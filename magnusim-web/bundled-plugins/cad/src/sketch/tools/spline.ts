@@ -146,6 +146,8 @@ export function splineTool(mode: SketchMode, form: 'fit' | 'control'): SketchToo
       }
       return out;
     },
+    // ux010 (DRAW): a press that moves still places its point (where it was pressed).
+    dragDraw: () => false,
     pointer(e) {
       if (e.type === 'move') return show(e);
       if (e.type === 'leave') {

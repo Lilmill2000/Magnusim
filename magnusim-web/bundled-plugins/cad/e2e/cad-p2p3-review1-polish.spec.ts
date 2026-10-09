@@ -97,7 +97,8 @@ async function settled(page: Page) {
 async function inView(page: Page, frame: FrameLocator, pts: V3[]) {
   for (let i = 0; i < 30; i++) {
     const stage = (await frame.locator('.cad-stage').boundingBox())!;
-    const cards = [await frame.locator('[data-cad-tree]').boundingBox(), (await frame.locator('[data-cad-panel]').count()) ? await frame.locator('[data-cad-panel]').first().boundingBox() : null];
+    // ux010: the tree card, or its rail while a sketch is edited (the left column's first card).
+    const cards = [await frame.locator('[data-cad-left-stack] > :first-child').boundingBox(), (await frame.locator('[data-cad-panel]').count()) ? await frame.locator('[data-cad-panel]').first().boundingBox() : null];
     const left = Math.max(stage.x, ...cards.map((c) => (c ? c.x + c.width : 0))) + 30;
     const right = stage.x + stage.width - 30;
     let ok = true;

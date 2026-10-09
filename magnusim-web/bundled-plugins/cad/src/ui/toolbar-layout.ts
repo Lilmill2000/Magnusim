@@ -30,6 +30,13 @@ export interface ModeLayout {
   place: Record<string, Place>;
   /** A group's commands in the user's order (ids; unknown ones are skipped). */
   order: Record<string, string[]>;
+  /**
+   * UX 0.1.0 (additive, absent = none): the commands dragged from More onto the bar (or put there
+   * by "Swap with"). They are kept in view at every width, never folded into More for the frame,
+   * so the group keeps the commands it showed when one came in: the frame folds the group's other
+   * commands first.
+   */
+  held?: string[];
 }
 
 export interface ToolbarLayout {
@@ -53,7 +60,7 @@ const ID = /^[a-z0-9_.:-]{1,80}$/i;
 function readMode(raw: unknown): ModeLayout {
   const out: ModeLayout = { place: {}, order: {} };
   if (!raw || typeof raw !== 'object') return out;
-  const r = raw as { place?: unknown; order?: unknown };
+  const r = raw as { place?: unknown; order?: unknown; held?: unknown };
   if (r.place && typeof r.place === 'object') {
     for (const [id, p] of Object.entries(r.place as Record<string, unknown>)) {
       if (ID.test(id) && (p === 'bar' || p === 'more')) out.place[id] = p;
@@ -67,6 +74,10 @@ function readMode(raw: unknown): ModeLayout {
       if (list.length) out.order[g] = list;
     }
   }
+  if (Array.isArray(r.held)) {
+    const held = [...new Set(r.held.filter((x): x is string => typeof x === 'string' && ID.test(x)))];
+    if (held.length) out.held = held;
+  }
   return out;
 }
 
@@ -78,7 +89,21 @@ export function readLayout(raw: unknown): ToolbarLayout {
 }
 
 export function isDefault(m: ModeLayout): boolean {
-  return !Object.keys(m.place).length && !Object.keys(m.order).length;
+  return !Object.keys(m.place).length && !Object.keys(m.order).length && !m.held?.length;
+}
+
+/** The command was dragged onto the bar from More: it never folds into More for the width. */
+export function held(m: ModeLayout, id: string): boolean {
+  return !!m.held?.includes(id);
+}
+
+/** `m` with `id` held (on) or not; `held` is left out when empty. */
+function withHeld(m: ModeLayout, id: string, on: boolean): ModeLayout {
+  const list = (m.held ?? []).filter((x) => x !== id);
+  if (on) list.push(id);
+  const { held: _old, ...rest } = m;
+  void _old;
+  return list.length ? { ...rest, held: list } : rest;
 }
 
 /**
@@ -120,7 +145,9 @@ export function withPlace(m: ModeLayout, id: string, place: Place, mode: LayoutM
   const next = { ...m.place };
   delete next[id];
   if (place === 'bar' || placeOf(id, mode, { place: {}, order: {} }, keep) !== 'more') next[id] = place;
-  return { place: next, order: m.order };
+  const out: ModeLayout = { ...m, place: next };
+  // A command sent to More is no longer held on the bar.
+  return place === 'more' ? withHeld(out, id, false) : out;
 }
 
 /** The user asked for it on the bar: it folds after every other command when the frame is narrow. */
@@ -136,7 +163,52 @@ export function withMove(m: ModeLayout, group: string, current: readonly string[
   const list = current.filter((x) => x !== id);
   const at = before == null ? list.length : list.indexOf(before);
   list.splice(at < 0 ? list.length : at, 0, id);
-  return { place: m.place, order: { ...m.order, [group]: list } };
+  return { ...m, order: { ...m.order, [group]: list } };
+}
+
+// ---------------------------------------------------------------- dragging between More and the bar
+// UX 0.1.0 (Daniel 2026-10-07: "drag tangent arc up there and it moves spline to the More tab").
+// A command dragged from its group's More onto the bar takes a slot there and the group keeps the
+// same number of commands on the bar: the bar's last one goes to More. The reverse (a bar command
+// dropped into its group's open More) is Move to More (withPlace): nothing comes up in exchange.
+// A command never leaves its own group.
+
+/**
+ * Where a command from the group's More lands when dropped at gap `index` (0 = before the first,
+ * shown.length = after the last) among the group's commands on the bar now (`shown`, left to
+ * right): just before `before`, and `displaced` (the bar's last command) goes to More. Dropped in
+ * the last slot or after it, it takes the last slot. With nothing on the bar it just goes there.
+ */
+export function barDropOf(shown: readonly string[], index: number): { before: string | null; displaced: string | null } {
+  if (!shown.length) return { before: null, displaced: null };
+  const i = Math.max(0, Math.min(Math.floor(index), shown.length - 1));
+  return { before: shown[i], displaced: shown[shown.length - 1] };
+}
+
+/**
+ * The layout with `id` (now in the group's More) put on the bar at gap `index` among `shown` (the
+ * group's commands on the bar now), and the bar's last command moved to More (barDropOf). `order`
+ * is the group's order as shown now. `id` is put on the bar and held there (`held`: it never folds
+ * for the width, review B2: at 1150 px it folded away right after the drop), so the group keeps
+ * its count on the bar.
+ */
+export function withSwapIn(
+  m: ModeLayout,
+  group: string,
+  order: readonly string[],
+  shown: readonly string[],
+  id: string,
+  index: number,
+  mode: LayoutMode,
+  keep: ReadonlySet<string>,
+): ModeLayout {
+  const bar = shown.filter((x) => x !== id);
+  const { before, displaced } = barDropOf(bar, index);
+  let next = before ? withMove(m, group, order, id, before) : m;
+  next = withPlace(next, id, 'bar', mode, keep);
+  if (displaced) next = withPlace(next, displaced, 'more', mode, keep);
+  // Held: it stays on the bar at every width (the frame folds the group's other commands first).
+  return withHeld(next, id, true);
 }
 
 // ---------------------------------------------------------------- the store (per services)

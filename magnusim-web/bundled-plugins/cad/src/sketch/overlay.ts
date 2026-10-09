@@ -36,6 +36,22 @@ import { drawnPoints, hitTest, samples } from './pick';
 import { constructionItems } from './select-menu';
 import { linkLook } from './project/style';
 import { linkMenuItems } from './project/menu';
+// ux010 (DRAW)
+import { CLICK_PX } from '../viewport/colors';
+import { drawsConstruction } from './edit';
+
+/**
+ * ux010 (DRAW, review S2): when a press that moved is a click-drag (its release places the shape's
+ * next point) and not a sloppy click (a click at the press point): held at least CLICK_DRAG_MS and
+ * moved more than CLICK_DRAG_PX, or moved more than CLICK_DRAG_FAR_PX at any speed (CSS px, ms).
+ * A 20 px slide in 60 ms is a click; a deliberate drag draws.
+ */
+export const CLICK_DRAG_MS = 150;
+export const CLICK_DRAG_PX = 12;
+export const CLICK_DRAG_FAR_PX = 30;
+export function isClickDrag(heldMs: number, movedPx: number): boolean {
+  return (heldMs >= CLICK_DRAG_MS && movedPx > CLICK_DRAG_PX) || movedPx > CLICK_DRAG_FAR_PX;
+}
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -267,6 +283,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   const solid = new Lines(frame, 2.4);
   const dashed = new Lines(frame, 1.6, { dashed: true });
   const preview = new Lines(frame, 1.6, { order: 1001 });
+  // ux010 (DRAW): what is being drawn while construction drawing is on, dashed as it will be.
+  const previewDashed = new Lines(frame, 1.6, { dashed: true, order: 1001 });
   const guides = new Lines(frame, 1, { dashed: true, order: 1002 });
   const dots = new Dots(frame, 7);
   const dimLines = new Lines(dimFrame, 1, { order: 1003 });
@@ -326,7 +344,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   function drawGeometry(v: SketchView) {
     const d = v.draft;
     if (!d) {
-      for (const l of [halo, solid, dashed, preview, guides, dimLines]) l.set([]);
+      for (const l of [halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.set([]);
       dots.set([]);
       curvesUv = null;
       dimsUv = null;
@@ -423,7 +441,12 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         if (a && b) guideSegs.push({ a, b, color: pal.construction });
       });
     }
-    preview.set(prevSegs);
+    // ux010 (DRAW): construction drawing shows the shape dashed (not the trim's red piece or a window).
+    const asConstruction = mode.drawConstruction && drawsConstruction(mode.tool?.id);
+    preview.set(asConstruction ? [] : prevSegs);
+    previewDashed.set(asConstruction ? prevSegs : []);
+    previewDashed.mat.dashSize = 6 * px;
+    previewDashed.mat.gapSize = 4 * px;
     guides.set(guideSegs);
     dots.set(pts);
     drawDimensions(v);
@@ -982,6 +1005,129 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     }
   }
 
+  // ---- ux010 (DRAW): drag handles (a new fillet's radius arrow), the construction badge, the dot
+  const handleEls = new Map<string, { el: HTMLElement; at: Vec2; dir: Vec2 }>();
+  function syncHandles(v: SketchView) {
+    const hs = v.preview?.handles ?? [];
+    const keep = new Set(hs.map((h) => h.id));
+    for (const [id, rec] of handleEls)
+      if (!keep.has(id)) {
+        rec.el.remove();
+        handleEls.delete(id);
+      }
+    for (const h of hs) {
+      let rec = handleEls.get(h.id);
+      if (!rec) {
+        const el = document.createElement('div');
+        el.className = 'cad-sk-handle';
+        el.setAttribute('data-sketch-handle', h.id);
+        el.setAttribute('aria-hidden', 'true');
+        // An arrow pointing right (rotated to its direction): a shaft and a head, on a round grip.
+        el.innerHTML = '<svg viewBox="0 0 34 16" width="34" height="16"><path d="M3 8h22" /><path d="M20 3l7 5-7 5z" /></svg>';
+        // Review B1: the arrow takes the press itself, along its whole length (labels and glyphs under
+        // it never get it): the press goes to the view as a press there, so the tool's drag starts.
+        el.addEventListener('pointerdown', (e) => {
+          if (!canvas || e.button !== 0 || e.altKey || typeof PointerEvent !== 'function') return;
+          e.preventDefault();
+          e.stopPropagation();
+          canvas.dispatchEvent(new PointerEvent('pointerdown', e));
+        });
+        el.addEventListener('pointermove', (e) => {
+          if (!canvas || e.buttons || typeof PointerEvent !== 'function') return;
+          canvas.dispatchEvent(new PointerEvent('pointermove', e));
+        });
+        forwardWheel(el);
+        html.append(el);
+        rec = { el, at: h.at, dir: h.dir };
+        handleEls.set(h.id, rec);
+      }
+      rec.at = h.at;
+      rec.dir = h.dir;
+      rec.el.classList.toggle('is-active', !!h.active);
+    }
+  }
+  function placeHandles() {
+    for (const rec of handleEls.values()) {
+      const s0 = screenOf(rec.at);
+      const s1 = screenOf([rec.at[0] + rec.dir[0], rec.at[1] + rec.dir[1]]);
+      if (!s0 || !s1) {
+        rec.el.style.display = 'none';
+        continue;
+      }
+      const ang = Math.atan2(s1[1] - s0[1], s1[0] - s0[0]);
+      rec.el.style.display = '';
+      // The grip (the arrow's tail, 3 px in) sits on the arc; the arrow points away from its centre.
+      rec.el.style.transform = `translate(${Math.round(s0[0])}px, ${Math.round(s0[1])}px) rotate(${ang}rad) translate(-3px, -8px)`;
+      rec.el.dataset.screen = `${Math.round(s0[0] + hostRect().left)},${Math.round(s0[1] + hostRect().top)}`;
+    }
+  }
+
+  /** Review B1: a dimension label on a radius arrow's line moves beside it while the arrow shows. */
+  function clearArrows() {
+    if (!handleEls.size || !dimEls.size) return;
+    const host = hostRect();
+    for (const rec of handleEls.values()) {
+      if (rec.el.style.display === 'none') continue;
+      const s0 = screenOf(rec.at);
+      const s1 = screenOf([rec.at[0] + rec.dir[0], rec.at[1] + rec.dir[1]]);
+      if (!s0 || !s1) continue;
+      const l = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) || 1;
+      const d: [number, number] = [(s1[0] - s0[0]) / l, (s1[1] - s0[1]) / l];
+      const n: [number, number] = [-d[1], d[0]];
+      for (const dim of dimEls.values()) {
+        if (dim.el.style.display === 'none') continue;
+        const r = dim.el.getBoundingClientRect();
+        const c: [number, number] = [r.left + r.width / 2 - host.left - s0[0], r.top + r.height / 2 - host.top - s0[1]];
+        const along = c[0] * d[0] + c[1] * d[1];
+        const across = c[0] * n[0] + c[1] * n[1];
+        const reachAlong = Math.abs(d[0]) * (r.width / 2) + Math.abs(d[1]) * (r.height / 2);
+        const reachAcross = Math.abs(n[0]) * (r.width / 2) + Math.abs(n[1]) * (r.height / 2);
+        if (along < -12 - reachAlong || along > 36 + reachAlong || Math.abs(across) >= reachAcross + 12) continue;
+        const want = (across < 0 ? -1 : 1) * (reachAcross + 14);
+        shiftBy(dim.el, n[0] * (want - across), n[1] * (want - across));
+      }
+    }
+  }
+
+  const badge = document.createElement('div');
+  badge.className = 'cad-sk-construction-badge';
+  badge.setAttribute('data-sketch-construction-badge', '1');
+  badge.setAttribute('role', 'status');
+  badge.textContent = 'Construction (X)';
+  badge.title = 'Construction drawing is on: what you draw now is construction geometry (dashed, never part of a profile). X turns it off.';
+  badge.hidden = true;
+  html.append(badge);
+  const syncBadge = () => {
+    badge.hidden = !mode.drawConstruction;
+  };
+
+  /**
+   * The dot at the pointer as the last frame drew it (frame client px), for the e2e: the preview
+   * point nearest the pointer (where its snap put it). Written each frame, after the draw.
+   */
+  function markDot() {
+    const pv = mode.view.get().preview;
+    if (!pointerAt || !pv?.points.length || !drawing()) {
+      if (html.dataset.sketchDot != null) delete html.dataset.sketchDot;
+      return;
+    }
+    const host = hostRect();
+    let best: [number, number] | null = null;
+    let bd = Infinity;
+    for (const p of pv.points) {
+      const s = screenOf(p);
+      if (!s) continue;
+      const d = Math.hypot(s[0] + host.left - pointerAt[0], s[1] + host.top - pointerAt[1]);
+      if (d < bd) {
+        bd = d;
+        best = [s[0] + host.left, s[1] + host.top];
+      }
+    }
+    const text = best ? `${Math.round(best[0])},${Math.round(best[1])}` : null;
+    if (text && html.dataset.sketchDot !== text) html.dataset.sketchDot = text;
+  }
+  // ---- end ux010 (DRAW)
+
   function syncInference(v: SketchView) {
     for (const r of inferEls.splice(0)) r.el.remove();
     for (const g of v.preview?.glyphs ?? []) {
@@ -1117,6 +1263,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     for (const rec of glyphEls.values()) put(rec.el, rec.at, 10 + rec.slot * 18, 6);
     for (const rec of dimEls.values()) put(rec.el, rec.at);
     for (const rec of inferEls) put(rec.el, rec.at, 12 + rec.slot * 18, -24);
+    placeHandles();
+    clearArrows();
     placeBoxes();
     if (editor) put(editor.input.parentElement!, editor.at);
     drawGrid();
@@ -1159,6 +1307,19 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // P4b (SELECT): the last move, sent again when a snap on the model is ready (read from the kernel meanwhile).
   let lastMove: ViewportPointer | null = null;
+  /**
+   * ux010 (DRAW, Daniel: "I can't start drawing a line while the little dot is moving"): the press
+   * as a drawing tool saw it. The viewport makes no click of a press that moved more than
+   * CLICK_PX before its release (a quick click while the hand still moves, or a click-drag), so the
+   * click was lost. Now such a press clicks where it was pressed, as soon as it starts to drag (the
+   * shape follows from there); its release clicks again (`fromDrag`) when the tool had no step open
+   * and the press was a real drag (isClickDrag: held and moved, or moved far): click-drag draws. A
+   * sloppy click stays a click; a still press clicks at the press point too.
+   */
+  let press: { sp: SketchPointer; x: number; y: number; t0: number; far: number; moved: boolean; clicked: boolean; draws: boolean } | null = null;
+  /** A still press just released: the viewport's click comes next, and lands where it was pressed. */
+  let stillPress: SketchPointer | null = null;
+  const clickOf = (sp: SketchPointer, extra: Partial<SketchPointer> = {}): SketchPointer => ({ ...sp, type: 'click', pressed: false, ...extra });
   mode.repeatPointer = () => {
     const sp = lastMove && !pressed ? toSketch('move', lastMove) : null;
     if (sp && mode.tool) mode.tool.pointer(sp);
@@ -1174,6 +1335,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         return true;
       }
       if (e.type === 'down') {
+        // ux010 (DRAW, review N5): a click still owed to an earlier press never lands on a later one.
+        stillPress = null;
         if (e.button !== 0 || e.alt) return false;
         const sp = toSketch('down', e);
         // P4b (INTEGRATE, mouse binding): a press the tool leaves (the Select tool off sketch
@@ -1181,6 +1344,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         if (sp && mode.tool.takesPress && !mode.tool.takesPress(sp)) return false;
         if (mode.view.get().editing) mode.view.set({ editing: null });
         pressed = true;
+        stillPress = null;
+        // ux010 (DRAW): whether a drag of this press starts a shape (asked before the tool sees the press).
+        press = sp && mode.tool.dragDraw ? { sp, x: e.clientX, y: e.clientY, t0: performance.now(), far: 0, moved: false, clicked: false, draws: mode.tool.dragDraw() } : null;
         if (sp) mode.tool.pointer(sp);
         return true;
       }
@@ -1188,9 +1354,32 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         const sp = toSketch('up', e);
         pressed = false;
         if (sp) mode.tool.pointer(sp);
+        const p = press;
+        press = null;
+        const tool = mode.tool;
+        if (p && tool && !tool.ownsDrag?.()) {
+          const far = Math.max(p.far, Math.hypot(e.clientX - p.x, e.clientY - p.y));
+          if (!p.moved) stillPress = p.sp;
+          else if (p.clicked && p.draws && sp && isClickDrag(performance.now() - p.t0, far)) {
+            // Click-drag: the release is the shape's next point (a line's end, a rectangle's corner).
+            tool.pointer({ ...sp, type: 'move', pressed: false });
+            tool.pointer(clickOf(sp, { fromDrag: true }));
+            applyCursor();
+          }
+        }
+        return true;
+      }
+      if (e.type === 'click' && stillPress) {
+        // ux010 (DRAW): a still press clicks where it was pressed (the snap of the press point).
+        const sp = stillPress;
+        stillPress = null;
+        mode.tool.pointer(clickOf(sp));
+        applyCursor();
+        if (mode.view.get().preview?.boxes.length) mode.state.set({ typing: true });
         return true;
       }
       if (e.type === 'leave') {
+        stillPress = null;
         mode.setHover(null);
         const sp = toSketch('leave', e);
         if (sp) mode.tool.pointer(sp);
@@ -1199,6 +1388,17 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       const sp = toSketch(e.type, e);
       if (sp) mode.tool.pointer(sp);
       if (e.type === 'move') lastMove = e;
+      // ux010 (DRAW): a press that starts to drag clicks where it was pressed (unless the tool drags it itself).
+      if (e.type === 'move' && press) press.far = Math.max(press.far, Math.hypot(e.clientX - press.x, e.clientY - press.y));
+      if (e.type === 'move' && press && !press.moved && Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_PX) {
+        press.moved = true;
+        const tool = mode.tool;
+        if (!tool.ownsDrag?.()) {
+          press.clicked = true;
+          tool.pointer(clickOf(press.sp));
+          if (sp && mode.tool === tool) tool.pointer(sp);
+        }
+      }
       // The boxes move out from under the pointer now, before the press that may follow.
       if (e.type === 'move' && boxEls.size) place();
       applyCursor();
@@ -1244,6 +1444,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     syncGlyphs(v);
     syncBoxes(v);
     syncInference(v);
+    syncHandles(v);
+    syncBadge();
     syncEditor(v);
     place();
     applyCursor();
@@ -1257,7 +1459,17 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const f = mode.feature;
     if (f && st.rebuild.outputs[f] !== prev.rebuild.outputs[f] && mode.draft()?.links?.length) render();
   });
-  const offFrame = handle.onFrame(place);
+  const offFrame = handle.onFrame(() => {
+    place();
+    markDot();
+  });
+  // ux010 (DRAW): construction drawing on or off: the badge and the preview's dashes.
+  let drawingConstruction = mode.drawConstruction;
+  const offState = mode.state.subscribe((s) => {
+    if (!!s.drawConstruction === drawingConstruction) return;
+    drawingConstruction = !!s.drawConstruction;
+    render();
+  });
   render();
 
   return () => {
@@ -1265,10 +1477,11 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     offSel();
     offLinks();
     offFrame();
+    offState();
     popTool();
     mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);
-    for (const l of [grid, halo, solid, dashed, preview, guides, dimLines]) l.dispose();
+    for (const l of [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.dispose();
     dots.dispose();
     for (const o of [...frame.children, ...dimFrame.children] as Object3D[]) o.removeFromParent();
     geo.dispose();

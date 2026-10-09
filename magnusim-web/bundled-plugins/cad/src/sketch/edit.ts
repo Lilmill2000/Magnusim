@@ -133,6 +133,25 @@ export function toggleConstruction(d: SketchDraft, ids: readonly string[]): Sket
   return { ...d, entities };
 }
 
+// ---- ux010 (DRAW): construction drawing
+/** The tools whose shapes construction drawing makes construction (points stay points; a centerline is construction always). */
+const CONSTRUCTION_TOOLS = new Set(['line', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'spline-fit', 'spline-control']);
+export function drawsConstruction(tool: string | null | undefined): boolean {
+  return !!tool && CONSTRUCTION_TOOLS.has(tool);
+}
+
+/** The curves an edit added (not in `before`; not points, not linked references) made construction. */
+export function asConstruction<T extends SketchDraft>(before: SketchDraft, after: T): T {
+  const had = new Set(before.entities.map((e) => e.id));
+  let changed = false;
+  const entities = after.entities.map((e) => {
+    if (had.has(e.id) || e.kind === 'point' || e.construction || (e as { link?: string }).link) return e;
+    changed = true;
+    return { ...e, construction: true } as SketchEntity;
+  });
+  return changed ? { ...after, entities } : after;
+}
+
 // ------------------------------------------------------------ trim and extend
 
 /** Where a curve crosses another one, as positions along it (line: t in [0,1]; arc: 0..1 from its ccw start; circle: angle). */

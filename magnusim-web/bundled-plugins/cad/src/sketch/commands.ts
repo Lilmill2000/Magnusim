@@ -33,6 +33,9 @@ import { sketchUp } from '../viewport/normal';
 // P4b (SKETCH): spline handles and fit points for Tangent / Coincident.
 import { addHandle } from './tools/spline-relations';
 
+/** ux010 (DRAW): the tools Construction (X) never converts a selection in: it toggles construction drawing. */
+const DRAWING_TOOLS = new Set<string>(['line', 'centerline', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'point', 'spline-fit', 'spline-control']);
+
 export const CURVED_FACE = 'Sketches go on flat faces: that face is curved';
 /** A CONSTRUCT plane selected that did not build (failed, suppressed or rolled back). */
 export const NOT_BUILT = ' is not built: fix it or roll forward first';
@@ -200,32 +203,64 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       },
     }),
   );
-  reg({
+  // ux010 (DRAW): Construction (X) turns construction drawing on or off (Daniel: "a toggle ... to have
+  // the line I'm drawing be a construction line"), always while a drawing tool is in hand (a selection
+  // left from before is not converted). With another tool (Select) and lines, circles or arcs selected,
+  // it converts them, as before; right-click > Construction always converts what was clicked
+  // (src/sketch/select-menu.ts). Never greyed in an open sketch: it always does one of the two.
+  const curvesPicked = (): string[] => {
+    const d = mode.draft();
+    if (!d || DRAWING_TOOLS.has(mode.tool?.id ?? 'select')) return [];
+    return mode
+      .selected()
+      .filter((h) => h.what === 'entity')
+      .map((h) => h.id)
+      .filter((id) => {
+        const e = entityOf(d, id);
+        return !!e && e.kind !== 'point';
+      });
+  };
+  const construction: CommandDef = {
     id: 'sketch.construction',
     label: 'Construction',
     group: 'draw',
     mode: 'sketch',
     icon: SKETCH_ICONS.construction,
     shortcut: 'X',
-    hint: 'Turn the selected lines, circles and arcs into construction geometry (dashed, never part of a profile), or back',
+    get hint() {
+      const ids = curvesPicked();
+      if (!ids.length) return mode.drawConstruction ? 'Construction drawing is on: X turns it off' : 'Construction drawing is off: X turns it on (what you draw is dashed, never part of a profile)';
+      const d = mode.draft();
+      return d && ids.every((id) => entityOf(d, id)?.construction) ? 'Make the selection normal geometry (not construction)' : 'Make the selection construction';
+    },
     order: 30,
     explainRefusal: true,
-    enabled: () => {
-      const e = editable();
-      if (e !== true) return e;
-      const d = mode.draft();
-      const ids = mode.selected().filter((h) => h.what === 'entity').map((h) => h.id);
-      if (!d || !ids.some((id) => entityOf(d, id) && entityOf(d, id)!.kind !== 'point')) return 'Select lines, circles or arcs';
-      return true;
-    },
+    enabled: editable,
+    pressed: () => mode.active && mode.drawConstruction,
     run: () => {
-      const ids = mode.selected().filter((h) => h.what === 'entity').map((h) => h.id);
+      const ids = curvesPicked();
+      if (!ids.length) {
+        mode.setDrawConstruction(!mode.drawConstruction);
+        return;
+      }
       void mode.apply('Construction', (d) => {
         const next = toggleConstruction(d, ids);
         return next ? { ok: true, draft: next, optional: [], removed: [] } : { ok: false, reason: 'select lines, circles or arcs' };
       });
     },
-  });
+  };
+  reg(construction);
+  // The toolbar draws the command pressed while construction drawing is on: it redraws when the
+  // registry changes, so the same def is registered again when the mode flips.
+  let drawingWas = false;
+  offs.push(
+    mode.state.subscribe((s) => {
+      const on = !!s.drawConstruction;
+      if (on === drawingWas) return;
+      drawingWas = on;
+      if (services.commands.get(construction.id) === construction) services.commands.register(construction);
+    }),
+  );
 
   // ---- sketch mode: CONSTRAIN (select first)
   CONSTRAIN_COMMANDS.forEach((c, i) =>

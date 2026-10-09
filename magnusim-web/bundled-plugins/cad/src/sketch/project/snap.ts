@@ -21,6 +21,8 @@ import type { TopoResult } from '../../types/kernel-protocol';
 import type { SketchBuilder } from '../edit';
 import { applyLinkCurves, pierceSegment, toPlaneUv, type PlaneCurve } from './curves';
 import { projectItem } from './source';
+// ux010 (DRAW): one read at a time, the newest next (src/sketch/latest-queue.ts).
+import { latestQueue } from '../latest-queue';
 
 /** A snap on the model, ready to be placed. */
 export interface ModelSnap {
@@ -57,11 +59,19 @@ const planeKey = (p: PlaneFrame) => [...p.origin, ...p.normal, ...p.xdir].map((x
 
 /** Forget what was read (another sketch, a rebuild: shape ids and names change). */
 export function clearModelSnaps() {
+  reads.clear();
   cache.clear();
   recentRound = [];
 }
 
-function resolve(services: AppServices, plane: PlaneFrame, body: string, kind: 'edge' | 'vertex', index: number, onReady: () => void): Resolved | null {
+/**
+ * ux010 (DRAW): the kernel reads a snap needs, one at a time, the newest waiting one next. A read for
+ * an edge the pointer has left is dropped (and asked again if the pointer comes back), so the snap
+ * under the pointer never waits behind the edges a fast move crossed.
+ */
+const reads = latestQueue();
+
+function resolve(services: AppServices, plane: PlaneFrame, body: string, kind: 'edge' | 'vertex', index: number, onReady: () => void, low = false): Resolved | null {
   const pk = planeKey(plane);
   if (pk !== cachePlane) {
     clearModelSnaps();
@@ -76,7 +86,7 @@ function resolve(services: AppServices, plane: PlaneFrame, body: string, kind: '
   if (hit) return null;
   cache.set(key, 'pending');
   const lookup = kernelLookup(services.kernel);
-  void (async () => {
+  const job = async () => {
     try {
       if (kind === 'vertex') {
         const [v] = await lookup.vertices!(info.shape, [index]);
@@ -97,7 +107,13 @@ function resolve(services: AppServices, plane: PlaneFrame, body: string, kind: '
       cache.set(key, 'none');
     }
     onReady();
-  })();
+  };
+  reads.ask(job, {
+    low,
+    dropped: () => {
+      if (cache.get(key) === 'pending') cache.delete(key);
+    },
+  });
   return null;
 }
 
@@ -147,7 +163,7 @@ export function modelSnap(services: AppServices, plane: PlaneFrame, e: { uv: Vec
   }
   // Centres of round edges hovered lately (the pointer goes from the rim to the middle).
   for (const r0 of recentRound) {
-    const r = resolve(services, plane, r0.body, 'edge', r0.index, onReady);
+    const r = resolve(services, plane, r0.body, 'edge', r0.index, onReady, true);
     const c = r?.curve;
     if (r && c && (c.kind === 'circle' || c.kind === 'arc')) cands.push({ at: c.c, kind: 'centre', glyph: 'coincident', source: { kind: 'edge', body: r0.body, ref: r.ref }, curve: c, ...(r.edge?.center ? { model: r.edge.center as Vec3 } : {}) });
   }

@@ -21,7 +21,23 @@ Magnusim as the Part workspace. It ships on; Settings > Plugins turns it off.
   sketch patterns.
 - Project a body's vertices, edges, faces or silhouette into a sketch, and
   Intersect the sketch plane with the bodies. These curves follow the model.
-- Snap to the model while drawing; Construction from the right-click menu.
+- Snap to the model while drawing; construction geometry (see below).
+
+**Sketching, after the first trial**
+- Construction drawing: Construction (X, in Draw's More) turns it on and off;
+  while it is on, every line, rectangle, circle, arc and spline you draw is
+  construction. Right-click still turns a drawn curve into construction.
+- A click counts where you pressed, even while the mouse is still moving, and
+  a click and drag draws a line, rectangle, circle or arc in one go.
+- A new sketch fillet shows an arrow on its arc: drag it to change the radius
+  (it stops at the largest radius the corner takes and says why).
+- Drag a command from a group's More menu onto the toolbar: it goes where you
+  drop it and the group's last command moves to More.
+- The Sketch panel is compact: the name and state, what the tool wants next,
+  the dimension you are editing, and Done. Details shows the rest; its chevron
+  (or `Ctrl+\`) slides it into a slim rail at the left edge.
+- While you edit a sketch, the design tree slides into a rail at the left edge
+  to free the view; click the rail to see the tree.
 
 **Solids and edits**
 - Extrude (blind, two sides, symmetric, through all, up to a face or a vertex;

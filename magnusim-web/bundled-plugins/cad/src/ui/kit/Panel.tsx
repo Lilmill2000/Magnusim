@@ -58,6 +58,10 @@ export interface PanelChromeProps {
   className?: string;
   /** data-cad-panel value (tests). */
   panel: string;
+  /** ux010 PANELS: more in the head after the title (the Sketch panel's state and its collapse chevron). */
+  headAside?: ReactNode;
+  /** ux010 PANELS: more in the foot's left, after Delete (the Sketch panel's Details disclosure). */
+  footLeft?: ReactNode;
 }
 
 export function PanelChrome({
@@ -75,6 +79,8 @@ export function PanelChrome({
   foot,
   className,
   panel,
+  headAside = null,
+  footLeft = null,
 }: PanelChromeProps) {
   const blocked = !onDelete && deleteBlock ? (
     <div data-delete-block="1">
@@ -102,6 +108,7 @@ export function PanelChrome({
             </span>
           </div>
         )}
+        {headAside}
       </div>
       <div className="mgk-panel-body">{children}</div>
       {foot || blocked ? (
@@ -117,6 +124,7 @@ export function PanelChrome({
               {deleteLabel}
             </Button>
           ) : null}
+          {footLeft}
         </div>
         <Button variant="done" onClick={done} disabledReason={doneDisabled} tip={doneDisabled ? 'Done' : null} data-panel-done="1">
           Done
@@ -126,10 +134,10 @@ export function PanelChrome({
   );
 }
 
-/** The flyout column beside the tree card (.tree-detail). */
-export function Flyout({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
+/** The flyout column beside the tree card (.tree-detail); `rail` (ux010): its panel is collapsed to a slim rail. */
+export function Flyout({ children, wide = false, rail = false }: { children: ReactNode; wide?: boolean; rail?: boolean }) {
   return (
-    <div className={`tree-detail${wide ? ' is-wide' : ''}`} data-cad-flyout="1">
+    <div className={`tree-detail${wide ? ' is-wide' : ''}${rail ? ' is-rail' : ''}`} data-cad-flyout="1">
       {children}
     </div>
   );

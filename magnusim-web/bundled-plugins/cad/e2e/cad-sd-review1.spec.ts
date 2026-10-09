@@ -24,7 +24,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, baseUrl, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
+import { addSolid, baseUrl, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, openSketchDetails } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -429,7 +429,7 @@ test('cad:sd-review1-removed-box-used a P1 Box whose body a Combine uses: its De
 
 // ---------------------------------------------------------------- polish: the panel's layout
 
-test('cad:sd-review1-panel-layout Use padding does not move the field; the Percent field lines up and keeps its % in line; Padding keeps the sides set; CAD panels are 360 px', async ({ page, request }) => {
+test('cad:sd-review1-panel-layout Use padding does not move the field; the Percent field lines up and keeps its % in line; Padding keeps the sides set; CAD feature panels are 360 px, the Sketch panel 288 px (ux010)', async ({ page, request }) => {
   test.setTimeout(240_000);
   const { seen, frame } = await freshPart(page, request);
   const made = await addSolid(page, { size: [40, 30, 20] });
@@ -485,7 +485,10 @@ test('cad:sd-review1-panel-layout Use padding does not move the field; the Perce
   await featureRow(frame, 'Sketch 1').locator('> .tree-row').dblclick();
   const sk = frame.locator('[data-cad-panel]').first();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  expect(Math.round((await sk.boundingBox())!.width)).toBe(360);
+  // ux010: the Sketch panel is narrower (compact: a hint, a tool's few fields, a value), with or without its Details.
+  expect(Math.round((await sk.boundingBox())!.width)).toBe(288);
+  await openSketchDetails(page, frame);
+  expect(Math.round((await sk.boundingBox())!.width)).toBe(288);
   expect(made.body).toBeTruthy();
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);

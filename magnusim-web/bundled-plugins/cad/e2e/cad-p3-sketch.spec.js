@@ -28,7 +28,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, soloVolume } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, soloVolume, openSketchDetails } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -451,7 +451,8 @@ test('cad:p3-sketch-face-cut a sketch on the top face of a 40 x 40 x 20 block, a
   await clickAt(page, [30, 30, 20]);
   await tb(frame).locator('[data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  // The face as Measure names it (review P2/P3 round 4: "Face of Body 1" said which body only).
+  // The face as Measure names it (review P2/P3 round 4: "Face of Body 1" said which body only); ux010: under Details.
+  await openSketchDetails(page, frame);
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-plane]')).toHaveText(/^Face \d+ of Body 1$/);
   await settled(page);
   await circle(page, frame, [20, 20, 20], 10);

@@ -51,6 +51,12 @@ export const SHARDS = {
     'e2e/cad-p4b-project.spec.ts',
     // Press-pull fix round 1: the angle labels' gap and the label double-click in Mirror (ci2 polish).
     'e2e/cad-p5-fix1-sketch-labels.spec.ts',
+    // ux010 PANELS: the tree and the Sketch panel collapse sideways into rails; the compact Sketch panel.
+    'e2e/cad-ux010-panels.spec.ts',
+    // ux010 TOOLBAR: drag a command from its group's More onto the bar (and back), sketch and model mode.
+    'e2e/cad-ux010-toolbar.spec.ts',
+    // ux010 DRAW: construction drawing (Construction / X toggle), a press is never lost (click-drag draws), a new fillet's radius arrow.
+    'e2e/cad-ux010-draw.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.

@@ -743,3 +743,51 @@ export async function commandControl(frame: FrameLocator, id: string): Promise<L
   if ((await more.getAttribute('aria-expanded')) !== 'true') await more.click();
   return frame.locator(`[data-cad-menu] [data-command="${id}"]`);
 }
+
+// ---- ux010 PANELS: the compact Sketch panel and the tree's rail while sketching
+
+/** The prefs keys of src/ui/left-rails.ts (the tree's and the Sketch panel's collapsed states, Details). */
+export const RAIL_PREF_KEYS = ['tree-collapsed', 'sketch-panel-collapsed', 'sketch-details-open'] as const;
+
+/** A plugin pref as the host keeps it (ws.prefs), or null. */
+export async function cadPref(request: APIRequestContext, key: string): Promise<unknown> {
+  const r = await readWithRetry(() => request.post(`${baseUrl()}/api/plugin-prefs/get`, { data: { plugin: 'cad', key } }));
+  expect(r.ok(), await r.text()).toBe(true);
+  return (await r.json()).value ?? null;
+}
+
+/** Back to a user who never collapsed or opened anything (the server keeps one prefs file for every test). */
+export async function forgetRailPrefs(request: APIRequestContext): Promise<void> {
+  for (const key of RAIL_PREF_KEYS) {
+    const r = await readWithRetry(() => request.post(`${baseUrl()}/api/plugin-prefs/remove`, { data: { plugin: 'cad', key } }));
+    expect(r.ok(), await r.text()).toBe(true);
+  }
+}
+
+/**
+ * Opens the Sketch panel's Details (the plane, the selection and its actions, every pattern, the
+ * references), as a user does: its foot's "Details ▸". The panel is compact by default (ux010).
+ * The open state is the user's pref, kept on the server every test shares: once this page has
+ * stored it, it is taken back off the server (this page stays open), so other tests still start
+ * compact.
+ */
+export async function openSketchDetails(page: Page, frame: FrameLocator): Promise<void> {
+  const btn = frame.locator('[data-cad-panel="sketch"] [data-sketch-details]');
+  await expect(btn).toBeVisible();
+  if ((await btn.getAttribute('data-sketch-details')) === 'open') return;
+  await btn.click();
+  await expect(btn).toHaveAttribute('data-sketch-details', 'open');
+  await expect.poll(() => cadPref(page.request, 'sketch-details-open')).toBe(true);
+  const r = await page.request.post(`${baseUrl()}/api/plugin-prefs/remove`, { data: { plugin: 'cad', key: 'sketch-details-open' } });
+  expect(r.ok(), await r.text()).toBe(true);
+}
+
+/**
+ * Brings the design tree back while a sketch is edited (ux010: entering a sketch slides it into its
+ * rail at the left edge): a click on the rail, for this sketch only.
+ */
+export async function showTreeDuringSketch(frame: FrameLocator): Promise<void> {
+  const rail = frame.locator('[data-cad-rail="tree"]');
+  if (await rail.count()) await rail.click();
+  await expect(frame.locator('[data-cad-tree]')).toBeVisible();
+}

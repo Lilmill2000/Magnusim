@@ -61,13 +61,21 @@ unit ("125 mm", "5 in").
   sketch mode the ribbon shows DRAW, CONSTRAIN, DIMENSION and MODIFY.
   - Arrange it your way: right-click a command for **Show in toolbar**, **Move to
     More**, **Move left**, **Move right** and **Reset toolbar**, or drag a command
-    along its group. The layout is yours in every project, and another open CAD
-    tab follows a change at once.
+    along its group. Drag a command out of a group's **More** onto the toolbar: it
+    goes in where you drop it and the group's last command moves to More (the
+    toolbar says which while you drag), so the group keeps its size; right-click
+    it in More for **Swap with** that last command. Drag a command into its
+    group's open More to put it there. A command stays in its own group. The
+    layout is yours in every project, and another open CAD tab follows a change
+    at once.
   - A command that cannot run right now is greyed, and its tooltip says why
     ("Make or import a body first").
 - **Design tree** on the left: **Origin** (the Top, Front and Right planes and
   the X, Y and Z axes), **Bodies**, and **History**, the features in build order
-  with a rollback bar.
+  with a rollback bar. The chevron at its top right (or `Ctrl+\`) slides it into a
+  slim rail at the left edge; click the rail to bring it back. It stays the way
+  you leave it, in every project. While you edit a sketch it is a rail by itself
+  (click the rail to see it for that sketch) and comes back at **Done**.
 - **Feature panels** open on the left when you make or edit a feature. Changes
   apply live as you type or pick; **Done** closes the panel; **Delete** removes
   the feature (on a new one it discards it).
@@ -85,10 +93,22 @@ pick an origin plane, a CONSTRUCT plane or a flat face of a body. The view turns
 square to the sketch. **Finish sketch** (or Enter with no tool step open) leaves
 sketch mode; the camera stays where it is.
 
+The **Sketch panel** is compact: the sketch's name and state, what the tool
+wants next and its own fields, the dimension you are editing, and **Done**.
+Problems always show there (a failed sketch, the constraints that over-define
+it, a lost reference). **Details ▸** in its foot adds the plane, the selection
+with Construction and Delete selected, every pattern and the references; it
+stays open or closed the way you leave it. The chevron in the panel's head (or
+`Ctrl+\`) slides the panel into a slim rail at the left edge, with the sketch's
+state dot and **Finish sketch** on it; the next sketch opens the same way. While
+it is a rail, a tool that has its own fields (Offset's distance, Fillet's
+radius, a pattern's count) shows them in a small card beside the rail.
+
 **Draw** (DRAW group):
 
 - **Line** (L): chained lines, click by click. A, or a drag from the end, makes
-  a tangent arc.
+  a tangent arc. Click and drag draws one line from the press to the release
+  (Rectangle, Circle, 3-point arc and Tangent arc draw the same way).
 - **Rectangle** (R, two corners) and **Center rectangle**.
 - **Circle** (C), **3-point arc** (A), **Tangent arc**, **Point**,
   **Centerline**.
@@ -97,15 +117,21 @@ sketch mode; the camera stays where it is.
   ordinary sketch points: dimension them, relate them, drag them.
 - **Control-point spline**: degree 3 (or 5), pulled by its control points;
   the control polygon shows dashed while it is selected.
-- **Construction** (X), or right-click a selection: **Construction** turns
-  curves into construction geometry and back. A mixed selection offers **Make
-  construction** and **Make normal**.
+- **Construction** (X, in DRAW's More): with a drawing tool in hand, or nothing
+  selected, it turns construction drawing on or off. While it is on (checked in
+  More, pressed if you put it on the toolbar, and the view says "Construction
+  (X)"), every line, rectangle, circle, arc and spline you draw is construction.
+  It is off again when the sketch closes. With curves selected and no drawing
+  tool, it turns them into construction geometry and back; right-click a
+  selection for the same **Construction** (a mixed selection offers **Make
+  construction** and **Make normal**).
 
 While you draw, a value box follows the pointer: type a length or an angle and
-press Enter or Tab. The pointer snaps to the sketch (ends, midpoints, centres,
-curves, horizontal and vertical) and to the model itself: a body's vertex, an
-edge's middle, a point on an edge, a round edge's centre (hover the rim first),
-and the point where an edge pierces the sketch plane. Clicking a model snap adds
+press Enter or Tab. A click counts where you pressed, even when the mouse is
+still moving as you click. The pointer snaps to the sketch (ends, midpoints,
+centres, curves, horizontal and vertical) and to the model itself: a body's
+vertex, an edge's middle, a point on an edge, a round edge's centre (hover the
+rim first), and the point where an edge pierces the sketch plane. Clicking a model snap adds
 a linked reference and the relation in one undo step. Hold Ctrl to draw without
 snapping.
 
@@ -117,13 +143,17 @@ snapping.
   to end) is previewed on the pointer's side. Click to place; **Both sides** is
   an option. Line and arc offsets stay tied to their source.
 - **Fillet** and **Chamfer** of a sketch corner, with a Radius or Distance
-  dimension you can edit later.
+  dimension you can edit later. A new fillet shows an arrow on its arc: drag it
+  outward for a bigger radius, inward for a smaller one (the Radius box follows;
+  it stops at the largest radius the corner takes and says why). Select a fillet
+  arc later to get the arrow back.
 - **Mirror** (M): pick entities, then the mirror line. The copies stay
   symmetric to their source.
 - **Linear pattern** (one or two directions; count, spacing, angle or "Along a
   line") and **Circular pattern** (about the origin or a picked centre; full
   circle or a total angle). The copies are tied to their source and follow it.
-  Each pattern has a row in the Sketch panel where you change its count,
+  The pattern you just made or selected has a row in the Sketch panel (every
+  pattern has one under **Details**) where you change its count,
   spacing or angle, bring back a deleted copy, or **Dissolve** it (the copies
   become free geometry where they are). Deleting a pattern's source makes the
   next copy the source; the message offers **Dissolve pattern** instead.
@@ -136,7 +166,8 @@ snapping.
 Projected and intersected curves are **linked**: drawn purple, fixed in place,
 and recomputed whenever the model rebuilds, so a sketch built on them follows
 the model. Dimensions, relations, Trim (against them) and regions all use them.
-**Break link** (right-click, or the panel's References row) turns one into
+**Break link** (right-click, or its References row under the panel's
+**Details**) turns one into
 ordinary geometry. If its source disappears upstream, the curve turns amber,
 the panel says "Lost reference: ...", and the sketch still solves; nothing is
 blocked.
@@ -359,9 +390,11 @@ Delete faces), Ctrl+Z / Ctrl+Y, Escape clears the selection.
 
 **Sketch mode:** L Line, R Rectangle, C Circle, A 3-point arc, S Spline,
 M Mirror, O Offset, P Project, D Dimension, T Trim, X Construction, N Normal to
-(the open sketch), Enter places an open tool step or finishes the sketch,
+(the open sketch), Enter places an open tool step or finishes the sketch
+(on a menu item, or a button you reached with Tab, Enter presses that instead),
 Escape stops the tool, then clears the selection. Ctrl held while drawing turns
-snapping off.
+snapping off. `Ctrl+\` collapses or expands the Sketch panel (in model mode: the
+design tree).
 
 **Normal to** (N, the views menu, and the right-click menu of a face, a plane, a
 sketch's row or its curves in the view) turns the view square to a flat face, a

@@ -309,6 +309,8 @@ export function offsetTool(mode: SketchMode): SketchTool {
   return {
     id: 'offset',
     hint: () => 'Point at a curve: its chain is offset to the pointer\'s side. Click to place it.',
+    // ux010 (PANELS): the compact panel's and the tool card's one line.
+    shortHint: () => 'Point at a curve, then click to place the offset.',
     // ci2: a label or glyph clicked keeps the selection as it is (src/sketch/mode.ts refusesPick).
     refusesPick: (what) => `${what === 'dimension' ? 'Dimensions' : 'Relations'} can't be offset: point at a line, an arc, a circle or a spline`,
     cancel: () => {

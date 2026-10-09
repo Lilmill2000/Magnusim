@@ -14,7 +14,7 @@ import { expect, test, type APIRequestContext, type FrameLocator, type Page } fr
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chipVolumes, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { chipVolumes, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FLANGE = join(resolve(HERE, '..', 'fixtures', 'kernel'), 'flange.step');
@@ -155,6 +155,8 @@ async function sketchOnFace(page: Page, frame: FrameLocator, face: number) {
   await frame.locator('[data-cad-menu] [data-menu-item="sketch-mode:new-sketch"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await idle(page);
+  // ux010: the references are under the Sketch panel's Details (every test here reads them).
+  await openSketchDetails(page, frame);
 }
 
 test("cad:p4b-project-step-gate a sketch on the flange's top face with its outer edges and a hole rim projected and a point snapped onto another rim; both holes deleted upstream: the outer edges stay, the rims are amber Lost references, the sketch still solves", async ({ page, request }) => {
@@ -517,6 +519,8 @@ test('cad:p4b-fix-p5-one-body-name the References rows name the imported body on
   await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await idle(page);
+  // ux010: the references are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   await page.keyboard.press('p');
   const [vx, vy] = await modelOnPage(page, [50, -50, 10]);
   await page.mouse.click(vx, vy);

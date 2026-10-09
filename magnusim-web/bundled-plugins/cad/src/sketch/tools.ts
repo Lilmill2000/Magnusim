@@ -170,6 +170,8 @@ function lineTool(mode: SketchMode, id: 'line' | 'centerline'): SketchTool {
   let last: SketchPointer | null = null;
   let press: { client: [number, number]; onEnd: boolean } | null = null;
   let arcDrag = false;
+  /** ux010 (DRAW): the press just released drew a tangent arc (its drag is the tool's own). */
+  let arcDragged = false;
 
   function endChain() {
     start = null;
@@ -340,12 +342,17 @@ function lineTool(mode: SketchMode, id: 'line' | 'centerline'): SketchTool {
         : mode.view.get().lineArc && prev
           ? 'Click where the tangent arc ends (A switches back to a line).'
           : 'Click the next point, or type a length, Tab, an angle, Enter. A: tangent arc next. Double-click or Escape ends the chain.',
+    // ux010 (PANELS): the compact panel's one line while the chain is open (null: the first sentence).
+    shortHint: () => (start && !(mode.view.get().lineArc && prev) ? 'Click the next point, or type a length.' : null),
     cancel() {
       const had = !!start;
       endChain();
       mode.setPreview(null);
       return had;
     },
+    // ux010 (DRAW): no chain open: a click-drag draws one line from the press to the release.
+    dragDraw: () => !start,
+    ownsDrag: () => arcDrag || arcDragged,
     toggleArc() {
       if (!start || !prev) return false;
       mode.view.set({ lineArc: !mode.view.get().lineArc });
@@ -372,6 +379,7 @@ function lineTool(mode: SketchMode, id: 'line' | 'centerline'): SketchTool {
       }
       if (e.type === 'down') {
         press = { client: [e.clientX, e.clientY], onEnd: !!start && dist(e.uv, start.at) <= 8 * e.px };
+        arcDragged = false;
         return;
       }
       if (e.type === 'up') {
@@ -379,6 +387,7 @@ function lineTool(mode: SketchMode, id: 'line' | 'centerline'): SketchTool {
           // Fusion: a drag from the chain's end draws a tangent arc.
           commitArc(t.infer(e, { exclude: new Set([start.point]) }));
           arcDrag = false;
+          arcDragged = true;
           mode.refreshHint();
           show(e);
         }
@@ -404,6 +413,8 @@ function lineTool(mode: SketchMode, id: 'line' | 'centerline'): SketchTool {
         }
         if (mode.view.get().lineArc && prev) commitArc(t.infer(e, { exclude: new Set([start.point]) }));
         else commitLine(endOf(e));
+        // ux010 (DRAW): a click-drag drew one line; the next press starts a new one (SolidWorks).
+        if (e.fromDrag) endChain();
         mode.refreshHint();
         show(e);
         return;
@@ -523,6 +534,8 @@ function rectangleTool(mode: SketchMode, id: 'rectangle-corner' | 'rectangle-cen
     id,
     hint: () =>
       !first ? (center ? 'Click the centre of the rectangle.' : 'Click the first corner of the rectangle.') : 'Click the opposite corner, or type the width, Tab, the height, Enter.',
+    // ux010 (PANELS): the compact panel's one line.
+    shortHint: () => (first ? 'Click the opposite corner, or type its size.' : null),
     cancel() {
       const had = !!first;
       first = null;
@@ -530,6 +543,8 @@ function rectangleTool(mode: SketchMode, id: 'rectangle-corner' | 'rectangle-cen
       mode.setPreview(null);
       return had;
     },
+    // ux010 (DRAW): a click-drag draws the rectangle from the press to the release.
+    dragDraw: () => !first,
     box(bid, action, text) {
       boxes.set(bid, text);
       if (action === 'enter' && first && last) {
@@ -611,6 +626,8 @@ function circleTool(mode: SketchMode): SketchTool {
       mode.setPreview(null);
       return had;
     },
+    // ux010 (DRAW): a click-drag draws the circle: the centre at the press, the rim at the release.
+    dragDraw: () => !centre,
     box(bid, action, text) {
       boxes.set(bid, text);
       if (action === 'enter' && centre && last) {
@@ -752,6 +769,8 @@ function arcThreePointTool(mode: SketchMode): SketchTool {
       mode.setPreview(null);
       return had;
     },
+    // ux010 (DRAW): a click-drag places the arc's two ends; a click then bends it.
+    dragDraw: () => !a,
     box(bid, action, text) {
       boxes.set(bid, text);
       if (action === 'enter' && a && b && last) {
@@ -828,6 +847,8 @@ function tangentArcTool(mode: SketchMode): SketchTool {
       mode.setPreview(null);
       return had;
     },
+    // ux010 (DRAW): a click-drag from a curve's end draws the tangent arc to the release.
+    dragDraw: () => !from,
     pointer(e) {
       if (e.type === 'move') return show(e);
       if (e.type !== 'click') return;
@@ -874,6 +895,8 @@ function pointTool(mode: SketchMode): SketchTool {
     id: 'point',
     hint: () => 'Click to place a point.',
     cancel: () => false,
+    // ux010 (DRAW): a press that moves still places its point (where it was pressed).
+    dragDraw: () => false,
     pointer(e) {
       if (e.type === 'move') {
         const inf = t.infer(e);

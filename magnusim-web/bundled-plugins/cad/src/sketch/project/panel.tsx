@@ -19,17 +19,19 @@ import { breakLinks } from './curves';
 import { sourceDetail, sourceWords } from './source';
 import { intersectBodies, projectStateOf, sketchEnv } from './tools';
 
-export function LinksBlock({ mode, feature, draft }: { mode: SketchMode; feature: string; draft: SketchFeature }) {
+/** `refs` (ux010, the compact Sketch panel): 'lost' lists only the links that lost what they follow or whose source changed (each with its one line); 'none' only the tool's inputs (the collapsed panel's tool card). */
+export function LinksBlock({ mode, feature, draft, refs = 'all' }: { mode: SketchMode; feature: string; draft: SketchFeature; refs?: 'all' | 'lost' | 'none' }) {
   const services = useServices();
   const st = useStateStore(projectStateOf(services));
   const tool = useStateStore(mode.state, (s) => s.tool);
   const out = useStateStore(services.doc.state, (s) => s.rebuild.outputs[feature] as SketchOutput | undefined);
   const bodiesKey = useStateStore(services.doc.state, (s) => JSON.stringify(s.rebuild.bodies.filter((b) => b.visible).map((b) => b.id)));
   const [busy, setBusy] = useState(false);
-  const links = draft.links ?? [];
+  const allLinks = draft.links ?? [];
   const env = sketchEnv(services);
   const status = out?.type === 'sketch' ? (out.links ?? {}) : {};
   const shownBodies = JSON.parse(bodiesKey) as string[];
+  const links = refs === 'all' ? allLinks : refs === 'none' ? [] : allLinks.filter((l) => status[l.id]?.state === 'lost' || status[l.id]?.state === 'changed');
 
   const removeLink = (id: string) => {
     const l = links.find((x) => x.id === id);
@@ -89,7 +91,7 @@ export function LinksBlock({ mode, feature, draft }: { mode: SketchMode; feature
       ) : null}
       {links.length ? (
         <div className="cad-sk-section" data-sketch-links="1">
-          <div className="cad-field-group-title">References</div>
+          <div className="cad-field-group-title">{refs === 'all' ? 'References' : links.every((l) => status[l.id]?.state === 'lost') ? 'Lost references' : links.every((l) => status[l.id]?.state === 'changed') ? 'Changed references' : 'Lost and changed references'}</div>
           <ul className="cad-sk-links">
             {links.map((l) => {
               const s = status[l.id];
@@ -119,7 +121,7 @@ export function LinksBlock({ mode, feature, draft }: { mode: SketchMode; feature
               );
             })}
           </ul>
-          <Hint>Purple curves follow the model and are re-projected at every rebuild. Break link makes them ordinary geometry.</Hint>
+          {refs === 'all' ? <Hint>Purple curves follow the model and are re-projected at every rebuild. Break link makes them ordinary geometry.</Hint> : null}
         </div>
       ) : null}
     </>

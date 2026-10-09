@@ -285,3 +285,200 @@
 .cad-sketch-pick[data-problem='1'] {
   color: var(--mg-danger);
 }
+
+/* ==== ux010 PANELS (begin): the compact Sketch panel (src/sketch/panel.tsx) ==== */
+/* Narrower than a feature panel's 360 px: compact, it holds a hint, a tool's few fields and a value. */
+.tree-detail:not(.is-wide) > .cad-panel[data-cad-panel='sketch'] {
+  width: 288px;
+}
+
+/* The head, one line: the name (renamable) on the left takes the ellipsis (its full text is the tooltip);
+   the state dot and words, then the chevron, on the right keep their full width (review 2: the DOF
+   state was cut, "Over defined · 4 conflic…", and the name wrapped). */
+.cad-panel[data-cad-panel='sketch'] > .mgk-panel-head > :first-child {
+  min-width: 48px;
+  flex: 1 1 auto;
+}
+
+.cad-panel[data-cad-panel='sketch'] .mesh-title-row .mgk-panel-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cad-panel[data-cad-panel='sketch'] .mesh-title-row > button {
+  flex: none;
+}
+
+.cad-sk-head-aside {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: none;
+}
+
+.cad-sk-head-aside .cad-sk-state {
+  flex: none;
+  font-size: 12px;
+}
+
+.cad-sk-state-dot {
+  flex: none;
+}
+
+.cad-sk-state-words {
+  white-space: nowrap;
+}
+
+.cad-panel[data-cad-panel='sketch'] .cad-sk-hint:first-child {
+  margin-top: 0;
+}
+
+/* The dimension being edited or just placed. */
+.cad-sk-dimension-value {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  vertical-align: bottom;
+}
+
+/* Details ▸ in the foot, beside Delete: a quiet disclosure, not an action. */
+.cad-sk-details-btn {
+  margin: 0;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--mg-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.cad-sk-details-btn:hover,
+.cad-sk-details-btn:focus-visible {
+  color: var(--mg-text-strong);
+  text-decoration: underline;
+  outline: none;
+}
+
+/* The kit's focus ring (as the rails'), review 7. */
+.cad-sk-details-btn:focus-visible {
+  border-radius: 3px;
+  box-shadow: 0 0 0 2px var(--mg-focus);
+}
+/* The compact hint: one line, cut with an ellipsis (the full hint is the tooltip and in Details). */
+.cad-sk-hint.is-one-line > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The collapsed panel: its rail, and beside it the active tool's own inputs (the tool card). */
+.cad-rail-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-height: 100%;
+  min-height: 0;
+}
+
+.cad-rail-group > .cad-rail {
+  max-height: 100%;
+}
+
+.cad-tool-card {
+  box-sizing: border-box;
+  width: 248px;
+  padding: 8px 10px;
+  font-size: 12px;
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-card-border);
+  border-left: 3px solid var(--cad-panel-accent-sketch);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
+  animation: cad-rail-in 140ms ease-out;
+}
+
+.cad-tool-card .cad-sk-hint {
+  margin: 0 0 4px;
+}
+
+.cad-tool-card .cad-sk-section {
+  margin: 4px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cad-tool-card {
+    animation: none;
+  }
+}
+
+/* ==== ux010 PANELS (end) ==== */
+
+/* ==== ux010 DRAW (start): the construction drawing badge, a fillet's radius arrow ==== */
+/* Construction drawing on: a small badge at the top of the view (where the model's "Select a plane" prompt sits; never both). */
+.cad-sketch-annotations > .cad-sk-construction-badge {
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border: 1px dashed var(--mg-text-muted);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--mg-shadow-tooltip);
+  pointer-events: none;
+}
+.cad-sketch-annotations > .cad-sk-construction-badge[hidden] {
+  display: none;
+}
+/* The radius arrow: its tail on the arc, pointing away from the centre (rotated by the overlay); a press anywhere on it drags it. */
+.cad-sketch-annotations > .cad-sk-handle {
+  width: 34px;
+  height: 16px;
+  transform-origin: 0 0;
+  /* Review B1: the arrow takes the press itself (above the labels and glyphs it may cross). */
+  pointer-events: auto;
+  cursor: grab;
+  z-index: 3;
+  color: var(--mg-primary);
+}
+.cad-sk-handle svg {
+  display: block;
+  overflow: visible;
+}
+.cad-sk-handle svg path:first-child {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.cad-sk-handle svg path:last-child {
+  fill: currentColor;
+  stroke: var(--mg-bg);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+.cad-sk-handle::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 3px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: var(--mg-bg);
+  box-sizing: border-box;
+}
+.cad-sk-handle.is-active {
+  color: var(--cad-pick);
+}
+/* ==== ux010 DRAW (end) ==== */

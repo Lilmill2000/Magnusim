@@ -22,6 +22,15 @@
 // Users rearrange both: right-click a command (or a More item) for Move to More /
 // Show in toolbar / Move left / Move right / Reset toolbar, or drag a command
 // along its group. The layout is kept in the project (toolbar-layout.ts).
+// UX 0.1.0 (Daniel 2026-10-07: "I need to be able to drag something from More onto the main
+// toolbar and it replaced the last thing there"): a command dragged out of its group's More menu
+// onto the bar goes in where it is dropped, and the group's last command on the bar goes to More
+// (dropped on the last slot or after it, it takes that slot); a bar command dragged into its
+// group's open More menu (or onto its More button) goes to More. While dragging, a marker shows
+// where it lands, the command that will leave is highlighted and a note under the pointer says so
+// ("Spline moves to More"); over another group the note says it can only go in its own group, the
+// pointer shows not-allowed, and a drop there changes nothing. The keyboard's way: a More item's
+// right-click menu has "Swap with <the bar's last>" (useToolbarDrag, customizer).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -33,8 +42,8 @@ import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { PARAMS_ID, REDO_ID, UNDO_ID } from './commands';
 import { uiFor, type UiState } from './controller';
 import { Icon, ICONS } from './Icon';
-import { useTip, type MenuEntry } from './kit';
-import { isDefault, layoutModeOf, orderIds, pinned, placeOf, toolbarPrefs, withMove, withPlace, type LayoutMode, type ModeLayout, type ToolbarPrefs } from './toolbar-layout';
+import { hideTip, useTip, type MenuEntry } from './kit';
+import { held, isDefault, layoutModeOf, orderIds, pinned, placeOf, toolbarPrefs, withMove, withPlace, withSwapIn, type LayoutMode, type ModeLayout, type ToolbarPrefs } from './toolbar-layout';
 
 /**
  * The order in which commands fold into their group's "More" menu when the labelled toolbar does
@@ -151,6 +160,7 @@ function viewCommands(services: AppServices, mode: Mode): CommandDef[] {
 }
 
 function isActive(c: CommandDef, panel: UiState['panel'], sketchTool: string | null): boolean {
+  if (c.pressed?.()) return true; // ux010 (DRAW): a toggled mode (sketch.construction)
   if (c.activeWhen?.sketchTool && sketchTool === c.activeWhen.sketchTool) return true;
   if (!panel) return false;
   if (c.id === PARAMS_ID) return panel.kind === 'params';
@@ -170,17 +180,14 @@ function reasonOf(c: CommandDef, services: AppServices): string | null {
   return ok === true ? null : ok;
 }
 
-/** What a group's button may do besides running its command: its right-click menu and the drag along the group. */
+/** What a group's button may do besides running its command: its right-click menu and a drag (useToolbarDrag). */
 interface ButtonCustom {
   onContextMenu(e: React.MouseEvent<HTMLButtonElement>): void;
   onPointerDown?(e: React.PointerEvent<HTMLButtonElement>): void;
-  onPointerMove?(e: React.PointerEvent<HTMLButtonElement>): void;
-  onPointerUp?(e: React.PointerEvent<HTMLButtonElement>): void;
-  onPointerCancel?(e: React.PointerEvent<HTMLButtonElement>): void;
-  /** A click that ended a drag does not run the command. */
-  takeClick?(): boolean;
   dragging?: boolean;
   drop?: 'before' | 'after' | null;
+  /** UX 0.1.0: the command a drop from More would send to More ("Spline moves to More"). */
+  displaced?: boolean;
 }
 
 function ToolbarButton({ c, services, active, index, primary = false, custom }: { c: CommandDef; services: AppServices; active: boolean; index: number; primary?: boolean; custom?: ButtonCustom }) {
@@ -190,7 +197,7 @@ function ToolbarButton({ c, services, active, index, primary = false, custom }: 
   return (
     <button
       type="button"
-      className={`tb-btn${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}${custom?.dragging ? ' is-dragging' : ''}${drop}`}
+      className={`tb-btn${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}${custom?.dragging ? ' is-dragging' : ''}${drop}${custom?.displaced ? ' is-displaced' : ''}`}
       data-command={c.id}
       data-index={index}
       aria-label={c.label}
@@ -201,11 +208,11 @@ function ToolbarButton({ c, services, active, index, primary = false, custom }: 
       {...tip}
       onContextMenu={custom?.onContextMenu}
       onPointerDown={custom?.onPointerDown}
-      onPointerMove={custom?.onPointerMove}
-      onPointerUp={custom?.onPointerUp}
-      onPointerCancel={custom?.onPointerCancel}
       onClick={() => {
-        if (custom?.takeClick?.()) return;
+        // A More menu left open beside this button (a press here no longer closes it: a bar
+        // command may be dragged into it) closes on the click.
+        const ui = uiFor(services);
+        if (ui.state.get().menu) ui.closeMenu();
         if (reason) return;
         void services.commands.run(c.id);
       }}
@@ -232,6 +239,8 @@ function MoreButton({
   panel,
   sketchTool,
   itemMenu,
+  onItemPress,
+  dropInto = false,
 }: {
   group: string;
   label: string;
@@ -242,6 +251,10 @@ function MoreButton({
   sketchTool: string | null;
   /** The right-click menu of one of its items (Show in toolbar, Reset toolbar). */
   itemMenu?(c: CommandDef, x: number, y: number): void;
+  /** UX 0.1.0: a press on one of its items (it may be dragged onto the bar). */
+  onItemPress?(c: CommandDef, e: React.PointerEvent<HTMLButtonElement>): void;
+  /** A bar command dragged here would go to More. */
+  dropInto?: boolean;
 }) {
   const ui = uiFor(services);
   const owner = `tb-more:${group}`;
@@ -263,7 +276,10 @@ function MoreButton({
       ...(c.hint ? { hint: c.hint } : {}),
       disabled: reasonOf(c, services),
       active: isActive(c, panel, sketchTool),
+      // ux010 (review N2): a toggle (Construction drawing) is a checkbox item with its check mark.
+      ...(c.pressed ? { checked: !!c.pressed() } : {}),
       ...(itemMenu ? { onContext: (x: number, y: number) => itemMenu(c, x, y) } : {}),
+      ...(onItemPress ? { onPress: (e: React.PointerEvent<HTMLButtonElement>) => onItemPress(c, e) } : {}),
       run: () => void services.commands.run(c.id),
     }));
     ui.showMenu(r.left, r.bottom + 2, items, name, { owner, anchor: el });
@@ -279,7 +295,7 @@ function MoreButton({
     <button
       ref={ref}
       type="button"
-      className={`tb-btn tb-more${active ? ' is-active' : ''}${open ? ' is-open' : ''}`}
+      className={`tb-btn tb-more${active ? ' is-active' : ''}${open ? ' is-open' : ''}${dropInto ? ' is-drop-into' : ''}`}
       data-tb-more={group}
       data-index={first}
       data-more-commands={commands.map((c) => c.id).join(' ')}
@@ -309,13 +325,45 @@ function MoreButton({
 interface GroupCustom {
   /** The right-click menu of a command shown in the group. */
   barMenu(c: CommandDef, shown: string[], x: number, y: number): void;
-  /** The right-click menu of a command in the group's More. */
-  moreMenu(c: CommandDef, x: number, y: number): void;
-  /** Move `id` to just before `before` (null: the end) in the group's order. */
-  move(id: string, before: string | null): void;
+  /** The right-click menu of a command in the group's More (`shown`: the group's commands on the bar). */
+  moreMenu(c: CommandDef, shown: string[], x: number, y: number): void;
+}
+
+/** The drop mark on a bar button: the dragged command lands before or after it. */
+interface Mark {
+  target: string;
+  after: boolean;
+}
+
+/** Where a toolbar drag would drop now (useToolbarDrag). */
+type DropAt =
+  /** A More command onto its group's bar, at gap `index`; `displaced` goes to More. */
+  | { kind: 'bar'; group: string; index: number; mark: Mark | null; displaced: string | null }
+  /** A bar command along its group. */
+  | { kind: 'move'; group: string; mark: Mark }
+  /** A bar command into its group's More (the open menu, or the More button). */
+  | { kind: 'more'; group: string; menu: boolean }
+  /** Over another group: refused, nothing changes. */
+  | { kind: 'refused'; group: string }
+  | { kind: 'none' };
+
+/** The drag in progress, as the toolbar draws it. */
+interface DragView {
+  id: string;
+  group: string;
+  from: 'bar' | 'more';
+  label: string;
+  icon?: string;
+  x: number;
+  y: number;
+  at: DropAt;
+  /** The note under the pointer ("Spline moves to More"), or null. */
+  note: string | null;
 }
 
 const DRAG_PX = 6;
+/** A More item becomes a drag when the pointer leaves it or goes this far up (toward the bar). */
+const MORE_PX = 10;
 
 function Group({
   id,
@@ -329,6 +377,8 @@ function Group({
   primary = false,
   custom,
   menu,
+  drag,
+  startDrag,
 }: {
   id: string;
   label: string;
@@ -342,25 +392,15 @@ function Group({
   custom?: GroupCustom;
   /** VIEW, EDIT and the primary action: their right-click menu (Reset toolbar). */
   menu?(x: number, y: number): void;
+  /** The toolbar's drag in progress (any group's), to draw its marks here. */
+  drag?: DragView | null;
+  /** A press on one of the group's commands, on the bar or in its More: it may become a drag. */
+  startDrag?(c: CommandDef, from: 'bar' | 'more', e: React.PointerEvent<HTMLButtonElement>): void;
 }) {
   const more = folded ? commands.filter((c) => folded.has(c.id)) : [];
   const shown = commands.filter((c) => !more.includes(c)).map((c) => c.id);
-  const items = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: string; x0: number; pointer: number; active: boolean } | null>(null);
-  const ate = useRef(false);
-  const [mark, setMark] = useState<{ id: string; target: string; after: boolean } | null>(null);
-  /** The shown button nearest the pointer (not the dragged one) and its side. */
-  const targetAt = (x: number, from: string): { target: string; after: boolean } | null => {
-    const els = [...(items.current?.querySelectorAll<HTMLElement>('.tb-btn[data-command]') ?? [])].filter((el) => el.dataset.command !== from);
-    let best: { target: string; after: boolean; d: number } | null = null;
-    for (const el of els) {
-      const r = el.getBoundingClientRect();
-      const mid = (r.left + r.right) / 2;
-      const d = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
-      if (!best || d < best.d) best = { target: el.dataset.command ?? '', after: x > mid, d };
-    }
-    return best ? { target: best.target, after: best.after } : null;
-  };
+  const at = drag?.at;
+  const mark = at && (at.kind === 'bar' || at.kind === 'move') && at.group === id ? at.mark : null;
   const customFor = (c: CommandDef): ButtonCustom | undefined => {
     if (!custom) return menu ? { onContextMenu: (e) => (e.preventDefault(), e.stopPropagation(), menu(e.clientX, e.clientY)) } : undefined;
     return {
@@ -370,52 +410,18 @@ function Group({
         custom.barMenu(c, shown, e.clientX, e.clientY);
       },
       onPointerDown(e) {
-        if (e.button !== 0) return;
-        ate.current = false;
-        drag.current = { id: c.id, x0: e.clientX, pointer: e.pointerId, active: false };
-        try {
-          e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {
-          /* synthetic events */
-        }
+        startDrag?.(c, 'bar', e);
       },
-      onPointerMove(e) {
-        const d = drag.current;
-        if (!d || d.pointer !== e.pointerId || d.id !== c.id) return;
-        if (!d.active && Math.abs(e.clientX - d.x0) < DRAG_PX) return;
-        d.active = true;
-        const t = targetAt(e.clientX, d.id);
-        setMark(t ? { id: d.id, ...t } : { id: d.id, target: '', after: false });
-      },
-      onPointerUp(e) {
-        const d = drag.current;
-        drag.current = null;
-        if (!d || d.pointer !== e.pointerId || !d.active) return;
-        ate.current = true;
-        setMark(null);
-        const t = targetAt(e.clientX, d.id);
-        if (!t || !t.target) return;
-        const rest = commands.map((x) => x.id).filter((x) => x !== d.id);
-        const before = t.after ? (rest[rest.indexOf(t.target) + 1] ?? null) : t.target;
-        custom.move(d.id, before);
-      },
-      onPointerCancel() {
-        drag.current = null;
-        setMark(null);
-      },
-      takeClick() {
-        const was = ate.current;
-        ate.current = false;
-        return was;
-      },
-      dragging: mark?.id === c.id,
+      dragging: drag?.from === 'bar' && drag.id === c.id,
       drop: mark && mark.target === c.id ? (mark.after ? 'after' : 'before') : null,
+      displaced: at?.kind === 'bar' && at.group === id && at.displaced === c.id,
     };
   };
   return (
     <div
-      className={`tb-group${end ? ' is-end' : ''}`}
+      className={`tb-group${end ? ' is-end' : ''}${at?.kind === 'refused' && at.group === id ? ' is-drop-refused' : ''}`}
       data-group={id}
+      data-drop-refused={at?.kind === 'refused' && at.group === id ? '1' : undefined}
       role="group"
       aria-label={label}
       onContextMenu={
@@ -428,7 +434,8 @@ function Group({
       }
     >
       <div className="tb-group-label">{label}</div>
-      <div className="tb-items" ref={items}>
+      {/* data-menu-keep: a press on the group's buttons leaves its open More menu open (a bar command may be dragged into it). */}
+      <div className="tb-items" data-menu-keep={custom ? '1' : undefined}>
         {commands.map((c, i) =>
           more.includes(c) ? null : <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} custom={customFor(c)} />,
         )}
@@ -441,7 +448,9 @@ function Group({
             services={services}
             panel={panel}
             sketchTool={sketchTool}
-            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(c, x, y) } : {})}
+            dropInto={at?.kind === 'more' && at.group === id}
+            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(c, shown, x, y) } : {})}
+            {...(custom && startDrag ? { onItemPress: (c: CommandDef, e: React.PointerEvent<HTMLButtonElement>) => startDrag(c, 'more', e) } : {})}
           />
         ) : null}
       </div>
@@ -453,7 +462,10 @@ function Group({
  * The right-click menus that rearrange the toolbar (P4b fix round 1). A command on the bar: Move to
  * More, Move left / Move right (the keyboard's and the mouse's way to reorder, besides a drag),
  * Reset toolbar. A command in More: Show in toolbar (greyed with the reason when the frame is too
- * narrow for it), Reset toolbar. Anywhere else on the toolbar: Reset toolbar.
+ * narrow for it), Swap with <the bar's last> (UX 0.1.0: the keyboard's way to do what a drag from
+ * More onto the bar's last slot does), Reset toolbar. Anywhere else on the toolbar: Reset toolbar.
+ * "Show in toolbar" still adds the command without sending another to More: it is the only way to
+ * give a group more commands on the bar (model mode starts with one or two per group).
  */
 function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode, m: ModeLayout, fitFolded: ReadonlySet<string>) {
   const ui = uiFor(services);
@@ -464,6 +476,7 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
     disabled: isDefault(m) ? 'The toolbar is already as it was at first' : null,
     run: () => prefs.reset(mode),
   };
+  const labelOf = (id: string) => services.commands.get(id)?.label ?? id;
   const forGroup = (group: string, order: string[]): GroupCustom => ({
     barMenu(c, shown, x, y) {
       const i = shown.indexOf(c.id);
@@ -491,8 +504,9 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
         `Toolbar: ${c.label}`,
       );
     },
-    moreMenu(c, x, y) {
+    moreMenu(c, shown, x, y) {
       const stuck = pinned(m, c.id) && fitFolded.has(c.id);
+      const last = shown.length ? shown[shown.length - 1] : null;
       ui.showMenu(
         x,
         y,
@@ -503,18 +517,327 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
             disabled: stuck ? 'The toolbar is full at this width: move another command to More to make room' : null,
             run: () => set(withPlace(m, c.id, 'bar', mode, KEEP_SET)),
           },
+          ...(last
+            ? [
+                {
+                  id: 'tb-swap',
+                  label: `Swap with ${labelOf(last)}`,
+                  run: () => set(withSwapIn(m, group, order, shown, c.id, shown.length, mode, KEEP_SET)),
+                },
+              ]
+            : []),
           { sep: true, id: 'tb-sep' },
           reset,
         ],
         `Toolbar: ${c.label}`,
       );
     },
-    move(id, before) {
-      set(withMove(m, group, order, id, before));
-    },
   });
   const menu = (x: number, y: number) => ui.showMenu(x, y, [reset], 'Toolbar');
   return { forGroup, menu };
+}
+
+/** What the toolbar's drag needs from the current render (read when the pointer moves or lets go). */
+interface DragLive {
+  services: AppServices;
+  prefs: ToolbarPrefs;
+  mode: LayoutMode;
+  m: ModeLayout;
+  groups: { group: string; label: string; order: string[] }[];
+}
+
+const rectHas = (r: DOMRect, x: number, y: number) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+
+/**
+ * Dragging a command (UX 0.1.0): from a group's More menu onto its bar, from the bar into its More,
+ * or along the bar. Pointer events on the window (the menu's item goes away while it is dragged,
+ * so nothing is captured there), so it works with a mouse in the sandboxed frame. A press becomes
+ * a drag after DRAG_PX; Escape cancels it; the click that ends a drag runs nothing.
+ */
+function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React.RefObject<DragLive>) {
+  const [view, setView] = useState<DragView | null>(null);
+  const cur = useRef<(DragView & { pointer: number; x0: number; y0: number; active: boolean }) | null>(null);
+  const stop = useRef<(() => void) | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => () => stop.current?.(), []);
+
+  const menuEl = () => document.querySelector<HTMLElement>('[data-cad-menu]');
+  const groupEl = (g: string) => bar.current?.querySelector<HTMLElement>(`:scope > .tb-group[data-group="${CSS.escape(g)}"]`) ?? null;
+  /** The toolbar group under (or nearest above or below) the pointer, or null off the toolbar. */
+  const groupAt = (x: number, y: number): string | null => {
+    const root = bar.current;
+    if (!root) return null;
+    const r = root.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top - 4 || y > r.bottom + 12) return null;
+    let best: { g: string; d: number } | null = null;
+    for (const el of root.querySelectorAll<HTMLElement>(':scope > .tb-group')) {
+      const gr = el.getBoundingClientRect();
+      const d = x < gr.left ? gr.left - x : x > gr.right ? x - gr.right : 0;
+      if (!best || d < best.d) best = { g: el.dataset.group ?? '', d };
+    }
+    return best && best.d <= 12 ? best.g : null;
+  };
+  const buttonsOf = (g: string, except?: string) =>
+    [...(groupEl(g)?.querySelectorAll<HTMLElement>('.tb-items > .tb-btn[data-command]') ?? [])].filter((el) => el.dataset.command !== except);
+
+  const dropAt = (d: DragView, x: number, y: number): DropAt => {
+    const menu = menuEl();
+    const ui = uiFor(live.current.services);
+    if (menu && rectHas(menu.getBoundingClientRect(), x, y)) {
+      // In the open menu: a More command is back home; a bar command goes into its own group's More.
+      if (d.from === 'more') return { kind: 'none' };
+      return ui.state.get().menu?.owner === `tb-more:${d.group}` ? { kind: 'more', group: d.group, menu: true } : { kind: 'none' };
+    }
+    const g = groupAt(x, y);
+    if (g == null) return { kind: 'none' };
+    if (g !== d.group) return { kind: 'refused', group: g };
+    if (d.from === 'more') {
+      const btns = buttonsOf(g);
+      const shown = btns.map((el) => el.dataset.command ?? '');
+      const index = btns.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return x > (r.left + r.right) / 2;
+      }).length;
+      const mark = index < shown.length ? { target: shown[index], after: false } : shown.length ? { target: shown[shown.length - 1], after: true } : null;
+      return { kind: 'bar', group: g, index, mark, displaced: shown.length ? shown[shown.length - 1] : null };
+    }
+    // A bar command: onto its group's More button is Move to More; elsewhere in the group, a move.
+    const mr = groupEl(g)?.querySelector<HTMLElement>('[data-tb-more]')?.getBoundingClientRect();
+    if (mr && x >= mr.left && x <= mr.right) return { kind: 'more', group: g, menu: false };
+    let best: { target: string; after: boolean; dist: number } | null = null;
+    for (const el of buttonsOf(g, d.id)) {
+      const r = el.getBoundingClientRect();
+      const dist = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+      if (!best || dist < best.dist) best = { target: el.dataset.command ?? '', after: x > (r.left + r.right) / 2, dist };
+    }
+    return best ? { kind: 'move', group: g, mark: { target: best.target, after: best.after } } : { kind: 'none' };
+  };
+
+  const noteOf = (d: DragView, at: DropAt): string | null => {
+    const label = (id: string) => live.current.services.commands.get(id)?.label ?? id;
+    if (at.kind === 'bar') return at.displaced ? `${label(at.displaced)} moves to More` : `${d.label} goes on the toolbar`;
+    if (at.kind === 'more') return `${d.label} moves to More`;
+    if (at.kind === 'refused') {
+      const own = live.current.groups.find((g) => g.group === d.group)?.label ?? '';
+      return `${d.label} can only go in ${groupWords(own)}`;
+    }
+    return null;
+  };
+
+  const apply = (d: DragView, at: DropAt) => {
+    const { services, prefs, mode, m, groups } = live.current;
+    const g = groups.find((x) => x.group === d.group);
+    if (!g) return;
+    if (at.kind === 'bar' && at.group === d.group) {
+      const shown = buttonsOf(d.group).map((el) => el.dataset.command ?? '');
+      prefs.setMode(mode, withSwapIn(m, d.group, g.order, shown, d.id, at.index, mode, KEEP_SET));
+      uiFor(services).closeMenu();
+    } else if (at.kind === 'more' && at.group === d.group) {
+      prefs.setMode(mode, withPlace(m, d.id, 'more', mode, KEEP_SET));
+      // The open menu lists the group's More as it was: it closes (the More button lists it now).
+      uiFor(services).closeMenu();
+    } else if (at.kind === 'move' && at.group === d.group) {
+      const rest = g.order.filter((x) => x !== d.id);
+      const before = at.mark.after ? (rest[rest.indexOf(at.mark.target) + 1] ?? null) : at.mark.target;
+      prefs.setMode(mode, withMove(m, d.group, g.order, d.id, before));
+    }
+  };
+
+  const start = (c: CommandDef, group: string, from: 'bar' | 'more', e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return;
+    stop.current?.();
+    const pressed = e.currentTarget;
+    if (from === 'bar') {
+      try {
+        pressed.setPointerCapture(e.pointerId);
+      } catch {
+        /* synthetic events */
+      }
+    }
+    // A More item: the drag starts once the pointer leaves the item or goes MORE_PX toward the bar,
+    // so a click with a moving hand still runs it (review S6).
+    const item = from === 'more' ? pressed.getBoundingClientRect() : null;
+    const d: DragView & { pointer: number; x0: number; y0: number; active: boolean } = {
+      id: c.id,
+      group,
+      from,
+      label: c.label,
+      ...(c.icon ? { icon: c.icon } : {}),
+      x: e.clientX,
+      y: e.clientY,
+      at: { kind: 'none' },
+      note: null,
+      pointer: e.pointerId,
+      x0: e.clientX,
+      y0: e.clientY,
+      active: false,
+    };
+    cur.current = d;
+    const root = document.documentElement;
+    let menuDrop = false;
+    const setMenuDrop = (on: boolean) => {
+      if (on === menuDrop) return;
+      menuDrop = on;
+      const el = menuEl();
+      if (el) {
+        if (on) el.dataset.dropInto = '1';
+        else delete el.dataset.dropInto;
+      }
+    };
+    /** What the toolbar draws for the drop changed: the marks and the note (one render per change, not per move). */
+    let drawn = '';
+    const show = (x: number, y: number) => {
+      const at = dropAt(d, x, y);
+      d.x = x;
+      d.y = y;
+      d.at = at;
+      d.note = noteOf(d, at);
+      const ghost = ghostRef.current;
+      if (ghost) {
+        ghost.style.left = `${x + 14}px`;
+        ghost.style.top = `${y + 16}px`;
+      }
+      const key = JSON.stringify([at, d.note]);
+      if (key !== drawn || !ghost) {
+        drawn = key;
+        root.classList.toggle('cad-tb-drag-refused', at.kind === 'refused');
+        setMenuDrop(at.kind === 'more' && at.menu);
+        setView({ id: d.id, group: d.group, from: d.from, label: d.label, ...(d.icon ? { icon: d.icon } : {}), x, y, at, note: d.note });
+      }
+      return at;
+    };
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== d.pointer) return;
+      // No button held: the press ended where this frame did not hear it (review S5). Drop nothing.
+      if ((ev.buttons & 1) === 0) {
+        end();
+        return;
+      }
+      if (!d.active) {
+        const far = item
+          ? !rectHas(item, ev.clientX, ev.clientY) || d.y0 - ev.clientY > MORE_PX
+          : Math.max(Math.abs(ev.clientX - d.x0), Math.abs(ev.clientY - d.y0)) >= DRAG_PX;
+        if (!far) return;
+        d.active = true;
+        root.classList.add('cad-tb-drag');
+      }
+      hideTip();
+      const at = show(ev.clientX, ev.clientY);
+      // From a More menu: it stays open until the pointer leaves it toward the bar (above it, or over the toolbar).
+      if (d.from === 'more') {
+        const ui = uiFor(live.current.services);
+        const menu = menuEl();
+        if (menu && ui.state.get().menu?.owner === `tb-more:${d.group}`) {
+          const r = menu.getBoundingClientRect();
+          if (!rectHas(r, ev.clientX, ev.clientY) && (ev.clientY < r.top || at.kind !== 'none')) ui.closeMenu();
+        }
+      }
+    };
+    const listen = (on: boolean) => {
+      const f = on ? window.addEventListener.bind(window) : window.removeEventListener.bind(window);
+      f('pointermove', move as EventListener, true);
+      f('pointerup', up as EventListener, true);
+      f('pointercancel', cancel as EventListener, true);
+      f('pointerdown', again as EventListener, true);
+      f('keydown', key as EventListener, true);
+      f('blur', lost);
+      if (on) document.addEventListener('visibilitychange', hidden);
+      else document.removeEventListener('visibilitychange', hidden);
+      if (from === 'bar') {
+        if (on) pressed.addEventListener('lostpointercapture', lost);
+        else pressed.removeEventListener('lostpointercapture', lost);
+      }
+    };
+    const end = () => {
+      listen(false);
+      root.classList.remove('cad-tb-drag', 'cad-tb-drag-refused');
+      setMenuDrop(false);
+      if (cur.current === d) cur.current = null;
+      if (stop.current === end) stop.current = null;
+      setView(null);
+    };
+    // The click that ends a drag (on the dragged button, or wherever it ended) runs nothing.
+    const eatClick = () => {
+      const eat = (ce: MouseEvent) => {
+        ce.stopPropagation();
+        ce.preventDefault();
+      };
+      window.addEventListener('click', eat, true);
+      setTimeout(() => window.removeEventListener('click', eat, true), 0);
+    };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== d.pointer) return;
+      const was = d.active;
+      const at = was ? dropAt(d, ev.clientX, ev.clientY) : null;
+      end();
+      if (!was || !at) return;
+      // Let go back on the More item it started from: a click (the item runs), not a drop.
+      if (at.kind === 'none' && item && rectHas(item, ev.clientX, ev.clientY) && menuEl()) return;
+      eatClick();
+      apply(d, at);
+    };
+    const cancel = (ev: PointerEvent) => {
+      if (ev.pointerId === d.pointer) end();
+    };
+    // The press is gone without a pointerup here (the window lost focus, the tab was hidden, the
+    // button lost its capture, or a new press began): end the drag and drop nothing (review S5).
+    const lost = () => end();
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') end();
+    };
+    const again = () => end();
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' && d.active) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        end();
+        // Cancelled: letting go afterwards runs nothing either. Only that release: a later press
+        // (or the window losing focus) forgets it, so no later click is ever eaten.
+        const forget = () => {
+          window.removeEventListener('pointerup', late, true);
+          window.removeEventListener('pointerdown', forget, true);
+          window.removeEventListener('blur', forget);
+        };
+        const late = (ue: PointerEvent) => {
+          if (ue.pointerId !== d.pointer) return;
+          forget();
+          eatClick();
+        };
+        window.addEventListener('pointerup', late, true);
+        window.addEventListener('pointerdown', forget, true);
+        window.addEventListener('blur', forget);
+      }
+    };
+    listen(true);
+    stop.current = end;
+  };
+  return { view, start, ghostRef };
+}
+
+/** The dragged command under the pointer, and the note on where it goes (or why it cannot go there). */
+function DragGhost({ view, ghostRef }: { view: DragView; ghostRef: React.RefObject<HTMLDivElement | null> }) {
+  const refused = view.at.kind === 'refused';
+  return (
+    <div
+      ref={ghostRef}
+      className={`tb-drag-ghost${refused ? ' is-refused' : ''}`}
+      data-tb-ghost={view.id}
+      data-drop={view.at.kind}
+      aria-hidden="true"
+      style={{ left: view.x + 14, top: view.y + 16 }}
+    >
+      <div className="tb-drag-chip">
+        <span className="tb-drag-ico">{view.icon ? <Icon d={view.icon} size={16} stroke={1.7} /> : null}</span>
+        <span>{view.label}</span>
+        {refused ? <span className="tb-drag-no" /> : null}
+      </div>
+      {view.note ? (
+        <div className="tb-drag-note" data-tb-drop-note>
+          {view.note}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -597,10 +920,12 @@ export function Toolbar() {
   const placedMore = new Set(groups.flatMap((g) => g.order.filter((x) => placeOf(x, lmode, ml, KEEP_SET) === 'more')));
   // The commands that may fold here, in folding order (only the mode's groups' own commands on the bar).
   const present = new Set(groups.flatMap((g) => g.order));
-  // What the user asked to see ("Show in toolbar") folds last, after the rest in FOLD_ORDER.
+  // What the user asked to see ("Show in toolbar") folds last, after the rest in FOLD_ORDER. A
+  // command dragged onto the bar from More (UX 0.1.0, `held`) never folds for the width: the
+  // group's other commands fold first (review B2).
   const foldable = [
-    ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !pinned(ml, x)),
-    ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && pinned(ml, x)),
+    ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !held(ml, x) && !pinned(ml, x)),
+    ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !held(ml, x) && pinned(ml, x)),
   ];
   const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 2);
   // Tests wait for the stored layout: the attribute is set without a render.
@@ -625,6 +950,10 @@ export function Toolbar() {
   const fitFolded = new Set(foldable.slice(0, Math.max(0, Math.min(fit.level - 1, foldable.length))));
   const folded = new Set([...placedMore, ...fitFolded]);
   const cz = customizer(services, prefs, lmode, ml, fitFolded);
+  // UX 0.1.0: dragging between a group's More and its bar (the handlers read this render's layout).
+  const live = useRef<DragLive>({ services, prefs, mode: lmode, m: ml, groups: [] });
+  live.current = { services, prefs, mode: lmode, m: ml, groups: groups.map((g) => ({ group: g.group, label: g.label, order: g.order })) };
+  const drag = useToolbarDrag(bar, live);
   const iconLevel = fit.level >= foldable.length + 2 ? 2 : fit.level >= 1 ? 1 : 0;
   const view = viewCommands(services, mode);
   // Sketch mode undoes inside the sketch (its own Undo / Redo); model mode the document's.
@@ -634,37 +963,42 @@ export function Toolbar() {
   const primary = services.commands.all().filter((c) => c.primary && c.icon && modeOk(c, mode));
   if (!groups.length && !view.length && !edit.length && !primary.length) return null;
   return (
-    <div
-      ref={barRef}
-      className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}`}
-      role="toolbar"
-      aria-label="Commands"
-      data-cad-toolbar={mode}
-      data-fit={iconLevel}
-      data-folded={folded.size}
-      data-fit-folded={fitFolded.size}
-      data-layout={isDefault(ml) ? 'default' : 'custom'}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        cz.menu(e.clientX, e.clientY);
-      }}
-    >
-      {groups.map((g) => (
-        <Group
-          key={g.group}
-          id={g.group}
-          label={g.label}
-          commands={g.commands}
-          folded={folded}
-          services={services}
-          panel={panel}
-          sketchTool={sketchTool}
-          custom={cz.forGroup(g.group, g.order)}
-        />
-      ))}
-      {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary menu={cz.menu} /> : null}
-      {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} menu={cz.menu} /> : null}
-      {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end menu={cz.menu} /> : null}
-    </div>
+    <>
+      <div
+        ref={barRef}
+        className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}`}
+        role="toolbar"
+        aria-label="Commands"
+        data-cad-toolbar={mode}
+        data-fit={iconLevel}
+        data-folded={folded.size}
+        data-fit-folded={fitFolded.size}
+        data-layout={isDefault(ml) ? 'default' : 'custom'}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          cz.menu(e.clientX, e.clientY);
+        }}
+      >
+        {groups.map((g) => (
+          <Group
+            key={g.group}
+            id={g.group}
+            label={g.label}
+            commands={g.commands}
+            folded={folded}
+            services={services}
+            panel={panel}
+            sketchTool={sketchTool}
+            custom={cz.forGroup(g.group, g.order)}
+            drag={drag.view}
+            startDrag={(c, from, e) => drag.start(c, g.group, from, e)}
+          />
+        ))}
+        {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary menu={cz.menu} drag={drag.view} /> : null}
+        {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} menu={cz.menu} drag={drag.view} /> : null}
+        {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end menu={cz.menu} drag={drag.view} /> : null}
+      </div>
+      {drag.view ? <DragGhost view={drag.view} ghostRef={drag.ghostRef} /> : null}
+    </>
   );
 }

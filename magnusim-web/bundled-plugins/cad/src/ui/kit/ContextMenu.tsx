@@ -35,6 +35,11 @@ export interface MenuItem {
   checked?: boolean;
   /** P4b fix 1 (TOOLBAR): a right-click on the item (the More menus' items: Show in toolbar). */
   onContext?(x: number, y: number): void;
+  /**
+   * UX 0.1.0 (TOOLBAR): a press on the item, which may start a drag (a More menu's item dragged
+   * onto the toolbar). The click that ends a drag is swallowed by the dragger, not here.
+   */
+  onPress?(e: React.PointerEvent<HTMLButtonElement>): void;
   run(): void;
 }
 export type MenuEntry = MenuItem | { sep: true; id: string };
@@ -69,6 +74,7 @@ function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem):
       data-disabled-reason={item.disabled || undefined}
       {...tip}
       onPointerEnter={(e) => onHover(e.currentTarget, !!item.disabled)}
+      onPointerDown={item.onPress}
       onContextMenu={
         item.onContext
           ? (e) => {
@@ -84,6 +90,8 @@ function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem):
     >
       {cmd ? (
         <>
+          {/* ux010 (TOOLBAR, review N2): a command that toggles a mode (Construction) shows its state. */}
+          {item.checked != null ? <span className="cad-menu-check" aria-hidden="true" data-on={item.checked ? '1' : undefined} /> : null}
           <span className="cad-menu-ico">{item.icon ? <Icon d={item.icon} size={16} stroke={1.7} /> : null}</span>
           <span className="cad-menu-label">{item.label}</span>
           {item.shortcut ? <kbd className="cad-menu-key">{item.shortcut}</kbd> : null}
@@ -121,6 +129,9 @@ export function ContextMenu({ x, y, items, onClose, label = 'Actions', anchor = 
       const t = e.target as Node;
       // A press on the button that opened it is that button's own (it toggles the menu).
       if (anchor?.contains(t)) return;
+      // UX 0.1.0 (TOOLBAR): nor a press beside it in a [data-menu-keep] (a toolbar group's buttons,
+      // one of which may be dragged into this More menu); the toolbar closes it on their click.
+      if (anchor?.closest('[data-menu-keep]')?.contains(t)) return;
       if (ref.current && !ref.current.contains(t)) onClose();
     };
     const onBlur = () => onClose();

@@ -9,7 +9,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { PNG } from './png';
-import { addSolid, chipVolumes, commandControl, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, chipVolumes, commandControl, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, watchPage, workspaceFrame } from './helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -107,6 +107,8 @@ async function sketchOn(page: Page, frame: FrameLocator, plane: 'top' | 'front' 
   await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await idle(page);
+  // ux010: the references are under the Sketch panel's Details (every test here reads them).
+  await openSketchDetails(page, frame);
 }
 
 const links = (frame: FrameLocator) => frame.locator('[data-sketch-links] [data-link]');
@@ -647,6 +649,8 @@ test('cad:p4b-fix-p4-construction-purple a projected line made construction stay
   await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await idle(page);
+  // ux010: the references are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   await page.keyboard.press('p');
   const [tx, ty] = await at(page, [20, 10, 10]);
   await page.mouse.click(tx, ty);

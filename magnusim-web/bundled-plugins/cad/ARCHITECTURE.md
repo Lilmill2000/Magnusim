@@ -616,7 +616,25 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     button for Move to More, Move left, Move right and Reset toolbar; right-click
     a More item for Show in toolbar (a command shown this way folds last when the
     frame is narrow; greyed with the reason when even then it cannot fit) and
-    Reset toolbar; drag a button along its group (a drop mark shows where); a
+    Reset toolbar; drag a button along its group (a drop mark shows where);
+    (UX 0.1.0, Daniel: "drag tangent arc up there and it moves spline to the More
+    tab") drag a More item onto its group's bar: it goes in at the drop gap and
+    the group's last bar command goes to More (`toolbar-layout.ts` `withSwapIn`;
+    on the last slot or after it, it takes that slot; the command that came in is
+    `held`, an additive `held` list in the stored layout, and never folds for the
+    width, so a narrow frame folds the group's other commands first; review B2),
+    a More item becomes a drag only once the pointer leaves it or goes 10 px up
+    (a wobbly click still runs it), a lost release (no button held, window blur,
+    hidden tab, a new press) ends the drag dropping nothing; drag a bar command into its
+    group's open More (or onto its More button) for Move to More, nothing
+    pulled up; while dragging (`useToolbarDrag`, window pointer events, nothing
+    captured on the menu item, which goes away when the pointer leaves the menu
+    toward the bar) a drop mark, the leaving command highlighted
+    (`.is-displaced`) and a note under the pointer ("Spline moves to More");
+    over another group a not-allowed pointer and "Point can only go in Draw",
+    and the drop changes nothing; Escape cancels; the keyboard's way is a More
+    item's "Swap with <the bar's last>" ("Show in toolbar" still adds without
+    displacing: the only way to grow a group); a
     right-click anywhere else on the toolbar offers Reset toolbar. Shortcuts and
     the More menus work whatever the layout. The layout (per mode, `place` id
     -> bar | more and each group's `order`; unknown ids are ignored, new commands
@@ -1377,6 +1395,24 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   filter shows Points / Curves / Dimensions in sketch mode, and clicks and
   boxes obey it. The dock's chip says "Selected · 9 edges" for several items
   (`src/features/selectcount/`).
+- **ux010 (DRAW): construction drawing, a press never lost, the fillet's radius arrow.**
+  `sketch.construction` (X) with a drawing tool in hand, or with no curves selected, toggles `SketchModeState.drawConstruction`
+  (reset on enter and leave); `SketchMode.apply` marks the curves a drawing tool adds construction
+  (`asConstruction`, `drawsConstruction` in `src/sketch/edit.ts`), so a shape begun before X counts.
+  The toolbar draws it pressed through `CommandDef.pressed`; the overlay shows the badge
+  `[data-sketch-construction-badge]` and the preview dashed. A press is never lost: the viewport
+  makes no click of a press that moved past `CLICK_PX`, so the overlay (`attachOverlay`, tools with
+  `dragDraw`) clicks at the press point as the drag starts, and at the release (`fromDrag`) when the
+  tool had no step open and the press was a real drag (`isClickDrag`: held 150 ms and moved 12 px,
+  or moved 30 px; a sloppy click stays a click) (click-drag draws; the line ends its chain); a still
+  click lands at the press point; `ownsDrag` keeps the line's tangent-arc drag.
+  The snaps on the model read the kernel through `latestQueue()` (one at a time, the newest next),
+  so a fast sweep never leaves the snap under the pointer behind stale reads; the overlay writes the
+  dot it drew at each frame to `data-sketch-dot` (e2e). A new sketch fillet (and a fillet arc
+  selected later) shows a radius arrow (`src/sketch/tools/radius-handle.ts`; the arrow element takes
+  the press and the R label moves off its line): its drag solves with `solver.setValue` live in the
+  mode's edit queue (`SketchMode.queue`; Undo waits for the release, Escape cancels), the release is one `apply` that changes the radius dimension, and
+  `filletLimit` (the corner rebuilt, bisected with `filletCorner`) stops it with the words why.
 - **Units and the cursor in sketches (P4b follow-up, Daniel 2026-10-06).** The cursor stays the normal
   arrow over what cannot be dragged (a fully defined entity, the origin) and the
   sketch panel says why ("This line is fully defined: change a dimension to move

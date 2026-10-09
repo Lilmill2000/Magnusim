@@ -256,6 +256,22 @@ describe('the smoke and serial tags', () => {
       'cad:p4b-toolbar-customize',
       'cad:p4b-toolbar-migrate',
       'cad:p4b-toolbar-tabs',
+      // ux010 TOOLBAR: dragging between More and the bar changes the same user layout.
+      'cad:ux010-toolbar-model',
+      'cad:ux010-toolbar-narrow',
+      'cad:ux010-toolbar-sketch',
+      // ux010 PANELS: the Sketch panel's collapse and Details, the tree's collapse: the user's prefs too.
+      'cad:ux010-panels-collapse',
+      'cad:ux010-panels-compact',
+      'cad:ux010-panels-error-compact',
+      'cad:ux010-panels-measure',
+      'cad:ux010-panels-hint-line',
+      'cad:ux010-panels-model-tree',
+      'cad:ux010-panels-review-delete-head',
+      'cad:ux010-panels-review-keyboard',
+      'cad:ux010-panels-review-no-flash',
+      'cad:ux010-panels-review-short-frame',
+      'cad:ux010-panels-tool-card',
     ].sort());
   });
 });

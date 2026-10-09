@@ -170,7 +170,8 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
     await more.click();
     await expect(more).toHaveAttribute('aria-expanded', 'true');
     await expect(menu(frame)).toHaveAttribute('aria-label', `More ${words} commands`);
-    const items = menu(frame).locator('button[role="menuitem"]');
+    // ux010: a toggle (Construction) is a menuitemcheckbox.
+    const items = menu(frame).locator('button[role^="menuitem"]');
     await expect(items.locator('.cad-menu-label')).toHaveText(inMore.map((c) => c.label));
     for (const c of inMore) {
       const item = menu(frame).locator(`[data-command="${c.id}"]`);

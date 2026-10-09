@@ -14,7 +14,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 // fix1: the curve as drawn, computed independently of the trim (the spline's own math on the points placed).
 import { closestOnSpline, fitSpline, splineGreen, subSpline } from '../src/sketch/tools/bspline';
-import { baseUrl, chipVolumes, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+import { baseUrl, chipVolumes, ensureCadOn, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
 
 type V3 = [number, number, number];
 type V2 = [number, number];
@@ -262,11 +262,21 @@ test('cad:p4b-sketch-spline-profiles a closed control-point spline and a Bezier 
   // Sketch 2: an open Bezier (4 poles) from (0, 0) up and over to (-40, 0), closed by a line along the x axis.
   // (Its own sketch: one Extrude of a closed spline region with another region is 0.04 % off in the kernel, R5.)
   await enterSketchOnTop(page, frame);
-  // The view framed the body: zoom out about the origin so -40..40 is on screen.
-  const [ox, oy] = await at(page, [0, 0, 0]);
-  await page.mouse.move(ox, oy);
+  // The view framed the body: zoom out so -40..40 is on screen. ux010: about the middle of the view, not the origin:
+  // with the tree a rail the body is framed further left, and a zoom about the origin (fixed on screen) left -40 off it.
+  const vb = (await page.locator('#workspace-frame').boundingBox())!;
+  const stageBox = await workspaceFrame(page).evaluate(() => {
+    const r = document.querySelector('[data-cad-viewport] canvas')!.getBoundingClientRect();
+    const cover = document.querySelector('[data-view-cover]')!.getBoundingClientRect().right;
+    return { x: cover, y: r.top, w: r.right - cover, h: r.height };
+  });
+  await page.mouse.move(vb.x + stageBox.x + stageBox.w / 2, vb.y + stageBox.y + stageBox.h / 2);
   for (let i = 0; i < 12; i++) await page.mouse.wheel(0, 100);
   await settled(page);
+  for (const p of [[-40, 0], [-40, 30], [0, 30], [0, 0]] as V2[]) {
+    const [x, y] = await at(page, [p[0], p[1], 0]);
+    expect(x > vb.x + stageBox.x && x < vb.x + stageBox.x + stageBox.w && y > vb.y + stageBox.y && y < vb.y + stageBox.y + stageBox.h, `${p} is in the free view`).toBe(true);
+  }
   await runCommand(frame, 'sketch.spline-control');
   for (const p of [[0, 0], [0, 30], [-40, 30], [-40, 0]] as V2[]) await clickAt(page, p);
   await page.keyboard.press('Enter');
@@ -324,6 +334,8 @@ test('cad:p4b-sketch-label-click-keeps-picks a click on a dimension label or a r
   const { seen, frame } = await freshPart(page, request);
   await enterSketchOnTop(page, frame);
   await typedRectangle(page, frame, 30, 20);
+  // ux010: the selection's words are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   const label = frame.locator('[data-sketch-dim]', { hasText: /^20 mm$/ });
   const glyph = frame.locator('[data-sketch-glyph="horizontal"]').first();
   const note = panel(frame).locator('.mgk-reason-msg');
@@ -974,6 +986,8 @@ test('cad:p4b-sketch-spline-tangent Tangent between a line and a fit spline at t
     await page.keyboard.up('Control');
   }
   expect(await picked()).toBe(true);
+  // ux010: the selection's words are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   await expect(panel(frame).locator('[data-sketch-selection]')).toContainText('Line 1, Spline 1');
   await runCommand(frame, 'sketch.tangent');
   await sketchIdle(page);

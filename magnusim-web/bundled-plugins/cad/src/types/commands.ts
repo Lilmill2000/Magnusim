@@ -68,6 +68,8 @@ export interface CommandDef {
   primary?: boolean;
   /** Drawn pressed while this panel is open (a feature of this type, or this tool), or while this sketch tool is in use. */
   activeWhen?: { featureType?: string; tool?: string; sketchTool?: string };
+  /** ux010 (DRAW): drawn pressed while this is true, a mode the command toggles (sketch mode's construction drawing). */
+  pressed?(): boolean;
   run(services: AppServices): void | Promise<void>;
 }
 

@@ -13,11 +13,12 @@ import type { SketchMode } from '../mode';
 import { deleteTie, MAX_INSTANCES, skippedOf, tieLabel, updatePattern } from './pattern';
 import { dissolveTie } from './ties';
 
-export function TieRows({ mode }: { mode: SketchMode }) {
+/** `only` (ux010, the compact Sketch panel): just these patterns' rows (null: every one). */
+export function TieRows({ mode, only = null }: { mode: SketchMode; only?: ReadonlySet<string> | null }) {
   const services = useServices();
   const draft = useStateStore(mode.view, (v) => v.draft) as SketchFeature | null;
   const over = useStateStore(mode.view, (v) => [...(v.status?.conflicting ?? []), ...(v.status?.redundant ?? [])].join(','));
-  const ties = draft?.ties ?? [];
+  const ties = (draft?.ties ?? []).filter((t) => !only || only.has(t.id));
   // fu2: what the last edit did to a pattern by itself, with Dissolve when the pattern lives on.
   const notice = useStateStore(mode.view, (v) => v.tieNotice ?? null);
   const units = services.doc.units;

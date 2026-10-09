@@ -18,7 +18,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSketch, addSolid, drawBlock, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, groupCommandLabels, commandControl } from './helpers';
+import { addSketch, addSolid, drawBlock, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, groupCommandLabels, commandControl, openSketchDetails } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 async function shot(page: Page, name: string) {
@@ -142,7 +142,9 @@ test('cad:p4a-construct-plane-sketch a Plane 20 mm above Top, a sketch on it, Ex
   // Sketch on it: the plane selected, then Sketch.
   await tb(frame).locator('[data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await expect(frame.locator('[data-cad-panel]')).toContainText('Plane 1');
+  // ux010: the sketch's plane is under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
+  await expect(frame.locator('[data-cad-panel] [data-sketch-plane]')).toHaveText('Plane 1');
   await still(page);
   await page.keyboard.press('r');
   const o = await modelOnPage(page, [0, 0, 20]);
@@ -190,7 +192,9 @@ test('cad:p4a-construct-plane-sketch a Plane 20 mm above Top, a sketch on it, Ex
   await expect(item).toBeVisible();
   await item.click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await expect(frame.locator('[data-cad-panel]')).toContainText('Plane 1');
+  // ux010: the sketch's plane is under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
+  await expect(frame.locator('[data-cad-panel] [data-sketch-plane]')).toHaveText('Plane 1');
   await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
   expect(seen.csp).toEqual([]);

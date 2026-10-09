@@ -184,6 +184,8 @@ export interface SketchModeState {
   analyzing: boolean;
   /** Typing a value in an on-canvas box (the keyboard belongs to it). */
   typing: boolean;
+  /** ux010 (DRAW): construction drawing is on (what the drawing tools make is construction); off when the sketch opens. */
+  drawConstruction?: boolean;
 }
 
 /**

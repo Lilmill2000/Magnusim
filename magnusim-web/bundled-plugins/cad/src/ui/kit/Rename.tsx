@@ -114,7 +114,16 @@ export function RenameTitle({
         </span>
       ) : (
         <>
-          <span className="mgk-panel-title" data-panel-title="1">
+          {/* ux010 (PANELS): a name cut by the head's ellipsis has its full text as the tooltip. */}
+          <span
+            className="mgk-panel-title"
+            data-panel-title="1"
+            onMouseEnter={(e) => {
+              const el = e.currentTarget;
+              if (el.scrollWidth > el.clientWidth + 1) el.title = name;
+              else el.removeAttribute('title');
+            }}
+          >
             {name}
           </span>
           {canRename ? <IconButton icon={ICONS.pencil} label={`Rename ${label}`} onClick={ed.start} data-rename-btn="1" /> : null}

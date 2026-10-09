@@ -19,6 +19,8 @@ import { arcGeom, entityLabel, entityOf, entityPoints, isDimension, pointAt } fr
 import { emptyPreview, storeExpr, type SketchMode, type SketchTool } from '../mode';
 import { hitTest } from '../pick';
 import type { ToolOption } from './options';
+// ux010 (DRAW): the new fillet's radius arrow.
+import { newFilletArc, RadiusHandle } from './radius-handle';
 
 /** The two curves (lines or arcs) that meet at a point and nothing else does, or why not. */
 export function cornerAt(d: SketchDraft, point: string): { a: SketchEntity; b: SketchEntity } | string {
@@ -217,6 +219,44 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
     const r = units.evaluate(e, 'length');
     return r.ok ? r.value : NaN;
   };
+  // ux010 (DRAW): the fillet just made keeps a radius arrow until another corner is picked, the
+  // tool changes, Escape, or a click elsewhere; its drag sets the radius (the Radius box follows).
+  const handle =
+    kind === 'fillet'
+      ? new RadiusHandle(mode, (r) => {
+          radius = lenExpr(r);
+          mode.refreshHint();
+        })
+      : null;
+  /** The press on the arrow that is under way (its click is the drag's, not a pick). */
+  let grabbed = false;
+  /** The Radius box's value when the arrow's drag began: Escape puts it back (review S3). */
+  let radiusBefore: string | null = null;
+  // The arrow comes back at once after an Undo or Redo (they clear the preview; review N1).
+  const offDraft = handle
+    ? mode.view.subscribe((v, prev) => {
+        const lost = !!prev.preview?.handles?.length && !v.preview?.handles?.length;
+        if ((v.draft === prev.draft && !lost) || handle.dragging || !handle.target) return;
+        if (!handle.check()) return;
+        if (!v.preview?.handles?.length) queueMicrotask(() => mode.tool?.id === 'fillet' && handle.target && !handle.dragging && showHandle());
+      })
+    : () => {};
+  function showHandle() {
+    const d = mode.draft();
+    if (!handle || !d) return;
+    const p = emptyPreview();
+    p.handles = handle.previewHandles();
+    mode.setPreview(p);
+  }
+  function dropHandle(): boolean {
+    if (!handle?.target) return false;
+    handle.cancel();
+    handle.target = null;
+    handle.stopped = null;
+    handle.hovered = false;
+    mode.view.set({ cursor: '' });
+    return true;
+  }
 
   function run(corner: string) {
     const r = value(radius);
@@ -227,11 +267,23 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
     const h = mode.services.viewport.get().handle;
     const labelGap = plane && h ? 72 * h.pixelSize([plane.origin[0], plane.origin[1], plane.origin[2]]) : undefined;
     const opts = labelGap && Number.isFinite(labelGap) && labelGap > 0 ? { labelGap } : {};
-    void mode.apply(kind === 'fillet' ? 'Sketch fillet' : 'Sketch chamfer', (d) => (kind === 'fillet' ? filletCorner(d, corner, r, radius, opts) : chamferCorner(d, corner, a, z, [dist1, dist2], equal, opts))).then(() => {
-      first = null;
-      mode.select([], false);
-      mode.refreshHint();
-    });
+    dropHandle();
+    let before: SketchDraft | null = null;
+    void mode
+      .apply(kind === 'fillet' ? 'Sketch fillet' : 'Sketch chamfer', (d) => {
+        before = d;
+        return kind === 'fillet' ? filletCorner(d, corner, r, radius, opts) : chamferCorner(d, corner, a, z, [dist1, dist2], equal, opts);
+      })
+      .then((res) => {
+        first = null;
+        mode.select([], false);
+        // ux010 (DRAW): the new fillet shows its radius arrow.
+        if (handle && res.ok && before && mode.tool?.id === 'fillet') {
+          handle.target = newFilletArc(before, res.draft);
+          showHandle();
+        }
+        mode.refreshHint();
+      });
   }
 
   /** The corner a pointer is at: a corner point within the pick distance. */
@@ -245,18 +297,66 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
 
   return {
     id: kind,
-    hint: () => (first ? 'Click the second curve (it must meet the first at a corner).' : 'Pick a corner or two curves.'),
+    hint: () => {
+      // ux010 (DRAW): the radius arrow's drag says the radius, or why it stopped.
+      if (handle?.dragging) return handle.stopped ?? `Radius ${units.format(handle.live ?? 0, 'length', { digits: 2 })}: release to keep it.`;
+      if (handle?.target && !first) return handle.stopped ?? 'Drag the arrow to size this fillet, or type its radius. Pick another corner or two curves for the next one.';
+      return first ? 'Click the second curve (it must meet the first at a corner).' : 'Pick a corner or two curves.';
+    },
     // ci2: a label or glyph clicked keeps the first pick (src/sketch/mode.ts refusesPick).
     refusesPick: (what) => `${what === 'dimension' ? 'Dimensions' : 'Relations'} can't be ${kind === 'fillet' ? 'filleted' : 'chamfered'}: ${first ? 'click the second curve' : 'pick a corner or two curves'}`,
     cancel() {
-      const had = !!first;
+      // ux010 (DRAW): Escape during the arrow's drag cancels the drag: the radius, the box and the
+      // stored fillet stay as they were (review S3); the arrow stays. Otherwise Escape drops the arrow first.
+      if (handle?.dragging) {
+        handle.cancel();
+        if (radiusBefore != null) radius = radiusBefore;
+        radiusBefore = null;
+        showHandle();
+        mode.refreshHint();
+        return true;
+      }
+      const hadHandle = dropHandle();
+      if (hadHandle) mode.setPreview(null);
+      const had = !!first || hadHandle;
       first = null;
       mode.select([], false);
       mode.refreshHint();
       return had;
     },
+    dispose() {
+      offDraft();
+      if (handle?.dragging && radiusBefore != null) radius = radiusBefore;
+      dropHandle();
+    },
     options(): ToolOption[] {
-      if (kind === 'fillet') return [{ kind: 'number', id: 'radius', label: 'Radius', expr: radius, quantity: 'length', validate: (v) => (v > 0 ? null : 'Must be more than 0'), set: (e) => void (radius = e) }];
+      if (kind === 'fillet')
+        return [
+          {
+            kind: 'number',
+            id: 'radius',
+            label: 'Radius',
+            // ux010 (DRAW): the box shows the shown fillet's radius (after an Undo too), live while its arrow is dragged.
+            expr: (handle && !handle.dragging && handle.stored()) || radius,
+            quantity: 'length',
+            validate: (v) => (v > 0 ? null : 'Must be more than 0'),
+            set: (e, v) => {
+              // ux010 (DRAW): typed while a new fillet shows its arrow: that fillet takes it too (one undo step).
+              if (handle?.target && handle.check()) {
+                const why = handle.refusal(v);
+                if (why) return why;
+                radius = e;
+                void handle.setRadius(e).then(() => {
+                  showHandle();
+                  mode.refreshHint();
+                });
+                return null;
+              }
+              radius = e;
+              return null;
+            },
+          },
+        ];
       const out: ToolOption[] = [
         { kind: 'check', id: 'equal', label: 'Same distance on both lines', value: equal, set: (v) => ((equal = v), mode.refreshHint()) },
         { kind: 'number', id: 'distance1', label: equal ? 'Distance' : 'Distance 1', expr: dist1, quantity: 'length', validate: (v) => (v > 0 ? null : 'Must be more than 0'), set: (e) => void (dist1 = e) },
@@ -267,15 +367,56 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
     pointer(e) {
       const d = mode.draft();
       if (!d) return;
+      // ---- ux010 (DRAW): the radius arrow (press, drag, release)
+      if (handle) {
+        handle.check();
+        if (e.type === 'down') {
+          const was = radius;
+          grabbed = handle.begin(e);
+          if (grabbed) {
+            radiusBefore = was;
+            mode.setHover(null);
+            showHandle();
+            mode.refreshHint();
+          }
+          return;
+        }
+        if (e.type === 'move' && handle.dragging) {
+          handle.move(e);
+          showHandle();
+          return;
+        }
+        if (e.type === 'up' && handle.dragging) {
+          radiusBefore = null;
+          void handle.end().then(() => {
+            showHandle();
+            mode.refreshHint();
+          });
+          return;
+        }
+        if (e.type === 'click' && grabbed) {
+          // The click of a press on the arrow that did not move: nothing to pick.
+          grabbed = false;
+          return;
+        }
+      }
       if (e.type === 'move') {
-        const corner = cornerNear(e.uv, e.px);
-        mode.setHover(corner ? { what: 'point', id: corner } : hitTest(d, e.uv, e.px, { points: false }));
+        const onArrow = !!handle?.target && handle.hit(e);
+        if (handle && onArrow !== handle.hovered) {
+          handle.hovered = onArrow;
+          mode.view.set({ cursor: onArrow ? 'grab' : '' });
+        }
+        const corner = onArrow ? null : cornerNear(e.uv, e.px);
+        mode.setHover(onArrow ? null : corner ? { what: 'point', id: corner } : hitTest(d, e.uv, e.px, { points: false }));
         const p = emptyPreview();
         if (corner) p.points.push(pointAt(d, corner)!);
+        if (handle) p.handles = handle.previewHandles();
         mode.setPreview(p);
         return;
       }
       if (e.type !== 'click') return;
+      // ux010 (DRAW): any other click (a pick, or a click away) lets go of the last fillet's arrow.
+      const hadHandle = dropHandle();
       const corner = cornerNear(e.uv, e.px);
       if (corner && !first) {
         run(corner);
@@ -284,6 +425,12 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
       const h = hitTest(d, e.uv, e.px, { points: false });
       const ent = h ? entityOf(d, h.id) : null;
       if (!ent || (ent.kind !== 'line' && ent.kind !== 'arc')) {
+        if (hadHandle && !first) {
+          // A click away from the last fillet: its arrow goes, nothing else.
+          mode.setPreview(null);
+          mode.refreshHint();
+          return;
+        }
         mode.note(kind === 'fillet' ? 'Pick a corner, or a line or an arc' : 'Pick a corner, or a line');
         return;
       }

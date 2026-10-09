@@ -36,7 +36,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, singleVolume } from './helpers';
+import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, singleVolume, openSketchDetails } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 const FLANGE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'kernel', 'flange.step');
@@ -192,7 +192,8 @@ async function expectVolume(frame: FrameLocator, mm3: number, rel = 1e-6) {
 /** Where the tree card and the open panel are, the free part of the view right of them, and the stage. */
 async function layout(page: Page, frame: FrameLocator) {
   const stage = (await frame.locator('.cad-stage').boundingBox())!;
-  const tree = (await frame.locator('[data-cad-tree]').boundingBox())!;
+  // ux010: the tree card, or its rail while a sketch is edited (the left column's first card).
+  const tree = (await frame.locator('[data-cad-left-stack] > :first-child').boundingBox())!;
   const p = panel(frame);
   const pr = (await p.count()) ? await p.first().boundingBox() : null;
   const coverRight = Math.max(tree.x + tree.width, pr ? pr.x + pr.width : 0);
@@ -307,8 +308,14 @@ test('cad:p2p3-review4-reopen-far-body a sketch reopened with a later body 200 m
   const corners: V3[] = [[0, 0, 0], [40, 0, 0], [40, 30, 0], [0, 30, 0]];
   const check = async (when: string) => {
     expect(await hiddenParts(page, frame, corners, ['40', '30']), when).toEqual([]);
+    // ux010: with the tree a rail while sketching, the free view at 1280 x 800 is 940 px wide (it was 660 px, its
+    // shorter side, which the framing fitted), now wider than the stage is tall: the sketch is drawn larger but spans
+    // less of the width. Its size is taken against the free view's shorter side; a third of it is more than the old
+    // bar (30 % of 660 px = 198 px).
     const span = await spanOf(page, frame, corners);
-    expect(Math.max(span.across, span.down), `${when}: the sketch spans ${(span.across * 100).toFixed(0)} % across and ${(span.down * 100).toFixed(0)} % down the free view`).toBeGreaterThan(0.3);
+    const { free } = await layout(page, frame);
+    const fill = Math.max(span.across * (free.right - free.left), span.down * (free.bottom - free.top)) / Math.min(free.right - free.left, free.bottom - free.top);
+    expect(fill, `${when}: the sketch spans ${(span.across * 100).toFixed(0)} % across and ${(span.down * 100).toFixed(0)} % down the free view (${(fill * 100).toFixed(0)} % of its shorter side)`).toBeGreaterThan(1 / 3);
     const t = await cameraTarget(page);
     expect(t[0] >= 0 && t[0] <= 40 && t[1] >= 0 && t[1] <= 30 && Math.abs(t[2]) < 1, `${when}: the camera looks at ${t.map((v) => v.toFixed(1))}, not into the sketch`).toBe(true);
   };
@@ -464,6 +471,8 @@ test('cad:p2p3-review4-face-cut a sketch on a face names the face; Extrude Cut f
   await clickAt(page, [12, 12, 10]);
   await tb(frame).locator('[data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  // ux010: the plane is under the panel's Details.
+  await openSketchDetails(page, frame);
   const plane = frame.locator('[data-cad-panel="sketch"] [data-sketch-plane]');
   await expect(plane).toHaveText(measured);
   await expect(plane).toHaveAttribute('title', `${measured}, from End face of Extrude 1`);

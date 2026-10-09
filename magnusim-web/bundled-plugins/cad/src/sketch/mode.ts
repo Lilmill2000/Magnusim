@@ -20,7 +20,7 @@ import type { ViewportHandle } from '../types/viewport';
 import { uiFor } from '../ui/controller';
 import { kernelLookup, refOfFace, resolveFace } from '../naming';
 import { solvedStateOf, statusOf, type SketchStatus } from './dof';
-import { SketchBuilder, type EditOutcome, type SketchDraft } from './edit';
+import { SketchBuilder, asConstruction, drawsConstruction, type EditOutcome, type SketchDraft } from './edit';
 import { constraintLabel, DIMENSION_LABELS, entityLabel, entityOf, evaluateDimensions, isDimension, measureDimension, quantityOf, toSolverSketch, withSolved } from './model';
 import type { SolverClient } from './solver-client';
 import { prunedLinks } from './project/curves';
@@ -52,6 +52,8 @@ export interface SketchPreview {
   boxes: ValueBox[];
   /** A dimension being placed (its label follows the pointer). */
   dimension: { kind: SketchConstraint['kind']; refs: string[]; at: Vec2 } | null;
+  /** ux010 (DRAW): drag handles (a new fillet's radius arrow): where, and the u/v direction the arrow points. */
+  handles?: { id: string; at: Vec2; dir: Vec2; active?: boolean }[];
 }
 
 export interface ValueBox {
@@ -107,6 +109,8 @@ export interface SketchPointer {
   pressed: boolean;
   clientX: number;
   clientY: number;
+  /** ux010 (DRAW): this click is the release of a click-drag (the press started the shape; the release ends it). */
+  fromDrag?: boolean;
 }
 
 export interface SketchTool {
@@ -116,6 +120,12 @@ export interface SketchTool {
   cancel(): boolean;
   /** The panel's hint for this tool now. */
   hint(): string;
+  /**
+   * ux010 (PANELS): the hint in one short line for the compact Sketch panel, when the hint's first
+   * sentence does not say enough alone or runs long (null or absent: the first sentence). The full
+   * hint stays in the tooltip and in Details.
+   */
+  shortHint?(): string | null;
   /**
    * A value box changed (typed while drawing). For 'enter': true when the shape
    * was placed (the overlay then lets go of the box, so the next digit starts
@@ -146,6 +156,15 @@ export interface SketchTool {
    * dimension or relation in their place. Absent: the click selects it (the Select and drawing tools).
    */
   refusesPick?(what: 'dimension' | 'relation'): string;
+  // ---- ux010 (DRAW): a press is never lost
+  /**
+   * A drawing tool with no step open: a press that moves past the click distance still clicks
+   * where it was pressed, and when it drags on the release clicks again there with `fromDrag`
+   * (click-drag draws a line, a rectangle, a circle). Absent: only real clicks reach the tool.
+   */
+  dragDraw?(): boolean;
+  /** The press that just ended was the tool's own drag (the line's tangent arc, a fillet's radius arrow): no click is made of it. */
+  ownsDrag?(): boolean;
 }
 
 export type ToolFactory = (mode: SketchMode, id: SketchToolId) => SketchTool;
@@ -296,9 +315,10 @@ export class SketchMode implements SketchModeApi {
     const d = session.draft as SketchFeature;
     const out = this.services.doc.state.get().rebuild.outputs[session.feature] as SketchOutput | undefined;
     const plane = out?.type === 'sketch' && out.plane ? out.plane : d.plane;
-    this.view.set({ draft: d, plane, analysis: null, status: null, hover: null, preview: null, note: null, prompt: null, editing: null, canUndo: false, canRedo: false, lineArc: false, dragging: false, cursor: '', hint: '' });
+    // ux010 (PANELS, review 3): tieNotice too: a pattern note of the last sketch followed into this one.
+    this.view.set({ draft: d, plane, analysis: null, status: null, hover: null, preview: null, note: null, prompt: null, editing: null, canUndo: false, canRedo: false, lineArc: false, dragging: false, cursor: '', hint: '', tieNotice: null });
     this.services.mode.set({ mode: 'sketch' });
-    this.state.set({ feature: session.feature, tool: 'select', status: null, analyzing: false, typing: false });
+    this.state.set({ feature: session.feature, tool: 'select', status: null, analyzing: false, typing: false, drawConstruction: false });
     this.tool = this.makeTool(this, 'select');
     this.refreshHint();
     // The model selection (the sketch feature the panel selected) gives way to the sketch's own.
@@ -362,8 +382,8 @@ export class SketchMode implements SketchModeApi {
     this.session = null;
     this.drag = null;
     this.detach();
-    this.view.set({ draft: null, plane: null, analysis: null, status: null, hover: null, preview: null, note: null, prompt: null, editing: null, canUndo: false, canRedo: false, dragging: false, cursor: '', hint: '' });
-    this.state.set({ feature: null, tool: 'select', status: null, analyzing: false, typing: false });
+    this.view.set({ draft: null, plane: null, analysis: null, status: null, hover: null, preview: null, note: null, prompt: null, editing: null, canUndo: false, canRedo: false, dragging: false, cursor: '', hint: '', tieNotice: null });
+    this.state.set({ feature: null, tool: 'select', status: null, analyzing: false, typing: false, drawConstruction: false });
     this.services.mode.set({ mode: 'model' });
     // Sketch items leave the selection with sketch mode.
     if (feature) this.services.selection.set((sel) => ({ ...sel, items: sel.items.filter((it) => !(it.kind === 'sketch' && it.feature === feature)) }));
@@ -478,6 +498,17 @@ export class SketchMode implements SketchModeApi {
     this.view.set({ hint: this.tool?.hint() ?? '' });
   }
 
+  // ---- ux010 (DRAW): construction drawing (Construction / X with nothing selected)
+  /** What the drawing tools make is construction (dashed, never part of a profile) while this is on; off when the sketch opens or closes. */
+  get drawConstruction(): boolean {
+    return !!this.state.get().drawConstruction;
+  }
+
+  setDrawConstruction(on: boolean) {
+    if (!this.session || this.drawConstruction === on) return;
+    this.state.set({ drawConstruction: on });
+  }
+
   /** Escape: the tool's step, then the tool, then the selection. Never finishes the sketch. */
   escape(): void {
     const v = this.view.get();
@@ -562,6 +593,11 @@ export class SketchMode implements SketchModeApi {
     return p;
   }
 
+  /** ux010 (DRAW): solver work of a drag that is not mode's own (a fillet's radius arrow), in order with the edits. */
+  queue<T>(fn: () => Promise<T>): Promise<T> {
+    return this.enqueue(fn);
+  }
+
   /** Wait for every queued edit (tests, Finish). */
   idle(): Promise<void> {
     return this.chain.then(() => {});
@@ -574,6 +610,8 @@ export class SketchMode implements SketchModeApi {
    * (one sketch undo step) and analysed for the colours.
    */
   apply(label: string, make: (d: SketchFeature) => EditOutcome | SketchDraft | null, opts: ApplyOptions = {}): Promise<ApplyResult> {
+    // ux010 (DRAW): construction drawing, as it is when the shape is placed (a shape begun before X counts too).
+    const construction = this.drawConstruction && drawsConstruction(this.tool?.id);
     return this.enqueue(async () => {
       const s = this.session;
       const before = this.stored();
@@ -591,7 +629,7 @@ export class SketchMode implements SketchModeApi {
         this.note(`Not applied: ${out.reason}`);
         return { ok: false, reason: out.reason };
       }
-      const draft = 'ok' in out ? out.draft : out;
+      const draft = construction ? asConstruction(before, 'ok' in out ? out.draft : out) : 'ok' in out ? out.draft : out;
       const optional = [...('ok' in out ? out.optional : []), ...(opts.optional ?? [])];
       // P4b fu2 (SKETCH): a pattern whose source this edit deleted starts from its next copy.
       const promoted = promoteTies(before, { ...before, ...draft });
@@ -726,6 +764,8 @@ export class SketchMode implements SketchModeApi {
   }
 
   undo(): void {
+    // ux010 (DRAW): not in the middle of a drag (its release stores it; Escape cancels it).
+    if (this.view.get().dragging) return;
     void this.enqueue(async () => {
       const prev = this.undoStack.pop();
       const cur = this.stored();
@@ -741,6 +781,7 @@ export class SketchMode implements SketchModeApi {
   }
 
   redo(): void {
+    if (this.view.get().dragging) return;
     void this.enqueue(async () => {
       const next = this.redoStack.pop();
       const cur = this.stored();

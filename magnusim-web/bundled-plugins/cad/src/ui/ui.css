@@ -150,6 +150,111 @@
   box-shadow: inset -2px 0 0 var(--mg-primary);
 }
 
+/* ---- UX 0.1.0 (TOOLBAR builder): dragging between a group's More and its bar (Toolbar.tsx
+   useToolbarDrag). Kept in this block. ---- */
+/* The insertion mark: a bar in the gap where the dragged command lands (drawn over the 2 px gap,
+   so it shows beside a highlighted command too). */
+.tb-btn.is-drop-before::after,
+.tb-btn.is-drop-after::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--mg-primary);
+  pointer-events: none;
+}
+.tb-btn.is-drop-before::after {
+  left: -3px;
+}
+.tb-btn.is-drop-after::after {
+  right: -3px;
+}
+/* The command a drop from More would send to More: highlighted, its name in the note. */
+.tb-btn.is-displaced {
+  background: var(--mg-danger-bg);
+  border: 1px dashed var(--mg-danger);
+}
+/* A bar command over its group's More (the button or the open menu): it goes in there. */
+.cad-toolbar .tb-btn.tb-more.is-drop-into,
+.face-ctx-menu[data-drop-into] {
+  box-shadow: 0 0 0 2px var(--mg-primary);
+}
+/* Over another group: refused (a command stays in its own group). */
+.tb-group.is-drop-refused {
+  background: var(--mg-danger-bg);
+  border-radius: 4px;
+}
+html.cad-tb-drag,
+html.cad-tb-drag * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+html.cad-tb-drag-refused,
+html.cad-tb-drag-refused * {
+  cursor: not-allowed !important;
+}
+/* The dragged command under the pointer, and the note on where it goes. */
+.tb-drag-ghost {
+  position: fixed;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  pointer-events: none;
+}
+.tb-drag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--cad-toolbar-active-border);
+  border-radius: 4px;
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  font: 600 12px/1.3 var(--mg-font);
+  box-shadow: var(--cad-menu-shadow);
+}
+.tb-drag-ico {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+.tb-drag-ghost.is-refused .tb-drag-chip {
+  border-color: var(--mg-danger);
+}
+/* Not allowed: a circle with a slash. */
+.tb-drag-no {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--mg-danger);
+  border-radius: 50%;
+}
+.tb-drag-no::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  background: var(--mg-danger);
+  transform: rotate(45deg);
+}
+.tb-drag-note {
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--mg-tooltip-bg);
+  color: var(--mg-tooltip-text);
+  font: 400 12px/1.45 var(--mg-font);
+  box-shadow: var(--mg-shadow-tooltip);
+  white-space: nowrap;
+}
+/* ---- end UX 0.1.0 (TOOLBAR) ---- */
+
 /* Fit levels (Toolbar useFitLevel): icons only where the labelled buttons do not fit the frame;
    the label stays in the tooltip and the accessible name. */
 .cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-btn,
@@ -1100,3 +1205,187 @@ input.mgk-input.cad-param-name {
 .face-ctx-menu .cad-menu-check[data-on]::before {
   content: '\2713';
 }
+
+/* ==== ux010 PANELS (begin): the tree card and the Sketch panel collapse sideways into slim rails
+   at the left edge of the view (src/ui/left-rails.ts, src/ui/tree/TreeRail.tsx, src/sketch/rail.tsx). ==== */
+
+/* Only rails in the column: one above the other at the left edge. On a short frame they shrink (their
+   labels take the cut) and never run under the dock's chips (review 5). */
+.cad-float-stack.is-rails {
+  flex-direction: column;
+}
+
+.cad-float-stack.is-rails > * {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* Until the prefs are read the column is not drawn (review 6: a stored rail showed the card first). */
+.cad-float-stack.is-pending {
+  visibility: hidden;
+}
+
+.tree-detail.is-rail {
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+}
+
+.cad-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  width: 32px;
+  margin: 0;
+  padding: 7px 0;
+  font: inherit;
+  font-size: 12px;
+  line-height: normal;
+  color: var(--cad-icon-btn);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-card-border);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
+  animation: cad-rail-in 140ms ease-out;
+}
+
+button.cad-rail {
+  cursor: pointer;
+}
+
+button.cad-rail:hover,
+button.cad-rail:focus-visible,
+.cad-rail-open:hover,
+.cad-rail-open:focus-visible,
+.cad-rail-done:hover,
+.cad-rail-done:focus-visible {
+  background: var(--cad-icon-btn-hover-bg);
+  color: var(--mg-text-strong);
+  outline: none;
+}
+
+button.cad-rail:focus-visible,
+.cad-rail-open:focus-visible,
+.cad-rail-done:focus-visible {
+  box-shadow: 0 0 0 2px var(--mg-focus);
+}
+
+/* The name reads upward, cut with an ellipsis (the full name is the tooltip). */
+.cad-rail-label {
+  flex: 0 1 auto;
+  min-height: 0;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  max-height: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--cad-tree-head);
+}
+
+.cad-rail-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-danger);
+  color: var(--mg-bg);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* The Sketch panel's rail: its accent, the open button over most of it, Finish sketch at the foot. */
+.cad-rail.is-sketch {
+  padding: 0 0 4px;
+  gap: 2px;
+  border-left: 3px solid var(--cad-panel-accent-sketch);
+}
+
+.cad-rail-open {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 7px 0 8px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-radius: var(--mg-radius-md) var(--mg-radius-md) 0 0;
+  cursor: pointer;
+}
+
+.cad-rail-done {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  color: var(--cad-panel-accent-sketch);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--mg-divider);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* The collapse chevron: the tree card's head (PART) and the Sketch panel's head. It never makes the head taller. */
+.cad-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: -3px -4px -3px 0;
+  padding: 0;
+  color: var(--cad-icon-btn);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cad-collapse-btn:hover,
+.cad-collapse-btn:focus-visible {
+  background: var(--cad-icon-btn-hover-bg);
+  color: var(--mg-text-strong);
+  outline: none;
+}
+
+/* The kit's focus ring (as the rails'), review 7. */
+.cad-collapse-btn:focus-visible {
+  box-shadow: 0 0 0 2px var(--mg-focus);
+}
+
+@keyframes cad-rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cad-rail {
+    animation: none;
+  }
+}
+/* ==== ux010 PANELS (end) ==== */

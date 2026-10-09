@@ -14,7 +14,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, openSketchDetails } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -388,7 +388,8 @@ test('cad:p3-sketch-face-parameter a sketch on a block face faces it; a dimensio
   await expect(tb.locator('[data-command="sketch.new"]')).not.toHaveAttribute('aria-disabled', 'true');
   await tb.locator('[data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  // The face as Measure names it (review P2/P3 round 4: "Face of Body 1" said which body only).
+  // The face as Measure names it (review P2/P3 round 4: "Face of Body 1" said which body only); ux010: under Details.
+  await openSketchDetails(page, frame);
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-plane]')).toHaveText(/^Face \d+ of Body 1$/);
   await settled(page);
   const dir = await workspaceFrame(page).evaluate(() => {

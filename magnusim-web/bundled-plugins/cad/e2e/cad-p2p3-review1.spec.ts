@@ -47,7 +47,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, openSketchDetails, showTreeDuringSketch } from './helpers';
 import { PNG } from './png';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -143,7 +143,8 @@ async function builtAndStill(page: Page) {
 async function inView(page: Page, frame: FrameLocator, pts: V3[]) {
   for (let i = 0; i < 30; i++) {
     const stage = (await frame.locator('.cad-stage').boundingBox())!;
-    const cards = [await frame.locator('[data-cad-tree]').boundingBox(), (await frame.locator('[data-cad-panel]').count()) ? await frame.locator('[data-cad-panel]').first().boundingBox() : null];
+    // ux010: the tree card, or its rail while a sketch is edited (the left column's first card).
+    const cards = [await frame.locator('[data-cad-left-stack] > :first-child').boundingBox(), (await frame.locator('[data-cad-panel]').count()) ? await frame.locator('[data-cad-panel]').first().boundingBox() : null];
     const left = Math.max(stage.x, ...cards.map((c) => (c ? c.x + c.width : 0))) + 30;
     const right = stage.x + stage.width - 30;
     let ok = true;
@@ -257,6 +258,8 @@ test('cad:p2p3-review1-refused-delete a sketch an extrude uses shows no Delete; 
 
   // Delete from the tree's menu: offered disabled, the reason beside it (review round 2: it was
   // offered and only the click said no); a click does nothing, the panel and the line stay.
+  // ux010: the tree is a rail while a sketch is edited: shown for this sketch.
+  await showTreeDuringSketch(frame);
   await featureRow(frame, 'Sketch 1').locator('> .tree-row').click({ button: 'right' });
   const del = frame.locator('[data-cad-menu] [data-menu-item="delete"]');
   await expect(del).toHaveAttribute('aria-disabled', 'true');
@@ -975,7 +978,8 @@ test('cad:p2p3-review1-words plain words: Delete on edges, an empty sketch, the 
   await glyph.focus();
   await page.keyboard.press('Space');
   await expect(glyph).toHaveAttribute('aria-pressed', 'true');
-  // The panel's own Delete says what it deletes (the foot Delete is the sketch's).
+  // The panel's own Delete says what it deletes (the foot Delete is the sketch's); ux010: under Details.
+  await openSketchDetails(page, frame);
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-action="delete"]')).toHaveText('Delete selected');
   await page.keyboard.press('Delete');
   await sketchIdle(page);

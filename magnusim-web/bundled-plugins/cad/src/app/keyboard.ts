@@ -50,8 +50,37 @@ function typingIn(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
 }
 
+/**
+ * ux010 (TOOLBAR, review): Enter or Space on a menu item, or on a button the KEYBOARD brought the
+ * focus to (Tab, the arrows, a menu handing the keyboard back), is that control's own: it runs the
+ * More menu's item or the button, never a shortcut (Enter used to finish the sketch from the More
+ * menu). A button the mouse clicked keeps its focus but not the key: Enter after clicking
+ * Rectangle and drawing does what it always did (Finish sketch). How the focus came is tracked
+ * here (the input before each focus change) rather than read from :focus-visible, which Chromium
+ * turns on for a mouse-focused button as soon as a key is pressed.
+ */
+function controlOf(combo: string, target: EventTarget | null): { el: HTMLElement; menu: boolean } | null {
+  if (combo !== 'Enter' && combo !== 'Space') return null;
+  const t = target as HTMLElement | null;
+  if (!t || typeof t.closest !== 'function') return null;
+  const el = t.closest<HTMLElement>('button, [role="button"], [role^="menuitem"], a[href]');
+  return el ? { el, menu: /^menuitem/.test(el.getAttribute('role') ?? '') } : null;
+}
+
 export function createKeyboard(doc: Document): KeyboardManager {
   const bindings = new Map<string, KeyBinding[]>();
+  // The last input (a key or a pointer press), and the element the focus last went to with it.
+  let lastInput: 'key' | 'pointer' = 'pointer';
+  let focused: { el: EventTarget | null; byKey: boolean } = { el: null, byKey: false };
+  const onPress = () => {
+    lastInput = 'pointer';
+  };
+  const onAnyKey = () => {
+    lastInput = 'key';
+  };
+  const onFocus = (e: FocusEvent) => {
+    focused = { el: e.target, byKey: lastInput === 'key' };
+  };
   const onKey = (e: KeyboardEvent) => {
     // An in-frame modal dialog is open: it alone answers keys. A key that reaches the page
     // outside it (the keyboard came back to the frame's body) runs no shortcut, and Tab
@@ -68,6 +97,8 @@ export function createKeyboard(doc: Document): KeyboardManager {
     const combo = comboOf(e);
     const list = bindings.get(combo);
     if (!list || !list.length) return;
+    const control = controlOf(combo, e.target);
+    if (control && (control.menu || (focused.byKey && (focused.el === control.el || control.el.contains(focused.el as Node | null))))) return;
     // A panel field after Enter: Ctrl+Z is the app's Undo, not the browser's text undo (review
     // P2/P3 round 3: it put the old text back in the field while the model kept the new value).
     const typing = typingIn(e.target) && !(UNDO_COMBOS.has(combo) && (e.target as HTMLElement).getAttribute?.('data-undo-to-app') === '1');
@@ -80,6 +111,9 @@ export function createKeyboard(doc: Document): KeyboardManager {
       return;
     }
   };
+  doc.addEventListener('pointerdown', onPress, true);
+  doc.addEventListener('keydown', onAnyKey, true);
+  doc.addEventListener('focusin', onFocus, true);
   doc.addEventListener('keydown', onKey);
   return {
     normalise: normaliseCombo,
@@ -96,6 +130,9 @@ export function createKeyboard(doc: Document): KeyboardManager {
     },
     dispose() {
       doc.removeEventListener('keydown', onKey);
+      doc.removeEventListener('pointerdown', onPress, true);
+      doc.removeEventListener('keydown', onAnyKey, true);
+      doc.removeEventListener('focusin', onFocus, true);
       bindings.clear();
     },
   };

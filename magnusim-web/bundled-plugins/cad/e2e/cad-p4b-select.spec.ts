@@ -8,7 +8,7 @@
 // perf spec does) and times the box (tagged serial: it times the browser).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
-import { addSolid, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, watchPage, workspaceFrame } from './helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -52,8 +52,13 @@ async function idle(page: Page) {
 
 const at = (page: Page, p: V3) => modelOnPage(page, p);
 
-/** The Sketch panel's "Selected" words (its tooltip holds them all), or [] with nothing selected. */
+/**
+ * The Sketch panel's "Selected" words (its tooltip holds them all), or [] with nothing selected.
+ * ux010: the selection is under the panel's Details, which must be open (openSketchDetails), so an
+ * empty list means nothing is selected, not a compact panel.
+ */
 async function selectedWords(frame: FrameLocator): Promise<string[]> {
+  await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-details]')).toHaveAttribute('data-sketch-details', 'open');
   const el = frame.locator('[data-sketch-selection] .cad-sk-selected');
   if (!(await el.count())) return [];
   const t = (await el.getAttribute('title')) ?? '';
@@ -124,6 +129,8 @@ const LINES = {
 test('cad:p4b-select-construction-menu right-click Construction on any sketch selection: a check mark, Make construction / Make normal when mixed, X and the toolbar still toggle', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await openSketchOnTop(page, frame, LINES);
+  // ux010: the selection's words are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   const menu = frame.locator('[data-cad-menu]');
   const item = (id: string) => menu.locator(`[data-menu-item="${id}"]`);
   const rightClick = async (p: V3) => {
@@ -193,6 +200,8 @@ test('cad:p4b-select-construction-menu right-click Construction on any sketch se
 test('cad:p4b-select-sketch-box Ctrl+drag: left to right encloses (solid), right to left touches (dashed), Ctrl+Shift adds, an empty box clears, the sketch filter; a plain drag orbits', { tag: '@smoke' }, async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await openSketchOnTop(page, frame, LINES);
+  // ux010: the selection's words are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   const tl = await at(page, [-5, 25, 0]);
   const br = await at(page, [35, -5, 0]);
 
@@ -256,6 +265,8 @@ test('cad:p4b-select-sketch-box-dimension a box takes a dimension label it enclo
     constraints: [{ id: 'c_d', kind: 'distance', refs: ['e_1'], expr: '30 mm', driving: true, at: [15, -8] }],
     solved: { values: { c_d: 30 }, dof: 0, state: 'under' },
   });
+  // ux010: the selection's words are under the Sketch panel's Details.
+  await openSketchDetails(page, frame);
   const label = frame.locator('[data-sketch-dim="c_d"]');
   await expect(label).toBeVisible();
   const r = (await label.boundingBox())!;

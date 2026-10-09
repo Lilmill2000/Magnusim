@@ -9,6 +9,7 @@
 // Sketch rows (P3-PROFILES): "(-)" / "(+)" / "(?)" before the name as
 // SOLIDWORKS shows how defined a sketch is (a lock when fully defined), its
 // dimension count, and an eye that shows or hides it in the view.
+// ux010: the PART head's chevron slides the card into its rail (src/ui/LeftStack.tsx, TreeRail.tsx).
 // Owner: UI-SHELL; sketch rows P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
@@ -25,6 +26,8 @@ import { DisabledReason, EmptyState, IconButton, InlineRename, TreeNode, TreeSec
 import { sketchShown } from '../../features/sketch/view';
 import { constructKindOfType } from '../../features/refgeom/api';
 import { constructShown, constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../features/refgeom/scene';
+import { RAIL_SHORTCUT, railsFor, useRailFocus } from '../left-rails';
+import { CHEVRON_LEFT } from './TreeRail';
 import { barIndexAt, bodyRows, dimensionsText, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
 
 /** A padlock (24 viewBox outline): the sketch is fully defined. */
@@ -450,7 +453,7 @@ function PlanesEye({ handle }: { handle: ViewportHandle }) {
   );
 }
 
-function Part() {
+function Part({ collapse }: { collapse: ReactElement | null }) {
   const services = useServices();
   const ui = uiFor(services);
   const { doc, selection } = services;
@@ -514,7 +517,7 @@ function Part() {
   };
 
   return (
-    <TreeSection title="PART" section="part">
+    <TreeSection title="PART" section="part" action={collapse ?? undefined}>
       <TreeNode nodeKey="part" icon={ICONS.part} label={name} className="is-part" attrs={{ 'data-part-name': '1' }} onDoubleClick={() => void renamePart()} />
       <TreeNode
         nodeKey="origin"
@@ -534,7 +537,18 @@ function Part() {
           label={`Parameters (${d.params})`}
           selected={paramsOpen}
           attrs={{ 'data-params-row': '1' }}
-          onClick={() => (paramsOpen ? ui.closePanel() : ui.openParams())}
+          onClick={() => {
+            if (paramsOpen) return ui.closePanel();
+            // ux010 (review 11): the tree is one rail click away while sketching; opening Parameters
+            // would end the sketch with no word. It is refused in the Sketch panel's note instead.
+            if (services.mode.get().mode === 'sketch') {
+              const p = ui.state.get().panel;
+              const name = p?.kind === 'feature' ? (doc.state.get().doc.features.find((f) => f.id === p.feature)?.name ?? 'the sketch') : 'the sketch';
+              ui.setPanelNote(`Finish ${name} first to open Parameters`);
+              return;
+            }
+            ui.openParams();
+          }}
         />
       ) : null}
       <TreeNode
@@ -556,10 +570,38 @@ function Part() {
   );
 }
 
-export function DesignTree() {
+/** ux010: the chevron at the top right of the card that slides it into its rail at the left edge. */
+function CollapseTree({ onCollapse, sketching }: { onCollapse(): void; sketching: boolean }) {
+  const rails = railsFor(useServices());
+  const ref = useRef<HTMLButtonElement>(null);
+  useRailFocus(rails, 'tree-collapse', ref);
+  const label = 'Hide the design tree';
+  const tip = useTip({ text: label, detail: sketching ? 'Back to its rail for this sketch' : 'It stays a rail at the left edge until you click it', ...(sketching ? {} : { shortcut: RAIL_SHORTCUT }) });
+  return (
+    <button type="button" className="cad-collapse-btn" data-tree-collapse="1" aria-label={label} aria-expanded="true" ref={ref} onClick={() => {
+        rails.focusAfter('tree-rail');
+        onCollapse();
+      }} {...tip}>
+      <Icon d={CHEVRON_LEFT} size={15} />
+    </button>
+  );
+}
+
+export function DesignTree({ onCollapse = null, sketching = false }: { onCollapse?: (() => void) | null; sketching?: boolean } = {}) {
+  const services = useServices();
+  // ux010: the card goes away under the pointer when it slides into its rail (a sketch starts from a
+  // plane's row): the hovered row gets no mouseleave, so its hover highlight is cleared here (the Top
+  // plane stayed drawn after the sketch).
+  useEffect(
+    () => () => {
+      services.viewport.get().handle?.flash([]);
+      constructView(services).set({ flash: null });
+    },
+    [services],
+  );
   return (
     <div className="left-tree" data-cad-tree="1" aria-label="Design tree">
-      <Part />
+      <Part collapse={onCollapse ? <CollapseTree onCollapse={onCollapse} sketching={sketching} /> : null} />
       <History />
     </div>
   );

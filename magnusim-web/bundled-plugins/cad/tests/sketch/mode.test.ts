@@ -294,7 +294,10 @@ describe('the other tools (real solver)', () => {
     await h.idle();
     expect(h.sketch().entities.find((e) => e.id === 'l')?.construction).toBe(true);
     h.mode.select([], false);
-    expect(h.services.commands.canRun('sketch.construction')).toBe('Select lines, circles or arcs');
+    // ux010 (DRAW): with nothing selected it turns construction drawing on (never greyed).
+    expect(h.services.commands.canRun('sketch.construction')).toBe(true);
+    await h.services.commands.run('sketch.construction');
+    expect(h.mode.drawConstruction).toBe(true);
   });
 
   it('constraint commands run on the selection; driven and driving; a label moves; the first dimension scales the sketch', async () => {

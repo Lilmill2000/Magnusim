@@ -55,6 +55,53 @@ describe('keyboard', () => {
     kb.dispose();
   });
 
+  it("ux010: Enter on a menu item, or on a button the keyboard focused, is the control's own; after a mouse click on a button Enter runs the shortcut as before", async () => {
+    const reg = createCommandRegistry(() => services);
+    const kb = createKeyboard(document);
+    const finish = vi.fn();
+    reg.register({ id: 'sketch.finish', label: 'Finish sketch', shortcut: 'Enter', run: finish });
+    bindCommandShortcuts(reg, kb);
+    const item = document.createElement('button');
+    item.setAttribute('role', 'menuitem');
+    const button = document.createElement('button');
+    const inner = document.createElement('span');
+    button.append(inner);
+    document.body.append(item, button);
+    const enter = (el: Element) => {
+      const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    // A menu item: always its own (however it got the focus).
+    item.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    item.focus();
+    expect(enter(item)).toBe(false);
+    await Promise.resolve();
+    expect(finish).not.toHaveBeenCalled();
+    // A button the keyboard focused (Tab): its own.
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    button.focus();
+    expect(enter(button)).toBe(false);
+    expect(enter(inner)).toBe(false);
+    await Promise.resolve();
+    expect(finish).not.toHaveBeenCalled();
+    // The same button clicked with the mouse: Enter runs Finish sketch, as before.
+    button.blur();
+    button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    button.focus();
+    expect(enter(button)).toBe(true);
+    await Promise.resolve();
+    expect(finish).toHaveBeenCalledTimes(1);
+    // Nothing focused: the shortcut.
+    button.blur();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await Promise.resolve();
+    expect(finish).toHaveBeenCalledTimes(2);
+    item.remove();
+    button.remove();
+    kb.dispose();
+  });
+
   it('a field marked data-undo-to-app hands Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z to the app, and the browser does not undo its text (review P2/P3 round 3)', async () => {
     const reg = createCommandRegistry(() => services);
     const kb = createKeyboard(document);

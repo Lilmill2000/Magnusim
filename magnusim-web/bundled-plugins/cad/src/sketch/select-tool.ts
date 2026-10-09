@@ -20,6 +20,8 @@ import { entityOf, ORIGIN, pointAt } from './model';
 import { toModel, type SketchHit, type SketchMode, type SketchPointer, type SketchTool } from './mode';
 import { drawnPoints, hitTest, samples } from './pick';
 import { sketchFilterOf, type SketchPickKind } from './select-filter';
+// ux010 (DRAW): a selected arc with a radius dimension shows the fillet's radius arrow.
+import { RadiusHandle, radiusDimensionOf } from './tools/radius-handle';
 import { autoProjectItem, modelItemAt } from './project/tools';
 
 const DRAG_PX = 4;
@@ -166,14 +168,64 @@ export function selectTool(mode: SketchMode): SketchTool {
     const cur = mode.selected();
     mode.select(combineSelection(cur, hits, how, (h) => `${h.what}:${h.id}`), false);
   };
+  // ---- ux010 (DRAW): one arc selected that a driving radius dimension holds (a fillet): its radius
+  // arrow, dragged as right after the fillet was made (the panel's foot says why it stops).
+  const radius = new RadiusHandle(mode, () => {
+    mode.note(radius.stopped);
+  });
+  let grabbed = false;
+  /** The release of a drag of the arrow: the click the view may send after it is the drag's. */
+  let swallowClick = false;
+  const showRadius = () => {
+    const pv = mode.view.get().preview;
+    const hs = radius.previewHandles() ?? [];
+    if (!hs.length && !pv?.handles?.length) return;
+    if (pv && (pv.window || pv.lines.length)) return;
+    mode.setPreview(hs.length ? { lines: [], arcs: [], points: [], guides: [], glyphs: [], doomed: [], window: null, boxes: [], dimension: null, handles: hs } : null);
+  };
+  const pickRadius = () => {
+    if (radius.dragging) return;
+    const d = mode.stored();
+    const sel = mode.selected();
+    const one = sel.length === 1 && sel[0].what === 'entity' && d ? sel[0].id : null;
+    const ent = one && d ? entityOf(d, one) : null;
+    const dim = ent?.kind === 'arc' && d ? radiusDimensionOf(d, ent.id) : null;
+    radius.target = ent && dim ? { arc: ent.id, dim } : null;
+    radius.hovered = false;
+    showRadius();
+  };
+  const offSel = mode.services.selection.subscribe(() => pickRadius());
+  const offDraft = mode.view.subscribe((v, prev) => {
+    // After an edit, an Undo or a Redo (they clear the preview): the arrow drawn again, or gone with its arc.
+    const lost = !!prev.preview?.handles?.length && !v.preview?.handles?.length;
+    if ((v.draft === prev.draft && !lost) || radius.dragging || !radius.target) return;
+    radius.check();
+    queueMicrotask(() => {
+      if (mode.tool?.id === 'select' && !radius.dragging) showRadius();
+    });
+  });
+  pickRadius();
   return {
     id: 'select',
     hint: () => 'Click to select (Ctrl toggles, Shift adds; Ctrl+click on a body vertex or edge adds it, projected). Ctrl+drag to box select: left to right selects what the box encloses, right to left what it touches (Ctrl+Shift adds). Drag under-defined geometry to move it; drag elsewhere to orbit.',
+    // ux010 (PANELS): the compact panel's one line.
+    shortHint: () => 'Click to select; Ctrl+drag to box select.',
     takesPress(e) {
       const d = mode.draft();
+      // ux010 (DRAW): a press on the radius arrow is its drag.
+      if (radius.target && radius.hit(e)) return true;
       return !!d && selectTakesPress(e, hit(d, e.uv, e.px));
     },
     cancel() {
+      // ux010 (DRAW, review S4): Escape during the radius arrow's drag cancels it: nothing is stored.
+      if (radius.dragging) {
+        radius.cancel();
+        grabbed = false;
+        swallowClick = true;
+        mode.note(null);
+        showRadius();
+        return true;
+      }
       if (dragging === 'window') {
         dragging = null;
         press = null;
@@ -185,10 +237,51 @@ export function selectTool(mode: SketchMode): SketchTool {
     },
     dispose() {
       box.hide();
+      // ux010 (DRAW)
+      radius.cancel();
+      offSel();
+      offDraft();
     },
     pointer(e) {
       const d = mode.draft();
       if (!d) return;
+      // ---- ux010 (DRAW): the radius arrow of a selected fillet arc.
+      if (swallowClick) {
+        swallowClick = false;
+        if (e.type === 'click') return;
+      }
+      if (e.type === 'down' && radius.target && radius.begin(e)) {
+        grabbed = true;
+        mode.setHover(null);
+        showRadius();
+        return;
+      }
+      if (grabbed) {
+        if (e.type === 'move' && radius.dragging) {
+          radius.move(e);
+          showRadius();
+        } else if (e.type === 'up') {
+          grabbed = false;
+          swallowClick = true;
+          void radius.end().then(() => {
+            mode.note(radius.stopped);
+            showRadius();
+          });
+        }
+        return;
+      }
+      if (e.type === 'move' && !e.pressed && radius.target) {
+        const on = radius.hit(e);
+        if (on !== radius.hovered) {
+          radius.hovered = on;
+          showRadius();
+        }
+        if (on) {
+          mode.setHover(null);
+          mode.view.set({ cursor: 'grab' });
+          return;
+        }
+      }
       if (e.type === 'move' && !e.pressed) {
         const h = hit(d, e.uv, e.px);
         mode.setHover(h);
