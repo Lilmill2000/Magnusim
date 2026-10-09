@@ -126,7 +126,12 @@ test('gate:h15-queue-fair: mesh, runs and plugin cases take turns on one slot', 
       if (s1.status === 'running') running.push('S1');
       if ((f2.job || {}).status === 'running') running.push('F2');
       if (s2.status === 'running') running.push('S2');
-      return { running, s1: s1.status, s2: s2.status, f2: (f2.job || {}).status, mesh: (m.live_mesh_result || {}).status };
+      const out = { running, s1: s1.status, s2: s2.status, f2: (f2.job || {}).status, mesh: (m.live_mesh_result || {}).status };
+      // A job that failed says why (its own error), so the report names the cause.
+      for (const [name, row] of [['s1', s1], ['s2', s2], ['f2', f2.job || {}]]) {
+        if (/failed|stopped/.test(String(row.status || ''))) out[`${name}_error`] = row.error || row.message || row.stage || '(none given)';
+      }
+      return out;
     };
     const holderOf = (b) => {
       if (!b) return null;
