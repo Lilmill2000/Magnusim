@@ -306,6 +306,12 @@ export interface ImportFeature extends FeatureBase<'import'> {
     reason?: string;
   }[];
   diagnostics?: ImportDiagnosticsSummary;
+  /**
+   * Edit in CAD (host API 1.7): the project geometry this import brought in when the Part was
+   * opened to edit it (its id, and the sha256 of the STEP the app served). Opening the Part again
+   * finds it here and does not import again.
+   */
+  origin?: { geometryId: string; sha256: string };
 }
 
 /**
@@ -996,6 +1002,28 @@ export interface CadView {
    * with no entry is shown until a later feature uses it (Fusion).
    */
   sketches?: Record<FeatureId, 'shown' | 'hidden'>;
+  /**
+   * ux010 (TOOLBAR builder): scale models drawn beside the part ("Banana for scale"). Never a
+   * body, never in the model or the simulation: kept with the view (no undo step, the linked
+   * geometry never sees it). A model with no entry is not shown. Absent: none.
+   */
+  scaleModels?: ScaleModels;
+}
+
+/** ux010: where a scale model lies (model mm; its underside at at[2]; rot about +Z in degrees). */
+export interface ScaleModelPlace {
+  at: Vec3;
+  rot: number;
+}
+
+/** ux010: the scale models shown (one banana for now). */
+export interface ScaleModels {
+  banana?: ScaleModelPlace;
+  /**
+   * ux010: the taped banana image shown in a sketch (while that sketch is edited), per sketch
+   * feature: its centre in the sketch's u/v (mm). Absent: not shown in that sketch.
+   */
+  sketch?: Record<FeatureId, { at: Vec2 }>;
 }
 
 /**

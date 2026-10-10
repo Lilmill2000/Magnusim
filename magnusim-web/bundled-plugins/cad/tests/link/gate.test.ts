@@ -75,7 +75,9 @@ describe('gate:l3-cad never soft-passes', () => {
     const pkg = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     expect(pkg.scripts['test:gate:l3-cad']).toBe('node scripts/gate-l3-cad.mjs');
     expect(L3_UNIT).toContain('tests/link/leave.test.ts');
-    expect(L3_E2E).toEqual(['e2e/cad-link-exit.spec.ts']);
+    expect(L3_UNIT).toContain('tests/link/adopt.test.ts');
+    expect(L3_UNIT).toContain('tests/link/edit-open.test.ts');
+    expect(L3_E2E).toEqual(['e2e/cad-link-exit.spec.ts', 'e2e/cad-edit-in-cad.spec.ts']);
   });
 
   it('runs the e2e with --forbid-only and vitest with --allowOnly=false: a stray .only fails the gate', () => {
@@ -84,17 +86,17 @@ describe('gate:l3-cad never soft-passes', () => {
     expect(src).toContain("'--allowOnly=false'");
   });
 
-  it('the census is the spec: every test of cad-link-exit.spec.ts by id, and exactly the test.fail() ones are expected to fail', () => {
-    const spec = readFileSync(join(PLUGIN, 'e2e', 'cad-link-exit.spec.ts'), 'utf8');
+  it('the census is the specs: every test of cad-link-exit.spec.ts and cad-edit-in-cad.spec.ts by id, and exactly the test.fail() ones are expected to fail', () => {
+    const spec = L3_E2E.map((f) => readFileSync(join(PLUGIN, f), 'utf8')).join('\n');
     const blocks = spec.split(/\n  test\(/).slice(1);
-    const idOf = (b: string) => /^['"`](cad:l3-[a-z0-9-]+)/.exec(b)?.[1] ?? '?';
+    const idOf = (b: string) => /^['"`](cad:(?:l3|edit)-[a-z0-9-]+)/.exec(b)?.[1] ?? '?';
     const failing = blocks.filter((b) => /^\s*test\.fail\(/m.test(b.split(/\n  \}\);/)[0])).map(idOf);
     expect(blocks.map(idOf).sort()).toEqual(L3_E2E_CENSUS.map(([id]) => id).sort());
     expect(failing.sort()).toEqual(L3_E2E_CENSUS.filter(([, s]) => s === 'failed').map(([id]) => id).sort());
   });
 
   it('no host-defect marker is left: no test.fail(), no defect allowance, every test expected to pass', () => {
-    const spec = readFileSync(join(PLUGIN, 'e2e', 'cad-link-exit.spec.ts'), 'utf8');
+    const spec = L3_E2E.map((f) => readFileSync(join(PLUGIN, f), 'utf8')).join('\n');
     expect(spec).not.toMatch(/test\.fail\(/);
     expect(spec).not.toMatch(/HOST.DEFECT/i);
     expect(L3_E2E_CENSUS.filter(([, s]) => s !== 'passed')).toEqual([]);
@@ -130,10 +132,10 @@ describe('gate:l3-cad never soft-passes', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain(`[gate:l3-cad:ci] FAILED: the app's Python is missing: MAGNUSIM_PYTHON names no file (${missing}).`);
     // Left out: exactly the Vortex case, each with a reason and a twin that runs in CI.
-    expect(L3_CI_LEFT_OUT.map((l) => l.id)).toEqual(['cad:l3-vortex-include']);
-    const spec = readFileSync(join(PLUGIN, 'e2e', 'cad-link-exit.spec.ts'), 'utf8');
+    expect(L3_CI_LEFT_OUT.map((l) => l.id)).toEqual(['cad:l3-vortex-include', 'cad:edit-vortex']);
+    const spec = L3_E2E.map((f) => readFileSync(join(PLUGIN, f), 'utf8')).join('\n');
     const blocks = spec.split(/\n  test\(/).slice(1);
-    const idOf = (b: string) => /^['"`](cad:l3-[a-z0-9-]+)/.exec(b)?.[1] ?? '?';
+    const idOf = (b: string) => /^['"`](cad:(?:l3|edit)-[a-z0-9-]+)/.exec(b)?.[1] ?? '?';
     const body = (id: string) => blocks.find((b) => idOf(b) === id)?.split(/\n  \}\);/)[0] ?? '';
     for (const l of L3_CI_LEFT_OUT) {
       expect(l.why).toMatch(/Daniel's/);
@@ -151,12 +153,12 @@ describe('gate:l3-cad never soft-passes', () => {
     const [flag, pattern] = ciGrepInvert();
     expect(flag).toBe('--grep-invert');
     const re = new RegExp(pattern);
-    expect(ids.filter((id) => re.test(`gate:l3-cad exit sync ${id} words`))).toEqual(['cad:l3-vortex-include']);
+    expect(ids.filter((id) => re.test(`gate:l3-cad exit sync ${id} words`)).sort()).toEqual(['cad:edit-vortex', 'cad:l3-vortex-include']);
     // The CI census is checked like the full one: a left-out case that ran anyway is unknown to it.
     const pass = (id: string) => ({ title: `${id} words`, tests: [{ expectedStatus: 'passed', status: 'expected', results: [{ status: 'passed' }] }] });
     const report = (list: string[]) => ({ suites: [{ title: 'cad-link-exit.spec.ts', specs: [], suites: [{ title: 'gate:l3-cad exit sync', specs: list.map(pass) }] }] });
     expect(censusVerdict(report(L3_E2E_CI_CENSUS.map(([id]) => id)), L3_E2E_CI_CENSUS)).toBeNull();
-    expect(censusVerdict(report(L3_E2E_CENSUS.map(([id]) => id)), L3_E2E_CI_CENSUS)).toMatch(/^the census has tests it does not know: cad:l3-vortex-include/);
+    expect(censusVerdict(report(L3_E2E_CENSUS.map(([id]) => id)), L3_E2E_CI_CENSUS)).toMatch(/^the census has tests it does not know: cad:l3-vortex-include, cad:edit-vortex/);
     expect(censusVerdict(report(L3_E2E_CI_CENSUS.map(([id]) => id).filter((id) => id !== 'cad:l3-include')), L3_E2E_CI_CENSUS)).toMatch(/^the census is short: cad:l3-include/);
   });
 

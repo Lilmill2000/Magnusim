@@ -32,7 +32,7 @@ test('cad:p1-scaffold + New Part opens an empty Part with the kernel ready', { t
   const tb = frame.locator('[data-cad-toolbar]');
   // P2/P3: SKETCH first; INSPECT and FILE after MODIFY. SD: no one-click solids (SOLID is Extrude
   // only), and CFD PREP (Enclosure) after the modelling groups.
-  await expect(tb.locator('.tb-group-label')).toHaveText(['SKETCH', 'SOLID', 'PATTERN', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+  await expect(tb.locator('.tb-group-label')).toHaveText(['SKETCH', 'SOLID', 'PATTERN', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'SCALE MODELS', 'EDIT']);
   expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
   await expect(tb.locator('[data-group="cfd"] .tb-txt')).toHaveText(['Enclosure']);
   await expect(tb.locator('[data-group="edit"] [data-command="edit.undo"]')).toHaveAttribute('aria-disabled', 'true');

@@ -30,8 +30,13 @@ import { SKETCH_ICONS } from './icons';
 import { entityOf, ORIGIN, RELATION_LABELS } from './model';
 import { type SketchMode } from './mode';
 import { sketchUp } from '../viewport/normal';
+// ux010 (DRAW): Show relations.
+import { relationsView, SHOW_RELATIONS_SHORTCUT } from './relations-view';
 // P4b (SKETCH): spline handles and fit points for Tangent / Coincident.
 import { addHandle } from './tools/spline-relations';
+
+/** ux010 (DRAW): Show relations' icon: a perpendicular glyph on its badge. */
+const RELATIONS_ICON = 'M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M8 16h8 M12 16V8 M12 13h3v3';
 
 /** ux010 (DRAW): the tools Construction (X) never converts a selection in: it toggles construction drawing. */
 const DRAWING_TOOLS = new Set<string>(['line', 'centerline', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'point', 'spline-fit', 'spline-control']);
@@ -403,6 +408,30 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       if (p && h) h.lookAt(p.normal, sketchUp(p));
     },
   });
+
+  // ---- ux010 (DRAW): Show relations (VIEW group): every relation glyph, or the selection's only.
+  const rv = relationsView(services);
+  const showRelations: CommandDef = {
+    id: 'view.sketch-relations',
+    label: 'Show relations',
+    mode: 'sketch',
+    icon: RELATIONS_ICON,
+    shortcut: SHOW_RELATIONS_SHORTCUT,
+    get hint() {
+      return rv.state.get().showAll
+        ? 'Every relation shows: Shift+R shows only those of the selected geometry (a conflict always shows)'
+        : 'Relations show for the selected geometry only: Shift+R shows them all (a conflict always shows)';
+    },
+    order: 60,
+    pressed: () => mode.active && rv.state.get().showAll,
+    run: () => rv.setShowAll(!rv.state.get().showAll),
+  };
+  reg(showRelations);
+  offs.push(
+    rv.state.subscribe(() => {
+      if (services.commands.get(showRelations.id) === showRelations) services.commands.register(showRelations);
+    }),
+  );
 
   // ---- keys that are not one command's shortcut
   const kb = services.keyboard;

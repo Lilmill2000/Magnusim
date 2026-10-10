@@ -7,7 +7,8 @@
 //      starts gets the Python as MAGNUSIM_PYTHON.
 //   2. vitest on L3_UNIT with --allowOnly=false (a stray it.only fails), and its JSON
 //      report must show no skipped or todo test, and every L3_UNIT file with tests that ran.
-//   3. The exit e2e (e2e/cad-link-exit.spec.ts, against the real host) through
+//   3. The exit e2e (e2e/cad-link-exit.spec.ts, against the real host) and Edit in CAD's
+//      (e2e/cad-edit-in-cad.spec.ts, host API 1.7: cad:edit-flow and its neighbours) through
 //      scripts/e2e.mjs with CAD_L3_REQUIRE=1 (a missing Python or Vortex fails the
 //      tests instead of skipping them) and --forbid-only (a stray test.only fails), and
 //      its JSON report must show no skipped test, and pass the census (L3_E2E_CENSUS):
@@ -31,8 +32,8 @@ import { e2eVerdict, gateEnv, gatePython, vitestVerdict } from './gate-l2-cad.mj
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-export const L3_UNIT = ['tests/link/leave.test.ts', 'tests/link/controller.test.ts', 'tests/app/bootstrap.test.tsx', 'tests/doc/service.test.ts', 'tests/ui/panels.test.tsx'];
-export const L3_E2E = ['e2e/cad-link-exit.spec.ts'];
+export const L3_UNIT = ['tests/link/leave.test.ts', 'tests/link/controller.test.ts', 'tests/app/bootstrap.test.tsx', 'tests/doc/service.test.ts', 'tests/ui/panels.test.tsx', 'tests/link/adopt.test.ts', 'tests/link/edit-open.test.ts'];
+export const L3_E2E = ['e2e/cad-link-exit.spec.ts', 'e2e/cad-edit-in-cad.spec.ts'];
 
 /**
  * The exit e2e, test by test: [id (the title's first word), expected status]. Every test is
@@ -57,6 +58,16 @@ export const L3_E2E_CENSUS = [
   ['cad:l3-background-camera', 'passed'],
   ['cad:l3-include', 'passed'],
   ['cad:l3-vortex-include', 'passed'],
+  // Edit in CAD (host API 1.7).
+  ['cad:edit-flow', 'passed'],
+  ['cad:edit-unchanged', 'passed'],
+  ['cad:edit-ineligible', 'passed'],
+  ['cad:edit-viewport', 'passed'],
+  ['cad:edit-two-tabs', 'passed'],
+  ['cad:edit-undo-to-import', 'passed'],
+  ['cad:edit-surface-only', 'passed'],
+  ['cad:edit-wait-stop', 'passed'],
+  ['cad:edit-vortex', 'passed'],
 ];
 
 /**
@@ -68,6 +79,11 @@ export const L3_CI_LEFT_OUT = [
     id: 'cad:l3-vortex-include',
     why: "it imports Daniel's Vortex STEP (CAD_E2E_VORTEX_STEP), which never leaves his PC",
     twin: 'cad:l3-include',
+  },
+  {
+    id: 'cad:edit-vortex',
+    why: "it opens Daniel's Vortex STEP (CAD_E2E_VORTEX_STEP) in CAD from the project, which never leaves his PC",
+    twin: 'cad:edit-flow',
   },
 ];
 

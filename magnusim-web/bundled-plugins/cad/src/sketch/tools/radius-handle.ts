@@ -1,10 +1,15 @@
 // ux010 (DRAW): the radius arrow of a sketch fillet (Daniel: "a little arrow or something for
-// me to drag and change the radius myself when I first make it"). A radial arrow on the arc at
-// its mid-angle, pointing away from its centre. Dragging it along the arrow changes the radius by
-// as much as the pointer moves along it (outward: bigger): the solver solves each value live (the
-// trimmed lines follow, the radius label and the panel's Radius box show it), and the release
-// stores it as one undo step (the radius dimension's value changes; nothing is added). A radius
-// the corner can't take stops at the largest one it can, and the hint says why.
+// me to drag and change the radius myself when I first make it"). Direct manipulation (Daniel,
+// efd5d15: the first arrow dragged "inverted"): the handle sits on the arc's midpoint and, while
+// dragged, the midpoint follows the pointer along the corner's bisector. A bigger fillet's
+// midpoint lies further from the corner (vertex to midpoint = r (1/sin(theta/2) - 1) between two
+// lines), so the arrow points inward, the way that grows the radius; the radius for a pointer is
+// the one whose arc midpoint is nearest it (the fillet's own geometry, filletCorner, searched; a
+// line and an arc have no closed form). An arc that is not a fillet: its midpoint follows the
+// pointer radially (arrow outward). The solver solves each value live (the trimmed lines follow,
+// the radius label and the panel's Radius box show it), and the release stores it as one undo
+// step (the radius dimension's value changes; nothing is added). A radius the corner can't take
+// stops at the largest one it can, and the hint says why.
 // Owner: DRAW (ux010).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchEntity, SketchFeature, Vec2 } from '../../types/doc';
@@ -25,14 +30,84 @@ export interface RadiusHandleGeom {
   dir: Vec2;
 }
 
-/** Where a radius arrow goes on an arc: its middle, pointing away from the centre. */
-export function radiusHandleOf(d: Pick<SketchFeature, 'points' | 'entities'>, arc: string): RadiusHandleGeom | null {
+/** Where a radius arrow goes on an arc: its middle, pointing away from the centre (`inward`: towards it, a fillet's). */
+export function radiusHandleOf(d: Pick<SketchFeature, 'points' | 'entities'>, arc: string, inward = false): RadiusHandleGeom | null {
   const e = entityOf(d, arc);
   if (!e || e.kind !== 'arc') return null;
   const g = arcGeom(d, e);
   if (!g || !(g.r > 0)) return null;
   const mid = g.a0 + g.sweep / 2;
-  return { at: polar(g.c, g.r, mid), dir: [Math.cos(mid), Math.sin(mid)] };
+  const s = inward ? -1 : 1;
+  return { at: polar(g.c, g.r, mid), dir: [s * Math.cos(mid), s * Math.sin(mid)] };
+}
+
+/** A fillet arc's corner put back: the draft before the fillet (its neighbours to the corner, the arc gone) and the corner point. */
+export interface FilletCornerOf {
+  pre: SketchDraft;
+  corner: string;
+  why: string;
+}
+
+export function filletCornerOf(d: SketchDraft, arc: string): FilletCornerOf | null {
+  const e = entityOf(d, arc);
+  if (!e || e.kind !== 'arc') return null;
+  const ends = [e.a, e.b];
+  const next = ends.map((p) => d.entities.filter((x) => x.id !== arc && (x.kind === 'line' || x.kind === 'arc') && endsOf(x).includes(p)));
+  if (next.some((n) => n.length !== 1)) return null;
+  const [n1, n2] = [next[0][0], next[1][0]];
+  // The corner: a construction point held on both neighbours (point_on_line / point_on_circle).
+  const on = (p: string, curve: string) => d.constraints.some((c) => (c.kind === 'point_on_line' || c.kind === 'point_on_circle') && c.refs[0] === p && c.refs[1] === curve);
+  const corner = d.entities.find((x): x is Extract<SketchEntity, { kind: 'point' }> => x.kind === 'point' && !!x.construction && on(x.p, n1.id) && on(x.p, n2.id))?.p;
+  if (!corner || !pointAt(d, corner)) return null;
+  const pre: SketchDraft = {
+    points: d.points,
+    entities: d.entities.filter((x) => x.id !== arc && !(x.kind === 'point' && x.p === corner)).map((x) => (x.id === n1.id ? withEnd(x, e.a, corner) : x.id === n2.id ? withEnd(x, e.b, corner) : x)),
+    constraints: [],
+  };
+  return { pre, corner, why: n1.kind === 'line' && n2.kind === 'line' ? 'the lines are too short' : 'the line and the arc are too short' };
+}
+
+/** The midpoint of the fillet of radius r at the corner, or null when that radius does not fit. */
+export function filletMidAt(fc: FilletCornerOf, r: number): Vec2 | null {
+  const out = filletCorner(fc.pre, fc.corner, r, `${r} mm`);
+  if (!out.ok) return null;
+  const had = new Set(fc.pre.entities.map((x) => x.id));
+  const a = out.draft.entities.find((x) => x.kind === 'arc' && !had.has(x.id));
+  return a ? (radiusHandleOf(out.draft, a.id)?.at ?? null) : null;
+}
+
+/**
+ * The radius in [lo, hi] whose fillet midpoint is nearest `target` (the pointer, less where it held
+ * the handle): samples, then a golden-section search beside the best one. Between two lines the
+ * midpoint runs on the bisector, r (1/sin(theta/2) - 1) from the corner, so this is the
+ * projection's closed form; a line and an arc are searched the same way.
+ */
+export function filletRadiusAt(fc: FilletCornerOf, target: Vec2, lo: number, hi: number): number {
+  const f = (r: number) => {
+    const m = filletMidAt(fc, r);
+    return m ? Math.hypot(m[0] - target[0], m[1] - target[1]) : Infinity;
+  };
+  const n = 48;
+  const rs = Array.from({ length: n }, (_, i) => lo * Math.pow(hi / lo, i / (n - 1)));
+  let best = 0;
+  let bestD = Infinity;
+  rs.forEach((r, i) => {
+    const v = f(r);
+    if (v < bestD) {
+      bestD = v;
+      best = i;
+    }
+  });
+  let a = rs[Math.max(0, best - 1)];
+  let b = rs[Math.min(n - 1, best + 1)];
+  const g = (Math.sqrt(5) - 1) / 2;
+  for (let i = 0; i < 48; i++) {
+    const x1 = b - g * (b - a);
+    const x2 = a + g * (b - a);
+    if (f(x1) <= f(x2)) b = x2;
+    else a = x1;
+  }
+  return (a + b) / 2;
 }
 
 /** The radius dimension that drives an arc (driving), or null. */
@@ -49,20 +124,9 @@ export function radiusDimensionOf(d: Pick<SketchFeature, 'constraints'>, arc: st
  */
 export function filletLimit(d: SketchDraft, arc: string): { max: number; why: string } | null {
   const e = entityOf(d, arc);
-  if (!e || e.kind !== 'arc') return null;
-  const ends = [e.a, e.b];
-  const next = ends.map((p) => d.entities.filter((x) => x.id !== arc && (x.kind === 'line' || x.kind === 'arc') && endsOf(x).includes(p)));
-  if (next.some((n) => n.length !== 1)) return null;
-  const [n1, n2] = [next[0][0], next[1][0]];
-  // The corner: a construction point held on both neighbours (point_on_line / point_on_circle).
-  const on = (p: string, curve: string) => d.constraints.some((c) => (c.kind === 'point_on_line' || c.kind === 'point_on_circle') && c.refs[0] === p && c.refs[1] === curve);
-  const corner = d.entities.find((x): x is Extract<SketchEntity, { kind: 'point' }> => x.kind === 'point' && !!x.construction && on(x.p, n1.id) && on(x.p, n2.id))?.p;
-  if (!corner || !pointAt(d, corner)) return null;
-  const pre: SketchDraft = {
-    points: d.points,
-    entities: d.entities.filter((x) => x.id !== arc && !(x.kind === 'point' && x.p === corner)).map((x) => (x.id === n1.id ? withEnd(x, e.a, corner) : x.id === n2.id ? withEnd(x, e.b, corner) : x)),
-    constraints: [],
-  };
+  const fc = filletCornerOf(d, arc);
+  if (!e || e.kind !== 'arc' || !fc) return null;
+  const { pre, corner } = fc;
   const ok = (r: number) => filletCorner(pre, corner, r, `${r} mm`).ok;
   const g = arcGeom(d, e);
   let lo = g && ok(g.r) ? g.r : 0;
@@ -82,8 +146,7 @@ export function filletLimit(d: SketchDraft, arc: string): { max: number; why: st
     if (ok(m)) lo = m;
     else hi = m;
   }
-  const why = n1.kind === 'line' && n2.kind === 'line' ? 'the lines are too short' : 'the line and the arc are too short';
-  return { max: lo, why };
+  return { max: lo, why: fc.why };
 }
 
 function endsOf(e: SketchEntity): string[] {
@@ -105,7 +168,19 @@ export class RadiusHandle {
   /** Why the radius stopped ("The radius can't be bigger than 12.4 mm here: the lines are too short"), or null. */
   stopped: string | null = null;
   hovered = false;
-  private drag: { from: Vec2; r0: number; dir: Vec2; base: SketchFeature; limit: { max: number; why: string } | null; min: number; step: number; fine: number } | null = null;
+  private drag: {
+    /** Where the press held the handle, from the arc's midpoint (kept while dragging). */
+    grab: Vec2;
+    r0: number;
+    /** The arc's centre at the press (an arc that is not a fillet: its midpoint follows the pointer radially). */
+    centre: Vec2;
+    fillet: FilletCornerOf | null;
+    base: SketchFeature;
+    limit: { max: number; why: string } | null;
+    min: number;
+    step: number;
+    fine: number;
+  } | null = null;
   /** The solver's work for the drag, in order; `want` is the newest radius asked for. */
   private chain: Promise<unknown> = Promise.resolve();
   private want: number | null = null;
@@ -116,6 +191,8 @@ export class RadiusHandle {
     private readonly mode: SketchMode,
     /** The radius changed (live or stored): the tool's Radius box and hint follow. */
     private readonly changed: (r: number) => void,
+    /** A live solve was drawn: the tool draws the arrow again, on the arc's new midpoint. */
+    private readonly drawn: () => void = () => {},
   ) {}
 
   get dragging(): boolean {
@@ -126,7 +203,8 @@ export class RadiusHandle {
   geom(d: SketchFeature | null = this.mode.draft()): RadiusHandleGeom | null {
     if (!this.target || !d) return null;
     if (!d.constraints.some((c) => c.id === this.target!.dim)) return null;
-    return radiusHandleOf(d, this.target.arc);
+    // A fillet's arrow points inward (the way its radius grows); another arc's outward.
+    return radiusHandleOf(d, this.target.arc, !!filletCornerOf(this.mode.stored() ?? d, this.target.arc));
   }
 
   /** Drop the handle when its arc or dimension is gone. */
@@ -157,13 +235,15 @@ export class RadiusHandle {
     if (!this.target || !base || !this.hit(e)) return false;
     const g = this.geom(base)!;
     const arc = entityOf(base, this.target.arc);
-    const r0 = arc?.kind === 'arc' ? (arcGeom(base, arc)?.r ?? 0) : 0;
-    if (!(r0 > 0)) return false;
+    const ag = arc?.kind === 'arc' ? arcGeom(base, arc) : null;
+    const r0 = ag?.r ?? 0;
+    if (!ag || !(r0 > 0)) return false;
     const units = this.mode.services.doc.units;
     const per = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 }[units.units().length];
-    // The radius moves in steps a pixel can show, in round numbers of the display unit (0.1 mm at 0.06 mm per pixel).
-    const step = Math.pow(10, Math.ceil(Math.log10(Math.max(1e-9, e.px / per)))) * per;
-    this.drag = { from: e.uv, r0, dir: g.dir, base, limit: filletLimit(base, this.target.arc), min: step, step, fine: 0.01 * per };
+    // The radius moves in round numbers of the display unit finer than a pixel shows (0.01 mm at
+    // 0.06 mm per pixel), so the midpoint stays under the pointer.
+    const step = Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, e.px / per)))) * per;
+    this.drag = { grab: [e.uv[0] - g.at[0], e.uv[1] - g.at[1]], r0, centre: ag.c, fillet: filletCornerOf(base, this.target.arc), base, limit: filletLimit(base, this.target.arc), min: step, step, fine: 0.01 * per };
     this.live = r0;
     this.lastGood = r0;
     this.stopped = null;
@@ -175,15 +255,22 @@ export class RadiusHandle {
     return true;
   }
 
-  /** A move of the drag: the radius by how far the pointer went along the arrow. */
+  /** A move of the drag: the radius whose arc midpoint is under the pointer (where it held the handle). */
   move(e: SketchPointer) {
     const dr = this.drag;
     if (!dr || !this.target) return;
-    const along = (e.uv[0] - dr.from[0]) * dr.dir[0] + (e.uv[1] - dr.from[1]) * dr.dir[1];
-    let r = Math.round((dr.r0 + along) / dr.step) * dr.step;
+    const target: Vec2 = [e.uv[0] - dr.grab[0], e.uv[1] - dr.grab[1]];
+    let raw: number;
+    if (dr.fillet) {
+      const hi = dr.limit ? dr.limit.max * (1 - 1e-9) : dr.r0 * 1e3;
+      raw = filletRadiusAt(dr.fillet, target, Math.min(dr.min * 0.5, dr.r0), hi);
+      // At the top of the range and the pointer further on: past the limit.
+      if (dr.limit && raw >= hi * (1 - 1e-6)) raw = dr.limit.max * 2;
+    } else raw = Math.hypot(target[0] - dr.centre[0], target[1] - dr.centre[1]);
+    let r = Math.round(raw / dr.step) * dr.step;
     const units = this.mode.services.doc.units;
     this.stopped = null;
-    if (dr.limit && r > dr.limit.max) {
+    if (dr.limit && r >= dr.limit.max) {
       // Just under the limit (a line would be gone at it), in hundredths of the display unit.
       r = Math.floor(dr.limit.max / dr.fine) * dr.fine;
       if (!(r > 0) || r >= dr.limit.max) r = dr.limit.max * 0.999;
@@ -225,6 +312,7 @@ export class RadiusHandle {
           const expr = this.expr(v);
           const draft = withSolved(dr.base, res.values);
           this.mode.view.set({ draft: { ...draft, constraints: draft.constraints.map((c) => (c.id === target.dim && isDimension(c) ? { ...c, expr } : c)) } });
+          this.drawn();
         })
         .catch(() => {})
         .then(step);

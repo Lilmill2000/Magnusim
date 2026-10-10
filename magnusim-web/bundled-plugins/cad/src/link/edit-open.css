@@ -1,0 +1,56 @@
+/*
+ * Edit in CAD: the line over the viewport while the Part opens a project geometry
+ * ("Opening Vortex CFD Test from the project", "Waiting for Magnusim to finish
+ * storing ...", "Matching the faces of ..."), an error, and the note on faces that
+ * could not be matched (it stays until closed). Bottom centre of the frame, above
+ * the viewport, below dialogs. Colours only through var(--mg-*).
+ * Owner: LINK (Edit in CAD).
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+.cad-edit-open {
+  position: fixed;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 7px 12px;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-size: 13px;
+  box-shadow: var(--mg-shadow-tooltip);
+}
+.cad-edit-open[hidden] {
+  display: none;
+}
+.cad-edit-open[data-edit-open='error'] {
+  border-color: var(--mg-danger);
+}
+.cad-edit-open[data-edit-open='note'] {
+  border-color: var(--mg-warning);
+}
+.cad-edit-open .cad-edit-open-bar {
+  flex: 0 0 96px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--mg-border);
+  overflow: hidden;
+}
+.cad-edit-open .cad-edit-open-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--mg-primary);
+}
+.cad-edit-open button {
+  border: 0;
+  background: transparent;
+  color: var(--mg-text-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}

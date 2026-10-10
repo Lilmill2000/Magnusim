@@ -18,9 +18,16 @@ import { importRunsFor } from './runs';
 
 export const STEP_ACCEPT = ['.step', '.stp'];
 
-/** Start importing a picked or dropped file: checks first, then the panel with its progress. */
-export function startImport(services: AppServices, file: File): void {
-  const toast = (m: string) => services.bridge.toast(m, 'error');
+/**
+ * Start importing a picked or dropped file: checks first, then the panel with its progress.
+ * `init` adds fields to the new Imported feature (Edit in CAD: its `origin`). True when the
+ * import started; false when it was refused (the toast says why).
+ */
+export function startImport(services: AppServices, file: File, init: Partial<ImportFeature> = {}): boolean {
+  const toast = (m: string) => {
+    services.bridge.toast(m, 'error');
+    return false;
+  };
   if (!/\.(step|stp)$/i.test(file.name)) return toast(`Import failed: ${file.name} is not a STEP file (.step, .stp)`);
   const big = sizeProblem(file.size);
   if (big) return toast(big);
@@ -33,10 +40,11 @@ export function startImport(services: AppServices, file: File): void {
   if (p?.kind === 'feature' && p.type === 'import' && importRunsFor(services).state.get().runs[p.feature]?.progress) {
     return toast(`Wait for ${importRunsFor(services).state.get().runs[p.feature].fileName} to finish importing`);
   }
-  ui.openNew('import', { source: { rel: '', size: file.size, sha256: '', fileName: file.name, unit: null } } as Partial<ImportFeature>);
+  ui.openNew('import', { ...init, source: { rel: '', size: file.size, sha256: '', fileName: file.name, unit: null } } as Partial<ImportFeature>);
   const s = services.doc.session();
-  if (!s || !s.open || s.draft.type !== 'import') return;
+  if (!s || !s.open || s.draft.type !== 'import') return false;
   importRunsFor(services).start(s, file);
+  return true;
 }
 
 const module: CadModule = {

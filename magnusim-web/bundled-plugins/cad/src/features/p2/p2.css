@@ -129,11 +129,12 @@
 }
 
 /* ---- switch ---- */
+/* ux010 (PANELS): the arrow, as every toggle in CAD and the core kit's switch (src/styles/app.css). */
 .cad-switch-row {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
+  cursor: default;
 }
 /* The switch is the host kit's Toggle (mgk-switch). The kit draws no focus ring on
    it (its checkbox is 0 x 0); CAD rings the track, so the keyboard shows where it is. */
@@ -141,7 +142,7 @@
   box-shadow: 0 0 0 2px var(--mg-focus);
 }
 .cad-switch-label {
-  cursor: pointer;
+  cursor: default;
 }
 
 /* ---- progress ---- */

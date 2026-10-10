@@ -5,6 +5,7 @@
 // preview changes. Every change applies at once (no Apply button).
 // Owner: P4b SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { useReducer } from 'react';
 import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
 import type { Quantity } from '../../types/units';
@@ -25,6 +26,9 @@ export function ToolOptions({ mode }: { mode: SketchMode }) {
   useStateStore(mode.view, (v) => `${v.hint}|${v.preview ? 1 : 0}|${v.draft?.entities.length ?? 0}`);
   useStateStore(mode.state, (s) => s.tool);
   useStateStore(services.selection, (s) => s.items.length);
+  // ux010 (PANELS): a box or a choice whose change moves nothing else on screen (sketch Chamfer's "Same
+  // distance on both lines": the hint stays) redraws too; the controlled box snapped back to its old state.
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
   const opts = mode.tool?.options?.() ?? [];
   if (!opts.length) return null;
   const units = services.doc.units;
@@ -53,7 +57,10 @@ export function ToolOptions({ mode }: { mode: SketchMode }) {
           case 'choice':
             return (
               <Field key={o.id} label={o.label} field={`sk-${o.id}`}>
-                <Select value={o.value} label={o.label} field={`sk-${o.id}`} options={o.choices} onChange={(v) => o.set(v)} />
+                <Select value={o.value} label={o.label} field={`sk-${o.id}`} options={o.choices} onChange={(v) => {
+                  o.set(v);
+                  redraw();
+                }} />
               </Field>
             );
           case 'number':
@@ -73,7 +80,10 @@ export function ToolOptions({ mode }: { mode: SketchMode }) {
           case 'check':
             return (
               <label key={o.id} className="cad-sk-check">
-                <input type="checkbox" checked={o.value} onChange={(e) => o.set(e.target.checked)} data-sketch-option={o.id} />
+                <input type="checkbox" checked={o.value} onChange={(e) => {
+                  o.set(e.target.checked);
+                  redraw();
+                }} data-sketch-option={o.id} />
                 {o.label}
               </label>
             );

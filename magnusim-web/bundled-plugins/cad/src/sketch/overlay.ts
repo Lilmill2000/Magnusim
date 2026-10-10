@@ -39,6 +39,9 @@ import { linkMenuItems } from './project/menu';
 // ux010 (DRAW)
 import { CLICK_PX } from '../viewport/colors';
 import { drawsConstruction } from './edit';
+import { cursorFor, cursorTone, sketchCursor } from './cursors';
+import { VIEWPORT_BG } from '../viewport/colors';
+import { relationShown, relationsView } from './relations-view';
 
 /**
  * ux010 (DRAW, review S2): when a press that moved is a click-drag (its release places the shape's
@@ -136,11 +139,37 @@ class Lines {
   }
 }
 
+/**
+ * ux010 (DRAW, Daniel: "can points be round and not square?"): a point sprite drawn as a round dot
+ * with a smooth (anti-aliased) edge: outside its circle the fragment is dropped, the last pixel
+ * fades. Picking is analytic (src/sketch/pick.ts), not from the sprite.
+ */
+export function roundPoints(mat: PointsMaterial): PointsMaterial {
+  mat.defines = { ...(mat.defines ?? {}), ROUND_POINTS: '' };
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <alphatest_fragment>',
+      [
+        '#include <alphatest_fragment>',
+        '#ifdef ROUND_POINTS',
+        '  float rr = length( gl_PointCoord - vec2( 0.5 ) ) * 2.0;',
+        '  float aa = max( fwidth( rr ), 1e-4 );',
+        '  diffuseColor.a *= 1.0 - smoothstep( 1.0 - aa, 1.0, rr );',
+        '  if ( diffuseColor.a <= 0.0 ) discard;',
+        '#endif',
+      ].join('\n'),
+    );
+  };
+  mat.customProgramCacheKey = () => 'cad-round-points';
+  mat.needsUpdate = true;
+  return mat;
+}
+
 class Dots {
   readonly obj: Points;
   readonly mat: PointsMaterial;
   constructor(parent: Group, size: number) {
-    this.mat = new PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, depthTest: false, depthWrite: false, transparent: true });
+    this.mat = roundPoints(new PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, depthTest: false, depthWrite: false, transparent: true }));
     this.obj = new Points(new BufferGeometry(), this.mat);
     this.obj.renderOrder = 1010;
     this.obj.frustumCulled = false;
@@ -291,6 +320,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   const html = ann.html;
   html.classList.add('cad-sketch-annotations');
   html.setAttribute('data-sketch-annotations', '1');
+  // ux010 (DRAW): what the points' material draws (the e2e reads it): 'round' when its shader cuts the circle.
+  html.dataset.sketchPoints = dots.mat.defines && 'ROUND_POINTS' in dots.mat.defines ? 'round' : 'square';
 
   // ------------------------------------------------------------ the plane frame
   let plane: PlaneFrame | null = null;
@@ -387,9 +418,20 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     guides.mat.dashSize = 4 * px;
     guides.mat.gapSize = 4 * px;
     const pts: { at: Vec2; color: string }[] = [{ at: [0, 0], color: sel.has(ORIGIN) ? pal.pick : pal.fully }];
+    // ux010 (DRAW): a point under a radius arrow (the fillet's virtual sharp lies on its line) is not
+    // drawn while the arrow shows, so the arrow reads on its own.
+    const arrows = (v.preview?.handles ?? []).map((h) => ({ at: h.at, dir: h.dir, px: pxAt(h.at) }));
+    const underArrow = (p: Vec2) =>
+      arrows.some((a) => {
+        const rel: Vec2 = [(p[0] - a.at[0]) / a.px, (p[1] - a.at[1]) / a.px];
+        const along = rel[0] * a.dir[0] + rel[1] * a.dir[1];
+        const across = Math.abs(-rel[0] * a.dir[1] + rel[1] * a.dir[0]);
+        return along > 2 && along < 30 && across < 6;
+      });
     for (const id of drawnPoints(d)) {
       const p = pointAt(d, id);
       if (!p) continue;
+      if (arrows.length && underArrow(p)) continue;
       const pe = d.entities.find((e) => e.kind === 'point' && e.p === id);
       const key = pe ? pe.id : id;
       const lp = look.points.get(id);
@@ -604,8 +646,14 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       const slots = new Map<string, number>();
       const sel = new Set(mode.selected().map((h) => h.id));
       const conflict = new Set([...(v.status?.conflicting ?? []), ...(v.status?.redundant ?? [])]);
+      // ux010 (DRAW): relations show for the selection only, unless Show relations is on; a conflict
+      // always shows; a fillet arc's own while its radius arrow is up stay hidden (src/sketch/relations-view.ts).
+      const showAll = relationsView(services).state.get().showAll;
+      const hidden = new Set((v.preview?.handles ?? []).map((h) => h.id));
+      html.dataset.sketchRelations = showAll ? 'all' : 'selection';
       for (const c of d.constraints) {
         if (isDimension(c)) continue;
+        if (!relationShown(d, c, { showAll, conflict, selected: sel, hidden })) continue;
         const anchors = glyphAnchors(d, c);
         anchors.forEach((at, i) => {
           const key = `${c.id}:${i}`;
@@ -1023,7 +1071,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
         el.setAttribute('data-sketch-handle', h.id);
         el.setAttribute('aria-hidden', 'true');
         // An arrow pointing right (rotated to its direction): a shaft and a head, on a round grip.
-        el.innerHTML = '<svg viewBox="0 0 34 16" width="34" height="16"><path d="M3 8h22" /><path d="M20 3l7 5-7 5z" /></svg>';
+        // ux010 (DRAW, Daniel: "that radius pull thing looks way too cluttered"): a light arrow (thin
+        // shaft, small head) in a 38 x 22 grab box, its tail (4, 11) on the arc.
+        el.innerHTML = '<svg viewBox="0 0 38 22" width="38" height="22"><path d="M7 11h14" /><path d="M20.5 8.2l4.6 2.8-4.6 2.8z" /></svg>';
         // Review B1: the arrow takes the press itself, along its whole length (labels and glyphs under
         // it never get it): the press goes to the view as a press there, so the tool's drag starts.
         el.addEventListener('pointerdown', (e) => {
@@ -1037,6 +1087,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
           canvas.dispatchEvent(new PointerEvent('pointermove', e));
         });
         forwardWheel(el);
+        el.style.cursor = sketchCursor('grab', null, cursorTone(services.bridge?.context?.theme?.name ?? null, VIEWPORT_BG));
         html.append(el);
         rec = { el, at: h.at, dir: h.dir };
         handleEls.set(h.id, rec);
@@ -1056,8 +1107,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       }
       const ang = Math.atan2(s1[1] - s0[1], s1[0] - s0[0]);
       rec.el.style.display = '';
-      // The grip (the arrow's tail, 3 px in) sits on the arc; the arrow points away from its centre.
-      rec.el.style.transform = `translate(${Math.round(s0[0])}px, ${Math.round(s0[1])}px) rotate(${ang}rad) translate(-3px, -8px)`;
+      // The grip (the arrow's tail, 4 px in) sits on the arc; the arrow points away from its centre.
+      rec.el.style.transform = `translate(${Math.round(s0[0])}px, ${Math.round(s0[1])}px) rotate(${ang}rad) translate(-4px, -11px)`;
       rec.el.dataset.screen = `${Math.round(s0[0] + hostRect().left)},${Math.round(s0[1] + hostRect().top)}`;
     }
   }
@@ -1272,10 +1323,27 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // ------------------------------------------------------------ the pointer
   const drawing = () => (mode.tool?.id ?? 'select') !== 'select';
+  /** ux010 (DRAW): white cursors on a dark view (the host's theme, or the view's colour). */
+  const tone = () => cursorTone(services.bridge?.context?.theme?.name ?? null, VIEWPORT_BG);
+  /** ux010 (DRAW): the cursor value last given to the canvas. */
+  let lastCursor = '';
+  /** ux010 (DRAW): the active tool's toolbar icon (the command that presses for it), for the draw cursor. */
+  const toolIcon = (): string | null => {
+    const id = mode.tool?.id;
+    if (!id) return null;
+    return services.commands.all().find((c) => c.activeWhen?.sketchTool === id)?.icon ?? null;
+  };
   function applyCursor() {
     if (!canvas) return;
     const v = mode.view.get();
-    canvas.style.cursor = v.dragging ? 'grabbing' : v.cursor || (drawing() ? 'crosshair' : 'default');
+    // ux010 (DRAW): our own cursors (src/sketch/cursors.ts) for the keywords the tools ask for.
+    const want = v.dragging ? 'grabbing' : v.cursor || (drawing() ? 'crosshair' : 'default');
+    const css = cursorFor(want, want === 'crosshair' ? toolIcon() : null, tone());
+    if (css !== lastCursor || canvas.dataset.sketchCursor !== want || (css.includes('url(') && !canvas.style.cursor.includes('url('))) {
+      lastCursor = css;
+      canvas.style.cursor = css;
+      canvas.dataset.sketchCursor = want;
+    }
   }
 
   let pressed = false;
@@ -1326,7 +1394,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   };
   const popTool = handle.pushTool({
     id: 'sketch',
-    cursor: 'crosshair',
+    // ux010 (DRAW): the sketch's crosshair (the overlay adds the tool's icon at once).
+    cursor: sketchCursor('draw'),
     onPointer(e) {
       if (!mode.tool) return false;
       pointerAt = e.type === 'leave' ? null : [e.clientX, e.clientY];
@@ -1463,6 +1532,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     place();
     markDot();
   });
+  // ux010 (DRAW): Show relations on or off: the glyphs again.
+  const offRelations = relationsView(services).state.subscribe(() => render());
   // ux010 (DRAW): construction drawing on or off: the badge and the preview's dashes.
   let drawingConstruction = mode.drawConstruction;
   const offState = mode.state.subscribe((s) => {
@@ -1478,6 +1549,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     offLinks();
     offFrame();
     offState();
+    offRelations();
     popTool();
     mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);
@@ -1486,6 +1558,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     for (const o of [...frame.children, ...dimFrame.children] as Object3D[]) o.removeFromParent();
     geo.dispose();
     ann.dispose();
-    if (canvas) canvas.style.cursor = '';
+    if (canvas) {
+      canvas.style.cursor = '';
+      delete canvas.dataset.sketchCursor;
+    }
   };
 }

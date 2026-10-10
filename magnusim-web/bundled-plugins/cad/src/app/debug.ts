@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ViewState } from '@magnusim/workspace';
 import type { LinkController, LinkOutcome } from '../link/controller';
+import type { EditOpen } from '../link/edit-open';
 import type { AppServices } from '../types/app';
 
 export interface CadTestHandle {
@@ -15,6 +16,8 @@ export interface CadTestHandle {
   link: LinkController | null;
   /** L3: the exit hook ('pending' until the app answered its registration), and its last run. */
   leave: CadLeaveHandle;
+  /** Edit in CAD (host API 1.7): the open flow of a Part opened on a project geometry. */
+  edit?: EditOpen;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;

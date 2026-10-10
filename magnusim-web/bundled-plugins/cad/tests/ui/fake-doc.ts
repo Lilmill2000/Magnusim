@@ -605,6 +605,21 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       calls.push(`setSketchVisibility ${id} ${mode}`);
       state.set((s) => ({ ...s, view: { ...s.view, sketches: { ...(s.view.sketches ?? {}), ...(mode ? { [id]: mode } : {}) } } }));
     },
+    // ux010 (TOOLBAR builder): the banana for scale, kept with the view.
+    setScaleModel(kind, place) {
+      calls.push(`setScaleModel ${kind} ${place ? 'shown' : 'removed'}`);
+      state.set((s) => {
+        const models = { ...(s.view.scaleModels ?? {}) };
+        if (place) models[kind] = place;
+        else delete models[kind];
+        const view: typeof s.view = { ...s.view, scaleModels: models };
+        if (!Object.keys(models).length) delete view.scaleModels;
+        return { ...s, view };
+      });
+    },
+    setSketchBanana(feature, at) {
+      calls.push(`setSketchBanana ${feature} ${at ? 'shown' : 'removed'}`);
+    },
     async flush() {},
     async retellDirty() {},
     retrySave() {

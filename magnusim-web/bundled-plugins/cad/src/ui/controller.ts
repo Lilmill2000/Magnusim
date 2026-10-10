@@ -62,6 +62,11 @@ export interface UiController {
   readonly state: StateStore<UiState>;
   /** Why the model cannot be edited right now, or null. */
   editBlock(): string | null;
+  /**
+   * Edit in CAD: one more reason the model cannot be edited now (null when it can), asked after the
+   * document's own; the returned function removes it.
+   */
+  addEditBlock(fn: () => string | null): () => void;
   /** Open the panel of a new feature (`init`: fields filled from the selection, select-first). */
   openNew(type: FeatureType, init?: Partial<Feature>): void;
   openEdit(id: FeatureId): void;
@@ -124,9 +129,16 @@ export function createUiController(services: AppServices): UiController {
     services.bridge.toast(`${action} failed: ${reason}`, 'error');
   };
 
+  // Edit in CAD: other reasons (the Part being opened on a project geometry).
+  const blocks = new Set<() => string | null>();
   const editBlock = (): string | null => {
     const ok = doc.editable();
-    return ok === true ? null : ok;
+    if (ok !== true) return ok;
+    for (const fn of blocks) {
+      const why = fn();
+      if (why) return why;
+    }
+    return null;
   };
 
   const featureName = (id: FeatureId) => featureById(services, id)?.name ?? 'the feature';
@@ -211,6 +223,12 @@ export function createUiController(services: AppServices): UiController {
   const c: UiController = {
     state,
     editBlock,
+    addEditBlock(fn) {
+      blocks.add(fn);
+      return () => {
+        blocks.delete(fn);
+      };
+    },
     openNew(type, init) {
       const label = doc.features.get(type)?.label ?? type;
       begin(() => doc.beginNew(type, init), type, `New ${label}`);

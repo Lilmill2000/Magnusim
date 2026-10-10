@@ -13,7 +13,7 @@ import { isClickDrag } from '../../src/sketch/overlay';
 import { asConstruction, drawsConstruction } from '../../src/sketch/edit';
 import { arcGeom, isDimension } from '../../src/sketch/model';
 import type { SketchPointer } from '../../src/sketch/mode';
-import { filletLimit, radiusHandleOf } from '../../src/sketch/tools/radius-handle';
+import { filletCornerOf, filletLimit, filletMidAt, filletRadiusAt, radiusHandleOf } from '../../src/sketch/tools/radius-handle';
 import { filletCorner } from '../../src/sketch/tools/fillet';
 import type { SketchDimension, SketchEntity, Vec2 } from '../../src/types/doc';
 import { rectangle, type Geo } from './fixtures';
@@ -200,6 +200,8 @@ describe('snaps on the model: one kernel read at a time, the newest next', () =>
 });
 
 describe("a new sketch fillet's radius arrow", () => {
+  /** A 90 degree corner: the arc's midpoint is r (1/sin 45 - 1) from the corner. */
+  const K = Math.SQRT2 - 1;
   const px = 0.1;
   const ev = (type: SketchPointer['type'], at: Vec2, pressed = false): SketchPointer => ({ type, uv: at, px, ctrl: false, shift: false, pressed, clientX: at[0] / px, clientY: -at[1] / px });
 
@@ -225,7 +227,31 @@ describe("a new sketch fillet's radius arrow", () => {
     expect(hg.dir[1]).toBeCloseTo(Math.SQRT1_2, 6);
   });
 
-  it('drag outward: bigger radius live and stored in one undo step (the dimension changes, nothing added); too far stops at 20 and says why; Undo gives 5 back', async () => {
+  it('direct manipulation: the radius whose fillet midpoint is at a point, two lines (closed form) and a line with an arc (searched)', () => {
+    const g = rectangle(0, 0, 40, 20);
+    const f = filletCorner(g, 'p3', 5, '5 mm');
+    if (!f.ok) throw new Error(f.reason);
+    const arc = f.draft.entities.find((e) => e.kind === 'arc')!;
+    const fc = filletCornerOf(f.draft, arc.id)!;
+    // Between two lines at 90 degrees: the midpoint is r (sqrt 2 - 1) from the corner (40, 20), along the bisector.
+    const m7 = filletMidAt(fc, 7)!;
+    expect(Math.hypot(m7[0] - 40, m7[1] - 20)).toBeCloseTo(7 * (Math.SQRT2 - 1), 6);
+    expect(filletRadiusAt(fc, m7, 0.01, 19.99)).toBeCloseTo(7, 4);
+    // A point off the bisector: its projection on it.
+    expect(filletRadiusAt(fc, [m7[0] + 0.8, m7[1] - 0.8], 0.01, 19.99)).toBeCloseTo(7, 4);
+    // A line and an arc (no closed form): the search finds the radius whose midpoint is there.
+    const la = { points: { a: [0, 0] as Vec2, p: [20, 0] as Vec2, o: [25, 10] as Vec2, q: [35, 10] as Vec2 }, entities: [{ id: 'l', kind: 'line', p: ['a', 'p'] }, { id: 'k', kind: 'arc', c: 'o', a: 'p', b: 'q' }] as SketchEntity[], constraints: [] };
+    const f2 = filletCorner(la, 'p', 2, '2 mm');
+    if (!f2.ok) throw new Error(f2.reason);
+    const had = new Set(la.entities.map((e) => e.id));
+    const arc2 = f2.draft.entities.find((e) => e.kind === 'arc' && !had.has(e.id))!;
+    const fc2 = filletCornerOf(f2.draft, arc2.id)!;
+    expect(fc2.why).toBe('the line and the arc are too short');
+    const m3 = filletMidAt(fc2, 3)!;
+    expect(filletRadiusAt(fc2, m3, 0.01, filletLimit(f2.draft, arc2.id)!.max * 0.999)).toBeCloseTo(3, 3);
+  });
+
+  it('drag inward (away from the corner): bigger radius live and stored in one undo step (the dimension changes, nothing added); too far stops at 20 and says why; Undo gives 5 back', async () => {
     h = await sketchHarness(plate());
     h.tool('fillet');
     h.click([40, 20]);
@@ -239,17 +265,24 @@ describe("a new sketch fillet's radius arrow", () => {
     const { at, dir } = pv!.handles![0];
     expect(h.mode.view.get().hint).toMatch(/^Drag the arrow to size this fillet/);
     const t = h.mode.tool!;
-    const along = (d: number): Vec2 => [at[0] + dir[0] * d, at[1] + dir[1] * d];
+    // Direct manipulation (Daniel, efd5d15): the arrow points inward (towards the arc's centre, away
+    // from the corner) and the arc's midpoint follows the pointer: a radius d mm bigger moves it
+    // d (1/sin 45 - 1) = d (sqrt 2 - 1) mm further along the bisector.
+    const ag0 = arcGeom(h.sketch(), h.sketch().entities.find((e) => e.kind === 'arc') as Extract<SketchEntity, { kind: 'arc' }>)!;
+    expect((ag0.c[0] - at[0]) * dir[0] + (ag0.c[1] - at[1]) * dir[1]).toBeCloseTo(5, 6);
+    const along = (d: number): Vec2 => [at[0] + dir[0] * d * K, at[1] + dir[1] * d * K];
     t.pointer(ev('move', at));
     t.pointer(ev('down', at, true));
     for (let i = 1; i <= 6; i++) {
       t.pointer(ev('move', along(i * 0.5), true));
       await h.idle();
     }
-    // 3 mm out: radius 8, drawn live before the release.
+    // 3 mm bigger: radius 8, drawn live before the release, its midpoint under the pointer.
     const live = h.mode.view.get().draft!;
     const liveArc = live.entities.find((e) => e.kind === 'arc') as Extract<SketchEntity, { kind: 'arc' }>;
     expect(arcGeom(live, liveArc)!.r).toBeCloseTo(8, 4);
+    const liveMid = radiusHandleOf(live, liveArc.id)!.at;
+    expect(Math.hypot(liveMid[0] - along(3)[0], liveMid[1] - along(3)[1])).toBeLessThan(0.05);
     expect(h.mode.view.get().hint).toBe('Radius 8 mm: release to keep it.');
     const opts = h.mode.tool!.options!();
     expect(opts[0]).toMatchObject({ id: 'radius', expr: '8 mm' });
@@ -266,7 +299,7 @@ describe("a new sketch fillet's radius arrow", () => {
     // Too far: it stops at 20 (the short side) and says why.
     const g2 = h.mode.view.get().preview!.handles![0];
     t.pointer(ev('down', g2.at, true));
-    t.pointer(ev('move', [g2.at[0] + g2.dir[0] * 40, g2.at[1] + g2.dir[1] * 40], true));
+    t.pointer(ev('move', [g2.at[0] + g2.dir[0] * 40 * K, g2.at[1] + g2.dir[1] * 40 * K], true));
     await h.idle();
     expect(h.mode.view.get().hint).toBe("The radius can't be bigger than 20 mm here: the lines are too short");
     t.pointer(ev('up', g2.at));
@@ -293,7 +326,8 @@ describe("a new sketch fillet's radius arrow", () => {
     const rad = () => h!.sketch().constraints.filter((c): c is SketchDimension => isDimension(c) && c.kind === 'radius')[0].expr;
     let g = h.mode.view.get().preview!.handles![0];
     let t = h.mode.tool!;
-    const out = (k: number): Vec2 => [g.at[0] + g.dir[0] * k, g.at[1] + g.dir[1] * k];
+    // A radius k mm bigger (k < 0: smaller, towards the corner).
+    const out = (k: number): Vec2 => [g.at[0] + g.dir[0] * k * K, g.at[1] + g.dir[1] * k * K];
     t.pointer(ev('down', g.at, true));
     t.pointer(ev('move', out(-4), true));
     await h.idle();
@@ -353,9 +387,9 @@ describe("a new sketch fillet's radius arrow", () => {
     const t = h.mode.tool!;
     expect(t.takesPress!(ev('down', hs[0].at, true))).toBe(true);
     t.pointer(ev('down', hs[0].at, true));
-    t.pointer(ev('move', [hs[0].at[0] + hs[0].dir[0] * 2, hs[0].at[1] + hs[0].dir[1] * 2], true));
+    t.pointer(ev('move', [hs[0].at[0] + hs[0].dir[0] * 2 * K, hs[0].at[1] + hs[0].dir[1] * 2 * K], true));
     await h.idle();
-    t.pointer(ev('up', [hs[0].at[0] + hs[0].dir[0] * 2, hs[0].at[1] + hs[0].dir[1] * 2]));
+    t.pointer(ev('up', [hs[0].at[0] + hs[0].dir[0] * 2 * K, hs[0].at[1] + hs[0].dir[1] * 2 * K]));
     await h.idle();
     await h.idle();
     const dim = h.sketch().constraints.find((c): c is SketchDimension => isDimension(c) && c.kind === 'radius')!;

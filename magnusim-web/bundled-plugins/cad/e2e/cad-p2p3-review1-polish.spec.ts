@@ -25,7 +25,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, showAllRelations } from './helpers';
 import { PNG } from './png';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -536,6 +536,8 @@ test('cad:p2p3-review1-trim-relation after a trim splits a line, a point on the 
     ],
     constraints: [{ id: 'on1', kind: 'point_on_line', refs: ['q', 'h'] }],
   });
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   const glyph = frame.locator('[data-sketch-glyph="point_on_line"][data-constraint="on1"]');
   await expect(glyph).toHaveAttribute('aria-label', 'On line: End of Line 4, Line 1');
   // Trim the middle of the long line (between the two crossings).

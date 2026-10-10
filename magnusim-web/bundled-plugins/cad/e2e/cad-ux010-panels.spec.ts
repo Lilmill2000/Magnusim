@@ -866,3 +866,73 @@ test('cad:ux010-panels-review-params Parameters in the tree during a sketch is r
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);
 });
+
+// ---------------------------------------------------------------- the text cursor (Daniel 2026-10-08)
+
+/** The computed cursor of an element (what the pointer shows over it). */
+const cursorOf = (l: ReturnType<FrameLocator['locator']>) => l.evaluate((el) => getComputedStyle(el).cursor);
+
+test('cad:ux010-panels-cursor no I-beam on what is not typed text: the sketch Chamfer\'s "Same distance" label and box, an Extrude field label and the Sketch panel hint show the arrow, a tree row the hand of the core tree, a menu item no I-beam; a number field keeps the I-beam; the label text still toggles the box', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await addSolid(page);
+  // A tree row, and a menu item of its menu.
+  const row = frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl').first();
+  await row.hover();
+  // The hand, as the core tree's rows (a row is clicked, not read as text).
+  expect(await cursorOf(row)).toBe('pointer');
+  await row.click({ button: 'right' });
+  const item = frame.locator('[data-cad-menu] [data-menu-item]').first();
+  await expect(item).toBeVisible();
+  await item.hover();
+  expect(await cursorOf(item)).not.toBe('text');
+  expect(await cursorOf(item)).not.toBe('auto');
+  await page.keyboard.press('Escape');
+  // The Extrude panel: a field label (the arrow) and its number field (the I-beam).
+  await runCommand(frame, 'solid.extrude');
+  const fpanel = frame.locator('[data-cad-panel="feature"]');
+  const label = fpanel.locator('[data-field-row="distance"] .mgk-field-k');
+  await expect(label).toBeVisible();
+  await label.hover();
+  expect(await cursorOf(label)).toBe('default');
+  const input = fpanel.locator('.nui[data-field="distance"] input');
+  await input.hover();
+  expect(await cursorOf(input)).toBe('text');
+  await fpanel.locator('[data-panel-delete]').click();
+  await expect(fpanel).toHaveCount(0);
+  // The sketch Chamfer: "Same distance on both lines", its text and its box.
+  await sketchOnTop(page, frame);
+  const panel = frame.locator('[data-cad-panel="sketch"]');
+  const hint = panel.locator('[data-sketch-hint]');
+  await hint.hover();
+  expect(await cursorOf(hint)).toBe('default');
+  expect(await cursorOf(hint.locator('> *'))).toBe('default');
+  await runCommand(frame, 'sketch.chamfer');
+  const box = panel.locator('[data-sketch-option="equal"]');
+  await expect(box).toBeVisible();
+  const check = panel.locator('label.cad-sk-check:has([data-sketch-option="equal"])');
+  await expect(check).toContainText('Same distance on both lines');
+  // Over the words (right of the box).
+  const cb = (await check.boundingBox())!;
+  const bb = (await box.boundingBox())!;
+  await page.mouse.move(bb.x + bb.width + 30, cb.y + cb.height / 2);
+  const under = await workspaceFrame(page).evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    return el ? { tag: el.tagName, cursor: getComputedStyle(el).cursor } : null;
+  }, await (async () => {
+    const fb = (await page.locator('#workspace-frame').boundingBox())!;
+    return { x: bb.x + bb.width + 30 - fb.x, y: cb.y + cb.height / 2 - fb.y };
+  })());
+  expect(under).toEqual({ tag: 'LABEL', cursor: 'default' });
+  expect(await cursorOf(box)).toBe('default');
+  // The words still toggle the box.
+  const was = await box.isChecked();
+  await page.mouse.click(bb.x + bb.width + 30, cb.y + cb.height / 2);
+  await expect(box).toBeChecked({ checked: !was });
+  // And back (the box redraws each time: it used to snap back, the hint not changing).
+  await page.mouse.click(bb.x + bb.width + 30, cb.y + cb.height / 2);
+  await expect(box).toBeChecked({ checked: was });
+  await page.keyboard.press('Escape');
+  await finish(frame);
+  expect(seen.csp).toEqual([]);
+  expect(seen.errors).toEqual([]);
+});

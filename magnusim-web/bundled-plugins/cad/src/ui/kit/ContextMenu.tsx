@@ -25,6 +25,8 @@ export interface MenuItem {
   command?: string;
   /** A command's icon (24x24 path), drawn before the label. */
   icon?: string;
+  /** ux010: the icon drawn in colour (CommandDef.iconColors). */
+  iconColors?: { fill: string; stroke: string };
   /** A command's shortcut ("E", "Ctrl+Z"), drawn at the item's right and in its tooltip. */
   shortcut?: string;
   /** A command's hint: the tooltip's second line while it can run. */
@@ -92,7 +94,7 @@ function Item({ item, onRun, onHover }: { item: MenuItem; onRun(item: MenuItem):
         <>
           {/* ux010 (TOOLBAR, review N2): a command that toggles a mode (Construction) shows its state. */}
           {item.checked != null ? <span className="cad-menu-check" aria-hidden="true" data-on={item.checked ? '1' : undefined} /> : null}
-          <span className="cad-menu-ico">{item.icon ? <Icon d={item.icon} size={16} stroke={1.7} /> : null}</span>
+          <span className="cad-menu-ico">{item.icon ? <Icon d={item.icon} size={16} stroke={1.7} {...(item.iconColors ? { colors: item.iconColors } : {})} /> : null}</span>
           <span className="cad-menu-label">{item.label}</span>
           {item.shortcut ? <kbd className="cad-menu-key">{item.shortcut}</kbd> : null}
         </>

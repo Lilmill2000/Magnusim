@@ -30,6 +30,8 @@ export const SHARDS = {
     'e2e/cad-p4a-toolbar.spec.ts',
     // P4b fix round 1 (TOOLBAR): the compact model default, the sketch ribbon order, rearranging and Reset.
     'e2e/cad-p4b-toolbar.spec.ts',
+    // ux010 TOOLBAR builder: Banana for scale (SCALE MODELS after VIEW; never a body; dragged; not linked).
+    'e2e/cad-ux010-banana.spec.ts',
   ],
   // The sketcher (tools, relations, dimensions, value boxes), profiles, and Extrude of them
   // (P3's gate and the P2+P3 review rounds).
@@ -55,8 +57,14 @@ export const SHARDS = {
     'e2e/cad-ux010-panels.spec.ts',
     // ux010 TOOLBAR: drag a command from its group's More onto the bar (and back), sketch and model mode.
     'e2e/cad-ux010-toolbar.spec.ts',
+    // ux010 TOOLBAR builder: the taped banana picture in a sketch (true size, behind the sketch, dragged, never sketch geometry).
+    'e2e/cad-ux010-sketch-banana.spec.ts',
     // ux010 DRAW: construction drawing (Construction / X toggle), a press is never lost (click-drag draws), a new fillet's radius arrow.
     'e2e/cad-ux010-draw.spec.ts',
+    // ux010 DRAW: the sketch's own cursors (SVG, keyword fallback) and round points.
+    'e2e/cad-ux010-cursors.spec.ts',
+    // ux010 DRAW: relation glyphs for the selection only, Show relations (Shift+R), a conflict always shows.
+    'e2e/cad-ux010-relations.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.
@@ -92,9 +100,12 @@ export const SHARDS = {
     'e2e/cad-link-carry.spec.ts',
     'e2e/cad-link-ux.spec.ts',
     'e2e/cad-start.spec.ts',
+    // Edit in CAD (host API 1.7): a project geometry opened in a Part, adopted on the first Back with a change (gate:l3-cad).
+    'e2e/cad-edit-in-cad.spec.ts',
   ],
   // Opt-in: Daniel's 113 MB STEP (CAD_E2E_BIG_STEP); its tests skip without it.
-  big: ['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts'],
+  // Edit in CAD on the 113 MB STEP (CAD_KERNEL_BIG_STEP or CAD_E2E_BIG_STEP): its timings.
+  big: ['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts'],
 };
 
 export const SHARD_NAMES = Object.keys(SHARDS);

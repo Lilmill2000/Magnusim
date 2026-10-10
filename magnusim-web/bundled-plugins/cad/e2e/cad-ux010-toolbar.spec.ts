@@ -295,6 +295,19 @@ async function sketchTool(frame: FrameLocator): Promise<string | null> {
   );
 }
 
+/**
+ * Resizes the page and waits until the Part's frame has had its resize event: that event closes an
+ * open menu (kit ContextMenu), so a right-click made before it lands loses its menu (seen in real
+ * Chrome, where setViewportSize returns before the frame hears of the new size).
+ */
+async function resizeTo(page: Page, frame: FrameLocator, width: number, height: number) {
+  await page.setViewportSize({ width, height });
+  const app = frame.locator('[data-cad-app]');
+  await expect.poll(() => app.evaluate(() => window.innerWidth), `the frame at ${width} px`).toBe(width);
+  // The resize steps run when the frame next renders, before its animation frames: two of them.
+  await app.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+}
+
 async function resetToolbar(frame: FrameLocator) {
   await tb(frame).locator('[data-group="view"] .tb-group-label').click({ button: 'right', force: true });
   await menu(frame).locator('[data-menu-item="tb-reset"]').click();
@@ -310,7 +323,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
 
   // B2: at 1150 and 1000 px, Tangent arc dragged onto DRAW's last slot stays on the bar.
   for (const width of [1150, 1000]) {
-    await page.setViewportSize({ width, height: 900 });
+    await resizeTo(page, frame, width, 900);
     await expect.poll(() => moreIds(frame, 'draw'), `Tangent arc in More at ${width}`).toContain('sketch.arc-tangent');
     const before = await shownIds(frame, 'draw');
     const last = before[before.length - 1];
@@ -334,14 +347,17 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
     expect(await moreIds(frame, 'draw')).toContain(last);
     if (width === 1150) await page.screenshot({ path: test.info().outputPath('narrow-1150-after.png') });
     // A narrower frame folds the group's other commands first: Tangent arc stays.
-    await page.setViewportSize({ width: 900, height: 900 });
+    await resizeTo(page, frame, 900, 900);
     await expect.poll(() => shownIds(frame, 'draw')).toContain('sketch.arc-tangent');
-    await page.setViewportSize({ width, height: 900 });
+    await resizeTo(page, frame, width, 900);
     await resetToolbar(frame);
   }
 
   // B2 for the keyboard's way: Swap with at 1000 px keeps Spline on the bar.
-  await expect.poll(() => moreIds(frame, 'draw')).toContain('sketch.spline');
+  // Still in the sketch (DRAW and its More exist only there), so a miss below is the toolbar's fit: at
+  // 1000 px every foldable sketch command is folded (data-fit 2), Spline among them.
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await expect.poll(() => moreIds(frame, 'draw'), "Spline in DRAW's More at 1000 px").toContain('sketch.spline');
   const before = await shownIds(frame, 'draw');
   const last = before[before.length - 1];
   await tb(frame).locator('[data-tb-more="draw"]').click();
@@ -351,7 +367,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   await expect.poll(() => shownIds(frame, 'draw')).toEqual([...before.slice(0, -1), 'sketch.spline']);
   await expect(btn(frame, 'sketch.spline')).toBeVisible();
   await resetToolbar(frame);
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  await resizeTo(page, frame, 1600, 1000);
   await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.spline']);
 
   // S5: the window loses the press mid-drag (alt-tab): the drag ends, the release later drops nothing.

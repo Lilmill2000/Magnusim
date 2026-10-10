@@ -70,7 +70,8 @@ const FOLD_ORDER = [
  * round 1, Daniel: the compact layout at every width). Every other model command starts in its
  * group's More menu.
  */
-const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'];
+// ux010: SCALE MODELS' Banana for scale is on the bar too.
+const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step', 'scale.banana'];
 
 type Cmd = { id: string; label: string; shortcut: string | null; hint: string | null; reason: string | null };
 type Grp = { group: string; label: string; commands: Cmd[] };
@@ -143,7 +144,10 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
         const r = (await btn.boundingBox())!;
         expect(r.x >= fr.x - 0.5 && r.x + r.width <= right + 0.5, `${where}: ${c.id} inside the frame`).toBe(true);
         // CONSTRAIN draws its constraints' own glyphs (labels in the tooltips, by design since P3).
-        if (g.group !== 'constrain') {
+        // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon when the labelled
+        // toolbar does not fit (data-fit-scale), so a modelling command keeps its label.
+        const iconsOnly = g.group === 'scale' && (await bar.getAttribute('data-fit-scale')) === '1';
+        if (g.group !== 'constrain' && !iconsOnly) {
           const label = await btn.locator('.tb-txt').evaluate((t) => {
             const r2 = t.getBoundingClientRect();
             return getComputedStyle(t).position !== 'absolute' && r2.width > 12 ? (t.textContent ?? '') : '';

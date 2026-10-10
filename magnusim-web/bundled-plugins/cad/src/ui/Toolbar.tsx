@@ -121,7 +121,19 @@ export const KEEP_IN_VIEW: readonly string[] = [
   'sketch.arc',
   'sketch.dimension',
   'sketch.trim',
+  // ux010: SCALE MODELS' Banana for scale (both modes). Never folded: it goes to its icon alone
+  // (its group's title hidden) with VIEW and EDIT, the first step when the frame is narrow
+  // (ui.css), so it never takes a label from a modelling command (smaller than a More would be).
+  'scale.banana',
+  'scale.sketch-banana',
 ];
+
+/**
+ * ux010 (Daniel: "a 'Banana for scale' button next to the 'View' section ... a new section called
+ * [Scale Models]"): registry groups drawn right after VIEW (before EDIT) instead of with the
+ * modelling groups. They rearrange, fold and keep their layout as the other groups do.
+ */
+export const AFTER_VIEW: ReadonlySet<string> = new Set(['scale']);
 const KEEP_SET: ReadonlySet<string> = new Set(KEEP_IN_VIEW);
 
 /** Sentence case for the More menu's name: "MODIFY" -> "Modify", "CFD PREP" -> "Cfd prep". */
@@ -217,7 +229,7 @@ function ToolbarButton({ c, services, active, index, primary = false, custom }: 
         void services.commands.run(c.id);
       }}
     >
-      <span className="tb-ico">{c.icon ? <Icon d={c.icon} size={18} stroke={1.7} className="tb-svg" /> : null}</span>
+      <span className="tb-ico">{c.icon ? <Icon d={c.icon} size={18} stroke={1.7} className="tb-svg" {...(c.iconColors ? { colors: c.iconColors } : {})} /> : null}</span>
       <span className="tb-txt">{c.label}</span>
     </button>
   );
@@ -272,6 +284,7 @@ function MoreButton({
       command: c.id,
       label: c.label,
       ...(c.icon ? { icon: c.icon } : {}),
+      ...(c.iconColors ? { iconColors: c.iconColors } : {}),
       ...(c.shortcut ? { shortcut: c.shortcut } : {}),
       ...(c.hint ? { hint: c.hint } : {}),
       disabled: reasonOf(c, services),
@@ -927,7 +940,11 @@ export function Toolbar() {
     ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !held(ml, x) && !pinned(ml, x)),
     ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !held(ml, x) && pinned(ml, x)),
   ];
-  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 2);
+  // ux010: one step more than before, right after VIEW and EDIT go to icons: SCALE MODELS'
+  // button goes to its icon (its heading stays, as every group's does), before anything folds.
+  const hasScale = groups.some((g) => AFTER_VIEW.has(g.group));
+  const scaleStep = hasScale ? 1 : 0;
+  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 2 + scaleStep);
   // Tests wait for the stored layout: the attribute is set without a render.
   const bar = useRef<HTMLDivElement | null>(null);
   const fitRef = fit.ref;
@@ -947,14 +964,18 @@ export function Toolbar() {
       live = false;
     };
   }, [prefs, mode]);
-  const fitFolded = new Set(foldable.slice(0, Math.max(0, Math.min(fit.level - 1, foldable.length))));
+  // Steps: 0 labels; 1 VIEW and EDIT icons; 2 SCALE MODELS' icon (when there); then the folds;
+  // the last, every group but the primary action as icons.
+  const level = fit.level >= 2 ? fit.level - scaleStep : fit.level;
+  const scaleIcons = scaleStep > 0 && fit.level >= 2;
+  const fitFolded = new Set(foldable.slice(0, Math.max(0, Math.min(level - 1, foldable.length))));
   const folded = new Set([...placedMore, ...fitFolded]);
   const cz = customizer(services, prefs, lmode, ml, fitFolded);
   // UX 0.1.0: dragging between a group's More and its bar (the handlers read this render's layout).
   const live = useRef<DragLive>({ services, prefs, mode: lmode, m: ml, groups: [] });
   live.current = { services, prefs, mode: lmode, m: ml, groups: groups.map((g) => ({ group: g.group, label: g.label, order: g.order })) };
   const drag = useToolbarDrag(bar, live);
-  const iconLevel = fit.level >= foldable.length + 2 ? 2 : fit.level >= 1 ? 1 : 0;
+  const iconLevel = level >= foldable.length + 2 ? 2 : level >= 1 ? 1 : 0;
   const view = viewCommands(services, mode);
   // Sketch mode undoes inside the sketch (its own Undo / Redo); model mode the document's.
   const editIds = mode === 'sketch' ? [WELL_KNOWN_COMMANDS.sketchUndo, WELL_KNOWN_COMMANDS.sketchRedo] : [UNDO_ID, REDO_ID];
@@ -966,11 +987,12 @@ export function Toolbar() {
     <>
       <div
         ref={barRef}
-        className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}`}
+        className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}${scaleIcons ? ' is-fit-scale' : ''}`}
         role="toolbar"
         aria-label="Commands"
         data-cad-toolbar={mode}
         data-fit={iconLevel}
+        data-fit-scale={scaleIcons ? '1' : '0'}
         data-folded={folded.size}
         data-fit-folded={fitFolded.size}
         data-layout={isDefault(ml) ? 'default' : 'custom'}
@@ -979,7 +1001,7 @@ export function Toolbar() {
           cz.menu(e.clientX, e.clientY);
         }}
       >
-        {groups.map((g) => (
+        {groups.filter((g) => !AFTER_VIEW.has(g.group)).map((g) => (
           <Group
             key={g.group}
             id={g.group}
@@ -996,6 +1018,22 @@ export function Toolbar() {
         ))}
         {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary menu={cz.menu} drag={drag.view} /> : null}
         {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} menu={cz.menu} drag={drag.view} /> : null}
+        {/* ux010: SCALE MODELS, right after VIEW. */}
+        {groups.filter((g) => AFTER_VIEW.has(g.group)).map((g) => (
+          <Group
+            key={g.group}
+            id={g.group}
+            label={g.label}
+            commands={g.commands}
+            folded={folded}
+            services={services}
+            panel={panel}
+            sketchTool={sketchTool}
+            custom={cz.forGroup(g.group, g.order)}
+            drag={drag.view}
+            startDrag={(c, from, e) => drag.start(c, g.group, from, e)}
+          />
+        ))}
         {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end menu={cz.menu} drag={drag.view} /> : null}
       </div>
       {drag.view ? <DragGhost view={drag.view} ghostRef={drag.ghostRef} /> : null}

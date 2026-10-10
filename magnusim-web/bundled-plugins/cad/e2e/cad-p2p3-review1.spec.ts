@@ -47,7 +47,7 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, openSketchDetails, showTreeDuringSketch } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, openSketchDetails, showTreeDuringSketch, showAllRelations } from './helpers';
 import { PNG } from './png';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -907,6 +907,8 @@ test('cad:p2p3-review1-constraints each CONSTRAIN command, selected first, holds
   const fx = d.constraints.find((c) => c.kind === 'fix' && c.refs.includes((d.entities.find((e) => e.id === T) as unknown as { p: string }).p))!;
   expect(fx).toBeTruthy();
   await expect.poll(() => cad<number>(page, () => (window as unknown as W).__CAD__.services.apis.get().sketch.state.get().status.dof)).toBe(dof0 - 2);
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   // Every relation shows its glyph.
   for (const k of ['horizontal', 'vertical', 'perpendicular', 'parallel', 'equal', 'coincident', 'midpoint', 'tangent', 'concentric', 'collinear', 'symmetric', 'fix']) {
     await expect(frame.locator(`[data-sketch-glyph="${k}"]`).first(), `the ${k} glyph`).toBeVisible();
@@ -971,6 +973,8 @@ test('cad:p2p3-review1-words plain words: Delete on edges, an empty sketch, the 
   const d = await draft(page);
   const [a, b] = d.entities.map((e) => e.id);
   await constrain(page, frame, 'equal', [a, b]);
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   const glyph = frame.locator('[data-sketch-glyph="equal"]').first();
   await expect(glyph).toHaveAttribute('role', 'button');
   await expect(glyph).toHaveAttribute('aria-label', /^Equal: /);

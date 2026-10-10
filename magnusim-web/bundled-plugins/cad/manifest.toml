@@ -1,12 +1,16 @@
 key = "cad"
 name = "Magnusim CAD"
-version = "0.2.0-dev"
+version = "0.1.0"
+# 1.7: Edit in CAD (geometry_actions below): a project geometry imported as STEP,
+# IGES or BREP opens in a Part (ws.context.geometry, ws.project.geometrySource and
+# geometryFaces), and its first update goes back into that geometry with its setup
+# (linkGeometry's originalNames); also ws.prefs (the toolbar layout, the rails).
 # 1.6: leaving the Part workspace brings the project's geometry up to date
 # (ws.nav.onLeave, the exit hook) and hands the viewport the Part's camera.
 # 1.5: a Part links its design into the project as a geometry
 # (ws.project.linkGeometry, links_geometry below). 1.3: the workspace imports the
 # host's UI kit (@magnusim/plugin-ui). 1.2: ws.files and nav.setDirty.
-api_version = "1.6"
+api_version = "1.7"
 tier = "bundled"
 required = false
 # Ships on (Daniel's D33): an optional bundled plugin, on by default. Settings >
@@ -48,3 +52,16 @@ label = "Design a part"
 places = ["empty_project", "header", "new_project", "home"]
 home_label = "New design"
 header_label = "CAD"
+
+# Edit in CAD (host API 1.7, Daniel 2026-10-09): "Edit in CAD" on a project geometry
+# imported as STEP, IGES or BREP: the right-click menu of its row (and its bodies) in
+# the tree, the viewport right-click on the part, and the Geometry panel. It opens the
+# Part that edits it (made the first time, titled with the geometry's name); the Part
+# imports the geometry by itself, and the first Back with a change updates that
+# geometry in place, its boundary conditions carried over by face name.
+[[geometry_actions]]
+study_kind = "part"
+label = "Edit in CAD"
+hint = "Open this part in CAD. Back updates it in the project, with its boundary conditions."
+formats = ["step", "iges", "brep"]
+places = ["tree", "viewport", "panel"]

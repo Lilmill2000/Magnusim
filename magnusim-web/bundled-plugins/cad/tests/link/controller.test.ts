@@ -12,6 +12,8 @@ import type { Bridge } from '../../src/lib/bridge';
 import type { CadDoc } from '../../src/types/doc';
 import type { DocService, DocState, EndBodies } from '../../src/types/doc-service';
 import type { KernelAdapter } from '../../src/types/kernel';
+import type { CadAdopt } from '../../src/types/edit-geometry';
+import { designDigest } from '../../src/link/adopt';
 
 const DOC: CadDoc = {
   schema: 2,
@@ -50,7 +52,7 @@ function result(over: Partial<LinkResult> = {}): LinkResult {
 
 const refused = (code: string, message = `refused ${code}`) => Object.assign(new Error(message), { code });
 
-function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers?: (LinkResult | Error)[]; afterStale?: LinkedGeometry | null; bodies?: CadDoc['bodies']; end?: Partial<EndBodies>; progress?: boolean } = {}) {
+function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers?: (LinkResult | Error)[]; afterStale?: LinkedGeometry | null; bodies?: CadDoc['bodies']; end?: Partial<EndBodies>; progress?: boolean; adopt?: CadAdopt | null } = {}) {
   const doc0: CadDoc = { ...DOC, bodies: opts.bodies ?? DOC.bodies };
   const state = createStateStore<DocState>({
     status: 'ready',
@@ -112,8 +114,10 @@ function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers
       onGeometry: () => () => {},
     },
   } as unknown as Bridge;
-  const ctl = createLinkController({ bridge, doc, kernel, busyWaitMs: 1, log: () => {} });
-  return { ctl, calls, writes, toasts, dirty, kernel, doc, state, bridge };
+  const ready = vi.fn(async () => opts.adopt ?? null);
+  const unverified: number[] = [];
+  const ctl = createLinkController({ bridge, doc, kernel, busyWaitMs: 1, notReadyWaitMs: 1, log: () => {}, ...(opts.adopt !== undefined ? { adopt: { ready, geometryName: () => 'Vortex CFD Test', noteUnverified: (n: number) => void unverified.push(n) } } : {}) });
+  return { ctl, calls, writes, toasts, dirty, kernel, doc, state, bridge, ready, unverified };
 }
 
 describe('link controller: save, then link', () => {
@@ -512,5 +516,90 @@ describe('link review fixes (L1, L2, polish)', () => {
     expect(seen.some((x) => x.startsWith('a:'))).toBe(true);
     expect(seen.some((x) => x.startsWith('b:'))).toBe(true);
     expect(t.calls).toHaveLength(1);
+  });
+});
+
+describe('link controller: Edit in CAD (host API 1.7)', () => {
+  const ADOPT: CadAdopt = { geometryId: 'g-vortex', importId: 'f_imp', baselineVersion: 4, baselineDigest: null, originalNames: { rel: 'studies/s1/adopt/f_imp/original_names.json', sha256: 'd'.repeat(64) }, matched: 6, total: 6, error: null };
+
+  it('Undo back to the import (a later save counter, the same design as the baseline): unchanged, no link (review B2)', async () => {
+    const digest = await designDigest(DOC);
+    const t = setup({ version: 7, adopt: { ...ADOPT, baselineDigest: digest } });
+    expect(await t.ctl.sync()).toEqual({ outcome: 'unchanged', sourceVersion: 7, geometryId: 'g-vortex' });
+    expect(t.calls).toEqual([]);
+    expect(t.writes).toEqual([]);
+    // Another design at that later counter: linked, with the names.
+    const u = setup({ version: 7, adopt: { ...ADOPT, baselineDigest: 'f'.repeat(64) } });
+    expect((await u.ctl.sync()).outcome).toBe('linked');
+    expect(u.calls[0]).toHaveProperty('originalNames');
+  });
+
+  it('the app could not check some rows (unverified): the outcome notes it, and the Part is told', async () => {
+    const t = setup({ version: 5, adopt: ADOPT, answers: [result({ geometryId: 'g-vortex', created: false, rev: 1, fromRev: 0, ...({ adopted: true, unverified: 2 } as object) })] });
+    const r = await t.ctl.sync();
+    expect(r).toMatchObject({ outcome: 'linked', notes: ['2 faces of Vortex CFD Test could not be checked; their boundary conditions follow by shape only.'] });
+    expect(t.unverified).toEqual([2]);
+  });
+
+  it('Back at the version the import was saved at links nothing: unchanged, on the geometry it edits, nothing exported', async () => {
+    const t = setup({ version: 4, adopt: ADOPT });
+    expect(await t.ctl.sync()).toEqual({ outcome: 'unchanged', sourceVersion: 4, geometryId: 'g-vortex' });
+    expect(t.ready).toHaveBeenCalledTimes(1);
+    expect(t.kernel.call).not.toHaveBeenCalled();
+    expect(t.writes).toEqual([]);
+    expect(t.calls).toEqual([]);
+    expect(t.dirty).toEqual([]);
+  });
+
+  it('the first link after a change sends originalNames (the app adopts the geometry); a later one does not', async () => {
+    const t = setup({ version: 5, adopt: ADOPT, answers: [result({ geometryId: 'g-vortex', created: false, rev: 1, fromRev: 0 }), result({ geometryId: 'g-vortex', created: false, rev: 2, fromRev: 1 })] });
+    expect((await t.ctl.sync()).outcome).toBe('linked');
+    expect(t.calls[0]).toMatchObject({ sourceVersion: 5, basedOnRev: null, originalNames: ADOPT.originalNames });
+    // Linked now: the link pointer holds the association, no names again.
+    t.state.set({ sourceVersion: 6 });
+    expect((await t.ctl.sync()).outcome).toBe('linked');
+    expect(t.calls[1]).toMatchObject({ sourceVersion: 6, basedOnRev: 1 });
+    expect(t.calls[1]).not.toHaveProperty('originalNames');
+  });
+
+  it('no sidecar (the matching failed): the first link adopts without names', async () => {
+    const t = setup({ version: 5, adopt: { ...ADOPT, originalNames: null, matched: 0 } });
+    expect((await t.ctl.sync()).outcome).toBe('linked');
+    expect(t.calls[0]).not.toHaveProperty('originalNames');
+  });
+
+  it('gone (the geometry was removed meanwhile): linked again as a new geometry, without the names', async () => {
+    const t = setup({ version: 5, adopt: ADOPT, answers: [refused('gone', 'Vortex CFD Test was removed'), result()] });
+    expect((await t.ctl.sync()).outcome).toBe('linked');
+    expect(t.calls).toHaveLength(2);
+    expect(t.calls[0]).toHaveProperty('originalNames');
+    expect(t.calls[1]).not.toHaveProperty('originalNames');
+  });
+
+  it('not_ready: tried once more after retryAfter; a second not_ready is the app message', async () => {
+    const t = setup({ version: 5, adopt: ADOPT, answers: [Object.assign(refused('not_ready', 'Vortex CFD Test is still being stored'), { retryAfter: 0.001 }), result()] });
+    expect((await t.ctl.sync()).outcome).toBe('linked');
+    expect(t.calls).toHaveLength(2);
+    const u = setup({ version: 5, adopt: ADOPT, answers: [refused('not_ready', 'still storing'), refused('not_ready', 'Vortex CFD Test is still being stored.')] });
+    expect(await u.ctl.sync()).toEqual({ outcome: 'failed', code: 'not_ready', message: 'Vortex CFD Test is still being stored.' });
+  });
+
+  it('adopted (another Part edits that geometry now): the app message as it is', async () => {
+    const t = setup({ version: 5, adopt: ADOPT, answers: [refused('adopted', 'Vortex CFD Test is already edited in Vortex CFD Test (2).')] });
+    expect(await t.ctl.sync()).toEqual({ outcome: 'failed', code: 'adopted', message: 'Vortex CFD Test is already edited in Vortex CFD Test (2).' });
+    expect(t.toasts).toEqual([['Vortex CFD Test is already edited in Vortex CFD Test (2).', 'error']]);
+  });
+
+  it('a Part that links its geometry already never reads the adoption', async () => {
+    const t = setup({ version: 5, linked: linked(1, 4, 'g-vortex'), adopt: ADOPT, answers: [result({ geometryId: 'g-vortex', created: false, rev: 2, fromRev: 1 })] });
+    expect((await t.ctl.sync()).outcome).toBe('linked');
+    expect(t.ready).not.toHaveBeenCalled();
+    expect(t.calls[0]).not.toHaveProperty('originalNames');
+  });
+
+  it('a failed build says the geometry it edits was not changed', async () => {
+    const t = setup({ version: 5, adopt: ADOPT, end: { failed: ['Press-pull 1'] } });
+    const r = await t.ctl.sync();
+    expect(r).toMatchObject({ outcome: 'failed', code: 'not_built', message: 'Press-pull 1 failed to build, so Vortex CFD Test was not changed. Fix, retry or suppress it first.' });
   });
 });

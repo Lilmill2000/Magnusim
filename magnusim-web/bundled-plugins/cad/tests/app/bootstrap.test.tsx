@@ -58,7 +58,8 @@ describe('bootstrap', () => {
     // P2/P3 modules (src/features/*, src/sketch): SKETCH first, CFD PREP after the modelling groups,
     // INSPECT and FILE after it. No Box or Cylinder (decision 2026-10-01): SOLID is Extrude, then P4a's Revolve, Sweep and Loft.
     // P4b (PATTERN): PATTERN right after SOLID, beside Extrude (Daniel's item 7).
-    expect(groups).toEqual(['SKETCH', 'SOLID', 'PATTERN', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'EDIT']);
+    // ux010 (Daniel): SCALE MODELS (Banana for scale) right after VIEW.
+    expect(groups).toEqual(['SKETCH', 'SOLID', 'PATTERN', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'SCALE MODELS', 'EDIT']);
     // P4b fix round 1 (Daniel): the model toolbar starts compact at every width: each group's main
     // command(s) on the bar, the rest in its More menu (in the group's order).
     const shownIn = (g: string) => [...root.querySelectorAll(`[data-cad-toolbar] [data-group="${g}"] .tb-btn[data-command] .tb-txt`)].map((e) => e.textContent);
@@ -121,5 +122,40 @@ describe('bootstrap', () => {
     });
     await vi.waitFor(() => expect(window.__CAD__?.leave.hook).toBe('on'));
     expect(typeof ws.leaveHook).toBe('function');
+  });
+
+  it('Edit in CAD (1.7): a Part opened on a geometry asks the app for its STEP at once and says what it is doing; a Part on none does not', async () => {
+    const asked: string[] = [];
+    const ws = createFakeWorkspace({
+      hostVersion: '1.7',
+      edit: {
+        geometry: { id: 'g1', name: 'Vortex CFD Test', format: 'step', fileName: 'Vortex CFD Test.step', linked: false, rev: 0, bodies: 1, faces: 6 },
+        source: async () => {
+          asked.push('source');
+          throw Object.assign(new Error('The source file of Vortex CFD Test is missing.'), { code: 'no_source' });
+        },
+      },
+      spawnWorker: () => {
+        const w = new FakeWorker(okHandler());
+        w.ready();
+        return w as unknown as Worker;
+      },
+    });
+    setFakeConnection(ws);
+    const { bootstrap } = await import('../../src/app/bootstrap');
+    const root = document.createElement('div');
+    document.body.append(root);
+    await act(async () => {
+      await bootstrap(root);
+    });
+    await vi.waitFor(() => expect(document.querySelector('[data-edit-open]')?.getAttribute('data-edit-open')).toBe('error'));
+    expect(asked).toEqual(['source']);
+    expect(document.querySelector('[data-edit-open-line]')?.textContent).toBe('Vortex CFD Test could not be opened in CAD: The source file of Vortex CFD Test is missing.');
+    expect(window.__CAD__?.edit?.geometry?.id).toBe('g1');
+    // Said once, on the line, with Try again (no toast too: review N1).
+    expect(ws.log.toasts).toEqual([]);
+    expect(document.querySelector('[data-edit-open-action]')?.textContent).toBe('Try again');
+    // The line's text is the line alone (review N10).
+    expect(document.querySelector('[data-edit-open]')?.textContent).toBe('Vortex CFD Test could not be opened in CAD: The source file of Vortex CFD Test is missing.Try again');
   });
 });

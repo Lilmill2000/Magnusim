@@ -280,8 +280,12 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   ]) {
     await page.setViewportSize(size);
     const bar = frame.locator('[data-cad-toolbar="model"]');
-    await expect(bar).toHaveAttribute('data-fit', size.width === 1600 ? '0' : '1');
-    const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]) .tb-btn[data-command]').evaluateAll((els) =>
+    // ux010 (Daniel: a SCALE MODELS section, labelled like the others): VIEW and EDIT are icons at
+    // 1600 px too since then, to leave the labelled Banana for scale its room.
+    await expect(bar).toHaveAttribute('data-fit', '1');
+    await expect(bar).toHaveAttribute('data-fit-scale', '0');
+    // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon (data-fit-scale), checked by cad-ux010-banana.
+    const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command]').evaluateAll((els) =>
       els.map((b) => {
         const s = getComputedStyle(b);
         const t = b.querySelector('.tb-txt') as HTMLElement;

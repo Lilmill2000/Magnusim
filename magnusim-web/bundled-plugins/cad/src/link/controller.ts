@@ -54,7 +54,15 @@
 //               (only when it answers so at the call, never after the job ran);
 //   unsaved     the app had not heard "clean" yet: tell it again, try again;
 //   gone        the geometry was removed: link again as a first link;
+//   not_ready   (1.7) the app is still storing the geometry: once more after retryAfter;
+//   adopted     (1.7) another Part edits that geometry now: the app's message;
 //   plugin_needed and every other refusal: the app's message as it is.
+// - Edit in CAD (host API 1.7, edit-open.ts): a Part opened on a project geometry links
+//   nothing while it is still at the version its import was saved at (`cad_adopt`
+//   baselineVersion): Back with no change of the design leaves the project as it was.
+//   Its first link sends `originalNames` (adopt.ts), and the app updates that geometry
+//   in place (adopts it) instead of making a new one; `gone` (the geometry was removed
+//   meanwhile) makes a new one without the names.
 //   "Save as new" resolves with created and the new geometryId:
 //   linkedGeometry() names it from then on.
 // Owner: LINK.
@@ -68,6 +76,8 @@ import type { KernelAdapter } from '../types/kernel';
 import { exportForLink, isIncluded, type LinkExport } from './export';
 import { isRemovedFeature } from '../doc/features/removed';
 import { REMOVED_FEATURE_TYPES } from '../types/doc';
+import type { CadAdopt } from '../types/edit-geometry';
+import { designDigest, unverifiedWords } from './adopt';
 
 export type LinkOutcome =
   /** The geometry already shows this saved design: nothing was exported. */
@@ -159,6 +169,13 @@ export interface LinkControllerOptions {
   kernel: KernelAdapter;
   /** Pause before trying again after `busy` (ms). */
   busyWaitMs?: number;
+  /**
+   * Edit in CAD (1.7): the geometry this Part was opened to edit. `ready()` waits for its faces to
+   * be matched and gives the study's `cad_adopt` (null when the Part edits none).
+   */
+  adopt?: { ready(): Promise<CadAdopt | null>; geometryName(): string | null; noteUnverified?(n: number): void };
+  /** Wait before the one retry after `not_ready` when the app gives no retryAfter (ms; tests). */
+  notReadyWaitMs?: number;
   log?(message: string, detail?: unknown): void;
 }
 
@@ -325,6 +342,9 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     let docAt: CadDoc | null = null;
     let linked: LinkedGeometry | null = null;
     let end: EndBodies | null = null;
+    // Edit in CAD: read once per sync, after the faces are matched.
+    let adopt: CadAdopt | null = null;
+    let adoptRead = false;
     for (let round = 0; !end || !docAt; round++) {
       if (round >= SAVE_ROUNDS) return { outcome: 'failed', code: 'unsaved', message: `${partTitle()} kept changing while it was being added to the project. Try again.` };
       const stop = (await saveNow()) ?? stopped();
@@ -339,6 +359,18 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
       };
       linked = await link.linkedGeometry();
       if (!same()) continue;
+      if (!linked && o.adopt && !adoptRead) {
+        progress(null, `Matching the faces of ${o.adopt.geometryName() ?? 'the geometry'}`);
+        adopt = await o.adopt.ready().catch(() => null);
+        adoptRead = true;
+        if (!same()) continue;
+      }
+      // Opened to edit a geometry and still the design the import made: nothing to link.
+      // Also when an Undo went back to the import: the saved design is the baseline's (review B2).
+      if (!linked && adopt && (adopt.baselineVersion === version || (adopt.baselineDigest !== null && (await designDigest(at)) === adopt.baselineDigest))) {
+        if (!same()) continue;
+        return { outcome: 'unchanged', sourceVersion: version, geometryId: adopt.geometryId };
+      }
       if (linked && linked.sourceVersion === version) return { outcome: 'unchanged', sourceVersion: version, geometryId: linked.geometryId };
       // The geometry has a newer design (another tab's): the app would refuse this one as stale.
       if (linked && linked.sourceVersion > version) return { outcome: 'failed', code: 'stale', message: `${partTitle()} changed in another tab. Reload to continue.` };
@@ -359,7 +391,8 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     }
 
     // Never a partial design (L1): what failed or was stopped, and invalid bodies, are fixed first.
-    const where = linked ? `${linked.name} keeps its last update` : 'nothing was added to the project';
+    const adoptName = !linked && adopt ? o.adopt?.geometryName() : null;
+    const where = linked ? `${linked.name} keeps its last update` : adoptName ? `${adoptName} was not changed` : 'nothing was added to the project';
     // A removed type (Box, Cylinder) cannot be fixed or retried: it is suppressed or deleted (B2).
     const gone = docAt.features.filter((f) => !f.suppressed && isRemovedFeature(f));
     const goneNames = new Set(gone.map((f) => f.name));
@@ -417,7 +450,7 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     if (stopped()) return stopped()!;
     const ex = await exportForLink(kernel, docAt, end, { signal: opts.signal });
     if ('nothing' in ex) {
-      const left = linked ? `${linked.name} keeps its last update.` : 'Nothing was added to the project.';
+      const left = linked ? `${linked.name} keeps its last update.` : adoptName ? `${adoptName} was not changed.` : 'Nothing was added to the project.';
       const why = ex.surfaces.length && !ex.excluded.length ? 'No solid body is included in the simulation (surface bodies are never sent)' : 'No body is included in the simulation';
       return { outcome: 'nothing', message: `${why}; ${left}`, empty: end.bodies.length === 0, linked: !!linked };
     }
@@ -443,6 +476,9 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     let busyTries = 0;
     let unsavedTried = false;
     let goneTried = false;
+    let notReadyTried = false;
+    // The first link of a Part that edits a geometry: the original's face names go with it.
+    let originalNames = !linked && adopt?.originalNames ? adopt.originalNames : null;
     for (;;) {
       // The app said something about this try (a stage): it took the job, so a "busy" after it
       // is how the job ended, not the app's answer at the call, and it is not tried again.
@@ -455,11 +491,20 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
           sourceVersion,
           basedOnRev,
           ...(view ? { view } : {}),
+          ...(originalNames && basedOnRev === null ? { originalNames } : {}),
           onProgress: (p) => {
             heard = true;
             progress(p.fraction, p.stage === 'queued' && p.ahead ? `Queued behind ${p.ahead} ${p.ahead === 1 ? 'job' : 'jobs'} (see Queue)` : (p.label ?? STAGE_WORDS[p.stage] ?? 'Updating the project'));
           },
         });
+        // Rows of the original's names the app could not check (contract change 4): those faces
+        // follow by shape only, and the Part says so.
+        const unverified = Number((result as { unverified?: unknown }).unverified) || 0;
+        if (unverified > 0) {
+          const words = unverifiedWords(unverified, o.adopt?.geometryName() ?? result.name);
+          if (words) notes.push(words);
+          o.adopt?.noteUnverified?.(unverified);
+        }
         return { outcome: 'linked', sourceVersion, result, ...(notes.length ? { notes } : {}) };
       } catch (e) {
         const code = codeOf(e);
@@ -487,8 +532,16 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
           told.clean = true;
           await bridge.setDirtyNow(false);
           continue;
+        } else if (code === 'not_ready' && !notReadyTried) {
+          notReadyTried = true;
+          const after = Number((e as { retryAfter?: unknown }).retryAfter);
+          progress(null, 'Waiting for the app to finish storing the geometry');
+          await sleep(Number.isFinite(after) && after > 0 ? Math.min(30, after) * 1000 : (o.notReadyWaitMs ?? 2000), opts.signal);
+          continue;
         } else if (code === 'gone' && !goneTried) {
           goneTried = true;
+          // The geometry it edited was removed: a new one, without the original's names.
+          originalNames = null;
           linked = await link.linkedGeometry();
           basedOnRev = linked ? linked.rev : null;
           continue;

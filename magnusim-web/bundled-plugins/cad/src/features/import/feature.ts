@@ -34,6 +34,16 @@ export function rememberBrep(sha256: string, bytes: ArrayBuffer): void {
   }
 }
 
+/**
+ * A copy of the BREP bytes this session wrote with this sha256, or null (Edit in CAD: the
+ * adoption reads the import's shapes again without downloading them). A copy: a kernel call
+ * transfers its bytes.
+ */
+export function recentBrep(sha256: string): ArrayBuffer | null {
+  const hit = recent.get(sha256);
+  return hit ? hit.slice(0) : null;
+}
+
 /** For tests. */
 export function forgetBreps(): void {
   recent.clear();

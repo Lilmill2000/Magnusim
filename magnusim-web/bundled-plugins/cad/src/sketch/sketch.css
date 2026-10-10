@@ -441,12 +441,13 @@
 }
 /* The radius arrow: its tail on the arc, pointing away from the centre (rotated by the overlay); a press anywhere on it drags it. */
 .cad-sketch-annotations > .cad-sk-handle {
-  width: 34px;
-  height: 16px;
+  /* A generous grab box (38 x 22) around a light arrow: a thin shaft, a small head, a small ring. */
+  width: 38px;
+  height: 22px;
   transform-origin: 0 0;
   /* Review B1: the arrow takes the press itself (above the labels and glyphs it may cross). */
   pointer-events: auto;
-  cursor: grab;
+  cursor: grab; /* the overlay sets the sketch's own grab cursor on the element */
   z-index: 3;
   color: var(--mg-primary);
 }
@@ -457,7 +458,7 @@
 .cad-sk-handle svg path:first-child {
   fill: none;
   stroke: currentColor;
-  stroke-width: 2.4;
+  stroke-width: 1.6;
   stroke-linecap: round;
 }
 .cad-sk-handle svg path:last-child {
@@ -469,11 +470,11 @@
 .cad-sk-handle::before {
   content: '';
   position: absolute;
-  left: -2px;
-  top: 3px;
-  width: 10px;
-  height: 10px;
-  border: 2px solid currentColor;
+  left: 0.5px;
+  top: 7.5px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
   border-radius: 50%;
   background: var(--mg-bg);
   box-sizing: border-box;

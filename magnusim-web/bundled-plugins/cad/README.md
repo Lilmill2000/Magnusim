@@ -85,6 +85,14 @@ unit ("125 mm", "5 in").
   **Section view**.
 - **Chips** at the bottom: the selected body's volume (or each body's, never a
   total), the number of items selected, the save state and the sketch's state.
+- **Banana for scale** (SCALE MODELS, after VIEW) puts a yellow banana beside the
+  bodies to show their size. Drag it: it moves parallel to the screen, stays
+  within reach of the part and snaps to the spots beside it (hold Alt not to
+  snap); right-click it for Place next to part, Turn 90° and Remove banana.
+  Click the button again to remove it. It is not a body and never reaches the simulation. In a sketch the same
+  button tapes a true-size banana picture to the sketch's plane, behind the
+  sketch; move it with the Select tool (drawing tools draw over it), right-click
+  it for Place next to sketch.
 
 ## Sketches
 
@@ -128,7 +136,13 @@ radius, a pattern's count) shows them in a small card beside the rail.
 
 While you draw, a value box follows the pointer: type a length or an angle and
 press Enter or Tab. A click counts where you pressed, even when the mouse is
-still moving as you click. The pointer snaps to the sketch (ends, midpoints,
+still moving as you click. The pointer is a thin crosshair with the tool's icon
+beside it; over geometry you can drag, an open hand (closed while you drag).
+
+Relations (the small horizontal, parallel, tangent, ... badges) show only for
+the geometry you select. **Show relations** (VIEW, Shift+R) shows them all and
+is remembered; a relation in conflict always shows, in red. Dimensions always
+show. The pointer snaps to the sketch (ends, midpoints,
 centres, curves, horizontal and vertical) and to the model itself: a body's
 vertex, an edge's middle, a point on an edge, a round edge's centre (hover the
 rim first), and the point where an edge pierces the sketch plane. Clicking a model snap adds
@@ -144,7 +158,8 @@ snapping.
   an option. Line and arc offsets stay tied to their source.
 - **Fillet** and **Chamfer** of a sketch corner, with a Radius or Distance
   dimension you can edit later. A new fillet shows an arrow on its arc: drag it
-  outward for a bigger radius, inward for a smaller one (the Radius box follows;
+  and the arc's middle follows the pointer (inward, away from the corner, for a
+  bigger radius; towards the corner for a smaller one) (the Radius box follows;
   it stops at the largest radius the corner takes and says why). Select a fillet
   arc later to get the arrow back.
 - **Mirror** (M): pick entities, then the mirror line. The copies stay
@@ -299,6 +314,40 @@ The origin's X, Y and Z axes are rows under Origin and can be used the same way.
   undone later.
 - **Export STEP**: the bodies you pick, as STEP AP214 or AP242, in the length
   unit you choose.
+
+### Edit in CAD: a geometry imported in the simulation view
+
+A STEP, IGES or BREP part you imported into the project (the simulation view)
+opens in CAD from **Edit in CAD**: right-click its row (or one of its bodies) in
+the tree, right-click the part in the viewport, or use the button in its Geometry
+panel.
+
+- The first time, a Part named like the geometry is made and imports it by
+  itself: the import panel shows the progress and closes when it is done. If
+  Magnusim is still updating the geometry, the Part says "Waiting for Magnusim to
+  finish storing <geometry>" and goes on when it can (at most 2 minutes; **Stop**
+  ends the wait, **Try again** starts it again); modelling waits meanwhile. A face
+  you right-clicked in the viewport is selected.
+- Open in two tabs at once, the part is imported once: the tab whose save came
+  second shows Reload, and after it uses the same import.
+- Edit it as any import. **Back** with a change updates the geometry; when a
+  simulation uses it, Back asks first, as for any Part: **Overwrite
+  <geometry>** updates the geometry in place (the same geometry, its boundary
+  conditions, refinements and monitors carried over by face), **Save as new
+  geometry** adds a new one, **Keep editing** stays. Meshes are marked out of
+  date; nothing is deleted. The original file is kept, and the Geometry panel can
+  add it back as a geometry of its own.
+- **Back with no change changes nothing** in the project, also after an Undo
+  back to the import.
+- **Edit in CAD again** opens the same Part with its history; it does not import
+  again.
+- The faces of the part in CAD are matched to the geometry's own (by number,
+  then by place, size and facing), and Magnusim checks each match again. If some
+  could not be matched or checked, the Part says how many, and if the matching
+  failed, it says why: those boundary conditions follow by shape only (a face
+  you move or resize then loses its boundary condition).
+- A mesh geometry (STL, OBJ, PLY) shows Edit in CAD greyed out, with the reason:
+  import the part as STEP to edit it.
 
 ## CFD prep: Enclosure and Combine
 
@@ -467,7 +516,10 @@ sources are: `LICENSES/README.md`.
 
 ### Host API
 
-It needs Magnusim's host API 1.6: a Part's design becomes a geometry of its
+It needs Magnusim's host API 1.7: Edit in CAD (the manifest's `[[geometry_actions]]`;
+`ws.context.geometry` and `launch`, `ws.project.geometrySource` and `geometryFaces`,
+and `linkGeometry`'s `originalNames`, 1.7: `src/link/edit-open.ts` and `adopt.ts`);
+a Part's design becomes a geometry of its
 project (`ws.project.linkGeometry`, the Part study kind's `links_geometry`, 1.5),
 and its panels are drawn with the host's UI kit (`@magnusim/plugin-ui`, 1.3).
 The sync runs when the user leaves the Part (the host's exit hook,

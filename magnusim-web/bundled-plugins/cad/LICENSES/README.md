@@ -20,6 +20,8 @@ the page uses the app's font.
 | musl libc | inside both `.wasm` | MIT | `musl-MIT.txt` |
 | three.js 0.186.1 | bundled in `workspace/app.js` and `workspace/pick/pick-worker.js` | MIT | `three.js-MIT.txt` |
 | three-mesh-bvh 0.9.15 | bundled in `workspace/app.js` and `workspace/pick/pick-worker.js` | MIT | `three-mesh-bvh-MIT.txt` |
+| Banana duct taped to a wall (image, the sketch's Banana for scale) | `workspace/assets/banana-taped.webp` (source `src/features/scale/banana-taped.webp`) | Daniel Milligan, GPL-3.0-or-later | the root `LICENSE` |
+| The 3D banana (Banana for scale): our own model, made by `scripts/make-banana.mjs` with the plugin's kernel | `workspace/models/banana.bin` | GPL-3.0-or-later | the root `LICENSE` |
 | React 19, the workspace bridge and the UI kit (`@magnusim/plugin-ui`) | not shipped here: the app's import map provides them | MIT (React), GPL-3.0-or-later (Magnusim) | (the app's notices) |
 
 The build strips licence comments from the bundled JavaScript

@@ -9,7 +9,8 @@
 //    line from the press point to the release (also a rectangle); a quick click whose hand still
 //    moves (8 px) starts the line where it was pressed; the dot at the pointer is where the
 //    pointer is within two frames of a move.
-//  - A new sketch fillet's radius arrow: dragging it outward makes the radius bigger live (the
+//  - A new sketch fillet's radius arrow (direct manipulation: it points inward, away from the
+//    corner, and the arc's midpoint follows the pointer): dragging it inward makes the radius bigger live (the
 //    radius label and the Radius box say so before the release), the release keeps it (the
 //    trimmed lines followed) as one undo step; too far stops at the largest radius and says why;
 //    a fillet arc selected later shows the arrow too.
@@ -380,7 +381,7 @@ function topEnd(d: Drawn): number {
 
 const labelValue = async (frame: FrameLocator) => Number(((await frame.locator('[data-sketch-dim]', { hasText: /^R ?[\d.]+ mm$/ }).textContent()) ?? '').replace(/[^\d.]/g, ''));
 
-test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging it outward makes the radius bigger live (label and Radius box), the release keeps it (the lines follow) as one undo step; too far stops at the largest radius and says why', async ({ page, request }) => {
+test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging it inward makes the radius bigger live (label and Radius box), the release keeps it (the lines follow) as one undo step; too far stops at the largest radius and says why', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await enterSketchOnTop(page, frame);
   await typedRectangle(page, frame, 40, 20);
@@ -399,7 +400,8 @@ test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging i
 
   // Review B1: the middle of the arrow's shaft (16 px from its grip) is the arrow, not the R label
   // or a glyph; the label sits off the arrow's line.
-  const { grip, to } = await arrow(page, 3);
+  // 3 mm bigger: the midpoint 3 (sqrt 2 - 1) mm further inward along the bisector (a 90 degree corner).
+  const { grip, to } = await arrow(page, 3 * (Math.SQRT2 - 1));
   const shaft = await alongArrow(page, 16);
   const under = await cad<string>(page, ((p: V2) => {
     const el = document.elementFromPoint(p[0], p[1]);
@@ -414,11 +416,12 @@ test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging i
   }
   expect(hb.width).toBeGreaterThan(10);
 
-  // Review S3: dragged inward, then Escape while held: the radius and the box go back, nothing is stored.
+  // Review S3: dragged towards the corner (smaller), then Escape while held: the radius and the box
+  // go back, nothing is stored.
   await page.mouse.move(shaft[0], shaft[1]);
   await page.mouse.down();
-  const inward = await alongArrow(page, -12);
-  await page.mouse.move(inward[0], inward[1], { steps: 3 });
+  const towardCorner = await alongArrow(page, -12);
+  await page.mouse.move(towardCorner[0], towardCorner[1], { steps: 3 });
   await expect(hint(frame)).toHaveText(/^(Radius [\d.]+ mm: release to keep it\.|Dragging stops at .*)$/);
   await expect.poll(() => labelValue(frame)).toBeLessThan(5);
   await page.keyboard.press('Escape');
@@ -429,7 +432,7 @@ test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging i
   expect(await arcRadius(page)).toBeCloseTo(5, 6);
   await expect(handle).toHaveCount(1);
 
-  // Drag 3 mm outward from the middle of the shaft: live first (the label and the box), then released.
+  // Drag from the middle of the shaft, 3 mm bigger: live first (the label and the box), then released.
   await page.mouse.move(shaft[0], shaft[1]);
   await page.mouse.down();
   await page.mouse.move(shaft[0] + (to[0] - grip[0]) / 2, shaft[1] + (to[1] - grip[1]) / 2, { steps: 3 });
@@ -494,7 +497,7 @@ test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging i
   }) as never);
   await clickAt(page, mid);
   await expect(handle).toHaveCount(1);
-  const again = await arrow(page, 2);
+  const again = await arrow(page, 2 * (Math.SQRT2 - 1));
   await page.mouse.move(again.grip[0], again.grip[1]);
   await page.mouse.down();
   await page.mouse.move(again.to[0], again.to[1], { steps: 4 });
@@ -506,5 +509,100 @@ test('cad:ux010-draw-fillet-handle a new fillet shows a radius arrow; dragging i
   await page.keyboard.press('Control+z');
   await sketchIdle(page);
   expect(await arcRadius(page)).toBeCloseTo(5, 6);
+  expect(seen.errors).toEqual([]);
+});
+
+/** The fillet arc's midpoint as drawn now (the live draft while dragging), in page px. */
+async function arcMidPage(page: Page): Promise<V2> {
+  const m = await cad<V3>(page, (() => {
+    const d = (window as unknown as W).__CAD__.services.apis.get().sketch.view.get().draft;
+    const a = d.entities.find((e: { kind: string }) => e.kind === 'arc');
+    const c = d.points[a.c];
+    const p = d.points[a.a];
+    const q = d.points[a.b];
+    const r = Math.hypot(p[0] - c[0], p[1] - c[1]);
+    const mx = (p[0] + q[0]) / 2 - c[0];
+    const my = (p[1] + q[1]) / 2 - c[1];
+    const l = Math.hypot(mx, my);
+    return [c[0] + (mx / l) * r, c[1] + (my / l) * r, 0];
+  }) as never);
+  return at(page, m);
+}
+
+/** Grab the radius arrow at its grip and move `px` screen pixels along it (negative: towards the corner), without letting go. */
+async function dragArrowBy(page: Page, px: number): Promise<V2> {
+  const { grip, to } = await arrow(page, 1);
+  const l = Math.hypot(to[0] - grip[0], to[1] - grip[1]);
+  const end: V2 = [grip[0] + ((to[0] - grip[0]) / l) * px, grip[1] + ((to[1] - grip[1]) / l) * px];
+  await page.mouse.move(grip[0], grip[1]);
+  await page.mouse.down();
+  await page.mouse.move(end[0], end[1], { steps: 5 });
+  return end;
+}
+
+/** The arc's midpoint is under the pointer (within 2 px) once the live solve has landed. */
+async function expectMidAt(page: Page, p: V2) {
+  await expect.poll(async () => {
+    const m = await arcMidPage(page);
+    return Math.hypot(m[0] - p[0], m[1] - p[1]);
+  }).toBeLessThanOrEqual(2);
+}
+
+test('cad:ux010-draw-fillet-direct the radius arrow is direct manipulation: 20 px inward makes the radius bigger with the arc midpoint under the pointer, towards the corner smaller; the same with the Select tool on an existing fillet', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await typedRectangle(page, frame, 40, 20);
+  await runCommand(frame, 'sketch.fillet');
+  await clickAt(page, [40, 20]);
+  await sketchIdle(page);
+  const handle = frame.locator('[data-sketch-handle]');
+  await expect(handle).toHaveCount(1);
+  // The arrow points inward: from the arc's midpoint towards its centre (away from the corner).
+  const g = await cad<{ at: V2; dir: V2 }>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch.view.get().preview.handles[0]) as never);
+  expect(g.dir[0]).toBeCloseTo(-Math.SQRT1_2, 6);
+  expect(g.dir[1]).toBeCloseTo(-Math.SQRT1_2, 6);
+  // 20 px inward: bigger, and the midpoint (and the handle on it) stay under the pointer.
+  let p = await dragArrowBy(page, 20);
+  await expectMidAt(page, p);
+  await expect.poll(() => labelValue(frame)).toBeGreaterThan(5);
+  const [fx, fy] = await frameOffset(page);
+  await expect
+    .poll(async () => {
+      const [hx, hy] = ((await handle.getAttribute('data-screen')) ?? '0,0').split(',').map(Number);
+      return Math.hypot(hx + fx - p[0], hy + fy - p[1]);
+    })
+    .toBeLessThanOrEqual(2);
+  await page.mouse.up();
+  await sketchIdle(page);
+  const r1 = await arcRadius(page);
+  expect(r1).toBeGreaterThan(5);
+  // Towards the corner: smaller.
+  p = await dragArrowBy(page, -20);
+  await expectMidAt(page, p);
+  await page.mouse.up();
+  await sketchIdle(page);
+  const r2 = await arcRadius(page);
+  expect(r2).toBeLessThan(r1);
+  // The Select tool on the existing fillet: click its arc, the arrow, the same direct drag.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await clickAt(page, await (async () => {
+    const d = await drawn(page);
+    const a = d.entities.find((e) => e.kind === 'arc')!;
+    const c = d.points[a.c!];
+    const s0 = d.points[a.a!];
+    const s1 = d.points[a.b!];
+    const mx = (s0[0] + s1[0]) / 2 - c[0];
+    const my = (s0[1] + s1[1]) / 2 - c[1];
+    const l = Math.hypot(mx, my);
+    const r = Math.hypot(s0[0] - c[0], s0[1] - c[1]);
+    return [c[0] + (mx / l) * r, c[1] + (my / l) * r] as V2;
+  })());
+  await expect(handle).toHaveCount(1);
+  p = await dragArrowBy(page, 20);
+  await expectMidAt(page, p);
+  await page.mouse.up();
+  await sketchIdle(page);
+  expect(await arcRadius(page)).toBeGreaterThan(r2);
   expect(seen.errors).toEqual([]);
 });

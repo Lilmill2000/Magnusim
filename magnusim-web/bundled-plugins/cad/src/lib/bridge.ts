@@ -1,10 +1,12 @@
 // The one module that talks to the host bridge (@magnusim/workspace), so host
 // API churn is absorbed here. Frozen shape (scaffold); INTEGRATE adds wrappers
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
-// connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs).
+// connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
+// Edit in CAD: the geometry a Part edits, its source and its faces).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, LinkedGeometry, LinkOptions, LinkResult, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import type { WsFilesApi } from '../types/docstore';
+import type { EditedGeometry, EditLaunch, GeometryFaces, GeometrySource, OriginalNamesRef } from '../types/edit-geometry';
 
 export type ToastKind = 'info' | 'success' | 'error';
 
@@ -22,11 +24,27 @@ export interface PrefsApi {
 
 /** Host API 1.5, a study kind with `links_geometry`: the study's design as a project geometry. */
 export interface LinkApi {
-  linkGeometry(o: LinkOptions): Promise<LinkResult>;
+  /** `originalNames` (1.7, Edit in CAD): the first link of a Part that edits a project geometry. */
+  linkGeometry(o: LinkOptions & { originalNames?: OriginalNamesRef }): Promise<LinkResult & { adopted?: boolean }>;
   /** The geometry this study links now; null before the first link, or after the user removed it. */
   linkedGeometry(): Promise<LinkedGeometry | null>;
   /** The linked geometry was updated (this page's link or another tab's). */
   onGeometry(fn: (g: { geometryId: string; rev: number; fromRev: number | null }) => void): () => void;
+}
+
+/**
+ * Edit in CAD (host API 1.7): the project geometry this Part was opened to edit. Null on an older
+ * host, or when the Part edits no geometry.
+ */
+export interface EditApi {
+  /** ws.context.geometry: what the Part edits (null when it edits none). */
+  readonly geometry: EditedGeometry | null;
+  /** ws.context.launch: where the user right-clicked (one-shot), or null. */
+  readonly launch: EditLaunch | null;
+  /** The geometry's STEP as a File (refusals: not_allowed, gone, no_source, not_ready with retryAfter). */
+  source(o?: { signal?: AbortSignal; onProgress?(done: number, total: number): void }): Promise<GeometrySource>;
+  /** The geometry's face table now (before adoption: the original's). */
+  faces(): Promise<GeometryFaces>;
 }
 
 export interface Bridge {
@@ -72,6 +90,8 @@ export interface Bridge {
   setDirtyNow(dirty: boolean, message?: string): Promise<void>;
   /** Linking a geometry (host API 1.5); null on an older host. */
   link: LinkApi | null;
+  /** Edit in CAD (host API 1.7); null on an older host (its SDK has no geometrySource). */
+  edit: EditApi | null;
   /**
    * Register the exit hook (host API 1.6, `ws.nav.onLeave`; null clears it). Null on an
    * older host, which has no exit hook (a 1.5 host also refuses the call with `not_allowed`).
@@ -137,6 +157,19 @@ export function createBridge(ws: Workspace): Bridge {
     maybePrefs && typeof maybePrefs.get === 'function' && typeof maybePrefs.set === 'function' && typeof maybePrefs.remove === 'function' && typeof maybePrefs.onChange === 'function'
       ? (maybePrefs as PrefsApi)
       : null;
+  // Feature detection (compatibility.md 1.7, Edit in CAD): the host says 1.7 or newer, and its SDK
+  // has the calls.
+  const editProject = project as unknown as { geometrySource?: unknown; geometryFaces?: unknown } | undefined;
+  const ctx = ws.context as typeof ws.context & { geometry?: EditedGeometry | null; launch?: EditLaunch | null };
+  const edit: EditApi | null =
+    versionAtLeast(ws.context.hostVersion, 1, 7) && editProject && typeof editProject.geometrySource === 'function' && typeof editProject.geometryFaces === 'function'
+      ? {
+          geometry: ctx.geometry ?? null,
+          launch: ctx.launch ?? null,
+          source: (o) => (editProject.geometrySource as EditApi['source']).call(project, o),
+          faces: () => (editProject.geometryFaces as EditApi['faces']).call(project),
+        }
+      : null;
   return {
     context: ws.context,
     studyId: ws.context.study.id,
@@ -168,6 +201,7 @@ export function createBridge(ws: Workspace): Bridge {
       await nav.setDirty!(dirty, message);
     },
     link,
+    edit,
     onLeave,
     hostAtLeast: (major, minor) => versionAtLeast(ws.context.hostVersion, major, minor),
     spawnWorker: (url) => ws.spawnWorker(url),

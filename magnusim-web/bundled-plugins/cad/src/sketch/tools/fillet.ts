@@ -223,10 +223,14 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
   // tool changes, Escape, or a click elsewhere; its drag sets the radius (the Radius box follows).
   const handle =
     kind === 'fillet'
-      ? new RadiusHandle(mode, (r) => {
-          radius = lenExpr(r);
-          mode.refreshHint();
-        })
+      ? new RadiusHandle(
+          mode,
+          (r) => {
+            radius = lenExpr(r);
+            mode.refreshHint();
+          },
+          () => showHandle(),
+        )
       : null;
   /** The press on the arrow that is under way (its click is the drag's, not a pick). */
   let grabbed = false;

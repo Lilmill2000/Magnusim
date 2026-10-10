@@ -8,7 +8,7 @@
 // earlier features (a sketch's regions), the sketch solver and face names;
 // RebuildState publishes every feature's output.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SavedCamera, StoredFileRef, Vec3 } from './doc';
+import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SavedCamera, ScaleModelPlace, StoredFileRef, Vec2, Vec3 } from './doc';
 import type { BodyInfo, KernelAdapter } from './kernel';
 import type { BBox, OffsetFaceAbout, ShapeId } from './kernel-protocol';
 import type { FaceNames } from './naming';
@@ -278,6 +278,13 @@ export interface DocService {
   setCamera(camera: SavedCamera): void;
   /** Show or hide a sketch in model mode (the tree's eye); null forgets the choice (shown until used). */
   setSketchVisibility(id: FeatureId, mode: 'shown' | 'hidden' | null): void;
+  /**
+   * ux010 (TOOLBAR builder): show the banana for scale at `place`, or remove it (null). Kept with
+   * the view (CadView.scaleModels): saved, not undoable, never part of the model.
+   */
+  setScaleModel(kind: 'banana', place: ScaleModelPlace | null): void;
+  /** ux010: the taped banana in sketch `feature` at `at` (its centre, sketch u/v mm), or removed (null). Kept with the view, as setScaleModel. */
+  setSketchBanana(feature: FeatureId, at: Vec2 | null): void;
 
   /**
    * Exact volume, area and bounding box of a body at the current rebuild

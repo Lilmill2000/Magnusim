@@ -170,9 +170,13 @@ export function selectTool(mode: SketchMode): SketchTool {
   };
   // ---- ux010 (DRAW): one arc selected that a driving radius dimension holds (a fillet): its radius
   // arrow, dragged as right after the fillet was made (the panel's foot says why it stops).
-  const radius = new RadiusHandle(mode, () => {
-    mode.note(radius.stopped);
-  });
+  const radius = new RadiusHandle(
+    mode,
+    () => {
+      mode.note(radius.stopped);
+    },
+    () => showRadius(),
+  );
   let grabbed = false;
   /** The release of a drag of the arrow: the click the view may send after it is the drag's. */
   let swallowClick = false;

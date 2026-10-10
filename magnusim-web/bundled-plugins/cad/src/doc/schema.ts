@@ -2,11 +2,11 @@
 // reading stored documents (validation + migration from v1) and freezing snapshots.
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { DOC_SCHEMA, DOC_SCHEMAS_READ, type CadDoc, type CadView, type Feature, type Param, type SavedCamera, type Vec3 } from '../types/doc';
+import { DOC_SCHEMA, DOC_SCHEMAS_READ, type CadDoc, type CadView, type Feature, type Param, type SavedCamera, type ScaleModelPlace, type Vec3 } from '../types/doc';
 import type { DocUnits, LengthUnit } from '../types/units';
 import { newId } from '../lib/ids';
 
-export const PLUGIN_VERSION = '0.2.0-dev';
+export const PLUGIN_VERSION = '0.1.0';
 export const DEFAULT_BODY_COLOR = '#bdc9db';
 export const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -147,7 +147,29 @@ export function readView(raw: unknown, featureCount: number): CadView {
     for (const [id, mode] of Object.entries(v.sketches)) if (mode === 'shown' || mode === 'hidden') sketches[id] = mode;
     if (Object.keys(sketches).length) view.sketches = sketches;
   }
+  // ux010 (TOOLBAR builder): the banana for scale, when shown (optional; older views have none),
+  // and the taped banana per sketch.
+  const sm = v.scaleModels && typeof v.scaleModels === 'object' ? (v.scaleModels as { banana?: unknown; sketch?: unknown }) : {};
+  const banana = readScaleModelPlace(sm.banana);
+  const sketch: Record<string, { at: [number, number] }> = {};
+  if (sm.sketch && typeof sm.sketch === 'object') {
+    for (const [id, e] of Object.entries(sm.sketch as Record<string, unknown>)) {
+      const at = (e as { at?: unknown } | null)?.at;
+      if (Array.isArray(at) && at.length === 2 && at.every((n) => typeof n === 'number' && Number.isFinite(n))) sketch[id] = { at: [at[0], at[1]] };
+    }
+  }
+  if (banana || Object.keys(sketch).length) view.scaleModels = { ...(banana ? { banana } : {}), ...(Object.keys(sketch).length ? { sketch } : {}) };
   return view;
+}
+
+/** ux010: a stored scale model's place, or null when it is missing or unusable (then it is not shown). */
+export function readScaleModelPlace(raw: unknown): ScaleModelPlace | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as { at?: unknown; rot?: unknown };
+  const at = vec3(r.at);
+  if (!at) return null;
+  const rot = typeof r.rot === 'number' && Number.isFinite(r.rot) ? ((r.rot % 360) + 360) % 360 : 0;
+  return { at, rot };
 }
 
 const vec3 = (x: unknown): Vec3 | null => (Array.isArray(x) && x.length === 3 && x.every((n) => typeof n === 'number' && Number.isFinite(n)) ? [x[0], x[1], x[2]] : null);

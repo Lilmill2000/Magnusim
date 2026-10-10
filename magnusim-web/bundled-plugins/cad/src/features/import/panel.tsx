@@ -8,7 +8,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useState } from 'react';
 import { useServices } from '../../lib/services';
-import { useStateStore } from '../../lib/store';
+import { createStateStore, useStateStore } from '../../lib/store';
 import type { ImportFeature } from '../../types/doc';
 import type { FeaturePanelProps } from '../../types/modules';
 import { uiFor } from '../../ui/controller';
@@ -17,6 +17,9 @@ import { formatBytes } from '../../files/words';
 import { P2FeaturePanel, Switch, useFeaturePanel } from '../p2/panel';
 import { DEFAULT_HEAL_TOLERANCE, type StageProgress } from './pipeline';
 import { importRunsFor } from './runs';
+import { editOpenState, type EditOpenState } from '../../link/edit-state';
+
+const NO_EDIT = createStateStore<{ s: EditOpenState | null }>({ s: null });
 
 const pct = (p: StageProgress) => (p.total ? `${Math.min(100, Math.floor(((p.done ?? 0) / p.total) * 100))}%` : '');
 const secs = (p: StageProgress, now: number) => `${Math.max(0, Math.floor((now - p.since) / 1000))} s`;
@@ -95,6 +98,9 @@ export function ImportPanel(props: FeaturePanelProps) {
   const output = useStateStore(services.doc.state, (s) => s.rebuild.outputs[props.feature] ?? null);
   const units = services.doc.units;
   const f = kit.draft;
+  // Edit in CAD: the project geometry this import came from, and the faces that could not be matched.
+  const editStore = editOpenState(services);
+  const edit = useStateStore<{ s: EditOpenState | null } | EditOpenState, EditOpenState | null>(editStore ?? NO_EDIT, (v) => ('s' in v ? v.s : (v as EditOpenState)));
   const done = !!f.brep?.rel && f.items.length > 0;
   const shells = f.items.filter((it) => it.kind === 'shell').length;
   // Faces in no solid now: those of the surface bodies the import makes (after a knit, none; it said
@@ -133,6 +139,14 @@ export function ImportPanel(props: FeaturePanelProps) {
           </span>
         </Field>
       ) : null}
+      {f.origin ? (
+        <Field label="From the project" field="origin">
+          <span className="cad-p2-readout" data-import-origin={f.origin.geometryId}>
+            {edit?.geometryName ?? 'A project geometry'}
+          </span>
+        </Field>
+      ) : null}
+      {f.origin && edit?.note ? <Hint>{edit.note}</Hint> : null}
       {f.source?.unit ? (
         <Field label="Length unit" field="unit">
           <span data-import-unit="1">{f.source.unit}</span>

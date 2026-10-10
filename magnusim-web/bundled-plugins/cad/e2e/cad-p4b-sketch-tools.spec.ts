@@ -14,7 +14,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 // fix1: the curve as drawn, computed independently of the trim (the spline's own math on the points placed).
 import { closestOnSpline, fitSpline, splineGreen, subSpline } from '../src/sketch/tools/bspline';
-import { baseUrl, chipVolumes, ensureCadOn, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+import { baseUrl, chipVolumes, ensureCadOn, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, singleVolume, watchPage, workspaceFrame, showAllRelations } from './helpers';
 
 type V3 = [number, number, number];
 type V2 = [number, number];
@@ -319,6 +319,8 @@ test('cad:p4b-sketch-mirror mirror a rectangle about its own edge: Symmetric cop
   const d = await drawn(page);
   // The left edge is on the mirror line: not copied; its ends are shared by the copies.
   expect(d.kinds).toEqual({ line: 7 });
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="symmetric"]')).toHaveCount(2);
   await expect(chip(frame)).toHaveText('Fully defined');
   await finish(frame);
@@ -662,6 +664,8 @@ test('cad:p4b-sketch-spline-trim fix1 B2/B4: a line trimmed against a fit spline
   // The cut end is ON the curve as drawn, held there by On curve.
   const orig = fitSpline(fitBefore);
   expect(closestOnSpline(orig, d.points[lineEnd]).d).toBeLessThan(1e-6);
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="point_on_circle"]')).toHaveCount(1);
   // B4: trim the spline's left tail: it now starts at the line's end, the same point.
   await clickAt(page, [-42, 4.5]);
@@ -888,6 +892,8 @@ test('cad:p4b-fix1-chamfer-same fix1 P7: chamfer Same distance is one dimension:
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Fully defined');
   await expect(frame.locator('[data-sketch-dim]', { hasText: /^3 mm$/ })).toHaveCount(1);
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="equal"]')).toHaveCount(2);
   await page.keyboard.press('Escape');
   await frame.locator('[data-sketch-dim]', { hasText: /^3 mm$/ }).dblclick();
@@ -993,6 +999,8 @@ test('cad:p4b-sketch-spline-tangent Tangent between a line and a fit spline at t
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Under defined · 9 DOF');
   // One Tangent relation: its glyph beside each of the two curves it names.
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="tangent"]')).toHaveCount(2);
   const d = await drawn(page);
   const sp = d.entities.find((e) => e.kind === 'spline') as unknown as { pts: string[]; handles: [string | null, string | null] };
@@ -1151,7 +1159,8 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   const [fx, fy] = await at(page, [76, 15, 0]);
   await page.mouse.move(fx + 30, fy);
   await page.mouse.move(fx, fy, { steps: 4 });
-  await expect.poll(async () => (await cursor()).style).toBe('move');
+  // ux010 (DRAW): the sketch's own open hand (an SVG, the grab keyword as its fallback).
+  await expect.poll(async () => (await cursor()).style).toMatch(/url\("data:image\/svg\+xml,.*, grab$/);
   expect(seen.errors).toEqual([]);
 });
 

@@ -13,6 +13,8 @@ import { createDocService, install as installDoc } from '../doc';
 import { PLUGIN_VERSION } from '../doc/schema';
 import { createKernelAdapter } from '../kernel';
 import { createLinkController } from '../link/controller';
+import { createEditOpen } from '../link/edit-open';
+import { mountEditOpenView } from '../link/edit-open-view';
 import { installLeaveHook } from '../link/leave';
 import { createModuleRegistry, discoverModules, installModules, registerModuleFeatures } from '../modules';
 import type { AppServices, AreaApis } from '../types/app';
@@ -88,8 +90,12 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   // LINK: the Part's design into the project's linked geometry. Leaving the
   // workspace runs it: the exit hook (host API 1.6, L3), registered now that the
   // page is connected; it hands the app the camera the user leaves with.
-  const link = createLinkController({ bridge, doc, kernel });
+  // Edit in CAD (host API 1.7): a Part opened on a project geometry imports it by itself and
+  // matches its faces; the link adopts that geometry on the first Back with a change.
+  const editOpen = createEditOpen(services);
+  const link = createLinkController({ bridge, doc, kernel, adopt: { ready: () => editOpen.ready(), geometryName: () => editOpen.geometry?.name ?? null, noteUnverified: (n) => editOpen.noteUnverified(n) } });
   const leave = exposeTestHandle(services, PLUGIN_VERSION, link);
+  if (window.__CAD__) window.__CAD__.edit = editOpen;
   void installLeaveHook({
     bridge,
     doc,
@@ -109,5 +115,9 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   kernel.start().catch(() => {});
   await doc.load();
   bus.emit('app:ready', { ms: performance.now() - t0 });
+  if (editOpen.geometry) {
+    mountEditOpenView(editOpen.state, { stop: () => editOpen.stop(), retry: () => void editOpen.retry() });
+    void editOpen.start();
+  }
   return services;
 }

@@ -19,7 +19,8 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { addSolid, baseUrl, groupCommandLabels, newPartFromTree, newProject, openPart, openProject, partOpened, runCommand, watchPage } from './helpers';
 
-const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'];
+// ux010: SCALE MODELS' Banana for scale (after VIEW) is on the bar too.
+const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step', 'scale.banana'];
 const MODEL_MORE: Record<string, string> = {
   solid: 'solid.revolve solid.sweep solid.loft',
   pattern: 'pattern.circular pattern.mirror',

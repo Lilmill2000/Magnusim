@@ -42,11 +42,26 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
-export function Icon({ d, size = 14, stroke = 1.8, title, className }: { d: string; size?: number; stroke?: number; title?: string; className?: string }) {
+export function Icon({
+  d,
+  size = 14,
+  stroke = 1.8,
+  title,
+  className,
+  colors,
+}: {
+  d: string;
+  size?: number;
+  stroke?: number;
+  title?: string;
+  className?: string;
+  /** ux010: drawn in colour (Banana for scale's yellow banana) instead of currentColor. */
+  colors?: { fill: string; stroke: string };
+}) {
   return (
-    <svg className={className ? `cad-icon ${className}` : 'cad-icon'} viewBox="0 0 24 24" width={size} height={size} aria-hidden={title ? undefined : true} focusable="false">
+    <svg className={className ? `cad-icon ${className}` : 'cad-icon'} viewBox="0 0 24 24" width={size} height={size} aria-hidden={title ? undefined : true} focusable="false" data-icon-colors={colors ? '1' : undefined}>
       {title ? <title>{title}</title> : null}
-      <path d={d} fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={d} fill={colors?.fill ?? 'none'} stroke={colors?.stroke ?? 'currentColor'} strokeWidth={colors ? Math.min(stroke, 1.3) : stroke} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

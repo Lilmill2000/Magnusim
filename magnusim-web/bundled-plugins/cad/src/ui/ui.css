@@ -253,6 +253,40 @@ html.cad-tb-drag-refused * {
   box-shadow: var(--mg-shadow-tooltip);
   white-space: nowrap;
 }
+/* SCALE MODELS (Banana for scale): labelled like every group while the bar has room; when VIEW
+   and EDIT are icons and it still does not fit, its button goes to its icon (is-fit-scale), before
+   any command folds or loses its label. Its heading stays, as every group's does. */
+.cad-toolbar.is-fit-scale .tb-group[data-group='scale'] .tb-btn {
+  min-width: 26px;
+  padding: 4px 2px;
+}
+.cad-toolbar.is-fit-scale .tb-group[data-group='scale'] .tb-btn:not(.tb-more) .tb-txt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+/* Once VIEW and EDIT are icons the groups sit a little closer (5 px apart, 8 px from the frame's
+   edges), VIEW's and EDIT's icons are 24 px and SCALE MODELS leaves its right separator to EDIT's:
+   with SCALE MODELS' heading kept, the model toolbar then fits 1280 px with every modelling
+   command labelled (measured in bundled Chromium: 1299 px needed before, 1266 px after). */
+.cad-toolbar.is-fit-1,
+.cad-toolbar.is-fit-2 {
+  gap: 5px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+/* Its two-word heading stays on one line (a squeezed group would wrap it and look fitted). */
+.cad-toolbar.is-fit-1 .tb-group[data-group='scale'],
+.cad-toolbar.is-fit-2 .tb-group[data-group='scale'] {
+  padding-right: 0;
+  border-right: none;
+}
+.tb-group[data-group='scale'] .tb-group-label {
+  white-space: nowrap;
+}
 /* ---- end UX 0.1.0 (TOOLBAR) ---- */
 
 /* Fit levels (Toolbar useFitLevel): icons only where the labelled buttons do not fit the frame;
@@ -262,6 +296,14 @@ html.cad-tb-drag-refused * {
 .cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']) .tb-btn {
   min-width: 30px;
   padding: 4px 4px;
+}
+/* ux010 (TOOLBAR builder): VIEW's and EDIT's icons 24 px wide at fit level 1 (the 20 px icon
+   box with 1 px each side), so SCALE MODELS fits beside them at 1280 px and no modelling command
+   loses its label for it. */
+.cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-btn,
+.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-btn {
+  min-width: 24px;
+  padding: 4px 1px;
 }
 .cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-txt,
 .cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-txt,

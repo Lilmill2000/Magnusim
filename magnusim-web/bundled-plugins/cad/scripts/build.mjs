@@ -12,6 +12,8 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import { acquireLock } from './lock.mjs';
+// ux010 (TOOLBAR builder): the "Banana for scale" mesh, made with the shipped kernel on every build.
+import { BANANA_OUT, makeBanana } from './make-banana.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
@@ -32,10 +34,12 @@ export const WORKERS = [
 
 /** Everything the page build writes (relative to the output folder). */
 const PAGE_OUTPUTS = ['index.html', 'app.js', 'app.css', 'chunks', 'assets'];
+/** Other generated files (scripts/make-banana.mjs). */
+const OTHER_OUTPUTS = [BANANA_OUT];
 
 function clean() {
   if (check) rmSync(OUT, { recursive: true, force: true });
-  for (const p of [...PAGE_OUTPUTS, ...WORKERS.map((w) => w.out)]) rmSync(join(OUT, p), { recursive: true, force: true });
+  for (const p of [...PAGE_OUTPUTS, ...OTHER_OUTPUTS, ...WORKERS.map((w) => w.out)]) rmSync(join(OUT, p), { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
 }
 
@@ -75,7 +79,7 @@ function listFiles(dir, base = dir) {
 }
 
 function generated(dir) {
-  const outs = new Set(WORKERS.map((w) => w.out));
+  const outs = new Set([...WORKERS.map((w) => w.out), ...OTHER_OUTPUTS]);
   return listFiles(dir).filter((f) => outs.has(f) || PAGE_OUTPUTS.some((p) => f === p || f.startsWith(p + '/')));
 }
 
@@ -87,6 +91,7 @@ try {
   clean();
   await buildPage();
   for (const w of WORKERS) await buildWorker(w);
+  await makeBanana(OUT);
 } finally {
   release();
 }

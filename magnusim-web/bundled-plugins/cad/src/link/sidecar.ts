@@ -36,6 +36,13 @@ export interface SidecarFace {
   body: number;
   name?: string;
   label?: string;
+  /**
+   * Edit in CAD (host 1.7, an originalNames file only): the fingerprint of the CAD face a named row
+   * names, in mm; `normal` null for a curved face (kept as null in the file).
+   */
+  centroid?: number[];
+  area?: number;
+  normal?: number[] | null;
 }
 
 // Control characters, and the bidirectional controls a name could hide text with
@@ -189,7 +196,7 @@ export function uniqueNames(names: readonly string[]): string[] {
 
 function row<T extends object>(r: T): T {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(r)) if (v !== undefined && v !== null && v !== '') out[k] = v;
+  for (const [k, v] of Object.entries(r)) if (v !== undefined && v !== '' && (v !== null || (k === 'normal' && 'centroid' in r))) out[k] = v;
   return out as T;
 }
 

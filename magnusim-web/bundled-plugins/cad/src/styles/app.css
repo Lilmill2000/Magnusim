@@ -42,13 +42,40 @@ body {
   cursor: default;
 }
 
-.cad-app input,
+/* ux010 (PANELS, Daniel 2026-10-08: "when there is a toggle box ... the mouse is the normal pointer and
+   not the 'I'"): only text you can type in shows the I-beam. Everything else keeps the app root's
+   arrow: checkboxes, radios, switches and their labels, selects, headings, field labels, hints, tree
+   rows, menus, chips and notes (the core's own toggle, the kit's switch, shows the arrow; buttons and
+   pills keep the kit's hand). The rule used to take every input and select, so a checkbox and a
+   select showed the I-beam. */
+.cad-app input:not([type]),
+.cad-app input[type='text'],
+.cad-app input[type='number'],
+.cad-app input[type='search'],
+.cad-app input[type='email'],
+.cad-app input[type='url'],
+.cad-app input[type='tel'],
+.cad-app input[type='password'],
 .cad-app textarea,
-.cad-app select,
-.cad-app [contenteditable] {
+.cad-app [contenteditable]:not([contenteditable='false']) {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+}
+
+.cad-app input[type='checkbox'],
+.cad-app input[type='radio'],
+.cad-app select,
+.cad-app label {
+  cursor: default;
+}
+
+/* What went wrong stays selectable, to copy into a report (the arrow, as for any text that is not typed). */
+.cad-app .cad-reason,
+.cad-app [data-run-reason],
+.cad-app [role='alert'] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .cad-stage {

@@ -21,6 +21,7 @@ import { uiFor } from '../ui/controller';
 import { kernelLookup, refOfFace, resolveFace } from '../naming';
 import { solvedStateOf, statusOf, type SketchStatus } from './dof';
 import { SketchBuilder, asConstruction, drawsConstruction, type EditOutcome, type SketchDraft } from './edit';
+import { relationsView, type RelationsView } from './relations-view';
 import { constraintLabel, DIMENSION_LABELS, entityLabel, entityOf, evaluateDimensions, isDimension, measureDimension, quantityOf, toSolverSketch, withSolved } from './model';
 import type { SolverClient } from './solver-client';
 import { prunedLinks } from './project/curves';
@@ -496,6 +497,11 @@ export class SketchMode implements SketchModeApi {
 
   refreshHint() {
     this.view.set({ hint: this.tool?.hint() ?? '' });
+  }
+
+  /** ux010 (DRAW): which relation glyphs show (Show relations; src/sketch/relations-view.ts). */
+  get relations(): RelationsView {
+    return relationsView(this.services);
   }
 
   // ---- ux010 (DRAW): construction drawing (Construction / X with nothing selected)

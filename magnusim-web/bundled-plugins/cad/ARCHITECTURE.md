@@ -1411,8 +1411,21 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   dot it drew at each frame to `data-sketch-dot` (e2e). A new sketch fillet (and a fillet arc
   selected later) shows a radius arrow (`src/sketch/tools/radius-handle.ts`; the arrow element takes
   the press and the R label moves off its line): its drag solves with `solver.setValue` live in the
-  mode's edit queue (`SketchMode.queue`; Undo waits for the release, Escape cancels), the release is one `apply` that changes the radius dimension, and
+  mode's edit queue (`SketchMode.queue`; Undo waits for the release, Escape cancels); direct
+  manipulation: the arc's midpoint follows the pointer along the corner's bisector (the radius
+  whose fillet midpoint is nearest it, `filletRadiusAt` over `filletCorner`; the arrow points
+  inward, the way the radius grows), the release is one `apply` that changes the radius dimension, and
   `filletLimit` (the corner rebuilt, bisected with `filletCorner`) stops it with the words why.
+  Sketch cursors are the plugin's own SVGs (`src/sketch/cursors.ts`): CSS `cursor:
+  image-set(url(data:...) 1x, url(data:...) 2x) x y, <keyword>` on the canvas (the OS draws them:
+  no lag; the frame's CSP allows data: images; tools still ask for keywords, the overlay maps them),
+  the crosshair with the tool's toolbar icon, an open hand (draggable, handles) and a closed hand
+  (dragging); white on a dark view (`cursorTone`: the host theme name or the view colour).
+  Relation glyphs show for the selection only (`src/sketch/relations-view.ts` `relationShown`; a
+  conflict always shows; a fillet arc's own while its radius arrow is up stay hidden); Show
+  relations (`view.sketch-relations`, VIEW, Shift+R, `CommandDef.pressed`) shows all, ws.prefs key
+  `sketch-show-relations`; `SketchMode.relations` is the page's state (e2e `showAllRelations`). Sketch
+  points are round (`roundPoints`: the PointsMaterial's fragment cut to a circle with a smooth edge).
 - **Units and the cursor in sketches (P4b follow-up, Daniel 2026-10-06).** The cursor stays the normal
   arrow over what cannot be dragged (a fully defined entity, the origin) and the
   sketch panel says why ("This line is fully defined: change a dimension to move

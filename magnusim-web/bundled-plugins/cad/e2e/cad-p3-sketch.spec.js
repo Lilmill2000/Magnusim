@@ -28,7 +28,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, soloVolume, openSketchDetails } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, soloVolume, openSketchDetails, showAllRelations } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -179,7 +179,7 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   // round 1, cad-sd-review1.spec.ts); here the plane is selected first.
   await expect(tb(frame).locator('[data-command="sketch.new"]')).not.toHaveAttribute('aria-disabled', 'true');
   await sketchOnTop(page, frame);
-  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'EDIT']);
+  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
   // Nothing drawn yet: said so (review P2/P3 round 1: an empty sketch read "Fully defined").
   await expect(chip(frame)).toHaveText('No geometry yet');
 
@@ -191,6 +191,8 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
   await expect(frame.locator('[data-cad-panel="sketch"] [data-sketch-state]')).toHaveText('Under defined · 2 DOF');
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="horizontal"]')).toHaveCount(2);
   await expect(frame.locator('[data-sketch-glyph="vertical"]')).toHaveCount(2);
 
@@ -268,7 +270,8 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '(44.72 mm)']);
   const [c2x, c2y] = await at(page, [40, 20, 0]);
   await page.mouse.move(c2x, c2y);
-  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toBe('move');
+  // ux010 (DRAW): the sketch's own open hand (an SVG, the grab keyword as its fallback).
+  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toMatch(/url\("data:image\/svg\+xml,.*, grab$/);
   const [tx, ty] = await at(page, [40, 30, 0]);
   await page.mouse.down();
   await page.mouse.move(tx, ty, { steps: 10 });

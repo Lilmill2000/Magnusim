@@ -775,9 +775,15 @@ export async function openSketchDetails(page: Page, frame: FrameLocator): Promis
   const btn = frame.locator('[data-cad-panel="sketch"] [data-sketch-details]');
   await expect(btn).toBeVisible();
   if ((await btn.getAttribute('data-sketch-details')) === 'open') return;
+  // This page's own write of the pref, awaited by its response: a poll of the server's value could
+  // miss it for good, since a test running beside this one may take the same key off in between.
+  const wrote = page.waitForResponse(
+    (r) => r.url().endsWith('/api/plugin-prefs/set') && (r.request().postData() ?? '').includes('"sketch-details-open"'),
+    { timeout: 30_000 },
+  );
   await btn.click();
   await expect(btn).toHaveAttribute('data-sketch-details', 'open');
-  await expect.poll(() => cadPref(page.request, 'sketch-details-open')).toBe(true);
+  expect((await wrote).ok(), 'the Details pref was stored').toBe(true);
   const r = await page.request.post(`${baseUrl()}/api/plugin-prefs/remove`, { data: { plugin: 'cad', key: 'sketch-details-open' } });
   expect(r.ok(), await r.text()).toBe(true);
 }
@@ -790,4 +796,20 @@ export async function showTreeDuringSketch(frame: FrameLocator): Promise<void> {
   const rail = frame.locator('[data-cad-rail="tree"]');
   if (await rail.count()) await rail.click();
   await expect(frame.locator('[data-cad-tree]')).toBeVisible();
+}
+
+// ---- ux010 DRAW: Show relations
+
+/**
+ * Every relation glyph shows on this page: Show relations on, for this page only. (The toolbar's
+ * Show relations is the user's pref, one file on the server every test shares; a test that wants
+ * every glyph without selecting turns it on here, and the pref stays untouched.) Call it while a
+ * sketch is open; it holds for the page.
+ */
+export async function showAllRelations(page: Page): Promise<void> {
+  await workspaceFrame(page).evaluate(() => {
+    const m = (window as unknown as { __CAD__: { services: { apis: { get(): { sketch: { relations: { state: { set(p: { showAll: boolean }): void } } } } } } } }).__CAD__.services.apis.get().sketch;
+    m.relations.state.set({ showAll: true });
+  });
+  await expect(page.frameLocator('#workspace-frame').locator('[data-sketch-annotations]')).toHaveAttribute('data-sketch-relations', 'all');
 }

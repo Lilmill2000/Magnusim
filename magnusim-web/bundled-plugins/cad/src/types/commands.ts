@@ -6,8 +6,10 @@
 import type { AppServices } from './app';
 
 /** Toolbar groups by mode, in display order (proposal §3.1). */
-export type ModelGroup = 'sketch' | 'solid' | 'modify' | 'pattern' | 'construct' | 'cfd' | 'inspect' | 'file';
-export type SketchGroup = 'draw' | 'constrain' | 'dimension' | 'sketch-modify';
+/** ux010 (TOOLBAR builder): 'scale' is SCALE MODELS (Banana for scale), drawn right after VIEW (Toolbar.tsx AFTER_VIEW). */
+export type ModelGroup = 'sketch' | 'solid' | 'modify' | 'pattern' | 'construct' | 'cfd' | 'inspect' | 'file' | 'scale';
+/** ux010: sketch mode has a SCALE MODELS group too (the taped banana), after its VIEW. */
+export type SketchGroup = 'draw' | 'constrain' | 'dimension' | 'sketch-modify' | 'scale';
 export type ToolbarGroup = ModelGroup | SketchGroup;
 export type Mode = 'model' | 'sketch';
 
@@ -20,6 +22,7 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
   cfd: 'CFD PREP',
   inspect: 'INSPECT',
   file: 'FILE',
+  scale: 'SCALE MODELS',
   draw: 'DRAW',
   constrain: 'CONSTRAIN',
   dimension: 'DIMENSION',
@@ -28,8 +31,8 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
 
 /** CFD PREP (Enclosure) comes after the modelling groups (decision 2026-10-01). */
 /** P4b (PATTERN, Daniel's item 7): PATTERN sits right after SOLID, beside Extrude. */
-export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'pattern', 'modify', 'construct', 'cfd', 'inspect', 'file'];
-export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', 'sketch-modify'];
+export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'pattern', 'modify', 'construct', 'cfd', 'inspect', 'file', 'scale'];
+export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', 'sketch-modify', 'scale'];
 
 /**
  * A command. Only commands that work end to end are registered (honest UI:
@@ -47,6 +50,11 @@ export interface CommandDef {
   mode?: Mode | 'any';
   /** SVG path d (24x24, stroke 1.7, currentColor), required when `group` is set. */
   icon?: string;
+  /**
+   * ux010 (TOOLBAR builder): the icon drawn in colour instead of the monochrome outline (the
+   * yellow banana of Banana for scale): `fill` inside the path, `stroke` its outline.
+   */
+  iconColors?: { fill: string; stroke: string };
   /** "Ctrl+Z", "Shift+F", "E", "Delete", "Escape". Ctrl means Ctrl or Cmd. */
   shortcut?: string;
   /** Longer tooltip text; the label and shortcut are added by the toolbar. */

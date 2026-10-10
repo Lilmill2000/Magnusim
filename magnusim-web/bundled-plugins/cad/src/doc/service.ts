@@ -8,7 +8,7 @@ import type { EventBus } from '../lib/bus';
 import { newId, nextName } from '../lib/ids';
 import { commitPendingEdits, pendingEditLabel, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { createStateStore } from '../lib/store';
-import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera } from '../types/doc';
+import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera, type ScaleModelPlace, type ScaleModels, type Vec2 } from '../types/doc';
 import type { BodyProps, DocService, DocState, EditResult, EditSession, FeatureFiles, SaveState } from '../types/doc-service';
 import type { DocStore } from '../types/docstore';
 import type { CadEvents } from '../types/events';
@@ -23,7 +23,7 @@ import { dependencies as featureDependencies, featureUses, gcBodies as gcFeature
 import { createBuiltinRegistry } from './features/registry';
 import { createParamScope, featureExprs, paramNameProblem, usersOfParam } from './params';
 import { RebuildEngine, type RebuildOutput } from './rebuild';
-import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readView } from './schema';
+import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readScaleModelPlace, readView } from './schema';
 import { openDocStore } from './store/open';
 import { isRemovedFeature } from './features/removed';
 import { createUndoStack } from './undo';
@@ -748,6 +748,40 @@ export function createDocService(opts: DocServiceOptions): DocService {
     setView({ ...v, camera: c });
   }
 
+  // ux010 (TOOLBAR builder): the banana for scale, kept with the view.
+  function setScaleModel(kind: 'banana', place: ScaleModelPlace | null) {
+    const v = state.get().view;
+    if (state.get().status !== 'ready') return;
+    const cur = v.scaleModels?.[kind] ?? null;
+    const next = place ? readScaleModelPlace(place) : null;
+    if (JSON.stringify(cur) === JSON.stringify(next)) return;
+    const models = { ...(v.scaleModels ?? {}) };
+    if (next) models[kind] = next;
+    else delete models[kind];
+    const view: CadView = { ...v, scaleModels: models };
+    if (!Object.keys(models).length) delete view.scaleModels;
+    setView(view);
+  }
+
+  // ux010 (TOOLBAR builder): the taped banana per sketch, kept with the view. Entries of sketches
+  // no longer in the Part are dropped on the way.
+  function setSketchBanana(feature: FeatureId, at: Vec2 | null) {
+    const v = state.get().view;
+    if (state.get().status !== 'ready') return;
+    const cur = v.scaleModels?.sketch?.[feature]?.at ?? null;
+    const next = at && at.length === 2 && at.every((n) => Number.isFinite(n)) ? ([at[0], at[1]] as Vec2) : null;
+    if (JSON.stringify(cur) === JSON.stringify(next)) return;
+    const known = new Set(state.get().doc.features.map((f) => f.id));
+    const sketch: Record<FeatureId, { at: Vec2 }> = {};
+    for (const [id, e] of Object.entries(v.scaleModels?.sketch ?? {})) if (id !== feature && known.has(id)) sketch[id] = e;
+    if (next) sketch[feature] = { at: next };
+    const models: ScaleModels = { ...(v.scaleModels ?? {}), sketch };
+    if (!Object.keys(sketch).length) delete models.sketch;
+    const view: CadView = { ...v, scaleModels: models };
+    if (!Object.keys(models).length) delete view.scaleModels;
+    setView(view);
+  }
+
   function setSketchVisibility(id: FeatureId, mode: 'shown' | 'hidden' | null) {
     const v = state.get().view;
     if (state.get().status !== 'ready' || (v.sketches?.[id] ?? null) === mode) return;
@@ -998,6 +1032,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
     setPlanes,
     setCamera,
     setSketchVisibility,
+    setScaleModel,
+    setSketchBanana,
     measure,
     async flush() {
       await autosave?.flush();

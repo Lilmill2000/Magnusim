@@ -49,7 +49,7 @@ describe('shards', () => {
     expect(new Set(listed).size).toBe(listed.length);
     expect(SHARD_NAMES).toEqual(['shell', 'sketch', 'solids', 'step', 'link', 'big']);
     // The opt-in shard: Daniel's 113 MB part (P4b SELECT fix round 1 adds the box timed on it).
-    expect(SHARDS.big).toEqual(['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts']);
+    expect(SHARDS.big).toEqual(['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts']);
     expect(specsOf(['link', 'solids'])).toEqual([...SHARDS.solids, ...SHARDS.link]);
   });
 
@@ -252,6 +252,8 @@ describe('the smoke and serial tags', () => {
       // P4b SELECT fix round 1 (B-3): the box timed along the user's path, on the 10k grid and (opt-in) the 113 MB part.
       'cad:p4b-fix-b3-box-user-path',
       'cad:p4b-select-big-box',
+      // Edit in CAD: the 113 MB STEP opened from the project, timed.
+      'cad:edit-big-step',
       // P4b follow-up: the toolbar layout is the user's (ws.prefs): one file per plugin on the server.
       'cad:p4b-toolbar-customize',
       'cad:p4b-toolbar-migrate',
@@ -262,6 +264,8 @@ describe('the smoke and serial tags', () => {
       'cad:ux010-toolbar-sketch',
       // ux010 PANELS: the Sketch panel's collapse and Details, the tree's collapse: the user's prefs too.
       'cad:ux010-panels-collapse',
+      // ux010 DRAW: Show relations is the user's pref too.
+      'cad:ux010-relations-toggle',
       'cad:ux010-panels-compact',
       'cad:ux010-panels-error-compact',
       'cad:ux010-panels-measure',

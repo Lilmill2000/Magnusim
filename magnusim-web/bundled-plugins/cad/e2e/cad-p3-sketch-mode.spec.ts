@@ -14,7 +14,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, openSketchDetails } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, openSketchDetails, showAllRelations } from './helpers';
 import { PNG } from './png';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -107,7 +107,7 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await expect(tb.locator('[data-command="sketch.new"]')).not.toHaveAttribute('aria-disabled', 'true');
   await enterSketchOnTop(page, frame);
   // Sketch mode: DRAW / CONSTRAIN / DIMENSION / MODIFY, Finish sketch as the primary button, VIEW, EDIT (the sketch's own undo).
-  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'EDIT']);
+  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
   await expect(tb.locator('[data-group="primary"] [data-command="sketch.finish"]')).toHaveClass(/is-primary/);
   await expect(tb.locator('[data-group="edit"] [data-command]')).toHaveCount(2);
   await expect(tb.locator('[data-command="sketch.undo"]')).toHaveAttribute('aria-disabled', 'true');
@@ -136,6 +136,8 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await clickAt(page, [40.3, 20.2, 0]);
   await sketchIdle(page);
   await expect(chip(frame)).toHaveText('Under defined · 2 DOF');
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="horizontal"]')).toHaveCount(2);
   await expect(frame.locator('[data-sketch-glyph="vertical"]')).toHaveCount(2);
   await expect(frame.locator('[data-sketch-glyph="coincident"]')).toHaveCount(1);
@@ -212,7 +214,8 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   await expect(frame.locator('[data-sketch-dim]')).toHaveCount(2);
   const [c2x, c2y] = await at(page, [40, 20, 0]);
   await page.mouse.move(c2x, c2y);
-  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => (el as HTMLElement).style.cursor)).toBe('move');
+  // ux010 (DRAW): the sketch's own open hand (an SVG, the grab keyword as its fallback).
+  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => (el as HTMLElement).style.cursor)).toMatch(/url\("data:image\/svg\+xml,.*, grab$/);
   const [tx, ty] = await at(page, [40, 30, 0]);
   await page.mouse.down();
   await page.mouse.move(tx, ty, { steps: 10 });
@@ -321,6 +324,8 @@ test('cad:p3-sketch-escape-typed Escape never finishes a sketch; typed length an
   await clickAt(page, [70, 0, 0]);
   await sketchIdle(page);
   expect(await kinds()).toEqual(['line', 'circle', 'arc']);
+  // ux010 (DRAW): relations show for the selection only by default; this test reads every glyph.
+  await showAllRelations(page);
   await expect(frame.locator('[data-sketch-glyph="point_on_circle"]')).toHaveCount(2);
   // Undo the trim inside the sketch.
   await tb.locator('[data-command="sketch.undo"]').click();

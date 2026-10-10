@@ -5,6 +5,8 @@
 // pass. hostVersion "1.1" by default (ws.data only); pass "1.2" for ws.files.
 // nav.onLeave (host 1.6) keeps the handler in `leaveHook`; a host before 1.6
 // refuses it with not_allowed, as the real one does.
+// Edit in CAD (host 1.7): pass `edit` for ws.context.geometry / launch and
+// ws.project.geometrySource / geometryFaces (with hostVersion "1.7").
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import { FakeFiles, FakeFolder } from '../doc/fake-files';
@@ -62,6 +64,13 @@ export function createFakeWorkspace(
     folder?: FakeFolder;
     /** Host API 1.5: what ws.project.linkedGeometry() answers (the calls exist only with it). */
     linked?: () => unknown;
+    /** Host API 1.7 (Edit in CAD): the context's geometry and launch, and the two calls' answers. */
+    edit?: {
+      geometry: unknown;
+      launch?: unknown;
+      source?: (o?: { signal?: AbortSignal; onProgress?(done: number, total: number): void }) => Promise<unknown>;
+      faces?: () => Promise<unknown>;
+    };
   } = {},
 ): FakeWorkspace {
   let study = fakeStudy(opts.study);
@@ -77,7 +86,8 @@ export function createFakeWorkspace(
     units: opts.units ?? 'metric',
     theme: { name: 'light', stylesheet: '/plugin-sdk/theme.css' },
     hostVersion: opts.hostVersion ?? '1.1',
-  };
+    ...(opts.edit ? { geometry: opts.edit.geometry, launch: opts.edit.launch ?? null } : {}),
+  } as WorkspaceContext;
   const clone = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
   const ws = {
     context,
@@ -133,6 +143,18 @@ export function createFakeWorkspace(
             },
             async linkedGeometry() {
               return opts.linked!();
+            },
+          }
+        : {}),
+      ...(opts.edit
+        ? {
+            async geometrySource(o?: { signal?: AbortSignal; onProgress?(done: number, total: number): void }) {
+              if (!opts.edit!.source) throw Object.assign(new Error('fake workspace: geometrySource is not scripted'), { code: 'failed' });
+              return opts.edit!.source(o);
+            },
+            async geometryFaces() {
+              if (!opts.edit!.faces) throw Object.assign(new Error('fake workspace: geometryFaces is not scripted'), { code: 'failed' });
+              return opts.edit!.faces();
             },
           }
         : {}),

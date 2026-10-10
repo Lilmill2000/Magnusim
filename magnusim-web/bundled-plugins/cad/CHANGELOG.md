@@ -38,6 +38,15 @@ Magnusim as the Part workspace. It ships on; Settings > Plugins turns it off.
   (or `Ctrl+\`) slides it into a slim rail at the left edge.
 - While you edit a sketch, the design tree slides into a rail at the left edge
   to free the view; click the rail to see the tree.
+- The pointer in a sketch is a thin crosshair with the tool's icon beside it,
+  and an open hand over geometry you can drag (closed while you drag); sketch
+  points are drawn round.
+- Relations show only for the geometry you select. Show relations (VIEW,
+  Shift+R) shows them all and is remembered; a relation in conflict always
+  shows, in red.
+- Banana for scale (a new SCALE MODELS group after VIEW): a yellow 3D banana
+  beside the part, dragged anywhere, never a body or part of the simulation;
+  in a sketch, a true-size picture of a banana taped to the sketch's plane.
 
 **Solids and edits**
 - Extrude (blind, two sides, symmetric, through all, up to a face or a vertex;
@@ -54,6 +63,12 @@ Magnusim as the Part workspace. It ships on; Settings > Plugins turns it off.
 **STEP files**
 - Import STEP with healing, names and colours (tested up to a 113 MB part),
   edit it with every tool above, and export STEP (AP214 or AP242).
+- Edit in CAD: a STEP, IGES or BREP part imported in the simulation view opens
+  in CAD from its tree row's right-click, the viewport's right-click on the
+  part, or its Geometry panel. The Part imports it by itself; Back with a
+  change updates that geometry in place with its boundary conditions (or saves
+  it as a new one), and Back with no change leaves it as it was. The original
+  file is kept.
 
 **For CFD**
 - Enclosure: a box or cylinder of air around the part, with zero, percent or
