@@ -6,7 +6,7 @@ import { DOC_SCHEMA, DOC_SCHEMAS_READ, type CadDoc, type CadView, type Feature, 
 import type { DocUnits, LengthUnit } from '../types/units';
 import { newId } from '../lib/ids';
 
-export const PLUGIN_VERSION = '0.1.0';
+export const PLUGIN_VERSION = '0.2.0-dev';
 export const DEFAULT_BODY_COLOR = '#bdc9db';
 export const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
