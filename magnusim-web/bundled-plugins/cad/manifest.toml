@@ -1,6 +1,6 @@
 key = "cad"
 name = "Magnusim CAD"
-version = "0.2.0-dev"
+version = "0.1.0"
 # 1.7: Edit in CAD (geometry_actions below): a project geometry imported as STEP,
 # IGES or BREP opens in a Part (ws.context.geometry, ws.project.geometrySource and
 # geometryFaces), and its first update goes back into that geometry with its setup
