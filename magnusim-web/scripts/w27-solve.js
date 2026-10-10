@@ -2009,7 +2009,7 @@ async function startSolveBody(opts = {}, slot) {
     if (block === 'draining') {
       killLegacyCase(draft);
     } else {
-      draft = reapStaleRunningDoc(id, draft);
+      draft = reapStaleRunningDoc(id, draft, { ownStart: true });
     }
   }
 
@@ -2746,12 +2746,27 @@ function runProcessIsLive(doc) {
   return pidIsAlive(doc && doc.pid);
 }
 
+/** reapStaleRunningDoc, for the tests of who may reap a run its slot holds. */
+export function reapStaleRunningDocForTests(projectId, doc, opts) {
+  return reapStaleRunningDoc(projectId, doc, opts);
+}
+
 /** Vite/Node restart used to leave run.json at "running" forever. Persist stopped/failed. */
-function reapStaleRunningDoc(projectId, doc) {
+function reapStaleRunningDoc(projectId, doc, opts = {}) {
   if (!doc || !projectId) return doc;
-  // Never while the boot check probes, nor a run the slot holds (its reconstructPar or copy back may still run).
+  // Never while the boot check probes, nor a run the slot holds: running, draining (its
+  // reconstructPar or copy back may still run), or starting. A starting run's doc says
+  // running while the worker plans it, before the runner has a record or a process, so
+  // a status or list read then must not reap it; only its own Start may (opts.ownStart),
+  // which clears a doc an earlier attempt left running before it writes the new one.
   const holder = computeSlotHolder();
-  if (holder && (holder.kind === 'check' || (holder.kind === 'solve' && (holder.phase === 'running' || holder.phase === 'draining') && String(holder.run_id) === String(doc.run_id || doc.id) && sameProjectFolder(holder.project_id, projectId)))) return doc;
+  const held =
+    holder &&
+    holder.kind === 'solve' &&
+    (holder.phase === 'running' || holder.phase === 'draining' || (holder.phase === 'starting' && !opts.ownStart)) &&
+    String(holder.run_id) === String(doc.run_id || doc.id) &&
+    sameProjectFolder(holder.project_id, projectId);
+  if (holder && (holder.kind === 'check' || held)) return doc;
   const st = String(doc.status || '');
   if (st !== 'running' && st !== 'starting') return doc;
   // On the runner: its record says; an ended one is written now. With no record

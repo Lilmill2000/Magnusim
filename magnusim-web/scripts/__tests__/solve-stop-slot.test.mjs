@@ -351,3 +351,42 @@ describe('Stop of a run on the runner (kind solve)', () => {
     assert.equal(takeStartCancel(B), true);
   });
 });
+
+// A Start writes its run as running, then plans it on the worker before the runner
+// takes it (the slot says "starting" until then). A status read in that window used
+// to reap the run as failed ("Solver process exited before the first saved
+// iteration"): no runner record and no process yet. The v0.3.0 gate hit it once,
+// on a transient run, while the worker was busy.
+describe('a run the slot is still starting is not reaped', () => {
+  /** A project of its own (status reads keep per-project state) with the run as
+   * startSolveBody writes it before the plan: running, no pid, case or runner record. */
+  function seedStartingDoc(pid, runId) {
+    const dir = join(PROJECTS, pid);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'project.json'), JSON.stringify({ id: pid, title: pid }));
+    layout.createGeometryFolder(dir, { id: 'g1', name: 'G', original_filename: 'g.step' });
+    layout.createStudyFolder(dir, 'g1', { id: 's1', name: 'Study 1' });
+    return studyIo.persistRun(pid, 's1', { id: runId, run_id: runId, name: runId, simulation_id: 's1', status: 'running' });
+  }
+  const statusOf = (pid, runId) => w27.getRunStatus(pid, runId, 's1').body.run;
+
+  it('while the slot starts it: still running, no error', () => {
+    seedStartingDoc('proj-reap-1', 'run_p');
+    claimComputeSlot('solve', { project_id: 'proj-reap-1', run_id: 'run_p' }, { phase: 'starting' });
+    const run = statusOf('proj-reap-1', 'run_p');
+    assert.equal(run.status, 'running');
+    assert.equal(run.error || null, null);
+  });
+
+  it('with the slot starting another run, or free, the same doc is reaped as before', () => {
+    seedStartingDoc('proj-reap-2', 'run_q');
+    claimComputeSlot('solve', { project_id: 'proj-reap-2', run_id: 'run_other' }, { phase: 'starting' });
+    let run = statusOf('proj-reap-2', 'run_q');
+    assert.equal(run.status, 'failed');
+    assert.match(String(run.error), /exited before the first saved iteration/);
+    resetComputeSlotForTests();
+    seedStartingDoc('proj-reap-3', 'run_r');
+    run = statusOf('proj-reap-3', 'run_r');
+    assert.equal(run.status, 'failed');
+  });
+});

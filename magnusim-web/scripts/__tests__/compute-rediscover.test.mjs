@@ -436,7 +436,7 @@ describe('run docs of the boot check', () => {
     assert.deepEqual([readDoc('proj-r', 'drained').status, readDoc('proj-r', 'drained').draining], ['stopped', false]);
   });
 
-  it('a list call never reaps a run the slot holds, nor anything during the check; its own Start may', () => {
+  it('a list call never reaps a run the slot holds (starting too), nor anything during the check; its own Start may', () => {
     seedProject('proj-g');
     const fresh = (runId) => runDoc('proj-g', runId, { status: 'running', pid: 999999 });
     const status = (runId) => w27.getRunStatus('proj-g', runId, 's1');
@@ -455,6 +455,11 @@ describe('run docs of the boot check', () => {
     resetComputeSlotForTests();
     slot.claimComputeSlot('solve', { project_id: 'proj-g', run_id: 'held' }, { phase: 'starting' });
     status('held');
+    // Its doc says running while the worker plans it, before the runner has a record:
+    // a status read then must not reap it (the v0.3.0 gate's "exited before the first
+    // saved iteration"); its own Start may, clearing a doc an earlier attempt left.
+    assert.equal(readDoc('proj-g', 'held').status, 'running', 'a status read never reaps the run its slot is starting');
+    w27.reapStaleRunningDocForTests('proj-g', readDoc('proj-g', 'held'), { ownStart: true });
     assert.equal(readDoc('proj-g', 'held').status, 'failed', 'its own Start reaps its stale doc');
     resetComputeSlotForTests();
     fresh('free');
