@@ -20,6 +20,15 @@ Plugins
       reference planes, axes and points, and named parameters.
     - Open a STEP file and edit it directly: Press-pull flat and curved faces,
       delete faces, split, combine, and export STEP.
+    - Edit in CAD: right-click a STEP, IGES or BREP part imported in a
+      simulation (in the tree, on the part in the view, or in its Geometry
+      panel) to open it in CAD. Back with a change updates that geometry in
+      place and keeps its boundary conditions; the original file is kept.
+    - Sketching: draw construction geometry with X, click-and-drag to draw,
+      drag a fillet's arrow to set its radius, a compact Sketch panel, the
+      design tree in a rail while you sketch, sketch cursors and round points,
+      and relations shown for what you select (Shift+R shows them all).
+    - Banana for scale: a banana beside the part, or true-size in a sketch.
     - For CFD: Enclosure wraps the part in a box or cylinder of air; Combine
       Cut makes the fluid volume.
     - Leave CAD and you are back in the simulation with the part as the
@@ -38,7 +47,7 @@ Plugins
   its place ("Remove update" goes back); one that fails to load is taken away
   again and the previous version kept.
 - Plugin authors: docs/plugins (GUIDE, API, authoring) and npm run plugin:new
-  / plugin:check / plugin:pack (makes the zip). The plugin API is version 1.6.
+  / plugin:check / plugin:pack (makes the zip). The plugin API is version 1.7.
 
 Incompressible Flow
 - Turbulence: Spalart-Allmaras and realizable k-epsilon join k-omega SST,
