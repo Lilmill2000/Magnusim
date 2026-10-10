@@ -89,6 +89,12 @@ export interface GeomNode {
   unlinkedLost?: number;
   scopeKey?: string;
   studies: StudyNode[];
+  /** API 1.7: the geometry actions it offers ("Edit in CAD"), as the tree node has them. */
+  editActions?: import('../workspace/geometryActions').GeometryActionRow[];
+  /** API 1.7: an adopted geometry's original ("Add the original as a new geometry"). */
+  original?: { fileName: string | null; format: string | null; present: boolean } | null;
+  /** API 1.7: the studies a geometry action opened on this plain geometry that sent no edit back yet. */
+  editedIn?: Array<{ plugin: string; id: string; title: string; workspace: string; scopeKey: string; available: boolean }>;
 }
 
 export interface SetupTreeModel {
@@ -125,6 +131,10 @@ export interface PluginStudyRow {
   read_only: boolean;
   reason: string;
   scope_key: string;
+  /** API 1.7: the project geometry a geometry action opened it on ('' when none). */
+  edits_geometry?: string;
+  /** API 1.7: it edits that plain geometry and sent no edit back yet: shown on the geometry's row, not in STUDIES. */
+  editing?: string;
 }
 
 /** A study kind an enabled plugin declares (manifest [[study_kinds]]). */
@@ -140,6 +150,18 @@ export interface PluginStudyKind {
   links_geometry?: boolean;
   /** API 1.4: its start action (manifest [[start_actions]]), or null. */
   start_action?: import('../workspace/startActions').StartAction | null;
+  /** API 1.7: its geometry action (manifest [[geometry_actions]]), or null. */
+  geometry_action?: {
+    study_kind: string;
+    kind_title: string;
+    workspace: string;
+    workspace_title: string;
+    label: string;
+    hint: string;
+    icon: string;
+    formats: string[];
+    places: string[];
+  } | null;
 }
 
 interface ProjectTreeGeom {
@@ -160,6 +182,14 @@ interface ProjectTreeGeom {
   source_state?: 'ok' | 'plugin_off' | 'plugin_missing' | 'study_deleted';
   source_reason?: string;
   behind?: boolean;
+  // API 1.7: what it was imported from, why no action may edit it now ('' when one may),
+  // the geometry actions of the plugins that are on (each enabled or with its reason), and
+  // what an adopted geometry was imported from.
+  format?: 'step' | 'iges' | 'brep' | 'mesh' | null;
+  edit_block?: string;
+  edit_actions?: import('../workspace/geometryActions').GeometryActionRow[];
+  original?: { file_name?: string | null; format?: string | null; present?: boolean } | null;
+  edited_in?: Array<{ plugin?: string; id?: string; title?: string; workspace?: string; scope_key?: string; available?: boolean }>;
 }
 
 interface ProjectTreeStudy {
@@ -367,6 +397,18 @@ export function readSetupTree(
       link: geomLinkOf(geom, doc),
       // An earlier version kept by "Save as new" is a plain row; it keeps its lost-face count.
       unlinkedLost: geom.unlinked ? Number(geom.lost_faces) || 0 : 0,
+      editActions: Array.isArray(geom.edit_actions) ? geom.edit_actions : [],
+      editedIn: (Array.isArray(geom.edited_in) ? geom.edited_in : []).map((s) => ({
+        plugin: str(s.plugin),
+        id: str(s.id),
+        title: str(s.title, str(s.id)),
+        workspace: str(s.workspace),
+        scopeKey: str(s.scope_key),
+        available: s.available !== false,
+      })),
+      original: geom.original
+        ? { fileName: geom.original.file_name ? String(geom.original.file_name) : null, format: geom.original.format ? String(geom.original.format) : null, present: !!geom.original.present }
+        : null,
       studies: studies.map((study) => {
         const sid = str(study.id);
         const studyAct = forStudy(act, sid) ? act : null;

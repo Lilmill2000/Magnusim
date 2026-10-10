@@ -21,7 +21,8 @@
 //   env             more environment; a null value removes a variable
 //   webRoot         the checkout to run (default: this one)
 //   viteCacheDir    a private Vite dependency cache (servers sharing node_modules otherwise
-//                   share node_modules/.vite, and one re-optimizing blanks the others' pages)
+//                   share node_modules/.vite, and one re-optimizing blanks the others' pages);
+//                   when MAGNUSIM_E2E_VITE_CACHE_DIR is set, each server gets its own folder in it
 //   port            a fixed port (default: the first free one from portFrom)
 //   portFrom        lowest port tried (default MAGNUSIM_E2E_PORT + 11)
 //   keepFree        offsets above the port that must be free too (e.g. [11, 12, 13])
@@ -211,7 +212,11 @@ export async function startHost(options = {}) {
   if (pluginsFrom) cpSync(isAbsolute(pluginsFrom) ? pluginsFrom : join(webRoot, pluginsFrom), pluginsDir, { recursive: true });
   mkdirSync(pluginsDir, { recursive: true });
   const prefsPath = join(tmp, 'prefs.json');
-  const config = viteCacheDir ? privateCacheConfig(webRoot, viteCacheDir) : null;
+  // MAGNUSIM_E2E_VITE_CACHE_DIR (a snapshot beside a live app server): a folder of it per server,
+  // never one cache two servers share (one re-optimizing would blank the other's pages).
+  const runCache = String(process.env.MAGNUSIM_E2E_VITE_CACHE_DIR || '').trim();
+  const cacheDir = viteCacheDir || (runCache ? join(runCache, name) : null);
+  const config = cacheDir ? privateCacheConfig(webRoot, cacheDir) : null;
   const vite = join(webRoot, 'node_modules', 'vite', 'bin', 'vite.js');
 
   let child = null;

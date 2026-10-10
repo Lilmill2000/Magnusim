@@ -329,7 +329,7 @@ describe('the geometry panel and the report', () => {
       outOfDate: { meshes: [], runs: 0 },
       seconds: 2,
     } as LinkResult;
-    const none = { movedFar: [], split: [], merged: [], stale: [] };
+    const none = { movedFar: [], split: [], merged: [], stale: [], inside: [] };
     expect([linkTouchesSetup(base, none), linkNeedsAction(base, none), linkQuietText(base, none)]).toEqual([false, false, '']);
     const meshes = { ...base, outOfDate: { meshes: [{ studyId: 's1', studyTitle: 'Study 1', meshId: 'm1', meshName: 'Mesh 1' }], runs: 0 } } as LinkResult;
     expect(linkTouchesSetup(meshes, none)).toBe(false);

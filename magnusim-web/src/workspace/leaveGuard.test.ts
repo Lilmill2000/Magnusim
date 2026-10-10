@@ -250,6 +250,16 @@ describe('the leave question', () => {
     );
   });
 
+  it('a write still on its way (no page message) says what leaving stops, and no "discards them"', async () => {
+    const { UPLOAD_OPEN } = await import('./bridge');
+    setWorkspaceDirty(true, UPLOAD_OPEN);
+    await confirmLeaveWorkspace('back');
+    expect(confirm.mock.lastCall?.[0]).toMatchObject({
+      title: 'Leave now?',
+      copy: 'Workspace demo: It is still writing a file in its own folder of the project. Leaving stops that write; nothing else in the project changes.',
+    });
+  });
+
   it('reads right whether or not the page message ends like a sentence', async () => {
     const copies = async (message: string): Promise<[string, string]> => {
       setWorkspaceDirty(true, message);

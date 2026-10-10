@@ -34,6 +34,14 @@
  * geometry with a journal no live job owns is fenced until the recovery, which runs
  * first in line on the compute slot (runFirst), finishes or undoes it.
  *
+ * The adoption (host API 1.7): the first link of a study that edits a plain project
+ * geometry (its host-owned `edits_geometry`) is an update of THAT geometry from a rev 0
+ * of its own (geometry.link_check answers it with `adopt`). The call checks the page's
+ * `original_names` against the geometry's face table and writes <staging>/old_named.json
+ * (geometry.adopt_names), the table the face map starts from; the swap keeps the
+ * geometry's source files in <geometry>/link/original/ (journaled like every move), and
+ * the apply makes it a linked geometry. "Save as new" leaves it as it was.
+ *
  * Everything shared lives on globalThis (the study locks, the live jobs, the recovery
  * list), so a Vite re-import of this module shares it. Records and events are in
  * link-store.js. Test switches (inert when unset, read once when this module loads):
@@ -332,6 +340,47 @@ function stillLinked(projectId, geometryId) {
   return !!dir && existsSync(join(dir, 'link', 'state.json')) && !existsSync(join(dir, 'link', 'unlinked.json')) && !existsSync(join(dir, 'link', 'pending.json'));
 }
 
+/**
+ * An adoption's geometry is still the plain one it was (API 1.7): there, not removed, and no
+ * link has taken it over meanwhile.
+ * @param {string} projectId @param {string} geometryId
+ */
+function stillAdoptable(projectId, geometryId) {
+  const dir = geometryDirOf(projectId, geometryId);
+  return !!dir && !existsSync(join(dir, 'link', 'state.json')) && !existsSync(join(dir, 'link', 'pending.json'));
+}
+
+/** The geometry is what its job expects: still linked to the study, or (an adoption) still plain. @param {any} rec */
+function stillTarget(rec) {
+  return rec && rec.adopt ? stillAdoptable(rec.project_id, rec.geometry_id) : stillLinked(rec.project_id, rec.geometry_id);
+}
+
+/**
+ * An adoption job whose geometry an earlier link of the SAME study took over meanwhile (a
+ * second Back while the first adoption ran): the geometry is that study's linked one now.
+ * @param {any} rec @param {string | null} dir
+ */
+function adoptedBySameStudy(rec, dir) {
+  if (!rec || !rec.adopt || !dir || !linkStateOf(dir) || existsSync(join(dir, 'link', 'unlinked.json'))) return false;
+  const src = (readJson(join(dir, 'id.json')) || {}).source || {};
+  return src.type === 'plugin_study' && src.plugin === rec.plugin && src.study_id === rec.study_id;
+}
+
+/** Such a job goes on as an ordinary update of the study's linked geometry (no original's table). @param {any} rec */
+function asOrdinaryUpdate(rec) {
+  updateLinkRecord(rec.id, { adopt: false, adopt_unverified: null });
+  rmQuiet(join(stagingDirOf(rec.project_id, rec.id), 'old_named.json'));
+  return readLinkRecord(rec.id) || { ...rec, adopt: false };
+}
+
+/** The geometry is (or becomes, by this link) one a study edits after a geometry action: its own name rules. @param {any} geom */
+function editsGeometry(geom) {
+  return !!(geom && (geom.adopt || (geom.state && geom.state.adopted && typeof geom.state.adopted === 'object')));
+}
+
+/** The state an adoption starts from: rev 0 of the plain geometry (no link/state.json yet). */
+const ADOPT_STATE = Object.freeze({ rev: 0, source_version: -1, shape_sha256: '', names_sha256: null, names_file_sha256: null });
+
 /** @param {string} dir */
 function rmQuiet(dir) {
   try {
@@ -434,6 +483,7 @@ export function linkJobOf(rec) {
     geometryName: rec.geometry_name || null,
     oldGeometryId: rec.old_geometry_id || null,
     oldGeometryName: rec.old_geometry_name || null,
+    studyTitle: rec.study_title || null,
     copies: Array.isArray(rec.copies) ? rec.copies : null,
     setup: rec.setup || null,
     seq: Number(rec.seq) || 0,
@@ -450,7 +500,7 @@ export function linkJobOf(rec) {
 function setupOf(rep) {
   const s = (rep && rep.setup) || {};
   const list = (/** @type {any} */ v) => (Array.isArray(v) ? v : []);
-  return { movedFar: list(s.moved_far), split: list(s.split), merged: list(s.merged), stale: list(rep && rep.stale) };
+  return { movedFar: list(s.moved_far), split: list(s.split), merged: list(s.merged), stale: list(rep && rep.stale), inside: list(s.inside) };
 }
 
 /** @param {string} id @param {string} stage @param {string} [label] @param {number | null} [fraction] */
@@ -513,6 +563,9 @@ function linkResult(r) {
     claimedTwice: Array.isArray(rep.claimed_twice) ? rep.claimed_twice : [],
     outOfDate: { meshes: Array.isArray(out.meshes) ? out.meshes : [], runs: Number(out.runs) || 0 },
     seconds: Number(r.seconds) || 0,
+    // API 1.7: this update took over the plain geometry the study edits, and how many of the
+    // original's names did not match their face (dropped: those faces followed by shape).
+    ...(r.adopted ? { adopted: true, unverified: Number(r.unverified) || 0 } : {}),
   };
 }
 
@@ -531,7 +584,8 @@ async function writeFaceMap(dir, stage, sameShape) {
       return null;
     }
   };
-  const live = (await read(join(dir, 'cad_preview.json'))) || {};
+  // An adoption (API 1.7) maps from the original's face table with the page's names on it.
+  const live = (await read(join(stage, 'old_named.json'))) || (await read(join(dir, 'cad_preview.json'))) || {};
   const staged = join(stage, 'new', 'cad_preview.json');
   const next = (await read(staged)) || {};
   let doc;
@@ -552,7 +606,7 @@ async function writeFaceMap(dir, stage, sameShape) {
 /**
  * @typedef {{ rel: string, sha256: string | null, etag: string | null }} LinkFileIn
  * @typedef {{ projectId: string, plugin: string, studyId: string, shape: LinkFileIn & { format: string },
- *   faceNames: LinkFileIn | null, sourceVersion: number, basedOnRev: number | null, name: string }} LinkCall
+ *   faceNames: LinkFileIn | null, originalNames: LinkFileIn | null, sourceVersion: number, basedOnRev: number | null, name: string }} LinkCall
  */
 
 /** @param {any} f @param {string} what */
@@ -590,6 +644,8 @@ export function linkCallOf(body) {
     });
   }
   const faceNames = body.face_names === null || body.face_names === undefined ? null : fileIn(body.face_names, 'face_names');
+  // API 1.7: the original's face names, read only by the link that adopts a geometry.
+  const originalNames = body.original_names === null || body.original_names === undefined ? null : fileIn(body.original_names, 'original_names');
   const sv = body.source_version;
   if (typeof sv !== 'number' || !Number.isSafeInteger(sv) || sv < 0) throw new LinkJobError(400, 'bad_request', 'source_version must be a whole number');
   const based = body.based_on_rev;
@@ -599,7 +655,7 @@ export function linkCallOf(body) {
   // eslint-disable-next-line no-control-regex
   const name = String(body.name === null || body.name === undefined ? '' : body.name).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '').trim();
   if (name.length > 120) throw new LinkJobError(400, 'bad_request', 'name is longer than 120 characters');
-  return { projectId, plugin, studyId, shape: { ...shape, format }, faceNames, sourceVersion: sv, basedOnRev: based === null || based === undefined ? null : based, name };
+  return { projectId, plugin, studyId, shape: { ...shape, format }, faceNames, originalNames, sourceVersion: sv, basedOnRev: based === null || based === undefined ? null : based, name };
 }
 
 /** R3 at the call and under the slot: may this design land on that state? */
@@ -656,8 +712,11 @@ export async function acceptLink(c) {
   if (!study.available) throw new LinkJobError(404, 'plugin_off', 'This plugin is not on');
   if (study.read_only) throw new LinkJobError(409, 'read_only', 'This study was saved by a newer version of the plugin');
   if (!check.links_geometry) throw new LinkJobError(403, 'not_allowed', "This study's kind does not link a geometry (links_geometry)");
+  // API 1.7: the geometry this study edits was taken over by another study meanwhile.
+  if (check.adopt_refused) throw new LinkJobError(409, 'adopted', String(check.adopt_refused.error || 'The geometry is already edited in another study.'));
   const geom = check.geometry || null;
   const state = geom ? geom.state : null;
+  const originals = geom && geom.adopt ? c.originalNames : null;
   // A queued job and a question waiting for its answer (5.0) follow the same rules.
   const queuedNow = studyRecords(c.projectId, c.plugin, c.studyId, ['queued', 'choosing']);
   // 2. The accept rule before any copy (it is applied again after the copy).
@@ -674,7 +733,7 @@ export async function acceptLink(c) {
   const files = d.files;
   if (!files) throw new LinkJobError(503, 'unavailable', 'The app could not check the link right now');
   let sizes = 0;
-  for (const f of [c.shape, c.faceNames]) {
+  for (const f of [c.shape, c.faceNames, originals]) {
     if (!f) continue;
     const info = await files.stat(c.projectId, c.plugin, f.rel);
     if (info) sizes += Number(info.size) || 0;
@@ -698,6 +757,7 @@ export async function acceptLink(c) {
       [
         { name: 'shape', rel: c.shape.rel, sha256: c.shape.sha256, etag: c.shape.etag },
         ...(c.faceNames ? [{ name: 'face_names', rel: c.faceNames.rel, sha256: c.faceNames.sha256, etag: c.faceNames.etag }] : []),
+        ...(originals ? [{ name: 'original_names', rel: originals.rel, sha256: originals.sha256, etag: originals.etag }] : []),
       ],
       join(stage, 'in'),
     );
@@ -743,11 +803,14 @@ async function questionFor(c, geom, study) {
   if (!use || use.ok !== true || !Array.isArray(use.studies) || !use.studies.length) return null;
   const dir = geometryDirOf(c.projectId, geom.id);
   const fenced = !!dir && geometryFenced(dir);
-  const nv = await call('geometry.next_version', { project_id: c.projectId, plugin: c.plugin, study_id: c.studyId, base: c.name || study.title });
+  // A study that edits a project geometry (API 1.7) asks about the geometry, by its name.
+  const edits = editsGeometry(geom);
+  const nv = await call('geometry.next_version', { project_id: c.projectId, plugin: c.plugin, study_id: c.studyId, base: edits ? geom.name : c.name || study.title, adopt: !!geom.adopt });
   const unknown = Array.isArray(use.unknown) ? use.unknown : [];
   const blocked = unknown.length ? pluginNeeded(unknown, geom.name, study.title) : null;
   return {
     geometry: { id: geom.id, name: geom.name },
+    ...(edits ? { edits: true } : {}),
     study: { id: c.studyId, title: study.title },
     new_name: String((nv && nv.name) || `${study.title} v2`),
     studies: use.studies.map((/** @type {any} */ st) => {
@@ -774,10 +837,26 @@ async function afterSnapshot(c, s) {
   const study = s.check.study;
   let geom = s.check.geometry || null;
   let state = geom ? geom.state : null;
+  const adopt = !!(geom && geom.adopt);
+  // originalNames rows whose fingerprint did not match their host face (their names dropped).
+  let adoptUnverified = 0;
   const active = () => studyRecords(c.projectId, c.plugin, c.studyId, ['queued', 'running']);
+  // API 1.7, an adoption: the page's original names checked against the geometry's face
+  // table now (a bad file is refused before the user is asked anything), and the named
+  // table the face map starts from written into staging.
+  if (adopt) {
+    const named = await call('geometry.adopt_names', { project_id: c.projectId, geometry_id: geom.id, staging_rel: stagingRelOf(s.jobId) });
+    if (!named || named.ok !== true) {
+      const code = String((named && named.code) || 'failed');
+      if (code === 'gone') throw new LinkJobError(404, 'gone', LINK_TEXT.removed);
+      const extra = code === 'not_ready' ? { retryAfter: 3 } : {};
+      throw new LinkJobError(code === 'bad_face_names' ? 400 : 503, code, String((named && named.error) || 'The app could not read the geometry'), extra);
+    }
+    adoptUnverified = Number(named.unverified) || 0;
+  }
   // 5. `none` at the call: nothing of this study queued or running, no journal, no
   // pending recovery, and the bytes the committed design's.
-  if (geom && !active().length && !geom.journal && !L().pending.has(pendingKey(c.projectId, geom.id)) && sameBytes(state, s.shapeSha, s.namesSha)) {
+  if (geom && !adopt && !active().length && !geom.journal && !L().pending.has(pendingKey(c.projectId, geom.id)) && sameBytes(state, s.shapeSha, s.namesSha)) {
     const answer = await call('geometry.record_source', { project_id: c.projectId, geometry_id: geom.id, source_version: c.sourceVersion });
     if (answer && answer.ok) {
       rmQuiet(s.stage);
@@ -828,7 +907,8 @@ async function afterSnapshot(c, s) {
   for (const q of queued) supersede(q);
   const op = geom ? 'update' : 'create';
   const geometryId = geom ? geom.id : `geom-${s.jobId.slice(-6)}${Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0')}`;
-  const name = c.name || study.title;
+  // An edited project geometry (API 1.7) keeps its own name, and "Save as new" names its copy after it.
+  const name = editsGeometry(geom) ? String(geom.name) : c.name || study.title;
   const geometryName = geom ? geom.name : name;
   writeJsonAtomic(join(s.stage, 'job.json'), {
     job: s.jobId,
@@ -845,6 +925,7 @@ async function afterSnapshot(c, s) {
     shape_sha256: s.shapeSha,
     names_file_sha256: s.namesSha,
     format: c.shape.format,
+    ...(adopt ? { adopt: true } : {}),
   });
   const rowName = LINK_TEXT.rowName(geometryName, study.title);
   const rec = createLinkRecord({
@@ -864,6 +945,7 @@ async function afterSnapshot(c, s) {
     names_file_sha256: s.namesSha,
     staging: stagingRelOf(s.jobId),
     row_name: rowName,
+    ...(adopt ? { adopt: true, adopt_unverified: adoptUnverified } : {}),
     ...(question ? { status: 'choosing', choosing: question } : {}),
   });
   if (question) {
@@ -973,7 +1055,7 @@ export async function chooseLink(body) {
     if (adding) throw new LinkJobError(409, 'busy', LINK_TEXT.adding(String(adding.geometry_name || adding.name || 'the new geometry')));
     // The geometry asked about is no longer this study's linked one (a "Save as new"
     // moved the link, or it was removed): the question is moot.
-    if (!stillLinked(rec.project_id, rec.geometry_id)) {
+    if (!stillTarget(rec)) {
       const error = LINK_TEXT.notLinked(rec.geometry_name, rec.study_title);
       finish(rec.id, 'stale', { error, code: 'stale' });
       rmQuiet(stagingDirOf(rec.project_id, rec.id));
@@ -1194,10 +1276,15 @@ async function runUpdate(id, live) {
     dir = geometryDirOf(rec.project_id, rec.geometry_id);
     if (!dir) return ended('gone', { error: LINK_TEXT.removed, code: 'gone' });
   }
-  let state = linkStateOf(dir);
+  // An adoption (API 1.7) starts from rev 0 of the plain geometry. One an earlier link of
+  // the same study took over meanwhile goes on as an ordinary update; one another study took
+  // over is moot.
+  if (adoptedBySameStudy(rec, dir)) rec = asOrdinaryUpdate(rec);
+  let state = rec.adopt ? (linkStateOf(dir) ? null : { ...ADOPT_STATE }) : linkStateOf(dir);
+  if (!state && rec.adopt) return ended('stale', { error: LINK_TEXT.notLinked(rec.geometry_name, rec.study_title), code: 'stale' });
   if (!state) return ended('gone', { error: LINK_TEXT.removed, code: 'gone' });
   // "Save as new" moved the link meanwhile: the overwrite of the old geometry is moot.
-  if (!stillLinked(rec.project_id, rec.geometry_id)) return ended('stale', { error: LINK_TEXT.notLinked(rec.geometry_name, rec.study_title), code: 'stale' });
+  if (!stillTarget(rec)) return ended('stale', { error: LINK_TEXT.notLinked(rec.geometry_name, rec.study_title), code: 'stale' });
   // Equal bytes first, then R3 (a job queued behind another of the study may be stale now).
   const none = async () => {
     const answer = await call('geometry.record_source', { project_id: rec.project_id, geometry_id: rec.geometry_id, source_version: rec.source_version });
@@ -1215,15 +1302,32 @@ async function runUpdate(id, live) {
   const preview = await runPreviewOf(rec, live);
   if (live.aborted || !geometryDirOf(rec.project_id, rec.geometry_id)) return ended('gone', { error: LINK_TEXT.removed, code: 'gone' });
   if (!preview.ok) return ended('failed', { error: preview.error, code: preview.code });
-  state = linkStateOf(dir) || state;
-  const sameShape = rec.shape_sha256 === state.shape_sha256;
-  if (sameShape && (preview.report.names_sha256 || null) === (state.names_sha256 || null)) return none();
-  // Name the faces and match them to the live ones.
-  setStage(id, 'matching');
-  await writeFaceMap(dir, stagingDirOf(rec.project_id, rec.id), sameShape);
-  // The commit.
-  rec = readLinkRecord(id) || rec;
-  const committed = await commitUpdate(rec, live, dir, Number(state.rev) || 0, sameShape);
+  /** @type {any} */
+  let committed;
+  for (let pass = 0; ; pass += 1) {
+    if (adoptedBySameStudy(rec, dir)) {
+      rec = asOrdinaryUpdate(rec);
+      state = linkStateOf(dir) || state;
+      if (!accepted(rec.source_version, rec.based_on_rev, state)) return ended('stale', { error: LINK_TEXT.stale(rec.study_title), code: 'stale' });
+    }
+    state = rec.adopt ? state : linkStateOf(dir) || state;
+    const sameShape = rec.shape_sha256 === state.shape_sha256;
+    if (rec.adopt && !existsSync(join(stagingDirOf(rec.project_id, rec.id), 'old_named.json'))) {
+      const named = await call('geometry.adopt_names', { project_id: rec.project_id, geometry_id: rec.geometry_id, staging_rel: stagingRelOf(rec.id) });
+      if (!named || named.ok !== true) return ended('failed', { error: String((named && named.error) || 'The geometry could not be read'), code: String((named && named.code) || 'failed') });
+      updateLinkRecord(id, { adopt_unverified: Number(named.unverified) || 0 });
+    }
+    if (sameShape && (preview.report.names_sha256 || null) === (state.names_sha256 || null)) return none();
+    // Name the faces and match them to the live ones.
+    setStage(id, 'matching');
+    await writeFaceMap(dir, stagingDirOf(rec.project_id, rec.id), sameShape);
+    // The commit.
+    rec = readLinkRecord(id) || rec;
+    committed = await commitUpdate(rec, live, dir, Number(state.rev) || 0, sameShape);
+    // The same study's earlier link took the geometry over while this one waited: once more, as an update.
+    if (!committed.ok && committed.convert && pass === 0) continue;
+    break;
+  }
   if (!committed.ok) {
     if (committed.keepStaging) {
       finish(id, committed.status, { error: committed.error, code: committed.code });
@@ -1243,6 +1347,8 @@ async function runUpdate(id, live) {
     named: preview.report.named,
     report: committed.report,
     seconds: (L().deps.now() - t0) / 1000,
+    adopted: !!rec.adopt,
+    unverified: rec.adopt_unverified,
   });
   updateLinkRecord(id, { result, setup: setupOf(committed.report) });
   // The follow-ups, still inside the slot (stage finishing); then the record ends.
@@ -1263,16 +1369,28 @@ function movesFor(change) {
  * On the first error every rename made so far is undone in reverse and the journal
  * goes: the folder is whole at the old rev. Returns {ok} | {ok:false, held} |
  * {ok:false, undoFailed} (the journal stays at swap: fenced).
- * @param {{ projectDir: string, geomDir: string, stage: string, job: string, fromRev: number, rev: number, change: string }} o
+ *
+ * An adoption (`adopt`, API 1.7) keeps the plain geometry's source files (its STEP, its
+ * sidecar and the file the user imported, original.*) in <geometry>/link/original/
+ * instead of staging: they stay, as the original, after the commit.
+ * @param {{ projectDir: string, geomDir: string, stage: string, job: string, fromRev: number, rev: number, change: string, adopt?: boolean }} o
  */
 export function swapOnce(o) {
   const plan = movesFor(o.change);
   const rel = (/** @type {string} */ p) => relative(o.projectDir, p).replace(/\\/g, '/');
   /** @type {Array<{ from: string, to: string }>} */
   const moves = [];
+  const keep = join(o.geomDir, 'link', 'original');
+  const kept = new Set(o.adopt ? ['source.step', 'source.bbrep'] : []);
+  if (o.adopt && o.change !== 'names') {
+    mkdirSync(keep, { recursive: true });
+    for (const name of readdirSync(o.geomDir)) {
+      if (/^original\.[A-Za-z0-9]{1,8}$/.test(name) && statSync(join(o.geomDir, name)).isFile()) moves.push({ from: join(o.geomDir, name), to: join(keep, name) });
+    }
+  }
   for (const name of plan.out) {
     const live = join(o.geomDir, name);
-    if (existsSync(live)) moves.push({ from: live, to: join(o.stage, 'old', name) });
+    if (existsSync(live)) moves.push({ from: live, to: kept.has(name) ? join(keep, name) : join(o.stage, 'old', name) });
   }
   for (const name of plan.in) {
     const staged = join(o.stage, 'new', name);
@@ -1351,7 +1469,7 @@ function waitStep(attempt) {
  * Plan, swap and apply, with the project's gate closed from the plan to the end of the
  * apply. Waits (stage `waiting`) while open requests or another program's handles stop
  * it, up to 10 minutes.
- * @returns {Promise<{ ok: boolean, change?: string, fromRev?: number, report?: any, status?: string, code?: string, error?: string, keepStaging?: boolean }>}
+ * @returns {Promise<{ ok: boolean, change?: string, fromRev?: number, report?: any, status?: string, code?: string, error?: string, keepStaging?: boolean, convert?: boolean }>}
  */
 async function commitUpdate(/** @type {any} */ rec, /** @type {LiveJob} */ live, /** @type {string} */ dir, /** @type {number} */ fromRev, /** @type {boolean} */ sameShape) {
   const d = L().deps;
@@ -1362,9 +1480,11 @@ async function commitUpdate(/** @type {any} */ rec, /** @type {LiveJob} */ live,
   for (let attempt = 0; ; attempt += 1) {
     // 1. The geometry and its project are still there; R3 again.
     if (live.aborted || !geometryDirOf(rec.project_id, rec.geometry_id)) return { ok: false, status: 'gone', code: 'gone', error: LINK_TEXT.removed };
-    const st = linkStateOf(dir);
+    if (adoptedBySameStudy(rec, dir)) return { ok: false, convert: true, status: 'stale', code: 'stale', error: LINK_TEXT.stale(rec.study_title) };
+    const st = rec.adopt ? (linkStateOf(dir) ? null : { ...ADOPT_STATE }) : linkStateOf(dir);
+    if (!st && rec.adopt) return { ok: false, status: 'stale', code: 'stale', error: LINK_TEXT.notLinked(name, rec.study_title) };
     if (!st) return { ok: false, status: 'gone', code: 'gone', error: LINK_TEXT.removed };
-    if (!stillLinked(rec.project_id, rec.geometry_id)) return { ok: false, status: 'stale', code: 'stale', error: LINK_TEXT.notLinked(name, rec.study_title) };
+    if (!stillTarget(rec)) return { ok: false, status: 'stale', code: 'stale', error: LINK_TEXT.notLinked(name, rec.study_title) };
     if ((Number(st.rev) || 0) !== fromRev || !accepted(rec.source_version, rec.based_on_rev, st)) {
       return { ok: false, status: 'stale', code: 'stale', error: LINK_TEXT.stale(rec.study_title) };
     }
@@ -1390,6 +1510,7 @@ async function commitUpdate(/** @type {any} */ rec, /** @type {LiveJob} */ live,
           staging_rel: stagingRelOf(rec.id),
           from_rev: fromRev,
           same_shape: sameShape,
+          ...(rec.adopt ? { adopt: true } : {}),
         });
         if (!planned || !planned.ok) {
           open();
@@ -1405,7 +1526,7 @@ async function commitUpdate(/** @type {any} */ rec, /** @type {LiveJob} */ live,
         }
         // 4. Swap.
         live.phase = 'swap';
-        const swapped = swapOnce({ projectDir: pdir, geomDir: dir, stage, job: rec.id, fromRev, rev: Number(planned.rev), change: String(planned.change) });
+        const swapped = swapOnce({ projectDir: pdir, geomDir: dir, stage, job: rec.id, fromRev, rev: Number(planned.rev), change: String(planned.change), adopt: !!rec.adopt });
         if (!swapped.ok && swapped.undoFailed) {
           // 9. The undo failed: fenced until the job undoes it by what exists.
           open();
@@ -1568,10 +1689,12 @@ export function resumeQueuedCreates() {
 
 /** The project.json record of a linked geometry (refreshed by project.upsert_geometry). */
 function geometryRecord(/** @type {any} */ rec, /** @type {string} */ dir, /** @type {any} */ state, /** @type {any} */ source) {
+  // An adopted geometry (API 1.7) keeps the name of the file it was imported from.
+  const from = state.adopted && typeof state.adopted === 'object' ? state.adopted.from || {} : null;
   return {
     id: rec.geometry_id,
     name: state.name || rec.geometry_name,
-    original_filename: null,
+    original_filename: from ? from.file_name || null : null,
     original_path: null,
     source_kind: 'plugin',
     length_unit: null,
@@ -1583,7 +1706,7 @@ function geometryRecord(/** @type {any} */ rec, /** @type {string} */ dir, /** @
     n_faces: state.n_faces || null,
     body_offset: 0,
     imported_at: (source && source.linked_at) || state.synced_at || new Date().toISOString(),
-    note: `Linked from ${rec.study_title}.`,
+    note: from ? `Edited in ${rec.study_title}${from.file_name ? ` (from ${from.file_name})` : ''}.` : `Linked from ${rec.study_title}.`,
     source,
   };
 }
@@ -1618,7 +1741,7 @@ async function runCreate(id, live) {
   // Under the study lock: the geometry linked to this study now.
   const again = await call('geometry.link_check', { project_id: rec.project_id, plugin: rec.plugin, study_id: rec.study_id });
   const linkedNow = again && again.ok && again.geometry ? again.geometry : null;
-  if (linkedNow && !rec.save_as_new) {
+  if (linkedNow && !linkedNow.adopt && !rec.save_as_new) {
     // A first link racing another tab's: this one becomes an update of that geometry.
     const geom = linkedNow;
     const rowName = LINK_TEXT.rowName(geom.name, rec.study_title);
@@ -1641,7 +1764,7 @@ async function runCreate(id, live) {
   const oldState = oldDir ? linkStateOf(oldDir) : null;
   const oldName = String((old && old.name) || rec.old_geometry_name || '');
   // The version and the name ("<base> v<k>" from 2; k goes up past a name taken).
-  const nv = await call('geometry.next_version', { project_id: rec.project_id, plugin: rec.plugin, study_id: rec.study_id, base: rec.name });
+  const nv = await call('geometry.next_version', { project_id: rec.project_id, plugin: rec.plugin, study_id: rec.study_id, base: rec.name, adopt: !!rec.adopt });
   const version = Number(nv && nv.version) > 0 ? Number(nv.version) : 1;
   const gname = String((nv && nv.name) || rec.name);
   updateLinkRecord(id, { geometry_name: gname });
@@ -2274,7 +2397,8 @@ export function scanLinkJournals() {
 export async function linkedGeometryOf(projectId, plugin, studyId) {
   const check = checkAnswer(await call('geometry.link_check', { project_id: projectId, plugin, study_id: studyId }));
   const geom = check.geometry;
-  if (!geom) return null;
+  // Before its first link an editing study links nothing (API 1.7): its geometry is still plain.
+  if (!geom || geom.adopt) return null;
   const st = geom.state || {};
   const recs = studyRecords(projectId, plugin, studyId, ['queued', 'running']).filter((r) => r.op === 'update');
   const fenced = !!geom.journal && !(geom.journal.job && L().live.has(String(geom.journal.job)));
@@ -2290,7 +2414,16 @@ export async function linkedGeometryOf(projectId, plugin, studyId) {
     state,
     error: fenced ? LINK_TEXT.fenced(geom.name) : null,
     lostFaces: Number(geom.lost_faces) || 0,
+    // API 1.7: the geometry was a plain import before this study took it over, and its original.
+    adopted: !!(st.adopted && typeof st.adopted === 'object'),
+    original: st.adopted && typeof st.adopted === 'object' ? originalOf(st.adopted) : null,
   };
+}
+
+/** What an adopted geometry was imported from (its state's `adopted.from`). @param {any} adopted */
+function originalOf(adopted) {
+  const from = (adopted && adopted.from) || {};
+  return { fileName: from.file_name || null, format: String(from.format || ''), sha256: String(from.sha256 || '') };
 }
 
 /** The records of a study (newest first, 50 at most). */

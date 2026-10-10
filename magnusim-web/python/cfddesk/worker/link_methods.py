@@ -18,6 +18,15 @@ wholly before, between or after every Python save of study records (proposal 5.1
 - ``geometry.lost_list``: a geometry's link for its panel (source, last update, lost entries);
 - ``project.upsert_geometry``: adds or refreshes one geometry record in project.json.
 
+Editing a project geometry (API 1.7, ``cfddesk.project.geometry_actions``):
+
+- ``geometry_actions.open``: the study a geometry action opens (made the first time);
+- ``geometry.edit_target`` / ``geometry.source_path`` / ``geometry.faces_table``: the
+  geometry a study edits, its STEP file and its face table, for the workspace bridge;
+- ``geometry.adopt_names``: checks a first link's ``originalNames`` and writes the named
+  face table the adoption's face map starts from;
+- ``geometry.original_import``: an adopted geometry's original file, to import it again.
+
 A refusal is an answer, ``{ok: false, code, error, data?}``, not an RPC error.
 """
 
@@ -26,6 +35,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from cfddesk.project import geometry_actions as ga
 from cfddesk.project import link
 from cfddesk.registry import load_all
 from cfddesk.worker.paths import project_dir, web_root
@@ -137,6 +147,27 @@ def geometry_link_check(project_id: str = "", plugin: str = "", study_id: str = 
     if study is None:
         return {"ok": False, "code": "study_not_found", "error": "That study was removed"}
     kind = next((k for k in kinds if k["plugin"] == plugin and k["key"] == study.get("kind")), None)
+    linked = _geometry_row(root, link.find_linked(root, plugin, study_id))
+    adopt_refused = None
+    if linked is None:
+        # API 1.7: the study edits a plain project geometry (edits_geometry): its first link
+        # takes that geometry over (state rev 0), unless another study did meanwhile.
+        target = ga.adopt_target(root, plugin, study_id)
+        if target is not None and target["other"] is not None:
+            name = ga.display_name(target["geometry"], target["row"])
+            adopt_refused = {"code": "adopted", "error": f"{name} is already edited in {target['other']['title']}."}
+        elif target is not None:
+            geom = target["geometry"]
+            gdir = Path(geom["dir"])
+            linked = {
+                "id": str(geom.get("id") or ""),
+                "name": ga.display_name(geom, target["row"]),
+                "folder": gdir.name,
+                "state": ga.adopt_state(geom, target["row"]),
+                "journal": link.read_journal(gdir),
+                "lost_faces": 0,
+                "adopt": True,
+            }
     return {
         "ok": True,
         "study": {
@@ -149,7 +180,8 @@ def geometry_link_check(project_id: str = "", plugin: str = "", study_id: str = 
             "plugin_name": study.get("plugin_name") or plugin,
         },
         "links_geometry": bool(kind and kind.get("links_geometry")),
-        "geometry": _geometry_row(root, link.find_linked(root, plugin, study_id)),
+        "geometry": linked,
+        "adopt_refused": adopt_refused,
     }
 
 
@@ -181,13 +213,14 @@ def geometry_plan(
     studies: list[str] | None = None,
     rev: int | None = None,
     map_from: str = "",
+    adopt: bool = False,
 ) -> dict[str, Any]:
     root = _root(project_id, project_dir)
     try:
         return link.plan(
             root, geometry_id, staging_rel, int(from_rev), bool(same_shape), studies, rev,
             known=_known(), catalog=_catalog(), web_root=web_root(), schema_fields=_schema_fields(),
-            map_from=map_from or None,
+            map_from=map_from or None, adopt=bool(adopt),
         )
     except link.LinkError as exc:
         return _refusal(exc)
@@ -245,9 +278,12 @@ def geometry_usage(project_id: str = "", project_dir: str = "", geometry_id: str
 
 
 @rpc("geometry.next_version")
-def geometry_next_version(project_id: str = "", project_dir: str = "", plugin: str = "", study_id: str = "", base: str = "") -> dict[str, Any]:
+def geometry_next_version(
+    project_id: str = "", project_dir: str = "", plugin: str = "", study_id: str = "", base: str = "", adopt: bool = False
+) -> dict[str, Any]:
     root = _root(project_id, project_dir)
-    return {"ok": True, **link.next_version(root, plugin, study_id, str(base or "Geometry"))}
+    # "Save as new" of an adoption sits beside the geometry it started from: from v2.
+    return {"ok": True, **link.next_version(root, plugin, study_id, str(base or "Geometry"), 2 if adopt else 1)}
 
 
 @rpc("geometry.link_commit")
@@ -264,6 +300,65 @@ def geometry_link_commit(
         return link.link_commit(root, geometry_id, old_id or None, job_id, bool(stop_after_commit_point))
     except link.LinkError as exc:
         return _refusal(exc)
+
+
+# ---- editing a project geometry (API 1.7) ----------------------------------------------
+
+
+@rpc("geometry_actions.open")
+def geometry_actions_open(project_id: str = "", geometry_id: str = "", plugin: str = "", study_kind: str = "") -> dict[str, Any]:
+    from cfddesk.worker.methods import _plugin_study_catalog
+
+    root = _root(project_id)
+    studies, kinds = _plugin_study_catalog(root, str(project_id))
+    manifest = load_all(web_root=web_root()).manifests.get(str(plugin))
+    try:
+        return ga.open_action(root, str(geometry_id), str(plugin), str(study_kind), studies, kinds, manifest)
+    except ga.ActionError as exc:
+        return exc.answer()
+
+
+@rpc("geometry.edit_target")
+def geometry_edit_target(project_id: str = "", plugin: str = "", study_id: str = "") -> dict[str, Any]:
+    root = _root(project_id)
+    target = ga.edit_target(root, str(plugin), str(study_id))
+    return {"ok": True, "geometry": target["row"] if target else None}
+
+
+@rpc("geometry.source_path")
+def geometry_source_path(project_id: str = "", plugin: str = "", study_id: str = "") -> dict[str, Any]:
+    root = _root(project_id)
+    try:
+        return ga.source_info(root, str(plugin), str(study_id))
+    except ga.ActionError as exc:
+        return exc.answer()
+
+
+@rpc("geometry.faces_table")
+def geometry_faces_table(project_id: str = "", plugin: str = "", study_id: str = "") -> dict[str, Any]:
+    root = _root(project_id)
+    try:
+        return ga.faces_table(root, str(plugin), str(study_id), _schema_fields())
+    except ga.ActionError as exc:
+        return exc.answer()
+
+
+@rpc("geometry.adopt_names")
+def geometry_adopt_names(project_id: str = "", project_dir: str = "", geometry_id: str = "", staging_rel: str = "") -> dict[str, Any]:
+    root = _root(project_id, project_dir)
+    try:
+        return ga.adopt_names(root, str(geometry_id), str(staging_rel))
+    except link.LinkError as exc:
+        return _refusal(exc)
+
+
+@rpc("geometry.original_import")
+def geometry_original_import(project_id: str = "", geometry_id: str = "") -> dict[str, Any]:
+    root = _root(project_id)
+    try:
+        return ga.original_import(root, str(geometry_id))
+    except ga.ActionError as exc:
+        return exc.answer()
 
 
 @rpc("geometry.barrier")

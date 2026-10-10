@@ -311,7 +311,7 @@ describe('exit-sync fixes: the report of a link the page makes while it stays op
     }) as unknown as typeof window.__CFD_CONFIRM__;
     const t = await openConnected();
     const base = { geometryId: 'g1', name: 'Demo 1', rev: 2, change: 'shape', lost: [], returned: [], claimedTwice: [], match: { byName: 21, byShape: 0, split: 0, merged: 0, movedFar: 6 } };
-    const none = { movedFar: [], split: [], merged: [], stale: [] };
+    const none = { movedFar: [], split: [], merged: [], stale: [], inside: [] };
     const linkOnce = async (seq: number, result: Record<string, unknown>, setup: Record<string, unknown>) => {
       const linked = t.send('project.linkGeometry', { shape: { rel: 'studies/st-1/design/shape.bbrep', format: 'brep', sha256: SHA_HEX }, sourceVersion: seq, basedOnRev: 1, token: `tk${seq}` });
       const es = await waitFor(() => {

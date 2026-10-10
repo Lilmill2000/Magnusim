@@ -37,6 +37,10 @@ export async function linkHarness(opts = {}) {
   if ((opts.plugins || []).includes('bc-demo')) {
     cpSync(join(WEB, 'python', 'tests', 'fixtures', 'link-plugins', 'bc-demo'), join(plugins, 'bc-demo'), { recursive: true });
   }
+  // A plugin that edits a project geometry (host API 1.7, [[geometry_actions]]).
+  if ((opts.plugins || []).includes('edit-demo')) {
+    cpSync(join(WEB, 'python', 'tests', 'fixtures', 'edit-plugins', 'edit-demo'), join(plugins, 'edit-demo'), { recursive: true });
+  }
   // A second plugin with the same kind title (its own key): two plugins' studies never meet.
   if ((opts.plugins || []).includes('link-demo-2')) {
     cpSync(join(plugins, 'link-demo'), join(plugins, 'link-demo-2'), { recursive: true });

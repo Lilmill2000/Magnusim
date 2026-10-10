@@ -79,6 +79,8 @@ async function domOf(locator, skip = '') {
         // Generated ids (mesh-…, sim-…, run-…, st-…) differ run to run.
         .replace(/\b(?:mesh|sim|run|st|geom|mat|bc|rc)-[a-z0-9-]{4,}/gi, '<id>')
         .replace(/\b(run|mesh):[^/\s"]+/g, '$1:<id>')
+        // A process id is a number however long (a 6-digit PID would also pass for a hex id below).
+        .replace(/\bPID \d+/g, 'PID #')
         // Bare hex run ids (not colors: those follow '#').
         .replace(/(?<!#)\b[0-9a-f]{6,}\b/gi, '<id>')
         .replace(/-?\d+(?:[.,]\d+)*(?:e[-+]?\d+)?/gi, '#')
@@ -91,6 +93,9 @@ async function domOf(locator, skip = '') {
       const attrs = [...el.attributes]
         // An emptied inline style (left by focus handling) is no style.
         .filter((a) => !(a.name === 'style' && !a.value.trim()))
+        // Host API 1.7 (Edit in CAD): a geometry's tree row and its body rows take the keyboard focus
+        // for their right-click menu (Shift+F10, the menu key), added after v0.2.0: left out.
+        .filter((a) => !(a.name === 'tabindex' && el.matches('[data-w16-geom] > .tree-row, [data-w16-body] > .tree-row')))
         // Run and study ids are random: only their presence is compared.
         .map((a) => `${a.name}="${/(^|-)id$|^data-w27-run/.test(a.name) ? '<id>' : mask(a.value)}"`)
         .sort()

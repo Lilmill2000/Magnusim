@@ -1,7 +1,7 @@
 key = "my-workspace"
 name = "My workspace"
 version = "0.1.0"
-api_version = "1.6"
+api_version = "1.7"
 license = "GPL-3.0-or-later"
 description = "A plugin with its own full workspace: copy this folder to start one"
 authors = "Your Name"
@@ -34,3 +34,14 @@ schema_version = 1
 # places = ["empty_project", "header", "new_project", "home"]
 # home_label = "New sketch"
 # header_label = "Sketch"
+
+# Host 1.7 and later: "Edit in Sketch" on a project geometry (a STEP, IGES or BREP
+# import), in the tree's and the viewport's right-click menus and the Geometry panel.
+# It needs links_geometry = true above (authoring.md, "Editing a project geometry (1.7)").
+# Remove the "# " to add it.
+# [[geometry_actions]]
+# study_kind = "sketch"
+# label = "Edit in Sketch"
+# hint = "Open this part here. Back updates it in the project."
+# formats = ["step", "iges", "brep"]
+# places = ["tree", "viewport", "panel"]

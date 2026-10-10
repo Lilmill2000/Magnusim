@@ -40,8 +40,10 @@ async function open(
         .then(() => reply(got.method, got.params))
         .then(
           (result) => port.onmessage?.({ data: { id: got.id, result } }),
-          (err: { message?: string; code?: string }) =>
-            port.onmessage?.({ data: { id: got.id, error: { message: err.message, code: err.code } } }),
+          (err: { message?: string; code?: string; retryAfter?: number }) =>
+            port.onmessage?.({
+              data: { id: got.id, error: { message: err.message, code: err.code, ...(err.retryAfter ? { retryAfter: err.retryAfter } : {}) } },
+            }),
         );
     },
   };
@@ -89,7 +91,7 @@ describe('ws.files: writing', () => {
   it("sends an ArrayBuffer in chunks it hands over, leaving the caller's buffer as it was", async () => {
     const { ws, posts, hello } = await open(uploads());
     expect(hello).toHaveBeenCalledWith({ magnusim: 'hello', sdkVersion: SDK_VERSION, instance: expect.any(String) }, '*');
-    expect(SDK_VERSION).toBe('1.3.0');
+    expect(SDK_VERSION).toBe('1.4.0');
     const data = new Uint8Array(40 * MiB);
     data[0] = 1;
     data[16 * MiB] = 2;
@@ -595,5 +597,71 @@ describe('ws.nav.onLeave (host 1.6, gate:l3-guard)', () => {
     await vi.waitFor(() => expect(methods(posts)).toContain('nav.leaveDone'));
     expect(handler).not.toHaveBeenCalled();
     await expect(ws.nav.onLeave('nope' as never)).rejects.toThrow(TypeError);
+  });
+});
+
+describe('ws.project.geometrySource and geometryFaces (host 1.7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reads the file as a File with its name, hands the host a token, and gives the page its progress', async () => {
+    const blob = new Blob([new Uint8Array([1, 2, 3, 4])]);
+    let pushProgress: ((msg: Record<string, unknown>) => void) | null = null;
+    const { ws, posts, push } = await open(async (method, params) => {
+      if (method !== 'project.geometrySource') return undefined;
+      pushProgress?.({ event: 'sourceProgress', data: { token: params.token, done: 2, total: 4 } });
+      pushProgress?.({ event: 'sourceProgress', data: { token: 'someone-else', done: 9, total: 9 } });
+      return { geometryId: 'g1', blob, fileName: 'box.step', format: 'step', size: 4, sha256: SHA, adopted: false };
+    });
+    pushProgress = push;
+    const seen: Array<[number, number]> = [];
+    const src = await ws.project.geometrySource({ onProgress: (done, total) => seen.push([done, total]) });
+    expect(src.file).toBeInstanceOf(File);
+    expect(src.file.name).toBe('box.step');
+    expect(new Uint8Array(await src.file.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(src).toMatchObject({ geometryId: 'g1', format: 'step', size: 4, sha256: SHA, adopted: false });
+    expect(posts[0].method).toBe('project.geometrySource');
+    expect(posts[0].params).toMatchObject({ formats: ['step'] });
+    expect(typeof posts[0].params.token).toBe('string');
+    expect(seen).toEqual([[2, 4]]);
+  });
+
+  it('a refusal keeps its code and retryAfter; an abort stops the host read and rejects at once', async () => {
+    const { ws, posts } = await open((method) => {
+      if (method === 'project.geometrySource') throw Object.assign(new Error('Magnusim is still storing box.'), { code: 'not_ready', retryAfter: 3 });
+      return { ok: true };
+    });
+    const err = (await ws.project.geometrySource().catch((e) => e)) as Error & { code?: string; retryAfter?: number };
+    expect(err.message).toBe('Magnusim is still storing box.');
+    expect(err.code).toBe('not_ready');
+    expect(err.retryAfter).toBe(3);
+    const ctl = new AbortController();
+    ctl.abort(new DOMException('stop', 'AbortError'));
+    await expect(ws.project.geometrySource({ signal: ctl.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    // Already aborted: nothing was asked of the host.
+    expect(posts.filter((p) => p.method === 'project.geometrySource')).toHaveLength(1);
+    const late = new AbortController();
+    const { ws: ws2, posts: posts2 } = await open((method) => (method === 'project.geometrySource' ? new Promise(() => undefined) : { ok: true }));
+    const p = ws2.project.geometrySource({ signal: late.signal });
+    late.abort();
+    await expect(p).rejects.toBeTruthy();
+    await vi.waitFor(() => expect(posts2.map((x) => x.method)).toContain('project.geometrySourceAbort'));
+    expect(posts2.find((x) => x.method === 'project.geometrySourceAbort')?.params.token).toBe(posts2[0].params.token);
+  });
+
+  it('geometryFaces answers the host; linkGeometry passes originalNames as given', async () => {
+    const table = { geometryId: 'g1', rev: 0, lengthUnit: 'mm', sourceSha256: SHA, bodies: [], faces: [] };
+    const { ws, posts } = await open((method) => (method === 'project.geometryFaces' ? table : method === 'project.linkGeometry' ? { change: 'shape' } : undefined));
+    expect(await ws.project.geometryFaces()).toEqual(table);
+    await ws.project.linkGeometry({
+      shape: { rel: 'studies/st-1/a.bbrep', format: 'brep', sha256: SHA },
+      originalNames: { rel: 'studies/st-1/original_names.json', sha256: SHA },
+      sourceVersion: 1,
+      basedOnRev: null,
+    });
+    expect(posts[1].params).toMatchObject({ originalNames: { rel: 'studies/st-1/original_names.json', sha256: SHA } });
+  });
+
+  it('the SDK says 1.4.0', () => {
+    expect(SDK_VERSION).toBe('1.4.0');
   });
 });

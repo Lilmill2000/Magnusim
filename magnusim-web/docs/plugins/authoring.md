@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Start with `npm run plugin:new -- <key> [--workspace|--analysis]` from `magnusim-web/` ([GUIDE.md](GUIDE.md), "Quick start"). It writes a plugin that passes `npm run plugin:check`, with its tests. `templates/plugin/` and `templates/plugin-workspace/` are what it is made from: read them as examples, do not copy them (their keys are not yours).
 
-## Manifest 1.6
+## Manifest 1.7
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.6"
+api_version = "1.7"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -511,6 +511,98 @@ document.getElementById('done')?.addEventListener('click', () => void ws.nav.bac
 - **One leave at a time.** During a leave, Back is disabled and `nav.back()` answers `false`, also from inside the handler.
 - **`setDirty` keeps its meaning,** "would be lost": a saved design that is not linked yet is not dirty.
 - **The camera** (`ViewState`, optional, from the hook's result or `linkGeometry`'s `view`; the last one wins) is model mm in the frame of your export, Z up like the app's viewport: `position`, `target`, `up`, `projection` (`perspective` with the vertical angle `fovDeg`, or `orthographic` with the full visible `height` in mm). The app's window has another width, so the sides crop differently. A view with a number that is not finite, the position on the target, or `up` along the view direction is dropped. It is applied when the user goes Back to the project (the header's or your `nav.back()`) and the part shows (stage geometry or setup), also when the hook linked nothing because the design did not change: the project then shows the study's geometry with that camera. After "Continue in background" only `linkGeometry`'s `view` can arrive (see "Long work").
+
+## Editing a project geometry (1.7)
+
+A study kind that links geometry can also **edit a geometry the user imported**: a STEP, IGES or BREP part. Declare a **geometry action** and the app offers it, the same way for every plugin, in three places: the right-click menu of the geometry (and its bodies) in the tree, the viewport's right-click on the part, and a button in the Geometry panel. "Edit in CAD" is the CAD plugin's.
+
+```toml test
+key = "part-editor"
+name = "Part editor"
+version = "0.1.0"
+api_version = "1.7"
+license = "GPL-3.0-or-later"
+description = "Edits imported parts"
+authors = "Your Name"
+
+[[workspaces]]
+key = "editor"
+title = "Part editor"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "part"
+title = "Part"
+workspace = "editor"
+links_geometry = true            # the edit goes back as a link
+
+[[geometry_actions]]
+study_kind = "part"              # required: a kind with a workspace and links_geometry = true
+label = "Edit in Part editor"    # required, 1-40 characters
+hint = "Open this part here. Back updates it in the project."   # optional, up to 120 characters
+formats = ["step", "iges", "brep"]                 # optional; the default is all three
+places = ["tree", "viewport", "panel"]             # optional; the default is all three
+```
+
+- **What a click does.** The app opens a study of your kind for that geometry, at its workspace's address: the study that links the geometry (after its first edit went back), else the newest study of your kind that edits it and links nothing yet, else a **new study named after the geometry** ("Vortex", then "Vortex (2)" when that name is taken). The app runs this on one lane, so two tabs never make two studies. The new study's record carries `edits_geometry: {id, name, at}`; it is the app's, and `study.update` cannot change it. Until its first edit goes back, the study is shown on the geometry's row ("Being edited in <study>", with Edit), not in STUDIES: nothing of the project changed yet. The app's question about a new shape names the geometry ("<Geometry> has a new shape"), and "Save as new" names the copy after it ("<Geometry> v2").
+- **When it is off.** The item is shown disabled with the reason under it: a mesh import ("<Geometry> is a mesh (STL); Edit in CAD needs a STEP, IGES or BREP part."), a source file that is missing, a geometry that is updating, one another plugin's study links ("<Geometry> comes from <Study> (<Plugin>). Edit it there."), or one taken over by a study that was deleted since (its original is kept: the reason says to add it as a new geometry and edit that). A plugin that is off shows nothing. `"mesh"` and a format or place this host does not know are left out with a warning on your plugin's Settings row; none left is an error. At most one action per kind.
+- **What your page gets.** `ws.context.geometry` is the geometry the study edits: `{id, name, format, fileName, linked, rev, bodies, faces}` (`linked` false until its first edit went back). `ws.context.launch` says what the user right-clicked in the viewport (`{face: "face 3@Body1", body: "Body1"}`), once, for the page load the action opened; a reload has none.
+- **Read the part.** `ws.project.geometrySource({signal, onProgress})` gives the geometry's file as a `File` (always STEP in 1.7: an IGES or BREP import comes as the STEP the app made of it, the one its faces were numbered from), with its `sha256`. `ws.project.geometryFaces()` gives the face table in the app's order (each face's `index`, `body`, `label`, area, centroid, normal, surface type, and `uses`: the boundary conditions, materials, refinements and monitors that use it), with `sourceSha256`.
+- **Send the edit back.** Link as in "Linking a geometry (1.5)". The **first** link of the study takes that geometry over (the same id; the app's question "Overwrite <Geometry>" first when a study has setup on it, "Save as new geometry" leaves it as it was). Pass `originalNames`: a face-name file of the ORIGINAL geometry, one row per face of `geometryFaces()` in its order, its `shape_sha256` that call's `sourceSha256`, each face named as your design names it now, **with the fingerprint of the face the row names**: its `centroid`, `area` and `normal` from `geometryFaces()` (mm). The app puts those names on the original's faces, so a boundary condition follows its face to the face of the same name in the new shape (then by shape). It checks each row's fingerprint against its face (the tolerances of the app's own face match): a row that names another face loses its name, so that face follows by shape only (a face that moved is then lost and listed, never put on the wrong face), and `LinkResult.unverified` counts such rows. When more than 20 % of the rows do not match, or the file does not describe the original, the link is refused at the call with `bad_face_names` ("originalNames: 3 of 6 faces don't match <Geometry>", "originalNames does not describe <Geometry>: <rule>"). A face with no name follows by shape only. Link only when the design changed: opening the page and going back changes nothing in the project. After the update the app says so: "<Geometry> updated from <Study>. The original file is kept: Geometry panel → Add the original as a new geometry."
+- **The original is kept.** The geometry's source files move to its `link/original/` folder. Later, `geometrySource()` serves that original (`adopted: true`), `linkedGeometry()` says `adopted` and `original`, and the Geometry panel offers "Add the original as a new geometry" (the original imported again beside it, as "<file> (original)").
+- **Refusals** (`.code`): `not_allowed` (the study edits no geometry), `gone`, `no_source` (a geometry a link made has no STEP, or the import's STEP is missing), `not_ready` (the geometry is updating, or the app has not read its faces yet: it reads them when the geometry is shown; try again after `.retryAfter` seconds), `adopted` (another study took the geometry over first), and `bad_face_names`.
+
+```ts test
+import { connect, type GeometryFaces } from '@magnusim/workspace';
+
+const ws = await connect();
+const g = ws.context.geometry;
+if (g && !g.linked) {
+  const read = async () => {
+    for (;;) {
+      try {
+        return await ws.project.geometrySource({ onProgress: (done, total) => console.log(done, '/', total) });
+      } catch (e) {
+        const err = e as { code?: string; retryAfter?: number };
+        if (err.code !== 'not_ready') throw e;
+        await new Promise((r) => setTimeout(r, (err.retryAfter || 3) * 1000));
+      }
+    }
+  };
+  const source = await read();
+  console.log(source.file.name, source.size, source.sha256);
+  const table: GeometryFaces = await ws.project.geometryFaces();
+  const launch = ws.context.launch;
+  if (launch?.face) console.log('select', launch.face, 'of', table.faces.length);
+  // ...import source.file, edit it, export the design (part.bbrep, face_names.json), then
+  // name the ORIGINAL's faces as the design names them now:
+  const sid = ws.context.study.id;
+  const originalNames = {
+    format: 'magnusim.face-names',
+    version: 1,
+    length_unit: 'mm',
+    shape_sha256: table.sourceSha256,
+    bodies: table.bodies.map((b) => ({ index: b.index, id: `b${b.index}`, name: `Part ${b.index}` })),
+    // Each row names a face of your design and carries THAT face's fingerprint, as geometryFaces()
+    // gave it for the face you matched it to (here every face kept its place).
+    faces: table.faces.map((f) => ({ index: f.index, body: f.body, name: `F:import:${f.index}`, centroid: f.centroid, area: f.area, normal: f.normal })),
+  };
+  const orig = await ws.files.write(`studies/${sid}/export/original_names.json`, JSON.stringify(originalNames));
+  const shape = await ws.files.write(`studies/${sid}/export/part.bbrep`, new Uint8Array([1, 2, 3]));
+  const study = await ws.study.get();
+  const sourceVersion = (Number(study.source_version) || 0) + 1;
+  await ws.study.update({ source_version: sourceVersion }, study.rev);
+  const r = await ws.project.linkGeometry({
+    shape: { rel: shape.rel, format: 'brep', sha256: shape.sha256 },
+    originalNames: { rel: orig.rel, sha256: orig.sha256 },
+    sourceVersion,
+    basedOnRev: null,
+  });
+  console.log(r.geometryId === g.id, r.rev, r.adopted, r.unverified);
+}
+```
+
+`python/tests/fixtures/edit-plugins/edit-demo/` is a complete example, driven by `e2e/geometry-actions.spec.js`.
 
 ## UI kit (1.3)
 

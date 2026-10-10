@@ -1,0 +1,30 @@
+key = "edit-demo"
+name = "Edit demo"
+version = "1.0.0"
+api_version = "1.7"
+license = "GPL-3.0-or-later"
+description = "Test plugin that edits a project geometry (host API 1.7): kind Demo links geometry and has a geometry action"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "demo"
+title = "Demo editor"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "demo"
+title = "Edit demo"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "demo"
+links_geometry = true
+
+[[geometry_actions]]
+study_kind = "demo"
+label = "Edit in Demo"
+hint = "Open this part in the Demo editor."
+formats = ["step", "iges", "brep"]
+places = ["tree", "viewport", "panel"]
+
+[files]
+max_file_mb = 64

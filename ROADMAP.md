@@ -23,14 +23,17 @@ September 2026 readiness audit. This list preserves the intended work.
   example an airfoil from the Airfoil plugin into a 2D wind tunnel), and the
   2D Wind Tunnel plugin itself.
 
-- **CAD plugin host calls, still to add (G5, G6, G9):** a CAD Part already
-  becomes its project's linked geometry, with its face names as patch names
-  (host API 1.5 and 1.6, `ws.project.linkGeometry` and the exit hook). To add:
-  a call that reads the project's geometries and an “Open in CAD” action on
-  geometry rows, so a geometry added as a STEP file can be edited in CAD and
-  join the same live link (G5, G6). Workspace files are read whole and sent
-  again on every open, and the CAD kernel is 22 MB: stream them, let the
-  browser revalidate them, and serve precompressed copies (G9).
+- **CAD plugin host calls, still to add (G9):** a CAD Part becomes its
+  project's linked geometry, with its face names as patch names (host API 1.5
+  and 1.6, `ws.project.linkGeometry` and the exit hook). G5 and G6 are done in
+  v0.3.0 as Edit in CAD (host API 1.7): a geometry added as a STEP, IGES or
+  BREP file has “Edit in CAD” on its tree row, in the viewport's right-click
+  menu and in the Geometry panel; the Part reads that geometry
+  (`ws.project.geometrySource`, `geometryFaces`), and its first update goes
+  back into it with its boundary conditions and joins the same live link.
+  To add: workspace files are read whole and sent again on every open, and
+  the CAD kernel is 22 MB: stream them, let the browser revalidate them, and
+  serve precompressed copies (G9).
 
 - **Mesher plugins with their own engine:** a mesher plugin can register, but
   generating a mesh with it answers 400 “has no run path in this version”
@@ -117,15 +120,14 @@ September 2026 readiness audit. This list preserves the intended work.
 
 - **CAD plugin V1 (Magnusim CAD, `bundled-plugins/cad`; 0.1.0,
   October 2026):** 0.1.0 is the MVP: sketches, solid features, patterns,
-  reference geometry, booleans, STEP editing, the Enclosure and the live link
-  to the project. Its known limitations are listed in the plugin's
-  `README.md`. Next, in this order:
+  reference geometry, booleans, STEP editing, the Enclosure, the live link
+  to the project and Edit in CAD for a project geometry. Its known
+  limitations are listed in the plugin's `README.md`. Next, in this order:
   - V1-M, modelling breadth: hole wizard, draft, variable-radius fillets,
     guide rails for Sweep and Loft, 3D sketch paths, the surface basics, a
     command palette, a view cube and mouse presets;
-  - V1-C, CFD preparation: open a project geometry added as STEP in CAD (host
-    G5, G6), split face, an internal fluid volume (the air inside a part),
-    defeature by size, projected area;
+  - V1-C, CFD preparation: split face, an internal fluid volume (the air
+    inside a part), defeature by size, projected area;
   - from 0.1.0's limitations: Press-pull with a "keep tangent faces" switch,
     re-rounding fillet chains and corner blends, and the "what works" search
     above 2,000 faces; spline offsets that follow their source; Extend and

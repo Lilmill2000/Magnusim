@@ -34,6 +34,7 @@ import type { RequestContext, Router } from './router.ts';
 import type { WorkerClient } from './worker.ts';
 import { writeSse } from './jobs.ts';
 import type { PluginFiles } from './plugin-files.ts';
+import { registerGeometryEditRoutes } from './geometry-edit-routes.ts';
 import { claimComputeSlot, releaseComputeSlot, sameProjectFolder } from '../compute-slot.js';
 import { LINK_JOB_RE, linkEventBus, readLinkRecord } from '../link-store.js';
 import {
@@ -90,6 +91,8 @@ function inScope(rec: any, s: Scope): any {
 
 export function registerLinkRoutes(router: Router, deps: { worker: WorkerClient; files: PluginFiles }): void {
   configureLinkJobs({ worker: deps.worker, files: deps.files });
+  // Editing a project geometry (API 1.7): its target, file and faces, and the actions' resolver.
+  registerGeometryEditRoutes(router, deps.worker);
   const own = { underscoreAlias: false };
 
   router.add(

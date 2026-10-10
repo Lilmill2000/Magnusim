@@ -18,9 +18,12 @@ from cfddesk.registry.base import Registry, RegistryError
 from cfddesk.registry.bc_extend import BcExtensions
 from cfddesk.registry.hooks import get_hooks
 from cfddesk.registry.manifest import (
+    GEOMETRY_ACTION_FORMATS,
+    GEOMETRY_ACTION_PLACES,
     MB,
     START_ACTION_PLACES,
     FilesSpec,
+    GeometryAction,
     PluginManifest,
     StartAction,
     StudyKind,
@@ -877,6 +880,96 @@ def start_action_row(manifest: PluginManifest, action: StartAction) -> dict[str,
     }
 
 
+def _known_names(
+    raw: Any, known: tuple[str, ...], what: str, kind_key: str, warnings: list[str], ignored: str = ""
+) -> tuple[str, ...]:
+    """A list of names from ``known`` (the default when left out); unknown ones are warned about and left out."""
+    if raw is None:
+        return known
+    if not isinstance(raw, list) or not all(isinstance(p, str) for p in raw):
+        raise ValueError(f"{kind_key}: {what} must be a list of names")
+    if len(set(raw)) != len(raw):
+        raise ValueError(f"{kind_key}: {what} names one twice")
+    for name in raw:
+        if name not in known:
+            why = ignored if name == "mesh" and ignored else "is not known to this app"
+            warnings.append(f"manifest [[geometry_actions]]: {what[:-1]} {name!r} {why}; ignored")
+    out = tuple(p for p in raw if p in known)
+    if not out:
+        raise ValueError(f"{kind_key}: {what} names none this app knows ({', '.join(known)})")
+    return out
+
+
+def geometry_actions_from_meta(
+    meta: dict[str, Any], kinds: list[StudyKind]
+) -> tuple[list[GeometryAction], list[str]]:
+    """Validate ``[[geometry_actions]]`` (API 1.7): (actions, warnings).
+
+    Each names a study kind with a workspace and ``links_geometry = true``, at most one
+    action per kind. ``formats`` (default step, iges, brep) and ``places`` (default
+    tree, viewport, panel) keep only what this host knows: a name it does not know (and
+    ``mesh``, which 1.7 never edits) is left out with a warning; none left is an error.
+    A bad table raises ValueError (the plugin fails to load).
+    """
+    raw = meta.get("geometry_actions")
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        raise ValueError("must be an array of tables")
+    by_key = {k.key: k for k in kinds}
+    out: list[GeometryAction] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("each geometry action is a table")
+        kind_key = row.get("study_kind")
+        if not isinstance(kind_key, str) or not kind_key:
+            raise ValueError("each geometry action needs a study_kind")
+        kind = by_key.get(kind_key)
+        if kind is None:
+            raise ValueError(f"study_kind {kind_key!r} is not declared in [[study_kinds]]")
+        if not kind.workspace:
+            raise ValueError(f"{kind_key}: its study kind has no workspace to open")
+        if not kind.links_geometry:
+            raise ValueError(f"{kind_key}: its study kind needs links_geometry = true (the edit goes back as a link)")
+        if kind_key in seen:
+            raise ValueError(f"{kind_key}: has two geometry actions; at most one per kind")
+        seen.add(kind_key)
+        try:
+            label = _action_text(row, "label", 40, required=True)
+            hint = _action_text(row, "hint", 120)
+        except ValueError as exc:
+            raise ValueError(f"{kind_key}: {exc}") from None
+        icon = row.get("icon", "")
+        if not isinstance(icon, str) or not _ICON_PATH_RE.match(icon):
+            raise ValueError(f"{kind_key}: icon must be one SVG path (d attribute)")
+        formats = _known_names(
+            row.get("formats"), GEOMETRY_ACTION_FORMATS, "formats", kind_key, warnings,
+            "is never offered: a mesh import (STL, OBJ, PLY) cannot be read as STEP",
+        )
+        places = _known_names(row.get("places"), GEOMETRY_ACTION_PLACES, "places", kind_key, warnings)
+        out.append(GeometryAction(kind_key, label, hint, icon or kind.icon, formats, places))
+    return out, warnings
+
+
+def geometry_action_row(manifest: PluginManifest, action: GeometryAction) -> dict[str, Any]:
+    """A geometry action as the catalog and the tree's kind rows publish it."""
+    kind = next((k for k in manifest.study_kinds if k.key == action.study_kind), None)
+    workspace = next((w for w in manifest.workspaces if kind is not None and w.key == kind.workspace), None)
+    return {
+        "study_kind": action.study_kind,
+        "kind_title": kind.title if kind else "",
+        "workspace": kind.workspace if kind else "",
+        "workspace_title": workspace.title if workspace else "",
+        "label": action.label,
+        "hint": action.hint,
+        "icon": action.icon,
+        "formats": list(action.formats),
+        "places": list(action.places),
+    }
+
+
 def workspaces_from_meta(meta: dict[str, Any], plugin_dir: Path) -> list[WorkspaceSpec]:
     """Validate ``[[workspaces]]``: key, title, icon (one SVG path), entry (an HTML
     file in the plugin's ``workspace/`` folder, which is all the host serves)."""
@@ -1007,6 +1100,12 @@ def _load_folder_plugin(
         hub.failures.append(_failure_row(key, f"manifest [[start_actions]]: {exc}", meta, source=source))
         return None, True
     try:
+        geometry_actions, action_warnings = geometry_actions_from_meta(meta, kinds)
+        manifest_warnings = manifest_warnings + action_warnings
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [[geometry_actions]]: {exc}", meta, source=source))
+        return None, True
+    try:
         files = files_spec_from_meta(meta)
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [files]: {exc}", meta, source=source))
@@ -1049,6 +1148,7 @@ def _load_folder_plugin(
         result.study_kinds = kinds
         result.workspaces = workspaces
         result.start_actions = start_actions
+        result.geometry_actions = geometry_actions
         result.manifest_warnings = manifest_warnings
         result.files = files
         result.python_env = python_env
@@ -1088,6 +1188,7 @@ def _load_folder_plugin(
         study_kinds=kinds,
         workspaces=workspaces,
         start_actions=start_actions,
+        geometry_actions=geometry_actions,
         manifest_warnings=manifest_warnings,
         files=files,
         python_env=python_env,
@@ -1792,6 +1893,7 @@ def _catalog_row(
     files: dict[str, int] | None = None,
     start_actions: list[dict[str, Any]] | None = None,
     copy: dict[str, Any] | None = None,
+    geometry_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     copy = copy or {}
     return {
@@ -1836,6 +1938,8 @@ def _catalog_row(
         "files": dict(files) if files else _files_row(FilesSpec()),
         # API 1.4: its start actions, only while it is loaded and on ([] otherwise).
         "start_actions": list(start_actions or []),
+        # API 1.7: its geometry actions ("Edit in ..."), only while it is loaded and on.
+        "geometry_actions": list(geometry_actions or []),
     }
 
 
@@ -1963,6 +2067,11 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                 files=_files_row(getattr(manifest, "files", None) or FilesSpec()),
                 start_actions=(
                     [start_action_row(manifest, a) for a in (getattr(manifest, "start_actions", None) or [])]
+                    if status == "enabled"
+                    else []
+                ),
+                geometry_actions=(
+                    [geometry_action_row(manifest, a) for a in (getattr(manifest, "geometry_actions", None) or [])]
                     if status == "enabled"
                     else []
                 ),

@@ -13,8 +13,12 @@
  * Self-contained: no imports, so the host can serve it to any frame.
  */
 
-/** The bridge's version; a host accepts a workspace built for the same major version. */
-export const SDK_VERSION = '1.3.0';
+/**
+ * The bridge's version; a host accepts a workspace built for the same major version.
+ * 1.4.0 (host 1.7): ws.prefs, context.geometry and context.launch, ws.project.geometrySource
+ * and ws.project.geometryFaces, and linkGeometry's `originalNames` (editing a project geometry).
+ */
+export const SDK_VERSION = '1.4.0';
 
 /** A project-level study record (plugins/<key>/studies/<sid>/study.json) plus the plugin's own fields. */
 export interface StudyRecord {
@@ -54,13 +58,134 @@ export interface WorkspaceContext {
   units: UnitSystem;
   theme: ThemeInfo;
   /**
-   * The host's bridge API version ("1.6"). To use a call a later host added,
+   * The host's bridge API version ("1.7"). To use a call a later host added,
    * compare it as numbers, major then minor (ws.nav.setDirty needs 1.2,
    * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
-   * ws.nav.onLeave 1.6), or catch the refusal: an older host
-   * rejects a call it does not know with code "not_allowed".
+   * ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the
+   * refusal: an older host rejects a call it does not know with code "not_allowed".
    */
   hostVersion: string;
+  /**
+   * The project geometry this study edits (host 1.7; absent on an older host): the one the
+   * user chose "Edit in …" on (a `[[geometry_actions]]` entry), or the one this study links.
+   * null for a study that edits no project geometry. Read its file with
+   * ws.project.geometrySource() and its faces with ws.project.geometryFaces().
+   */
+  geometry?: EditedGeometry | null;
+  /**
+   * What the user right-clicked to open this page (host 1.7): a face label ("face 3@Body1")
+   * or a body ("Body1") of `geometry`, from the viewport's menu. Given once, to the page load
+   * the action opened; a reload has none. null or absent otherwise.
+   */
+  launch?: LaunchTarget | null;
+}
+
+/** What a geometry action was started on (host 1.7). */
+export interface LaunchTarget {
+  /** A host face label of the edited geometry, "face <n>@<body ref>". */
+  face?: string;
+  /** A body ref of the edited geometry ("Body1"). */
+  body?: string;
+}
+
+/** The project geometry a study edits (host 1.7), as context.geometry gives it. */
+export interface EditedGeometry {
+  /** The geometry's id in the project. */
+  id: string;
+  name: string;
+  /** What it was imported from: STEP, IGES, or a BREP (a linked geometry). */
+  format: 'step' | 'iges' | 'brep';
+  /** The file it was imported from, as the user named it; null when unknown. */
+  fileName: string | null;
+  /** True when this study links it (ws.project.linkedGeometry() has it): edits already went back once. */
+  linked: boolean;
+  /** Its revision: 0 for a plain import, then one more for each shape update. */
+  rev: number;
+  /** Its bodies (solids) and faces, in the host's numbering. */
+  bodies: number;
+  faces: number;
+}
+
+/** The file a project geometry was made from (host 1.7), as ws.project.geometrySource() gives it. */
+export interface GeometrySource {
+  geometryId: string;
+  /** The STEP file: the import itself, or the host's own STEP of an IGES or BREP import. */
+  file: File;
+  /** 1.7 serves only 'step'. */
+  format: 'step';
+  size: number;
+  /** The file's SHA-256 (hex): GeometryFaces.sourceSha256 for the same file. */
+  sha256: string;
+  /** True once an edit of this study went back to the project: the file is the original kept since. */
+  adopted: boolean;
+}
+
+/** A body of a project geometry (host 1.7), in the host's order. */
+export interface GeometryBody {
+  /** 1-based, the host's order. */
+  index: number;
+  /** The host's body ref ("Body1"), as face labels use it. */
+  ref: string;
+  /** The body id a face-name sidecar gave it; null for a plain import. */
+  id: string | null;
+  name: string | null;
+}
+
+/** Where a face is used by a study's setup (host 1.7). */
+export interface GeometryFaceUse {
+  studyId: string;
+  studyTitle: string;
+  /** bc: a boundary condition; material: a material's volume; refinement: a mesh refinement; monitor: a result control. */
+  kind: 'bc' | 'material' | 'refinement' | 'monitor';
+  /** The record's name ("Inlet"). */
+  item: string;
+}
+
+/** A face of a project geometry (host 1.7), in the host's face order. */
+export interface GeometryFace {
+  /** 1-based, the host's order: the order a face-name sidecar's rows follow. */
+  index: number;
+  /** Its body's index (1-based). */
+  body: number;
+  /** The host's label, "face <n>@<body ref>". */
+  label: string;
+  /** mm², and mm. */
+  area: number;
+  centroid: [number, number, number];
+  /** The surface's normal at the face's middle (its u, v centre), outward; null when it has none. */
+  normal: [number, number, number] | null;
+  /** "plane", "cylinder", "cone", "sphere", "torus", "bspline", …; null when unknown. */
+  surfaceType: string | null;
+  /**
+   * When two bodies share this face (it is inside the part): the index of the same face's
+   * visit in the other body; else null.
+   */
+  sharedWith: number | null;
+  /** The name a face-name sidecar gave it; null for a plain import. */
+  name: string | null;
+  uses: GeometryFaceUse[];
+}
+
+/** The faces of the geometry a study edits (host 1.7), as ws.project.geometryFaces() gives them. */
+export interface GeometryFaces {
+  geometryId: string;
+  rev: number;
+  lengthUnit: 'mm';
+  /**
+   * The SHA-256 of the file these faces were read from (GeometrySource.sha256 before the
+   * first edit went back): an `originalNames` file gives it as its `shape_sha256`.
+   */
+  sourceSha256: string;
+  bodies: GeometryBody[];
+  faces: GeometryFace[];
+}
+
+/** ws.project.geometrySource's options (host 1.7). */
+export interface GeometrySourceOptions {
+  /** Aborting it stops the read (rejects with the signal's reason). */
+  signal?: AbortSignal;
+  /** Called as the file arrives, with the bytes so far and the total. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 export interface JobEvent {
@@ -192,6 +317,19 @@ export interface LinkOptions {
   shape: LinkShape;
   /** The face-name sidecar (magnusim_sdk.link.write_face_names writes it). */
   faceNames?: LinkFile;
+  /**
+   * Host 1.7, for the first link of a study that edits a project geometry (context.geometry
+   * with `linked` false): a face-name sidecar of the ORIGINAL geometry, one row per face of
+   * ws.project.geometryFaces() in its order, its `shape_sha256` that call's `sourceSha256`,
+   * and each named row with the fingerprint of the face it names (`centroid`, `area`,
+   * `normal`: that face's in geometryFaces(), mm). The host puts these names on the
+   * original's faces, so the boundary conditions follow each face to the face of the new
+   * shape with the same name (then by shape). A row whose fingerprint is not its host face's
+   * loses its name (counted in LinkResult.unverified); more than 20 % of such rows, or a
+   * file that does not describe the original, is refused with `bad_face_names`, at the call.
+   * A face with no name follows by shape only. Ignored by every later link.
+   */
+  originalNames?: LinkFile;
   /** The plugin's own version of the SAVED design: a whole number that never goes down. */
   sourceVersion: number;
   /** The geometry rev this page last read (linkedGeometry().rev); null before the first link. */
@@ -235,6 +373,14 @@ export interface LinkResult {
   claimedTwice: ClaimedTwice[];
   outOfDate: { meshes: { studyId: string; studyTitle: string; meshId: string; meshName: string }[]; runs: number };
   seconds: number;
+  /** Host 1.7: true on the update that took over the project geometry this study edits (its first link). */
+  adopted?: boolean;
+  /**
+   * Host 1.7, with `adopted`: how many `originalNames` rows did not match their face (their
+   * fingerprint is not the host face's). Their names were dropped, so those faces followed by
+   * shape only; a face that also moved is then lost (`lost`).
+   */
+  unverified?: number;
 }
 
 /** The project geometry this study links, as the host has it. */
@@ -249,6 +395,10 @@ export interface LinkedGeometry {
   state: 'ok' | 'queued' | 'updating' | 'failed';
   error: string | null;
   lostFaces: number;
+  /** Host 1.7: the geometry was a plain import before this study's first link took it over. */
+  adopted?: boolean;
+  /** Host 1.7: the file it was imported from, kept since (null when it was never a plain import). */
+  original?: { fileName: string | null; format: string; sha256: string } | null;
 }
 
 /**
@@ -424,6 +574,23 @@ export interface Workspace {
     linkGeometry(o: LinkOptions): Promise<LinkResult>;
     /** The geometry this study links now; null before the first link, or after the user removed it. */
     linkedGeometry(): Promise<LinkedGeometry | null>;
+    /**
+     * The file of the geometry this study edits (host 1.7; context.geometry): a STEP file,
+     * the import itself or the host's own STEP of an IGES import. Once an edit went back to
+     * the project (`adopted`), the original the host kept. Refusals carry `.code`:
+     * "not_allowed" (this study edits no geometry), "gone" (it was removed), "adopted"
+     * (another study took it over), "no_source" (the geometry has no such file, e.g. one a
+     * link made, or its STEP is missing), "not_ready" (it is updating: try again after
+     * `.retryAfter` seconds).
+     */
+    geometrySource(o?: GeometrySourceOptions): Promise<GeometrySource>;
+    /**
+     * The faces of the geometry this study edits (host 1.7), in the host's order, with the
+     * study setup that uses each one. Before the first edit went back, the faces of the
+     * original. Refusals as geometrySource; "not_ready" also when the app has not read the
+     * geometry's faces yet (it reads them when the geometry is shown).
+     */
+    geometryFaces(): Promise<GeometryFaces>;
   };
   ui: {
     toast(message: string, opts?: { kind?: 'info' | 'success' | 'error' }): Promise<void>;
@@ -527,7 +694,7 @@ export interface Workspace {
 interface HostReply {
   id?: number;
   result?: unknown;
-  error?: { message?: string; code?: string };
+  error?: { message?: string; code?: string; retryAfter?: number };
   event?: string;
   data?: unknown;
   jobId?: string;
@@ -608,6 +775,8 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   const jobListeners = new Map<string, Set<(ev: JobEvent) => void>>();
   // linkGeometry calls in flight, by their token: the progress the host sends for each.
   const linkProgress = new Map<string, NonNullable<LinkOptions['onProgress']>>();
+  // geometrySource reads in flight (host 1.7), by their token: the progress the host sends for each.
+  const sourceProgress = new Map<string, NonNullable<GeometrySourceOptions['onProgress']>>();
   // The exit hook (host 1.6), and the leaves it is running, by the host's id for each.
   let leaveHandler: LeaveHandler | null = null;
   const leaves = new Map<string, AbortController>();
@@ -622,7 +791,10 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       const p = pending.get(msg.id);
       if (!p) return;
       pending.delete(msg.id);
-      if (msg.error) p.reject(Object.assign(new Error(msg.error.message || 'The host refused the call'), { code: msg.error.code }));
+      if (msg.error) {
+        const extra = typeof msg.error.retryAfter === 'number' ? { retryAfter: msg.error.retryAfter } : {};
+        p.reject(Object.assign(new Error(msg.error.message || 'The host refused the call'), { code: msg.error.code }, extra));
+      }
       else p.resolve(msg.result);
       return;
     }
@@ -638,6 +810,18 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
           fn({ stage: p.stage, fraction: p.fraction ?? null, ...(p.label ? { label: p.label } : {}), ...(typeof p.ahead === 'number' ? { ahead: p.ahead } : {}) });
         } catch (e) {
           console.warn('[workspace] onProgress', e);
+        }
+      }
+      return;
+    }
+    if (msg.event === 'sourceProgress') {
+      const p = (msg.data || {}) as { token?: string; done?: number; total?: number };
+      const fn = p.token ? sourceProgress.get(p.token) : undefined;
+      if (fn && typeof p.done === 'number' && typeof p.total === 'number') {
+        try {
+          fn(p.done, p.total);
+        } catch (e) {
+          console.warn('[workspace] geometrySource onProgress', e);
         }
       }
       return;
@@ -864,6 +1048,32 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         }
       },
       linkedGeometry: () => call('project.linkedGeometry'),
+      geometrySource: async (o = {}) => {
+        const { signal, onProgress } = o;
+        const stopped = () => (signal && signal.reason !== undefined ? signal.reason : new DOMException('The read was aborted', 'AbortError'));
+        if (signal?.aborted) throw stopped();
+        const token = newInstance();
+        if (typeof onProgress === 'function') sourceProgress.set(token, onProgress);
+        // The host stops its own read too.
+        const onAbort = () => void call('project.geometrySourceAbort', { token }).catch(() => undefined);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        try {
+          const r = await untilAborted(
+            call<{ geometryId: string; blob: Blob; fileName: string; format: 'step'; size: number; sha256: string; adopted: boolean }>(
+              'project.geometrySource',
+              { formats: ['step'], token },
+            ),
+            signal,
+            stopped,
+          );
+          const file = new File([r.blob], r.fileName || 'source.step', { type: 'application/step' });
+          return { geometryId: r.geometryId, file, format: 'step', size: r.size, sha256: r.sha256, adopted: r.adopted === true };
+        } finally {
+          sourceProgress.delete(token);
+          signal?.removeEventListener('abort', onAbort);
+        }
+      },
+      geometryFaces: () => call('project.geometryFaces'),
     },
     ui: {
       toast: async (message, opts = {}) => {

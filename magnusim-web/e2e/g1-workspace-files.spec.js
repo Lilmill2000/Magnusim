@@ -34,7 +34,7 @@ test('gate:g1-workspace-files a workspace stores, reads, guards and deletes larg
     await expect(page.frameLocator('#workspace-frame').locator('#bench-title')).toHaveText('Big files', { timeout: 60_000 });
     const frame = page.frames().find((f) => f.url().includes(`/plugins/${KEY}/workspace/`));
     expect(frame, 'workspace frame').toBeTruthy();
-    expect(await frame.evaluate(() => window.__ws.context.hostVersion)).toBe('1.6');
+    expect(await frame.evaluate(() => window.__ws.context.hostVersion)).toBe('1.7');
     stage(t0, 'workspace open');
 
     // 40 MB from an ArrayBuffer: progress, the file on disk, the same bytes back.

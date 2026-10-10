@@ -5292,6 +5292,14 @@ body.is-recording #viewport-gizmo {
 .ws-menu-list button:disabled { color: var(--mg-text-muted); cursor: default; }
 .ws-menu-sep { height: 1px; margin: 4px 6px; background: var(--mg-border-subtle); }
 .ws-menu-note { padding: 6px 10px; color: var(--mg-text-muted); font-size: var(--mg-text-md); white-space: nowrap; }
+/* Geometry actions (API 1.7): the tree's right-click menu on a geometry, "Edit in ...". */
+.ws-menu-list.geom-action-menu { position: fixed; right: auto; min-width: 200px; max-width: 360px; }
+.ws-menu-list.geom-action-menu button { flex-direction: column; align-items: flex-start; gap: 2px; white-space: normal; }
+.geom-action-label { font-weight: 600; }
+.geom-action-sub { color: var(--mg-text-muted); font-size: var(--mg-text-sm); font-weight: 400; line-height: 1.35; }
+.geom-action-reason { color: var(--mg-text-muted); }
+.face-ctx-menu .face-ctx-sub { display: block; font-weight: 400; color: #667085; margin-top: 2px; white-space: normal; max-width: 280px; }
+.geom-panel-action { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 4px; }
 .ws-start-host { display: inline-flex; gap: 8px; }
 .ws-start-btn { display: inline-flex; align-items: center; gap: 6px; }
 .ws-start-icon { flex: none; }

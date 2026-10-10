@@ -1,0 +1,2 @@
+# Fixture bytes are hashed (shape_sha256, sidecar sha256): never convert line endings.
+* -text

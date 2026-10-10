@@ -55,6 +55,8 @@ export const WORKER_UNGATED = Object.freeze(['bc.menu', 'registry.reload', 'sim.
  */
 export const UNGATED_PREFIXES = Object.freeze([
   '/api/_routes',
+  // A geometry action's resolver (API 1.7): reads the geometry, writes only a plugin study's record.
+  '/api/geometry-actions',
   '/api/case',
   '/api/compute-queue',
   '/api/cut-plane',

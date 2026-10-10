@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
@@ -22,6 +22,8 @@ import {
 import { formatSimTime } from '../plugin-ui/format/time';
 import { onProjectTree, readProjectTree } from './treeFeed';
 import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
+import { GeometryMenu } from './GeometryMenu';
+import { actionsFor, rememberTreeActions } from '../workspace/geometryActions';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
   if (ok) return <span className="tree-check" aria-hidden="true">✓</span>;
@@ -64,6 +66,7 @@ function Node({
   queuePos,
   extra,
   children,
+  onContextMenu,
 }: {
   label: string;
   expandedLabel?: string;
@@ -75,6 +78,8 @@ function Node({
   queuePos?: number;
   extra?: ReactNode;
   children?: ReactNode;
+  /** The row's right-click (and Shift+F10 or the menu key, at the row): true when it showed a menu. */
+  onContextMenu?: (at: { x: number; y: number; row: HTMLElement }) => boolean;
 }) {
   const key = expandedLabel || label;
   const exp = children ? treeExpanded(key) : false;
@@ -87,9 +92,30 @@ function Node({
       if (v != null && v !== '') dataAttrs[k] = v;
     }
   }
+  // A row with a menu takes the focus (Tab), so Shift+F10 and the menu key reach it.
+  const rowMenu = onContextMenu
+    ? {
+        tabIndex: 0,
+        onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => {
+          if (onContextMenu({ x: e.clientX, y: e.clientY, row: e.currentTarget })) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        },
+        onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+          if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+            const r = e.currentTarget.getBoundingClientRect();
+            if (onContextMenu({ x: r.left + 24, y: r.bottom, row: e.currentTarget })) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }
+        },
+      }
+    : {};
   return (
     <li className={cls} data-label={key} {...dataAttrs}>
-      <div className="tree-row">
+      <div className="tree-row" {...rowMenu}>
         {children ? <Tw label={key} /> : null}
         <span className="tl">{label}</span>
         {extra}
@@ -469,12 +495,71 @@ function LinkRow({ geom, link }: { geom: GeomNode; link: GeomLink }) {
   );
 }
 
+/**
+ * A plain geometry a study is editing (API 1.7: a geometry action opened it, and no edit went
+ * back yet): "Being edited in <study>" and its Edit button. The study is not listed in STUDIES
+ * meanwhile: nothing of the project changed.
+ */
+function EditedInRow({ geom }: { geom: GeomNode }) {
+  const studies = geom.editedIn || [];
+  return (
+    <span className="tree-link-row" data-geom-edited-in={geom.id}>
+      {studies.map((s) => (
+        <span key={`${s.plugin}|${s.id}`} className="tree-sub" data-geom-edited-by={s.id}>
+          Being edited in {s.title}
+          {s.available && s.workspace ? (
+            <button
+              type="button"
+              className="tree-link-edit"
+              data-geom-edited-open={s.id}
+              title={`Open ${s.title}`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (s.scopeKey) onTreeAction(s.scopeKey, 'plugin-study-open', { workspace: s.workspace });
+              }}
+            >
+              Edit
+            </button>
+          ) : null}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string | null }) {
   const gkey = geom.scopeKey || `geom:${geom.id}`;
+  // The right-click menu of the geometry and its body rows (API 1.7): its geometry actions.
+  const [menu, setMenu] = useState<{ x: number; y: number; row: HTMLElement } | null>(null);
+  const entries = actionsFor({ edit_actions: geom.editActions }, 'tree');
+  const openMenu = (at: { x: number; y: number; row: HTMLElement }): boolean => {
+    if (!entries.length || !geom.id) return false;
+    setMenu(at);
+    return true;
+  };
+  const projectId = useProjectStore.getState().projectId || '';
   return (
+    <>
+    {menu ? (
+      <GeometryMenu
+        x={menu.x}
+        y={menu.y}
+        projectId={projectId}
+        geometryId={geom.id}
+        geometryName={geom.name}
+        entries={entries}
+        onClose={(refocus) => {
+          const row = menu.row;
+          setMenu(null);
+          if (refocus) row.focus();
+        }}
+      />
+    ) : null}
     <Node
       label={geom.name}
       expandedLabel={gkey}
+      onContextMenu={entries.length ? openMenu : undefined}
       selected={selectedKey === gkey}
       attrs={{ 'data-w16-geom': geom.id, 'data-scope-key': geom.scopeKey, 'data-geom-linked': geom.link ? '1' : undefined }}
       // No ✓ over a part that is not up to date with its study (or whose update did not finish).
@@ -482,6 +567,8 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
       extra={
         geom.link ? (
           <LinkRow geom={geom} link={geom.link} />
+        ) : geom.editedIn && geom.editedIn.length ? (
+          <EditedInRow geom={geom} />
         ) : geom.unlinkedLost ? (
           <span className="tree-sub" data-geom-lost="1">
             {lostText(geom.unlinkedLost)}
@@ -497,6 +584,7 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
               label={bodyDisplay(b, geom.bodyLabels ? geom.bodyLabels[b] || null : null)}
               selected={selectedKey === `body-${i + 1}`}
               attrs={{ 'data-w16-body': '1', 'data-body-index': String(i + 1) }}
+              onContextMenu={entries.length ? openMenu : undefined}
             />
           ))}
         </Node>
@@ -505,6 +593,7 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
         <StudyBlock key={s.id} study={s} selectedKey={selectedKey} />
       ))}
     </Node>
+    </>
   );
 }
 
@@ -678,6 +767,8 @@ export function PluginStudiesView({
                     title: st.title,
                     available: st.available,
                     plugin_name: st.plugin_name,
+                    // A study that links a geometry: say what goes and what stays (the two may share a name).
+                    ...deleteWords(st, linked[`${st.plugin}|${st.id}`]),
                   });
                 }}
               >
@@ -728,6 +819,22 @@ export function PluginStudiesView({
   );
 }
 
+/**
+ * The delete question of a study that links a project geometry (API 1.5/1.7): what is deleted
+ * (the study) and what stays (the geometry), named apart: a CAD part and the geometry it edits
+ * often share a name. {} for any other study (the app's own question).
+ */
+export function deleteWords(st: PluginStudyRow, geometry: { id: string; name: string } | undefined): { confirm_title?: string; confirm_copy?: string } {
+  if (!geometry) return {};
+  const ws = String(st.workspace_title || '').trim();
+  const kind = String(st.kind_title || 'study').trim();
+  const what = ws && !kind.toLowerCase().includes(ws.toLowerCase()) ? `${ws} ${kind.toLowerCase()}` : kind;
+  return {
+    confirm_title: `Delete the ${what}?`,
+    confirm_copy: `Delete the ${what} '${st.title}'? The geometry '${geometry.name}' stays in the project, with its simulations.`,
+  };
+}
+
 /** React setup tree. Same collapse keys and [data-w20-mesh-item] as the runtime tree. */
 export function LeftTree() {
   const projectId = useProjectStore((s) => s.projectId);
@@ -764,7 +871,8 @@ export function LeftTree() {
     const doc = docRef.current;
     const own = (row: { scope_key?: string }) => !!row.scope_key && scopeBelongsToProject(row.scope_key, projectId);
     setStudies({
-      rows: projectId ? (doc?.plugin_studies || []).filter(own) : [],
+      // A study still editing a plain geometry (API 1.7) shows on that geometry's row instead.
+      rows: projectId ? (doc?.plugin_studies || []).filter(own).filter((row) => !row.editing) : [],
       kinds: projectId ? doc?.plugin_study_kinds || [] : [],
       linked: projectId ? linkedGeometryByStudy(doc) : {},
     });
@@ -831,6 +939,8 @@ export function LeftTree() {
       docRef.current = doc;
       // A linked geometry whose rev or names changed is loaded again (a second tab, API 1.5).
       if (doc) noteTreeGeometries(projectId, doc.geometries as Parameters<typeof noteTreeGeometries>[1]);
+      // The geometry actions (API 1.7), for the Geometry panel and the viewport's menu.
+      if (doc) rememberTreeActions(projectId, doc.geometries);
       paint();
       if (doc && doc.plugin_studies_migrating && followUps < 30 && !followTimer) {
         followUps += 1;

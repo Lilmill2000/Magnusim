@@ -22,7 +22,7 @@
  * paused while an app dialog is open), throws, fails, has its link refused or loses its
  * page ends in one safe question. One leave at a time.
  */
-import { cleanDirtyMessage, type LeaveActivity, type LeaveHookOutcome } from './bridge';
+import { cleanDirtyMessage, UPLOAD_OPEN, type LeaveActivity, type LeaveHookOutcome } from './bridge';
 import { parseWorkspaceHash, type WorkspaceRoute } from './route';
 
 /** Why the user leaves; 'results' (the page opens a case's results in 3D) asks the 'back' question. */
@@ -252,6 +252,8 @@ function leaveQuestion(reason: LeaveReason, ws: GuardedWorkspace): LeaveQuestion
       safe: true,
     };
   }
+  // Only a write still on its way (no message of the page's own): say what leaving stops, nothing more.
+  if (msg === UPLOAD_OPEN) return { title: 'Leave now?', copy: `${who}: ${UPLOAD_OPEN}`, yes: 'Leave', no: 'Stay', safe: true };
   const what = msg ? `${who}: ${asSentence(msg)}` : `${who} has changes to "${plainName(ws.studyTitle(), ws.route.studyId)}" that are not saved.`;
   return { title: 'Leave without saving?', copy: `${what} Leaving discards them.`, yes: 'Leave', no: 'Stay', safe: true };
 }

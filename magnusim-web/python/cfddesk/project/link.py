@@ -23,6 +23,13 @@ when this module loads: ``MAGNUSIM_TEST_LINK_FAIL_APPLY=1`` makes every apply fa
 Revision 7 adds two markers: ``pending.json`` (a new geometry, hidden until its
 commit, :func:`link_commit`) and ``unlinked.json`` (an earlier version the link moved
 away from after "Save as new"; a plain geometry to the user).
+
+API 1.7 adds the *adoption*: a study that edits a plain project geometry
+(``edits_geometry``, ``cfddesk.project.geometry_actions``) takes it over with its first
+link. :func:`plan` (``adopt``) starts from rev 0 of the plain geometry; :func:`apply`
+writes ``link/original/original.json``, then ``id.json``'s ``source`` (with
+``adopted: true``), then ``state.json`` (with ``adopted``), the commit point as ever.
+The link job keeps the geometry's source files in ``link/original/``.
 """
 
 from __future__ import annotations
@@ -430,6 +437,7 @@ def plan(
     web_root: Path | None = None,
     schema_fields: dict[str, dict[str, list[tuple[str, str]]]] | None = None,
     map_from: str | None = None,
+    adopt: bool = False,
 ) -> dict[str, Any]:
     """Work out the update and write ``<staging>/plan.json``; nothing else is written.
 
@@ -442,12 +450,25 @@ def plan(
     stamped ``rev``, into ``plan-copy.json``; ``map_from`` names the geometry their
     labels were drawn on (the old one), whose face table the map starts from. The name
     follows the job's (the study title) with the geometry's " v<version>" suffix.
+
+    ``adopt`` (API 1.7): the first link of a study that edits this plain geometry. It
+    starts from rev 0 (the import as it is), keeps the geometry's name, and the map starts
+    from ``<staging>/old_named.json`` (the face table with the page's original names).
     """
+    from cfddesk.project import geometry_actions as ga
     from cfddesk.project.link_rewrite import build_plan
 
     gdir = _geometry_dir(project_dir, geometry_id)
     stage = _staging(project_dir, staging_rel)
     state = read_state(gdir)
+    if adopt:
+        if state:
+            raise LinkError("stale", "The geometry was taken over by another study meanwhile.")
+        geom = find_geometry(Path(project_dir), geometry_id) or {}
+        row = ga.project_rows(Path(project_dir)).get(str(geometry_id))
+        state = ga.adopt_state({**geom, "dir": gdir}, row)
+        if not (stage / ga.OLD_NAMED).is_file():
+            raise LinkError("failed", "The update has no face table of the original.")
     if not state:
         raise LinkError("gone", "The geometry is not linked.")
     # A save-as-new copy maps from the old geometry's live face table (its records are
@@ -460,7 +481,7 @@ def plan(
         raise LinkError("stale", "The geometry changed since this update was planned.")
     # An overwrite needs the geometry still linked: after "Save as new" the old one is kept
     # as it was (proposal 5.0), whatever update was queued for it before.
-    if studies is None and _marked(gdir, UNLINKED):
+    if studies is None and not adopt and _marked(gdir, UNLINKED):
         raise LinkError("unlinked", "The geometry is no longer linked to its study.")
     if known is not None:
         missing = check_kinds(project_dir, geometry_id, known, catalog, web_root, studies)
@@ -476,11 +497,14 @@ def plan(
     change = built["change"]
     new_rev = int(built["rev"])
     base = str(job.get("name") or "").strip()
+    # An adopted geometry keeps its own name, at its adoption and at every later update.
+    keeps = adopt or isinstance(state.get("adopted"), dict)
+    name = str(state.get("name") or "") if keeps else versioned_name(base, state.get("version")) if base else str(state.get("name") or "")
     new_state = {
-        **state,
+        **{k: v for k, v in state.items() if k not in ("adopt", "source_ready")},
         "rev": new_rev,
         "source_version": max(int(state.get("source_version") or 0), int(job.get("source_version") or 0)),
-        "name": versioned_name(base, state.get("version")) if base else str(state.get("name") or ""),
+        "name": name,
         "shape_sha256": job.get("shape_sha256"),
         "names_file_sha256": job.get("names_file_sha256"),
         "names_sha256": preview.get("names_sha256"),
@@ -491,6 +515,27 @@ def plan(
         "synced_at": _now(),
         "job_id": str(job.get("job") or ""),
     }
+    adopt_doc = None
+    if adopt:
+        geom = find_geometry(Path(project_dir), geometry_id) or {}
+        row = ga.project_rows(Path(project_dir)).get(str(geometry_id))
+        at = _now()
+        new_state["adopted"] = {
+            "at": at,
+            "from": {
+                "format": ga.geometry_format({**geom, "dir": gdir}, row),
+                "file_name": ga.original_filename(geom, row),
+                "sha256": state.get("shape_sha256") or None,
+                "faces": state.get("n_faces"),
+                "bodies": state.get("n_solids"),
+            },
+        }
+        adopt_doc = {
+            "plugin": str(job.get("plugin") or ""),
+            "study_id": str(job.get("study_id") or ""),
+            "workspace": str(job.get("workspace") or ""),
+            "linked_at": at,
+        }
     report = {"change": change, **built["report"]}
     fmap = _read(stage / "map.json") or {}
     doc = {
@@ -503,6 +548,7 @@ def plan(
         "report": report,
         "state": new_state,
         "map": {"faces": fmap.get("faces") or {}, "body_map": fmap.get("body_map") or {}, "identity": bool(fmap.get("identity"))},
+        "adopt": adopt_doc,
     }
     atomic_write(stage / ("plan-copy.json" if studies is not None else "plan.json"), doc)
     return {
@@ -543,6 +589,9 @@ def apply(project_dir: Path | str, geometry_id: str, staging_rel: str, plan_file
     ldir = link_dir(gdir)
     if not ldir.is_dir():
         raise LinkError("gone", "The geometry was removed.")
+    adopt = doc.get("adopt")
+    if isinstance(adopt, dict):
+        _apply_adoption(gdir, doc, adopt)
     if doc.get("change") != "names":
         fmap = doc.get("map") or {}
         atomic_write(
@@ -557,6 +606,30 @@ def apply(project_dir: Path | str, geometry_id: str, staging_rel: str, plan_file
         )
     atomic_write(ldir / STATE, doc["state"])
     return {"ok": True, "rev": doc.get("rev"), "change": doc.get("change"), "patched": patched, "skipped": skipped}
+
+
+def _apply_adoption(gdir: Path, doc: dict[str, Any], adopt: dict[str, Any]) -> None:
+    """An adoption's own files before the commit point: what the original was, then the link
+    in ``id.json`` (``state.json``, written last by :func:`apply`, makes it a linked geometry).
+    Writing them twice gives the same files (a recovery replays the apply)."""
+    from cfddesk.project import geometry_actions as ga
+
+    state = doc.get("state") or {}
+    adopted: dict[str, Any] = state["adopted"] if isinstance(state.get("adopted"), dict) else {}
+    frm = adopted.get("from") or {}
+    if (ga.original_dir(gdir) / "source.step").is_file() and ga.read_original(gdir) is None:
+        ga.write_original(gdir, adopted, frm.get("faces"), frm.get("bodies"))
+    ident = _read(gdir / "id.json")
+    ident = ident if isinstance(ident, dict) else {}
+    ident["source"] = {
+        "type": "plugin_study",
+        "plugin": str(adopt.get("plugin") or ""),
+        "study_id": str(adopt.get("study_id") or ""),
+        "workspace": str(adopt.get("workspace") or ""),
+        "linked_at": str(adopt.get("linked_at") or _now()),
+        "adopted": True,
+    }
+    atomic_write(gdir / "id.json", ident)
 
 
 def _apply_patches(root: Path, patches: list[dict[str, Any]]) -> tuple[int, int]:
@@ -624,10 +697,13 @@ def geometry_record(project_id: str, geom: dict[str, Any], state: dict[str, Any]
     """The project.json record of a linked geometry (its part row), from its own files."""
     gdir = Path(geom["dir"])
     src = source_of(geom) or {}
+    adopted = state.get("adopted") if isinstance(state.get("adopted"), dict) else None
+    frm = (adopted or {}).get("from") or {}
     return {
         "id": str(geom["id"]),
         "name": str(state.get("name") or geom.get("name") or ""),
-        "original_filename": None,
+        # An adopted geometry keeps the name of the file it was imported from (API 1.7).
+        "original_filename": (frm.get("file_name") or geom.get("original_filename")) if adopted else None,
         "original_path": None,
         "source_kind": "plugin",
         "length_unit": None,
@@ -639,7 +715,7 @@ def geometry_record(project_id: str, geom: dict[str, Any], state: dict[str, Any]
         "n_faces": state.get("n_faces"),
         "body_offset": 0,
         "imported_at": src.get("linked_at") or state.get("synced_at"),
-        "note": "Linked from a plugin study.",
+        "note": "Edited in a plugin study." if adopted else "Linked from a plugin study.",
         "source": src or None,
     }
 
@@ -780,13 +856,14 @@ def _geometry_names(root: Path) -> set[str]:
     return names
 
 
-def next_version(project_dir: Path | str, plugin: str, study_id: str, base: str) -> dict[str, Any]:
+def next_version(project_dir: Path | str, plugin: str, study_id: str, base: str, at_least: int = 1) -> dict[str, Any]:
     """The version and name of the next geometry a study's link makes.
 
     1 + the highest ``version`` among the folders this ``(plugin, study_id)`` made, linked
     or kept unlinked (a removed or pending one does not count); the bare base when none is
     left. From 2 the name is "<base> v<k>", and k goes up while another geometry of the
-    project has that name.
+    project has that name. ``at_least`` 2 (the "Save as new" of an adoption, API 1.7)
+    starts at v2: the geometry it was made from keeps the bare name.
     """
     root = Path(project_dir)
     versions: list[int] = []
@@ -801,7 +878,7 @@ def next_version(project_dir: Path | str, plugin: str, study_id: str, base: str)
             versions.append(int((read_state(gdir) or {}).get("version") or 1))
         except (TypeError, ValueError):
             versions.append(1)
-    k = max(versions) + 1 if versions else 1
+    k = max(max(versions) + 1 if versions else 1, int(at_least or 1))
     if k == 1:
         return {"version": 1, "name": base}
     taken = _geometry_names(root)
@@ -921,7 +998,9 @@ def link_commit(
         raise LinkError("failed", "test hook: stopped after the commit point")
     if old_id and str(old_id) != str(geometry_id):
         old = find_geometry(root, str(old_id))
-        if old and not _marked(old["dir"], REMOVED) and not _marked(old["dir"], UNLINKED) and link_dir(old["dir"]).is_dir():
+        # Only a geometry a link made: a plain one (the original of an adoption's "Save as
+        # new", API 1.7) stays plain, whatever its link/ folder holds.
+        if old and not _marked(old["dir"], REMOVED) and not _marked(old["dir"], UNLINKED) and (link_dir(old["dir"]) / STATE).is_file():
             atomic_write(link_dir(old["dir"]) / UNLINKED, {"moved_to": str(geometry_id), "job_id": str(job_id), "at": _now()})
     upsert_geometry(root, geometry_record(root.name, geom, state))
     return {"ok": True, "geometry_id": str(geometry_id), "name": str(state.get("name") or "")}

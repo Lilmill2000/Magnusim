@@ -206,7 +206,7 @@ function propRows(props, required = []) {
   return lines;
 }
 
-const TABLE_NAMES = { StudyKind: 'study_kinds', WorkspaceSpec: 'workspaces', StartAction: 'start_actions', Requirement: 'requires' };
+const TABLE_NAMES = { StudyKind: 'study_kinds', WorkspaceSpec: 'workspaces', StartAction: 'start_actions', GeometryAction: 'geometry_actions', Requirement: 'requires' };
 
 // -- the examples (code blocks tagged `test`, run by npm run test:docs) ---------------------
 

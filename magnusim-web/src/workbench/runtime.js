@@ -211,6 +211,7 @@ import {
   withGeometryRev,
 } from './geometryRev';
 import { setShownFaceTable } from './faceNames';
+import { fillViewportGeometryActions } from './viewportGeometryActions';
 import { cameraMovedSince, isCameraDrag } from './landingCamera';
 import { linkNeedsAction, linkQuietText, linkReportText, linkTouchesSetup, setupOf } from '../workspace/linkReport';
 import { savedAsNewText } from '../workspace/linkChoice';
@@ -6818,8 +6819,8 @@ async function handlePluginStudyAction(ps, action, detail) {
   if (action === 'plugin-study-delete') {
     const missing = detail.available === false;
     const ok = await confirmAction({
-      title: 'Delete study?',
-      copy:
+      title: detail.confirm_title || 'Delete study?',
+      copy: detail.confirm_copy ||
         '"' +
         String(detail.title || 'This study') +
         '" and everything saved with it will be deleted.' +
@@ -25134,6 +25135,9 @@ function showFaceCtxMenu(e, hit) {
     }
   }
   if (sep) sep.hidden = false;
+  // The shown geometry's actions ("Edit in CAD", API 1.7) when the click hit the part.
+  const onPart = hit && (hit.faceId || hit.solidId) ? { ...(hit.faceId ? { face: faceLabel(hit.faceId, hit.solidId || 1) } : {}), body: 'Body' + (Number(hit.solidId) || 1) } : null;
+  try { fillViewportGeometryActions(m, { projectId: String(currentProjectId() || ''), geometryId: shownGeometryId(), geometryName: String((w16State.geometry && w16State.geometry.name) || ''), hit: onPart, close: hideFaceCtxMenu }); } catch (_) {}
   const wr = wrap.getBoundingClientRect();
   let x = e.clientX - wr.left;
   let y = e.clientY - wr.top;
@@ -37146,14 +37150,14 @@ function showLandingReport(job, quiet) {
     t = savedAsNewText(String(job.result.name || job.geometryName || ''), String(job.oldGeometryName || ''), job.copies || null);
     needs = (job.copies || []).some((c) => c && (!c.ok || (c.lost || []).length || (c.claimedTwice || []).length));
   } else if (linkTouchesSetup(job.result, setup)) {
-    t = linkReportText(job.result, setup);
+    t = linkReportText(job.result, setup, 1, job.studyTitle);
     needs = linkNeedsAction(job.result, setup);
   }
   if (t && (!quiet || needs)) {
     void confirmAction({ title: t.title, copy: t.copy, yes: 'OK', notice: true });
     return 'dialog';
   }
-  const text = t && savedAsNew ? t.copy.replace(/\n/g, ' ') : linkQuietText(job.result, setup);
+  const text = t && savedAsNew ? t.copy.replace(/\n/g, ' ') : linkQuietText(job.result, setup, 1, job.studyTitle);
   if (!text) return false;
   try { finishToasts.push({ text, fail: false, ms: 6000 }); } catch (_) {}
   window.__CFD_LINK_TOASTS__ = [...(window.__CFD_LINK_TOASTS__ || []), text];

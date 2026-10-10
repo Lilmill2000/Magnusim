@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Edit demo</title>
+    <script type="module" src="./main.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Connecting…</h1>
+      <p>Geometry: <code id="ctx">…</code></p>
+      <p>Launch: <code id="launch">…</code></p>
+      <p>
+        <button type="button" id="read-source">Read source</button>
+        <button type="button" id="faces">Faces</button>
+        <button type="button" id="edit-v2">Edit v2</button>
+        <button type="button" id="edit-v2-plain">Edit v2 without names</button>
+        <button type="button" id="done">Done</button>
+      </p>
+      <p>Source: <span id="src"></span></p>
+      <p>Faces: <span id="face-list"></span></p>
+      <p>Status: <span id="status">idle</span></p>
+      <p>Result: <span id="result"></span></p>
+    </main>
+  </body>
+</html>

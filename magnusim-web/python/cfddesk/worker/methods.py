@@ -10,7 +10,7 @@ from typing import Any
 from cfddesk.project import web_writes as ww
 from cfddesk.registry import get_hub, load_all, reset_for_tests
 from cfddesk.registry.base import RegistryError
-from cfddesk.registry.discovery import plugin_catalog, start_action_row
+from cfddesk.registry.discovery import geometry_action_row, plugin_catalog, start_action_row
 from cfddesk.registry.schema import validate as validate_schema
 from cfddesk.worker import (
     volume_cache as _volume_cache,  # noqa: F401 — puts python/tools on sys.path for the export_* imports
@@ -56,6 +56,9 @@ def registry_describe() -> dict[str, Any]:
             "provides": getattr(m, "provides", {}) or {},
             "tier": getattr(m, "tier", "user"),
             "required": bool(getattr(m, "required", False)),
+            # API 1.7: a study kind of it links geometry (so its pages may edit one): the
+            # workspace handshake asks for the edited geometry only then.
+            "links_geometry": any(bool(getattr(k, "links_geometry", False)) for k in (getattr(m, "study_kinds", None) or [])),
         }
         for m in hub.manifests.values()
     ]
@@ -307,6 +310,15 @@ def project_tree(id: str = "", project_id: str = "") -> dict[str, Any]:
     tree["plugin_studies"] = studies
     tree["plugin_study_kinds"] = kinds
     _link_source_states(root, tree, studies)
+    # API 1.7: each geometry's format and the geometry actions that may edit it.
+    try:
+        from cfddesk.project.geometry_actions import annotate_tree
+
+        annotate_tree(root, tree, studies, kinds)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("geometry actions on the tree failed")
     return tree
 
 
@@ -1323,6 +1335,10 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
                     "needs_migration": kind is not None and not newer and schema < int(kind.schema_version),
                     "reason": "" if kind is not None else why,
                     "scope_key": plugin_study_scope(pid, key, rec["id"]),
+                    # API 1.7: the project geometry a geometry action opened it on ("" when none).
+                    "edits_geometry": str((rec.get("edits_geometry") or {}).get("id") or "")
+                    if isinstance(rec.get("edits_geometry"), dict)
+                    else "",
                 }
             )
     kinds_out = [
@@ -1338,6 +1354,11 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
             "links_geometry": k.links_geometry,
             "start_action": next(
                 (start_action_row(m, a) for a in m.start_actions if a.study_kind == k.key),
+                None,
+            ),
+            # API 1.7: its geometry action ("Edit in ..."), or None.
+            "geometry_action": next(
+                (geometry_action_row(m, a) for a in m.geometry_actions if a.study_kind == k.key),
                 None,
             ),
         }
@@ -1441,7 +1462,11 @@ def plugin_studies_get(project_id: str = "", plugin: str = "", study_id: str = "
 
 
 # What a study update may not change: the host keeps these.
-_STUDY_FIXED = {"id", "kind", "plugin", "plugin_name", "plugin_version", "schema_version", "created_at", "updated_at", "rev"}
+# ``edits_geometry`` (API 1.7) is the host's: the geometry a geometry action opened the study on.
+_STUDY_FIXED = {
+    "id", "kind", "plugin", "plugin_name", "plugin_version", "schema_version", "created_at", "updated_at", "rev",
+    "edits_geometry",
+}
 
 
 @rpc("plugin_studies.update")
@@ -1536,7 +1561,7 @@ def plugin_studies_migrated(
     if kind is None:
         raise RpcError(-32602, f"{plugin} has no study kind {current.get('kind')!r}")
     if int(current.get("schema_version") or 1) < int(kind.schema_version):
-        patch = {k: v for k, v in study.items() if k not in {"id", "kind", "plugin", "created_at", "rev", "updated_at"}}
+        patch = {k: v for k, v in study.items() if k not in {"id", "kind", "plugin", "created_at", "rev", "updated_at", "edits_geometry"}}
         patch["schema_version"] = int(kind.schema_version)
         patch["plugin_version"] = manifest.version
         _study_call(data.update_study, study_id, patch, rev)

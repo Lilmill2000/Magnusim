@@ -151,7 +151,7 @@ A workspace plugin with its own environment:
 key = "hello-workspace"
 name = "Hello workspace"
 version = "0.1.0"
-api_version = "1.6"
+api_version = "1.7"
 license = "GPL-3.0-or-later"
 description = "A wing section study with its own workspace"
 authors = "Your Name"
@@ -192,7 +192,7 @@ A panel plugin with a TypeScript UI that the host bundles:
 key = "panel-demo"
 name = "Panel demo"
 version = "0.1.0"
-api_version = "1.6"
+api_version = "1.7"
 license = "GPL-3.0-or-later"
 description = "A field widget for the mesh panel"
 authors = "Your Name"
@@ -545,7 +545,7 @@ What the host enforces:
 
 1. **Your folder.** Each project has `plugins/<key>/` for you. `ws.data`, `ws.files` and `PluginData` reach only that folder. A path outside it is refused, links and junctions included.
 2. **Your studies.** A study's record (`studies/<id>/study.json`) changes only through `ws.study.update` (your page) or `PluginData.update_study` (your service or job), with the current `rev`. Every other field name is yours, `times` included.
-   - Through the page, the host keeps: `id`, `kind`, `plugin`, `plugin_name`, `plugin_version`, `schema_version`, `created_at`, `updated_at`, `rev`.
+   - Through the page, the host keeps: `id`, `kind`, `plugin`, `plugin_name`, `plugin_version`, `schema_version`, `created_at`, `updated_at`, `rev`, `edits_geometry` (the project geometry a geometry action opened the study on).
    - Through `PluginData`, it keeps: `id`, `kind`, `plugin`, `created_at`, `rev`. It sets `updated_at`. Do not write the others from Python: the host sets `schema_version` and `plugin_version` when it stores what your `migrate_study` returned.
 3. **The frame.** A workspace page has an opaque origin. It cannot read the app's page, call the app's API or use storage. Its Content-Security-Policy allows only `/plugin-sdk/` and your own `workspace/` folder.
 4. **The bridge.** Each call is checked against your plugin, this project and this study. The rest is refused and logged.
@@ -621,7 +621,7 @@ The browser test reaches the app's test harness through one module: `e2e/support
 | `prefs` | | More settings over `{wizard_completed: true, units: 'Metric', port}` |
 | `env` | | More environment variables; `null` removes one |
 | `webRoot` | This app | The app folder to run |
-| `viteCacheDir` | Shared | A Vite cache of its own. Give one, so another test server never disturbs yours |
+| `viteCacheDir` | Shared (a folder of `MAGNUSIM_E2E_VITE_CACHE_DIR` per server, when set) | A Vite cache of its own. Give one, so another test server never disturbs yours |
 | `port` | The first free one from `portFrom` | A fixed port. The start fails when it is taken |
 | `portFrom` | `MAGNUSIM_E2E_PORT` + 11 (8094) | The lowest port tried |
 | `keepFree` | `[]` | Offsets above the port that must be free too |

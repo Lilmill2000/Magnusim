@@ -636,7 +636,7 @@ describe('exit-sync fixes: what the bridge tells a leave', () => {
     const moved = { studyId: 's1', studyTitle: 'Study 1', kind: 'bc', item: 'Side wall', field: 'faces', old: 'face 15@Body1', name: 'F:boss:end', label: 'Boss end' };
     FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 2, ev: { event: 'end', status: 'done', result, setup: { movedFar: [moved], split: [], merged: [], stale: [] } } });
     await vi.waitFor(() => expect(linked()).toBeTruthy());
-    expect(t.h.linkReport).toHaveBeenCalledWith(result, { movedFar: [moved], split: [], merged: [], stale: [] });
+    expect(t.h.linkReport).toHaveBeenCalledWith(result, { movedFar: [moved], split: [], merged: [], stale: [], inside: [] });
     t.end();
   });
 });

@@ -34,13 +34,15 @@ export interface LinkSetup {
   merged: SetupFace[];
   /** Records saved for an older version: their faces must be picked again. */
   stale: Array<{ studyId: string; studyTitle: string; item: string; kind: string }>;
+  /** Boundary conditions now on a face two bodies share (inside the part: not used there). */
+  inside?: Array<{ studyId: string; studyTitle: string; item: string; kind: string; faces: string[]; bodies?: number }>;
 }
 
 /** A job's `setup` as the host reads it (an older record has none: nothing of it to report). */
 export function setupOf(raw: unknown): LinkSetup {
   const s = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<keyof LinkSetup, unknown>>;
   const list = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
-  return { movedFar: list(s.movedFar), split: list(s.split), merged: list(s.merged), stale: list(s.stale) };
+  return { movedFar: list(s.movedFar), split: list(s.split), merged: list(s.merged), stale: list(s.stale), inside: list(s.inside) };
 }
 
 /** A lost or returned face as the user reads it: its label, else its name, else the host's label. */
@@ -64,7 +66,7 @@ function lostOf(r: LinkResult): LostFace[] {
 export function linkTouchesSetup(r: LinkResult | null | undefined, setup?: LinkSetup | null): boolean {
   if (!r) return false;
   const s = setup || setupOf(null);
-  return !!(lostOf(r).length || r.returned?.length || r.claimedTwice?.length || s.movedFar.length || s.split.length || s.merged.length || s.stale.length);
+  return !!(lostOf(r).length || r.returned?.length || r.claimedTwice?.length || s.movedFar.length || s.split.length || s.merged.length || s.stale.length || s.inside?.length);
 }
 
 /**
@@ -75,7 +77,15 @@ export function linkTouchesSetup(r: LinkResult | null | undefined, setup?: LinkS
 export function linkNeedsAction(r: LinkResult | null | undefined, setup?: LinkSetup | null): boolean {
   if (!r) return false;
   const s = setup || setupOf(null);
-  return !!(lostOf(r).length || r.claimedTwice?.length || s.movedFar.length || s.stale.length);
+  return !!(lostOf(r).length || r.claimedTwice?.length || s.movedFar.length || s.stale.length || s.inside?.length);
+}
+
+/**
+ * The first update of a study that edits a project geometry took that geometry over (API 1.7):
+ * said every time, with where the imported file went.
+ */
+export function adoptedText(r: LinkResult, studyTitle?: string | null): string {
+  return `${r.name} updated from ${studyTitle || 'its study'}. The original file is kept: Geometry panel → Add the original as a new geometry.`;
 }
 
 function meshesLine(r: LinkResult, studyCount: number): string {
@@ -85,9 +95,10 @@ function meshesLine(r: LinkResult, studyCount: number): string {
 }
 
 /** The report dialog's title and text (plain text, one line per item). */
-export function linkReportText(r: LinkResult, setup?: LinkSetup | null, studyCount = 1): { title: string; copy: string } {
+export function linkReportText(r: LinkResult, setup?: LinkSetup | null, studyCount = 1, studyTitle?: string | null): { title: string; copy: string } {
   const s = setup || setupOf(null);
   const lines: string[] = [];
+  if (r.adopted) lines.push(adoptedText(r, studyTitle));
   const lost = lostOf(r);
   if (r.match && (r.match.byName || r.match.byShape)) {
     lines.push('Boundary conditions, refinements and monitors kept their faces by name.');
@@ -113,6 +124,12 @@ export function linkReportText(r: LinkResult, setup?: LinkSetup | null, studyCou
     lines.push(`Pick one: '${faceShown(c)}' was in ${c.items.join(' and ')}.`);
   }
   for (const st of s.stale) lines.push(`Saved for an older version: ${where(st)}. Pick its faces again.`);
+  for (const f of s.inside || []) {
+    const n = f.faces.length;
+    lines.push(
+      `${f.item} is now on ${n === 1 ? 'an inside face' : `${n} inside faces`} (shared by ${f.bodies || 2} bodies) and won't be used. Move it in Boundary conditions.`,
+    );
+  }
   const meshes = meshesLine(r, studyCount);
   if (meshes) lines.push(meshes);
   return { title: `${r.name} updated`, copy: lines.join('\n') };
@@ -124,9 +141,18 @@ export function linkReportText(r: LinkResult, setup?: LinkSetup | null, studyCou
  * "Continue in background" an update that touched the setup without needing the user is
  * said here too, in one line.
  */
-export function linkQuietText(r: LinkResult, setup?: LinkSetup | null, studyCount = 1): string {
+export function linkQuietText(r: LinkResult, setup?: LinkSetup | null, studyCount = 1, studyTitle?: string | null): string {
   const s = setup || setupOf(null);
   const parts: string[] = [];
+  if (r.adopted) {
+    // The first update of an editing study is always said (a toast when nothing else needs the user).
+    const rest: string[] = [];
+    const kept0 = s.split.length + s.merged.length + (r.returned?.length || 0);
+    if (kept0) rest.push(`${kept0} face${kept0 === 1 ? '' : 's'} of your setup changed and stayed on ${kept0 === 1 ? 'its record' : 'their records'}.`);
+    const meshes0 = meshesLine(r, studyCount);
+    if (meshes0) rest.push(meshes0);
+    return [adoptedText(r, studyTitle), ...rest].join(' ');
+  }
   const kept = s.split.length + s.merged.length + (r.returned?.length || 0);
   if (kept) parts.push(`${kept} face${kept === 1 ? '' : 's'} of your setup changed and stayed on ${kept === 1 ? 'its record' : 'their records'}.`);
   const meshes = meshesLine(r, studyCount);

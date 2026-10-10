@@ -54,7 +54,7 @@ describe('the update report names only faces a record refers to', () => {
     // The plugin's LinkResult keeps the part's statistics...
     assert.equal(rec.result.match.movedFar, 6);
     // ...but nothing of it touches a record: nothing to report.
-    const none = { movedFar: [], split: [], merged: [], stale: [] };
+    const none = { movedFar: [], split: [], merged: [], stale: [], inside: [] };
     assert.deepEqual(rec.setup, none);
     assert.deepEqual(endOf(r.body.job_id).setup, none);
     const st = await h.get(`/api/plugin-geometry/status?project_id=${pid}&plugin=link-demo&study_id=${sid}&job_id=${r.body.job_id}`);

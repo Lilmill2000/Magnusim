@@ -34,6 +34,8 @@ export interface LinkQuestion {
   studies: LinkChoiceStudy[];
   overwrite: 'ok' | { code: string; message: string; records?: unknown[] };
   fenced?: boolean;
+  /** API 1.7: the study edits this project geometry (a geometry action): the question names the geometry. */
+  edits?: boolean;
 }
 
 export type LinkChoice = { choice: 'new'; copy: string[] } | { choice: 'overwrite' } | { choice: 'cancel' };
@@ -58,7 +60,7 @@ export function linkChoiceText(q: LinkQuestion): {
 } {
   const g = q.geometry.name;
   return {
-    title: `${q.study.title} has a new shape`,
+    title: `${q.edits ? g : q.study.title} has a new shape`,
     copy: `${g} is used by ${listNames(q.studies.map((s) => s.title))}. How should the simulation get the new shape?`,
     newLabel: 'Save as new geometry',
     newLine: `Adds ${q.new_name}. ${g} and its studies, meshes and results stay as they are.`,

@@ -8,6 +8,7 @@ import { handleProjectHydrate } from '../project-hydrate.js';
 import { caseDetachAllowed, caseDirBelongsToProject } from '../project-isolation.js';
 import { handleW17Api } from '../w17-simulation.js';
 import { registerLostFaceRoutes } from './link-routes.ts';
+import { registerOriginalImportRoute } from './geometry-edit-routes.ts';
 import { handleW18Api } from '../w18-materials.js';
 import { handleW19Api } from '../w19-boundary-conditions.js';
 import { handleW20Api } from '../w20-mesh.js';
@@ -283,6 +284,8 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
   router.add(['GET', 'HEAD', 'POST'], '/api/geometry', wrap(handleW16Api));
   // A linked geometry's lost faces (API 1.5), ahead of the catch-all below.
   registerLostFaceRoutes(router, worker);
+  // An adopted geometry's original, imported again (API 1.7).
+  registerOriginalImportRoute(router, worker, importGeometry);
   router.add(['GET', 'HEAD', 'POST'], '/api/geometry/**rest', wrap(handleW16Api));
 
   router.post('/api/case/attach', async (ctx) => {

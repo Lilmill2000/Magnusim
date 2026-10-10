@@ -31,6 +31,7 @@ import { openPluginResults } from './pluginResults';
 import type { WorkspaceRoute } from './route';
 import { linkQuietText, linkReportText, linkTouchesSetup } from './linkReport';
 import { savedAsNewText, showLinkChoice } from './linkChoice';
+import { dropLaunch, launchFor } from './geometryActions';
 
 // When the host gives the keyboard to the frame (it lives with the leave guard, which needs it too).
 export { frameMayTakeFocus };
@@ -463,16 +464,16 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       linkReport: (result, setup) => {
         const touched = linkTouchesSetup(result, setup);
         if (leaveInProgress() || leaveApproved()) {
-          heldReport.current = touched ? linkReportText(result, setup) : null;
+          heldReport.current = touched ? linkReportText(result, setup, 1, named.current.title) : null;
           return;
         }
         if (linked.current) linked.current.reported = true;
         if (!touched) {
-          const quiet = linkQuietText(result, setup);
+          const quiet = linkQuietText(result, setup, 1, named.current.title);
           if (quiet) setToast({ id: ++toastSerial.current, text: quiet, kind: 'info' });
           return;
         }
-        const t = linkReportText(result, setup);
+        const t = linkReportText(result, setup, 1, named.current.title);
         void pageDialog((turn) =>
           window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ title: t.title, copy: t.copy, yes: 'OK', notice: true, ...turn }) : Promise.resolve(true),
         );
@@ -533,7 +534,12 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       projectTitle: projectTitle(route.projectId),
       studyId: route.studyId,
     };
-    const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, hooks), hooks);
+    // What the user right-clicked to open it (API 1.7): the page gets it once.
+    const launch = {
+      get: () => launchFor(route.projectId, route.plugin, route.studyId),
+      drop: () => dropLaunch(route.projectId, route.plugin, route.studyId),
+    };
+    const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, hooks, launch), hooks);
     bridgeRef.current = bridge;
     const detach = bridge.attach();
     const timer = setTimeout(() => {

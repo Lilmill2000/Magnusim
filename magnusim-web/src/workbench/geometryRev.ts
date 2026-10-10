@@ -93,6 +93,8 @@ const host: Host = {
 };
 
 const shown = new Map<string, Shown>();
+/** Geometries this tab has seen as plain imports (API 1.7): one a study then takes over is loaded again. */
+const plainSeen = new Set<string>();
 const jobs = new Map<string, LinkJobView>();
 const streams = new Map<string, EventSource>();
 const listeners = new Set<() => void>();
@@ -169,6 +171,7 @@ export async function adoptServerRev(geometryId: string, accept = true): Promise
     const doc = (await r.json()) as { geometries?: LinkTreeNode[] };
     const node = (doc.geometries || []).find((g) => String(g.id) === geometryId) || null;
     if (accept && node && typeof node.rev === 'number') {
+      plainSeen.delete(geometryId);
       shown.set(geometryId, { rev: node.rev, names8: String(node.names8 || ''), updating: !!node.updating, name: String(node.name || '') });
       changed();
     }
@@ -384,6 +387,7 @@ export function noteTreeGeometries(projectId: string, geometries: LinkTreeNode[]
   if (projectId !== projectOf) {
     projectOf = projectId;
     shown.clear();
+    plainSeen.clear();
     jobs.clear();
     reloading = new Map();
     for (const es of streams.values()) es.close();
@@ -398,10 +402,23 @@ export function noteTreeGeometries(projectId: string, geometries: LinkTreeNode[]
         if (run && run.id && run.older_geometry) olderRuns.set(String(run.id), String(g.name || ''));
       }
     }
-    if (!gid || typeof g.rev !== 'number') continue;
+    if (!gid) continue;
+    if (typeof g.rev !== 'number') {
+      plainSeen.add(gid);
+      continue;
+    }
     const next: Shown = { rev: g.rev, names8: String(g.names8 || ''), updating: !!g.updating, name: String(g.name || '') };
     const before = shown.get(gid);
-    if (!before) {
+    if (!before && plainSeen.has(gid)) {
+      // A plain import a study took over (its first edit, API 1.7): its new shape is loaded,
+      // then shown at its rev (saves made meanwhile are refused).
+      plainSeen.delete(gid);
+      const target = next;
+      void reloadNow(gid).then(() => {
+        shown.set(gid, target);
+        changed();
+      });
+    } else if (!before) {
       shown.set(gid, next);
     } else if (before.rev !== next.rev || before.names8 !== next.names8 || (before.updating && !next.updating)) {
       // Moved only once the geometry is loaded again: saves made meanwhile are refused.
@@ -537,6 +554,7 @@ export async function chooseLinkFromRow(geometryId: string): Promise<boolean> {
 /** Tests: forget everything this module holds. */
 export function resetGeometryRevForTests(): void {
   shown.clear();
+  plainSeen.clear();
   olderRuns.clear();
   jobs.clear();
   for (const es of streams.values()) es.close();

@@ -202,7 +202,9 @@ class FaceMap:
     @staticmethod
     def load(stage: Path, geom_dir: Path, state: dict[str, Any] | None) -> FaceMap:
         doc = _read(stage / "map.json") or {}
-        old = Table.load(Path(geom_dir) / "cad_preview.json", (state or {}).get("bodies"))
+        # An adoption (API 1.7) maps from the original's face table with the page's names on it.
+        named = stage / "old_named.json"
+        old = Table.load(named if named.is_file() else Path(geom_dir) / "cad_preview.json", (state or {}).get("bodies"))
         new_meta = stage / "new" / "cad_preview.json"
         new = Table.load(new_meta) if new_meta.is_file() else old
         identity = bool(doc.get("identity"))
@@ -955,6 +957,26 @@ def build_plan(
     return {"change": change, "rev": new_rev, "patches": patches, "report": report}
 
 
+def _inside_report(planned: list[Planned], ctx: Ctx, out: dict[str, list[dict[str, Any]]]) -> None:
+    """Boundary conditions now on a face two bodies share (the new face table's ``shared_with``):
+    that face is inside the part, so the boundary condition is not used there (5.14, API 1.7)."""
+    for p in planned:
+        if p.stale or p.rec.kind != "bc":
+            continue
+        faces: list[str] = []
+        for path, what in p.rec.fields:
+            if what != "face" or _mirror_of(p.rec.kind, path) is not None:
+                continue
+            now = p.values.get(path)
+            for v in now if isinstance(now, list) else ([now] if now else []):
+                idx = face_index(v)
+                nf = ctx.fmap.new.faces.get(idx or -1) or {}
+                if isinstance(nf.get("shared_with"), int) and not isinstance(nf.get("shared_with"), bool) and str(v) not in faces:
+                    faces.append(str(v))
+        if faces:
+            out["inside"].append({"studyId": p.rec.study_id, "studyTitle": p.rec.study_title, "kind": p.rec.kind, "item": p.rec.name, "faces": faces, "bodies": 2})
+
+
 def _setup_report(planned: list[Planned], ctx: Ctx) -> dict[str, list[dict[str, Any]]]:
     """What of a shape change touches the user's setup (the host's report, 5.14).
 
@@ -964,9 +986,10 @@ def _setup_report(planned: list[Planned], ctx: Ctx) -> dict[str, list[dict[str, 
     never reported, however far it moved. Lost and claimed-twice faces are reported by
     their own lists; a face of an ambiguous name group is neither split nor merged.
     """
-    out: dict[str, list[dict[str, Any]]] = {"moved_far": [], "split": [], "merged": []}
+    out: dict[str, list[dict[str, Any]]] = {"moved_far": [], "split": [], "merged": [], "inside": []}
     if ctx.same_shape:
         return out
+    _inside_report(planned, ctx, out)
     rep = ctx.fmap.report or {}
     moved = {face_index(m.get("old")) for m in rep.get("moved_far") or [] if isinstance(m, dict)}
     merged = {str(m.get("target")): int(m.get("faces") or 0) for m in rep.get("merged") or [] if isinstance(m, dict)}

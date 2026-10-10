@@ -21,7 +21,7 @@ const SCOPE: BridgeScope = {
 };
 
 const STUDY = { id: 'st-1', kind: 'bench_case', title: 'Wing', rev: 3 } as unknown as StudyRecord;
-const UPLOADING = 'A file upload has not finished.';
+const UPLOADING = 'It is still writing a file in its own folder of the project. Leaving stops that write; nothing else in the project changes.';
 
 type Call = { url: string; method: string; body: unknown };
 type Answer = { status: number; body: unknown } | Response;
@@ -1079,7 +1079,7 @@ describe('WorkspaceBridge: the handshake', () => {
     const [msg, origin, transfer] = t.posted[0] as [Record<string, unknown>, string, MessagePort[]];
     expect(origin).toBe('*');
     expect(msg).toMatchObject({ magnusim: 'welcome', instance: 'i1' });
-    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.6' });
+    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.7' });
     expect(t.bridge.connected()).toBe(true);
     expect(t.h.connected).toHaveBeenCalledTimes(1);
 
@@ -1394,7 +1394,7 @@ describe('WorkspaceCalls: linked geometries (project.linkGeometry, API 1.5)', ()
       { event: 'linkProgress', data: { token: 't1', stage: 'matching', fraction: null } },
     ]);
     // The host hears the result and what of it touched the user's setup (nothing in the end event here).
-    expect(h.linkReport).toHaveBeenCalledWith(RESULT, { movedFar: [], split: [], merged: [], stale: [] });
+    expect(h.linkReport).toHaveBeenCalledWith(RESULT, { movedFar: [], split: [], merged: [], stale: [], inside: [] });
   });
 
   it('keeps link jobs follow-only: nothing a page calls stops one', async () => {

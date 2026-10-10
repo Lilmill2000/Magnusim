@@ -1025,7 +1025,7 @@ def test_the_setup_report_names_only_faces_a_record_refers_to(tmp_path: Path, pr
     rep = p.commit("v4", 1)["report"]
     # The part's own statistics still count every face (LinkResult.match, the plugin's).
     assert rep["match"]["movedFar"] == 6 and len(rep["moved_far"]) == 6
-    assert rep["setup"] == {"moved_far": [], "split": [], "merged": []}
+    assert rep["setup"] == {"moved_far": [], "split": [], "merged": [], "inside": []}
     q = Proj(tmp_path / "boss", previews)
     t = q.study()
     _write(t / BC / "BC_Top" / "bc.json", {"id": "top", "name": "Top", "faces": ["face 15@Body1"], "face": "face 15@Body1", "geometry_rev": 1})

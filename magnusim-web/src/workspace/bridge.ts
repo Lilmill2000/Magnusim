@@ -35,12 +35,21 @@
  * the page's nav.leaveProgress and nav.leaveDone (with its camera), or `leaveAbort` when
  * the user cancels or the hook stalls. While it runs, the bridge tells the guard what
  * happens (calls in flight, the link's stages, the host's question, the job accepted).
+ *
+ * Editing a project geometry (1.7): the context carries the geometry the study edits
+ * (`geometry`, /api/plugin-geometry/target) and, once, what the user right-clicked to open
+ * it (`launch`); project.geometrySource streams its STEP file to the page as a Blob (its
+ * progress goes to the page as `sourceProgress`), project.geometryFaces answers its face
+ * table, and project.linkGeometry passes `originalNames` for the link that adopts it.
  */
 import type {
   ComputeJob,
+  EditedGeometry,
   FileInfo,
   FileWriteResult,
+  GeometryFaces,
   JobEvent,
+  LaunchTarget,
   LinkedGeometry,
   LinkResult,
   StudyRecord,
@@ -54,7 +63,7 @@ import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestio
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.6';
+export const HOST_API_VERSION = '1.7';
 /** A link job's id (gl-<time>-<hex>, scripts/link-store.js LINK_JOB_RE). */
 const LINK_JOB_ID = /^gl-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
 const PROBE_MS = 1500;
@@ -62,8 +71,12 @@ const METHOD_NAME = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,120}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 /** The longest unsaved-work message the host shows (after cleaning). */
 export const DIRTY_MESSAGE_MAX = 200;
-/** What the host shows while an upload is open and the page gave no message of its own. */
-const UPLOAD_OPEN = 'A file upload has not finished.';
+/**
+ * What the host shows while a write of the page to its own folder is open and the page gave no
+ * message of its own. Leaving stops that write; the project's geometries and simulations are
+ * not touched by it (the leave question adds nothing about discarding).
+ */
+export const UPLOAD_OPEN = 'It is still writing a file in its own folder of the project. Leaving stops that write; nothing else in the project changes.';
 // C0, DEL and C1 (\p{Cc}), line and paragraph separators, and bidi controls.
 const DIRTY_MESSAGE_CONTROLS = /[\p{Cc}\u{2028}\u{2029}\u{200e}\u{200f}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu;
 
@@ -221,9 +234,12 @@ export interface BridgeHooks {
 
 export class BridgeError extends Error {
   code: string;
-  constructor(message: string, code = 'failed') {
+  /** Seconds to wait before asking again (a `not_ready` refusal, API 1.7). */
+  retryAfter?: number;
+  constructor(message: string, code = 'failed', retryAfter?: number) {
     super(message);
     this.code = code;
+    if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter > 0) this.retryAfter = retryAfter;
   }
 }
 
@@ -328,6 +344,8 @@ export function linkBody(params: Record<string, unknown>): Record<string, unknow
   const format = (params.shape as Record<string, unknown>).format;
   const body: Record<string, unknown> = { shape: { ...shape, format: typeof format === 'string' ? format : '' } };
   body.face_names = params.faceNames === undefined || params.faceNames === null ? null : linkFileBody(params.faceNames, 'faceNames');
+  // API 1.7: the original's face names, for the link that adopts the geometry the study edits.
+  if (params.originalNames !== undefined && params.originalNames !== null) body.original_names = linkFileBody(params.originalNames, 'originalNames');
   if (!isCount(params.sourceVersion)) throw badParam('sourceVersion (a whole number)');
   body.source_version = params.sourceVersion;
   const based = params.basedOnRev;
@@ -374,10 +392,21 @@ export const THEME: ThemeInfo = { name: 'light', stylesheet: '/plugin-sdk/theme.
 
 /** A refused answer as a BridgeError: the app's own code when it names one, else one from the status. */
 async function refusal(r: Response): Promise<BridgeError> {
-  const j = (await r.json().catch(() => ({}))) as { error?: string; code?: unknown };
+  const j = (await r.json().catch(() => ({}))) as { error?: string; code?: unknown; retryAfter?: unknown };
   const code = typeof j.code === 'string' && j.code ? j.code : r.status === 409 ? 'conflict' : r.status === 404 ? 'not_found' : 'failed';
-  return new BridgeError(String(j.error || `the app answered ${r.status}`), code);
+  const wait = Number(j.retryAfter ?? r.headers.get('Retry-After'));
+  return new BridgeError(String(j.error || `the app answered ${r.status}`), code, code === 'not_ready' && wait > 0 ? wait : undefined);
 }
+
+/** The one-shot launch target a geometry action left for this page (API 1.7). */
+export interface LaunchSource {
+  get(): LaunchTarget | null;
+  /** The page got it: a reload of the page gets none. */
+  drop(): void;
+}
+
+/** How often a geometrySource read tells the page how far it is. */
+const SOURCE_PROGRESS_MS = 100;
 
 async function api<T>(url: string, init?: { body?: unknown; method?: string }): Promise<T> {
   const r = await fetch(url, {
@@ -459,10 +488,15 @@ export class WorkspaceCalls {
   /** The unsaved-work state the host was last told. */
   private told = { dirty: false, message: '' };
   private push: (msg: Record<string, unknown>) => void = () => undefined;
+  /** What the user right-clicked to open this study (API 1.7), given once with the context. */
+  private readonly launch: LaunchSource | null;
+  /** project.geometrySource reads in flight, by the page's token (API 1.7). */
+  private readonly sourceReads = new Map<string, AbortController>();
 
-  constructor(scope: BridgeScope, hooks: BridgeHooks) {
+  constructor(scope: BridgeScope, hooks: BridgeHooks, launch: LaunchSource | null = null) {
     this.scope = scope;
     this.hooks = hooks;
+    this.launch = launch;
   }
 
   setPush(push: (msg: Record<string, unknown>) => void): void {
@@ -580,15 +614,105 @@ export class WorkspaceCalls {
   }
 
   async context(): Promise<WorkspaceContext> {
+    const [study, geometry] = await Promise.all([this.study(), this.editedGeometry()]);
+    let launch: LaunchTarget | null = null;
+    try {
+      launch = this.launch ? this.launch.get() : null;
+      this.launch?.drop();
+    } catch {
+      launch = null;
+    }
     return {
       plugin: this.scope.plugin,
       workspace: this.scope.workspace,
       project: { id: this.scope.projectId, title: this.scope.projectTitle },
-      study: await this.study(),
+      study,
       units: this.hooks.units(),
       theme: THEME,
       hostVersion: HOST_API_VERSION,
+      geometry,
+      launch,
     };
+  }
+
+  /** The project geometry this study edits (API 1.7), or null (also when the app cannot say). */
+  private async editedGeometry(): Promise<EditedGeometry | null> {
+    try {
+      const r = await api<{ geometry?: EditedGeometry | null }>(
+        `/api/plugin-geometry/target?${this.q({ plugin: this.scope.plugin, study_id: this.scope.studyId })}`,
+      );
+      return r.geometry || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * project.geometrySource (API 1.7): the STEP file of the geometry this study edits, read
+   * in chunks (the page hears how far: `sourceProgress`) and handed over as one Blob.
+   */
+  private async geometrySource(token: string): Promise<Record<string, unknown>> {
+    const s = this.scope;
+    const ctl = new AbortController();
+    if (token) this.sourceReads.get(token)?.abort();
+    if (token) this.sourceReads.set(token, ctl);
+    try {
+      const r = await fetch(`/api/plugin-geometry/source?${this.q({ plugin: s.plugin, study_id: s.studyId, format: 'step' })}`, {
+        cache: 'no-store',
+        signal: ctl.signal,
+      });
+      if (!r.ok) throw await refusal(r);
+      const total = Number(r.headers.get('Content-Length')) || 0;
+      const tell = (done: number) => {
+        if (token) this.push({ event: 'sourceProgress', data: { token, done, total: total || done } });
+      };
+      let blob: Blob;
+      const reader = r.body ? r.body.getReader() : null;
+      if (!reader) {
+        blob = await r.blob();
+        tell(blob.size);
+      } else {
+        const parts: BlobPart[] = [];
+        let done = 0;
+        let last = 0;
+        tell(0);
+        for (;;) {
+          const { value, done: end } = await reader.read();
+          if (end) break;
+          if (!value) continue;
+          parts.push(value);
+          done += value.byteLength;
+          const now = Date.now();
+          if (now - last >= SOURCE_PROGRESS_MS) {
+            last = now;
+            tell(done);
+          }
+        }
+        tell(done);
+        blob = new Blob(parts, { type: 'application/step' });
+      }
+      if (total && blob.size !== total) throw new BridgeError('The file did not arrive whole. Try again.', 'failed');
+      let fileName = 'source.step';
+      try {
+        fileName = decodeURIComponent(r.headers.get('X-File-Name') || '') || fileName;
+      } catch {
+        /* the default name */
+      }
+      return {
+        geometryId: String(r.headers.get('X-Geometry-Id') || ''),
+        blob,
+        fileName,
+        format: 'step',
+        size: blob.size,
+        sha256: String(r.headers.get('X-Sha256') || ''),
+        adopted: r.headers.get('X-Adopted') === '1',
+      };
+    } catch (e) {
+      if (ctl.signal.aborted) throw new BridgeError('The read was stopped.', 'aborted');
+      throw e;
+    } finally {
+      if (token && this.sourceReads.get(token) === ctl) this.sourceReads.delete(token);
+    }
   }
 
   async handle(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -668,6 +792,26 @@ export class WorkspaceCalls {
         this.wantsGeometry = true;
         this.openLinkStream();
         return { ok: true };
+      // Editing a project geometry (API 1.7): its STEP file and its face table.
+      case 'project.geometrySource': {
+        const formats = Array.isArray(params.formats) ? params.formats.map(String) : ['step'];
+        if (!formats.includes('step')) {
+          throw new BridgeError("This app serves a project geometry only as 'step'.", 'unsupported_format');
+        }
+        return this.geometrySource(typeof params.token === 'string' ? params.token.slice(0, 64) : '');
+      }
+      case 'project.geometrySourceAbort': {
+        const token = typeof params.token === 'string' ? params.token.slice(0, 64) : '';
+        this.sourceReads.get(token)?.abort();
+        return { ok: true };
+      }
+      case 'project.geometryFaces': {
+        const r = await api<GeometryFaces & { ok?: boolean }>(
+          `/api/plugin-geometry/faces?${this.q({ plugin: s.plugin, study_id: s.studyId })}`,
+        );
+        const { ok: _ok, ...faces } = r;
+        return faces;
+      }
       case 'prefs.units':
         return this.hooks.units();
       // The plugin's own prefs for this user, in every project (API 1.7). The plugin is
@@ -1422,6 +1566,8 @@ export class WorkspaceCalls {
     this.caseStream?.close();
     this.caseStream = null;
     this.cases.clear();
+    for (const ctl of this.sourceReads.values()) ctl.abort();
+    this.sourceReads.clear();
     for (const id of this.uploads.keys()) this.dropUpload(id);
     this.uploads.clear();
     this.epoch++;
@@ -1633,7 +1779,7 @@ export class WorkspaceBridge {
     } catch (err) {
       const e = err instanceof BridgeError ? err : new BridgeError(err instanceof Error ? err.message : String(err));
       if (e.code === 'not_allowed') this.hooks.log(`workspace ${this.calls.scope.plugin}: ${e.message}`, params);
-      port.postMessage({ id: m.id, error: { message: e.message, code: e.code } });
+      port.postMessage({ id: m.id, error: { message: e.message, code: e.code, ...(e.retryAfter ? { retryAfter: e.retryAfter } : {}) } });
     } finally {
       answered();
     }

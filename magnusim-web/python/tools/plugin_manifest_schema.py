@@ -7,14 +7,14 @@ JSON Schema (``docs/plugins/manifest.schema.json``, written by
 (``tools/plugin_check.py``):
 
 - the tables of arrays (``[[study_kinds]]``, ``[[workspaces]]``,
-  ``[[start_actions]]``) take their keys, types and defaults from the
+  ``[[start_actions]]``, ``[[geometry_actions]]``) take their keys, types and defaults from the
   dataclasses' fields, so a field added there shows up here;
 - every top-level ``PluginManifest`` field is mapped to its manifest key or
   listed as one the host sets itself. A field this module does not know makes
   :func:`build_schema` raise, so the generated docs cannot fall behind
   ``manifest.py`` silently (``gen:plugin-docs:check`` fails in CI);
 - patterns and enums are the loader's own (``PLUGIN_KEY_RE``, ``KIND_KEY_RE``,
-  the icon path pattern, ``START_ACTION_PLACES``).
+  the icon path pattern, ``START_ACTION_PLACES``, ``GEOMETRY_ACTION_PLACES``).
 
 The loader stays the authority on what loads; the schema adds what a parser
 cannot say, such as a misspelt key, which the host ignores without a word.
@@ -61,6 +61,7 @@ FEATURE_API: dict[str, str] = {
     "start_actions": "1.4",
     "study_kinds.links_geometry": "1.4",
     "default_analysis.study_name": "1.4",
+    "geometry_actions": "1.7",
 }
 
 # PluginManifest fields that are not manifest keys: the host or register() sets them.
@@ -174,6 +175,14 @@ TOP_LEVEL: dict[str, dict[str, Any]] = {
         "items": "StartAction",
         "description": "Buttons that create a study of a kind and open it in its workspace.",
     },
+    "geometry_actions": {
+        "type": "array",
+        "items": "GeometryAction",
+        "description": (
+            "Actions on a project geometry (\"Edit in ...\"): each opens a study of a kind that links geometry "
+            "in its workspace, to edit that geometry and send the edit back."
+        ),
+    },
     "files": {
         "type": "object",
         "properties": {
@@ -274,6 +283,33 @@ ARRAY_TABLES: dict[str, tuple[type, tuple[str, ...], dict[str, dict[str, Any]]]]
             },
         },
     ),
+    "GeometryAction": (
+        manifest_mod.GeometryAction,
+        ("study_kind", "label"),
+        {
+            "study_kind": {
+                "pattern": KIND_KEY_RE.pattern,
+                "description": "A [[study_kinds]] key with a workspace and links_geometry = true; one action per kind.",
+            },
+            "label": {"minLength": 1, "maxLength": 40, "description": "The menu item's and the button's text, one line."},
+            "hint": {"maxLength": 120, "description": "A line under the menu item and the button."},
+            "icon": {"pattern": _ICON_PATH_RE.pattern, "description": "One SVG path; the kind's icon when left out."},
+            "formats": {
+                "items": {"type": "string", "enum": list(manifest_mod.GEOMETRY_ACTION_FORMATS), "x-open-enum": True},
+                "description": (
+                    "The imports it edits (default: all). \"mesh\" and a format this host does not know are left out "
+                    "with a warning; a mesh import is never offered."
+                ),
+            },
+            "places": {
+                "items": {"type": "string", "enum": list(manifest_mod.GEOMETRY_ACTION_PLACES), "x-open-enum": True},
+                "description": (
+                    "Where the host offers it (default: all): the tree's right-click menu, the viewport's right-click "
+                    "on the part, the Geometry panel. A place this host does not know is left out with a warning."
+                ),
+            },
+        },
+    ),
     "Requirement": (
         Requirement,
         ("name",),
@@ -332,6 +368,8 @@ def _table_schema(name: str) -> dict[str, Any]:
             prop["default"] = default
         if name == "StartAction" and field.name == "places":
             prop["default"] = list(manifest_mod.START_ACTION_PLACES)
+        if name == "GeometryAction" and field.name in ("formats", "places"):
+            prop["default"] = list(manifest_mod.GEOMETRY_ACTION_FORMATS if field.name == "formats" else manifest_mod.GEOMETRY_ACTION_PLACES)
         prop.update({k: v for k, v in extra.items()})
         if prop.get("type") == "array" and "items" in extra:
             prop["items"] = extra["items"]

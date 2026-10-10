@@ -47,6 +47,35 @@ class StartAction:
     header_label: str = ""
 
 
+# Where the host draws a geometry action (manifest ``[[geometry_actions]]`` ``places``):
+# a geometry's right-click menu in the tree, the viewport's right-click on the part, and
+# a button in the Geometry panel.
+GEOMETRY_ACTION_PLACES = ("tree", "viewport", "panel")
+# What a geometry action may edit (``formats``): the geometry's import format. 1.7 serves
+# every one of them as STEP (ws.project.geometrySource); a mesh import is never offered.
+GEOMETRY_ACTION_FORMATS = ("step", "iges", "brep")
+
+
+@dataclass(frozen=True)
+class GeometryAction:
+    """An action on a project geometry: it opens a study of a kind in its workspace to
+    edit that geometry (manifest ``[[geometry_actions]]``, API 1.7).
+
+    The kind needs a workspace and ``links_geometry``. The host creates the study the
+    first time (or opens the one already editing or linking the geometry); the page reads
+    the geometry with ``ws.project.geometrySource()`` and sends its edit back with
+    ``ws.project.linkGeometry``. ``formats`` and ``places`` keep only what this host
+    knows, in the manifest's order.
+    """
+
+    study_kind: str
+    label: str
+    hint: str = ""
+    icon: str = ""
+    formats: tuple[str, ...] = GEOMETRY_ACTION_FORMATS
+    places: tuple[str, ...] = GEOMETRY_ACTION_PLACES
+
+
 @dataclass(frozen=True)
 class WorkspaceSpec:
     """A full workspace a plugin draws itself (manifest ``[[workspaces]]``, API 1.1).
@@ -133,6 +162,8 @@ class PluginManifest:
     workspaces: list[WorkspaceSpec] = field(default_factory=list)
     # Buttons that create a study and open it ([[start_actions]], API 1.4).
     start_actions: list[StartAction] = field(default_factory=list)
+    # Actions that open a project geometry in a workspace to edit it ([[geometry_actions]], API 1.7).
+    geometry_actions: list[GeometryAction] = field(default_factory=list)
     # What the manifest asked for that this host ignores (shown on its Settings row).
     manifest_warnings: list[str] = field(default_factory=list)
     # Size limits for its own files in a project ([files]).
