@@ -191,6 +191,7 @@ import {
 import { createToastQueue } from './toastQueue';
 import { runProgressText } from './runProgressText';
 import { carrySettle } from './runSettle';
+import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
@@ -20098,9 +20099,23 @@ async function importGeometryClient(opts, upload) {
   return window.__CFD_W16__;
 }
 
+/** After a geometry's removal: this tab forgets its studies, as the server did (splitStudiesOnRemove). */
+function forgetRemovedGeometryStudies(removal, pid) {
+  if (!removal || !removal.removed.length) return;
+  studyCatalog.simulations = applyStudyOrderLock(noteStudyList(removal.left, pid), pid);
+  const active = studyCatalog.simulation && removal.removed.includes(String(studyCatalog.simulation.id || ''));
+  // With a geometry left, alignStudyToShownGeometry (below) opens one of its studies.
+  if (active && !w16State.geometry) clearStudyScope();
+  else {
+    try { refreshSetupTree(); } catch (_) {}
+  }
+}
+
 async function removeGeometryClient(geomId) {
   const pid = w16State.project && w16State.project.id;
   if (!pid || !geomId) return;
+  const firstGeom = importedGeometries()[0];
+  const removal = splitStudiesOnRemove(studyCatalog.simulations || [], String(geomId), String((firstGeom && firstGeom.id) || ''));
   const r = await fetch('/api/geometry/remove', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -20135,6 +20150,7 @@ async function removeGeometryClient(geomId) {
     try { refreshSetupTree(); } catch (_) {}
     try { dismissTreeDetail(); } catch (_) {}
   }
+  forgetRemovedGeometryStudies(removal, pid);
   publishW16({ imported: !!w16State.geometry });
   applyWorkbenchStage();
   if (w16State.geometry && !(await alignStudyToShownGeometry())) await reloadGeometryScopedSetup();
