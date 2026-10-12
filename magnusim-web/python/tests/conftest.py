@@ -48,6 +48,13 @@ def _own_local_json(request, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("CFDDESK_LOCAL_JSON", str(tmp_path_factory.mktemp("local") / ".magnusim-local.json"))
 
 
+@pytest.fixture(autouse=True)
+def _own_mesh_geometry_cache(tmp_path_factory, monkeypatch):
+    """Each test heals CAD into a cache folder of its own (cfddesk.mesh.heal_cache):
+    nothing lands in the app's .cache, and a mesh never reuses another test's work."""
+    monkeypatch.setenv("MAGNUSIM_MESH_GEOMETRY_CACHE", str(tmp_path_factory.mktemp("mesh-geometry")))
+
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     return FIXTURES
