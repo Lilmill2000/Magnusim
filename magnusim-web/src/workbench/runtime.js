@@ -213,6 +213,7 @@ import {
 } from './geometryRev';
 import { bodyDisplay, setShownFaceTable } from './faceNames';
 import { getBodyView, publishBodyView, setBodyViewHandler } from './bodyView';
+import { buildCadFaceIndex, extractCells, hiddenFaceBodies, triSoupFromTris, triSoupSpan, visibleCellMask } from './cadHideIndex';
 import { fillViewportGeometryActions } from './viewportGeometryActions';
 import { cameraMovedSince, isCameraDrag } from './landingCamera';
 import { linkNeedsAction, linkQuietText, linkReportText, linkTouchesSetup, setupOf } from '../workspace/linkReport';
@@ -18494,19 +18495,33 @@ function applyGeomHighlight() {
     const solidRaw = solidArr && solidArr.getData ? solidArr.getData() : null;
     const rgb = new Uint8Array(n * 3);
     const restIsCad = usePreview && !useFaces && !useBody;
+    // Face id -> the bodies named with it (0 = any), so a cell asks a Map, not every pick.
+    const byFace = (refs) => {
+      const m = new Map();
+      refs.forEach((r) => {
+        if (!m.has(r.faceId)) m.set(r.faceId, []);
+        m.get(r.faceId).push(r.bodyId);
+      });
+      return m;
+    };
+    const named = (m, fid, bid) => {
+      const list = m.get(fid);
+      return !!list && list.some((b) => !b || !bid || b === bid);
+    };
+    const faceRefMap = byFace(faceRefs);
+    const previewRefMap = byFace(previewRefs);
+    const focusRef = w16State.focusedFace ? parseFaceRef(w16State.focusedFace) : null;
     for (let i = 0; i < n; i++) {
       const fid = faceRaw ? Number(faceRaw[i]) : faceArr ? Number(faceArr.getValue(i)) : 0;
       const bid = solidRaw ? Number(solidRaw[i]) : solidArr ? Number(solidArr.getValue(i)) : 0;
       const on = useFaces
-        ? faceRefs.some((r) => r.faceId === fid && (!r.bodyId || !bid || r.bodyId === bid))
+        ? named(faceRefMap, fid, bid)
         : !!(useBody && selectedBodyIds.includes(bid));
-      const focusRef = w16State.focusedFace ? parseFaceRef(w16State.focusedFace) : null;
       const focused =
         !!(focusRef &&
           focusRef.faceId === fid &&
           (!focusRef.bodyId || !bid || focusRef.bodyId === bid));
-      const previewed = previewRefs.some((r) =>
-        r.faceId === fid && (!r.bodyId || !bid || r.bodyId === bid));
+      const previewed = named(previewRefMap, fid, bid);
       if (focused || previewed) {
         rgb[i * 3] = 46;
         rgb[i * 3 + 1] = 196;
@@ -23111,6 +23126,32 @@ function polylinePointAtFraction(pts, t) {
   return pts[pts.length - 1].slice();
 }
 
+/** polylinePointAtFraction at each of these fractions, the polyline measured once (same arithmetic). */
+function polylinePointsAtFractions(pts, ts) {
+  if (!pts || !pts.length) return ts.map(() => null);
+  if (pts.length === 1) return ts.map(() => pts[0].slice());
+  const segs = new Float64Array(pts.length);
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    segs[i] = v3len(v3sub(pts[i], pts[i - 1]));
+    len += segs[i];
+  }
+  if (!(len > 0)) return ts.map(() => pts[0].slice());
+  return ts.map((t) => {
+    const want = Math.max(0, Math.min(1, t)) * len;
+    let acc = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const seg = segs[i];
+      if (acc + seg >= want || i === pts.length - 1) {
+        const u = seg > 1e-18 ? (want - acc) / seg : 0;
+        return v3add(pts[i - 1], v3scale(v3sub(pts[i], pts[i - 1]), Math.max(0, Math.min(1, u))));
+      }
+      acc += seg;
+    }
+    return pts[pts.length - 1].slice();
+  });
+}
+
 function fitEdgeCircle(pts) {
   if (!pts || pts.length < 8) return null;
   const n = pts.length;
@@ -23218,19 +23259,21 @@ function cadEdgeFaceMatchTol() {
   return Math.max(span * 2e-4, 0.02);
 }
 
-function cadFacesAlongEdge(pts) {
+function cadFacesAlongEdge(pts, slop2In) {
   if (!pts || pts.length < 2) return [];
   const idx = ensureCadNearestFaceIndex();
   if (!idx || idx.empty || !idx.facesOnEdge) return [];
-  const slop2 = cadEdgeFaceMatchTol() * cadEdgeFaceMatchTol();
+  const slop2 = slop2In != null ? slop2In : cadEdgeFaceMatchTol() * cadEdgeFaceMatchTol();
   const counts = new Map();
   const nSamp = Math.min(11, Math.max(5, Math.min(pts.length, 9)));
-  let samples = 0;
-  for (let s = 1; s <= nSamp; s++) {
-    const p = polylinePointAtFraction(pts, s / (nSamp + 1));
-    if (!p) continue;
-    samples += 1;
-    const on = idx.facesOnEdge(p, slop2) || [];
+  const fr = [];
+  for (let s = 1; s <= nSamp; s++) fr.push(s / (nSamp + 1));
+  const at = polylinePointsAtFractions(pts, fr).filter(Boolean);
+  const samples = at.length;
+  // One grid look-up for all the edge's points (cadHideIndex.ts).
+  const onEach = idx.facesOnEdgeMany ? idx.facesOnEdgeMany(at, slop2) : at.map((p) => idx.facesOnEdge(p, slop2));
+  for (let q = 0; q < onEach.length; q++) {
+    const on = onEach[q] || [];
     for (let i = 0; i < on.length; i++) {
       const fid = on[i];
       if (!fid) continue;
@@ -23250,12 +23293,74 @@ function attachCadEdgeAdjacentFaces() {
   if (!cadEdgeCache.length) rebuildCadEdgeCache();
   if (!cadEdgeCache.length) return;
   if (!cadTriCache.length) rebuildCadTriCache();
+  // The tolerance is the same for every edge: worked out once (it walks every triangle).
+  let slop2 = null;
   for (let i = 0; i < cadEdgeCache.length; i++) {
     const e = cadEdgeCache[i];
     if (e.faceIds && e.faceRule === CAD_EDGE_FACE_RULE) continue;
-    e.faceIds = cadFacesAlongEdge(e.pts);
+    if (slop2 == null) slop2 = cadEdgeFaceMatchTol() * cadEdgeFaceMatchTol();
+    e.faceIds = cadFacesAlongEdge(e.pts, slop2);
     e.faceRule = CAD_EDGE_FACE_RULE;
   }
+}
+
+let cadEdgeFaceWarmFor = null;
+
+/**
+ * Works out every edge's faces (as attachCadEdgeAdjacentFaces does) in idle moments, a
+ * slice at a time: started when the viewport menu opens on the part, so its Hide face or
+ * Hide body finds the work done (about 0.15 s on a part with 23,000 edges).
+ */
+function warmCadEdgeFacesSoon() {
+  if (!cadEdgeCache.length || cadEdgeFaceWarmFor === cadEdgeCache) return;
+  const edges = cadEdgeCache;
+  cadEdgeFaceWarmFor = edges;
+  const later = typeof window.requestIdleCallback === 'function'
+    ? (fn) => window.requestIdleCallback(fn, { timeout: 400 })
+    : (fn) => setTimeout(() => fn(null), 0);
+  let i = 0;
+  let slop2 = null;
+  let tris = null;
+  const step = (deadline) => {
+    // Another part shown, or its triangles read again: stop (the next menu starts over).
+    if (cadEdgeCache !== edges || (tris && cadTriCache !== tris)) {
+      if (cadEdgeFaceWarmFor === edges) cadEdgeFaceWarmFor = null;
+      return;
+    }
+    const left = deadline && deadline.timeRemaining ? deadline.timeRemaining() : 0;
+    const until = performance.now() + Math.max(4, left - 1);
+    try {
+      if (!cadTriCache.length) rebuildCadTriCache();
+      tris = cadTriCache;
+      if (slop2 == null) slop2 = cadEdgeFaceMatchTol() * cadEdgeFaceMatchTol();
+      while (i < edges.length && performance.now() < until) {
+        const e = edges[i++];
+        if (e.faceIds && e.faceRule === CAD_EDGE_FACE_RULE) continue;
+        e.faceIds = cadFacesAlongEdge(e.pts, slop2);
+        e.faceRule = CAD_EDGE_FACE_RULE;
+      }
+    } catch (_) {
+      return;
+    }
+    if (i < edges.length) later(step);
+  };
+  later(step);
+}
+
+let cadEdgeIdCache = null;
+
+/** The cached edge with this id (a Map, not a search of every edge). */
+function cadEdgeById(id) {
+  const want = Number(id);
+  if (!cadEdgeIdCache || cadEdgeIdCache.list !== cadEdgeCache || cadEdgeIdCache.n !== cadEdgeCache.length) {
+    const map = new Map();
+    for (let i = 0; i < cadEdgeCache.length; i++) {
+      const e = cadEdgeCache[i];
+      if (!map.has(e.id)) map.set(e.id, e);
+    }
+    cadEdgeIdCache = { list: cadEdgeCache, n: cadEdgeCache.length, map };
+  }
+  return cadEdgeIdCache.map.get(want);
 }
 
 function cadEdgeHiddenByFaces(edge, hideIds) {
@@ -23735,7 +23840,7 @@ function applyEdgeSelectionDisplay() {
   if (hideIds && hideIds.size) attachCadEdgeAdjacentFaces();
   let radiusAt = null;
   edgeCtxSelected.forEach((id) => {
-    const e = cadEdgeCache.find((x) => x.id === id);
+    const e = cadEdgeById(id);
     if (!e || !e.pts.length) return;
     if (cadEdgeHiddenByFaces(e, hideIds)) return;
     const start = pts.length / 3;
@@ -23855,7 +23960,7 @@ function syncMeasureChip() {
   const faceIds = selectedFaceIds();
   const edges = [];
   edgeCtxSelected.forEach((id) => {
-    const e = cadEdgeCache.find((x) => x.id === id);
+    const e = cadEdgeById(id);
     if (e) edges.push(e);
   });
   const verts = selectedVertices();
@@ -23997,34 +24102,24 @@ function walkPolyCells(pd, fn) {
   }
 }
 
-function extractPolyCells(pd, keepFn) {
+/** The kept cells (polys, or lines) of pd with their points and cell arrays; `keep` is a mask or asked per cell id. */
+function extractPolyKind(pd, keep, lines) {
   if (!pd) return pd;
   const ptsIn = pd.getPoints() && pd.getPoints().getData();
   if (!ptsIn) return pd;
-  const used = new Map();
-  const newPts = [];
-  const newPolys = [];
-  const kept = [];
-  const mapId = (old) => {
-    if (used.has(old)) return used.get(old);
-    const n = newPts.length / 3;
-    newPts.push(ptsIn[old * 3], ptsIn[old * 3 + 1], ptsIn[old * 3 + 2]);
-    used.set(old, n);
-    return n;
-  };
-  walkPolyCells(pd, (cellId, ids) => {
-    if (!keepFn(cellId, ids)) return;
-    newPolys.push(ids.length);
-    for (let k = 0; k < ids.length; k++) newPolys.push(mapId(ids[k]));
-    kept.push(cellId);
-  });
+  const ca = lines ? pd.getLines && pd.getLines() : pd.getPolys && pd.getPolys();
+  const data = ca && ca.getData ? ca.getData() : null;
+  // cadHideIndex.ts: typed arrays, no per-cell arrays or Map of points.
+  const ex = extractCells(data || [], ptsIn, keep, lines ? 2 : 0);
   const out = vtkPolyData.newInstance();
   const vtkPts = vtkPoints.newInstance();
-  vtkPts.setData(Float32Array.from(newPts), 3);
+  vtkPts.setData(ex.points, 3);
   out.setPoints(vtkPts);
   const cells = vtkCellArray.newInstance();
-  cells.setData(Uint32Array.from(newPolys));
-  out.setPolys(cells);
+  cells.setData(ex.cells);
+  if (lines) out.setLines(cells);
+  else out.setPolys(cells);
+  const kept = ex.kept;
   const cd = pd.getCellData && pd.getCellData();
   const nArr = cd && cd.getNumberOfArrays ? cd.getNumberOfArrays() : 0;
   for (let ai = 0; ai < nArr; ai++) {
@@ -24049,56 +24144,12 @@ function extractPolyCells(pd, keepFn) {
   return out;
 }
 
-function extractPolyLines(pd, keepFn) {
-  if (!pd) return pd;
-  const ptsIn = pd.getPoints() && pd.getPoints().getData();
-  if (!ptsIn) return pd;
-  const used = new Map();
-  const newPts = [];
-  const newLines = [];
-  const kept = [];
-  const mapId = (old) => {
-    if (used.has(old)) return used.get(old);
-    const n = newPts.length / 3;
-    newPts.push(ptsIn[old * 3], ptsIn[old * 3 + 1], ptsIn[old * 3 + 2]);
-    used.set(old, n);
-    return n;
-  };
-  walkPolyLines(pd, (cellId, _path, ids) => {
-    if (!keepFn(cellId, ids)) return;
-    newLines.push(ids.length);
-    for (let k = 0; k < ids.length; k++) newLines.push(mapId(ids[k]));
-    kept.push(cellId);
-  });
-  const out = vtkPolyData.newInstance();
-  const vtkPts = vtkPoints.newInstance();
-  vtkPts.setData(Float32Array.from(newPts), 3);
-  out.setPoints(vtkPts);
-  const cells = vtkCellArray.newInstance();
-  cells.setData(Uint32Array.from(newLines));
-  out.setLines(cells);
-  const cd = pd.getCellData && pd.getCellData();
-  const nArr = cd && cd.getNumberOfArrays ? cd.getNumberOfArrays() : 0;
-  for (let ai = 0; ai < nArr; ai++) {
-    const arr = cd.getArray(ai);
-    if (!arr) continue;
-    const name = arr.getName();
-    const nc = arr.getNumberOfComponents ? arr.getNumberOfComponents() : 1;
-    const src = arr.getData ? arr.getData() : null;
-    if (!src || !kept.length) continue;
-    const dst = new src.constructor(kept.length * nc);
-    for (let i = 0; i < kept.length; i++) {
-      const o = kept[i] * nc;
-      const d = i * nc;
-      for (let c = 0; c < nc; c++) dst[d + c] = src[o + c];
-    }
-    out.getCellData().addArray(vtkDataArray.newInstance({
-      name,
-      numberOfComponents: nc,
-      values: dst,
-    }));
-  }
-  return out;
+function extractPolyCells(pd, keep) {
+  return extractPolyKind(pd, keep, false);
+}
+
+function extractPolyLines(pd, keep) {
+  return extractPolyKind(pd, keep, true);
 }
 
 function cellIdsCentroid(pts, ids) {
@@ -24160,125 +24211,12 @@ function distPointTri2(p, t) {
 function ensureCadNearestFaceIndex() {
   if (cadNearestFaceIndex) return cadNearestFaceIndex;
   if (!cadTriCache.length) rebuildCadTriCache();
-  if (!cadTriCache.length) {
-    cadNearestFaceIndex = { empty: true, faceIdAt: () => 0, faceIdsNear: () => [], facesOnEdge: () => [] };
-    return cadNearestFaceIndex;
-  }
-  let xmin = Infinity;
-  let xmax = -Infinity;
-  let ymin = Infinity;
-  let ymax = -Infinity;
-  let zmin = Infinity;
-  let zmax = -Infinity;
-  for (let i = 0; i < cadTriCache.length; i++) {
-    const t = cadTriCache[i];
-    xmin = Math.min(xmin, t.a[0], t.b[0], t.c[0]);
-    xmax = Math.max(xmax, t.a[0], t.b[0], t.c[0]);
-    ymin = Math.min(ymin, t.a[1], t.b[1], t.c[1]);
-    ymax = Math.max(ymax, t.a[1], t.b[1], t.c[1]);
-    zmin = Math.min(zmin, t.a[2], t.b[2], t.c[2]);
-    zmax = Math.max(zmax, t.a[2], t.b[2], t.c[2]);
-  }
-  const span = Math.max(xmax - xmin, ymax - ymin, zmax - zmin, 1);
+  // A grid of the part's triangles in typed arrays (cadHideIndex.ts): the same answers as
+  // the per-triangle objects it replaces, without the freeze on parts with thousands of faces.
+  const soup = triSoupFromTris(cadTriCache);
+  const span = triSoupSpan(soup);
   const cell = Math.max(span / 140, typicalMeshCellWorld() || span * 0.008);
-  const grid = new Map();
-  const keyOf = (i, j, k) => i + ',' + j + ',' + k;
-  const eps = cell * 1e-4;
-  for (let t = 0; t < cadTriCache.length; t++) {
-    const tri = cadTriCache[t];
-    const x0 = Math.floor((Math.min(tri.a[0], tri.b[0], tri.c[0]) - eps) / cell);
-    const x1 = Math.floor((Math.max(tri.a[0], tri.b[0], tri.c[0]) + eps) / cell);
-    const y0 = Math.floor((Math.min(tri.a[1], tri.b[1], tri.c[1]) - eps) / cell);
-    const y1 = Math.floor((Math.max(tri.a[1], tri.b[1], tri.c[1]) + eps) / cell);
-    const z0 = Math.floor((Math.min(tri.a[2], tri.b[2], tri.c[2]) - eps) / cell);
-    const z1 = Math.floor((Math.max(tri.a[2], tri.b[2], tri.c[2]) + eps) / cell);
-    for (let i = x0; i <= x1; i++) {
-      for (let j = y0; j <= y1; j++) {
-        for (let k = z0; k <= z1; k++) {
-          const key = keyOf(i, j, k);
-          let bucket = grid.get(key);
-          if (!bucket) {
-            bucket = [];
-            grid.set(key, bucket);
-          }
-          bucket.push(tri);
-        }
-      }
-    }
-  }
-  const searchRing = (pt, ring) => {
-    const i0 = Math.floor(pt[0] / cell);
-    const j0 = Math.floor(pt[1] / cell);
-    const k0 = Math.floor(pt[2] / cell);
-    let bestD = Infinity;
-    let bestId = 0;
-    for (let i = i0 - ring; i <= i0 + ring; i++) {
-      for (let j = j0 - ring; j <= j0 + ring; j++) {
-        for (let k = k0 - ring; k <= k0 + ring; k++) {
-          const bucket = grid.get(keyOf(i, j, k));
-          if (!bucket) continue;
-          for (let b = 0; b < bucket.length; b++) {
-            const d = distPointTri2(pt, bucket[b]);
-            if (d < bestD) {
-              bestD = d;
-              bestId = bucket[b].faceId;
-            }
-          }
-        }
-      }
-    }
-    return { bestD, bestId };
-  };
-  const searchMinByFace = (pt, ring) => {
-    const i0 = Math.floor(pt[0] / cell);
-    const j0 = Math.floor(pt[1] / cell);
-    const k0 = Math.floor(pt[2] / cell);
-    const minByFace = new Map();
-    for (let i = i0 - ring; i <= i0 + ring; i++) {
-      for (let j = j0 - ring; j <= j0 + ring; j++) {
-        for (let k = k0 - ring; k <= k0 + ring; k++) {
-          const bucket = grid.get(keyOf(i, j, k));
-          if (!bucket) continue;
-          for (let b = 0; b < bucket.length; b++) {
-            const tri = bucket[b];
-            const d = distPointTri2(pt, tri);
-            const prev = minByFace.get(tri.faceId);
-            if (prev == null || d < prev) minByFace.set(tri.faceId, d);
-          }
-        }
-      }
-    }
-    return minByFace;
-  };
-  cadNearestFaceIndex = {
-    empty: false,
-    faceIdAt(pt) {
-      if (!pt) return 0;
-      let hit = searchRing(pt, 1);
-      if (!hit.bestId) hit = searchRing(pt, 3);
-      return hit.bestId || 0;
-    },
-    faceIdsNear(pt, tol2) {
-      if (!pt || !(tol2 > 0)) return [];
-      return this.facesOnEdge(pt, tol2);
-    },
-    facesOnEdge(pt, slop2) {
-      if (!pt) return [];
-      let minByFace = searchMinByFace(pt, 1);
-      if (!minByFace.size) minByFace = searchMinByFace(pt, 3);
-      let best = Infinity;
-      minByFace.forEach((d) => {
-        if (d < best) best = d;
-      });
-      if (!Number.isFinite(best)) return [];
-      const cut = Math.max(slop2 > 0 ? slop2 : 0, best * 4);
-      const ids = [];
-      minByFace.forEach((d, fid) => {
-        if (fid && d <= cut) ids.push(fid);
-      });
-      return ids;
-    },
-  };
+  cadNearestFaceIndex = buildCadFaceIndex(soup, cell);
   return cadNearestFaceIndex;
 }
 
@@ -24510,7 +24448,7 @@ function applyHiddenCadEdges() {
   }
   if (skipSel && !cadEdgeCache.length) rebuildCadEdgeCache();
   const filtered = extractPolyLines(src, (cellId) => {
-    const e = cadEdgeCache[cellId] || cadEdgeCache.find((x) => x.id === cellId);
+    const e = cadEdgeById(cellId);
     if (e && skipSel && edgeCtxSelected.has(e.id)) return false;
     return !cadEdgeHiddenByFaces(e, hideIds);
   });
@@ -24523,7 +24461,7 @@ function pruneHiddenEdgeSelection() {
   const hideIds = hiddenCadFaceIdSet();
   let changed = false;
   edgeCtxSelected.forEach((id) => {
-    const e = cadEdgeCache.find((x) => x.id === id);
+    const e = cadEdgeById(id);
     if (e && cadEdgeHiddenByFaces(e, hideIds)) {
       edgeCtxSelected.delete(id);
       changed = true;
@@ -24541,14 +24479,19 @@ function applyHiddenCadDisplay() {
     bindCadFacePolyData(src);
     return;
   }
-  const filtered = extractPolyCells(src, (cellId) => {
-    const hit = hitFromCellIdOnPd(src, cellId);
-    if (!hit) return true;
-    if (hiddenBodies.size && hiddenBodies.has(Number(hit.solidId) || 1)) return false;
-    if (!hit.faceId) return true;
-    return !hiddenCadFaces.has(faceLabel(hit.faceId, hit.solidId || 1));
-  });
-  bindCadFacePolyData(filtered);
+  // Each cell's face and body from the cell arrays, once (cadHideIndex.ts), as hitFromCellIdOnPd reads them.
+  const cd = src.getCellData && src.getCellData();
+  const faceArr = cd && cd.getArrayByName && cd.getArrayByName('faceId');
+  const solidArr = cd && cd.getArrayByName && cd.getArrayByName('solidId');
+  const keep = visibleCellMask(
+    faceArr && faceArr.getData ? faceArr.getData() : null,
+    solidArr && solidArr.getData ? solidArr.getData() : null,
+    src.getNumberOfCells ? src.getNumberOfCells() : 0,
+    geometryBodies().length > 0,
+    hiddenFaceBodies(hiddenCadFaces),
+    hiddenBodies,
+  );
+  bindCadFacePolyData(extractPolyCells(src, keep));
 }
 
 function paintMeshFacePreview(mapper, pd, bounds, fullPd) {
@@ -24823,6 +24766,16 @@ function cadPosToWorld(pos) {
   return [pos[0] * s, pos[1] * s, pos[2] * s];
 }
 
+/** cadPosToWorld with the scale looked up once, for a pick over thousands of points. */
+function cadPosToWorldFn() {
+  const s = cadToWorldScale();
+  const one = !(s > 0) || Math.abs(s - 1) < 1e-12;
+  return (pos) => {
+    if (!pos || pos.length < 3) return null;
+    return one ? [pos[0], pos[1], pos[2]] : [pos[0] * s, pos[1] * s, pos[2] * s];
+  };
+}
+
 function lookNormalToFace(faceId) {
   const info = faceOrientationInfo(faceId);
   if (!info || !info.flat) return false;
@@ -24857,12 +24810,23 @@ function lookNormalToFace(faceId) {
   return true;
 }
 
+let cadCacheSpanMemo = null;
+
 function cadCacheSpan() {
   if (!cadTriCache.length) return 1;
+  if (cadCacheSpanMemo && cadCacheSpanMemo.list === cadTriCache && cadCacheSpanMemo.n === cadTriCache.length) {
+    return cadCacheSpanMemo.span;
+  }
+  const span = cadCacheSpanOf(cadTriCache);
+  cadCacheSpanMemo = { list: cadTriCache, n: cadTriCache.length, span };
+  return span;
+}
+
+function cadCacheSpanOf(tris) {
   let xmin = Infinity;
   let xmax = -Infinity;
-  for (let i = 0; i < cadTriCache.length; i++) {
-    const c = cadTriCache[i].c3;
+  for (let i = 0; i < tris.length; i++) {
+    const c = tris[i].c3;
     if (c[0] < xmin) xmin = c[0];
     if (c[0] > xmax) xmax = c[0];
   }
@@ -25015,6 +24979,99 @@ function worldToDisplayXY(pos, view, ren) {
   }
 }
 
+/**
+ * worldToDisplayXY for many points of one view: the camera's matrices are read once, then
+ * each point goes through the same steps as vtk's worldToDisplay (world -> view ->
+ * projection -> display). Checked against vtk on the first point; any doubt, vtk's own.
+ */
+function displayProjector(view, ren) {
+  const slow = (pos) => worldToDisplayXY(pos, view, ren);
+  try {
+    if (!view || !ren || !view.worldToDisplay || !view.getViewportSize || !view.getFramebufferSize) return slow;
+    const cam = ren.getActiveCamera && ren.getActiveCamera();
+    const vpr = ren.getViewportByReference ? ren.getViewportByReference() : ren.getViewport && ren.getViewport();
+    if (!cam || !vpr) return slow;
+    const dims = view.getViewportSize(ren);
+    const fb = view.getFramebufferSize();
+    const tr = (m) => {
+      const t = new Float64Array(16);
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) t[i * 4 + j] = m[j * 4 + i];
+      return t;
+    };
+    const v = tr(cam.getViewMatrix());
+    const pm = tr(cam.getProjectionMatrix(dims[0] / dims[1], -1.0, 1.0));
+    const sx = vpr[2] - vpr[0];
+    const sy = vpr[3] - vpr[1];
+    const vx0 = vpr[0];
+    const vy0 = vpr[1];
+    const fw = fb[0];
+    const fh = fb[1];
+    const fast = (pos) => {
+      if (!pos) return null;
+      const x = pos[0];
+      const y = pos[1];
+      const z = pos[2];
+      let w = v[3] * x + v[7] * y + v[11] * z + v[15];
+      w = w || 1.0;
+      const x1 = (v[0] * x + v[4] * y + v[8] * z + v[12]) / w;
+      const y1 = (v[1] * x + v[5] * y + v[9] * z + v[13]) / w;
+      const z1 = (v[2] * x + v[6] * y + v[10] * z + v[14]) / w;
+      let w2 = pm[3] * x1 + pm[7] * y1 + pm[11] * z1 + pm[15];
+      w2 = w2 || 1.0;
+      const x2 = (pm[0] * x1 + pm[4] * y1 + pm[8] * z1 + pm[12]) / w2;
+      const y2 = (pm[1] * x1 + pm[5] * y1 + pm[9] * z1 + pm[13]) / w2;
+      const dx = ((x2 + 1.0) * 0.5 * sx + vx0) * fw;
+      const dy = ((y2 + 1.0) * 0.5 * sy + vy0) * fh;
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+      return [dx, dy];
+    };
+    let mode = 'check';
+    return (pos) => {
+      if (!pos) return null;
+      if (mode === 'fast') return fast(pos);
+      if (mode === 'slow') return slow(pos);
+      const a = fast(pos);
+      const b = slow(pos);
+      if (!a || !b) return b;
+      const same = Math.abs(a[0] - b[0]) <= 1e-6 * (1 + Math.abs(b[0])) && Math.abs(a[1] - b[1]) <= 1e-6 * (1 + Math.abs(b[1]));
+      // Not the same as vtk's: vtk's for the rest.
+      mode = same ? 'fast' : 'slow';
+      return b;
+    };
+  } catch (_) {
+    return slow;
+  }
+}
+
+/** edgeIsVisibleInFrontOf(pos, surfacePos, ren) for many points: the camera is read once. */
+function inFrontOfSurfaceTest(surfacePos, ren) {
+  if (!surfacePos) return (pos) => !!pos;
+  const r = ren || renderer;
+  const cam = r && r.getActiveCamera && r.getActiveCamera();
+  if (!cam) return (pos) => edgeIsVisibleInFrontOf(pos, surfacePos, ren);
+  const cpos = cam.getPosition();
+  const fov = ((cam.getViewAngle && cam.getViewAngle()) || 30) * Math.PI / 180;
+  const canvas = container && container.querySelector('canvas');
+  const hPx = (canvas && (canvas.clientHeight || canvas.height)) || 600;
+  const tanHalf = Math.tan(fov / 2);
+  let fallback = null;
+  // visibleSurfaceSlack(ren, pos), as worldPerCssPixelAt works it out.
+  const slack = (pos) => {
+    const dist = Math.hypot(pos[0] - cpos[0], pos[1] - cpos[1], pos[2] - cpos[2]) || 1;
+    const px = (2 * dist * tanHalf) / Math.max(hPx, 1);
+    if (px > 0 && Number.isFinite(px)) return px * 8;
+    if (fallback == null) fallback = visibleSurfaceSlack(ren, pos);
+    return fallback;
+  };
+  const camDist = (pos) => Math.hypot(pos[0] - cpos[0], pos[1] - cpos[1], pos[2] - cpos[2]);
+  const surfSlack = slack(surfacePos);
+  const surfDist = camDist(surfacePos);
+  return (pos) => {
+    if (!pos) return false;
+    return camDist(pos) <= surfDist + Math.max(slack(pos), surfSlack);
+  };
+}
+
 function pickDisplayXY(e, pane) {
   if (pane === 'b' && compareState.viewer) {
     return eventToPaneDisplay(e, document.getElementById('viewer-b'), compareState.viewer.fullScreenRenderer);
@@ -25041,10 +25098,12 @@ function pickClosestScreenHit(xy, view, ren, items, pixelTol, surfacePos) {
   const maxD = pixelTol * pixelTol;
   let best = null;
   let bestD = Infinity;
+  const project = displayProjector(view, ren);
+  const inFront = surfacePos ? inFrontOfSurfaceTest(surfacePos, ren) : null;
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    if (surfacePos && !edgeIsVisibleInFrontOf(it.pos, surfacePos, ren)) continue;
-    const dpy = worldToDisplayXY(it.pos, view, ren);
+    if (inFront && !inFront(it.pos)) continue;
+    const dpy = project(it.pos);
     if (!dpy) continue;
     const dx = dpy[0] - xy[0];
     const dy = dpy[1] - xy[1];
@@ -25065,7 +25124,8 @@ function pickCadVertexFromEvent(e, pane, surfacePos) {
   if (!cadVertexCache.length) rebuildCadVertexCache();
   const root = pane === 'b' ? document.getElementById('viewer-b') : container;
   const tol = VERTEX_PICK_CSS_PX * displayPerCssPx(view, root);
-  const items = cadVertexCache.map((v) => ({ id: v.id, pos: cadPosToWorld(v.pos) || v.pos }));
+  const toWorld = cadPosToWorldFn();
+  const items = cadVertexCache.map((v) => ({ id: v.id, pos: toWorld(v.pos) || v.pos }));
   const hit = pickClosestScreenHit(xy, view, ren, items, tol, surfacePos);
   if (!hit) return null;
   return { kind: 'vertex', vertexId: hit.id, pos: hit.pos, screenD2: hit.screenD2 };
@@ -25089,6 +25149,9 @@ function pickCadEdgeFromEvent(e, pane, surfacePos) {
   let best = null;
   let bestD = Infinity;
   let bestPos = null;
+  const project = displayProjector(view, ren);
+  const toWorld = cadPosToWorldFn();
+  const inFront = surfacePos ? inFrontOfSurfaceTest(surfacePos, ren) : null;
   for (let i = 0; i < cadEdgeCache.length; i++) {
     const edge = cadEdgeCache[i];
     if (cadEdgeHiddenByFaces(edge, hideIds)) continue;
@@ -25097,8 +25160,8 @@ function pickCadEdgeFromEvent(e, pane, surfacePos) {
     let prevDpy = null;
     let prevW = null;
     for (let k = 0; k < pts.length; k++) {
-      const w = cadPosToWorld(pts[k]) || pts[k];
-      const dpy = worldToDisplayXY(w, view, ren);
+      const w = toWorld(pts[k]) || pts[k];
+      const dpy = project(w);
       if (prevDpy && dpy) {
         const seg = distPointSeg2(xy[0], xy[1], prevDpy[0], prevDpy[1], dpy[0], dpy[1]);
         if (seg.d2 <= maxD && seg.d2 < bestD) {
@@ -25113,7 +25176,7 @@ function pickCadEdgeFromEvent(e, pane, surfacePos) {
             const onEdge = closestPointOnSegment(surfacePos, prevW, w);
             const d3 = v3len(v3sub(onEdge, surfacePos));
             if (d3 <= onEdgeSlack) pos = onEdge;
-            else if (!edgeIsVisibleInFrontOf(pos, surfacePos, ren)) {
+            else if (!inFront(pos)) {
               prevDpy = dpy;
               prevW = w;
               continue;
@@ -25257,7 +25320,7 @@ function orbitPointFromCadHit(hit) {
     if (hit.pos) return { pos: hit.pos, kind: 'point' };
   }
   if (hit.kind === 'edge' || hit.edgeId != null) {
-    const e = cadEdgeCache.find((x) => x.id === Number(hit.edgeId));
+    const e = cadEdgeById(hit.edgeId);
     const p = e ? edgeOrbitCadPoint(e) : null;
     if (p) return { pos: cadPosToWorld(p), kind: 'edge' };
     if (hit.pos) return { pos: hit.pos, kind: 'edge' };
@@ -25277,7 +25340,7 @@ function orbitPointFromSelection() {
     if (v) return { pos: cadPosToWorld(v.pos), kind: 'point' };
   }
   if (edgeCtxSelected.size === 1 && !vertexCtxSelected.size && !faceCtxSelected.size) {
-    const e = cadEdgeCache.find((x) => x.id === Number(Array.from(edgeCtxSelected)[0]));
+    const e = cadEdgeById(Array.from(edgeCtxSelected)[0]);
     const p = e && edgeOrbitCadPoint(e);
     if (p) return { pos: cadPosToWorld(p), kind: 'edge' };
   }
@@ -25332,6 +25395,10 @@ function showFaceCtxMenu(e, hit, under) {
       : faceCtxBodies.length ? 'Hide ' + bodyRowName(faceCtxBodies[0]) : 'Hide body';
   }
   if (showBodiesBtn) showBodiesBtn.hidden = hiddenBodies.size < 1;
+  // A hide may follow: work out which faces each edge lies on while the menu is open.
+  if ((hideBtn && !hideBtn.hidden) || faceCtxBodies.length) {
+    try { warmCadEdgeFacesSoon(); } catch (_) {}
+  }
   const orbit = orbitPointFromCadHit(hit) || orbitPointFromSelection();
   faceCtxOrbitTarget = orbit;
   if (orbitBtn) {
