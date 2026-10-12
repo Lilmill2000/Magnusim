@@ -323,3 +323,52 @@ export const edit = (page: Page) => cad<{ timings: Record<string, number>; adopt
   const e = (window as unknown as W).__CAD__.edit;
   return { timings: { ...e.timings }, adopt: await e.ready(), launched: e.state.get().launched };
 }) as never);
+
+// ---- round 3: a removed target (contract change 6) ----------------------------------------------
+
+/** Remove a geometry the way the simulation view does: its row, its panel's Delete, Remove. */
+export async function removeGeometryInPanel(page: Page, gid: string) {
+  await geometryRow(page, gid).click();
+  const geo = page.locator('#panel-geometry .cfd-island');
+  await expect(geo).toBeVisible({ timeout: 30_000 });
+  await geo.getByRole('button', { name: 'Delete' }).click();
+  const confirm = page.locator('#modal-confirm');
+  await expect(confirm).toContainText('Remove this geometry?');
+  await confirm.getByRole('button', { name: 'Remove' }).click();
+  await expect(page.locator(`#left-tree [data-w16-geom="${gid}"]`)).toHaveCount(0, { timeout: 60_000 });
+}
+
+/** The project's geometry ids, sorted (the app's own tree). */
+export async function geometryIds(request: APIRequestContext, pid: string): Promise<string[]> {
+  const r = await request.get(`${baseUrl()}/api/project/tree?project_id=${pid}`);
+  expect(r.ok(), await r.text()).toBe(true);
+  return (((await r.json()).geometries || []) as { id: string }[]).map((g) => String(g.id)).sort();
+}
+
+export async function geometryName(request: APIRequestContext, pid: string, gid: string): Promise<string | null> {
+  const r = await request.get(`${baseUrl()}/api/project/tree?project_id=${pid}`);
+  return (((await r.json()).geometries || []) as { id: string; name?: string }[]).find((g) => String(g.id) === gid)?.name ?? null;
+}
+
+/** Open a Part from STUDIES by its title. */
+export async function openPartRow(page: Page, title: string) {
+  await page.waitForFunction(() => (window as unknown as { __CFD_PROJECT_READY__?: string }).__CFD_PROJECT_READY__, null, { timeout: 90_000 });
+  const row = page.locator('#plugin-studies-section li[data-plugin="cad"]').filter({ has: page.locator('.tl', { hasText: title }) });
+  await expect(row).toHaveCount(1, { timeout: 60_000 });
+  await row.locator('> .tree-row').click();
+}
+
+/** The app's question for a Part whose geometry was removed (contract change 6). */
+export async function expectRemovedQuestion(page: Page, geometryName: string, partTitle: string) {
+  const modal = page.locator('#modal-link-choice');
+  await expect(modal).toBeVisible({ timeout: 300_000 });
+  await expect(modal).toContainText(`${geometryName} was removed from the project`);
+  await expect(modal).toContainText(`Add ${partTitle} as a new geometry?`);
+}
+
+export async function answerRemovedQuestion(page: Page, choice: 'new' | 'not_now' | 'cancel') {
+  const modal = page.locator('#modal-link-choice');
+  const name = { new: 'Add as new geometry', not_now: 'Not now', cancel: 'Keep editing' }[choice];
+  await modal.getByRole('button', { name }).click();
+  await expect(modal).toBeHidden();
+}

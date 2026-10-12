@@ -52,7 +52,7 @@ function result(over: Partial<LinkResult> = {}): LinkResult {
 
 const refused = (code: string, message = `refused ${code}`) => Object.assign(new Error(message), { code });
 
-function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers?: (LinkResult | Error)[]; afterStale?: LinkedGeometry | null; bodies?: CadDoc['bodies']; end?: Partial<EndBodies>; progress?: boolean; adopt?: CadAdopt | null } = {}) {
+function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers?: (LinkResult | Error)[]; afterStale?: LinkedGeometry | null; bodies?: CadDoc['bodies']; end?: Partial<EndBodies>; progress?: boolean; adopt?: CadAdopt | null; study?: Record<string, unknown> } = {}) {
   const doc0: CadDoc = { ...DOC, bodies: opts.bodies ?? DOC.bodies };
   const state = createStateStore<DocState>({
     status: 'ready',
@@ -80,8 +80,19 @@ function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers
   const writes: string[] = [];
   const toasts: [string, string][] = [];
   const dirty: boolean[] = [];
+  let study: Record<string, unknown> = { id: 's1', rev: 1, title: 'Part 1', ...(opts.study ?? {}) };
+  const studyUpdates: Record<string, unknown>[] = [];
   const bridge = {
     studyId: 's1',
+    study: {
+      get: async () => JSON.parse(JSON.stringify(study)),
+      update: async (patch: Record<string, unknown>, rev: number) => {
+        if (rev !== study.rev) throw new Error('stale rev');
+        studyUpdates.push(patch);
+        study = { ...study, ...patch, rev: (study.rev as number) + 1 };
+        return study;
+      },
+    },
     context: { study: { title: 'Part 1' } },
     files: {
       write: vi.fn(async (rel: string) => {
@@ -116,8 +127,17 @@ function setup(opts: { version?: number; linked?: LinkedGeometry | null; answers
   } as unknown as Bridge;
   const ready = vi.fn(async () => opts.adopt ?? null);
   const unverified: number[] = [];
-  const ctl = createLinkController({ bridge, doc, kernel, busyWaitMs: 1, notReadyWaitMs: 1, log: () => {}, ...(opts.adopt !== undefined ? { adopt: { ready, geometryName: () => 'Vortex CFD Test', noteUnverified: (n: number) => void unverified.push(n) } } : {}) });
-  return { ctl, calls, writes, toasts, dirty, kernel, doc, state, bridge, ready, unverified };
+  const linkedResults: LinkResult[] = [];
+  const ctl = createLinkController({
+    bridge,
+    doc,
+    kernel,
+    busyWaitMs: 1,
+    notReadyWaitMs: 1,
+    log: () => {},
+    ...(opts.adopt !== undefined ? { adopt: { ready, geometryName: () => 'Vortex CFD Test', noteUnverified: (n: number) => void unverified.push(n), onLinked: (r: LinkResult) => void linkedResults.push(r) } } : {}),
+  });
+  return { ctl, calls, writes, toasts, dirty, kernel, doc, state, bridge, ready, unverified, studyUpdates, linkedResults, study: () => study };
 }
 
 describe('link controller: save, then link', () => {
@@ -601,5 +621,54 @@ describe('link controller: Edit in CAD (host API 1.7)', () => {
     const t = setup({ version: 5, adopt: ADOPT, end: { failed: ['Press-pull 1'] } });
     const r = await t.ctl.sync();
     expect(r).toMatchObject({ outcome: 'failed', code: 'not_built', message: 'Press-pull 1 failed to build, so Vortex CFD Test was not changed. Fix, retry or suppress it first.' });
+  });
+});
+
+describe('link controller: a removed target (contract change 6)', () => {
+  const REMOVED = { id: 'g-gone', name: 'stepped-bore', at: '2026-10-12T10:00:00Z' };
+  const ADOPT: CadAdopt = { geometryId: 'g-gone', importId: 'f_imp', baselineVersion: 2, baselineDigest: 'a'.repeat(64), originalNames: { rel: 'studies/s1/adopt/f_imp/original_names.json', sha256: 'd'.repeat(64) }, matched: 6, total: 6, error: null };
+
+  it('no change since the last link: nothing linked, no question', async () => {
+    const digest = await designDigest(DOC);
+    const t = setup({ version: 9, adopt: ADOPT, study: { geometry_removed: REMOVED, cad_last_link: { geometryId: 'g-gone', sourceVersion: 9, digest } } });
+    expect(await t.ctl.sync()).toEqual({ outcome: 'unchanged', sourceVersion: 9, geometryId: 'g-gone' });
+    expect(t.calls).toEqual([]);
+    // The adoption is not consulted for a removed geometry.
+    expect(t.ready).not.toHaveBeenCalled();
+  });
+
+  it('a change: linked as a first link WITHOUT the original names (the app asks); Add as new: created, the Part told, the design kept as the last link', async () => {
+    const t = setup({ version: 9, adopt: ADOPT, study: { geometry_removed: REMOVED }, answers: [result({ geometryId: 'g-new', name: 'stepped-bore (2)', created: true, rev: 1 })] });
+    const r = await t.ctl.sync();
+    expect(r).toMatchObject({ outcome: 'linked', result: { geometryId: 'g-new', created: true } });
+    expect(t.calls[0]).toMatchObject({ basedOnRev: null, sourceVersion: 9 });
+    expect(t.calls[0]).not.toHaveProperty('originalNames');
+    expect(t.linkedResults.map((x) => x.geometryId)).toEqual(['g-new']);
+    expect(t.study().cad_last_link).toEqual({ geometryId: 'g-new', sourceVersion: 9, digest: await designDigest(DOC) });
+  });
+
+  it('Not now: nothing linked, no message, quiet outcome; the next sync with no change since does not ask again', async () => {
+    const t = setup({ version: 9, adopt: ADOPT, study: { geometry_removed: REMOVED }, answers: [refused('not_now', 'Not now')] });
+    expect(await t.ctl.sync()).toEqual({ outcome: 'not-now', sourceVersion: 9, geometryName: 'stepped-bore' });
+    expect(t.toasts).toEqual([]);
+    expect(t.study().cad_not_now).toEqual({ geometryId: 'g-gone', sourceVersion: 9, digest: await designDigest(DOC) });
+    expect(t.calls).toHaveLength(1);
+    // Back again with no change (an autosave of the view, a reopen): no second question.
+    expect(await t.ctl.sync()).toEqual({ outcome: 'unchanged', sourceVersion: 9, geometryId: 'g-gone' });
+    expect(t.calls).toHaveLength(1);
+    // A change since: the app asks again.
+    t.state.set({ doc: { ...DOC, features: [...DOC.features, { id: 'f2', type: 'press_pull', name: 'Press-pull 1' } as unknown as CadDoc['features'][number]] }, sourceVersion: 10 });
+    await t.ctl.sync().catch(() => null);
+    expect(t.calls).toHaveLength(2);
+  });
+
+  it('target_removed (the app could not ask): a failure with its words; Keep editing stays quietly', async () => {
+    const words = 'stepped-bore was removed from the project. Add Part 1 as a new geometry?';
+    const t = setup({ version: 9, study: { geometry_removed: REMOVED }, answers: [refused('target_removed', words)] });
+    expect(await t.ctl.sync()).toEqual({ outcome: 'failed', code: 'target_removed', message: words });
+    expect(t.toasts).toEqual([[words, 'error']]);
+    const u = setup({ version: 9, study: { geometry_removed: REMOVED }, answers: [refused('cancelled', 'You kept editing.')] });
+    expect(await u.ctl.sync()).toEqual({ outcome: 'kept-editing', sourceVersion: 9 });
+    expect(u.study()).not.toHaveProperty('cad_not_now');
   });
 });

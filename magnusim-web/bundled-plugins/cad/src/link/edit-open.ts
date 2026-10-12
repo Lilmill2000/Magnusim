@@ -20,6 +20,12 @@
 // - A Part with a design of its own and no such Import is never imported into.
 // - ws.context.launch (the face the user right-clicked) selects that face once the
 //   faces are known; on a geometry the Part already links, the face is the export's.
+// - The geometry was REMOVED from the project (the study record's host-owned
+//   `geometry_removed`, contract change 6; ws.context.geometry is then null): a Part that
+//   never imported says "The geometry <G> this part was opened for was removed from the
+//   project." and imports nothing; one that has a design notes "Its geometry <G> was removed.
+//   Back asks before adding this part as a new geometry." and works as usual (the app asks
+//   on Back; controller.ts). Once a link adds it as a new geometry the note goes.
 // Nothing here changes the project: adoption is the link's, on Back.
 // Owner: LINK (Edit in CAD).
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -38,6 +44,7 @@ import type { CadAdopt, EditedGeometry, GeometrySource } from '../types/edit-geo
 import type { KernelAdapter } from '../types/kernel';
 import type { StateStore } from '../types/state';
 import { setEditOpenState, type EditOpenState } from './edit-state';
+import { readRemoved, type RemovedTarget } from './controller';
 
 export type { EditOpenState } from './edit-state';
 
@@ -49,6 +56,10 @@ export interface EditOpen {
   ready(): Promise<CadAdopt | null>;
   /** The geometry this Part edits, or null. */
   readonly geometry: EditedGeometry | null;
+  /** The geometry this Part edited or linked was removed from the project (study `geometry_removed`), or null. */
+  readonly removed: RemovedTarget | null;
+  /** A link went through: a note about a removed geometry no longer applies. */
+  onLinked(r: { created?: boolean }): void;
   /** How long each step took (ms): source, import, adopt (tests, the big STEP's timings). */
   readonly timings: Record<string, number>;
   /** The line's Stop: ends a wait for the geometry, or its download. */
@@ -162,6 +173,7 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
 export function createEditOpen(services: AppServices, opts: EditOpenOptions = {}): EditOpen {
   const { bridge, doc } = services;
   const geometry = bridge.edit?.geometry ?? null;
+  let removed = readRemoved((bridge.context?.study as unknown as Record<string, unknown> | undefined)?.geometry_removed);
   const sleep = opts.sleep ?? defaultSleep;
   const state = createStateStore<EditOpenState>({ phase: 'idle', line: null, fraction: null, note: null, geometryName: geometry?.name ?? null, launched: null, action: null });
   setEditOpenState(services, state);
@@ -496,10 +508,17 @@ export function createEditOpen(services: AppServices, opts: EditOpenOptions = {}
     return only ? [s.sourceVersion, await designDigest(s.doc)] : [-1, null];
   }
 
+  /** The geometry was removed: say so (nothing is imported), or note what Back will ask. */
+  function runRemoved(r: RemovedTarget) {
+    if (!doc.state.get().doc.features.length) set({ phase: 'removed', line: `The geometry ${r.name} this part was opened for was removed from the project.`, action: null });
+    else set({ phase: 'ready', note: `Its geometry ${r.name} was removed. Back asks before adding this part as a new geometry.` });
+  }
+
   async function run() {
+    if (doc.state.get().status !== 'ready') return;
+    if (removed) return runRemoved(removed);
     const g = geometry;
     if (!g || !bridge.edit) return;
-    if (doc.state.get().status !== 'ready') return;
     if (g.linked) {
       await selectLinkedLaunch();
       set({ phase: 'ready' });
@@ -562,6 +581,15 @@ export function createEditOpen(services: AppServices, opts: EditOpenOptions = {}
   return {
     state,
     geometry,
+    get removed() {
+      return removed;
+    },
+    onLinked(r) {
+      if (!removed || !r.created) return;
+      removed = null;
+      const st = state.get();
+      set({ note: null, ...(st.phase === 'removed' ? { phase: 'ready', line: null } : {}) });
+    },
     timings,
     start() {
       return pending ?? begin();

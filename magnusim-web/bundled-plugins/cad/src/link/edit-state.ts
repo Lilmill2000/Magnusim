@@ -10,9 +10,10 @@ export interface EditOpenState {
   /**
    * idle: nothing to do (no geometry, or done); loading: the STEP comes from the app; waiting:
    * the app is still storing it; importing: the import panel shows it; matching: the faces are
-   * matched; ready: the Part is open on it (imported, matched, or linked already); error: `line` says why.
+   * matched; ready: the Part is open on it (imported, matched, or linked already); error: `line` says why;
+   * removed: the geometry it was opened for was removed before anything was imported (`line` says so).
    */
-  phase: 'idle' | 'loading' | 'waiting' | 'importing' | 'matching' | 'ready' | 'error';
+  phase: 'idle' | 'loading' | 'waiting' | 'importing' | 'matching' | 'ready' | 'error' | 'removed';
   /** The line shown over the viewport, or null. */
   line: string | null;
   /** 0..1 while the STEP comes from the app, else null. */
