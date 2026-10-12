@@ -187,6 +187,31 @@ describe('LeftTree', () => {
     expect(document.querySelector('[data-w20-mesh-item="mesh_1"] > .tree-row .tree-check')).toBeTruthy();
   });
 
+  it('says Failed on a mesh whose last generate failed, with no spinner', () => {
+    const live: SetupTreeModel = {
+      ...fixture,
+      geoms: [
+        {
+          ...fixture.geoms[0],
+          studies: [
+            {
+              ...fixture.geoms[0].studies[0],
+              meshes: [{ id: 'mesh_1', name: 'Mesh 1', ready: false, busy: false, failed: true }],
+            },
+          ],
+        },
+      ],
+    };
+    render(
+      <ul>
+        <SetupTreeView model={live} />
+      </ul>,
+    );
+    const row = document.querySelector('[data-w20-mesh-item="mesh_1"] > .tree-row');
+    expect(row?.querySelector('[data-mesh-failed="1"]')?.textContent).toBe('Failed');
+    expect(row?.querySelector('.tree-spin')).toBeFalsy();
+  });
+
   it('shows Results on a running run that already has frames', () => {
     const live: SetupTreeModel = {
       ...fixture,

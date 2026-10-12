@@ -13,6 +13,8 @@ export interface MeshNode {
   refinements?: Array<{ id: string; name: string; faces: string[]; scopeKey?: string }>;
   /** Generated from an older version of its linked geometry (API 1.5): Generate it again. */
   outOfDate?: boolean;
+  /** Its last generate failed (and none is running): the Mesh panel says why. */
+  failed?: boolean;
 }
 
 export interface StudyNode {
@@ -434,12 +436,13 @@ export function readSetupTree(
           meshes: owned(study.meshes).map((mesh, i) => {
             const id = str(mesh.id || mesh.name, `mesh_${i + 1}`);
             const ready = meshReady(mesh, studyAct, sid, id);
+            const busy = meshBusy(mesh, studyAct, sid, id, ready);
             return {
               id,
               name: str(mesh.name, `Mesh ${i + 1}`),
               scopeKey: mesh.key,
               ready,
-              busy: meshBusy(mesh, studyAct, sid, id, ready),
+              busy,
               queuePos: queuePos(studyAct, projectId, sid, 'mesh', id),
               refinements: owned(mesh.refinements).map((ref, refIndex) => ({
                 id: str(ref.id, `ref_${refIndex}`),
@@ -448,6 +451,7 @@ export function readSetupTree(
                 scopeKey: ref.key,
               })),
               ...(mesh.out_of_date ? { outOfDate: true } : {}),
+              ...(!ready && !busy && mesh.live_status === 'failed' ? { failed: true } : {}),
             };
           }),
           runs: owned(study.runs).map((run) => {

@@ -17103,8 +17103,21 @@ function publishMeshJobState() {
     (viewId ? String(liveId) === String(viewId) : jobState.mesh_id && String(liveId) === String(jobState.mesh_id))
   );
   const meshReady = isGeneratedMeshReady();
-  const failed = jobStatus === 'failed' && meshJob && mine;
   const queuedRow = queuedMeshRow(viewId || (!foreign && jobState.mesh_id) || null);
+  // The shown mesh's record says its last generate failed (after a reload, or a job this
+  // tab did not follow): the panel says so, with the reason, until it generates again.
+  const recLive = getLiveMeshResult();
+  const recMesh = getLiveMeshDoc();
+  const recFailed = !!(
+    recLive &&
+    recLive.status === 'failed' &&
+    !meshReady &&
+    !queuedRow &&
+    recMesh &&
+    (!viewId || String(recMesh.id) === String(viewId)) &&
+    !((mine || thisLive) && (jobStatus === 'running' || computeLive))
+  );
+  const failed = (jobStatus === 'failed' && meshJob && mine) || recFailed;
   // jobState also carries solves: a finished run must not read as "Finishing mesh"
   // on a mesh that was never generated. Only this mesh's own mesh job counts.
   const ownJobStatus = meshJob && (mine || thisLive) ? jobStatus : 'idle';
@@ -17139,7 +17152,9 @@ function publishMeshJobState() {
     const result = Object.fromEntries(((row && row.report) || []).map(([k]) => [k, k ? pick(k) : null]));
     bits.push(...reportBits(row, result, formatMetres));
   }
-  const err = failed && jobState.error ? String(jobState.error).split('\n')[0].slice(0, 160) : '';
+  const jobFailed = jobStatus === 'failed' && meshJob && mine;
+  const failText = jobFailed ? jobState.error : recFailed ? recLive.error : '';
+  const err = failed && failText ? String(failText).split('\n')[0].slice(0, 400) : '';
   const startMs = jobState.started_at ? Date.parse(jobState.started_at) : NaN;
   const endMs = jobState.finished_at ? Date.parse(jobState.finished_at) : NaN;
   const detail = {
@@ -17834,8 +17849,25 @@ window.__CFD_W15_APPLY__ = async function applyW15(partial) {
 };
 
 
+/** Generates (by kick id) this page has seen end: a late "running" answer never revives one. */
+const endedMeshKicks = new Set();
+
+function rememberEndedMeshKick(kick) {
+  if (!kick) return;
+  endedMeshKicks.add(String(kick));
+  if (endedMeshKicks.size > 50) endedMeshKicks.delete(endedMeshKicks.values().next().value);
+}
+
+function meshKickEnded(j) {
+  const kick = j && (j.kick_id || j.generate_id);
+  return !!kick && endedMeshKicks.has(String(kick));
+}
+
 function applyCaseSnapToJob(j) {
   if (!j) return;
+  // An older poll's answer can land after this job's end (a slow or frozen tab).
+  if (j.status === 'running' && meshKickEnded(j)) return;
+  if (isTerminalJobStatus(j.status) && isMeshJobKind(j.path_kind)) rememberEndedMeshKick(j.kick_id || j.generate_id);
   if (ignoreForeignCaseSnap({
     resultsOpen: !!resultsViewOpen,
     viewedCaseDir: getCaseDir(),
@@ -17910,28 +17942,113 @@ function watchJobEvents(jobId) {
   }
   if (!jobId) return;
   const pid = typeof currentProjectId === 'function' ? currentProjectId() : '';
+  // Once the job has ended, nothing it sends makes it "running" again. A late or second
+  // connection gets every event replayed (its stages, then "failed"), and a failed mesh
+  // whose end the poll had already shown went back to "Meshing" for good.
+  let ended = false;
   window.__CFD_JOB_EVENTS_UNSUB__ = subscribeJobEvents(String(jobId), (ev) => {
     let data = {};
     try { data = JSON.parse(ev.data || '{}'); } catch (_) { data = {}; }
     const fields = data.fields && typeof data.fields === 'object' ? data.fields : data;
+    const status = String(fields.status || data.status || '');
+    let endStatus = isTerminalJobStatus(status) ? status : '';
+    if (!endStatus && data.event === 'result') endStatus = data.ok === false ? 'failed' : 'done';
+    if (!endStatus && data.event === 'error') endStatus = 'failed';
+    if (endStatus) {
+      const result = data.result && typeof data.result === 'object' ? data.result : null;
+      const error = String(data.error || fields.error || (result && result.error) || '');
+      const first = !ended;
+      ended = true;
+      endWatchedMeshJob(endStatus, error, first);
+      return;
+    }
+    // The page may have ended this job first (its poll saw the end): it stays ended.
+    if (ended || isTerminalJobStatus(jobState.status)) return;
     const stage = fields.stage || data.stage || '';
     if (stage) jobState.stage = String(stage);
-    if (stage || data.status === 'running' || fields.status === 'running' || data.event === 'progress') {
+    if (stage || status === 'running' || data.event === 'progress') {
       jobState.status = 'running';
       jobState.mode = 'mesh';
-    }
-    if (data.event === 'result' || data.status === 'done' || fields.status === 'done') {
-      jobState.status = 'done';
     }
     try { syncViewportJobChip(); } catch (_) {}
   }, pid);
 }
+
+/**
+ * The watched mesh job's stream says it ended. A failure ends it on the page at once,
+ * with the mesher's reason: the job poll may have stopped already, or may not see this
+ * job (another study's case attached). Done and stopped get one poll now, which does
+ * what their end always did (attach the new mesh; the stop's own handling).
+ */
+function endWatchedMeshJob(status, error, first) {
+  const live = meshGenerateJobIsLive() && !meshJobInOtherProject();
+  if (error && (live || jobState.status === status)) {
+    jobState.error = error;
+    if (!live) {
+      try { publishMeshJobState(); } catch (_) {}
+    }
+  }
+  if (!live || !first) return;
+  if (status !== 'failed') {
+    if (status === 'done') jobState.status = 'done';
+    if (typeof jobState.poll_tick === 'function' && jobState.poll_timer) {
+      jobState.poll_tick().catch(() => {});
+    }
+    try { syncViewportJobChip(); } catch (_) {}
+    return;
+  }
+  rememberEndedMeshKick(jobState.kick_id || jobState.generate_id);
+  stopJobPoll();
+  stopMeshElapsedClock();
+  jobState.status = 'failed';
+  jobState.stage = 'failed';
+  jobState.stage_detail = null;
+  if (!jobState.finished_at) jobState.finished_at = new Date().toISOString();
+  const meshId = jobState.mesh_id || null;
+  try { clearLiveCompute('mesh'); } catch (_) {}
+  if (meshId) {
+    updateMeshListEntry(meshId, {
+      generated: false,
+      live_mesh_result: { status: 'failed', error: jobState.error || null, mesh_id: meshId },
+    });
+  }
+  try {
+    showJobFinishToast(
+      'mesh',
+      {
+        project_id: jobState.project_id,
+        project_title: jobState.project_title,
+        study_label: jobState.geometry_name,
+        simulation_id: jobState.simulation_id,
+        mesh_id: meshId,
+        name: jobState.mesh_name || 'Mesh',
+      },
+      'failed'
+    );
+  } catch (_) {}
+  try { syncJobStatusChrome(); } catch (_) {}
+  try { if (typeof applyWorkbenchStage === 'function') applyWorkbenchStage(); } catch (_) {}
+  try { publishJobActivity(); } catch (_) {}
+  try { if (typeof refreshSetupTree === 'function') refreshSetupTree(); } catch (_) {}
+  try { scheduleKickNextQueuedJob(400); } catch (_) {}
+}
 window.__CFD_WATCH_JOB__ = watchJobEvents;
+
+/** The running mesh job's own record: its project, study and mesh (not the study shown). */
+function jobMeshQs() {
+  const pid = jobState.project_id || (typeof currentProjectId === 'function' ? currentProjectId() : '');
+  if (!pid || !jobState.simulation_id || !jobState.mesh_id) return hashProjectQs();
+  return '?' + new URLSearchParams({
+    project_id: String(pid),
+    simulation_id: String(jobState.simulation_id),
+    mesh_id: String(jobState.mesh_id),
+  }).toString();
+}
 
 function startJobPoll() {
   if (!runStatusPollEnabled()) return;
   stopJobPoll();
-  jobState.poll_timer = setInterval(async () => {
+  const tick = async () => {
     try {
       // Another project's job: this project's /api/case cannot describe it, and its
       // mesh_1 would match by id. releaseForeignMeshJob ends it from the queue poll.
@@ -17945,9 +18062,10 @@ function startJobPoll() {
         !(isTerminalJobStatus(snap && snap.status) && liveGenerateSnapMatch(snap))
       ) {
         try {
-          const mr = await fetch('/api/mesh' + hashProjectQs());
+          const mr = await fetch('/api/mesh' + jobMeshQs());
           const mj = await mr.json();
-          const rec = ((mj && mj.meshes) || []).find(
+          const own = mj && mj.mesh && String(mj.mesh.id) === String(jobState.mesh_id) ? mj.mesh : null;
+          const rec = own || ((mj && mj.meshes) || []).find(
             (m) => m && String(m.id) === String(jobState.mesh_id)
           );
           const live = rec && rec.live_mesh_result;
@@ -17965,6 +18083,7 @@ function startJobPoll() {
       syncJobStatusChrome();
       publishW15({ polled: true, api: snap });
       if (isTerminalJobStatus(snap && snap.status) && liveGenerateSnapMatch(snap)) {
+        rememberEndedMeshKick(snap.kick_id || snap.generate_id || jobState.kick_id);
         if (isMeshJobKind(snap.path_kind || jobState.path_kind)) {
           try {
             showJobFinishToast(
@@ -18007,6 +18126,7 @@ function startJobPoll() {
               case_dir: snap.case_dir,
               live_mesh_result: {
                 status: snap.status,
+                error: snap.status === 'failed' ? snap.error || jobState.error || null : null,
                 case_dir: snap.case_dir,
                 n_cells: snap.n_cells,
                 n_points: snap.n_points,
@@ -18081,7 +18201,9 @@ function startJobPoll() {
     } catch (e) {
       console.warn('[CFD W15.1] poll', e);
     }
-  }, 750);
+  };
+  jobState.poll_tick = tick;
+  jobState.poll_timer = setInterval(tick, 750);
 }
 
 
