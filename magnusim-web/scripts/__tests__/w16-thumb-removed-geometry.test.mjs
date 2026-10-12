@@ -63,7 +63,10 @@ async function call(method, path, body) {
   const res = {
     statusCode: 200,
     body: null,
-    setHeader() {},
+    headers: {},
+    setHeader(k, v) {
+      this.headers[String(k).toLowerCase()] = v;
+    },
     end(bytes) {
       this.body = bytes;
     },
@@ -198,6 +201,68 @@ describe('a geometry removed and added again from a file of the same name', () =
       assert.ok(held.started.length >= 2, 'the new part was never rendered');
       assert.notEqual(thumb.body[0], 1, "the Home card got the removed part's thumbnail");
       assert.notEqual(readFileSync(join(newDir, 'thumb.png'))[0], 1, "the new geometry's folder holds the removed part's thumbnail");
+    } finally {
+      held.release();
+      setThumbRendererForTests(null);
+    }
+  });
+});
+
+describe("the Home card's thumbnail address", () => {
+  it("is not the removed part's address while the new part's picture is made", { timeout: 300_000 }, async () => {
+    // The browser keeps a thumbnail a day. While a picture was being made the address was
+    // ...&v=pending for any geometry, so after a part was removed and another added, the
+    // Home card could show the removed part's picture from the browser's cache.
+    const pid = 'thumb-address-same-name';
+    const dir = join(root, pid);
+    mkdirSync(dir, { recursive: true });
+    const first = createGeometryFolder(dir, { id: 'g-old', name: 'Part', original_filename: 'Part.step' });
+    cpSync(join(FIXTURES, 'transient-test.step'), join(first.dir, 'source.step'));
+    writeJsonAtomic(join(dir, 'project.json'), {
+      id: pid,
+      title: pid,
+      units: 'Metric',
+      folder: 'My Projects',
+      geometries: [{ id: 'g-old', name: 'Part', original_filename: 'Part.step', step_path: join(first.dir, 'source.step'), source_kind: 'step', n_solids: 1 }],
+      active_geometry_id: 'g-old',
+    });
+    const changedDir = join(root, 'changed-part-address');
+    mkdirSync(changedDir, { recursive: true });
+    const changed = join(changedDir, 'Part.step');
+    cpSync(join(FIXTURES, 'transient-test-teardrop.step'), changed);
+    const cardUrl = async () => {
+      const listed = await call('GET', '/api/projects');
+      assert.equal(listed.statusCode, 200, JSON.stringify(listed.body));
+      const card = listed.body.projects.find((p) => p.id === pid);
+      assert.ok(card && card.thumb_url, JSON.stringify(card));
+      return card.thumb_url;
+    };
+
+    const held = holdThumbRenders();
+    try {
+      // Both pictures are still being made when Home lists the project.
+      const activated = await call('POST', '/api/geometry/activate', { project_id: pid, geometry_id: 'g-old' });
+      assert.equal(activated.statusCode, 200, JSON.stringify(activated.body));
+      await held.renderStarted();
+      const before = await cardUrl();
+      const removed = await call('POST', '/api/geometry/remove', { project_id: pid, geometry_id: 'g-old' });
+      assert.equal(removed.statusCode, 200, JSON.stringify(removed.body));
+      const added = await call('POST', '/api/geometry/import', { project_id: pid, step_path: changed, filename: 'Part.step' });
+      assert.equal(added.statusCode, 200, JSON.stringify(added.body));
+      const after = await cardUrl();
+      assert.notEqual(after, before, "the new part has the removed part's thumbnail address");
+
+      held.release();
+      // An answer to an address asked for before the picture was made is not kept.
+      const pending = await call('GET', after);
+      assert.equal(pending.statusCode, 200, JSON.stringify(pending.body));
+      assert.equal(pending.headers['cache-control'], 'no-store');
+      // The made picture's address is new again, and that one is kept.
+      const made = await cardUrl();
+      assert.notEqual(made, after);
+      const kept = await call('GET', made);
+      assert.equal(kept.statusCode, 200, JSON.stringify(kept.body));
+      assert.match(String(kept.headers['cache-control']), /max-age/);
     } finally {
       held.release();
       setThumbRendererForTests(null);

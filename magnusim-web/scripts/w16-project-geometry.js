@@ -301,8 +301,12 @@ function summarizeProject(proj) {
   const thumbFile = thumbPathFor(proj.id);
   let thumb_url = null;
   if (has_geometry) {
-    const v = existsSync(thumbFile) ? Math.floor(statSync(thumbFile).mtimeMs) : 'pending';
-    thumb_url = `/api/geometry/thumb?project_id=${encodeURIComponent(proj.id)}&v=${v}`;
+    // The browser keeps a thumbnail a day (thumbCacheControl): its address names the
+    // geometry and the picture's age, so a geometry removed and added again (the same
+    // file name, the same thumb.png path) never reuses the removed part's picture.
+    const age = existsSync(thumbFile) ? String(Math.floor(statSync(thumbFile).mtimeMs)) : THUMB_PENDING;
+    const v = `${thumbGeometryId(proj) || 'none'}-${age}`;
+    thumb_url = `/api/geometry/thumb?project_id=${encodeURIComponent(proj.id)}&v=${encodeURIComponent(v)}`;
   }
   return {
     id: proj.id,
@@ -1434,6 +1438,20 @@ function thumbIsFresh(thumb, source) {
   return statSync(thumb).mtimeMs >= statSync(source).mtimeMs;
 }
 
+/** A thumbnail address's age while the picture is not made yet (thumbCacheControl). */
+const THUMB_PENDING = 'pending';
+
+/**
+ * Cache-Control of a thumbnail answer, from its address's `v` (summarizeProject). Only an
+ * address naming a made picture is kept: one asked for while the picture was still pending
+ * (or with no `v`) is the same address for whatever the project shows next.
+ */
+export function thumbCacheControl(v) {
+  const s = String(v || '');
+  if (!s || s === THUMB_PENDING || s.endsWith('-' + THUMB_PENDING)) return 'no-store';
+  return 'public, max-age=86400';
+}
+
 /** The geometry a project's thumbnail shows: its active one, else its first ('' when none). */
 function thumbGeometryId(proj) {
   const aid = proj && activeGeometryId(proj);
@@ -1516,6 +1534,8 @@ async function renderGeometryThumb(projectId, retried = false) {
     if (!retried) return renderGeometryThumb(id, true);
     return { ok: false, status: 409, body: { error: 'geometry changed while its thumbnail rendered', project_id: id } };
   }
+  // The Home list names the picture's age in its address (summarizeProject): list again.
+  invalidateProjectsListCache();
   return { ok: true, path: out, bytes: readFileSync(out), cached: false, project: proj };
 }
 
@@ -2454,7 +2474,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       res.setHeader('Content-Length', String(got.bytes.length));
       res.setHeader('X-CFD-Source', 'geometry-thumb');
       res.setHeader('X-CFD-Project-Id', pid || '');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Cache-Control', thumbCacheControl(u.searchParams.get('v')));
       if (req.method === 'HEAD') {
         res.end();
         return true;
