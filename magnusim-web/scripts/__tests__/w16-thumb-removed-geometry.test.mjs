@@ -6,7 +6,7 @@
  * folder. A project deleted mid-render came back the same way.
  */
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,7 +76,7 @@ async function call(method, path, body) {
     },
     readJsonBody: async () => body,
   };
-  await handleW16Api({ method }, res, url, url.pathname.split('/').filter(Boolean), helpers);
+  await handleW16Api({ method, headers: { 'content-type': 'application/json' } }, res, url, url.pathname.split('/').filter(Boolean), helpers);
   return res;
 }
 
@@ -87,10 +87,12 @@ function holdThumbRenders() {
   const released = new Promise((r) => (release = r));
   setThumbRendererForTests(async (args) => {
     started.push(args);
+    // Each render's picture is filled with its own number (1 for the first).
+    const n = started.length;
     const out = args[args.indexOf('--out') + 1];
     await released;
     mkdirSync(dirname(out), { recursive: true });
-    writeFileSync(out, Buffer.alloc(256, 7));
+    writeFileSync(out, Buffer.alloc(256, n));
   });
   const renderStarted = async () => {
     const by = Date.now() + 120_000;
@@ -144,6 +146,58 @@ describe('a thumbnail rendered while its geometry is deleted', () => {
 
       if (existsSync(dir)) assert.fail(`${dir} is back: ${readdirSync(dir, { recursive: true }).join(', ')}`);
       assert.equal(thumb.statusCode, 404, JSON.stringify(thumb.body));
+    } finally {
+      held.release();
+      setThumbRendererForTests(null);
+    }
+  });
+});
+
+describe('a geometry removed and added again from a file of the same name', () => {
+  it("does not get the removed part's thumbnail", { timeout: 300_000 }, async () => {
+    // Daniel: a part removed and a changed part of the same file name added. The new one
+    // gets the same folder (Geometry_<name>), so the same thumb.png path.
+    const pid = 'thumb-same-name-again';
+    const dir = join(root, pid);
+    mkdirSync(dir, { recursive: true });
+    const first = createGeometryFolder(dir, { id: 'g-first', name: 'Part', original_filename: 'Part.step' });
+    cpSync(join(FIXTURES, 'transient-test.step'), join(first.dir, 'source.step'));
+    writeJsonAtomic(join(dir, 'project.json'), {
+      id: pid,
+      title: pid,
+      units: 'Metric',
+      folder: 'My Projects',
+      geometries: [{ id: 'g-first', name: 'Part', original_filename: 'Part.step', step_path: join(first.dir, 'source.step'), source_kind: 'step', n_solids: 1 }],
+      active_geometry_id: 'g-first',
+    });
+    // The changed part: another shape, the same file name.
+    const changedDir = join(root, 'changed-part');
+    mkdirSync(changedDir, { recursive: true });
+    const changed = join(changedDir, 'Part.step');
+    cpSync(join(FIXTURES, 'transient-test-teardrop.step'), changed);
+
+    const held = holdThumbRenders();
+    try {
+      const activated = await call('POST', '/api/geometry/activate', { project_id: pid, geometry_id: 'g-first' });
+      assert.equal(activated.statusCode, 200, JSON.stringify(activated.body));
+      await held.renderStarted();
+
+      const removed = await call('POST', '/api/geometry/remove', { project_id: pid, geometry_id: 'g-first' });
+      assert.equal(removed.statusCode, 200, JSON.stringify(removed.body));
+      const added = await call('POST', '/api/geometry/import', { project_id: pid, step_path: changed, filename: 'Part.step' });
+      assert.equal(added.statusCode, 200, JSON.stringify(added.body));
+      const newDir = join(geometriesRoot(dir), 'Geometry_Part');
+      assert.deepEqual(readdirSync(geometriesRoot(dir)), ['Geometry_Part']);
+      assert.notEqual(added.body.geometry.id, 'g-first');
+
+      held.release();
+      const thumb = await call('GET', `/api/geometry/thumb?project_id=${pid}`);
+      assert.equal(thumb.statusCode, 200, JSON.stringify(thumb.body));
+      // The first render drew the removed part (its picture is all 1s): neither the
+      // reply nor the new folder's thumb.png may be it.
+      assert.ok(held.started.length >= 2, 'the new part was never rendered');
+      assert.notEqual(thumb.body[0], 1, "the Home card got the removed part's thumbnail");
+      assert.notEqual(readFileSync(join(newDir, 'thumb.png'))[0], 1, "the new geometry's folder holds the removed part's thumbnail");
     } finally {
       held.release();
       setThumbRendererForTests(null);

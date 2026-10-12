@@ -1434,14 +1434,29 @@ function thumbIsFresh(thumb, source) {
   return statSync(thumb).mtimeMs >= statSync(source).mtimeMs;
 }
 
+/** The geometry a project's thumbnail shows: its active one, else its first ('' when none). */
+function thumbGeometryId(proj) {
+  const aid = proj && activeGeometryId(proj);
+  if (aid) return String(aid);
+  const geoms = proj && Array.isArray(proj.geometries) ? proj.geometries : [];
+  return String((geoms[0] && geoms[0].id) || '');
+}
+
 /**
  * Move a thumbnail rendered outside the project to `out`, unless `out` is no longer the
  * project's thumbnail: its geometry (or the project) was removed while it rendered, and
  * writing there would make the removed folder again. All synchronous, so a remove (an
  * rmSync on this thread) cannot land between the check and the copy.
+ *
+ * `geomId` is the geometry the render drew. A geometry removed and added again from a
+ * file of the same name gets the same folder, so the same `out`: the path alone let the
+ * removed part's picture land in the new geometry's folder, where it stayed (it is newer
+ * than the new STEP, so it counted as current).
  */
-function placeThumb(id, out, rendered) {
-  if (!readProject(id) || thumbPathFor(id) !== out || !existsSync(dirname(out))) return false;
+function placeThumb(id, out, rendered, geomId) {
+  const proj = readProject(id);
+  if (!proj || thumbPathFor(id) !== out || !existsSync(dirname(out))) return false;
+  if (geomId !== undefined && thumbGeometryId(proj) !== geomId) return false;
   try {
     copyFileSync(rendered, out);
     return true;
@@ -1456,6 +1471,7 @@ async function renderGeometryThumb(projectId, retried = false) {
   const proj = readProject(id);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: id } };
   const out = thumbPathFor(id);
+  const geomId = thumbGeometryId(proj);
   // A linked geometry's thumbnail is a follow-up of its link job: served, never rendered here.
   if (isLinkedGeometryDir(dirname(out))) {
     const fenced = linkFenceAnswer(dirname(out));
@@ -1490,7 +1506,7 @@ async function renderGeometryThumb(projectId, retried = false) {
     return { ok: false, status: 500, body: { error: 'thumb render failed', detail: String(e), project_id: id } };
   }
   const made = existsSync(rendered) && statSync(rendered).size >= 80;
-  const placed = made && placeThumb(id, out, rendered);
+  const placed = made && placeThumb(id, out, rendered, geomId);
   rmSync(rendered, { force: true });
   if (!made) {
     return { ok: false, status: 500, body: { error: 'thumb missing after render', path: out } };
