@@ -12,7 +12,9 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
   (threads make gmsh differ run to run, so this one cannot be byte-exact).
 - W5 Standard on a plate whose tabs sit 0.188 mm off its slots (small feature
   suppression at 1.5 mm used to open its surface): meshes with its hex core and
-  layers, and checkMesh passes.
+  layers, and checkMesh passes. Its walls are meshed finer than h around the
+  tabs, so their layers are sized in bands (patches of their own for the
+  layers pass): after the mesh they are one ``walls`` patch again.
 
 Each run has its own WSL case id and removes it when done. Record the cell
 counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``.
@@ -62,9 +64,22 @@ def _patches(case: Path) -> dict[str, tuple[str, int]]:
     return {name: (kind, int(n)) for name, kind, n in _PATCH.findall(text)}
 
 
+_BAND = re.compile(r"_bl\d+_*$")
+
+
+def _merged_groups(groups: dict[str, int]) -> dict[str, int]:
+    """Triangle groups with the layer bands (``walls_bl3``) counted in their patch,
+    as the mesh has them after the layers pass merges them back."""
+    out: dict[str, int] = {}
+    for name, n in groups.items():
+        base = _BAND.sub("", name)
+        out[base] = out.get(base, 0) + int(n)
+    return out
+
+
 def _golden_types(name: str) -> dict[str, str]:
     lines = (GOLDEN / name / "constant" / "triSurface" / "patch_types.txt").read_text(encoding="utf-8").split("\n")
-    return dict(ln.split() for ln in lines if ln.strip())
+    return {k: v for k, v in (ln.split() for ln in lines if ln.strip()) if not _BAND.search(k)}
 
 
 def _host_record(name: str) -> dict[str, Any] | None:
@@ -115,7 +130,7 @@ def test_w1_standard(tmp_path: Path):
         # One thread is repeatable: the same cells and boundary as the golden msh.
         msh = record["files"]["constant/triSurface/geometry.msh"]["mesh"]
         assert res["n_cells"] == sum(n for kind, n in msh["elements"].items() if kind != "tri")
-        assert {k: v[1] for k, v in patches.items()} == msh["triangles_per_group"]
+        assert {k: v[1] for k, v in patches.items()} == _merged_groups(msh["triangles_per_group"])
 
 
 def test_w2_hex_dominant(tmp_path: Path):
@@ -216,3 +231,9 @@ def test_w5_standard_tabs_part(tmp_path: Path):
     assert _checkmesh_ok((case / "log.standard_generate.txt").read_text(encoding="utf-8"), allow_skew=True)
     host = (case / "log.gmsh_host.txt").read_text(encoding="utf-8")
     assert "small feature suppression: faces below 0.0015 m suppressed" in host
+    # Layer bands were used and merged back: the mesh has the study's patches only.
+    bands = meta["sizing"]["layers"]["bands"]
+    assert bands.get("walls"), bands
+    patches = _patches(case)
+    assert sorted(patches) == ["pressure_1", "velocity_inlet_1", "walls"], sorted(patches)
+    assert patches["walls"][0] == "wall"

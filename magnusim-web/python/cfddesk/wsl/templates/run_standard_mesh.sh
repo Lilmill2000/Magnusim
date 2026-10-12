@@ -54,6 +54,14 @@ else
   echo "layers off (no snappyHexMeshDict)" > log.snappyHexMesh
 fi
 
+# Wall patches split by cell size for the layers go back to one patch each.
+if [ -f system/createPatchDict ]; then
+  openfoam2606 bash -c '
+    cd "'"$CASE_DIR"'"
+    createPatch -overwrite > log.createPatch 2>&1
+  ' || fail createPatch
+fi
+
 openfoam2606 bash -c '
   cd "'"$CASE_DIR"'"
   checkMesh > log.checkMesh 2>&1 || true

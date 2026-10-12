@@ -10,11 +10,20 @@
     "triangles_per_group": {
      "pressure_1": 88,
      "velocity_inlet_1": 86,
-     "walls": 21638
+     "walls": 12255,
+     "walls_bl1": 706,
+     "walls_bl2": 1198,
+     "walls_bl3": 678,
+     "walls_bl4": 2031,
+     "walls_bl5": 419,
+     "walls_bl6": 497,
+     "walls_bl7": 956,
+     "walls_bl8": 2893,
+     "walls_bl9": 5
     }
    },
-   "sha256": "d0e0a2fbeb0de1a7e4fd78c89e66f769d8bc7d486894f867de2d8f85b5bb9e8f",
-   "size": 3687865
+   "sha256": "03748b3a74443a55aa847adf3501a9121d6d466fbef40b7597dd6e97d1e977f8",
+   "size": 3725560
   }
  },
  "text": {
@@ -31,6 +40,7 @@
    "tet volume: 52848 tets, 0 prisms (<s>)",
    "volume assembly: cells 0.0447498 m\u00b3 vs boundary 0.0447498 m\u00b3 (rel err 0.00e+00)",
    "volume check: mesh 0.0447498 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 1.09e-03)",
+   "boundary layers: walls sized by the local cells in 10 band(s), down to 0.000533 m",
    "msh written: 14739 nodes, 52848 tets, 0 hexes, 0 prisms, 0 pyramids, 21812 boundary tris (<s>)"
   ]
  }

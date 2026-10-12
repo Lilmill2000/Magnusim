@@ -1,3 +1,5 @@
 pressure_1 patch
 velocity_inlet_1 patch
 walls wall
+walls_bl1 wall
+walls_bl2 wall
