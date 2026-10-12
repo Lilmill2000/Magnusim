@@ -22,7 +22,8 @@ import {
 import { formatSimTime } from '../plugin-ui/format/time';
 import { onProjectTree, readProjectTree } from './treeFeed';
 import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
-import { GeometryMenu } from './GeometryMenu';
+import { GeometryMenu, type GeometryMenuExtra } from './GeometryMenu';
+import { bodyHidden, bodyMenuItems, getBodyView, requestBodyView, subscribeBodyView } from '../workbench/bodyView';
 import { actionsFor, rememberTreeActions } from '../workspace/geometryActions';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
@@ -530,12 +531,22 @@ function EditedInRow({ geom }: { geom: GeomNode }) {
 
 function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string | null }) {
   const gkey = geom.scopeKey || `geom:${geom.id}`;
-  // The right-click menu of the geometry and its body rows (API 1.7): its geometry actions.
-  const [menu, setMenu] = useState<{ x: number; y: number; row: HTMLElement } | null>(null);
+  // The right-click menu of the geometry and its body rows (API 1.7): its geometry actions;
+  // a body row of the shown geometry also hides or shows bodies in the view.
+  const [menu, setMenu] = useState<{ x: number; y: number; row: HTMLElement; extra: GeometryMenuExtra[] } | null>(null);
   const entries = actionsFor({ edit_actions: geom.editActions }, 'tree');
-  const openMenu = (at: { x: number; y: number; row: HTMLElement }): boolean => {
-    if (!entries.length || !geom.id) return false;
-    setMenu(at);
+  const view = getBodyView();
+  const multiPicked = !!geom.id && view.geometryId === geom.id && view.selected.length > 1;
+  const bodyExtra = (body: number): GeometryMenuExtra[] =>
+    bodyMenuItems(view, geom.id, body).map((item) => ({
+      key: item.act,
+      label: item.label,
+      attrs: { 'data-body-act': item.act },
+      onPick: () => requestBodyView(item.act === 'show-all' ? { kind: 'show-all' } : { kind: item.act, bodies: item.bodies }),
+    }));
+  const openMenu = (at: { x: number; y: number; row: HTMLElement }, extra: GeometryMenuExtra[] = []): boolean => {
+    if ((!entries.length && !extra.length) || !geom.id) return false;
+    setMenu({ ...at, extra });
     return true;
   };
   const projectId = useProjectStore.getState().projectId || '';
@@ -549,6 +560,7 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
         geometryId={geom.id}
         geometryName={geom.name}
         entries={entries}
+        extra={menu.extra}
         onClose={(refocus) => {
           const row = menu.row;
           setMenu(null);
@@ -578,15 +590,25 @@ function GeomBlock({ geom, selectedKey }: { geom: GeomNode; selectedKey: string 
     >
       {geom.bodies.length ? (
         <Node label="Geometry" attrs={{ 'data-w17-geo': '1' }} mark>
-          {geom.bodies.map((b, i) => (
-            <Node
-              key={`${b}-${i}`}
-              label={bodyDisplay(b, geom.bodyLabels ? geom.bodyLabels[b] || null : null)}
-              selected={selectedKey === `body-${i + 1}`}
-              attrs={{ 'data-w16-body': '1', 'data-body-index': String(i + 1) }}
-              onContextMenu={entries.length ? openMenu : undefined}
-            />
-          ))}
+          {geom.bodies.map((b, i) => {
+            const extra = bodyExtra(i + 1);
+            const hidden = bodyHidden(view, geom.id, i + 1);
+            return (
+              <Node
+                key={`${b}-${i}`}
+                label={bodyDisplay(b, geom.bodyLabels ? geom.bodyLabels[b] || null : null)}
+                className={hidden ? 'is-hidden-body' : undefined}
+                selected={selectedKey === `body-${i + 1}` || (multiPicked && view.selected.includes(i + 1))}
+                attrs={{
+                  'data-w16-body': '1',
+                  'data-body-index': String(i + 1),
+                  'data-body-hidden': hidden ? '1' : undefined,
+                  title: hidden ? 'Hidden in the view' : undefined,
+                }}
+                onContextMenu={entries.length || extra.length ? (at) => openMenu(at, extra) : undefined}
+              />
+            );
+          })}
         </Node>
       ) : null}
       {geom.studies.map((s) => (
@@ -882,6 +904,8 @@ export function LeftTree() {
   // A linked geometry's job state and the shown geometry's face names repaint the rows.
   useEffect(() => subscribeLinkedGeometries(paint), []);
   useEffect(() => subscribeFaceNames(paint), []);
+  // Bodies hidden in the view (or picked together) repaint their rows.
+  useEffect(() => subscribeBodyView(paint), []);
 
   useEffect(() => {
     const left = document.getElementById('left-tree');
