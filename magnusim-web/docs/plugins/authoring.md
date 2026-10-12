@@ -4,13 +4,13 @@ A plugin adds or replaces one aspect of the workbench. Drop a folder in `plugins
 
 Start with `npm run plugin:new -- <key> [--workspace|--analysis]` from `magnusim-web/` ([GUIDE.md](GUIDE.md), "Quick start"). It writes a plugin that passes `npm run plugin:check`, with its tests. `templates/plugin/` and `templates/plugin-workspace/` are what it is made from: read them as examples, do not copy them (their keys are not yours).
 
-## Manifest 1.7
+## Manifest 1.8
 
 ```toml
 key = "my-plugin"
 name = "My plugin"
 version = "0.1.0"
-api_version = "1.7"
+api_version = "1.8"
 license = "GPL-3.0-or-later"
 description = "What this plugin adds"
 authors = "Your Name"
@@ -185,6 +185,35 @@ host.pluginUi.registerBcSettings("my-plugin.bc", MyBcEditor, { facesNote: MyFace
 It gets `BcSettingsProps` (`src/plugin-api/slots.ts`): the saved `bc`, its `family` row, `imperial`, the assigned `faces`, `save(patch)` and `flowBasis(faces)` (one face's mean area and the fluid's density). `facesNote` is optional and is drawn under the assigned faces. Incompressible Flow's BC types and families (the seven stored types and their four families, then symmetry, freestream, total-pressure inlet and the moving and rotating walls) are protected: build on them, never drop them. The slot props also carry `study` (the study's record, or null). `cfddesk.case.bc_registry` and `cfddesk.case.bc_menu` are 1.x shims kept for older code; read the registry instead.
 
 A `MaterialModel` (kind `material`) gives the Materials panel its fluids and fields: `properties_schema` (the number rows; a field's `quantity` gives its Imperial unit), `library` (the presets, rows of `key`, `name`, `values`, `library`, `codes`, `names` and optional `legacy_values`), `record_keys` (the record keys that hold each property), `record_constants` (what every record carries) and `custom_preset` (the preset a record has once the user types their own values). An analysis names its model in `material_models`. A saved material keeps its numbers; `compatibility.md` (1.4) has the rule that matches a record to its preset. Incompressible Flow's `newtonian_incompressible` (`bundled-plugins/incompressible_flow/incompressible_flow/materials.py`) is a complete example.
+
+## Building on another plugin, and heat transfer pieces (1.8)
+
+**Plugin exports.** A plugin may use another plugin's Python code only through modules that plugin lists in its manifest `exports` (`"package.module"`, a module of its own), and only when its own `requires_plugins` names that plugin (so it loads first). Anything else of another plugin stays private: `plugin:check` and the CI boundary check (`tools/plugin_boundary.py`, rule 4) refuse the import with the fix. An export is the exporter's public API: it keeps its names and meaning across its minor versions.
+
+```toml
+# The exporter's manifest
+exports = ["incompressible_flow.flow_bcs"]
+# The user's manifest
+requires_plugins = ["incompressible_flow>=1.1"]
+```
+
+**Fields on another plugin's BCs.** An analysis adds fields to the BCs of its studies with `bc_fields`, groups of `SchemaField`s (`BcFieldGroup`: `key`, `title`, `fields`, `families`, `ui`, `description`). The BC editor draws each group under the family's own settings, only in studies of that analysis, and saves its fields in the same BC record, so a family another plugin owns gains them without changing. `families` names the bc_family keys a group is for (empty: every family the analysis offers). A field may not use a key the family or the host already holds; a group that does unloads its plugin with the reason. `ui` names a component drawn instead of the generic form (`host.pluginUi.registerBcSection(name, Component)`; it gets `BcSettingsProps` plus its `group`).
+
+```python test
+from cfddesk.registry import AnalysisType, BcFieldGroup, SchemaField
+
+T_IN = SchemaField("inlet_temperature", "Inlet temperature", "float", default=293.15, quantity="temperature")
+heat = AnalysisType(
+    key="my_heat_steady", label="Heat", category="heat", time_dependency="steady", fields=("T",),
+    bc_types=("velocity_inlet_fixed", "wall_noslip"),
+    bc_fields=(BcFieldGroup("inlet_thermal", "Thermal", (T_IN,), families=("velocity_inlet",)),),
+)
+assert heat.bc_fields[0].families == ("velocity_inlet",)
+```
+
+**Several materials per study.** A `MaterialModel` has a `role`, `"fluid"` (the default) or `"solid"`. An analysis that lists more than one model in `material_models` lets a study hold several material records, one per group of bodies: the Materials tree lists each, "+" adds one, its panel picks the model ("Type"), the preset and the bodies, and a body belongs to one record at a time (assigning it takes it from the other). Each record with bodies is one region of the mesh, with its model's role (`cfddesk.project.regions.study_regions`); Generate refuses such a study on a mesher without `multi_region`. A record names its model in `material_model`. An analysis with one model keeps the one-fluid panel.
+
+**Units.** Temperatures are shown and typed in °C (metric) or °F (imperial), stored in K; a schema form's temperature field has a K/°C/°F picker. New quantities: `heat_flux`, `heat_transfer_coefficient`, `thermal_conductivity`, `specific_heat`, `power`, `power_density`, `thermal_expansion`, `acceleration`, `dynamic_viscosity` and `molar_mass` (`magnusim_sdk.units`, and the kit's `UNITS`).
 
 ## UI
 

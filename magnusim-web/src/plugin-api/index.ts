@@ -15,12 +15,13 @@ import { mergeObjectSchemas, pickSchemaValues } from '../panels/scope';
 import {
   registerSlotFor,
   unregisterSlot,
+  type BcSectionProps,
   type BcSettingsProps,
   type RunSettingsProps,
   type StudySettingsProps,
 } from './slots';
 
-export type { BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
+export type { BcSectionProps, BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
 
 /**
  * Places the host actually renders: the Filters panel and the plugin's row in
@@ -270,6 +271,11 @@ function registerBcSettingsFor(
   }
 }
 
+/** An analysis's BC field group in the BC editor (API 1.8; its `bc_fields` row's `ui`). */
+function registerBcSectionFor(owner: string, name: string, Component: ComponentType<BcSectionProps>): void {
+  ledgerFor(owner).slots.add(registerSlotFor(owner, 'bc-section', name, Component as ComponentType<never>));
+}
+
 export type PluginToastKind = 'info' | 'success' | 'error';
 
 /** An app toast (the app's toast layer, bottom right). An unknown kind is info, as in ws.ui.toast. */
@@ -297,6 +303,8 @@ export function pluginUiFor(owner: string) {
       Component: ComponentType<BcSettingsProps>,
       opts?: { facesNote?: ComponentType<BcSettingsProps> },
     ) => registerBcSettingsFor(owner, name, Component, opts),
+    // API 1.8: an analysis's BC field group.
+    registerBcSection: (name: string, Component: ComponentType<BcSectionProps>) => registerBcSectionFor(owner, name, Component),
     SciNumberInput,
     schema: { mergeObjectSchemas, pickSchemaValues },
     registerPanel: (opts: RegisterPanelOpts) => registerPanelFor(owner, opts),

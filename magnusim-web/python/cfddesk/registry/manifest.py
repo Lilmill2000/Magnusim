@@ -150,6 +150,9 @@ class PluginManifest:
     default_enabled: bool = True
     # Plugins this one needs loaded first: "key" or "key>=1.0".
     requires_plugins: list[str] = field(default_factory=list)
+    # Host API 1.8: its modules another plugin may import when it requires this one
+    # ("package.module"; tools/plugin_boundary.py rule 4).
+    exports: list[str] = field(default_factory=list)
     # "kind:key" specs of this plugin that other plugins may not drop.
     protected: list[str] = field(default_factory=list)
     # [default_analysis] (a required bundled plugin only): the analysis a study

@@ -19045,12 +19045,16 @@ const SETUP_SECTION_FROM_PANEL = {
 };
 
 let lastSetupSection = null;
+// Host API 1.8: the material record the Materials panel edits in a study with
+// several materials ('' = the study's materials). Written by the tree's row
+// clicks and openMaterialItem, read by openTreeDetail.
+let materialItemId = '';
 
 function setupSectionFromSelectedKey(selectedKey) {
   const key = String(selectedKey || '');
   if (!key) return null;
   if (key === 'geometry' || key.startsWith('body-')) return 'Geometry';
-  if (key === 'materials' || key === 'air') return 'Materials';
+  if (key === 'materials' || key === 'air' || key.startsWith('air:')) return 'Materials';
   if (key === 'bcs' || key === 'bc-defaults' || key.startsWith('bcid:')) return 'Boundary conditions';
   if (
     key === 'mesh' ||
@@ -19341,6 +19345,8 @@ function openTreeDetail(key, opts) {
       if (meshKey && typeof viewingMeshId === 'function') itemId = String(viewingMeshId() || '');
       else if (bcKey && typeof viewingBcId === 'function') itemId = String(viewingBcId() || '');
       else if (runKey && typeof viewingRunId === 'function') itemId = String(viewingRunId() || '');
+      // Host API 1.8: the material record a row of a study with several materials opened.
+      else if (key === 'air') itemId = materialItemId;
       const geomId =
         (w16State && (w16State.selectedGeomId || (w16State.geometry && w16State.geometry.id))) || '';
       const scope = [
@@ -19364,6 +19370,18 @@ function openTreeDetail(key, opts) {
 }
 
 window.__CFD_OPEN_TREE_DETAIL__ = openTreeDetail;
+
+/**
+ * Open one material record of a study that holds several (host API 1.8: an
+ * analysis with more than one material model). The tree row and the Materials
+ * hub's list call it; '' opens the panel on the study's materials.
+ */
+function openMaterialItem(id) {
+  materialItemId = String(id || '');
+  markTreeSelected(materialItemId ? 'air:' + materialItemId : 'air');
+  openTreeDetail('air', { toggle: false });
+}
+window.__CFD_OPEN_MATERIAL__ = openMaterialItem;
 
 function isAssigningMaterial() {
   return treeUi.openPanel === 'mat-picker' || treeUi.openPanel === 'air';
@@ -22744,6 +22762,7 @@ function publishW18(extra) {
 }
 
 function openAirPanel() {
+  materialItemId = '';
   openTreeDetail('air', { toggle: false });
 }
 
@@ -22756,6 +22775,7 @@ function openMaterialLibrary() {
     console.warn('[CFD W18] Create Simulation first');
     return;
   }
+  materialItemId = '';
   openTreeDetail('mat-picker', { toggle: false });
 }
 
@@ -22888,7 +22908,7 @@ window.__CFD_MATERIAL_APPLY__ = function applySavedMaterial(mat, projectId) {
   if (!mat) return null;
   return applyMaterialRecord(mat, projectId || mat.project_id, { openPanel: false });
 };
-window.__CFD_MATERIAL_DELETE__ = () => deleteAirMaterialClient();
+window.__CFD_MATERIAL_DELETE__ = (id) => (id ? deleteMaterialRecordClient(String(id)) : deleteAirMaterialClient());
 
 function vtkView() {
   try {
@@ -26243,6 +26263,33 @@ async function deleteAirMaterialClient() {
   hideAllTreeDetails();
   refreshSetupTree();
   publishW18({ deleted: true, ready: false });
+  return j;
+}
+
+/**
+ * Delete one material record of a study that holds several (host API 1.8); the
+ * study's other materials stay. The panels and the tree read them again.
+ */
+async function deleteMaterialRecordClient(id) {
+  const payload = { delete: true, material_id: id };
+  if (w16State.project && w16State.project.id) payload.project_id = w16State.project.id;
+  if (typeof currentMeshStudyIds === 'function') Object.assign(payload, currentMeshStudyIds());
+  // census: a delete (never stamp-checked).
+  const r = await fetch('/api/materials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'delete failed');
+  if (materialCatalog.material && String(materialCatalog.material.id || '') === id) {
+    materialCatalog.material = (Array.isArray(j.materials) && j.materials[0]) || null;
+  }
+  materialItemId = '';
+  highlightGeomBody(null);
+  hideAllTreeDetails();
+  refreshSetupTree();
+  syncMaterialsHub();
   return j;
 }
 
@@ -37097,12 +37144,14 @@ function applyStudyDropOrder(ids, geometryId) {
         return;
       }
       if (node.matches('[data-w18-air="1"]')) {
-        if (closeIfTreeItemOpen('air')) return;
-        markTreeSelected('air');
-        openAirPanel();
+        // A study with several materials (host API 1.8) names the record on its row.
+        const mid = node.getAttribute('data-w18-material-id') || '';
+        if (closeIfTreeItemOpen(mid ? 'air:' + mid : 'air')) return;
+        openMaterialItem(mid);
         return;
       }
       if (node.matches('[data-w18-materials="1"]')) {
+        materialItemId = '';
         if (closeIfTreeItemOpen('materials')) return;
         const hasAir = !!(materialCatalog && materialCatalog.material);
         if (hasAir) {

@@ -36,11 +36,28 @@ class MaterialModel:
     record_constants: dict[str, Any] = field(default_factory=dict)
     # The preset name a record has once its values are edited by hand.
     custom_preset: str = "custom"
+    # API 1.8: what a body with this material is, "fluid" or "solid". An analysis
+    # that lists more than one model lets a study hold several material records,
+    # one per group of bodies; a solid record makes its bodies a solid region.
+    role: str = "fluid"
+
+
+MATERIAL_ROLES: tuple[str, ...] = ("fluid", "solid")
 
 
 def validate_analysis_material_refs(hub: RegistryHub) -> None:
     """Fail if any AnalysisType.material_models key is not registered."""
-    mat_keys = set(hub.registry("material").keys())
+    materials = hub.registry("material")
+    mat_keys = set(materials.keys())
+    for model in materials.items():
+        role = str(getattr(model, "role", "fluid") or "fluid")
+        if role not in MATERIAL_ROLES:
+            for spec in hub.registry("analysis").items():
+                if getattr(model, "key", None) in tuple(getattr(spec, "material_models", ()) or ()):
+                    raise RegistryError(
+                        f"analysis {getattr(spec, 'key', '?')!r}: material {model.key!r} has role {role!r}; "
+                        f"a role is one of {list(MATERIAL_ROLES)}"
+                    )
     for spec in hub.registry("analysis").items():
         bag = tuple(getattr(spec, "material_models", ()) or ())
         unknown = [k for k in bag if k not in mat_keys]

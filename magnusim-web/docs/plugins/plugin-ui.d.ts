@@ -188,9 +188,18 @@ declare module '@magnusim/plugin-ui/_internal/controls/NumberUnitInput' {
       disabled?: boolean;
       /** 72 px, 128 px, or 100% up to 220 px (a schema form's width). Default 'narrow'. */
       width?: 'narrow' | 'wide' | 'fill';
+      /**
+       * API 1.8: the unit is a picker, not a label. `true` offers every unit of the
+       * quantity; a list offers those. The value stays in SI either way: a pick
+       * only changes what is shown and typed. Without `unit` the picker keeps its
+       * own choice; with `unit`, report picks through `onUnit`.
+       */
+      unitChoices?: boolean | readonly string[];
+      /** API 1.8: the unit picked (with `unitChoices`). */
+      onUnit?: (unit: string) => void;
   }
   /** A number in a unit, stored in SI: the core's value row (BC and Materials panels, schema forms). */
-  export function NumberUnitInput({ label, valueSi, onCommitSi, onLiveSi, quantity, units, unit, id, disabled, width, }: NumberUnitInputProps): import("react").JSX.Element;
+  export function NumberUnitInput({ label, valueSi, onCommitSi, onLiveSi, quantity, units, unit, id, disabled, width, unitChoices, onUnit, }: NumberUnitInputProps): import("react").JSX.Element;
 }
 declare module '@magnusim/plugin-ui/_internal/controls/SciNumberInput' {
   export interface SciNumberInputProps {
@@ -255,7 +264,7 @@ declare module '@magnusim/plugin-ui/_internal/controls/index' {
   export { Field, type FieldProps } from '@magnusim/plugin-ui/_internal/controls/Field';
   export { Hint, DisabledReason, EmptyState, type HintProps, type DisabledReasonProps, type EmptyStateProps, } from '@magnusim/plugin-ui/_internal/controls/Hint';
   export { Icon, type IconName, type IconProps } from '@magnusim/plugin-ui/_internal/controls/Icon';
-  export { fieldUnit, fieldQuantity, toSi, fromSi, convertQuantity, preferredUnit, resolveUnit, unitLabels, siUnitLabel, UNITS, IMPERIAL_DEFAULT, SI_DEFAULT, type Quantity, type UnitSystem, } from '@magnusim/plugin-ui/_internal/units';
+  export { fieldUnit, fieldQuantity, toSi, fromSi, convertQuantity, preferredUnit, resolveUnit, unitLabels, siUnitLabel, UNITS, IMPERIAL_DEFAULT, SI_DEFAULT, METRIC_DEFAULT, type Quantity, type UnitSystem, } from '@magnusim/plugin-ui/_internal/units';
 }
 declare module '@magnusim/plugin-ui/_internal/data/ColorLegend' {
   import { type ColormapName } from '@magnusim/plugin-ui/_internal/colormaps/index';
@@ -581,17 +590,23 @@ declare module '@magnusim/plugin-ui/_internal/units' {
    * re-exports this file) and plugins (through the kit). The tables are frozen,
    * so a plugin cannot change the core's conversions.
    */
-  export type Quantity = 'velocity' | 'pressure' | 'volumetric_flow' | 'mass_flow' | 'length' | 'temperature' | 'time' | 'angular_velocity' | 'density' | 'kinematic_viscosity' | 'area';
+  export type Quantity = 'velocity' | 'pressure' | 'volumetric_flow' | 'mass_flow' | 'length' | 'temperature' | 'time' | 'angular_velocity' | 'density' | 'kinematic_viscosity' | 'area' | 'heat_flux' | 'heat_transfer_coefficient' | 'thermal_conductivity' | 'specific_heat' | 'power' | 'power_density' | 'thermal_expansion' | 'acceleration' | 'dynamic_viscosity' | 'molar_mass';
   /** The units a project or the Settings page shows (the workspace SDK's `units`). */
   export type UnitSystem = 'metric' | 'imperial';
   /** Multiplicative SI factors. Temperature is affine and handled in toSi/fromSi. */
   export const UNITS: Readonly<Record<Quantity, Readonly<Record<string, number>>>>;
   export const IMPERIAL_DEFAULT: Readonly<Record<Quantity, string>>;
   export function resolveUnit(quantity: Quantity, unit: string): string;
+  /** The unit a project in each system shows a quantity in (API 1.8: metric shows temperature in °C). */
   export function preferredUnit(quantity: Quantity, imperial: boolean): string;
   export function unitIsImperial(unit: string): boolean;
   export function convertQuantity(quantity: Quantity, value: number, fromUnit: string, toUnit: string): number;
   export const SI_DEFAULT: Readonly<Record<Quantity, string>>;
+  /**
+   * The units a metric project shows (API 1.8): SI, except temperature in °C.
+   * SI_DEFAULT stays the storage unit (temperature in K).
+   */
+  export const METRIC_DEFAULT: Readonly<Record<Quantity, string>>;
   export function unitLabels(quantity: Quantity): string[];
   export function toSi(quantity: Quantity, value: number, unit: string): number;
   export function fromSi(quantity: Quantity, valueSi: number, unit: string): number;
@@ -603,8 +618,9 @@ declare module '@magnusim/plugin-ui/_internal/units' {
    */
   export function siUnitLabel(quantity: string): string;
   /**
-   * The unit a schema form shows a number field in: length in mm or in, every
-   * other quantity in its first (SI) unit, in either system.
+   * The unit a schema form shows a number field in: length in mm or in,
+   * temperature in the system's unit (°C or °F, API 1.8), every other quantity
+   * in its first (SI) unit, in either system.
    */
   export function fieldUnit(q: Quantity, units: UnitSystem): string;
   /** A schema field's quantity (its x-cfddesk.quantity), or null. */
@@ -612,7 +628,7 @@ declare module '@magnusim/plugin-ui/_internal/units' {
 }
 declare module '@magnusim/plugin-ui/_internal/version' {
   /** The plugin UI kit's own version (semver). A minor version adds; it never removes. */
-  export const PLUGIN_UI_API_VERSION = "1.0.0";
+  export const PLUGIN_UI_API_VERSION = "1.1.0";
 }
 declare module '@magnusim/plugin-ui' {
   export * from '@magnusim/plugin-ui/_internal/index';

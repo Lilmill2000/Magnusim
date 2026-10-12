@@ -451,10 +451,21 @@ def _save_rev(project_dir: Path, sid: str, raw: dict[str, Any], key: str, geomet
 
     rows = raw.get(key) if isinstance(raw, dict) else None
     recs = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
-    only = str(raw.get("only_id") or "").strip() if isinstance(raw, dict) else ""
+    only = _only_ids(raw)
     if only:
-        recs = [r for r in recs if str(r.get("id") or "") == only]
+        recs = [r for r in recs if str(r.get("id") or "") in only]
     return check_save(project_dir, sid, recs, geometry_rev)
+
+
+def _only_ids(raw: Any) -> set[str]:
+    """The records a save writes: ``only_id``, and (API 1.8) every id in ``only_ids``; empty = all."""
+    if not isinstance(raw, dict):
+        return set()
+    ids = {str(raw.get("only_id") or "").strip()}
+    many = raw.get("only_ids")
+    if isinstance(many, list):
+        ids |= {str(x or "").strip() for x in many}
+    return {i for i in ids if i}
 
 
 def set_materials(
@@ -470,14 +481,14 @@ def set_materials(
     _proj, mode, mirror = write_through_project(project_dir, "materials", raw, sim_id=sid)
     src = mirror if isinstance(mirror, dict) and (mirror.get("materials") or mirror.get("air")) else raw
     doc = _scope_doc_to_study(stamp(src, sim_id=sid, increment="W18"), "materials", sid)
-    only = str(raw.get("only_id") or "").strip()
+    only = _only_ids(raw)
     study = find_study(project_dir, sid)
     if study:
         parent = Path(study["dir"]) / "materials"
         for rec in doc.get("materials") or []:
             if not isinstance(rec, dict) or rec.get("id") is None:
                 continue
-            if only and str(rec.get("id")) != only:
+            if only and str(rec.get("id")) not in only:
                 continue
             persist_child_item(parent, "material", {**rec, "simulation_id": sid}, geometry_rev=rev)
     proj_path = project_dir / "project.json"

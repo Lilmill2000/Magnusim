@@ -61,6 +61,7 @@ def gather_run_inputs(
     from cfddesk.project.paths import (
         assemble_study_bc_defaults,
         assemble_study_bcs,
+        assemble_study_materials,
         find_run,
         study_json_path,
     )
@@ -96,6 +97,13 @@ def gather_run_inputs(
     }
     aa = _study_or_root("result_controls.json") or _study_or_root("area_average.json")
 
+    def _materials_doc() -> dict:
+        # Every material of the study, folder records first (as readiness reads them);
+        # the aggregate file alone can hold fewer after a save that wrote one record.
+        doc = _study_or_root("materials.json")
+        rows = assemble_study_materials(root, sim_id) if sim_id else []
+        return {**doc, "materials": rows} if rows else doc
+
     if time_dependency:
         td = _td(time_dependency)
     elif transient_override is not None:
@@ -118,7 +126,7 @@ def gather_run_inputs(
         time_dependency=td,
         analysis_key=analysis_key,
         solver_key=solver_key,
-        materials=_study_or_root("materials.json"),
+        materials=_materials_doc(),
         bcs_doc=bcs_doc,
         result_controls=aa if isinstance(aa, dict) else {},
         simulation_control=_study_or_root("simulation_control.json"),

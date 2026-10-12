@@ -297,6 +297,10 @@ class AnalysisType:
     # None = not declared (the panel keeps its time step and Courant text for a
     # transient run); () = none.
     live_metrics: tuple[dict[str, Any], ...] | None = None
+    # API 1.8: fields this analysis adds to the BCs of its studies
+    # (cfddesk.registry.bc.BcFieldGroup), e.g. a heat-transfer analysis's
+    # temperatures on another plugin's inlets and walls.
+    bc_fields: tuple[Any, ...] = ()
 
 
 def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict[str, Any]:

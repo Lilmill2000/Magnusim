@@ -7,6 +7,25 @@ function input(label: string): HTMLInputElement {
 }
 
 describe('NumberUnitInput', () => {
+  it('unitChoices: the unit is a picker; a pick changes the shown value, never the SI value', () => {
+    const onCommitSi = vi.fn();
+    const onUnit = vi.fn();
+    const { container } = render(
+      <NumberUnitInput label="Inlet temperature" valueSi={293.15} quantity="temperature" unitChoices onUnit={onUnit} onCommitSi={onCommitSi} />,
+    );
+    expect(container.querySelector('.mgk-unit')).toBeNull();
+    const pick = screen.getByLabelText('Inlet temperature unit') as HTMLSelectElement;
+    expect([...pick.options].map((o) => o.value)).toEqual(['K', '°C', '°F']);
+    expect(pick.value).toBe('°C');
+    expect(input('Inlet temperature').value).toBe('20');
+    fireEvent.change(pick, { target: { value: '°F' } });
+    expect(onUnit).toHaveBeenCalledWith('°F');
+    expect(input('Inlet temperature').value).toBe('68');
+    fireEvent.change(input('Inlet temperature'), { target: { value: '86' } });
+    fireEvent.blur(input('Inlet temperature'));
+    expect(onCommitSi.mock.calls[0][0]).toBeCloseTo(303.15, 9);
+  });
+
   it('draws the core value row: a decimal text input and its unit', () => {
     const { container } = render(
       <NumberUnitInput label="Gap" valueSi={0.025} quantity="length" onCommitSi={() => {}} />,

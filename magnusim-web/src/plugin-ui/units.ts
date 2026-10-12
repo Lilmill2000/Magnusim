@@ -14,10 +14,24 @@ export type Quantity =
   | 'angular_velocity'
   | 'density'
   | 'kinematic_viscosity'
-  | 'area';
+  | 'area'
+  // API 1.8: heat transfer.
+  | 'heat_flux'
+  | 'heat_transfer_coefficient'
+  | 'thermal_conductivity'
+  | 'specific_heat'
+  | 'power'
+  | 'power_density'
+  | 'thermal_expansion'
+  | 'acceleration'
+  | 'dynamic_viscosity'
+  | 'molar_mass';
 
 /** The units a project or the Settings page shows (the workspace SDK's `units`). */
 export type UnitSystem = 'metric' | 'imperial';
+
+/** One BTU (International Table) per hour, in W. */
+const BTU_PER_H = 1055.05585262 / 3600;
 
 /** Multiplicative SI factors. Temperature is affine and handled in toSi/fromSi. */
 export const UNITS: Readonly<Record<Quantity, Readonly<Record<string, number>>>> = Object.freeze({
@@ -46,6 +60,16 @@ export const UNITS: Readonly<Record<Quantity, Readonly<Record<string, number>>>>
   density: Object.freeze({ 'kg/m³': 1.0, 'lb/ft³': 16.01846337 }),
   kinematic_viscosity: Object.freeze({ 'm²/s': 1.0, cSt: 1e-6, 'ft²/s': 0.09290304 }),
   area: Object.freeze({ 'm²': 1.0, 'cm²': 1e-4, 'mm²': 1e-6, 'in²': 0.00064516, 'ft²': 0.09290304 }),
+  heat_flux: Object.freeze({ 'W/m²': 1.0, 'kW/m²': 1e3, 'W/cm²': 1e4, 'BTU/(h·ft²)': BTU_PER_H / 0.09290304 }),
+  heat_transfer_coefficient: Object.freeze({ 'W/(m²·K)': 1.0, 'BTU/(h·ft²·°F)': (BTU_PER_H / 0.09290304) * 1.8 }),
+  thermal_conductivity: Object.freeze({ 'W/(m·K)': 1.0, 'BTU/(h·ft·°F)': (BTU_PER_H / 0.3048) * 1.8 }),
+  specific_heat: Object.freeze({ 'J/(kg·K)': 1.0, 'kJ/(kg·K)': 1e3, 'BTU/(lb·°F)': (1055.05585262 / 0.45359237) * 1.8 }),
+  power: Object.freeze({ W: 1.0, kW: 1e3, 'BTU/h': BTU_PER_H, hp: 745.69987158227 }),
+  power_density: Object.freeze({ 'W/m³': 1.0, 'W/cm³': 1e6, 'BTU/(h·ft³)': BTU_PER_H / 0.028316846592 }),
+  thermal_expansion: Object.freeze({ '1/K': 1.0, '1/°C': 1.0, '1/°F': 1.8 }),
+  acceleration: Object.freeze({ 'm/s²': 1.0, 'ft/s²': 0.3048 }),
+  dynamic_viscosity: Object.freeze({ 'Pa·s': 1.0, 'mPa·s': 1e-3, cP: 1e-3, 'lb/(ft·s)': 0.45359237 / 0.3048 }),
+  molar_mass: Object.freeze({ 'g/mol': 1.0, 'kg/kmol': 1.0, 'lb/lbmol': 1.0 }),
 });
 
 const UNIT_ALIASES: Record<string, string> = {
@@ -71,6 +95,27 @@ const UNIT_ALIASES: Record<string, string> = {
   'in H2O': 'inH₂O',
   mmh2o: 'mmH₂O',
   'mmH2O': 'mmH₂O',
+  'W/m2': 'W/m²',
+  'kW/m2': 'kW/m²',
+  'W/cm2': 'W/cm²',
+  'W/m2K': 'W/(m²·K)',
+  'W/(m2K)': 'W/(m²·K)',
+  'W/(m2·K)': 'W/(m²·K)',
+  'W/mK': 'W/(m·K)',
+  'W/(mK)': 'W/(m·K)',
+  'J/kgK': 'J/(kg·K)',
+  'J/(kgK)': 'J/(kg·K)',
+  'kJ/kgK': 'kJ/(kg·K)',
+  'W/m3': 'W/m³',
+  'W/cm3': 'W/cm³',
+  '1/C': '1/°C',
+  '1/F': '1/°F',
+  'm/s2': 'm/s²',
+  'm/s^2': 'm/s²',
+  'ft/s2': 'ft/s²',
+  'Pa.s': 'Pa·s',
+  'Pas': 'Pa·s',
+  'mPa.s': 'mPa·s',
 };
 
 export const IMPERIAL_DEFAULT: Readonly<Record<Quantity, string>> = Object.freeze({
@@ -85,6 +130,16 @@ export const IMPERIAL_DEFAULT: Readonly<Record<Quantity, string>> = Object.freez
   density: 'lb/ft³',
   kinematic_viscosity: 'ft²/s',
   area: 'ft²',
+  heat_flux: 'BTU/(h·ft²)',
+  heat_transfer_coefficient: 'BTU/(h·ft²·°F)',
+  thermal_conductivity: 'BTU/(h·ft·°F)',
+  specific_heat: 'BTU/(lb·°F)',
+  power: 'BTU/h',
+  power_density: 'BTU/(h·ft³)',
+  thermal_expansion: '1/°F',
+  acceleration: 'ft/s²',
+  dynamic_viscosity: 'lb/(ft·s)',
+  molar_mass: 'lb/lbmol',
 });
 
 export function resolveUnit(quantity: Quantity, unit: string): string {
@@ -98,13 +153,14 @@ export function resolveUnit(quantity: Quantity, unit: string): string {
   return hit || raw;
 }
 
+/** The unit a project in each system shows a quantity in (API 1.8: metric shows temperature in °C). */
 export function preferredUnit(quantity: Quantity, imperial: boolean): string {
-  return imperial ? IMPERIAL_DEFAULT[quantity] : SI_DEFAULT[quantity];
+  return imperial ? IMPERIAL_DEFAULT[quantity] : METRIC_DEFAULT[quantity];
 }
 
 export function unitIsImperial(unit: string): boolean {
   // "in" only as its own word or inH₂O, never inside one (min, mmH₂O are not imperial).
-  return /ft|(?:^|[^a-z])in(?:$|[^a-z]|h)|psi|lb|cfm|mph|°F/i.test(String(unit || ''));
+  return /ft|(?:^|[^a-z])in(?:$|[^a-z]|h)|psi|lb|cfm|mph|°F|btu|(?:^|[^a-z])hp(?:$|[^a-z])/i.test(String(unit || ''));
 }
 
 export function convertQuantity(
@@ -132,7 +188,23 @@ export const SI_DEFAULT: Readonly<Record<Quantity, string>> = Object.freeze({
   density: 'kg/m³',
   kinematic_viscosity: 'm²/s',
   area: 'm²',
+  heat_flux: 'W/m²',
+  heat_transfer_coefficient: 'W/(m²·K)',
+  thermal_conductivity: 'W/(m·K)',
+  specific_heat: 'J/(kg·K)',
+  power: 'W',
+  power_density: 'W/m³',
+  thermal_expansion: '1/K',
+  acceleration: 'm/s²',
+  dynamic_viscosity: 'Pa·s',
+  molar_mass: 'g/mol',
 });
+
+/**
+ * The units a metric project shows (API 1.8): SI, except temperature in °C.
+ * SI_DEFAULT stays the storage unit (temperature in K).
+ */
+export const METRIC_DEFAULT: Readonly<Record<Quantity, string>> = Object.freeze({ ...SI_DEFAULT, temperature: '°C' });
 
 export function unitLabels(quantity: Quantity): string[] {
   return Object.keys(UNITS[quantity]);
@@ -187,11 +259,14 @@ export function siUnitLabel(quantity: string): string {
 }
 
 /**
- * The unit a schema form shows a number field in: length in mm or in, every
- * other quantity in its first (SI) unit, in either system.
+ * The unit a schema form shows a number field in: length in mm or in,
+ * temperature in the system's unit (°C or °F, API 1.8), every other quantity
+ * in its first (SI) unit, in either system.
  */
 export function fieldUnit(q: Quantity, units: UnitSystem): string {
-  return q === 'length' ? (units === 'imperial' ? 'in' : 'mm') : unitLabels(q)[0];
+  if (q === 'length') return units === 'imperial' ? 'in' : 'mm';
+  if (q === 'temperature') return preferredUnit(q, units === 'imperial');
+  return unitLabels(q)[0];
 }
 
 /** A schema field's quantity (its x-cfddesk.quantity), or null. */

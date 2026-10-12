@@ -14,9 +14,9 @@ import type * as ReactDomClient from 'react-dom/client';
 import type * as Kit from '../plugin-ui';
 import type { FieldWidgetProps } from '../plugin-ui';
 import type { SciNumberInputProps } from '../plugin-ui/controls/SciNumberInput';
-import type { BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
+import type { BcSectionProps, BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
 
-export type { BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
+export type { BcSectionProps, BcSettingsProps, RunSettingsProps, StudySettingsProps } from './slots';
 export type { BcRecord, RunState, StudyState, TimeDependency } from '../panels/legacyBridge';
 export type { BcFamilyRow, RegistryRow } from '../api/registry.gen';
 export type { FieldWidgetProps, SciNumberInputProps };
@@ -114,6 +114,8 @@ export interface PluginUi {
     Component: ComponentType<BcSettingsProps>,
     opts?: { facesNote?: ComponentType<BcSettingsProps> },
   ) => void;
+  /** Draw an analysis's BC field group in the BC editor (its `bc_fields` group's `ui` names it). API 1.8. */
+  registerBcSection: (name: string, Component: ComponentType<BcSectionProps>) => void;
   /** The core's number box that reads and writes scientific notation. */
   SciNumberInput: ComponentType<SciNumberInputProps>;
   /** Helpers for an analysis's own schemas. */

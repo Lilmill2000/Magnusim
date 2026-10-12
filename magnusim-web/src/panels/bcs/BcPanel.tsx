@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { RJSFSchema } from '@rjsf/utils';
-import type { BcFamilyRow } from '../../api/registry.gen';
+import type { BcFamilyRow, BcFieldGroupRow } from '../../api/registry.gen';
+import { analysisRow, siblingKey } from '../../analysis';
 import { canonicalBcType, colorOf, defaultsChoiceText, familiesFor, familyOf, timeTableText } from '../../bcCatalog';
 import { SchemaForm } from '../../forms/SchemaForm';
 import { dispatchPanelDone, type IslandProps } from '../../islands';
 import { faceDisplay, lostDisplay, subscribeFaceNames } from '../../workbench/faceNames';
-import { usePluginUiLoaded, useSlotComponent, type BcSettingsProps } from '../../plugin-api/slots';
+import { usePluginUiLoaded, useSlotComponent, type BcSectionProps, type BcSettingsProps } from '../../plugin-api/slots';
 import {
   bcFlowBasis,
   bcStateNow,
@@ -345,6 +346,55 @@ function BcFields(props: Omit<BcSettingsProps, 'family'> & { family: BcFamilyRow
   );
 }
 
+/**
+ * The field groups a study's analysis adds to BCs of this family (API 1.8
+ * `bc_fields`): those naming the family, or every family the analysis offers.
+ */
+export function bcFieldGroupsFor(analysisKey: string | null | undefined, family: BcFamilyRow | undefined): BcFieldGroupRow[] {
+  if (!family) return [];
+  const key = String(analysisKey || '').trim();
+  const row = analysisRow(key) || analysisRow(siblingKey(key, 'steady'));
+  const groups = Array.isArray(row?.bc_fields) ? row.bc_fields : [];
+  const offered = new Set((row?.bc_types || []).map(String));
+  const offers = (family.variants || []).some((v) => offered.has(String(v)));
+  return groups.filter((g) =>
+    Array.isArray(g.families) && g.families.length ? g.families.includes(String(family.key)) : offers,
+  );
+}
+
+/** One analysis field group: its slot component, else a form from its fields; saved in the BC record. */
+function BcFieldGroup(props: BcSettingsProps & { group: BcFieldGroupRow }) {
+  const { group, bc, save } = props;
+  const Slot = useSlotComponent<BcSectionProps>('bc-section', group.ui || undefined);
+  const loaded = usePluginUiLoaded();
+  const schema = group.schema as RJSFSchema | null;
+  let body: ReactNode = null;
+  if (Slot) body = <Slot {...props} />;
+  else if (!(group.ui && !loaded) && schema && Object.keys((schema.properties as object) || {}).length) {
+    body = (
+      <SchemaForm
+        schema={schema}
+        formData={pickSchemaValues(bc, schema)}
+        hideFooter
+        onCommit={(values) => {
+          const patch = changedFields(values, bc);
+          if (Object.keys(patch).length) void save(patch);
+        }}
+      />
+    );
+  }
+  if (!body) return null;
+  return (
+    <div className="bc-field-group" data-bc-field-group={group.key}>
+      <div className="mat-assign-head">
+        <span className="mat-k">{group.title}</span>
+      </div>
+      {group.description ? <p className="mat-assign-hint">{group.description}</p> : null}
+      {body}
+    </div>
+  );
+}
+
 /** The line a family's plugin draws under the assigned faces (its 'bc-faces-note'), if any. */
 function BcFacesNote(props: BcSettingsProps) {
   const Note = useSlotComponent<BcSettingsProps>('bc-faces-note', props.family.ui || undefined);
@@ -406,6 +456,11 @@ export function BcEditor() {
           </select>
         </Row>
         <BcFields {...slotProps} family={family} />
+        {family
+          ? bcFieldGroupsFor(state.analysis_key, family).map((group) => (
+              <BcFieldGroup key={group.key} {...slotProps} family={family} group={group} />
+            ))
+          : null}
         <div className="mat-assign-block">
           <div className="mat-assign-head">
             <span className="mat-k">Assigned faces ({faces.length})</span>

@@ -16,7 +16,21 @@ Quantity = Literal[
     "density",
     "kinematic_viscosity",
     "area",
+    # magnusim_sdk 1.4 (host API 1.8): heat transfer.
+    "heat_flux",
+    "heat_transfer_coefficient",
+    "thermal_conductivity",
+    "specific_heat",
+    "power",
+    "power_density",
+    "thermal_expansion",
+    "acceleration",
+    "dynamic_viscosity",
+    "molar_mass",
 ]
+
+# One BTU (International Table) per hour, in W.
+_BTU_PER_H = 1055.05585262 / 3600.0
 
 # Multiplicative factors: value_si = value_display * factor  (temperature is affine — see convert.py)
 UNITS: dict[Quantity, dict[str, float]] = {
@@ -49,6 +63,16 @@ UNITS: dict[Quantity, dict[str, float]] = {
         "ft²/s": 0.09290304,
     },
     "area": {"m²": 1.0, "cm²": 1e-4, "mm²": 1e-6, "in²": 0.00064516, "ft²": 0.09290304},
+    "heat_flux": {"W/m²": 1.0, "kW/m²": 1e3, "W/cm²": 1e4, "BTU/(h·ft²)": _BTU_PER_H / 0.09290304},
+    "heat_transfer_coefficient": {"W/(m²·K)": 1.0, "BTU/(h·ft²·°F)": _BTU_PER_H / 0.09290304 * 1.8},
+    "thermal_conductivity": {"W/(m·K)": 1.0, "BTU/(h·ft·°F)": _BTU_PER_H / 0.3048 * 1.8},
+    "specific_heat": {"J/(kg·K)": 1.0, "kJ/(kg·K)": 1e3, "BTU/(lb·°F)": 1055.05585262 / 0.45359237 * 1.8},
+    "power": {"W": 1.0, "kW": 1e3, "BTU/h": _BTU_PER_H, "hp": 745.69987158227},
+    "power_density": {"W/m³": 1.0, "W/cm³": 1e6, "BTU/(h·ft³)": _BTU_PER_H / 0.028316846592},
+    "thermal_expansion": {"1/K": 1.0, "1/°C": 1.0, "1/°F": 1.8},
+    "acceleration": {"m/s²": 1.0, "ft/s²": 0.3048},
+    "dynamic_viscosity": {"Pa·s": 1.0, "mPa·s": 1e-3, "cP": 1e-3, "lb/(ft·s)": 0.45359237 / 0.3048},
+    "molar_mass": {"g/mol": 1.0, "kg/kmol": 1.0, "lb/lbmol": 1.0},
 }
 
 SI_DEFAULT: dict[Quantity, str] = {
@@ -63,6 +87,16 @@ SI_DEFAULT: dict[Quantity, str] = {
     "density": "kg/m³",
     "kinematic_viscosity": "m²/s",
     "area": "m²",
+    "heat_flux": "W/m²",
+    "heat_transfer_coefficient": "W/(m²·K)",
+    "thermal_conductivity": "W/(m·K)",
+    "specific_heat": "J/(kg·K)",
+    "power": "W",
+    "power_density": "W/m³",
+    "thermal_expansion": "1/K",
+    "acceleration": "m/s²",
+    "dynamic_viscosity": "Pa·s",
+    "molar_mass": "g/mol",
 }
 
 

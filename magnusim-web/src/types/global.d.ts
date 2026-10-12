@@ -116,7 +116,9 @@ declare global {
     __CFD_BC_FLOW_BASIS__?: (faces: string[]) => { face_area_m2: number | null; density: number };
     __CFD_CREATE_PICK_ANALYSIS__?: (row: { label?: string; time_dependency?: string }) => void;
     __CFD_MATERIAL_APPLY__?: (material: Record<string, unknown>, projectId?: string) => unknown;
-    __CFD_MATERIAL_DELETE__?: () => Promise<unknown>;
+    __CFD_MATERIAL_DELETE__?: (id?: string) => Promise<unknown>;
+    /** Host API 1.8: open one material record of a study with several ('' = the study's materials). */
+    __CFD_OPEN_MATERIAL__?: (id: string) => void;
     __CFD_GEOMETRY_BODIES__?: () => string[];
     __CFD_BCS__?: import('../panels/legacyBridge').BcState;
     __CFD_BC_STATE__?: () => import('../panels/legacyBridge').BcState;

@@ -17,6 +17,16 @@ export interface MeshNode {
   failed?: boolean;
 }
 
+/** One material record of a study (host API 1.8). */
+export interface StudyMaterialNode {
+  id: string;
+  name: string;
+  /** Its material model key ('' when the record does not say). */
+  model: string;
+  volumes: string[];
+  lost?: number;
+}
+
 export interface StudyNode {
   id: string;
   name: string;
@@ -29,6 +39,10 @@ export interface StudyNode {
   materialVolumes: string[];
   /** Bodies of the study's material a linked geometry's update could not place (API 1.5). */
   materialLost?: number;
+  /** The study's analysis key (host API 1.8: an analysis with several material models lists each material). */
+  analysisType?: string;
+  /** Every material record of the study (host API 1.8). */
+  materials?: StudyMaterialNode[];
   bcs: Array<{ id: string; name: string; faces: string[]; scopeKey?: string; lost?: number }>;
   wallDefault: string;
   runs: Array<{
@@ -207,6 +221,8 @@ interface ProjectTreeStudy {
   material_volumes?: string[];
   material_name?: string;
   material_lost?: number;
+  analysis_type?: string;
+  materials?: Array<{ id?: string; name?: string; model?: string; volumes?: string[]; lost?: number }>;
   bcs?: Array<{ id?: string; name?: string; faces?: string[]; key?: string; lost?: number }>;
   meshes?: ProjectTreeMesh[];
   runs?: ProjectTreeRun[];
@@ -427,6 +443,16 @@ export function readSetupTree(
           materialName: str(study.material_name),
           materialVolumes: volumes,
           materialLost: Number(study.material_lost) || 0,
+          analysisType: str(study.analysis_type),
+          materials: (study.materials || [])
+            .filter((m) => m && str(m.id))
+            .map((m) => ({
+              id: str(m.id),
+              name: str(m.name),
+              model: str(m.model),
+              volumes: (m.volumes || []).map((v) => str(v)).filter(Boolean),
+              lost: Number(m.lost) || 0,
+            })),
           wallDefault: str(study.wall_default, 'No-slip'),
           bcs: owned(study.bcs).map((bc, i) => ({
             id: str(bc.id, `bc_${i}`),

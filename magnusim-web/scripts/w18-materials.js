@@ -475,6 +475,41 @@ async function upsertMaterials(body) {
   };
 }
 
+/**
+ * Delete one material record of a study (host API 1.8: a study with several
+ * materials). Its folder and its aggregate row go; the study's other materials
+ * stay, and the answer lists them.
+ */
+async function deleteOneMaterialRecord(projectIdOpt, geomIdOpt, simIdOpt, materialId) {
+  const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
+  if (!projectId) return { ok: false, status: 400, body: { error: 'no active project', soft_pass: false } };
+  const proj = readProject(projectId);
+  if (!proj) return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };
+  const sim = getActiveSimulation(projectId, proj, simIdOpt);
+  if (!sim) return { ok: false, status: 400, body: { error: 'no simulation; Create Simulation first' } };
+  const id = String(materialId);
+  deleteOneMaterial(projectId, sim.id, id);
+  const doc = readMaterialsFile(projectId, sim.id);
+  const all = (doc && Array.isArray(doc.materials) ? doc.materials : []).filter((m) => m && String(m.id || '') !== id);
+  const next = { ...(doc || {}), materials: all, air: studyFluid(all), updated_at: new Date().toISOString() };
+  await writeMaterialsFile(projectId, next, sim.id, []);
+  const p = materialsJsonPath(projectId, sim.id);
+  proj.materials = {
+    air: next.air
+      ? { id: next.air.id, name: next.air.name, assigned_volumes: next.air.assigned_volumes, materials_json: p, updated_at: next.updated_at }
+      : null,
+    materials_json: p,
+    count: all.length,
+  };
+  proj.updated_at = next.updated_at;
+  writeProject(proj);
+  return {
+    ok: true,
+    status: 200,
+    body: { ok: true, deleted: true, material_id: id, project_id: projectId, materials: all, air: next.air || null },
+  };
+}
+
 async function deleteMaterials(projectIdOpt, geomIdOpt, simIdOpt) {
   const projectId = projectIdOpt || projectIdOrActive('', readActiveId);
   if (!projectId) {
@@ -630,7 +665,9 @@ export async function handleW18Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
       if (body && (body.delete === true || body.action === 'delete')) {
-        const result = await deleteMaterials(body.project_id, body.geometry_id, body.simulation_id);
+        const result = body.material_id
+          ? await deleteOneMaterialRecord(body.project_id, body.geometry_id, body.simulation_id, body.material_id)
+          : await deleteMaterials(body.project_id, body.geometry_id, body.simulation_id);
         res.setHeader('X-CFD-Source', 'materials-delete');
         res.setHeader('X-CFD-Increment', 'W18');
         return sendJson(res, result.status, result.body);

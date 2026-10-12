@@ -69,7 +69,7 @@ describe('the context (1.7)', () => {
     let launch: { face?: string } | null = { face: 'face 6@Body1' };
     const c = new WorkspaceCalls(SCOPE, hooks(), { get: () => launch, drop: () => (launch = null) });
     const first = await c.context();
-    expect(first.hostVersion).toBe('1.7');
+    expect(first.hostVersion).toBe('1.8');
     expect(first.geometry).toEqual(GEOMETRY);
     expect(first.launch).toEqual({ face: 'face 6@Body1' });
     expect(urls.some((u) => u === '/api/plugin-geometry/target?project_id=proj-a&plugin=cad&study_id=st-1')).toBe(true);

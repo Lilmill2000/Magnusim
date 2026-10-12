@@ -10,6 +10,12 @@
    its job tools registered with ``python="plugin"`` and the plugin modules that
    only those import. Code the host loads (plugin.py, what it imports, job
    tools that run on the core's Python) keeps rule 2.
+4. (Host API 1.8) A plugin may import a module another plugin lists in its
+   manifest ``exports`` (and that module's submodules), when it names that
+   plugin in ``requires_plugins`` (so the exporter loads first). An exported
+   name must be a module of the exporter's own (a dotted name under one of its
+   top-level packages, its file present); anything else in ``exports`` is a
+   problem of the exporter.
 
 ``importlib.import_module("x")`` and ``__import__("x")`` (called by that name,
 an ``as`` alias, ``from importlib import *``, or as ``<anything>.import_module``
@@ -162,6 +168,7 @@ FIXTURE_PLUGIN_FOLDERS = (
     "foam-plugins",
     "hook-plugins",
     "flood-plugins",
+    "heat-plugins",
 )
 
 SOURCES = (".py", ".pyw")
@@ -1016,13 +1023,93 @@ def _provider(mod: str, names: dict[str, str]) -> str | None:
     return next((dist for name, dist in names.items() if _under(mod, name)), None)
 
 
+def _str_list(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if isinstance(raw, (list, tuple)):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return []
+
+
+_EXPORT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$")
+
+
+def export_problems(plugin_dir: Path, meta: dict[str, Any]) -> list[str]:
+    """What is wrong with a plugin's own ``exports`` (rule 4): each must be a dotted
+    module name under one of its top-level packages, with its file present."""
+    out: list[str] = []
+    own = _own_modules(plugin_dir, set())
+    raw = meta.get("exports")
+    if raw is not None and not isinstance(raw, (str, list, tuple)):
+        return ["exports must be a list of module names"]
+    for name in _str_list(raw):
+        if not _EXPORT_RE.match(name):
+            out.append(f"exports: {name!r} is not a module of a package (write it as package.module)")
+            continue
+        parts = name.split(".")
+        if parts[0] not in own or not (plugin_dir / parts[0]).is_dir():
+            out.append(f"exports: {name!r} is not under one of this plugin's own packages")
+            continue
+        base = plugin_dir.joinpath(*parts)
+        if not (base.with_suffix(".py").is_file() or (base / "__init__.py").is_file()):
+            out.append(f"exports: {name!r} has no file ({'/'.join(parts)}.py)")
+    return out
+
+
+def plugin_exports(plugin_dirs: list[Path]) -> dict[str, str]:
+    """Module name -> the key of the plugin that exports it (rule 4), over these plugin folders."""
+    out: dict[str, str] = {}
+    for d in plugin_dirs:
+        meta = _read_manifest(d)
+        if export_problems(d, meta):
+            continue
+        key = str(meta.get("key") or d.name)
+        for name in _str_list(meta.get("exports")):
+            out.setdefault(name, key)
+    return out
+
+
+def _required_keys(meta: dict[str, Any]) -> set[str]:
+    return {re.split(r"[<>=!~ ]", req, maxsplit=1)[0].strip() for req in _str_list(meta.get("requires_plugins"))}
+
+
+def _known_plugin_dirs(plugin_dir: Path, web_root: Path) -> list[Path]:
+    """The app's bundled plugins and the plugin's sibling folders: where an export may come from."""
+    seen: list[Path] = []
+    for parent in (web_root / "bundled-plugins", plugin_dir.parent):
+        if parent.is_dir():
+            for d in sorted(parent.iterdir()):
+                if (d / "manifest.toml").is_file() and d.resolve() != plugin_dir.resolve() and d not in seen:
+                    seen.append(d)
+    return seen
+
+
+def _exported_by(mod: str, names: tuple[str, ...], exports: dict[str, str]) -> str | None:
+    """The exporter's key when the import reaches only an exported module (or its submodules)."""
+    for name, key in exports.items():
+        if _under(mod, name):
+            return key
+    # ``from pkg import exported`` names exported modules as attributes of their package.
+    if names and "*" not in names:
+        keys = {next((k for n, k in exports.items() if n == f"{mod}.{a}"), None) for a in names}
+        if len(keys) == 1 and None not in keys:
+            return keys.pop()
+    return None
+
+
 def check_plugin(
-    plugin_dir: Path, key: str, *, web_root: Path | None = None, info: dict[str, Any] | None = None
+    plugin_dir: Path,
+    key: str,
+    *,
+    web_root: Path | None = None,
+    info: dict[str, Any] | None = None,
+    exports: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """Problems in one plugin, and the folders the check skipped (relative to the plugin).
 
     ``info`` (optional) receives what counted as environment code and where the lock's
-    import names came from."""
+    import names came from. ``exports`` (module -> exporting plugin key, rule 4) defaults
+    to what the app's bundled plugins and the plugin's siblings export."""
     stdlib = _stdlib()
     files, skipped, bytecode = plugin_files(plugin_dir)
     hidden = set(skipped)
@@ -1030,6 +1117,13 @@ def check_plugin(
     problems: list[dict[str, object]] = []
     rows = {py: _read_imports(py, problems) for py in files}
     meta = _read_manifest(plugin_dir)
+    manifest_file = str(plugin_dir / "manifest.toml")
+    for why in export_problems(plugin_dir, meta):
+        problems.append({"file": manifest_file, "line": 0, "import": "", "problem": why})
+    if exports is None:
+        exports = plugin_exports(_known_plugin_dirs(plugin_dir, web_root or WEB_ROOT))
+    exports = {m: k for m, k in exports.items() if k != key}
+    required = _required_keys(meta)
     env_files, _entries, unplaced = environment_files(plugin_dir, rows, own, meta)
     python = meta.get("python")
     lock_names: dict[str, str] = {}
@@ -1085,6 +1179,16 @@ def check_plugin(
             if root in stdlib or root in own:
                 continue
             if any(_under(mod, a) for a in ALLOWED):
+                continue
+            exporter = _exported_by(mod, _names, exports)
+            if exporter is not None:
+                if exporter in required:
+                    continue
+                why = (
+                    f"{mod} is exported by the plugin {exporter}: list it in requires_plugins "
+                    f'(requires_plugins = ["{exporter}"]) so it loads first'
+                )
+                problems.append({"file": str(py), "line": line, "import": mod, "problem": why})
                 continue
             dist = _provider(mod, lock_names)
             if dist and py in env_files:
@@ -1163,9 +1267,10 @@ def run(web_root: Path) -> dict[str, object]:
     problems: list[dict[str, object]] = []
     skipped: dict[str, list[str]] = {}
     environment: dict[str, dict[str, Any]] = {}
+    exports = plugin_exports(plugin_dirs)
     for d in plugin_dirs:
         info: dict[str, Any] = {}
-        found, folders = check_plugin(d, _plugin_key(d), web_root=web_root, info=info)
+        found, folders = check_plugin(d, _plugin_key(d), web_root=web_root, info=info, exports=exports)
         problems += found
         rel = d.relative_to(web_root).as_posix()
         skipped[rel] = folders

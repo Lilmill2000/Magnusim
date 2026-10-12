@@ -73,6 +73,8 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
       /** Analyses (API 1.4): the BC types and material models it offers. */
       bc_types?: string[];
       material_models?: string[];
+      /** Analyses (API 1.8): the fields it adds to the BCs of its studies. */
+      bc_fields?: BcFieldGroupRow[];
       /** Material models (API 1.4): presets, and how a study's material record stores the properties. */
       library?: Array<Record<string, unknown>>;
       /** Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }. */
@@ -125,6 +127,22 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
       fields: Record<string, unknown> | null;
       /** A 'bc-settings' slot component name; '' = none. */
       ui: string;
+  }
+  /**
+   * Fields an analysis adds to the BCs of its studies (API 1.8): the BC editor
+   * draws the group under the family's own settings and saves its fields in the
+   * same record.
+   */
+  export interface BcFieldGroupRow {
+      key: string;
+      title: string;
+      /** The bc_family keys it applies to; [] = every family the analysis offers. */
+      families: string[];
+      /** A 'bc-section' slot component that draws it; '' = the generic form. */
+      ui: string;
+      description: string;
+      /** Its fields (JSON Schema). */
+      schema: Record<string, unknown> | null;
   }
   /** A quantity a run's monitors report, and how it is shown (API 1.4). */
   export interface MonitorQuantity {
@@ -537,8 +555,8 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/public' {
   import type * as Kit from '@magnusim/plugin-ui';
   import type { FieldWidgetProps } from '@magnusim/plugin-ui';
   import type { SciNumberInputProps } from '@magnusim/plugin-ui/_internal/controls/SciNumberInput';
-  import type { BcSettingsProps, RunSettingsProps, StudySettingsProps } from '@magnusim/plugin-api/_internal/plugin-api/slots';
-  export type { BcSettingsProps, RunSettingsProps, StudySettingsProps } from '@magnusim/plugin-api/_internal/plugin-api/slots';
+  import type { BcSectionProps, BcSettingsProps, RunSettingsProps, StudySettingsProps } from '@magnusim/plugin-api/_internal/plugin-api/slots';
+  export type { BcSectionProps, BcSettingsProps, RunSettingsProps, StudySettingsProps } from '@magnusim/plugin-api/_internal/plugin-api/slots';
   export type { BcRecord, RunState, StudyState, TimeDependency } from '@magnusim/plugin-api/_internal/panels/legacyBridge';
   export type { BcFamilyRow, RegistryRow } from '@magnusim/plugin-api/_internal/api/registry.gen';
   export type { FieldWidgetProps, SciNumberInputProps };
@@ -624,6 +642,8 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/public' {
       registerBcSettings: (name: string, Component: ComponentType<BcSettingsProps>, opts?: {
           facesNote?: ComponentType<BcSettingsProps>;
       }) => void;
+      /** Draw an analysis's BC field group in the BC editor (its `bc_fields` group's `ui` names it). API 1.8. */
+      registerBcSection: (name: string, Component: ComponentType<BcSectionProps>) => void;
       /** The core's number box that reads and writes scientific notation. */
       SciNumberInput: ComponentType<SciNumberInputProps>;
       /** Helpers for an analysis's own schemas. */
@@ -697,14 +717,16 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/slots' {
    * built from its schemas.
    */
   import { type ComponentType } from 'react';
-  import type { BcFamilyRow, RegistryRow } from '@magnusim/plugin-api/_internal/api/registry.gen';
+  import type { BcFamilyRow, BcFieldGroupRow, RegistryRow } from '@magnusim/plugin-api/_internal/api/registry.gen';
   import type { BcRecord, RunState, StudyState, TimeDependency } from '@magnusim/plugin-api/_internal/panels/legacyBridge';
   /**
    * 'bc-settings' (API 1.4): a BC family's fields in the BC editor, between the
    * Type row and the assigned faces, named by the family's `ui`. 'bc-faces-note'
    * is an optional line the same family draws under the assigned faces.
+   * 'bc-section' (API 1.8): an analysis's BC field group (its `bc_fields` row's
+   * `ui`), drawn under the family's fields in studies of that analysis.
    */
-  export type SettingsSlot = 'study-settings' | 'run-settings' | 'bc-settings' | 'bc-faces-note';
+  export type SettingsSlot = 'study-settings' | 'run-settings' | 'bc-settings' | 'bc-faces-note' | 'bc-section';
   /** What a study-settings component gets. The core shows a failed save's message. */
   export interface StudySettingsProps {
       study: StudyState;
@@ -752,6 +774,10 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/slots' {
       };
       /** The study's record as saved (its turbulence model, time dependency, ...); null when not known. */
       study?: Record<string, unknown> | null;
+  }
+  /** What a bc-section component gets (API 1.8): a BC's props and the group it draws. */
+  export interface BcSectionProps extends BcSettingsProps {
+      group: BcFieldGroupRow;
   }
   type AnyComponent = ComponentType<never>;
   export {};

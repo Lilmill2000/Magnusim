@@ -171,6 +171,7 @@ export function ControlsSection({ kit, side }: SectionProps) {
           <Row call="fieldUnit('length', 'metric')" out={kit.fieldUnit('length', 'metric')} />
           <Row call="fieldUnit('length', 'imperial')" out={kit.fieldUnit('length', 'imperial')} />
           <Row call="fieldUnit('pressure', 'imperial')" out={kit.fieldUnit('pressure', 'imperial')} />
+          <Row call="fieldUnit('temperature', 'metric')" out={kit.fieldUnit('temperature', 'metric')} />
         </Specimen>
         <Specimen name="Units/fieldQuantity" covers="fieldQuantity">
           <Row
@@ -214,6 +215,9 @@ export function ControlsSection({ kit, side }: SectionProps) {
         </Specimen>
         <Specimen name="Units/SI_DEFAULT" covers="SI_DEFAULT">
           <Row call="SI_DEFAULT" out={kit.SI_DEFAULT} />
+        </Specimen>
+        <Specimen name="Units/METRIC_DEFAULT" covers="METRIC_DEFAULT">
+          <Row call="METRIC_DEFAULT.temperature" out={kit.METRIC_DEFAULT.temperature} />
         </Specimen>
       </Group>
     </div>

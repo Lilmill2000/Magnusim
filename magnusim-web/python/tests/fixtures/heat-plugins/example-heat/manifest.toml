@@ -1,0 +1,8 @@
+key = "example-heat"
+name = "Heat example"
+version = "0.1.0"
+api_version = "1.8"
+license = "GPL-3.0-or-later"
+description = "A test analysis with a fluid and a solid material model and thermal BC fields (host API 1.8)"
+authors = "Magnusim"
+requires_plugins = ["incompressible_flow>=1.0"]

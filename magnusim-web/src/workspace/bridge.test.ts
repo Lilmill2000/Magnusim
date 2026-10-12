@@ -1079,7 +1079,7 @@ describe('WorkspaceBridge: the handshake', () => {
     const [msg, origin, transfer] = t.posted[0] as [Record<string, unknown>, string, MessagePort[]];
     expect(origin).toBe('*');
     expect(msg).toMatchObject({ magnusim: 'welcome', instance: 'i1' });
-    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.7' });
+    expect(msg.context).toMatchObject({ plugin: 'ws-demo', workspace: 'bench', project: { id: 'proj-a' }, study: STUDY, hostVersion: '1.8' });
     expect(t.bridge.connected()).toBe(true);
     expect(t.h.connected).toHaveBeenCalledTimes(1);
 

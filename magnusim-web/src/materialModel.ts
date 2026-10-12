@@ -42,6 +42,8 @@ export interface MaterialModelRow {
   record_keys?: Record<string, string[]>;
   record_constants?: Record<string, unknown>;
   custom_preset?: string;
+  /** API 1.8: what a body with this material is. */
+  role?: string;
 }
 
 /** One property field of a model (from its schema). */
@@ -87,6 +89,40 @@ export function modelFor(analysisKey?: string | null, rows: MaterialModelRow[] =
     if (hit) return hit;
   }
   return undefined;
+}
+
+/**
+ * Every material model an analysis offers, in its order (host API 1.8). More
+ * than one lets a study hold several material records, one per group of
+ * bodies (a fluid and the solids around it).
+ */
+export function modelsFor(analysisKey?: string | null, rows: MaterialModelRow[] = materialModelRows()): MaterialModelRow[] {
+  if (!rows.length) return [];
+  const analysis = analysisRow(analysisKey) || analysisRow(defaultAnalysisKey());
+  const keys = analysis?.material_models;
+  if (!Array.isArray(keys)) return [rows[0]];
+  return keys.map((key) => rows.find((row) => row.key === key)).filter((row): row is MaterialModelRow => !!row);
+}
+
+/** A study of this analysis holds several materials (host API 1.8). */
+export function hasSeveralMaterials(analysisKey?: string | null, rows: MaterialModelRow[] = materialModelRows()): boolean {
+  return modelsFor(analysisKey, rows).length > 1;
+}
+
+/** The model of a saved record: its material_model when the analysis offers it, else the analysis's first. */
+export function modelOf(
+  record: { material_model?: unknown } | null | undefined,
+  analysisKey?: string | null,
+  rows: MaterialModelRow[] = materialModelRows(),
+): MaterialModelRow | undefined {
+  const offered = modelsFor(analysisKey, rows);
+  const want = String(record?.material_model || '');
+  return offered.find((m) => m.key === want) || offered[0];
+}
+
+/** 'solid' or 'fluid' (host API 1.8; a model that does not say is a fluid). */
+export function roleOf(model: MaterialModelRow | undefined): 'fluid' | 'solid' {
+  return model?.role === 'solid' ? 'solid' : 'fluid';
 }
 
 export function presets(model: MaterialModelRow | undefined): MaterialPreset[] {

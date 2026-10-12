@@ -597,10 +597,27 @@ export function applyMaterial(material: Record<string, unknown>, projectId?: str
   return true;
 }
 
-export async function deleteMaterial(): Promise<unknown> {
+/** Delete the study's materials, or (host API 1.8, `id`) one material record of a study with several. */
+export async function deleteMaterial(id?: string): Promise<unknown> {
   const fn = window.__CFD_MATERIAL_DELETE__;
   if (!fn) throw new Error('Delete is not ready yet.');
-  return fn();
+  return id ? fn(id) : fn();
+}
+
+/** Open one material record in the Materials panel (host API 1.8); '' opens the study's materials. */
+export function openMaterial(id: string): boolean {
+  const fn = window.__CFD_OPEN_MATERIAL__;
+  if (!fn) return false;
+  fn(id);
+  return true;
+}
+
+/** Open the Materials panel on a new material of the active study. */
+export function addMaterial(): boolean {
+  const fn = window.__CFD_ADD_MATERIAL__;
+  if (!fn) return false;
+  fn();
+  return true;
 }
 
 /** Body names of the open geometry ("Body1", ...), in viewport pick order. */

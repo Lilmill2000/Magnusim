@@ -36,6 +36,44 @@ describe('SchemaForm', () => {
     expect(onCommit).toHaveBeenCalled();
   });
 
+  it('a temperature field (API 1.8) types in °C or °F with a K/°C/°F picker, and commits K', async () => {
+    const thermal: RJSFSchema = {
+      type: 'object',
+      properties: {
+        t_ref: { type: 'number', title: 'Reference temperature', default: 293.15, 'x-cfddesk': { quantity: 'temperature' } },
+      },
+    };
+    const onCommit = vi.fn();
+    render(<SchemaForm schema={thermal} formData={{ t_ref: 293.15 }} onCommit={onCommit} />);
+    const unit = screen.getByLabelText('Reference temperature unit') as HTMLSelectElement;
+    expect([...unit.options].map((o) => o.value)).toEqual(['K', '°C', '°F']);
+    expect(unit.value).toBe('°C');
+    const box = screen.getAllByLabelText('Reference temperature')[0] as HTMLInputElement;
+    expect(box.value).toBe('20');
+    fireEvent.change(unit, { target: { value: 'K' } });
+    expect((screen.getAllByLabelText('Reference temperature')[0] as HTMLInputElement).value).toBe('293.15');
+    fireEvent.change(screen.getAllByLabelText('Reference temperature')[0], { target: { value: '300' } });
+    fireEvent.blur(screen.getAllByLabelText('Reference temperature')[0]);
+    await new Promise((r) => setTimeout(r, 350));
+    expect(onCommit).toHaveBeenCalled();
+    expect(onCommit.mock.calls.at(-1)?.[0].t_ref).toBeCloseTo(300, 9);
+  });
+
+  it('a temperature field in an imperial project starts on °F', () => {
+    window.__CFD_PROJECT_UNITS__ = () => 'imperial';
+    try {
+      const thermal: RJSFSchema = {
+        type: 'object',
+        properties: { t: { type: 'number', title: 'Wall temperature', 'x-cfddesk': { quantity: 'temperature' } } },
+      };
+      render(<SchemaForm schema={thermal} formData={{ t: 373.15 }} onCommit={() => {}} />);
+      expect((screen.getByLabelText('Wall temperature unit') as HTMLSelectElement).value).toBe('°F');
+      expect((screen.getAllByLabelText('Wall temperature')[0] as HTMLInputElement).value).toBe('212');
+    } finally {
+      delete window.__CFD_PROJECT_UNITS__;
+    }
+  });
+
   it('renders a COARSE-to-FINE slider for the range widget', () => {
     const ranged: RJSFSchema = {
       type: 'object',

@@ -12,6 +12,7 @@ from typing import Any
 
 from cfddesk.project.paths import (
     assemble_study_bcs,
+    assemble_study_materials,
     create_mesh_folder,
     create_run_folder,
     drop_missing_studies,
@@ -245,6 +246,27 @@ def _material_lost(study_dir: Path) -> int:
         seen.add(key)
         n += _lost(row)
     return n
+
+
+def _materials(root: Path, sid: str) -> list[dict[str, Any]]:
+    """Every material record of the study (API 1.8 tree rows): id, name, model, bodies, lost bodies."""
+    out: list[dict[str, Any]] = []
+    for row in assemble_study_materials(root, sid):
+        if not isinstance(row, dict) or row.get("id") is None:
+            continue
+        vols = row.get("assigned_volumes")
+        out.append(
+            _with_lost(
+                {
+                    "id": str(row.get("id")),
+                    "name": str(row.get("name") or ""),
+                    "model": str(row.get("material_model") or ""),
+                    "volumes": list(dict.fromkeys(str(v) for v in vols if str(v))) if isinstance(vols, list) else [],
+                },
+                row,
+            )
+        )
+    return out
 
 
 def _material_volumes(study_dir: Path) -> list[str]:
@@ -493,6 +515,8 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
                     "material_name": _material_name(study_dir),
                     "material_volumes": _material_volumes(study_dir),
                     "material_lost": _material_lost(study_dir),
+                    "materials": _materials(root, sid),
+                    "analysis_type": str(study.get("analysis_type") or ""),
                     "bcs": _bcs(root, sscope),
                     "meshes": [
                         _mesh_node(project_id, gid, sid, mesh, grev) for mesh in walk_meshes(root, sid)

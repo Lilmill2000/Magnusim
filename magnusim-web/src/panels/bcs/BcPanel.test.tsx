@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import committed from '../../../scripts/generated/registry.json';
 import type { BcFamilyRow, RegistryDescribe } from '../../api/registry.gen';
-import { pluginUiFor, unregisterPlugin, type BcSettingsProps } from '../../plugin-api';
+import { pluginUiFor, unregisterPlugin, type BcSectionProps, type BcSettingsProps } from '../../plugin-api';
 import { useProjectStore } from '../../store/project';
 import type { BcState } from '../legacyBridge';
 import { BcPanel, bcCardSub } from './BcPanel';
@@ -83,6 +83,33 @@ beforeEach(() => {
       analysis: [
         { key: 'incompressible_steady', label: 'Incompressible', bc_types: IF_BCS },
         { key: 'extra_bc_steady', label: 'Extra BC', bc_types: [...IF_BCS, 'symmetry_plane'] },
+        {
+          key: 'heat_steady',
+          label: 'Heat',
+          bc_types: IF_BCS,
+          bc_fields: [
+            {
+              key: 'wall_thermal',
+              title: 'Thermal',
+              families: ['wall'],
+              ui: '',
+              description: 'Heat through the wall.',
+              schema: {
+                type: 'object',
+                properties: {
+                  thermal_wall: { type: 'string', title: 'Thermal', enum: ['Adiabatic', 'Fixed temperature'], default: 'Adiabatic' },
+                  wall_temperature: {
+                    type: 'number',
+                    title: 'Wall temperature',
+                    default: 293.15,
+                    'x-cfddesk': { quantity: 'temperature', depends_on: { thermal_wall: 'Fixed temperature' } },
+                  },
+                },
+              },
+            },
+            { key: 'outlet_thermal', title: 'Backflow', families: ['pressure_outlet'], ui: 'fx.backflow', description: '', schema: null },
+          ],
+        },
       ],
       bc_family: [...IF_FAMILIES, mirror],
       default_analysis: { steady: 'incompressible_steady' },
@@ -325,6 +352,55 @@ describe('editor', () => {
       vi.useRealTimers();
     }
     expect(window.__CFD_BC_UPDATE__).toHaveBeenCalledWith('s1', { mirror: 'Plane' });
+  });
+
+  it("draws the study's analysis's BC field groups (API 1.8) under the family's fields, and saves them in the record", () => {
+    publish({
+      analysis_key: 'heat_steady',
+      active_id: 'w1',
+      bcs: [{ id: 'w1', name: 'Wall 1', bc_type: 'Wall', faces: [], wall_type: 'No-slip', thermal_wall: 'Fixed temperature', wall_temperature: 353.15 }],
+    });
+    const { container } = render(<BcPanel panelId="panel-bc-editor" />);
+    const group = container.querySelector('[data-bc-field-group="wall_thermal"]') as HTMLElement;
+    expect(group).not.toBeNull();
+    // Under the family's own fields (IF's component), before the assigned faces.
+    const ifFields = container.querySelector('[data-fake-if-fields="wall"]') as HTMLElement;
+    expect(ifFields.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(group.textContent).toContain('Thermal');
+    expect(group.textContent).toContain('Heat through the wall.');
+    expect((screen.getByLabelText('Wall temperature unit') as HTMLSelectElement).value).toBe('°C');
+    expect((screen.getAllByLabelText('Wall temperature')[0] as HTMLInputElement).value).toBe('80');
+    expect(container.querySelector('[data-bc-field-group="outlet_thermal"]')).toBeNull();
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getAllByLabelText('Wall temperature')[0], { target: { value: '100' } });
+      fireEvent.blur(screen.getAllByLabelText('Wall temperature')[0]);
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const calls = (window.__CFD_BC_UPDATE__ as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.at(-1)?.[0]).toBe('w1');
+    expect(calls.at(-1)?.[1].wall_temperature).toBeCloseTo(373.15, 9);
+  });
+
+  it("draws a group's bc-section component, and no group in another analysis's study", () => {
+    const sections: BcSectionProps[] = [];
+    pluginUiFor('bcpanel-test').registerBcSection('fx.backflow', (props: BcSectionProps) => {
+      sections.push(props);
+      return <div data-fake-backflow={props.group.key} />;
+    });
+    publish({ analysis_key: 'heat_steady', active_id: 'bc2' });
+    const first = render(<BcPanel panelId="panel-bc-editor" />);
+    expect(first.container.querySelector('[data-bc-field-group="outlet_thermal"] [data-fake-backflow="outlet_thermal"]')).not.toBeNull();
+    expect(sections.at(-1)?.bc.id).toBe('bc2');
+    expect(sections.at(-1)?.family.key).toBe('pressure_outlet');
+    first.unmount();
+    publish({ analysis_key: 'incompressible_steady', active_id: 'bc2' });
+    const { container } = render(<BcPanel panelId="panel-bc-editor" />);
+    expect(container.querySelector('[data-bc-field-group]')).toBeNull();
   });
 
   it('keeps an unknown type and its fields, and says its plugin is off', () => {

@@ -65,6 +65,8 @@ export interface RegistryRow {
   /** Analyses (API 1.4): the BC types and material models it offers. */
   bc_types?: string[];
   material_models?: string[];
+  /** Analyses (API 1.8): the fields it adds to the BCs of its studies. */
+  bc_fields?: BcFieldGroupRow[];
   /** Material models (API 1.4): presets, and how a study's material record stores the properties. */
   library?: Array<Record<string, unknown>>;
   /** Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }. */
@@ -117,6 +119,23 @@ export interface BcFamilyRow {
   fields: Record<string, unknown> | null;
   /** A 'bc-settings' slot component name; '' = none. */
   ui: string;
+}
+
+/**
+ * Fields an analysis adds to the BCs of its studies (API 1.8): the BC editor
+ * draws the group under the family's own settings and saves its fields in the
+ * same record.
+ */
+export interface BcFieldGroupRow {
+  key: string;
+  title: string;
+  /** The bc_family keys it applies to; [] = every family the analysis offers. */
+  families: string[];
+  /** A 'bc-section' slot component that draws it; '' = the generic form. */
+  ui: string;
+  description: string;
+  /** Its fields (JSON Schema). */
+  schema: Record<string, unknown> | null;
 }
 
 /** A quantity a run's monitors report, and how it is shown (API 1.4). */

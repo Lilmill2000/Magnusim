@@ -221,7 +221,15 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         # API 1.4: the BC types and material models the analysis offers.
         "bc_types": [str(k) for k in getattr(spec, "bc_types", ()) or ()],
         "material_models": [str(k) for k in getattr(spec, "material_models", ()) or ()],
+        # API 1.8: the fields it adds to the BCs of its studies.
+        "bc_fields": _bc_field_groups(spec),
     }
+
+
+def _bc_field_groups(spec: Any) -> list[dict[str, Any]]:
+    from cfddesk.registry.bc import bc_field_groups
+
+    return bc_field_groups(spec)
 
 
 def _list_or_none(names: tuple[str, ...] | None) -> list[str] | None:

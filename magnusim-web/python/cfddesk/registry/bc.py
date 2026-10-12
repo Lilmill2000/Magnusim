@@ -14,6 +14,7 @@ the hub. Do not import bc_registry at module top level: it imports this module.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -90,6 +91,114 @@ class BcFamily:
     fields: tuple[SchemaField, ...] = ()
     ui: str = ""
     resolve: BcResolveFn | None = None
+
+
+@dataclass(frozen=True)
+class BcFieldGroup:
+    """Fields an analysis adds to the BCs of its studies (API 1.8, ``AnalysisType.bc_fields``).
+
+    The BC editor draws the group under the family's own settings, in studies of
+    that analysis only, and saves its fields in the same BC record (top-level
+    keys), so another plugin's family gains them without changing. ``families``
+    are the bc_family keys it applies to (empty: every family the analysis
+    offers). ``ui`` names a ``bc-section`` slot component that draws the group
+    instead of the generic form. A field key may not be one the family itself
+    holds, nor a host record key (:data:`BC_RECORD_KEYS`).
+    """
+
+    key: str
+    title: str
+    fields: tuple[SchemaField, ...]
+    families: tuple[str, ...] = ()
+    ui: str = ""
+    description: str = ""
+
+
+# Keys a saved BC record holds for the host: never a field group's.
+BC_RECORD_KEYS: frozenset[str] = frozenset(
+    {
+        "id", "name", "bc_type", "type", "faces", "face", "saved", "created_at", "updated_at",
+        "persistence", "geometry_id", "simulation_id", "project_id", "geometry_rev", "lost_faces",
+        "folder", "kind", "patch",
+    }
+)
+
+_GROUP_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _family_record_keys(fam: Any) -> set[str]:
+    """The record keys a BC family holds: its fields, its seed keys and its value/unit fields."""
+    keys = {f.key for f in getattr(fam, "fields", ()) or ()}
+    for seed in dict(getattr(fam, "defaults", None) or {}).values():
+        keys |= set(dict(seed or {}))
+    for row in getattr(fam, "values", ()) or ():
+        keys |= {str(row[0]), str(row[1])}
+    return keys
+
+
+def _offered_families(hub: RegistryHub, spec: Any) -> list[str]:
+    """The bc_family keys an analysis offers: those with a variant among its bc_types."""
+    offered = {str(k) for k in getattr(spec, "bc_types", ()) or ()}
+    return [
+        fam.key for fam in hub.registry("bc_family").items() if offered & {str(v) for v in getattr(fam, "variants", ()) or ()}
+    ]
+
+
+def validate_analysis_bc_fields(hub: RegistryHub) -> None:
+    """Fail (``analysis '<key>': ...``) when an analysis's BC field groups (API 1.8) name a
+    family that is not registered, repeat a key, or use a record key a family or the host holds."""
+    families = hub.registry("bc_family")
+    family_keys = set(families.keys())
+    for spec in hub.registry("analysis").items():
+        groups = tuple(getattr(spec, "bc_fields", ()) or ())
+        if not groups:
+            continue
+        key = getattr(spec, "key", "?")
+        seen_groups: set[str] = set()
+        seen_fields: set[str] = set()
+        for group in groups:
+            gkey = str(getattr(group, "key", "") or "")
+            if not _GROUP_KEY_RE.match(gkey) or gkey in seen_groups:
+                raise RegistryError(f"analysis {key!r}: bc_fields group key {gkey!r} must be lower_snake_case and unique")
+            seen_groups.add(gkey)
+            if not str(getattr(group, "title", "") or "").strip():
+                raise RegistryError(f"analysis {key!r}: bc_fields group {gkey!r} has no title")
+            named = [str(f) for f in getattr(group, "families", ()) or ()]
+            unknown = [f for f in named if f not in family_keys]
+            if unknown:
+                raise RegistryError(
+                    f"analysis {key!r}: bc_fields group {gkey!r} names unknown bc_family {unknown}; "
+                    f"registered families={sorted(family_keys)}"
+                )
+            taken: set[str] = set()
+            for fam_key in named or _offered_families(hub, spec):
+                taken |= _family_record_keys(families.get(fam_key))
+            for f in getattr(group, "fields", ()) or ():
+                fk = str(getattr(f, "key", "") or "")
+                if fk in BC_RECORD_KEYS or fk in taken:
+                    raise RegistryError(
+                        f"analysis {key!r}: bc_fields group {gkey!r} field {fk!r} is a key the BC record already holds"
+                    )
+                if fk in seen_fields:
+                    raise RegistryError(f"analysis {key!r}: bc_fields field {fk!r} is in two groups")
+                seen_fields.add(fk)
+
+
+def bc_field_groups(spec: Any) -> list[dict[str, Any]]:
+    """An analysis row's ``bc_fields`` (API 1.8): each group's key, title, families, ui,
+    description and its fields as a JSON Schema."""
+    key = str(getattr(spec, "key", ""))
+    return [
+        {
+            "key": str(g.key),
+            "title": str(g.title),
+            "families": [str(f) for f in g.families],
+            "ui": str(g.ui or ""),
+            "description": str(g.description or ""),
+            "schema": _schema_to_json(tuple(g.fields), kind="analysis", key=key, bag=f"bc_fields.{g.key}"),
+        }
+        for g in getattr(spec, "bc_fields", ()) or ()
+    ]
 
 
 def validate_analysis_bc_refs(hub: RegistryHub) -> None:

@@ -199,6 +199,11 @@ def boundary_patches(
     )
     if refusal:
         raise RuntimeError(refusal)
+    from cfddesk.project.regions import mesh_region_refusal
+
+    refusal = mesh_region_refusal(project_dir, simulation_id, "snappy_hexdominant")
+    if refusal:
+        raise RuntimeError(refusal)
     project = _apply_web_bcs(project, web_bcs, n_faces)
     sizes, _mins, size_notes = load_surface_custom_sizes(project_dir, mesh_id, n_faces, diag_m)
     inflates = load_inflate_refs(project_dir, mesh_id, n_faces, h_wall_m, extra_face_sizes=sizes)

@@ -1213,7 +1213,8 @@
       ],
       "material_models": [
         "newtonian_incompressible"
-      ]
+      ],
+      "bc_fields": []
     },
     {
       "key": "incompressible_transient",
@@ -2499,7 +2500,8 @@
       ],
       "material_models": [
         "newtonian_incompressible"
-      ]
+      ],
+      "bc_fields": []
     }
   ],
   "solver": [
@@ -4587,7 +4589,8 @@
         "kinematic_viscosity_unit": "m2/s",
         "density_unit": "kg/m3"
       },
-      "custom_preset": "custom"
+      "custom_preset": "custom",
+      "role": "fluid"
     }
   ],
   "monitor": [

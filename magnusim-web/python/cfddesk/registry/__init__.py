@@ -18,6 +18,7 @@ from cfddesk.registry.analysis import (
 from cfddesk.registry.base import Registry, RegistryError, Spec
 from cfddesk.registry.bc import (
     BcFamily,
+    BcFieldGroup,
     BcTypeSpec,
     validate_analysis_bc_refs,
     validate_bc_families,
@@ -45,7 +46,7 @@ from cfddesk.registry.result_filter import ResultFilterType, analysis_has_filter
 from cfddesk.registry.schema import SchemaField, to_json_schema, validate
 from cfddesk.registry.solver import SolverApp, validate_analysis_solver_refs
 
-API_VERSION = "1.7"
+API_VERSION = "1.8"
 
 __all__ = [
     "API_VERSION",
@@ -66,6 +67,7 @@ __all__ = [
     "validate_multi_region_meshing",
     "BcTypeSpec",
     "BcFamily",
+    "BcFieldGroup",
     "validate_analysis_bc_refs",
     "validate_bc_families",
     "MaterialModel",

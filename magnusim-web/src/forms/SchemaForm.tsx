@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import Form from '@rjsf/core';
 import validator from '@rjsf/validator-ajv8';
 import type { ObjectFieldTemplateProps, RJSFSchema, UiSchema, WidgetProps } from '@rjsf/utils';
-import { fieldQuantity, fieldUnit, fromSi, toSi } from '../units/convert';
+import { fieldQuantity, fieldUnit, fromSi, toSi, unitLabels } from '../units/convert';
 import { prefersImperial } from '../prefs';
 import { subscribeFacePicks } from '../viewer/pick';
 import { SciNumberInput } from './SciNumberInput';
@@ -42,10 +42,18 @@ function AdvancedDetails({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * A number in its quantity's unit, stored in SI. A temperature field's unit is
+ * a K/°C/°F picker (API 1.8), starting on the unit system's; the pick changes
+ * only what is shown and typed.
+ */
 function NumberUnitWidget(props: WidgetProps) {
   const qty = fieldQuantity(props.schema);
   const preferred = qty ? fieldUnit(qty, prefersImperial() ? 'imperial' : 'metric') : '';
-  const unit = String(props.options?.unit || preferred || '');
+  const fixed = String(props.options?.unit || '');
+  const [picked, setPicked] = useState('');
+  const choices = qty === 'temperature' && !fixed ? unitLabels(qty) : [];
+  const unit = choices.length && picked ? picked : String(fixed || preferred || '');
   const display =
     qty && unit && typeof props.value === 'number' ? fromSi(qty, props.value, unit) : props.value;
   const emit = (n: number) => props.onChange(qty && unit ? toSi(qty, n, unit) : n);
@@ -58,7 +66,22 @@ function NumberUnitWidget(props: WidgetProps) {
         onLive={emit}
         onCommit={emit}
       />
-      {unit ? <span className="bc-unit-label">{unit}</span> : null}
+      {choices.length ? (
+        <select
+          className="bc-select"
+          aria-label={`${props.label} unit`}
+          value={unit}
+          onChange={(e) => setPicked(e.target.value)}
+        >
+          {choices.map((u) => (
+            <option key={u} value={u}>
+              {u}
+            </option>
+          ))}
+        </select>
+      ) : unit ? (
+        <span className="bc-unit-label">{unit}</span>
+      ) : null}
     </span>
   );
 }

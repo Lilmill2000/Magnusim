@@ -62,6 +62,7 @@ FEATURE_API: dict[str, str] = {
     "study_kinds.links_geometry": "1.4",
     "default_analysis.study_name": "1.4",
     "geometry_actions": "1.7",
+    "exports": "1.8",
 }
 
 # PluginManifest fields that are not manifest keys: the host or register() sets them.
@@ -147,6 +148,10 @@ TOP_LEVEL: dict[str, dict[str, Any]] = {
         "description": "Bundled tier only: false ships the plugin off until someone turns it on in Settings → Plugins.",
     },
     "requires_plugins": {**_STR_OR_LIST, "description": "Plugins loaded before this one: \"key\" or \"key>=1.0\"."},
+    "exports": {
+        **_STR_OR_LIST,
+        "description": "Modules of this plugin (\"package.module\") another plugin may import when its requires_plugins names this one.",
+    },
     "protected": {**_STR_OR_LIST, "description": "Bundled tier only: kind:key specs of this plugin that other plugins may not drop."},
     "default_analysis": {
         "type": "object",

@@ -311,3 +311,71 @@ describe('LeftTree fluid label', () => {
     expect(label()).toBe('Water');
   });
 });
+
+describe('LeftTree several materials (host API 1.8)', () => {
+  afterEach(() => {
+    useProjectStore.setState({ registry: null });
+  });
+
+  const SOLID = { ...FIXTURE_MODEL, key: 'fx_solid', role: 'solid', library: [{ key: 'al', name: 'Aluminium', codes: ['DEFAULT'] }] };
+  const registry = {
+    ...FIXTURE_REGISTRY,
+    analysis: [...FIXTURE_REGISTRY.analysis, { key: 'heat_steady', label: 'Heat', material_models: ['newtonian_incompressible', 'fx_solid'] }],
+    material: [FIXTURE_MODEL, SOLID],
+  };
+
+  const heat = (selectedKey: string | null = null): SetupTreeModel => ({
+    ...fixture,
+    selectedKey,
+    geoms: [
+      {
+        ...fixture.geoms[0],
+        studies: [
+          {
+            ...fixture.geoms[0].studies[0],
+            analysisType: 'heat_steady',
+            materialsAssigned: true,
+            materialVolumes: ['Body1', 'Body3'],
+            materials: [
+              { id: 'm-air', name: 'Air', model: 'newtonian_incompressible', volumes: ['Body1'] },
+              { id: 'm-al', name: '', model: 'fx_solid', volumes: ['Body3'] },
+              { id: 'm-cu', name: 'Copper', model: 'fx_solid', volumes: [] },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  it('a row per material with its bodies, the "+" always there, each row naming its record', () => {
+    useProjectStore.setState({ registry: registry as never });
+    render(
+      <ul>
+        <SetupTreeView model={heat('air:m-al')} />
+      </ul>,
+    );
+    const rows = [...document.querySelectorAll('[data-w18-air="1"]')];
+    expect(rows.map((r) => r.getAttribute('data-w18-material-id'))).toEqual(['m-air', 'm-al', 'm-cu']);
+    // A record with no name shows its model's default preset.
+    expect(rows.map((r) => r.querySelector(':scope > .tree-row .tl')?.textContent)).toEqual(['Air', 'Aluminium', 'Copper']);
+    expect(rows[1].querySelector('[data-w18-assign="Body3"]')?.getAttribute('data-body-index')).toBe('3');
+    expect(document.querySelector('[data-w18-mat-plus="s1"]')).not.toBeNull();
+    expect(rows[1].className).toContain('selected');
+    expect(rows[0].className).not.toContain('selected');
+  });
+
+  it('an Incompressible Flow study keeps its one fluid row', () => {
+    useProjectStore.setState({ registry: registry as never });
+    const model = heat();
+    model.geoms[0].studies[0].analysisType = 'incompressible_steady';
+    render(
+      <ul>
+        <SetupTreeView model={model} />
+      </ul>,
+    );
+    const rows = [...document.querySelectorAll('[data-w18-air="1"]')];
+    expect(rows.length).toBe(1);
+    expect(rows[0].getAttribute('data-w18-material-id')).toBeNull();
+    expect(document.querySelector('[data-w18-mat-plus="s1"]')).toBeNull();
+  });
+});

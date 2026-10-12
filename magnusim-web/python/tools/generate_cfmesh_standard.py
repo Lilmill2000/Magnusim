@@ -255,6 +255,11 @@ def main() -> int:
         )
         if refusal:
             return _result(False, error=refusal)
+        from cfddesk.project.regions import mesh_region_refusal
+
+        refusal = mesh_region_refusal(project_dir, str(args.simulation_id or ""), "cfmesh")
+        if refusal:
+            return _result(False, error=refusal)
         project = _apply_web_bcs(project, web_bcs, n_faces)
 
         bbox = shape_bbox(solid.shape, unit="native")

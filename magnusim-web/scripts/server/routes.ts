@@ -374,8 +374,11 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     if (listKey && params.body && typeof params.body === 'object') {
       const body = params.body as Record<string, unknown>;
       const rows = Array.isArray(body[listKey]) ? (body[listKey] as Array<Record<string, unknown>>) : [];
-      const only = String(body.only_id || '');
-      const recs = only ? rows.filter((r) => r && String(r.id || '') === only) : rows;
+      // only_id, and (host API 1.8) only_ids: the records this save writes; none = all.
+      const only = new Set(
+        [String(body.only_id || ''), ...(Array.isArray(body.only_ids) ? body.only_ids.map((x) => String(x || '')) : [])].filter(Boolean),
+      );
+      const recs = only.size ? rows.filter((r) => r && only.has(String(r.id || ''))) : rows;
       const check = checkRecordSave(String(projectDir(project_id)), String(params.sim_id || ''), recs, undefined) as {
         ok: boolean;
         status?: number;

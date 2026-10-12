@@ -625,7 +625,11 @@ def _validate_cross_refs(hub: RegistryHub) -> None:
     name each other correctly. A plugin that breaks this is unloaded and listed as
     an error; builtins and the other plugins keep loading. A builtin that breaks it
     is a core bug and still raises."""
-    from cfddesk.registry.bc import validate_analysis_bc_refs, validate_bc_families
+    from cfddesk.registry.bc import (
+        validate_analysis_bc_fields,
+        validate_analysis_bc_refs,
+        validate_bc_families,
+    )
     from cfddesk.registry.material import validate_analysis_material_refs
     from cfddesk.registry.monitor import validate_analysis_monitor_refs
     from cfddesk.registry.solver import validate_analysis_solver_refs
@@ -636,6 +640,7 @@ def _validate_cross_refs(hub: RegistryHub) -> None:
         validate_analysis_material_refs,
         validate_analysis_monitor_refs,
         validate_bc_families,
+        validate_analysis_bc_fields,
     )
     for _ in range(64):
         try:
@@ -1204,6 +1209,7 @@ def _apply_tier_meta(result: PluginManifest, meta: dict[str, Any], tier: str) ->
     result.tier = "bundled" if tier == "bundled" else "user"
     result.required, result.default_enabled = tier_flags(meta, result.tier)
     result.requires_plugins = _str_list(meta.get("requires_plugins"))
+    result.exports = _str_list(meta.get("exports"))
     result.protected = _str_list(meta.get("protected")) if result.tier == "bundled" else []
     for token in result.protected:
         kind, _, key = token.partition(":")

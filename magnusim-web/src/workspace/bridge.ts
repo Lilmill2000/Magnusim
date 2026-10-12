@@ -63,7 +63,7 @@ import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestio
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
 
 export const HOST_SDK_MAJOR = 1;
-export const HOST_API_VERSION = '1.7';
+export const HOST_API_VERSION = '1.8';
 /** A link job's id (gl-<time>-<hex>, scripts/link-store.js LINK_JOB_RE). */
 const LINK_JOB_ID = /^gl-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
 const PROBE_MS = 1500;

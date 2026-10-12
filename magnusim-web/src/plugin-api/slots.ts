@@ -9,15 +9,17 @@
  * built from its schemas.
  */
 import { useSyncExternalStore, type ComponentType } from 'react';
-import type { BcFamilyRow, RegistryRow } from '../api/registry.gen';
+import type { BcFamilyRow, BcFieldGroupRow, RegistryRow } from '../api/registry.gen';
 import type { BcRecord, RunState, StudyState, TimeDependency } from '../panels/legacyBridge';
 
 /**
  * 'bc-settings' (API 1.4): a BC family's fields in the BC editor, between the
  * Type row and the assigned faces, named by the family's `ui`. 'bc-faces-note'
  * is an optional line the same family draws under the assigned faces.
+ * 'bc-section' (API 1.8): an analysis's BC field group (its `bc_fields` row's
+ * `ui`), drawn under the family's fields in studies of that analysis.
  */
-export type SettingsSlot = 'study-settings' | 'run-settings' | 'bc-settings' | 'bc-faces-note';
+export type SettingsSlot = 'study-settings' | 'run-settings' | 'bc-settings' | 'bc-faces-note' | 'bc-section';
 
 /** What a study-settings component gets. The core shows a failed save's message. */
 export interface StudySettingsProps {
@@ -62,6 +64,11 @@ export interface BcSettingsProps {
   flowBasis: (faces: string[]) => { face_area_m2: number | null; density: number };
   /** The study's record as saved (its turbulence model, time dependency, ...); null when not known. */
   study?: Record<string, unknown> | null;
+}
+
+/** What a bc-section component gets (API 1.8): a BC's props and the group it draws. */
+export interface BcSectionProps extends BcSettingsProps {
+  group: BcFieldGroupRow;
 }
 
 type AnyComponent = ComponentType<never>;

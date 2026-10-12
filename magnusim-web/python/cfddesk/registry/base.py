@@ -311,6 +311,8 @@ class Registry(Generic[T]):
                 }
                 row["record_constants"] = _plain_json(dict(getattr(spec, "record_constants", None) or {}))
                 row["custom_preset"] = str(getattr(spec, "custom_preset", "custom") or "custom")
+                # API 1.8: fluid or solid.
+                row["role"] = str(getattr(spec, "role", "fluid") or "fluid")
             if self.kind == "monitor":
                 # API 1.4: what the monitor is and measures; its fields_schema is its "schema".
                 row["target"] = str(getattr(spec, "target", "") or "")

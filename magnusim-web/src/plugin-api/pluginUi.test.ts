@@ -41,7 +41,7 @@ describe('pluginUi (API 1.3)', () => {
   it('kit is the page copy of the kit itself', () => {
     expect(ui.kit).toBe(kit);
     expect(ui.kit.Button).toBe(kit.Button);
-    expect(ui.kit.PLUGIN_UI_API_VERSION).toBe('1.0.0');
+    expect(ui.kit.PLUGIN_UI_API_VERSION).toBe('1.1.0');
   });
 
   it('panelDone sends one cfd:panel-done', () => {

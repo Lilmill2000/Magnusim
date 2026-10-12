@@ -30,7 +30,7 @@ from magnusim_sdk.study import (
     wall_treatment,
 )
 
-from .materials import LEGACY_AIR
+from .materials import LEGACY_AIR, MODEL_KEY
 from .monitors import custom_monitors, forces_monitor_records, probe_monitor_records
 from .physics import StudyPhysics, physics_from_record
 from .reference import reference_record
@@ -142,7 +142,14 @@ def air_from_materials(
     lst = (mats or {}).get("materials") if isinstance(mats, dict) else None
     if not isinstance(lst, list):
         return None
-    scoped = [m for m in lst if matches_study(m, sim_id, legacy_id)]
+    # Only this plugin's own fluid records: a study of another analysis may hold
+    # several materials of other models (host API 1.8).
+    scoped = [
+        m
+        for m in lst
+        if matches_study(m, sim_id, legacy_id)
+        and str((m.get("material_model") if isinstance(m, dict) else "") or MODEL_KEY) == MODEL_KEY
+    ]
     air = study_fluid(scoped)
     if not air:
         return None

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { createPortal } from 'react-dom';
 import { pluginTreeNodes, type PluginTreeNode } from '../plugin-api';
 import { useProjectStore } from '../store/project';
-import { defaultFluidName } from '../materialModel';
+import { defaultFluidName, defaultPreset, hasSeveralMaterials, modelOf } from '../materialModel';
 import { pluginStudyScope, scopeBelongsToProject } from '../scope';
 import { headerKinds, kindKey } from '../workspace/startActions';
 import { bodyDisplay, faceDisplay, faceNamesGeometry, subscribeFaceNames } from '../workbench/faceNames';
@@ -208,6 +208,76 @@ function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: b
   );
 }
 
+/**
+ * Materials of a study whose analysis offers several material models (host API
+ * 1.8): a row per material record with its bodies, and "+" always (a new
+ * material for more bodies). A row opens that record (data-w18-material-id).
+ */
+function SeveralMaterials({
+  study,
+  matKey,
+  airKey,
+  selectedKey,
+}: {
+  study: StudyNode;
+  matKey: string;
+  airKey: string;
+  selectedKey: string | null;
+}) {
+  const materials = study.materials || [];
+  const assigned = materials.some((m) => m.volumes.length > 0);
+  return (
+    <Node
+      label="Materials"
+      expandedLabel={matKey}
+      selected={study.active && selectedKey === 'materials'}
+      attrs={{ 'data-w18-materials': '1' }}
+      mark={assigned}
+      extra={
+        <button
+          type="button"
+          className="mat-plus"
+          id={study.active ? 'btn-materials-plus' : undefined}
+          data-w18-mat-plus={study.id}
+          title="Add material"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (study.scopeKey) onTreeAction(study.scopeKey, 'add-material');
+          }}
+        >
+          +
+        </button>
+      }
+    >
+      {materials.map((m) => {
+        const model = modelOf({ material_model: m.model }, study.analysisType);
+        const label = m.name || String(defaultPreset(model)?.name || '') || 'Material';
+        return (
+          <Node
+            key={m.id}
+            label={label}
+            expandedLabel={`${airKey}:${m.id}`}
+            selected={study.active && selectedKey === `air:${m.id}`}
+            attrs={{ 'data-w18-air': '1', 'data-w18-material-id': m.id }}
+            mark={m.volumes.length > 0}
+          >
+            {m.volumes.map((v) => (
+              <Node key={v} label={v} attrs={{ 'data-w18-assign': v, 'data-body-index': String(bodyIndexOf(v)) }} />
+            ))}
+          </Node>
+        );
+      })}
+    </Node>
+  );
+}
+
+/** "Body3" -> 3 (1 when the name has no number). */
+function bodyIndexOf(name: string): number {
+  const m = /(\d+)\s*$/.exec(name);
+  return m ? Number(m[1]) : 1;
+}
+
 function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: string | null }) {
   const skey = study.scopeKey || `study:${study.id}`;
   const matKey = study.scopeKey ? `${study.scopeKey}/item:materials` : `Materials:${study.id}`;
@@ -215,6 +285,8 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
   // Re-read when the registry arrives: a material with no name shows its model's default fluid.
   useProjectStore((s) => s.registry);
   const fluidLabel = study.materialName || defaultFluidName() || 'Fluid';
+  // Host API 1.8: an analysis with several material models lists each material of the study.
+  const several = hasSeveralMaterials(study.analysisType);
   const bcKey = study.scopeKey ? `${study.scopeKey}/item:bcs` : `Boundary conditions:${study.id}`;
   const meshKey = study.scopeKey ? `${study.scopeKey}/item:mesh` : `Mesh:${study.id}`;
   const simKey = study.scopeKey ? `${study.scopeKey}/item:simulation` : `Simulation:${study.id}`;
@@ -300,6 +372,9 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
       selected={study.active && selectedKey === 'study-settings'}
       attrs={{ 'data-w17-sim-id': study.id, 'data-w17-sim': '1', 'data-scope-key': study.scopeKey }}
     >
+      {several ? (
+        <SeveralMaterials study={study} matKey={matKey} airKey={airKey} selectedKey={selectedKey} />
+      ) : (
       <Node
         label="Materials"
         expandedLabel={matKey}
@@ -337,6 +412,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
           </Node>
         ) : null}
       </Node>
+      )}
       <Node
         label="Boundary conditions"
         expandedLabel={bcKey}

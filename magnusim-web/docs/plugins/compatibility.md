@@ -2,17 +2,29 @@
 
 The host loads a plugin whose `api_version` has the same major version as its own (`cfddesk.registry.API_VERSION`). A minor version adds things; it never removes or changes what an older minor version offered, so a `1.0` plugin loads unchanged on a `1.1` host. The one exception is a safety fix, listed under the version that made it (1.2 made `ws.data` paths stricter).
 
-## Frozen at 1.7
+## Frozen at 1.8
 
-The plugin API is frozen at host API 1.7 (workspace SDK 1.4.0, plugin UI kit 1.0.0, `magnusim_sdk` 1.3.0, analysis contract 1.5). Write plugins against it. What the freeze means:
+The plugin API is frozen at host API 1.8 (workspace SDK 1.4.0, plugin UI kit 1.1.0, `magnusim_sdk` 1.4.0, analysis contract 1.5). Write plugins against it. What the freeze means:
 
-1. Everything in [API.md](API.md) as of 1.7 stays: the manifest keys, the bridge calls and events, the kit's exports and props, the in-page host API, `magnusim_sdk`, the analysis contract, the fired hooks, and the refusal codes.
+1. Everything in [API.md](API.md) as of 1.8 stays: the manifest keys, the bridge calls and events, the kit's exports and props, the in-page host API, `magnusim_sdk`, the analysis contract, the fired hooks, and the refusal codes.
 2. A later change is a new minor version (1.8, 1.9, …), listed in its own section here. It only adds: a new key, call, field, prop, event or code. The host does not gate an addition by `api_version`: a plugin that declares 1.0 may use a 1.6 call on a 1.6 host. `plugin:check` warns when a manifest key is newer than the `api_version` a plugin declares. An older host ignores a manifest key it does not know and refuses a bridge call it does not have (`not_allowed`), so a page checks `ws.context.hostVersion` before it uses a newer call.
 3. An added field never changes what an existing one means. A new prop or option is optional, and leaving it out keeps the earlier behaviour.
 4. Nothing is removed or renamed without a new major version (2.0). A 1.x plugin is then listed as incompatible, never loaded half-working.
 5. A safety fix may make a check stricter (as 1.2 did for `ws.data` paths). It is listed under the version that made it, with what to change.
 6. A deprecated name keeps working until the next major version. It is listed here, under its version and in this list:
    - the panel id `panel-incompressible-defaults` (1.4): use `panel-study-settings`.
+
+## 1.8
+
+Host API 1.8 (`API_VERSION`, and `hostVersion` in a workspace's context), `magnusim_sdk` 1.4.0, plugin UI kit 1.1.0; the workspace SDK stays 1.4.0. A 1.7 plugin loads unchanged. For Magnusim v0.4.0 (the pieces the Heat Transfer plugin builds on).
+
+**Plugin exports.** A manifest key, `exports` (a list of `"package.module"`): modules of the plugin another plugin may import when its `requires_plugins` names this one. The boundary check (`tools/plugin_boundary.py` rule 4, and `plugin:check`) refuses an import of another plugin's module that is not exported, or whose exporter is not required, with the fix; an `exports` entry that is not a module of the plugin's own packages is the exporter's problem, and it then exports nothing.
+
+**BC fields from an analysis.** `AnalysisType.bc_fields` (`cfddesk.registry.BcFieldGroup`: `key`, `title`, `fields`, `families`, `ui`, `description`): fields an analysis adds to the BCs of its studies, in families another plugin may own. An analysis row gains `bc_fields` (`[{key, title, families, ui, description, schema}]`). The BC editor draws each group under the family's fields in studies of that analysis and saves it in the BC record (the BC route keeps keys it does not own). After every plugin registers, a group that names an unknown family, repeats a field, or uses a key the family or the host holds unloads its plugin (`analysis '<key>': bc_fields ...`). The page slot `bc-section` (`host.pluginUi.registerBcSection(name, Component)`, props `BcSectionProps`: `BcSettingsProps` and its `group`) draws a group named by its `ui`.
+
+**Several materials per study.** `MaterialModel.role` (`"fluid"` or `"solid"`; a material row gains `role`; another value unloads the plugin of an analysis that names the model). An analysis whose `material_models` lists more than one model lets a study hold several material records: the tree's study row gains `materials` (`[{id, name, model, volumes, lost?}]`) and `analysis_type`; the Materials panel edits a record by id (the tree row's `data-w18-material-id`), "+" makes a new one, and assigning a body takes it from another record in the same save. `materials.set` accepts `only_ids` (every record a save writes) beside `only_id`; `POST /api/materials {delete: true, material_id}` deletes one record. A run's inputs read every record of the study (folder records first), as readiness does. `cfddesk.project.regions.study_regions(project_dir, sim_id)` gives the regions (`[{name, role, material_id, material_name, model, bodies}]`, empty for an analysis with one model or a study with one material), and Generate refuses a study with more than one on a mesher without `multi_region` ("<Mesher> meshes every body as one fluid, but this simulation has N materials: …"). Body roles on the geometry are not written, so mesh fingerprints do not change. Incompressible Flow's fluid is its own model's record (`material_model` `newtonian_incompressible`, or none).
+
+**Units.** `magnusim_sdk.units` and the kit's tables gain `heat_flux`, `heat_transfer_coefficient`, `thermal_conductivity`, `specific_heat`, `power`, `power_density`, `thermal_expansion`, `acceleration`, `dynamic_viscosity` and `molar_mass` (SI unit first; an imperial unit each). Metric shows temperature in °C: `preferredUnit('temperature', false)` is `'°C'` (was `'K'`), the kit's new `METRIC_DEFAULT` holds what metric shows, and `SI_DEFAULT` stays the storage unit (K). `fieldUnit('temperature', units)` is °C or °F (was K in both). A schema form's temperature field has a K/°C/°F unit picker; the kit's `NumberUnitInput` gains `unitChoices` and `onUnit`. Values stay in SI.
 
 ## 1.7
 

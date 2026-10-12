@@ -6,6 +6,7 @@ import { SciNumberInput } from '../../forms/SciNumberInput';
 import {
   customPresetKey,
   defaultPreset,
+  hasSeveralMaterials,
   materialRecord,
   modelFor,
   presetByKey,
@@ -25,6 +26,7 @@ import { subscribeBodyPicks } from '../../viewer/pick';
 import { applyMaterial, deleteMaterial, geometryBodies, studyStateNow, subscribeStudyState, type StudyState } from '../legacyBridge';
 import { PanelChrome } from '../PanelChrome';
 import { scopeIds, useRegistryReady } from '../scope';
+import { MultiMaterialsPanel } from './MultiMaterialsPanel';
 
 export type { SavedMaterial } from '../../materialModel';
 
@@ -83,13 +85,26 @@ function useStudyState(): StudyState | null {
 }
 
 /**
+ * The Materials panels. A study whose analysis offers one material model edits
+ * its one fluid; one whose analysis offers several (host API 1.8, e.g. fluids
+ * and solids) holds one material per group of bodies.
+ */
+export function MaterialsPanel(props: IslandProps) {
+  const registry = useRegistryReady();
+  const study = useStudyState();
+  const studyKey = study && (!props.simId || !study.id || study.id === props.simId) ? study.analysis_type : '';
+  if (registry && studyKey && hasSeveralMaterials(studyKey)) return <MultiMaterialsPanel {...props} analysisKey={studyKey} />;
+  return <FluidPanel {...props} />;
+}
+
+/**
  * Materials → the study's fluid. The Fluid list, the property rows and what a
  * save writes come from the study's material model (its registry row): a
  * preset loads its values, the custom preset keeps the numbers to edit under
  * its own name. Values save on change; a body clicked here, in the viewport or
  * in the tree toggles its assignment.
  */
-export function MaterialsPanel(props: IslandProps) {
+function FluidPanel(props: IslandProps) {
   const registry = useRegistryReady();
   const study = useStudyState();
   const studyKey = study && (!props.simId || !study.id || study.id === props.simId) ? study.analysis_type : '';

@@ -24,6 +24,7 @@ export {
   UNITS,
   IMPERIAL_DEFAULT,
   SI_DEFAULT,
+  METRIC_DEFAULT,
   type Quantity,
   type UnitSystem,
 } from '../units';
