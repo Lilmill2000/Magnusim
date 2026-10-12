@@ -34,6 +34,7 @@ import { envGet } from './env-compat.js';
 import { writeJsonCli } from './py-json.js';
 import { MESH_ENGINES, mesherEngineOf, mesherKeys } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc } from './mesh-live-slim.js';
+import { plainMeshFailure } from './mesh-failure.js';
 import { assembleMeshDoc, persistMeshDoc, persistOneMesh, meshCasePath, meshFolderOf } from './study-io.js';
 import { buildStampOf, generateRev, linkStartRefusal, writeBuildStamp } from './link-build.js';
 import { findGeometry, findStudy, walkGeometries } from './project-layout.js';
@@ -526,6 +527,89 @@ export function closeAfterExit(child, { graceMs = ORPHAN_PIPE_GRACE_MS, onOrphan
     }, graceMs);
     if (timer.unref) timer.unref();
   });
+}
+
+/** How often, and how long after its generator is gone, watchGeneratorGone ends a job. */
+const GONE_POLL_MS = 2000;
+const GONE_GRACE_MS = ORPHAN_PIPE_GRACE_MS + 4000;
+
+/**
+ * The last guard against a mesh that shows "meshing" for ever: when the generator is
+ * gone (it exited, crashed or was killed) and its 'close' has still not come a grace
+ * later (closeAfterExit normally brings it within ORPHAN_PIPE_GRACE_MS), drop the pipes
+ * and send 'close' with its exit code, so the job ends failed and frees the slot.
+ * @param {import('node:child_process').ChildProcess} child
+ * @param {{ pollMs?: number, graceMs?: number, alive?: (child: any) => boolean }} [opts]
+ * @returns {() => void} stops the watch
+ */
+export function watchGeneratorGone(child, { pollMs = GONE_POLL_MS, graceMs = GONE_GRACE_MS, alive = liveChildIsRunning } = {}) {
+  let closed = false;
+  let goneAt = 0;
+  const timer = setInterval(() => {
+    // Never spawned: its 'error' handler already ended the job.
+    if (closed || !child.pid) {
+      clearInterval(timer);
+      return;
+    }
+    if (alive(child)) {
+      goneAt = 0;
+      return;
+    }
+    if (!goneAt) {
+      goneAt = Date.now();
+      return;
+    }
+    if (Date.now() - goneAt < graceMs) return;
+    clearInterval(timer);
+    for (const stream of [child.stdout, child.stderr]) {
+      try {
+        if (stream) stream.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!closed) child.emit('close', child.exitCode ?? null, child.signalCode ?? null);
+  }, pollMs);
+  if (timer.unref) timer.unref();
+  child.once('close', () => {
+    closed = true;
+    clearInterval(timer);
+  });
+  return () => clearInterval(timer);
+}
+
+/** Record a generate's end and tell its job; a failed write must not leave the job "running". */
+function reportMeshEnd(projectId, terminal, onUpdate) {
+  try {
+    persistMeshResult(projectId, terminal);
+  } catch (e) {
+    console.warn('[CFD] mesh result write', e);
+  }
+  try {
+    onUpdate(terminal);
+  } catch (e) {
+    console.warn('[CFD] mesh result update', e);
+  }
+  scheduleComputeQueueKick(250);
+}
+
+/**
+ * Run a generate's close handler once (a 'close' from watchGeneratorGone may be followed
+ * by the real one). If it throws before it reports the end, onCloseError reports it.
+ * @param {(code: number | null, signal: string | null) => void} onClose
+ * @param {(code: number | null, signal: string | null, err: unknown) => void} onCloseError
+ */
+function closeOnce(onClose, onCloseError) {
+  let done = false;
+  return (code, signal) => {
+    if (done) return;
+    done = true;
+    try {
+      onClose(code, signal);
+    } catch (err) {
+      onCloseError(code, signal, err);
+    }
+  };
 }
 
 /** Kill what a dead generator left behind, unless a new generate already owns that case folder. */
@@ -1242,6 +1326,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     onUpdate,
   });
   closeAfterExit(child, { onOrphaned: () => reapAfterDeadGenerator(job, winOut) });
+  watchGeneratorGone(child);
   // The registry key that was picked (a plugin mesher runs through its engine's path).
   const meshBackend = resolveMeshBackend(settings);
   jobLog.info('spawn', { pid: child.pid || null, path_kind: pathKind, engine, mesh_backend: meshBackend });
@@ -1300,10 +1385,15 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   persistMeshResult(project_id, baseRunning);
 
   let lastStage = null;
+  // The model's length unit in metres (step_loaded): where a failure is, in the user's units.
+  let scaleToMetres = null;
   const flushParsedLine = (line) => {
     const parsed = parseCfmeshLine(line);
     if (!parsed) return;
     if (parsed.kind === 'result') lastResult = parsed.data;
+    if (parsed.kind === 'progress' && parsed.data && Number(parsed.data.scale_to_metres) > 0) {
+      scaleToMetres = Number(parsed.data.scale_to_metres);
+    }
     if (parsed.kind === 'progress' && parsed.data && parsed.data.stage) {
       const stage = String(parsed.data.stage);
       const detail = parsed.data.msg ? String(parsed.data.msg) : null;
@@ -1348,9 +1438,13 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
     scheduleComputeQueueKick(250);
   });
 
+  /** The reason a failed generate shows (see mesh-failure.js). */
+  const failureText = () =>
+    plainMeshFailure({ error: lastResult && lastResult.error, log: out.text(), scaleToMetres, gotResult: !!lastResult });
+
   // Decide on 'close' (not 'exit'): exit can fire while the final JSON result
   // chunk is still in the pipe; close waits until stdout/stderr are fully drained.
-  child.on('close', (code, signal) => {
+  const onClose = (code, signal) => {
     out.flushCarry();
     if (liveJob && liveJob.child === child) liveJob = null;
     if (job.stop_requested) {
@@ -1417,7 +1511,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
             ? 'cancelled'
             : exit_code === 75
               ? 'Volume fill timed out. Reduce inflate thickness or fineness and generate again.'
-              : (lastResult && lastResult.error) || `exit ${exit_code}`,
+              : failureText(),
       hex_core_applied: lastResult && lastResult.hex_core != null ? !!lastResult.hex_core : hexCore,
       layers_applied: lastResult && lastResult.layers_applied != null ? !!lastResult.layers_applied : null,
       surface_size_m: (lastResult && lastResult.surface_size_m) || null,
@@ -1431,9 +1525,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
               ? 'Volume fill timed out. Reduce inflate thickness or fineness and generate again.'
               : `${engineLabel} mesh failed (exit ${exit_code}${lastResult && lastResult.error ? ': ' + lastResult.error : ''}).`,
     };
-    persistMeshResult(project_id, terminal);
-    onUpdate(terminal);
-    scheduleComputeQueueKick(250);
+    reportMeshEnd(project_id, terminal, onUpdate);
     setImmediate(() => {
       if (job.stop_requested) return;
       let fingerprint_after = null;
@@ -1451,7 +1543,32 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
         } catch (_) {}
       }
     });
-  });
+  };
+  child.on(
+    'close',
+    closeOnce(onClose, (code, signal, err) => {
+      if (liveJob && liveJob.child === child) liveJob = null;
+      const exit_code = code == null ? (signal ? -2 : -1) : code;
+      out.note(`\nCLOSE_ERROR: ${err}\n`);
+      reportMeshEnd(
+        project_id,
+        {
+          ...baseRunning,
+          status: 'failed',
+          exit_code: exit_code || 1,
+          finished_at: new Date().toISOString(),
+          log_excerpt: out.text().slice(-4000),
+          script_result: lastResult,
+          stage: 'failed',
+          stage_detail: null,
+          error: failureText(),
+          signal: signal || null,
+          note: `${engineLabel} mesh failed (exit ${exit_code}).`,
+        },
+        onUpdate,
+      );
+    }),
+  );
 
   return {
     ok: true,
@@ -1712,6 +1829,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
     onUpdate,
   });
   closeAfterExit(child, { onOrphaned: () => reapAfterDeadGenerator(job, winOut) });
+  watchGeneratorGone(child);
   const meshBackend = resolveMeshBackend(settingsEarly);
   jobLog.info('spawn', { pid: child.pid || null, path_kind: PATH_SNAPPY, mesh_backend: meshBackend });
   try {
@@ -1803,7 +1921,10 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   child.stdout?.on('data', out.add);
   child.stderr?.on('data', out.add);
 
-  child.on('close', (code) => {
+  const failureText = () =>
+    plainMeshFailure({ error: lastResult && lastResult.error, log: out.text(), gotResult: !!lastResult });
+
+  const onClose = (code) => {
     out.flushCarry();
     if (liveJob && liveJob.child === child) liveJob = null;
     if (job.stop_requested) {
@@ -1867,7 +1988,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
           ? null
           : status === 'stopped'
             ? 'cancelled'
-            : (lastResult && lastResult.error) || `generate_snappy exit ${exit_code}`,
+            : failureText(),
       note:
         status === 'done'
           ? `Hex-dominant snappy done (exit ${exit_code}). cells=${counts.n_cells} points=${counts.n_points}.`
@@ -1877,9 +1998,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       log_excerpt: out.text().slice(-4000),
       mtp1_silent_copy: false,
     };
-    persistMeshResult(project_id, terminal);
-    onUpdate(terminal);
-    scheduleComputeQueueKick(250);
+    reportMeshEnd(project_id, terminal, onUpdate);
     setImmediate(() => {
       if (job.stop_requested) return;
       let fingerprint_after = null;
@@ -1897,7 +2016,30 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
         } catch (_) {}
       }
     });
-  });
+  };
+  child.on(
+    'close',
+    closeOnce(onClose, (code, signal, err) => {
+      if (liveJob && liveJob.child === child) liveJob = null;
+      const exit_code = code == null ? 1 : code;
+      out.note(`\nCLOSE_ERROR: ${err}\n`);
+      reportMeshEnd(
+        project_id,
+        {
+          ...baseRunning,
+          status: 'failed',
+          exit_code: exit_code || 1,
+          finished_at: new Date().toISOString(),
+          log_excerpt: out.text().slice(-4000),
+          stage: 'failed',
+          error: failureText(),
+          note: `Hex-dominant snappy failed (exit ${exit_code}).`,
+          mtp1_silent_copy: false,
+        },
+        onUpdate,
+      );
+    }),
+  );
 
   return {
     ok: true,

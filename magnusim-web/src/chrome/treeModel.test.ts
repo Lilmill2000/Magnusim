@@ -166,6 +166,18 @@ describe('readSetupTree job marks', () => {
     expect(study.meshes.find((m) => m.id === 'mesh_1')).toMatchObject({ busy: false, ready: true });
   });
 
+  it('marks a mesh whose last generate failed, and never while it generates again', () => {
+    const doc = treeDoc();
+    doc.geometries![0].studies![0].meshes![1].live_status = 'failed';
+    const idle = readSetupTree(doc, activity({ kind: null, mesh_id: null })).geoms[0].studies[0];
+    expect(idle.meshes.find((m) => m.id === 'mesh_2')).toMatchObject({ busy: false, ready: false, failed: true });
+    expect(idle.meshes.find((m) => m.id === 'mesh_1')?.failed).toBeUndefined();
+    // Generate again: the page's live job is that mesh (the record still says failed).
+    const again = readSetupTree(doc, activity()).geoms[0].studies[0];
+    expect(again.meshes.find((m) => m.id === 'mesh_2')).toMatchObject({ busy: true });
+    expect(again.meshes.find((m) => m.id === 'mesh_2')?.failed).toBeUndefined();
+  });
+
   it('does not mark a finished mesh busy when a solve is the live job', () => {
     const doc = treeDoc();
     doc.geometries![0].studies![0].meshes![0].live_status = 'running';

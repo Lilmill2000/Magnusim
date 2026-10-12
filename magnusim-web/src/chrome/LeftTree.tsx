@@ -166,6 +166,10 @@ function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: b
           <span className="tree-sub" data-mesh-out-of-date="1" title="Made from an older version of its geometry. Generate it again.">
             Out of date
           </span>
+        ) : mesh.failed ? (
+          <span className="tree-sub" data-mesh-failed="1" title="The last Generate failed. Open the mesh to see why.">
+            Failed
+          </span>
         ) : undefined
       }
     >
