@@ -17107,16 +17107,15 @@ function publishMeshJobState() {
   // The shown mesh's record says its last generate failed (after a reload, or a job this
   // tab did not follow): the panel says so, with the reason, until it generates again.
   const recLive = getLiveMeshResult();
-  const recMesh = getLiveMeshDoc();
-  const recFailed = !!(
-    recLive &&
-    recLive.status === 'failed' &&
-    !meshReady &&
-    !queuedRow &&
-    recMesh &&
-    (!viewId || String(recMesh.id) === String(viewId)) &&
-    !((mine || thisLive) && (jobStatus === 'running' || computeLive))
-  );
+  const recKey = meshFailureKey(typeof currentStudyId === 'function' ? currentStudyId() : '', viewId);
+  const recError = meshFailureMap().has(recKey)
+    ? meshFailureMap().get(recKey)
+    : recLive && recLive.status === 'failed'
+      ? String(recLive.error || '')
+      : null;
+  // Not while this mesh has a job of its own (generating, or finishing a new mesh).
+  const ownJobLive = (mine || thisLive) && (jobStatus === 'running' || jobStatus === 'done' || computeLive);
+  const recFailed = !!(viewId && recError != null && !meshReady && !queuedRow && !ownJobLive);
   const failed = (jobStatus === 'failed' && meshJob && mine) || recFailed;
   // jobState also carries solves: a finished run must not read as "Finishing mesh"
   // on a mesh that was never generated. Only this mesh's own mesh job counts.
@@ -17153,7 +17152,7 @@ function publishMeshJobState() {
     bits.push(...reportBits(row, result, formatMetres));
   }
   const jobFailed = jobStatus === 'failed' && meshJob && mine;
-  const failText = jobFailed ? jobState.error : recFailed ? recLive.error : '';
+  const failText = jobFailed ? jobState.error : recFailed ? recError : '';
   const err = failed && failText ? String(failText).split('\n')[0].slice(0, 400) : '';
   const startMs = jobState.started_at ? Date.parse(jobState.started_at) : NaN;
   const endMs = jobState.finished_at ? Date.parse(jobState.finished_at) : NaN;
@@ -17849,18 +17848,45 @@ window.__CFD_W15_APPLY__ = async function applyW15(partial) {
 };
 
 
+/**
+ * Each mesh's last failed generate ("study|mesh" -> its reason), from the server's records.
+ * Made on first use: the Mesh panel can publish before this part of the module has run.
+ */
+function meshFailureMap() {
+  if (!meshFailureMap.map) meshFailureMap.map = new Map();
+  return meshFailureMap.map;
+}
+
+function meshFailureKey(sid, meshId) {
+  return String(sid || '') + '|' + String(meshId || '');
+}
+
+function noteMeshFailures(list, sid) {
+  for (const m of list || []) {
+    if (!m || !m.id || !Object.prototype.hasOwnProperty.call(m, 'live_mesh_result')) continue;
+    const key = meshFailureKey(m.simulation_id || sid, m.id);
+    const live = m.live_mesh_result;
+    if (live && live.status === 'failed') meshFailureMap().set(key, String(live.error || ''));
+    else meshFailureMap().delete(key);
+  }
+}
+
 /** Generates (by kick id) this page has seen end: a late "running" answer never revives one. */
-const endedMeshKicks = new Set();
+function endedMeshKicks() {
+  if (!endedMeshKicks.set) endedMeshKicks.set = new Set();
+  return endedMeshKicks.set;
+}
 
 function rememberEndedMeshKick(kick) {
   if (!kick) return;
-  endedMeshKicks.add(String(kick));
-  if (endedMeshKicks.size > 50) endedMeshKicks.delete(endedMeshKicks.values().next().value);
+  const ended = endedMeshKicks();
+  ended.add(String(kick));
+  if (ended.size > 50) ended.delete(ended.values().next().value);
 }
 
 function meshKickEnded(j) {
   const kick = j && (j.kick_id || j.generate_id);
-  return !!kick && endedMeshKicks.has(String(kick));
+  return !!kick && endedMeshKicks().has(String(kick));
 }
 
 function applyCaseSnapToJob(j) {
@@ -18006,6 +18032,7 @@ function endWatchedMeshJob(status, error, first) {
   if (!jobState.finished_at) jobState.finished_at = new Date().toISOString();
   const meshId = jobState.mesh_id || null;
   try { clearLiveCompute('mesh'); } catch (_) {}
+  if (meshId) meshFailureMap().set(meshFailureKey(jobState.simulation_id, meshId), String(jobState.error || ''));
   if (meshId) {
     updateMeshListEntry(meshId, {
       generated: false,
@@ -18118,6 +18145,9 @@ function startJobPoll() {
         if (isMeshJobKind(snap.path_kind || jobState.path_kind)) {
           const finishedId = jobState.mesh_id || null;
           if (finishedId) {
+            const failKey = meshFailureKey(jobState.simulation_id, finishedId);
+            if (snap.status === 'failed') meshFailureMap().set(failKey, String(snap.error || jobState.error || ''));
+            else meshFailureMap().delete(failKey);
             updateMeshListEntry(finishedId, {
               generated: snap.status === 'done',
               n_cells: snap.n_cells,
@@ -27516,6 +27546,10 @@ function applyMeshRecord(doc, projectId, opts) {
   const meshSid =
     (doc && doc.simulation_id) ||
     (typeof currentStudyId === 'function' ? currentStudyId() : null);
+  try {
+    const one = doc && doc.mesh && doc.mesh.id ? [doc.mesh] : [];
+    noteMeshFailures([].concat(listedAll || [], (doc && doc.meshes) || [], one), meshSid);
+  } catch (_) {}
   if (listedAll) {
     meshCatalog.meshes_all = adoptStudyTaggedList(
       meshCatalog.meshes_all,
