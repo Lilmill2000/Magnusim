@@ -1,36 +1,56 @@
 // Draws the tunnel on a WebGPU canvas: the displayed field through a colour map (the
-// app's colour maps, from the UI kit), the absorbing zones tinted, and the bodies filled
-// and outlined from their distance fields (smooth at any zoom).
+// app's colour maps, from the UI kit) or a plain background, the absorbing zones tinted,
+// the dye, the particles' trail texture, velocity arrows and the bodies (filled and
+// outlined from their distance fields, smooth at any zoom); then anything drawn into the
+// same pass after it (the streamlines).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { colormapRgb, type ColormapName } from '@magnusim/plugin-ui';
 import { renderShader } from '../sim/kernels';
 import type { Solver } from '../sim/solver';
 
 export interface ViewXform {
-  /** Lattice cells per CSS pixel... per device pixel. */
+  /** Lattice cells per device pixel. */
   scale: number;
   /** Lattice coordinates of the canvas's top-left device pixel. */
   ox: number;
   oy: number;
 }
 
+type RGB = [number, number, number];
+type RGBA = [number, number, number, number];
+
 export interface Palette {
-  bg: [number, number, number];
-  body: [number, number, number];
-  edge: [number, number, number];
-  zone: [number, number, number, number];
+  bg: RGB;
+  body: RGB;
+  edge: RGB;
+  zone: RGBA;
+  /** The background when no field is shown (particles and dye on their own). */
+  plain: RGB;
+  arrow: RGBA;
+}
+
+export interface Overlays {
+  plain: boolean;
+  arrows: boolean;
+  /** Arrow grid spacing (cells). */
+  arrowCells: number;
+  /** Lattice inflow speed (arrow length scale). */
+  uRef: number;
+  dye: GPUBuffer | null;
+  dyeColors: RGBA[];
+  trail: GPUTexture | null;
 }
 
 export class Renderer {
   private device: GPUDevice;
   private ctx: GPUCanvasContext;
-  private format: GPUTextureFormat;
+  readonly format: GPUTextureFormat;
   private pipe: GPURenderPipeline;
   private viewBuf: GPUBuffer;
   private lutBuf: GPUBuffer;
   private lutName = '';
-  private bg: GPUBindGroup | null = null;
-  private bgSolver: Solver | null = null;
+  private dummyBuf: GPUBuffer;
+  private dummyTex: GPUTexture;
 
   constructor(device: GPUDevice, canvas: HTMLCanvasElement) {
     this.device = device;
@@ -46,8 +66,10 @@ export class Renderer {
       fragment: { module, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list' },
     });
-    this.viewBuf = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.viewBuf = device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.lutBuf = device.createBuffer({ size: 256 * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.dummyBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE });
+    this.dummyTex = device.createTexture({ size: [1, 1], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
   }
 
   setColormap(name: ColormapName) {
@@ -66,42 +88,57 @@ export class Renderer {
     this.lutName = name;
   }
 
-  encode(enc: GPUCommandEncoder, solver: Solver, view: ViewXform, range: { lo: number; hi: number }, pal: Palette) {
-    if (!this.bg || this.bgSolver !== solver || solver.renderBGDirty) {
-      const b = solver.buffers;
-      this.bg = this.device.createBindGroup({
-        layout: this.pipe.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: b.scalar } },
-          { binding: 1, resource: { buffer: this.viewBuf } },
-          { binding: 2, resource: { buffer: b.params } },
-          { binding: 3, resource: { buffer: b.bodies } },
-          { binding: 4, resource: { buffer: b.sdf } },
-          { binding: 5, resource: { buffer: this.lutBuf } },
-        ],
-      });
-      this.bgSolver = solver;
-      solver.renderBGDirty = false;
-    }
-    const v = new Float32Array(28);
-    v.set([view.scale, view.ox, view.oy, range.lo, range.hi, solver.nx, solver.ny, solver.absorbInX, solver.spongeX, 0, 0, 0]);
-    v.set([...pal.bg, 1], 12);
-    v.set([...pal.body, 1], 16);
-    v.set([...pal.edge, 1], 20);
-    v.set(pal.zone, 24);
-    this.device.queue.writeBuffer(this.viewBuf, 0, v);
+  /** The canvas's size in device pixels. */
+  get size() {
+    const t = this.ctx.getCurrentTexture();
+    return { w: t.width, h: t.height };
+  }
+
+  encode(enc: GPUCommandEncoder, solver: Solver, view: ViewXform, range: { lo: number; hi: number }, pal: Palette, ov: Overlays, after?: (pass: GPURenderPassEncoder) => void) {
+    const b = solver.buffers;
+    const bg = this.device.createBindGroup({
+      layout: this.pipe.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: b.scalar } },
+        { binding: 1, resource: { buffer: this.viewBuf } },
+        { binding: 2, resource: { buffer: b.params } },
+        { binding: 3, resource: { buffer: b.bodies } },
+        { binding: 4, resource: { buffer: b.sdf } },
+        { binding: 5, resource: { buffer: this.lutBuf } },
+        { binding: 6, resource: { buffer: solver.macroBuf } },
+        { binding: 7, resource: { buffer: ov.dye ?? this.dummyBuf } },
+        { binding: 8, resource: (ov.trail ?? this.dummyTex).createView() },
+      ],
+    });
+    const flags = (ov.plain ? 1 : 0) | (ov.arrows ? 2 : 0) | (ov.dye ? 4 : 0) | (ov.trail ? 8 : 0);
+    const d = new ArrayBuffer(208);
+    const f = new Float32Array(d);
+    const u = new Uint32Array(d);
+    f.set([view.scale, view.ox, view.oy, range.lo, range.hi, solver.nx, solver.ny, solver.absorbInX, solver.spongeX, ov.uRef, ov.arrowCells]);
+    u[11] = flags;
+    f.set([...pal.bg, 1], 12);
+    f.set([...pal.body, 1], 16);
+    f.set([...pal.edge, 1], 20);
+    f.set(pal.zone, 24);
+    f.set([...pal.plain, 1], 28);
+    f.set(pal.arrow, 32);
+    for (let c = 0; c < 4; c++) f.set(ov.dyeColors[c] ?? [0, 0, 0, 0], 36 + 4 * c);
+    this.device.queue.writeBuffer(this.viewBuf, 0, d);
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: pal.bg[0], g: pal.bg[1], b: pal.bg[2], a: 1 } }],
     });
     pass.setPipeline(this.pipe);
-    pass.setBindGroup(0, this.bg);
+    pass.setBindGroup(0, bg);
     pass.draw(3);
+    after?.(pass);
     pass.end();
   }
 
   destroy() {
     this.viewBuf.destroy();
     this.lutBuf.destroy();
+    this.dummyBuf.destroy();
+    this.dummyTex.destroy();
     this.ctx.unconfigure();
   }
 }

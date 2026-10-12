@@ -148,6 +148,7 @@ const FIELD_OPTIONS: { value: FieldMode; label: string }[] = [
   { value: 'speed', label: 'Speed' },
   { value: 'pressure', label: 'Pressure (Cp)' },
   { value: 'schlieren', label: 'Density gradient (schlieren)' },
+  { value: 'none', label: 'None (markers on a dark background)' },
 ];
 
 export function ViewPanel({ store }: { store: Store }) {

@@ -47,9 +47,19 @@ export class Store {
       if (this.past.length > HISTORY) this.past.shift();
       this.future = [];
     }
-    const selected = this.state.selected && scene.bodies.some((b) => b.id === this.state.selected) ? this.state.selected : null;
+    // The selection survives a change while its body or rake is still there.
+    const sel = this.state.selected;
+    const selected = sel && (scene.bodies.some((b) => b.id === sel) || scene.rakes.some((r) => r.id === sel)) ? sel : null;
     this.set({ scene, selected });
     this.onSceneChange?.(scene);
+  }
+
+  /** End of a live drag: `next` is the scene, `before` the one Undo goes back to. */
+  commitFrom(before: Scene, next: Scene) {
+    this.past.push(before);
+    if (this.past.length > HISTORY) this.past.shift();
+    this.future = [];
+    this.commit(next, false);
   }
 
   updateBody(id: string, patch: Partial<Body>, undoable = true) {

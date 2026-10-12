@@ -15,6 +15,13 @@
   /* Selection and the pose a dragged body is going to */
   --t2d-select: #1570ef;
   --t2d-ghost: #475467;
+  /* Flow markers: tracers on a field (dark) and on the plain background (light); the plain
+     background itself (a smoke tunnel's dark); streamlines and arrows on a field */
+  --t2d-particle-dark: #1a1d24;
+  --t2d-particle-light: #e8edf5;
+  --t2d-plain: #121823;
+  --t2d-streamline: #1a1d24;
+  --t2d-arrow: #1a1d24;
   --t2d-panel-w: 272px;
   --t2d-panel-right-w: 284px;
 }

@@ -7,7 +7,7 @@ import { useEffect, useRef } from 'react';
 import { contains, transform, type Poly } from '../geometry/polygon';
 import { outline } from '../geometry/shapes';
 import type { Engine } from '../sim/engine';
-import type { Body, Scene } from '../scene/scene';
+import type { Body, Rake, Scene } from '../scene/scene';
 import type { Store } from '../app/store';
 
 const HANDLE_GAP_PX = 26;
@@ -30,6 +30,7 @@ export function worldOutline(b: Body, pose: { x: number; y: number; angle: numbe
 }
 
 type Drag =
+  | { kind: 'rake'; id: string; part: 'all' | 'start' | 'end'; startX: number; startY: number; r0: Rake; before: Scene }
   | { kind: 'move'; id: string; startX: number; startY: number; bodyX: number; bodyY: number; angle: number; moved: boolean }
   | { kind: 'turn'; id: string; startAngle: number; pointerStart: number; angle: number; x: number; y: number }
   | { kind: 'pan'; startX: number; startY: number; cx: number; cy: number };
@@ -140,9 +141,46 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
       g.clearRect(0, 0, v.w, v.h);
       const { scene, selected } = store.get();
       const d = drag.current;
+      for (const r of scene.rakes) {
+        const color = css.getPropertyValue(`--mg-series-${(r.color % 6) + 1}`).trim() || sel;
+        const a = toScreen(r.x0, r.y0);
+        const b = toScreen(r.x1, r.y1);
+        const isSel = r.id === selected;
+        g.globalAlpha = r.enabled ? 1 : 0.45;
+        g.beginPath();
+        g.moveTo(a.x, a.y);
+        g.lineTo(b.x, b.y);
+        g.strokeStyle = color;
+        g.lineWidth = isSel ? 3 : 2;
+        g.setLineDash(r.kind === 'timelines' ? [6, 4] : []);
+        g.stroke();
+        g.setLineDash([]);
+        if (r.kind !== 'timelines') {
+          g.fillStyle = color;
+          for (let e = 0; e < r.emitters; e++) {
+            const t = r.emitters === 1 ? 0.5 : e / (r.emitters - 1);
+            g.beginPath();
+            g.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 2.5, 0, Math.PI * 2);
+            g.fill();
+          }
+        }
+        if (isSel) {
+          for (const p of [a, b]) {
+            g.fillStyle = handleFill;
+            g.strokeStyle = color;
+            g.lineWidth = 2;
+            g.fillRect(p.x - 5, p.y - 5, 10, 10);
+            g.strokeRect(p.x - 5, p.y - 5, 10, 10);
+          }
+        }
+        g.globalAlpha = 1;
+      }
       for (const b of scene.bodies) {
         const isSel = b.id === selected;
-        const target = d && 'id' in d && d.id === b.id ? { x: d.kind === 'move' ? d.bodyX : d.x, y: d.kind === 'move' ? d.bodyY : d.y, angle: d.angle } : null;
+        const target =
+          d && (d.kind === 'move' || d.kind === 'turn') && d.id === b.id
+            ? { x: d.kind === 'move' ? d.bodyX : d.x, y: d.kind === 'move' ? d.bodyY : d.y, angle: d.angle }
+            : null;
         const pose = poseOf(b);
         const path = (poly: Poly) => {
           g.beginPath();
@@ -214,6 +252,29 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
     return null;
   };
 
+  /** The rake (and which part of it) under a screen point: an end of the selected rake, or the line. */
+  const hitRake = (cx: number, cy: number): { rake: Rake; part: 'all' | 'start' | 'end' } | null => {
+    const r0 = wrap.current!.getBoundingClientRect();
+    const px = cx - r0.left;
+    const py = cy - r0.top;
+    const { scene, selected } = store.get();
+    for (let i = scene.rakes.length - 1; i >= 0; i--) {
+      const r = scene.rakes[i];
+      const a = toScreen(r.x0, r.y0);
+      const b = toScreen(r.x1, r.y1);
+      if (r.id === selected) {
+        if (Math.hypot(px - a.x, py - a.y) <= 8) return { rake: r, part: 'start' };
+        if (Math.hypot(px - b.x, py - b.y) <= 8) return { rake: r, part: 'end' };
+      }
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const l2 = dx * dx + dy * dy;
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / l2)) : 0;
+      if (Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy)) <= 6) return { rake: r, part: 'all' };
+    }
+    return null;
+  };
+
   const clampToTunnel = (x: number, y: number) => {
     const t = store.get().scene.tunnel;
     return { x: Math.min(t.length, Math.max(0, x)), y: Math.min(t.height, Math.max(0, y)) };
@@ -240,6 +301,12 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
         return;
       }
     }
+    const rk = hitRake(e.clientX, e.clientY);
+    if (rk) {
+      store.select(rk.rake.id);
+      drag.current = { kind: 'rake', id: rk.rake.id, part: rk.part, startX: w.x, startY: w.y, r0: rk.rake, before: store.get().scene };
+      return;
+    }
     const hit = hitBody(w.x, w.y);
     if (hit) {
       store.select(hit.id);
@@ -254,8 +321,20 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
     const d = drag.current;
     if (!d) {
       const w = toWorld(e.clientX, e.clientY);
-      const hit = hitBody(w.x, w.y);
-      wrap.current!.style.cursor = hit && !hit.locked ? 'grab' : 'default';
+      const rk = hitRake(e.clientX, e.clientY);
+      const hit = rk ? null : hitBody(w.x, w.y);
+      wrap.current!.style.cursor = rk ? (rk.part === 'all' ? 'move' : 'crosshair') : hit && !hit.locked ? 'grab' : 'default';
+      return;
+    }
+    if (d.kind === 'rake') {
+      const w = toWorld(e.clientX, e.clientY);
+      const ddx = w.x - d.startX;
+      const ddy = w.y - d.startY;
+      const r = d.r0;
+      const s0 = clampToTunnel(r.x0 + (d.part === 'end' ? 0 : ddx), r.y0 + (d.part === 'end' ? 0 : ddy));
+      const s1 = clampToTunnel(r.x1 + (d.part === 'start' ? 0 : ddx), r.y1 + (d.part === 'start' ? 0 : ddy));
+      const s = store.get().scene;
+      store.commit({ ...s, rakes: s.rakes.map((x) => (x.id === d.id ? { ...x, x0: s0.x, y0: s0.y, x1: s1.x, y1: s1.y } : x)) }, false);
       return;
     }
     if (d.kind === 'pan') {
@@ -291,6 +370,11 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
     drag.current = null;
     onStatus?.('');
     if (!d || d.kind === 'pan') return;
+    if (d.kind === 'rake') {
+      const now = store.get().scene;
+      if (now !== d.before) store.commitFrom(d.before, now);
+      return;
+    }
     if (d.kind === 'move' && d.moved) store.updateBody(d.id, { x: d.bodyX, y: d.bodyY });
     if (d.kind === 'turn') store.updateBody(d.id, { angle: d.angle });
     engine.setTarget(d.id, null);

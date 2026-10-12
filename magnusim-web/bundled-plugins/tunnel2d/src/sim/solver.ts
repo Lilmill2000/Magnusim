@@ -42,7 +42,8 @@ export interface FrameResult {
   badCell: { x: number; y: number } | null;
 }
 
-export const FIELD_MODES = { vorticity: 0, speed: 1, pressure: 2, schlieren: 3 } as const;
+/** The field pass's mode per view ('none' draws a plain background; its field is not shown). */
+export const FIELD_MODES = { vorticity: 0, speed: 1, pressure: 2, schlieren: 3, none: 1 } as const;
 const SAMPLE_STRIDE = 4;
 
 export class Solver {

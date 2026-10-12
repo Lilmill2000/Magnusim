@@ -7,8 +7,11 @@ import { outline, referenceLength } from '../geometry/shapes';
 import { bakeSdf, type SdfGrid } from '../geometry/sdf';
 import { radius, transform } from '../geometry/polygon';
 import { Renderer, type Palette, type ViewXform } from '../render/renderer';
-import { FLUIDS, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
+import { FLUIDS, LIMITS, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
+import { Dye, type DyeSource } from './dye';
 import { MAX_BODIES, MAX_STEPS } from './kernels';
+import { Particles, type RakeGpu } from './particles';
+import { Streamlines } from './streamlines';
 import { FIELD_MODES, Solver, type FrameResult, type GpuBody } from './solver';
 import { SMAG_CS, latticeMap, reynolds, type LatticeMap } from './units';
 
@@ -26,7 +29,27 @@ export const SPIN_TIP_MAX = 0.1;
 /** Target GPU time per frame (ms) when running as fast as possible. */
 const FRAME_BUDGET_MS = 12;
 
-export const FIELD_COLORMAP: Record<FieldMode, ColormapName> = { vorticity: 'balance', speed: 'viridis', pressure: 'balance', schlieren: 'viridis' };
+export const FIELD_COLORMAP: Record<FieldMode, ColormapName> = { vorticity: 'balance', speed: 'viridis', pressure: 'balance', schlieren: 'viridis', none: 'viridis' };
+
+/** Tracer particles per lattice cell, by density. */
+const TRACERS_PER_CELL = { low: 1 / 1500, normal: 1 / 500, high: 1 / 150 } as const;
+/** A GPU slower than this (million cell updates a second) gets at most LOW_GPU_TRACERS. */
+const LOW_GPU_MLUPS = 3000;
+const LOW_GPU_TRACERS = 60_000;
+/** How much of the trail stays from one frame to the next. */
+const TRAIL_KEEP = { off: 0, short: 0.6, long: 0.9 } as const;
+/** Spacing of the velocity arrows and of the streamlines' seeds (CSS pixels). */
+const ARROW_PX = 34;
+const STREAMLINE_PX = 14;
+
+/** The colours flow markers use (from the design tokens). */
+export interface MarkerColors {
+  tracerDark: [number, number, number, number];
+  tracerLight: [number, number, number, number];
+  rakes: [number, number, number, number][];
+  streamline: [number, number, number, number];
+  streamlineLight: [number, number, number, number];
+}
 
 export function gridFor(scene: Scene, cells: number): { nx: number; ny: number } {
   const { length, height } = scene.tunnel;
@@ -79,7 +102,7 @@ interface BodyState {
 
 type Listener = () => void;
 
-let benchCache: number | null = null;
+const benchCache = new Map<string, number>();
 
 export class Engine {
   readonly device: GPUDevice;
@@ -114,6 +137,13 @@ export class Engine {
   worldView = { cx: 4, cy: 2, mpp: 0.01, w: 800, h: 400, dpr: 1 };
   simTime = 0;
   stats: Stats;
+  private particles: Particles;
+  private dye: Dye | null = null;
+  private streamlines: Streamlines;
+  private rakeGpu: RakeGpu[] = [];
+  private dyeChannels = new Map<string, number>();
+  private frameNo = 0;
+  markerColors: MarkerColors | null = null;
   /** Every step's force per body, kept for tests (window.__TUNNEL__), off by default. */
   recordForces = false;
   onUnstable: (() => void) | null = null;
@@ -126,6 +156,8 @@ export class Engine {
     this.palette = palette;
     this.canvas = canvas;
     this.renderer = new Renderer(device, canvas);
+    this.particles = new Particles(device);
+    this.streamlines = new Streamlines(device, this.renderer.format);
     this.stats = { adapter: adapterName, nx: 0, ny: 0, stepsPerFrame: 0, mlups: 0, speedRatio: 0, simTime: 0, fps: 0, map: null, state: 'running' };
   }
 
@@ -149,10 +181,21 @@ export class Engine {
     return this.solver ? { nx: this.solver.nx, ny: this.solver.ny } : null;
   }
 
-  /** Million lattice updates per second on this GPU (a short run; once per page). */
-  async benchmark(): Promise<number> {
-    if (benchCache !== null) return benchCache;
-    const s = new Solver(this.device, { nx: 1024, ny: 512, walls: 'slip' });
+  /** Million lattice updates per second on this GPU at the medium grid (a short run; once per page). */
+  benchmark(): Promise<number> {
+    return this.benchmarkAt(1024, 512);
+  }
+
+  /**
+   * Million lattice updates per second at one grid size (cached). Each size is measured
+   * itself: a grid that fits the GPU's cache runs much faster per cell than one that does
+   * not, so a small grid's speed says little about a big one's.
+   */
+  async benchmarkAt(nx: number, ny: number): Promise<number> {
+    const key = `${nx}x${ny}`;
+    const cached = benchCache.get(key);
+    if (cached !== undefined) return cached;
+    const s = new Solver(this.device, { nx, ny, walls: 'slip' });
     s.setPhysics({ u: 0.05, tau: 0.51, smagorinsky: true, smagCs: SMAG_CS });
     const run = async (steps: number) => {
       const enc = this.device.createCommandEncoder();
@@ -160,26 +203,33 @@ export class Engine {
       this.device.queue.submit([enc.finish()]);
       await this.device.queue.onSubmittedWorkDone();
     };
-    await run(50);
+    await run(30);
+    const steps = Math.max(40, Math.min(400, Math.round(2e8 / (nx * ny))));
     const t0 = performance.now();
-    await run(400);
-    const ms = performance.now() - t0;
+    await run(steps);
+    const ms = Math.max(0.1, performance.now() - t0);
     s.destroy();
-    benchCache = (1024 * 512 * 400) / (ms / 1000) / 1e6;
-    return benchCache;
+    const mlups = (nx * ny * steps) / (ms / 1000) / 1e6;
+    benchCache.set(key, mlups);
+    return mlups;
   }
 
-  /** The grid a resolution gives (auto: the largest that moves the flow at least 0.4 tunnel lengths a second). */
+  /**
+   * The grid a resolution gives. Auto: the finest grid on which this GPU moves the flow at
+   * least 0.4 tunnel lengths a second (with a quarter to spare for the markers and the
+   * drawing), measured at that grid's own size, from medium upward (or down to low).
+   */
   async cellsFor(res: Resolution, scene: Scene): Promise<number> {
     if (res !== 'auto') return RESOLUTION_CELLS[res];
-    const mlups = await this.benchmark();
-    const order: Exclude<Resolution, 'auto'>[] = ['ultra', 'high', 'medium', 'low'];
-    for (const r of order) {
-      const { nx } = gridFor(scene, RESOLUTION_CELLS[r]);
-      const need = (8 * nx * RESOLUTION_CELLS[r]) / 1e6;
-      if (mlups >= need) return RESOLUTION_CELLS[r];
-    }
-    return RESOLUTION_CELLS.low;
+    const fits = async (r: Exclude<Resolution, 'auto'>) => {
+      const { nx, ny } = gridFor(scene, RESOLUTION_CELLS[r]);
+      const need = (8 * nx * nx * ny * 1.25) / 1e6;
+      return (await this.benchmarkAt(nx, ny)) >= need;
+    };
+    if (!(await fits('medium'))) return RESOLUTION_CELLS.low;
+    if (!(await fits('high'))) return RESOLUTION_CELLS.medium;
+    if (!(await fits('ultra'))) return RESOLUTION_CELLS.high;
+    return RESOLUTION_CELLS.ultra;
   }
 
   /** Apply a scene: a new grid when the tunnel or resolution changed, new bodies, new physics. */
@@ -192,6 +242,9 @@ export class Engine {
     if (gridKey !== this.gridKey) {
       this.solver?.destroy();
       this.solver = new Solver(this.device, { nx, ny, walls: scene.tunnel.walls });
+      this.particles.clear();
+      this.dye?.destroy();
+      this.dye = null;
       this.gridKey = gridKey;
       this.bodies.clear();
       this.physKey = '';
@@ -209,7 +262,61 @@ export class Engine {
       this.physKey = physKey;
     }
     this.syncBodies(scene);
+    await this.syncMarkers(scene);
     this.emit();
+  }
+
+  /** Tracers and rakes for the GPU: pools laid out again when their number or kinds change. */
+  private async syncMarkers(scene: Scene) {
+    const solver = this.solver!;
+    const dx = this.map!.dx;
+    const mlups = await this.benchmark();
+    let tracers = scene.view.tracers ? Math.round(solver.n * TRACERS_PER_CELL[scene.view.density]) : 0;
+    if (mlups < LOW_GPU_MLUPS) tracers = Math.min(tracers, LOW_GPU_TRACERS);
+    const toCell = (v: number) => v / dx - 0.5;
+    const live = scene.rakes.filter((r) => r.enabled);
+    this.rakeGpu = live
+      .filter((r) => r.kind !== 'dye')
+      .map((r) => ({ id: r.id, kind: r.kind as RakeGpu['kind'], x0: toCell(r.x0), y0: toCell(r.y0), x1: toCell(r.x1), y1: toCell(r.y1), emitters: r.emitters, color: r.color }));
+    this.particles.configure(tracers, this.rakeGpu, { nx: solver.nx, ny: solver.ny, absorbInX: Math.max(0, solver.absorbInX), outX: solver.spongeX });
+    const dyeRakes = live.filter((r) => r.kind === 'dye').slice(0, LIMITS.maxDyeRakes);
+    this.dyeChannels = new Map(dyeRakes.map((r, i) => [r.id, i]));
+    if (dyeRakes.length) {
+      if (!this.dye) {
+        this.dye = new Dye(this.device, solver.nx, solver.ny);
+        this.dye.clear();
+      }
+      const srcs: DyeSource[] = [];
+      dyeRakes.forEach((r, ch) => {
+        for (let e = 0; e < r.emitters; e++) {
+          const t = r.emitters === 1 ? 0.5 : e / (r.emitters - 1);
+          srcs.push({ x: toCell(r.x0 + (r.x1 - r.x0) * t), y: toCell(r.y0 + (r.y1 - r.y0) * t), channel: ch });
+        }
+      });
+      this.dye.setSources(srcs);
+    } else if (this.dye) {
+      this.dye.destroy();
+      this.dye = null;
+    }
+  }
+
+  /** The dye channel of each dye rake (by id). */
+  get dyeChannelOf(): ReadonlyMap<string, number> {
+    return this.dyeChannels;
+  }
+
+  /** Every particle (for tests): positions and meta, and which pools are whose. */
+  async readParticles() {
+    const r = await this.particles.read();
+    return r ? { ...r, tracers: this.particles.tracerCount, pools: this.particles.pools, dx: this.map?.dx ?? 0 } : null;
+  }
+
+  async readDye() {
+    return this.dye ? { data: await this.dye.read(), nx: this.dye.nx, ny: this.dye.ny, channels: Object.fromEntries(this.dyeChannels), dx: this.map?.dx ?? 0 } : null;
+  }
+
+  get streamlineCount() {
+    return this.scene?.view.streamlines ? this.streamlines.count : 0;
   }
 
   private syncBodies(scene: Scene) {
@@ -300,6 +407,9 @@ export class Engine {
     this.solver.reset(this.map.u);
     this.simTime = 0;
     this.rhoRef = 1;
+    this.particles.clear();
+    this.dye?.clear();
+    if (this.scene) void this.syncMarkers(this.scene);
     this.unstable = false;
     for (const st of this.bodies.values()) {
       st.fxEma = 0;
@@ -393,7 +503,52 @@ export class Engine {
     const { readForces } = solver.encodeFrame(enc, steps, { mode, uRef: map.u, lRef: this.lRefCells(), rhoRef: this.rhoRef });
     const range = scene.view.autoRange && this.autoRange.ready ? this.autoRange : this.range;
     this.renderer.setColormap(FIELD_COLORMAP[scene.view.field]);
-    this.renderer.encode(enc, solver, this.latticeView(map.dx), range, this.palette);
+    const lv = this.latticeView(map.dx);
+    const view = scene.view;
+    const plain = view.field === 'none';
+    const mc = this.markerColors;
+    const pf = { steps, u: map.u, nx: solver.nx, ny: solver.ny, absorbInX: Math.max(0, solver.absorbInX), outX: solver.spongeX, wrapY: scene.tunnel.walls === 'periodic' };
+    this.particles.encodeAdvect(enc, pf, solver.macroBuf, solver.buffers);
+    this.dye?.encode(enc, steps, solver.macroBuf);
+    this.frameNo++;
+    if (view.streamlines && (steps > 0 || this.frameNo % 10 === 0)) {
+      const lines = scene.tunnel.height / this.worldView.mpp / STREAMLINE_PX;
+      this.streamlines.encodeTrace(enc, solver.macroBuf, solver, Math.max(0, solver.absorbInX) + 1, Math.max(8, lines));
+    }
+    const size = this.renderer.size;
+    const markers = view.tracers && this.particles.tracerCount > 0;
+    if (markers && mc) {
+      this.particles.encodeDraw(enc, size, lv, steps > 0 ? TRAIL_KEEP[view.trail] : 0, { tracers: true }, { tracer: plain ? mc.tracerLight : mc.tracerDark });
+    }
+    const dyeColors = [...this.dyeChannels.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .map(([id]) => {
+        const r = scene.rakes.find((x) => x.id === id);
+        const c = mc?.rakes[r?.color ?? 0] ?? [0, 0, 0, 1];
+        return [c[0], c[1], c[2], 0.9] as [number, number, number, number];
+      });
+    this.renderer.encode(
+      enc,
+      solver,
+      lv,
+      range,
+      this.palette,
+      {
+        plain,
+        arrows: view.arrows,
+        arrowCells: (ARROW_PX * this.worldView.mpp) / map.dx,
+        uRef: map.u,
+        dye: this.dye ? this.dye.field : null,
+        dyeColors,
+        trail: markers && mc ? this.particles.trail : null,
+      },
+      mc
+        ? (pass) => {
+            if (view.streamlines) this.streamlines.encodeDraw(pass, size, lv, plain ? mc.streamlineLight : mc.streamline, this.worldView.dpr);
+            if (this.rakeGpu.length) this.particles.encodeRakeLines(pass, this.renderer.format, size, lv, mc.rakes, this.worldView.dpr);
+          }
+        : undefined,
+    );
     const read = readForces && !this.readPending ? solver.prepareRead(enc, steps) : null;
     const t0 = performance.now();
     this.device.queue.submit([enc.finish()]);
@@ -522,6 +677,9 @@ export class Engine {
   destroy() {
     this.stop();
     this.solver?.destroy();
+    this.particles.destroy();
+    this.dye?.destroy();
+    this.streamlines.destroy();
     this.renderer.destroy();
   }
 }

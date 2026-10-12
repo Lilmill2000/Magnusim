@@ -12,7 +12,7 @@ import { Store } from './app/store';
 import { exposeTestHandle } from './app/debug';
 import type { Palette } from './render/renderer';
 import { Engine } from './sim/engine';
-import { shaderErrors } from './sim/kernels';
+import { shaderErrors } from './sim/shaders';
 
 const rootEl = document.getElementById('t2d-root') as HTMLElement;
 const root = createRoot(rootEl);
@@ -88,9 +88,18 @@ async function main() {
     body: tokenRgb('--t2d-body'),
     edge: tokenRgb('--t2d-edge'),
     zone: [...tokenRgb('--t2d-zone'), 0.14],
+    plain: tokenRgb('--t2d-plain'),
+    arrow: [...tokenRgb('--t2d-arrow'), 0.85],
   };
   const canvas = document.createElement('canvas');
   const engine = new Engine(device, canvas, adapterName, palette);
+  engine.markerColors = {
+    tracerDark: [...tokenRgb('--t2d-particle-dark'), 0.55],
+    tracerLight: [...tokenRgb('--t2d-particle-light'), 0.7],
+    rakes: [1, 2, 3, 4, 5, 6].map((i) => [...tokenRgb(`--mg-series-${i}`), 0.95] as [number, number, number, number]),
+    streamline: [...tokenRgb('--t2d-streamline'), 0.75],
+    streamlineLight: [...tokenRgb('--t2d-particle-light'), 0.6],
+  };
   store.onSceneChange = (s) => {
     saver.schedule(s);
     void engine.setScene(s);

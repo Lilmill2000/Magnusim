@@ -7,6 +7,7 @@ import { referenceLength } from '../geometry/shapes';
 import type { FieldMode, Scene } from '../scene/scene';
 import { FIELD_COLORMAP, type Engine } from '../sim/engine';
 import { BodiesPanel, BodyPanel, TunnelPanel, ViewPanel, WindPanel, fmtRe } from '../ui/panels';
+import { MarkersPanel, RakePanel, rakeName } from '../ui/markers';
 import { Viewport, fitView } from '../ui/Viewport';
 import { useStore, type Store } from './store';
 
@@ -22,6 +23,8 @@ function legendFor(field: FieldMode, scene: Scene, lRefM: number): { title: stri
       return { title: 'Pressure coefficient Cp', unit: '', k: 1, centred: true };
     case 'schlieren':
       return { title: 'Density gradient (relative)', unit: '', k: 1, centred: false };
+    case 'none':
+      return { title: '', unit: '', k: 1, centred: false };
   }
 }
 
@@ -71,6 +74,8 @@ function Legend({ engine, store }: { engine: Engine; store: Store }) {
   useEffect(() => {
     if (!scene.view.autoRange) engine.setRange(scene.view.min / lg.k, scene.view.max / lg.k);
   }, [engine, scene.view.autoRange, scene.view.min, scene.view.max, lg.k]);
+  // No field shown: no legend (after the hooks, which run on every render).
+  if (scene.view.field === 'none') return null;
   return (
     <div className="t2d-legend" data-t2d-legend data-lo={lo * lg.k} data-hi={hi * lg.k}>
       <ColorLegend map={FIELD_COLORMAP[scene.view.field]} min={lo * lg.k} max={hi * lg.k} title={lg.title} unit={lg.unit} centred={lg.centred} ticks={5} format={fmtRe} />
@@ -117,6 +122,7 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
   const [hint, setHint] = useState('');
   const save = useStore(store, (s) => s.save);
   const saveError = useStore(store, (s) => s.saveError);
+  const selectedRake = useStore(store, (s) => s.scene.rakes.find((r) => r.id === s.selected) ?? null);
   useEffect(() => ws.on('units', setUnits), [ws]);
   useEffect(() => {
     engine.onUnstable = () => {
@@ -155,9 +161,13 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
         e.preventDefault();
         const s = store.get().scene;
         const b = s.bodies.find((x) => x.id === store.get().selected);
+        const r = s.rakes.find((x) => x.id === store.get().selected);
         if (b) {
           store.commit({ ...s, bodies: s.bodies.filter((x) => x.id !== b.id) });
           void ws.ui.toast(`Removed ${b.name}. Undo (Ctrl+Z) brings it back.`, { kind: 'info' });
+        } else if (r) {
+          store.commit({ ...s, rakes: s.rakes.filter((x) => x.id !== r.id) });
+          void ws.ui.toast(`Removed ${rakeName(s, r)}. Undo (Ctrl+Z) brings it back.`, { kind: 'info' });
         }
       } else if (e.key === 'Escape') {
         store.select(null);
@@ -202,6 +212,7 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
         <aside className="t2d-side">
           <WindPanel store={store} engine={engine} units={units} />
           <BodiesPanel store={store} ws={ws} />
+          <MarkersPanel store={store} ws={ws} />
           <TunnelPanel store={store} engine={engine} units={units} />
           <ViewPanel store={store} />
         </aside>
@@ -226,7 +237,7 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
           <StatusLine engine={engine} store={store} />
         </div>
         <aside className="t2d-side t2d-side--right">
-          <BodyPanel store={store} ws={ws} units={units} engine={engine} />
+          {selectedRake ? <RakePanel store={store} ws={ws} units={units} rake={selectedRake} /> : <BodyPanel store={store} ws={ws} units={units} engine={engine} />}
         </aside>
       </div>
     </div>

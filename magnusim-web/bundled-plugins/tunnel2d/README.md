@@ -2,6 +2,16 @@
 
 A real-time 2D wind tunnel in its own workspace. Set the wind speed and the fluid, add airfoils (NACA 4- and 5-digit, or a `.dat` file) and shapes, then drag and turn them. The flow answers as they move, in vorticity, speed, pressure (Cp) or a density-gradient (schlieren) view.
 
+Flow markers show where the flow goes:
+
+- **Tracers:** particles through the whole tunnel, with fading trails.
+- **Rakes** you place and drag, in three kinds:
+  - streaks: a continuous thread from each emitter;
+  - timelines: a line released at intervals that the flow stretches and rolls up;
+  - dye.
+- **Velocity arrows and streamlines.**
+- **A plain dark background,** to show the markers on their own.
+
 The plugin ships off. Turn it on in **Settings → Plugins**; the header's **Wind tunnel** button then opens a tunnel.
 
 ## How it works
@@ -9,7 +19,9 @@ The plugin ships off. Turn it on in **Settings → Plugins**; the header's **Win
 - **GPU solver.** The flow is solved in the workspace page on the GPU with WebGPU compute shaders. The method is a D2Q9 lattice Boltzmann solver: recursive-regularized collision, a Smagorinsky model when the grid cannot resolve the flow, Zou–He inlet and outlet, and absorbing layers at both ends. No Python, WSL or OpenFOAM is involved.
 - **Bodies.** Each body is a signed distance field in its own frame, sampled at its moving pose every step. Walls use Bouzidi's interpolated bounce-back, with the moving-wall term and Galilean-invariant momentum exchange.
 - **Validation.** The solver passes the Schäfer–Turek 2D-2 cylinder benchmark: St 0.302 and Cd max 3.253 at 20 cells per diameter. The browser suite checks this on every run.
-- **Scene file.** A tunnel keeps its scene (tunnel, wind, bodies, view) in `studies/<id>/scene.json` in the plugin's folder of the project. The flow itself starts again when the tunnel opens.
+- **Markers.** Particles are carried by the velocity field on the GPU, in midpoint steps of under a cell, so they never cut through a body. One that ends up inside a body is pushed back out along the distance field, or leaves the flow if it cannot be.
+- **Dye.** Dye is advected with MacCormack's corrected semi-Lagrangian scheme (clamped, so it never overshoots).
+- **Scene file.** A tunnel keeps its scene (tunnel, wind, bodies, rakes, view) in `studies/<id>/scene.json` in the plugin's folder of the project. The flow itself starts again when the tunnel opens.
 
 ## What the numbers mean
 
@@ -35,6 +47,6 @@ The browser suite runs from the app folder on the installed Chrome, because Play
 npx playwright test -c bundled-plugins/tunnel2d/e2e/playwright.config.js
 ```
 
-`MAGNUSIM_E2E_SOAK=1` makes the drag soak run for 10 minutes instead of 30 seconds.
+`MAGNUSIM_E2E_SOAK=1` makes the drag soak run for 10 minutes instead of 30 seconds, and the tracer test for 5 minutes.
 
 The NACA generator is a port of the Airfoil plugin's `airfoil/naca.py`. `tests/fixtures/gen_naca.py` regenerates the parity fixture from the Python.

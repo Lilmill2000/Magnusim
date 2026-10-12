@@ -6,11 +6,15 @@ import { parseCode } from '../geometry/naca';
 import { MAX_POINTS, MIN_POINTS } from '../geometry/datfile';
 import type { Shape } from '../geometry/shapes';
 
-export const SCENE_VERSION = 1;
+/** 2: rakes, and the view's tracers, trail, arrows and streamlines (a version-1 file reads as is). */
+export const SCENE_VERSION = 2;
 
 export type Walls = 'slip' | 'noslip' | 'periodic';
 export type Resolution = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
-export type FieldMode = 'vorticity' | 'speed' | 'pressure' | 'schlieren';
+export type FieldMode = 'vorticity' | 'speed' | 'pressure' | 'schlieren' | 'none';
+export type RakeKind = 'streaks' | 'timelines' | 'dye';
+export type Density = 'low' | 'normal' | 'high';
+export type TrailLength = 'off' | 'short' | 'long';
 export type FluidKey = 'air' | 'water';
 export type SimSpeed = 'max' | 'realtime';
 
@@ -30,12 +34,41 @@ export interface Body {
   locked: boolean;
 }
 
+/** A rake: a line of emitters that release streaks, timelines or dye into the flow. */
+export interface Rake {
+  id: string;
+  kind: RakeKind;
+  /** Its ends (m). */
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  emitters: number;
+  /** Index into the rake colours (the app's series colours). */
+  color: number;
+  enabled: boolean;
+}
+
+export interface View {
+  field: FieldMode;
+  autoRange: boolean;
+  min: number;
+  max: number;
+  speed: SimSpeed;
+  tracers: boolean;
+  density: Density;
+  trail: TrailLength;
+  arrows: boolean;
+  streamlines: boolean;
+}
+
 export interface Scene {
   version: number;
   tunnel: { length: number; height: number; walls: Walls; resolution: Resolution };
   flow: { speed: number; fluid: FluidKey };
   bodies: Body[];
-  view: { field: FieldMode; autoRange: boolean; min: number; max: number; speed: SimSpeed };
+  rakes: Rake[];
+  view: View;
 }
 
 export const FLUIDS: Record<FluidKey, { label: string; nu: number; rho: number }> = {
@@ -48,12 +81,23 @@ export const LIMITS = {
   height: [0.005, 1000] as const,
   speed: [1e-4, 340] as const,
   maxBodies: 8,
+  maxRakes: 8,
+  /** Dye rakes: one colour channel each. */
+  maxDyeRakes: 4,
+  emitters: [1, 64] as const,
 };
+
+export const RAKE_COLORS = 6;
 
 let seq = 0;
 export function newBodyId(): string {
   seq = (seq + 1) % 1e6;
   return `b${Date.now().toString(36)}${seq.toString(36)}`;
+}
+
+export function newRakeId(): string {
+  seq = (seq + 1) % 1e6;
+  return `r${Date.now().toString(36)}${seq.toString(36)}`;
 }
 
 export function defaultScene(): Scene {
@@ -64,7 +108,8 @@ export function defaultScene(): Scene {
     bodies: [
       { id: newBodyId(), name: 'NACA 2412', shape: { kind: 'naca', code: '2412', chord: 1 }, x: 2.5, y: 2, angle: 6, spin: 0, enabled: true, locked: false },
     ],
-    view: { field: 'vorticity', autoRange: true, min: -10, max: 10, speed: 'max' },
+    rakes: [],
+    view: { field: 'vorticity', autoRange: true, min: -10, max: 10, speed: 'max', tracers: true, density: 'normal', trail: 'short', arrows: false, streamlines: false },
   };
 }
 
@@ -123,6 +168,17 @@ export function parseScene(raw: unknown): Scene {
     enabled: b?.enabled !== false,
     locked: b?.locked === true,
   }));
+  const rakes: Rake[] = (Array.isArray(o.rakes) ? o.rakes : []).slice(0, LIMITS.maxRakes).map((r: any, i: number) => ({
+    id: typeof r?.id === 'string' && r.id ? r.id.slice(0, 40) : newRakeId(),
+    kind: oneOf(r?.kind, ['streaks', 'timelines', 'dye'] as const, 'streaks'),
+    x0: num(r?.x0, 'Rake x'),
+    y0: num(r?.y0, 'Rake y'),
+    x1: num(r?.x1, 'Rake x'),
+    y1: num(r?.y1, 'Rake y'),
+    emitters: Math.round(num(r?.emitters ?? 12, 'Rake emitters', ...LIMITS.emitters)),
+    color: Math.round(num(r?.color ?? i % RAKE_COLORS, 'Rake colour', 0, RAKE_COLORS - 1)),
+    enabled: r?.enabled !== false,
+  }));
   return {
     version: SCENE_VERSION,
     tunnel: {
@@ -136,12 +192,18 @@ export function parseScene(raw: unknown): Scene {
       fluid: oneOf(f.fluid, ['air', 'water'] as const, d.flow.fluid),
     },
     bodies,
+    rakes,
     view: {
-      field: oneOf(v.field, ['vorticity', 'speed', 'pressure', 'schlieren'] as const, d.view.field),
+      field: oneOf(v.field, ['vorticity', 'speed', 'pressure', 'schlieren', 'none'] as const, d.view.field),
       autoRange: v.autoRange !== false,
       min: Number.isFinite(Number(v.min)) ? Number(v.min) : d.view.min,
       max: Number.isFinite(Number(v.max)) ? Number(v.max) : d.view.max,
       speed: oneOf(v.speed, ['max', 'realtime'] as const, d.view.speed),
+      tracers: v.tracers !== undefined ? v.tracers !== false : d.view.tracers,
+      density: oneOf(v.density, ['low', 'normal', 'high'] as const, d.view.density),
+      trail: oneOf(v.trail, ['off', 'short', 'long'] as const, d.view.trail),
+      arrows: v.arrows === true,
+      streamlines: v.streamlines === true,
     },
   };
 }

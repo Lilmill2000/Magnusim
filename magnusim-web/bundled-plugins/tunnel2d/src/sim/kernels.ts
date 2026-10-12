@@ -38,7 +38,7 @@ const n10 = (v: number) => v.toFixed(10);
 const n1 = (v: number) => v.toFixed(1);
 
 /** Shared declarations: the parameters, the bodies and their distance fields. */
-const COMMON = /* wgsl */ `
+export const COMMON = /* wgsl */ `
 struct Params {
   nx: u32, ny: u32, n: u32, nBodies: u32,
   omega: f32, smag: f32, uIn: f32, absorb: f32,
@@ -106,7 +106,7 @@ fn feqAt(k: u32, rho: f32, u: vec2f) -> f32 {
 }
 `;
 
-const TABLES = /* wgsl */ `
+export const TABLES = /* wgsl */ `
 const CXF = array<f32, 9>(${CX.map(n1).join(', ')});
 const CYF = array<f32, 9>(${CY.map(n1).join(', ')});
 const WF = array<f32, 9>(${W.map(n10).join(', ')});
@@ -374,14 +374,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 `;
 }
 
-/** Full-screen render: the field through a colour map, the sponge zones tinted, bodies filled. */
+/**
+ * Full-screen render: the field through a colour map (or a plain background), the sponge
+ * zones tinted, the dye, the particles' trail, velocity arrows, and the bodies on top.
+ * Flags: 1 plain background, 2 arrows, 4 dye, 8 trail.
+ */
 export function renderShader(): string {
   return `
 struct View {
   scale: f32, ox: f32, oy: f32, lo: f32,
   hi: f32, nxf: f32, nyf: f32, absorbIn: f32,
-  spongeX: f32, p0: f32, p1: f32, p2: f32,
+  spongeX: f32, uRef: f32, arrowCells: f32, flags: u32,
   bg: vec4f, body: vec4f, edge: vec4f, zone: vec4f,
+  plain: vec4f, arrow: vec4f,
+  dye: array<vec4f, 4>,
 };
 @group(0) @binding(0) var<storage, read> scalar: array<f32>;
 @group(0) @binding(1) var<uniform> Vw: View;
@@ -389,6 +395,9 @@ struct View {
 @group(0) @binding(3) var<storage, read> B: array<Body>;
 @group(0) @binding(4) var<storage, read> sdf: array<f32>;
 @group(0) @binding(5) var<storage, read> lut: array<vec4f, 256>;
+@group(0) @binding(6) var<storage, read> mac: array<vec4f>;
+@group(0) @binding(7) var<storage, read> dye: array<vec4f>;
+@group(0) @binding(8) var trail: texture_2d<f32>;
 ${TABLES}
 ${COMMON}
 
@@ -398,29 +407,84 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
   return vec4f(p[i], 0.0, 1.0);
 }
 
-fn sampleScalar(l: vec2f) -> f32 {
+fn cellIndex(c: vec2f) -> vec4u {
   let nx = u32(Vw.nxf);
-  let ny = u32(Vw.nyf);
-  let c = clamp(l, vec2f(0.0), vec2f(Vw.nxf - 1.001, Vw.nyf - 1.001));
+  let n = nx * u32(Vw.nyf);
   let i = u32(c.x);
   let j = u32(c.y);
-  let f = c - vec2f(f32(i), f32(j));
   let k = i + j * nx;
-  let a = scalar[k];
-  let b = scalar[min(k + 1u, nx * ny - 1u)];
-  let cc = scalar[min(k + nx, nx * ny - 1u)];
-  let d = scalar[min(k + nx + 1u, nx * ny - 1u)];
-  return mix(mix(a, b, f.x), mix(cc, d, f.x), f.y);
+  return vec4u(k, min(k + 1u, n - 1u), min(k + nx, n - 1u), min(k + nx + 1u, n - 1u));
+}
+fn clampCell(l: vec2f) -> vec2f { return clamp(l, vec2f(0.0), vec2f(Vw.nxf - 1.001, Vw.nyf - 1.001)); }
+
+fn sampleScalar(l: vec2f) -> f32 {
+  let c = clampCell(l);
+  let k = cellIndex(c);
+  let f = fract(c);
+  return mix(mix(scalar[k.x], scalar[k.y], f.x), mix(scalar[k.z], scalar[k.w], f.x), f.y);
+}
+fn sampleMac(l: vec2f) -> vec4f {
+  let c = clampCell(l);
+  let k = cellIndex(c);
+  let f = fract(c);
+  return mix(mix(mac[k.x], mac[k.y], f.x), mix(mac[k.z], mac[k.w], f.x), f.y);
+}
+fn sampleDye(l: vec2f) -> vec4f {
+  let c = clampCell(l);
+  let k = cellIndex(c);
+  let f = fract(c);
+  return mix(mix(dye[k.x], dye[k.y], f.x), mix(dye[k.z], dye[k.w], f.x), f.y);
+}
+
+/** Coverage (0..1) of the velocity arrow of the grid cell around l. */
+fn arrowCover(l: vec2f) -> f32 {
+  let G = Vw.arrowCells;
+  let c = (floor(l / G) + 0.5) * G;
+  if (c.x < 0.0 || c.y < 0.0 || c.x > Vw.nxf - 1.0 || c.y > Vw.nyf - 1.0) { return 0.0; }
+  let m = sampleMac(c);
+  if (m.w > 0.25) { return 0.0; }
+  let sp = length(m.xy);
+  if (sp < Vw.uRef * 0.02) { return 0.0; }
+  let L = clamp(sp / Vw.uRef, 0.05, 2.0) * 0.42 * G;
+  let d = m.xy / sp;
+  let r = l - c;
+  let along = dot(r, d) + L * 0.5;
+  let across = abs(dot(r, vec2f(-d.y, d.x)));
+  let px = Vw.scale;
+  let head = min(L * 0.4, 7.0 * px);
+  var dist = 1e9;
+  if (along >= 0.0 && along <= L - head) { dist = across - 0.6 * px; }
+  if (along > L - head && along <= L) {
+    let half = (L - along) / head * head * 0.45;
+    dist = min(dist, across - half);
+  }
+  return clamp(0.5 - dist / px, 0.0, 1.0);
 }
 
 @fragment
 fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let l = vec2f(Vw.ox + pos.x * Vw.scale, Vw.oy - pos.y * Vw.scale);
   if (l.x < -0.5 || l.y < -0.5 || l.x > Vw.nxf - 0.5 || l.y > Vw.nyf - 0.5) { return Vw.bg; }
-  let s = sampleScalar(l);
-  let t = clamp((s - Vw.lo) / max(1e-12, Vw.hi - Vw.lo), 0.0, 1.0);
-  var col = lut[u32(t * 255.0 + 0.5)].rgb;
+  var col: vec3f;
+  if ((Vw.flags & 1u) != 0u) {
+    col = Vw.plain.rgb;
+  } else {
+    let s = sampleScalar(l);
+    let t = clamp((s - Vw.lo) / max(1e-12, Vw.hi - Vw.lo), 0.0, 1.0);
+    col = lut[u32(t * 255.0 + 0.5)].rgb;
+  }
   if (l.x < Vw.absorbIn || l.x > Vw.spongeX) { col = mix(col, Vw.zone.rgb, Vw.zone.a); }
+  if ((Vw.flags & 4u) != 0u) {
+    let d = sampleDye(l);
+    for (var c = 0u; c < 4u; c++) { col = mix(col, Vw.dye[c].rgb, clamp(d[c], 0.0, 1.0) * Vw.dye[c].a); }
+  }
+  if ((Vw.flags & 8u) != 0u) {
+    let t = textureLoad(trail, vec2i(pos.xy), 0);
+    col = col * (1.0 - clamp(t.a, 0.0, 1.0)) + t.rgb;
+  }
+  if ((Vw.flags & 2u) != 0u) {
+    col = mix(col, Vw.arrow.rgb, arrowCover(l) * Vw.arrow.a);
+  }
   var bp: array<vec4f, ${MAX_BODIES}>;
   let near = poses(l, 1.0, &bp);
   if (near != 0u) {
@@ -444,14 +508,4 @@ export function allShaders(): { label: string; code: string }[] {
     { label: 'field', code: fieldShader() },
     { label: 'render', code: renderShader() },
   ];
-}
-
-/** Compile every shader; the first error's message, or null when all compile. */
-export async function shaderErrors(device: GPUDevice): Promise<string | null> {
-  for (const s of allShaders()) {
-    const info = await device.createShaderModule({ code: s.code, label: s.label }).getCompilationInfo();
-    const err = info.messages.find((m) => m.type === 'error');
-    if (err) return `${s.label} shader, line ${err.lineNum}: ${err.message}`;
-  }
-  return null;
 }

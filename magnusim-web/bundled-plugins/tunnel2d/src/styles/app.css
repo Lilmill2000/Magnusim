@@ -13,10 +13,16 @@ body {
   overflow: hidden;
 }
 
+html {
+  overflow: hidden;
+}
+/* Pinned to the frame: focusing a control low in a side panel scrolls that panel, never
+   the page, so the toolbar always stays in view. */
 .t2d-app {
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
 }
 
 .t2d-toolbar {
@@ -148,6 +154,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.t2d-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--mg-radius-xs);
+  flex: none;
 }
 .t2d-icon-btn {
   border: none;
