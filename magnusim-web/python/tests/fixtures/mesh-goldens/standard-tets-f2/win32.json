@@ -3,27 +3,22 @@
   "constant/triSurface/geometry.msh": {
    "mesh": {
     "elements": {
-     "tet": 52848,
-     "tri": 21812
+     "tet": 40228,
+     "tri": 15146
     },
-    "nodes": 14739,
+    "nodes": 10680,
     "triangles_per_group": {
      "pressure_1": 88,
-     "velocity_inlet_1": 86,
-     "walls": 12255,
-     "walls_bl1": 706,
-     "walls_bl2": 1198,
-     "walls_bl3": 678,
-     "walls_bl4": 2031,
-     "walls_bl5": 419,
-     "walls_bl6": 497,
-     "walls_bl7": 956,
-     "walls_bl8": 2893,
-     "walls_bl9": 5
+     "velocity_inlet_1": 84,
+     "walls": 12385,
+     "walls_bl1": 735,
+     "walls_bl2": 1771,
+     "walls_bl3": 75,
+     "walls_bl4": 8
     }
    },
-   "sha256": "03748b3a74443a55aa847adf3501a9121d6d466fbef40b7597dd6e97d1e977f8",
-   "size": 3725560
+   "sha256": "86363f08762806c61e8bb91acb488cdf9013c2d8bdfafe9be4109d40a7e94eda",
+   "size": 2650199
   }
  },
  "text": {
@@ -33,15 +28,12 @@
    "small feature suppression: features below 9.2e-05 m suppressed",
    "physics-based: 1 inlet + 1 outlet surface(s) at 0.70\u00b7h",
    "surface: 15146 triangles, 7575 nodes at h=0.01207 m (<s>)",
-   "feature refinement: 0 short curve(s), 3 narrow face(s), 0 narrow gap(s) below 0.00302 m; cells there down to 0.000754 m, growing 1.22x per cell; about 0.16M cells vs 0.15M uniform (53325 size boxes, <s>)",
-   "surface (feature-refined): 21812 triangles, 10908 nodes (<s>)",
-   "collapsed 8 surface edge(s) shorter than 0.0003 m",
    "tets: filling the volume (timeout <s>)",
-   "tet volume: 52848 tets, 0 prisms (<s>)",
-   "volume assembly: cells 0.0447498 m\u00b3 vs boundary 0.0447498 m\u00b3 (rel err 0.00e+00)",
-   "volume check: mesh 0.0447498 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 1.09e-03)",
-   "boundary layers: walls sized by the local cells in 10 band(s), down to 0.000533 m",
-   "msh written: 14739 nodes, 52848 tets, 0 hexes, 0 prisms, 0 pyramids, 21812 boundary tris (<s>)"
+   "tet volume: 40228 tets, 0 prisms (<s>)",
+   "volume assembly: cells 0.0447506 m\u00b3 vs boundary 0.0447506 m\u00b3 (rel err 1.55e-16)",
+   "volume check: mesh 0.0447506 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 1.07e-03)",
+   "boundary layers: walls sized by the local cells in 5 band(s), down to 0.00302 m",
+   "msh written: 10680 nodes, 40228 tets, 0 hexes, 0 prisms, 0 pyramids, 15146 boundary tris (<s>)"
   ]
  }
 }

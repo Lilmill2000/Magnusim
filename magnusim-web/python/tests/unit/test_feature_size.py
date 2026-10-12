@@ -319,3 +319,25 @@ def test_automatic_layers_are_marked_relative():
     )
     assert [s.automatic for s in specs] == [True]
     assert math.isclose(specs[0].thickness_m, 0.01)
+
+
+def test_a_sliver_of_a_smooth_face_is_not_a_narrow_feature(gmsh_session):
+    from cfddesk.mesh.feature_size import feature_curves
+
+    gmsh = gmsh_session
+    gmsh.model.add("sliver")
+    occ = gmsh.model.occ
+    box = occ.addBox(0, 0, 0, 100, 100, 100)
+    # a 2 mm strip of the top face, split off but flat with the rest of it
+    strip = occ.addRectangle(0, 49, 100, 100, 2)
+    occ.fragment([(3, box)], [(2, strip)])
+    occ.synchronize()
+    vols = gmsh.model.getEntities(3)
+    surfs = sorted({int(t) for _d, v in vols for t in gmsh.model.getAdjacencies(3, v)[1]})
+    assert len(surfs) == 8
+    assert feature_curves(gmsh, surfs, h=40.0).n_faces == 0
+
+    gmsh.model.remove()
+    # the same 2 mm strip as the top of a 2 mm fin: it bends away on both long sides
+    surfs = _occ_box_model(gmsh, [(0, 0, 0, 100, 100, 100), (-1, 0, 90, 101, 49, 101), (-1, 51, 90, 101, 101, 101)])
+    assert feature_curves(gmsh, surfs, h=40.0).n_faces >= 1
