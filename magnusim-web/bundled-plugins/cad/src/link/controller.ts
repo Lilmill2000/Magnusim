@@ -56,7 +56,18 @@
 //   gone        the geometry was removed: link again as a first link;
 //   not_ready   (1.7) the app is still storing the geometry: once more after retryAfter;
 //   adopted     (1.7) another Part edits that geometry now: the app's message;
+//   not_now     (1.7, contract change 6) the geometry this Part edits or links was REMOVED
+//               from the project, and the user answered the app's question "Add <Part> as
+//               a new geometry?" with Not now: nothing is linked, the leave goes on, no
+//               message (outcome 'not-now'); the study record keeps that design
+//               (`cad_not_now`), so a Back with no change since does not ask again;
+//   target_removed  the same question where the app cannot ask it: its words, as a failure;
 //   plugin_needed and every other refusal: the app's message as it is.
+// - A removed target (contract change 6): while the study record has `geometry_removed` and the
+//   Part links nothing, a sync with no change since the last link, the import, or the last
+//   "Not now" (design digests in `cad_last_link`, `cad_adopt`, `cad_not_now`) links nothing;
+//   otherwise it links as a first link without originalNames, and the app asks first. "Add as
+//   new geometry" creates one, named after the Part, and the Part links it from then on.
 // - Edit in CAD (host API 1.7, edit-open.ts): a Part opened on a project geometry links
 //   nothing while it is still at the version its import was saved at (`cad_adopt`
 //   baselineVersion): Back with no change of the design leaves the project as it was.
@@ -67,7 +78,7 @@
 //   linkedGeometry() names it from then on.
 // Owner: LINK.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { LinkedGeometry, LinkResult, LinkStage, ViewState } from '@magnusim/workspace';
+import type { LinkedGeometry, LinkResult, LinkStage, StudyRecord, ViewState } from '@magnusim/workspace';
 import type { Bridge } from '../lib/bridge';
 import { commitPendingEdits, pendingEdits } from '../lib/pendingEdits';
 import type { CadDoc } from '../types/doc';
@@ -86,6 +97,11 @@ export type LinkOutcome =
   | { outcome: 'linked'; sourceVersion: number; result: LinkResult; notes?: string[] }
   /** The user answered "Keep editing" (or removed the update from the Queue). */
   | { outcome: 'kept-editing'; sourceVersion: number }
+  /**
+   * The geometry this Part edits or links was removed, and the user answered the app's "Add <Part>
+   * as a new geometry?" with Not now: nothing was linked (the leave goes on, quietly).
+   */
+  | { outcome: 'not-now'; sourceVersion: number; geometryName: string | null }
   /** A newer link of this study replaced this one. */
   | { outcome: 'superseded'; sourceVersion: number }
   /**
@@ -173,7 +189,7 @@ export interface LinkControllerOptions {
    * Edit in CAD (1.7): the geometry this Part was opened to edit. `ready()` waits for its faces to
    * be matched and gives the study's `cad_adopt` (null when the Part edits none).
    */
-  adopt?: { ready(): Promise<CadAdopt | null>; geometryName(): string | null; noteUnverified?(n: number): void };
+  adopt?: { ready(): Promise<CadAdopt | null>; geometryName(): string | null; noteUnverified?(n: number): void; onLinked?(r: LinkResult): void };
   /** Wait before the one retry after `not_ready` when the app gives no retryAfter (ms; tests). */
   notReadyWaitMs?: number;
   log?(message: string, detail?: unknown): void;
@@ -229,6 +245,24 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     );
   });
 
+/** The study record's `geometry_removed` (host-owned, contract change 6), when well formed. */
+export interface RemovedTarget {
+  id: string;
+  name: string;
+}
+
+export function readRemoved(v: unknown): RemovedTarget | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as { id?: unknown; name?: unknown };
+  return typeof r.id === 'string' && r.id ? { id: r.id, name: typeof r.name === 'string' && r.name ? r.name : 'The geometry' } : null;
+}
+
+/** A design digest kept in the study record (`cad_last_link`, `cad_not_now`: `digest`; `cad_adopt`: `baselineDigest`). */
+function digestOf(v: unknown, key = 'digest'): string | null {
+  const d = v && typeof v === 'object' ? (v as Record<string, unknown>)[key] : null;
+  return typeof d === 'string' && d ? d : null;
+}
+
 export function createLinkController(o: LinkControllerOptions): LinkController {
   const { bridge, doc, kernel } = o;
   const log = o.log ?? ((m: string, d?: unknown) => console.warn(`[cad] ${m}`, d ?? ''));
@@ -240,6 +274,22 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
   let last: LinkOutcome | null = null;
 
   const partTitle = () => String(bridge.context.study?.title ?? '').trim() || 'this Part';
+
+  /** Keep a small note in the study record (CAD's own key); a stale rev is read again, a few times. */
+  async function remember(key: string, value: Record<string, unknown>) {
+    if (!bridge.study?.get) return;
+    for (let i = 0; i < 4; i++) {
+      try {
+        const s = await bridge.study.get();
+        const was = (s as unknown as Record<string, unknown>)[key];
+        if (was && digestOf(was) === value.digest && (was as { geometryId?: unknown }).geometryId === value.geometryId) return;
+        await bridge.study.update({ [key]: value }, s.rev);
+        return;
+      } catch (e) {
+        if (!/stale|rev/i.test(`${codeOf(e)} ${messageOf(e)}`)) break;
+      }
+    }
+  }
 
   async function run(holder: Holder): Promise<LinkOutcome> {
     const told = { clean: false };
@@ -345,6 +395,12 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     // Edit in CAD: read once per sync, after the faces are matched.
     let adopt: CadAdopt | null = null;
     let adoptRead = false;
+    // A removed target (contract change 6): the study record's geometry_removed and the designs that
+    // need no link while it stands. Read once per sync, while the Part links nothing.
+    let removed: RemovedTarget | null = null;
+    let removedRead = false;
+    let quiet: string[] = [];
+    let savedDigest: string | null = null;
     for (let round = 0; !end || !docAt; round++) {
       if (round >= SAVE_ROUNDS) return { outcome: 'failed', code: 'unsaved', message: `${partTitle()} kept changing while it was being added to the project. Try again.` };
       const stop = (await saveNow()) ?? stopped();
@@ -359,7 +415,20 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
       };
       linked = await link.linkedGeometry();
       if (!same()) continue;
-      if (!linked && o.adopt && !adoptRead) {
+      if (!linked && !removedRead) {
+        const rec = (await (bridge.study?.get?.() ?? Promise.resolve(null)).catch(() => null)) as (StudyRecord & Record<string, unknown>) | null;
+        removed = readRemoved(rec?.geometry_removed);
+        quiet = [digestOf(rec?.cad_last_link), digestOf(rec?.cad_not_now), digestOf(rec?.cad_adopt, 'baselineDigest')].filter((x): x is string => !!x);
+        removedRead = true;
+        if (!same()) continue;
+      }
+      if (!linked && removed) {
+        // Nothing changed since the last link, the import or the last "Not now": no question again.
+        savedDigest = await designDigest(at);
+        if (!same()) continue;
+        if (quiet.includes(savedDigest)) return { outcome: 'unchanged', sourceVersion: version, geometryId: removed.id };
+      }
+      if (!linked && !removed && o.adopt && !adoptRead) {
         progress(null, `Matching the faces of ${o.adopt.geometryName() ?? 'the geometry'}`);
         adopt = await o.adopt.ready().catch(() => null);
         adoptRead = true;
@@ -478,7 +547,7 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     let goneTried = false;
     let notReadyTried = false;
     // The first link of a Part that edits a geometry: the original's face names go with it.
-    let originalNames = !linked && adopt?.originalNames ? adopt.originalNames : null;
+    let originalNames = !linked && !removed && adopt?.originalNames ? adopt.originalNames : null;
     for (;;) {
       // The app said something about this try (a stage): it took the job, so a "busy" after it
       // is how the job ended, not the app's answer at the call, and it is not tried again.
@@ -505,10 +574,19 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
           if (words) notes.push(words);
           o.adopt?.noteUnverified?.(unverified);
         }
+        // The design the geometry now has: a later sync whose target was removed meanwhile asks only
+        // after a change since (contract change 6).
+        await remember('cad_last_link', { geometryId: result.geometryId, sourceVersion, digest: await designDigest(savedDoc) });
+        o.adopt?.onLinked?.(result);
         return { outcome: 'linked', sourceVersion, result, ...(notes.length ? { notes } : {}) };
       } catch (e) {
         const code = codeOf(e);
         if (code === 'cancelled') return { outcome: 'kept-editing', sourceVersion };
+        if (code === 'not_now') {
+          // Not now (the removed target's question): nothing linked; this design does not ask again.
+          if (removed) await remember('cad_not_now', { geometryId: removed.id, sourceVersion, digest: savedDigest ?? (await designDigest(savedDoc)) });
+          return { outcome: 'not-now', sourceVersion, geometryName: removed?.name ?? null };
+        }
         if (code === 'superseded') return { outcome: 'superseded', sourceVersion };
         if (code === 'stale' && !staleTried) {
           staleTried = true;

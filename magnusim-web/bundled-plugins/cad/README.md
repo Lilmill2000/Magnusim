@@ -341,6 +341,11 @@ panel.
   back to the import.
 - **Edit in CAD again** opens the same Part with its history; it does not import
   again.
+- If the geometry is **removed** from the project, the Part says so (one line).
+  Back with a change then asks first: **Add as new geometry** adds the part as a
+  geometry of its own, **Not now** leaves the project as it is (and does not ask
+  again until you change the part), **Keep editing** stays. A Part opened for a
+  geometry that was removed before anything was imported imports nothing.
 - The faces of the part in CAD are matched to the geometry's own (by number,
   then by place, size and facing), and Magnusim checks each match again. If some
   could not be matched or checked, the Part says how many, and if the matching

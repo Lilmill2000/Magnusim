@@ -205,6 +205,8 @@ export function createLeaveHandler(o: LeaveHookOptions): (leave: LeaveEvent) => 
       case 'linked':
       case 'unchanged':
       case 'superseded':
+      // Not now (the removed target's question, contract change 6): nothing linked, the leave goes on.
+      case 'not-now':
         report(r, null);
         return withView();
       case 'nothing': {

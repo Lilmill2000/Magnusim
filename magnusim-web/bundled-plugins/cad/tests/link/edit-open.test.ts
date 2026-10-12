@@ -72,6 +72,8 @@ function services(
     storedByOtherTab?: CadDoc['features'];
     /** The save after this tab's import meets another tab's save. */
     importConflicts?: boolean;
+    /** The study record's host-owned geometry_removed (contract change 6). */
+    removed?: { id: string; name: string; at: string };
   } = {},
 ) {
   const docState = createStateStore<{ status: string; doc: CadDoc; save: Save; sourceVersion: number }>({ status: 'ready', doc: { features: o.features ?? [], bodies: {} } as unknown as CadDoc, save: { state: 'saved', at: null }, sourceVersion: 1 });
@@ -82,9 +84,11 @@ function services(
   const reload = vi.fn(async () => {
     if (o.storedByOtherTab) docState.set((s) => ({ ...s, doc: { ...s.doc, features: o.storedByOtherTab! }, save: { state: 'saved', at: null }, sourceVersion: 5 }));
   });
+  const sourceCalls: number[] = [];
   const s = {
     bridge: {
       studyId: 's1',
+      context: { study: { id: 's1', title: 'Part 1', ...(o.removed ? { geometry_removed: o.removed } : {}) } },
       toast: (m: string) => toasts.push(m),
       study: {
         get: async () => study,
@@ -98,7 +102,15 @@ function services(
       edit:
         o.geometry === null
           ? null
-          : { geometry: o.geometry ?? G, launch: o.launch ?? null, source: o.source ?? (async () => ({ geometryId: 'g1', file: new File(['x'], 'Vortex CFD Test.step'), format: 'step', size: 1, sha256: 'abc', adopted: false })), faces: async () => ({}) },
+          : {
+              geometry: o.geometry === undefined ? G : o.geometry,
+              launch: o.launch ?? null,
+              source: async (opts?: { signal?: AbortSignal }) => {
+                sourceCalls.push(1);
+                return o.source ? o.source(opts) : { geometryId: 'g1', file: new File(['x'], 'Vortex CFD Test.step'), format: 'step', size: 1, sha256: 'abc', adopted: false };
+              },
+              faces: async () => ({}),
+            },
       link: null,
     },
     doc: {
@@ -119,7 +131,7 @@ function services(
     selection,
     kernel: {},
   } as unknown as AppServices;
-  return { s, docState, updates, selection, toasts, reload, study: () => study };
+  return { s, docState, updates, selection, toasts, reload, sourceCalls, study: () => study };
 }
 
 /** The import "finishes": stored shapes, no progress; the session is still open (the panel shows it). */
@@ -473,5 +485,69 @@ describe('Edit in CAD: helper kernels within a memory budget', () => {
     expect(kept).toBe(1);
     expect(afterDrop).toEqual([true, true, true, true]);
     expect(made.every((h) => h.disposed)).toBe(true);
+  });
+});
+
+describe('Edit in CAD: a removed geometry (contract change 6)', () => {
+  const REMOVED = { id: 'g1', name: 'stepped-bore', at: '2026-10-12T10:00:00Z' };
+
+  it('removed before anything was imported: the Part says so and imports nothing (the app gives no geometry)', async () => {
+    const { createEditOpen } = await import('../../src/link/edit-open');
+    const t = services({ removed: REMOVED, geometry: null as unknown as EditedGeometry });
+    const e = createEditOpen(t.s, { sleep: async () => {} });
+    expect(e.removed).toEqual({ id: 'g1', name: 'stepped-bore' });
+    await e.start();
+    expect(t.sourceCalls).toEqual([]);
+    expect(started).toEqual([]);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(e.state.get()).toMatchObject({ phase: 'removed', line: 'The geometry stepped-bore this part was opened for was removed from the project.', action: null });
+  });
+
+  it('removed after the import: a one-line note, the Part works as usual; a link that adds it as a new geometry clears it', async () => {
+    const { createEditOpen } = await import('../../src/link/edit-open');
+    const t = services({ removed: REMOVED, geometry: null as unknown as EditedGeometry, features: [IMPORTED], study: { cad_adopt: record() } });
+    const e = createEditOpen(t.s, { sleep: async () => {} });
+    await e.start();
+    expect(t.sourceCalls).toEqual([]);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(e.state.get()).toMatchObject({ phase: 'ready', note: 'Its geometry stepped-bore was removed. Back asks before adding this part as a new geometry.' });
+    expect(block()).toBeNull();
+    e.onLinked({ created: false });
+    expect(e.state.get().note).not.toBeNull();
+    e.onLinked({ created: true });
+    expect(e.state.get().note).toBeNull();
+    expect(e.removed).toBeNull();
+  });
+});
+
+describe('Edit in CAD: the launch face on a geometry of two bodies', () => {
+  it('"face 8@Body2" (the face the user right-clicked in Body2) selects the CAD face the match gives for host face 8; "Body2" selects its body', async () => {
+    const { createEditOpen } = await import('../../src/link/edit-open');
+    // The app numbers faces over the whole geometry: Body1 has faces 1-6, Body2 faces 7-12.
+    const table = { faces: Array.from({ length: 12 }, (_, i) => ({ index: i + 1, label: `face ${i + 1}@Body${i < 6 ? 1 : 2}` })) };
+    const faces = new Map(table.faces.map((f) => [f.index, { body: f.index <= 6 ? 'b_a' : 'b_b', index: (f.index - 1) % 6 }]));
+    const bodies = new Map([
+      [1, 'b_a'],
+      [2, 'b_b'],
+    ]);
+    prepare.mockImplementation(async (_d: unknown, o: { baselineVersion: number; feature: ImportFeature }) => ({ record: record({ baselineVersion: o.baselineVersion }), faces, bodies, table, ms: 1 }));
+    const t = services({ launch: { face: 'face 8@Body2', body: 'Body2' } });
+    const e = createEditOpen(t.s, { sleep: async () => {} });
+    const run = e.start();
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+    finishImport();
+    await run;
+    expect(t.selection.get().items).toEqual([{ kind: 'face', body: 'b_b', index: 1 }]);
+    // A label the table does not list (the app relabelled it): the face number still finds it.
+    matchOnly.mockResolvedValue({ table: { faces: [] }, faces, bodies });
+    const u = services({ features: [IMPORTED], study: { cad_adopt: record() }, launch: { face: 'face 12@Body2' } });
+    const f = createEditOpen(u.s, { sleep: async () => {} });
+    await f.start();
+    expect(u.selection.get().items).toEqual([{ kind: 'face', body: 'b_b', index: 5 }]);
+    // Only a body: its CAD body.
+    const v = services({ features: [IMPORTED], study: { cad_adopt: record() }, launch: { body: 'Body2' } });
+    const g = createEditOpen(v.s, { sleep: async () => {} });
+    await g.start();
+    expect(v.selection.get().items).toEqual([{ kind: 'body', body: 'b_b' }]);
   });
 });

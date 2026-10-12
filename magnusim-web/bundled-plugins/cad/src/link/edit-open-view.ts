@@ -32,12 +32,12 @@ export function mountEditOpenView(state: StateStore<EditOpenState>, actions: { s
   doc.body.append(el);
   const draw = () => {
     const s = state.get();
-    const busy = s.line && (s.phase === 'loading' || s.phase === 'waiting' || s.phase === 'matching' || s.phase === 'error');
+    const busy = s.line && (s.phase === 'loading' || s.phase === 'waiting' || s.phase === 'matching' || s.phase === 'error' || s.phase === 'removed');
     const kind = busy ? s.phase : s.note ? 'note' : null;
     el.hidden = !kind;
     if (!kind) return;
     el.setAttribute('data-edit-open', kind);
-    el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    el.setAttribute('role', kind === 'error' || kind === 'removed' ? 'alert' : 'status');
     text.textContent = busy ? s.line : s.note;
     if (kind === 'loading' && s.fraction != null) {
       fill.style.width = `${Math.round((s.fraction ?? 0) * 100)}%`;

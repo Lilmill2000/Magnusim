@@ -31,6 +31,14 @@ import {
   VORTEX,
   type W,
   backButton,
+  settled,
+  answerRemovedQuestion,
+  expectRemovedQuestion,
+  openPartRow,
+  geometryName,
+  geometryIds,
+  removeGeometryInPanel,
+  baseUrl,
   backUnchanged,
   bcsOf,
   cad,
@@ -386,6 +394,96 @@ test.describe('Edit in CAD', () => {
     await line.locator('[data-edit-open-action="retry"]').click();
     await expect.poll(() => cad<string>(page, (() => (window as unknown as W).__CAD__.edit.state.get().phase) as never), { timeout: 180_000 }).toBe('ready');
     expect(await history(page)).toEqual(['import']);
+  });
+
+  test('cad:edit-removed-target the edited geometry is removed and a new one of the same name added: the Part says so, and its next Back with a change ASKS: Not now adds nothing and leaves the new geometry untouched; Add as new geometry adds exactly one, named after the Part (round 3)', async ({ page, request }) => {
+    test.setTimeout(900_000);
+    const pid = await newProject(request, `CAD edit removed ${Date.now()}`);
+    const geom = await importGeometry(request, pid, STEPPED, 'stepped-bore.step');
+    await openProject(page, pid);
+    // Edit in CAD, press-pull, Back -> Overwrite: the Part now links (adopted) the geometry.
+    await (await treeMenuItem(page, geom.id)).click();
+    const { sid, frame } = await editOpened(page, pid);
+    const partTitle = ((await page.locator('#workspace-overlay [data-ws-title]').textContent()) ?? '').trim();
+    const topAt = async (z: number) => (await cadFaces(page)).filter((f) => f.normal && near(f.normal[2], 1, 1e-6) && near(f.centroid[2], z, 1e-3));
+    await pressPull(page, frame, (await topAt(30))[0].i, 10);
+    let before = await landings(page);
+    await backButton(page).click();
+    await landed(page, pid, before);
+    expect((await linkedOf(request, pid, sid))?.geometryId).toBe(geom.id);
+    // Remove it in the simulation view (its panel's Delete), then add ANOTHER STEP under the same name.
+    await removeGeometryInPanel(page, geom.id);
+    const other = await importGeometry(request, pid, BOX, 'stepped-bore.step');
+    expect(other.id).not.toBe(geom.id);
+    expect(other.name).toBe(geom.name);
+    const otherMeta = await metaOf(request, pid, other.id);
+    const geometriesBefore = await geometryIds(request, pid);
+    // The Part, reopened from STUDIES: the note, and it works as usual.
+    await page.goto(`${baseUrl()}/#/p/${pid}`);
+    await openPartRow(page, partTitle);
+    const f2 = await partOpened(page);
+    await expect(f2.locator('[data-edit-open="note"] [data-edit-open-line]')).toHaveText(`Its geometry ${geom.name} was removed. Back asks before adding this part as a new geometry.`, { timeout: 60_000 });
+    await settled(page);
+    await pressPull(page, f2, (await topAt(40))[0].i, 5);
+    // Back: the question. Not now: nothing added, the new same-name geometry untouched, the leave goes on.
+    before = await landings(page);
+    await backButton(page).click();
+    await expectRemovedQuestion(page, geom.name, partTitle);
+    await shot(page, 'edit-removed-question');
+    await answerRemovedQuestion(page, 'not_now');
+    await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 120_000 });
+    expect(await geometryIds(request, pid)).toEqual(geometriesBefore);
+    expect(await metaOf(request, pid, other.id)).toEqual(otherMeta);
+    expect(await linkedOf(request, pid, sid)).toBeNull();
+    // Back again with no change since: no question.
+    await openPartRow(page, partTitle);
+    await partOpened(page);
+    await settled(page);
+    await backUnchanged(page, pid);
+    expect(await geometryIds(request, pid)).toEqual(geometriesBefore);
+    // A change, Back, Add as new geometry: exactly one geometry more, named after the Part; the Part links it.
+    await openPartRow(page, partTitle);
+    const f3 = await partOpened(page);
+    await settled(page);
+    await pressPull(page, f3, (await topAt(45))[0].i, 5);
+    before = await landings(page);
+    await backButton(page).click();
+    await expectRemovedQuestion(page, geom.name, partTitle);
+    await answerRemovedQuestion(page, 'new');
+    await landed(page, pid, before);
+    const after = await geometryIds(request, pid);
+    const added = after.filter((id) => !geometriesBefore.includes(id));
+    expect(added).toHaveLength(1);
+    const ln = (await linkedOf(request, pid, sid))!;
+    expect(ln.geometryId).toBe(added[0]);
+    expect(await geometryName(request, pid, added[0])).toMatch(new RegExp(`^${partTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( v2)?$`));
+    expect(await metaOf(request, pid, other.id)).toEqual(otherMeta);
+  });
+
+  test('cad:edit-removed-before-back the geometry is removed before the first Back: the reopened Part shows the note, and Back with a change asks (round 3)', async ({ page, request }) => {
+    test.setTimeout(900_000);
+    const pid = await newProject(request, `CAD edit removed early ${Date.now()}`);
+    const geom = await importGeometry(request, pid, STEPPED, 'stepped-bore.step');
+    await openProject(page, pid);
+    await (await treeMenuItem(page, geom.id)).click();
+    const { sid } = await editOpened(page, pid);
+    const partTitle = ((await page.locator('#workspace-overlay [data-ws-title]').textContent()) ?? '').trim();
+    await backUnchanged(page, pid);
+    await removeGeometryInPanel(page, geom.id);
+    const geometriesBefore = await geometryIds(request, pid);
+    await openPartRow(page, partTitle);
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-edit-open="note"] [data-edit-open-line]')).toHaveText(`Its geometry ${geom.name} was removed. Back asks before adding this part as a new geometry.`, { timeout: 60_000 });
+    await settled(page);
+    expect(await history(page)).toEqual(['import']);
+    const top = (await cadFaces(page)).filter((f) => f.normal && near(f.normal[2], 1, 1e-6) && near(f.centroid[2], 30, 1e-3));
+    await pressPull(page, frame, top[0].i, 10);
+    await backButton(page).click();
+    await expectRemovedQuestion(page, geom.name, partTitle);
+    await answerRemovedQuestion(page, 'not_now');
+    await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`), { timeout: 120_000 });
+    expect(await geometryIds(request, pid)).toEqual(geometriesBefore);
+    expect(await linkedOf(request, pid, sid)).toBeNull();
   });
 
   test('cad:edit-vortex Daniel\'s Vortex: Edit in CAD imports it by itself, matches its faces, and a BC on the moved face follows it while another stays', async ({ page, request }, info) => {

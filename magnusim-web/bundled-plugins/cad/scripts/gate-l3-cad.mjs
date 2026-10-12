@@ -67,6 +67,8 @@ export const L3_E2E_CENSUS = [
   ['cad:edit-undo-to-import', 'passed'],
   ['cad:edit-surface-only', 'passed'],
   ['cad:edit-wait-stop', 'passed'],
+  ['cad:edit-removed-target', 'passed'],
+  ['cad:edit-removed-before-back', 'passed'],
   ['cad:edit-vortex', 'passed'],
 ];
 
