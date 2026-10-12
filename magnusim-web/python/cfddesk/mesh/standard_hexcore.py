@@ -80,6 +80,8 @@ _MIN_SIZE_FRACTION = 0.5
 _PHYSICS_IO_FACTOR = 0.7
 # Hex core clearance from the CAD surface in units of h_s (plus 0.5·h_c).
 _CORE_CLEARANCE_HS = 1.5
+# With feature refinement, core vertices only where the cells are this x h_c or larger.
+_CORE_MIN_FIELD_FRACTION = 0.95
 # Automatic boundary layers = SimScale inflate defaults.
 BL_N_LAYERS = 3
 BL_RELATIVE_THICKNESS = 0.4
@@ -197,6 +199,8 @@ class StandardMeshResult:
     log: list[str] = field(default_factory=list)
     # How the volume was filled when the first attempt failed ("" otherwise).
     volume_fill_note: str = ""
+    # Automatic feature refinement: the smallest cell size it allowed (None: off).
+    feature_floor_m: float | None = None
 
     @property
     def n_cells(self) -> int:
@@ -399,8 +403,12 @@ def _build_hex_core(
     h_s: float,
     h_c: float,
     log,
+    size_at=None,
 ) -> _HexCore | None:
-    """Cartesian core inside the closed triangulated surface, capped with pyramids."""
+    """Cartesian core inside the closed triangulated surface, capped with pyramids.
+
+    ``size_at`` (points -> cell size), when given, keeps the core where the
+    cells are to be at least about h_c: refined regions are filled with tets."""
     from scipy.spatial import cKDTree
 
     t0 = time.monotonic()
@@ -433,6 +441,9 @@ def _build_hex_core(
     # per-point VTK enclosed-points test took ~100 s at fineness 10). Vertices
     # near the surface are excluded above, so on-surface ambiguity never counts.
     inside = ~near & _lattice_inside(surf_nodes, surf_tris, gx, gy, gz, h_c).ravel()
+    if size_at is not None and inside.any():
+        idx = np.flatnonzero(inside)
+        inside[idx[size_at(pts[idx]) < _CORE_MIN_FIELD_FRACTION * h_c]] = False
     good = inside.reshape(tuple(n))
     core = (
         good[:-1, :-1, :-1]
@@ -1483,9 +1494,40 @@ def _build_standard_msh_once(
         nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
         _log(f"surface: {len(tris)} triangles, {len(nodes)} nodes at h={h:.4g} m ({time.monotonic()-t0:.1f}s)")
 
+        # --- automatic feature refinement: smaller cells at short curves, narrow
+        # faces and narrow gaps, growing at the gradation rate (feature_size.py)
+        feature = None
+        size_view = None
+        if not discrete:
+            from cfddesk.mesh.feature_size import add_size_view, plan_feature_refinement, view_field
+
+            feature = plan_feature_refinement(
+                gmsh, surfs, nodes, tris, h=h, gradation=float(sizing.gradation),
+                small_feature_m=sfs, log=_log,
+            )
+        if feature is not None:
+            t_f = time.monotonic()
+            # Without a hex core the tets grow on past h away from the walls.
+            grow_on = not use_core and sizing.gradation > 1.0
+            size_view = add_size_view(
+                gmsh, feature.field, feature.tree, cap=_GRADATION_MAX_SIZE_HS * h if grow_on else None
+            )
+            fields.append(view_field(gmsh, size_view))
+            _set_background(gmsh, fields)
+            if feature.floor < gmsh.option.getNumber("Mesh.MeshSizeMin"):
+                gmsh.option.setNumber("Mesh.MeshSizeMin", feature.floor)
+            gmsh.model.mesh.clear()
+            gmsh.model.mesh.generate(2)
+            nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
+            _log(
+                f"surface (feature-refined): {len(tris)} triangles, {len(nodes)} nodes "
+                f"({time.monotonic() - t_f:.1f}s)"
+            )
+
         # --- needle triangles: short CAD edges meshed next to triangles of size h
+        # (the feature refinement grades the surface from them already)
         n_needles = 0 if discrete else hxt_unfit_needles(nodes, tris)
-        if n_needles:
+        if n_needles and feature is None:
             t_g = time.monotonic()
             floor = max(sfs, _NEEDLE_GRADE_FLOOR_HS * h)
             grade, counts = _short_edge_fields(gmsh, surfs, h=h, floor=floor)
@@ -1523,7 +1565,10 @@ def _build_standard_msh_once(
         if gap is not None:
             fields.append(_size_view_field(gmsh, "gap_size", c_nodes, c_tris, gap))
             _set_background(gmsh, fields)
-            gmsh.option.setNumber("Mesh.MeshSizeMin", max(sfs, 0.25 * h_min))
+            gap_min = max(sfs, 0.25 * h_min)
+            if feature is not None:
+                gap_min = min(gap_min, feature.floor)
+            gmsh.option.setNumber("Mesh.MeshSizeMin", gap_min)
             gmsh.model.mesh.clear()
             gmsh.model.mesh.generate(2)
             nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
@@ -1577,7 +1622,10 @@ def _build_standard_msh_once(
                 core_note = f"hex element core skipped: {len(vols)} volumes (single solid only)"
                 _log(core_note)
             else:
-                core = _build_hex_core(nodes, tris, h_s=h, h_c=float(sizing.h_core_m), log=_log)
+                core = _build_hex_core(
+                    nodes, tris, h_s=h, h_c=float(sizing.h_core_m), log=_log,
+                    size_at=feature.field if feature is not None else None,
+                )
                 core_note = "hex element core on" if core is not None else "hex element core skipped: no room for core cells"
                 if core is None:
                     _log(core_note)
@@ -1611,6 +1659,9 @@ def _build_standard_msh_once(
                 # one took 90 s on a part with 6,534 faces.
                 gmsh.model.add("standard-shell")
                 vols = []
+                if size_view is not None:
+                    # Fields belong to a model; the size view does not.
+                    _set_background(gmsh, [view_field(gmsh, size_view)])
                 ds_outer = gmsh.model.addDiscreteEntity(2)
                 outer_tags = np.arange(1, len(nodes) + 1, dtype=np.int64)
                 gmsh.model.mesh.addNodes(
@@ -1831,6 +1882,7 @@ def _build_standard_msh_once(
         wall_s=wall,
         gmsh_layer_patches=list(grown),
         log=lines,
+        feature_floor_m=feature.floor if feature is not None else None,
     )
 
 

@@ -496,6 +496,8 @@ def main() -> int:
                     "min_thickness_m": sizing.layer_min_thickness_m,
                     "expansion": sizing.layer_expansion,
                 },
+                # Automatic feature refinement: the smallest cell it allowed (None: off).
+                "feature_floor_m": mesh.feature_floor_m,
             },
             "host_mesh": {
                 "n_nodes": mesh.n_nodes,

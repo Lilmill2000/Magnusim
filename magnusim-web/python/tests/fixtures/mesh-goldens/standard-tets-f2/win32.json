@@ -3,18 +3,18 @@
   "constant/triSurface/geometry.msh": {
    "mesh": {
     "elements": {
-     "tet": 40228,
-     "tri": 15146
+     "tet": 52848,
+     "tri": 21812
     },
-    "nodes": 10680,
+    "nodes": 14739,
     "triangles_per_group": {
      "pressure_1": 88,
-     "velocity_inlet_1": 84,
-     "walls": 14974
+     "velocity_inlet_1": 86,
+     "walls": 21638
     }
    },
-   "sha256": "a1b5431e80108c4533e517da1e7ce3eae97e6cb893a877e512016256a911f44d",
-   "size": 2639771
+   "sha256": "d0e0a2fbeb0de1a7e4fd78c89e66f769d8bc7d486894f867de2d8f85b5bb9e8f",
+   "size": 3687865
   }
  },
  "text": {
@@ -24,11 +24,14 @@
    "small feature suppression: features below 9.2e-05 m suppressed",
    "physics-based: 1 inlet + 1 outlet surface(s) at 0.70\u00b7h",
    "surface: 15146 triangles, 7575 nodes at h=0.01207 m (<s>)",
+   "feature refinement: 0 short curve(s), 3 narrow face(s), 0 narrow gap(s) below 0.00302 m; cells there down to 0.000754 m, growing 1.22x per cell; about 0.16M cells vs 0.15M uniform (53325 size boxes, <s>)",
+   "surface (feature-refined): 21812 triangles, 10908 nodes (<s>)",
+   "collapsed 8 surface edge(s) shorter than 0.0003 m",
    "tets: filling the volume (timeout <s>)",
-   "tet volume: 40228 tets, 0 prisms (<s>)",
-   "volume assembly: cells 0.0447506 m\u00b3 vs boundary 0.0447506 m\u00b3 (rel err 1.55e-16)",
-   "volume check: mesh 0.0447506 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 1.07e-03)",
-   "msh written: 10680 nodes, 40228 tets, 0 hexes, 0 prisms, 0 pyramids, 15146 boundary tris (<s>)"
+   "tet volume: 52848 tets, 0 prisms (<s>)",
+   "volume assembly: cells 0.0447498 m\u00b3 vs boundary 0.0447498 m\u00b3 (rel err 0.00e+00)",
+   "volume check: mesh 0.0447498 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 1.09e-03)",
+   "msh written: 14739 nodes, 52848 tets, 0 hexes, 0 prisms, 0 pyramids, 21812 boundary tris (<s>)"
   ]
  }
 }
