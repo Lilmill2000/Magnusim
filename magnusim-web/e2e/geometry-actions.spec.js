@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { prepareE2eProjectsRoot } from './prepare-projects.js';
 import { getJson } from './support/compute-slot.js';
 import { e2eTemp, killTree, startHost } from './support/host-server.mjs';
@@ -26,13 +26,19 @@ import { e2eTemp, killTree, startHost } from './support/host-server.mjs';
 //   6. Save as new: "box v2" added, box stays a plain import with its study.
 //   7. Keep editing: nothing changes.
 //   8. A save drawn on the plain box after the adoption is refused (409 geometry_changed).
-//   9. Refusals: a bad originalNames (bad_face_names), a second editor (adopted), a removed
-//      geometry (the link makes a new one).
+//   9. Refusals: a bad originalNames (bad_face_names), a second editor (adopted), a geometry
+//      removed before the first link (the host asks; "Add as new geometry" makes a new one).
 //  10. Crash: on a host whose every apply fails the adoption stops half way (fenced); after a
 //      restart without the switch the recovery finishes it.
 //  11. "Add as new geometry" imports the original beside the adopted one.
+//  12. A removed target: after an adoption, box removed (the question says the Part stays), a
+//      new box of the same name added; the Part is in STUDIES ("Its geometry box was
+//      removed"), the new box is never its; its next edit asks: "Not now" adds nothing,
+//      "Add as new geometry" adds "box v2" and leaves the new box as it was.
+//  13. Two bodies: the viewport right-click on the second body passes that body.
 
 const FX = resolve('python/tests/fixtures/edit-plugins/edit-demo/workspace/fixtures');
+const TWO_BODIES = resolve('python/tests/fixtures/geometry/two-boxes-shared-face.brep');
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const BOX_SHA = sha256(readFileSync(join(FX, 'box.step')));
 
@@ -52,9 +58,10 @@ async function newProject(request, host, title) {
   return pj.id;
 }
 
-/** Import a fixture file as the project's newest geometry; its id. */
+/** Import a fixture file (edit-demo's, or a full path) as the project's newest geometry; its id. */
 async function importFile(request, host, pid, file) {
-  const r = await request.post(`${host.base}/api/geometry/import`, { data: { project_id: pid, step_path: join(FX, file), filename: file } });
+  const path = isAbsolute(file) ? file : join(FX, file);
+  const r = await request.post(`${host.base}/api/geometry/import`, { data: { project_id: pid, step_path: path, filename: basename(path) } });
   const j = await r.json();
   expect(r.ok(), JSON.stringify(j).slice(0, 400)).toBe(true);
   return j.added.id;
@@ -180,19 +187,22 @@ async function readReport(page) {
 async function answerQuestion(page, choice) {
   await expect(page.locator('#modal-link-choice')).toBeVisible({ timeout: 120_000 });
   const heading = await page.locator('#lc-heading').textContent();
+  const copy = await page.locator('#lc-copy').textContent();
+  const newLabel = await page.locator('#lc-new').textContent();
   const overwrite = await page.locator('#lc-overwrite').textContent();
-  await page.locator({ new: '#lc-new', overwrite: '#lc-overwrite', cancel: '#lc-cancel' }[choice]).click();
+  // "Not now" is the second button of the question about a removed geometry.
+  await page.locator({ new: '#lc-new', overwrite: '#lc-overwrite', not_now: '#lc-overwrite', cancel: '#lc-cancel' }[choice]).click();
   await expect(page.locator('#modal-link-choice')).toBeHidden();
-  return { heading, overwrite };
+  return { heading, copy, newLabel, overwrite };
 }
 
-/** Points of the viewport's canvas on the part, as the viewport's own pick finds them. */
-async function partPoint(page) {
+/** A point of the viewport's canvas on the part (on this body, when given), as the viewport's own pick finds it. */
+async function partPoint(page, body = 0) {
   let found = null;
   await expect
     .poll(
       async () => {
-        found = await page.evaluate(() => {
+        found = await page.evaluate((want) => {
           const canvas = document.querySelector('#viewer canvas');
           if (!canvas || typeof window.__CFD_PICK_CAD__ !== 'function') return null;
           const r = canvas.getBoundingClientRect();
@@ -208,13 +218,14 @@ async function partPoint(page) {
               const x = Math.round(r.left + r.width * fx);
               const y = Math.round(r.top + r.height * fy);
               const key = faceAt(x, y);
-              if (!key || ring.some(([dx, dy]) => faceAt(x + dx, y + dy) !== key)) continue;
+              if (!key || (want && Number(key.split(':')[0]) !== want)) continue;
+              if (ring.some(([dx, dy]) => faceAt(x + dx, y + dy) !== key)) continue;
               const [solidId, faceId] = key.split(':').map(Number);
               return { x, y, faceId, solidId };
             }
           }
           return null;
-        });
+        }, body);
         return !!found;
       },
       { timeout: 30_000, intervals: [250] },
@@ -335,6 +346,31 @@ test.describe('geometry actions (host API 1.7)', () => {
     expect(JSON.parse(await page.frameLocator('#workspace-frame').locator('#ctx').textContent()).id).toBe(gid);
   });
 
+  test('two bodies: the viewport right-click on the second body passes that body and its face, as the face table names it @plugins', async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const pid = await newProject(request, host, 'Actions two bodies');
+    const gid = await importFile(request, host, pid, TWO_BODIES);
+    await openProject(page, host, pid);
+    const at = await partPoint(page, 2);
+    expect(at.solidId).toBe(2);
+    await page.mouse.click(at.x, at.y, { button: 'right' });
+    await page.locator('#face-ctx-menu [data-geom-action="demo"]').click();
+    await expect(page).toHaveURL(new RegExp(`#/p/${pid}/ws/edit-demo/demo/st-[0-9a-f]+$`));
+    const frame = page.frameLocator('#workspace-frame');
+    const launch = { face: `face ${at.faceId}@Body2`, body: 'Body2' };
+    await expect(frame.locator('#launch')).toHaveText(JSON.stringify(launch), { timeout: 30_000 });
+    expect(JSON.parse(await frame.locator('#ctx').textContent())).toMatchObject({ id: gid, bodies: 2 });
+    // The page finds that face in the host's face table, on that body.
+    const row = await frame.locator('body').evaluate(
+      (el, label) => window.__ws.project.geometryFaces().then((t) => {
+        const f = t.faces.find((x) => x.label === label);
+        return f ? { label: f.label, body: f.body } : null;
+      }),
+      launch.face,
+    );
+    expect(row).toEqual({ label: launch.face, body: 2 });
+  });
+
   test('Edit v2 overwrites box in place: same id, BCs follow by name, mesh out of date, original kept, after a reload too @plugins', async ({ page, request }) => {
     test.setTimeout(300_000);
     const pid = await newProject(request, host, 'Actions adopt');
@@ -349,7 +385,7 @@ test.describe('geometry actions (host API 1.7)', () => {
     const frame = await editFromTree(page, pid, gid);
     await frame.locator('#edit-v2').click();
     const q = await answerQuestion(page, 'overwrite');
-    expect(q).toEqual({ heading: 'box has a new shape', overwrite: 'Overwrite box' });
+    expect([q.heading, q.overwrite]).toEqual(['box has a new shape', 'Overwrite box']);
     await expect(frame.locator('#status')).toHaveText('shape rev 1', { timeout: 180_000 });
     const result = JSON.parse(await frame.locator('#result').textContent());
     expect(result).toMatchObject({ geometryId: gid, change: 'shape', rev: 1, fromRev: 0, created: false, lost: 0 });
@@ -458,8 +494,8 @@ test.describe('geometry actions (host API 1.7)', () => {
     const late = await frameB.locator('body').evaluate(() => window.editV2().then(() => 'linked', (e) => `${e.code}: ${e.message}`));
     expect(late).toBe('adopted: box is already edited in box.');
     expect(sid).not.toBe(oid);
-    // A removed geometry: the first link makes a new one.
-    const pid2 = await newProject(request, host, 'Actions removed');
+    // A geometry removed before the first link: the host asks; "Add as new geometry" makes a new one.
+    const pid2 = await newProject(request, host, 'Actions removed early');
     const gid2 = await importFile(request, host, pid2, 'box.step');
     const opened = await (await request.post(`${host.base}/api/geometry-actions/open`, { data: { project_id: pid2, geometry_id: gid2, plugin: 'edit-demo', study_kind: 'demo' } })).json();
     const rm = await request.post(`${host.base}/api/geometry/remove`, { data: { project_id: pid2, geometry_id: gid2 } });
@@ -468,9 +504,86 @@ test.describe('geometry actions (host API 1.7)', () => {
     await page.evaluate((h) => (location.hash = h), `#/p/${pid2}/ws/edit-demo/demo/${opened.study_id}`);
     const frameC = page.frameLocator('#workspace-frame');
     await expect(frameC.locator('#title')).toHaveText('box', { timeout: 30_000 });
-    const made = await frameC.locator('body').evaluate(() => window.editV2().then((r) => r, (e) => ({ error: e.code })));
+    expect(await frameC.locator('#ctx').textContent()).toBe('null');
+    const pending = frameC.locator('body').evaluate(() => window.editV2().then((r) => r, (e) => ({ error: e.code })));
+    const asked = await answerQuestion(page, 'new');
+    expect([asked.heading, asked.copy, asked.newLabel, asked.overwrite]).toEqual(['box was removed from the project', 'Add box as a new geometry?', 'Add as new geometry', 'Not now']);
+    const made = await pending;
     expect(made).toMatchObject({ created: true, change: 'shape', rev: 1 });
     expect(made.geometryId).not.toBe(gid2);
+  });
+
+  test('a removed box: its Part stays in STUDIES and asks before it adds it again; a new box of the same name is never taken over @plugins', async ({ page, request }) => {
+    test.setTimeout(420_000);
+    const pid = await newProject(request, host, 'Actions removed target');
+    const gid = await importFile(request, host, pid, 'box.step');
+    const geometries = async () => (await getJson(request, `${host.base}/api/project/tree?project_id=${pid}`)).geometries;
+    await openProject(page, host, pid);
+    let frame = await editFromTree(page, pid, gid);
+    const sid = await studyOf(page);
+    // 1. Edit, change: the Part takes box over (nothing uses it: no question). Back.
+    await frame.locator('#edit-v2').click();
+    await expect(frame.locator('#status')).toHaveText('shape rev 1', { timeout: 180_000 });
+    await back(page, pid);
+    await expect(geomRow(page, gid).locator('[data-geom-from]')).toHaveText('from box', { timeout: 30_000 });
+    // 2. Remove box from the Geometry panel: the question says the Part stays.
+    // Its name (the row's middle is the link's "Edit").
+    await geomRow(page, gid).locator('.tl').first().click();
+    await page.locator('#panel-geometry .mat-clear-link', { hasText: 'Delete' }).click({ timeout: 30_000 });
+    await expect(page.locator('#modal-confirm')).toBeVisible();
+    await expect(page.locator('#cf-copy')).toHaveText(
+      "The CAD is removed from this project. The Demo editor edit demo 'box' that edits it stays. It won't add the geometry back unless you choose to.",
+    );
+    await page.screenshot({ path: test.info().outputPath('1-remove-question.png') });
+    await page.locator('#cf-confirm').click();
+    await expect.poll(async () => (await geometries()).length, { timeout: 30_000 }).toBe(0);
+    // The Part stays, in STUDIES, and says why it is not in the simulation.
+    await expect(page.locator(`[data-plugin-study="${sid}"] [data-plugin-study-removed="${gid}"]`)).toHaveText('Its geometry box was removed', { timeout: 30_000 });
+    // 3. The same file again: a new box. Its row is not the Part's, and its action makes a new study.
+    const gid2 = await importFile(request, host, pid, 'box.step');
+    expect(gid2).not.toBe(gid);
+    // The import went by the route: load the project again.
+    await page.reload();
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+    await expect(page.locator(`#left-tree [data-w16-geom="${gid2}"]`)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(`#left-tree [data-w16-geom="${gid2}"] [data-geom-edited-by]`)).toHaveCount(0);
+    await expect(page.locator(`[data-plugin-study="${sid}"] [data-plugin-study-removed="${gid}"]`)).toBeVisible();
+    const fresh = await (await request.post(`${host.base}/api/geometry-actions/open`, { data: { project_id: pid, geometry_id: gid2, plugin: 'edit-demo', study_kind: 'demo' } })).json();
+    expect(fresh.study_id).not.toBe(sid);
+    // 4. Reopen the Part from STUDIES: it edits no geometry now. A change asks; Not now adds nothing.
+    await page.locator(`[data-plugin-study="${sid}"] > .tree-row`).click();
+    await expect(page).toHaveURL(new RegExp(`#/p/${pid}/ws/edit-demo/demo/${sid}$`));
+    frame = page.frameLocator('#workspace-frame');
+    await expect(frame.locator('#title')).toHaveText('box', { timeout: 30_000 });
+    expect(await frame.locator('#ctx').textContent()).toBe('null');
+    await frame.locator('#edit-v2').click();
+    const asked = await answerQuestion(page, 'not_now');
+    expect([asked.heading, asked.copy, asked.newLabel, asked.overwrite]).toEqual(['box was removed from the project', 'Add box as a new geometry?', 'Add as new geometry', 'Not now']);
+    await expect(frame.locator('#status')).toContainText('Refused: not_now', { timeout: 60_000 });
+    expect((await geometries()).map((g) => g.id)).toEqual([gid2]);
+    await back(page, pid);
+    await expect(page.locator(`[data-plugin-study="${sid}"] [data-plugin-study-removed="${gid}"]`)).toBeVisible({ timeout: 30_000 });
+    // 5. Again: it asks again; Add as new geometry adds "box v2" (box is the new one's name).
+    await page.locator(`[data-plugin-study="${sid}"] > .tree-row`).click();
+    frame = page.frameLocator('#workspace-frame');
+    await expect(frame.locator('#title')).toHaveText('box', { timeout: 30_000 });
+    await frame.locator('#edit-v2').click();
+    expect((await answerQuestion(page, 'new')).heading).toBe('box was removed from the project');
+    await expect(frame.locator('#status')).toHaveText('shape rev 1', { timeout: 180_000 });
+    const made = JSON.parse(await frame.locator('#result').textContent());
+    expect(made.created).toBe(true);
+    expect([made.geometryId === gid, made.geometryId === gid2]).toEqual([false, false]);
+    const tree = await geometries();
+    expect(tree.map((g) => g.name).sort()).toEqual(['box', 'box v2']);
+    // The new box: untouched, a plain import with no link.
+    const plain = tree.find((g) => g.id === gid2);
+    expect([plain.name, plain.rev, plain.source]).toEqual(['box', undefined, undefined]);
+    expect(readdirSync(geomDir(host, pid, gid2))).toContain('source.step');
+    const rec = JSON.parse(readFileSync(join(host.projects, pid, 'plugins', 'edit-demo', 'studies', sid, 'study.json'), 'utf8'));
+    expect(rec.geometry_removed).toBeUndefined();
+    await back(page, pid);
+    await expect(page.locator(`[data-plugin-study="${sid}"] [data-plugin-study-geometry="${made.geometryId}"]`)).toHaveText('\u2192 box v2', { timeout: 30_000 });
+    await page.screenshot({ path: test.info().outputPath('2-added-again.png') });
   });
 });
 

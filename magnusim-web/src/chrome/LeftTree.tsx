@@ -24,7 +24,7 @@ import { onProjectTree, readProjectTree } from './treeFeed';
 import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from './treeSession';
 import { GeometryMenu, type GeometryMenuExtra } from './GeometryMenu';
 import { bodyHidden, bodyMenuItems, getBodyView, requestBodyView, subscribeBodyView } from '../workbench/bodyView';
-import { actionsFor, rememberTreeActions } from '../workspace/geometryActions';
+import { actionsFor, rememberTreeActions, studyKindWords } from '../workspace/geometryActions';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
   if (ok) return <span className="tree-check" aria-hidden="true">✓</span>;
@@ -818,6 +818,11 @@ export function PluginStudiesView({
               >
                 {`\u2192 ${linked[`${st.plugin}|${st.id}`].name}`}
               </button>
+            ) : st.geometry_removed ? (
+              // API 1.7: the geometry it edited or linked was removed; its next link asks first.
+              <div className="plugin-study-geometry is-none" data-plugin-study-geometry="" data-plugin-study-removed={st.geometry_removed.id}>
+                {st.geometry_removed.name ? `Its geometry ${st.geometry_removed.name} was removed` : 'Its geometry was removed'}
+              </div>
             ) : st.available && links(st) ? (
               <div className="plugin-study-geometry is-none" data-plugin-study-geometry="">
                 Not in the simulation yet
@@ -852,9 +857,7 @@ export function PluginStudiesView({
  */
 export function deleteWords(st: PluginStudyRow, geometry: { id: string; name: string } | undefined): { confirm_title?: string; confirm_copy?: string } {
   if (!geometry) return {};
-  const ws = String(st.workspace_title || '').trim();
-  const kind = String(st.kind_title || 'study').trim();
-  const what = ws && !kind.toLowerCase().includes(ws.toLowerCase()) ? `${ws} ${kind.toLowerCase()}` : kind;
+  const what = studyKindWords(st.kind_title, st.workspace_title);
   return {
     confirm_title: `Delete the ${what}?`,
     confirm_copy: `Delete the ${what} '${st.title}'? The geometry '${geometry.name}' stays in the project, with its simulations.`,

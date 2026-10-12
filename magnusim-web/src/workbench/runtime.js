@@ -215,6 +215,7 @@ import { bodyDisplay, setShownFaceTable } from './faceNames';
 import { getBodyView, publishBodyView, setBodyViewHandler } from './bodyView';
 import { buildCadFaceIndex, extractCells, hiddenFaceBodies, triSoupFromTris, triSoupSpan, visibleCellMask } from './cadHideIndex';
 import { fillViewportGeometryActions } from './viewportGeometryActions';
+import { withGeometryRemoveNote } from '../workspace/geometryActions';
 import { cameraMovedSince, isCameraDrag } from './landingCamera';
 import { linkNeedsAction, linkQuietText, linkReportText, linkTouchesSetup, setupOf } from '../workspace/linkReport';
 import { savedAsNewText } from '../workspace/linkChoice';
@@ -19719,10 +19720,11 @@ window.__CFD_GEOMETRY_DELETE__ = async () => {
   const n = (studyCatalog.simulations || []).filter((s) => s && studyGeometryId(s) === String(id)).length;
   const ok = await confirmAction({
     title: 'Remove this geometry?',
-    copy: n
+    // A plugin study that edits it (API 1.7) stays, and the question says so.
+    copy: withGeometryRemoveNote(n
       ? 'Its ' + (n === 1 ? 'simulation' : n + ' simulations') +
         ' (meshes, boundary conditions, runs and results) will be removed with it.'
-      : 'The CAD is removed from this project.',
+      : 'The CAD is removed from this project.', String((w16State.project && w16State.project.id) || ''), String(id)),
     yes: 'Remove',
   });
   if (!ok) return false;

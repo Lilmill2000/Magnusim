@@ -1394,9 +1394,14 @@ test.describe('linked geometries: rows and plugins (gate:l2-e2e)', () => {
     const removed = await request.post(`${host.base}/api/geometry/remove`, { data: { project_id: scope.pid, geometry_id: first.geometry_id } });
     expect(removed.ok(), await removed.text()).toBe(true);
     await openProject(page, host, scope.pid);
-    // The next link from the page creates a new geometry.
+    // The next link from the page asks first (API 1.7: never a silent create); "Add as new
+    // geometry" creates a new geometry.
     const frame = await openWorkspace(page, host, scope);
-    await linkFromPage(frame, 'v2', 'shape rev 1');
+    await frame.locator('#link-v2').click();
+    const q = await readQuestion(page);
+    expect([q.title, q.copy, q.newLabel, q.overwrite, q.cancel]).toEqual(['Demo 1 was removed from the project', 'Add Demo 1 as a new geometry?', 'Add as new geometry', 'Not now', 'Keep editing']);
+    await answerQuestion(page, 'new');
+    await expect(frame.locator('#link-status')).toHaveText('shape rev 1', { timeout: 180_000 });
     await back(page, scope.pid);
     const linked = await linkedOf(request, host, scope);
     expect(linked.geometryId).not.toBe(first.geometry_id);

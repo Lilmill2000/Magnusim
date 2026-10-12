@@ -1339,6 +1339,13 @@ def _plugin_study_catalog(root: Path, pid: str) -> tuple[list[dict[str, Any]], l
                     "edits_geometry": str((rec.get("edits_geometry") or {}).get("id") or "")
                     if isinstance(rec.get("edits_geometry"), dict)
                     else "",
+                    # The geometry it edited or linked was removed ({id, name}), else None.
+                    "geometry_removed": {
+                        "id": str(rec["geometry_removed"].get("id") or ""),
+                        "name": str(rec["geometry_removed"].get("name") or ""),
+                    }
+                    if isinstance(rec.get("geometry_removed"), dict) and rec["geometry_removed"].get("id")
+                    else None,
                 }
             )
     kinds_out = [
@@ -1462,10 +1469,11 @@ def plugin_studies_get(project_id: str = "", plugin: str = "", study_id: str = "
 
 
 # What a study update may not change: the host keeps these.
-# ``edits_geometry`` (API 1.7) is the host's: the geometry a geometry action opened the study on.
+# ``edits_geometry`` (API 1.7) is the host's: the geometry a geometry action opened the study on;
+# so is ``geometry_removed``: the geometry it edited or linked was removed.
 _STUDY_FIXED = {
     "id", "kind", "plugin", "plugin_name", "plugin_version", "schema_version", "created_at", "updated_at", "rev",
-    "edits_geometry",
+    "edits_geometry", "geometry_removed",
 }
 
 
@@ -1561,7 +1569,7 @@ def plugin_studies_migrated(
     if kind is None:
         raise RpcError(-32602, f"{plugin} has no study kind {current.get('kind')!r}")
     if int(current.get("schema_version") or 1) < int(kind.schema_version):
-        patch = {k: v for k, v in study.items() if k not in {"id", "kind", "plugin", "created_at", "rev", "updated_at", "edits_geometry"}}
+        patch = {k: v for k, v in study.items() if k not in {"id", "kind", "plugin", "created_at", "rev", "updated_at", "edits_geometry", "geometry_removed"}}
         patch["schema_version"] = int(kind.schema_version)
         patch["plugin_version"] = manifest.version
         _study_call(data.update_study, study_id, patch, rev)

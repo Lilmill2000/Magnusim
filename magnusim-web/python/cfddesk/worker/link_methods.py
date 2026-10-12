@@ -25,7 +25,9 @@ Editing a project geometry (API 1.7, ``cfddesk.project.geometry_actions``):
   geometry a study edits, its STEP file and its face table, for the workspace bridge;
 - ``geometry.adopt_names``: checks a first link's ``originalNames`` and writes the named
   face table the adoption's face map starts from;
-- ``geometry.original_import``: an adopted geometry's original file, to import it again.
+- ``geometry.original_import``: an adopted geometry's original file, to import it again;
+- ``geometry.mark_removed`` / ``geometry.clear_removed``: a removed geometry's studies get
+  ``geometry_removed`` (their next link asks first); a link that adds it again clears it.
 
 A refusal is an answer, ``{ok: false, code, error, data?}``, not an RPC error.
 """
@@ -149,6 +151,7 @@ def geometry_link_check(project_id: str = "", plugin: str = "", study_id: str = 
     kind = next((k for k in kinds if k["plugin"] == plugin and k["key"] == study.get("kind")), None)
     linked = _geometry_row(root, link.find_linked(root, plugin, study_id))
     adopt_refused = None
+    removed = None
     if linked is None:
         # API 1.7: the study edits a plain project geometry (edits_geometry): its first link
         # takes that geometry over (state rev 0), unless another study did meanwhile.
@@ -168,6 +171,9 @@ def geometry_link_check(project_id: str = "", plugin: str = "", study_id: str = 
                 "lost_faces": 0,
                 "adopt": True,
             }
+        else:
+            # The geometry it edited or linked was removed: its link asks before it adds one.
+            removed = ga.removed_target(root, plugin, study_id)
     return {
         "ok": True,
         "study": {
@@ -182,7 +188,20 @@ def geometry_link_check(project_id: str = "", plugin: str = "", study_id: str = 
         "links_geometry": bool(kind and kind.get("links_geometry")),
         "geometry": linked,
         "adopt_refused": adopt_refused,
+        "removed": removed,
     }
+
+
+@rpc("geometry.mark_removed")
+def geometry_mark_removed(project_id: str = "", geometry_id: str = "") -> dict[str, Any]:
+    root = _root(project_id)
+    return ga.mark_removed(root, geometry_id)
+
+
+@rpc("geometry.clear_removed")
+def geometry_clear_removed(project_id: str = "", plugin: str = "", study_id: str = "") -> dict[str, Any]:
+    root = _root(project_id)
+    return {"ok": True, "cleared": ga.clear_removed(root, plugin, study_id)}
 
 
 @rpc("geometry.check_kinds")
@@ -279,11 +298,18 @@ def geometry_usage(project_id: str = "", project_dir: str = "", geometry_id: str
 
 @rpc("geometry.next_version")
 def geometry_next_version(
-    project_id: str = "", project_dir: str = "", plugin: str = "", study_id: str = "", base: str = "", adopt: bool = False
+    project_id: str = "",
+    project_dir: str = "",
+    plugin: str = "",
+    study_id: str = "",
+    base: str = "",
+    adopt: bool = False,
+    unique: bool = False,
 ) -> dict[str, Any]:
     root = _root(project_id, project_dir)
     # "Save as new" of an adoption sits beside the geometry it started from: from v2.
-    return {"ok": True, **link.next_version(root, plugin, study_id, str(base or "Geometry"), 2 if adopt else 1)}
+    # ``unique``: a removed geometry's study adds its part again; never a name another has.
+    return {"ok": True, **link.next_version(root, plugin, study_id, str(base or "Geometry"), 2 if adopt else 1, unique=bool(unique))}
 
 
 @rpc("geometry.link_commit")

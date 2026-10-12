@@ -341,6 +341,22 @@ def annotate_tree(root: Path, tree: dict[str, Any], studies: list[dict[str, Any]
                         }
                     )
         node["edited_in"] = editing
+        # The plugin studies whose target it is (the one that links it, or is editing it):
+        # the remove question says they stay and won't add it back on their own.
+        src = node.get("source") if isinstance(node.get("source"), dict) else None
+        owner = (str(src.get("plugin") or ""), str(src.get("study_id") or "")) if src and not node.get("unlinked") else None
+        editors = []
+        for s in studies:
+            key = (str(s.get("plugin") or ""), str(s.get("id") or ""))
+            if key == owner or (s.get("editing") and str(s.get("editing")) == str(node.get("id"))):
+                editors.append(
+                    {
+                        "title": str(s.get("title") or key[1]),
+                        "kind_title": str(s.get("kind_title") or ""),
+                        "workspace_title": str(s.get("workspace_title") or ""),
+                    }
+                )
+        node["editors"] = editors
 
 
 # ---- the target of a study ---------------------------------------------------------------
@@ -349,6 +365,14 @@ def annotate_tree(root: Path, tree: dict[str, Any], studies: list[dict[str, Any]
 def _edits_id(rec: dict[str, Any] | None) -> str:
     ed = (rec or {}).get("edits_geometry")
     return str(ed.get("id") or "") if isinstance(ed, dict) else ""
+
+
+def removed_mark(rec: dict[str, Any] | None) -> dict[str, str] | None:
+    """A study's ``geometry_removed`` ({id, name}): the geometry it edited or linked was removed."""
+    mark = (rec or {}).get("geometry_removed")
+    if isinstance(mark, dict) and str(mark.get("id") or ""):
+        return {"id": str(mark["id"]), "name": str(mark.get("name") or "")}
+    return None
 
 
 def study_record(root: Path, plugin: str, study_id: str) -> dict[str, Any] | None:
@@ -424,7 +448,9 @@ def edit_target(root: Path, plugin: str, study_id: str) -> dict[str, Any] | None
         }
     rec = study_record(root, plugin, study_id)
     gid = _edits_id(rec)
-    geom = find(root, gid) if gid else None
+    mark = removed_mark(rec)
+    # The geometry it edited was removed: never another one, whatever its name.
+    geom = find(root, gid) if gid and not (mark and mark["id"] == gid) else None
     if geom is None or linked_state(geom) is not None:
         return None
     row = rows.get(gid)
@@ -701,7 +727,8 @@ def adopt_target(root: Path, plugin: str, study_id: str) -> dict[str, Any] | Non
     root = Path(root)
     rec = study_record(root, plugin, study_id)
     gid = _edits_id(rec)
-    geom = find(root, gid) if gid else None
+    mark = removed_mark(rec)
+    geom = find(root, gid) if gid and not (mark and mark["id"] == gid) else None
     if geom is None:
         return None
     row = project_rows(root).get(gid)
@@ -712,6 +739,84 @@ def adopt_target(root: Path, plugin: str, study_id: str) -> dict[str, Any] | Non
     if geometry_format(geom, row) not in ("step", "iges", "brep"):
         return None
     return {"geometry": geom, "row": row, "other": None}
+
+
+# ---- a removed geometry ------------------------------------------------------------------
+
+
+def mark_removed(root: Path, geometry_id: str) -> dict[str, Any]:
+    """A geometry is about to be removed: every plugin study whose target it is gets
+    ``geometry_removed: {id, name, at}`` (host-owned, like ``edits_geometry``, which stays).
+
+    Its target: the geometry the study links now, else (it links nothing) the one its
+    ``edits_geometry`` names. Such a study's next link asks before it adds a geometry
+    (``geometry.link_check``'s ``removed``); it never takes another geometry over.
+    Called while the folder is still there (its name is read from it).
+    """
+    from cfddesk.registry.plugin_data import PluginData, plugin_data_folders
+
+    root = Path(root)
+    want = str(geometry_id or "").strip()
+    if not want:
+        return {"ok": True, "marked": []}
+    geom = find(root, want)
+    row = project_rows(root).get(want)
+    if geom is None and row is None:
+        # Not a geometry of this project (the remove is refused): nothing to mark.
+        return {"ok": True, "marked": []}
+    name = display_name(geom, row) if geom is not None else str((row or {}).get("name") or want)
+    marked: list[dict[str, str]] = []
+    for key in plugin_data_folders(root):
+        data = PluginData(root, key)
+        for rec in data.studies():
+            sid = str(rec.get("id") or "")
+            if not sid:
+                continue
+            now = link.find_linked(root, key, sid)
+            if now is not None:
+                hit = str(now.get("id") or "") == want
+            else:
+                hit = _edits_id(rec) == want
+            if not hit:
+                continue
+            rec["geometry_removed"] = {"id": want, "name": name, "at": _now()}
+            data.write_json(f"studies/{sid}/study.json", rec)
+            marked.append({"plugin": key, "study_id": sid})
+    return {"ok": True, "marked": marked}
+
+
+def clear_removed(root: Path, plugin: str, study_id: str) -> bool:
+    """The study links a geometry again ("Add as new geometry"): its mark goes."""
+    from cfddesk.registry.plugin_data import PluginData
+
+    rec = study_record(root, plugin, study_id)
+    if rec is None or "geometry_removed" not in rec:
+        return False
+    rec.pop("geometry_removed", None)
+    PluginData(Path(root), plugin).write_json(f"studies/{study_id}/study.json", rec)
+    return True
+
+
+def removed_target(root: Path, plugin: str, study_id: str) -> dict[str, str] | None:
+    """The geometry a study edited or linked before it was removed, while it links nothing.
+
+    Its ``geometry_removed``; for a project from before the mark, an ``edits_geometry``
+    that is gone. None otherwise (its link creates a geometry, as a first link does).
+    """
+    root = Path(root)
+    if link.find_linked(root, plugin, study_id) is not None:
+        return None
+    rec = study_record(root, plugin, study_id)
+    if rec is None:
+        return None
+    mark = removed_mark(rec)
+    if mark is not None:
+        return mark
+    gid = _edits_id(rec)
+    if gid and find(root, gid) is None:
+        ed = rec.get("edits_geometry") or {}
+        return {"id": gid, "name": str(ed.get("name") or "")}
+    return None
 
 
 def adopt_state(geom: dict[str, Any], row: dict[str, Any] | None) -> dict[str, Any]:

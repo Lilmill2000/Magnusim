@@ -13,6 +13,7 @@ import {
   openGeometryAction,
   rememberTreeActions,
   resetGeometryActionsForTests,
+  withGeometryRemoveNote,
 } from './geometryActions';
 
 const SCOPE: BridgeScope = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'cad', projectId: 'proj-a', projectTitle: 'A', studyId: 'st-1' };
@@ -242,5 +243,43 @@ describe('the words of an adoption (review fixes)', () => {
       confirm_copy: "Delete the CAD part 'Vortex'? The geometry 'Vortex' stays in the project, with its simulations.",
     });
     expect(deleteWords(row, undefined)).toEqual({});
+  });
+});
+
+describe('a removed target (1.7 fix)', () => {
+  it('the question: "<Geometry> was removed from the project. Add <Part> as a new geometry?", Add as new geometry, Not now, Keep editing', async () => {
+    const { linkChoiceText } = await import('./linkChoice');
+    const t = linkChoiceText({ kind: 'removed', geometry: { id: 'g', name: 'Vortex' }, study: { id: 's', title: 'Vortex' }, new_name: 'Vortex v2', studies: [], overwrite: 'ok' });
+    expect([t.title, t.copy]).toEqual(['Vortex was removed from the project', 'Add Vortex as a new geometry?']);
+    expect([t.newLabel, t.newLine, t.overwriteLabel, t.cancelLabel, t.overwriteBlocked]).toEqual([
+      'Add as new geometry',
+      'Adds Vortex v2 to the project.',
+      'Not now',
+      'Keep editing',
+      null,
+    ]);
+    expect(t.overwriteLine).toBe('Nothing is added. Vortex stays out of the simulation; you are asked again the next time it goes back with a change.');
+  });
+
+  it('every link this host sends says it can ask (ask_removed)', () => {
+    expect(linkBody({ shape: { rel: 's', format: 'brep', sha256: SHA }, sourceVersion: 1 }).ask_removed).toBe(true);
+  });
+
+  it("the remove question says the part that edits the geometry stays and won't add it back", () => {
+    resetGeometryActionsForTests();
+    rememberTreeActions('p1', [
+      { id: 'g1', name: 'Vortex', editors: [{ title: 'Vortex', kind_title: 'Part', workspace_title: 'CAD' }] },
+      { id: 'g2', name: 'plain', editors: [] },
+      { id: 'g3', name: 'two', editors: [{ title: 'A', kind_title: 'Part', workspace_title: 'CAD' }, { title: 'B', kind_title: 'Part', workspace_title: 'CAD' }] },
+    ]);
+    const copy = 'The CAD is removed from this project.';
+    expect(withGeometryRemoveNote(copy, 'p1', 'g1')).toBe(
+      "The CAD is removed from this project. The CAD part 'Vortex' that edits it stays. It won't add the geometry back unless you choose to.",
+    );
+    expect(withGeometryRemoveNote(copy, 'p1', 'g2')).toBe(copy);
+    expect(withGeometryRemoveNote(copy, 'p1', 'g3')).toBe(`${copy} The studies 'A' and 'B' that edit it stay. They won't add the geometry back unless you choose to.`);
+    // Another project's tree: nothing.
+    expect(withGeometryRemoveNote(copy, 'p2', 'g1')).toBe(copy);
+    resetGeometryActionsForTests();
   });
 });

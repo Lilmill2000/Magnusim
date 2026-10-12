@@ -1381,6 +1381,8 @@ describe('WorkspaceCalls: linked geometries (project.linkGeometry, API 1.5)', ()
       face_names: null,
       source_version: 2,
       based_on_rev: 1,
+      // API 1.7: this host asks when the study's geometry was removed.
+      ask_removed: true,
     });
     expect(FakeEventSource.made.map((e) => e.url)).toEqual(['/api/plugin-geometry/events?project_id=proj-a&plugin=ws-demo&study_id=st-1']);
     const es = FakeEventSource.made[0];
@@ -1520,6 +1522,7 @@ describe("WorkspaceCalls: the host's question (API 1.5, LINK 5.0)", () => {
       if (url.startsWith('/api/plugin-geometry/choose')) {
         const b = JSON.parse(String(init.body));
         if (b.choice === 'cancel') return { status: 200, body: { ok: true, job_id: LJOB, cancelled: true } };
+        if (b.choice === 'not_now') return { status: 200, body: { ok: true, job_id: LJOB, not_now: true } };
         return { status: 202, body: { ok: true, job_id: LJOB, geometry_id: b.choice === 'new' ? 'g2' : 'g1', created: b.choice === 'new', queued: b.choice === 'overwrite' } };
       }
       return { status: 200, body: { ok: true } };
@@ -1588,6 +1591,62 @@ describe("WorkspaceCalls: the host's question (API 1.5, LINK 5.0)", () => {
     expect(chosen()[0]).toMatchObject({ choice: 'overwrite' });
     FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: { ...CREATED, created: false, geometryId: 'g1', rev: 2, fromRev: 1, name: 'Demo 1' } } });
     await expect(p).resolves.toMatchObject({ geometryId: 'g1', rev: 2 });
+  });
+
+  describe('a removed target (API 1.7: the geometry the study edited or linked was removed)', () => {
+    const REMOVED = { kind: 'removed', geometry: { id: 'g1', name: 'box' }, study: { id: 'st-1', title: 'box' }, new_name: 'box v2', studies: [], overwrite: 'ok' };
+    const NOT_NOW_END = { event: 'end', status: 'cancelled', code: 'not_now', error: 'Not added: box was removed from the project, and nothing was added.' };
+    const asking = () => {
+      const base = answer;
+      answer = (url, method, init) =>
+        url.startsWith('/api/plugin-geometry/link?')
+          ? { status: 202, body: { ok: true, job_id: LJOB, geometry_id: 'g9', created: false, queued: false, choosing: REMOVED } }
+          : base(url, method, init);
+    };
+
+    it('a caller that cannot ask answers Not now (never Overwrite, never a create): the call rejects not_now', async () => {
+      asking();
+      const linkChoice = vi.fn(async () => ({ choice: 'new' as const, copy: [] }));
+      const h = hooks();
+      const c = new WorkspaceCalls(SCOPE, { ...h, linkChoice });
+      c.setInteractive(false);
+      const p = c.handle('project.linkGeometry', CALL);
+      await vi.waitFor(() => expect(chosen().length).toBe(1));
+      expect(linkChoice).not.toHaveBeenCalled();
+      expect(chosen()[0]).toMatchObject({ choice: 'not_now', copy: [] });
+      FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: NOT_NOW_END });
+      expect((await refused(p)).code).toBe('not_now');
+      expect(h.linkStarted).not.toHaveBeenCalled();
+    });
+
+    it('Not now from the dialog: nothing lands, the call rejects not_now (quiet)', async () => {
+      asking();
+      const h = hooks();
+      const c = new WorkspaceCalls(SCOPE, { ...h, linkChoice: vi.fn(async () => ({ choice: 'not_now' as const })) });
+      const p = c.handle('project.linkGeometry', CALL);
+      await vi.waitFor(() => expect(chosen().length).toBe(1));
+      expect(chosen()[0]).toMatchObject({ choice: 'not_now' });
+      FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: NOT_NOW_END });
+      const err = await refused(p);
+      expect(err.code).toBe('not_now');
+      expect(h.linkStarted).not.toHaveBeenCalled();
+    });
+
+    it('Add as new geometry: the create lands and reports as a first link does (no "Save as new" report)', async () => {
+      asking();
+      const h = hooks();
+      const linkSavedAsNew = vi.fn();
+      const linkReport = vi.fn();
+      const c = new WorkspaceCalls(SCOPE, { ...h, linkChoice: vi.fn(async () => ({ choice: 'new' as const, copy: [] })), linkSavedAsNew, linkReport });
+      const p = c.handle('project.linkGeometry', CALL);
+      await vi.waitFor(() => expect(chosen().length).toBe(1));
+      expect(h.linkStarted).toHaveBeenCalledWith({ geometryId: 'g2', jobId: LJOB, created: true });
+      const made = { ...CREATED, name: 'box v2' };
+      FakeEventSource.made[0].emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: made } });
+      await expect(p).resolves.toEqual(made);
+      expect(linkSavedAsNew).not.toHaveBeenCalled();
+      expect(linkReport).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('a question dropped unanswered (the page went away) sends nothing: it stays open for the row\'s Choose…', async () => {

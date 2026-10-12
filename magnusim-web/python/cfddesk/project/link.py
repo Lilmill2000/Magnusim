@@ -856,14 +856,15 @@ def _geometry_names(root: Path) -> set[str]:
     return names
 
 
-def next_version(project_dir: Path | str, plugin: str, study_id: str, base: str, at_least: int = 1) -> dict[str, Any]:
+def next_version(project_dir: Path | str, plugin: str, study_id: str, base: str, at_least: int = 1, unique: bool = False) -> dict[str, Any]:
     """The version and name of the next geometry a study's link makes.
 
     1 + the highest ``version`` among the folders this ``(plugin, study_id)`` made, linked
     or kept unlinked (a removed or pending one does not count); the bare base when none is
     left. From 2 the name is "<base> v<k>", and k goes up while another geometry of the
     project has that name. ``at_least`` 2 (the "Save as new" of an adoption, API 1.7)
-    starts at v2: the geometry it was made from keeps the bare name.
+    starts at v2: the geometry it was made from keeps the bare name. ``unique``: the bare
+    base too only while no other geometry has it (else from v2).
     """
     root = Path(project_dir)
     versions: list[int] = []
@@ -879,9 +880,10 @@ def next_version(project_dir: Path | str, plugin: str, study_id: str, base: str,
         except (TypeError, ValueError):
             versions.append(1)
     k = max(max(versions) + 1 if versions else 1, int(at_least or 1))
-    if k == 1:
-        return {"version": 1, "name": base}
     taken = _geometry_names(root)
+    if k == 1 and not (unique and base.casefold() in taken):
+        return {"version": 1, "name": base}
+    k = max(k, 2)
     while versioned_name(base, k).casefold() in taken:
         k += 1
     return {"version": k, "name": versioned_name(base, k)}

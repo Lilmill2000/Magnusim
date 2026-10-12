@@ -131,6 +131,23 @@ describe('the dialog', () => {
     await expect(p).resolves.toBeNull();
   });
 
+  it('a removed target: its words, and "Not now" (the second button) answers not_now', async () => {
+    const R: LinkQuestion = { kind: 'removed', geometry: { id: 'g1', name: 'box' }, study: { id: 'st-1', title: 'box' }, new_name: 'box v2', studies: [], overwrite: 'ok' };
+    let p = showLinkChoice(R);
+    await vi.waitFor(() => expect(document.getElementById('modal-link-choice')!.hidden).toBe(false));
+    expect(document.getElementById('lc-heading')!.textContent).toBe('box was removed from the project');
+    expect(document.getElementById('lc-copy')!.textContent).toBe('Add box as a new geometry?');
+    expect(document.getElementById('lc-new')!.textContent).toBe('Add as new geometry');
+    expect(document.getElementById('lc-overwrite')!.textContent).toBe('Not now');
+    expect(document.getElementById('lc-copies')!.children.length).toBe(0);
+    (document.getElementById('lc-overwrite') as HTMLButtonElement).click();
+    await expect(p).resolves.toEqual({ choice: 'not_now' });
+    p = showLinkChoice(R);
+    await vi.waitFor(() => expect(document.getElementById('modal-link-choice')!.hidden).toBe(false));
+    (document.getElementById('lc-new') as HTMLButtonElement).click();
+    await expect(p).resolves.toEqual({ choice: 'new', copy: [] });
+  });
+
   it('sends the answer to the choose route and refuses with its code', async () => {
     const seen: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal(
@@ -206,5 +223,35 @@ describe('the rows', () => {
     );
     expect(screen.getByText('→ Demo 1 v2').getAttribute('data-plugin-study-geometry')).toBe('g2');
     expect(screen.getByText('Not in the simulation yet')).toBeTruthy();
+  });
+
+  it('a study whose geometry was removed says so (API 1.7), and opens as any study', () => {
+    const removed = {
+      id: 'st-9',
+      plugin: 'link-demo',
+      plugin_name: 'Link demo',
+      kind: 'demo',
+      kind_title: 'Demo',
+      icon: '',
+      workspace: 'demo',
+      title: 'box',
+      rev: 1,
+      available: true,
+      read_only: false,
+      reason: '',
+      scope_key: 'p:p1/plugin:link-demo/study:st-9',
+      geometry_removed: { id: 'g-old', name: 'box' },
+    };
+    render(
+      <PluginStudiesView
+        projectId="p1"
+        studies={[removed]}
+        kinds={[{ plugin: 'link-demo', plugin_name: 'Link demo', key: 'demo', title: 'Demo', icon: '', workspace: 'demo', links_geometry: true }]}
+      />,
+    );
+    const note = screen.getByText('Its geometry box was removed');
+    expect(note.getAttribute('data-plugin-study-removed')).toBe('g-old');
+    expect(screen.queryByText('Not in the simulation yet')).toBeNull();
+    expect(document.querySelector('[data-plugin-study="st-9"] [data-plugin-study-open="1"]')).toBeTruthy();
   });
 });

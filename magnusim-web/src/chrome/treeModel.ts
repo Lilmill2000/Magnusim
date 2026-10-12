@@ -135,6 +135,8 @@ export interface PluginStudyRow {
   scope_key: string;
   /** API 1.7: the project geometry a geometry action opened it on ('' when none). */
   edits_geometry?: string;
+  /** API 1.7: the geometry it edited or linked was removed (its next link asks before it adds one). */
+  geometry_removed?: { id: string; name: string } | null;
   /** API 1.7: it edits that plain geometry and sent no edit back yet: shown on the geometry's row, not in STUDIES. */
   editing?: string;
 }

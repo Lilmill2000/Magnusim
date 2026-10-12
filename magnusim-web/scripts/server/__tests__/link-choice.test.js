@@ -333,10 +333,16 @@ describe('versions and names', () => {
     assert.equal(names[p.gid], 'Demo 1');
     assert.equal(names[v2.result.geometryId], 'Demo 1 v2');
     assert.equal(names[v3.result.geometryId], 'Demo 1 v3');
-    // Remove the linked one: the next link makes a new geometry with the next free version.
+    // Remove the linked one: the next link asks first (API 1.7; refused target_removed without
+    // ask_removed); "Add as new geometry" makes a new geometry with the next free version.
     const removed = await h.post('/api/geometry/remove', { project_id: p.pid, geometry_id: v5.result.geometryId });
     assert.equal(removed.status, 200, JSON.stringify(removed.body));
-    const next = await h.link(p.pid, p.sid, { version: 'v1', sourceVersion: 6, basedOnRev: null });
+    const refused = await h.link(p.pid, p.sid, { version: 'v1', sourceVersion: 6, basedOnRev: null });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.code, 'target_removed');
+    const next = await h.link(p.pid, p.sid, { version: 'v1', sourceVersion: 6, basedOnRev: null, extra: { ask_removed: true }, choose: 'new' });
+    assert.equal(next.body.asked.kind, 'removed');
+    assert.equal(next.body.asked.new_name, 'Wing v4');
     const created = await h.until(next.body.job_id);
     assert.equal(created.status, 'done', created.error);
     assert.equal(created.result.created, true);

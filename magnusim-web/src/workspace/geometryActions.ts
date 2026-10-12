@@ -82,6 +82,8 @@ export function actionsFor(node: GeometryActionNode | null | undefined, place: G
 
 interface RememberedNode extends GeometryActionNode {
   original?: { file_name?: string | null; format?: string | null; present?: boolean } | null;
+  /** The plugin studies whose target it is (the one that links it, or is editing it). */
+  editors?: Array<{ title?: string; kind_title?: string; workspace_title?: string }> | null;
 }
 
 let treeProject = '';
@@ -115,6 +117,39 @@ export function geometryOriginalNow(projectId: string, geometryId: string): { fi
   if (!projectId || projectId !== treeProject) return null;
   const o = treeNodes.get(String(geometryId))?.original;
   return o ? { fileName: o.file_name ? String(o.file_name) : null, present: !!o.present } : null;
+}
+
+/**
+ * What a study of a kind is called in a sentence: "CAD part" (its workspace's title and its
+ * kind's, when the kind's does not say it already), else the kind's title ("study").
+ */
+export function studyKindWords(kindTitle: string | null | undefined, workspaceTitle: string | null | undefined): string {
+  const ws = String(workspaceTitle || '').trim();
+  const kind = String(kindTitle || 'study').trim() || 'study';
+  return ws && !kind.toLowerCase().includes(ws.toLowerCase()) ? `${ws} ${kind.toLowerCase()}` : kind;
+}
+
+/**
+ * The remove question's words about the studies that edit a geometry (API 1.7): they stay,
+ * and their next edit asks before it adds the geometry again. '' when none does.
+ */
+export function geometryRemoveNote(projectId: string, geometryId: string): string {
+  if (!projectId || projectId !== treeProject) return '';
+  const eds = (treeNodes.get(String(geometryId))?.editors || []).filter((e) => e && e.title);
+  if (!eds.length) return '';
+  if (eds.length === 1) {
+    const e = eds[0];
+    return `The ${studyKindWords(e.kind_title, e.workspace_title)} '${e.title}' that edits it stays. It won't add the geometry back unless you choose to.`;
+  }
+  const names = eds.map((e) => `'${e.title}'`);
+  const list = `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  return `The studies ${list} that edit it stay. They won't add the geometry back unless you choose to.`;
+}
+
+/** The remove question's copy with that note after it (unchanged when no study edits the geometry). */
+export function withGeometryRemoveNote(copy: string, projectId: string, geometryId: string): string {
+  const note = geometryRemoveNote(projectId, geometryId);
+  return note ? `${copy} ${note}` : copy;
 }
 
 /** Hear each tree read's actions. Returns the stop. */

@@ -180,7 +180,7 @@ interface LeaveRun {
 const NOT_HOOK_WORK = new Set(['nav.leaveProgress', 'nav.leaveDone', 'nav.leaveHook', 'nav.back', 'results.openIn3D']);
 
 /** Link refusals that are no error of the hook: "Keep editing", the Queue's remove, a newer link. */
-const QUIET_LINK_ENDS = new Set(['cancelled', 'superseded']);
+const QUIET_LINK_ENDS = new Set(['cancelled', 'superseded', 'not_now']);
 
 export interface BridgeScope {
   plugin: string;
@@ -352,6 +352,8 @@ export function linkBody(params: Record<string, unknown>): Record<string, unknow
   if (based !== null && based !== undefined && !isCount(based)) throw badParam('basedOnRev (a whole number or null)');
   body.based_on_rev = based ?? null;
   if (params.name !== undefined && params.name !== null) body.name = text(params.name, 'name', 120);
+  // API 1.7: this host asks its question when the study's geometry was removed (else 409 target_removed).
+  body.ask_removed = true;
   return body;
 }
 
@@ -1079,7 +1081,9 @@ export class WorkspaceCalls {
     }
     if (question.geometry && question.geometry.name) this.linkedName = question.geometry.name;
     let picked: LinkChoice | null;
-    if (!this.interactive || !this.hooks.linkChoice) picked = { choice: 'overwrite' };
+    const removed = question.kind === 'removed';
+    // A caller that cannot ask: "Overwrite", or "Not now" when the geometry was removed (nothing is added).
+    if (!this.interactive || !this.hooks.linkChoice) picked = removed ? { choice: 'not_now' } : { choice: 'overwrite' };
     else {
       // Inside a leave: "Waiting for your choice", and the stall timer waits too (LINK 6.4).
       this.note({ kind: 'choosing', open: true });
@@ -1095,11 +1099,13 @@ export class WorkspaceCalls {
     if (picked.choice === 'cancel') this.note({ kind: 'kept' });
     try {
       const chosen = await sendLinkChoice({ projectId: s.projectId, plugin: s.plugin, studyId: s.studyId, jobId }, picked);
-      if (picked.choice === 'new') this.saved.set(jobId, { oldName: question.geometry.name, copies: null });
-      if (chosen.geometry_id && picked.choice !== 'cancel') {
+      // "Add as new geometry" after a removal reports as a first link does (no old geometry kept).
+      if (picked.choice === 'new' && !removed) this.saved.set(jobId, { oldName: question.geometry.name, copies: null });
+      const goes = picked.choice !== 'cancel' && picked.choice !== 'not_now';
+      if (chosen.geometry_id && goes) {
         this.hooks.linkStarted?.({ geometryId: String(chosen.geometry_id), jobId, created: !!chosen.created });
       }
-      if (picked.choice !== 'cancel') this.note({ kind: 'accepted', jobId, create: picked.choice === 'new', queued: !!chosen.queued && chosen.waiting !== false });
+      if (goes) this.note({ kind: 'accepted', jobId, create: picked.choice === 'new', queued: !!chosen.queued && chosen.waiting !== false });
     } catch (e) {
       const code = String((e as { code?: unknown })?.code || 'failed');
       // Answered in another tab or from the geometry's row: the job's end settles the call.
