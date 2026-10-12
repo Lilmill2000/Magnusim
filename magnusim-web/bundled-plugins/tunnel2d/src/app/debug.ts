@@ -59,6 +59,7 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
       let tracersAlive = 0;
       let nan = 0;
       let inside = 0;
+      const insideAt: Record<string, number>[] = [];
       const perPool = r.pools.map((p) => ({ id: p.id, alive: 0, maxX: -Infinity }));
       for (let i = 0; i < r.meta.length / 4; i++) {
         if (r.meta[4 * i + 3] < 0.5 || r.meta[4 * i] < 0) continue;
@@ -78,10 +79,13 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
           }
         }
         for (const { poly } of bodies) {
-          if (contains(poly, x, y) && signedDistance(poly, x, y) < -0.5 * dx) inside++;
+          if (contains(poly, x, y) && signedDistance(poly, x, y) < -0.5 * dx) {
+            inside++;
+            if (insideAt.length < 6) insideAt.push({ x, y, depthCells: signedDistance(poly, x, y) / dx, age: r.meta[4 * i], src: r.meta[4 * i + 1], prevX: (r.pos[4 * i + 2] + 0.5) * dx, prevY: (r.pos[4 * i + 3] + 0.5) * dx });
+          }
         }
       }
-      return { tracers: r.tracers, tracersAlive, nan, inside, pools: perPool };
+      return { tracers: r.tracers, tracersAlive, nan, inside, insideAt, pools: perPool };
     },
     /** The dye, summed up: per channel, the total and how far downstream it reaches (world m), and dye inside bodies. */
     dye: async () => {
@@ -119,5 +123,7 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
       return { channels: d.channels, sums, maxX, insideSum };
     },
     streamlines: () => engine.streamlineCount,
+    /** The rheoscopic field, summed up; null when the view is off. */
+    rheo: () => engine.readRheo(),
   };
 }

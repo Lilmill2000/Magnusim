@@ -41,7 +41,7 @@ test('tracers fill the tunnel, stay out of bodies and keep their number while th
     await page.waitForTimeout(2000);
     const p = await particles(frame);
     expect(p.nan, `after ${k} drags`).toBe(0);
-    expect(p.inside, `after ${k} drags: tracers inside a body`).toBe(0);
+    expect(p.inside, `after ${k} drags: tracers inside a body ${JSON.stringify(p.insideAt)} airfoil at ${JSON.stringify(await T(frame, (id) => window.__TUNNEL__.livePose(id), foil.id))}`).toBe(0);
     expect(p.tracersAlive, `after ${k} drags`).toBe(p0.tracers);
   }
   expect((await stats(frame)).state).toBe('running');
@@ -143,7 +143,7 @@ test('streamlines, velocity arrows and the plain background', async ({ page, req
   // The plain background: no field, no legend.
   await frame.getByRole('combobox', { name: 'Show' }).selectOption('none');
   await expect(frame.locator('[data-t2d-legend]')).toHaveCount(0);
-  await expect(frame.getByRole('combobox', { name: 'Trails' })).toBeVisible();
+  await expect(frame.getByRole('combobox', { name: 'Streaks' })).toBeVisible();
   await frame.locator('[data-t2d-play]').dispatchEvent('click');
   await expect(frame.locator('[data-t2d-status]')).toHaveAttribute('data-state', 'running');
   // Layout guard: focusing a control low in the side panel scrolls that panel, never the

@@ -22,6 +22,19 @@
   --t2d-plain: #121823;
   --t2d-streamline: #1a1d24;
   --t2d-arrow: #1a1d24;
+  /* The rheoscopic tank: a dark base and the colours of its two lights, per preset */
+  --t2d-rheo-kalliroscope-base: #061226;
+  --t2d-rheo-kalliroscope-light1: #d8e8ff;
+  --t2d-rheo-kalliroscope-light2: #4f8dff;
+  --t2d-rheo-pearl-base: #141318;
+  --t2d-rheo-pearl-light1: #fff3df;
+  --t2d-rheo-pearl-light2: #c4d2ff;
+  --t2d-rheo-copper-base: #170b05;
+  --t2d-rheo-copper-light1: #ffb067;
+  --t2d-rheo-copper-light2: #ffe0b8;
+  /* Bodies in the particles view: black, with a thin light outline */
+  --t2d-body-dark: #08080b;
+  --t2d-edge-light: #f4f5f7;
   --t2d-panel-w: 272px;
   --t2d-panel-right-w: 284px;
 }

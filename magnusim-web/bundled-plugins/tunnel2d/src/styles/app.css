@@ -222,6 +222,18 @@ html {
   min-width: 220px;
   pointer-events: auto;
 }
+.t2d-maplegend .mgk-legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--mg-text-xs);
+  color: var(--mg-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.t2d-maplegend .mgk-legend-bar {
+  height: 10px;
+  border-radius: var(--mg-radius-xs);
+  margin: var(--mg-space-1) 0;
+}
 .t2d-range {
   display: flex;
   gap: var(--mg-space-1);

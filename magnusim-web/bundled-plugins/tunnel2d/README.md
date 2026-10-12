@@ -27,7 +27,7 @@ The plugin ships off. Turn it on in **Settings → Plugins**; the header's **Win
 
 A grid can only resolve so much. The lattice runs at a grid Reynolds number of at most 50 per cell, so a body 200 cells long is simulated at about Re 10,000, whatever the real one is. The Wind panel shows both, the real one and the simulated one, and says when they differ. Wakes, shedding, separation and how bodies affect each other show as they do. Forces are those of the simulated Reynolds number.
 
-When two bodies close a gap between them, a limiter holds the squeezed flow there to equilibrium. The status line says when this happens. A clean run never uses it, and the benchmark checks that too.
+Where the flow is pushed beyond what the lattice can carry, a limiter holds it to its limits there: for example, a gap closing between two bodies, or a body dragged fast. The status line says when this happens. A clean run never uses it, and the benchmark checks that too.
 
 ## Requirements
 

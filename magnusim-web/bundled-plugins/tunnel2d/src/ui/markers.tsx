@@ -54,14 +54,18 @@ export function MarkersPanel({ store, ws }: { store: Store; ws: Workspace }) {
   };
   return (
     <Section title="Flow markers" attr="markers">
-      <Field label="Tracer particles" help="Particles spread through the whole tunnel, carried by the flow.">
-        <Toggle label="Tracer particles" checked={v.tracers} onChange={(on) => set({ tracers: on })} />
-      </Field>
+      {v.field === 'particles' ? (
+        <Hint>The particles view shows the tracer particles; here you set how many and their trails.</Hint>
+      ) : (
+        <Field label="Tracer particles" help="Particles carried by the flow, drawn faintly over the field.">
+          <Toggle label="Tracer particles" checked={v.tracers} onChange={(on) => set({ tracers: on })} />
+        </Field>
+      )}
       <Field label="Particle count">
         <Select
           label="Particle count"
           value={v.density}
-          disabled={!v.tracers}
+          disabled={!v.tracers && v.field !== 'particles'}
           options={[
             { value: 'low', label: 'Few' },
             { value: 'normal', label: 'Normal' },
@@ -70,12 +74,12 @@ export function MarkersPanel({ store, ws }: { store: Store; ws: Workspace }) {
           onChange={(x) => set({ density: x as Density })}
         />
       </Field>
-      <Field label="Trails" help="How long each particle’s path stays drawn behind it.">
+      <Field label="Streaks" help="Each particle is drawn as a short streak along its motion.">
         <Select
-          label="Trails"
+          label="Streaks"
           value={v.trail}
           options={[
-            { value: 'off', label: 'Off' },
+            { value: 'off', label: 'Dots' },
             { value: 'short', label: 'Short' },
             { value: 'long', label: 'Long' },
           ]}

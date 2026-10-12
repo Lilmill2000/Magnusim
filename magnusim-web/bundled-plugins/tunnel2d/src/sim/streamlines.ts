@@ -149,7 +149,7 @@ export class Streamlines {
   /** Draw the traced lines into a render pass whose target has `format`. */
   encodeDraw(pass: GPURenderPassEncoder, size: { w: number; h: number }, view: { scale: number; ox: number; oy: number }, color: [number, number, number, number], dpr: number) {
     if (!this.lines) return;
-    this.device.queue.writeBuffer(this.drawUni, 0, new Float32Array([view.scale, view.ox, view.oy, size.w, size.h, 0.7 * dpr, LINE_POINTS, 0, ...color]));
+    this.device.queue.writeBuffer(this.drawUni, 0, new Float32Array([view.scale, view.ox, view.oy, size.w, size.h, 0.6 * dpr, LINE_POINTS, 0, ...color]));
     const bg = this.device.createBindGroup({
       layout: this.draw.getBindGroupLayout(0),
       entries: [

@@ -9,9 +9,12 @@ import type { Shape } from '../geometry/shapes';
 /** 2: rakes, and the view's tracers, trail, arrows and streamlines (a version-1 file reads as is). */
 export const SCENE_VERSION = 2;
 
-export type Walls = 'slip' | 'noslip' | 'periodic';
+export type Walls = 'farfield' | 'slip' | 'noslip' | 'periodic';
 export type Resolution = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
-export type FieldMode = 'vorticity' | 'speed' | 'pressure' | 'schlieren' | 'none';
+export type FieldMode = 'particles' | 'vorticity' | 'speed' | 'pressure' | 'schlieren' | 'rheoscopic' | 'none';
+/** What colours the particles in the particles view. */
+export type ParticleColor = 'speed' | 'vorticity';
+export type RheoPreset = 'kalliroscope' | 'pearl' | 'copper';
 export type RakeKind = 'streaks' | 'timelines' | 'dye';
 export type Density = 'low' | 'normal' | 'high';
 export type TrailLength = 'off' | 'short' | 'long';
@@ -60,6 +63,8 @@ export interface View {
   trail: TrailLength;
   arrows: boolean;
   streamlines: boolean;
+  rheoPreset: RheoPreset;
+  particleColor: ParticleColor;
 }
 
 export interface Scene {
@@ -103,13 +108,26 @@ export function newRakeId(): string {
 export function defaultScene(): Scene {
   return {
     version: SCENE_VERSION,
-    tunnel: { length: 8, height: 4, walls: 'slip', resolution: 'auto' },
+    tunnel: { length: 8, height: 4, walls: 'farfield', resolution: 'auto' },
     flow: { speed: 10, fluid: 'air' },
     bodies: [
       { id: newBodyId(), name: 'NACA 2412', shape: { kind: 'naca', code: '2412', chord: 1 }, x: 2.5, y: 2, angle: 6, spin: 0, enabled: true, locked: false },
     ],
     rakes: [],
-    view: { field: 'vorticity', autoRange: true, min: -10, max: 10, speed: 'max', tracers: true, density: 'normal', trail: 'short', arrows: false, streamlines: false },
+    view: {
+      field: 'particles',
+      autoRange: true,
+      min: -10,
+      max: 10,
+      speed: 'max',
+      tracers: false,
+      density: 'normal',
+      trail: 'short',
+      arrows: false,
+      streamlines: false,
+      rheoPreset: 'kalliroscope',
+      particleColor: 'speed',
+    },
   };
 }
 
@@ -184,7 +202,7 @@ export function parseScene(raw: unknown): Scene {
     tunnel: {
       length: num(t.length ?? d.tunnel.length, 'Tunnel length', ...LIMITS.length),
       height: num(t.height ?? d.tunnel.height, 'Tunnel height', ...LIMITS.height),
-      walls: oneOf(t.walls, ['slip', 'noslip', 'periodic'] as const, d.tunnel.walls),
+      walls: oneOf(t.walls, ['farfield', 'slip', 'noslip', 'periodic'] as const, d.tunnel.walls),
       resolution: oneOf(t.resolution, ['auto', 'low', 'medium', 'high', 'ultra'] as const, d.tunnel.resolution),
     },
     flow: {
@@ -194,16 +212,18 @@ export function parseScene(raw: unknown): Scene {
     bodies,
     rakes,
     view: {
-      field: oneOf(v.field, ['vorticity', 'speed', 'pressure', 'schlieren', 'none'] as const, d.view.field),
+      field: oneOf(v.field, ['particles', 'vorticity', 'speed', 'pressure', 'schlieren', 'rheoscopic', 'none'] as const, d.view.field),
       autoRange: v.autoRange !== false,
       min: Number.isFinite(Number(v.min)) ? Number(v.min) : d.view.min,
       max: Number.isFinite(Number(v.max)) ? Number(v.max) : d.view.max,
       speed: oneOf(v.speed, ['max', 'realtime'] as const, d.view.speed),
-      tracers: v.tracers !== undefined ? v.tracers !== false : d.view.tracers,
+      tracers: v.tracers === true,
       density: oneOf(v.density, ['low', 'normal', 'high'] as const, d.view.density),
       trail: oneOf(v.trail, ['off', 'short', 'long'] as const, d.view.trail),
       arrows: v.arrows === true,
       streamlines: v.streamlines === true,
+      rheoPreset: oneOf(v.rheoPreset, ['kalliroscope', 'pearl', 'copper'] as const, d.view.rheoPreset),
+      particleColor: oneOf(v.particleColor, ['speed', 'vorticity'] as const, d.view.particleColor),
     },
   };
 }

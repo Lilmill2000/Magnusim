@@ -43,7 +43,7 @@ export interface FrameResult {
 }
 
 /** The field pass's mode per view ('none' draws a plain background; its field is not shown). */
-export const FIELD_MODES = { vorticity: 0, speed: 1, pressure: 2, schlieren: 3, none: 1 } as const;
+export const FIELD_MODES = { particles: 0, vorticity: 0, speed: 1, pressure: 2, schlieren: 3, rheoscopic: 1, none: 1 } as const;
 const SAMPLE_STRIDE = 4;
 
 export class Solver {
@@ -55,7 +55,7 @@ export class Solver {
   private f: [GPUBuffer, GPUBuffer];
   private cur = 0;
   private paramsBuf: GPUBuffer;
-  private params = new ArrayBuffer(48);
+  private params = new ArrayBuffer(64);
   private bodiesBuf: GPUBuffer;
   private bodyData = new ArrayBuffer(MAX_BODIES * 64);
   private sdfBuf: GPUBuffer;
@@ -94,7 +94,7 @@ export class Solver {
     const S = GPUBufferUsage;
     const fBytes = 9 * this.n * 4;
     this.f = [device.createBuffer({ size: fBytes, usage: S.STORAGE | S.COPY_DST }), device.createBuffer({ size: fBytes, usage: S.STORAGE | S.COPY_DST })];
-    this.paramsBuf = device.createBuffer({ size: 48, usage: S.UNIFORM | S.COPY_DST });
+    this.paramsBuf = device.createBuffer({ size: 64, usage: S.UNIFORM | S.COPY_DST });
     this.bodiesBuf = device.createBuffer({ size: MAX_BODIES * 64, usage: S.STORAGE | S.COPY_DST });
     this.sdfBuf = device.createBuffer({ size: 16, usage: S.STORAGE | S.COPY_DST });
     this.forceBuf = device.createBuffer({ size: FORCE_WORDS * 4, usage: S.STORAGE | S.COPY_SRC | S.COPY_DST });
@@ -156,11 +156,13 @@ export class Solver {
     f32[4] = 1 / p.tau;
     f32[5] = 18 * Math.SQRT2 * p.smagCs * p.smagCs;
     f32[6] = p.u;
-    f32[7] = this.config.absorbing ? 0.05 : 0;
+    f32[7] = this.config.absorbing || this.config.walls === 'farfield' ? 0.05 : 0;
     f32[8] = this.config.absorbing ? this.absorbInX : -1;
     f32[9] = this.spongeX;
     u32[10] = Math.max(1, frameSteps);
     u32[11] = this.config.profile;
+    // The open boundary's absorbing band: 6 % of the height on each side.
+    f32[12] = this.config.walls === 'farfield' ? Math.max(4, this.ny * 0.06) : 0;
     this.device.queue.writeBuffer(this.paramsBuf, 0, this.params);
   }
 

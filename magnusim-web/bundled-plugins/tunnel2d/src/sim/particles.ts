@@ -97,10 +97,28 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     if (q.x < 0.0 || q.x > Ad.outX || q.y < 0.0 || q.y > Ad.ny - 1.0 || q.x != q.x || q.y != q.y) { gone = true; break; }
   }
   if (m.y < 0.0) {
-    if (gone || m.x > Ad.maxAge) {
-      // A tracer that left (or grew too old in a dead-water zone) comes back in with the
-      // stream: anywhere in the strip the inflow brought in this frame.
+    // Each tracer lives a while of its own (a third to all of maxAge), so they do not all
+    // renew at once; then it starts again somewhere at random, which keeps them spread
+    // evenly (dead-water zones included). One that leaves the tunnel comes back in with the
+    // stream, in the strip the inflow brought in this frame.
+    let life = Ad.maxAge * (0.35 + 0.65 * rnd(i, 7u));
+    if (gone) {
       q = vec2f(Ad.respawnX0 + rnd(i, Ad.seed) * Ad.respawnW, rnd(i, Ad.seed ^ 0x9e3779b9u) * (Ad.ny - 1.0));
+      m.x = 0.0;
+      prev = q;
+    } else if (m.x > life) {
+      // A random spot clear of every body (a few tries; else back in with the stream).
+      var placed = false;
+      for (var t = 0u; t < 4u && !placed; t++) {
+        let c = vec2f(Ad.respawnX0 + rnd(i + t * 7919u, Ad.seed) * (Ad.outX - Ad.respawnX0), rnd(i + t * 7919u, Ad.seed ^ 0x9e3779b9u) * (Ad.ny - 1.0));
+        var ok = true;
+        if (P.nBodies > 0u) {
+          let near = poses(c, 1.0, &bp);
+          if (near != 0u) { ok = sdfAt(c, near, &bp).d > 1.0; }
+        }
+        if (ok) { q = c; placed = true; }
+      }
+      if (!placed) { q = vec2f(Ad.respawnX0 + rnd(i, Ad.seed) * Ad.respawnW, rnd(i, Ad.seed ^ 0x9e3779b9u) * (Ad.ny - 1.0)); }
       m.x = 0.0;
       prev = q;
     }
@@ -115,15 +133,35 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 export const drawShader = () => `
 struct D {
   scale: f32, ox: f32, oy: f32, w: f32,
-  h: f32, halfW: f32, maxSeg: f32, pad: f32,
+  h: f32, halfW: f32, maxSeg: f32, tail: f32,
   tracer: vec4f,
   colors: array<vec4f, ${MAX_RAKE_COLORS}>,
+  // byField: 1 when a tracer takes its colour from the field (lo..hi through the colour map).
+  lo: f32, hi: f32, byField: f32, nx: f32,
+  lift: f32, ny: f32, taper: f32, pad1: f32,
 };
 @group(0) @binding(0) var<storage, read> pos: array<vec4f>;
 @group(0) @binding(1) var<storage, read> pmeta: array<vec4f>;
 @group(0) @binding(2) var<uniform> Dr: D;
+@group(0) @binding(3) var<storage, read> scalar: array<f32>;
+@group(0) @binding(4) var<storage, read> lut: array<vec4f, 256>;
 
-struct Out { @builtin(position) p: vec4f, @location(0) c: vec4f, @location(1) d: f32 };
+fn fieldColor(p: vec2f) -> vec3f {
+  let c = clamp(p, vec2f(0.0), vec2f(Dr.nx - 1.001, Dr.ny - 1.001));
+  let nx = u32(Dr.nx);
+  let k = u32(c.x) + u32(c.y) * nx;
+  let f = fract(c);
+  let v = mix(mix(scalar[k], scalar[k + 1u], f.x), mix(scalar[k + nx], scalar[k + nx + 1u], f.x), f.y);
+  let t = clamp((v - Dr.lo) / max(1e-12, Dr.hi - Dr.lo), 0.0, 1.0);
+  // A shade of the field's own colour: lighter where the map is dark, darker where it is
+  // light (so the particles show on every part of every map).
+  let base = lut[u32(t * 255.0 + 0.5)].rgb;
+  let lum = dot(base, vec3f(0.299, 0.587, 0.114));
+  return mix(base, select(vec3f(1.0), vec3f(0.0), lum > 0.62), Dr.lift);
+}
+
+// d: across the stroke (-1..1); s: along it, in pixels from the head (0) back; len: tail length.
+struct Out { @builtin(position) p: vec4f, @location(0) c: vec4f, @location(1) d: f32, @location(2) s: f32, @location(3) len: f32 };
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
@@ -134,6 +172,10 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   let b = vec2f((q.x - Dr.ox) / Dr.scale, (Dr.oy - q.y) / Dr.scale);
   var a = vec2f((q.z - Dr.ox) / Dr.scale, (Dr.oy - q.w) / Dr.scale);
   if (distance(a, b) > Dr.maxSeg) { a = b; }
+  // The tail: back along this frame's motion, at most Dr.tail pixels (0: a dot).
+  let back = a - b;
+  let bl = length(back);
+  a = b + select(vec2f(0.0), back / max(bl, 1e-6) * min(bl * 3.0, Dr.tail), bl > 1e-4);
   var dir = b - a;
   let len = length(dir);
   dir = select(vec2f(1.0, 0.0), dir / max(len, 1e-6), len > 1e-3);
@@ -146,15 +188,32 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   let px = along + nrm * hw * c.y;
   o.p = vec4f(px.x / Dr.w * 2.0 - 1.0, 1.0 - px.y / Dr.h * 2.0, 0.0, 1.0);
   o.c = select(Dr.colors[min(u32(m.z), ${MAX_RAKE_COLORS - 1}u)], Dr.tracer, m.y < 0.0);
+  if (m.y < 0.0 && Dr.byField > 0.5) { o.c = vec4f(fieldColor(q.xy), Dr.tracer.a); }
   o.d = c.y;
+  o.len = len;
+  o.s = select(len + hw, -hw, c.x > 0.5);
   return o;
 }
 
 @fragment
 fn fs(i: Out) -> @location(0) vec4f {
-  // Soft edges across the segment's width.
-  let a = i.c.a * clamp((1.0 - abs(i.d)) * 2.0, 0.0, 1.0);
-  return vec4f(i.c.rgb, a);
+  let hw = Dr.halfW;
+  let across = abs(i.d) * hw;
+  if (Dr.taper < 0.5) {
+    // Long trails: an even stroke each frame, so the fading trail builds a smooth line.
+    return vec4f(i.c.rgb, i.c.a * clamp(hw - across + 0.5, 0.0, 1.0));
+  }
+  // A comet: a round head, and a tail that thins and fades back to nothing.
+  var r: f32;
+  if (i.s <= 0.0) {
+    r = length(vec2f(i.s, across));
+  } else {
+    let t = clamp(i.s / max(i.len, 1e-3), 0.0, 1.0);
+    r = across / max(1.0 - 0.75 * t, 0.05);
+  }
+  let edge = clamp(hw - r + 0.5, 0.0, 1.0);
+  let fade = select(1.0, pow(1.0 - clamp(i.s / max(i.len + hw, 1e-3), 0.0, 1.0), 1.6), i.s > 0.0);
+  return vec4f(i.c.rgb, i.c.a * edge * fade);
 }
 `;
 
@@ -187,6 +246,8 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   if (ma.w < 0.5 || mb.w < 0.5 || ma.x < 0.0 || mb.x < 0.0 || ma.y < 0.0 || ma.y != mb.y) { return o; }
   let src = min(u32(ma.y), ${MAX_RAKE_COLORS - 1}u);
   if (abs(ma.x - mb.x) > Dr.gaps[src].x) { return o; }
+  // Older parts of a streak or timeline fade, as smoke thins out downstream.
+  let fade = pow(clamp(1.0 - ma.x / max(Dr.gaps[src].y, 1.0), 0.12, 1.0), 0.8);
   let qa = pos[i];
   let qb = pos[i + 1u];
   let a = vec2f((qa.x - Dr.ox) / Dr.scale, (Dr.oy - qa.y) / Dr.scale);
@@ -199,14 +260,15 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   let c = corner[vi];
   let px = select(a - dir * Dr.halfW * 0.5, b + dir * Dr.halfW * 0.5, c.x > 0.5) + n * Dr.halfW * c.y;
   o.p = vec4f(px.x / Dr.w * 2.0 - 1.0, 1.0 - px.y / Dr.h * 2.0, 0.0, 1.0);
-  o.c = Dr.colors[min(u32(ma.z), ${MAX_RAKE_COLORS - 1}u)];
+  let col = Dr.colors[min(u32(ma.z), ${MAX_RAKE_COLORS - 1}u)];
+  o.c = vec4f(col.rgb, col.a * fade);
   o.d = c.y;
   return o;
 }
 
 @fragment
 fn fs(i: Out) -> @location(0) vec4f {
-  return vec4f(i.c.rgb, i.c.a * clamp((1.0 - abs(i.d)) * 1.8, 0.0, 1.0));
+  return vec4f(i.c.rgb, i.c.a * clamp((1.0 - abs(i.d)) * 1.6, 0.0, 1.0));
 }
 `;
 
@@ -272,6 +334,8 @@ export class Particles {
   private seed = 1;
   /** Steps between two particles one streak emitter releases. */
   private streakGap = 1;
+  /** Age (steps) by which rake lines have faded: most of a tunnel crossing. */
+  private fadeSteps = 1e4;
   trail: GPUTexture | null = null;
   private trailKey = '';
   private clearTrail = true;
@@ -303,7 +367,7 @@ export class Particles {
       },
       primitive: { topology: 'triangle-list' },
     });
-    this.drawUni = device.createBuffer({ size: 48 + 16 * MAX_RAKE_COLORS, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.drawUni = device.createBuffer({ size: 80 + 16 * MAX_RAKE_COLORS, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.lineUni = device.createBuffer({ size: 32 + 32 * MAX_RAKE_COLORS, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   }
 
@@ -324,11 +388,14 @@ export class Particles {
       });
     }
     const d = new Float32Array(8 + 8 * MAX_RAKE_COLORS);
-    d.set([view.scale, view.ox, view.oy, size.w, size.h, 1.3 * dpr, 80 * dpr, this.tracers]);
+    d.set([view.scale, view.ox, view.oy, size.w, size.h, 0.75 * dpr, 80 * dpr, this.tracers]);
     colors.slice(0, MAX_RAKE_COLORS).forEach((c, i) => d.set(c, 8 + 4 * i));
     for (const r of this.rakes) {
       // A streak's neighbours were released one emission interval apart; a timeline's together.
-      d[8 + 4 * MAX_RAKE_COLORS + 4 * Math.min(r.index, MAX_RAKE_COLORS - 1)] = r.rake.kind === 'streaks' ? this.streakGap * 2.5 : 0.5;
+      const g = 8 + 4 * MAX_RAKE_COLORS + 4 * Math.min(r.index, MAX_RAKE_COLORS - 1);
+      d[g] = r.rake.kind === 'streaks' ? this.streakGap * 2.5 : 0.5;
+      // Age (steps) at which the line has faded to its faintest: most of a crossing.
+      d[g + 1] = this.fadeSteps;
     }
     this.device.queue.writeBuffer(this.lineUni, 0, d);
     const bg = this.device.createBindGroup({
@@ -415,6 +482,7 @@ export class Particles {
       if (rake.kind === 'streaks') {
         // One particle per 1/STREAK_PER_CELL cells the flow moves, from every emitter.
         this.streakGap = 1 / (f.u * STREAK_PER_CELL);
+        this.fadeSteps = (0.85 * f.nx) / f.u;
         r.acc += f.u * f.steps * STREAK_PER_CELL;
         const n = Math.min(r.per, Math.floor(r.acc));
         r.acc -= n;
@@ -435,6 +503,7 @@ export class Particles {
       } else {
         // A whole line every tenth of the tunnel's crossing.
         const every = (f.nx * 0.1) / f.u;
+        this.fadeSteps = (0.85 * f.nx) / f.u;
         r.acc += f.steps;
         while (r.acc >= every) {
           r.acc -= every;
@@ -484,7 +553,8 @@ export class Particles {
     fl[6] = f.outX;
     fl[7] = f.absorbInX;
     fl[8] = Math.max(1, f.u * f.steps);
-    fl[9] = (3 * f.nx) / f.u;
+    // A tracer lives up to a third of a tunnel crossing (its trail is a stretch of path).
+    fl[9] = (0.35 * f.nx) / f.u;
     u[10] = f.wrapY ? 1 : 0;
     this.device.queue.writeBuffer(this.advectUni, 0, a);
     const bg = this.device.createBindGroup({
@@ -530,11 +600,13 @@ export class Particles {
    */
   encodeDraw(
     enc: GPUCommandEncoder,
-    size: { w: number; h: number },
+    size: { w: number; h: number; dot: number; tail: number; taper: boolean },
     view: { scale: number; ox: number; oy: number },
     keep: number,
     show: { tracers: boolean },
     colors: { tracer: [number, number, number, number] },
+    byField: { scalar: GPUBuffer; lut: GPUBuffer; nx: number; ny: number; lo: number; hi: number; lift: number } | null,
+    dummy: { scalar: GPUBuffer; lut: GPUBuffer },
   ) {
     const viewKey = `${view.scale.toFixed(9)}|${view.ox.toFixed(4)}|${view.oy.toFixed(4)}`;
     this.ensureTrail(size.w, size.h, viewKey);
@@ -547,9 +619,11 @@ export class Particles {
     pass.setBlendConstant({ r: keep, g: keep, b: keep, a: keep });
     pass.draw(3);
     if (this.pos && this.meta && show.tracers && this.tracers > 0) {
-      const d = new Float32Array(12 + 4 * MAX_RAKE_COLORS);
-      d.set([view.scale, view.ox, view.oy, size.w, size.h, 0.75, 60, 0]);
+      const d = new Float32Array(20 + 4 * MAX_RAKE_COLORS);
+      d.set([view.scale, view.ox, view.oy, size.w, size.h, size.dot, 60, size.tail]);
       d.set(colors.tracer, 8);
+      const o = 12 + 4 * MAX_RAKE_COLORS;
+      d.set([byField?.lo ?? 0, byField?.hi ?? 1, byField ? 1 : 0, byField?.nx ?? 1, byField?.lift ?? 0, byField?.ny ?? 1, size.taper ? 1 : 0, 0], o);
       this.device.queue.writeBuffer(this.drawUni, 0, d);
       const bg = this.device.createBindGroup({
         layout: this.drawPipe.getBindGroupLayout(0),
@@ -557,6 +631,8 @@ export class Particles {
           { binding: 0, resource: { buffer: this.pos } },
           { binding: 1, resource: { buffer: this.meta } },
           { binding: 2, resource: { buffer: this.drawUni } },
+          { binding: 3, resource: { buffer: byField?.scalar ?? dummy.scalar } },
+          { binding: 4, resource: { buffer: byField?.lut ?? dummy.lut } },
         ],
       });
       pass.setPipeline(this.drawPipe);

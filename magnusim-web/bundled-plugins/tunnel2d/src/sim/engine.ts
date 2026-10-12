@@ -11,6 +11,8 @@ import { FLUIDS, LIMITS, type Body, type FieldMode, type Resolution, type Scene 
 import { Dye, type DyeSource } from './dye';
 import { MAX_BODIES, MAX_STEPS } from './kernels';
 import { Particles, type RakeGpu } from './particles';
+import { Rheo } from './rheo';
+import type { MapName, RheoLook } from '../render/renderer';
 import { Streamlines } from './streamlines';
 import { FIELD_MODES, Solver, type FrameResult, type GpuBody } from './solver';
 import { SMAG_CS, latticeMap, reynolds, type LatticeMap } from './units';
@@ -22,22 +24,38 @@ export const RESOLUTION_CELLS: Record<Exclude<Resolution, 'auto'>, number> = {
   high: 1536 * 768,
   ultra: 2048 * 1024,
 };
-/** A body's wall moves at most this fast (cells per step): the lattice's Mach limit. */
-export const WALL_SPEED_MAX = 0.05;
+/** A body's wall moves at most this fast (cells per step): 0.6 of the inflow speed. */
+export const WALL_SPEED_MAX = 0.03;
+
+/**
+ * One frame of a critically damped follow toward a target: the gap e and its rate v after
+ * t steps, with natural rate w (1/steps). Smooth starts and stops keep a dragged body from
+ * slamming the fluid (every jolt is a pressure wave in a slightly compressible lattice).
+ */
+function follow(e0: number, v0: number, w: number, t: number): [number, number] {
+  const c = v0 + w * e0;
+  const decay = Math.exp(-w * t);
+  return [(e0 + c * t) * decay, (c - w * (e0 + c * t)) * decay];
+}
 /** A spinning body's edge moves at most this fast (cells per step): twice the inflow speed. */
 export const SPIN_TIP_MAX = 0.1;
 /** Target GPU time per frame (ms) when running as fast as possible. */
 const FRAME_BUDGET_MS = 12;
 
-export const FIELD_COLORMAP: Record<FieldMode, ColormapName> = { vorticity: 'balance', speed: 'viridis', pressure: 'balance', schlieren: 'viridis', none: 'viridis' };
+export const FIELD_COLORMAP: Record<FieldMode, MapName> = { particles: 'inferno', vorticity: 'balance', speed: 'viridis', pressure: 'balance', schlieren: 'viridis', rheoscopic: 'viridis', none: 'viridis' };
+/** The tank's depth for the rheoscopic view's depth shear, as a fraction of the tunnel's height. */
+const RHEO_DEPTH = 0.3;
+/** Still flakes tumble back to random over this many tunnel crossings. */
+const RHEO_RELAX_CROSSINGS = 1.5;
 
 /** Tracer particles per lattice cell, by density. */
-const TRACERS_PER_CELL = { low: 1 / 1500, normal: 1 / 500, high: 1 / 150 } as const;
+const TRACERS_PER_CELL = { low: 1 / 110, normal: 1 / 40, high: 1 / 16 } as const;
 /** A GPU slower than this (million cell updates a second) gets at most LOW_GPU_TRACERS. */
 const LOW_GPU_MLUPS = 3000;
-const LOW_GPU_TRACERS = 60_000;
+const LOW_GPU_TRACERS = 40_000;
 /** How much of the trail stays from one frame to the next. */
-const TRAIL_KEEP = { off: 0, short: 0.6, long: 0.9 } as const;
+/** Tracers are short motion streaks (CSS px), drawn fresh each frame: nothing piles up. */
+const STREAK_PX = { off: 0, short: 11, long: 22 } as const;
 /** Spacing of the velocity arrows and of the streamlines' seeds (CSS pixels). */
 const ARROW_PX = 34;
 const STREAMLINE_PX = 14;
@@ -47,8 +65,16 @@ export interface MarkerColors {
   tracerDark: [number, number, number, number];
   tracerLight: [number, number, number, number];
   rakes: [number, number, number, number][];
+  /** The rake colours lightened for the dark views (plain and rheoscopic). */
+  rakesOnDark: [number, number, number, number][];
   streamline: [number, number, number, number];
   streamlineLight: [number, number, number, number];
+}
+
+/** The colour map a view draws its field (and, in the particles view, its particles) with. */
+export function particleMap(view: Scene['view']): MapName {
+  if (view.field === 'particles') return view.particleColor === 'vorticity' ? 'balance' : 'inferno';
+  return FIELD_COLORMAP[view.field];
 }
 
 export function gridFor(scene: Scene, cells: number): { nx: number; ny: number } {
@@ -94,6 +120,8 @@ interface BodyState {
   /** Lattice pose now. */
   pose: { x: number; y: number; theta: number };
   spinAngle: number;
+  /** Its velocity now (cells per step) and turning rate (radians per step), for the smooth follow. */
+  vel: { x: number; y: number; theta: number };
   fxEma: number;
   fyEma: number;
   /** Forces per step for the tests (lattice units), the most recent first trimmed. */
@@ -127,6 +155,7 @@ export class Engine {
   private autoRange = { lo: -10, hi: 10, ready: false };
   private gridKey = '';
   private rangeField: FieldMode | null = null;
+  private rangeKey = '';
   /** The free stream's density (lattice), the reference for Cp. */
   private rhoRef = 1;
   private physKey = '';
@@ -139,6 +168,9 @@ export class Engine {
   stats: Stats;
   private particles: Particles;
   private dye: Dye | null = null;
+  private rheo: Rheo | null = null;
+  /** The rheoscopic looks (from the design tokens), by preset. */
+  rheoLooks: Record<string, RheoLook> = {};
   private streamlines: Streamlines;
   private rakeGpu: RakeGpu[] = [];
   private dyeChannels = new Map<string, number>();
@@ -245,6 +277,8 @@ export class Engine {
       this.particles.clear();
       this.dye?.destroy();
       this.dye = null;
+      this.rheo?.destroy();
+      this.rheo = null;
       this.gridKey = gridKey;
       this.bodies.clear();
       this.physKey = '';
@@ -271,7 +305,8 @@ export class Engine {
     const solver = this.solver!;
     const dx = this.map!.dx;
     const mlups = await this.benchmark();
-    let tracers = scene.view.tracers ? Math.round(solver.n * TRACERS_PER_CELL[scene.view.density]) : 0;
+    const want = scene.view.tracers || scene.view.field === 'particles';
+    let tracers = want ? Math.round(solver.n * TRACERS_PER_CELL[scene.view.density]) : 0;
     if (mlups < LOW_GPU_MLUPS) tracers = Math.min(tracers, LOW_GPU_TRACERS);
     const toCell = (v: number) => v / dx - 0.5;
     const live = scene.rakes.filter((r) => r.enabled);
@@ -315,6 +350,34 @@ export class Engine {
     return this.dye ? { data: await this.dye.read(), nx: this.dye.nx, ny: this.dye.ny, channels: Object.fromEntries(this.dyeChannels), dx: this.map?.dx ?? 0 } : null;
   }
 
+  /** The flake-orientation field, summed up (for tests): mean of Q's diagonal and of |Q_xy|, its spread, NaNs. */
+  async readRheo() {
+    if (!this.rheo) return null;
+    const d = await this.rheo.read();
+    const n = this.rheo.nx * this.rheo.ny;
+    let zz = 0;
+    let xy = 0;
+    let nan = 0;
+    let tr = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    // A brightness proxy: Q_zz (flakes lying flat face the eye).
+    for (let k = 0; k < n; k++) {
+      const v = d.slice(8 * k, 8 * k + 6);
+      if (!v.every(Number.isFinite)) {
+        nan++;
+        continue;
+      }
+      zz += v[2];
+      xy += Math.abs(v[3]);
+      tr += v[0] + v[1] + v[2];
+      min = Math.min(min, v[2]);
+      max = Math.max(max, v[2]);
+    }
+    const ok = Math.max(1, n - nan);
+    return { meanZZ: zz / ok, meanAbsXY: xy / ok, meanTrace: tr / ok, minZZ: min, maxZZ: max, nan, nx: this.rheo.nx, ny: this.rheo.ny, data: null as Float32Array | null };
+  }
+
   get streamlineCount() {
     return this.scene?.view.streamlines ? this.streamlines.count : 0;
   }
@@ -338,6 +401,7 @@ export class Engine {
           rCells: radius(local),
           pose: st?.pose ?? target,
           spinAngle: st?.spinAngle ?? 0,
+          vel: st?.vel ?? { x: 0, y: 0, theta: 0 },
           fxEma: 0,
           fyEma: 0,
           history: [],
@@ -409,6 +473,7 @@ export class Engine {
     this.rhoRef = 1;
     this.particles.clear();
     this.dye?.clear();
+    this.rheo?.reset();
     if (this.scene) void this.syncMarkers(this.scene);
     this.unstable = false;
     for (const st of this.bodies.values()) {
@@ -422,6 +487,9 @@ export class Engine {
   setColormap(name: ColormapName) {
     this.renderer.setColormap(name);
   }
+
+  /** The palette of the frame: bodies dark with a light outline in the particles view (the colours of the view's own look). */
+  bodyLook: { body: [number, number, number]; edge: [number, number, number] } | null = null;
 
   /** The automatic colour range (dimensionless) once the field has been sampled. */
   get autoRangeNow() {
@@ -478,61 +546,106 @@ export class Engine {
       const from = { ...st.pose };
       if (steps === 0) {
         st.pose = to;
+        st.vel = { x: 0, y: 0, theta: 0 };
       } else {
-        const maxMove = WALL_SPEED_MAX * steps;
-        const dxp = to.x - from.x;
-        const dyp = to.y - from.y;
-        const dist = Math.hypot(dxp, dyp);
-        const k = dist > maxMove ? maxMove / dist : 1;
-        let dth = to.theta - from.theta;
-        const maxTurn = (WALL_SPEED_MAX * steps) / Math.max(1, st.rCells);
-        if (Math.abs(dth) > maxTurn) dth = Math.sign(dth) * maxTurn;
-        st.pose = { x: from.x + dxp * k, y: from.y + dyp * k, theta: from.theta + dth };
+        // Settle over about two sound crossings of the body (at least 300 steps): slow
+        // enough that the fluid around it is not jolted, quick on a fast GPU.
+        const w = 1 / Math.max(300, (2 * 2 * st.rCells) / 0.577);
+        const r = Math.max(1, st.rCells);
+        const [ex, vx] = follow(from.x - to.x, st.vel.x, w, steps);
+        const [ey, vy] = follow(from.y - to.y, st.vel.y, w, steps);
+        const [et, vt] = follow(from.theta - to.theta, st.vel.theta, w, steps);
+        let mx = to.x + ex - from.x;
+        let my = to.y + ey - from.y;
+        let mt = to.theta + et - from.theta;
+        // The wall-speed limit: a frame moves at most WALL_SPEED_MAX a step, edges included.
+        const move = Math.hypot(mx, my);
+        if (move > WALL_SPEED_MAX * steps) {
+          mx *= (WALL_SPEED_MAX * steps) / move;
+          my *= (WALL_SPEED_MAX * steps) / move;
+        }
+        const maxTurn = (WALL_SPEED_MAX * steps) / r;
+        if (Math.abs(mt) > maxTurn) mt = Math.sign(mt) * maxTurn;
+        const capped = Math.hypot(mx, my) < move - 1e-9;
+        st.vel = { x: capped ? mx / steps : vx, y: capped ? my / steps : vy, theta: Math.abs(mt) >= maxTurn ? mt / steps : vt };
+        st.pose = { x: from.x + mx, y: from.y + my, theta: from.theta + mt };
       }
       gpuBodies.push({ key: `${id}:${st.key}`, sdf: st.sdf, from: steps === 0 ? st.pose : from, to: st.pose });
     }
     solver.setBodies(gpuBodies);
 
-    const mode = FIELD_MODES[scene.view.field];
+    // The particles view colours its tracers by vorticity or speed: the field pass computes that.
+    const pview = scene.view.field === 'particles';
+    const mode = pview ? (scene.view.particleColor === 'vorticity' ? FIELD_MODES.vorticity : FIELD_MODES.speed) : FIELD_MODES[scene.view.field];
+    const rangeKey = pview ? `particles:${scene.view.particleColor}` : scene.view.field;
     const enc = this.device.createCommandEncoder();
-    if (scene.view.field !== this.rangeField) {
+    if (rangeKey !== this.rangeKey) {
       // A new field: its own range from scratch (never blended with the last field's).
-      this.rangeField = scene.view.field;
+      this.rangeKey = rangeKey;
+      this.rangeField = pview ? (scene.view.particleColor === 'vorticity' ? 'vorticity' : 'speed') : scene.view.field;
       this.autoRange = { lo: 0, hi: 1, ready: false };
     }
     const { readForces } = solver.encodeFrame(enc, steps, { mode, uRef: map.u, lRef: this.lRefCells(), rhoRef: this.rhoRef });
     const range = scene.view.autoRange && this.autoRange.ready ? this.autoRange : this.range;
-    this.renderer.setColormap(FIELD_COLORMAP[scene.view.field]);
+    this.renderer.setColormap(particleMap(scene.view));
     const lv = this.latticeView(map.dx);
     const view = scene.view;
     const plain = view.field === 'none';
+    // Markers on a dark view (plain, rheoscopic, particles) are drawn light.
+    const dark = plain || view.field === 'rheoscopic' || pview;
     const mc = this.markerColors;
     const pf = { steps, u: map.u, nx: solver.nx, ny: solver.ny, absorbInX: Math.max(0, solver.absorbInX), outX: solver.spongeX, wrapY: scene.tunnel.walls === 'periodic' };
     this.particles.encodeAdvect(enc, pf, solver.macroBuf, solver.buffers);
     this.dye?.encode(enc, steps, solver.macroBuf);
+    const rheoOn = view.field === 'rheoscopic';
+    if (rheoOn && !this.rheo) this.rheo = new Rheo(this.device, solver.nx, solver.ny);
+    if (!rheoOn && this.rheo) {
+      this.rheo.destroy();
+      this.rheo = null;
+    }
+    this.rheo?.encode(enc, steps, solver.macroBuf, {
+      depthCells: solver.ny * RHEO_DEPTH,
+      relaxSteps: (RHEO_RELAX_CROSSINGS * solver.nx) / map.u,
+      inletX: Math.max(1, solver.absorbInX),
+    });
     this.frameNo++;
     if (view.streamlines && (steps > 0 || this.frameNo % 10 === 0)) {
       const lines = scene.tunnel.height / this.worldView.mpp / STREAMLINE_PX;
       this.streamlines.encodeTrace(enc, solver.macroBuf, solver, Math.max(0, solver.absorbInX) + 1, Math.max(8, lines));
     }
     const size = this.renderer.size;
-    const markers = view.tracers && this.particles.tracerCount > 0;
+    const markers = (view.tracers || view.field === 'particles') && this.particles.tracerCount > 0;
     if (markers && mc) {
-      this.particles.encodeDraw(enc, size, lv, steps > 0 ? TRAIL_KEEP[view.trail] : 0, { tracers: true }, { tracer: plain ? mc.tracerLight : mc.tracerDark });
+      const dpr = this.worldView.dpr;
+      // In the particles view each streak takes the field's colour under it, lightened, so
+      // the particles are the field's own texture; over another field they are faint marks.
+      const byField = pview ? { scalar: solver.buffers.scalar, lut: this.renderer.lut, nx: solver.nx, ny: solver.ny, lo: range.lo, hi: range.hi, lift: 0.36 } : null;
+      const tracer = pview ? ([1, 1, 1, 0.66] as [number, number, number, number]) : dark ? mc.tracerLight : ([...mc.tracerDark.slice(0, 3), 0.3] as [number, number, number, number]);
+      this.particles.encodeDraw(
+        enc,
+        { ...size, dot: (pview ? 0.95 : 0.6) * dpr, tail: steps > 0 ? STREAK_PX[view.trail] * dpr : 0, taper: true },
+        lv,
+        0,
+        { tracers: true },
+        { tracer },
+        byField,
+        this.renderer.dummies,
+      );
     }
     const dyeColors = [...this.dyeChannels.entries()]
       .sort((a, b) => a[1] - b[1])
       .map(([id]) => {
         const r = scene.rakes.find((x) => x.id === id);
-        const c = mc?.rakes[r?.color ?? 0] ?? [0, 0, 0, 1];
-        return [c[0], c[1], c[2], 0.9] as [number, number, number, number];
+        // Dye a little lighter than its rake's colour, so it reads on dark and light views.
+        const c = mc?.rakesOnDark[r?.color ?? 0] ?? [0, 0, 0, 1];
+        return [c[0], c[1], c[2], 0.95] as [number, number, number, number];
       });
     this.renderer.encode(
       enc,
       solver,
       lv,
       range,
-      this.palette,
+      (pview || view.field === 'rheoscopic') && this.bodyLook ? { ...this.palette, ...this.bodyLook } : this.palette,
       {
         plain,
         arrows: view.arrows,
@@ -541,11 +654,12 @@ export class Engine {
         dye: this.dye ? this.dye.field : null,
         dyeColors,
         trail: markers && mc ? this.particles.trail : null,
+        rheo: this.rheo && this.rheoLooks[view.rheoPreset] ? { field: this.rheo.field, look: this.rheoLooks[view.rheoPreset], sparkle: this.rheo.sparkleWeights } : null,
       },
       mc
         ? (pass) => {
-            if (view.streamlines) this.streamlines.encodeDraw(pass, size, lv, plain ? mc.streamlineLight : mc.streamline, this.worldView.dpr);
-            if (this.rakeGpu.length) this.particles.encodeRakeLines(pass, this.renderer.format, size, lv, mc.rakes, this.worldView.dpr);
+            if (view.streamlines) this.streamlines.encodeDraw(pass, size, lv, dark ? mc.streamlineLight : mc.streamline, this.worldView.dpr);
+            if (this.rakeGpu.length) this.particles.encodeRakeLines(pass, this.renderer.format, size, lv, dark ? mc.rakesOnDark : mc.rakes, this.worldView.dpr);
           }
         : undefined,
     );
@@ -572,7 +686,7 @@ export class Engine {
     }
     if (scene.view.autoRange && now - this.sampledAt > 400) {
       this.sampledAt = now;
-      void solver.readSampled().then((s) => s && this.takeSample(s, scene.view.field));
+      void solver.readSampled().then((s) => s && this.rangeField && this.takeSample(s, this.rangeField));
     }
 
     this.stats = {
@@ -655,7 +769,9 @@ export class Engine {
       hi = m;
     } else {
       lo = 0;
-      hi = Math.max(1e-6, q(0.995));
+      // Speed: at least to 1.8 times the free stream, so the free stream sits mid-scale and
+      // only flow sped up round a body reaches the top.
+      hi = Math.max(field === 'speed' ? 1.8 : 1e-6, q(0.995));
     }
     const a = this.autoRange.ready ? 0.3 : 1;
     this.autoRange = { lo: this.autoRange.lo * (1 - a) + lo * a, hi: this.autoRange.hi * (1 - a) + hi * a, ready: true };
@@ -679,6 +795,7 @@ export class Engine {
     this.solver?.destroy();
     this.particles.destroy();
     this.dye?.destroy();
+    this.rheo?.destroy();
     this.streamlines.destroy();
     this.renderer.destroy();
   }

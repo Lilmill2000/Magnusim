@@ -10,7 +10,7 @@ describe('the scene file', () => {
   });
   it('fills in what an older or partial file lacks', () => {
     const s = parseScene({ bodies: [{ shape: { kind: 'circle', diameter: 0.3 }, x: 1, y: 1 }] });
-    expect(s.tunnel.walls).toBe('slip');
+    expect(s.tunnel.walls).toBe('farfield');
     expect(s.bodies[0]).toMatchObject({ angle: 0, spin: 0, enabled: true, locked: false });
     expect(s.bodies[0].id).toBeTruthy();
   });
@@ -24,7 +24,7 @@ describe('the scene file', () => {
     const s = parseScene({ version: 1, bodies: [], view: { field: 'speed' } });
     expect(s.version).toBe(2);
     expect(s.rakes).toEqual([]);
-    expect(s.view).toMatchObject({ field: 'speed', tracers: true, density: 'normal', trail: 'short', arrows: false, streamlines: false });
+    expect(s.view).toMatchObject({ field: 'speed', tracers: false, density: 'normal', trail: 'short', arrows: false, streamlines: false, particleColor: 'speed' });
   });
   it('reads rakes, with defaults and limits', () => {
     const s = parseScene({

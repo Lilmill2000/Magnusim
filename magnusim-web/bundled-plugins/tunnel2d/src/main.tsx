@@ -93,12 +93,32 @@ async function main() {
   };
   const canvas = document.createElement('canvas');
   const engine = new Engine(device, canvas, adapterName, palette);
+  // Two lights 25 degrees over the tank, from the upper left and the lower right.
+  const lightDir = (azDeg: number): [number, number, number] => {
+    const el = (16 * Math.PI) / 180;
+    const az = (azDeg * Math.PI) / 180;
+    return [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
+  };
+  const look = (name: string, d1: number, d2: number, sharp: number, glint: number) => ({
+    base: tokenRgb(`--t2d-rheo-${name}-base`),
+    l1: { dir: lightDir(135), color: tokenRgb(`--t2d-rheo-${name}-light1`), diffuse: d1 },
+    l2: { dir: lightDir(-45), color: tokenRgb(`--t2d-rheo-${name}-light2`), diffuse: d2 },
+    sharp,
+    glint,
+  });
+  engine.rheoLooks = { kalliroscope: look('kalliroscope', 0.16, 0.12, 12, 1.8), pearl: look('pearl', 0.18, 0.14, 12, 1.6), copper: look('copper', 0.17, 0.12, 10, 1.8) };
+  engine.bodyLook = { body: tokenRgb('--t2d-body-dark'), edge: tokenRgb('--t2d-edge-light') };
   engine.markerColors = {
-    tracerDark: [...tokenRgb('--t2d-particle-dark'), 0.55],
-    tracerLight: [...tokenRgb('--t2d-particle-light'), 0.7],
-    rakes: [1, 2, 3, 4, 5, 6].map((i) => [...tokenRgb(`--mg-series-${i}`), 0.95] as [number, number, number, number]),
-    streamline: [...tokenRgb('--t2d-streamline'), 0.75],
-    streamlineLight: [...tokenRgb('--t2d-particle-light'), 0.6],
+    tracerDark: [...tokenRgb('--t2d-particle-dark'), 0.5],
+    tracerLight: [...tokenRgb('--t2d-particle-light'), 0.85],
+    rakes: [1, 2, 3, 4, 5, 6].map((i) => [...tokenRgb(`--mg-series-${i}`), 0.85] as [number, number, number, number]),
+    // On the dark views: each series colour a third of the way to white.
+    rakesOnDark: [1, 2, 3, 4, 5, 6].map((i) => {
+      const c = tokenRgb(`--mg-series-${i}`);
+      return [c[0] + (1 - c[0]) * 0.35, c[1] + (1 - c[1]) * 0.35, c[2] + (1 - c[2]) * 0.35, 0.85] as [number, number, number, number];
+    }),
+    streamline: [...tokenRgb('--t2d-streamline'), 0.4],
+    streamlineLight: [...tokenRgb('--t2d-particle-light'), 0.35],
   };
   store.onSceneChange = (s) => {
     saver.schedule(s);

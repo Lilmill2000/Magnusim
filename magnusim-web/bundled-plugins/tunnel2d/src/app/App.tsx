@@ -5,7 +5,8 @@ import type { Workspace } from '@magnusim/workspace';
 import { useEffect, useState } from 'react';
 import { referenceLength } from '../geometry/shapes';
 import type { FieldMode, Scene } from '../scene/scene';
-import { FIELD_COLORMAP, type Engine } from '../sim/engine';
+import { particleMap, type Engine } from '../sim/engine';
+import { mapRgb, type MapName } from '../render/renderer';
 import { BodiesPanel, BodyPanel, TunnelPanel, ViewPanel, WindPanel, fmtRe } from '../ui/panels';
 import { MarkersPanel, RakePanel, rakeName } from '../ui/markers';
 import { Viewport, fitView } from '../ui/Viewport';
@@ -23,7 +24,10 @@ function legendFor(field: FieldMode, scene: Scene, lRefM: number): { title: stri
       return { title: 'Pressure coefficient Cp', unit: '', k: 1, centred: true };
     case 'schlieren':
       return { title: 'Density gradient (relative)', unit: '', k: 1, centred: false };
+    case 'particles':
+      return scene.view.particleColor === 'vorticity' ? { title: 'Vorticity', unit: '1/s', k: U / lRefM, centred: true } : { title: 'Speed', unit: 'm/s', k: U, centred: false };
     case 'none':
+    case 'rheoscopic':
       return { title: '', unit: '', k: 1, centred: false };
   }
 }
@@ -50,8 +54,8 @@ function StatusLine({ engine, store }: { engine: Engine; store: Store }) {
       <span>{s.stepsPerFrame} steps a frame</span>
       <span title="Simulated seconds per second">{s.state === 'running' ? `×${fmtRe(s.speedRatio)} real time` : s.state === 'paused' ? 'Paused' : 'Stopped'}</span>
       {performance.now() - engine.limitedAt < 2000 ? (
-        <span className="t2d-squeeze" data-t2d-squeeze title="Flow squeezed between bodies that touch or close a gap is held to equilibrium there, so the flow in that gap is approximate.">
-          Bodies close a gap: flow there approximated
+        <span className="t2d-squeeze" data-t2d-squeeze title="Where the flow went faster, or was squeezed harder, than the lattice can carry (a body dragged fast, or a gap closing between bodies), it is held to those limits there, so the flow at that spot is approximate.">
+          Flow held to its limits where it moved too fast
         </span>
       ) : null}
       <span data-t2d-simtime={s.simTime}>t = {s.simTime < 1 ? `${(s.simTime * 1000).toPrecision(3)} ms` : `${s.simTime.toPrecision(4)} s`}</span>
@@ -75,10 +79,15 @@ function Legend({ engine, store }: { engine: Engine; store: Store }) {
     if (!scene.view.autoRange) engine.setRange(scene.view.min / lg.k, scene.view.max / lg.k);
   }, [engine, scene.view.autoRange, scene.view.min, scene.view.max, lg.k]);
   // No field shown: no legend (after the hooks, which run on every render).
-  if (scene.view.field === 'none') return null;
+  if (scene.view.field === 'none' || scene.view.field === 'rheoscopic') return null;
+  const map = particleMap(scene.view);
   return (
     <div className="t2d-legend" data-t2d-legend data-lo={lo * lg.k} data-hi={hi * lg.k}>
-      <ColorLegend map={FIELD_COLORMAP[scene.view.field]} min={lo * lg.k} max={hi * lg.k} title={lg.title} unit={lg.unit} centred={lg.centred} ticks={5} format={fmtRe} />
+      {map === 'inferno' ? (
+        <MapLegend map={map} min={lo * lg.k} max={hi * lg.k} title={lg.title} unit={lg.unit} />
+      ) : (
+        <ColorLegend map={map} min={lo * lg.k} max={hi * lg.k} title={lg.title} unit={lg.unit} centred={lg.centred} ticks={5} format={fmtRe} />
+      )}
       {!scene.view.autoRange ? (
         <RangeInputs
           lo={scene.view.min}
@@ -86,6 +95,30 @@ function Legend({ engine, store }: { engine: Engine; store: Store }) {
           onCommit={(min, max) => store.commit({ ...scene, view: { ...scene.view, min, max } }, false)}
         />
       ) : null}
+    </div>
+  );
+}
+
+/** A colour bar for a map the UI kit does not carry (inferno), in the kit legend's layout. */
+function MapLegend({ map, min, max, title, unit }: { map: MapName; min: number; max: number; title: string; unit: string }) {
+  const rgb = mapRgb(map);
+  const stops = Array.from({ length: 9 }, (_, i) => {
+    const j = Math.round((i / 8) * 255);
+    return `rgb(${rgb[3 * j]}, ${rgb[3 * j + 1]}, ${rgb[3 * j + 2]}) ${(i / 8) * 100}%`;
+  });
+  const ticks = Array.from({ length: 5 }, (_, i) => min + ((max - min) * i) / 4);
+  return (
+    <div className="t2d-maplegend">
+      <div className="mgk-legend-title">
+        {title}
+        {unit ? ` (${unit})` : ''}
+      </div>
+      <div className="mgk-legend-bar" style={{ background: `linear-gradient(to right, ${stops.join(', ')})` }} />
+      <div className="mgk-legend-ticks">
+        {ticks.map((t, i) => (
+          <span key={i}>{fmtRe(t)}</span>
+        ))}
+      </div>
     </div>
   );
 }

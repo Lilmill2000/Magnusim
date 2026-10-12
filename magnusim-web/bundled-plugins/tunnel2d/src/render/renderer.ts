@@ -5,6 +5,15 @@
 // same pass after it (the streamlines).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { colormapRgb, type ColormapName } from '@magnusim/plugin-ui';
+import { INFERNO } from './inferno';
+
+/** The kit's colour maps, and inferno (the particles view's). */
+export type MapName = ColormapName | 'inferno';
+
+/** A colour map as 256 RGB entries (0..255). */
+export function mapRgb(name: MapName): Uint8Array {
+  return name === 'inferno' ? INFERNO : colormapRgb(name);
+}
 import { renderShader } from '../sim/kernels';
 import type { Solver } from '../sim/solver';
 
@@ -39,6 +48,18 @@ export interface Overlays {
   dye: GPUBuffer | null;
   dyeColors: RGBA[];
   trail: GPUTexture | null;
+  /** The rheoscopic field and its lighting, when that view is on. */
+  rheo: { field: GPUBuffer; look: RheoLook; sparkle: [number, number] } | null;
+}
+
+/** A rheoscopic look: the tank's dark base and two lights (direction xyz, colour rgb, diffuse strength). */
+export interface RheoLook {
+  base: RGB;
+  l1: { dir: [number, number, number]; color: RGB; diffuse: number };
+  l2: { dir: [number, number, number]; color: RGB; diffuse: number };
+  /** Glint sharpness (exponent) and strength. */
+  sharp: number;
+  glint: number;
 }
 
 export class Renderer {
@@ -66,15 +87,15 @@ export class Renderer {
       fragment: { module, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list' },
     });
-    this.viewBuf = device.createBuffer({ size: 208, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.viewBuf = device.createBuffer({ size: 304, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.lutBuf = device.createBuffer({ size: 256 * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.dummyBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE });
     this.dummyTex = device.createTexture({ size: [1, 1], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
   }
 
-  setColormap(name: ColormapName) {
+  setColormap(name: MapName) {
     if (name === this.lutName) return;
-    const rgb = colormapRgb(name);
+    const rgb = mapRgb(name);
     const count = rgb.length / 3;
     const lut = new Float32Array(256 * 4);
     for (let i = 0; i < 256; i++) {
@@ -86,6 +107,15 @@ export class Renderer {
     }
     this.device.queue.writeBuffer(this.lutBuf, 0, lut);
     this.lutName = name;
+  }
+
+  /** The colour map now set (256 vec4), for particles coloured by the field. */
+  get lut(): GPUBuffer {
+    return this.lutBuf;
+  }
+  /** Small buffers to bind where nothing else is. */
+  get dummies() {
+    return { scalar: this.dummyBuf, lut: this.lutBuf };
   }
 
   /** The canvas's size in device pixels. */
@@ -108,10 +138,11 @@ export class Renderer {
         { binding: 6, resource: { buffer: solver.macroBuf } },
         { binding: 7, resource: { buffer: ov.dye ?? this.dummyBuf } },
         { binding: 8, resource: (ov.trail ?? this.dummyTex).createView() },
+        { binding: 9, resource: { buffer: ov.rheo?.field ?? this.dummyBuf } },
       ],
     });
-    const flags = (ov.plain ? 1 : 0) | (ov.arrows ? 2 : 0) | (ov.dye ? 4 : 0) | (ov.trail ? 8 : 0);
-    const d = new ArrayBuffer(208);
+    const flags = (ov.plain ? 1 : 0) | (ov.arrows ? 2 : 0) | (ov.dye ? 4 : 0) | (ov.trail ? 8 : 0) | (ov.rheo ? 16 : 0);
+    const d = new ArrayBuffer(304);
     const f = new Float32Array(d);
     const u = new Uint32Array(d);
     f.set([view.scale, view.ox, view.oy, range.lo, range.hi, solver.nx, solver.ny, solver.absorbInX, solver.spongeX, ov.uRef, ov.arrowCells]);
@@ -123,6 +154,15 @@ export class Renderer {
     f.set([...pal.plain, 1], 28);
     f.set(pal.arrow, 32);
     for (let c = 0; c < 4; c++) f.set(ov.dyeColors[c] ?? [0, 0, 0, 0], 36 + 4 * c);
+    if (ov.rheo) {
+      const L = ov.rheo.look;
+      f.set([...L.base, 1], 52);
+      f.set([...L.l1.dir, 0], 56);
+      f.set([...L.l1.color, L.l1.diffuse], 60);
+      f.set([...L.l2.dir, 0], 64);
+      f.set([...L.l2.color, L.l2.diffuse], 68);
+      f.set([L.sharp, ov.rheo.sparkle[0], ov.rheo.sparkle[1], L.glint], 72);
+    }
     this.device.queue.writeBuffer(this.viewBuf, 0, d);
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: pal.bg[0], g: pal.bg[1], b: pal.bg[2], a: 1 } }],

@@ -32,7 +32,8 @@ export const OPP = [0, 3, 4, 1, 2, 7, 8, 5, 6];
 /** The direction mirrored in y (a slip wall's reflection). */
 export const MIRY = [0, 1, 4, 3, 2, 8, 7, 6, 5];
 
-export const WALLS = { slip: 0, noslip: 1, periodic: 2 } as const;
+/** Top and bottom: slip, no-slip, periodic, or open (the free stream beyond, waves pass out). */
+export const WALLS = { slip: 0, noslip: 1, periodic: 2, farfield: 3 } as const;
 
 const n10 = (v: number) => v.toFixed(10);
 const n1 = (v: number) => v.toFixed(1);
@@ -43,6 +44,7 @@ struct Params {
   nx: u32, ny: u32, n: u32, nBodies: u32,
   omega: f32, smag: f32, uIn: f32, absorb: f32,
   absorbIn: f32, spongeX: f32, frameSteps: u32, profile: u32,
+  farW: f32, p0: f32, p1: f32, p2: f32,
 };
 struct Body {
   c0: vec2f, c1: vec2f,
@@ -133,6 +135,7 @@ export function stepShader(): string {
       yEdge = `if (${out}) {
       if (WALLS == 1u) { f${k} = ${rd(i, 'idx')}; }
       else if (WALLS == 0u) { f${k} = ${rd(MIRY[k], `u32(i32(x) - (${cx})) + y * P.nx`)}; }
+      else if (WALLS == 3u) { f${k} = ${n10(W[k])} * (1.0 + 3.0 * ${n1(cx)} * P.uIn + 4.5 * ${n1(cx * cx)} * P.uIn * P.uIn - 1.5 * P.uIn * P.uIn); }
       else { f${k} = ${rd(k, `u32(i32(x) - (${cx})) + ${wrapY} * P.nx`)}; }
     } else `;
     }
@@ -183,10 +186,24 @@ export function stepShader(): string {
   var sig = 0.0;
   if (xf > P.spongeX) { let r = (xf - P.spongeX) / (f32(P.nx) - P.spongeX); tP += r * r; sig = P.absorb * r * r; }
   if (xf < P.absorbIn) { let r = (P.absorbIn - xf) / P.absorbIn; sig = P.absorb * r * r; }
+  if (WALLS == 3u) {
+    // Open top and bottom: a band that relaxes to the free stream, so what reaches the
+    // edge (sound, a wake) passes out instead of reflecting.
+    let yb = min(f32(y), f32(P.ny - 1u) - f32(y));
+    if (yb < P.farW) { let r = (P.farW - yb) / P.farW; sig = max(sig, P.absorb * r * r); }
+  }
   let omP = 1.0 / tP;
   let axxy = 2.0 * ux * pxy + uy * pxx;
   let axyy = 2.0 * uy * pxy + ux * pyy;
   let keep = 1.0 - omP;
+  // Bulk viscosity: the stress's trace (compression) relaxes fully every step while its
+  // deviatoric part (shear) relaxes at omP. Sound waves (from dragged bodies, the start)
+  // then die out within a few cells instead of ringing between the walls, and the
+  // incompressible flow is unchanged (the Schafer-Turek check runs with it).
+  let half = 0.5 * (pxx + pyy);
+  let dxx = keep * (pxx - half) + KEEP_BULK * half;
+  let dyy = keep * (pyy - half) + KEEP_BULK * half;
+  let dxy = keep * pxy;
 `;
   for (let k = 0; k < 9; k++) {
     const cx = CX[k];
@@ -197,7 +214,7 @@ export function stepShader(): string {
     const hxxy = cx * cx * cy - cy / 3;
     const hxyy = cx * cy * cy - cx / 3;
     collide += `  var o${k} = ${n10(W[k])} * rho * (1.0 + 3.0 * (${n10(cx)} * ux + ${n10(cy)} * uy) + 4.5 * (${n10(hxx)} * ux * ux + ${n10(hyy)} * uy * uy + ${n10(2 * hxy)} * ux * uy) + 13.5 * (${n10(hxxy)} * ux * ux * uy + ${n10(hxyy)} * ux * uy * uy))
-    + keep * ${n10(W[k])} * (4.5 * (${n10(hxx)} * pxx + ${n10(hyy)} * pyy + ${n10(2 * hxy)} * pxy) + 13.5 * (${n10(hxxy)} * axxy + ${n10(hxyy)} * axyy));
+    + ${n10(W[k])} * (4.5 * (${n10(hxx)} * dxx + ${n10(hyy)} * dyy + ${n10(2 * hxy)} * dxy) + 13.5 * keep * (${n10(hxxy)} * axxy + ${n10(hxyy)} * axyy));
 `;
   }
   collide += `  if (sig > 0.0) {
@@ -210,6 +227,8 @@ ${Array.from({ length: 9 }, (_, k) => `  fout[${k}u * P.n + idx] = o${k};`).join
   return `
 override WALLS: u32 = 0u;
 override SMAG: bool = false;
+/** 1 - the bulk relaxation rate (0: the stress's trace fully relaxed each step). */
+const KEEP_BULK = 0.0;
 struct Step { slot: u32, p0: u32, p1: u32, p2: u32 };
 @group(0) @binding(0) var<storage, read> fin: array<f32>;
 @group(0) @binding(1) var<storage, read_write> fout: array<f32>;
@@ -377,7 +396,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 /**
  * Full-screen render: the field through a colour map (or a plain background), the sponge
  * zones tinted, the dye, the particles' trail, velocity arrows, and the bodies on top.
- * Flags: 1 plain background, 2 arrows, 4 dye, 8 trail.
+ * Flags: 1 plain background, 2 arrows, 4 dye, 8 trail, 16 rheoscopic (flakes lit by two lights).
  */
 export function renderShader(): string {
   return `
@@ -388,6 +407,8 @@ struct View {
   bg: vec4f, body: vec4f, edge: vec4f, zone: vec4f,
   plain: vec4f, arrow: vec4f,
   dye: array<vec4f, 4>,
+  rBase: vec4f, l1dir: vec4f, l1col: vec4f, l2dir: vec4f, l2col: vec4f,
+  rParams: vec4f,
 };
 @group(0) @binding(0) var<storage, read> scalar: array<f32>;
 @group(0) @binding(1) var<uniform> Vw: View;
@@ -398,6 +419,7 @@ struct View {
 @group(0) @binding(6) var<storage, read> mac: array<vec4f>;
 @group(0) @binding(7) var<storage, read> dye: array<vec4f>;
 @group(0) @binding(8) var trail: texture_2d<f32>;
+@group(0) @binding(9) var<storage, read> rheo: array<vec4f>;
 ${TABLES}
 ${COMMON}
 
@@ -436,6 +458,34 @@ fn sampleDye(l: vec2f) -> vec4f {
   return mix(mix(dye[k.x], dye[k.y], f.x), mix(dye[k.z], dye[k.w], f.x), f.y);
 }
 
+/**
+ * The flakes' colour at l: two lights low over the tank, the eye straight above. Each
+ * light gives a two-sided diffuse term sqrt(lᵀQl) (its strength in the light's alpha) and
+ * a glint (hᵀQh)^k (rParams: k, the two sparkle layers' weights, glint strength), the
+ * glint lit up where the carried sparkle noise is high.
+ */
+fn rheoColor(l: vec2f) -> vec3f {
+  let c = clampCell(l);
+  let k = cellIndex(c);
+  let f = fract(c);
+  let a = mix(mix(rheo[2u * k.x], rheo[2u * k.y], f.x), mix(rheo[2u * k.z], rheo[2u * k.w], f.x), f.y);
+  let b = mix(mix(rheo[2u * k.x + 1u], rheo[2u * k.y + 1u], f.x), mix(rheo[2u * k.z + 1u], rheo[2u * k.w + 1u], f.x), f.y);
+  let Q = mat3x3f(vec3f(a.x, a.w, b.x), vec3f(a.w, a.y, b.y), vec3f(b.x, b.y, a.z));
+  let eye = vec3f(0.0, 0.0, 1.0);
+  let sparkle = Vw.rParams.y * b.z + Vw.rParams.z * b.w;
+  let glitter = 0.35 + 2.4 * smoothstep(0.62, 1.0, sparkle);
+  var col = Vw.rBase.rgb;
+  for (var i = 0u; i < 2u; i++) {
+    let ld = normalize(select(Vw.l2dir.xyz, Vw.l1dir.xyz, i == 0u));
+    let lc = select(Vw.l2col, Vw.l1col, i == 0u);
+    let dif = sqrt(max(dot(ld, Q * ld), 0.0));
+    let hv = normalize(ld + eye);
+    let gl = pow(clamp(dot(hv, Q * hv), 0.0, 1.0), Vw.rParams.x);
+    col += lc.rgb * (lc.a * dif + Vw.rParams.w * gl * glitter);
+  }
+  return col;
+}
+
 /** Coverage (0..1) of the velocity arrow of the grid cell around l. */
 fn arrowCover(l: vec2f) -> f32 {
   let G = Vw.arrowCells;
@@ -466,7 +516,9 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let l = vec2f(Vw.ox + pos.x * Vw.scale, Vw.oy - pos.y * Vw.scale);
   if (l.x < -0.5 || l.y < -0.5 || l.x > Vw.nxf - 0.5 || l.y > Vw.nyf - 0.5) { return Vw.bg; }
   var col: vec3f;
-  if ((Vw.flags & 1u) != 0u) {
+  if ((Vw.flags & 16u) != 0u) {
+    col = rheoColor(l);
+  } else if ((Vw.flags & 1u) != 0u) {
     col = Vw.plain.rgb;
   } else {
     let s = sampleScalar(l);

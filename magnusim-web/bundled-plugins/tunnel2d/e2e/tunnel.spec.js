@@ -14,7 +14,8 @@
 // 5. A short drag soak: dragging and turning bodies for 30 s (10 min with
 //    MAGNUSIM_E2E_SOAK=1) never makes the flow unstable.
 // 6. A body dragged into another (the closing gap's flow is limited, and the page says so)
-//    leaves the flow stable.
+//    leaves the flow stable; a fast drag leaves no sound waves ringing (the diamond
+//    artefacts); the rheoscopic view keeps a sound flake field.
 // 7. Without WebGPU (no navigator.gpu, or no adapter), the page says why it cannot run.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
@@ -113,6 +114,10 @@ test('a tunnel runs, the airfoil drags through the flow, and the scene is saved'
   // 1. The default scene and a running flow.
   const s0 = await scene(frame);
   expect(s0.bodies).toHaveLength(1);
+  // A new tunnel opens on the flow with particles (speed); this test reads vorticity.
+  expect(s0.view.field).toBe('particles');
+  await expect(frame.locator('[data-t2d-legend]')).toContainText('Speed');
+  await frame.getByRole('combobox', { name: 'Show' }).selectOption('vorticity');
   expect(s0.bodies[0].shape).toMatchObject({ kind: 'naca', code: '2412' });
   const st0 = await stats(frame);
   expect(st0.nx).toBeGreaterThan(100);
@@ -272,7 +277,7 @@ test('spin (the Magnus effect and its cap), the wall kinds, the resolution and a
 
   // The wall kinds: each runs.
   const walls = frame.getByRole('combobox', { name: 'Walls' });
-  for (const w of ['noslip', 'periodic', 'slip']) {
+  for (const w of ['noslip', 'periodic', 'slip', 'farfield']) {
     await walls.selectOption(w);
     await expect.poll(async () => (await scene(frame)).tunnel.walls).toBe(w);
     const t0 = (await stats(frame)).simTime;
@@ -353,7 +358,7 @@ test('dragging and turning bodies for a while never makes the flow unstable', as
   await expect(frame.locator('[data-t2d-unstable]')).toHaveCount(0);
 });
 
-test('a body dragged into another one keeps the flow stable and the page says the gap is approximated', async ({ page, request }) => {
+test('a body dragged into another one keeps the flow stable and the page says the flow was held to its limits', async ({ page, request }) => {
   needsFastGpu();
   // Bug found by the soak (T1): a cylinder pushed into the airfoil trapped fluid in the closing
   // gap; its density ran away and the whole flow stopped as unstable.
@@ -378,6 +383,62 @@ test('a body dragged into another one keeps the flow stable and the page says th
   expect(st.state, JSON.stringify(st.unstableAt)).toBe('running');
   expect(st.limitedTotal).toBeGreaterThan(0);
   await expect(frame.locator('[data-t2d-unstable]')).toHaveCount(0);
+});
+
+test('a fast drag leaves no sound waves ringing through the tunnel', async ({ page, request }) => {
+  // Bug Daniel saw (T3): after dragging the airfoil, diamond patterns filled the field:
+  // pressure waves from the jolted body, bouncing between the walls (the lattice's sound is
+  // only ~11 x the wind speed). Fixed by a smooth follow of the dragged pose, open top and
+  // bottom (waves pass out) and bulk viscosity. Measured: upstream |grad rho| 0.7 s after
+  // this drag was 43.5 before, about 0.07 after (calm: about 0.06-0.09).
+  needsFastGpu();
+  const frame = await openTunnel(page, await newTunnel(request, 'Waves tunnel'));
+  await frame.getByRole('combobox', { name: 'Show' }).selectOption('schlieren');
+  const band = () =>
+    T(frame, async () => {
+      const s = await window.__TUNNEL__.sampleField();
+      const st = window.__TUNNEL__.stats();
+      const w = Math.ceil(st.nx / 4);
+      const h = Math.ceil(st.ny / 4);
+      let sum = 0;
+      let n = 0;
+      for (let j = 0; j < h; j++) for (let i = Math.floor(w * 0.08); i < Math.floor(w * 0.22); i++) { const v = s[j * w + i]; if (v != null) { sum += Math.abs(v); n++; } }
+      return sum / n;
+    });
+  await page.waitForTimeout(6000);
+  const calm = await band();
+  const b = (await scene(frame)).bodies[0];
+  const at = await pageXY(page, frame, await T(frame, ([x, y]) => window.__TUNNEL__.toScreen(x, y), [b.x + 0.15, b.y]));
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.down();
+  for (let i = 1; i <= 15; i++) { await page.mouse.move(at.x, at.y - i * 10); await page.waitForTimeout(30); }
+  for (let i = 1; i <= 30; i++) { await page.mouse.move(at.x, at.y - 150 + i * 10); await page.waitForTimeout(30); }
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  const after = await band();
+  console.log(`upstream |grad rho|: calm ${calm.toFixed(4)}, 0.7 s after the drag ${after.toFixed(4)}`);
+  expect(after).toBeLessThan(Math.max(0.5, 6 * calm));
+});
+
+test('the rheoscopic view: flakes carried and turned by the flow, dull where it is still', async ({ page, request }) => {
+  needsFastGpu();
+  const frame = await openTunnel(page, await newTunnel(request, 'Rheo tunnel'));
+  await frame.getByRole('combobox', { name: 'Show' }).selectOption('rheoscopic');
+  await expect(frame.locator('[data-t2d-legend]')).toHaveCount(0);
+  await expect(frame.getByRole('combobox', { name: 'Flakes' })).toBeVisible();
+  await page.waitForTimeout(6000);
+  const r = await T(frame, () => window.__TUNNEL__.rheo());
+  expect(r.nan).toBe(0);
+  // A second moment: trace 1 everywhere, off-diagonals bounded (they once ran away to 1e31).
+  expect(Math.abs(r.meanTrace - 1)).toBeLessThan(1e-3);
+  expect(r.meanAbsXY).toBeLessThan(0.5);
+  // The flow lays flakes down and turns them: from nearly upright to nearly flat.
+  expect(r.maxZZ - r.minZZ).toBeGreaterThan(0.5);
+  for (const preset of ['pearl', 'copper', 'kalliroscope']) {
+    await frame.getByRole('combobox', { name: 'Flakes' }).selectOption(preset);
+    await expect.poll(async () => (await scene(frame)).view.rheoPreset).toBe(preset);
+  }
+  expect((await stats(frame)).state).toBe('running');
 });
 
 test('without WebGPU the page says why it cannot run', async ({ browser, request }) => {

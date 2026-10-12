@@ -115,12 +115,13 @@ export function TunnelPanel({ store, engine, units }: { store: Store; engine: En
       <Field label="Height">
         <NumberUnitInput label="Height" quantity="length" unit={lengthUnit(units)} units={units} valueSi={scene.tunnel.height} onCommitSi={(v) => set({ height: Math.min(LIMITS.height[1], Math.max(LIMITS.height[0], v)) })} />
       </Field>
-      <Field label="Walls" help="Slip walls let the flow slide along them, like open air. Solid walls have boundary layers, like a real tunnel. Periodic: what leaves at the top comes in at the bottom.">
+      <Field label="Walls" help="Open: no walls; the free stream goes on beyond the top and bottom, and waves and wakes pass out through them (a body in open air). Slip walls let the flow slide along them. Solid walls have boundary layers, like a real tunnel. Periodic: what leaves at the top comes in at the bottom.">
         <Select
           label="Walls"
           value={scene.tunnel.walls}
           options={[
-            { value: 'slip', label: 'Slip (open air)' },
+            { value: 'farfield', label: 'Open (no walls)' },
+            { value: 'slip', label: 'Slip walls' },
             { value: 'noslip', label: 'Solid' },
             { value: 'periodic', label: 'Periodic' },
           ]}
@@ -144,10 +145,12 @@ export function TunnelPanel({ store, engine, units }: { store: Store; engine: En
 }
 
 const FIELD_OPTIONS: { value: FieldMode; label: string }[] = [
+  { value: 'particles', label: 'Flow with particles' },
   { value: 'vorticity', label: 'Vorticity' },
   { value: 'speed', label: 'Speed' },
   { value: 'pressure', label: 'Pressure (Cp)' },
   { value: 'schlieren', label: 'Density gradient (schlieren)' },
+  { value: 'rheoscopic', label: 'Rheoscopic (flakes in a tank)' },
   { value: 'none', label: 'None (markers on a dark background)' },
 ];
 
@@ -159,6 +162,33 @@ export function ViewPanel({ store }: { store: Store }) {
       <Field label="Show">
         <Select label="Show" value={scene.view.field} options={FIELD_OPTIONS} onChange={(v) => set({ field: v as FieldMode })} />
       </Field>
+      {scene.view.field === 'particles' ? (
+        <Field label="Colour by" help="The flow's speed or its vorticity, drawn under the particles; each particle is a lighter shade of the colour where it is.">
+          <Select
+            label="Colour by"
+            value={scene.view.particleColor}
+            options={[
+              { value: 'speed', label: 'Speed' },
+              { value: 'vorticity', label: 'Vorticity' },
+            ]}
+            onChange={(p) => set({ particleColor: p as Scene['view']['particleColor'] })}
+          />
+        </Field>
+      ) : null}
+      {scene.view.field === 'rheoscopic' ? (
+        <Field label="Flakes" help="How the tank looks: the flakes' colour and the two lights over it. Flakes lie flat and tilt with the flow, and catch the light where the flow shears and turns; still water goes dull.">
+          <Select
+            label="Flakes"
+            value={scene.view.rheoPreset}
+            options={[
+              { value: 'kalliroscope', label: 'Kalliroscope blue' },
+              { value: 'pearl', label: 'Pearl' },
+              { value: 'copper', label: 'Copper' },
+            ]}
+            onChange={(p) => set({ rheoPreset: p as Scene['view']['rheoPreset'] })}
+          />
+        </Field>
+      ) : null}
       <Field label="Colour range" help="Automatic follows the flow; turn it off to fix the range (in the legend's units).">
         <Toggle label="Automatic colour range" checked={scene.view.autoRange} onChange={(on) => set({ autoRange: on })} />
       </Field>
