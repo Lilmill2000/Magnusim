@@ -1,0 +1,41 @@
+key = "tunnel2d"
+name = "2D Wind Tunnel"
+version = "0.1.0"
+# 1.2: ws.files (the tunnel's scene) and nav.setDirty. 1.3: the UI kit.
+# 1.4: start actions.
+api_version = "1.4"
+tier = "bundled"
+required = false
+# Ships off: nothing of it runs until someone turns it on in Settings > Plugins.
+default_enabled = false
+license = "GPL-3.0-or-later"
+description = "A real-time 2D wind tunnel on the GPU: set the wind speed, drop in airfoils and shapes, drag and turn them, and watch the flow (speed, pressure, vorticity) answer as you move them. Needs a browser with WebGPU."
+authors = ["Magnusim"]
+# No [python]: the flow is solved in the workspace page on the GPU (WebGPU compute
+# shaders, a lattice Boltzmann method). plugin.py is the only Python file here.
+
+# The scene (tunnel, wind, bodies, view) of each tunnel study: one small JSON file.
+[files]
+max_file_mb = 8
+max_total_mb = 256
+
+[[workspaces]]
+key = "tunnel"
+title = "2D Wind Tunnel"
+icon = "M3 7h12a3 3 0 1 0-3-3 M3 12h17a3 3 0 1 1-3 3 M3 17h9"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "tunnel"
+title = "Wind tunnel"
+icon = "M3 7h12a3 3 0 1 0-3-3 M3 12h17a3 3 0 1 1-3 3 M3 17h9"
+workspace = "tunnel"
+schema_version = 1
+
+[[start_actions]]
+study_kind = "tunnel"
+label = "Open a 2D wind tunnel"
+hint = "Makes a wind tunnel study and opens it"
+places = ["empty_project", "header", "new_project", "home"]
+home_label = "New wind tunnel"
+header_label = "Wind tunnel"

@@ -1,0 +1,29 @@
+{
+  "name": "magnusim-tunnel2d",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Magnusim 2D Wind Tunnel: the tunnel workspace plugin (built into workspace/ from src/)",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@webgpu/types": "0.1.66"
+  },
+  "magnusim": {
+    "e2eHostPaths": [
+      "src/workspace/",
+      "src/plugin-sdk/",
+      "src/plugin-ui/",
+      "src/plugins/",
+      "scripts/server/workspace-files.ts",
+      "scripts/server/plugin-files.ts",
+      "python/cfddesk/registry/",
+      "e2e/support/"
+    ]
+  }
+}
