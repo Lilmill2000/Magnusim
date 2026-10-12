@@ -1006,6 +1006,11 @@ body,
 .face-ctx-menu[hidden] {
   display: none !important;
 }
+/* An item that does not apply (Hide face off the part, Show all bodies with none hidden). */
+.face-ctx-menu button[hidden],
+.face-ctx-menu .face-ctx-sep[hidden] {
+  display: none;
+}
 .face-ctx-menu button {
   display: block;
   width: 100%;
@@ -2680,6 +2685,11 @@ select.fp-select {
 .tree-node[data-label="Body1"] .tl,
 .tree-node[data-w16-body="1"] .tl {
   font-weight: 600;
+}
+
+/* A body hidden in the view (right-click, Hide body): its row is lighter grey. */
+.tree-node.is-hidden-body > .tree-row .tl {
+  color: var(--mg-text-subtle);
 }
 
 

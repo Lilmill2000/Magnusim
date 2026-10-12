@@ -210,7 +210,8 @@ import {
   subscribeLinkedGeometries,
   withGeometryRev,
 } from './geometryRev';
-import { setShownFaceTable } from './faceNames';
+import { bodyDisplay, setShownFaceTable } from './faceNames';
+import { getBodyView, publishBodyView, setBodyViewHandler } from './bodyView';
 import { fillViewportGeometryActions } from './viewportGeometryActions';
 import { cameraMovedSince, isCameraDrag } from './landingCamera';
 import { linkNeedsAction, linkQuietText, linkReportText, linkTouchesSetup, setupOf } from '../workspace/linkReport';
@@ -8522,6 +8523,16 @@ window.__CFD_SET_FILTERS_MODE__ = setFiltersToolbarMode;
 
 let meshSurfFullPd = null;
 const hiddenCadFaces = new Set();
+/**
+ * Bodies hidden in the view (1-based solid ids) of the geometry `hiddenBodiesGeom`: a view
+ * state only (nothing saved changes), gone when another geometry is shown or the page loads.
+ * Each body draws its own copy of a face it shares with another (face_visits), so hiding
+ * one body never opens a hole in the other.
+ */
+const hiddenBodies = new Set();
+let hiddenBodiesGeom = '';
+/** The bodies the open viewport menu's "Hide body" item hides. */
+let faceCtxBodies = [];
 let faceCtxHit = null;
 let faceCtxOrbitTarget = null;
 const faceCtxSelected = new Set();
@@ -8922,6 +8933,7 @@ function hideRunResultsView(opts) {
   // A results compare belongs to the Results view.
   try { if (resultsCompareOn()) stopCompare(); } catch (_) {}
   resultsViewOpen = false;
+  try { publishBodyViewState(); } catch (_) {}
   resultsOpeningRunId = null;
   resultsRunId = null;
   activeViewId = '';
@@ -9447,6 +9459,7 @@ async function openRunResults(runId, opts) {
     try { flushFilterAutosave(); } catch (_) {}
   }
   resultsViewOpen = true;
+  try { publishBodyViewState(); } catch (_) {}
   resultsOpeningRunId = runId;
   resultsRunId = null; // set once the case is attached (blocks autosave meanwhile)
   holdCadDuringResultsLoad();
@@ -18564,6 +18577,7 @@ function highlightGeomBody(bodyIndex) {
     w16State.focusedFace = null;
   }
   applyGeomHighlight();
+  publishBodyViewState();
 }
 
 function highlightGeomBodies(indices) {
@@ -18575,6 +18589,7 @@ function highlightGeomBodies(indices) {
     w16State.focusedFace = null;
   }
   applyGeomHighlight();
+  publishBodyViewState();
 }
 
 function highlightGeomFaces(labels, focusLabel, paint) {
@@ -19313,11 +19328,14 @@ function resetEmptyWorkbench({ keepProject = true } = {}) {
   w16State.fingerprint = null;
   try {
     hiddenCadFaces.clear();
+    hiddenBodies.clear();
+    hiddenBodiesGeom = '';
     faceCtxSelected.clear();
     edgeCtxSelected.clear();
     vertexCtxSelected.clear();
     faceCtxHit = null;
     syncHiddenFacesChip();
+    publishBodyViewState();
     applyHiddenDisplays();
     try { applyEdgeSelectionDisplay(); } catch (_) {}
     try { syncMeasureChip(); } catch (_) {}
@@ -19677,6 +19695,11 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   geomMapper.setInputConnection(geomCadFaceReader.getOutputPort());
   const pd = geomCadFaceReader.getOutputData();
   const fp = fingerprintGeomPolyData(pd);
+  // Another geometry: its bodies all show. The same one again: what was hidden stays hidden.
+  try { syncHiddenBodiesGeometry(); } catch (_) {}
+  if (hiddenBodies.size || hiddenCadFaces.size) {
+    try { applyHiddenCadDisplay(); } catch (_) {}
+  }
   if (!fp.empty) {
     setGeomVisible(true);
     try {
@@ -23692,7 +23715,7 @@ function applyEdgeSelectionDisplay() {
   if (!cadEdgeCache.length) rebuildCadEdgeCache();
   const pts = [];
   const lines = [];
-  const hideIds = hiddenCadFaces.size ? hiddenCadFaceIdSet() : null;
+  const hideIds = anyCadHidden() ? hiddenCadFaceIdSet() : null;
   if (hideIds && hideIds.size) attachCadEdgeAdjacentFaces();
   let radiusAt = null;
   edgeCtxSelected.forEach((id) => {
@@ -24279,13 +24302,165 @@ function selectedCadFaceIdSet() {
   return want;
 }
 
+/** The ids of the faces hidden in the view: hidden faces, and every face of a hidden body. */
 function hiddenCadFaceIdSet() {
   const want = new Set();
   hiddenCadFaces.forEach((lab) => {
     const id = parseFaceId(lab);
     if (id > 0) want.add(id);
   });
+  if (hiddenBodies.size) {
+    cadFaceBodyMap().forEach((body, fid) => {
+      if (hiddenBodies.has(body)) want.add(fid);
+    });
+  }
   return want;
+}
+
+function anyCadHidden() {
+  return hiddenCadFaces.size > 0 || hiddenBodies.size > 0;
+}
+
+let cadFaceBodyCache = null;
+
+/** Face id -> body (solid id) of the shown part, from its face polydata (ids are unique per part). */
+function cadFaceBodyMap() {
+  const pd = geomCadFaceReader.getOutputData && geomCadFaceReader.getOutputData();
+  const n = pd && pd.getNumberOfCells ? pd.getNumberOfCells() : 0;
+  const mtime = pd && pd.getMTime ? pd.getMTime() : 0;
+  if (cadFaceBodyCache && cadFaceBodyCache.pd === pd && cadFaceBodyCache.n === n && cadFaceBodyCache.mtime === mtime) {
+    return cadFaceBodyCache.map;
+  }
+  const map = new Map();
+  try {
+    const cd = pd && pd.getCellData && pd.getCellData();
+    const faceArr = cd && cd.getArrayByName && cd.getArrayByName('faceId');
+    const solidArr = cd && cd.getArrayByName && cd.getArrayByName('solidId');
+    const faceRaw = faceArr && faceArr.getData ? faceArr.getData() : null;
+    const solidRaw = solidArr && solidArr.getData ? solidArr.getData() : null;
+    if (faceRaw) {
+      for (let i = 0; i < n; i++) {
+        const fid = Number(faceRaw[i]);
+        if (fid > 0 && !map.has(fid)) map.set(fid, solidRaw ? Number(solidRaw[i]) || 1 : 1);
+      }
+    }
+  } catch (_) {}
+  cadFaceBodyCache = { pd, n, mtime, map };
+  return map;
+}
+
+/** The body (1-based) a viewport pick lies on; mesh and results picks carry the face id only. */
+function bodyOfCadHit(hit) {
+  if (!hit) return 0;
+  const fid = Number(hit.faceId) || 0;
+  const body = fid ? cadFaceBodyMap().get(fid) : 0;
+  return body || Number(hit.solidId) || 0;
+}
+
+/** The bodies (solid ids) the shown part draws: none for a part with no body ids per face. */
+function drawnBodyIds() {
+  return new Set(cadFaceBodyMap().values());
+}
+
+function bodyOfFaceLabel(label) {
+  const ref = parseFaceRef(label);
+  if (!ref) return 0;
+  return cadFaceBodyMap().get(ref.faceId) || ref.bodyId || 0;
+}
+
+/** The shown geometry's bodies: hidden ones, the ones picked in the tree, for the tree (bodyView.ts). */
+function publishBodyViewState() {
+  const next = {
+    geometryId: hiddenBodiesGeom || shownGeometryId(),
+    count: drawnBodyIds().size,
+    hidden: Array.from(hiddenBodies),
+    selected: Array.isArray(w16State.selectedBodies) ? w16State.selectedBodies.slice() : [],
+    results: !!resultsViewOpen,
+  };
+  const now = getBodyView();
+  const same = (a, b) => a.slice().sort((x, y) => x - y).join() === b.slice().sort((x, y) => x - y).join();
+  if (now.geometryId === next.geometryId && now.count === next.count && now.results === next.results && same(now.hidden, next.hidden) && same(now.selected, next.selected.map(Number))) {
+    return;
+  }
+  // The tree repaints its rows: give it the selected row first, or a repaint drops its mark.
+  try { applyTreeSession({ selectedKey: treeUi.selectedKey || null }); } catch (_) {}
+  publishBodyView(next);
+}
+
+/** Another geometry shown: its bodies all show. */
+function syncHiddenBodiesGeometry() {
+  const gid = shownGeometryId();
+  if (gid !== hiddenBodiesGeom) {
+    hiddenBodies.clear();
+    hiddenBodiesGeom = gid;
+  }
+  publishBodyViewState();
+}
+
+/** Hides or shows these bodies (1-based) of the shown geometry, in every view; nothing saved changes. */
+function setBodiesHidden(bodies, hide) {
+  syncHiddenBodiesGeometry();
+  const drawn = drawnBodyIds();
+  if (drawn.size < 2) return false;
+  const list = (bodies || []).map(Number).filter((b) => drawn.has(b));
+  if (!list.length) return false;
+  list.forEach((b) => (hide ? hiddenBodies.add(b) : hiddenBodies.delete(b)));
+  if (hide) {
+    // Their faces drop out of the viewport's picks.
+    Array.from(faceCtxSelected).forEach((lab) => {
+      if (hiddenBodies.has(bodyOfFaceLabel(lab))) faceCtxSelected.delete(lab);
+    });
+  }
+  applyHiddenDisplays();
+  applyCadSelectionDisplay();
+  publishBodyViewState();
+  return true;
+}
+
+function showAllBodies() {
+  if (!hiddenBodies.size) return;
+  hiddenBodies.clear();
+  applyHiddenDisplays();
+  try { applyGeomHighlight(); } catch (_) {}
+  publishBodyViewState();
+}
+
+setBodyViewHandler((req) => {
+  if (!req) return;
+  if (req.kind === 'show-all') showAllBodies();
+  else setBodiesHidden(req.bodies, req.kind === 'hide');
+});
+
+/** A body as the tree names it ("Fluid (Body2)", "Body2"). */
+function bodyRowName(body) {
+  const gid = shownGeometryId();
+  try {
+    const row = document.querySelector(
+      '#simulations-tree [data-w16-geom="' + cssSelAttr(gid) + '"] [data-w16-body="1"][data-body-index="' + Number(body) + '"] > .tree-row .tl',
+    );
+    const text = row && row.textContent ? row.textContent.trim() : '';
+    if (text) return text;
+  } catch (_) {}
+  return bodyDisplay(bodyNameFromIndex(body));
+}
+
+/** The bodies a viewport "Hide body" hides: the clicked one, or every body of the picked faces (or picked tree rows) it is one of. */
+function viewportBodyTargets(under) {
+  // The results surface carries no body per cell: there a body can't be hidden.
+  if (drawnBodyIds().size < 2 || resultsViewOpen) return [];
+  const body = bodyOfCadHit(under);
+  if (!body || hiddenBodies.has(body)) return [];
+  const picked = new Set();
+  faceCtxSelected.forEach((lab) => {
+    const b = bodyOfFaceLabel(lab);
+    if (b) picked.add(b);
+  });
+  const rows = Array.isArray(w16State.selectedBodies) ? w16State.selectedBodies.map(Number) : [];
+  if (rows.length > 1 && rows.includes(body)) rows.forEach((b) => picked.add(b));
+  if (picked.size > 1 && picked.has(body)) {
+    return Array.from(picked).filter((b) => b > 0 && !hiddenBodies.has(b)).sort((a, b) => a - b);
+  }
+  return [body];
 }
 
 function bindCadFacePolyData(pd) {
@@ -24310,7 +24485,7 @@ function bindCadEdgePolyData(pd) {
 function applyHiddenCadEdges() {
   const src = geomCadEdgeReader.getOutputData && geomCadEdgeReader.getOutputData();
   if (!src) return;
-  const hideIds = hiddenCadFaces.size ? hiddenCadFaceIdSet() : null;
+  const hideIds = anyCadHidden() ? hiddenCadFaceIdSet() : null;
   if (hideIds && hideIds.size) attachCadEdgeAdjacentFaces();
   const skipSel = edgeCtxSelected.size > 0;
   if ((!hideIds || !hideIds.size) && !skipSel) {
@@ -24327,7 +24502,7 @@ function applyHiddenCadEdges() {
 }
 
 function pruneHiddenEdgeSelection() {
-  if (!edgeCtxSelected.size || !hiddenCadFaces.size) return;
+  if (!edgeCtxSelected.size || !anyCadHidden()) return;
   attachCadEdgeAdjacentFaces();
   const hideIds = hiddenCadFaceIdSet();
   let changed = false;
@@ -24346,13 +24521,15 @@ function pruneHiddenEdgeSelection() {
 function applyHiddenCadDisplay() {
   const src = geomCadFaceReader.getOutputData && geomCadFaceReader.getOutputData();
   if (!src) return;
-  if (!hiddenCadFaces.size) {
+  if (!anyCadHidden()) {
     bindCadFacePolyData(src);
     return;
   }
   const filtered = extractPolyCells(src, (cellId) => {
     const hit = hitFromCellIdOnPd(src, cellId);
-    if (!hit || !hit.faceId) return true;
+    if (!hit) return true;
+    if (hiddenBodies.size && hiddenBodies.has(Number(hit.solidId) || 1)) return false;
+    if (!hit.faceId) return true;
     return !hiddenCadFaces.has(faceLabel(hit.faceId, hit.solidId || 1));
   });
   bindCadFacePolyData(filtered);
@@ -24425,7 +24602,7 @@ function applyHiddenMeshDisplay() {
   const bind = (mapper, fullPd, bounds) => {
     if (!mapper || !fullPd) return;
     let pd = fullPd;
-    if (hiddenCadFaces.size) {
+    if (anyCadHidden()) {
       const hideIds = hiddenCadFaceIdSet();
       const faceIds = meshCellCadFaceIds(fullPd, bounds);
       if (hideIds.size && faceIds.length) {
@@ -24460,8 +24637,11 @@ function syncHiddenFacesChip() {
   const txt = document.getElementById('hidden-faces-chip-txt');
   if (!chip) return;
   const n = hiddenCadFaces.size;
-  chip.hidden = n < 1;
-  if (txt) txt.textContent = n === 1 ? '1 face hidden' : n + ' faces hidden';
+  const nb = hiddenBodies.size;
+  chip.hidden = n < 1 && nb < 1;
+  const faces = n === 1 ? '1 face' : n + ' faces';
+  const bodies = nb === 1 ? '1 body' : nb + ' bodies';
+  if (txt) txt.textContent = (nb && n ? bodies + ', ' + faces : nb ? bodies : faces) + ' hidden';
 }
 
 function hideCadFace(label) {
@@ -24679,9 +24859,10 @@ function nearestCadFaceAtPoint(pt) {
   if (!cadTriCache.length) return null;
   let best = null;
   let bestD = Infinity;
+  const hideIds = anyCadHidden() ? hiddenCadFaceIdSet() : null;
   for (let i = 0; i < cadTriCache.length; i++) {
     const t = cadTriCache[i];
-    if (hiddenCadFaces.size && hiddenCadFaces.has(faceLabel(t.faceId, 1))) continue;
+    if (hideIds && hideIds.has(t.faceId)) continue;
     const d = distPointTri2(pt, t);
     if (d < bestD) {
       bestD = d;
@@ -24693,7 +24874,7 @@ function nearestCadFaceAtPoint(pt) {
   if (!(span > 0)) span = cadCacheSpan() * 0.04;
   const maxR = Math.max(span * 8, cadCacheSpan() * 0.03);
   if (bestD > maxR * maxR) return null;
-  return { faceId: best.faceId, solidId: 1, pos: pt };
+  return { faceId: best.faceId, solidId: cadFaceBodyMap().get(best.faceId) || 1, pos: pt };
 }
 
 const meshFacePicker = vtkCellPicker.newInstance();
@@ -24880,7 +25061,7 @@ function pickCadEdgeFromEvent(e, pane, surfacePos) {
   const ren = pickRendererForPane(pane);
   if (!xy || !view || !ren) return null;
   if (!cadEdgeCache.length) rebuildCadEdgeCache();
-  const hideIds = hiddenCadFaces.size ? hiddenCadFaceIdSet() : null;
+  const hideIds = anyCadHidden() ? hiddenCadFaceIdSet() : null;
   if (hideIds && hideIds.size) attachCadEdgeAdjacentFaces();
   const root = pane === 'b' ? document.getElementById('viewer-b') : container;
   const tol = EDGE_PICK_CSS_PX * displayPerCssPx(view, root);
@@ -24972,9 +25153,10 @@ function pickCadFaceAlongRay(xy, view, ren) {
   const orig = s === 1 ? origW : [origW[0] / s, origW[1] / s, origW[2] / s];
   let bestT = Infinity;
   let best = null;
+  const hideIds = anyCadHidden() ? hiddenCadFaceIdSet() : null;
   for (let i = 0; i < cadTriCache.length; i++) {
     const tri = cadTriCache[i];
-    if (hiddenCadFaces.size && hiddenCadFaces.has(faceLabel(tri.faceId, 1))) continue;
+    if (hideIds && hideIds.has(tri.faceId)) continue;
     const t = rayHitsTri(orig, dir, tri.a, tri.b, tri.c);
     if (t > 0 && t < bestT) {
       bestT = t;
@@ -24982,9 +25164,10 @@ function pickCadFaceAlongRay(xy, view, ren) {
     }
   }
   if (!best) return null;
+  // The face's own body: a face of Body2 picked here was "face N@Body1", so hiding it hid nothing.
   return {
     faceId: best.faceId,
-    solidId: 1,
+    solidId: cadFaceBodyMap().get(best.faceId) || 1,
     pos: v3add(origW, v3scale(dir, bestT * s)),
   };
 }
@@ -25029,6 +25212,7 @@ function hideFaceCtxMenu() {
   if (m) m.hidden = true;
   faceCtxHit = null;
   faceCtxOrbitTarget = null;
+  faceCtxBodies = [];
 }
 
 function edgeOrbitCadPoint(edge) {
@@ -25089,11 +25273,13 @@ function orbitPointFromSelection() {
   return null;
 }
 
-function showFaceCtxMenu(e, hit) {
+function showFaceCtxMenu(e, hit, under) {
   const m = document.getElementById('face-ctx-menu');
   const wrap = document.querySelector('.viewport-wrap');
   if (!m || !wrap) return;
   faceCtxHit = hit || null;
+  const hideBodyBtn = document.getElementById('face-ctx-hide-body');
+  const showBodiesBtn = document.getElementById('face-ctx-show-bodies');
   const hideBtn = document.getElementById('face-ctx-hide');
   const normalBtn = document.getElementById('face-ctx-normal');
   const showBtn = document.getElementById('face-ctx-show-all');
@@ -25121,6 +25307,15 @@ function showFaceCtxMenu(e, hit) {
     if (normalBtn) normalBtn.hidden = true;
   }
   if (showBtn) showBtn.hidden = hiddenCadFaces.size < 1;
+  // A part with more than one body: hide the body under the click (or every picked body).
+  faceCtxBodies = viewportBodyTargets(under || (hit && hit.faceId ? hit : null));
+  if (hideBodyBtn) {
+    hideBodyBtn.hidden = !faceCtxBodies.length;
+    hideBodyBtn.textContent = faceCtxBodies.length > 1
+      ? 'Hide ' + faceCtxBodies.length + ' bodies'
+      : faceCtxBodies.length ? 'Hide ' + bodyRowName(faceCtxBodies[0]) : 'Hide body';
+  }
+  if (showBodiesBtn) showBodiesBtn.hidden = hiddenBodies.size < 1;
   const orbit = orbitPointFromCadHit(hit) || orbitPointFromSelection();
   faceCtxOrbitTarget = orbit;
   if (orbitBtn) {
@@ -25156,8 +25351,16 @@ function onViewerFaceContextMenu(e) {
     ? 'b'
     : 'a';
   const picked = pickFaceOrEdgeForSelect(e, pane);
-  if (picked) applyCadPick(picked, false);
-  showFaceCtxMenu(e, picked);
+  // A right-click on a picked face keeps the picks (Ctrl+click several, then hide them all).
+  const keep = picked && picked.kind === 'face' && picked.faceId &&
+    faceCtxSelected.has(faceLabel(picked.faceId, picked.solidId || 1));
+  if (picked && !keep) applyCadPick(picked, false);
+  // The face under the click, for its body, also when the click picked an edge.
+  let under = picked && picked.kind === 'face' ? picked : null;
+  if (!under) {
+    try { under = pickFaceForHide(e, pane); } catch (_) { under = null; }
+  }
+  showFaceCtxMenu(e, picked, under);
 }
 
 function onViewerFaceClick(e, pane) {
@@ -25259,12 +25462,20 @@ function hitFromCellIdOnPd(pd, cellId) {
     } else if (act === 'show-all') {
       showAllCadFaces();
       hideFaceCtxMenu();
+    } else if (act === 'hide-body') {
+      const bodies = faceCtxBodies.slice();
+      hideFaceCtxMenu();
+      setBodiesHidden(bodies, true);
+    } else if (act === 'show-bodies') {
+      hideFaceCtxMenu();
+      showAllBodies();
     } else {
       hideFaceCtxMenu();
     }
   });
   document.getElementById('hidden-faces-show')?.addEventListener('click', () => {
     showAllCadFaces();
+    showAllBodies();
     hideFaceCtxMenu();
   });
   document.getElementById('measure-clear')?.addEventListener('click', () => {
@@ -36030,6 +36241,41 @@ function markTreeSelected(key) {
   if (node) node.classList.add('selected');
 }
 
+let treeBodyAnchor = 0;
+
+/** Ctrl-click adds or drops a body row; Shift-click picks the rows from the last one clicked. */
+function pickTreeBodies(idx, how) {
+  const n = geometryBodies().length;
+  let ids = Array.isArray(w16State.selectedBodies) ? w16State.selectedBodies.map(Number).filter((b) => b > 0) : [];
+  if (how === 'range' && treeBodyAnchor > 0 && treeBodyAnchor <= n) {
+    const lo = Math.min(treeBodyAnchor, idx);
+    const hi = Math.max(treeBodyAnchor, idx);
+    ids = [];
+    for (let b = lo; b <= hi; b++) ids.push(b);
+  } else {
+    ids = ids.includes(idx) ? ids.filter((b) => b !== idx) : ids.concat([idx]);
+    treeBodyAnchor = idx;
+  }
+  ids.sort((a, b) => a - b);
+  if (!ids.length) {
+    highlightGeomBody(null);
+    markTreeSelected(null);
+    return;
+  }
+  highlightGeomBodies(ids);
+  openTreeDetail('geometry', { toggle: false });
+  markTreeSelected('body-' + idx);
+  const gid = shownGeometryId();
+  ids.forEach((b) => {
+    try {
+      const row = document.querySelector(
+        '#simulations-tree [data-w16-geom="' + cssSelAttr(gid) + '"] [data-w16-body="1"][data-body-index="' + b + '"]',
+      );
+      if (row) row.classList.add('selected');
+    } catch (_) {}
+  });
+}
+
 /** opts.toggle false: open the panel even if it is open already (never close it). */
 function activateTreePanel(selectKey, panelKey, opts) {
   if (selectKey !== 'mesh1' && meshInspectOpen) hideMeshInspect();
@@ -36575,7 +36821,13 @@ function applyStudyDropOrder(ids, geometryId) {
           toggleAssignVolume(name, idx);
           return;
         }
-        if (w16State.selectedBody === idx) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          pickTreeBodies(idx, e.shiftKey ? 'range' : 'toggle');
+          return;
+        }
+        treeBodyAnchor = idx;
+        const several = Array.isArray(w16State.selectedBodies) && w16State.selectedBodies.length > 1;
+        if (w16State.selectedBody === idx && !several) {
           highlightGeomBody(null);
           markTreeSelected(null);
           if (treeUi.openPanel === 'geometry') hideAllTreeDetails();
@@ -37120,11 +37372,29 @@ window.__CFD_LINK_CAD_PENDING__ = () => linkCadPending;
 window.__CFD_FACE_PICKS_PAUSED__ = () => linkPicksPaused();
 // The faces picked in the viewport (a click or a right-click), and the hidden ones: tests read them.
 window.__CFD_VIEWPORT_FACES__ = () => ({ selected: Array.from(faceCtxSelected), hidden: Array.from(hiddenCadFaces) });
+// The bodies hidden in the view (1-based), the geometry they belong to, and the bodies the
+// drawn part still has (from the CAD polydata the viewport draws): tests read them.
+window.__CFD_VIEWPORT_BODIES__ = () => {
+  const drawn = new Set();
+  try {
+    const pd = geomMapper.getInputData && geomMapper.getInputData();
+    const arr = pd && pd.getCellData && pd.getCellData().getArrayByName('solidId');
+    const raw = arr && arr.getData ? arr.getData() : null;
+    if (raw) for (let i = 0; i < raw.length; i++) drawn.add(Number(raw[i]) || 1);
+  } catch (_) {}
+  return {
+    geometryId: hiddenBodiesGeom,
+    hidden: Array.from(hiddenBodies).sort((a, b) => a - b),
+    drawn: Array.from(drawn).sort((a, b) => a - b),
+  };
+};
 
 /** A shape changed under the shown geometry: hidden and right-clicked faces and the compare views go with it. */
 function clearLinkedFaceState() {
   try {
     hiddenCadFaces.clear();
+    hiddenBodies.clear();
+    publishBodyViewState();
     faceCtxSelected.clear();
     faceCtxHit = null;
     syncHiddenFacesChip();

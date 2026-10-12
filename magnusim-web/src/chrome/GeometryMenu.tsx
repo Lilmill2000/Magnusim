@@ -2,6 +2,14 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import { createPortal } from 'react-dom';
 import { geometryActionNotice, openGeometryAction, type GeometryActionEntry } from '../workspace/geometryActions';
 
+export interface GeometryMenuExtra {
+  key: string;
+  label: string;
+  /** Data attributes on its button (tests and styling). */
+  attrs?: Record<string, string>;
+  onPick: () => void;
+}
+
 export interface GeometryMenuProps {
   /** Where it opens (client pixels): the right-click, or the row for the keyboard. */
   x: number;
@@ -10,6 +18,8 @@ export interface GeometryMenuProps {
   geometryId: string;
   geometryName: string;
   entries: GeometryActionEntry[];
+  /** The view's own items above the actions (a body row's "Hide body"), each one closing the menu. */
+  extra?: GeometryMenuExtra[];
   /** Closed (Escape, a click outside, an action that opened); `refocus` gives the row its focus back. */
   onClose: (refocus: boolean) => void;
 }
@@ -20,7 +30,7 @@ export interface GeometryMenuProps {
  * move; Enter opens; Escape closes and gives the row its focus back. An item stays
  * disabled ("Opening…") until its workspace opens or the app's notice says why not.
  */
-export function GeometryMenu({ x, y, projectId, geometryId, geometryName, entries, onClose }: GeometryMenuProps) {
+export function GeometryMenu({ x, y, projectId, geometryId, geometryName, entries, extra = [], onClose }: GeometryMenuProps) {
   const list = useRef<HTMLUListElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [pos, setPos] = useState({ left: x, top: y });
@@ -109,6 +119,24 @@ export function GeometryMenu({ x, y, projectId, geometryId, geometryName, entrie
       onKeyDown={onKey}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {extra.map((item) => (
+        <li key={`extra:${item.key}`} role="none">
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            disabled={!!busy}
+            {...(item.attrs || {})}
+            onClick={() => {
+              onClose(false);
+              item.onPick();
+            }}
+          >
+            <span className="geom-action-label">{item.label}</span>
+          </button>
+        </li>
+      ))}
+      {extra.length && entries.length ? <li role="separator" className="ws-menu-sep" /> : null}
       {entries.map((entry) => {
         const key = `${entry.plugin}|${entry.studyKind}`;
         const opening = busy === key;
