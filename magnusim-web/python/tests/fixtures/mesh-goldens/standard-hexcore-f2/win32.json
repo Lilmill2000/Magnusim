@@ -3,28 +3,24 @@
   "constant/triSurface/geometry.msh": {
    "mesh": {
     "elements": {
-     "hex": 9387,
-     "pyramid": 3504,
-     "tet": 90971,
-     "tri": 22736
+     "hex": 9389,
+     "pyramid": 3506,
+     "tet": 76967,
+     "tri": 16024
     },
-    "nodes": 31609,
+    "nodes": 27315,
     "triangles_per_group": {
      "pressure_1": 88,
-     "velocity_inlet_1": 86,
-     "walls": 13122,
-     "walls_bl1": 753,
-     "walls_bl2": 1212,
-     "walls_bl3": 665,
-     "walls_bl4": 2029,
-     "walls_bl5": 435,
-     "walls_bl6": 488,
-     "walls_bl7": 990,
-     "walls_bl8": 2868
+     "velocity_inlet_1": 84,
+     "walls": 13221,
+     "walls_bl1": 748,
+     "walls_bl2": 1802,
+     "walls_bl3": 73,
+     "walls_bl4": 8
     }
    },
-   "sha256": "7c958ddfe2dca4dba3edad1c74ef8525d8d33928af0d65eadc19f6e081742b96",
-   "size": 7256490
+   "sha256": "3010b6ad42924d064f9310b73601c9ed673000fb55d409f90e6359a696364425",
+   "size": 6117408
   },
   "constant/triSurface/geometry_mm.brep": {
    "sha256": "490452274e744547c936123de5bfdc2cb464c3add51fb8164bec26be462cd828",
@@ -38,19 +34,16 @@
    "small feature suppression: features below 9.2e-05 m suppressed",
    "physics-based: 1 inlet + 1 outlet surface(s) at 0.70\u00b7h",
    "surface: 16024 triangles, 8014 nodes at h=0.01207 m (<s>)",
-   "feature refinement: 0 short curve(s), 3 narrow face(s), 0 narrow gap(s) below 0.00302 m; cells there down to 0.000754 m, growing 1.22x per cell; about 0.16M cells vs 0.15M uniform (53325 size boxes, <s>)",
-   "surface (feature-refined): 22762 triangles, 11383 nodes (<s>)",
-   "collapsed 12 surface edge(s) shorter than 0.0003 m",
-   "hexcore: lattice 26\u00d726\u00d768 h_c=0.01207 m, 9435 raw core cells (<s>)",
+   "hexcore: lattice 26\u00d726\u00d768 h_c=0.01207 m, 9437 raw core cells (<s>)",
    "hexcore: manifold repair converged after 2 pass(es)",
-   "hexcore: 9387 hexes, 3504 pyramids, 12200 inner tris (908 shared faces dropped, 48 cells removed in repair, 2 core piece(s), <s>)",
+   "hexcore: 9389 hexes, 3506 pyramids, 12202 inner tris (911 shared faces dropped, 48 cells removed in repair, 2 core piece(s), <s>)",
    "hexcore: 2 core pieces, one inner surface each",
    "tets: filling the shell between the surface and the hex core (timeout <s>)",
-   "tet shell: 90971 tets (<s>)",
-   "volume assembly: cells 0.0447541 m\u00b3 vs boundary 0.0447541 m\u00b3 (rel err 0.00e+00)",
-   "volume check: mesh 0.0447541 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 9.93e-04)",
-   "boundary layers: walls sized by the local cells in 9 band(s), down to 0.000754 m",
-   "msh written: 31609 nodes, 90971 tets, 9387 hexes, 0 prisms, 3504 pyramids, 22736 boundary tris (<s>)"
+   "tet shell: 76967 tets (<s>)",
+   "volume assembly: cells 0.0447545 m\u00b3 vs boundary 0.0447545 m\u00b3 (rel err 1.55e-16)",
+   "volume check: mesh 0.0447545 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 9.82e-04)",
+   "boundary layers: walls sized by the local cells in 5 band(s), down to 0.00302 m",
+   "msh written: 27315 nodes, 76967 tets, 9389 hexes, 0 prisms, 3506 pyramids, 16024 boundary tris (<s>)"
   ]
  }
 }

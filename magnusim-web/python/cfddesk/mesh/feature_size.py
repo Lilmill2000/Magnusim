@@ -44,6 +44,11 @@ FLOOR_STEP = math.sqrt(2.0)
 CELL_BUDGET = 6.0
 # Tetrahedra gmsh makes per cube of the local size (calibrated on Standard meshes).
 TETS_PER_SIZE3 = 6.0
+# A narrow face counts when it meets its neighbours at more than this angle
+# along more than half of its rim.
+_SMOOTH_ANGLE_DEG = 30.0
+# Curves shorter than this (metres) are degenerate (a cone's apex, a sphere's pole).
+_DEGENERATE_M = 1e-9
 # Bucket sizes for the field: a source's size is rounded down to the nearest
 # floor x 2**(k / _BUCKETS_PER_OCTAVE).
 _BUCKETS_PER_OCTAVE = 4
@@ -150,9 +155,53 @@ class FeatureCurves:
     n_faces: int
 
 
+def _normal_at(gmsh, face: int, point: np.ndarray) -> np.ndarray | None:
+    try:
+        uv = gmsh.model.getParametrization(2, int(face), point.tolist())
+        n = np.asarray(gmsh.model.getNormal(int(face), list(uv)), dtype=float)[:3]
+    except Exception:
+        return None
+    ln = float(np.linalg.norm(n))
+    return n / ln if ln > 0 else None
+
+
+def bends_from_neighbours(gmsh, face: int, curves: list[int], faces_of: dict[int, list[int]], length: dict[int, float]) -> bool:
+    """Does ``face`` meet its neighbours at an angle along most of its rim (a
+    fin's rim, a hole's wall: an edge on each long side)?
+
+    A narrow face that continues a neighbour smoothly along a long side (a sliver
+    a CAD split left in a smooth surface, even along a real edge of the part) is
+    no feature of its own: meshing it finer would only refine around a split line
+    the part does not have."""
+    limit = math.cos(math.radians(_SMOOTH_ANGLE_DEG))
+    rim = sum(length[c] for c in curves if _DEGENERATE_M < length.get(c, 0.0) < math.inf)
+    bent = 0.0
+    for c in curves:
+        if not (_DEGENERATE_M < length.get(c, 0.0) < math.inf):
+            continue
+        others = [f for f in faces_of.get(c, []) if f != face]
+        if not others:
+            continue
+        try:
+            lo, hi = gmsh.model.getParametrizationBounds(1, int(c))
+            p = np.asarray(gmsh.model.getValue(1, int(c), [0.5 * (float(lo[0]) + float(hi[0]))]), dtype=float)[:3]
+        except Exception:
+            bent += length[c]
+            continue
+        n0 = _normal_at(gmsh, face, p)
+        normals = [_normal_at(gmsh, f, p) for f in others]
+        if n0 is None or any(n1 is None or abs(float(n0 @ n1)) < limit for n1 in normals):
+            bent += length[c]
+        if bent > 0.5 * rim:
+            return True
+    return False
+
+
 def feature_curves(gmsh, surfs: list[int], *, h: float) -> FeatureCurves:
     """Curves shorter than ``FEATURE_FRACTION`` x h ask for their length; the rim of
-    a face narrower than that (2 x area / perimeter) asks for the face's width."""
+    a face narrower than that (2 x area / perimeter) asks for the face's width when
+    the face bends away from a neighbour. Degenerate (zero-length) curves do not
+    count."""
     limit = FEATURE_FRACTION * float(h)
     curves_of: dict[int, list[int]] = {}
     length: dict[int, float] = {}
@@ -166,7 +215,11 @@ def feature_curves(gmsh, surfs: list[int], *, h: float) -> FeatureCurves:
                     length[c] = float(gmsh.model.occ.getMass(1, c))
                 except Exception:
                     length[c] = math.inf
-    want: dict[int, float] = {c: L for c, L in length.items() if L < limit}
+    want: dict[int, float] = {c: L for c, L in length.items() if _DEGENERATE_M < L < limit}
+    faces_of: dict[int, list[int]] = {}
+    for s, cs in curves_of.items():
+        for c in cs:
+            faces_of.setdefault(c, []).append(s)
     n_curves = len(want)
     n_faces = 0
     for s, cs in curves_of.items():
@@ -178,11 +231,11 @@ def feature_curves(gmsh, surfs: list[int], *, h: float) -> FeatureCurves:
         except Exception:
             continue
         width = 2.0 * area / perimeter
-        if width >= limit:
+        if width >= limit or not bends_from_neighbours(gmsh, s, cs, faces_of, length):
             continue
         n_faces += 1
         for c in cs:
-            if math.isfinite(length[c]):
+            if _DEGENERATE_M < length[c] < math.inf:
                 want[c] = min(want.get(c, math.inf), width)
     return FeatureCurves(want, length, n_curves, n_faces)
 
