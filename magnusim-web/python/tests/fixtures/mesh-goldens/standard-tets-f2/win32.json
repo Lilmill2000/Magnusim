@@ -3,7 +3,7 @@
   "constant/triSurface/geometry.msh": {
    "mesh": {
     "elements": {
-     "tet": 40227,
+     "tet": 40228,
      "tri": 15146
     },
     "nodes": 10680,
@@ -13,8 +13,8 @@
      "walls": 14974
     }
    },
-   "sha256": "d9fb7af5886ec8fcd166841a771ba071539941ed28d6c88ffd0b3a9bdb925064",
-   "size": 2639696
+   "sha256": "a1b5431e80108c4533e517da1e7ce3eae97e6cb893a877e512016256a911f44d",
+   "size": 2639771
   }
  },
  "text": {
@@ -25,10 +25,10 @@
    "physics-based: 1 inlet + 1 outlet surface(s) at 0.70\u00b7h",
    "surface: 15146 triangles, 7575 nodes at h=0.01207 m (<s>)",
    "tets: filling the volume (timeout <s>)",
-   "tet volume: 40227 tets, 0 prisms (<s>)",
+   "tet volume: 40228 tets, 0 prisms (<s>)",
    "volume assembly: cells 0.0447506 m\u00b3 vs boundary 0.0447506 m\u00b3 (rel err 1.55e-16)",
    "volume check: mesh 0.0447506 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 1.07e-03)",
-   "msh written: 10680 nodes, 40227 tets, 0 hexes, 0 prisms, 0 pyramids, 15146 boundary tris (<s>)"
+   "msh written: 10680 nodes, 40228 tets, 0 hexes, 0 prisms, 0 pyramids, 15146 boundary tris (<s>)"
   ]
  }
 }

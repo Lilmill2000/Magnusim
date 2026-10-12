@@ -380,6 +380,7 @@ def main() -> int:
             n_tris=mesh.n_tris,
             hex_core_applied=mesh.hex_core_applied,
             hex_core_note=mesh.hex_core_note,
+            volume_fill_note=mesh.volume_fill_note,
             wall_s=mesh.wall_s,
             gmsh_layer_patches=mesh.gmsh_layer_patches,
         )
@@ -511,6 +512,7 @@ def main() -> int:
                 "gmsh_layer_patches": mesh.gmsh_layer_patches,
                 "volume_error_rel": mesh.volume_error_rel,
                 "assembly_error_rel": mesh.assembly_error_rel,
+                "volume_fill_note": mesh.volume_fill_note,
                 "wall_s": mesh.wall_s,
             },
             "patches": {"names": mesh.patch_names, "walls": mesh.wall_patches, "types": patch_types},

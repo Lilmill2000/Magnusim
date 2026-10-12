@@ -10,6 +10,9 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
 - W3 cfMesh: checkMesh passes, patch types, the cell count near the recorded one.
 - W4 Standard with production threads: within 1 % of the one-thread golden
   (threads make gmsh differ run to run, so this one cannot be byte-exact).
+- W5 Standard on a plate whose tabs sit 0.188 mm off its slots (small feature
+  suppression at 1.5 mm used to open its surface): meshes with its hex core and
+  layers, and checkMesh passes.
 
 Each run has its own WSL case id and removes it when done. Record the cell
 counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``.
@@ -179,3 +182,37 @@ def test_w4_standard_production_threads(tmp_path: Path):
     msh = record["files"]["constant/triSurface/geometry.msh"]["mesh"]
     golden = sum(n for kind, n in msh["elements"].items() if kind != "tri")
     assert abs(res["n_cells"] - golden) <= 0.01 * golden, (res["n_cells"], golden)
+
+
+def test_w5_standard_tabs_part(tmp_path: Path):
+    from cfddesk.cad.io import write_step
+    from cfddesk.cad.step import load_step
+    from tests.unit.test_standard_small_features import _tabs_fluid
+
+    step = tmp_path / "tabs.step"
+    write_step(_tabs_fluid(), step)
+    # Inlet and outlet: the box's bottom (z = -40 mm) and top (z = +40 mm) faces
+    # (labels are 1-based).
+    solid = load_step(step)
+    ends = sorted((f.centroid[2], f.face_id) for f in solid.faces if abs(abs(f.centroid[2]) - 40.0) < 1e-6)
+    assert len(ends) == 2
+    proj, mesh = _project(tmp_path / "p", step=step, faces=(ends[0][1] + 1, ends[1][1] + 1))
+    case = mesh / "case"
+    wsl_case = _case_id("w5")
+    try:
+        res = _run(
+            [
+                str(TOOLS / "generate_standard.py"),
+                "--project-dir", str(proj), "--case-dir", str(case), "--wsl-case", wsl_case,
+                "--generate-id", "golden", "--fineness", "1", "--hex-core", "1", "--add-layers", "1",
+                "--small-feature", "0.0015", "--mesh-id", "mesh_1", "--simulation-id", "sim_1",
+            ]
+        )
+    finally:
+        remove_wsl_case(wsl_case)
+    meta = json.loads((case / "standard-meta.json").read_text(encoding="utf-8"))
+    assert meta["hex_core_applied"] is True and meta["host_mesh"]["n_hex"] > 0
+    assert res["layers_applied"] is True
+    assert _checkmesh_ok((case / "log.standard_generate.txt").read_text(encoding="utf-8"), allow_skew=True)
+    host = (case / "log.gmsh_host.txt").read_text(encoding="utf-8")
+    assert "small feature suppression: faces below 0.0015 m suppressed" in host

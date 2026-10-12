@@ -195,6 +195,8 @@ class StandardMeshResult:
     wall_s: float = 0.0
     gmsh_layer_patches: list[str] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
+    # How the volume was filled when the first attempt failed ("" otherwise).
+    volume_fill_note: str = ""
 
     @property
     def n_cells(self) -> int:
@@ -556,43 +558,251 @@ def _gap_sizes(
 
     ``gap_factor`` = gap thickness / edge length in the gap. A triangle facing
     an opposite wall at distance ``t`` gets size ``min(h, t / gap_factor)``.
-    Returns None when no triangle needs refinement."""
-    from scipy.spatial import cKDTree
+    The opposite wall is found by projecting each triangle's centroid onto the
+    triangles near it: with triangles of 90 mm across a 2.5 mm sheet, the
+    centroids of the two sides are tens of millimetres apart, and a search by
+    centroid distance missed them. Triangles that share a node (a sharp
+    wedge's two sides) are not a gap. Returns None when no triangle needs
+    refinement."""
+    from cfddesk.mesh.surface_checks import near_triangle_pairs, triangle_spheres
 
     g = float(gap_factor)
-    if g <= 0:
+    if g <= 0 or len(tris) < 2:
         return None
-    r_max = g * h * 1.05  # gaps thicker than this never refine below h
+    t_max = g * h * 1.05  # gaps thicker than this never refine below h
+    tris = np.asarray(tris, dtype=np.int64)
     P = nodes[tris]
-    cent = P.mean(axis=1)
+    cent, rad = triangle_spheres(nodes, tris)
     nrm = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
     nlen = np.linalg.norm(nrm, axis=1)
     ok = nlen > 0
     nrm[ok] /= nlen[ok][:, None]
-    tree = cKDTree(cent)
-    pairs = tree.query_pairs(r_max, output_type="ndarray")
-    if len(pairs) == 0:
+    i, j = near_triangle_pairs(cent, rad, t_max)
+    if len(i) == 0:
         return None
-    i, j = pairs[:, 0], pairs[:, 1]
-    d = cent[j] - cent[i]
-    # opposing normals and displacement along the normal
-    opp = (nrm[i] * nrm[j]).sum(axis=1) < -0.5
-    along = (d * nrm[i]).sum(axis=1)
-    lateral = np.linalg.norm(d - along[:, None] * nrm[i], axis=1)
-    sel = opp & (np.abs(along) > 1e-12) & (lateral < 0.75 * h)
-    if not sel.any():
+    sel = (nrm[i] * nrm[j]).sum(axis=1) < -0.5  # opposing normals
+    for a in range(3):
+        for b in range(3):
+            sel &= tris[i, a] != tris[j, b]
+    i, j = i[sel], j[sel]
+    if len(i) == 0:
         return None
-    t = np.abs(along[sel])
+
+    def _onto(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Distance from src's centroid to dst's plane, and whether its foot lies in dst."""
+        d = ((cent[src] - P[dst, 0]) * nrm[dst]).sum(axis=1)
+        foot = cent[src] - d[:, None] * nrm[dst]
+        v0 = P[dst, 1] - P[dst, 0]
+        v1 = P[dst, 2] - P[dst, 0]
+        v2 = foot - P[dst, 0]
+        d00 = (v0 * v0).sum(axis=1)
+        d01 = (v0 * v1).sum(axis=1)
+        d11 = (v1 * v1).sum(axis=1)
+        d20 = (v2 * v0).sum(axis=1)
+        d21 = (v2 * v1).sum(axis=1)
+        den = d00 * d11 - d01 * d01
+        den = np.where(np.abs(den) > 0, den, 1.0)
+        bv = (d11 * d20 - d01 * d21) / den
+        bw = (d00 * d21 - d01 * d20) / den
+        slack = 0.05
+        inside = (bv >= -slack) & (bw >= -slack) & (bv + bw <= 1.0 + slack)
+        return np.abs(d), inside
+
+    d_ij, in_ij = _onto(i, j)
+    d_ji, in_ji = _onto(j, i)
+    t = np.where(in_ij, d_ij, np.inf)
+    t = np.minimum(t, np.where(in_ji, d_ji, np.inf))
+    hit = np.isfinite(t) & (t > 1e-12) & (t <= t_max)
+    if not hit.any():
+        return None
     size = np.full(len(tris), h, dtype=float)
-    want = t / g
-    np.minimum.at(size, i[sel], want)
-    np.minimum.at(size, j[sel], want)
+    want = t[hit] / g
+    np.minimum.at(size, i[hit], want)
+    np.minimum.at(size, j[hit], want)
     size = np.maximum(size, _MIN_SIZE_FRACTION * h * 0.5)
     n_ref = int((size < 0.95 * h).sum())
     if n_ref == 0:
         return None
     log(f"gap refinement: {n_ref} surface triangles refined (factor {g})")
     return size
+
+
+# Distance field samples per surface and direction, and the most samples one
+# field may hold before each surface is sampled by its size instead.
+_DISTANCE_SAMPLING = 60
+_DISTANCE_SAMPLE_BUDGET = 2_000_000
+
+
+def _surface_distance_field(gmsh, surfs: list[int], h: float, *, log) -> int:
+    """A field: distance to the surfaces ``surfs``.
+
+    gmsh samples every surface on a ``Sampling`` x ``Sampling`` grid. At 60 that
+    is 3,600 points per surface: 23.5 million for a part of 6,534 faces, where
+    the surface mesh took 30 s instead of 19 s. Past the budget each surface
+    gets samples about h/2 apart instead (one Distance field per sampling,
+    joined by a Min field). Small parts keep the single field at 60.
+    """
+    if len(surfs) * _DISTANCE_SAMPLING**2 <= _DISTANCE_SAMPLE_BUDGET:
+        dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(dist, "SurfacesList", surfs)
+        gmsh.model.mesh.field.setNumber(dist, "Sampling", _DISTANCE_SAMPLING)
+        return int(dist)
+    groups: dict[int, list[int]] = {}
+    for s in surfs:
+        bb = gmsh.model.getBoundingBox(2, int(s))
+        size = math.sqrt((bb[3] - bb[0]) ** 2 + (bb[4] - bb[1]) ** 2 + (bb[5] - bb[2]) ** 2)
+        n = int(math.ceil(size / (0.5 * h)))
+        bucket = next(b for b in (4, 8, 16, 32, _DISTANCE_SAMPLING) if n <= b or b == _DISTANCE_SAMPLING)
+        groups.setdefault(bucket, []).append(int(s))
+    parts = []
+    for bucket, tags in sorted(groups.items()):
+        d = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(d, "SurfacesList", tags)
+        gmsh.model.mesh.field.setNumber(d, "Sampling", bucket)
+        parts.append(int(d))
+    log(
+        "distance to the walls sampled by surface size: "
+        + ", ".join(f"{len(groups[b])} surface(s) at {b}x{b}" for b in sorted(groups))
+    )
+    if len(parts) == 1:
+        return parts[0]
+    joined = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(joined, "FieldsList", parts)
+    return int(joined)
+
+
+# Needle repair: CAD edges shorter than _NEEDLE_EDGE_HS x h get triangles of
+# their own size (not below _NEEDLE_GRADE_FLOOR_HS x h) growing by
+# _NEEDLE_GROWTH per unit distance up to h. On the perforated plate with louver
+# tabs this took the worst cells from 88.6 to 86.5 degrees non-orthogonality and
+# skewness from 5.6 to 3.8 for 32 % more cells, and a 200-iteration simpleFoam
+# run that blew up at the tabs ran through.
+_NEEDLE_EDGE_HS = 0.05
+_NEEDLE_GRADE_FLOOR_HS = 0.125
+_NEEDLE_GROWTH = 2.0
+
+
+def _short_edge_fields(gmsh, surfs, *, h: float, floor: float) -> tuple[list[int], int]:
+    """Threshold fields growing the surface size from each short CAD edge to h.
+
+    Edges are grouped by size (powers of two from ``floor``), one Distance +
+    Threshold field per group. Returns (fields, number of edges)."""
+    curves: set[int] = set()
+    for s in surfs:
+        for _d, c in gmsh.model.getBoundary([(2, int(s))], combined=False, oriented=False, recursive=False):
+            curves.add(abs(int(c)))
+    groups: dict[float, list[int]] = {}
+    for c in sorted(curves):
+        try:
+            length = float(gmsh.model.occ.getMass(1, c))
+        except Exception:
+            continue
+        if length >= _NEEDLE_EDGE_HS * h:
+            continue
+        size = floor
+        while size < length:
+            size *= 2.0
+        groups.setdefault(min(size, h), []).append(c)
+    fields = []
+    for size, tags in sorted(groups.items()):
+        dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(dist, "CurvesList", tags)
+        gmsh.model.mesh.field.setNumber(dist, "Sampling", 4)
+        thr = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(thr, "InField", dist)
+        gmsh.model.mesh.field.setNumber(thr, "SizeMin", size)
+        gmsh.model.mesh.field.setNumber(thr, "SizeMax", h)
+        gmsh.model.mesh.field.setNumber(thr, "DistMin", 0.0)
+        gmsh.model.mesh.field.setNumber(thr, "DistMax", (h - size) / (_NEEDLE_GROWTH - 1.0))
+        fields.append(int(thr))
+    return fields, sum(len(v) for v in groups.values())
+
+
+# Rounds of local refinement where the surface touches itself (see
+# _repair_crossings).
+_SURFACE_REPAIR_ROUNDS = 3
+
+
+def _size_view_field(gmsh, name: str, nodes: np.ndarray, tris: np.ndarray, size: np.ndarray) -> int:
+    """A PostView size field: ``size`` on each triangle of the surface mesh."""
+    view = gmsh.view.add(name)
+    P = nodes[tris]
+    data = np.column_stack(
+        [P[:, :, 0], P[:, :, 1], P[:, :, 2], np.repeat(np.asarray(size, float)[:, None], 3, axis=1)]
+    ).ravel()
+    gmsh.view.addListData(view, "ST", len(tris), data.tolist())
+    pv_field = gmsh.model.mesh.field.add("PostView")
+    gmsh.model.mesh.field.setNumber(pv_field, "ViewTag", view)
+    return int(pv_field)
+
+
+def _set_background(gmsh, fields: list[int]) -> None:
+    fmin = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(fmin, "FieldsList", fields)
+    gmsh.model.mesh.field.setAsBackgroundMesh(fmin)
+
+
+def _repair_crossings(gmsh, surfs, tag_to_phys, nodes, tris, tri_phys, fields: list[int], *, floor: float, log):
+    """Mesh the surface finer where it touches or crosses itself.
+
+    Two faces closer than their triangles' sag (a thin curved sheet, a fin a
+    fraction of a millimetre off a hole) can be meshed so that their triangles
+    meet. The volume fill cannot start from such a surface. Each round halves
+    the triangle size around every crossing and meshes the surface again.
+    """
+    from scipy.spatial import cKDTree
+
+    from cfddesk.mesh.surface_checks import crossing_pairs, triangle_spheres
+
+    for rnd in range(_SURFACE_REPAIR_ROUNDS + 1):
+        t_r = time.monotonic()
+        bad = crossing_pairs(nodes, tris)
+        if not len(bad):
+            if rnd:
+                log(f"surface repair: no crossing triangles left after {rnd} round(s)")
+            return nodes, tris, tri_phys
+        if rnd == _SURFACE_REPAIR_ROUNDS:
+            log(f"surface repair: {len(bad)} crossing triangle pair(s) left after {rnd} round(s)")
+            return nodes, tris, tri_phys
+        cent, rad = triangle_spheres(nodes, tris)
+        ids = np.unique(bad.ravel())
+        size = np.full(len(tris), 1e22)
+        near = cKDTree(cent).query_ball_point(cent[ids], 3.0 * rad[ids])
+        for k, lst in zip(ids.tolist(), near, strict=True):
+            idx = np.asarray(lst, dtype=np.int64)
+            # edge length of a well-shaped triangle ~ sqrt(3) x its corner radius
+            size[idx] = np.minimum(size[idx], max(floor, 0.5 * math.sqrt(3.0) * float(rad[k])))
+        refined = size < 1e21
+        smallest = float(size[refined].min())
+        fields.append(_size_view_field(gmsh, f"surface_repair_{rnd + 1}", nodes, tris, size))
+        _set_background(gmsh, fields)
+        if smallest < gmsh.option.getNumber("Mesh.MeshSizeMin"):
+            gmsh.option.setNumber("Mesh.MeshSizeMin", smallest)
+        gmsh.model.mesh.clear()
+        gmsh.model.mesh.generate(2)
+        nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
+        log(
+            f"surface repair: {len(bad)} crossing triangle pair(s) where faces lie closer than the "
+            f"triangles' sag; {int(refined.sum())} triangle(s) around them meshed at down to "
+            f"{smallest:.3g} m -> {len(tris)} triangles ({time.monotonic() - t_r:.1f}s)"
+        )
+    return nodes, tris, tri_phys
+
+
+def _shell_defects(nodes: np.ndarray, tris: np.ndarray) -> str:
+    """Why a collapsed surface cannot bound the volume fill ("" when it can)."""
+    from cfddesk.mesh.surface_checks import crossing_pairs
+
+    tris = np.asarray(tris, dtype=np.int64)
+    e = np.sort(np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]), axis=1)
+    _u, uses = np.unique(e, axis=0, return_counts=True)
+    bad_edges = int((uses != 2).sum())
+    if bad_edges:
+        return f"{bad_edges} edge(s) not shared by exactly two triangles"
+    n_cross = len(crossing_pairs(nodes, tris))
+    if n_cross:
+        return f"{n_cross} crossing triangle pair(s)"
+    return ""
 
 
 # ----------------------------------------------------------- msh writer -------
@@ -906,6 +1116,54 @@ def apply_inward_boundary_layers(
 # ------------------------------------------------------------- main -----------
 
 
+# gmsh 3D algorithms for the volume fill. HXT (10) is fast but gives up on a
+# surface whose boundary it can only recover by splitting a surface edge (needle
+# triangles from short CAD edges next to large ones); gmsh's Delaunay (1)
+# recovers those with points inside the volume. Each attempt starts a new gmsh
+# session: after a failed fill gmsh refuses to mesh again ("I'm busy!").
+ALGO_HXT = 10
+ALGO_DELAUNAY = 1
+_ALGO_NAMES = {ALGO_HXT: "HXT", ALGO_DELAUNAY: "Delaunay"}
+
+
+# A surface with many needle triangles (shape below _NEEDLE_SHAPE) sends the fill
+# straight to Delaunay. The perforated plate that failed had 488 of 157k
+# (0.3 %); the elbow fixture at fineness 5 has 4 of 51k and fills with HXT.
+_NEEDLE_SHAPE = 0.05
+_NEEDLE_MIN_COUNT = 20
+_NEEDLE_MIN_SHARE = 5.0e-4
+
+
+def hxt_unfit_needles(nodes: np.ndarray, tris: np.ndarray) -> int:
+    """Number of needle triangles when there are enough to make HXT fail, else 0.
+
+    Shape = 4 sqrt(3) area / (sum of squared edges): 1 for an equilateral
+    triangle, 0.02 for a 0.2 mm x 14 mm sliver."""
+    tris = np.asarray(tris, dtype=np.int64)
+    if not len(tris):
+        return 0
+    x = np.asarray(nodes, dtype=float)[tris]
+    e2 = sum(((x[:, (k + 1) % 3] - x[:, k]) ** 2).sum(axis=1) for k in range(3))
+    area = 0.5 * np.linalg.norm(np.cross(x[:, 1] - x[:, 0], x[:, 2] - x[:, 0]), axis=1)
+    shape = 4.0 * math.sqrt(3.0) * area / np.maximum(e2, 1e-300)
+    n = int((shape < _NEEDLE_SHAPE).sum())
+    return n if n >= _NEEDLE_MIN_COUNT and n >= _NEEDLE_MIN_SHARE * len(tris) else 0
+
+
+def _first_line(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text.splitlines()[0][:200] if text else type(exc).__name__
+
+
+def volume_fill_attempts(hex_core: bool) -> list[tuple[bool, int]]:
+    """Order in which the volume fill is tried: (hex core, 3D algorithm). The
+    hex core goes last: without it the tets need no inner surface to meet."""
+    out = [(bool(hex_core), ALGO_HXT), (bool(hex_core), ALGO_DELAUNAY)]
+    if hex_core:
+        out += [(False, ALGO_HXT), (False, ALGO_DELAUNAY)]
+    return out
+
+
 def build_standard_msh(
     step_path: Path,
     solid: LoadedSolid,
@@ -922,7 +1180,94 @@ def build_standard_msh(
     n_threads: int = 16,
     log=None,
 ) -> StandardMeshResult:
-    """Generate the Standard mesh (MSH 2.2) for ``solid`` / ``project``."""
+    """Generate the Standard mesh (MSH 2.2) for ``solid`` / ``project``.
+
+    When the volume fill fails (or leaves cells that do not fill their boundary)
+    the mesh is built again with the next entry of ``volume_fill_attempts``.
+    Errors before the volume fill (geometry import, surface mesh) are raised at
+    once: another fill would not change them. When every attempt fails, the
+    first attempt's error is raised.
+    """
+    t_all = time.monotonic()
+    lines: list[str] = []
+
+    def _log(msg: str) -> None:
+        lines.append(msg)
+        if log is not None:
+            log(msg)
+
+    first_error: BaseException | None = None
+    attempts = volume_fill_attempts(hex_core)
+    tried: set[tuple[bool, int]] = set()
+    n_failed = 0
+    for i, (core_on, algo) in enumerate(attempts):
+        if (core_on, algo) in tried:
+            continue
+        stage: dict = {}
+        try:
+            res = _build_standard_msh_once(
+                step_path, solid, project, out_msh,
+                scale_to_metres=scale_to_metres, sizing=sizing, hex_core=core_on,
+                physics_based=physics_based, extra_face_sizes=extra_face_sizes,
+                extra_face_mins=extra_face_mins, layer_specs=layer_specs,
+                n_threads=n_threads, log=_log, algorithm_3d=algo, stage=stage,
+            )
+        except Exception as exc:
+            if not stage.get("volume"):
+                raise
+            if first_error is None:
+                first_error = exc
+            used = int(stage.get("algorithm_3d", algo))
+            tried.add((core_on, used))
+            n_failed += 1
+            left = [a for a in attempts[i + 1 :] if a not in tried]
+            if not left:
+                break
+            _log(
+                f"volume fill failed ({_ALGO_NAMES[used]}, hex element core {'on' if core_on else 'off'}): "
+                f"{_first_line(exc)}; meshing again with {_ALGO_NAMES[left[0][1]]}"
+                + ("" if left[0][0] else ", hex element core off")
+            )
+            continue
+        used = int(stage.get("algorithm_3d", algo))
+        if n_failed:
+            res.volume_fill_note = (
+                f"filled with {_ALGO_NAMES[used]} after {n_failed} failed attempt(s)"
+                + ("" if core_on or not hex_core else "; hex element core dropped")
+            )
+        elif used != algo:
+            res.volume_fill_note = f"filled with {_ALGO_NAMES[used]} (needle triangles on the surface)"
+        if hex_core and not core_on:
+            res.hex_core_note = "hex element core skipped: the tet fill around it failed"
+        res.log = lines
+        res.wall_s = time.monotonic() - t_all
+        return res
+    assert first_error is not None
+    raise first_error
+
+
+def _build_standard_msh_once(
+    step_path: Path,
+    solid: LoadedSolid,
+    project: Project,
+    out_msh: Path,
+    *,
+    scale_to_metres: float,
+    sizing: StandardSizing,
+    hex_core: bool = True,
+    physics_based: bool = True,
+    extra_face_sizes: dict[int, float] | None = None,
+    extra_face_mins: dict[int, float] | None = None,
+    layer_specs: list | None = None,
+    n_threads: int = 16,
+    log=None,
+    algorithm_3d: int = ALGO_HXT,
+    stage: dict | None = None,
+) -> StandardMeshResult:
+    """One attempt of ``build_standard_msh`` with this 3D algorithm.
+
+    ``stage["volume"]`` is set once the surface mesh is done, so the caller can
+    tell a failed volume fill from a failure before it."""
     import gmsh
 
     from cfddesk.mesh.gmsh_standard import (
@@ -946,6 +1291,7 @@ def build_standard_msh(
         surface_tags_of,
         write_gmsh_brep,
     )
+    from cfddesk.mesh.heal_cache import import_suppressed
 
     # A closed mesh import (STL/OBJ/PLY) is meshed from its surfaces of triangles as
     # discrete gmsh geometry; OCC CAD would be one plane per triangle.
@@ -974,29 +1320,14 @@ def build_standard_msh(
         gmsh.option.setNumber("Geometry.OCCScaling", float(scale_to_metres))
 
         def _import(heal_tol: float):
-            gmsh.model.add("standard")
-            gmsh.model.occ.importShapes(str(gmsh_geometry))
-            gmsh.model.occ.synchronize()
-            if heal_tol > 0:
-                # Small feature suppression: heal tiny edges / sliver faces
-                # below the suppression length so they do not force refinement.
-                gmsh.model.occ.healShapes(
-                    gmsh.model.getEntities(3), tolerance=heal_tol,
-                    fixDegenerated=True, fixSmallEdges=True, fixSmallFaces=True,
-                    sewFaces=False, makeSolids=False,
-                )
-                gmsh.model.occ.synchronize()
-                # healShapes can leave the pre-heal faces behind as orphan
-                # surfaces; they would be meshed twice (coplanar duplicates).
-                bounding: set[int] = set()
-                for _d, v in gmsh.model.getEntities(3):
-                    _up, down = gmsh.model.getAdjacencies(3, v)
-                    bounding.update(int(t) for t in down)
-                orphans = [(2, t) for _d, t in gmsh.model.getEntities(2) if int(t) not in bounding]
-                if orphans:
-                    gmsh.model.occ.remove(orphans, recursive=True)
-                    gmsh.model.occ.synchronize()
-                    _log(f"removed {len(orphans)} orphan surface(s) left by healing")
+            # Small feature suppression: heal tiny edges / sliver faces below the
+            # suppression length so they do not force refinement, but only when
+            # the healed faces still close the surface (cfddesk.mesh.heal_cache).
+            if gmsh_geometry is None:
+                raise RuntimeError("no CAD geometry to import")
+            healed = import_suppressed(
+                gmsh, gmsh_geometry, scale=float(scale_to_metres), tol_m=heal_tol, log=_log
+            )
             bodies = gmsh.model.getEntities(3)
             if inside and len(bodies) > 1:
                 # healShapes gives each body its own copy of the face they share,
@@ -1009,7 +1340,7 @@ def build_standard_msh(
                     f"{len(bodies)} bodies fused into {len(gmsh.model.getEntities(3))} fluid volume(s): "
                     f"the {len(inside) // 2} face(s) they share are inside the mesh"
                 )
-            return _match_occ_surfaces(
+            return healed, _match_occ_surfaces(
                 gmsh, solid, project, scale=float(scale_to_metres), lc=h
             )
 
@@ -1028,15 +1359,20 @@ def build_standard_msh(
             cad_vol = abs(float(np.einsum("ij,ij->i", pts_m[:, 0], np.cross(pts_m[:, 1], pts_m[:, 2])).sum()) / 6.0)
         else:
             try:
-                face_to_tag, patch_tags, vols, _tol = _import(sfs)
-                if sfs > 0:
+                healed, (face_to_tag, patch_tags, vols, _tol) = _import(sfs)
+                if healed == "full":
                     _log(f"small feature suppression: features below {sfs:.3g} m suppressed")
+                elif healed == "faces":
+                    _log(
+                        f"small feature suppression: faces below {sfs:.3g} m suppressed; shorter "
+                        "edges kept (removing them would open the surface)"
+                    )
             except Exception as exc:
                 if sfs <= 0:
                     raise
                 _log(f"small feature suppression skipped ({str(exc)[:160]})")
                 gmsh.model.remove()
-                face_to_tag, patch_tags, vols, _tol = _import(0.0)
+                _healed, (face_to_tag, patch_tags, vols, _tol) = _import(0.0)
             try:
                 cad_vol = float(sum(gmsh.model.occ.getMass(3, t) for _, t in vols))
             except Exception:
@@ -1090,7 +1426,7 @@ def build_standard_msh(
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
         gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay (uniform tris)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 10)  # HXT
+        gmsh.option.setNumber("Mesh.Algorithm3D", int(algorithm_3d))  # HXT first
         gmsh.option.setNumber("Mesh.Optimize", 1)
         gmsh.option.setNumber("Mesh.Smoothing", 3)
 
@@ -1128,9 +1464,7 @@ def build_standard_msh(
         if not use_core and sizing.gradation > 1.0:
             # linear growth h → h_max with adjacent-cell ratio ≈ gradation
             h_max = _GRADATION_MAX_SIZE_HS * h
-            dist = gmsh.model.mesh.field.add("Distance")
-            gmsh.model.mesh.field.setNumbers(dist, "SurfacesList", surfs)
-            gmsh.model.mesh.field.setNumber(dist, "Sampling", 60)
+            dist = _surface_distance_field(gmsh, surfs, h, log=_log)
             thr = gmsh.model.mesh.field.add("Threshold")
             gmsh.model.mesh.field.setNumber(thr, "InField", dist)
             gmsh.model.mesh.field.setNumber(thr, "SizeMin", h)
@@ -1149,12 +1483,32 @@ def build_standard_msh(
         nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
         _log(f"surface: {len(tris)} triangles, {len(nodes)} nodes at h={h:.4g} m ({time.monotonic()-t0:.1f}s)")
 
+        # --- needle triangles: short CAD edges meshed next to triangles of size h
+        n_needles = 0 if discrete else hxt_unfit_needles(nodes, tris)
+        if n_needles:
+            t_g = time.monotonic()
+            floor = max(sfs, _NEEDLE_GRADE_FLOOR_HS * h)
+            grade, counts = _short_edge_fields(gmsh, surfs, h=h, floor=floor)
+            if grade:
+                fields.extend(grade)
+                _set_background(gmsh, fields)
+                if floor < gmsh.option.getNumber("Mesh.MeshSizeMin"):
+                    gmsh.option.setNumber("Mesh.MeshSizeMin", floor)
+                gmsh.model.mesh.clear()
+                gmsh.model.mesh.generate(2)
+                nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
+                _log(
+                    f"surface: {n_needles} needle triangle(s) next to short CAD edges; the surface grows "
+                    f"from {counts} short edge(s) at {floor:.3g} m to h -> {len(tris)} triangles "
+                    f"({time.monotonic() - t_g:.1f}s)"
+                )
+
         # Sliver edges on a faceted STL collapse onto the closed surface.
         # healShapes would remove the same edges but leaves the shell open,
-        # so HXT cannot fill it. Do this before gap refinement: those "gaps"
-        # are the slivers.
+        # so HXT cannot fill it. Gaps are measured on the collapsed surface:
+        # its slivers are not gaps.
         stitch_tol = min(3.0e-4, 0.05 * h)
-        nodes, tris, tri_phys, n_short = _collapse_short_edges(
+        c_nodes, c_tris, c_phys, n_short = _collapse_short_edges(
             nodes, tris, tri_phys, stitch_tol
         )
         if n_short:
@@ -1163,34 +1517,59 @@ def build_standard_msh(
             )
 
         # --- gap refinement (SimScale gap refinement factor)
-        # Remeshing for gaps rebuilds the surface and brings the slivers back, so
-        # it is skipped only when the collapsed shell becomes the hex-core
-        # boundary (core on, one volume). Otherwise the collapsed triangles are
-        # not used and the gaps still need their refinement.
-        shell_used = bool(n_short and use_core and len(vols) == 1)
-        gap = None if shell_used else _gap_sizes(
-            nodes, tris, h=h, gap_factor=sizing.gap_refinement_factor, log=_log
+        gap = _gap_sizes(
+            c_nodes, c_tris, h=h, gap_factor=sizing.gap_refinement_factor, log=_log
         )
         if gap is not None:
-            view = gmsh.view.add("gap_size")
-            P = nodes[tris]
-            data = np.column_stack(
-                [P[:, :, 0], P[:, :, 1], P[:, :, 2], np.repeat(gap[:, None], 3, axis=1)]
-            ).ravel()
-            gmsh.view.addListData(view, "ST", len(tris), data.tolist())
-            pv_field = gmsh.model.mesh.field.add("PostView")
-            gmsh.model.mesh.field.setNumber(pv_field, "ViewTag", view)
-            fields.append(pv_field)
-            fmin = gmsh.model.mesh.field.add("Min")
-            gmsh.model.mesh.field.setNumbers(fmin, "FieldsList", fields)
-            gmsh.model.mesh.field.setAsBackgroundMesh(fmin)
+            fields.append(_size_view_field(gmsh, "gap_size", c_nodes, c_tris, gap))
+            _set_background(gmsh, fields)
             gmsh.option.setNumber("Mesh.MeshSizeMin", max(sfs, 0.25 * h_min))
             gmsh.model.mesh.clear()
             gmsh.model.mesh.generate(2)
             nodes, tris, tri_phys = _collect_surface(gmsh, surfs, tag_to_phys)
             _log(f"surface (gap-refined): {len(tris)} triangles, {len(nodes)} nodes")
+            if n_short:
+                # The new surface brings the slivers back: collapse them again.
+                c_nodes, c_tris, c_phys, n_short = _collapse_short_edges(
+                    nodes, tris, tri_phys, stitch_tol
+                )
+
+        # The collapsed shell becomes the hex-core boundary (core on, one
+        # volume) only while it is still a closed surface that does not touch
+        # itself: collapsing a short edge next to a thin wall can fold a
+        # triangle through it. Otherwise the CAD surface mesh is used.
+        shell_used = bool(n_short and use_core and len(vols) == 1)
+        if shell_used:
+            defect = _shell_defects(c_nodes, c_tris)
+            if defect:
+                _log(f"collapsed surface not used ({defect}); the CAD surface mesh is kept")
+                shell_used = False
+        if shell_used:
+            nodes, tris, tri_phys = c_nodes, c_tris, c_phys
+        else:
+            n_short = 0
+            nodes, tris, tri_phys = _repair_crossings(
+                gmsh, surfs, tag_to_phys, nodes, tris, tri_phys, fields,
+                floor=max(sfs, 0.05 * h), log=_log,
+            )
 
         # --- volume
+        if stage is not None:
+            stage["volume"] = True
+        if int(algorithm_3d) == ALGO_HXT:
+            # A surface graded for its needles still has some: HXT failed on every one.
+            n_needles = n_needles or hxt_unfit_needles(nodes, tris)
+            if n_needles:
+                # HXT gives up on (or crashes in) the boundary recovery of such a
+                # surface; going to Delaunay first saves a whole failed attempt.
+                _log(
+                    f"the surface had {n_needles} needle triangle(s) (short CAD edges next to "
+                    "large triangles): filling with Delaunay instead of HXT"
+                )
+                algorithm_3d = ALGO_DELAUNAY
+                gmsh.option.setNumber("Mesh.Algorithm3D", ALGO_DELAUNAY)
+        if stage is not None:
+            stage["algorithm_3d"] = int(algorithm_3d)
         core: _HexCore | None = None
         core_note = "hex element core off"
         if use_core:
@@ -1228,10 +1607,9 @@ def build_standard_msh(
                 # The OCC surface still carries the sliver triangulation, which
                 # is what makes the tet shell skew. Mesh the collapsed shell
                 # as its own discrete boundary instead.
-                _remove_entities(gmsh, list(vols), recursive=True, occ=occ)
-                leftover = gmsh.model.getEntities(2)
-                if leftover:
-                    _remove_entities(gmsh, leftover, recursive=True, occ=occ)
+                # A new model holds the shell: removing the CAD entities one by
+                # one took 90 s on a part with 6,534 faces.
+                gmsh.model.add("standard-shell")
                 vols = []
                 ds_outer = gmsh.model.addDiscreteEntity(2)
                 outer_tags = np.arange(1, len(nodes) + 1, dtype=np.int64)
