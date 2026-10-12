@@ -13,6 +13,11 @@
  *   its studies' records is off or not installed (plugin_needed, D30).
  * - "Keep editing": nothing changes.
  *
+ * When the geometry the study edited or linked was removed (API 1.7, `kind: 'removed'`):
+ * "<Geometry> was removed from the project. Add <Part> as a new geometry?", with
+ * "Add as new geometry", "Not now" (nothing is added; asked again on a later link) and
+ * "Keep editing".
+ *
  * The answer goes to POST /api/plugin-geometry/choose, which only the host calls: no
  * bridge call of a page reaches it.
  */
@@ -36,9 +41,11 @@ export interface LinkQuestion {
   fenced?: boolean;
   /** API 1.7: the study edits this project geometry (a geometry action): the question names the geometry. */
   edits?: boolean;
+  /** API 1.7: the geometry the study edited or linked was removed: add the part as a new geometry, or not now. */
+  kind?: 'removed';
 }
 
-export type LinkChoice = { choice: 'new'; copy: string[] } | { choice: 'overwrite' } | { choice: 'cancel' };
+export type LinkChoice = { choice: 'new'; copy: string[] } | { choice: 'overwrite' } | { choice: 'not_now' } | { choice: 'cancel' };
 
 /** "A", "A and B", "A, B and C". */
 export function listNames(names: string[]): string {
@@ -59,6 +66,20 @@ export function linkChoiceText(q: LinkQuestion): {
   cancelLabel: string;
 } {
   const g = q.geometry.name;
+  if (q.kind === 'removed') {
+    // The second button is "Not now" here: nothing to overwrite.
+    return {
+      title: `${g} was removed from the project`,
+      copy: `Add ${q.study.title} as a new geometry?`,
+      newLabel: 'Add as new geometry',
+      newLine: `Adds ${q.new_name} to the project.`,
+      copyLabel: (study) => `Copy the setup of ${study} onto it`,
+      overwriteLabel: 'Not now',
+      overwriteLine: `Nothing is added. ${q.study.title} stays out of the simulation; you are asked again the next time it goes back with a change.`,
+      overwriteBlocked: null,
+      cancelLabel: 'Keep editing',
+    };
+  }
   return {
     title: `${q.edits ? g : q.study.title} has a new shape`,
     copy: `${g} is used by ${listNames(q.studies.map((s) => s.title))}. How should the simulation get the new shape?`,
@@ -144,7 +165,7 @@ function showLinkChoiceNow(q: LinkQuestion, o: DialogOpts): Promise<LinkChoice |
       [...(copies?.querySelectorAll<HTMLInputElement>('input[type=checkbox]') || [])].filter((b) => b.checked && !b.disabled).map((b) => b.value);
     const onNew = () => done({ choice: 'new', copy: picked() });
     const onOver = () => {
-      if (over && !over.disabled) done({ choice: 'overwrite' });
+      if (over && !over.disabled) done(q.kind === 'removed' ? { choice: 'not_now' } : { choice: 'overwrite' });
     };
     const onCancel = () => done({ choice: 'cancel' });
     // The asker went away (the page closed): the question stays open on the server.

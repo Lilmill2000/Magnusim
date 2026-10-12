@@ -545,7 +545,7 @@ What the host enforces:
 
 1. **Your folder.** Each project has `plugins/<key>/` for you. `ws.data`, `ws.files` and `PluginData` reach only that folder. A path outside it is refused, links and junctions included.
 2. **Your studies.** A study's record (`studies/<id>/study.json`) changes only through `ws.study.update` (your page) or `PluginData.update_study` (your service or job), with the current `rev`. Every other field name is yours, `times` included.
-   - Through the page, the host keeps: `id`, `kind`, `plugin`, `plugin_name`, `plugin_version`, `schema_version`, `created_at`, `updated_at`, `rev`, `edits_geometry` (the project geometry a geometry action opened the study on).
+   - Through the page, the host keeps: `id`, `kind`, `plugin`, `plugin_name`, `plugin_version`, `schema_version`, `created_at`, `updated_at`, `rev`, `edits_geometry` (the project geometry a geometry action opened the study on), `geometry_removed` (the geometry the study edited or linked was removed: its next link asks before it adds one).
    - Through `PluginData`, it keeps: `id`, `kind`, `plugin`, `created_at`, `rev`. It sets `updated_at`. Do not write the others from Python: the host sets `schema_version` and `plugin_version` when it stores what your `migrate_study` returned.
 3. **The frame.** A workspace page has an opaque origin. It cannot read the app's page, call the app's API or use storage. Its Content-Security-Policy allows only `/plugin-sdk/` and your own `workspace/` folder.
 4. **The bridge.** Each call is checked against your plugin, this project and this study. The rest is refused and logged.

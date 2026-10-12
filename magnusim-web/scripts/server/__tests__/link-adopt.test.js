@@ -9,7 +9,11 @@
 //   no face table); one row naming another face loses its name: its BC never lands on that face;
 // - a second link of the study while its adoption runs goes on as an ordinary update;
 // - another study's link is `adopted`; a bad project id is a 400;
-// - the swap keeps the originals and its undo puts them back.
+// - the swap keeps the originals and its undo puts them back;
+// - a removed target: removing the geometry marks the study; its next link asks (`kind:
+//   'removed'`) or is refused `target_removed` without the bridge's ask_removed; "Not now"
+//   adds nothing, "Add as new geometry" adds the part ("box v2" beside a new box) and clears
+//   the mark; a new geometry of the same name is never taken over.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -67,7 +71,7 @@ async function open(pid, gid) {
 }
 
 /** The edit: the pulled box, its names, and (by default) the original's names. */
-async function linkEdit(pid, sid, { originals = 'box.original_names.json', sourceVersion = 1, basedOnRev = null, shapeBuf = null, namesBuf = null } = {}) {
+async function linkEdit(pid, sid, { originals = 'box.original_names.json', sourceVersion = 1, basedOnRev = null, shapeBuf = null, namesBuf = null, ask = false } = {}) {
   const shape = h.put(pid, sid, shapeBuf || fx('box-pulled.bbrep'), 'shape.bbrep', 'edit-demo');
   const names = h.put(pid, sid, namesBuf || fx('box-pulled.face_names.json'), 'names.json', 'edit-demo');
   const orig = originals ? h.put(pid, sid, fx(originals), 'original_names.json', 'edit-demo') : null;
@@ -77,9 +81,14 @@ async function linkEdit(pid, sid, { originals = 'box.original_names.json', sourc
     names: null,
     sourceVersion,
     basedOnRev,
-    extra: { shape: { ...shape, format: 'brep' }, face_names: names, ...(orig ? { original_names: orig } : {}) },
+    extra: { shape: { ...shape, format: 'brep' }, face_names: names, ...(orig ? { original_names: orig } : {}), ...(ask ? { ask_removed: true } : {}) },
+    // With `ask` the question comes back unanswered (the test answers it).
+    ...(ask ? { choose: null } : {}),
   });
 }
+
+const studyRec = (pid, sid) => JSON.parse(readFileSync(join(h.projects, pid, 'plugins', 'edit-demo', 'studies', sid, 'study.json'), 'utf8'));
+const treeOf = async (pid) => (await h.get(`/api/project/tree?project_id=${pid}`)).body;
 
 describe('the geometry action and the page reads', () => {
   it('makes one study, then opens it again; target, source and faces answer the plain geometry', async () => {
@@ -245,16 +254,113 @@ describe('the adoption', () => {
     assert.equal(late.body.error, 'box is already edited in box.');
   });
 
-  it('a removed geometry makes the first link a create', async () => {
+});
+
+describe('a removed target (API 1.7 fix)', () => {
+  it('an adopted box removed, a new box added: the link asks; Not now adds nothing; Add as new adds "box v2"; the new box is untouched', async () => {
     const pid = 'p-gone';
+    const { gid } = await importBox(pid);
+    const sid = (await open(pid, gid)).body.study_id;
+    const first = await linkEdit(pid, sid);
+    assert.equal((await h.until(first.body.job_id)).status, 'done');
+    const rm = await h.post('/api/geometry/remove', { project_id: pid, geometry_id: gid });
+    assert.equal(rm.status, 200, JSON.stringify(rm.body));
+    assert.deepEqual({ id: studyRec(pid, sid).geometry_removed.id, name: studyRec(pid, sid).geometry_removed.name }, { id: gid, name: 'box' });
+    // The same file again: a new geometry, also "box".
+    const again = await h.post('/api/geometry/import', { project_id: pid, step_path: join(FX, 'box.step'), filename: 'box.step' });
+    const gid2 = again.body.added.id;
+    const dir2 = h.geomDir(pid, gid2);
+    assert.notEqual(gid2, gid);
+    let tree = await treeOf(pid);
+    assert.deepEqual(tree.geometries.map((g) => [g.id, g.name]), [[gid2, 'box']]);
+    const row = tree.plugin_studies.find((s) => s.id === sid);
+    assert.deepEqual(row.geometry_removed, { id: gid, name: 'box' });
+    assert.equal(row.editing, undefined, 'listed in STUDIES, not on the new box');
+    assert.deepEqual(tree.geometries[0].edited_in, []);
+    // A caller that cannot ask: refused, nothing made.
+    const plain = await linkEdit(pid, sid, { sourceVersion: 2, basedOnRev: 1 });
+    assert.equal(plain.status, 409, JSON.stringify(plain.body));
+    assert.equal(plain.body.code, 'target_removed');
+    assert.equal(plain.body.error, 'box was removed from the project. Add box as a new geometry?');
+    // With the bridge's ask_removed: the question.
+    const asked = await linkEdit(pid, sid, { sourceVersion: 2, basedOnRev: 1, ask: true });
+    assert.equal(asked.status, 202, JSON.stringify(asked.body));
+    assert.deepEqual(asked.body.choosing, { kind: 'removed', geometry: { id: gid, name: 'box' }, study: { id: sid, title: 'box' }, new_name: 'box v2', studies: [], overwrite: 'ok' });
+    assert.equal(asked.body.created, false);
+    const bad = await h.choose(pid, sid, asked.body.job_id, 'overwrite', [], 'edit-demo');
+    assert.equal(bad.status, 400);
+    // Not now: nothing added, the mark stays.
+    const notNow = await h.choose(pid, sid, asked.body.job_id, 'not_now', [], 'edit-demo');
+    assert.equal(notNow.status, 200, JSON.stringify(notNow.body));
+    const ended = await h.until(asked.body.job_id);
+    assert.deepEqual([ended.status, ended.code], ['cancelled', 'not_now']);
+    assert.ok(!existsSync(join(h.projects, pid, '.magnusim-staging', `link-${asked.body.job_id}`)));
+    tree = await treeOf(pid);
+    assert.deepEqual(tree.geometries.map((g) => g.id), [gid2]);
+    assert.equal(studyRec(pid, sid).geometry_removed.id, gid);
+    // A later link asks again; Add as new geometry: "box v2", the mark cleared.
+    const third = await linkEdit(pid, sid, { sourceVersion: 3, basedOnRev: 1, ask: true });
+    assert.equal(third.body.choosing.kind, 'removed');
+    const add = await h.choose(pid, sid, third.body.job_id, 'new', [], 'edit-demo');
+    assert.equal(add.status, 202, JSON.stringify(add.body));
+    assert.equal(add.body.created, true);
+    const made = await h.until(third.body.job_id);
+    assert.equal(made.status, 'done', made.error);
+    assert.deepEqual([made.result.created, made.result.name], [true, 'box v2']);
+    assert.notEqual(made.result.geometryId, gid2);
+    assert.equal(studyRec(pid, sid).geometry_removed, undefined);
+    tree = await treeOf(pid);
+    assert.deepEqual(tree.geometries.map((g) => g.name).sort(), ['box', 'box v2']);
+    // The new box: still a plain import, never linked.
+    assert.equal(existsSync(join(dir2, 'link', 'state.json')), false);
+    assert.equal(JSON.parse(readFileSync(join(dir2, 'id.json'), 'utf8')).source, undefined);
+    assert.ok(existsSync(join(dir2, 'source.step')));
+    const linked = await h.get(`/api/plugin-geometry/linked?project_id=${pid}&plugin=edit-demo&study_id=${sid}`);
+    assert.equal(linked.body.linked.geometryId, made.result.geometryId);
+    // Its next link is an ordinary update: no question.
+    const fourth = await linkEdit(pid, sid, { sourceVersion: 4, basedOnRev: 1, ask: true, shapeBuf: fx('box-pulled.bbrep') });
+    assert.ok([200, 202].includes(fourth.status), JSON.stringify(fourth.body));
+    assert.equal(fourth.body.choosing, undefined);
+  });
+
+  it('an editor removed before its first link: the same question; Keep editing keeps the mark; Add as new adds "box"', async () => {
+    const pid = 'p-gone-early';
+    const { gid } = await importBox(pid);
+    const sid = (await open(pid, gid)).body.study_id;
+    const rm = await h.post('/api/geometry/remove', { project_id: pid, geometry_id: gid });
+    assert.equal(rm.status, 200, JSON.stringify(rm.body));
+    assert.equal(studyRec(pid, sid).geometry_removed.id, gid);
+    const target = await h.get(`/api/plugin-geometry/target?project_id=${pid}&plugin=edit-demo&study_id=${sid}`);
+    assert.equal(target.body.geometry, null);
+    const asked = await linkEdit(pid, sid, { ask: true });
+    assert.equal(asked.body.choosing.kind, 'removed');
+    assert.equal(asked.body.choosing.new_name, 'box');
+    const keep = await h.choose(pid, sid, asked.body.job_id, 'cancel', [], 'edit-demo');
+    assert.equal(keep.status, 200);
+    assert.deepEqual([(await h.until(asked.body.job_id)).code], ['cancelled']);
+    assert.equal(studyRec(pid, sid).geometry_removed.id, gid);
+    assert.deepEqual((await treeOf(pid)).geometries, []);
+    const again = await linkEdit(pid, sid, { sourceVersion: 2, ask: true });
+    const add = await h.choose(pid, sid, again.body.job_id, 'new', [], 'edit-demo');
+    assert.equal(add.status, 202, JSON.stringify(add.body));
+    const made = await h.until(again.body.job_id);
+    assert.equal(made.status, 'done', made.error);
+    assert.equal(made.result.name, 'box');
+    assert.notEqual(made.result.geometryId, gid);
+    assert.equal(studyRec(pid, sid).geometry_removed, undefined);
+  });
+
+  it('a project from before the mark: an edits_geometry that is gone asks too', async () => {
+    const pid = 'p-gone-legacy';
     const { gid, dir } = await importBox(pid);
     const sid = (await open(pid, gid)).body.study_id;
     rmSync(dir, { recursive: true, force: true });
     const r = await linkEdit(pid, sid);
-    assert.equal(r.status, 202);
-    assert.equal(r.body.created, true);
-    assert.notEqual(r.body.geometry_id, gid);
-    assert.equal((await h.until(r.body.job_id)).status, 'done');
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, 'target_removed');
+    const asked = await linkEdit(pid, sid, { ask: true });
+    assert.deepEqual(asked.body.choosing.geometry, { id: gid, name: 'box' });
+    assert.equal((await h.choose(pid, sid, asked.body.job_id, 'not_now', [], 'edit-demo')).status, 200);
   });
 });
 

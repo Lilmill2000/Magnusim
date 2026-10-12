@@ -9,8 +9,8 @@
  * copies, and answers one of:
  *
  * - `none`: the bytes equal the committed state's (recorded on the main lane, no slot);
- * - a create (the first link, or after the geometry was removed): a job that runs
- *   outside the compute slot, like an import, under the study's lock;
+ * - a create (the first link): a job that runs outside the compute slot, like an
+ *   import, under the study's lock;
  * - an update: a queued compute job (`kind: 'geometry'`), the one compute slot held
  *   from its start until its follow-ups end, so no mesh, run or plugin case reads the
  *   geometry while it changes;
@@ -41,6 +41,14 @@
  * (geometry.adopt_names), the table the face map starts from; the swap keeps the
  * geometry's source files in <geometry>/link/original/ (journaled like every move), and
  * the apply makes it a linked geometry. "Save as new" leaves it as it was.
+ *
+ * A removed target (API 1.7 fix): removing a geometry marks the studies whose target it
+ * was (`geometry_removed`, geometry.mark_removed). Such a study's next link never adds a
+ * geometry silently: the host asks ("<Geometry> was removed from the project. Add <Part>
+ * as a new geometry?", question `kind: 'removed'`): `new` makes the create and clears the
+ * mark, `not_now` ends the record `cancelled` with code `not_now` (nothing added), `cancel`
+ * as for any question. A call without the bridge's `ask_removed` is refused 409
+ * `target_removed`.
  *
  * Everything shared lives on globalThis (the study locks, the live jobs, the recovery
  * list), so a Vite re-import of this module shares it. Records and events are in
@@ -109,6 +117,8 @@ export const LINK_TEXT = Object.freeze({
   studyDeleted: 'The study was deleted',
   notLinked: (g, s) => `${g} is no longer linked to ${s}. ${g} is unchanged.`,
   adding: (g2) => `Adding ${g2}. Choose again when it is done.`,
+  targetRemoved: (g, part) => `${g} was removed from the project. Add ${part} as a new geometry?`,
+  notNow: (g) => `Not added: ${g} was removed from the project, and nothing was added.`,
 });
 
 /** A refusal: an HTTP status, a 5.3 code and the message a plugin may show. */
@@ -606,7 +616,8 @@ async function writeFaceMap(dir, stage, sameShape) {
 /**
  * @typedef {{ rel: string, sha256: string | null, etag: string | null }} LinkFileIn
  * @typedef {{ projectId: string, plugin: string, studyId: string, shape: LinkFileIn & { format: string },
- *   faceNames: LinkFileIn | null, originalNames: LinkFileIn | null, sourceVersion: number, basedOnRev: number | null, name: string }} LinkCall
+ *   faceNames: LinkFileIn | null, originalNames: LinkFileIn | null, sourceVersion: number, basedOnRev: number | null, name: string,
+ *   askRemoved?: boolean }} LinkCall
  */
 
 /** @param {any} f @param {string} what */
@@ -655,7 +666,26 @@ export function linkCallOf(body) {
   // eslint-disable-next-line no-control-regex
   const name = String(body.name === null || body.name === undefined ? '' : body.name).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '').trim();
   if (name.length > 120) throw new LinkJobError(400, 'bad_request', 'name is longer than 120 characters');
-  return { projectId, plugin, studyId, shape: { ...shape, format }, faceNames, originalNames, sourceVersion: sv, basedOnRev: based === null || based === undefined ? null : based, name };
+  // API 1.7: the caller can ask the host's question about a removed target (the bridge can).
+  const askRemoved = body.ask_removed === true;
+  return { projectId, plugin, studyId, shape: { ...shape, format }, faceNames, originalNames, sourceVersion: sv, basedOnRev: based === null || based === undefined ? null : based, name, askRemoved };
+}
+
+/**
+ * The geometry this study edited or linked before it was removed, while it links nothing:
+ * the study's mark (geometry.link_check's `removed`), else, for a project from before the
+ * mark, the geometry its newest finished link made when that one is gone. Null otherwise.
+ * @param {any} c @param {any} check
+ */
+function removedTarget(c, check) {
+  if (check.geometry) return null;
+  const r = check.removed;
+  if (r && r.id) return { id: String(r.id), name: String(r.name || '') || 'The geometry' };
+  const last = studyRecords(c.projectId, c.plugin, c.studyId, 'done').find((x) => x.result && x.result.geometryId);
+  if (last && !geometryDirOf(c.projectId, String(last.result.geometryId))) {
+    return { id: String(last.result.geometryId), name: String(last.result.name || last.geometry_name || '') || 'The geometry' };
+  }
+  return null;
 }
 
 /** R3 at the call and under the slot: may this design land on that state? */
@@ -717,6 +747,9 @@ export async function acceptLink(c) {
   const geom = check.geometry || null;
   const state = geom ? geom.state : null;
   const originals = geom && geom.adopt ? c.originalNames : null;
+  // API 1.7: its geometry was removed: never a silent create; a caller that cannot ask is refused.
+  const removed = removedTarget(c, check);
+  if (removed && !c.askRemoved) throw new LinkJobError(409, 'target_removed', LINK_TEXT.targetRemoved(removed.name, study.title));
   // A queued job and a question waiting for its answer (5.0) follow the same rules.
   const queuedNow = studyRecords(c.projectId, c.plugin, c.studyId, ['queued', 'choosing']);
   // 2. The accept rule before any copy (it is applied again after the copy).
@@ -770,7 +803,7 @@ export async function acceptLink(c) {
   const shapeSha = copied[0].sha256;
   const namesSha = c.faceNames ? copied[1].sha256 : null;
   try {
-    return await afterSnapshot(c, { jobId, stage, shapeSha, namesSha, check });
+    return await afterSnapshot(c, { jobId, stage, shapeSha, namesSha, check, removed });
   } catch (e) {
     rmQuiet(stage);
     throw e;
@@ -828,10 +861,28 @@ async function questionFor(c, geom, study) {
 }
 
 /**
+ * The host's question when the geometry this study edited or linked was removed (API 1.7):
+ * add the part as a new geometry, or not now. No studies to copy, nothing to overwrite.
+ * @param {LinkCall} c @param {{ id: string, name: string }} removed @param {any} study
+ */
+async function removedQuestion(c, removed, study) {
+  const base = c.name || study.title;
+  const nv = await call('geometry.next_version', { project_id: c.projectId, plugin: c.plugin, study_id: c.studyId, base, adopt: false, unique: true });
+  return {
+    kind: 'removed',
+    geometry: { id: removed.id, name: removed.name },
+    study: { id: c.studyId, title: study.title },
+    new_name: String((nv && nv.name) || base),
+    studies: [],
+    overwrite: 'ok',
+  };
+}
+
+/**
  * The call after its copy: the accept rule again (synchronously, up to the record), the
  * `none` test, then a create or a queued update.
  * @param {LinkCall} c
- * @param {{ jobId: string, stage: string, shapeSha: string, namesSha: string | null, check: any }} s
+ * @param {{ jobId: string, stage: string, shapeSha: string, namesSha: string | null, check: any, removed?: { id: string, name: string } | null }} s
  */
 async function afterSnapshot(c, s) {
   const study = s.check.study;
@@ -884,7 +935,11 @@ async function afterSnapshot(c, s) {
   }
   // 6. Ask (5.0): the shape changed and a simulation study on the geometry has saved
   // setup. A names-only change, an unused geometry and a first link never ask.
-  const question = geom && state && s.shapeSha !== state.shape_sha256 ? await questionFor(c, geom, study) : null;
+  const question = s.removed
+    ? await removedQuestion(c, s.removed, study)
+    : geom && state && s.shapeSha !== state.shape_sha256
+      ? await questionFor(c, geom, study)
+      : null;
   // An update with no question needs every record kind of its studies loaded (with the
   // question, a missing kind only blocks "Overwrite": "Save as new" rewrites no record).
   if (geom && !question) {
@@ -1014,7 +1069,9 @@ function enqueueUpdate(rec) {
  * question. Accepts only a `choosing` record of that project and (plugin, study), and
  * only study ids its question offered for a copy. `new` makes a create beside the old
  * geometry (no slot); `overwrite` queues the update (plugin_needed is checked again);
- * `cancel` ends the record `cancelled` and drops its staging.
+ * `cancel` ends the record `cancelled` and drops its staging. A removed target's question
+ * (API 1.7, `kind: 'removed'`) takes `new` (the create, as a first link) or `not_now`
+ * (ends `cancelled` with code `not_now`: nothing added) or `cancel`.
  * @param {Record<string, any>} body
  */
 export async function chooseLink(body) {
@@ -1026,12 +1083,15 @@ export async function chooseLink(body) {
   if (!projectId || !PLUGIN_KEY_RE.test(plugin) || !STUDY_ID_RE.test(studyId) || !LINK_JOB_RE.test(jobId)) {
     throw new LinkJobError(400, 'bad_request', 'project_id, plugin, study_id and job_id are required');
   }
-  if (!['new', 'overwrite', 'cancel'].includes(choice)) throw new LinkJobError(400, 'bad_request', "choice must be 'new', 'overwrite' or 'cancel'");
+  if (!['new', 'overwrite', 'cancel', 'not_now'].includes(choice)) throw new LinkJobError(400, 'bad_request', "choice must be 'new', 'overwrite', 'not_now' or 'cancel'");
   const copy = Array.isArray(body.copy) ? [...new Set(body.copy.map((/** @type {any} */ x) => String(x)))] : [];
   const rec0 = readLinkRecord(jobId);
   if (!rec0 || !sameStudy(rec0, projectId, plugin, studyId)) throw new LinkJobError(404, 'not_found', 'No such question in this study');
   if (rec0.status !== 'choosing') throw new LinkJobError(409, 'not_choosing', LINK_TEXT.answered);
   const q = rec0.choosing || {};
+  // A removed target's question (API 1.7): add the part again, not now, or keep editing.
+  if (q.kind === 'removed') return chooseRemoved(rec0, choice);
+  if (choice === 'not_now') throw new LinkJobError(400, 'bad_request', "choice must be 'new', 'overwrite' or 'cancel'");
   const offered = new Map((Array.isArray(q.studies) ? q.studies : []).map((/** @type {any} */ st) => [String(st.id), st]));
   if (choice === 'new') {
     for (const id of copy) {
@@ -1091,6 +1151,36 @@ export async function chooseLink(body) {
   emitLinkEvent(rec.id, queuedEvent({ ...rec, op: 'create' }, 0));
   startCreateWhenFree(rec.project_id, rec.plugin, rec.study_id);
   return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: newId, created: true, queued: false } };
+}
+
+/**
+ * The answer to a removed target's question. `new`: the create, as a first link (named
+ * as the question said; the mark is cleared at its commit). `not_now`: nothing is added;
+ * the record ends `cancelled` with code `not_now` and the mark stays, so a later link asks
+ * again. `cancel`: as for any question.
+ * @param {any} rec0 @param {string} choice
+ */
+function chooseRemoved(rec0, choice) {
+  if (choice === 'overwrite') throw new LinkJobError(400, 'bad_request', "choice must be 'new', 'not_now' or 'cancel'");
+  const rec = readLinkRecord(rec0.id);
+  if (!rec || rec.status !== 'choosing') throw new LinkJobError(409, 'not_choosing', LINK_TEXT.answered);
+  const q = rec.choosing || {};
+  if (choice === 'cancel') {
+    finish(rec.id, 'cancelled', { error: LINK_TEXT.kept, code: 'cancelled' });
+    rmQuiet(stagingDirOf(rec.project_id, rec.id));
+    return { status: 200, body: { ok: true, job_id: rec.id, cancelled: true } };
+  }
+  if (choice === 'not_now') {
+    finish(rec.id, 'cancelled', { error: LINK_TEXT.notNow(String((q.geometry && q.geometry.name) || 'The geometry')), code: 'not_now' });
+    rmQuiet(stagingDirOf(rec.project_id, rec.id));
+    return { status: 200, body: { ok: true, job_id: rec.id, not_now: true } };
+  }
+  const name = String(q.new_name || rec.name);
+  updateLinkRecord(rec.id, { status: 'queued', op: 'create', choice, removed: true, geometry_name: name });
+  emitLinkEvent(rec.id, { event: 'chosen', choice, geometryId: rec.geometry_id });
+  emitLinkEvent(rec.id, queuedEvent({ ...rec, op: 'create' }, 0));
+  startCreateWhenFree(rec.project_id, rec.plugin, rec.study_id);
+  return { status: 202, body: { ok: true, job_id: rec.id, geometry_id: rec.geometry_id, created: true, queued: false } };
 }
 
 /** A deleted plugin study's question ends `cancelled` (5.19). @param {string} projectId @param {string} plugin @param {string} studyId */
@@ -1764,7 +1854,7 @@ async function runCreate(id, live) {
   const oldState = oldDir ? linkStateOf(oldDir) : null;
   const oldName = String((old && old.name) || rec.old_geometry_name || '');
   // The version and the name ("<base> v<k>" from 2; k goes up past a name taken).
-  const nv = await call('geometry.next_version', { project_id: rec.project_id, plugin: rec.plugin, study_id: rec.study_id, base: rec.name, adopt: !!rec.adopt });
+  const nv = await call('geometry.next_version', { project_id: rec.project_id, plugin: rec.plugin, study_id: rec.study_id, base: rec.name, adopt: !!rec.adopt, ...(rec.removed ? { unique: true } : {}) });
   const version = Number(nv && nv.version) > 0 ? Number(nv.version) : 1;
   const gname = String((nv && nv.name) || rec.name);
   updateLinkRecord(id, { geometry_name: gname });
@@ -1888,6 +1978,12 @@ async function runCreate(id, live) {
   if (!committed || committed.ok !== true) {
     await dropAll(made);
     return ended('failed', { error: String((committed && committed.error) || 'Linking the geometry failed'), code: 'failed' });
+  }
+  // "Add as new geometry" after its geometry was removed (API 1.7): the study links one again.
+  if (rec.removed) {
+    await call('geometry.clear_removed', { project_id: rec.project_id, plugin: rec.plugin, study_id: rec.study_id }).catch((e) =>
+      console.warn(`[CFD link] ${id}: clearing geometry_removed`, e),
+    );
   }
   // A question of this study still open about the geometry it just left is moot now.
   if (oldId) {
@@ -2095,6 +2191,24 @@ async function runFollowUps(/** @type {any} */ rec, /** @type {LiveJob} */ live,
 }
 
 // ---- removal ----------------------------------------------------------------------------
+
+/**
+ * A geometry is about to be removed (w16 removeGeometry, first): the plugin studies whose
+ * target it is get `geometry_removed` (geometry.mark_removed, on the main lane, while the
+ * folder is there), so their next link asks before it adds a geometry. A failure is only
+ * logged: the remove goes on (link_check also finds an `edits_geometry` that is gone).
+ * @param {string} projectId @param {string} geometryId
+ */
+export async function markRemovedStudies(projectId, geometryId) {
+  const w = L().deps.worker;
+  if (!w) return;
+  try {
+    const r = await w.call('geometry.mark_removed', { project_id: projectId, geometry_id: geometryId }, 30_000);
+    if (!r || r.ok !== true) console.warn(`[CFD link] marking the studies of removed ${geometryId}`, r);
+  } catch (e) {
+    console.warn(`[CFD link] marking the studies of removed ${geometryId}`, e);
+  }
+}
 
 /**
  * A geometry is about to be removed (w16 removeGeometry, before its folder goes): a

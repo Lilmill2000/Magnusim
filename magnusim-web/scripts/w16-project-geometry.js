@@ -43,7 +43,7 @@ import { computeRowsForProject, dropComputeRows } from './server/compute-queue.t
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
-import { geometryFenced, isLinkedGeometryDir, onGeometryRemove } from './server/link-job.js';
+import { geometryFenced, isLinkedGeometryDir, markRemovedStudies, onGeometryRemove } from './server/link-job.js';
 import { linkOverlay } from './server/link-overlay.js';
 import {
   LAYOUT_VERSION,
@@ -1996,6 +1996,10 @@ async function removeGeometry(opts) {
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project' } };
   }
+  // The plugin studies whose target it is (API 1.7) are marked first, before the project
+  // this call writes is read: their next link asks before it adds a geometry.
+  const markId = String((opts && (opts.geometry_id || opts.id)) || '').trim();
+  if (markId && readProject(projectId)) await markRemovedStudies(projectId, markId);
   const proj = readProject(projectId);
   if (!proj) {
     return { ok: false, status: 404, body: { error: 'project not found', project_id: projectId } };

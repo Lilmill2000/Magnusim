@@ -359,3 +359,131 @@ def test_the_target_the_source_and_the_faces_a_page_reads(env: Path):
     (gdir / "id.json").write_text(json.dumps(ident), encoding="utf-8")
     (gdir / "id.json").unlink()
     assert link_methods.geometry_source_path("p1", "edit-demo", sid)["code"] == "gone"
+
+
+# ---- a removed target (API 1.7 fix) ------------------------------------------------------
+
+
+def _linked(root: Path, gid: str, name: str, plugin: str, sid: str, folder: str | None = None) -> Path:
+    """A geometry a link of (plugin, sid) made (rev 1)."""
+    gdir = root / "geometries" / (folder or f"Geometry_{name}")
+    (gdir / "link").mkdir(parents=True)
+    (gdir / "simulations").mkdir()
+    (gdir / "id.json").write_text(
+        json.dumps({"id": gid, "name": name, "kind": "geometry", "source": {"type": "plugin_study", "plugin": plugin, "study_id": sid, "workspace": "demo"}}),
+        encoding="utf-8",
+    )
+    (gdir / "source.bbrep").write_bytes(b"x")
+    (gdir / "link" / "state.json").write_text(json.dumps({"rev": 1, "version": 1, "name": name, "shape_sha256": "a" * 64}), encoding="utf-8")
+    proj = json.loads((root / "project.json").read_text(encoding="utf-8"))
+    proj["geometries"].append({"id": gid, "name": name})
+    (root / "project.json").write_text(json.dumps(proj), encoding="utf-8")
+    return gdir
+
+
+def _drop(root: Path, gid: str, gdir: Path) -> None:
+    """What the server's remove does after the marking: the folder and its project.json row go."""
+    shutil.rmtree(gdir)
+    proj = json.loads((root / "project.json").read_text(encoding="utf-8"))
+    proj["geometries"] = [g for g in proj["geometries"] if g["id"] != gid]
+    (root / "project.json").write_text(json.dumps(proj), encoding="utf-8")
+
+
+def test_removing_a_geometry_marks_the_studies_whose_target_it_was(env: Path):
+    from cfddesk.registry.plugin_data import PluginData
+    from cfddesk.worker import link_methods, methods
+
+    root = _project(env)
+    _plain(root)
+    _plain(root, "geom-other", "other", "other.step")
+    editor = link_methods.geometry_actions_open("p1", "geom-box", "edit-demo", "demo")["study_id"]
+    elsewhere = link_methods.geometry_actions_open("p1", "geom-other", "edit-demo", "demo")["study_id"]
+    demo = PluginData(root, "link-demo")
+    linker = demo.create_study("demo", "Design 1", plugin_name="Link demo", plugin_version="1.0.0", schema_version=1)["id"]
+    _linked(root, "geom-l", "Design 1", "link-demo", linker)
+    # An editor of box whose link moved to another geometry ("Save as new"): box is not its target.
+    data = PluginData(root, "edit-demo")
+    rec = data.create_study("demo", "Moved", plugin_name="Edit demo", plugin_version="1.0.0", schema_version=1)
+    moved = rec["id"]
+    rec["edits_geometry"] = {"id": "geom-box", "name": "box", "at": "x"}
+    data.write_json(f"studies/{moved}/study.json", rec)
+    _linked(root, "geom-v2", "box v2", "edit-demo", moved)
+    # The tree names the studies whose target each geometry is (the remove question says they stay).
+    assert _node("p1", "geom-box")["editors"] == [{"title": "box", "kind_title": "Edit demo", "workspace_title": "Demo editor"}]
+    assert [e["title"] for e in _node("p1", "geom-l")["editors"]] == ["Design 1"]
+    assert [e["title"] for e in _node("p1", "geom-v2")["editors"]] == ["Moved"]
+
+    out = link_methods.geometry_mark_removed("p1", "geom-box")
+    assert out == {"ok": True, "marked": [{"plugin": "edit-demo", "study_id": editor}]}
+    rec = data.study(editor)
+    assert {k: rec["geometry_removed"][k] for k in ("id", "name")} == {"id": "geom-box", "name": "box"}
+    assert rec["geometry_removed"]["at"] and rec["edits_geometry"]["id"] == "geom-box"
+    assert "geometry_removed" not in data.study(elsewhere) and "geometry_removed" not in data.study(moved)
+    # The linked one: its linking study is marked, by the geometry's own name.
+    assert link_methods.geometry_mark_removed("p1", "geom-l")["marked"] == [{"plugin": "link-demo", "study_id": linker}]
+    assert demo.study(linker)["geometry_removed"]["name"] == "Design 1"
+    # Not a geometry of the project: nothing.
+    assert link_methods.geometry_mark_removed("p1", "geom-nope")["marked"] == []
+    # The host's key: a page cannot change or drop it; the catalog row carries it.
+    methods.plugin_studies_update("p1", "edit-demo", editor, data.study(editor)["rev"], {"geometry_removed": None, "x": 1})
+    assert data.study(editor)["geometry_removed"]["id"] == "geom-box"
+    row = next(s for s in methods.project_tree(project_id="p1")["plugin_studies"] if s["id"] == editor)
+    assert row["geometry_removed"] == {"id": "geom-box", "name": "box"}
+    assert next(s for s in methods.project_tree(project_id="p1")["plugin_studies"] if s["id"] == elsewhere)["geometry_removed"] is None
+
+
+def test_a_removed_target_is_a_question_and_a_new_same_name_geometry_is_never_taken_over(env: Path):
+    from cfddesk.project import link
+    from cfddesk.registry.plugin_data import PluginData
+    from cfddesk.worker import link_methods
+
+    root = _project(env)
+    gdir = _plain(root)
+    sid = link_methods.geometry_actions_open("p1", "geom-box", "edit-demo", "demo")["study_id"]
+    link_methods.geometry_mark_removed("p1", "geom-box")
+    _drop(root, "geom-box", gdir)
+    # A new geometry with the same name (and the same file name).
+    _plain(root, "geom-box-new", "box")
+    check = link_methods.geometry_link_check("p1", "edit-demo", sid)
+    assert (check["ok"], check["geometry"], check["adopt_refused"]) == (True, None, None)
+    assert check["removed"] == {"id": "geom-box", "name": "box"}
+    assert ga.edit_target(root, "edit-demo", sid) is None and ga.adopt_target(root, "edit-demo", sid) is None
+    assert link_methods.geometry_edit_target("p1", "edit-demo", sid)["geometry"] is None
+    # The action on the new box opens a new study, never the old Part.
+    fresh = link_methods.geometry_actions_open("p1", "geom-box-new", "edit-demo", "demo")
+    assert fresh["created"] is True and fresh["study_id"] != sid and fresh["title"] == "box (2)"
+    # "Add as new geometry" names the part so it is not mistaken for the new box.
+    assert link_methods.geometry_next_version("p1", "", "edit-demo", sid, "box", False, True)["name"] == "box v2"
+    assert link_methods.geometry_next_version("p1", "", "edit-demo", sid, "box")["name"] == "box"
+    assert link_methods.geometry_next_version("p1", "", "edit-demo", sid, "Part 9", False, True)["name"] == "Part 9"
+    # Once the study links a geometry again (the create's commit), the mark is cleared and the link answers.
+    _linked(root, "geom-made", "box v2", "edit-demo", sid, "Geometry_box v2")
+    assert link_methods.geometry_clear_removed("p1", "edit-demo", sid) == {"ok": True, "cleared": True}
+    assert "geometry_removed" not in PluginData(root, "edit-demo").study(sid)
+    again = link_methods.geometry_link_check("p1", "edit-demo", sid)
+    assert again["geometry"]["id"] == "geom-made" and again["removed"] is None
+    assert link_methods.geometry_clear_removed("p1", "edit-demo", sid)["cleared"] is False
+    assert link.find_linked(root, "edit-demo", sid)["id"] == "geom-made"
+
+
+def test_a_removed_linked_geometry_and_a_project_from_before_the_mark(env: Path):
+    from cfddesk.registry.plugin_data import PluginData
+    from cfddesk.worker import link_methods
+
+    root = _project(env)
+    # A native linking study (link-demo) whose geometry was removed: removed, never a silent create.
+    sid = PluginData(root, "link-demo").create_study("demo", "Design 1", plugin_name="Link demo", plugin_version="1.0.0", schema_version=1)["id"]
+    gdir = _linked(root, "geom-l", "Design 1", "link-demo", sid)
+    link_methods.geometry_mark_removed("p1", "geom-l")
+    _drop(root, "geom-l", gdir)
+    check = link_methods.geometry_link_check("p1", "link-demo", sid)
+    assert (check["geometry"], check["removed"]) == (None, {"id": "geom-l", "name": "Design 1"})
+    # A study that never linked: no question (its first link creates).
+    first = PluginData(root, "link-demo").create_study("demo", "Design 2", plugin_name="Link demo", plugin_version="1.0.0", schema_version=1)["id"]
+    assert link_methods.geometry_link_check("p1", "link-demo", first)["removed"] is None
+    # Removed before the mark existed: an edits_geometry that is gone counts too.
+    data = PluginData(root, "edit-demo")
+    old = data.create_study("demo", "Old box", plugin_name="Edit demo", plugin_version="1.0.0", schema_version=1)
+    old["edits_geometry"] = {"id": "geom-gone", "name": "box", "at": "x"}
+    data.write_json(f"studies/{old['id']}/study.json", old)
+    assert link_methods.geometry_link_check("p1", "edit-demo", old["id"])["removed"] == {"id": "geom-gone", "name": "box"}
