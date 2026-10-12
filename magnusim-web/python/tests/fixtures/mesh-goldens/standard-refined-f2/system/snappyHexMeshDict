@@ -59,6 +59,70 @@ addLayersControls
             thickness 0.00120655;
             minThickness 0.000241311;
         }
+        walls_bl1
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.00341265;
+            minThickness 0.00068253;
+        }
+        walls_bl2
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.00241311;
+            minThickness 0.000482622;
+        }
+        walls_bl3
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.00170633;
+            minThickness 0.000341265;
+        }
+        walls_bl4
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.00120655;
+            minThickness 0.000241311;
+        }
+        walls_bl5
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.000853163;
+            minThickness 0.000170633;
+        }
+        walls_bl6
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.000603277;
+            minThickness 0.000120655;
+        }
+        walls_bl7
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.000426581;
+            minThickness 8.53163e-05;
+        }
+        walls_bl8
+        {
+            nSurfaceLayers 3;
+            thicknessModel overallAndExpansion;
+            expansionRatio 1.5;
+            thickness 0.000301639;
+            minThickness 6.03277e-05;
+        }
     }
     expansionRatio 1.5;
     thickness 0.00482622;

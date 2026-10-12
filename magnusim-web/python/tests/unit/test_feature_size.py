@@ -1,5 +1,5 @@
-"""Standard mesher: automatic refinement around small features
-(cfddesk.mesh.feature_size).
+"""Standard mesher: automatic refinement around small features, and boundary
+layers sized by the local cells (cfddesk.mesh.feature_size, standard_hexcore).
 
 Synthetic parts only: a cube, a box with a thin slot of fluid, a box with a thin
 sheet cut out of it, a field of point features. The real part that asked for
@@ -8,6 +8,8 @@ rules it relies on.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -239,3 +241,81 @@ def test_small_feature_suppression_sets_the_floor(gmsh_session, monkeypatch):
     assert plan is not None and plan.floor == pytest.approx(4.0)
     # suppression above half of h: nothing is refined
     assert fs.plan_feature_refinement(gmsh, surfs, nodes, tris, h=40.0, gradation=1.22, small_feature_m=25.0) is None
+
+
+# ------------------------------------------------------------ layer bands -----
+
+
+def test_layer_bands_follow_the_local_triangle_size():
+    from cfddesk.mesh.standard_hexcore import layer_band_size, layer_size_bands
+
+    coarse_n, coarse_t = _cube_surface(4, size=1.0)
+    fine_n, fine_t = _cube_surface(16, size=1.0, origin=(5.0, 0.0, 0.0))
+    nodes = np.vstack([coarse_n, fine_n])
+    tris = np.vstack([coarse_t, fine_t + len(coarse_n)])
+    h = 0.25
+    band = layer_size_bands(nodes, tris, h)
+    # mean edge of the coarse cube ~ 0.29 (sides 0.25, diagonals 0.35): band 0
+    assert set(band[: len(coarse_t)].tolist()) == {0}
+    # the fine cube is 4x smaller: four half-octave bands down
+    assert set(band[len(coarse_t):].tolist()) == {4}
+    assert layer_band_size(h, 4) == pytest.approx(h / 4)
+
+
+def test_split_layer_bands_and_their_layer_specs(tmp_path):
+    from cfddesk.mesh import standard_hexcore as sh
+
+    coarse_n, coarse_t = _cube_surface(4, size=1.0)
+    fine_n, fine_t = _cube_surface(16, size=1.0, origin=(5.0, 0.0, 0.0))
+    nodes = np.vstack([coarse_n, fine_n])
+    tris = np.vstack([coarse_t, fine_t + len(coarse_n)])
+    tri_phys = np.concatenate([np.full(len(coarse_t), 1), np.full(len(fine_t), 2)])
+    names = {1: (2, "walls"), 2: (2, "inlet"), 100: (3, "fluid")}
+    tri_phys[len(coarse_t):][:10] = 1  # some fine triangles in walls, the rest inlet
+    bands = sh.split_layer_bands(nodes, tris, tri_phys, {"walls": 1}, names, h=0.25)
+    assert list(bands) == ["walls"]
+    [(bname, size)] = bands["walls"]
+    assert bname == "walls_bl4" and size == pytest.approx(0.0625)
+    bid = next(k for k, v in names.items() if v[1] == bname)
+    assert bid > 100
+    assert (tri_phys == bid).sum() == 10
+    assert (tri_phys == 1).sum() == len(coarse_t)
+    assert (tri_phys == 2).sum() == len(fine_t) - 10
+
+    specs = [
+        sh.LayerPatchSpec(name="walls", n_layers=3, thickness_m=0.1, expansion=1.5, min_thickness_m=0.02, automatic=True),
+        sh.LayerPatchSpec(name="inflated", n_layers=5, thickness_m=0.004, expansion=1.2, honor_absolute=True),
+    ]
+    out = sh.band_layer_specs(specs, {**bands, "inflated": [("inflated_bl2", 0.1)]})
+    by = {s.name: s for s in out}
+    assert set(by) == {"walls", "walls_bl4", "inflated"}  # typed Inflate keeps its thickness
+    assert by["walls_bl4"].thickness_m == pytest.approx(sh.BL_RELATIVE_THICKNESS * 0.0625)
+    assert by["walls_bl4"].min_thickness_m == pytest.approx(sh.BL_MIN_THICKNESS_FRACTION * by["walls_bl4"].thickness_m)
+    assert by["walls_bl4"].n_layers == 3 and by["walls_bl4"].expansion == 1.5
+
+    sh.write_band_merge(tmp_path, bands)
+    text = (tmp_path / "system" / "createPatchDict").read_text(encoding="ascii")
+    assert "name walls;" in text and "patches (walls walls_bl4);" in text
+    sh.write_band_merge(tmp_path, {})
+    assert not (tmp_path / "system" / "createPatchDict").exists()
+
+
+def test_uniform_walls_get_no_bands():
+    from cfddesk.mesh import standard_hexcore as sh
+
+    nodes, tris = _cube_surface(4)
+    tri_phys = np.ones(len(tris), dtype=np.int64)
+    names = {1: (2, "walls")}
+    assert sh.split_layer_bands(nodes, tris, tri_phys, {"walls": 1}, names, h=0.25) == {}
+    assert names == {1: (2, "walls")}
+
+
+def test_automatic_layers_are_marked_relative():
+    from cfddesk.mesh.web_refinements import layer_specs_for_generate
+
+    specs = layer_specs_for_generate(
+        wall_patches=["walls"], inflate=[], add_layers=True, default_n=3,
+        default_thickness_m=0.01, default_expansion=1.5, default_min_m=0.002,
+    )
+    assert [s.automatic for s in specs] == [True]
+    assert math.isclose(specs[0].thickness_m, 0.01)

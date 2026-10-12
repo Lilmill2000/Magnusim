@@ -177,6 +177,8 @@ class LayerPatchSpec:
     min_thickness_m: float | None = None
     specify: str = "total"  # first | total | first_and_total
     honor_absolute: bool = False
+    # Automatic boundary layers: sized by the local cell size (layer bands).
+    automatic: bool = False
 
 
 @dataclass
@@ -201,6 +203,10 @@ class StandardMeshResult:
     volume_fill_note: str = ""
     # Automatic feature refinement: the smallest cell size it allowed (None: off).
     feature_floor_m: float | None = None
+    # Wall patch -> [(band patch, local cell size)]: the parts of an automatic
+    # boundary layer patch meshed finer than h, written as patches of their own
+    # so their layers can be sized by the local cells; merged back after layers.
+    layer_bands: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
 
     @property
     def n_cells(self) -> int:
@@ -1852,6 +1858,21 @@ def _build_standard_msh_once(
 
     physical_names = {phys_of_patch[n]: (2, n) for n in patch_names}
     physical_names[100] = (3, "fluid")
+    layer_bands: dict[str, list[tuple[str, float]]] = {}
+    auto = [
+        sp.name for sp in (layer_specs or [])
+        if getattr(sp, "automatic", False) and sp.name in phys_of_patch and sp.name not in grown
+    ]
+    if auto:
+        tri_phys = np.asarray(tri_phys, dtype=np.int64).copy()
+        layer_bands = split_layer_bands(
+            final_nodes, tris, tri_phys, {n: phys_of_patch[n] for n in auto}, physical_names, h=h
+        )
+        for name, bands in layer_bands.items():
+            _log(
+                f"boundary layers: {name} sized by the local cells in {len(bands) + 1} band(s), "
+                f"down to {min(b[1] for b in bands):.3g} m"
+            )
     blocks = [
         (TET, tets, 100),
         (HEX, hexes, 100),
@@ -1883,6 +1904,127 @@ def _build_standard_msh_once(
         gmsh_layer_patches=list(grown),
         log=lines,
         feature_floor_m=feature.floor if feature is not None else None,
+        layer_bands=layer_bands,
+    )
+
+
+# Automatic boundary layers are as thick as BL_RELATIVE_THICKNESS x the local
+# cell size: the wall triangles are put in bands half an octave apart by size
+# (band k: about h / 2**(k/2)), each band a patch of its own for the layers pass.
+_LAYER_BANDS_PER_OCTAVE = 2
+_LAYER_BAND_MAX = 14
+
+
+def layer_size_bands(nodes: np.ndarray, tris: np.ndarray, h: float) -> np.ndarray:
+    """Band of each triangle by its local size: 0 for about h or larger, k for about
+    h / 2**(k/2). The size is the mean edge length around the triangle's nodes,
+    so neighbouring triangles of one region fall in the same band."""
+    nodes = np.asarray(nodes, dtype=float)
+    tris = np.asarray(tris, dtype=np.int64).reshape(-1, 3)
+    if not len(tris):
+        return np.zeros(0, dtype=np.int64)
+    edges = tris[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+    length = np.linalg.norm(nodes[edges[:, 0]] - nodes[edges[:, 1]], axis=1)
+    total = np.zeros(len(nodes))
+    count = np.zeros(len(nodes))
+    np.add.at(total, edges.ravel(), np.repeat(length, 2))
+    np.add.at(count, edges.ravel(), 1.0)
+    node_size = total / np.maximum(count, 1.0)
+    size = node_size[tris].mean(axis=1)
+    k = np.rint(_LAYER_BANDS_PER_OCTAVE * np.log2(float(h) / np.maximum(size, 1e-300)))
+    return np.clip(k, 0, _LAYER_BAND_MAX).astype(np.int64)
+
+
+def layer_band_size(h: float, band: int) -> float:
+    return float(h) * 2.0 ** (-float(band) / _LAYER_BANDS_PER_OCTAVE)
+
+
+def split_layer_bands(
+    nodes: np.ndarray,
+    tris: np.ndarray,
+    tri_phys: np.ndarray,
+    patches: dict[str, int],
+    physical_names: dict[int, tuple[int, str]],
+    *,
+    h: float,
+) -> dict[str, list[tuple[str, float]]]:
+    """Give the finer bands of each patch in ``patches`` (name -> physical id) a
+    physical group of their own: ``tri_phys`` and ``physical_names`` are updated in
+    place. Returns {patch: [(band patch name, local size)]}; band 0 keeps the patch."""
+    band = layer_size_bands(nodes, tris, h)
+    taken = {name for _dim, name in physical_names.values()}
+    next_id = max([100, *physical_names]) + 1
+    out: dict[str, list[tuple[str, float]]] = {}
+    for name, pid in patches.items():
+        on = tri_phys == int(pid)
+        for k in np.unique(band[on]).tolist():
+            if k <= 0:
+                continue
+            bname = f"{name}_bl{k}"
+            while bname in taken:
+                bname += "_"
+            taken.add(bname)
+            tri_phys[on & (band == k)] = next_id
+            physical_names[next_id] = (2, bname)
+            next_id += 1
+            out.setdefault(name, []).append((bname, layer_band_size(h, int(k))))
+    return out
+
+
+def band_layer_specs(
+    specs: list[LayerPatchSpec], bands: dict[str, list[tuple[str, float]]]
+) -> list[LayerPatchSpec]:
+    """``specs`` plus one spec per layer band: the parent's layers, as thick
+    relative to the band's cell size as the parent is to h."""
+    from dataclasses import replace
+
+    out = list(specs)
+    for spec in specs:
+        if not getattr(spec, "automatic", False) or spec.name not in bands:
+            continue
+        for bname, size in bands[spec.name]:
+            thick = BL_RELATIVE_THICKNESS * float(size)
+            out.append(
+                replace(
+                    spec,
+                    name=bname,
+                    thickness_m=thick,
+                    min_thickness_m=BL_MIN_THICKNESS_FRACTION * thick,
+                )
+            )
+    return out
+
+
+def write_band_merge(case_dir: Path, bands: dict[str, list[tuple[str, float]]]) -> None:
+    """system/createPatchDict that merges the layer bands back into their patch
+    (run after the layers pass; removed when there are no bands)."""
+    path = Path(case_dir) / "system" / "createPatchDict"
+    if not any(bands.values()):
+        if path.exists():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for name, items in sorted(bands.items()):
+        if not items:
+            continue
+        names = " ".join([name] + [b for b, _s in items])
+        entries.append(
+            "    {\n"
+            f"        name {name};\n"
+            "        patchInfo { type wall; }\n"
+            "        constructFrom patches;\n"
+            f"        patches ({names});\n"
+            "    }"
+        )
+    path.write_text(
+        _FOAM_HEADER.format(name="createPatchDict")
+        + "\n// Layer bands back into the wall patch they were split from.\n"
+        + "pointSync false;\n\npatches\n(\n"
+        + "\n".join(entries)
+        + "\n);\n",
+        encoding="ascii",
+        newline="\n",
     )
 
 

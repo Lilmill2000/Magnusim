@@ -1,3 +1,12 @@
 pressure_1 patch
 velocity_inlet_1 patch
 walls wall
+walls_bl1 wall
+walls_bl2 wall
+walls_bl3 wall
+walls_bl4 wall
+walls_bl5 wall
+walls_bl6 wall
+walls_bl7 wall
+walls_bl8 wall
+walls_bl9 wall

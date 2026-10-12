@@ -39,8 +39,11 @@ from cfddesk.mesh.gmsh_standard import (
     emitted_patch_types,
 )
 from cfddesk.mesh.standard_hexcore import (
+    BL_RELATIVE_THICKNESS,
     StandardSizing,
+    band_layer_specs,
     build_standard_msh,
+    write_band_merge,
     write_layers_case,
     write_patch_types_txt,
 )
@@ -383,9 +386,12 @@ def main() -> int:
         patch_types = emitted_patch_types(project)
         for name in mesh.patch_names:
             patch_types.setdefault(name, "wall")
-        write_patch_types_txt(case_dir, patch_types)
+        # Layer bands are wall patches until they are merged back after the layers.
+        band_types = {b: "wall" for bands in mesh.layer_bands.values() for b, _s in bands}
+        write_patch_types_txt(case_dir, {**patch_types, **band_types})
+        write_band_merge(case_dir, mesh.layer_bands)
         grown = set(mesh.gmsh_layer_patches)
-        layer_specs = [s for s in layer_specs if s.name not in grown]
+        layer_specs = band_layer_specs([s for s in layer_specs if s.name not in grown], mesh.layer_bands)
         layers_requested = bool(layer_specs)
         write_layers_case(
             case_dir,
@@ -402,6 +408,7 @@ def main() -> int:
                 wall_patches=mesh.wall_patches,
                 n_layers=infl.n_layers if infl else sizing.n_layers,
                 total_thickness_m=infl.thickness_m if infl else sizing.layer_thickness_m,
+                relative_thickness=BL_RELATIVE_THICKNESS,
                 expansion=infl.expansion if infl else sizing.layer_expansion,
                 inflate=inflate_notes(inflates),
                 layer_patches=[s.name for s in layer_specs] + list(mesh.gmsh_layer_patches),
@@ -495,6 +502,12 @@ def main() -> int:
                     "total_thickness_m": sizing.layer_thickness_m,
                     "min_thickness_m": sizing.layer_min_thickness_m,
                     "expansion": sizing.layer_expansion,
+                    # Automatic layers: this x the local cell size (total_thickness_m at h).
+                    "relative_thickness": BL_RELATIVE_THICKNESS,
+                    "bands": {
+                        name: [{"patch": b, "cell_size_m": size} for b, size in bands]
+                        for name, bands in mesh.layer_bands.items()
+                    },
                 },
                 # Automatic feature refinement: the smallest cell it allowed (None: off).
                 "feature_floor_m": mesh.feature_floor_m,

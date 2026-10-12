@@ -13,11 +13,19 @@
      "inflate_boundary_layer": 15637,
      "pressure_1": 88,
      "velocity_inlet_1": 86,
-     "walls": 21869
+     "walls": 11958,
+     "walls_bl1": 870,
+     "walls_bl2": 1288,
+     "walls_bl3": 858,
+     "walls_bl4": 2132,
+     "walls_bl5": 435,
+     "walls_bl6": 489,
+     "walls_bl7": 988,
+     "walls_bl8": 2851
     }
    },
-   "sha256": "00af815d2494ac5b96aa6dc73b811c6eaa56dc803bda13e4456c03fc0ef5ac9a",
-   "size": 8999965
+   "sha256": "4b5c25bf6fcbf04fcd71c5a447afec419e66f2b5493637443ca85d93755f82ab",
+   "size": 9039754
   }
  },
  "text": {
@@ -39,6 +47,7 @@
    "tet shell: 108693 tets (<s>)",
    "volume assembly: cells 0.0447544 m\u00b3 vs boundary 0.0447544 m\u00b3 (rel err 1.55e-16)",
    "volume check: mesh 0.0447544 m\u00b3 vs CAD 0.0447985 m\u00b3 (rel err 9.84e-04)",
+   "boundary layers: walls sized by the local cells in 9 band(s), down to 0.000754 m",
    "msh written: 39160 nodes, 108693 tets, 9387 hexes, 0 prisms, 3504 pyramids, 37680 boundary tris (<s>)"
   ]
  }

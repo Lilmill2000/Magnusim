@@ -593,6 +593,7 @@ def layer_specs_for_generate(
                     thickness_m=float(default_thickness_m),
                     expansion=float(default_expansion),
                     min_thickness_m=float(default_min_m),
+                    automatic=True,
                 )
             )
     for spec in inflate:
