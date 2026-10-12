@@ -18,6 +18,7 @@ import argparse
 import atexit
 import json
 import math
+import os
 import re
 import sys
 import traceback
@@ -151,6 +152,32 @@ def _poly_counts(poly: Path) -> dict:
     return out
 
 
+def _test_failure() -> int | None:
+    """Tests only: fail the way a real Standard mesh can, without meshing or WSL.
+
+    MAGNUSIM_TEST_MESH_FAIL names a file; while it exists, its text picks the failure:
+    ``plc`` ends like gmsh's volume mesher on a surface that crosses itself (the result
+    line, then the "PLC Error" lines gmsh prints as the process ends, exit 1); ``vanish``
+    stops after a few stages with no result line, as a killed or crashed mesher does.
+    Unset (every real run), or no such file: None, and the mesh is made as usual.
+    """
+    hook = os.environ.get("MAGNUSIM_TEST_MESH_FAIL", "").strip()
+    if not hook or not Path(hook).is_file():
+        return None
+    mode = Path(hook).read_text(encoding="utf-8").strip() or "plc"
+    _progress("load_step", step="(test failure)")
+    _progress("step_loaded", n_faces=6, scale_to_metres=0.001)
+    _progress("gmsh", msg="tets: filling the shell between the surface and the hex core (test)")
+    if mode == "vanish":
+        sys.stdout.flush()
+        os._exit(3)
+    code = _result(False, error="HXT 3D mesh failed")
+    print("PLC Error:  A vertex lies in a segment.")
+    print("  Vertex:  [14720] (0.950106,0.668371,-0.003175).")
+    print("  Segment: [71150, 16254] #-1 (4183)", flush=True)
+    return code
+
+
 def _parse_float(v, default: float) -> float:
     try:
         f = float(v)
@@ -199,6 +226,9 @@ def main() -> int:
 
     claim_generate_case(case_dir, generate_id=str(args.generate_id), mesh_id=str(args.mesh_id or ""))
     atexit.register(release_generate_case, case_dir, generate_id=str(args.generate_id))
+    failed = _test_failure()
+    if failed is not None:
+        return failed
 
     from cfddesk.project.paths import resolve_step_for_study
 
