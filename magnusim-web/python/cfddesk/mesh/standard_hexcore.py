@@ -6,7 +6,10 @@ cfMesh ``cartesianMesh`` path (``cfmesh_standard.py`` + HEXCORE-PROCESS-BACKUP).
 
 Pipeline (host side, this module)
     1. gmsh OCC import of the STEP (scaled to metres) → uniform triangulated
-       surface at ``h_s`` with curvature refinement (min 0.5·h_s).
+       surface at ``h_s`` with curvature refinement (min 0.5·h_s). Parts with
+       features below h_s/4 (short curves, narrow faces, narrow gaps) get a
+       size field graded from them (``feature_size.py``), for the surface and
+       the tets.
     2. Hex element core ON: Cartesian lattice at ``h_c`` clipped to the fluid
        interior with a clearance band, made manifold, capped with pyramids
        (apex half a lattice step outside every boundary quad). The unshared
@@ -14,10 +17,13 @@ Pipeline (host side, this module)
        CAD surface and inner surface with tets (HXT).
        Hex element core OFF: gmsh fills the whole volume with tets, growing
        from ``h_s`` at the surface with the global gradation rate.
-    3. MSH 2.2 written with physical surface groups per boundary patch.
+    3. MSH 2.2 written with physical surface groups per boundary patch; wall
+       triangles finer than h_s go in layer bands of their own (see
+       ``split_layer_bands``).
 
 WSL side (``cfddesk.wsl.mesh_run.run_standard_pipeline``): gmshToFoam → patch
-types → snappyHexMesh (layers only, absolute thickness 0.4·h_s) → checkMesh.
+types → snappyHexMesh (layers only, 0.4 × the local cell size per band) →
+createPatch (bands back into their patch) → checkMesh.
 
 Sizing calibration (SimScale Standard, Automatic sizing, fineness 5):
     h_s ≈ 0.007 × bounding-box diagonal; h(F) = h_5 · 2^((5−F)/3).
