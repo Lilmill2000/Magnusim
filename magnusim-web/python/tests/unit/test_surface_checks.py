@@ -123,8 +123,15 @@ def _sheet_part(tmp_path):
 
 @pytest.mark.occt
 @pytest.mark.parametrize("gap_factor", [0.0, 0.05])
-def test_thin_curved_sheet_meshes(tmp_path, gap_factor):
+def test_thin_curved_sheet_meshes(tmp_path, gap_factor, monkeypatch):
     """Before the fix both failed: "PLC Error: A segment and a facet intersect"."""
+    if not gap_factor:
+        # The automatic feature refinement meshes the sheet's 2.54 mm rims finer, so
+        # its faces no longer sag across each other; turned off here, the crossing
+        # repair is what has to make the surface fillable.
+        from cfddesk.mesh import feature_size
+
+        monkeypatch.setattr(feature_size, "FEATURE_FRACTION", 0.0)
     step, solid, project = _sheet_part(tmp_path)
     sizing = sh.StandardSizing.automatic((5.0, 5.0, 5.0), fineness=1, gap_refinement_factor=gap_factor)
     lines: list[str] = []
