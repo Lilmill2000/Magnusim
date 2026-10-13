@@ -82,6 +82,13 @@ async function drawn(page: Page): Promise<Drawn> {
   }) as never);
 }
 
+/**
+ * How near a clicked point lies to the model value it was aimed at (mm). The points come from the
+ * pointer through the camera, so they carry its rounding: 15.0000019 for 15 on Linux CI, below
+ * 1e-6 off on Windows; a pixel is about 0.25 mm here.
+ */
+const ON_LINE = 1e-4;
+
 const panel = (frame: FrameLocator) => frame.locator('[data-cad-panel="sketch"]');
 const hint = (frame: FrameLocator) => panel(frame).locator('[data-sketch-hint]');
 const badge = (frame: FrameLocator) => frame.locator('[data-sketch-construction-badge]');
@@ -189,7 +196,7 @@ test('cad:ux010-draw-construction Construction with nothing selected toggles con
   await page.keyboard.press('x');
   await sketchIdle(page);
   d = await drawn(page);
-  const top = d.entities.filter((e) => e.kind === 'line').find((e) => e.p!.every((id) => Math.abs(d.points[id][1] - 15) < 1e-6));
+  const top = d.entities.filter((e) => e.kind === 'line').find((e) => e.p!.every((id) => Math.abs(d.points[id][1] - 15) < ON_LINE));
   expect(top).toBeTruthy();
   expect(top!.construction).toBeFalsy();
   lines = d.entities.filter((e) => e.kind === 'line');
@@ -375,7 +382,7 @@ async function alongArrow(page: Page, px: number): Promise<V2> {
 
 /** The top line's end at the fillet (its right end, x). */
 function topEnd(d: Drawn): number {
-  const top = d.entities.filter((e) => e.kind === 'line').find((e) => e.p!.every((id) => Math.abs(d.points[id][1] - 20) < 1e-6))!;
+  const top = d.entities.filter((e) => e.kind === 'line').find((e) => e.p!.every((id) => Math.abs(d.points[id][1] - 20) < ON_LINE))!;
   return Math.max(...top.p!.map((id) => d.points[id][0]));
 }
 

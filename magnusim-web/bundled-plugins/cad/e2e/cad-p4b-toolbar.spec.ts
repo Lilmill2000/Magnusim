@@ -147,6 +147,105 @@ test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 128
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
+/** The groups that go to icons one at a time once the model toolbar is still too wide (src/ui/Toolbar.tsx ICON_ORDER). */
+const MODEL_ICON_ORDER = ['file', 'inspect', 'construct', 'pattern', 'modify', 'cfd', 'solid'];
+
+/** The model toolbar after the fit has run at this width: its fit steps and what each group shows. */
+async function fitAt(page: Page, frame: FrameLocator, width: number) {
+  await page.setViewportSize({ width, height: 900 });
+  const bar = tb(frame);
+  await expect.poll(() => bar.evaluate(() => window.innerWidth)).toBe(width);
+  // The fit runs before paint once the toolbar has seen its new width: two frames later it is done.
+  await bar.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  return bar.evaluate((el) => {
+    const labelShown = (t: Element | null) => !!t && getComputedStyle(t).position !== 'absolute' && t.getBoundingClientRect().width > 12;
+    const more = el.querySelector('[data-tb-more="pattern"]');
+    let caret = null as { right: boolean; inLine: boolean } | null;
+    if (more && labelShown(more.querySelector('.tb-txt'))) {
+      const range = document.createRange();
+      range.selectNodeContents(more.querySelector('.tb-txt')!.firstChild!);
+      const word = range.getBoundingClientRect();
+      const c = more.querySelector('.tb-caret')!.getBoundingClientRect();
+      caret = { right: c.left >= word.right - 0.5, inLine: c.top < word.bottom && c.bottom > word.top };
+    }
+    return {
+      fit: el.getAttribute('data-fit'),
+      scale: el.getAttribute('data-fit-scale'),
+      tight: el.getAttribute('data-fit-tight'),
+      icons: (el.getAttribute('data-fit-icons') ?? '').split(' ').filter(Boolean),
+      scroll: el.scrollWidth - el.clientWidth,
+      caret,
+      groups: Array.from(el.querySelectorAll<HTMLElement>(':scope > .tb-group')).map((g) => ({
+        id: g.dataset.group!,
+        iconsOnly: g.dataset.icons === '1',
+        heading: labelShown(g.querySelector('.tb-group-label')),
+        buttons: Array.from(g.querySelectorAll('.tb-btn[data-command]')).map((b) => ({ id: b.getAttribute('data-command')!, name: b.getAttribute('aria-label'), label: labelShown(b.querySelector('.tb-txt')) })),
+      })),
+    };
+  });
+}
+
+// Wider text than Segoe UI at 100 % (Windows text scaling or browser zoom, a larger system font,
+// Linux's fallback fonts: CI on Linux, 2026-10-13, the release's mirror) never costs Sketch its label
+// at 1280 px (P4a, Daniel's 1280 px screen) and never makes the toolbar scroll. SCALE MODELS goes to
+// its icon first, then the groups sit closer, then whole groups go to icons one at a time, the least
+// used first (FILE, INSPECT, CONSTRUCT, ...), their headings kept; Sketch keeps its label until every
+// other group is icons. Here the toolbar's text is 10 % larger, on any platform.
+test("cad:p4b-toolbar-wide-text with the toolbar's text 10 % larger: at 1280 px Sketch keeps its label and nothing scrolls, SCALE MODELS goes to its icon first, then the groups sit closer, then groups go to icons one at a time (FILE first), Sketch last; PATTERN's caret beside More while it is labelled", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const { seen, frame } = await freshPart(page, request);
+  // 11 px instead of 10 px for the buttons' labels and the groups' headings (a rule added to the
+  // CAD's own sheet through the CSSOM, as zoomed or scaled text would be).
+  await tb(frame).evaluate(() => {
+    const sheet = Array.from(document.styleSheets).find((s) => {
+      try {
+        return s.cssRules.length > 0;
+      } catch {
+        return false;
+      }
+    })!;
+    sheet.insertRule('.cad-toolbar .tb-btn, .cad-toolbar .tb-group-label { font-size: 11px; }', sheet.cssRules.length);
+  });
+  expect(await tb(frame).locator('.tb-btn[data-command="sketch.new"]').evaluate((b) => getComputedStyle(b).fontSize)).toBe('11px');
+  const ran = { tight: false, icons: 0 };
+  for (const width of [1280, 1100, 1000]) {
+    const s = await fitAt(page, frame, width);
+    const where = `at ${width} px with 11 px text`;
+    expect(s.scroll, `the toolbar scrolls ${where}`).toBeLessThanOrEqual(1);
+    // VIEW and EDIT are icons; never every group (that would take Sketch's label).
+    expect(s.fit, `fit level ${where}`).toBe('1');
+    // The order: SCALE MODELS' icon, then closer groups, then ICON_ORDER's groups one by one.
+    expect(s.icons, `the groups gone to icons ${where}`).toEqual(MODEL_ICON_ORDER.slice(0, s.icons.length));
+    if (s.icons.length) expect(s.tight, `closer groups before any group goes to icons ${where}`).toBe('1');
+    if (s.tight === '1') expect(s.scale, `SCALE MODELS' icon before the groups move closer ${where}`).toBe('1');
+    for (const g of s.groups) {
+      if (g.id === 'view' || g.id === 'edit') continue;
+      // Every heading stays (SCALE MODELS' too).
+      expect(g.heading, `${g.id}'s heading ${where}`).toBe(true);
+      const iconsOnly = g.id === 'scale' ? s.scale === '1' : s.icons.includes(g.id);
+      expect(g.iconsOnly, `${g.id} marked as icons ${where}`).toBe(g.id === 'scale' ? false : iconsOnly);
+      for (const b of g.buttons) {
+        expect(b.label, `${b.id}'s label ${where}`).toBe(!iconsOnly);
+        // As icons, the label is still the accessible name (and the tooltip).
+        expect(b.name, `${b.id}'s name ${where}`).toBeTruthy();
+      }
+    }
+    expect(s.groups.find((g) => g.id === 'sketch')!.buttons, `Sketch ${where}`).toEqual([{ id: 'sketch.new', name: 'Sketch', label: true }]);
+    if (!s.icons.includes('pattern')) expect(s.caret, `PATTERN's More caret ${where}`).toEqual({ right: true, inLine: true });
+    ran.tight ||= s.tight === '1';
+    ran.icons = Math.max(ran.icons, s.icons.length);
+  }
+  // The steps under test really ran: the groups moved closer, and at least FILE went to icons.
+  expect(ran.tight).toBe(true);
+  expect(ran.icons).toBeGreaterThan(0);
+  // Back to 1600 px: everything labelled again but VIEW and EDIT.
+  const s = await fitAt(page, frame, 1600);
+  expect(s.icons).toEqual([]);
+  expect(s.scroll).toBeLessThanOrEqual(1);
+  expect(seen.csp, 'CSP violations').toEqual([]);
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
 test("cad:p4b-toolbar-customize Show in toolbar, Move to More, a drag and Move left reorder; a shortcut of a command in More still runs; kept through a reopen, in a new Part and in a new project (the user's layout); sketch ribbon too; Reset toolbar", { tag: '@serial' }, async ({ page, request }) => {
   await forgetUserLayout(request);
   await page.setViewportSize({ width: 1600, height: 1000 });
