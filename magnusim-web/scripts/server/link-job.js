@@ -73,6 +73,7 @@ import {
 } from './compute-queue.ts';
 import { LINK_JOB_RE, createLinkRecord, emitLinkEvent, listLinkRecords, newLinkJobId, readLinkRecord, updateLinkRecord } from '../link-store.js';
 import { closeGate, gateKey, openGate } from './link-gate.js';
+import { thumbRenderTimeoutMs, thumbTestStandIn } from './thumb-render.js';
 import { geometriesRoot, geometryFolderName, readJsonFile, walkGeometries, writeJsonAtomic } from '../project-layout.js';
 import { pluginLoaded } from '../registry-defaults.js';
 import { linkFaceMap } from '../geometry-face-match.js';
@@ -148,8 +149,13 @@ function defaultDeps() {
     runPreview: (/** @type {string[]} */ args, /** @type {{ timeoutMs: number, live?: LiveJob }} */ opts) => runPy(['-m', 'cfddesk.cad.link_preview', ...args], opts),
     runCom: (/** @type {string} */ bbrep, /** @type {{ timeoutMs: number, live?: LiveJob }} */ opts) =>
       runPy(['-m', 'cfddesk.cad.link_preview', '--com', bbrep], opts),
+    // A thumbnail's own limit (server/thumb-render.js): a hung render does not hold the
+    // link's finishing stage for the follow-ups' ten minutes.
     renderThumb: (/** @type {string[]} */ args, /** @type {{ timeoutMs: number, live?: LiveJob }} */ opts) =>
-      runPy([pyTool('render_geometry_thumb.py'), ...args], opts),
+      runPy(thumbTestStandIn() || [pyTool('render_geometry_thumb.py'), ...args], {
+        ...opts,
+        timeoutMs: Math.min(opts.timeoutMs, thumbRenderTimeoutMs()),
+      }),
     freeBytes: async (/** @type {string} */ dir) => {
       try {
         const st = await fsp.statfs(dir);

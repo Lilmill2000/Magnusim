@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -170,19 +170,39 @@ test('a part removed and a changed part of the same file name added: Create Simu
     expect(meta.bounds).toEqual(project.geometry.fingerprint.bounds);
 
     // The Home card: its picture is the new part's thumbnail.
-    const cardUrl = async () => {
-      const card = ((await json(request, '/api/projects')).projects || []).find((p) => p.id === pid);
-      return card && card.thumb_url && !/pending/.test(card.thumb_url) ? card.thumb_url : null;
+    const card = async () => ((await json(request, '/api/projects')).projects || []).find((p) => p.id === pid);
+    // Where no picture can be made (no OpenGL for the renderer: GitHub's runner, or
+    // MAGNUSIM_TEST_THUMB_FAIL), the thumbnail answers "render failed": then no picture
+    // at all, never the removed part's, and the card shows its initials.
+    const thumbState = async () => {
+      const c = await card();
+      if (c && c.thumb_url && !/pending/.test(c.thumb_url)) return 'made';
+      const r = await request.get(`/api/geometry/thumb?project_id=${encodeURIComponent(pid)}`);
+      if (r.status() === 200) return 'made';
+      return r.status() === 500 && /thumb render failed/.test(await r.text()) ? 'unavailable' : 'pending';
     };
-    await expect.poll(cardUrl, { timeout: 120_000 }).not.toBeNull();
-    const thumbUrl = await cardUrl();
-    const pic = await request.get(thumbUrl);
-    expect(pic.ok()).toBe(true);
-    expect(sha256(await pic.body())).toBe(sha256(readFileSync(join(geomRoot, 'Geometry_Part', 'thumb.png'))));
-    await page.goto('/#/');
-    await expect(page.locator(`.home-card[data-project-id="${pid}"] img.home-thumb-img`)).toHaveAttribute('src', thumbUrl, {
-      timeout: 30_000,
-    });
+    await expect.poll(thumbState, { timeout: 120_000 }).not.toBe('pending');
+    if ((await thumbState()) === 'unavailable') {
+      test.info().annotations.push({ type: 'thumbnail', description: 'the renderer cannot run here: checked that no picture is shown' });
+      expect(existsSync(join(geomRoot, 'Geometry_Part', 'thumb.png'))).toBe(false);
+      await page.goto('/#/');
+      await expect(page.locator(`.home-card[data-project-id="${pid}"] .home-thumb span`)).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(3_000);
+      await expect(page.locator(`.home-card[data-project-id="${pid}"] img.home-thumb-img`)).toHaveCount(0);
+    } else {
+      await expect.poll(async () => {
+        const c = await card();
+        return c && c.thumb_url && !/pending/.test(c.thumb_url) ? c.thumb_url : null;
+      }, { timeout: 120_000 }).not.toBeNull();
+      const thumbUrl = (await card()).thumb_url;
+      const pic = await request.get(thumbUrl);
+      expect(pic.ok()).toBe(true);
+      expect(sha256(await pic.body())).toBe(sha256(readFileSync(join(geomRoot, 'Geometry_Part', 'thumb.png'))));
+      await page.goto('/#/');
+      await expect(page.locator(`.home-card[data-project-id="${pid}"] img.home-thumb-img`)).toHaveAttribute('src', thumbUrl, {
+        timeout: 30_000,
+      });
+    }
 
     // After a reload: the same part and the one study.
     await openProject(page, pid);

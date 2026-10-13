@@ -559,14 +559,20 @@ function retryThumb(span: HTMLElement, img: HTMLImageElement, src: string, attem
   if (attempt >= THUMB_RETRIES) return;
   window.setTimeout(() => {
     if (!span.isConnected) return;
-    const probe = new Image();
-    probe.onload = () => {
-      if (!span.isConnected) return;
-      img.src = probe.src;
-      span.replaceWith(img);
-    };
-    probe.onerror = () => retryThumb(span, img, src, attempt + 1);
-    probe.src = `${src}${src.includes('?') ? '&' : '?'}try=${attempt + 1}`;
+    // A fetch asking for an image: 202 (still being made) asks again later, 200 puts the
+    // picture in, anything else (204: no picture) stops. Nothing here logs a browser error.
+    const url = `${src}${src.includes('?') ? '&' : '?'}try=${attempt + 1}`;
+    fetch(url, { headers: { Accept: 'image/*' }, cache: 'no-store' })
+      .then((r) => {
+        if (!span.isConnected) return;
+        if (r.status === 200) {
+          img.src = url;
+          span.replaceWith(img);
+        } else if (r.status === 202) {
+          retryThumb(span, img, src, attempt + 1);
+        }
+      })
+      .catch(() => {});
   }, Math.round(THUMB_RETRY_MS * 1.6 ** attempt));
 }
 

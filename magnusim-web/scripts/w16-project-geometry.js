@@ -41,6 +41,7 @@ import { projectSolveSummary } from './w27-solve.js';
 import { computeSlotHolder, folderBusyMessage, holderNamesProject, projectBusyMessage } from './compute-slot.js';
 import { computeRowsForProject, dropComputeRows } from './server/compute-queue.ts';
 import { envGet } from './env-compat.js';
+import { thumbRenderTimeoutMs, thumbTestStandIn } from './server/thumb-render.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
 import { geometryFenced, isLinkedGeometryDir, markRemovedStudies, onGeometryRemove } from './server/link-job.js';
@@ -677,7 +678,8 @@ export function getProjectById(id) {
   return { ok: true, status: 200, body: { ok: true, active, project: proj, projects_root: PROJECTS_ROOT, increment: 'W16' } };
 }
 
-function runPython(args) {
+/** Run the app's Python; `timeoutMs` stops it (and rejects) when it has not ended by then. */
+function runPython(args, opts = {}) {
   return new Promise((resolveP, reject) => {
     if (!pythonFound()) {
       return reject(new Error(`PYTHON missing: ${PYTHON}`));
@@ -685,14 +687,34 @@ function runPython(args) {
     const child = spawn(PYTHON, args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
+    const timeoutMs = Number(opts.timeoutMs) || 0;
+    let timedOut = false;
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              /* gone */
+            }
+          }, timeoutMs)
+        : null;
     child.stdout.on('data', (d) => {
       stdout += d.toString();
     });
     child.stderr.on('data', (d) => {
       stderr += d.toString();
     });
-    child.on('error', reject);
+    child.on('error', (e) => {
+      if (timer) clearTimeout(timer);
+      reject(e);
+    });
     child.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        return reject(new Error(`python stopped: no answer in ${timeoutMs} ms`));
+      }
       if (code !== 0) {
         return reject(new Error(`python exit=${code}\n${stderr || stdout}`));
       }
@@ -1424,8 +1446,56 @@ function thumbPathFor(id) {
   return join(geometriesRoot(projectDir(id)), 'thumb.png');
 }
 
-const renderThumbWithPython = (args) => runPython([THUMB_SCRIPT, ...args]);
+// Stopped at thumbRenderTimeoutMs; MAGNUSIM_TEST_THUMB_FAIL (1 or hang) runs a stand-in
+// that fails or never ends (server/thumb-render.js).
+const renderThumbWithPython = (args) =>
+  runPython(thumbTestStandIn() || [THUMB_SCRIPT, ...args], { timeoutMs: thumbRenderTimeoutMs() });
 let renderThumb = renderThumbWithPython;
+
+/**
+ * Renders at a time. Home asks for every card's picture at once, and each render is a
+ * Python with VTK: a dozen at once took the machine's cores from every other request.
+ */
+const THUMB_RENDERS_AT_ONCE = 2;
+let thumbRendersRunning = 0;
+const thumbRenderQueue = [];
+
+async function inThumbRenderSlot(fn) {
+  if (thumbRendersRunning >= THUMB_RENDERS_AT_ONCE) {
+    await new Promise((go) => thumbRenderQueue.push(go));
+  }
+  thumbRendersRunning += 1;
+  try {
+    return await fn();
+  } finally {
+    thumbRendersRunning -= 1;
+    const next = thumbRenderQueue.shift();
+    if (next) next();
+  }
+}
+
+/** Renders running now (their process not ended yet); tests check none is left. */
+export function thumbRendersRunningForTests() {
+  return thumbRendersRunning;
+}
+
+/**
+ * A render that failed is not tried again for THUMB_FAILED_MS while the project shows the
+ * same geometry, unchanged: on a machine where the renderer cannot run, every Home visit
+ * started a Python for every card, each to fail the same way. The card shows its initials.
+ */
+const THUMB_FAILED_MS = 5 * 60_000;
+const thumbFailures = new Map();
+
+function thumbFailureKey(id, geomId, source) {
+  let age = '';
+  try {
+    age = String(statSync(source).mtimeMs);
+  } catch {
+    /* gone: its own key */
+  }
+  return `${id}|${geomId}|${age}`;
+}
 
 /** Tests hold the thumbnail render with a stand-in (null puts render_geometry_thumb.py back). */
 export function setThumbRendererForTests(fn) {
@@ -1507,16 +1577,26 @@ async function renderGeometryThumb(projectId, retried = false) {
   if (!existsSync(THUMB_SCRIPT)) {
     return { ok: false, status: 500, body: { error: 'thumb script missing', path: THUMB_SCRIPT } };
   }
+  const failKey = thumbFailureKey(id, geomId, freshnessSrc);
+  const failedAt = thumbFailures.get(failKey);
+  if (failedAt && Date.now() - failedAt < THUMB_FAILED_MS) {
+    if (existsSync(out) && statSync(out).size > 80) {
+      return { ok: true, path: out, bytes: readFileSync(out), stale: true, project: proj };
+    }
+    return { ok: false, status: 500, body: { error: 'thumb render failed', detail: 'failed a moment ago; not tried again yet', project_id: id } };
+  }
   // Rendered outside the project, then moved in by placeThumb: render_geometry_thumb.py
   // makes the folder it writes to.
   const rendered = join(tmpdir(), `magnusim-thumb-${process.pid}-${randomBytes(6).toString('hex')}.png`);
   try {
     if (preview.ok) {
-      await renderThumb(['--vtp', preview.faces, '--edges', preview.edges, '--out', rendered]);
+      await inThumbRenderSlot(() => renderThumb(['--vtp', preview.faces, '--edges', preview.edges, '--out', rendered]));
     } else {
-      await renderThumb(['--stl', source, '--out', rendered]);
+      await inThumbRenderSlot(() => renderThumb(['--stl', source, '--out', rendered]));
     }
+    thumbFailures.delete(failKey);
   } catch (e) {
+    thumbFailures.set(failKey, Date.now());
     rmSync(rendered, { force: true });
     if (existsSync(out) && statSync(out).size > 80) {
       return { ok: true, path: out, bytes: readFileSync(out), stale: true, project: proj };
@@ -2500,7 +2580,19 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         res.setHeader('Retry-After', '2');
         return sendJson(res, 202, { ok: false, pending: true, error: 'The thumbnail is being made.', project_id: pid || '' });
       }
-      if (!got.ok) return sendJson(res, got.status, got.body);
+      if (!got.ok) {
+        // An image request (a Home card's <img>, a fetch asking for image/*) gets "no picture"
+        // (204), not an error status: the browser logs every 4xx/5xx of an image as a console
+        // error, and the card shows its initials either way. Others keep the real status.
+        if (/\bimage\//i.test(String(req.headers.accept || ''))) {
+          res.statusCode = 204;
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('X-CFD-Thumb', String((got.body && got.body.error) || 'no thumbnail').slice(0, 120));
+          res.end();
+          return true;
+        }
+        return sendJson(res, got.status, got.body);
+      }
       res.statusCode = 200;
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Content-Length', String(got.bytes.length));
