@@ -667,7 +667,8 @@ export function MeshSettings(props: IslandProps) {
         </div>
         <MeshStatus job={job} />
         <OutOfDate geometry={job?.phase === 'generating' || job?.phase === 'queued' ? null : stale} />
-        {note ? (
+        {/* A refused Generate's reason, unless the failed status above already says it. */}
+        {note && !(job?.phase === 'failed' && job.error === note) ? (
           <p className="mat-assign-hint" role="alert">
             {note}
           </p>
