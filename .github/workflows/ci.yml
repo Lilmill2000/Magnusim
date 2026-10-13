@@ -1,6 +1,13 @@
 name: ci
+# Each run is titled from its commit (a plugin release tag's run reads
+# "Magnusim CAD v0.1.0 release", not the workflow's name).
+run-name: ${{ github.event.head_commit.message || github.event.pull_request.title || github.workflow }}
 on:
   push:
+    branches: ['**']
+    # Plugin release tags (cad-v0.1.0, airfoil-v0.1.0) run; an app tag (v0.3.0)
+    # does not, as master's run tests the same commit.
+    tags: ['*-v*']
   pull_request:
 jobs:
   python:
