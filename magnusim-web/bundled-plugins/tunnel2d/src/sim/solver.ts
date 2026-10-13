@@ -2,7 +2,7 @@
 // One instance per grid; a new grid makes a new instance.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SdfGrid } from '../geometry/sdf';
-import { FORCE_FIX, FORCE_WORDS, HEALTH_SLOT, MAX_BODIES, MAX_STEPS, W, WALLS, WG, fieldShader, macroShader, stepShader } from './kernels';
+import { FORCE_FIX, FORCE_WORDS, HEALTH_SLOT, MAX_BODIES, MAX_STEPS, TURB, W, WALLS, WG, fieldShader, macroShader, stepShader } from './kernels';
 
 export interface SimConfig {
   nx: number;
@@ -20,6 +20,17 @@ export interface Physics {
   tau: number;
   smagorinsky: boolean;
   smagCs: number;
+  /**
+   * Turbulence model: 'off' (resolved; τ above), 'wall' (wall functions on bodies) or 'sa'
+   * (Spalart–Allmaras with wall functions: each cell's viscosity is ν + ν_t, at least nuFloor).
+   */
+  turb?: keyof typeof TURB;
+  /** The fluid's own lattice viscosity (the wall law and SA use it). */
+  nuMol?: number;
+  /** The least total viscosity a cell runs at in 'sa' (what the grid can carry). */
+  nuFloor?: number;
+  /** 1 - the bulk relaxation rate: 0 (default) relaxes compression fully each step; below 0, at the shear's rate. */
+  bulkKeep?: number;
 }
 
 /** A body for the GPU: its baked field and its pose at the start and end of the frame (cells, radians CCW). */
@@ -71,6 +82,9 @@ export class Solver {
   private macroPipe: GPUComputePipeline;
   private fieldPipe: GPUComputePipeline;
   private stepModule: GPUShaderModule;
+  /** Per-step velocity, ν̃ and total viscosity (two, swapped with the populations) while a turbulence model is on. */
+  private aux: [GPUBuffer, GPUBuffer] | null = null;
+  private auxDummy: [GPUBuffer, GPUBuffer];
   readonly macroBuf: GPUBuffer;
   readonly scalarBuf: GPUBuffer;
   private fieldUni: GPUBuffer;
@@ -99,10 +113,11 @@ export class Solver {
     this.sdfBuf = device.createBuffer({ size: 16, usage: S.STORAGE | S.COPY_DST });
     this.forceBuf = device.createBuffer({ size: FORCE_WORDS * 4, usage: S.STORAGE | S.COPY_SRC | S.COPY_DST });
     this.slotBuf = device.createBuffer({ size: MAX_STEPS * 256, usage: S.UNIFORM | S.COPY_DST });
+    this.auxDummy = [device.createBuffer({ size: 16, usage: S.STORAGE }), device.createBuffer({ size: 16, usage: S.STORAGE })];
     const slots = new Uint32Array(MAX_STEPS * 64);
     for (let s = 0; s < MAX_STEPS; s++) slots[s * 64] = s;
     device.queue.writeBuffer(this.slotBuf, 0, slots);
-    this.macroBuf = device.createBuffer({ size: this.n * 16, usage: S.STORAGE });
+    this.macroBuf = device.createBuffer({ size: this.n * 16, usage: S.STORAGE | S.COPY_SRC });
     this.scalarBuf = device.createBuffer({ size: this.n * 4, usage: S.STORAGE });
     this.fieldUni = device.createBuffer({ size: 48, usage: S.UNIFORM | S.COPY_DST });
     this.sampleW = Math.ceil(this.nx / SAMPLE_STRIDE);
@@ -124,20 +139,49 @@ export class Solver {
     const usq = 1.5 * u * u;
     for (let k = 0; k < 9; k++) {
       const cu = 3 * [0, 1, 0, -1, 0, 1, -1, -1, 1][k] * u;
-      init.fill(W[k] * (1 + cu + 0.5 * cu * cu - usq), k * this.n, (k + 1) * this.n);
+      // Stored less the rest weight (see the step kernel).
+      init.fill(W[k] * (cu + 0.5 * cu * cu - usq), k * this.n, (k + 1) * this.n);
     }
     this.device.queue.writeBuffer(this.f[0], 0, init);
     this.device.queue.writeBuffer(this.f[1], 0, init);
+    this.resetAux(u);
     this.stepsDone = 0;
+  }
+
+  /** The free stream in the auxiliary field: the inflow, ν̃ = 3 ν (the model's usual free-stream value). */
+  private resetAux(u = this.physics.u) {
+    if (!this.aux) return;
+    const a = new Float32Array(4 * this.n);
+    const nuMol = this.physics.nuMol ?? 0;
+    const nuCell = Math.max(nuMol, this.physics.nuFloor ?? 0);
+    for (let i = 0; i < this.n; i++) {
+      a[4 * i] = u;
+      a[4 * i + 2] = 3 * nuMol;
+      a[4 * i + 3] = nuCell;
+    }
+    this.device.queue.writeBuffer(this.aux[0], 0, a);
+    this.device.queue.writeBuffer(this.aux[1], 0, a);
   }
 
   setPhysics(p: Physics) {
     this.physics = p;
-    const key = `${this.config.walls}|${p.smagorinsky}`;
+    const turb = p.turb ?? 'off';
+    if (turb !== 'off' && !this.aux) {
+      const S = GPUBufferUsage;
+      this.aux = [this.device.createBuffer({ size: 16 * this.n, usage: S.STORAGE | S.COPY_DST | S.COPY_SRC }), this.device.createBuffer({ size: 16 * this.n, usage: S.STORAGE | S.COPY_DST | S.COPY_SRC })];
+      this.resetAux();
+      this.stepBG = null;
+    } else if (turb === 'off' && this.aux) {
+      for (const b of this.aux) b.destroy();
+      this.aux = null;
+      this.stepBG = null;
+    }
+    const bulk = p.bulkKeep ?? 0;
+    const key = `${this.config.walls}|${p.smagorinsky}|${turb}|${bulk}`;
     if (key !== this.stepPipeKey) {
       this.stepPipe = this.device.createComputePipeline({
         layout: 'auto',
-        compute: { module: this.stepModule, entryPoint: 'step', constants: { WALLS: WALLS[this.config.walls], SMAG: p.smagorinsky ? 1 : 0 } },
+        compute: { module: this.stepModule, entryPoint: 'step', constants: { WALLS: WALLS[this.config.walls], SMAG: p.smagorinsky ? 1 : 0, TURB: TURB[turb], KEEP_BULK: bulk } },
       });
       this.stepPipeKey = key;
       this.stepBG = null;
@@ -163,6 +207,9 @@ export class Solver {
     u32[11] = this.config.profile;
     // The open boundary's absorbing band: 6 % of the height on each side.
     f32[12] = this.config.walls === 'farfield' ? Math.max(4, this.ny * 0.06) : 0;
+    f32[13] = p.nuMol ?? 0;
+    f32[14] = p.nuFloor ?? 0;
+    f32[15] = 3 * (p.nuMol ?? 0);
     this.device.queue.writeBuffer(this.paramsBuf, 0, this.params);
   }
 
@@ -220,6 +267,7 @@ export class Solver {
       u[o + 10] = b.sdf.w;
       u[o + 11] = b.sdf.h;
       u[o + 12] = this.sdfOffsets[i] ?? 0;
+      f[o + 13] = b.sdf.band;
     });
     this.device.queue.writeBuffer(this.bodiesBuf, 0, this.bodyData);
   }
@@ -231,7 +279,8 @@ export class Solver {
   private bindGroups() {
     if (!this.stepBG) {
       const layout = this.stepPipe.getBindGroupLayout(0);
-      const bg = (a: GPUBuffer, b: GPUBuffer) =>
+      const aux = this.aux ?? this.auxDummy;
+      const bg = (a: GPUBuffer, b: GPUBuffer, xa: GPUBuffer, xb: GPUBuffer) =>
         this.device.createBindGroup({
           layout,
           entries: [
@@ -241,9 +290,11 @@ export class Solver {
             { binding: 3, resource: { buffer: this.bodiesBuf } },
             { binding: 4, resource: { buffer: this.sdfBuf } },
             { binding: 5, resource: { buffer: this.forceBuf } },
+            { binding: 6, resource: { buffer: xa } },
+            { binding: 7, resource: { buffer: xb } },
           ],
         });
-      this.stepBG = [bg(this.f[0], this.f[1]), bg(this.f[1], this.f[0])];
+      this.stepBG = [bg(this.f[0], this.f[1], aux[0], aux[1]), bg(this.f[1], this.f[0], aux[1], aux[0])];
     }
     if (!this.slotBGs.length) {
       const layout = this.stepPipe.getBindGroupLayout(1);
@@ -385,8 +436,34 @@ export class Solver {
     }
   }
 
+  /**
+   * The flow now, for the validation runs: per cell (velocity x, y, density, 1 in a body)
+   * from the last field pass, and the turbulence model's (velocity x, y, ν̃, total ν; -1 in a body).
+   */
+  async readFields(): Promise<{ mac: Float32Array; aux: Float32Array | null }> {
+    const bytes = this.n * 16;
+    const S = GPUBufferUsage;
+    const mk = () => this.device.createBuffer({ size: bytes, usage: S.MAP_READ | S.COPY_DST });
+    const m = mk();
+    const a = this.aux ? mk() : null;
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.macroBuf, 0, m, 0, bytes);
+    if (a && this.aux) enc.copyBufferToBuffer(this.aux[this.cur], 0, a, 0, bytes);
+    this.device.queue.submit([enc.finish()]);
+    const read = async (b: GPUBuffer) => {
+      await b.mapAsync(GPUMapMode.READ);
+      const out = new Float32Array(b.getMappedRange().slice(0));
+      b.unmap();
+      b.destroy();
+      return out;
+    };
+    const [mac, aux] = await Promise.all([read(m), a ? read(a) : Promise.resolve(null)]);
+    return { mac, aux };
+  }
+
   destroy() {
     this.destroyed = true;
+    for (const b of [...(this.aux ?? []), ...this.auxDummy]) b.destroy();
     for (const b of [...this.f, this.paramsBuf, this.bodiesBuf, this.sdfBuf, this.forceBuf, this.slotBuf, this.macroBuf, this.scalarBuf, this.fieldUni, this.sampledBuf, ...this.staging]) b.destroy();
     this.staging = [];
   }

@@ -3,6 +3,7 @@
 import type { Workspace } from '@magnusim/workspace';
 import type { Engine } from '../sim/engine';
 import { runSchaferTurek } from '../sim/validate';
+import { airfoilCase, plateCase, runCase, type AirfoilSpec, type PlateSpec } from '../sim/validateRans';
 import { turnHandle, worldOutline } from '../ui/Viewport';
 import { contains, signedDistance } from '../geometry/polygon';
 import type { Store } from './store';
@@ -43,6 +44,9 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
       return { x: r.left + h.x, y: r.top + h.y, cx: r.left + h.cx, cy: r.top + h.cy };
     },
     validate: (N = 20, tstar = 200) => runSchaferTurek(device, N, tstar),
+    /** The turbulence model's checks (R1): an airfoil in a large open tunnel, a flat plate. */
+    validateAirfoil: (a: AirfoilSpec) => runCase(device, airfoilCase(a)),
+    validatePlate: (p: PlateSpec) => runCase(device, plateCase(p)),
     /**
      * The particles, summed up: tracers alive, each rake's particles alive and how far
      * downstream they reach (world m), any position that is not a number, and how many sit

@@ -1,7 +1,7 @@
 // The scene file: what is read back, and what is refused.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { defaultScene, LIMITS, parseScene, SceneError } from '../src/scene/scene';
+import { defaultScene, flowModelFor, LIMITS, parseScene, SCENE_VERSION, SceneError } from '../src/scene/scene';
 
 describe('the scene file', () => {
   it('round-trips the default scene', () => {
@@ -22,9 +22,23 @@ describe('the scene file', () => {
   });
   it("reads a version-1 file (no rakes, no markers) with the markers' defaults", () => {
     const s = parseScene({ version: 1, bodies: [], view: { field: 'speed' } });
-    expect(s.version).toBe(2);
+    expect(s.version).toBe(SCENE_VERSION);
     expect(s.rakes).toEqual([]);
     expect(s.view).toMatchObject({ field: 'speed', tracers: false, density: 'normal', trail: 'short', arrows: false, streamlines: false, particleColor: 'speed' });
+  });
+  it('reads a version-2 file with the flow model automatic, and keeps a chosen one', () => {
+    expect(parseScene({ version: 2, flow: { speed: 3, fluid: 'water' } }).flow).toEqual({ speed: 3, fluid: 'water', model: 'auto' });
+    expect(parseScene({ flow: { model: 'sa' } }).flow.model).toBe('sa');
+    expect(parseScene({ flow: { model: 'rans' } }).flow.model).toBe('auto');
+  });
+  it('picks the turbulence model automatically from a real Reynolds number of 100,000', () => {
+    const s = defaultScene(); // a 1 m chord at 10 m/s in air: Re about 660,000
+    expect(flowModelFor(s)).toBe('sa');
+    expect(flowModelFor({ ...s, flow: { ...s.flow, model: 'resolved' } })).toBe('off');
+    const slow = { ...s, flow: { ...s.flow, speed: 1 } }; // Re about 66,000
+    expect(flowModelFor(slow)).toBe('off');
+    expect(flowModelFor({ ...slow, flow: { ...slow.flow, model: 'sa' } })).toBe('sa');
+    expect(flowModelFor({ ...s, bodies: [] })).toBe('off');
   });
   it('reads rakes, with defaults and limits', () => {
     const s = parseScene({

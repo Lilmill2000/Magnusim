@@ -23,8 +23,12 @@ export interface LatticeMap {
   dt: number;
   /** Lattice inflow speed (cells per step). */
   u: number;
-  /** Lattice kinematic viscosity. */
+  /** Lattice kinematic viscosity (at least what the grid resolves). */
   nu: number;
+  /** The fluid's own viscosity on the lattice (the turbulence model's). */
+  nuFluid: number;
+  /** The least viscosity the grid carries (GRID_RE_MAX). */
+  nuFloor: number;
   tau: number;
   /** The physical viscosity was raised to what the grid resolves. */
   capped: boolean;
@@ -41,7 +45,7 @@ export function latticeMap(lengthM: number, nx: number, speed: number, nuPhys: n
   const nuMin = u / GRID_RE_MAX;
   const nu = Math.max(nuWanted, nuMin);
   const dt = (u * dx) / speed;
-  return { dx, dt, u, nu, tau: 3 * nu + 0.5, capped: nuWanted < nuMin, smagorinsky: nu < SMAG_BELOW_NU };
+  return { dx, dt, u, nu, nuFluid: nuWanted, nuFloor: nuMin, tau: 3 * nu + 0.5, capped: nuWanted < nuMin, smagorinsky: nu < SMAG_BELOW_NU };
 }
 
 /** Reynolds number of a body of length `refM`: the real one, and the one the lattice runs. */

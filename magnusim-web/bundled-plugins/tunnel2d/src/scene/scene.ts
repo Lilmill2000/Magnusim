@@ -4,10 +4,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { parseCode } from '../geometry/naca';
 import { MAX_POINTS, MIN_POINTS } from '../geometry/datfile';
-import type { Shape } from '../geometry/shapes';
+import { referenceLength, type Shape } from '../geometry/shapes';
 
-/** 2: rakes, and the view's tracers, trail, arrows and streamlines (a version-1 file reads as is). */
-export const SCENE_VERSION = 2;
+/**
+ * 2: rakes, and the view's tracers, trail, arrows and streamlines; 3: the flow model (older
+ * files read as is, with the model automatic).
+ */
+export const SCENE_VERSION = 3;
 
 export type Walls = 'farfield' | 'slip' | 'noslip' | 'periodic';
 export type Resolution = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
@@ -20,6 +23,12 @@ export type Density = 'low' | 'normal' | 'high';
 export type TrailLength = 'off' | 'short' | 'long';
 export type FluidKey = 'air' | 'water';
 export type SimSpeed = 'max' | 'realtime';
+/**
+ * How the flow is simulated: 'resolved' runs the grid's own Reynolds number (exact when the
+ * grid resolves the real one); 'sa' the Spalart–Allmaras turbulence model with wall
+ * functions at the real one; 'auto' picks by the real Reynolds number.
+ */
+export type FlowModel = 'auto' | 'resolved' | 'sa';
 
 export interface Body {
   id: string;
@@ -70,7 +79,7 @@ export interface View {
 export interface Scene {
   version: number;
   tunnel: { length: number; height: number; walls: Walls; resolution: Resolution };
-  flow: { speed: number; fluid: FluidKey };
+  flow: { speed: number; fluid: FluidKey; model: FlowModel };
   bodies: Body[];
   rakes: Rake[];
   view: View;
@@ -109,7 +118,7 @@ export function defaultScene(): Scene {
   return {
     version: SCENE_VERSION,
     tunnel: { length: 8, height: 4, walls: 'farfield', resolution: 'auto' },
-    flow: { speed: 10, fluid: 'air' },
+    flow: { speed: 10, fluid: 'air', model: 'auto' },
     bodies: [
       { id: newBodyId(), name: 'NACA 2412', shape: { kind: 'naca', code: '2412', chord: 1 }, x: 2.5, y: 2, angle: 6, spin: 0, enabled: true, locked: false },
     ],
@@ -129,6 +138,17 @@ export function defaultScene(): Scene {
       particleColor: 'speed',
     },
   };
+}
+
+/** At or above this real Reynolds number the automatic flow model is the turbulence model. */
+export const TURBULENT_RE = 1e5;
+
+/** The flow model a scene runs ('off': resolved): as chosen, or (automatic) by the largest real Reynolds number of its bodies. */
+export function flowModelFor(scene: Scene): 'off' | 'sa' {
+  if (scene.flow.model !== 'auto') return scene.flow.model === 'sa' ? 'sa' : 'off';
+  const nu = FLUIDS[scene.flow.fluid].nu;
+  const re = Math.max(0, ...scene.bodies.filter((b) => b.enabled).map((b) => (scene.flow.speed * referenceLength(b.shape)) / nu));
+  return re >= TURBULENT_RE ? 'sa' : 'off';
 }
 
 export class SceneError extends Error {}
@@ -208,6 +228,7 @@ export function parseScene(raw: unknown): Scene {
     flow: {
       speed: num(f.speed ?? d.flow.speed, 'Wind speed', ...LIMITS.speed),
       fluid: oneOf(f.fluid, ['air', 'water'] as const, d.flow.fluid),
+      model: oneOf(f.model, ['auto', 'resolved', 'sa'] as const, d.flow.model),
     },
     bodies,
     rakes,

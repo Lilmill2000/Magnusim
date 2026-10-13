@@ -7,15 +7,15 @@ import { outline, referenceLength } from '../geometry/shapes';
 import { bakeSdf, type SdfGrid } from '../geometry/sdf';
 import { radius, transform } from '../geometry/polygon';
 import { Renderer, type Palette, type ViewXform } from '../render/renderer';
-import { FLUIDS, LIMITS, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
+import { FLUIDS, LIMITS, flowModelFor, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
 import { Dye, type DyeSource } from './dye';
-import { MAX_BODIES, MAX_STEPS } from './kernels';
+import { MAX_BODIES, MAX_STEPS, SA_SDF_BAND, TE_MIN_CELLS } from './kernels';
 import { Particles, type RakeGpu } from './particles';
 import { Rheo } from './rheo';
 import type { MapName, RheoLook } from '../render/renderer';
 import { Streamlines } from './streamlines';
 import { FIELD_MODES, Solver, type FrameResult, type GpuBody } from './solver';
-import { SMAG_CS, latticeMap, reynolds, type LatticeMap } from './units';
+import { GRID_RE_MAX, SMAG_CS, U_LATTICE, latticeMap, reynolds, type LatticeMap } from './units';
 
 /** Cells in the lattice for each resolution (the grid keeps the tunnel's aspect). */
 export const RESOLUTION_CELLS: Record<Exclude<Resolution, 'auto'>, number> = {
@@ -159,6 +159,8 @@ export class Engine {
   /** The free stream's density (lattice), the reference for Cp. */
   private rhoRef = 1;
   private physKey = '';
+  /** The flow model running: resolved, or Spalart–Allmaras with wall functions. */
+  private turb: 'off' | 'sa' = 'off';
   paused = false;
   unstable = false;
   palette: Palette;
@@ -218,17 +220,23 @@ export class Engine {
     return this.benchmarkAt(1024, 512);
   }
 
+  /** The model running now. */
+  get flowModel(): 'off' | 'sa' {
+    return this.turb;
+  }
+
   /**
    * Million lattice updates per second at one grid size (cached). Each size is measured
    * itself: a grid that fits the GPU's cache runs much faster per cell than one that does
    * not, so a small grid's speed says little about a big one's.
    */
-  async benchmarkAt(nx: number, ny: number): Promise<number> {
-    const key = `${nx}x${ny}`;
+  async benchmarkAt(nx: number, ny: number, turb: 'off' | 'sa' = 'off'): Promise<number> {
+    const key = `${nx}x${ny}|${turb}`;
     const cached = benchCache.get(key);
     if (cached !== undefined) return cached;
     const s = new Solver(this.device, { nx, ny, walls: 'slip' });
-    s.setPhysics({ u: 0.05, tau: 0.51, smagorinsky: true, smagCs: SMAG_CS });
+    if (turb === 'sa') s.setPhysics({ u: U_LATTICE, tau: 0.51, smagorinsky: false, smagCs: SMAG_CS, turb: 'sa', nuMol: 1e-6, nuFloor: U_LATTICE / GRID_RE_MAX });
+    else s.setPhysics({ u: U_LATTICE, tau: 0.51, smagorinsky: true, smagCs: SMAG_CS });
     const run = async (steps: number) => {
       const enc = this.device.createCommandEncoder();
       s.encodeFrame(enc, steps, { mode: 0, uRef: 0.05, lRef: 50 });
@@ -253,10 +261,11 @@ export class Engine {
    */
   async cellsFor(res: Resolution, scene: Scene): Promise<number> {
     if (res !== 'auto') return RESOLUTION_CELLS[res];
+    const turb = flowModelFor(scene);
     const fits = async (r: Exclude<Resolution, 'auto'>) => {
       const { nx, ny } = gridFor(scene, RESOLUTION_CELLS[r]);
       const need = (8 * nx * nx * ny * 1.25) / 1e6;
-      return (await this.benchmarkAt(nx, ny)) >= need;
+      return (await this.benchmarkAt(nx, ny, turb)) >= need;
     };
     if (!(await fits('medium'))) return RESOLUTION_CELLS.low;
     if (!(await fits('high'))) return RESOLUTION_CELLS.medium;
@@ -289,9 +298,19 @@ export class Engine {
     }
     const fluid = FLUIDS[scene.flow.fluid];
     this.map = latticeMap(scene.tunnel.length, nx, scene.flow.speed, fluid.nu);
-    const physKey = `${this.map.u}|${this.map.tau}|${this.map.smagorinsky}`;
+    this.turb = flowModelFor(scene);
+    const sa = this.turb === 'sa';
+    const physKey = `${this.map.u}|${this.map.tau}|${this.map.smagorinsky}|${this.turb}|${this.map.nuFluid}`;
     if (physKey !== this.physKey) {
-      this.solver!.setPhysics({ u: this.map.u, tau: this.map.tau, smagorinsky: this.map.smagorinsky, smagCs: SMAG_CS });
+      this.solver!.setPhysics({
+        u: this.map.u,
+        tau: this.map.tau,
+        smagorinsky: this.map.smagorinsky && !sa,
+        smagCs: SMAG_CS,
+        turb: this.turb,
+        nuMol: this.map.nuFluid,
+        nuFloor: this.map.nuFloor,
+      });
       if (!this.physKey) this.solver!.reset(this.map.u);
       this.physKey = physKey;
     }
@@ -388,12 +407,15 @@ export class Engine {
     const keep = new Set(live.map((b) => b.id));
     for (const id of [...this.bodies.keys()]) if (!keep.has(id)) this.bodies.delete(id);
     for (const b of live) {
-      const key = `${JSON.stringify(b.shape)}@${dx}`;
+      // The turbulence model reads the wall distance farther out: a wider band.
+      const band = this.turb === 'sa' ? SA_SDF_BAND : undefined;
+      const key = `${JSON.stringify(b.shape)}@${dx}|${band ?? ''}`;
       const st = this.bodies.get(b.id);
       const target = this.targetPose(b);
       if (!st || st.key !== key) {
-        const local = transform(outline(b.shape), { x: 0, y: 0, theta: 0 }, 1 / dx);
-        const sdf = bakeSdf(local);
+        // Trailing edges at least two cells thick: drawn the same wherever they fall.
+        const local = transform(outline(b.shape, TE_MIN_CELLS * dx), { x: 0, y: 0, theta: 0 }, 1 / dx);
+        const sdf = bakeSdf(local, band);
         this.bodies.set(b.id, {
           body: b,
           key,
@@ -461,9 +483,11 @@ export class Engine {
     return this.bodies.get(id)?.history ?? [];
   }
 
+  /** The real Reynolds number and the one simulated: the real one when the turbulence model carries it. */
   reynoldsFor(b: Body): { real: number; sim: number } | null {
     if (!this.map || !this.scene) return null;
-    return reynolds(this.map, referenceLength(b.shape), this.scene.flow.speed, FLUIDS[this.scene.flow.fluid].nu);
+    const re = reynolds(this.map, referenceLength(b.shape), this.scene.flow.speed, FLUIDS[this.scene.flow.fluid].nu);
+    return this.turb === 'sa' ? { real: re.real, sim: re.real } : re;
   }
 
   resetFlow() {

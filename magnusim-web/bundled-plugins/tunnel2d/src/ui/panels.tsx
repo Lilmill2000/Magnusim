@@ -7,7 +7,7 @@ import { DatError, parseDat } from '../geometry/datfile';
 import { NacaError, parseCode } from '../geometry/naca';
 import { outline, referenceLength, shapeLabel, type Shape } from '../geometry/shapes';
 import { radius } from '../geometry/polygon';
-import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type Resolution, type Scene, type Walls } from '../scene/scene';
+import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type FlowModel, type Resolution, type Scene, type Walls } from '../scene/scene';
 import { RESOLUTION_CELLS, gridFor, type Engine } from '../sim/engine';
 import { useStore, type Store } from '../app/store';
 
@@ -61,6 +61,7 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
   const ref = scene.bodies.find((b) => b.id === selected) ?? scene.bodies.find((b) => b.enabled) ?? null;
   const re = ref ? engine.reynoldsFor(ref) : null;
   const map = engine.lattice;
+  const model = engine.flowModel;
   return (
     <Section title="Wind">
       <Field label="Wind speed" help="The speed of the flow coming in at the left.">
@@ -69,8 +70,23 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
       <Field label="Fluid">
         <Select label="Fluid" value={scene.flow.fluid} options={Object.entries(FLUIDS).map(([value, f]) => ({ value, label: f.label }))} onChange={(v) => set({ fluid: v as Scene['flow']['fluid'] })} />
       </Field>
+      <Field
+        label="Flow model"
+        help="Resolved: the grid's own flow, exact when the grid resolves the Reynolds number, otherwise run at the highest one it does. Turbulence model: Spalart–Allmaras with wall functions, at the real Reynolds number. Auto: the turbulence model from a Reynolds number of 100,000 up."
+      >
+        <Select
+          label="Flow model"
+          value={scene.flow.model}
+          options={[
+            { value: 'auto', label: `Auto (${model === 'sa' ? 'turbulence model' : 'resolved'})` },
+            { value: 'resolved', label: 'Resolved' },
+            { value: 'sa', label: 'Turbulence model (SA)' },
+          ]}
+          onChange={(v) => set({ model: v as FlowModel })}
+        />
+      </Field>
       {ref && re ? (
-        <div className="t2d-re" data-t2d-re data-real={re.real} data-sim={re.sim}>
+        <div className="t2d-re" data-t2d-re data-real={re.real} data-sim={re.sim} data-t2d-model={model}>
           <div className="t2d-re-row">
             <span>Reynolds number ({shapeLabel(ref.shape)}, {fmtRe(referenceLength(ref.shape))} m)</span>
           </div>
@@ -84,9 +100,18 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
               {fmtRe(re.sim)}
             </span>
           </div>
-          {map?.capped ? (
+          {model === 'sa' ? (
+            <Hint tone={re.real < 3e5 ? 'warning' : undefined}>
+              <span data-t2d-model-note="sa">
+                Turbulence model on (Spalart–Allmaras, wall functions) at the real Reynolds number. It gives the mean flow: attached boundary layers, lift to within about 5 % and stall to within a few degrees. Drag reads high at this grid (up to about twice the real drag), and past the stall the flow is not reliable. Turbulent eddies themselves are not drawn: 2D turbulence is not the real, 3D kind.
+                {re.real < 3e5 ? ' Below a Reynolds number of about 300,000, real airfoils often have laminar separation bubbles this model does not capture.' : ''}
+              </span>
+            </Hint>
+          ) : map?.capped ? (
             <Hint tone="warning">
-              This grid resolves a Reynolds number of about {fmtRe(re.sim)} here, so the flow is simulated at that, not at {fmtRe(re.real)}. Wakes, shedding and separation show as they do; forces are those of the lower Reynolds number. A finer resolution raises it.
+              <span data-t2d-model-note="capped">
+                This grid resolves a Reynolds number of about {fmtRe(re.sim)} here, so the flow is simulated at that, not at {fmtRe(re.real)}. Wakes, shedding and separation show as they do at the lower Reynolds number, and so do the forces. A finer resolution raises it{re.real >= 1e5 ? '; the turbulence model runs the real one' : ''}.
+              </span>
             </Hint>
           ) : null}
         </div>

@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { contains, selfIntersects, signedArea, signedDistance, transform } from '../src/geometry/polygon';
 import { bakeSdf, sampleSdf, SDF_BAND } from '../src/geometry/sdf';
-import { outline, referenceLength, type Shape } from '../src/geometry/shapes';
+import { outline, referenceLength, thickenRear, type Shape } from '../src/geometry/shapes';
+import { generate } from '../src/geometry/naca';
 
 const SHAPES: Shape[] = [
   { kind: 'naca', code: '2412', chord: 1 },
@@ -59,5 +60,28 @@ describe('the distance field', () => {
     const g = bakeSdf(transform(outline({ kind: 'circle', diameter: 1 }), { x: 0, y: 0, theta: 0 }, 20));
     expect(sampleSdf(g, 1e4, 0)).toBe(SDF_BAND);
     expect(g.bound).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('the trailing edge kept a grid thick', () => {
+  const s = generate('2412', 121);
+  const t = thickenRear(s.x, s.y, 0.01);
+  const le = s.x.indexOf(Math.min(...s.x));
+  const lowerAt = (y: number[], xv: number) => {
+    for (let i = le + 1; i < s.x.length; i++) if (s.x[i] >= xv) return y[i - 1] + ((y[i] - y[i - 1]) * (xv - s.x[i - 1])) / (s.x[i] - s.x[i - 1]);
+    return y[y.length - 1];
+  };
+  it('is at least that thick over the rear, with the mean line where it was', () => {
+    for (let i = 0; i < le; i++) {
+      if (s.x[i] < 0.5) continue;
+      const before = 0.5 * (s.y[i] + lowerAt(s.y, s.x[i]));
+      const lo = lowerAt(t.y, s.x[i]);
+      expect(t.y[i] - lo).toBeGreaterThan(0.01 - 1e-3);
+      if (s.y[i] - lowerAt(s.y, s.x[i]) < 0.009) expect(0.5 * (t.y[i] + lo)).toBeCloseTo(before, 3);
+    }
+  });
+  it('leaves the front half and thick parts alone', () => {
+    for (let i = 0; i < s.x.length; i++) if (s.x[i] < 0.5) expect(t.y[i]).toBe(s.y[i]);
+    expect(thickenRear(s.x, s.y, 0).y).toBe(s.y);
   });
 });

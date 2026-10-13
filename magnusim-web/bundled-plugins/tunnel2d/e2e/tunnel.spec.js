@@ -2,8 +2,8 @@
 //
 // 1. A new tunnel opens on its default scene (NACA 2412 at 6° in 10 m/s of air) and the
 //    flow runs on the GPU: the status line counts steps and simulated time, the vorticity
-//    field around the airfoil grows, and the Reynolds numbers say honestly that the grid
-//    simulates a lower one than the real one.
+//    field around the airfoil grows, and the Reynolds numbers say honestly what is run: the
+//    turbulence model at the real one, or (resolved) the lower one the grid simulates.
 // 2. Dragging the airfoil with the mouse moves it in the flow (the flow's body catches up
 //    with the dragged pose), the wake follows it, and the new position is saved: after a
 //    reload the airfoil is where it was left.
@@ -126,15 +126,22 @@ test('a tunnel runs, the airfoil drags through the flow, and the scene is saved'
   await expect(frame.locator('[data-t2d-status]')).toContainText('cells');
   // The flow grows a boundary layer and a wake: vorticity well above the free stream's zero.
   await expect.poll(async () => (await fieldStats(frame)).max, { timeout: 60_000 }).toBeGreaterThan(5);
-  // Re: 10 m/s x 1 m / 1.516e-5 = 660,000 real; the grid simulates far less and says so.
+  // Re: 10 m/s x 1 m / 1.516e-5 = 660,000 real. The turbulence model runs it (automatic from
+  // 100,000) and says what it gives; resolved, the grid simulates far less and says so.
   const re = frame.locator('[data-t2d-re]');
   await expect(re).toBeVisible();
   const real = Number(await re.getAttribute('data-real'));
-  const sim = Number(await re.getAttribute('data-sim'));
   expect(real).toBeGreaterThan(6.5e5);
   expect(real).toBeLessThan(6.7e5);
-  expect(sim).toBeLessThan(real);
+  await expect(re).toHaveAttribute('data-t2d-model', 'sa');
+  expect(Number(await re.getAttribute('data-sim'))).toBe(real);
+  await expect(re.locator('[data-t2d-model-note="sa"]')).toContainText('Turbulence model on');
+  await frame.getByRole('combobox', { name: 'Flow model' }).selectOption('resolved');
+  await expect(re).toHaveAttribute('data-t2d-model', 'off');
+  expect(Number(await re.getAttribute('data-sim'))).toBeLessThan(real);
   await expect(re).toContainText('simulated at that');
+  await frame.getByRole('combobox', { name: 'Flow model' }).selectOption('auto');
+  await expect(re).toHaveAttribute('data-t2d-model', 'sa');
   await expect(frame.locator('[data-t2d-legend]')).toContainText('Vorticity');
 
   // 2. Drag the airfoil 240 px right and 60 px down.
