@@ -17,6 +17,7 @@ would change every mesh's fingerprint.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,103 @@ def study_regions(project_dir: Path | str, sim_id: str | None) -> list[dict[str,
                 "bodies": bodies,
             }
         )
+    return out
+
+
+@dataclass(frozen=True)
+class MeshRegions:
+    """A study's regions as a mesher meshes them (more than one region only).
+
+    ``bodies[k]`` are region k's 0-based body indices (``Body<i+1>``, TopExp SOLID
+    order). ``interfaces`` are the face visits two bodies of DIFFERENT regions share
+    (each visit, both sides): never a patch, never a wall, meshed through as the
+    internal faces between two cellZones. A face two bodies of the SAME region share
+    stays inside that region, as it always has.
+    """
+
+    names: tuple[str, ...]
+    roles: tuple[str, ...]
+    bodies: tuple[tuple[int, ...], ...]
+    interfaces: frozenset[int] = field(default_factory=frozenset)
+
+    def region_of_body(self, body: int) -> int:
+        for k, members in enumerate(self.bodies):
+            if body in members:
+                return k
+        return -1
+
+    def summary(self) -> list[dict[str, Any]]:
+        """What a mesh records about its regions (and compares to see if it is out of date)."""
+        return [
+            {"name": n, "role": r, "bodies": [f"Body{b + 1}" for b in bs]}
+            for n, r, bs in zip(self.names, self.roles, self.bodies, strict=True)
+        ]
+
+
+def regions_signature(summary: list[dict[str, Any]] | None) -> list[list[Any]]:
+    """A region summary as a stable comparable value (region order does not matter)."""
+    rows = []
+    for r in summary or []:
+        if isinstance(r, dict):
+            rows.append([str(r.get("role") or ""), sorted(str(b) for b in r.get("bodies") or [])])
+    return sorted(rows)
+
+
+def mesh_regions(project_dir: Path | str, sim_id: str | None, solid: Any) -> MeshRegions | str | None:
+    """The regions a mesher splits ``solid`` into for this study: None for one region
+    (every body meshed as one fluid, as always), else the regions, or the reason it
+    cannot be meshed (a body no material names)."""
+    regions = study_regions(project_dir, sim_id)
+    if len(regions) <= 1:
+        return None
+    from cfddesk.cad.shared_faces import face_bodies, shared_face_ids
+
+    n_bodies = len(getattr(solid, "volumes", None) or [])
+    body_of: dict[int, int] = {}
+    for k, region in enumerate(regions):
+        for label in region["bodies"]:
+            m = re.fullmatch(r"Body(\d+)", str(label))
+            if not m or not (1 <= int(m.group(1)) <= n_bodies):
+                return f"{region['material_name'] or region['name']} names {label}, which this part does not have."
+            body_of[int(m.group(1)) - 1] = k
+    missing = [b for b in range(n_bodies) if b not in body_of]
+    if missing:
+        names = ", ".join(f"Body{b + 1}" for b in missing)
+        verb = "has" if len(missing) == 1 else "have"
+        return (
+            f"{names} {verb} no material. In this simulation every body is meshed with its material: "
+            "give it one in Materials."
+        )
+    bodies = face_bodies(solid)
+    shared = shared_face_ids(solid)
+    interfaces = frozenset(
+        int(f)
+        for f, other in shared.items()
+        if body_of.get(bodies.get(int(f), 0) - 1) != body_of.get(bodies.get(int(other), 0) - 1)
+    )
+    return MeshRegions(
+        names=tuple(r["name"] for r in regions),
+        roles=tuple(r["role"] for r in regions),
+        bodies=tuple(tuple(sorted(b for b, k in body_of.items() if k == i)) for i in range(len(regions))),
+        interfaces=interfaces,
+    )
+
+
+def body_centroids(solid: Any) -> list[tuple[float, float, float]]:
+    """Each body's centre of mass (shape units), in TopExp SOLID order (``Body<i+1>``)."""
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    out: list[tuple[float, float, float]] = []
+    explorer = TopExp_Explorer(solid.shape, TopAbs_SOLID)
+    while explorer.More():
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(explorer.Current(), props)
+        c = props.CentreOfMass()
+        out.append((float(c.X()), float(c.Y()), float(c.Z())))
+        explorer.Next()
     return out
 
 

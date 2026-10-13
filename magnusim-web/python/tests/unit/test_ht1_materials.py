@@ -128,7 +128,10 @@ def test_one_save_writes_every_record_it_names_and_the_regions_follow(
         ("air", "fluid", ["Body1"]),
         ("aluminium_6061", "solid", ["Body2"]),
     ]
-    refusal = mesh_region_refusal(project, "s1", "standard")
+    # Standard and Hex-dominant mesh several regions (HT2); cfMesh refuses, and says why.
+    assert mesh_region_refusal(project, "s1", "standard") is None
+    assert mesh_region_refusal(project, "s1", "snappy_hexdominant") is None
+    refusal = mesh_region_refusal(project, "s1", "cfmesh")
     assert refusal is not None
     assert "this simulation has 2 materials: Air (fluid), Aluminium 6061 (solid)" in refusal
     # The tree lists every record, and the study's analysis.
@@ -148,7 +151,7 @@ def test_a_generate_tool_process_loads_the_plugins_itself(tmp_path: Path, monkey
     _save(project, [_mat("a", "Air", "fx_fluid", ["Body1"]), _mat("b", "Al", "fx_solid", ["Body2"])], ["a", "b"])
     reset_for_tests()  # a fresh process: an empty hub
     assert [r["role"] for r in study_regions(project, "s1")] == ["fluid", "solid"]
-    assert mesh_region_refusal(project, "s1", "snappy_hexdominant") is not None
+    assert mesh_region_refusal(project, "s1", "cfmesh") is not None
 
 
 def test_a_save_naming_one_record_leaves_the_others_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

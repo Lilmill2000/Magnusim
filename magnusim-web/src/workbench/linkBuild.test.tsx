@@ -6,7 +6,7 @@ import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupTreeView } from '../chrome/LeftTree';
 import { readSetupTree, type ProjectTreeDoc } from '../chrome/treeModel';
-import { meshOutOfDateOf, outOfDateLine } from '../panels/mesh/MeshPanel';
+import { MATERIALS_OUT_OF_DATE_LINE, meshMaterialsChanged, meshOutOfDateOf, outOfDateLine } from '../panels/mesh/MeshPanel';
 import { OLDER_RUN_TEXT, noteTreeGeometries, resetGeometryRevForTests, runOlderGeometry } from './geometryRev';
 
 beforeEach(() => resetGeometryRevForTests());
@@ -71,6 +71,11 @@ describe('the mesh panel', () => {
   it('says "Out of date: made from an older version of <Geometry>. Generate it again." for that mesh only', () => {
     const geoms = DOC.geometries as unknown as Parameters<typeof meshOutOfDateOf>[0];
     expect(meshOutOfDateOf(geoms, 'm-old')).toBe('Demo 1');
+    // Host API 1.8: out of date for a change of the geometry, not of the materials.
+    expect(meshMaterialsChanged(geoms, 'm-old')).toBe(false);
+    const changed = [{ name: 'Sink', studies: [{ meshes: [{ id: 'm-heat', out_of_date: true, out_of_date_materials: true }] }] }];
+    expect(meshMaterialsChanged(changed, 'm-heat')).toBe(true);
+    expect(MATERIALS_OUT_OF_DATE_LINE).toMatch(/^Out of date: made before this simulation's materials changed/);
     expect(meshOutOfDateOf(geoms, 'm-new')).toBeNull();
     expect(meshOutOfDateOf(geoms, 'nope')).toBeNull();
     expect(outOfDateLine('Demo 1')).toBe('Out of date: made from an older version of Demo 1. Generate it again.');

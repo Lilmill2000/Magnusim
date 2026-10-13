@@ -54,6 +54,8 @@ interface MeshDoc {
   ui_mesh_engine?: string;
   /** Generated from an older version of its linked geometry (API 1.5). */
   out_of_date?: boolean;
+  /** Host API 1.8: generated before the study's materials' bodies changed. */
+  out_of_date_materials?: boolean;
 }
 
 type TreeGeom = { name?: string; studies?: Array<{ meshes?: MeshDoc[] }> };
@@ -62,6 +64,10 @@ type TreeGeom = { name?: string; studies?: Array<{ meshes?: MeshDoc[] }> };
 export function outOfDateLine(geometryName: string): string {
   return `Out of date: made from an older version of ${geometryName || 'its geometry'}. Generate it again.`;
 }
+
+/** Host API 1.8: what a mesh panel says of a mesh made before the materials' bodies changed. */
+export const MATERIALS_OUT_OF_DATE_LINE =
+  "Out of date: made before this simulation's materials changed (a body moved to another material, or a material became solid or fluid). Generate it again.";
 
 /** The geometry's name when this mesh is out of date (from the project tree), else null. */
 export function meshOutOfDateOf(geoms: TreeGeom[], meshId: string): string | null {
@@ -75,6 +81,18 @@ export function meshOutOfDateOf(geoms: TreeGeom[], meshId: string): string | nul
   return null;
 }
 
+/** True when this mesh is out of date because the materials' bodies changed (host API 1.8). */
+export function meshMaterialsChanged(geoms: TreeGeom[], meshId: string): boolean {
+  for (const geom of geoms) {
+    for (const study of geom.studies || []) {
+      for (const mesh of study.meshes || []) {
+        if (meshId && String(mesh.id || '') === meshId) return !!mesh.out_of_date_materials;
+      }
+    }
+  }
+  return false;
+}
+
 /** The out-of-date line of a mesh, read from the tree again when its job changes phase. */
 function useMeshOutOfDate(projectId: string, meshId: string, phase: string | undefined): string | null {
   const [geometry, setGeometry] = useState<string | null>(null);
@@ -86,7 +104,9 @@ function useMeshOutOfDate(projectId: string, meshId: string, phase: string | und
     let dead = false;
     void apiGet('/api/project/tree', { project_id: projectId })
       .then((doc) => {
-        if (!dead) setGeometry(meshOutOfDateOf((doc as { geometries?: TreeGeom[] }).geometries || [], meshId));
+        const geoms = (doc as { geometries?: TreeGeom[] }).geometries || [];
+        // Host API 1.8: the materials' line, marked by its own text (not a geometry name).
+        if (!dead) setGeometry(meshMaterialsChanged(geoms, meshId) ? MATERIALS_STALE : meshOutOfDateOf(geoms, meshId));
       })
       .catch(() => {});
     return () => {
@@ -96,10 +116,13 @@ function useMeshOutOfDate(projectId: string, meshId: string, phase: string | und
   return geometry;
 }
 
+/** The hook's value for a mesh made before the materials changed (never a geometry's name). */
+const MATERIALS_STALE = '\u0000materials';
+
 function OutOfDate({ geometry }: { geometry: string | null }) {
   return geometry !== null ? (
     <p className="mat-assign-hint" data-mesh-out-of-date-line="1">
-      {outOfDateLine(geometry)}
+      {geometry === MATERIALS_STALE ? MATERIALS_OUT_OF_DATE_LINE : outOfDateLine(geometry)}
     </p>
   ) : null;
 }

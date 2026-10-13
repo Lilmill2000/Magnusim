@@ -199,7 +199,8 @@ def build_standard() -> MeshBackend:
         supports_hex_core=True,
         requires=(),
         frozen=False,
-        multi_region=False,
+        # Host API 1.8: one cellZone per region (a study's materials, heat transfer).
+        multi_region=True,
         engine="standard",
         stage_labels=_STANDARD_STAGES,
         stage_details=_STANDARD_DETAILS,
@@ -242,7 +243,8 @@ def build_snappy_hexdominant() -> MeshBackend:
         supports_hex_core=False,
         requires=(Requirement("wsl_tool", "snappyHexMesh"),),
         frozen=False,
-        multi_region=False,
+        # Host API 1.8: one cellZone per region (locationsInMesh).
+        multi_region=True,
         engine="snappy_hexdominant",
         stage_labels=_HEX_STAGES,
         report=_report("Hex-dominant"),

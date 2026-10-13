@@ -132,6 +132,28 @@ def render_snappy_script(*, dst: str, win_out: str, generate_id: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _region_locations(solid, regions, scale: float) -> list[tuple[tuple[float, float, float], str]]:
+    """One point inside each body, named after its region (``locationsInMesh``, host API 1.8)."""
+    from types import SimpleNamespace
+
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    from cfddesk.cad.location import find_location_in_mesh
+
+    out: list[tuple[tuple[float, float, float], str]] = []
+    explorer = TopExp_Explorer(solid.shape, TopAbs_SOLID)
+    body = 0
+    while explorer.More():
+        k = regions.region_of_body(body)
+        if k >= 0:
+            point = find_location_in_mesh(SimpleNamespace(shape=explorer.Current()), scale).point_metres
+            out.append((tuple(float(v) for v in point), regions.names[k]))
+        body += 1
+        explorer.Next()
+    return out
+
+
 def boundary_patches(
     project_dir: Path,
     step: Path,
@@ -154,7 +176,12 @@ def boundary_patches(
     notes for the log.
     """
     import numpy as np
-    from generate_standard import _add_default_walls, _apply_web_bcs
+    from generate_standard import (
+        _add_default_walls,
+        _add_region_walls,
+        _apply_web_bcs,
+        _fluid_patches,
+    )
 
     from cfddesk.cad.location import find_location_in_mesh
     from cfddesk.cad.shared_faces import bc_refusal, face_bodies, shared_face_ids
@@ -204,20 +231,38 @@ def boundary_patches(
     refusal = mesh_region_refusal(project_dir, simulation_id, "snappy_hexdominant")
     if refusal:
         raise RuntimeError(refusal)
+    from cfddesk.project.regions import mesh_regions
+
+    mesh_regs = mesh_regions(project_dir, simulation_id, solid)
+    if isinstance(mesh_regs, str):
+        raise RuntimeError(mesh_regs)
     project = _apply_web_bcs(project, web_bcs, n_faces)
     sizes, _mins, size_notes = load_surface_custom_sizes(project_dir, mesh_id, n_faces, diag_m)
     inflates = load_inflate_refs(project_dir, mesh_id, n_faces, h_wall_m, extra_face_sizes=sizes)
     drop_inside_faces(inside, sizes, _mins, size_notes, inflates)
     project, inflates = bind_inflate_patches(project, inflates, n_faces)
-    project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
+    if mesh_regs is None:
+        project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
+    else:
+        project = _add_region_walls(project, leftover_faces(project, n_faces, inside), mesh_regs, face_bodies(solid))
     patch_types = emitted_patch_types(project)
     patches = write_patch_stls(
         tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types, inside=inside
     )
+    interfaces: list[dict[str, str]] = []
+    locations = None
+    if mesh_regs is not None:
+        from cfddesk.mesh.snappy_hexdominant import write_interface_stls
+
+        interfaces = write_interface_stls(tri_dir, pts_m, tris, fids, mesh_regs, inside, face_bodies(solid))
+        locations = _region_locations(solid, mesh_regs, scale)
 
     layer_specs = None
     if inflates or add_layers:
         wall_patches = [p["name"] for p in patches if p["type"] == "wall"]
+        if mesh_regs is not None:
+            # Boundary layers grow on fluid walls only (host API 1.8).
+            wall_patches = _fluid_patches(project, wall_patches, mesh_regs, face_bodies(solid))
         automatic = [] if not add_layers else [_AutoLayers(name) for name in wall_patches]
         inflate_names = {s.patch_name for s in inflates if s.patch_name}
         layer_specs = [a for a in automatic if a.name not in inflate_names] + layer_specs_for_generate(
@@ -247,6 +292,9 @@ def boundary_patches(
     location = find_location_in_mesh(solid, scale)
     return {
         "patches": patches,
+        "locations": locations,
+        "interfaces": interfaces,
+        "mesh_regions": mesh_regs.summary() if mesh_regs is not None else [],
         "location_m": location.point_metres,
         "layer_specs": layer_specs,
         "refine_regions": regions,
@@ -412,6 +460,8 @@ def main() -> int:
             location_m=location_m,
             layer_specs=prep["layer_specs"],
             refine_regions=prep["refine_regions"],
+            locations=prep.get("locations"),
+            interfaces=prep.get("interfaces"),
         )
         meta_doc = {
             "increment": "W25",
@@ -514,6 +564,12 @@ def main() -> int:
             )
 
         ok = rc == 0 and (last_result is None or bool(last_result.get("ok", True)))
+        region_rows: list[dict] = []
+        if prep.get("mesh_regions"):
+            from cfddesk.mesh.zones import cell_zone_sizes
+
+            zones = cell_zone_sizes(case_dir / "constant" / "polyMesh")
+            region_rows = [{**r, "cells": int(zones.get(r["name"], 0))} for r in prep["mesh_regions"]]
         if ok:
             # The script copied the mesh and logs to Windows; the WSL copy is done.
             remove_wsl_case(wsl_case)
@@ -535,6 +591,7 @@ def main() -> int:
             wsl_case=wsl_case,
             case_dir=str(case_dir),
             **mesh_input,
+            **({"regions": region_rows} if region_rows else {}),
         )
     except Exception as exc:
         return _result(False, error=str(exc), traceback=traceback.format_exc()[-2000:])

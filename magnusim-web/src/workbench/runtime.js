@@ -17151,6 +17151,8 @@ function publishMeshJobState() {
     const rows = mesherRows();
     const row = mesherFor(rows, backend, path) || (backend || path ? mesherFor(rows, 'standard') : undefined);
     const result = Object.fromEntries(((row && row.report) || []).map(([k]) => [k, k ? pick(k) : null]));
+    // Host API 1.8: a mesh of several regions also says each region's cells.
+    result.regions = pick('regions');
     bits.push(...reportBits(row, result, formatMetres));
   }
   const jobFailed = jobStatus === 'failed' && meshJob && mine;

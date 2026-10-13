@@ -92,6 +92,14 @@ export function reportBits(
       if (len) bits.push(text.replace('{length}', len));
     }
   }
+  // Host API 1.8: a mesh of several regions (a study's materials) says each one's cells.
+  const regions = Array.isArray(result.regions) ? (result.regions as Array<Record<string, unknown>>) : [];
+  if (regions.length > 1) {
+    for (const r of regions) {
+      const cells = Number(r.cells);
+      if (r.name && Number.isFinite(cells)) bits.push(`${String(r.name)}: ${cells.toLocaleString('en-US')} cells`);
+    }
+  }
   return bits;
 }
 

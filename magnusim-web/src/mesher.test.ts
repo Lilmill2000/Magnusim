@@ -51,6 +51,21 @@ describe('what the page shows for a mesher comes from its registry row', () => {
     expect(reportBits(undefined, { hex_core_applied: true }, fmt)).toEqual([]);
   });
 
+  it("a mesh of several regions (host API 1.8) says each region's cells", () => {
+    const fmt = () => null;
+    const regions = [
+      { name: 'air', role: 'fluid', bodies: ['Body1'], cells: 120345 },
+      { name: 'aluminium_6061', role: 'solid', bodies: ['Body2'], cells: 30001 },
+    ];
+    expect(reportBits(standard, { regions }, fmt)).toEqual([
+      'Standard',
+      'air: 120,345 cells',
+      'aluminium_6061: 30,001 cells',
+    ]);
+    // One region says nothing more.
+    expect(reportBits(standard, { regions: regions.slice(0, 1) }, fmt)).toEqual(['Standard']);
+  });
+
   it("offers the mesher's refinement types, and the core two before the registry loads", () => {
     expect(refinementMenu(standard).map((t) => t.label)).toEqual(['Inflate boundary layer']);
     expect(refinementMenu(undefined).map((t) => t.label)).toEqual(['Surface custom sizing', 'Inflate boundary layer']);

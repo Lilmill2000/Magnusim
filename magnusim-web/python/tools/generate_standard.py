@@ -108,6 +108,50 @@ def _apply_web_bcs(project: Project, bcs: list[dict], n_faces: int) -> Project:
     return project
 
 
+def _add_region_walls(project: Project, leftover: list[int], regions, bodies: dict[int, int]) -> Project:
+    """Leftover faces of a mesh of several regions (host API 1.8): a fluid region's go
+    to ``walls`` as always; a solid region's to its own ``<region>_walls`` (wall), so
+    boundary layers grow on fluid walls only and the solid's outer faces keep their
+    own patch."""
+    by_region: dict[int, list[int]] = {}
+    for fid in leftover:
+        by_region.setdefault(regions.region_of_body(bodies.get(int(fid), 1) - 1), []).append(int(fid))
+    fluid = [f for k, fids in by_region.items() if k < 0 or regions.roles[k] != "solid" for f in fids]
+    project = _add_default_walls(project, fluid)
+    for k, fids in sorted(by_region.items()):
+        if k >= 0 and regions.roles[k] == "solid":
+            project, _ = project.add_bc(
+                name=f"{regions.names[k]} walls",
+                bc_type="wall_noslip",
+                face_ids=fids,
+                refinement_level=project.mesh.refinement.walls,
+                patch_name=f"{regions.names[k]}_walls",
+            )
+    return project
+
+
+def _fluid_patches(project: Project, names: list[str], regions, bodies: dict[int, int]) -> list[str]:
+    """The patches of ``names`` whose faces are all on fluid regions' bodies (layers grow there only)."""
+    from cfddesk.mesh.gmsh_standard import _face_to_patch_map
+
+    solid = {
+        int(fid)
+        for fid, body in bodies.items()
+        if regions.region_of_body(body - 1) >= 0 and regions.roles[regions.region_of_body(body - 1)] == "solid"
+    }
+    faces: dict[str, set[int]] = {}
+    for fid, patch in _face_to_patch_map(project).items():
+        faces.setdefault(str(patch), set()).add(int(fid))
+    return [n for n in names if not (faces.get(n, set()) & solid)]
+
+
+def _region_rows(regions, cells: dict[str, int]) -> list[dict]:
+    """What a mesh of several regions records: each region's name, role, bodies and cells."""
+    if regions is None:
+        return []
+    return [{**row, "cells": int(cells.get(row["name"], 0))} for row in regions.summary()]
+
+
 def _add_default_walls(project: Project, leftover: list[int]) -> Project:
     """Every face no BC claims → one ``walls`` patch (type wall).
 
@@ -277,6 +321,11 @@ def main() -> int:
         refusal = mesh_region_refusal(project_dir, str(args.simulation_id or ""), "standard")
         if refusal:
             return _result(False, error=refusal)
+        from cfddesk.project.regions import mesh_regions
+
+        regions = mesh_regions(project_dir, str(args.simulation_id or ""), solid)
+        if isinstance(regions, str):
+            return _result(False, error=regions)
         project = _apply_web_bcs(project, web_bcs, n_faces)
 
         bbox = shape_bbox(solid.shape, unit="native")
@@ -309,7 +358,10 @@ def main() -> int:
         )
         drop_inside_faces(inside, extra_face_sizes, extra_face_mins, ref_notes, inflates)
         project, inflates = bind_inflate_patches(project, inflates, n_faces)
-        project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
+        if regions is None:
+            project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
+        else:
+            project = _add_region_walls(project, leftover_faces(project, n_faces, inside), regions, face_bodies(solid))
         _progress(
             "sizing",
             fineness=fineness,
@@ -348,6 +400,8 @@ def main() -> int:
 
         pre_types = emitted_patch_types(project)
         wall_pre = [n for n, ty in pre_types.items() if ty == "wall"]
+        if regions is not None:
+            wall_pre = _fluid_patches(project, wall_pre, regions, face_bodies(solid))
         layer_specs = layer_specs_for_generate(
             wall_patches=wall_pre,
             inflate=inflates,
@@ -371,6 +425,7 @@ def main() -> int:
             layer_specs=layer_specs,
             n_threads=max(1, int(args.threads)),
             log=_log,
+            regions=regions,
         )
         (case_dir / "log.gmsh_host.txt").write_text("\n".join(mesh.log) + "\n", encoding="utf-8")
         _progress(
@@ -539,6 +594,16 @@ def main() -> int:
             "wsl_case": result.wsl_case,
             "wall_s": total_wall,
         }
+        region_rows = _region_rows(regions, mesh.region_cells)
+        if region_rows:
+            # The written mesh's cellZones (boundary layers add cells after the host mesh).
+            from cfddesk.mesh.zones import cell_zone_sizes
+
+            zones = cell_zone_sizes(case_dir / "constant" / "polyMesh")
+            if zones:
+                region_rows = [{**r, "cells": int(zones.get(r["name"], r["cells"]))} for r in region_rows]
+        if region_rows:
+            meta["regions"] = region_rows
         (case_dir / "standard-meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         # The mesh and its logs are on Windows; nothing reads the WSL copy again.
         remove_wsl_case(wsl_case)
@@ -560,6 +625,7 @@ def main() -> int:
             fineness=fineness,
             surface_size_m=sizing.h_surface_m,
             generate_id=args.generate_id,
+            **({"regions": region_rows} if region_rows else {}),
         )
     except Exception as exc:
         traceback.print_exc()

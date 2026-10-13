@@ -213,6 +213,9 @@ class StandardMeshResult:
     # boundary layer patch meshed finer than h, written as patches of their own
     # so their layers can be sized by the local cells; merged back after layers.
     layer_bands: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
+    # Host API 1.8: cells per region (cellZone name -> cells) of a mesh of several
+    # regions (heat transfer: one per material); empty for one region.
+    region_cells: dict[str, int] = field(default_factory=dict)
 
     @property
     def n_cells(self) -> int:
@@ -1187,6 +1190,44 @@ def volume_fill_attempts(hex_core: bool) -> list[tuple[bool, int]]:
     return out
 
 
+def _region_tag_base(phys_of_patch: dict[str, int]) -> int:
+    """The first physical tag of the region volumes: above every patch tag (and 100)."""
+    return max([100, *phys_of_patch.values()]) + 1
+
+
+def _fragment_regions(gmsh, bodies, solid, regions, scale: float, log) -> dict[int, int]:
+    """Fragment the bodies (host API 1.8): faces two bodies share become one surface
+    meshed from both sides. Returns gmsh volume tag -> region index.
+
+    Each imported gmsh volume is matched to its body by centre of mass (the healed
+    BREP keeps the bodies, not necessarily in their order).
+    """
+    from cfddesk.project.regions import body_centroids
+
+    centres = np.asarray(body_centroids(solid), dtype=float) * float(scale)
+    if len(bodies) != len(centres):
+        raise RuntimeError(f"the part has {len(centres)} bodies but gmsh read {len(bodies)} volumes")
+    got = np.asarray([gmsh.model.occ.getCenterOfMass(3, t) for _, t in bodies], dtype=float)
+    dist = np.linalg.norm(got[:, None, :] - centres[None, :, :], axis=2)
+    body_of_input: list[int] = [int(b) for b in np.argmin(dist, axis=1)]
+    if len(set(body_of_input)) != len(body_of_input):
+        raise RuntimeError("the bodies could not be told apart after healing (two volumes match one body)")
+    gmsh.option.setNumber("Geometry.OCCUnionUnify", 0)
+    _out, out_map = gmsh.model.occ.fragment(bodies[:1], bodies[1:])
+    gmsh.model.occ.synchronize()
+    region_of_vol: dict[int, int] = {}
+    for i, pieces in enumerate(out_map):
+        k = regions.region_of_body(body_of_input[i])
+        for dim, tag in pieces:
+            if int(dim) == 3:
+                region_of_vol[int(tag)] = k
+    log(
+        f"{len(bodies)} bodies fragmented into {len(gmsh.model.getEntities(3))} volume(s) in "
+        f"{len(regions.names)} regions: " + ", ".join(regions.names)
+    )
+    return region_of_vol
+
+
 def build_standard_msh(
     step_path: Path,
     solid: LoadedSolid,
@@ -1202,8 +1243,15 @@ def build_standard_msh(
     layer_specs: list | None = None,
     n_threads: int = 16,
     log=None,
+    regions=None,
 ) -> StandardMeshResult:
     """Generate the Standard mesh (MSH 2.2) for ``solid`` / ``project``.
+
+    ``regions`` (host API 1.8, ``cfddesk.project.regions.MeshRegions``): the
+    study's regions when there are several. Each becomes its own physical volume
+    (a cellZone after gmshToFoam), the bodies are fragmented instead of fused so
+    the faces between regions are meshed conformally, and those faces are no
+    patch. None (one region) meshes every body as one fluid, as always.
 
     When the volume fill fails (or leaves cells that do not fill their boundary)
     the mesh is built again with the next entry of ``volume_fill_attempts``.
@@ -1234,6 +1282,7 @@ def build_standard_msh(
                 physics_based=physics_based, extra_face_sizes=extra_face_sizes,
                 extra_face_mins=extra_face_mins, layer_specs=layer_specs,
                 n_threads=n_threads, log=_log, algorithm_3d=algo, stage=stage,
+                regions=regions,
             )
         except Exception as exc:
             if not stage.get("volume"):
@@ -1286,6 +1335,7 @@ def _build_standard_msh_once(
     log=None,
     algorithm_3d: int = ALGO_HXT,
     stage: dict | None = None,
+    regions=None,
 ) -> StandardMeshResult:
     """One attempt of ``build_standard_msh`` with this 3D algorithm.
 
@@ -1334,6 +1384,12 @@ def _build_standard_msh_once(
     # Bodies that share a face are one fluid region (cad.shared_faces): they are
     # fused into one volume, so the face they share is meshed through, not walled.
     inside = shared_face_ids(solid)
+    # Several regions (host API 1.8): the bodies are fragmented, each gmsh volume
+    # belongs to its body's region, and the faces between volumes are meshed once.
+    multi = regions is not None and len(regions.names) > 1 and solid.mesh_triangles is None
+    region_of_vol: dict[int, int] = {}
+    tet_region: np.ndarray = np.zeros(0, dtype=np.int64)
+    prism_region: np.ndarray = np.zeros(0, dtype=np.int64)
     initialize_gmsh(gmsh)
     try:
         gmsh.option.setNumber("General.Terminal", 0)
@@ -1352,7 +1408,10 @@ def _build_standard_msh_once(
                 gmsh, gmsh_geometry, scale=float(scale_to_metres), tol_m=heal_tol, log=_log
             )
             bodies = gmsh.model.getEntities(3)
-            if inside and len(bodies) > 1:
+            if multi:
+                region_of_vol.clear()
+                region_of_vol.update(_fragment_regions(gmsh, bodies, solid, regions, float(scale_to_metres), _log))
+            elif inside and len(bodies) > 1:
                 # healShapes gives each body its own copy of the face they share,
                 # and gmsh would mesh them as regions walled off from each other.
                 # No unifying: every other CAD face stays its own surface to match.
@@ -1405,6 +1464,12 @@ def _build_standard_msh_once(
         surfs = sorted(
             {int(t) for _d, v in vols for t in gmsh.model.getAdjacencies(3, v)[1]}
         )
+        if multi:
+            # A face between two volumes (two regions, or two bodies of one region)
+            # is meshed through: no patch, no wall, no feature or gap source.
+            inner = {s for s in surfs if len(gmsh.model.getAdjacencies(2, s)[0]) >= 2}
+            surfs = [s for s in surfs if s not in inner]
+            _log(f"{len(regions.names)} regions: {len(inner)} face(s) between volumes are meshed through")
         for name in list(patch_tags):
             patch_tags[name] = [t for t in patch_tags[name] if int(t) in set(surfs)]
         assigned = {t for tags in patch_tags.values() for t in tags}
@@ -1648,7 +1713,9 @@ def _build_standard_msh_once(
         grown: list[str] = []
         side_tags: list[int] = []
         layer_thickness = 0.0
-        if core is None and layer_specs:
+        if multi and any(not getattr(sp, "automatic", False) for sp in (layer_specs or [])):
+            _log("inflated boundary layers skipped: the part is meshed in several regions")
+        if core is None and layer_specs and not multi:
             grown, _caps, side_faces, layer_thickness = apply_inward_boundary_layers(
                 gmsh, patch_tags, layer_specs, solid, float(scale_to_metres), _log, occ=occ
             )
@@ -1790,7 +1857,13 @@ def _build_standard_msh_once(
             tris = remap[tris_tags]
             final_nodes = all_xyz
         else:
-            if len(vols) >= 1:
+            if multi:
+                region_base = _region_tag_base(phys_of_patch)
+                for ri, name in enumerate(regions.names):
+                    tags = [t for _, t in vols if region_of_vol.get(int(t)) == ri]
+                    if tags:
+                        gmsh.model.addPhysicalGroup(3, tags, region_base + ri, name)
+            elif len(vols) >= 1:
                 gmsh.model.addPhysicalGroup(3, [t for _, t in vols], 100, "fluid")
             t3 = time.monotonic()
             _log(f"tets: filling the volume (timeout {VOLUME_FILL_TIMEOUT_S:.0f}s)")
@@ -1807,6 +1880,11 @@ def _build_standard_msh_once(
                 if pri_blocks
                 else np.zeros((0, 6), dtype=np.int64)
             )
+            if multi:
+                region_base = _region_tag_base(phys_of_patch)
+                vol_tag = [region_base + region_of_vol.get(int(t), 0) for _, t in vols]
+                tet_region = np.repeat(np.asarray(vol_tag, dtype=np.int64), [len(b) for b in tet_blocks])
+                prism_region = np.repeat(np.asarray(vol_tag, dtype=np.int64), [len(b) for b in pri_blocks])
             _log(
                 f"tet volume: {len(tet_tags)} tets, {len(prism_tags)} prisms "
                 f"({time.monotonic()-t3:.1f}s)"
@@ -1863,7 +1941,17 @@ def _build_standard_msh_once(
         gmsh.finalize()
 
     physical_names = {phys_of_patch[n]: (2, n) for n in patch_names}
-    physical_names[100] = (3, "fluid")
+    region_cells: dict[str, int] = {}
+    if multi:
+        region_base = _region_tag_base(phys_of_patch)
+        for ri, name in enumerate(regions.names):
+            physical_names[region_base + ri] = (3, name)
+            region_cells[name] = int(
+                np.count_nonzero(tet_region == region_base + ri) + np.count_nonzero(prism_region == region_base + ri)
+            )
+        _log("regions: " + ", ".join(f"{n} {c} cells" for n, c in region_cells.items()))
+    else:
+        physical_names[100] = (3, "fluid")
     layer_bands: dict[str, list[tuple[str, float]]] = {}
     auto = [
         sp.name for sp in (layer_specs or [])
@@ -1880,9 +1968,9 @@ def _build_standard_msh_once(
                 f"down to {min(b[1] for b in bands):.3g} m"
             )
     blocks = [
-        (TET, tets, 100),
+        (TET, tets, tet_region if multi else 100),
         (HEX, hexes, 100),
-        (PRISM, prisms, 100),
+        (PRISM, prisms, prism_region if multi else 100),
         (PYR, pyrs, 100),
         (TRI, tris, tri_phys),
     ]
@@ -1911,6 +1999,7 @@ def _build_standard_msh_once(
         log=lines,
         feature_floor_m=feature.floor if feature is not None else None,
         layer_bands=layer_bands,
+        region_cells=region_cells,
     )
 
 

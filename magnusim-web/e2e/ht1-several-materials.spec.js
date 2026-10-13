@@ -156,7 +156,7 @@ for (const [units, unit, shown, typed, kelvin] of [
   });
 }
 
-test('Generate refuses a study whose materials make separate regions, and says why', async ({ page, request }) => {
+test("two materials mesh as two regions (HT2): each region's cells shown; the mesh goes out of date when a body changes material", async ({ page, request }) => {
   test.skip(!WSL, NO_WSL);
   test.setTimeout(600_000);
   const { pid, sid } = await heatStudy(page, request, 'Metric');
@@ -178,13 +178,33 @@ test('Generate refuses a study whose materials make separate regions, and says w
   await expect(form.locator('[data-schema-key="fineness"] input')).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await meshesNow()).length, { timeout: 15_000 }).toBe(1);
   await form.locator('[data-mesh-generate="1"]').click();
-  const why = 'meshes every body as one fluid, but this simulation has 2 materials: Air (fluid), Aluminium 6061 (solid)';
   await expect
     .poll(async () => {
-      const m = (await meshesNow())[0] || {};
-      const r = m.live_mesh_result || {};
-      return r.status === 'failed' ? String(r.error || '') : String(r.status || 'wait');
-    }, { timeout: 300_000, intervals: [2_000] })
-    .toContain(why);
-  await expect(page.locator('#panel-mesh-form')).toContainText(why, { timeout: 30_000 });
+      const r = ((await meshesNow())[0] || {}).live_mesh_result || {};
+      return /done|failed|stopped/.test(String(r.status)) ? `${r.status} ${r.error || ''}` : 'wait';
+    }, { timeout: 480_000, intervals: [3_000] })
+    .toBe('done ');
+  const regions = ((await meshesNow())[0].live_mesh_result || {}).regions || [];
+  expect(regions.map((r) => [r.name, r.role, r.bodies])).toEqual([
+    ['air', 'fluid', ['Body1']],
+    ['aluminium_6061', 'solid', ['Body2']],
+  ]);
+  expect(Math.min(...regions.map((r) => r.cells))).toBeGreaterThan(0);
+  const meta = page.locator('#panel-mesh-form .mesh-finished-meta');
+  await expect(meta).toContainText(`air: ${regions[0].cells.toLocaleString('en-US')} cells`, { timeout: 30_000 });
+  await expect(meta).toContainText(`aluminium_6061: ${regions[1].cells.toLocaleString('en-US')} cells`);
+  const stale = page.locator('#panel-mesh-form [data-mesh-out-of-date-line="1"]');
+  await expect(stale).toHaveCount(0);
+
+  // Body2 moves to Air: the mesh's regions are not the materials' any more.
+  const fluidId = (await mats()).find((m) => m.material_model === 'example_heat_fluid').id;
+  await study.locator(`[data-w18-material-id="${fluidId}"] > .tree-row .tl`).click();
+  const record = page.locator('#panel-air-material .cfd-island');
+  await record.locator('[data-volume="Body2"] button').click();
+  await expect.poll(async () => (await mats()).find((m) => m.id === fluidId).assigned_volumes).toEqual(['Body1', 'Body2']);
+  await page.reload();
+  await page.waitForFunction((p) => window.__CFD_PROJECT_READY__ === p, pid, { timeout: 60_000 });
+  const meshRow = study.locator('[data-w20-mesh-item]').first();
+  await meshRow.locator(':scope > .tree-row .tl').click();
+  await expect(stale).toContainText("made before this simulation's materials changed", { timeout: 30_000 });
 });

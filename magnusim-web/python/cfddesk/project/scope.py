@@ -382,14 +382,40 @@ def _build_fields(node: dict[str, Any], rev: int | None, built: int | None, gene
     return node
 
 
+def _regions_now(root: Path, sid: str) -> list[dict[str, Any]]:
+    """The study's regions now (host API 1.8; [] for one region), as a mesh records them."""
+    from cfddesk.project.regions import study_regions
+
+    try:
+        return study_regions(root, sid)
+    except Exception:
+        return []
+
+
+def _regions_changed(node: dict[str, Any], live: dict[str, Any], generated: bool, regions_now: list | None) -> dict[str, Any]:
+    """Host API 1.8: a finished mesh whose regions are not the study's materials' now
+    (a body moved to another material, or a material became solid) is out of date."""
+    from cfddesk.project.regions import regions_signature
+
+    if generated and regions_now is not None and regions_signature(live.get("regions")) != regions_signature(regions_now):
+        node["out_of_date"] = True
+        node["out_of_date_materials"] = True
+    return node
+
+
 def _mesh_node(
-    project_id: str, geometry_id: str, study_id: str, mesh: dict[str, Any], rev: int | None = None
+    project_id: str,
+    geometry_id: str,
+    study_id: str,
+    mesh: dict[str, Any],
+    rev: int | None = None,
+    regions_now: list | None = None,
 ) -> dict[str, Any]:
     live = _dict(mesh.get("live_mesh_result"))
     scope = ScopeId(project_id, geometry_id, study_id, mesh_id=str(mesh.get("id") or ""))
     cells = live.get("n_cells", mesh.get("n_cells"))
     generated = str(live.get("status") or "") == "done"
-    return _build_fields({
+    return _regions_changed(_build_fields({
         "id": str(mesh.get("id") or ""),
         "name": str(mesh.get("name") or "Mesh"),
         "key": scope.key(),
@@ -400,7 +426,7 @@ def _mesh_node(
         "n_cells": cells if isinstance(cells, (int, float)) and not isinstance(cells, bool) else None,
         "live_status": str(live.get("status") or mesh.get("status") or ""),
         "refinements": _refinements(Path(mesh["dir"]), scope) if mesh.get("dir") else [],
-    }, rev, _stamp(live.get("built_from_rev")), generated)
+    }, rev, _stamp(live.get("built_from_rev")), generated), live, generated, regions_now)
 
 
 def _run_node(
@@ -503,6 +529,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
             sid = str(study.get("id") or "")
             sscope = ScopeId(project_id, gid, sid)
             study_dir = Path(study["dir"])
+            regions_now = _regions_now(root, sid)
             study_nodes.append(
                 {
                     "id": sid,
@@ -519,7 +546,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
                     "analysis_type": str(study.get("analysis_type") or ""),
                     "bcs": _bcs(root, sscope),
                     "meshes": [
-                        _mesh_node(project_id, gid, sid, mesh, grev) for mesh in walk_meshes(root, sid)
+                        _mesh_node(project_id, gid, sid, mesh, grev, regions_now) for mesh in walk_meshes(root, sid)
                     ],
                     "runs": [_run_node(project_id, gid, sid, run, grev) for run in walk_runs(root, sid)],
                 }

@@ -235,6 +235,34 @@ def write_binary_stl(path: Path, points_m, tris, header: str) -> None:
         fh.write(rec.tobytes())
 
 
+def write_interface_stls(tri_dir: Path, points_m, tris, face_ids, regions, shared: dict[int, int], bodies: dict[int, int]) -> list[dict[str, str]]:
+    """Host API 1.8: one binary STL per pair of regions that share faces, of ONE visit of
+    each shared face (the lower region's), as ``interface_<a>_<b>.stl``.
+
+    In the mesh it is a surface between two cellZones (``locationsInMesh``): snappy
+    keeps the cells on both sides and makes its faces the ``<a>_to_<b>`` faceZone,
+    never a patch.
+    """
+    import numpy as np
+
+    tri_dir = Path(tri_dir)
+    tri = np.asarray(tris, dtype=np.int64)
+    fid = np.asarray(face_ids, dtype=np.int64)
+    pairs: dict[tuple[int, int], list[int]] = {}
+    for f in sorted(int(x) for x in regions.interfaces):
+        a = regions.region_of_body(bodies.get(f, 1) - 1)
+        b = regions.region_of_body(bodies.get(int(shared.get(f, f)), 1) - 1)
+        if a < b:
+            pairs.setdefault((a, b), []).append(f)
+    out: list[dict[str, str]] = []
+    for (a, b), fids in sorted(pairs.items()):
+        name = f"interface_{regions.names[a]}_{regions.names[b]}"
+        fname = f"{name}.stl"
+        write_binary_stl(tri_dir / fname, points_m, tri[np.isin(fid, np.asarray(fids, dtype=np.int64))], f"Magnusim {name}")
+        out.append({"name": name, "file": fname})
+    return out
+
+
 def write_refine_stls(
     tri_dir: Path, points_m, tris, face_ids, groups: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -323,8 +351,15 @@ def write_hexdominant_dicts(
     location_m: tuple[float, float, float] | None = None,
     layer_specs: list[Any] | None = None,
     refine_regions: list[dict[str, Any]] | None = None,
+    locations: list[tuple[tuple[float, float, float], str]] | None = None,
+    interfaces: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host.
+
+    ``locations`` (host API 1.8, a mesh of several regions): one ``(point, region)``
+    per body; written as ``locationsInMesh`` in place of ``locationInMesh``, so each
+    region becomes its own cellZone. ``interfaces`` (``write_interface_stls``) are the
+    surfaces between regions: refined like walls, no patch.
 
     With ``patches`` (``write_patch_stls``) each boundary patch is its own
     surface, so the mesh carries the BC patches; without, ``Body1.stl`` is one
@@ -390,6 +425,14 @@ def write_hexdominant_dicts(
             f"            patchInfo {{ type {ptype}; }}",
             "        }",
         ]
+    for itf in interfaces or []:
+        geometry_lines += [f"    {itf['file']}", "    {", "        type triSurfaceMesh;", f"        name {itf['name']};", "    }"]
+        refine_lines += [
+            f"        {itf['name']}",
+            "        {",
+            f"            level ({int(walls_level)} {int(walls_level)});",
+            "        }",
+        ]
     region_lines = []
     for r in regions:
         geometry_lines += [f"    {r['file']}", "    {", "        type triSurfaceMesh;", f"        name {r['name']};", "    }"]
@@ -437,8 +480,20 @@ def write_hexdominant_dicts(
             "",
             "    resolveFeatureAngle 20;",
             *region_txt,
-            f"    locationInMesh ({loc[0]:.8f} {loc[1]:.8f} {loc[2]:.8f});",
-            "    allowFreeStandingZoneFaces true;",
+            *(
+                [
+                    "    locationsInMesh",
+                    "    (",
+                    *(f"        (({p[0]:.8f} {p[1]:.8f} {p[2]:.8f}) {name})" for p, name in locations),
+                    "    );",
+                    "    allowFreeStandingZoneFaces false;",
+                ]
+                if locations
+                else [
+                    f"    locationInMesh ({loc[0]:.8f} {loc[1]:.8f} {loc[2]:.8f});",
+                    "    allowFreeStandingZoneFaces true;",
+                ]
+            ),
             "}",
             "",
             "snapControls",
@@ -559,6 +614,14 @@ def write_hexdominant_dicts(
         },
         "snappy_geometry_rev": int(SNAPPY_GEOMETRY_REV),
         "patches": [{"name": n, "type": t} for n, _f, t in surfaces],
+        **(
+            {
+                "locationsInMesh": [{"point": list(p), "region": name} for p, name in locations],
+                "interfaces": [i["name"] for i in interfaces or []],
+            }
+            if locations
+            else {}
+        ),
     }
 
 

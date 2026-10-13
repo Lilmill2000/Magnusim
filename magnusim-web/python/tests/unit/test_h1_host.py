@@ -60,7 +60,8 @@ def test_gate_h1_no_stubs(tmp_path, sample_project_dict):
         assert spec.fingerprint_payload is not None
         assert spec.generate is not None
         assert spec.fingerprint_payload(project) == expected
-        assert spec.multi_region is False
+        # Host API 1.8: Standard and Hex-dominant mesh several regions; cfMesh does not.
+        assert spec.multi_region is (spec.key in {"standard", "snappy_hexdominant"})
     standard = get_registry("mesher").get("standard")
     snappy = get_registry("mesher").get("snappy_hexdominant")
     assert standard.settings_schema

@@ -87,7 +87,8 @@ def test_mesher_specs_shape():
     }
     # What all three generators apply; nothing else is offered.
     assert standard.refinement_types == HONEST_REFINEMENTS
-    assert standard.multi_region is False
+    # Host API 1.8: Standard meshes a study's material regions, one cellZone each.
+    assert standard.multi_region is True
 
     cfmesh = reg.get("cfmesh")
     assert cfmesh.label == "cfMesh cartesianMesh (legacy)"

@@ -125,11 +125,13 @@ def test_validate_multi_region_rejects_when_mesher_false():
     b1 = Body(id="b2", name="B2", face_ids=b0.face_ids, role="fluid", region="other")
     proj2 = replace(proj, geometries=[replace(geom, bodies=[b0, b1])])
     standard = hub.registry("mesher").get("standard")
-    assert standard.multi_region is False
-    errs = validate_multi_region_meshing(proj2, standard)
-    assert errs
+    cfmesh = hub.registry("mesher").get("cfmesh")
+    # Host API 1.8: Standard meshes several regions; cfMesh does not.
+    assert standard.multi_region is True and cfmesh.multi_region is False
+    assert validate_multi_region_meshing(proj2, cfmesh)
+    assert validate_multi_region_meshing(proj2, standard) == []
     # single region OK
-    assert validate_multi_region_meshing(proj, standard) == []
+    assert validate_multi_region_meshing(proj, cfmesh) == []
 
 
 def test_analysis_validate_region_roles_fluid_ok():
