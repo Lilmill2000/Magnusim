@@ -1547,6 +1547,29 @@ function ensureGeometryThumb(projectId) {
   return job;
 }
 
+/**
+ * How long a thumbnail request waits for its picture. A render of a big part takes
+ * many seconds, and Home asks for every card's picture at once: requests held that
+ * long fill the browser's six connections to the app, and every other request of the
+ * page (a new folder, a rename) waits behind them. Past this the answer is "being
+ * made" (202, not kept) while the render goes on; the card asks again.
+ */
+export const THUMB_WAIT_MS = 250;
+
+/** The thumbnail, or { pending: true } when it is not made within THUMB_WAIT_MS. */
+export async function geometryThumbWithin(projectId, waitMs = THUMB_WAIT_MS) {
+  const job = ensureGeometryThumb(projectId);
+  let timer;
+  const late = new Promise((resolveLate) => {
+    timer = setTimeout(() => resolveLate({ pending: true }), waitMs);
+  });
+  try {
+    return await Promise.race([job, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function stlFingerprint(stlPath) {
   const buf = readFileSync(stlPath);
   const header = buf.subarray(0, 80).toString('ascii').replace(/\0+$/g, '');
@@ -2471,7 +2494,12 @@ export async function handleW16Api(req, res, u, parts, helpers) {
     }
     if (parts[2] === 'thumb' && (req.method === 'GET' || req.method === 'HEAD')) {
       const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
-      const got = await ensureGeometryThumb(pid);
+      const got = await geometryThumbWithin(pid);
+      if (got.pending) {
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Retry-After', '2');
+        return sendJson(res, 202, { ok: false, pending: true, error: 'The thumbnail is being made.', project_id: pid || '' });
+      }
       if (!got.ok) return sendJson(res, got.status, got.body);
       res.statusCode = 200;
       res.setHeader('Content-Type', 'image/png');
