@@ -22,7 +22,9 @@ function powershell() {
   }
   return null;
 }
-const PS = powershell();
+// Setup.ps1 is Windows PowerShell for Windows (Start-Process -Verb RunAs, wsl.exe, DISM):
+// its tests run on Windows only. CI's Linux runners have PowerShell 7, where they cannot pass.
+const PS = process.platform === 'win32' ? powershell() : null;
 
 /** Run Restart-Elevated from Setup.ps1 with `startProcess` standing in for Start-Process. */
 function elevate(startProcess) {
@@ -54,7 +56,7 @@ function elevate(startProcess) {
   }
 }
 
-describe('Setup asks Windows for Administrator', { skip: PS ? false : 'no PowerShell here (Setup runs on Windows)' }, () => {
+describe('Setup asks Windows for Administrator', { skip: PS ? false : 'Setup runs on Windows only' }, () => {
   it('starts itself elevated (RunAs, waiting for it) with -Elevated and -Plugins, and ends with its exit code', () => {
     const r = elevate(
       [
@@ -168,7 +170,7 @@ function ensureWsl(w) {
   }
 }
 
-describe('Setup turns WSL on without asking for a restart forever', { skip: PS ? false : 'no PowerShell here (Setup runs on Windows)' }, () => {
+describe('Setup turns WSL on without asking for a restart forever', { skip: PS ? false : 'Setup runs on Windows only' }, () => {
   it("the laptop's state: WSL's service is there but --status fails (no distro yet): it goes on to install Ubuntu", () => {
     const r = ensureWsl({ marker: 'wsl-feature', services: ['LxssManager'], statusCode: 1, distros: [] });
     assert.match(r.out, /ELEVATE install Ubuntu-24\.04 in WSL/);
