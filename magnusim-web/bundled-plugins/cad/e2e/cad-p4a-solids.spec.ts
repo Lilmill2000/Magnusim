@@ -387,6 +387,57 @@ test.describe('P4a solids', () => {
     expect(seen.errors).toEqual([]);
   });
 
+  test('cad:shell-unchanged: Shell on a block with its top edges rounded, top open: OCCT hands back the block unchanged; the row is red in words, the block still shows', async ({ page, request }) => {
+    // OCCT 7.9.3's MakeThickSolid "succeeds" here with the input itself (valid, same volume and
+    // faces); the feature used to show it as a finished Shell with no wall.
+    const { seen, frame } = await freshPart(page, request);
+    await addSolid(page);
+    // Round the top face's 4 edges: the face selected first, then Fillet.
+    await clickAt(page, [10, 10, 20]);
+    await runCommand(frame, 'modify.fillet');
+    await expect(panel(frame).locator('[data-pick-field="edges"] [data-pick-row]')).toHaveText([/^End face of Extrude 1\s*all its edges/]);
+    const r = panel(frame).locator('.nui[data-field="radius"] input');
+    await r.fill('3');
+    await r.press('Enter');
+    await settled(page);
+    await expect(featureRowNamed(frame, 'Fillet 1')).toHaveAttribute('data-state', 'ok');
+    // 8000 less 4 x 14 mm of the r 3 fillet section and 4 mitred corners of r^3 / 3 (the kernel: 7,855.8407).
+    const rounded = 8000 - 4 * 14 * 9 * (1 - Math.PI / 4) - 4 * 9;
+    await expectVolume(frame, page, rounded, 1e-6);
+    await panel(frame).locator('[data-panel-done]').click();
+    await expect(panel(frame)).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    // Shell with the (smaller) top face open, the default 2 mm inside.
+    await runCommand(frame, 'modify.shell');
+    await clickAt(page, [10, 10, 20]);
+    await expect(panel(frame).locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(1);
+    await settled(page);
+    await expect(featureRowNamed(frame, 'Shell 1')).toHaveAttribute('data-state', 'error');
+    await expect(foot(frame)).toHaveText(/^Shell 1 failed: the kernel could not make a 2 mm wall inside .+: try a thinner wall or other faces \(the kernel returned the body unchanged\)$/);
+    await expectVolume(frame, page, rounded, 1e-6);
+    await shot(page, 'shell-unchanged');
+    await panel(frame).locator('[data-panel-done]').click();
+    // After a reload the row is still red. Reload only once the Shell is stored (under load the
+    // autosave can come after a reload issued right after Done, and the Shell is not there).
+    await expect
+      .poll(
+        () =>
+          workspaceFrame(page).evaluate(() => {
+            const d = (window as unknown as W).__CAD__.services.doc.state.get();
+            return d.save.state === 'saved' && d.doc.features.some((f: { name: string }) => f.name === 'Shell 1');
+          }),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+    await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved');
+    await page.reload();
+    const again = await partOpened(page);
+    await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    await settled(page);
+    await expect(featureRowNamed(again, 'Shell 1')).toHaveAttribute('data-state', 'error');
+    expect(seen.errors).toEqual([]);
+  });
+
   test('cad:p4a-extrude-extents: a hole cut Through all (both sides); a post Up to the block\'s top face picked in the view', async ({ page, request }) => {
     const { seen, frame } = await freshPart(page, request);
     // The block from z = -10 to 10: the sketch plane (Top) cuts it in two halves.

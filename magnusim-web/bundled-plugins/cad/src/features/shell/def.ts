@@ -1,7 +1,8 @@
 // The shell feature type (proposal §2.5): hollow a body to a wall thickness, the
 // picked faces removed (the openings). Inside: the outer size stays; outside: the
 // body becomes the cavity and the wall grows out of it. Kernel `shell` on a work
-// copy (BRepOffsetAPI_MakeThickSolid); the result's `valid` flag is honoured. The
+// copy (BRepOffsetAPI_MakeThickSolid); the result's `valid` flag is honoured, and a
+// result with no generated face (OCCT's body-unchanged "success") is a failure. The
 // body keeps its id; an inner wall face is F:<id>:inner:<the face it was offset from>.
 // Owner: P4a SOLIDS.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -65,6 +66,13 @@ export const shellDef: FeatureTypeDef<ShellFeature, { t: number }> = {
       await ctx.release([out.id]);
       const why = out.reason ? ` (${out.reason.replace(/^invalid result\s*/i, '').trim()})` : '';
       return { ok: false, message: `${words()}${why}` };
+    }
+    // OCCT can "succeed" without making a wall: it hands back the body unchanged and valid
+    // (a spline side meeting a flat one, a fillet tangent to an opening). A wall always adds
+    // faces the shell generated, so a result with none is a failure, never a silent pass.
+    if (out.history && !out.history.faces.some((h) => h.from.some((s) => s.how === 'generated'))) {
+      await ctx.release([out.id]);
+      return { ok: false, message: `${words()} (the kernel returned the body unchanged)` };
     }
     const names = await localOpNames(f.id, 'inner', out, body, ctx.kernel);
     return { ok: true, bodies: [{ id: f.body, shape: out.id, valid: true, names }], removed: [], ...(res.warning ? { warning: res.warning } : {}) };

@@ -230,6 +230,25 @@ describe('Fillet, Chamfer, Shell', () => {
     await settle(r2.doc);
     expect(close(await volume(r2, blk2.body), 24 * 24 * 22 - 8000)).toBe(true);
   });
+
+  it('Shell: OCCT handing back the body unchanged is red in words, never a silent pass; the body before it still shows', async () => {
+    // A block with every edge rounded r 3, top open: OCCT 7.9.3's MakeThickSolid "succeeds"
+    // with the input itself (valid, same volume and faces). Before the fix the feature was ok.
+    const r = await part();
+    const blk = await block(r, 40, 30, 20);
+    const b = body(r);
+    const refs = await Promise.all((await topo(r, b)).edges.map((e) => edgeRef(r, b, e.i)));
+    const fl = await addFeature(r, 'fillet', { body: blk.body, edges: refs, radius: '3 mm' });
+    expect(fl.status.state).toBe('ok');
+    const filleted = await volume(r, blk.body);
+    const top = (await topo(r, body(r))).faces.find((f) => f.type === 'plane' && f.normal![2] > 0.99)!;
+    const sh = await addFeature(r, 'shell', { body: blk.body, faces: [await faceRef(r, body(r), top.i)], thickness: '2 mm' });
+    expect(sh.status.state).toBe('error');
+    expect(sh.status.message).toMatch(/^Shell 1 failed: the kernel could not make a 2 mm wall inside .+: try a thinner wall or other faces \(the kernel returned the body unchanged\)$/);
+    expect(r.doc.state.get().rebuild.bodies).toHaveLength(1);
+    expect(close(await volume(r, blk.body), filleted)).toBe(true);
+    // A real wall is still made (the test above: a plain block, inside and outside).
+  });
 });
 
 describe('Extrude: Through all, Up to, a flat face', () => {
