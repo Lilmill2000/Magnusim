@@ -291,17 +291,18 @@ html.cad-tb-drag-refused * {
 
 /* Fit levels (Toolbar useFitLevel): icons only where the labelled buttons do not fit the frame;
    the label stays in the tooltip and the accessible name. */
-.cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-btn,
-.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-btn,
-.cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']) .tb-btn {
+.cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']):not([data-group='view']):not([data-group='edit']) .tb-btn {
   min-width: 30px;
   padding: 4px 4px;
 }
 /* ux010 (TOOLBAR builder): VIEW's and EDIT's icons 24 px wide at fit level 1 (the 20 px icon
    box with 1 px each side), so SCALE MODELS fits beside them at 1280 px and no modelling command
-   loses its label for it. */
+   loses its label for it. The same at fit level 2, so that last step is always narrower than the
+   one before it. */
 .cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-btn,
-.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-btn {
+.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-btn,
+.cad-toolbar.is-fit-2 .tb-group[data-group='view'] .tb-btn,
+.cad-toolbar.is-fit-2 .tb-group[data-group='edit'] .tb-btn {
   min-width: 24px;
   padding: 4px 1px;
 }
@@ -340,6 +341,37 @@ html.cad-tb-drag-refused * {
   margin-left: 1px;
   font-size: 11px;
   line-height: 1;
+}
+
+/* Wider text than measured (a larger system font, text scaling or browser zoom, Linux's fallback
+   fonts; Toolbar ICON_ORDER): with everything foldable folded and the toolbar still too wide, the
+   groups first sit closer (3 px apart, 5 px to each separator, 4 px from the frame's edges; 54 px
+   less across the model toolbar), then go to icons one group at a time, the least used first
+   (is-icons: the heading stays, the label is the tooltip and the accessible name). Kept after the
+   More rule so a group's More goes to its icon too. */
+.cad-toolbar.is-fit-tight {
+  gap: 3px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.cad-toolbar.is-fit-tight .tb-group {
+  padding-right: 5px;
+}
+.cad-toolbar.is-fit-tight .tb-group.is-end {
+  padding-left: 5px;
+  padding-right: 0;
+}
+.cad-toolbar .tb-group.is-icons .tb-btn {
+  min-width: 30px;
+  padding: 4px 4px;
+}
+.cad-toolbar .tb-group.is-icons .tb-txt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 /* A command in a menu (the toolbar's More menus): icon, label, and its shortcut at the right. */

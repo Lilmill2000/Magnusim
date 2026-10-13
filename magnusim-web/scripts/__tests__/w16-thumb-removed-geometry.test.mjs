@@ -105,6 +105,37 @@ function holdThumbRenders() {
   return { started, release, renderStarted };
 }
 
+describe('a thumbnail request while the picture is still being made', () => {
+  it('answers "being made" at once instead of holding the connection, then the picture', { timeout: 300_000 }, async () => {
+    // Home asks for every card's picture together; a request held for a slow render
+    // filled the browser's six connections, and the page's next request (a new folder)
+    // was never sent (CI, once Python was found on Linux).
+    const pid = 'thumb-not-held';
+    seedProject(pid);
+    const held = holdThumbRenders();
+    try {
+      const t0 = Date.now();
+      const first = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`);
+      const took = Date.now() - t0;
+      await held.renderStarted();
+      assert.equal(first.statusCode, 202, JSON.stringify(first.body));
+      assert.equal(first.body.pending, true);
+      assert.equal(first.headers['cache-control'], 'no-store');
+      assert.ok(took < 10_000, `held ${took} ms`);
+      held.release();
+      let got = first;
+      for (let i = 0; i < 100 && got.statusCode !== 200; i += 1) {
+        await new Promise((r) => setTimeout(r, 100));
+        got = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`);
+      }
+      assert.equal(got.statusCode, 200);
+    } finally {
+      held.release();
+      setThumbRendererForTests(null);
+    }
+  });
+});
+
 describe('a thumbnail rendered while its geometry is deleted', () => {
   it('does not bring the deleted geometry folder back', { timeout: 300_000 }, async () => {
     const pid = 'thumb-geometry-removed';
