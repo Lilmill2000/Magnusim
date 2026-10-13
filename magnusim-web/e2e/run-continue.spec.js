@@ -131,8 +131,9 @@ test('Continue on a finished run: offered with its input, and refused when its c
   await expect(go).toBeDisabled();
 
   // Transient: "Run on to t = [2] s" (its end, 1 s, plus the span it ran).
-  rmSync(join(caseDir, '50'), { recursive: true, force: true });
-  rmSync(join(caseDir, '100'), { recursive: true, force: true });
+  // The app's field reader may still hold a file of these frames open for a moment (Windows).
+  rmSync(join(caseDir, '50'), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  rmSync(join(caseDir, '100'), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   cpSync(join(CAVITY, '0.5'), join(caseDir, '0.5'), { recursive: true });
   cpSync(join(CAVITY, '0.5'), join(caseDir, '1'), { recursive: true });
   writeFileSync(
