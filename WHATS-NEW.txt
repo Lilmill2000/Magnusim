@@ -24,6 +24,7 @@ Plugins
       simulation (in the tree, on the part in the view, or in its Geometry
       panel) to open it in CAD. Back with a change updates that geometry in
       place and keeps its boundary conditions; the original file is kept.
+      A part whose geometry you removed asks before adding it back.
     - Sketching: draw construction geometry with X, click-and-drag to draw,
       drag a fillet's arrow to set its radius, a compact Sketch panel, the
       design tree in a rail while you sketch, sketch cursors and round points,
@@ -72,11 +73,25 @@ Meshing
   names and summary.
 - Faster: pressure scaling fix, binary result fields, faster reconstruct and
   a much faster hex core.
+- Standard meshes parts whose surface healing opened a gap, refines around
+  small features by itself (so parts with small features get more cells),
+  and sizes automatic boundary layers by the local cells.
+- A mesh that fails says so in the Mesh panel, with a reason, also after a
+  reload, instead of meshing forever.
+
+Geometry and view
+- Hide and show bodies of a multi-body part: right-click a body in the view
+  or in the setup tree (one or several; hidden rows are grey).
+- Hiding a face of a big part no longer freezes the view.
+- A part removed and added again under the same name gets its own
+  thumbnail; removing a geometry takes its studies out of the open tab, and
+  removing the last one leaves the workbench empty.
 
 Reliability
 - Finished meshes and solves no longer leave their WSL copies behind; old
   ones are cleaned up on the next start.
 - Deleted studies and geometries stay deleted; the setup tree updates at once.
+- A run is no longer marked failed the moment it starts while the PC is busy.
 - run.bat keeps the app on the code it started with; stop.bat ends only this
   folder's app.
 
@@ -85,6 +100,9 @@ Known limits
   over-predicts a laminar pipe's pressure drop by about 16 % (as in 0.2.0).
   A more accurate scheme is planned for the next version.
 - Airfoil's XFOIL engine runs on Windows only.
+- Standard meshes of some complex parts can still have very skewed cells
+  (non-orthogonality up to about 84 degrees at fineness 5); they solve, but
+  check the mesh quality summary.
 - CAD: big STEP imports need 1-2 GB of browser memory; the rest of its
   known limitations are in magnusim-web/bundled-plugins/cad/README.md.
 
