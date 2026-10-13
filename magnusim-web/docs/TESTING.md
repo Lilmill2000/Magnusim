@@ -104,6 +104,12 @@ ignored.
 - `MAGNUSIM_E2E_LOCK_WAIT_MS` bounds the wait (default 4 hours).
 - `MAGNUSIM_E2E_LOCK=0` skips the lock.
 
+**Two runs in one tree** need different `MAGNUSIM_E2E_PORT`s. A run on a port other
+than 8083 gets its own projects root and prefs (`e2e/.tmp-projects-<port>`,
+`e2e/.tmp-prefs-<port>.json`): each run's server start empties its root and seeds it
+again, so a shared root lost a running test's projects. `MAGNUSIM_E2E_PROJECTS_ROOT`
+names a root the run uses as it is (its server start never empties it).
+
 ## Writing tests
 
 - **Every bug fixed gets a browser test in a suite that runs by default.** It

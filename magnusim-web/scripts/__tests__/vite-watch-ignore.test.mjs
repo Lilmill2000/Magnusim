@@ -41,6 +41,7 @@ describe('Vite watch ignore', () => {
     for (const rel of [
       'projects/p1/project.json',
       'e2e/.tmp-projects/p1/project.json',
+      'e2e/.tmp-projects-8210/p1/project.json',
       'python/cfddesk/registry/__init__.py',
       'plugins/demo/.venv/Lib/site.py',
       'plugins/demo/__pycache__/x.pyc',

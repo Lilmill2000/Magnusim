@@ -495,6 +495,30 @@ test('the plugin seam re-exports what plugin suites use', async () => {
   }
 });
 
+test('a run on another port gets its own projects root and prefs; 8083 keeps e2e/.tmp-projects', async () => {
+  const { appSuiteConfig } = await import('../../e2e/support/app-config.js');
+  const saved = { ...process.env };
+  process.env.MAGNUSIM_E2E_SETTLED = '1';
+  delete process.env.MAGNUSIM_E2E_PROJECTS_ROOT;
+  try {
+    const at = (port) => {
+      process.env.MAGNUSIM_E2E_PORT = port;
+      const env = appSuiteConfig({ testDir: join(WEB_ROOT, 'e2e') }).webServer.env;
+      return { root: env.MAGNUSIM_PROJECTS_ROOT, prefs: env.MAGNUSIM_LOCAL_JSON };
+    };
+    const main = at('8083');
+    const other = at('8210');
+    // Each run's server start empties its root: two runs in one tree must not share one.
+    assert.equal(main.root, join(WEB_ROOT, 'e2e', '.tmp-projects'));
+    assert.equal(main.prefs, join(WEB_ROOT, 'e2e', '.tmp-prefs.json'));
+    assert.equal(other.root, join(WEB_ROOT, 'e2e', '.tmp-projects-8210'));
+    assert.equal(other.prefs, join(WEB_ROOT, 'e2e', '.tmp-prefs-8210.json'));
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+});
+
 test('a plugin suite seeds its own projects after the core\'s', async () => {
   const { appSuiteConfig } = await import('../../e2e/support/app-config.js');
   const { runSuiteSeed } = await import('../../e2e/support/seed-suite.js');
@@ -504,9 +528,11 @@ test('a plugin suite seeds its own projects after the core\'s', async () => {
   process.env.MAGNUSIM_E2E_SETTLED = '1';
   try {
     const cfg = appSuiteConfig({ name: 'incompressible_flow', testDir: dirname(seedPath), seed: seedPath });
-    assert.match(cfg.webServer.command, /^node e2e\/prepare-projects\.js && node e2e\/support\/seed-suite\.js ".*seed\.js" && npm run dev$/);
+    assert.match(cfg.webServer.command, /^node e2e\/prepare-projects\.js "(.*)" && node e2e\/support\/seed-suite\.js ".*seed\.js" && npm run dev$/);
+    // The core's projects are seeded into the run's own root (its server's MAGNUSIM_PROJECTS_ROOT).
+    assert.equal(cfg.webServer.command.match(/^node e2e\/prepare-projects\.js "(.*?)"/)[1], cfg.webServer.env.MAGNUSIM_PROJECTS_ROOT);
     const core = appSuiteConfig({ testDir: join(WEB_ROOT, 'e2e') });
-    assert.equal(core.webServer.command, 'node e2e/prepare-projects.js && npm run dev');
+    assert.equal(core.webServer.command, `node e2e/prepare-projects.js "${core.webServer.env.MAGNUSIM_PROJECTS_ROOT}" && npm run dev`);
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);

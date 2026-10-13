@@ -303,7 +303,8 @@ export function prepareE2eProjectsRoot(destRoot = resolve(__dirname, '.tmp-proje
 }
 
 if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || process.argv[1]?.endsWith('prepare-projects.js')) {
-  const root = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || prepareE2eProjectsRoot();
+  // The root to seed (e2e/support/app-config.js passes its run's own), else e2e/.tmp-projects.
+  const root = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || prepareE2eProjectsRoot(process.argv[2] ? resolve(process.argv[2]) : undefined);
   const prefs = process.env.MAGNUSIM_LOCAL_JSON || resolve(__dirname, '.tmp-prefs.json');
   writeFileSync(prefs, JSON.stringify({ wizard_completed: true, units: 'Metric', port: Number(process.env.MAGNUSIM_PORT || 8083) }));
   process.stdout.write(root + '\n');

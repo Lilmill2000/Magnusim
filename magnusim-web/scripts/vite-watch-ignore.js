@@ -15,8 +15,9 @@ const IGNORED_PARTS = [
   '/node_modules/',
   '/.git/',
   '/projects/',
-  // Playwright's projects root; a watched run folder blocks the live-sync rename from WSL.
-  '/.tmp-projects/',
+  // Playwright's projects roots (.tmp-projects, .tmp-projects-<port>); a watched run
+  // folder blocks the live-sync rename from WSL.
+  '/.tmp-projects',
   '/.cache/',
   '/python/',
   // A plugin's own virtual environment or bytecode (plugins/<key>/.venv).

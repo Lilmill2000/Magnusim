@@ -23,12 +23,16 @@ export const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '
 export function appSuiteConfig({ testDir, name = 'core', seed = '' }) {
   const PORT = process.env.MAGNUSIM_E2E_PORT || '8083';
   const baseURL = `http://127.0.0.1:${PORT}`;
-  const projectsRoot = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || join(WEB_ROOT, 'e2e', '.tmp-projects');
+  // A run on another port gets its own projects root and prefs: each run's server start
+  // empties and re-seeds its root (e2e/prepare-projects.js), which deleted the files of
+  // a second run's projects in the same folder mid-test (a big import then failed).
+  const own = PORT === '8083' ? '' : `-${PORT}`;
+  const projectsRoot = process.env.MAGNUSIM_E2E_PROJECTS_ROOT || join(WEB_ROOT, 'e2e', `.tmp-projects${own}`);
   process.env.MAGNUSIM_PROJECTS_ROOT = projectsRoot;
   // Test servers never sweep the WSL case root, which holds this PC's real cases
   // (wsl-prune.spec.js turns the sweep on for its own server and its own root).
   process.env.MAGNUSIM_WSL_PRUNE ??= '0';
-  const prefsPath = join(WEB_ROOT, 'e2e', '.tmp-prefs.json');
+  const prefsPath = join(WEB_ROOT, 'e2e', `.tmp-prefs${own}.json`);
   // Every test runs by default; real meshes and solves need WSL with OpenFOAM (see e2e/toolchain.js).
   const toolchain = settleE2eToolchain();
 
@@ -52,8 +56,8 @@ export function appSuiteConfig({ testDir, name = 'core', seed = '' }) {
     },
     webServer: {
       command: seed
-        ? `node e2e/prepare-projects.js && node e2e/support/seed-suite.js "${resolve(seed)}" && npm run dev`
-        : 'node e2e/prepare-projects.js && npm run dev',
+        ? `node e2e/prepare-projects.js "${projectsRoot}" && node e2e/support/seed-suite.js "${resolve(seed)}" && npm run dev`
+        : `node e2e/prepare-projects.js "${projectsRoot}" && npm run dev`,
       cwd: WEB_ROOT,
       url: baseURL,
       reuseExistingServer: false,

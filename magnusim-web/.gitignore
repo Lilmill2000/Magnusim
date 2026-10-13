@@ -9,6 +9,8 @@ projects/
 !python/tests/fixtures/projects/
 !python/tests/fixtures/projects/**
 e2e/.tmp-projects/
+e2e/.tmp-projects-*/
+e2e/.tmp-prefs*.json
 .magnusim-local.json
 .cfddesk-local.json
 .magnusim-plugin-prefs/
