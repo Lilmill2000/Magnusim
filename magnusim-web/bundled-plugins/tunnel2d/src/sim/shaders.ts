@@ -4,6 +4,7 @@
 import * as dye from './dye';
 import { allShaders } from './kernels';
 import * as particles from './particles';
+import { refineShaders } from './refine';
 import { rheoShader } from './rheo';
 import * as streamlines from './streamlines';
 
@@ -20,6 +21,7 @@ export function everyShader(): { label: string; code: string }[] {
     { label: 'streamlines trace', code: streamlines.traceShader },
     { label: 'streamlines draw', code: streamlines.drawShader },
     { label: 'rheoscopic', code: rheoShader() },
+    ...refineShaders(),
   ];
 }
 

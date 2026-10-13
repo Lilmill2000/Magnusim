@@ -50,6 +50,8 @@ export interface Overlays {
   trail: GPUTexture | null;
   /** The rheoscopic field and its lighting, when that view is on. */
   rheo: { field: GPUBuffer; look: RheoLook; sparkle: [number, number] } | null;
+  /** A refinement patch's own field (its cells per lattice cell, grid and rectangle in lattice cells). */
+  patch?: { scalar: GPUBuffer; scale: number; nx: number; ny: number; x0: number; y0: number; x1: number; y1: number } | null;
 }
 
 /** A rheoscopic look: the tank's dark base and two lights (direction xyz, colour rgb, diffuse strength). */
@@ -87,7 +89,7 @@ export class Renderer {
       fragment: { module, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list' },
     });
-    this.viewBuf = device.createBuffer({ size: 304, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.viewBuf = device.createBuffer({ size: 336, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.lutBuf = device.createBuffer({ size: 256 * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.dummyBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE });
     this.dummyTex = device.createTexture({ size: [1, 1], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING });
@@ -139,10 +141,11 @@ export class Renderer {
         { binding: 7, resource: { buffer: ov.dye ?? this.dummyBuf } },
         { binding: 8, resource: (ov.trail ?? this.dummyTex).createView() },
         { binding: 9, resource: { buffer: ov.rheo?.field ?? this.dummyBuf } },
+        { binding: 10, resource: { buffer: ov.patch?.scalar ?? this.dummyBuf } },
       ],
     });
     const flags = (ov.plain ? 1 : 0) | (ov.arrows ? 2 : 0) | (ov.dye ? 4 : 0) | (ov.trail ? 8 : 0) | (ov.rheo ? 16 : 0);
-    const d = new ArrayBuffer(304);
+    const d = new ArrayBuffer(336);
     const f = new Float32Array(d);
     const u = new Uint32Array(d);
     f.set([view.scale, view.ox, view.oy, range.lo, range.hi, solver.nx, solver.ny, solver.absorbInX, solver.spongeX, ov.uRef, ov.arrowCells]);
@@ -162,6 +165,10 @@ export class Renderer {
       f.set([...L.l2.dir, 0], 64);
       f.set([...L.l2.color, L.l2.diffuse], 68);
       f.set([L.sharp, ov.rheo.sparkle[0], ov.rheo.sparkle[1], L.glint], 72);
+    }
+    if (ov.patch) {
+      const q = ov.patch;
+      f.set([q.x0, q.y0, q.x1, q.y1, q.scale, q.nx, q.ny, 1], 76);
     }
     this.device.queue.writeBuffer(this.viewBuf, 0, d);
     const pass = enc.beginRenderPass({

@@ -59,7 +59,12 @@ async function main() {
   let device: GPUDevice;
   try {
     device = await adapter.requestDevice({
-      requiredLimits: { maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize },
+      requiredLimits: {
+        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+        maxBufferSize: adapter.limits.maxBufferSize,
+        // Refinement patches bind more storage buffers than the default 8 (when the GPU has them).
+        maxStorageBuffersPerShaderStage: Math.min(adapter.limits.maxStorageBuffersPerShaderStage, 16),
+      },
     });
   } catch (err) {
     fatal('The GPU could not be opened', String(err));

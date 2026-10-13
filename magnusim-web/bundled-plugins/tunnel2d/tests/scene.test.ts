@@ -31,6 +31,12 @@ describe('the scene file', () => {
     expect(parseScene({ flow: { model: 'sa' } }).flow.model).toBe('sa');
     expect(parseScene({ flow: { model: 'rans' } }).flow.model).toBe('auto');
   });
+  it('reads the refinement levels (0, 1, 2), with none for older files and bad values', () => {
+    expect(parseScene({ version: 3 }).tunnel.refine).toBe(0);
+    expect(parseScene({ tunnel: { refine: 2 } }).tunnel.refine).toBe(2);
+    expect(parseScene({ tunnel: { refine: '1' } }).tunnel.refine).toBe(1);
+    expect(parseScene({ tunnel: { refine: 5 } }).tunnel.refine).toBe(0);
+  });
   it('picks the turbulence model automatically from a real Reynolds number of 100,000', () => {
     const s = defaultScene(); // a 1 m chord at 10 m/s in air: Re about 660,000
     expect(flowModelFor(s)).toBe('sa');

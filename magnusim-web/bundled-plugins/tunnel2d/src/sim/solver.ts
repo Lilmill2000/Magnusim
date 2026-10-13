@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SdfGrid } from '../geometry/sdf';
 import { FORCE_FIX, FORCE_WORDS, HEALTH_SLOT, MAX_BODIES, MAX_STEPS, TURB, W, WALLS, WG, fieldShader, macroShader, stepShader } from './kernels';
+import type { Patch } from './refine';
 
 export interface SimConfig {
   nx: number;
@@ -12,6 +13,8 @@ export interface SimConfig {
   profile?: 0 | 1;
   /** Absorbing layers at the inlet (5 %) and outlet (15 %); off only for the validation channel. */
   absorbing?: boolean;
+  /** A refinement patch's fine grid: no domain edges (its edge cells are set by the coupling). */
+  patch?: boolean;
 }
 
 export interface Physics {
@@ -85,6 +88,12 @@ export class Solver {
   /** Per-step velocity, ν̃ and total viscosity (two, swapped with the populations) while a turbulence model is on. */
   private aux: [GPUBuffer, GPUBuffer] | null = null;
   private auxDummy: [GPUBuffer, GPUBuffer];
+  /** Pre-collision moments per cell (density, Π_neq), for refinement interfaces: two, swapped with the populations. */
+  private mom: [GPUBuffer, GPUBuffer] | null = null;
+  private momDummy: [GPUBuffer, GPUBuffer];
+
+  /** Refinement patches inside this grid, stepped with it. */
+  private children: Patch[] = [];
   readonly macroBuf: GPUBuffer;
   readonly scalarBuf: GPUBuffer;
   private fieldUni: GPUBuffer;
@@ -101,7 +110,7 @@ export class Solver {
 
   constructor(device: GPUDevice, cfg: SimConfig) {
     this.device = device;
-    this.config = { profile: 0, absorbing: true, ...cfg };
+    this.config = { profile: 0, absorbing: !cfg.patch, patch: false, ...cfg };
     this.nx = cfg.nx;
     this.ny = cfg.ny;
     this.n = cfg.nx * cfg.ny;
@@ -114,6 +123,7 @@ export class Solver {
     this.forceBuf = device.createBuffer({ size: FORCE_WORDS * 4, usage: S.STORAGE | S.COPY_SRC | S.COPY_DST });
     this.slotBuf = device.createBuffer({ size: MAX_STEPS * 256, usage: S.UNIFORM | S.COPY_DST });
     this.auxDummy = [device.createBuffer({ size: 16, usage: S.STORAGE }), device.createBuffer({ size: 16, usage: S.STORAGE })];
+    this.momDummy = [device.createBuffer({ size: 16, usage: S.STORAGE }), device.createBuffer({ size: 16, usage: S.STORAGE })];
     const slots = new Uint32Array(MAX_STEPS * 64);
     for (let s = 0; s < MAX_STEPS; s++) slots[s * 64] = s;
     device.queue.writeBuffer(this.slotBuf, 0, slots);
@@ -124,7 +134,7 @@ export class Solver {
     this.sampleH = Math.ceil(this.ny / SAMPLE_STRIDE);
     this.sampledBuf = device.createBuffer({ size: this.sampleW * this.sampleH * 4, usage: S.STORAGE | S.COPY_SRC });
     this.sampledRead = device.createBuffer({ size: this.sampleW * this.sampleH * 4, usage: S.MAP_READ | S.COPY_DST });
-    this.stepModule = device.createShaderModule({ code: stepShader(), label: 'tunnel step' });
+    this.stepModule = device.createShaderModule({ code: stepShader(this.config.patch), label: this.config.patch ? 'tunnel patch step' : 'tunnel step' });
     this.macroPipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: macroShader(), label: 'tunnel macro' }), entryPoint: 'main' } });
     this.fieldPipe = device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code: fieldShader(), label: 'tunnel field' }), entryPoint: 'main' } });
     const groups = Math.ceil(this.n / WG);
@@ -163,29 +173,86 @@ export class Solver {
     this.device.queue.writeBuffer(this.aux[1], 0, a);
   }
 
-  setPhysics(p: Physics) {
+  /** Refinement (being a patch, or holding one) needs the auxiliary field and the moments. */
+  private get refining() {
+    return this.config.patch || this.children.length > 0;
+  }
+
+  /** The refinement patches stepped with this grid (each made with this as its parent). */
+  setPatches(children: Patch[]) {
+    const was = this.refining;
+    this.children = children;
+    if (this.refining !== was) this.setPhysics(this.physics, true);
+  }
+
+  get patches(): readonly Patch[] {
+    return this.children;
+  }
+
+  /** Bumped whenever a buffer a refinement coupling binds is replaced. */
+  gen = 0;
+
+  /** After a fill into the other population buffer: make it the current one. */
+  swapCur() {
+    this.cur ^= 1;
+  }
+
+  /** What a refinement coupling reads and writes: populations, auxiliary field, moments, which buffer is now. */
+  get levelBuffers() {
+    return { f: this.f, aux: this.aux ?? this.auxDummy, mom: this.mom ?? this.momDummy, cur: this.cur };
+  }
+
+  setPhysics(p: Physics, force = false) {
     this.physics = p;
     const turb = p.turb ?? 'off';
-    if (turb !== 'off' && !this.aux) {
+    const needAux = turb !== 'off' || this.refining;
+    if (this.refining && !this.mom) {
+      const mk = () => this.device.createBuffer({ size: 16 * this.n, usage: GPUBufferUsage.STORAGE });
+      this.mom = [mk(), mk()];
+      this.stepBG = null;
+      this.gen++;
+    } else if (!this.refining && this.mom) {
+      for (const b of this.mom) b.destroy();
+      this.mom = null;
+      this.stepBG = null;
+      this.gen++;
+    }
+    if (needAux && !this.aux) {
       const S = GPUBufferUsage;
       this.aux = [this.device.createBuffer({ size: 16 * this.n, usage: S.STORAGE | S.COPY_DST | S.COPY_SRC }), this.device.createBuffer({ size: 16 * this.n, usage: S.STORAGE | S.COPY_DST | S.COPY_SRC })];
       this.resetAux();
       this.stepBG = null;
-    } else if (turb === 'off' && this.aux) {
+      this.gen++;
+    } else if (!needAux && this.aux) {
       for (const b of this.aux) b.destroy();
       this.aux = null;
       this.stepBG = null;
+      this.gen++;
     }
     const bulk = p.bulkKeep ?? 0;
-    const key = `${this.config.walls}|${p.smagorinsky}|${turb}|${bulk}`;
-    if (key !== this.stepPipeKey) {
+    const key = `${this.config.walls}|${p.smagorinsky}|${turb}|${bulk}|${this.config.patch}|${this.refining}`;
+    if (key !== this.stepPipeKey || force) {
       this.stepPipe = this.device.createComputePipeline({
         layout: 'auto',
-        compute: { module: this.stepModule, entryPoint: 'step', constants: { WALLS: WALLS[this.config.walls], SMAG: p.smagorinsky ? 1 : 0, TURB: TURB[turb], KEEP_BULK: bulk } },
+        compute: {
+          module: this.stepModule,
+          entryPoint: 'step',
+          constants: {
+            WALLS: WALLS[this.config.walls],
+            SMAG: p.smagorinsky ? 1 : 0,
+            TURB: TURB[turb],
+            KEEP_BULK: bulk,
+            PATCH: this.config.patch ? 1 : 0,
+            AUXW: this.refining ? 1 : 0,
+            MOMW: this.refining ? 1 : 0,
+          },
+        },
       });
       this.stepPipeKey = key;
       this.stepBG = null;
       this.slotBGs = [];
+      // A new pipeline has its own layouts: groups made for the old one no longer fit.
+      this.gen++;
     }
   }
 
@@ -218,7 +285,7 @@ export class Solver {
     return this.config.absorbing ? this.nx * 0.05 : -1;
   }
   get spongeX() {
-    return this.nx * 0.85;
+    return this.config.patch ? 1e9 : this.nx * 0.85;
   }
 
   /** The bodies in the flow; their fields are uploaded again only when a shape or the set changes. */
@@ -280,7 +347,8 @@ export class Solver {
     if (!this.stepBG) {
       const layout = this.stepPipe.getBindGroupLayout(0);
       const aux = this.aux ?? this.auxDummy;
-      const bg = (a: GPUBuffer, b: GPUBuffer, xa: GPUBuffer, xb: GPUBuffer) =>
+      const mom = this.mom ?? this.momDummy;
+      const bg = (a: GPUBuffer, b: GPUBuffer, xa: GPUBuffer, xb: GPUBuffer, m: GPUBuffer) =>
         this.device.createBindGroup({
           layout,
           entries: [
@@ -292,9 +360,11 @@ export class Solver {
             { binding: 5, resource: { buffer: this.forceBuf } },
             { binding: 6, resource: { buffer: xa } },
             { binding: 7, resource: { buffer: xb } },
+            { binding: 8, resource: { buffer: m } },
           ],
         });
-      this.stepBG = [bg(this.f[0], this.f[1], aux[0], aux[1]), bg(this.f[1], this.f[0], aux[1], aux[0])];
+      // The moments are written with the step's output, swapped like it.
+      this.stepBG = [bg(this.f[0], this.f[1], aux[0], aux[1], mom[1]), bg(this.f[1], this.f[0], aux[1], aux[0], mom[0])];
     }
     if (!this.slotBGs.length) {
       const layout = this.stepPipe.getBindGroupLayout(1);
@@ -307,32 +377,65 @@ export class Solver {
    * Advance `steps` (≤ MAX_STEPS; 0 = only refresh the displayed field) with each body moving
    * from its `from` pose to its `to` pose. Encodes into `enc`; call `finish` after submitting.
    */
-  encodeFrame(enc: GPUCommandEncoder, steps: number, field: { mode: number; uRef: number; lRef: number; rhoRef?: number }): { readForces: boolean } {
-    const count = Math.min(MAX_STEPS, Math.max(0, Math.floor(steps)));
+  /** The most steps a frame may take: the patches' fine steps share the per-step slots. */
+  get maxFrameSteps(): number {
+    return Math.floor(MAX_STEPS / this.depthFactor);
+  }
+
+  /** Fine steps per step of this grid, down its deepest chain of patches (1 with none). */
+  private get depthFactor(): number {
+    return this.children.reduce((m, c) => Math.max(m, 2 * c.fine.depthFactor), 1);
+  }
+
+  /** Set this grid (and its patches) up for a frame of `count` steps: parameters, poses, cleared forces. */
+  private beginFrame(enc: GPUCommandEncoder, count: number) {
     this.writeParams(Math.max(1, count));
     this.writeBodies();
-    const bgs = this.bindGroups();
-    let readForces = false;
+    this.bindGroups();
     if (count > 0) {
       enc.clearBuffer(this.forceBuf, 0, Math.min(FORCE_WORDS * 4, count * MAX_BODIES * 8));
       enc.clearBuffer(this.forceBuf, HEALTH_SLOT * 4, 16);
+    }
+    for (const c of this.children) c.fine.beginFrame(enc, 2 * count);
+  }
+
+  /** The layout of the step's group 2: a patch's edge rebuild reads its parent through it. */
+  get edgeLayout(): GPUBindGroupLayout {
+    return this.stepPipe.getBindGroupLayout(2);
+  }
+
+  /** One step of this grid as step `slot` of the frame (a patch's with its edge group), then its patches' coupled fine steps. */
+  encodeStep(pass: GPUComputePassEncoder, slot: number, edge?: GPUBindGroup) {
+    const bgs = this.bindGroups();
+    pass.setPipeline(this.stepPipe);
+    pass.setBindGroup(0, bgs[this.cur]);
+    pass.setBindGroup(1, this.slotBGs[slot]);
+    if (this.config.patch) {
+      if (!edge) throw new Error('A patch steps with its edge group.');
+      pass.setBindGroup(2, edge);
+    }
+    pass.dispatchWorkgroups(this.groups[0], this.groups[1]);
+    this.cur ^= 1;
+    this.stepsDone++;
+    for (const c of this.children) c.encodeCoupled(pass, slot);
+  }
+
+  encodeFrame(enc: GPUCommandEncoder, steps: number, field: { mode: number; uRef: number; lRef: number; rhoRef?: number }): { readForces: boolean } {
+    const count = Math.min(this.maxFrameSteps, Math.max(0, Math.floor(steps)));
+    this.beginFrame(enc, count);
+    let readForces = false;
+    if (count > 0) {
       const pass = enc.beginComputePass({ label: 'tunnel steps' });
-      pass.setPipeline(this.stepPipe);
-      for (let s = 0; s < count; s++) {
-        pass.setBindGroup(0, bgs[this.cur]);
-        pass.setBindGroup(1, this.slotBGs[s]);
-        pass.dispatchWorkgroups(this.groups[0], this.groups[1]);
-        this.cur ^= 1;
-      }
+      for (let s = 0; s < count; s++) this.encodeStep(pass, s);
       pass.end();
-      this.stepsDone += count;
-      readForces = true;
+      readForces = count > 0;
     }
     this.encodeField(enc, field);
     return { readForces };
   }
 
-  private encodeField(enc: GPUCommandEncoder, field: { mode: number; uRef: number; lRef: number; rhoRef?: number }) {
+  /** The macro and field passes alone (density, velocity, the displayed scalar). */
+  encodeField(enc: GPUCommandEncoder, field: { mode: number; uRef: number; lRef: number; rhoRef?: number }) {
     const d = new ArrayBuffer(48);
     const u = new Uint32Array(d);
     const f = new Float32Array(d);
@@ -463,7 +566,8 @@ export class Solver {
 
   destroy() {
     this.destroyed = true;
-    for (const b of [...(this.aux ?? []), ...this.auxDummy]) b.destroy();
+    for (const b of [...(this.aux ?? []), ...this.auxDummy, ...this.momDummy, ...(this.mom ?? [])]) b.destroy();
+    for (const c of this.children) c.destroy();
     for (const b of [...this.f, this.paramsBuf, this.bodiesBuf, this.sdfBuf, this.forceBuf, this.slotBuf, this.macroBuf, this.scalarBuf, this.fieldUni, this.sampledBuf, ...this.staging]) b.destroy();
     this.staging = [];
   }

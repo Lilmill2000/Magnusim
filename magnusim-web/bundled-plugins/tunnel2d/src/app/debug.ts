@@ -43,7 +43,7 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
       const h = turnHandle(engine, b);
       return { x: r.left + h.x, y: r.top + h.y, cx: r.left + h.cx, cy: r.top + h.cy };
     },
-    validate: (N = 20, tstar = 200) => runSchaferTurek(device, N, tstar),
+    validate: (N = 20, tstar = 200, refine = false) => runSchaferTurek(device, N, tstar, undefined, refine),
     /** The turbulence model's checks (R1): an airfoil in a large open tunnel, a flat plate. */
     validateAirfoil: (a: AirfoilSpec) => runCase(device, airfoilCase(a)),
     validatePlate: (p: PlateSpec) => runCase(device, plateCase(p)),
@@ -127,6 +127,8 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
       return { channels: d.channels, sums, maxX, insideSum };
     },
     streamlines: () => engine.streamlineCount,
+    /** The refinement patches round the bodies: per group, each level's rectangle and grid. */
+    refine: () => engine.refineInfo(),
     /** The rheoscopic field, summed up; null when the view is off. */
     rheo: () => engine.readRheo(),
   };

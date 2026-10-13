@@ -6,10 +6,11 @@
 import { generate } from '../geometry/naca';
 import { ensureCcw, transform, type Poly } from '../geometry/polygon';
 import { bakeSdf } from '../geometry/sdf';
-import { MAX_STEPS, SA_SDF_BAND, TE_MIN_CELLS, TURB } from './kernels';
+import { SA_SDF_BAND, TE_MIN_CELLS, TURB } from './kernels';
 import { thickenRear } from '../geometry/shapes';
-import { Solver } from './solver';
-import { analyzeSurface, blStation, type BlStation, type Panel } from './surface';
+import { Refinement, rectAround } from './refine';
+import { Solver, type FrameResult } from './solver';
+import { analyzeSurface, blStation, boxForce, type BlStation, type Panel } from './surface';
 import { GRID_RE_MAX, SMAG_BELOW_NU, SMAG_CS, U_LATTICE } from './units';
 
 
@@ -38,6 +39,9 @@ export interface CaseSpec {
   bulkKeep?: number;
   u?: number;
   walls?: 'farfield' | 'slip' | 'noslip';
+  /** Refinement levels round the body (0: none), and a factor on the patches' margins. */
+  refine?: number;
+  refineMargin?: number;
   /** Chord stations (x/c from the leading edge, the body's own frame) to report the boundary layer at. */
   blStations?: number[];
   /** Leading edge's offset from the pivot (cells, body frame) for those stations. */
@@ -45,6 +49,8 @@ export interface CaseSpec {
 }
 
 export interface CaseResult {
+  /** The momentum balance on boxes round the body (margin in reference lengths): an independent force. */
+  boxes?: { margin: number; cd: number; cl: number }[];
   /** Boundary layer per station: upper and lower sides (thicknesses in chords). */
   bl?: { xc: number; upper: BlStation | null; lower: BlStation | null }[];
   fields?: { nx: number; ny: number; mac: number[]; aux: number[] | null };
@@ -117,10 +123,33 @@ export async function runCase(device: GPUDevice, c: CaseSpec, onProgress?: (f: n
     bulkKeep: c.bulkKeep,
   });
   solver.reset(u);
-  const sdf = bakeSdf(c.poly, c.turb === 'sa' ? SA_SDF_BAND : undefined);
+  const band = c.turb === 'sa' ? SA_SDF_BAND : undefined;
+  const sdf = bakeSdf(c.poly, band);
   const theta = (-c.alpha * Math.PI) / 180;
   const pose = { x: c.x, y: c.y, theta };
   solver.setBodies([{ key: 'case', sdf, from: pose, to: pose }]);
+  // Refinement: level 1 round the body and its near wake, level 2 tighter round the body.
+  let ref: Refinement | null = null;
+  const levels = c.refine ?? 0;
+  if (levels > 0) {
+    const physics = { u, tau: 3 * resolvedNu + 0.5, smagorinsky: !sa && resolvedNu < SMAG_BELOW_NU, smagCs: SMAG_CS, turb: c.turb, nuMol, nuFloor, bulkKeep: c.bulkKeep };
+    const farW = Math.max(4, c.ny * 0.06);
+    const rects = [];
+    let world = transform(c.poly, pose);
+    let bounds = { x0: Math.ceil(c.nx * 0.05) + 6, y0: Math.ceil(farW) + 6, x1: Math.floor(c.nx * 0.85) - 6, y1: Math.floor(c.ny - farW) - 6 };
+    let l = c.lRef;
+    for (let i = 0; i < levels; i++) {
+      const g = c.refineMargin ?? 1;
+      const m = i === 0 ? { ahead: 0.3 * g, side: 0.3 * g, behind: 0.7 * g } : { ahead: 0.12 * g, side: 0.12 * g, behind: 0.3 * g };
+      const r = rectAround(world, l, m, bounds);
+      rects.push(r);
+      world = world.map((v, k) => 2 * (v - (k % 2 ? r.oy : r.ox)));
+      l *= 2;
+      bounds = { x0: 6, y0: 6, x1: 2 * r.wc - 6, y1: 2 * r.hc - 6 };
+    }
+    ref = new Refinement(device, solver, rects, physics);
+    ref.setBodies([{ key: 'case', local: c.poly, band, from: pose, to: pose }]);
+  }
   const convective = c.lRef / u;
   const steps = Math.ceil(c.tstar * convective);
   const tailFrom = Math.floor(steps * (1 - (c.tail ?? 0.25)));
@@ -140,15 +169,19 @@ export async function runCase(device: GPUDevice, c: CaseSpec, onProgress?: (f: n
   const q = 0.5 * u * u * c.lRef;
   const t0 = performance.now();
   for (let s = 0; s < steps; ) {
-    const count = Math.min(MAX_STEPS, steps - s);
+    const count = Math.min(solver.maxFrameSteps, steps - s);
     const enc = device.createCommandEncoder();
     solver.encodeFrame(enc, count, { mode: 1, uRef: u, lRef: c.lRef });
-    const read = solver.prepareRead(enc, count);
+    const coarseRead = solver.prepareRead(enc, count);
+    const fineRead = ref ? ref.prepareRead(enc, count) : null;
     device.queue.submit([enc.finish()]);
-    const r = await read();
-    if (!r) throw new Error('The force readback failed.');
-    bad += r.bad;
-    limited += r.limited;
+    const rc = await coarseRead();
+    const rf: FrameResult | null = fineRead ? await fineRead() : null;
+    if (!rc || (fineRead && !rf)) throw new Error('The force readback failed.');
+    // Forces from the finest level round the body when refined.
+    const r = rf ?? rc;
+    bad += rc.bad + (rf?.bad ?? 0);
+    limited += rc.limited + (rf?.limited ?? 0);
     for (let k = 0; k < count; k++) {
       const fx = r.forces[0].perStep[2 * k] / q;
       const fy = r.forces[0].perStep[2 * k + 1] / q;
@@ -177,7 +210,18 @@ export async function runCase(device: GPUDevice, c: CaseSpec, onProgress?: (f: n
   }
   await device.queue.onSubmittedWorkDone();
   const seconds = (performance.now() - t0) / 1000;
-  const { mac, aux } = await solver.readFields();
+  const { mac: macCoarse, aux } = await solver.readFields();
+  // The surface is read on the finest grid round it.
+  let fineSnap: { nx: number; ny: number; mac: Float32Array; k: number; pose: { x: number; y: number; theta: number } } | null = null;
+  if (ref) {
+    const enc = device.createCommandEncoder();
+    ref.finest.encodeField(enc, { mode: 1, uRef: u, lRef: c.lRef * ref.scale });
+    device.queue.submit([enc.finish()]);
+    const ff = await ref.finest.readFields();
+    fineSnap = { nx: ref.finest.nx, ny: ref.finest.ny, mac: ff.mac, k: ref.scale, pose: ref.poseAt(ref.levels.length - 1, pose) };
+    ref.destroy();
+  }
+  const mac = macCoarse;
   solver.destroy();
 
   // The free stream's density: the median over a column a little past the inlet's layer.
@@ -188,32 +232,47 @@ export async function runCase(device: GPUDevice, c: CaseSpec, onProgress?: (f: n
   const rhoInf = rs[Math.floor(rs.length / 2)] ?? 1;
 
   const world = transform(c.poly, pose);
-  const surf = analyzeSurface({ nx: c.nx, ny: c.ny, mac }, world, {
+  const sk = fineSnap?.k ?? 1;
+  const surfWorld = fineSnap ? transform(c.poly, fineSnap.pose, sk) : world;
+  const surfField = fineSnap ? { nx: fineSnap.nx, ny: fineSnap.ny, mac: fineSnap.mac } : { nx: c.nx, ny: c.ny, mac };
+  const surf = analyzeSurface(surfField, surfWorld, {
     u,
     rho: rhoInf,
-    lRef: c.lRef,
+    lRef: c.lRef * sk,
     shear: c.turb === 'off' ? 'resolved' : 'wall',
-    nu: c.turb === 'off' ? resolvedNu : nuMol,
+    nu: (c.turb === 'off' ? resolvedNu : nuMol) * sk,
   });
   let bl: CaseResult['bl'];
   if (c.blStations) {
-    const snap = { nx: c.nx, ny: c.ny, mac };
+    const snap = surfField;
     const ca = Math.cos(-theta);
     const sa = Math.sin(-theta);
+    const px = fineSnap?.pose.x ?? c.x;
+    const py = fineSnap?.pose.y ?? c.y;
     const local = surf.panels.map((p) => {
-      const dx = p.x - c.x;
-      const dy = p.y - c.y;
+      const dx = (p.x - px) / sk;
+      const dy = (p.y - py) / sk;
       return { p, xc: (ca * dx - sa * dy - (c.leX ?? 0)) / c.lRef, yc: (sa * dx + ca * dy) / c.lRef };
     });
     const pick = (xc: number, upper: boolean) => {
       const side = local.filter((q) => (upper ? q.yc > 0 : q.yc <= 0));
       if (!side.length) return null;
       const q = side.reduce((b, v) => (Math.abs(v.xc - xc) < Math.abs(b.xc - xc) ? v : b), side[0]);
-      const st = blStation(snap, q.p.x, q.p.y, q.p.nx, q.p.ny, 0.25 * c.lRef, { rho: rhoInf, u });
-      return st ? { ...st, delta: st.delta / c.lRef, dstar: st.dstar / c.lRef, theta: st.theta / c.lRef, ue: st.ue / u } : null;
+      const st = blStation(snap, q.p.x, q.p.y, q.p.nx, q.p.ny, 0.25 * c.lRef * sk, { rho: rhoInf, u });
+      const L = c.lRef * sk;
+      return st ? { ...st, delta: st.delta / L, dstar: st.dstar / L, theta: st.theta / L, ue: st.ue / u } : null;
     };
     bl = c.blStations.map((xc) => ({ xc, upper: pick(xc, true), lower: pick(xc, false) }));
   }
+  const boxes = [0.25, 0.5, 1].map((margin) => {
+    const m = margin * c.lRef;
+    const bb = world.reduce(
+      (b, v, i) => (i % 2 ? { ...b, y0: Math.min(b.y0, v), y1: Math.max(b.y1, v) } : { ...b, x0: Math.min(b.x0, v), x1: Math.max(b.x1, v) }),
+      { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity },
+    );
+    const box = { x0: Math.max(c.nx * 0.06, bb.x0 - m), x1: Math.min(c.nx * 0.84, bb.x1 + m), y0: Math.max(c.ny * 0.07, bb.y0 - m), y1: Math.min(c.ny * 0.93, bb.y1 + m) };
+    return { margin, ...boxForce({ nx: c.nx, ny: c.ny, mac }, box, { rho: rhoInf, u, lRef: c.lRef }) };
+  });
   let nutMax = 0;
   const diag = { macNaN: 0, auxNaN: 0, z: [Infinity, -Infinity], w: [Infinity, -Infinity], rhoInf, panels: surf.panels.length };
   for (let i = 0; i < c.nx * c.ny; i++) if (!Number.isFinite(mac[4 * i + 2])) diag.macNaN++;
@@ -240,11 +299,13 @@ export async function runCase(device: GPUDevice, c: CaseSpec, onProgress?: (f: n
     clSpread: yMax - yMin,
     surface: { cd: surf.cx, cl: surf.cy, cdP: surf.cxP, cdF: surf.cxF, clP: surf.cyP, clF: surf.cyF },
     history,
-    panels: surf.panels,
+    // Panels in the coarse grid's cells (the analysis scripts read them there).
+    panels: fineSnap ? surf.panels.map((p) => ({ ...p, x: c.x + (p.x - fineSnap!.pose.x) / sk, y: c.y + (p.y - fineSnap!.pose.y) / sk, ds: p.ds / sk })) : surf.panels,
     rhoInf,
     nuMol,
     nuFloor,
     nutMax,
+    boxes,
     bl,
     fields: c.dump ? { nx: c.nx, ny: c.ny, mac: Array.from(mac), aux: aux ? Array.from(aux) : null } : undefined,
   };
@@ -268,6 +329,8 @@ export interface AirfoilSpec {
   u?: number;
   walls?: 'farfield' | 'slip' | 'noslip';
   blStations?: number[];
+  refine?: number;
+  refineMargin?: number;
   /** Pivot offset from a cell centre (cells, in x and y). */
   offset?: number;
   /** Least trailing-edge thickness (cells). */
@@ -295,6 +358,8 @@ export function airfoilCase(a: AirfoilSpec): CaseSpec {
     u: a.u,
     walls: a.walls,
     blStations: a.blStations,
+    refine: a.refine,
+    refineMargin: a.refineMargin,
     leX: -0.25 * a.chord,
   };
 }

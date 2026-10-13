@@ -7,13 +7,15 @@ import { MAX_POINTS, MIN_POINTS } from '../geometry/datfile';
 import { referenceLength, type Shape } from '../geometry/shapes';
 
 /**
- * 2: rakes, and the view's tracers, trail, arrows and streamlines; 3: the flow model (older
- * files read as is, with the model automatic).
+ * 2: rakes, and the view's tracers, trail, arrows and streamlines; 3: the flow model; 4: the
+ * refinement round bodies (older files read as is: model automatic, no refinement).
  */
-export const SCENE_VERSION = 3;
+export const SCENE_VERSION = 4;
 
 export type Walls = 'farfield' | 'slip' | 'noslip' | 'periodic';
 export type Resolution = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
+/** Refinement levels round bodies: 0 none, 1 cells half the size (×2), 2 a quarter (×4). */
+export type RefineLevels = 0 | 1 | 2;
 export type FieldMode = 'particles' | 'vorticity' | 'speed' | 'pressure' | 'schlieren' | 'rheoscopic' | 'none';
 /** What colours the particles in the particles view. */
 export type ParticleColor = 'speed' | 'vorticity';
@@ -78,7 +80,7 @@ export interface View {
 
 export interface Scene {
   version: number;
-  tunnel: { length: number; height: number; walls: Walls; resolution: Resolution };
+  tunnel: { length: number; height: number; walls: Walls; resolution: Resolution; refine: RefineLevels };
   flow: { speed: number; fluid: FluidKey; model: FlowModel };
   bodies: Body[];
   rakes: Rake[];
@@ -117,7 +119,7 @@ export function newRakeId(): string {
 export function defaultScene(): Scene {
   return {
     version: SCENE_VERSION,
-    tunnel: { length: 8, height: 4, walls: 'farfield', resolution: 'auto' },
+    tunnel: { length: 8, height: 4, walls: 'farfield', resolution: 'auto', refine: 0 },
     flow: { speed: 10, fluid: 'air', model: 'auto' },
     bodies: [
       { id: newBodyId(), name: 'NACA 2412', shape: { kind: 'naca', code: '2412', chord: 1 }, x: 2.5, y: 2, angle: 6, spin: 0, enabled: true, locked: false },
@@ -224,6 +226,7 @@ export function parseScene(raw: unknown): Scene {
       height: num(t.height ?? d.tunnel.height, 'Tunnel height', ...LIMITS.height),
       walls: oneOf(t.walls, ['farfield', 'slip', 'noslip', 'periodic'] as const, d.tunnel.walls),
       resolution: oneOf(t.resolution, ['auto', 'low', 'medium', 'high', 'ultra'] as const, d.tunnel.resolution),
+      refine: ([0, 1, 2] as const).find((v) => v === Number(t.refine)) ?? d.tunnel.refine,
     },
     flow: {
       speed: num(f.speed ?? d.flow.speed, 'Wind speed', ...LIMITS.speed),

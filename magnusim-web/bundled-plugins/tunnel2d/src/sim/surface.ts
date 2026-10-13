@@ -238,3 +238,45 @@ export function blStation(
   }
   return { ue, delta: ds[k], dstar, theta, h: dstar / theta };
 }
+
+/**
+ * The force on whatever lies inside a box (cells), from the momentum balance on its edges:
+ * F = -∮ (p n + ρ u (u·n)) ds, with p measured against the free stream (viscous stress on
+ * the edges, small away from the body, left out). A check on the momentum exchange that
+ * does not touch the wall: in steady flow they agree.
+ */
+export function boxForce(
+  f: FieldSnapshot,
+  box: { x0: number; y0: number; x1: number; y1: number },
+  free: { rho: number; u: number; lRef: number },
+): { cd: number; cl: number } {
+  let fx = 0;
+  let fy = 0;
+  const at = (i: number, j: number) => {
+    const k = 4 * (j * f.nx + i);
+    return { ux: f.mac[k], uy: f.mac[k + 1], rho: f.mac[k + 2], solid: f.mac[k + 3] > 0.5 };
+  };
+  const p0 = free.rho / 3;
+  const edge = (i: number, j: number, nx: number, ny: number) => {
+    const c = at(i, j);
+    if (c.solid) return;
+    const p = c.rho / 3 - p0;
+    const un = c.ux * nx + c.uy * ny;
+    fx -= p * nx + c.rho * c.ux * un;
+    fy -= p * ny + c.rho * c.uy * un;
+  };
+  const x0 = Math.round(box.x0);
+  const x1 = Math.round(box.x1);
+  const y0 = Math.round(box.y0);
+  const y1 = Math.round(box.y1);
+  for (let i = x0; i < x1; i++) {
+    edge(i, y0, 0, -1);
+    edge(i, y1, 0, 1);
+  }
+  for (let j = y0; j < y1; j++) {
+    edge(x0, j, -1, 0);
+    edge(x1, j, 1, 0);
+  }
+  const q = 0.5 * free.rho * free.u * free.u * free.lRef;
+  return { cd: fx / q, cl: fy / q };
+}

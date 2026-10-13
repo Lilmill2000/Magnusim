@@ -7,7 +7,7 @@ import { DatError, parseDat } from '../geometry/datfile';
 import { NacaError, parseCode } from '../geometry/naca';
 import { outline, referenceLength, shapeLabel, type Shape } from '../geometry/shapes';
 import { radius } from '../geometry/polygon';
-import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type FlowModel, type Resolution, type Scene, type Walls } from '../scene/scene';
+import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type FlowModel, type RefineLevels, type Resolution, type Scene, type Walls } from '../scene/scene';
 import { RESOLUTION_CELLS, gridFor, type Engine } from '../sim/engine';
 import { useStore, type Store } from '../app/store';
 
@@ -52,6 +52,13 @@ function TextField({ label, value, onCommit, error, attr }: { label: string; val
 
 // ---------------------------------------------------------------------------------------
 
+/** How close the turbulence model's lift is with this many cells across a body (measured: NACA 0012 and 2412, R1/R2 reports). */
+function liftBand(cells: number | null): number {
+  if (cells == null || cells < 150) return 10;
+  if (cells < 250) return 5;
+  return 3;
+}
+
 export function WindPanel({ store, engine, units }: { store: Store; engine: Engine; units: UnitSystem }) {
   const scene = useStore(store, (s) => s.scene);
   const selected = useStore(store, (s) => s.selected);
@@ -62,6 +69,7 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
   const re = ref ? engine.reynoldsFor(ref) : null;
   const map = engine.lattice;
   const model = engine.flowModel;
+  const cells = ref ? engine.cellsAcross(ref) : null;
   return (
     <Section title="Wind">
       <Field label="Wind speed" help="The speed of the flow coming in at the left.">
@@ -103,7 +111,7 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
           {model === 'sa' ? (
             <Hint tone={re.real < 3e5 ? 'warning' : undefined}>
               <span data-t2d-model-note="sa">
-                Turbulence model on (Spalart–Allmaras, wall functions) at the real Reynolds number. It gives the mean flow: attached boundary layers, lift to within about 5 % and stall to within a few degrees. Drag reads high at this grid (up to about twice the real drag), and past the stall the flow is not reliable. Turbulent eddies themselves are not drawn: 2D turbulence is not the real, 3D kind.
+                Turbulence model on (Spalart–Allmaras, wall functions) at the real Reynolds number. It gives the mean flow: attached boundary layers, stall to within a few degrees, and lift to within about {liftBand(cells)} % with {fmtRe(Math.round(cells ?? 0))} cells across the body{(cells ?? 0) < 250 ? ' (Refine near bodies narrows it)' : ''}. Drag reads high (up to about twice the real drag at this resolution), and past the stall the flow is not reliable. Turbulent eddies themselves are not drawn: 2D turbulence is not the real, 3D kind.
                 {re.real < 3e5 ? ' Below a Reynolds number of about 300,000, real airfoils often have laminar separation bubbles this model does not capture.' : ''}
               </span>
             </Hint>
@@ -164,6 +172,23 @@ export function TunnelPanel({ store, engine, units }: { store: Store; engine: En
           onChange={(v) => set({ resolution: v as Resolution })}
         />
       </Field>
+      <Field
+        label="Refine near bodies"
+        help="Cells half (x2) or a quarter (x4) the size round each body, moving with it: thinner boundary layers, sharper leading and trailing edges, and, when the flow is resolved, twice or four times the Reynolds number near the body. The flow runs about 3 or 7 times slower. At a real Reynolds number of millions, drag still reads high: that needs cells far smaller than any real-time grid."
+      >
+        <Select
+          label="Refine near bodies"
+          value={String(scene.tunnel.refine)}
+          options={[
+            { value: '0', label: 'Off' },
+            { value: '1', label: 'x2 finer' },
+            { value: '2', label: 'x4 finer' },
+          ]}
+          onChange={(v) => set({ refine: Number(v) as RefineLevels })}
+          disabled={!!engine.refineUnavailable}
+        />
+      </Field>
+      {engine.refineUnavailable ? <Hint tone="warning">{engine.refineUnavailable}</Hint> : null}
       <Hint>The shaded strips at the inlet and the outlet absorb pressure waves; the flow there is not physical.</Hint>
     </Section>
   );

@@ -7,6 +7,7 @@
 import { bakeSdf } from '../geometry/sdf';
 import { outline } from '../geometry/shapes';
 import { MAX_STEPS } from './kernels';
+import { Patch } from './refine';
 import { Solver } from './solver';
 
 export const REF_2D2 = { St: [0.295, 0.305], cdMax: [3.22, 3.24], clMax: [0.99, 1.01] };
@@ -52,8 +53,12 @@ export function analyzeShedding(fx: Float64Array, fy: Float64Array, ubar: number
   return { St: D / (T * ubar), cdMax, cdMean: cdSum / (len - start), clMax, periods };
 }
 
-/** Run 2D-2 at N cells per diameter for `tstar` convective times (t U / D). */
-export async function runSchaferTurek(device: GPUDevice, N = 20, tstar = 200, onProgress?: (f: number) => void): Promise<ValidationResult> {
+/**
+ * Run 2D-2 at N cells per diameter for `tstar` convective times (t U / D). With `refine`, a
+ * patch of half-size cells (2N per diameter) covers the cylinder and its near wake, and the
+ * forces come from it.
+ */
+export async function runSchaferTurek(device: GPUDevice, N = 20, tstar = 200, onProgress?: (f: number) => void, refine = false): Promise<ValidationResult> {
   const H = Math.round(4.1 * N);
   const nx = 22 * N;
   const umax = 0.05;
@@ -67,6 +72,19 @@ export async function runSchaferTurek(device: GPUDevice, N = 20, tstar = 200, on
   const sdf = bakeSdf(local);
   const pose = { x: 2 * N, y: -0.5 + 2 * N, theta: 0 };
   solver.setBodies([{ key: 'cyl', sdf, from: pose, to: pose }]);
+  let patch: Patch | null = null;
+  const fineNu = 2 * nu;
+  if (refine) {
+    const rect = { ox: Math.round(1.0 * N), oy: Math.round(0.6 * N), wc: Math.round(4 * N), hc: Math.round(2.8 * N) };
+    const fine = new Solver(device, { nx: 2 * rect.wc + 1, ny: 2 * rect.hc + 1, walls: 'noslip', patch: true });
+    fine.setPhysics({ u: umax, tau: 3 * fineNu + 0.5, smagorinsky: false, smagCs: 0, nuMol: fineNu, nuFloor: 0 });
+    fine.reset(0);
+    const fpose = { x: 2 * (pose.x - rect.ox), y: 2 * (pose.y - rect.oy), theta: 0 };
+    fine.setBodies([{ key: 'cylf', sdf: bakeSdf(outline({ kind: 'circle', diameter: 2 * N })), from: fpose, to: fpose }]);
+    patch = new Patch(device, solver, fine, rect, 0);
+    solver.setPatches([patch]);
+    solver.setPhysics({ u: umax, tau: 3 * nu + 0.5, smagorinsky: false, smagCs: 0 });
+  }
   const steps = Math.ceil((tstar * N) / ubar);
   const fx = new Float64Array(steps);
   const fy = new Float64Array(steps);
@@ -77,21 +95,31 @@ export async function runSchaferTurek(device: GPUDevice, N = 20, tstar = 200, on
   // carry the inflow speed, so ramp it frame by frame.
   const rampSteps = Math.ceil((2 * N) / ubar);
   for (let s = 0; s < steps; ) {
-    const count = Math.min(MAX_STEPS, steps - s, s < rampSteps ? 200 : MAX_STEPS);
+    const count = Math.min(solver.maxFrameSteps, steps - s, s < rampSteps ? 200 : MAX_STEPS);
     const r = s < rampSteps ? 0.5 * (1 - Math.cos((Math.PI * s) / rampSteps)) : 1;
     solver.setPhysics({ u: umax * r, tau: 3 * nu + 0.5, smagorinsky: false, smagCs: 0 });
+    patch?.fine.setPhysics({ u: umax * r, tau: 3 * fineNu + 0.5, smagorinsky: false, smagCs: 0, nuMol: fineNu, nuFloor: 0 });
     const enc = device.createCommandEncoder();
     solver.encodeFrame(enc, count, { mode: 1, uRef: umax, lRef: N });
     const read = solver.prepareRead(enc, count);
+    const readFine = patch ? patch.fine.prepareRead(enc, 2 * count) : null;
     device.queue.submit([enc.finish()]);
     const res = await read();
-    if (!res) throw new Error('The force readback failed.');
+    const fres = readFine ? await readFine() : null;
+    if (!res || (readFine && !fres)) throw new Error('The force readback failed.');
     for (let k = 0; k < count; k++) {
-      fx[s + k] = res.forces[0].perStep[2 * k];
-      fy[s + k] = res.forces[0].perStep[2 * k + 1];
+      if (fres) {
+        // Fine forces per fine step, in fine units: a coarse step's is a quarter of two of them.
+        const ps = fres.forces[0].perStep;
+        fx[s + k] = (ps[4 * k] + ps[4 * k + 2]) / 4;
+        fy[s + k] = (ps[4 * k + 1] + ps[4 * k + 3]) / 4;
+      } else {
+        fx[s + k] = res.forces[0].perStep[2 * k];
+        fy[s + k] = res.forces[0].perStep[2 * k + 1];
+      }
     }
-    bad += res.bad;
-    limited += res.limited;
+    bad += res.bad + (fres?.bad ?? 0);
+    limited += res.limited + (fres?.limited ?? 0);
     s += count;
     onProgress?.(s / steps);
     if (bad) break;

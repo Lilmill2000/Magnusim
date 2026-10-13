@@ -265,8 +265,103 @@ fn saFv1(nt: f32) -> f32 {
 }
 `;
 
-/** The step kernel. Overrides: WALLS (0 slip, 1 no-slip, 2 periodic, 3 open), SMAG (Smagorinsky on), TURB (see TURB). */
-export function stepShader(): string {
+/** The post-collision population k (less its weight) of the RR collision, from pre-collision moments (refinement). */
+export const POST_RR = /* wgsl */ `
+fn postRR(k: u32, rho: f32, u: vec2f, pxx: f32, pyy: f32, pxy: f32, tau: f32) -> f32 {
+  let cx = CXF[k];
+  let cy = CYF[k];
+  let hxx = cx * cx - 1.0 / 3.0;
+  let hyy = cy * cy - 1.0 / 3.0;
+  let hxy = cx * cy;
+  let hxxy = cx * cx * cy - cy / 3.0;
+  let hxyy = cx * cy * cy - cx / 3.0;
+  let keep = 1.0 - 1.0 / tau;
+  let half = 0.5 * (pxx + pyy);
+  let kb = select(KEEP_BULK, keep, KEEP_BULK < 0.0);
+  let dxx = keep * (pxx - half) + kb * half;
+  let dyy = keep * (pyy - half) + kb * half;
+  let dxy = keep * pxy;
+  let axxy = 2.0 * u.x * pxy + u.y * pxx;
+  let axyy = 2.0 * u.y * pxy + u.x * pyy;
+  let ux = u.x;
+  let uy = u.y;
+  return WF[k] * ((rho - 1.0) + rho * (3.0 * (cx * ux + cy * uy) + 4.5 * (hxx * ux * ux + hyy * uy * uy + 2.0 * hxy * ux * uy) + 13.5 * (hxxy * ux * ux * uy + hxyy * ux * uy * uy)))
+    + WF[k] * (4.5 * (hxx * dxx + hyy * dyy + 2.0 * hxy * dxy) + 13.5 * keep * (hxxy * axxy + hxyy * axyy));
+}
+
+/** Rescale Π_neq between levels: the shear part by f, the trace by g. */
+fn rescale(p: vec3f, f: f32, g: f32) -> vec3f {
+  let half = 0.5 * (p.x + p.y);
+  return vec3f(f * (p.x - half) + g * half, f * (p.y - half) + g * half, f * p.z);
+}
+`;
+
+/**
+ * A refinement patch's edge cell, rebuilt for the next fine time from its parent's moments
+ * at the parent's last two times (cubic along the edge, linear in time; ν̃ and viscosity
+ * linearly, a cubic overshooting at a boundary layer's edge).
+ */
+const PATCH_EDGE = /* wgsl */ `
+struct Edge { ox: u32, oy: u32, nxc: u32, prime: u32 };
+@group(2) @binding(0) var<uniform> E: Edge;
+@group(2) @binding(1) var<storage, read> momT: array<vec4f>;
+@group(2) @binding(2) var<storage, read> momT1: array<vec4f>;
+@group(2) @binding(3) var<storage, read> auxT: array<vec4f>;
+@group(2) @binding(4) var<storage, read> auxT1: array<vec4f>;
+
+/** The parent's (ρ, u, ν) and (Π_neq, ν̃) at cell (i, j), fraction th from its older to its newer time. */
+fn parentAt(i: i32, j: i32, th: f32) -> array<vec4f, 2> {
+  let k = u32(i) + u32(j) * E.nxc;
+  let a = mix(auxT[k], auxT1[k], th);
+  let m = mix(momT[k], momT1[k], th);
+  return array<vec4f, 2>(vec4f(m.x, a.x, a.y, max(a.w, 0.0)), vec4f(m.y, m.z, m.w, max(a.z, 0.0)));
+}
+
+fn edgeCell(x: u32, y: u32, idx: u32) {
+  // This step goes to fine time (slot parity + 1) / 2 of the parent's step.
+  let th = select(f32((S.slot & 1u) + 1u) * 0.5, 1.0, E.prime == 1u);
+  let vertical = x == 0u || x == P.nx - 1u;
+  let t = select(x, y, vertical);
+  let ci = i32(E.ox) + i32(x / 2u);
+  let cj = i32(E.oy) + i32(y / 2u);
+  var m0: vec4f;
+  var m1: vec4f;
+  if ((t & 1u) == 0u) {
+    let v = parentAt(ci, cj, th);
+    m0 = v[0];
+    m1 = v[1];
+  } else {
+    let dx = select(1, 0, vertical);
+    let dy = select(0, 1, vertical);
+    let p = parentAt(ci - dx, cj - dy, th);
+    let q = parentAt(ci, cj, th);
+    let s = parentAt(ci + dx, cj + dy, th);
+    let w = parentAt(ci + 2 * dx, cj + 2 * dy, th);
+    m0 = (9.0 * (q[0] + s[0]) - (p[0] + w[0])) / 16.0;
+    m1 = (9.0 * (q[1] + s[1]) - (p[1] + w[1])) / 16.0;
+    m0.w = 0.5 * (q[0].w + s[0].w);
+    m1.w = 0.5 * (q[1].w + s[1].w);
+  }
+  let rho = m0.x;
+  let u = m0.yz;
+  let tauC = 3.0 * m0.w + 0.5;
+  let nuF = 2.0 * m0.w;
+  let tauF = 3.0 * nuF + 0.5;
+  let pf = rescale(m1.xyz, tauF / (2.0 * tauC), 0.5);
+  for (var k = 0u; k < 9u; k++) { fout[k * P.n + idx] = postRR(k, rho, u, pf.x, pf.y, pf.z, tauF); }
+  auxOut[idx] = vec4f(u, 2.0 * m1.w, nuF);
+}
+`;
+
+/** Storage buffers a patch's step binds (the ordinary step binds 8, WebGPU's default per-stage limit). */
+export const PATCH_STORAGE_BUFFERS = 12;
+
+/**
+ * The step kernel. Overrides: WALLS (0 slip, 1 no-slip, 2 periodic, 3 open), SMAG (Smagorinsky
+ * on), TURB (see TURB). The `patch` variant is a refinement patch's: its edge cells are rebuilt
+ * from its parent (group 2), which binds PATCH_STORAGE_BUFFERS storage buffers.
+ */
+export function stepShader(patch = false): string {
   // Populations are stored less their rest weights (g = f - w): the flow's information
   // sits in the small part, which f32 then keeps to about 1e-9 instead of 3e-8.
   const rd = (k: number | string, idx: string) => `fin[${k}u * P.n + ${idx}]`;
@@ -348,6 +443,15 @@ export function stepShader(): string {
   let pyy = ${[2, 4, 5, 6, 7, 8].map(neq).join(' + ')};
   let pxy = ${neq(5)} - ${neq(6)} + ${neq(7)} - ${neq(8)};
   var tP = 1.0 / P.omega;
+  // In a refinement patch the least viscosity ramps up to the coarse grid's (twice the
+  // patch's, in its own units) over the last cells before its edge, so the viscosity is
+  // the same either side of the interface.
+  var floorV = P.nuFloor;
+  if (PATCH) {
+    let dEdge = f32(min(min(x, y), min(P.nx - 1u - x, P.ny - 1u - y)));
+    floorV = P.nuFloor * (1.0 + clamp(1.0 - (dEdge - 1.0) / 8.0, 0.0, 1.0));
+    tP = 3.0 * max(P.nuMol, floorV) + 0.5;
+  }
   if (SMAG) {
     let Q = sqrt(pxx * pxx + pyy * pyy + 2.0 * pxy * pxy);
     tP = 0.5 * (tP + sqrt(tP * tP + P.smag * Q / rho));
@@ -358,7 +462,7 @@ export function stepShader(): string {
   if (TURB == 2u) {
     if (wfNt >= 0.0) { ntOut = wfNt; }
     else { ntOut = saStep(i32(x), i32(y), vec2f(ux, uy), wallDist(p, &bp)); }
-    tP = 3.0 * max(P.nuMol + ntOut * saFv1(ntOut), P.nuFloor) + 0.5;
+    tP = 3.0 * max(P.nuMol + ntOut * saFv1(ntOut), floorV) + 0.5;
   }
   let nuCell = (tP - 0.5) / 3.0;
   var sig = 0.0;
@@ -374,7 +478,9 @@ export function stepShader(): string {
     if (x == 0u) { ntOut = P.nuInf; }
     ntOut = mix(ntOut, P.nuInf, sig);
   }
-  if (TURB > 0u) { auxOut[idx] = vec4f(ux, uy, ntOut, nuCell); }
+  if (TURB > 0u || AUXW) { auxOut[idx] = vec4f(ux, uy, ntOut, nuCell); }
+  // The pre-collision moments a refinement interface carries across (density, Π_neq).
+  if (MOMW) { mom[idx] = vec4f(rho, pxx, pyy, pxy); }
   let omP = 1.0 / tP;
   let axxy = 2.0 * ux * pxy + uy * pxx;
   let axyy = 2.0 * uy * pxy + ux * pyy;
@@ -414,6 +520,12 @@ override SMAG: bool = false;
 override TURB: u32 = 0u;
 /** 1 - the bulk relaxation rate (0: the stress's trace fully relaxed each step; below 0: as the shear's). */
 override KEEP_BULK: f32 = 0.0;
+/** A refinement patch: its edge cells are not stepped (the interface sets them). */
+override PATCH: bool = false;
+/** Write the auxiliary field (velocity, ν̃, viscosity) without a turbulence model: refinement needs it. */
+override AUXW: bool = false;
+/** Write each cell's pre-collision moments (refinement). */
+override MOMW: bool = false;
 struct Step { slot: u32, p0: u32, p1: u32, p2: u32 };
 @group(0) @binding(0) var<storage, read> fin: array<f32>;
 @group(0) @binding(1) var<storage, read_write> fout: array<f32>;
@@ -423,10 +535,12 @@ struct Step { slot: u32, p0: u32, p1: u32, p2: u32 };
 @group(0) @binding(5) var<storage, read_write> force: array<atomic<i32>>;
 @group(0) @binding(6) var<storage, read> auxIn: array<vec4f>;
 @group(0) @binding(7) var<storage, read_write> auxOut: array<vec4f>;
+@group(0) @binding(8) var<storage, read_write> mom: array<vec4f>;
 @group(1) @binding(0) var<uniform> S: Step;
 ${TABLES}
 ${COMMON}
 ${TURB_FNS}
+${patch ? POST_RR + PATCH_EDGE : ''}
 
 @compute @workgroup_size(${WG})
 fn step(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
@@ -434,6 +548,10 @@ fn step(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   if (idx >= P.n) { return; }
   let x = idx % P.nx;
   let y = idx / P.nx;
+  ${patch ? `if (x == 0u || y == 0u || x == P.nx - 1u || y == P.ny - 1u) {
+    edgeCell(x, y, idx);
+    return;
+  }` : ''}
   let xf = f32(x);
   let p = vec2f(xf, f32(y));
   var bp: array<vec4f, ${MAX_BODIES}>;
@@ -447,7 +565,8 @@ fn step(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
     if (d0 < 0.0) {
       let uw = wallU(h0.b, p, bp[h0.b].xy);
       for (var k = 0u; k < 9u; k++) { fout[k * P.n + idx] = feqAt(k, 1.0, uw) - WF[k]; }
-      if (TURB > 0u) { auxOut[idx] = vec4f(uw, 0.0, -1.0); }
+      if (TURB > 0u || AUXW) { auxOut[idx] = vec4f(uw, 0.0, -1.0); }
+      if (MOMW) { mom[idx] = vec4f(1.0, 0.0, 0.0, 0.0); }
       return;
     }
   }
@@ -635,6 +754,8 @@ struct View {
   dye: array<vec4f, 4>,
   rBase: vec4f, l1dir: vec4f, l1col: vec4f, l2dir: vec4f, l2col: vec4f,
   rParams: vec4f,
+  /** A refinement patch drawn from its own cells: its rectangle (lattice) and (cells per lattice cell, its grid, on). */
+  patchBox: vec4f, patchGrid: vec4f,
 };
 @group(0) @binding(0) var<storage, read> scalar: array<f32>;
 @group(0) @binding(1) var<uniform> Vw: View;
@@ -646,6 +767,7 @@ struct View {
 @group(0) @binding(7) var<storage, read> dye: array<vec4f>;
 @group(0) @binding(8) var trail: texture_2d<f32>;
 @group(0) @binding(9) var<storage, read> rheo: array<vec4f>;
+@group(0) @binding(10) var<storage, read> fineScalar: array<f32>;
 ${TABLES}
 ${COMMON}
 
@@ -666,6 +788,18 @@ fn cellIndex(c: vec2f) -> vec4u {
 fn clampCell(l: vec2f) -> vec2f { return clamp(l, vec2f(0.0), vec2f(Vw.nxf - 1.001, Vw.nyf - 1.001)); }
 
 fn sampleScalar(l: vec2f) -> f32 {
+  // Inside a refinement patch (a cell in from its edge): its own, finer field.
+  let pb = Vw.patchBox;
+  if (Vw.patchGrid.w > 0.5 && l.x > pb.x + 1.0 && l.y > pb.y + 1.0 && l.x < pb.z - 1.0 && l.y < pb.w - 1.0) {
+    let nx = u32(Vw.patchGrid.y);
+    let ny = u32(Vw.patchGrid.z);
+    let q = clamp((l - pb.xy) * Vw.patchGrid.x, vec2f(0.0), vec2f(f32(nx) - 1.001, f32(ny) - 1.001));
+    let i = u32(q.x);
+    let j = u32(q.y);
+    let f = fract(q);
+    let k = i + j * nx;
+    return mix(mix(fineScalar[k], fineScalar[k + 1u], f.x), mix(fineScalar[k + nx], fineScalar[k + nx + 1u], f.x), f.y);
+  }
   let c = clampCell(l);
   let k = cellIndex(c);
   let f = fract(c);
@@ -782,6 +916,7 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 export function allShaders(): { label: string; code: string }[] {
   return [
     { label: 'step', code: stepShader() },
+    { label: 'patch step', code: stepShader(true) },
     { label: 'macro', code: macroShader() },
     { label: 'field', code: fieldShader() },
     { label: 'render', code: renderShader() },

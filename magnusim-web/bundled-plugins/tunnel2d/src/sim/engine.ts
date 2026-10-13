@@ -9,12 +9,13 @@ import { radius, transform } from '../geometry/polygon';
 import { Renderer, type Palette, type ViewXform } from '../render/renderer';
 import { FLUIDS, LIMITS, flowModelFor, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
 import { Dye, type DyeSource } from './dye';
-import { MAX_BODIES, MAX_STEPS, SA_SDF_BAND, TE_MIN_CELLS } from './kernels';
+import { MAX_BODIES, MAX_STEPS, PATCH_STORAGE_BUFFERS, SA_SDF_BAND, TE_MIN_CELLS } from './kernels';
 import { Particles, type RakeGpu } from './particles';
 import { Rheo } from './rheo';
 import type { MapName, RheoLook } from '../render/renderer';
 import { Streamlines } from './streamlines';
-import { FIELD_MODES, Solver, type FrameResult, type GpuBody } from './solver';
+import { RefineManager } from './refineManager';
+import { FIELD_MODES, Solver, type FrameResult, type GpuBody, type Physics } from './solver';
 import { GRID_RE_MAX, SMAG_CS, U_LATTICE, latticeMap, reynolds, type LatticeMap } from './units';
 
 /** Cells in the lattice for each resolution (the grid keeps the tunnel's aspect). */
@@ -116,6 +117,8 @@ interface BodyState {
   body: Body;
   key: string;
   sdf: SdfGrid;
+  /** Outline in lattice cells, body frame (the refinement bakes its own fields from it). */
+  local: number[];
   rCells: number;
   /** Lattice pose now. */
   pose: { x: number; y: number; theta: number };
@@ -161,6 +164,9 @@ export class Engine {
   private physKey = '';
   /** The flow model running: resolved, or Spalart–Allmaras with wall functions. */
   private turb: 'off' | 'sa' = 'off';
+  /** Refinement round the bodies (levels from the scene), and the physics it scales. */
+  private refine: RefineManager | null = null;
+  private physics: Physics | null = null;
   paused = false;
   unstable = false;
   palette: Palette;
@@ -218,6 +224,29 @@ export class Engine {
   /** Million lattice updates per second on this GPU at the medium grid (a short run; once per page). */
   benchmark(): Promise<number> {
     return this.benchmarkAt(1024, 512);
+  }
+
+  /** Why refinement cannot run on this GPU, or '' (a patch's step binds more storage buffers than some GPUs allow). */
+  get refineUnavailable(): string {
+    const n = this.device.limits.maxStorageBuffersPerShaderStage;
+    return n < PATCH_STORAGE_BUFFERS ? `This GPU lets a shader use ${n} storage buffers; refinement needs ${PATCH_STORAGE_BUFFERS}.` : '';
+  }
+
+  /** The refinement levels in force: the scene's, where the GPU allows them. */
+  private refineLevels(scene: Scene): number {
+    return this.refineUnavailable ? 0 : scene.tunnel.refine;
+  }
+
+  /** Cells across a body's reference length on the finest grid it is on. */
+  cellsAcross(b: Body): number | null {
+    if (!this.map) return null;
+    const k = this.refine?.refinedIds.has(b.id) ? this.refine.scale : 1;
+    return (referenceLength(b.shape) / this.map.dx) * k;
+  }
+
+  /** The refinement patches now (for tests). */
+  refineInfo() {
+    return this.refine?.info() ?? [];
   }
 
   /** The model running now. */
@@ -281,8 +310,10 @@ export class Engine {
     const { nx, ny } = gridFor(scene, cells);
     const gridKey = `${nx}x${ny}|${scene.tunnel.walls}|${scene.tunnel.length}`;
     if (gridKey !== this.gridKey) {
+      this.refine?.clear();
       this.solver?.destroy();
       this.solver = new Solver(this.device, { nx, ny, walls: scene.tunnel.walls });
+      this.refine = new RefineManager(this.device, this.solver);
       this.particles.clear();
       this.dye?.destroy();
       this.dye = null;
@@ -302,7 +333,7 @@ export class Engine {
     const sa = this.turb === 'sa';
     const physKey = `${this.map.u}|${this.map.tau}|${this.map.smagorinsky}|${this.turb}|${this.map.nuFluid}`;
     if (physKey !== this.physKey) {
-      this.solver!.setPhysics({
+      this.physics = {
         u: this.map.u,
         tau: this.map.tau,
         smagorinsky: this.map.smagorinsky && !sa,
@@ -310,7 +341,9 @@ export class Engine {
         turb: this.turb,
         nuMol: this.map.nuFluid,
         nuFloor: this.map.nuFloor,
-      });
+      };
+      this.solver!.setPhysics(this.physics);
+      this.refine!.setPhysics(this.physics);
       if (!this.physKey) this.solver!.reset(this.map.u);
       this.physKey = physKey;
     }
@@ -409,17 +442,20 @@ export class Engine {
     for (const b of live) {
       // The turbulence model reads the wall distance farther out: a wider band.
       const band = this.turb === 'sa' ? SA_SDF_BAND : undefined;
-      const key = `${JSON.stringify(b.shape)}@${dx}|${band ?? ''}`;
+      // Trailing edges at least two cells thick on the finest grid round the body.
+      const scale = 2 ** this.refineLevels(scene);
+      const key = `${JSON.stringify(b.shape)}@${dx}|${band ?? ''}|${scale}`;
       const st = this.bodies.get(b.id);
       const target = this.targetPose(b);
       if (!st || st.key !== key) {
-        // Trailing edges at least two cells thick: drawn the same wherever they fall.
-        const local = transform(outline(b.shape, TE_MIN_CELLS * dx), { x: 0, y: 0, theta: 0 }, 1 / dx);
+        // Drawn the same wherever they fall (shapes.thickenRear).
+        const local = transform(outline(b.shape, (TE_MIN_CELLS * dx) / scale), { x: 0, y: 0, theta: 0 }, 1 / dx);
         const sdf = bakeSdf(local, band);
         this.bodies.set(b.id, {
           body: b,
           key,
           sdf,
+          local,
           rCells: radius(local),
           pose: st?.pose ?? target,
           spinAngle: st?.spinAngle ?? 0,
@@ -487,12 +523,17 @@ export class Engine {
   reynoldsFor(b: Body): { real: number; sim: number } | null {
     if (!this.map || !this.scene) return null;
     const re = reynolds(this.map, referenceLength(b.shape), this.scene.flow.speed, FLUIDS[this.scene.flow.fluid].nu);
-    return this.turb === 'sa' ? { real: re.real, sim: re.real } : re;
+    if (this.turb === 'sa') return { real: re.real, sim: re.real };
+    // A refined body's flow runs on cells 2^levels smaller: that much higher a Reynolds number, up to the real one.
+    const k = this.refine?.refinedIds.has(b.id) ? this.refine.scale : 1;
+    return { real: re.real, sim: Math.min(re.real, re.sim * k) };
   }
 
   resetFlow() {
     if (!this.solver || !this.map) return;
     this.solver.reset(this.map.u);
+    // The patches start again from the reset flow (rebuilt at the next frame).
+    this.refine?.clear();
     this.simTime = 0;
     this.rhoRef = 1;
     this.particles.clear();
@@ -556,7 +597,8 @@ export class Engine {
 
     let steps = this.paused || this.unstable ? 0 : Math.round(this.stepsTarget);
     if (steps > 0 && scene.view.speed === 'realtime') steps = Math.max(1, Math.min(steps, Math.round(wall / 1000 / map.dt)));
-    steps = Math.min(MAX_STEPS, steps);
+    // Each refinement level doubles the fine steps a frame's per-step slots must hold.
+    steps = Math.min(MAX_STEPS >> this.refineLevels(scene), steps);
 
     // Bodies: each moves toward its target at the wall-speed limit (teleports while paused).
     const gpuBodies: GpuBody[] = [];
@@ -597,19 +639,36 @@ export class Engine {
       gpuBodies.push({ key: `${id}:${st.key}`, sdf: st.sdf, from: steps === 0 ? st.pose : from, to: st.pose });
     }
     solver.setBodies(gpuBodies);
+    const enc = this.device.createCommandEncoder();
+    // Refinement: patches placed or moved for where the bodies end this frame, before its steps.
+    if (this.refine) {
+      const farW = scene.tunnel.walls === 'farfield' ? Math.max(4, solver.ny * 0.06) : 0;
+      const bounds = { x0: Math.ceil(Math.max(0, solver.absorbInX)) + 4, y0: Math.ceil(farW) + 4, x1: Math.floor(solver.spongeX) - 4, y1: Math.floor(solver.ny - farW) - 5 };
+      this.refine.update(
+        enc,
+        this.order.map((id, i) => {
+          const st = this.bodies.get(id)!;
+          return { id, key: gpuBodies[i].key, local: st.local, band: st.sdf.band, from: gpuBodies[i].from, to: gpuBodies[i].to, r: st.rCells };
+        }),
+        steps > 0 ? this.refineLevels(scene) : this.refine.depth,
+        bounds,
+      );
+    }
 
     // The particles view colours its tracers by vorticity or speed: the field pass computes that.
     const pview = scene.view.field === 'particles';
     const mode = pview ? (scene.view.particleColor === 'vorticity' ? FIELD_MODES.vorticity : FIELD_MODES.speed) : FIELD_MODES[scene.view.field];
     const rangeKey = pview ? `particles:${scene.view.particleColor}` : scene.view.field;
-    const enc = this.device.createCommandEncoder();
     if (rangeKey !== this.rangeKey) {
       // A new field: its own range from scratch (never blended with the last field's).
       this.rangeKey = rangeKey;
       this.rangeField = pview ? (scene.view.particleColor === 'vorticity' ? 'vorticity' : 'speed') : scene.view.field;
       this.autoRange = { lo: 0, hi: 1, ready: false };
     }
-    const { readForces } = solver.encodeFrame(enc, steps, { mode, uRef: map.u, lRef: this.lRefCells(), rhoRef: this.rhoRef });
+    const fieldSpec = { mode, uRef: map.u, lRef: this.lRefCells(), rhoRef: this.rhoRef };
+    const { readForces } = solver.encodeFrame(enc, steps, fieldSpec);
+    // Inside a refinement patch the field is drawn from the patch's own, finer cells.
+    const patchField = this.refine?.encodeDisplay(enc, fieldSpec) ?? null;
     const range = scene.view.autoRange && this.autoRange.ready ? this.autoRange : this.range;
     this.renderer.setColormap(particleMap(scene.view));
     const lv = this.latticeView(map.dx);
@@ -679,6 +738,7 @@ export class Engine {
         dyeColors,
         trail: markers && mc ? this.particles.trail : null,
         rheo: this.rheo && this.rheoLooks[view.rheoPreset] ? { field: this.rheo.field, look: this.rheoLooks[view.rheoPreset], sparkle: this.rheo.sparkleWeights } : null,
+        patch: patchField,
       },
       mc
         ? (pass) => {
@@ -688,6 +748,7 @@ export class Engine {
         : undefined,
     );
     const read = readForces && !this.readPending ? solver.prepareRead(enc, steps) : null;
+    const readFine = read && this.refine?.depth ? this.refine.prepareRead(enc, steps) : null;
     const t0 = performance.now();
     this.device.queue.submit([enc.finish()]);
     this.simTime += steps * map.dt;
@@ -705,7 +766,18 @@ export class Engine {
       this.readPending = true;
       void read().then((r) => {
         this.readPending = false;
-        if (r) this.takeForces(r);
+        if (!r) return;
+        if (readFine) {
+          void readFine().then((f) => {
+            if (f) {
+              // A refined body's force from its finest grid.
+              r.forces = r.forces.map((fc, i) => f.byId.get(this.order[i]) ?? fc);
+              r.bad += f.bad;
+              r.limited += f.limited;
+            }
+            this.takeForces(r);
+          });
+        } else this.takeForces(r);
       });
     }
     if (scene.view.autoRange && now - this.sampledAt > 400) {
