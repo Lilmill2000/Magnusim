@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PYTHON } from '../scripts/python-env.js';
 
 // Hiding a face of a big part (Daniel, 2026-10): on a part with 6,500 faces and 23,000
 // edges, a right-click on a face, Hide face, froze the page for 45 s to over a minute
@@ -15,14 +15,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PY_DIR = join(HERE, '..', 'python');
 const stamp = () => Date.now().toString(36);
 
-function venvPython() {
-  const win = join(PY_DIR, '.venv', 'Scripts', 'python.exe');
-  return existsSync(win) ? win : join(PY_DIR, '.venv', 'bin', 'python');
-}
 
 /** The part's file, written for this test. */
 function buildPart(out) {
-  const r = spawnSync(venvPython(), ['tools/gen_many_faces_part.py', out, '--teeth', '1000'], {
+  // The app's own interpreter: MAGNUSIM_PYTHON, python/.venv, else python3/python on PATH (CI).
+  const r = spawnSync(PYTHON, ['tools/gen_many_faces_part.py', out, '--teeth', '1000'], {
     cwd: PY_DIR,
     encoding: 'utf8',
     timeout: 180_000,

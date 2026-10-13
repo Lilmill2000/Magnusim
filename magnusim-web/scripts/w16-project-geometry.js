@@ -28,7 +28,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PYTHON, pyTool } from './python-env.js';
+import { PYTHON, pyTool, pythonFound } from './python-env.js';
 import {
   activeGeometryId,
   geometriesOf,
@@ -679,7 +679,7 @@ export function getProjectById(id) {
 
 function runPython(args) {
   return new Promise((resolveP, reject) => {
-    if (!existsSync(PYTHON)) {
+    if (!pythonFound()) {
       return reject(new Error(`PYTHON missing: ${PYTHON}`));
     }
     const child = spawn(PYTHON, args, { windowsHide: true });
@@ -702,7 +702,7 @@ function runPython(args) {
 }
 
 function runPythonSync(args) {
-  if (!existsSync(PYTHON)) {
+  if (!pythonFound()) {
     throw new Error(`PYTHON missing: ${PYTHON}`);
   }
   const r = spawnSync(PYTHON, args, { encoding: 'utf8', windowsHide: true });

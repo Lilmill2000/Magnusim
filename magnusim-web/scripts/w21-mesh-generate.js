@@ -27,7 +27,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deferredMeshInput, ensureBody1Stl, geomFileExists, geometrySidecarPath } from './w16-project-geometry.js';
 import { activeGeometryId } from './w16-geometry-scope.js';
-import { PYTHON, pyTool } from './python-env.js';
+import { PYTHON, pyTool, pythonFound } from './python-env.js';
 import { wslCasePath, wslDistro } from './wsl-env.js';
 import { createJobLogger } from './log.js';
 import { envGet } from './env-compat.js';
@@ -449,7 +449,7 @@ function meshSurfaceCacheKey(caseDir) {
 }
 
 function prewarmMeshSurface(winOut) {
-  if (!existsSync(MESH_SURFACE_EXPORT_SCRIPT) || !existsSync(PYTHON)) {
+  if (!existsSync(MESH_SURFACE_EXPORT_SCRIPT) || !pythonFound()) {
     return { ok: false, skipped: 'missing_tool' };
   }
   mkdirSync(MESH_SURFACE_CACHE_ROOT, { recursive: true });
