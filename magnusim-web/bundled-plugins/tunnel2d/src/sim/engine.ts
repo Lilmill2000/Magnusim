@@ -129,7 +129,24 @@ interface BodyState {
   fyEma: number;
   /** Forces per step for the tests (lattice units), the most recent first trimmed. */
   history: number[];
+  /** Force coefficients through time (simulated seconds), a few dozen samples per convective time. */
+  samples: { t: number[]; cd: number[]; cl: number[] };
 }
+
+/** What a body's forces have done over a stretch of time (Measurement). */
+export interface Measurement {
+  /** Simulated seconds of samples since the flow (re)started, and those averaged. */
+  since: number;
+  span: number;
+  cd: number;
+  cl: number;
+  /** Half the lift's swing, and the shedding's Strouhal number (f D / U; null while it does not swing). */
+  clAmp: number;
+  st: number | null;
+}
+
+/** Samples kept per body. */
+const SAMPLES_MAX = 40_000;
 
 type Listener = () => void;
 
@@ -320,6 +337,7 @@ export class Engine {
       this.rheo?.destroy();
       this.rheo = null;
       this.gridKey = gridKey;
+      this.epoch++;
       this.bodies.clear();
       this.physKey = '';
       this.simTime = 0;
@@ -346,6 +364,8 @@ export class Engine {
       this.refine!.setPhysics(this.physics);
       if (!this.physKey) this.solver!.reset(this.map.u);
       this.physKey = physKey;
+      // Measurements start again with new physics.
+      for (const st of this.bodies.values()) st.samples = { t: [], cd: [], cl: [] };
     }
     this.syncBodies(scene);
     await this.syncMarkers(scene);
@@ -463,12 +483,16 @@ export class Engine {
           fxEma: 0,
           fyEma: 0,
           history: [],
+          samples: { t: [], cd: [], cl: [] },
         });
       } else {
         st.body = b;
       }
     }
-    this.order = live.map((b) => b.id);
+    const order = live.map((b) => b.id);
+    // A different set of bodies: forces read for the old one must not land on the new.
+    if (order.join('|') !== this.order.join('|')) this.epoch++;
+    this.order = order;
   }
 
   /** Where a body should be (lattice), from the scene or a drag in progress. */
@@ -515,6 +539,73 @@ export class Engine {
     return SPIN_TIP_MAX / Math.max(1, st.rCells) / this.map.dt;
   }
 
+  /**
+   * A body's mean drag and lift, lift swing and shedding frequency over the last `window`
+   * simulated seconds (null until there are samples). The Strouhal number comes from the
+   * times the lift crosses its mean going up.
+   */
+  measure(id: string, window: number): Measurement | null {
+    const st = this.bodies.get(id);
+    if (!st || !this.scene || !this.map) return null;
+    const { t, cd, cl } = st.samples;
+    if (t.length < 4) return null;
+    const end = t[t.length - 1];
+    let i0 = t.length - 1;
+    while (i0 > 0 && t[i0 - 1] >= end - window) i0--;
+    const n = t.length - i0;
+    if (n < 4) return null;
+    let mcd = 0;
+    let mcl = 0;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = i0; i < t.length; i++) {
+      mcd += cd[i];
+      mcl += cl[i];
+      lo = Math.min(lo, cl[i]);
+      hi = Math.max(hi, cl[i]);
+    }
+    mcd /= n;
+    mcl /= n;
+    const ups: number[] = [];
+    for (let i = i0 + 1; i < t.length; i++) {
+      const a = cl[i - 1] - mcl;
+      const b = cl[i] - mcl;
+      if (a < 0 && b >= 0) ups.push(t[i - 1] + ((t[i] - t[i - 1]) * a) / (a - b));
+    }
+    const amp = (hi - lo) / 2;
+    let stn: number | null = null;
+    // A swing worth the name (above 1 % of the drag) over at least two whole periods.
+    if (ups.length >= 3 && amp > 0.01 * Math.abs(mcd)) {
+      const period = (ups[ups.length - 1] - ups[0]) / (ups.length - 1);
+      stn = referenceLength(st.body.shape) / (period * this.scene.flow.speed);
+    }
+    return { since: end - t[0], span: end - t[i0], cd: mcd, cl: mcl, clAmp: amp, st: stn };
+  }
+
+  /**
+   * The recirculation behind a body: how far (in body lengths, from its rear) the flow along
+   * the line through its centre runs back upstream. Null with no reversed flow there.
+   */
+  async wakeLength(id: string): Promise<number | null> {
+    const st = this.bodies.get(id);
+    const solver = this.solver;
+    if (!st || !solver || !this.map) return null;
+    const j = Math.round(st.pose.y);
+    const row = await solver.readRow(j);
+    if (!row) return null;
+    const L = referenceLength(st.body.shape) / this.map.dx;
+    const rear = st.pose.x + L / 2;
+    let i = Math.ceil(rear);
+    // Past the body and its first cells, the reversed flow (u < 0) runs to where u turns positive.
+    while (i < solver.nx - 1 && row[4 * i + 3] > 0.5) i++;
+    if (!(row[4 * i] < 0)) return null;
+    while (i < solver.nx - 1 && row[4 * (i + 1)] < 0) i++;
+    const a = row[4 * i];
+    const b = row[4 * (i + 1)];
+    const x = i + a / (a - b);
+    return (x - rear) / L;
+  }
+
   forceHistory(id: string): number[] {
     return this.bodies.get(id)?.history ?? [];
   }
@@ -532,6 +623,7 @@ export class Engine {
   resetFlow() {
     if (!this.solver || !this.map) return;
     this.solver.reset(this.map.u);
+    this.epoch++;
     // The patches start again from the reset flow (rebuilt at the next frame).
     this.refine?.clear();
     this.simTime = 0;
@@ -545,6 +637,7 @@ export class Engine {
       st.fxEma = 0;
       st.fyEma = 0;
       st.history = [];
+      st.samples = { t: [], cd: [], cl: [] };
     }
     this.emit();
   }
@@ -748,6 +841,8 @@ export class Engine {
         : undefined,
     );
     const read = readForces && !this.readPending ? solver.prepareRead(enc, steps) : null;
+    const tStart = this.simTime;
+    const epoch = this.epoch;
     const readFine = read && this.refine?.depth ? this.refine.prepareRead(enc, steps) : null;
     const t0 = performance.now();
     this.device.queue.submit([enc.finish()]);
@@ -775,9 +870,9 @@ export class Engine {
               r.bad += f.bad;
               r.limited += f.limited;
             }
-            this.takeForces(r);
+            this.takeForces(r, tStart, epoch);
           });
-        } else this.takeForces(r);
+        } else this.takeForces(r, tStart, epoch);
       });
     }
     if (scene.view.autoRange && now - this.sampledAt > 400) {
@@ -803,7 +898,11 @@ export class Engine {
   limitedAt = 0;
   limitedTotal = 0;
 
-  private takeForces(r: FrameResult) {
+  /** Bumped when the flow restarts or its bodies change: a force read from before is dropped. */
+  private epoch = 0;
+
+  private takeForces(r: FrameResult, tStart: number, epoch: number) {
+    if (epoch !== this.epoch) return;
     if (r.limited > 0) {
       this.limitedAt = performance.now();
       this.limitedTotal += r.limited;
@@ -825,6 +924,34 @@ export class Engine {
       st.fyEma = st.fyEma ? st.fyEma * (1 - a) + fy * a : fy;
       if (this.recordForces) {
         for (let s = 0; s < r.steps; s++) st.history.push(f.perStep[2 * s], f.perStep[2 * s + 1]);
+      }
+      // Coefficient samples: about 50 per convective time.
+      if (this.map) {
+        const L = referenceLength(st.body.shape) / this.map.dx;
+        const q = 0.5 * this.map.u * this.map.u * L;
+        const every = Math.max(1, Math.floor(L / this.map.u / 50));
+        const sm = st.samples;
+        // Time only runs forward in a record (a restart begins a new one).
+        if (sm.t.length && tStart < sm.t[sm.t.length - 1]) st.samples = { t: [], cd: [], cl: [] };
+        const smp = st.samples;
+        for (let s = 0; s < r.steps; s += every) {
+          const k = Math.min(every, r.steps - s);
+          let x = 0;
+          let y = 0;
+          for (let m = 0; m < k; m++) {
+            x += f.perStep[2 * (s + m)];
+            y += f.perStep[2 * (s + m) + 1];
+          }
+          smp.t.push(tStart + (s + k / 2) * this.map.dt);
+          smp.cd.push(x / k / q);
+          smp.cl.push(y / k / q);
+        }
+        if (smp.t.length > SAMPLES_MAX) {
+          const cut = smp.t.length - SAMPLES_MAX;
+          smp.t.splice(0, cut);
+          smp.cd.splice(0, cut);
+          smp.cl.splice(0, cut);
+        }
       }
     });
   }

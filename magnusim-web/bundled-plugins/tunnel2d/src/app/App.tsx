@@ -10,6 +10,7 @@ import { mapRgb, type MapName } from '../render/renderer';
 import { BodiesPanel, BodyPanel, TunnelPanel, ViewPanel, WindPanel, fmtRe } from '../ui/panels';
 import { MarkersPanel, RakePanel, rakeName } from '../ui/markers';
 import { Viewport, fitView } from '../ui/Viewport';
+import { PresetPanel, PresetPicker } from '../ui/presets';
 import { useStore, type Store } from './store';
 
 /** The legend's title, unit and the factor from the dimensionless field to it. */
@@ -237,12 +238,15 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
         <Button variant="neutral" onClick={() => fitView(engine, store.get().scene)} title="Double-click empty space" attrs={{ 'data-t2d-fit': '1' }}>
           Fit view
         </Button>
+        <span className="t2d-sep" />
+        <PresetPicker store={store} engine={engine} ws={ws} />
         <span className="t2d-toolbar-hint" data-t2d-hint>
           {hint}
         </span>
       </header>
       <div className="t2d-main">
         <aside className="t2d-side">
+          <PresetPanel store={store} engine={engine} />
           <WindPanel store={store} engine={engine} units={units} />
           <BodiesPanel store={store} ws={ws} />
           <MarkersPanel store={store} ws={ws} />

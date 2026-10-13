@@ -8,9 +8,10 @@ import { referenceLength, type Shape } from '../geometry/shapes';
 
 /**
  * 2: rakes, and the view's tracers, trail, arrows and streamlines; 3: the flow model; 4: the
- * refinement round bodies (older files read as is: model automatic, no refinement).
+ * refinement round bodies; 5: the preset a scene was started from (older files read as is:
+ * model automatic, no refinement, no preset).
  */
-export const SCENE_VERSION = 4;
+export const SCENE_VERSION = 5;
 
 export type Walls = 'farfield' | 'slip' | 'noslip' | 'periodic';
 export type Resolution = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
@@ -85,6 +86,8 @@ export interface Scene {
   bodies: Body[];
   rakes: Rake[];
   view: View;
+  /** The preset this scene was started from (src/scene/presets.ts), or null. */
+  preset: string | null;
 }
 
 export const FLUIDS: Record<FluidKey, { label: string; nu: number; rho: number }> = {
@@ -139,6 +142,7 @@ export function defaultScene(): Scene {
       rheoPreset: 'kalliroscope',
       particleColor: 'speed',
     },
+    preset: null,
   };
 }
 
@@ -249,5 +253,6 @@ export function parseScene(raw: unknown): Scene {
       rheoPreset: oneOf(v.rheoPreset, ['kalliroscope', 'pearl', 'copper'] as const, d.view.rheoPreset),
       particleColor: oneOf(v.particleColor, ['speed', 'vorticity'] as const, d.view.particleColor),
     },
+    preset: typeof o.preset === 'string' && o.preset ? o.preset.slice(0, 40) : null,
   };
 }

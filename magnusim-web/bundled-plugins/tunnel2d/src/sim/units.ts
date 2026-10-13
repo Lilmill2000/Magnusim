@@ -4,13 +4,14 @@
 // 0.1 gave +4 %, 0.05 +1.8 %). A lattice can only resolve so much: its viscosity is
 // floored so the grid Reynolds number (inflow speed x one cell / viscosity) stays at or
 // below GRID_RE_MAX. Above that the simulated Reynolds number is lower than the real
-// one, and the UI says so; the Smagorinsky model then carries the unresolved scales.
+// one, and the UI says so; the Smagorinsky model then carries the unresolved scales. Below
+// it the grid resolves the flow and it runs as it is, with no model: exact (in 2D).
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 export const U_LATTICE = 0.05;
 /** Highest inflow speed x cell / viscosity the lattice is run at (τ ≥ 0.503 at 0.05). */
 export const GRID_RE_MAX = 50;
-/** Viscosity (lattice) below which the Smagorinsky model is switched on. */
+/** Viscosity (lattice) below which the validation runs switch the Smagorinsky model on. */
 export const SMAG_BELOW_NU = 0.005;
 export const SMAG_CS = 0.1;
 /** The most viscous lattice run: τ = 1.5. Slower flows lower the lattice speed instead. */
@@ -45,7 +46,9 @@ export function latticeMap(lengthM: number, nx: number, speed: number, nuPhys: n
   const nuMin = u / GRID_RE_MAX;
   const nu = Math.max(nuWanted, nuMin);
   const dt = (u * dx) / speed;
-  return { dx, dt, u, nu, nuFluid: nuWanted, nuFloor: nuMin, tau: 3 * nu + 0.5, capped: nuWanted < nuMin, smagorinsky: nu < SMAG_BELOW_NU };
+  // Smagorinsky only where the grid cannot carry the fluid's viscosity: a resolved flow runs as it is.
+  const capped = nuWanted < nuMin;
+  return { dx, dt, u, nu, nuFluid: nuWanted, nuFloor: nuMin, tau: 3 * nu + 0.5, capped, smagorinsky: capped };
 }
 
 /** Reynolds number of a body of length `refM`: the real one, and the one the lattice runs. */

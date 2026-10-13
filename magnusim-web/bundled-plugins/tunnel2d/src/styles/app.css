@@ -291,3 +291,34 @@ html {
   max-width: 640px;
   margin: 0 auto;
 }
+
+/* Presets: the reference table. */
+.t2d-preset-summary {
+  margin: 0 0 var(--mg-space-2);
+}
+.t2d-preset-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  margin: var(--mg-space-2) 0;
+}
+.t2d-preset-table th,
+.t2d-preset-table td {
+  text-align: left;
+  padding: var(--mg-space-1) var(--mg-space-1);
+  font-weight: normal;
+}
+.t2d-preset-table thead th {
+  color: var(--mg-text-muted);
+}
+.t2d-preset-table tr[data-within='yes'] td:first-of-type {
+  font-weight: var(--mg-weight-semibold);
+}
+.t2d-preset-off {
+  color: var(--mg-text-muted);
+}
+.t2d-preset-note {
+  margin: 0;
+  color: var(--mg-text-muted);
+  font-size: var(--mg-text-xs);
+}

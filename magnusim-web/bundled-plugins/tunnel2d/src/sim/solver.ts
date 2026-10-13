@@ -564,8 +564,31 @@ export class Solver {
     return { mac, aux };
   }
 
+  private rowRead: GPUBuffer | null = null;
+
+  /** One row of the last field pass's cells (velocity, density, in a body), or null while a read is on. */
+  async readRow(j: number): Promise<Float32Array | null> {
+    if (this.destroyed || j < 0 || j >= this.ny) return null;
+    if (this.rowRead && this.rowRead.mapState !== 'unmapped') return null;
+    const bytes = this.nx * 16;
+    if (!this.rowRead) this.rowRead = this.device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const buf = this.rowRead;
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.macroBuf, j * bytes, buf, 0, bytes);
+    this.device.queue.submit([enc.finish()]);
+    try {
+      await buf.mapAsync(GPUMapMode.READ);
+    } catch {
+      return null;
+    }
+    const out = new Float32Array(buf.getMappedRange().slice(0));
+    buf.unmap();
+    return out;
+  }
+
   destroy() {
     this.destroyed = true;
+    this.rowRead?.destroy();
     for (const b of [...(this.aux ?? []), ...this.auxDummy, ...this.momDummy, ...(this.mom ?? [])]) b.destroy();
     for (const c of this.children) c.destroy();
     for (const b of [...this.f, this.paramsBuf, this.bodiesBuf, this.sdfBuf, this.forceBuf, this.slotBuf, this.macroBuf, this.scalarBuf, this.fieldUni, this.sampledBuf, ...this.staging]) b.destroy();

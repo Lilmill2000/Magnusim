@@ -115,6 +115,10 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
                 {re.real < 3e5 ? ' Below a Reynolds number of about 300,000, real airfoils often have laminar separation bubbles this model does not capture.' : ''}
               </span>
             </Hint>
+          ) : map && !map.capped ? (
+            <Hint>
+              <span data-t2d-model-note="resolved">The grid resolves this Reynolds number: the flow runs as it is, with no model (exact in two dimensions).</span>
+            </Hint>
           ) : map?.capped ? (
             <Hint tone="warning">
               <span data-t2d-model-note="capped">
