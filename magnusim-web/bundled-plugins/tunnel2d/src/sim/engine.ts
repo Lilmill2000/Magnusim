@@ -15,6 +15,7 @@ import { Rheo } from './rheo';
 import type { MapName, RheoLook } from '../render/renderer';
 import { Streamlines } from './streamlines';
 import { RefineManager } from './refineManager';
+import { outerRing, splitSurface, surfacePoints, type CpPoint } from './surfaceCp';
 import { FIELD_MODES, Solver, type FrameResult, type GpuBody, type Physics } from './solver';
 import { GRID_RE_MAX, SMAG_CS, U_LATTICE, latticeMap, reynolds, type LatticeMap } from './units';
 
@@ -111,6 +112,9 @@ export interface BodyLive {
   fy: number;
   cd: number;
   cl: number;
+  /** Moment about the pivot (N·m per metre of span, nose up positive) and its coefficient (M / (q L²)). */
+  mz: number;
+  cm: number;
 }
 
 interface BodyState {
@@ -127,11 +131,29 @@ interface BodyState {
   vel: { x: number; y: number; theta: number };
   fxEma: number;
   fyEma: number;
+  /** Moment about the pivot (lattice, counter-clockwise positive), averaged as the forces. */
+  mzEma: number;
   /** Forces per step for the tests (lattice units), the most recent first trimmed. */
   history: number[];
-  /** Force coefficients through time (simulated seconds), a few dozen samples per convective time. */
-  samples: { t: number[]; cd: number[]; cl: number[] };
+  /** Force coefficients through time (simulated seconds), a few dozen samples per convective time (Cm nose up positive). */
+  samples: { t: number[]; cd: number[]; cl: number[]; cm: number[] };
 }
+
+/** The flow at a point, in the scene's units. */
+export interface FlowReading {
+  /** Velocity (m/s). */
+  u: number;
+  v: number;
+  speed: number;
+  /** Pressure against the free stream's (Pa), and as a coefficient (against ½ρU²). */
+  p: number;
+  cp: number;
+  /** The point is inside a body (no flow there). */
+  inBody: boolean;
+}
+
+/** Points across the free stream just past the inlet's absorbing layer: its density is the reference. */
+const REF_POINTS = 16;
 
 /** What a body's forces have done over a stretch of time (Measurement). */
 export interface Measurement {
@@ -140,6 +162,8 @@ export interface Measurement {
   span: number;
   cd: number;
   cl: number;
+  /** Mean moment coefficient about the pivot, nose up positive. */
+  cm: number;
   /** Half the lift's swing, and the shedding's Strouhal number (f D / U; null while it does not swing). */
   clAmp: number;
   st: number | null;
@@ -368,7 +392,7 @@ export class Engine {
       if (!this.physKey) this.solver!.reset(this.map.u);
       this.physKey = physKey;
       // Measurements start again with new physics.
-      for (const st of this.bodies.values()) st.samples = { t: [], cd: [], cl: [] };
+      for (const st of this.bodies.values()) st.samples = { t: [], cd: [], cl: [], cm: [] };
     }
     this.syncBodies(scene);
     await this.syncMarkers(scene);
@@ -486,8 +510,9 @@ export class Engine {
           vel: st?.vel ?? { x: 0, y: 0, theta: 0 },
           fxEma: 0,
           fyEma: 0,
+          mzEma: 0,
           history: [],
-          samples: { t: [], cd: [], cl: [] },
+          samples: { t: [], cd: [], cl: [], cm: [] },
         });
       } else {
         st.body = b;
@@ -531,9 +556,13 @@ export class Engine {
     const fluid = FLUIDS[this.scene.flow.fluid];
     // Lattice force per step -> N per metre span: F = f * rho * dx^2 * (dx/dt)^2 / dx ... (2D: per unit depth).
     const u = this.map.u;
-    const q = 0.5 * u * u * (referenceLength(st.body.shape) / this.map.dx);
-    const toN = (fl: number) => (fl / q) * 0.5 * fluid.rho * this.scene!.flow.speed ** 2 * referenceLength(st.body.shape);
-    return { ...pose, fx: toN(st.fxEma), fy: toN(st.fyEma), cd: st.fxEma / q, cl: st.fyEma / q };
+    const L = referenceLength(st.body.shape);
+    const q = 0.5 * u * u * (L / this.map.dx);
+    const qRef = 0.5 * fluid.rho * this.scene!.flow.speed ** 2;
+    const toN = (fl: number) => (fl / q) * qRef * L;
+    // Nose up is clockwise here (the leading side is on the left, upstream).
+    const cm = -st.mzEma / (q * (L / this.map.dx));
+    return { ...pose, fx: toN(st.fxEma), fy: toN(st.fyEma), cd: st.fxEma / q, cl: st.fyEma / q, mz: cm * qRef * L * L, cm };
   }
 
   /** The fastest spin (rad/s) a body may turn at: its edge at SPIN_TIP_MAX. Null before the grid is set. */
@@ -551,7 +580,7 @@ export class Engine {
   measure(id: string, window: number): Measurement | null {
     const st = this.bodies.get(id);
     if (!st || !this.scene || !this.map) return null;
-    const { t, cd, cl } = st.samples;
+    const { t, cd, cl, cm } = st.samples;
     if (t.length < 4) return null;
     const end = t[t.length - 1];
     let i0 = t.length - 1;
@@ -560,16 +589,19 @@ export class Engine {
     if (n < 4) return null;
     let mcd = 0;
     let mcl = 0;
+    let mcm = 0;
     let lo = Infinity;
     let hi = -Infinity;
     for (let i = i0; i < t.length; i++) {
       mcd += cd[i];
       mcl += cl[i];
+      mcm += cm[i];
       lo = Math.min(lo, cl[i]);
       hi = Math.max(hi, cl[i]);
     }
     mcd /= n;
     mcl /= n;
+    mcm /= n;
     const ups: number[] = [];
     for (let i = i0 + 1; i < t.length; i++) {
       const a = cl[i - 1] - mcl;
@@ -583,7 +615,7 @@ export class Engine {
       const period = (ups[ups.length - 1] - ups[0]) / (ups.length - 1);
       stn = referenceLength(st.body.shape) / (period * this.scene.flow.speed);
     }
-    return { since: end - t[0], span: end - t[i0], cd: mcd, cl: mcl, clAmp: amp, st: stn };
+    return { since: end - t[0], span: end - t[i0], cd: mcd, cl: mcl, cm: mcm, clAmp: amp, st: stn };
   }
 
   /**
@@ -608,6 +640,108 @@ export class Engine {
     const b = row[4 * (i + 1)];
     const x = i + a / (a - b);
     return (x - rear) / L;
+  }
+
+  /** The free stream's density (lattice) from the last read: Cp and p are against it. */
+  private rhoInf = 1;
+
+  /**
+   * The flow at points (lattice, main grid), each read from the finest grid that holds it,
+   * with the free stream's density read in the same pass. Null while a read is on.
+   */
+  private async readLattice(pts: { x: number; y: number }[]): Promise<({ u: number; v: number; rho: number } | null)[] | null> {
+    const solver = this.solver;
+    if (!solver) return null;
+    const groups = new Map<Solver, { idx: number[]; xy: number[] }>();
+    const coarse = { idx: [] as number[], xy: [] as number[] };
+    groups.set(solver, coarse);
+    // The reference column first (index -1).
+    const xr = Math.max(0, solver.absorbInX) + solver.nx * 0.03;
+    for (let k = 0; k < REF_POINTS; k++) {
+      coarse.idx.push(-1);
+      coarse.xy.push(xr, ((k + 0.5) / REF_POINTS) * 0.8 * solver.ny + 0.1 * solver.ny);
+    }
+    pts.forEach((p, i) => {
+      const fine = this.refine?.depth ? this.refine.finestAt(p.x, p.y) : null;
+      if (fine) {
+        let g = groups.get(fine.solver);
+        if (!g) groups.set(fine.solver, (g = { idx: [], xy: [] }));
+        const q = fine.map(p.x, p.y);
+        g.idx.push(i);
+        g.xy.push(q.x, q.y);
+      } else {
+        coarse.idx.push(i);
+        coarse.xy.push(p.x, p.y);
+      }
+    });
+    const out: ({ u: number; v: number; rho: number } | null)[] = pts.map(() => null);
+    const ref: number[] = [];
+    for (const [s, g] of groups) {
+      if (!g.idx.length) continue;
+      const r = await s.samplePoints(new Float32Array(g.xy));
+      if (!r) return null;
+      g.idx.forEach((i, k) => {
+        const w = r[4 * k + 3];
+        if (w <= 0) return;
+        if (i < 0) ref.push(r[4 * k + 2]);
+        else out[i] = { u: r[4 * k], v: r[4 * k + 1], rho: r[4 * k + 2] };
+      });
+    }
+    if (ref.length) {
+      ref.sort((a, b) => a - b);
+      this.rhoInf = ref[ref.length >> 1];
+    }
+    return out;
+  }
+
+  /** The flow at world points (m). Null while a read is on or before the grid is set. */
+  async readAt(points: { x: number; y: number }[]): Promise<FlowReading[] | null> {
+    const map = this.map;
+    const scene = this.scene;
+    if (!map || !scene) return null;
+    const r = await this.readLattice(points.map((p) => ({ x: p.x / map.dx - 0.5, y: p.y / map.dx - 0.5 })));
+    if (!r) return null;
+    const U = scene.flow.speed;
+    const k = U / map.u;
+    const qRef = 0.5 * FLUIDS[scene.flow.fluid].rho * U * U;
+    return r.map((m) => {
+      if (!m) return { u: 0, v: 0, speed: 0, p: 0, cp: 0, inBody: true };
+      const cp = (m.rho - this.rhoInf) / (1.5 * map.u * map.u);
+      return { u: m.u * k, v: m.v * k, speed: Math.hypot(m.u, m.v) * k, p: cp * qRef, cp, inBody: false };
+    });
+  }
+
+  /**
+   * The pressure coefficient round a body now: read one cell (of the grid that holds it) off
+   * its outline, split into the upper and lower surfaces by x along the body from its leading
+   * point (0) to its trailing one (1). Null while a read is on or without the body.
+   */
+  async surfaceCp(id: string): Promise<{ upper: CpPoint[]; lower: CpPoint[] } | null> {
+    const st = this.bodies.get(id);
+    const map = this.map;
+    if (!st || !map) return null;
+    const ring = outerRing(st.local);
+    const fine = this.refine?.depth ? this.refine.finestAt(st.pose.x, st.pose.y) : null;
+    const cell = fine ? 1 / fine.scale : 1;
+    const pts = surfacePoints(ring, Math.max(0.5 * cell, 0.5), cell);
+    const c = Math.cos(st.pose.theta);
+    const s = Math.sin(st.pose.theta);
+    const lat = pts.map((p) => ({ x: st.pose.x + c * p.px - s * p.py, y: st.pose.y + s * p.px + c * p.py }));
+    const r = await this.readLattice(lat);
+    if (!r) return null;
+    return splitSurface(
+      pts,
+      r.map((m) => (m ? (m.rho - this.rhoInf) / (1.5 * map.u * map.u) : null)),
+    );
+  }
+
+  /** A body's coefficient samples from simulated time `from` on (copies; empty without the body). */
+  samplesOf(id: string, from = 0): { t: number[]; cd: number[]; cl: number[]; cm: number[] } {
+    const sm = this.bodies.get(id)?.samples;
+    if (!sm) return { t: [], cd: [], cl: [], cm: [] };
+    let i = sm.t.length;
+    while (i > 0 && sm.t[i - 1] >= from) i--;
+    return { t: sm.t.slice(i), cd: sm.cd.slice(i), cl: sm.cl.slice(i), cm: sm.cm.slice(i) };
   }
 
   forceHistory(id: string): number[] {
@@ -640,8 +774,9 @@ export class Engine {
     for (const st of this.bodies.values()) {
       st.fxEma = 0;
       st.fyEma = 0;
+      st.mzEma = 0;
       st.history = [];
-      st.samples = { t: [], cd: [], cl: [] };
+      st.samples = { t: [], cd: [], cl: [], cm: [] };
     }
     this.emit();
   }
@@ -937,6 +1072,8 @@ export class Engine {
       const a = Math.min(1, r.steps / 400);
       st.fxEma = st.fxEma ? st.fxEma * (1 - a) + fx * a : fx;
       st.fyEma = st.fyEma ? st.fyEma * (1 - a) + fy * a : fy;
+      const mz = f.mz / r.steps;
+      st.mzEma = st.mzEma ? st.mzEma * (1 - a) + mz * a : mz;
       if (this.recordForces) {
         for (let s = 0; s < r.steps; s++) st.history.push(f.perStep[2 * s], f.perStep[2 * s + 1]);
       }
@@ -947,25 +1084,29 @@ export class Engine {
         const every = Math.max(1, Math.floor(L / this.map.u / 50));
         const sm = st.samples;
         // Time only runs forward in a record (a restart begins a new one).
-        if (sm.t.length && tStart < sm.t[sm.t.length - 1]) st.samples = { t: [], cd: [], cl: [] };
+        if (sm.t.length && tStart < sm.t[sm.t.length - 1]) st.samples = { t: [], cd: [], cl: [], cm: [] };
         const smp = st.samples;
         for (let s = 0; s < r.steps; s += every) {
           const k = Math.min(every, r.steps - s);
           let x = 0;
           let y = 0;
+          let z = 0;
           for (let m = 0; m < k; m++) {
             x += f.perStep[2 * (s + m)];
             y += f.perStep[2 * (s + m) + 1];
+            z += f.mzStep[s + m];
           }
           smp.t.push(tStart + (s + k / 2) * this.map.dt);
           smp.cd.push(x / k / q);
           smp.cl.push(y / k / q);
+          smp.cm.push(-z / k / (q * L));
         }
         if (smp.t.length > SAMPLES_MAX) {
           const cut = smp.t.length - SAMPLES_MAX;
           smp.t.splice(0, cut);
           smp.cd.splice(0, cut);
           smp.cl.splice(0, cut);
+          smp.cm.splice(0, cut);
         }
       }
     });

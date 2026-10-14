@@ -239,6 +239,20 @@ export class RefineManager {
     return { scalar: fine.buffers.scalar, scale: box.scale, nx: fine.nx, ny: fine.ny, x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 };
   }
 
+  /**
+   * The finest grid holding a point (coarse cells), at least `inset` coarse cells inside its
+   * edge, and the map from coarse cells to its own; null outside every patch.
+   */
+  finestAt(x: number, y: number, inset = 2): { solver: Solver; scale: number; map: (x: number, y: number) => { x: number; y: number } } | null {
+    for (const g of this.groups) {
+      const b = g.ref.finestBox;
+      if (x >= b.x0 + inset && x <= b.x1 - inset && y >= b.y0 + inset && y <= b.y1 - inset) {
+        return { solver: g.ref.finest, scale: b.scale, map: (px, py) => g.ref.toFinest(px, py) };
+      }
+    }
+    return null;
+  }
+
   /** The patches now (for tests): per group, its bodies and each level's rectangle and grid. */
   info() {
     return this.groups.map((g) => ({ ids: g.order, levels: g.ref.levels.map((l) => ({ ...l.rect, nx: l.fine.nx, ny: l.fine.ny })) }));

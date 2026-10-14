@@ -25,6 +25,11 @@ export function exposeTestHandle({ store, engine, device, editor }: { ws: Worksp
     view: () => ({ ...engine.worldView }),
     livePose: (id: string) => engine.livePose(id),
     bodyLive: (id: string) => engine.bodyLive(id),
+    /** A body's mean coefficients over the last `window` simulated seconds. */
+    measure: (id: string, window: number) => engine.measure(id, window),
+    /** The flow at world points, and the pressure coefficient round a body. */
+    readAt: (pts: { x: number; y: number }[]) => engine.readAt(pts),
+    surfaceCp: (id: string) => engine.surfaceCp(id),
     /** The displayed field sampled every 4 cells (NaN in bodies), as a plain array. */
     sampleField: async () => {
       const s = await engine.sampleField();

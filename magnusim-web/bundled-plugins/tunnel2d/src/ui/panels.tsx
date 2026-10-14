@@ -56,7 +56,7 @@ function TextField({ label, value, onCommit, error, attr }: { label: string; val
 // ---------------------------------------------------------------------------------------
 
 /** How close the turbulence model's lift is with this many cells across a body (measured: NACA 0012 and 2412, R1/R2 reports). */
-function liftBand(cells: number | null): number {
+export function liftBand(cells: number | null): number {
   if (cells == null || cells < 150) return 10;
   if (cells < 250) return 5;
   return 3;

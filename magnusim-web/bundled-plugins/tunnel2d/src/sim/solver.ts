@@ -2,7 +2,7 @@
 // One instance per grid; a new grid makes a new instance.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SdfGrid } from '../geometry/sdf';
-import { FORCE_FIX, FORCE_WORDS, HEALTH_SLOT, MAX_BODIES, MAX_STEPS, TURB, W, WALLS, WG, fieldShader, macroShader, stepShader } from './kernels';
+import { FORCE_FIX, FORCE_STRIDE, FORCE_WORDS, HEALTH_SLOT, TORQUE_FIX, MAX_BODIES, MAX_STEPS, TURB, W, WALLS, WG, fieldShader, macroShader, sampleShader, stepShader } from './kernels';
 import type { Patch } from './refine';
 
 export interface SimConfig {
@@ -46,8 +46,11 @@ export interface GpuBody {
 
 export interface FrameResult {
   steps: number;
-  /** Per body (in the order given), force summed over the frame's steps (lattice units), and per step. */
-  forces: { fx: number; fy: number; perStep: Float64Array }[];
+  /**
+   * Per body (in the order given), force summed over the frame's steps (lattice units), and per
+   * step (x, y pairs); the moment about its pivot likewise (counter-clockwise positive).
+   */
+  forces: { fx: number; fy: number; mz: number; perStep: Float64Array; mzStep: Float64Array }[];
   /** Cells whose density left [0.5, 2]: the run became unstable. */
   bad: number;
   /** Cell updates the limiter changed (flow squeezed between bodies). */
@@ -427,7 +430,7 @@ export class Solver {
     this.writeBodies();
     this.bindGroups();
     if (count > 0) {
-      enc.clearBuffer(this.forceBuf, 0, Math.min(FORCE_WORDS * 4, count * MAX_BODIES * 8));
+      enc.clearBuffer(this.forceBuf, 0, Math.min(FORCE_WORDS * 4, count * MAX_BODIES * FORCE_STRIDE * 4));
       enc.clearBuffer(this.forceBuf, HEALTH_SLOT * 4, 16);
     }
     for (const c of this.children) c.fine.beginFrame(enc, 2 * count);
@@ -483,16 +486,7 @@ export class Solver {
     u[6] = this.sampleW;
     u[7] = this.sampleH;
     this.device.queue.writeBuffer(this.fieldUni, 0, d);
-    const macroBG = this.device.createBindGroup({
-      layout: this.macroPipe.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.f[this.cur] } },
-        { binding: 1, resource: { buffer: this.macroBuf } },
-        { binding: 2, resource: { buffer: this.paramsBuf } },
-        { binding: 3, resource: { buffer: this.bodiesBuf } },
-        { binding: 4, resource: { buffer: this.sdfBuf } },
-      ],
-    });
+    const macroBG = this.macroBindGroup();
     const fieldBG = this.device.createBindGroup({
       layout: this.fieldPipe.getBindGroupLayout(0),
       entries: [
@@ -518,7 +512,7 @@ export class Solver {
    */
   prepareRead(enc: GPUCommandEncoder, steps: number): () => Promise<FrameResult | null> {
     const count = Math.min(MAX_STEPS, steps);
-    const bytes = count * MAX_BODIES * 8;
+    const bytes = count * MAX_BODIES * FORCE_STRIDE * 4;
     let st = this.staging.pop();
     if (!st) st = this.device.createBuffer({ size: FORCE_WORDS * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     enc.copyBufferToBuffer(this.forceBuf, 0, st, 0, bytes);
@@ -536,17 +530,23 @@ export class Solver {
       else buf.destroy();
       const forces = this.bodies.map((_, b) => {
         const perStep = new Float64Array(count * 2);
+        const mzStep = new Float64Array(count);
         let fx = 0;
         let fy = 0;
+        let mz = 0;
         for (let s = 0; s < count; s++) {
-          const x = v[(s * MAX_BODIES + b) * 2] / FORCE_FIX;
-          const y = v[(s * MAX_BODIES + b) * 2 + 1] / FORCE_FIX;
+          const o = (s * MAX_BODIES + b) * FORCE_STRIDE;
+          const x = v[o] / FORCE_FIX;
+          const y = v[o + 1] / FORCE_FIX;
+          const m = v[o + 2] / TORQUE_FIX;
           perStep[2 * s] = x;
           perStep[2 * s + 1] = y;
+          mzStep[s] = m;
           fx += x;
           fy += y;
+          mz += m;
         }
-        return { fx, fy, perStep };
+        return { fx, fy, mz, perStep, mzStep };
       });
       const first = v[HEALTH_SLOT] > 0 ? this.n - v[HEALTH_SLOT + 1] : -1;
       return { steps: count, forces, bad: v[HEALTH_SLOT], limited: v[HEALTH_SLOT + 2], badCell: first >= 0 ? { x: first % this.nx, y: Math.floor(first / this.nx) } : null };
@@ -599,6 +599,91 @@ export class Solver {
   }
 
   private rowRead: GPUBuffer | null = null;
+  private sampler: { pipe: GPUComputePipeline; uni: GPUBuffer; pts: GPUBuffer; out: GPUBuffer; read: GPUBuffer; cap: number } | null = null;
+  private sampleChain: Promise<unknown> = Promise.resolve();
+
+  /**
+   * The flow at points (lattice x, y pairs): per point velocity x, y, density and the fluid
+   * weight found (0 inside a body), from a fresh macro pass. Reads run one after another;
+   * null when the grid is gone or the read failed.
+   */
+  samplePoints(points: Float32Array): Promise<Float32Array | null> {
+    const run = this.sampleChain.then(() => this.sampleNow(points));
+    this.sampleChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async sampleNow(points: Float32Array): Promise<Float32Array | null> {
+    const n = points.length >> 1;
+    if (this.destroyed || n === 0) return null;
+    try {
+      const S = GPUBufferUsage;
+      if (!this.sampler || this.sampler.cap < n) {
+        if (this.sampler) for (const b of [this.sampler.pts, this.sampler.out, this.sampler.read, this.sampler.uni]) b.destroy();
+        const cap = Math.max(256, 1 << Math.ceil(Math.log2(n)));
+        const pipe = this.sampler?.pipe ?? this.device.createComputePipeline({ layout: 'auto', compute: { module: this.device.createShaderModule({ code: sampleShader(), label: 'tunnel sample' }), entryPoint: 'main' } });
+        this.sampler = {
+          pipe,
+          cap,
+          uni: this.device.createBuffer({ size: 16, usage: S.UNIFORM | S.COPY_DST }),
+          pts: this.device.createBuffer({ size: cap * 8, usage: S.STORAGE | S.COPY_DST }),
+          out: this.device.createBuffer({ size: cap * 16, usage: S.STORAGE | S.COPY_SRC }),
+          read: this.device.createBuffer({ size: cap * 16, usage: S.MAP_READ | S.COPY_DST }),
+        };
+      }
+      const sp = this.sampler;
+      this.device.queue.writeBuffer(sp.uni, 0, new Uint32Array([n, this.nx, this.ny, 0]));
+      this.device.queue.writeBuffer(sp.pts, 0, points.buffer, points.byteOffset, n * 8);
+      const enc = this.device.createCommandEncoder();
+      this.encodeMacro(enc);
+      const pass = enc.beginComputePass({ label: 'tunnel sample' });
+      pass.setPipeline(sp.pipe);
+      pass.setBindGroup(
+        0,
+        this.device.createBindGroup({
+          layout: sp.pipe.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: this.macroBuf } },
+            { binding: 1, resource: { buffer: sp.pts } },
+            { binding: 2, resource: { buffer: sp.out } },
+            { binding: 3, resource: { buffer: sp.uni } },
+          ],
+        }),
+      );
+      pass.dispatchWorkgroups(Math.ceil(n / 64));
+      pass.end();
+      enc.copyBufferToBuffer(sp.out, 0, sp.read, 0, n * 16);
+      this.device.queue.submit([enc.finish()]);
+      await sp.read.mapAsync(GPUMapMode.READ, 0, n * 16);
+      const out = new Float32Array(sp.read.getMappedRange(0, n * 16).slice(0));
+      sp.read.unmap();
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The macro pass alone (density and velocity per cell, bodies marked), for reads. */
+  encodeMacro(enc: GPUCommandEncoder) {
+    const pass = enc.beginComputePass({ label: 'tunnel macro' });
+    pass.setPipeline(this.macroPipe);
+    pass.setBindGroup(0, this.macroBindGroup());
+    pass.dispatchWorkgroups(this.groups[0], this.groups[1]);
+    pass.end();
+  }
+
+  private macroBindGroup() {
+    return this.device.createBindGroup({
+      layout: this.macroPipe.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.f[this.cur] } },
+        { binding: 1, resource: { buffer: this.macroBuf } },
+        { binding: 2, resource: { buffer: this.paramsBuf } },
+        { binding: 3, resource: { buffer: this.bodiesBuf } },
+        { binding: 4, resource: { buffer: this.sdfBuf } },
+      ],
+    });
+  }
 
   /** One row of the last field pass's cells (velocity, density, in a body), or null while a read is on. */
   async readRow(j: number): Promise<Float32Array | null> {
@@ -623,6 +708,7 @@ export class Solver {
   destroy() {
     this.destroyed = true;
     this.rowRead?.destroy();
+    if (this.sampler) for (const b of [this.sampler.pts, this.sampler.out, this.sampler.read, this.sampler.uni]) b.destroy();
     for (const b of [...(this.aux ?? []), ...this.auxDummy, ...this.momDummy, ...(this.mom ?? [])]) b.destroy();
     for (const c of this.children) c.destroy();
     for (const b of [...this.f, this.paramsBuf, this.bodiesBuf, this.sdfBuf, this.forceBuf, this.slotBuf, this.macroBuf, this.scalarBuf, this.fieldUni, this.sampledBuf, ...this.staging]) b.destroy();

@@ -15,6 +15,8 @@
   /* Selection and the pose a dragged body is going to */
   --t2d-select: #1570ef;
   --t2d-ghost: #475467;
+  /* Probes: dark ink on a ring of the page colour, over any field */
+  --t2d-probe: var(--mg-text);
   /* The sketcher (as CAD's sketch: blue under-defined, ink fully defined, red over-defined;
      CAD's pick green for the selection), on a halo of the page colour over any field */
   --t2d-sketch-under: var(--mg-primary);

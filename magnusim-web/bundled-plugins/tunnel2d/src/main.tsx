@@ -12,6 +12,8 @@ import { Store } from './app/store';
 import { exposeTestHandle } from './app/debug';
 import { SketchEditor } from './sketch/editor';
 import { SketchSolver } from './sketch/solve';
+import { SweepHost } from './sim/sweep';
+import { ProbeFeed } from './ui/probeFeed';
 import type { Palette } from './render/renderer';
 import { Engine } from './sim/engine';
 import { shaderErrors } from './sim/shaders';
@@ -136,10 +138,13 @@ async function main() {
   // The sketcher: its solver (CAD's PlaneGCS worker) starts on the first sketch edited.
   let solver: SketchSolver | null = null;
   const editor = new SketchEditor(store, engine, () => (solver ??= new SketchSolver((url) => ws.spawnWorker(url))));
+  const probes = new ProbeFeed(engine, store);
+  probes.start();
+  const sweeps = new SweepHost(engine, store);
   exposeTestHandle({ ws, store, engine, device, editor });
   window.addEventListener('pagehide', () => void saver.flush());
 
-  root.render(createElement(App, { ws, store, engine, editor, units: ws.context.units, problem: loaded.problem }));
+  root.render(createElement(App, { ws, store, engine, editor, probes, sweeps, units: ws.context.units, problem: loaded.problem }));
 }
 
 void main();

@@ -49,7 +49,7 @@ export class Store {
     }
     // The selection survives a change while its body or rake is still there.
     const sel = this.state.selected;
-    const selected = sel && (scene.bodies.some((b) => b.id === sel) || scene.rakes.some((r) => r.id === sel)) ? sel : null;
+    const selected = sel && (scene.bodies.some((b) => b.id === sel) || scene.rakes.some((r) => r.id === sel) || scene.probes.some((p) => p.id === sel)) ? sel : null;
     this.set({ scene, selected });
     this.onSceneChange?.(scene);
   }

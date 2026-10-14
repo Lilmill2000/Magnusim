@@ -13,6 +13,10 @@ import { Viewport, fitView } from '../ui/Viewport';
 import { PresetPanel, PresetPicker } from '../ui/presets';
 import { DimensionInput, SketchBar } from '../ui/sketchbar';
 import type { SketchEditor } from '../sketch/editor';
+import type { SweepHost } from '../sim/sweep';
+import type { ProbeFeed } from '../ui/probeFeed';
+import { ForcesPanel, SurfacePanel, SweepPanel } from '../ui/forces';
+import { ProbePanel, ProbesPanel } from '../ui/probes';
 import { useStore, type Store } from './store';
 
 /** The legend's title, unit and the factor from the dimensionless field to it. */
@@ -151,7 +155,25 @@ function RangeInputs({ lo, hi, onCommit }: { lo: number; hi: number; onCommit: (
   );
 }
 
-export function App({ ws, store, engine, editor, units: units0, problem }: { ws: Workspace; store: Store; engine: Engine; editor: SketchEditor; units: UnitSystem; problem: string }) {
+export function App({
+  ws,
+  store,
+  engine,
+  editor,
+  probes,
+  sweeps,
+  units: units0,
+  problem,
+}: {
+  ws: Workspace;
+  store: Store;
+  engine: Engine;
+  editor: SketchEditor;
+  probes: ProbeFeed;
+  sweeps: SweepHost;
+  units: UnitSystem;
+  problem: string;
+}) {
   const [units, setUnits] = useState<UnitSystem>(units0);
   const [paused, setPaused] = useState(false);
   const [unstable, setUnstable] = useState(false);
@@ -159,6 +181,8 @@ export function App({ ws, store, engine, editor, units: units0, problem }: { ws:
   const save = useStore(store, (s) => s.save);
   const saveError = useStore(store, (s) => s.saveError);
   const selectedRake = useStore(store, (s) => s.scene.rakes.find((r) => r.id === s.selected) ?? null);
+  const selectedProbe = useStore(store, (s) => s.scene.probes.find((p) => p.id === s.selected) ?? null);
+  const selectedBody = useStore(store, (s) => s.scene.bodies.find((b) => b.id === s.selected) ?? null);
   useEffect(() => ws.on('units', setUnits), [ws]);
   // Selecting another body (or the sketch body going: undo, remove) ends the edit.
   useEffect(
@@ -219,7 +243,9 @@ export function App({ ws, store, engine, editor, units: units0, problem }: { ws:
         const s = store.get().scene;
         const b = s.bodies.find((x) => x.id === store.get().selected);
         const r = s.rakes.find((x) => x.id === store.get().selected);
-        if (b) {
+        const pr = s.probes.find((x) => x.id === store.get().selected);
+        if (pr) store.commit({ ...s, probes: s.probes.filter((x) => x.id !== pr.id) });
+        else if (b) {
           store.commit({ ...s, bodies: s.bodies.filter((x) => x.id !== b.id) });
           void ws.ui.toast(`Removed ${b.name}. Undo (Ctrl+Z) brings it back.`, { kind: 'info' });
         } else if (r) {
@@ -273,6 +299,7 @@ export function App({ ws, store, engine, editor, units: units0, problem }: { ws:
           <WindPanel store={store} engine={engine} units={units} />
           <BodiesPanel store={store} ws={ws} editor={editor} />
           <MarkersPanel store={store} ws={ws} />
+          <ProbesPanel store={store} feed={probes} units={units} />
           <TunnelPanel store={store} engine={engine} units={units} />
           <ViewPanel store={store} />
         </aside>
@@ -292,14 +319,29 @@ export function App({ ws, store, engine, editor, units: units0, problem }: { ws:
               <DisabledReason reason="The flow became unstable and was stopped." fix={{ label: 'Reset flow', onFix: resetFlow }} role="alert" />
             </div>
           ) : null}
-          <Viewport engine={engine} store={store} editor={editor} onStatus={setHint} />
+          <Viewport engine={engine} store={store} editor={editor} units={units} onStatus={setHint} />
           <SketchBar editor={editor} />
           <DimensionInput editor={editor} />
           <Legend engine={engine} store={store} />
           <StatusLine engine={engine} store={store} />
         </div>
         <aside className="t2d-side t2d-side--right">
-          {selectedRake ? <RakePanel store={store} ws={ws} units={units} rake={selectedRake} /> : <BodyPanel store={store} ws={ws} units={units} engine={engine} editor={editor} />}
+          {selectedRake ? (
+            <RakePanel store={store} ws={ws} units={units} rake={selectedRake} />
+          ) : selectedProbe ? (
+            <ProbePanel store={store} feed={probes} units={units} probe={selectedProbe} />
+          ) : (
+            <>
+              <BodyPanel store={store} ws={ws} units={units} engine={engine} editor={editor} />
+              {selectedBody ? (
+                <>
+                  <ForcesPanel engine={engine} store={store} body={selectedBody} units={units} />
+                  <SurfacePanel engine={engine} store={store} body={selectedBody} />
+                  <SweepPanel engine={engine} store={store} body={selectedBody} host={sweeps} />
+                </>
+              ) : null}
+            </>
+          )}
         </aside>
       </div>
     </div>

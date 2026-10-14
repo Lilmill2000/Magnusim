@@ -430,3 +430,16 @@ html {
   border: 1px solid var(--mg-danger);
   border-radius: var(--mg-radius-xs);
 }
+
+/* Forces, surface pressure and the angle sweep (right side, under the body) */
+.t2d-forces td:nth-child(2),
+.t2d-forces td:nth-child(3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.t2d-sweep-caption {
+  font-size: var(--mg-text-sm);
+  color: var(--mg-text-muted);
+  margin-top: var(--mg-space-2);
+}

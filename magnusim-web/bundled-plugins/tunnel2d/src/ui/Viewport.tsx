@@ -3,15 +3,18 @@
 // Drag a body to move it, its round handle to turn it (Shift: whole degrees), empty
 // space or the middle button to pan, the wheel to zoom; double-click empty space fits.
 // While a sketch body is being edited, the left button belongs to the sketch editor (the
-// middle button still pans and the wheel zooms).
+// middle button still pans and the wheel zooms). Probes are drawn and dragged here too, and
+// hovering over the flow reads it under the pointer (the toolbar's hint).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef } from 'react';
+import type { UnitSystem } from '@magnusim/plugin-ui';
 import { containsRings, transformRings, type Rings } from '../geometry/polygon';
 import { hasOutline, outlineRings, profileOf } from '../geometry/shapes';
 import type { Engine } from '../sim/engine';
 import type { Body, Rake, Scene } from '../scene/scene';
 import type { Store } from '../app/store';
 import type { Palette, SketchEditor } from '../sketch/editor';
+import { readingText } from './forces';
 
 const HANDLE_GAP_PX = 26;
 const HANDLE_R_PX = 7;
@@ -33,7 +36,10 @@ export function worldOutline(b: Body, pose: { x: number; y: number; angle: numbe
   return transformRings(localOutline(b), { x: pose.x, y: pose.y, theta: (-pose.angle * Math.PI) / 180 });
 }
 
+const PROBE_R_PX = 5;
+
 type Drag =
+  | { kind: 'probe'; id: string; before: Scene; moved: boolean }
   | { kind: 'rake'; id: string; part: 'all' | 'start' | 'end'; startX: number; startY: number; r0: Rake; before: Scene }
   | { kind: 'move'; id: string; startX: number; startY: number; bodyX: number; bodyY: number; angle: number; moved: boolean }
   | { kind: 'turn'; id: string; startAngle: number; pointerStart: number; angle: number; x: number; y: number }
@@ -71,7 +77,9 @@ function sketchPalette(css: CSSStyleDeclaration): Palette {
   };
 }
 
-export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; store: Store; editor?: SketchEditor; onStatus?: (text: string) => void }) {
+export function Viewport({ engine, store, editor, units = 'metric', onStatus }: { engine: Engine; store: Store; editor?: SketchEditor; units?: UnitSystem; onStatus?: (text: string) => void }) {
+  /** The hover readout: the newest pointer position (world) and whether a read is on. */
+  const hover = useRef<{ at: { x: number; y: number } | null; busy: boolean; last: number }>({ at: null, busy: false, last: 0 });
   const wrap = useRef<HTMLDivElement>(null);
   /** The last left press (for click counts: a PointerEvent's detail is not one). */
   const lastPress = useRef({ t: 0, x: 0, y: 0, n: 0 });
@@ -151,6 +159,7 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
     const ghost = css.getPropertyValue('--t2d-ghost').trim() || 'gray';
     const handleFill = css.getPropertyValue('--mg-bg').trim() || 'white';
     const pal = sketchPalette(css);
+    const probeInk = css.getPropertyValue('--t2d-probe').trim() || 'black';
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const o = overlay.current;
@@ -195,6 +204,32 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
         }
         g.globalAlpha = 1;
       }
+      // Probes: a ringed cross with its name.
+      scene.probes.forEach((p, i) => {
+        const s = toScreen(p.x, p.y);
+        const isSel = p.id === selected;
+        g.beginPath();
+        g.arc(s.x, s.y, PROBE_R_PX, 0, Math.PI * 2);
+        g.fillStyle = handleFill;
+        g.fill();
+        g.strokeStyle = isSel ? sel : probeInk;
+        g.lineWidth = isSel ? 2.5 : 1.5;
+        g.stroke();
+        g.beginPath();
+        g.moveTo(s.x - PROBE_R_PX - 3, s.y);
+        g.lineTo(s.x + PROBE_R_PX + 3, s.y);
+        g.moveTo(s.x, s.y - PROBE_R_PX - 3);
+        g.lineTo(s.x, s.y + PROBE_R_PX + 3);
+        g.stroke();
+        g.font = '11px system-ui, sans-serif';
+        g.textAlign = 'left';
+        g.textBaseline = 'bottom';
+        g.lineWidth = 3;
+        g.strokeStyle = handleFill;
+        g.strokeText(`P${i + 1}`, s.x + PROBE_R_PX + 2, s.y - PROBE_R_PX);
+        g.fillStyle = isSel ? sel : probeInk;
+        g.fillText(`P${i + 1}`, s.x + PROBE_R_PX + 2, s.y - PROBE_R_PX);
+      });
       const sketching = editor?.editing ? editor.bodyId : null;
       for (const b of scene.bodies) {
         // The sketch being edited draws itself (its own points and curves, no turn handle).
@@ -296,6 +331,40 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
     return null;
   };
 
+  /** The probe under a screen point (client px). */
+  const hitProbe = (cx: number, cy: number) => {
+    const r0 = wrap.current!.getBoundingClientRect();
+    const probes = store.get().scene.probes;
+    for (let i = probes.length - 1; i >= 0; i--) {
+      const s = toScreen(probes[i].x, probes[i].y);
+      if (Math.hypot(cx - r0.left - s.x, cy - r0.top - s.y) <= PROBE_R_PX + 4) return probes[i];
+    }
+    return null;
+  };
+
+  /** Read the flow under the pointer for the toolbar's hint (at most ten times a second). */
+  const readHover = (w: { x: number; y: number } | null) => {
+    const h = hover.current;
+    h.at = w;
+    if (!w) {
+      onStatus?.('');
+      return;
+    }
+    const now = performance.now();
+    if (h.busy || now - h.last < 100) return;
+    h.busy = true;
+    h.last = now;
+    void engine
+      .readAt([w])
+      .then((r) => {
+        // Only if the pointer is still over the flow and no drag took the hint since.
+        if (r && hover.current.at && !drag.current) onStatus?.(readingText(r[0], units));
+      })
+      .finally(() => {
+        hover.current.busy = false;
+      });
+  };
+
   /** The rake (and which part of it) under a screen point: an end of the selected rake, or the line. */
   const hitRake = (cx: number, cy: number): { rake: Rake; part: 'all' | 'start' | 'end' } | null => {
     const r0 = wrap.current!.getBoundingClientRect();
@@ -359,6 +428,12 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
         return;
       }
     }
+    const pr = hitProbe(e.clientX, e.clientY);
+    if (pr) {
+      store.select(pr.id);
+      drag.current = { kind: 'probe', id: pr.id, before: store.get().scene, moved: false };
+      return;
+    }
     const rk = hitRake(e.clientX, e.clientY);
     if (rk) {
       store.select(rk.rake.id);
@@ -385,9 +460,20 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
     }
     if (!d) {
       const w = toWorld(e.clientX, e.clientY);
-      const rk = hitRake(e.clientX, e.clientY);
-      const hit = rk ? null : hitBody(w.x, w.y);
-      wrap.current!.style.cursor = rk ? (rk.part === 'all' ? 'move' : 'crosshair') : hit && !hit.locked ? 'grab' : 'default';
+      const pr = hitProbe(e.clientX, e.clientY);
+      const rk = pr ? null : hitRake(e.clientX, e.clientY);
+      const hit = pr || rk ? null : hitBody(w.x, w.y);
+      wrap.current!.style.cursor = pr ? 'move' : rk ? (rk.part === 'all' ? 'move' : 'crosshair') : hit && !hit.locked ? 'grab' : 'default';
+      readHover(w);
+      return;
+    }
+    if (d.kind === 'probe') {
+      const w = toWorld(e.clientX, e.clientY);
+      const p = clampToTunnel(w.x, w.y);
+      d.moved = true;
+      const s = store.get().scene;
+      store.commit({ ...s, probes: s.probes.map((x) => (x.id === d.id ? { ...x, x: p.x, y: p.y } : x)) }, false);
+      onStatus?.(`x ${p.x.toFixed(3)} m, y ${p.y.toFixed(3)} m`);
       return;
     }
     if (d.kind === 'rake') {
@@ -438,6 +524,11 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
     }
     onStatus?.('');
     if (!d || d.kind === 'pan') return;
+    if (d.kind === 'probe') {
+      const now = store.get().scene;
+      if (d.moved && now !== d.before) store.commitFrom(d.before, now);
+      return;
+    }
     if (d.kind === 'rake') {
       const now = store.get().scene;
       if (now !== d.before) store.commitFrom(d.before, now);
@@ -476,6 +567,7 @@ export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; 
       onWheel={onWheel}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => e.preventDefault()}
+      onPointerLeave={() => !drag.current && readHover(null)}
     >
       <canvas ref={canvas} />
       <canvas ref={overlay} className="t2d-overlay" />

@@ -18,8 +18,15 @@ export const MAX_BODIES = 8;
 export const MAX_STEPS = 2048;
 /** Fixed-point scale of the force atomics (2^20). */
 export const FORCE_FIX = 1048576;
+/**
+ * Fixed-point scale of the moment atomics (2^14): lever arms of hundreds of cells must not
+ * take a step's sum past i32 (the atomics wrap, so only the sum has to fit).
+ */
+export const TORQUE_FIX = 16384;
+/** Words per body per step in the force ring: force x, force y, moment about the pivot. */
+export const FORCE_STRIDE = 3;
 /** Index of the health counter (cells with a density out of range) after the force ring. */
-export const HEALTH_SLOT = MAX_STEPS * MAX_BODIES * 2;
+export const HEALTH_SLOT = MAX_STEPS * MAX_BODIES * FORCE_STRIDE;
 export const FORCE_WORDS = HEALTH_SLOT + 4;
 /** The limiter's bounds: density 1 ± LIMIT_RHO, speed LIMIT_U (lattice). */
 export const LIMIT_RHO = 0.1;
@@ -426,9 +433,13 @@ export function stepShader(patch = false): string {
       let mw = ${n10(6 * W[k])} * ${cu};
       if (q < 0.5) { f${k} = 2.0 * q * fi + (1.0 - 2.0 * q) * ${rd(i, 'u32(bx) + u32(by) * P.nx')} + mw; }
       else { f${k} = fi / (2.0 * q) + (2.0 * q - 1.0) / (2.0 * q) * ${rd(k, 'idx')} + mw / (2.0 * q); }
-      let slot = (S.slot * ${MAX_BODIES}u + hit.b) * 2u;
-      atomicAdd(&force[slot], i32(round((${n1(CX[i])} * (fi + f${k}) - uwB.x * (fi - f${k})) * ${FORCE_FIX}.0)));
-      atomicAdd(&force[slot + 1u], i32(round((${n1(CY[i])} * (fi + f${k}) - uwB.y * (fi - f${k})) * ${FORCE_FIX}.0)));
+      let slot = (S.slot * ${MAX_BODIES}u + hit.b) * ${FORCE_STRIDE}u;
+      let lf = vec2f(${n1(CX[i])} * (fi + f${k}) - uwB.x * (fi - f${k}), ${n1(CY[i])} * (fi + f${k}) - uwB.y * (fi - f${k}));
+      atomicAdd(&force[slot], i32(round(lf.x * ${FORCE_FIX}.0)));
+      atomicAdd(&force[slot + 1u], i32(round(lf.y * ${FORCE_FIX}.0)));
+      // Its moment about the body's pivot, the force acting where the link meets the wall.
+      let rw = vec2f(f32(x) - q * ${n1(cx)}, f32(y) - q * ${n1(cy)}) - c;
+      atomicAdd(&force[slot + 2u], i32(round((rw.x * lf.y - rw.y * lf.x) * ${TORQUE_FIX}.0)));
     } else {
       f${k} = ${rd(k, 'src')};
     }
@@ -921,4 +932,42 @@ export function allShaders(): { label: string; code: string }[] {
     { label: 'field', code: fieldShader() },
     { label: 'render', code: renderShader() },
   ];
+}
+
+/**
+ * Read the flow at points (lattice coordinates, cell centres at whole numbers): velocity and
+ * density, bilinear over the fluid cells round each point only (a body's cells are left out
+ * and the weights renormalised); w is the fluid weight found (0: the point is in a body).
+ */
+export function sampleShader(): string {
+  return /* wgsl */ `
+struct SP { n: u32, nx: u32, ny: u32, pad: u32 };
+@group(0) @binding(0) var<storage, read> mac: array<vec4f>;
+@group(0) @binding(1) var<storage, read> pts: array<vec2f>;
+@group(0) @binding(2) var<storage, read_write> outv: array<vec4f>;
+@group(0) @binding(3) var<uniform> S: SP;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3u) {
+  if (g.x >= S.n) { return; }
+  let p = pts[g.x];
+  let i0 = floor(p);
+  let t = p - i0;
+  var acc = vec3f(0.0);
+  var w = 0.0;
+  for (var dy = 0; dy < 2; dy++) {
+    for (var dx = 0; dx < 2; dx++) {
+      let ix = i32(i0.x) + dx;
+      let iy = i32(i0.y) + dy;
+      if (ix < 0 || iy < 0 || ix >= i32(S.nx) || iy >= i32(S.ny)) { continue; }
+      let m = mac[u32(ix) + u32(iy) * S.nx];
+      if (m.w > 0.5) { continue; }
+      let wt = select(1.0 - t.x, t.x, dx == 1) * select(1.0 - t.y, t.y, dy == 1);
+      acc += wt * m.xyz;
+      w += wt;
+    }
+  }
+  outv[g.x] = select(vec4f(0.0), vec4f(acc / max(w, 1e-12), w), w > 1e-6);
+}
+`;
 }

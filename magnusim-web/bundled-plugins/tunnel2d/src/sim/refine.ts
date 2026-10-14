@@ -418,6 +418,12 @@ export class Refinement {
     return { x0, y0, x1: x0 + w, y1: y0 + h, scale: k };
   }
 
+  /** A point in coarse cells, in the finest level's cells. */
+  toFinest(x: number, y: number): { x: number; y: number } {
+    const p = this.poseAt(this.levels.length - 1, { x, y, theta: 0 });
+    return { x: p.x, y: p.y };
+  }
+
   get finest(): Solver {
     return this.levels[this.levels.length - 1].fine;
   }
@@ -473,25 +479,32 @@ export class Refinement {
       const r = await read();
       if (!r) return null;
       // A coarse step's force: the sum over its finest steps, over 4 per level (momentum and
-      // time units both shrink with the cell).
+      // time units both shrink with the cell); a moment over 8 (its lever arm is in fine cells).
       const div = k * k;
+      const divM = k * k * k;
       const forces = r.forces.map((f) => {
         const perStep = new Float64Array(count * 2);
+        const mzStep = new Float64Array(count);
         let fx = 0;
         let fy = 0;
+        let mz = 0;
         for (let s = 0; s < count; s++) {
           let x = 0;
           let y = 0;
+          let m = 0;
           for (let q = 0; q < k; q++) {
             x += f.perStep[2 * (s * k + q)];
             y += f.perStep[2 * (s * k + q) + 1];
+            m += f.mzStep[s * k + q];
           }
           perStep[2 * s] = x / div;
           perStep[2 * s + 1] = y / div;
+          mzStep[s] = m / divM;
           fx += x / div;
           fy += y / div;
+          mz += m / divM;
         }
-        return { fx, fy, perStep };
+        return { fx, fy, mz, perStep, mzStep };
       });
       return { ...r, steps: count, forces };
     };

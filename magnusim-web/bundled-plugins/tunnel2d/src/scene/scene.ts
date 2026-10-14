@@ -9,10 +9,10 @@ import type { SketchData } from '../sketch/model';
 
 /**
  * 2: rakes, and the view's tracers, trail, arrows and streamlines; 3: the flow model; 4: the
- * refinement round bodies; 5: the preset a scene was started from (older files read as is:
- * model automatic, no refinement, no preset).
+ * refinement round bodies; 5: the preset a scene was started from; 6: probes and the last
+ * angle sweep (older files read as is: model automatic, no refinement, no preset, no probes).
  */
-export const SCENE_VERSION = 5;
+export const SCENE_VERSION = 6;
 
 export type Walls = 'farfield' | 'slip' | 'noslip' | 'periodic';
 export type Resolution = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
@@ -65,6 +65,33 @@ export interface Rake {
   enabled: boolean;
 }
 
+/** A point the flow is read at, pinned in the tunnel (world metres). */
+export interface Probe {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/** One angle of a sweep: the mean coefficients there (Cm about the pivot, nose up positive). */
+export interface SweepRow {
+  angle: number;
+  cl: number;
+  cd: number;
+  cm: number;
+}
+
+/** The last angle sweep: which body, at which Reynolds number and flow model, and its rows. */
+export interface SweepResult {
+  bodyId: string;
+  bodyName: string;
+  /** The Reynolds number the flow ran at, and what ran it ('sa': the turbulence model; 'off': resolved). */
+  re: number;
+  model: 'sa' | 'off';
+  /** Whether the grid resolved the real Reynolds number (a resolved run that is not is qualitative). */
+  exact: boolean;
+  rows: SweepRow[];
+}
+
 export interface View {
   field: FieldMode;
   autoRange: boolean;
@@ -86,6 +113,9 @@ export interface Scene {
   flow: { speed: number; fluid: FluidKey; model: FlowModel };
   bodies: Body[];
   rakes: Rake[];
+  probes: Probe[];
+  /** The last angle sweep, or null. */
+  sweep: SweepResult | null;
   view: View;
   /** The preset this scene was started from (src/scene/presets.ts), or null. */
   preset: string | null;
@@ -102,6 +132,9 @@ export const LIMITS = {
   speed: [1e-4, 340] as const,
   maxBodies: 8,
   maxRakes: 8,
+  maxProbes: 8,
+  /** Angles one sweep may visit. */
+  maxSweepAngles: 61,
   /** Dye rakes: one colour channel each. */
   maxDyeRakes: 4,
   emitters: [1, 64] as const,
@@ -113,6 +146,11 @@ let seq = 0;
 export function newBodyId(): string {
   seq = (seq + 1) % 1e6;
   return `b${Date.now().toString(36)}${seq.toString(36)}`;
+}
+
+export function newProbeId(): string {
+  seq = (seq + 1) % 1e6;
+  return `p${Date.now().toString(36)}${seq.toString(36)}`;
 }
 
 export function newRakeId(): string {
@@ -129,6 +167,8 @@ export function defaultScene(): Scene {
       { id: newBodyId(), name: 'NACA 2412', shape: { kind: 'naca', code: '2412', chord: 1 }, x: 2.5, y: 2, angle: 6, spin: 0, enabled: true, locked: false },
     ],
     rakes: [],
+    probes: [],
+    sweep: null,
     view: {
       field: 'particles',
       autoRange: true,
@@ -218,6 +258,26 @@ function parseShape(s: unknown): Shape {
   }
 }
 
+/** A saved sweep, or null when there is none or it does not read (it is only a record). */
+function parseSweep(raw: unknown): SweepResult | null {
+  const o = raw as Record<string, any> | null;
+  if (!o || typeof o !== 'object' || !Array.isArray(o.rows)) return null;
+  const fin = (v: unknown) => Number.isFinite(Number(v));
+  const rows = o.rows
+    .slice(0, LIMITS.maxSweepAngles)
+    .filter((r: any) => r && fin(r.angle) && fin(r.cl) && fin(r.cd) && fin(r.cm))
+    .map((r: any) => ({ angle: Number(r.angle), cl: Number(r.cl), cd: Number(r.cd), cm: Number(r.cm) }));
+  if (!rows.length || !fin(o.re)) return null;
+  return {
+    bodyId: String(o.bodyId ?? '').slice(0, 40),
+    bodyName: String(o.bodyName ?? 'Body').slice(0, 80),
+    re: Number(o.re),
+    model: o.model === 'sa' ? 'sa' : 'off',
+    exact: o.exact === true,
+    rows,
+  };
+}
+
 /** A scene read from a file: checked, with defaults for what is missing. Throws SceneError. */
 export function parseScene(raw: unknown): Scene {
   const o = (raw ?? {}) as Record<string, any>;
@@ -249,6 +309,11 @@ export function parseScene(raw: unknown): Scene {
     color: Math.round(num(r?.color ?? i % RAKE_COLORS, 'Rake colour', 0, RAKE_COLORS - 1)),
     enabled: r?.enabled !== false,
   }));
+  const probes: Probe[] = (Array.isArray(o.probes) ? o.probes : []).slice(0, LIMITS.maxProbes).map((p: any) => ({
+    id: typeof p?.id === 'string' && p.id ? p.id.slice(0, 40) : newProbeId(),
+    x: num(p?.x, 'Probe x'),
+    y: num(p?.y, 'Probe y'),
+  }));
   return {
     version: SCENE_VERSION,
     tunnel: {
@@ -265,6 +330,8 @@ export function parseScene(raw: unknown): Scene {
     },
     bodies,
     rakes,
+    probes,
+    sweep: parseSweep(o.sweep),
     view: {
       field: oneOf(v.field, ['particles', 'vorticity', 'speed', 'pressure', 'schlieren', 'rheoscopic', 'none'] as const, d.view.field),
       autoRange: v.autoRange !== false,
