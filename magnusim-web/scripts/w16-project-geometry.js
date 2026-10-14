@@ -1070,7 +1070,12 @@ function cadPreviewFreshAt(paths, stepPath) {
   return statSync(paths.faces).mtimeMs >= stepM && statSync(paths.edges).mtimeMs >= stepM;
 }
 
-async function ensureCadPreviewAt(projectId, stepPath, paths) {
+/**
+ * A geometry's (or modifier's) CAD preview at `paths`, made when it is missing or older than
+ * its STEP file. `opts.polled`: the ask is one of a page's asks again until the preview is
+ * made (GET /api/geometry/cad), which is answered a failed build (below).
+ */
+async function ensureCadPreviewAt(projectId, stepPath, paths, opts = {}) {
   // A linked geometry (API 1.5): its link job wrote its previews, so they are never made
   // again here and no --com-only run starts for it (its centre of mass is a follow-up).
   if (paths && isLinkedGeometryDir(paths.dir)) {
@@ -1096,11 +1101,14 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
     }
     return { ok: true, ...paths, step_path: stepPath, cached: true };
   }
-  // A build that failed is answered again while its STEP file is the one it read (for
-  // CAD_FAILURE_KEEP_MS): a page that asks again until its preview is made would otherwise
-  // start it once more each time, and never hear why it fails.
+  // A build that will fail again for this STEP file (the worker or the script read it and
+  // failed) is answered again, for CAD_FAILURE_KEEP_MS while the file is the one it read, to
+  // the page asking until its preview is made: it hears why instead of starting the build
+  // once more each time. Only to those asks: an import, an activate, a thumbnail or a
+  // modifier tries again. A failure that may not happen again (the worker timed out behind
+  // other work, restarted or was not there) is not kept: the next ask makes it again.
   const stamp = cadSourceStamp(stepPath);
-  const failed = cadPreviewFailures.get(paths.meta);
+  const failed = opts.polled ? cadPreviewFailures.get(paths.meta) : null;
   if (failed) {
     if (failed.stamp === stamp && Date.now() - failed.at < CAD_FAILURE_KEEP_MS) return failed.result;
     cadPreviewFailures.delete(paths.meta);
@@ -1113,8 +1121,8 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
     build = buildCadPreviewAt(projectId, stepPath, paths)
       .catch((e) => ({ ok: false, status: 500, body: { error: 'CAD preview failed', detail: String(e), project_id: projectId } }))
       .then((result) => {
-        if (result && result.ok) cadPreviewFailures.delete(paths.meta);
-        else cadPreviewFailures.set(paths.meta, { result, stamp, at: Date.now() });
+        if (result && result.lasting) cadPreviewFailures.set(paths.meta, { result, stamp, at: Date.now() });
+        else cadPreviewFailures.delete(paths.meta);
         return result;
       })
       .finally(() => cadPreviewBuilds.delete(paths.meta));
@@ -1124,9 +1132,21 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
 }
 
 const cadPreviewBuilds = new Map();
-/** Failed builds by preview (its meta path): {result, stamp, at}. */
+/** Builds that failed for good, by preview (its meta path): {result, stamp, at}. */
 const cadPreviewFailures = new Map();
 const CAD_FAILURE_KEEP_MS = 60_000;
+
+/**
+ * Whether a preview build's failure will happen again for the same STEP file: the worker
+ * answered with an error (it read the part and could not make it) or the script exited with
+ * one. A worker that did not answer in time (busy with other work), restarted or was not
+ * there, a script stopped at its time limit, or anything else may well work the next time.
+ */
+function cadPreviewFailureLasts(err) {
+  if (!err) return false;
+  if (err.scriptMissing || err.name === 'RpcError') return true;
+  return /^python exit=/.test(String(err.message || ''));
+}
 
 /** The STEP file a preview is made from, as it is now (a mesh import's sidecar until its STEP is written). */
 function cadSourceStamp(stepPath) {
@@ -1159,7 +1179,7 @@ async function withinCadWait(job, waitMs = CAD_WAIT_MS) {
 
 /** The shown geometry's preview, or { pending: true } while it is being made (see CAD_WAIT_MS). */
 export function ensureCadPreviewWithin(projectId, geomId, waitMs = CAD_WAIT_MS) {
-  return withinCadWait(ensureCadPreview(projectId, geomId), waitMs);
+  return withinCadWait(ensureCadPreview(projectId, geomId, { polled: true }), waitMs);
 }
 
 /** "Being prepared": 202 with Retry-After, never kept (a HEAD gets no body). */
@@ -1301,12 +1321,12 @@ async function buildCadPreviewAt(projectId, stepPath, paths, retried = false) {
     // as a preview that is not placed (below).
     if (failed && fileStamp(sourceFile) === sourceStamp) {
       if (failed.scriptMissing) {
-        return { ok: false, status: 500, body: { error: 'CAD preview script missing', path: CAD_PREVIEW_SCRIPT } };
+        return { ok: false, status: 500, body: { error: 'CAD preview script missing', path: CAD_PREVIEW_SCRIPT }, lasting: true };
       }
-      return { ok: false, status: 500, body: { error: 'CAD preview failed', detail: String(failed), project_id: projectId } };
+      return { ok: false, status: 500, body: { error: 'CAD preview failed', detail: String(failed), project_id: projectId }, lasting: cadPreviewFailureLasts(failed) };
     }
     if (!failed && (!existsSync(staged.edges) || !existsSync(staged.faces))) {
-      return { ok: false, status: 500, body: { error: 'CAD preview missing after export', ...paths } };
+      return { ok: false, status: 500, body: { error: 'CAD preview missing after export', ...paths }, lasting: true };
     }
     let placed = false;
     if (!failed) {
@@ -1331,7 +1351,7 @@ async function buildCadPreviewAt(projectId, stepPath, paths, retried = false) {
   return { ok: true, ...paths, step_path: stepPath, cached: false };
 }
 
-async function ensureCadPreview(projectId, geomId) {
+async function ensureCadPreview(projectId, geomId, opts = {}) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
   const proj = readProject(id);
@@ -1340,7 +1360,7 @@ async function ensureCadPreview(projectId, geomId) {
   const part = aid ? geometriesOf(proj).find((g) => g.id === aid) : null;
   const stepPath = (part && part.step_path && geomFileExists(part.step_path) && part.step_path) || resolveStepPath(proj);
   const paths = cadPaths(id, part ? part.id : null);
-  const preview = await ensureCadPreviewAt(id, stepPath, paths);
+  const preview = await ensureCadPreviewAt(id, stepPath, paths, opts);
   if (!preview.ok) return { ...preview, project: proj };
   return { ...preview, project: proj };
 }
@@ -2393,7 +2413,7 @@ async function readCadForModifier(projectId, geomId, modId, part) {
     return { ok: false, status: 404, body: { error: 'modifier not found', geometry_id: aid, modifier_id: modId } };
   }
   const paths = modifierCadPaths(id, host.id, rec.id);
-  const preview = await withinCadWait(ensureCadPreviewAt(id, rec.step_path, paths));
+  const preview = await withinCadWait(ensureCadPreviewAt(id, rec.step_path, paths, { polled: true }));
   if (preview.pending) return preview;
   if (!preview.ok) return preview;
   const file = part === 'edges' ? paths.edges : part === 'meta' ? paths.meta : paths.faces;

@@ -6,9 +6,12 @@
  * connections to the app for all of its tabs, so two tabs on two such parts froze every tab.
  * Now a build not done in CAD_WAIT_MS is answered 202 {pending, code: preview_pending} with
  * Retry-After: 1 (HEAD too, with no body) while it goes on, once per preview however many
- * ask; the page asks again. A build that failed is remembered for its STEP file as it was
- * (a minute at most), so the next ask gets its 500 instead of starting it again; a changed
- * STEP is made again. A modifier's preview (?modifier_id) is answered the same way.
+ * ask; the page asks again. A build that failed for good (the worker read the part and
+ * failed) is remembered for its STEP file as it was (a minute at most), so the next asks get
+ * its 500 instead of starting it again; a changed STEP is made again. One that may pass (the
+ * worker timed out behind other work, or restarted) is not remembered: the next ask makes the
+ * preview again. An activate or a thumbnail never takes a remembered failure: it tries again.
+ * A modifier's preview (?modifier_id) is answered the same way.
  */
 import assert from 'node:assert/strict';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +31,7 @@ if (!VENV && !process.env.MAGNUSIM_PYTHON && !process.env.CFDDESK_PYTHON) {
   if (r.status === 0 && r.stdout.trim()) process.env.MAGNUSIM_PYTHON = r.stdout.trim();
 }
 const { createGeometryFolder, writeJsonAtomic } = await import('../project-layout.js');
+const { RpcError } = await import('../server/worker.ts');
 const { CAD_WAIT_MS, handleW16Api, setCadPreviewWriterForTests, setThumbRendererForTests } = await import('../w16-project-geometry.js');
 
 const FIXTURES = join(WEB, 'python', 'tests', 'fixtures', 'geometry');
@@ -64,7 +68,7 @@ function seedProject(pid, { modifier = false } = {}) {
 }
 
 /** A request to the geometry routes, answered as the server answers it: {status, headers, body, ms}. */
-async function call(method, path) {
+async function call(method, path, json = {}) {
   const url = new URL(path, 'http://localhost');
   const t0 = performance.now();
   const res = {
@@ -84,21 +88,31 @@ async function call(method, path) {
       res.body = method === 'HEAD' ? undefined : doc;
       return true;
     },
-    readJsonBody: async () => ({}),
+    readJsonBody: async () => json,
   };
   await handleW16Api({ method, headers: {} }, res, url, url.pathname.split('/').filter(Boolean), helpers);
   return { status: res.statusCode, headers: res.headers, body: res.body, ms: performance.now() - t0 };
 }
 
-/** The real writer, held until released; `builds` counts the builds started. */
-function holdWriter({ fail = false } = {}) {
+/** How a build fails: the worker read the part and could not make it (for good), or it did not answer in time. */
+const FAILS = {
+  lasting: () => new RpcError(-32000, 'the part could not be read'),
+  timeout: () => new Error('worker RPC timeout: cad.preview after 180000 ms (the worker was busy with mesh.volume)'),
+};
+
+/**
+ * The real writer, held until released; `builds` counts the builds started. `fail` names how
+ * the first `failFirst` builds fail (every build without it).
+ */
+function holdWriter({ fail = null, failFirst = Infinity } = {}) {
   let release;
   const released = new Promise((r) => (release = r));
   const state = { builds: 0, release: () => release() };
   setCadPreviewWriterForTests(async (stepPath, out, write) => {
     state.builds += 1;
+    const n = state.builds;
     await released;
-    if (fail) throw new Error('the part could not be read');
+    if (fail && n <= failFirst) throw FAILS[fail]();
     return write(stepPath, out);
   });
   return state;
@@ -177,11 +191,11 @@ describe('GET /api/geometry/cad while the preview is being made', () => {
     }
   });
 
-  it('a build that failed answers 500 to the next ask without a second build; a changed STEP is made again', { timeout: 300_000 }, async () => {
+  it('a build that failed for good answers 500 to the next asks without a second build; a changed STEP is made again', { timeout: 300_000 }, async () => {
     const pid = 'cad-wait-failed';
     const { stepPath } = seedProject(pid);
     const path = `/api/geometry/cad?project_id=${pid}&geometry_id=g-plate&part=faces`;
-    const held = holdWriter({ fail: true });
+    const held = holdWriter({ fail: 'lasting' });
     try {
       assertPending(await answeredWithin(call('GET', path)), 'while it is made');
       held.release();
@@ -190,6 +204,8 @@ describe('GET /api/geometry/cad while the preview is being made', () => {
       assert.match(String(failed.body.error), /CAD preview failed/);
       const again = await call('GET', `/api/geometry/cad?project_id=${pid}&part=preview`);
       assert.equal(again.status, 500, 'asked again: the same failure');
+      const third = await call('GET', `/api/geometry/cad?project_id=${pid}&geometry_id=g-plate&part=edges`);
+      assert.equal(third.status, 500, 'and again');
       assert.equal(held.builds, 1, 'not made again while its STEP is the same');
 
       // The STEP changes (a new file of the same name): made again, and this time it is made.
@@ -200,6 +216,55 @@ describe('GET /api/geometry/cad while the preview is being made', () => {
       assert.equal(made.status, 200, JSON.stringify(made.body));
       assert.equal(ok.builds, 1);
     } finally {
+      setCadPreviewWriterForTests(null);
+    }
+  });
+
+  it('a build that failed because the worker did not answer in time is not remembered: the next ask makes the preview', { timeout: 300_000 }, async () => {
+    const pid = 'cad-wait-timeout';
+    seedProject(pid);
+    const path = `/api/geometry/cad?project_id=${pid}&geometry_id=g-plate&part=preview`;
+    const held = holdWriter({ fail: 'timeout', failFirst: 1 });
+    try {
+      assertPending(await answeredWithin(call('GET', path)), 'while it is made');
+      held.release();
+      const failed = await askUntilDone(path);
+      assert.equal(failed.status, 500, JSON.stringify(failed.body));
+      assert.match(String(failed.body.detail), /worker RPC timeout/);
+      assert.equal(held.builds, 1);
+      // Asked again (the user opens the part again): it is made again, and this time it is.
+      const made = await askUntilDone(path);
+      assert.equal(made.status, 200, JSON.stringify(made.body));
+      assert.ok(Number(made.body.n_faces) > 0);
+      assert.equal(held.builds, 2, 'made a second time');
+    } finally {
+      held.release();
+      setCadPreviewWriterForTests(null);
+    }
+  });
+
+  it('an activate and a thumbnail try again after a build that failed for good (only the asks again get it remembered)', { timeout: 300_000 }, async () => {
+    const pid = 'cad-wait-retry';
+    seedProject(pid);
+    const path = `/api/geometry/cad?project_id=${pid}&geometry_id=g-plate&part=preview`;
+    const held = holdWriter({ fail: 'lasting', failFirst: 1 });
+    try {
+      assertPending(await answeredWithin(call('GET', path)), 'while it is made');
+      held.release();
+      assert.equal((await askUntilDone(path)).status, 500);
+      assert.equal((await call('GET', path)).status, 500, 'the asks again get the failure');
+      assert.equal(held.builds, 1);
+      // The thumbnail tries again (its render is the test's): a second build.
+      const thumb = await askUntilDone(`/api/geometry/thumb?project_id=${pid}`);
+      assert.equal(held.builds, 2, `the thumbnail made the preview again (it answered ${thumb.status})`);
+      // The user activates the geometry (as Activate in the tree does): it is made, or found made.
+      const activated = await call('POST', '/api/geometry/activate', { project_id: pid, geometry_id: 'g-plate' });
+      assert.equal(activated.status, 200, JSON.stringify(activated.body).slice(0, 300));
+      // The page's asks now get the preview.
+      const meta = await call('GET', path);
+      assert.equal(meta.status, 200, JSON.stringify(meta.body).slice(0, 300));
+    } finally {
+      held.release();
       setCadPreviewWriterForTests(null);
     }
   });
