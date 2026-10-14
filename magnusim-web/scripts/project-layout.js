@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { pathIsWithin } from './safe-path.js';
+import { removeTreeSync } from './remove-tree.js';
 import { basename, dirname, join, resolve } from 'node:path';
 
 export const LAYOUT_VERSION = 2;
@@ -895,7 +896,7 @@ export function persistChildItem(parentDir, kind, rec, opts = {}) {
 export function removeChildItem(parentDir, jsonFile, id) {
   const folder = findChildItem(parentDir, jsonFile, id);
   if (!folder || !folder.dir) return false;
-  rmSync(folder.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+  removeTreeSync(folder.dir, { maxRetries: 8, retryDelay: 50 });
   return true;
 }
 
@@ -993,7 +994,7 @@ export function caseUnderOwner(casePath, ownerDir) {
 export function removeStudyFolder(projectDirPath, simId) {
   const study = findStudy(projectDirPath, simId);
   if (!study || !study.dir) return false;
-  rmSync(study.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+  removeTreeSync(study.dir, { maxRetries: 8, retryDelay: 50 });
   return true;
 }
 

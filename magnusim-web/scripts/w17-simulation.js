@@ -4,6 +4,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { projectIdOrActive } from './request-scope.js';
+import { removeTreeSync } from './remove-tree.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -984,7 +985,7 @@ export function purgeRemovedStudies(projectId, { simIds = [], geometryIds = [] }
     if (!sims.has(String(s.id)) && !geoms.has(String(s.geometry_id || ''))) continue;
     try {
       // Retried: the worker may be reading a file in it.
-      rmSync(s.dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+      removeTreeSync(s.dir, { maxRetries: 8, retryDelay: 50 });
     } catch (e) {
       failed = failed || e;
     }

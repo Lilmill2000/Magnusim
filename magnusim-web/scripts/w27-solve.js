@@ -1,5 +1,6 @@
 import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
+import { removeTree } from './remove-tree.js';
 // @ts-nocheck
 /**
  * Simulation Control — runs: a study's case, written by its analysis from the
@@ -1640,9 +1641,9 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
     } catch (_) {}
   }
   try {
-    // Windows can hold a just-written file for a moment (indexer, antivirus): retry
-    // (linear back-off, about 5 s in all).
-    rmSync(folder.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    // Windows can hold a file for a moment (the worker loading this run's fields for
+    // its Run panel, the indexer, antivirus): retry (linear back-off, about 5 s in all).
+    await removeTree(folder.dir, { maxRetries: 10, retryDelay: 100 });
   } catch (e) {
     return { ok: false, error: 'Could not delete run folder: ' + String((e && e.message) || e) };
   }

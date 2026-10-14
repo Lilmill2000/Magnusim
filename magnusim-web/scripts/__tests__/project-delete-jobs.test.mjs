@@ -131,12 +131,12 @@ describe('project delete', () => {
       ['dropped', 'The project was deleted'],
       ['dropped', 'The project was deleted'],
     ]);
-    // In the source: the rows are read before rmSync and dropped after it, all synchronous.
+    // In the source: the rows are read before removeTreeSync and dropped after it, all synchronous.
     const src = readFileSync(join(HERE, '..', 'w16-project-geometry.js'), 'utf8');
     const fn = src.slice(src.indexOf('export function deleteProject('), src.indexOf('function createProject('));
     const iHeld = fn.indexOf('holderNamesProject(held, id)');
     const iRows = fn.indexOf('computeRowsForProject(id)');
-    const iRm = fn.indexOf('rmSync(abs');
+    const iRm = fn.indexOf('removeTreeSync(abs');
     const iDrop = fn.indexOf('dropComputeRows(rowIds');
     assert.ok(iHeld > 0 && iHeld < iRows && iRows < iRm && iRm < iDrop, `${iHeld} ${iRows} ${iRm} ${iDrop}`);
     assert.ok(!/\bawait\b/.test(fn));

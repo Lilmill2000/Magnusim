@@ -1,5 +1,6 @@
 import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
+import { removeTreeSync } from './remove-tree.js';
 /**
  * W20 — Mesh form settings only (filesystem persistence).
  * Persists projects/<id>/mesh.json via POST/GET /api/mesh.
@@ -226,7 +227,7 @@ function removeGeneratedMeshRuns(projectId, caseDir, exceptMeshId) {
     if (!p || !existsSync(p)) return;
     if (ownerDir && !pathInside(ownerDir, p)) return;
     // A reader that just let go (Windows) can hold a file for a moment.
-    rmSync(p, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    removeTreeSync(p, { maxRetries: 10, retryDelay: 100 });
     removed.push(p);
   };
   if (caseDir) {

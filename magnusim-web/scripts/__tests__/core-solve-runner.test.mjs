@@ -36,6 +36,7 @@ const io = await import('../study-io.js');
 const core = await import('../core-solve.js');
 const hooks = await import('../solve-hooks.js');
 const { attachWorkerBridge } = await import('../py-json.js');
+const { WINDOWS_ONLY, holdOpen } = await import('./hold-open.mjs');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PID = 'p1';
@@ -591,5 +592,23 @@ describe('the end', () => {
     const rid = draftRun({ status: 'running', runner_job_id: 'fc-gone00-000000', wsl_case: '' });
     const shown = w27.getRunStatus(PID, rid, SID).body.run;
     assert.notEqual(shown.status, 'running', 'no record, no pid, no WSL case: reaped');
+  });
+});
+
+describe('Delete a run', () => {
+  // The Run panel of a finished run loads its result fields: the worker holds a file of a
+  // saved frame for a moment. A delete then failed at once ("Could not delete run folder:
+  // EPERM", the folder half removed): rmSync ignores its maxRetries.
+  it('a finished run whose fields the worker is reading is deleted once it lets go', { skip: WINDOWS_ONLY }, async () => {
+    const rid = draftRun({ status: 'done', has_results: true });
+    saveFrame(rid, 50);
+    saveFrame(rid, 100);
+    const dir = io.runFolderOf(PID, rid, SID).dir;
+    const reader = await holdOpen(join(caseOf(rid), '100', 'U'), 800);
+    const out = await w27.deleteCatalogRun(PID, rid, SID);
+    assert.equal(out.ok, true, String(out.error));
+    assert.equal(existsSync(dir), false);
+    assert.equal(w27.getRunStatus(PID, rid, SID).body.runs?.some((r) => r.id === rid) ?? false, false);
+    await reader.done;
   });
 });

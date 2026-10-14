@@ -1,5 +1,6 @@
 import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
+import { removeTreeSync } from './remove-tree.js';
 // @ts-nocheck
 /**
  * W16 — project create + geometry import (filesystem persistence).
@@ -532,14 +533,14 @@ export function deleteProject(id) {
   if (!isInsideProjectsRoot(abs)) {
     return { ok: false, status: 400, body: { error: 'refusing to delete outside projects root' } };
   }
-  // Synchronous from here to rmSync: no job can start in between. A job of this
+  // Synchronous from here to removeTreeSync: no job can start in between. A job of this
   // project (by folder, in any spelling) holding the compute slot refuses the delete.
   const held = computeSlotHolder();
   if (held && holderNamesProject(held, id)) {
     return { ok: false, status: 409, body: { error: projectBusyMessage(held, id) } };
   }
   const rowIds = computeRowsForProject(id);
-  rmSync(abs, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+  removeTreeSync(abs, { maxRetries: 8, retryDelay: 50 });
   // Its queued jobs go with it (a plugin case's record finishes stopped).
   dropComputeRows(rowIds, 'The project was deleted');
   if (readActiveId() === id) {
@@ -2246,7 +2247,7 @@ async function removeGeometry(opts) {
   try {
     // Before the catalog save below: its walk must not find this geometry's studies.
     // Retried as a study folder's remove is: the worker may be reading a file in it.
-    rmSync(destDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+    removeTreeSync(destDir, { maxRetries: 8, retryDelay: 50 });
   } catch {
     /* folder may already be gone */
   }

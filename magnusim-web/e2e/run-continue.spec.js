@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { cpSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { removeTree } from '../scripts/remove-tree.js';
 import { openRunPanel } from './support/compute-slot.js';
 
 // F6: Continue a finished run. The Run panel of a finished run offers Continue with its
@@ -131,9 +132,11 @@ test('Continue on a finished run: offered with its input, and refused when its c
   await expect(go).toBeDisabled();
 
   // Transient: "Run on to t = [2] s" (its end, 1 s, plus the span it ran).
-  // The app's field reader may still hold a file of these frames open for a moment (Windows).
-  rmSync(join(caseDir, '50'), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-  rmSync(join(caseDir, '100'), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  // The Run panel just loaded these frames' fields: the worker may still be reading a
+  // file of them, which Windows will not delete. removeTree retries as the app's deletes
+  // do (rmSync ignores its maxRetries and fails at once).
+  await removeTree(join(caseDir, '50'));
+  await removeTree(join(caseDir, '100'));
   cpSync(join(CAVITY, '0.5'), join(caseDir, '0.5'), { recursive: true });
   cpSync(join(CAVITY, '0.5'), join(caseDir, '1'), { recursive: true });
   writeFileSync(
@@ -168,7 +171,7 @@ test('Continue on a finished run: offered with its input, and refused when its c
   await expect(go).toBeDisabled();
 
   // Its saved results deleted: it cannot continue; the panel and the server say why.
-  for (const t of ['0.5', '1']) rmSync(join(caseDir, t), { recursive: true, force: true });
+  for (const t of ['0.5', '1']) await removeTree(join(caseDir, t));
   const why = "This run can't continue: its case folder has no saved result. Add a run to solve again.";
   panel = await openRunPanel(page, { projectId: pid, simulationId: sid, runId: rid });
   await expect(box.locator('[data-run-continue-reason="1"]')).toHaveText(why);

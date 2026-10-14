@@ -59,10 +59,11 @@
  * makes the commit stop between its commit point and unlinked.json).
  */
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, promises as fsp, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, promises as fsp, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { PYTHON, PY_ROOT, pyTool } from '../python-env.js';
 import { PROJECTS_ROOT } from '../project-isolation.js';
+import { removeTree, removeTreeSync } from '../remove-tree.js';
 import { claimComputeSlot, computeSlotHolder, releaseComputeSlot, sameProjectFolder } from '../compute-slot.js';
 import {
   dropComputeRows,
@@ -400,7 +401,7 @@ const ADOPT_STATE = Object.freeze({ rev: 0, source_version: -1, shape_sha256: ''
 /** @param {string} dir */
 function rmQuiet(dir) {
   try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+    removeTreeSync(dir, { maxRetries: 8, retryDelay: 50 });
   } catch {
     /* a later clean-up takes it */
   }
@@ -409,7 +410,7 @@ function rmQuiet(dir) {
 /** @param {string} dir */
 async function rmLater(dir) {
   try {
-    await fsp.rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    await removeTree(dir, { maxRetries: 8, retryDelay: 100 });
   } catch {
     /* the boot clean-up takes it */
   }
