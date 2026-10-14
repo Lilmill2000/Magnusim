@@ -23,7 +23,7 @@ import { useProjectStore } from '../../store/project';
 import type { IslandProps } from '../../islands';
 import { convertQuantity, preferredUnit, SI_DEFAULT } from '../../units/convert';
 import { subscribeBodyPicks } from '../../viewer/pick';
-import { applyMaterial, deleteMaterial, geometryBodies, studyStateNow, subscribeStudyState, type StudyState } from '../legacyBridge';
+import { applyMaterial, deleteMaterial, geometryBodies, useStudyState } from '../legacyBridge';
 import { PanelChrome } from '../PanelChrome';
 import { scopeIds, useRegistryReady } from '../scope';
 import { MultiMaterialsPanel } from './MultiMaterialsPanel';
@@ -77,12 +77,6 @@ function loadGate(): LoadGate {
 
 /** The gate before the panel's first load starts: it never opens. */
 const NO_LOAD_YET: LoadGate = { ...loadGate(), dropped: true };
-
-function useStudyState(): StudyState | null {
-  const [state, setState] = useState<StudyState | null>(() => studyStateNow());
-  useEffect(() => subscribeStudyState(setState), []);
-  return state;
-}
 
 /**
  * The Materials panels. A study whose analysis offers one material model edits

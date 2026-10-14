@@ -1,5 +1,5 @@
 /** @cfddesk/plugin-api — host helpers passed to a plugin's register(host). */
-import type { ComponentType } from 'react';
+import { useSyncExternalStore, type ComponentType } from 'react';
 import { useProjectStore } from '../store/project';
 import { useJobsStore } from '../store/jobs';
 import { useUiStore } from '../store/ui';
@@ -63,8 +63,26 @@ function ledgerFor(owner: string): Ledger {
   return ledger;
 }
 
+// Bumped on every change to the panels and the filter and field widgets (cfd:panels).
+let panelsVersion = 0;
+
 function notifyPanels(): void {
+  panelsVersion += 1;
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('cfd:panels'));
+}
+
+function subscribePanels(onChange: () => void): () => void {
+  window.addEventListener('cfd:panels', onChange);
+  return () => window.removeEventListener('cfd:panels', onChange);
+}
+
+/**
+ * Re-render when plugins register or remove panels and widgets. The version is read
+ * again when React subscribes, so one registered after the first render and before the
+ * subscription still shows.
+ */
+export function usePanelsVersion(): number {
+  return useSyncExternalStore(subscribePanels, () => panelsVersion);
 }
 
 function notifyTree(): void {

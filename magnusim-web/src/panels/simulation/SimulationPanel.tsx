@@ -9,9 +9,7 @@ import {
   deleteStudy,
   saveStudy,
   setStudyTimeDependency,
-  studyStateNow,
-  subscribeStudyState,
-  type StudyState,
+  useStudyState,
   type TimeDependency,
 } from '../legacyBridge';
 import { PanelChrome } from '../PanelChrome';
@@ -109,12 +107,6 @@ export function SimulationHub(props: IslandProps) {
 function rowFor(analysisType: unknown, timeDependency: unknown, rows: RegistryRow[]): RegistryRow | undefined {
   const key = siblingKey(String(analysisType || ''), timeDependency);
   return key ? rows.find((row) => row.key === key) : undefined;
-}
-
-function useStudyState(): StudyState | null {
-  const [state, setState] = useState<StudyState | null>(() => studyStateNow());
-  useEffect(() => subscribeStudyState(setState), []);
-  return state;
 }
 
 function errorText(e: unknown): string {

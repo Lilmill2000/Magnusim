@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { workerRpc } from '../../api/workerRpc';
 import { PanelBoundary } from '../../islands';
-import { panelsFor, registeredPluginKeys } from '../../plugin-api';
-import { loadPluginUi, pluginClientErrors, subscribePluginClients, type ListedPlugin } from '../../plugins/loader';
+import { panelsFor, registeredPluginKeys, usePanelsVersion } from '../../plugin-api';
+import { loadPluginUi, usePluginClientErrors, type ListedPlugin } from '../../plugins/loader';
 import { useProjectStore } from '../../store/project';
 import { confirmLeaveWorkspace, leaveInProgress, openWorkspaceRoute, withdrawLeaveApproval } from '../../workspace/leaveGuard';
 
@@ -149,11 +149,11 @@ function EnvLine({ env, run }: { env: PluginEnv; run?: EnvInstall }) {
 export function PluginsStep() {
   const [rows, setRows] = useState<PluginRow[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [client, setClient] = useState<ListedPlugin[]>(pluginClientErrors());
+  const client = usePluginClientErrors();
   const [busy, setBusy] = useState('');
   const [note, setNote] = useState('');
   const [installs, setInstalls] = useState<Record<string, EnvInstall>>({});
-  const [, setPanelTick] = useState(0);
+  usePanelsVersion();
   // A checked package waiting for Install / Cancel, and a plugin whose user copies wait for Remove / Cancel.
   const [pending, setPending] = useState<PackageInfo | null>(null);
   const [removing, setRemoving] = useState<PluginRow | null>(null);
@@ -192,8 +192,6 @@ export function PluginsStep() {
     void refresh();
   }, []);
 
-  useEffect(() => subscribePluginClients(() => setClient(pluginClientErrors())), []);
-
   // While a dependency install runs, follow it; when it ends, the plugin's row,
   // registry and UI come back as they now are.
   useEffect(() => {
@@ -220,12 +218,6 @@ export function PluginsStep() {
     }, 1000);
     return () => clearTimeout(timer);
   }, [installs]);
-
-  useEffect(() => {
-    const bump = () => setPanelTick((n) => n + 1);
-    window.addEventListener('cfd:panels', bump);
-    return () => window.removeEventListener('cfd:panels', bump);
-  }, []);
 
   // Only the Reload button stops running plugin cases (and drops queued ones); the reload
   // that turning a plugin on or off, or an install, runs stops nothing.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { RJSFSchema } from '@rjsf/utils';
 import type { BcFamilyRow, BcFieldGroupRow } from '../../api/registry.gen';
 import { analysisRow, siblingKey } from '../../analysis';
@@ -9,7 +9,6 @@ import { faceDisplay, lostDisplay, useFaceNamesVersion } from '../../workbench/f
 import { usePluginUiLoaded, useSlotComponent, type BcSectionProps, type BcSettingsProps } from '../../plugin-api/slots';
 import {
   bcFlowBasis,
-  bcStateNow,
   clearBcFaces,
   createBc,
   deleteBc,
@@ -18,11 +17,10 @@ import {
   openBc,
   openBcDefaults,
   openBcPicker,
-  subscribeBcState,
   unassignBcFace,
   updateBc,
+  useBcState,
   type BcRecord,
-  type BcState,
   type LostFaceEntry,
 } from '../legacyBridge';
 import { pickSchemaValues, useRegistryReady } from '../scope';
@@ -95,16 +93,6 @@ export function bcCardSub(
   const type = String(bc.bc_type || '');
   const faces = (bc.faces || []).map(faceDisplay).join(', ') || 'no faces';
   return [type, choice, table, faces].filter(Boolean).join(' · ');
-}
-
-/** Live runtime BC state (records, open BC, its faces, defaults, picker selection). */
-export function useBcState(): BcState | null {
-  const [state, setState] = useState<BcState | null>(() => bcStateNow());
-  useEffect(() => {
-    setState(bcStateNow());
-    return subscribeBcState(setState);
-  }, []);
-  return state;
 }
 
 /** The families the study's analysis offers; null until the page has the registry. */

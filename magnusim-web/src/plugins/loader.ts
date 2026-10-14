@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import ReactDOM from 'react-dom/client';
 import { pluginUiFor, registeredPluginKeys, unregisterPlugin } from '../plugin-api';
 import * as kit from '../plugin-ui';
@@ -39,6 +39,15 @@ export function pluginClientErrors(): ListedPlugin[] {
 export function subscribePluginClients(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/**
+ * The plugin UIs that failed to load, as a component's state. Each change replaces the
+ * list, so React reads it again when it subscribes: a failure recorded after the first
+ * render and before the subscription still shows.
+ */
+export function usePluginClientErrors(): ListedPlugin[] {
+  return useSyncExternalStore(subscribePluginClients, pluginClientErrors);
 }
 
 function publish(rows: ListedPlugin[]): void {

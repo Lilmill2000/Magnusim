@@ -3,7 +3,7 @@ import { apiGet } from '../../api/client';
 import type { IslandProps } from '../../islands';
 import { useProjectStore } from '../../store/project';
 import { lostDisplay } from '../../workbench/faceNames';
-import { deleteGeometry, forgetLostFaces, geometryStateNow, subscribeGeometryState, type GeometryState } from '../legacyBridge';
+import { deleteGeometry, forgetLostFaces, useGeometryState } from '../legacyBridge';
 import { PanelChrome } from '../PanelChrome';
 import {
   geometryActionNotice,
@@ -206,12 +206,6 @@ function OriginalRow({ original, geometryId }: { original: { fileName: string | 
       </span>
     </div>
   );
-}
-
-function useGeometryState(): GeometryState | null {
-  const [state, setState] = useState<GeometryState | null>(() => geometryStateNow());
-  useEffect(() => subscribeGeometryState(setState), []);
-  return state;
 }
 
 /** Geometry panel: the V0.1.0 rows (Name, Representation, Volume) and Delete. The runtime owns the data. */

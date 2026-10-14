@@ -12,14 +12,15 @@
  *   cfd:mesh-job       (window)   mesh job state    -> subscribeMeshJob
  *   cfd:mesh-settings  (window)   mesh settings the runtime wants shown -> subscribeMeshSettings
  *   cfd:mesh-copy      (window)   copy-from-mesh state -> subscribeMeshCopy
- *   cfd:bcs            (window)   boundary conditions -> subscribeBcState
- *   cfd:run-state      (window)   run panel state   -> subscribeRunState
- *   cfd:study          (window)   study panel state -> subscribeStudyState
- *   cfd:geometry       (window)   geometry panel state -> subscribeGeometryState
+ *   cfd:bcs            (window)   boundary conditions -> subscribeBcState, useBcState
+ *   cfd:run-state      (window)   run panel state   -> subscribeRunState, useRunState
+ *   cfd:study          (window)   study panel state -> subscribeStudyState, useStudyState
+ *   cfd:geometry       (window)   geometry panel state -> subscribeGeometryState, useGeometryState
  *
  * Every function is safe to call before the runtime has booted; it returns
  * false or undefined rather than throwing.
  */
+import { useState, useSyncExternalStore } from 'react';
 
 export interface MeshGenerateOptions {
   mesh_id?: string;
@@ -124,6 +125,24 @@ function subscribe<T>(name: string, onEvent: (detail: T) => void): () => void {
   const fn = (ev: Event) => onEvent((ev as CustomEvent<T>).detail);
   window.addEventListener(name, fn);
   return () => window.removeEventListener(name, fn);
+}
+
+/**
+ * A state the runtime publishes (its global first, then its event) as a panel's state.
+ * The snapshot is the published global, the same object until the next publish, so
+ * React reads it again when it subscribes: a state published after the panel's first
+ * render and before its subscription (a panel opened from a promise callback subscribes
+ * a task after it appears) still shows. Until the first publish the panel shows what
+ * `now` gave when it mounted; `now` may build a new object on every call, so it is never
+ * the snapshot itself.
+ */
+function usePublished<T>(
+  subscribeTo: (onState: (state: T) => void) => () => void,
+  published: () => T | null | undefined,
+  now: () => T | null,
+): T | null {
+  const [atMount] = useState(now);
+  return useSyncExternalStore(subscribeTo, () => published() || atMount);
 }
 
 export type MeshPhase = 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued';
@@ -327,6 +346,11 @@ export function runStateNow(): RunState | null {
   return window.__CFD_RUN_STATE__ || window.__CFD_RUN_STATE_NOW__?.() || null;
 }
 
+/** Live run panel state from the runtime (`cfd:run-state`). */
+export function useRunState(): RunState | null {
+  return usePublished(subscribeRunState, () => window.__CFD_RUN_STATE__, runStateNow);
+}
+
 /** The Start gate for the selected run (kept for plugins and tests). */
 export function runGate(runId?: string): RunGateState | null {
   const fn = window.__CFD_RUN_GATE__;
@@ -402,6 +426,11 @@ export function geometryStateNow(): GeometryState | null {
   return window.__CFD_GEOMETRY_STATE__ || window.__CFD_GEOMETRY_STATE_NOW__?.() || null;
 }
 
+/** Live geometry panel state from the runtime (`cfd:geometry`). */
+export function useGeometryState(): GeometryState | null {
+  return usePublished(subscribeGeometryState, () => window.__CFD_GEOMETRY_STATE__, geometryStateNow);
+}
+
 /** Remove the selected geometry (the runtime asks to confirm first). Resolves true when removed. */
 export async function deleteGeometry(): Promise<boolean> {
   const fn = window.__CFD_GEOMETRY_DELETE__;
@@ -430,6 +459,11 @@ export function subscribeStudyState(onState: (state: StudyState) => void): () =>
 
 export function studyStateNow(): StudyState | null {
   return window.__CFD_STUDY_STATE__ || window.__CFD_STUDY_STATE_NOW__?.() || null;
+}
+
+/** Live study panel state from the runtime (`cfd:study`). */
+export function useStudyState(): StudyState | null {
+  return usePublished(subscribeStudyState, () => window.__CFD_STUDY_STATE__, studyStateNow);
 }
 
 /** Save study fields (the analysis's settings and numerics) on the active study. */
@@ -502,6 +536,11 @@ export function subscribeBcState(onState: (state: BcState) => void): () => void 
 /** The latest state, asking the runtime to publish if nothing has been sent yet. */
 export function bcStateNow(): BcState | null {
   return window.__CFD_BCS__ || window.__CFD_BC_STATE__?.() || null;
+}
+
+/** Live runtime BC state (records, open BC, its faces, defaults, picker selection). */
+export function useBcState(): BcState | null {
+  return usePublished(subscribeBcState, () => window.__CFD_BCS__, bcStateNow);
 }
 
 export function openBcPicker(): boolean {

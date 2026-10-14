@@ -34,7 +34,7 @@ test('gate:h4-legacy-gone', () => {
   // Phase 7: the geometry panel shows V0.1.0's rows from runtime state; its old
   // file-less "Import" job button is gone.
   const geometryPanel = text('src/panels/geometry/GeometryPanel.tsx');
-  assert.match(geometryPanel, /subscribeGeometryState/);
+  assert.match(geometryPanel, /useGeometryState\(\)/);
   assert.equal(geometryPanel.includes('cad_import'), false);
   assert.match(text('src/panels/prefs/PluginsStep.tsx'), /registry\.reload/);
   assert.match(text('src/plugin-api/index.ts'), /pluginTreeNodes/);

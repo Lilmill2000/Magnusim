@@ -11,7 +11,6 @@ import {
   renameRun,
   runCopyPick,
   runSetupFix,
-  runStateNow,
   saveRunCores,
   saveRunSettings,
   saveRunSettle,
@@ -19,23 +18,13 @@ import {
   simContinue,
   simStart,
   simStop,
-  subscribeRunState,
+  useRunState,
   type RunState,
 } from '../legacyBridge';
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { ResidualPlot } from './ResidualPlot';
 import { RunCores, runCanUseCores, useRankCap } from './RunCores';
 import { RunMonitors } from './RunMonitors';
-
-/** Live run panel state from the runtime (`cfd:run-state`). */
-export function useRunState(): RunState | null {
-  const [state, setState] = useState<RunState | null>(() => runStateNow());
-  useEffect(() => {
-    setState(runStateNow());
-    return subscribeRunState(setState);
-  }, []);
-  return state;
-}
 
 function RunTitle({ name, canRename }: { name: string; canRename: boolean }) {
   const [editing, setEditing] = useState(false);
