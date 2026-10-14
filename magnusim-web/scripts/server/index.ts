@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { WEB_ROOT } from '../python-env.js';
 import { dispatch, Router } from './router.ts';
 import { HttpError, assertSameOrigin, sendJson } from './http.ts';
+import { keepIdleConnectionsOpen } from './keep-alive.ts';
 import { JobManager } from './jobs.ts';
 import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
 import { getWorker } from './worker.ts';
@@ -42,10 +43,12 @@ export function createApiPlugin() {
   function install(
     server: {
       middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void };
-      httpServer?: { on: (ev: string, fn: () => void) => void };
+      httpServer?: { on: (ev: string, fn: () => void) => void } | null;
     },
     sdkVariant: SdkVariant,
   ) {
+      // Idle connections stay open far longer than Node's 6 s (scripts/server/keep-alive.ts).
+      keepIdleConnectionsOpen(server.httpServer);
       worker.start();
       // Node validates mesher / analysis keys against the live registry (plugins
       // included); the committed registry.json holds builtins only.
