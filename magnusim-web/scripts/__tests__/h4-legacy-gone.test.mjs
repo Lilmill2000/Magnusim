@@ -35,6 +35,7 @@ test('gate:h4-legacy-gone', () => {
   // file-less "Import" job button is gone.
   const geometryPanel = text('src/panels/geometry/GeometryPanel.tsx');
   assert.match(geometryPanel, /useGeometryState\(\)/);
+  assert.match(geometryPanel, /import \{[^}]*\buseGeometryState\b[^}]*\} from '\.\.\/legacyBridge'/);
   assert.equal(geometryPanel.includes('cad_import'), false);
   assert.match(text('src/panels/prefs/PluginsStep.tsx'), /registry\.reload/);
   assert.match(text('src/plugin-api/index.ts'), /pluginTreeNodes/);

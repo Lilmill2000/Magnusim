@@ -11,7 +11,7 @@ import { PluginsStep } from './PluginsStep';
 vi.mock('../../api/workerRpc', () => ({ workerRpc: async () => ({}) }));
 
 // Its register() throws; loaded once first, so the loader's import of it answers at once.
-const BROKEN_UI = '/src/panels/prefs/brokenPluginUi.fixture.ts';
+const BROKEN_UI = '/src/test/brokenPluginUi.fixture.ts';
 const LAMINAR = {
   key: 'example-laminar',
   name: 'example-laminar',
