@@ -314,6 +314,14 @@ const isHookView = (cam) => cam.parallel === true && near(cam.pos, [400, 15, 15]
  * 7 px of an edge picks the edge, and where edges fall depends on the canvas size (the panels'
  * fonts differ by OS).
  */
+/** The point is on the viewer now: no panel (the Air panel growing as its fluid loads) is drawn over it. */
+function onViewer(page, at) {
+  return page.evaluate(([x, y]) => {
+    const top = document.elementFromPoint(x, y);
+    return !!top && !!top.closest('#viewer');
+  }, [at.x, at.y]);
+}
+
 async function partPoints(page, want = 2) {
   let found = [];
   await expect
@@ -1378,8 +1386,12 @@ test.describe('exit sync (host API 1.6)', () => {
       document.addEventListener('cfd:bodies', (e) => window.__bodies.push(e.detail.bodies));
       window.__CFD_OPEN_TREE_DETAIL__('air', { toggle: false });
     });
+    // Its fluid shown first: the panel grows over the viewer when it loads, and a click on the
+    // panel would be "dropped" without testing anything.
+    await expect(page.locator('#panel-air-material [data-material-volumes="1"]')).toBeVisible({ timeout: 30_000 });
     const [onPart] = await partPoints(page, 1);
     expect(onPart).toBeTruthy();
+    expect(await onViewer(page, onPart)).toBe(true);
     await page.mouse.click(onPart.x, onPart.y);
     await page.waitForTimeout(500);
     expect(await page.evaluate(() => window.__bodies)).toEqual([]);
@@ -1391,9 +1403,23 @@ test.describe('exit sync (host API 1.6)', () => {
     const bcAfter = (await getJson(request, `${host.base}/api/bcs?project_id=${pid}&simulation_id=${sim.id}`)).boundary_conditions.find((b) => b.id === sim.bc);
     expect(bcAfter.faces).not.toContain('face 1@Body1');
     expect(bcAfter.geometry_rev).toBe(rev + 1);
-    // Once the part is loaded the same viewport pick lands.
+    // Once the part is loaded the same viewport pick lands. The Air panel opens short ("Loading
+    // the fluid…") and grows over the viewer when its fluid comes: held here until then, so a
+    // point picked beside the short panel would be under the grown one (a slow machine or a
+    // trace recording hit that). The point is picked once the panel has grown.
+    let releaseMaterials = () => undefined;
+    const materialsHeld = new Promise((r) => (releaseMaterials = r));
+    await page.route('**/api/materials?**', async (route) => {
+      await materialsHeld;
+      await route.continue().catch(() => undefined);
+    });
     await page.evaluate(() => window.__CFD_OPEN_TREE_DETAIL__('air', { toggle: false }));
+    await expect(page.locator('#panel-air-material [data-material-loading="1"]')).toBeVisible({ timeout: 30_000 });
+    releaseMaterials();
+    await expect(page.locator('#panel-air-material [data-material-volumes="1"]')).toBeVisible({ timeout: 30_000 });
+    await page.unroute('**/api/materials?**');
     const [onNew] = await partPoints(page, 1);
+    expect(await onViewer(page, onNew)).toBe(true);
     await page.mouse.click(onNew.x, onNew.y);
     await expect.poll(() => page.evaluate(() => window.__bodies.length), { timeout: 10_000 }).toBe(1);
     stage(t1, 'picks waited for the landing');
