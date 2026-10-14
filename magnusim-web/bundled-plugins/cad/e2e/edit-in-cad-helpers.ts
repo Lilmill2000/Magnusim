@@ -8,8 +8,8 @@ import { expect, type APIRequestContext, type FrameLocator, type Page, type Test
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-// @ts-expect-error the app's host helper is plain JavaScript (e2e/host-server.d.mts types CAD's wrapper only)
 import { cadPreviewReady } from '../../../e2e/support/cad-preview.mjs';
+// @ts-expect-error the app's host helper is plain JavaScript (e2e/host-server.d.mts types CAD's wrapper only)
 import { startHost } from '../../../e2e/support/host-server.mjs';
 import { geometryRow, partOpened, workspaceFrame } from './helpers';
 
