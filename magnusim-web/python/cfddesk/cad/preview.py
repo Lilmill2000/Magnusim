@@ -15,7 +15,9 @@ import argparse
 import json
 import math
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 # The one face numbering rule (host API 1.5): every visit, one index per solid that
@@ -610,13 +612,26 @@ def ensure_step_sidecar(step: Path, shape, *, write: bool = True) -> tuple[Path 
             return side, False
         if not write:
             return None, False
-        tmp = side.with_name(f"{side.stem}.{os.getpid()}.tmp.bbrep")
+        # Written in the system temp folder, then moved in: OCCT's writer crashes the process
+        # (no exception) when the folder is not there, as when the geometry is removed while
+        # its preview is made. A move into a removed folder fails instead, and never makes it.
+        fd, name = tempfile.mkstemp(prefix="cfd-sidecar-", suffix=".bbrep")
+        os.close(fd)
+        tmp = Path(name)
+        near = side.with_name(f"{side.stem}.{os.getpid()}.tmp.bbrep")
         try:
             BinTools.Write_s(shape, str(tmp), False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
             os.utime(tmp, ns=(stamp, stamp))
-            os.replace(tmp, side)
+            try:
+                os.replace(tmp, side)
+            except OSError:
+                # Another volume: copied beside the STEP first, so no reader sees half a file.
+                shutil.copy2(tmp, near)
+                os.utime(near, ns=(stamp, stamp))
+                os.replace(near, side)
         finally:
             tmp.unlink(missing_ok=True)
+            near.unlink(missing_ok=True)
         return (side, True) if side.is_file() else (None, False)
     except Exception:
         return None, False

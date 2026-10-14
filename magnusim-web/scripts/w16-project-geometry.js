@@ -17,6 +17,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -1107,37 +1108,157 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
 
 const cadPreviewBuilds = new Map();
 
-async function buildCadPreviewAt(projectId, stepPath, paths) {
-  mkdirSync(paths.dir, { recursive: true });
+/** Writes a preview's three files where `out` names them: the worker, else the script. */
+async function writeCadPreviewWithPython(stepPath, out) {
+  const rpc = callWorker('cad.preview', { step_path: stepPath, edges: out.edges, faces: out.faces, meta: out.meta }, 180_000);
+  if (rpc) return rpc;
+  if (!existsSync(CAD_PREVIEW_SCRIPT)) {
+    throw Object.assign(new Error('CAD preview script missing'), { scriptMissing: true });
+  }
+  return runPython([CAD_PREVIEW_SCRIPT, '--step', stepPath, '--edges', out.edges, '--faces', out.faces, '--meta', out.meta]);
+}
+let writeCadPreview = writeCadPreviewWithPython;
+
+/**
+ * Tests hold the CAD preview build with a stand-in `fn(stepPath, out, write)`, where `write`
+ * is the real writer (null puts the real writer back).
+ */
+export function setCadPreviewWriterForTests(fn) {
+  writeCadPreview = fn ? (stepPath, out) => fn(stepPath, out, writeCadPreviewWithPython) : writeCadPreviewWithPython;
+}
+
+/**
+ * MAGNUSIM_TEST_PREVIEW_HOLD (tests only): a file. While it is there, a CAD preview that is
+ * made (its STEP read) waits before it is placed in the project. `made <step>` and
+ * `end <step>` lines are added to `<file>.log`.
+ */
+async function testPreviewHold(stepPath, event) {
+  const hold = envGet('TEST_PREVIEW_HOLD');
+  if (!hold) return;
   try {
-    const rpc = callWorker(
-      'cad.preview',
-      { step_path: stepPath, edges: paths.edges, faces: paths.faces, meta: paths.meta },
-      180_000,
-    );
-    if (rpc) {
-      await rpc;
-    } else {
-      if (!existsSync(CAD_PREVIEW_SCRIPT)) {
+    writeFileSync(`${hold}.log`, `${event} ${stepPath}\n`, { flag: 'a' });
+  } catch {
+    /* the test's own log */
+  }
+  if (event !== 'made') return;
+  while (existsSync(hold)) await new Promise((r) => setTimeout(r, 100));
+}
+
+/** Which file it is, and its age and size ('' when it is not there). */
+function fileStamp(file) {
+  try {
+    const s = statSync(file, { bigint: true });
+    return `${s.ino}|${s.mtimeNs}|${s.size}`;
+  } catch {
+    return '';
+  }
+}
+
+/** A string as Python's json.dumps writes it (non-ASCII as \u escapes). */
+function pyJsonString(s) {
+  const json = JSON.stringify(String(s));
+  let out = '';
+  for (let i = 0; i < json.length; i += 1) {
+    const n = json.charCodeAt(i);
+    out += n > 0x7f ? `\\u${n.toString(16).padStart(4, '0')}` : json[i];
+  }
+  return out;
+}
+
+/** cad_preview.json names its VTP files: the staged names become the geometry folder's. */
+function previewMetaToFinal(staged, paths) {
+  try {
+    let text = readFileSync(staged.meta, 'utf8');
+    const was = text;
+    for (const k of ['edges', 'faces']) text = text.split(pyJsonString(staged[k])).join(pyJsonString(paths[k]));
+    if (text !== was) writeFileSync(staged.meta, text, 'utf8');
+  } catch {
+    /* no meta: the preview is placed without one, as before */
+  }
+}
+
+function moveFileSync(from, to) {
+  try {
+    renameSync(from, to);
+  } catch {
+    // Another volume, or a reader holds the old file without delete sharing.
+    copyFileSync(from, to);
+  }
+}
+
+/**
+ * Move a CAD preview built outside the project into `paths`, unless the geometry it was
+ * made from is gone or was replaced while it was built: its folder (or the project) was
+ * removed, and writing there would make the removed folder again. The file it was made
+ * from must still be that same file: a geometry removed and added again from a file of the
+ * same name gets the same folder. All synchronous, so a remove (an rmSync on this thread)
+ * cannot land between the check and the move.
+ */
+function placeCadPreview(projectId, paths, staged, sourceFile, sourceStamp) {
+  if (!existsSync(projectJsonPath(projectId)) || !sourceStamp || fileStamp(sourceFile) !== sourceStamp) return false;
+  if (!existsSync(paths.dir)) {
+    // Only the project's geometries folder (a legacy project's one geometry) is made here:
+    // a geometry's or a modifier's folder holds its STEP, so it is there when the STEP is.
+    if (paths.dir !== geometriesRoot(projectDir(projectId))) return false;
+    mkdirSync(paths.dir);
+  }
+  moveFileSync(staged.faces, paths.faces);
+  moveFileSync(staged.edges, paths.edges);
+  if (existsSync(staged.meta)) moveFileSync(staged.meta, paths.meta);
+  return true;
+}
+
+async function buildCadPreviewAt(projectId, stepPath, paths, retried = false) {
+  // Built outside the project, then moved in by placeCadPreview: the preview's writers make
+  // the folder they write to, so a geometry or project removed while its preview was built
+  // came back as a folder holding only the preview (and the next import of that file got a
+  // "_2" folder). A mesh import's STEP is written after its sidecar, which is then the source.
+  const sourceFile = existsSync(stepPath) ? stepPath : geometrySidecarPath(stepPath);
+  const sourceStamp = fileStamp(sourceFile);
+  const stageDir = mkdtempSync(join(tmpdir(), 'magnusim-preview-'));
+  const staged = {
+    faces: join(stageDir, 'cad_faces.vtp'),
+    edges: join(stageDir, 'cad_edges.vtp'),
+    meta: join(stageDir, 'cad_preview.json'),
+  };
+  try {
+    let failed = null;
+    try {
+      await writeCadPreview(stepPath, staged);
+      await testPreviewHold(stepPath, 'made');
+    } catch (e) {
+      failed = e;
+    }
+    // A build that failed because its STEP was removed or replaced meanwhile is answered
+    // as a preview that is not placed (below).
+    if (failed && fileStamp(sourceFile) === sourceStamp) {
+      if (failed.scriptMissing) {
         return { ok: false, status: 500, body: { error: 'CAD preview script missing', path: CAD_PREVIEW_SCRIPT } };
       }
-      await runPython([
-        CAD_PREVIEW_SCRIPT,
-        '--step',
-        stepPath,
-        '--edges',
-        paths.edges,
-        '--faces',
-        paths.faces,
-        '--meta',
-        paths.meta,
-      ]);
+      return { ok: false, status: 500, body: { error: 'CAD preview failed', detail: String(failed), project_id: projectId } };
     }
-  } catch (e) {
-    return { ok: false, status: 500, body: { error: 'CAD preview failed', detail: String(e), project_id: projectId } };
-  }
-  if (!existsSync(paths.edges) || !existsSync(paths.faces)) {
-    return { ok: false, status: 500, body: { error: 'CAD preview missing after export', ...paths } };
+    if (!failed && (!existsSync(staged.edges) || !existsSync(staged.faces))) {
+      return { ok: false, status: 500, body: { error: 'CAD preview missing after export', ...paths } };
+    }
+    let placed = false;
+    if (!failed) {
+      previewMetaToFinal(staged, paths);
+      try {
+        placed = placeCadPreview(projectId, paths, staged, sourceFile, sourceStamp);
+      } catch (e) {
+        return { ok: false, status: 500, body: { error: 'CAD preview could not be saved', detail: String(e), project_id: projectId } };
+      }
+    }
+    if (!placed) {
+      // Made from a geometry replaced meanwhile: make the one that is there now (once).
+      if (!retried && existsSync(projectJsonPath(projectId)) && geomFileExists(stepPath)) {
+        return await buildCadPreviewAt(projectId, stepPath, paths, true);
+      }
+      return { ok: false, status: 404, body: { error: 'geometry removed while its CAD preview was made', project_id: projectId } };
+    }
+  } finally {
+    rmSync(stageDir, { recursive: true, force: true });
+    await testPreviewHold(stepPath, 'end');
   }
   return { ok: true, ...paths, step_path: stepPath, cached: false };
 }

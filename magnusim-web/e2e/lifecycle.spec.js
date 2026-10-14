@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -8,6 +8,7 @@ import {
   MISSING_STUDY_ID,
   MISSING_STUDY_PROJECT,
 } from './prepare-projects.js';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 
 // Everything a user creates can be renamed, moved and deleted again, through the UI:
 // folders and projects on Home; studies (rename, clone, delete), meshes and runs
@@ -518,4 +519,79 @@ test('setup wizard: first launch walks every step to Finish; Settings reopens it
       data: { wizard_completed: true, units: before.units || 'Metric', port: before.port || port },
     });
   }
+});
+
+// A Home card's picture is made from the geometry's CAD preview, which is made first when
+// it is missing. A project deleted on Home while that preview was made came back as a
+// folder holding only cad_faces.vtp / cad_edges.vtp / cad_preview.json (the preview wrote
+// into the removed folder). A server of its own: MAGNUSIM_TEST_PREVIEW_HOLD holds each
+// preview after its STEP is read and before it is placed, while the hold file is there.
+test.describe('a CAD preview made while its project is deleted on Home', () => {
+  let host;
+  let hold;
+  test.beforeAll(async () => {
+    const tmp = e2eTemp('preview-hold');
+    hold = join(tmp, 'preview-hold');
+    host = await startHost({ name: 'preview-hold', tmp, env: { MAGNUSIM_TEST_PREVIEW_HOLD: hold } });
+  });
+  test.afterAll(() => {
+    if (hold) rmSync(hold, { force: true });
+    if (host) host.stop();
+  });
+
+  test('does not bring the deleted project folder back', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    page.setDefaultTimeout(30_000);
+    const base = host.base;
+    const listed = async () => ((await json(request, `${base}/api/projects`)).projects || []).map((p) => p.id);
+    const made = await (
+      await request.post(`${base}/api/project`, {
+        data: { title: `e2e preview delete ${stamp()}`, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' },
+      })
+    ).json();
+    const pid = made.id;
+    const imported = await request.post(`${base}/api/geometry/import`, {
+      data: { project_id: pid, step_path: ROUND, filename: 'transient-test.step' },
+    });
+    expect(imported.ok(), await imported.text()).toBe(true);
+    const step = (await imported.json()).geometry.step_path;
+    const geomDir = dirname(step);
+    const projectFolder = dirname(dirname(geomDir));
+    // The import's own thumbnail render ends first (a card's request would join it) ...
+    const thumbUrl = `${base}/api/geometry/thumb?project_id=${encodeURIComponent(pid)}`;
+    await expect.poll(async () => (await request.get(thumbUrl)).status(), { timeout: 120_000 }).not.toBe(202);
+    // ... and the card's picture then needs the preview made again.
+    for (const f of ['cad_faces.vtp', 'cad_edges.vtp', 'cad_preview.json', 'thumb.png']) rmSync(join(geomDir, f), { force: true });
+    // Only the previews made from here on (the import made one too).
+    const log = `${hold}.log`;
+    rmSync(log, { force: true });
+    writeFileSync(hold, '');
+    const logged = (event) => (existsSync(log) ? readFileSync(log, 'utf8') : '').split(/\r?\n/).includes(`${event} ${step}`);
+
+    await page.goto(`${base}/#/`);
+    const card = page.locator(`.home-card[data-project-id="${pid}"]`);
+    await card.waitFor({ timeout: 60_000 });
+    // The card asked for its picture: the preview is made and held before it is placed.
+    await expect.poll(() => logged('made'), { timeout: 120_000 }).toBe(true);
+
+    await card.click();
+    await page.locator('#home-delete-project').click();
+    await expect(page.locator('#modal-delete-project')).toBeVisible();
+    await page.locator('#dp-confirm').click();
+    await page.locator('#dp-confirm').click();
+    await expect.poll(listed).not.toContain(pid);
+    expect(existsSync(projectFolder)).toBe(false);
+
+    // The preview goes on and ends; its project's folder stays gone.
+    rmSync(hold, { force: true });
+    await expect.poll(() => logged('end'), { timeout: 60_000 }).toBe(true);
+    const left = existsSync(projectFolder) ? readdirSync(projectFolder, { recursive: true }).join(', ') : '';
+    expect(left, `${projectFolder} is back`).toBe('');
+    expect(existsSync(projectFolder)).toBe(false);
+    // Home, after a reload, does not show it either.
+    await page.reload();
+    await expect(page.locator('.home-card').first()).toBeVisible({ timeout: 60_000 });
+    await expect(card).toHaveCount(0);
+    expect(await listed()).not.toContain(pid);
+  });
 });
