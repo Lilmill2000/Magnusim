@@ -13,6 +13,8 @@ const WS_HASH = '#/p/proj/ws/ws-demo/bench/st-1';
 
 const overlay = () => document.getElementById('workspace-overlay') as HTMLElement;
 const header = () => overlay().querySelector('[data-workspace-header="1"]');
+// The plugin's name, once the page has read the plugin list (its key until then).
+const pluginName = () => header()?.querySelector('.ws-plugin')?.textContent || '';
 
 let openAtChange: boolean | null = null;
 /** The address moving to the workspace right after the overlay rendered, before its passive effects ran. */
@@ -69,11 +71,11 @@ describe('WorkspaceOverlay', () => {
     document.body.appendChild(host);
     root = createRoot(host);
     root.render(createElement(Fragment, null, createElement(WorkspaceOverlay), createElement(Lands)));
-    await settle(() => !!header() && !overlay().hidden);
+    await settle(() => pluginName() === 'Workspace demo' && !overlay().hidden);
     // The timing was forced: the overlay was shut on the project when the address moved.
     expect(openAtChange).toBe(false);
     expect(location.hash).toBe(WS_HASH);
     expect(overlay().hidden, 'the workspace overlay is open').toBe(false);
-    expect(header()?.querySelector('.ws-plugin')?.textContent).toBe('Workspace demo');
+    expect(pluginName()).toBe('Workspace demo');
   });
 });
