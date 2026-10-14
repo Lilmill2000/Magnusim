@@ -1020,7 +1020,8 @@ def write_simulation(project_dir: Path, body: dict[str, Any], *, sim_id: str = "
         doc["id"] = sim_id
     doc["updated_at"] = doc.get("updated_at") or now_iso()
     doc["persistence"] = "filesystem"
-    atomic_write(path, doc)
+    # Into the project's own folder, never made: a deleted project stays deleted.
+    atomic_write(path, doc, make_dirs=False)
     return doc
 
 
@@ -1046,7 +1047,8 @@ def save_sim_catalog(project_dir: Path, body: dict[str, Any], *, sim_id: str = "
     }
     if sim_id:
         doc["simulation_id"] = sim_id
-    atomic_write(project_dir / "simulations.json", doc)
+    # Both files go into the project's own folder, never made: a deleted project stays deleted.
+    atomic_write(project_dir / "simulations.json", doc, make_dirs=False)
     mirror = project_dir / "simulation.json"
     active = next(
         (
@@ -1059,7 +1061,7 @@ def save_sim_catalog(project_dir: Path, body: dict[str, Any], *, sim_id: str = "
     if active:
         mirrored = dict(active)
         mirrored["simulation_json"] = str(mirror)
-        atomic_write(mirror, mirrored)
+        atomic_write(mirror, mirrored, make_dirs=False)
     elif mirror.exists():
         try:
             mirror.unlink()
