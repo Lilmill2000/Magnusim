@@ -22,7 +22,7 @@ vi.mock('../workspace/leaveGuard', () => ({
   },
 }));
 
-import { formatHomeSolveLine, openProject } from './controller';
+import { formatHomeSolveLine, openProject, parseHomeRoute } from './controller';
 
 // A project card's progress line reads the run on its analysis's x axis
 // (contract x_axis): simulated seconds or iterations.
@@ -174,5 +174,28 @@ describe('openProject over a workspace with unsaved work', () => {
       ['project', { interactive: true }],
     ]);
     expect(opens).toEqual(['other']);
+  });
+});
+
+// The page's route, from the address's hash. A hand-edited link with a broken %-escape
+// (a truncated paste: #/p/proj%2) is read as typed: decoding it threw, and the React shell
+// that parses the route as it draws went blank.
+describe('parseHomeRoute', () => {
+  it('reads a project, a workspace, a folder and the recent list', () => {
+    expect(parseHomeRoute('#/p/my%20pipe')).toEqual({ view: 'workbench', projectId: 'my pipe', filter: null, workspace: null });
+    expect(parseHomeRoute('#/p/proj/ws/cad/part/st-1')).toMatchObject({
+      view: 'workbench',
+      projectId: 'proj',
+      workspace: { projectId: 'proj', plugin: 'cad', workspace: 'part', studyId: 'st-1' },
+    });
+    expect(parseHomeRoute('#/folder/Wind%20tunnels')).toEqual({ view: 'home', projectId: null, filter: 'folder:Wind tunnels' });
+    expect(parseHomeRoute('#/recent')).toEqual({ view: 'home', projectId: null, filter: 'recent' });
+    expect(parseHomeRoute('')).toEqual({ view: 'home', projectId: null, filter: 'all' });
+  });
+
+  it('keeps a broken %-escape as it was typed instead of throwing', () => {
+    expect(parseHomeRoute('#/p/%E0%A4%A')).toEqual({ view: 'workbench', projectId: '%E0%A4%A', filter: null, workspace: null });
+    expect(parseHomeRoute('#/p/proj%2')).toEqual({ view: 'workbench', projectId: 'proj%2', filter: null, workspace: null });
+    expect(parseHomeRoute('#/folder/Runs%')).toEqual({ view: 'home', projectId: null, filter: 'folder:Runs%' });
   });
 });

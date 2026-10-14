@@ -119,16 +119,25 @@ function projectHash(id) {
   return `#/p/${encodeURIComponent(id)}`;
 }
 
+/** A piece of the address, decoded; a hand-edited link's broken %-escape stays as it was typed. */
+function decodeHashPart(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch (_) {
+    return part;
+  }
+}
+
 export function parseHomeRoute(hash = location.hash) {
   const h = String(hash || '').replace(/^#/, '');
   const proj = h.match(/^\/p\/([^/]+)$/);
-  if (proj) return { view: 'workbench', projectId: decodeURIComponent(proj[1]), filter: null, workspace: null };
+  if (proj) return { view: 'workbench', projectId: decodeHashPart(proj[1]), filter: null, workspace: null };
   // A plugin workspace opens over its project's workbench.
   const ws = parseWorkspaceHash(h);
   if (ws) return { view: 'workbench', projectId: ws.projectId, filter: null, workspace: ws };
   const folder = h.match(/^\/folder\/(.+)$/);
   if (folder) {
-    return { view: 'home', projectId: null, filter: `folder:${decodeURIComponent(folder[1])}` };
+    return { view: 'home', projectId: null, filter: `folder:${decodeHashPart(folder[1])}` };
   }
   if (h === '/recent') return { view: 'home', projectId: null, filter: 'recent' };
   return { view: 'home', projectId: null, filter: 'all' };
