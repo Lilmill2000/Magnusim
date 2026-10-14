@@ -5,6 +5,11 @@
  * the workspace bridge calls. `plugin` and `study_id` come from the bridge's scope;
  * every route checks a record's project (by folder), plugin, study and projects
  * root, and another scope's case answers 404 not_found.
+ *
+ * MAGNUSIM_TEST_EVENT_HUB=1 (read once, when this module loads) also registers, for the
+ * browser tests that follow a case without WSL, POST /api/test/plugin-case-event {project_id,
+ * plugin, study_id, job_id, seq, ev}: one event of that case on the bus the case channels
+ * read, as the runner publishes it (no record is made or changed).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
@@ -37,6 +42,7 @@ export interface PluginCaseDeps {
 
 /** At most this many queued cases per plugin per project. */
 export const FOAM_QUEUE_CAP = 20;
+const TEST_EVENTS = process.env.MAGNUSIM_TEST_EVENT_HUB === '1';
 const CHECK_TIMEOUT_MS = 30_000;
 const HEARTBEAT_MS = 15_000;
 const PLUGIN_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -538,6 +544,25 @@ export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): 
     };
     res.on('close', cleanup);
   });
+
+  if (TEST_EVENTS) {
+    // Tests only (see the header): one event of a case, as the runner publishes it.
+    router.post('/api/test/plugin-case-event', async (ctx) => {
+      const body = await bodyOf(ctx);
+      let s: Scope;
+      try {
+        s = scopeOf(ctx, body);
+      } catch (err) {
+        sendCaseError(ctx, err);
+        return;
+      }
+      const jobId = str(body.job_id);
+      const ev = body.ev;
+      if (!FOAM_JOB_RE.test(jobId) || !ev || typeof ev !== 'object') return fail(ctx, 400, 'bad_request', 'job_id and ev required');
+      foamEventBus().emit('event', { job_id: jobId, seq: Number(body.seq) || 0, ev, project_id: s.projectId, plugin: s.plugin, study_id: s.studyId, kind: 'foam' });
+      ctx.sendJson(200, { ok: true });
+    });
+  }
 
   // Results in 3D: where a case's results are, and what they are.
   router.get('/api/plugin-cases/resolve', async (ctx) => {
