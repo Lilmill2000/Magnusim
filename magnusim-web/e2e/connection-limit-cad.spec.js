@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { seedElbowProject } from './prepare-projects.js';
+import { mockJobChannel } from './support/event-hub-mock.js';
 import { e2eTemp, startHost } from './support/host-server.mjs';
 import { serverAnswersIn, stager, watchRequests } from './support/link-streams.js';
 
@@ -16,7 +18,8 @@ import { serverAnswersIn, stager, watchRequests } from './support/link-streams.j
 // Two projects, so the tabs' requests differ (a second tab asking for the very same URLs
 // waits on the browser's cache instead of taking a connection).
 // A part whose preview is made loads as before: its face table, faces and edges asked for
-// at once, and its face table once.
+// at once, and its face table once. A part being prepared while a mesh runs keeps the mesh's
+// chip (its stage and time), and says the part after it.
 // MAGNUSIM_TEST_PREVIEW_HOLD holds each preview once made, before it is placed. No WSL.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -147,5 +150,48 @@ test.describe('parts whose previews are being made, in two tabs', () => {
     expect(at('asked', 'faces'), 'its faces are asked for before its face table has answered').toBeLessThan(at('answered', 'preview'));
     expect(at('asked', 'edges'), 'its edges too').toBeLessThan(at('answered', 'preview'));
     expect(seen.filter((s) => s[0] === 'asked' && s[1] === 'preview').length, 'its face table, once (it is the active geometry)').toBe(1);
+  });
+
+  test("a part being prepared while a mesh runs: the viewport's chip keeps the mesh and says the part after it", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const PID = 'preparing-while-meshing';
+    const JOB = 'job-preparing-while-meshing';
+    seedElbowProject(host.projects, PID, 'Preparing while meshing');
+    const tree = await (await request.get(`${host.base}/api/project/tree?project_id=${PID}`)).json();
+    const study = (tree.geometries || []).flatMap((g) => g.studies || [])[0] || {};
+    const meshId = String(((study.meshes || [])[0] || {}).id || '');
+    expect(meshId, 'seeded mesh').toBeTruthy();
+    // No mesher runs: Generate is answered as a started snappyHexMesh job, whose events are the test's.
+    await page.addInitScript(() => {
+      window.__CFD_DISABLE_RUN_STATUS_POLL__ = true;
+    });
+    await mockJobChannel(page, JOB, () => [['event', { event: 'progress', stage: 'snappyHexMesh', status: 'running' }]]);
+    await page.route(/\/api\/mesh\/generate(\?|$)/, (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, job_id: JOB, status: 'running', mode: 'mesh', path_kind: 'snappyHexMesh', mesh_id: meshId, generate_id: 'gen-preparing', stage: 'snappyHexMesh' }),
+      }),
+    );
+    // The seeded part has no preview yet: the page's load makes it, and it is held once made.
+    rmSync(`${hold}.log`, { force: true });
+    writeFileSync(hold, '');
+    const chip = page.locator('#viewport-job-label');
+    try {
+      await page.goto(`${host.base}/#/p/${PID}`);
+      await expect.poll(() => (existsSync(`${hold}.log`) ? readFileSync(`${hold}.log`, 'utf8') : ''), { timeout: 120_000 }).toContain('made ');
+      // (The seeded part is named "Elbow".)
+      await expect(chip).toContainText('Preparing Elbow', { timeout: 15_000 });
+      // A mesh starts meanwhile: its chip, with the part said after it.
+      await page.waitForFunction(() => typeof window.__CFD_MESH_OPEN_SETTINGS__ === 'function');
+      await page.evaluate((id) => window.__CFD_MESH_OPEN_SETTINGS__(id), meshId);
+      await page.locator('#panel-mesh-form .cfd-island [data-mesh-generate="1"]').click();
+      await expect(chip).toHaveText(/^Meshing .* · Snapping the mesh to the surface · Preparing Elbow$/, { timeout: 15_000 });
+      stage(`while the part is prepared and the mesh runs, the chip says "${await chip.textContent()}"`);
+    } finally {
+      rmSync(hold, { force: true });
+    }
+    // Once the part is made, the chip is the mesh's alone.
+    await expect(chip).toHaveText(/^Meshing .* · Snapping the mesh to the surface$/, { timeout: 30_000 });
   });
 });

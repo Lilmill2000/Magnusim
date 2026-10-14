@@ -17566,13 +17566,16 @@ function syncViewportJobChip() {
   let holdAfter = true;
   const stage = workbenchStage();
   const post = stage === 'results' || stage === 'mesh';
-  if (cadPreparing) {
-    // The part's preview is being made (a big STEP takes minutes): said, not a frozen app.
+  // The part's preview is being made (a big STEP takes minutes): said, not a frozen app (a
+  // project opening waits for it, so it says this instead). A live mesh or solve keeps its
+  // chip (its progress, time and ETA), and the part is said after it.
+  const preparing = cadPreparing ? 'Preparing ' + cadPreparing.name : '';
+  if (preparing && !meshLive && !liveRun) {
     show = true;
-    label = 'Preparing ' + cadPreparing.name + '…';
+    label = preparing;
     time = formatElapsed(Date.now() - cadPreparing.since);
     holdAfter = false;
-  } else if (projectOpenCount > 0) {
+  } else if (projectOpenCount > 0 && !preparing) {
     show = true;
     label = 'Opening project';
     if (!projectOpenStarted) projectOpenStarted = Date.now();
@@ -17682,6 +17685,7 @@ function syncViewportJobChip() {
     lastJobChip.show = false;
     if (!jobStillExpected) jobChipStickyUntil = 0;
   }
+  if (preparing && show && label !== preparing) label += ' · ' + preparing;
   if (jobChip.hidden !== !show) jobChip.hidden = !show;
   if (show && jobChipLabel) jobChipLabel.textContent = label;
   if (jobChip) jobChip.title = label + (time ? ' · ' + time : '') + (eta ? ' · ' + eta : '');
