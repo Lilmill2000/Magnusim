@@ -400,6 +400,21 @@ describe('the leave question', () => {
     expect(workspaceDirty()).toBe(true);
   });
 
+  it('back at the open workspace before it closed (left, then entered again at once): the approval is over, the next way out asks', async () => {
+    setWorkspaceDirty(true, 'Chord not saved');
+    answer = true;
+    expect(await confirmLeaveWorkspace('back')).toBe(true);
+    expect(leaveApproved()).toBe(true);
+    // The address went to the project and straight back, before the overlay unmounted.
+    hashChange(WS_URL, PROJECT_URL);
+    hashChange(PROJECT_URL, WS_URL);
+    expect(leaveApproved()).toBe(false);
+    setWorkspaceDirty(true, 'Chord not saved');
+    answer = false;
+    expect(await confirmLeaveWorkspace('back')).toBe(false);
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
   it('Turn off holds while the turn-off runs, however long; one that failed is withdrawn', async () => {
     vi.useFakeTimers();
     setWorkspaceDirty(true, 'Chord not saved');

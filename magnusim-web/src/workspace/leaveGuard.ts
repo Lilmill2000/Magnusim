@@ -464,6 +464,17 @@ async function ask(q: LeaveQuestion, signal?: AbortSignal): Promise<boolean> {
  */
 function onHash(e: HashChangeEvent): void {
   const ws = open;
+  // Back at the open workspace before it closed (its way out and the way back came before
+  // the overlay unmounted, so it was never registered again): the approval of that way
+  // out is over. Without this the next Back within LEAVE_APPROVAL_MS left with no hook run
+  // and no question (a page that then reloaded in its hook was never asked about).
+  if (ws && approved) {
+    const back = routeOf(e.newURL);
+    if (back && sameRoute(back, ws.route)) {
+      clearApproval();
+      syncUnload();
+    }
+  }
   if (!ws || !leaveNeedsWork()) return;
   const from = routeOf(e.oldURL);
   if (!from || !sameRoute(from, ws.route)) return;
