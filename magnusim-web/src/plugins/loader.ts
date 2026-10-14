@@ -82,14 +82,20 @@ function clearClientError(key: string): void {
 }
 
 /**
- * Load one UI entry. What the plugin registered before is removed first, so a
- * reload or a scope change never doubles its panels or tree rows. A disabled
- * plugin's UI is removed. A thrown register is recorded and rethrown.
+ * Load one UI entry. What the plugin registered before is removed just before it
+ * registers again, so a reload or a scope change never doubles its panels or tree
+ * rows. A disabled plugin's UI is removed. A thrown register is recorded and rethrown.
+ *
+ * The old registration goes only once the entry has loaded, in the same task as
+ * the new one comes: a panel drawn in between (React draws a store change in a
+ * microtask, before an import answers) would unmount the plugin's FILTERS section
+ * or Settings panel and mount it again, losing what was typed in it.
  */
 export async function loadOnePlugin(plugin: ListedPlugin, scope: string): Promise<void> {
-  unregisterPlugin(plugin.key);
-  if (plugin.enabled === false || (plugin.status && plugin.status !== 'enabled')) return;
-  if (!plugin.ui && !plugin.url) return;
+  if (plugin.enabled === false || (plugin.status && plugin.status !== 'enabled') || (!plugin.ui && !plugin.url)) {
+    unregisterPlugin(plugin.key);
+    return;
+  }
   const url = plugin.url || `/plugins/${plugin.key}/ui/${plugin.ui_entry || 'index.js'}`;
   (globalThis as { __MAGNUSIM_HOST_REACT__?: typeof React }).__MAGNUSIM_HOST_REACT__ = React;
   // A bundled TSX UI's `@magnusim/plugin-ui` import reads the page's kit from here.
@@ -99,6 +105,7 @@ export async function loadOnePlugin(plugin: ListedPlugin, scope: string): Promis
       register?: (host: PluginHost) => void;
       default?: (host: PluginHost) => void;
     };
+    unregisterPlugin(plugin.key);
     const register = mod.register || mod.default;
     if (typeof register !== 'function') return;
     register(pluginHost(scope, plugin.key));
