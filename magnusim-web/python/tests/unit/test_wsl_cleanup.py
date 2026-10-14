@@ -29,8 +29,11 @@ def _solve_body() -> str:
 
 def test_solve_removes_its_case_only_after_a_clean_copy_back():
     body = _solve_body()
-    guard = 'if [ "$EC" -eq 0 ] && [ "$COPY_OK" -eq 1 ]; then'
+    # A clean run whose latest saved time came back as a frame (else the WSL copy
+    # holds the only results and stays for the sweep).
+    guard = 'if [ "$EC" -eq 0 ] && [ "$COPY_OK" -eq 1 ] && [ "$FRAME_BACK" -eq 1 ]; then'
     assert guard in body
+    assert body.index('! _has_frame "$WIN_OUT/$LATEST_SAVED"') < body.index(guard)
     block = body[body.index(guard) :]
     assert 'rm -rf -- "$DST"' in block.split("\nfi\n", 1)[0]
     # After every copy back to Windows, before the result the app waits for.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # cfddesk solve pipeline (Phase 1). Placeholders replaced by solve_run.render_solve_script:
 #   __DST__ __WIN_OUT__ __NPROCS__ __APP__ __RUN_ID__ __KEEP_FRAMES__ __FRAME_FIELDS__
-#   __RESTART__
+#   __RESTART__ __REGIONS__ __ALL_REGIONS__
 # Ext4 ($DST) is the case source of truth. Windows gets residuals/postProcessing,
 # viewer VTPs, logs, and saved fields as each write interval completes so
 # Results can open mid-run. KEEP_FRAMES=all keeps every result frame (a
@@ -10,6 +10,12 @@
 # startFrom latestTime) keeps every saved time, a parallel run decomposes only the
 # latest one, and the log so far is kept as the next part (log.$APP.1, .2, ...,
 # oldest first) before the new log.$APP starts.
+# REGIONS lists a multi-region case's regions (empty for one region): each needs
+# constant/<region>/polyMesh, decomposePar / reconstructPar run over every region
+# (ALL_REGIONS is their flag then, empty for one region; each region has its own
+# system/<region>/decomposeParDict), and a frame is written when every
+# <t>/<region>/ holds one of the frame fields. A case of one region runs the
+# commands it always ran (the script text has these lines either way).
 # Emits MAGNUSIM_EVENT JSON lines (CFDDESK_EVENT still accepted by parsers); OpenFOAM stdout passes through.
 set -uo pipefail
 DST="__DST__"
@@ -21,11 +27,30 @@ KEEP_FRAMES="__KEEP_FRAMES__"
 # Fields whose file in a time folder means that result frame was written (launch spec).
 FRAME_FIELDS="__FRAME_FIELDS__"
 RESTART="__RESTART__"
+REGIONS="__REGIONS__"
+ALL_REGIONS="__ALL_REGIONS__"
 
-_has_frame() {
+_frame_in() {
   local f
   for f in $FRAME_FIELDS; do [ -f "$1/$f" ] && return 0; done
   return 1
+}
+
+_has_frame() {
+  local r
+  [ -n "$REGIONS" ] || { _frame_in "$1"; return; }
+  for r in $REGIONS; do _frame_in "$1/$r" || return 1; done
+  return 0
+}
+
+# The files of one saved time, relative to it (<field>, or <region>/<field>).
+_frame_files() {
+  local f r
+  for f in "$1"/*; do [ -f "$f" ] && echo "${f##*/}"; done
+  for r in $REGIONS; do
+    for f in "$1/$r"/*; do [ -f "$f" ] && echo "$r/${f##*/}"; done
+  done
+  return 0
 }
 
 _evt() {
@@ -40,7 +65,15 @@ _evt() {
 
 _evt "{\"event\":\"start\",\"run_id\":\"$RUN_ID\",\"dst\":\"$DST\",\"n_procs\":$NPROCS,\"app\":\"$APP\",\"increment\":\"phase1-lean-copy\"}"
 
-if [ ! -d "$WIN_OUT/constant/polyMesh" ]; then
+if [ -n "$REGIONS" ]; then
+  for r in $REGIONS; do
+    if [ ! -d "$WIN_OUT/constant/$r/polyMesh" ]; then
+      _evt "{\"event\":\"error\",\"code\":46,\"error\":\"missing constant/$r/polyMesh in $WIN_OUT\"}"
+      _evt "{\"event\":\"result\",\"ok\":false,\"exit_code\":46}"
+      exit 46
+    fi
+  done
+elif [ ! -d "$WIN_OUT/constant/polyMesh" ]; then
   _evt "{\"event\":\"error\",\"code\":46,\"error\":\"missing polyMesh in $WIN_OUT\"}"
   _evt "{\"event\":\"result\",\"ok\":false,\"exit_code\":46}"
   exit 46
@@ -93,7 +126,7 @@ _list_times() {
     [[ "$t" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] || continue
     [ "$t" = "0" ] && continue
     echo "$t"
-  done | awk '{print $1+0, $0}' | sort -n | awk '{print $2}'
+  done | sort -g
 }
 
 _latest_time() {
@@ -140,7 +173,7 @@ sync_live_frames() {
   if [ "${#pending[@]}" -gt 0 ]; then
     local times
     times=$(IFS=,; echo "${pending[*]}")
-    openfoam2606 bash -c "cd '$DST' && reconstructPar -noZero -time '$times'" >> log.reconstructPar.live 2>&1 || true
+    openfoam2606 bash -c "cd '$DST' && reconstructPar$ALL_REGIONS -noZero -time '$times'" >> log.reconstructPar.live 2>&1 || true
   fi
   for t in $(_list_times "$src_root"); do
     [ "$t" = "$latest" ] && continue
@@ -163,8 +196,8 @@ live_sync_loop() {
 
 if [ "$NPROCS" -gt 1 ]; then
   _evt "{\"event\":\"stage\",\"stage\":\"decompose\"}"
-  DECOMPOSE="decomposePar -force"
-  [ "$RESTART" = "1" ] && DECOMPOSE="decomposePar -force -latestTime"
+  DECOMPOSE="decomposePar$ALL_REGIONS -force"
+  [ "$RESTART" = "1" ] && DECOMPOSE="decomposePar$ALL_REGIONS -force -latestTime"
   openfoam2606 bash -c "cd '$DST' && $DECOMPOSE" 2>&1 | tee log.decomposePar
   EC=${PIPESTATUS[0]}
   _evt "{\"event\":\"stage\",\"stage\":\"decompose_end\",\"exit_code\":$EC}"
@@ -184,14 +217,13 @@ if [ "$NPROCS" -gt 1 ]; then
     # removed so -newTimes rebuilds it; complete ones are not redone.
     for t in $(_list_times "$DST/processor0"); do
       [ -d "$DST/$t" ] || continue
-      for f in "$DST/processor0/$t"/*; do
-        [ -f "$f" ] || continue
-        if [ ! -f "$DST/$t/$(basename "$f")" ]; then rm -rf "${DST:?}/$t"; break; fi
-      done
+      while IFS= read -r f; do
+        if [ ! -f "$DST/$t/$f" ]; then rm -rf "${DST:?}/$t"; break; fi
+      done < <(_frame_files "$DST/processor0/$t")
     done
-    openfoam2606 bash -c "cd '$DST' && reconstructPar -noZero -newTimes" 2>&1 | tee log.reconstructPar
+    openfoam2606 bash -c "cd '$DST' && reconstructPar$ALL_REGIONS -noZero -newTimes" 2>&1 | tee log.reconstructPar
   else
-    openfoam2606 bash -c "cd '$DST' && reconstructPar -latestTime" 2>&1 | tee log.reconstructPar
+    openfoam2606 bash -c "cd '$DST' && reconstructPar$ALL_REGIONS -latestTime" 2>&1 | tee log.reconstructPar
   fi
   RECON_EC=${PIPESTATUS[0]}
   if [ "$EC" -eq 0 ] && [ "$RECON_EC" -ne 0 ]; then EC=$RECON_EC; fi
@@ -232,8 +264,16 @@ fi
 
 # Everything the run made is on Windows now, and the next solve on this id starts
 # from a fresh copy: drop the ext4 case. A failed run keeps it for a day (the
-# server's sweep, cfddesk/runner/cleanup.py, removes it later).
-if [ "$EC" -eq 0 ] && [ "$COPY_OK" -eq 1 ]; then
+# server's sweep, cfddesk/runner/cleanup.py, removes it later), and so does one
+# whose latest saved time did not come back as a frame (no frame field in it, or
+# in one of its regions): that copy holds the only results.
+FRAME_BACK=1
+LATEST_SAVED=$(_latest_time)
+if [ -n "$LATEST_SAVED" ] && ! _has_frame "$WIN_OUT/$LATEST_SAVED"; then
+  FRAME_BACK=0
+  _evt "{\"event\":\"warning\",\"code\":\"frame_not_back\",\"message\":\"The latest saved time ($LATEST_SAVED) did not come back to Windows (it lacks a frame field); the WSL copy of the case is kept\"}"
+fi
+if [ "$EC" -eq 0 ] && [ "$COPY_OK" -eq 1 ] && [ "$FRAME_BACK" -eq 1 ]; then
   _evt "{\"event\":\"stage\",\"stage\":\"cleanup\"}"
   cd / && case "$DST" in
     */cfddesk-*) rm -rf -- "$DST" ;;

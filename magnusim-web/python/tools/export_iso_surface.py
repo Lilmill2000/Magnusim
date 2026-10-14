@@ -31,6 +31,7 @@ from result_names import (  # noqa: E402
     default_shown_field,
     filter_fields,
     foam_sources,
+    json_text,
 )
 
 APPROACH = (
@@ -193,7 +194,7 @@ def export_iso_surface(
         }
     )
     out_meta = out_dir / "iso_surface.meta.json"
-    out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    out_meta.write_text(json_text(meta, indent=2) + "\n", encoding="utf-8")
     print(
         json.dumps(
             {

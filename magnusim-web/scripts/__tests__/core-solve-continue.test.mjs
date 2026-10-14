@@ -427,6 +427,23 @@ describe('Continue (F6)', () => {
     assert.deepEqual(runDoc(rid).warnings, want, 'kept when the run ends');
   });
 
+  it("solve.sh's frame_not_back (the last saved time did not come back) lands in the run's warnings", async () => {
+    const rid = await solvedRun('done');
+    const { out } = await cont(rid, { extraIterations: 10 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    relay([{ event: 'warning', code: 'frame_not_back', message: 'The latest saved time (110) did not come back' }]);
+    const want = [
+      {
+        code: 'frame_not_back',
+        message: 'The results of the last saved time did not come back to Windows. The case is kept in WSL for a day (its WSL case folder)',
+      },
+    ];
+    assert.deepEqual(runDoc(rid).warnings, want);
+    assert.deepEqual(w27.getRunStatus(PID, rid, SID).body.run.warnings, want);
+    endRun(rid, 'done');
+    assert.deepEqual(runDoc(rid).warnings, want, 'kept when the run ends');
+  });
+
   it('queued as a Start is: the row keeps its Continue, and the queue starts it as one', async () => {
     const rid = await solvedRun('done');
     // The row the Run panel queues while another job runs (its settings.continue).

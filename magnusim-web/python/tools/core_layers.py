@@ -46,12 +46,12 @@ ALLOWED: dict[str, set[str]] = {
     "case": {"registry"},
     "jobs": set(),
     "mesh": {"cad", "case", "project"},
-    "project": {"cad", "case", "mesh", "registry", "results"},
+    "project": {"cad", "case", "mesh", "registry", "results", "wsl"},
     "registry": {"builtin", "project", "wsl"},
-    "results": set(),
+    "results": {"wsl"},
     "runner": {"wsl"},
     "units": set(),
-    "worker": {"cad", "case", "project", "registry", "wsl"},
+    "worker": {"cad", "case", "project", "registry", "results", "wsl"},
     "wsl": {"jobs", "registry", "runner"},
 }
 

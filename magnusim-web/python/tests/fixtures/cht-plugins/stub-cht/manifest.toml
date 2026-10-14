@@ -1,0 +1,7 @@
+key = "stub-cht"
+name = "Stub conjugate heat transfer"
+version = "0.1.0"
+api_version = "1.8"
+license = "GPL-3.0-or-later"
+description = "A test analysis that solves a two-region conjugate heat transfer case (chtMultiRegionSimpleFoam) through the core solve path (host API 1.8)"
+authors = "Magnusim"

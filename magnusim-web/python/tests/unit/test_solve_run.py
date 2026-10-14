@@ -53,7 +53,7 @@ def test_template_exists_and_has_placeholders():
     p = solve_template_path()
     assert p.is_file()
     text = p.read_text(encoding="utf-8")
-    for tok in ("__DST__", "__WIN_OUT__", "__NPROCS__", "__APP__", "__RUN_ID__", "__RESTART__"):
+    for tok in ("__DST__", "__WIN_OUT__", "__NPROCS__", "__APP__", "__RUN_ID__", "__RESTART__", "__REGIONS__", "__ALL_REGIONS__"):
         assert tok in text
     assert "MAGNUSIM_EVENT" in text
     assert 'echo "MAGNUSIM_EVENT' in text  # emit preferred brand
@@ -61,13 +61,14 @@ def test_template_exists_and_has_placeholders():
     assert "decomposePar" in text
     assert "mpirun --oversubscribe -np" in text
     assert "W27_" not in text
-    assert "reconstructPar -latestTime" in text
+    # ALL_REGIONS is " -allRegions" in a multi-region case, else empty.
+    assert "reconstructPar$ALL_REGIONS -latestTime" in text
     # Transient: frames the live sync already rebuilt are not rebuilt again at the
     # end (-newTimes); a frame it left incomplete is removed first so it is redone.
-    assert "reconstructPar -noZero -newTimes" in text
+    assert "reconstructPar$ALL_REGIONS -noZero -newTimes" in text
     assert 'rm -rf "${DST:?}/$t"' in text
     # Live frames are rebuilt in one reconstructPar per tick, not one per frame.
-    assert "reconstructPar -noZero -time '$times'" in text
+    assert "reconstructPar$ALL_REGIONS -noZero -time '$times'" in text
     assert "reconstructPar -time $t" not in text
     assert "postProcessing" in text
     assert "_latest_time" in text
@@ -247,8 +248,65 @@ def test_render_solve_script_restart():
     assert 'RESTART="0"' in render_solve_script(**kw)
     body = render_solve_script(restart=True, **kw)
     assert 'RESTART="1"' in body and "__RESTART__" not in body
-    assert 'decomposePar -force -latestTime' in body
+    assert 'decomposePar$ALL_REGIONS -force -latestTime' in body
+    assert 'REGIONS=""' in body
     assert 'mv -f "$WIN_OUT/log.$APP" "$WIN_OUT/log.$APP.$n"' in body
+
+
+def _render_one_by_one(**kw) -> str:
+    """The render as it was before the one-pass substitution: one replace after
+    another (each value scanned again by the replaces after it)."""
+    from cfddesk.wsl.foam_case import regions_word_list
+
+    raw = solve_template_path().read_text(encoding="utf-8").lstrip("\ufeff")
+    words = regions_word_list(kw.get("regions", ()))
+    text = (
+        raw.replace("__DST__", str(kw["dst"]))
+        .replace("__WIN_OUT__", str(kw["win_out"]))
+        .replace("__NPROCS__", str(max(1, int(kw["n_procs"]))))
+        .replace("__APP__", kw["app"])
+        .replace("__KEEP_FRAMES__", kw.get("keep_frames", "latest"))
+        .replace("__FRAME_FIELDS__", " ".join(kw["frame_fields"]))
+        .replace("__RUN_ID__", str(kw["run_id"]))
+        .replace("__RESTART__", "1" if kw.get("restart") else "0")
+        .replace("__REGIONS__", words)
+        .replace("__ALL_REGIONS__", " -allRegions" if words else "")
+    )
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"restart": True, "keep_frames": "all"},
+        {"n_procs": 4, "regions": ("air", "aluminium_6061")},
+        {"regions": ("fluid1",), "restart": True},
+    ],
+)
+def test_render_in_one_pass_is_the_same_script_for_plain_values(extra):
+    kw = {"dst": "/home/u/cases/cfddesk-w27-r1", "win_out": "/mnt/c/P/My Projects/run/case", "n_procs": 2,
+          "run_id": "r1", "app": "simpleFoam", "frame_fields": ("U", "p"), **extra}
+    assert render_solve_script(**kw) == _render_one_by_one(**kw)
+
+
+def test_a_value_with_a_placeholder_name_is_not_replaced_again():
+    """A Windows folder named __REGIONS__ (or __APP__) stays as it is in the paths:
+    a value inserted is never scanned again."""
+    kw = {"n_procs": 1, "run_id": "r1", "app": "simpleFoam", "frame_fields": ("U", "p"), "regions": ("air", "solid")}
+    body = render_solve_script(dst="/d/cfddesk-w27-r1", win_out="/mnt/c/__REGIONS__/__APP__/case", **kw)
+    assert 'WIN_OUT="/mnt/c/__REGIONS__/__APP__/case"' in body
+    assert 'REGIONS="air solid"' in body and 'APP="simpleFoam"' in body
+
+
+def test_one_region_render_has_no_all_regions_flag():
+    kw = {"dst": "/d", "win_out": "/w", "run_id": "r1", "app": "simpleFoam", "frame_fields": ("U", "p")}
+    for n in (1, 2):
+        for keep in ("all", "latest"):
+            for restart in (False, True):
+                body = render_solve_script(n_procs=n, keep_frames=keep, restart=restart, **kw)
+                assert "-allRegions" not in body and 'ALL_REGIONS=""' in body
+    assert 'ALL_REGIONS=" -allRegions"' in render_solve_script(n_procs=2, regions=("a", "b"), **kw)
 
 
 def test_render_solve_script_needs_the_frame_fields():

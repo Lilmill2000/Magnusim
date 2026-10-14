@@ -2108,6 +2108,26 @@ select.fp-select {
 .sim-residual-legend[hidden] {
   display: none !important;
 }
+/* A multi-region result: where the shown field is not defined (drawn grey). */
+.legend-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #475467;
+}
+.legend-note[hidden] {
+  display: none;
+}
+/* A multi-region run's legend: one group per region, its name first. */
+.sim-residual-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.sim-residual-region {
+  font-weight: 600;
+  color: #344054;
+}
 .sim-swatch {
   display: inline-block;
   width: 12px;

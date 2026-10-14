@@ -442,6 +442,8 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       // first field loads.
       fields_available: last != null ? api.caseShownFields(caseDir, last) : [],
       result_fields: api.caseResultFieldRows(caseDir),
+      // A multi-region case's regions ({name, role}, host API 1.8): the region filter.
+      ...(api.caseRegions(caseDir).length ? { regions: api.caseRegions(caseDir) } : {}),
       start: times.length ? times[0] : null,
       end: times.length ? times[times.length - 1] : null,
       proves_not_baked_only: true,

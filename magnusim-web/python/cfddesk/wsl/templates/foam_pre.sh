@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 # WSL steps of a step-list run (plugin OpenFOAM cases, meshing plans).
-# Placeholders (DST, WIN_OUT, TOKEN and STEPS, each between two underscores on
-# both sides) are replaced in one pass by cfddesk.wsl.foam_case.render_foam_pre;
-# each appears once, below.
+# Placeholders (DST, WIN_OUT, TOKEN, STEPS and REGIONS, each between two
+# underscores on both sides) are replaced in one pass by
+# cfddesk.wsl.foam_case.render_foam_pre; each appears once, below.
 # Copies the Windows case in, runs each step from the one allowlist, and copies
 # back constant/polyMesh, 0/ (when there is one) and the logs. Tool output goes
 # only to log.<tool>.<i>; this script prints only MAGNUSIM_EVENT lines.
+# A multi-region case (REGIONS lists its regions; splitMeshRegions made them)
+# also gets back constant/<region>/, and its 0/ comes back without the
+# cellToRegion fields splitMeshRegions writes. No step writes system/<region>/
+# (the case writer and the relay write it on Windows), so it is not copied back.
+# Before a splitMeshRegions step each listed region's mesh goes (one from an
+# earlier attempt is never taken for this one's), and after the steps every
+# listed region must have its constant/<region>/polyMesh (exit 46 names it).
 # A step is a bash array run as `openfoam2606 "${STEP_i[@]}"`; no argument is
 # pasted into bash -c. A parallel step with more than one rank runs as
 # mpirun --oversubscribe -np N <tool> ... -parallel, as solve.sh runs a parallel solve.
@@ -15,6 +22,9 @@ set -uo pipefail
 DST="__DST__"
 WIN_OUT="__WIN_OUT__"
 TOKEN="__TOKEN__"
+REGIONS="__REGIONS__"
+# The listed region the steps made no mesh for (named on the error and result events).
+MISSING_REGION=""
 
 _evt() {
   local j="$1"
@@ -37,7 +47,9 @@ _copy_logs() {
 _fail() {
   local ec="$1" tool="${2:-}" idx="${3:-}"
   _copy_logs
-  if [ -n "$tool" ]; then
+  if [ -n "$MISSING_REGION" ]; then
+    _evt "{\"event\":\"result\",\"ok\":false,\"exit_code\":$ec,\"region\":\"$MISSING_REGION\"}"
+  elif [ -n "$tool" ]; then
     _evt "{\"event\":\"result\",\"ok\":false,\"exit_code\":$ec,\"tool\":\"$tool\",\"index\":$idx}"
   else
     _evt "{\"event\":\"result\",\"ok\":false,\"exit_code\":$ec}"
@@ -73,6 +85,13 @@ _step_done() {
   _stop_check
 }
 
+# Before splitMeshRegions: the listed regions' meshes in the copy go.
+_drop_region_meshes() {
+  local r
+  for r in $REGIONS; do rm -rf "$DST/constant/$r/polyMesh"; done
+  return 0
+}
+
 # decomposePar and reconstructParMesh of a run with one rank: the span runs serially.
 _step_skipped() {
   _evt "{\"event\":\"pre\",\"tool\":\"$2\",\"index\":$1,\"exit_code\":0,\"parallel\":false,\"n_procs\":1,\"skipped\":true}"
@@ -101,10 +120,22 @@ cd "$DST" || _fail 47
 __STEPS__
 
 [ -d "$DST/constant/polyMesh" ] || _fail 46
+for r in $REGIONS; do
+  if [ ! -d "$DST/constant/$r/polyMesh" ]; then
+    MISSING_REGION="$r"
+    _evt "{\"event\":\"error\",\"code\":46,\"region\":\"$r\",\"error\":\"The steps made no constant/$r/polyMesh (the case lists region $r)\"}"
+    _fail 46
+  fi
+done
 
 _evt "{\"event\":\"stage\",\"stage\":\"pre_copy_back\"}"
 [ -d "$WIN_OUT/constant" ] || mkdir "$WIN_OUT/constant" || _fail 48
 _put_back constant/polyMesh .magnusim-polyMesh.part || _fail 48
+for r in $REGIONS; do
+  rm -f "$DST/0/$r/cellToRegion"
+  _put_back "constant/$r" ".magnusim-$r.part" || _fail 48
+done
+[ -z "$REGIONS" ] || rm -f "$DST/0/cellToRegion"
 if [ -d "$DST/0" ]; then
   _put_back 0 .magnusim-0.part || _fail 48
 fi

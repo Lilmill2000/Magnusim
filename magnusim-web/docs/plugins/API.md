@@ -2052,6 +2052,14 @@ parse_surface_field_value(text: str) -> dict
 
 One ``surfaceFieldValue.dat``: ``{area, faces, columns, rows}``.
 
+#### start_time_folders
+
+```python
+start_time_folders(folder: Path) -> list[Path]
+```
+
+The start-time folders of a function object's folder, oldest first (a continued run starts a new one). Times may be written with an exponent.
+
 #### restart_dat_files
 
 ```python
@@ -2060,10 +2068,26 @@ restart_dat_files(folder: Path, stem: str) -> list[Path]
 
 A function object's ``<stem>.dat`` files in each start-time folder of ``folder`` (``postProcessing/<name>``), oldest first.
 
+#### function_object_folder
+
+```python
+function_object_folder(case_dir: Path, name: str, region: str = "") -> Path | None
+```
+
+The folder function object ``name`` writes its start-time folders in, or None.
+
+#### function_object_files
+
+```python
+function_object_files(case_dir: Path, name: str, filename: str, region: str = "") -> list[Path]
+```
+
+File ``filename`` of function object ``name`` in each of its start-time folders, oldest first (:func:`function_object_folder`; for a ``.dat`` file the ``<stem>_<time>.dat`` a run started again from the same time writes comes after its ``<stem>.dat``). A probes object's files are named after their field (``T``, ``U``); a field function object's after its type (``wallHeatFlux.dat``).
+
 #### read_surface_field_value
 
 ```python
-read_surface_field_value(case_dir: Path, name: str) -> dict | None
+read_surface_field_value(case_dir: Path, name: str, region: str = "") -> dict | None
 ```
 
 ``postProcessing/<name>/<time>/surfaceFieldValue.dat``, every time folder merged.
@@ -2235,6 +2259,22 @@ parse_residual_line(line: str, pattern: re.Pattern[str] = RE_RESIDUAL_ANY) -> di
 
 One OpenFOAM 'Solving for … Initial residual' line, or None.
 
+#### region_key
+
+```python
+region_key(region: str, field_name: str) -> str
+```
+
+The residual key of ``field_name`` solved in ``region``: ``<region>:<field>``.
+
+#### split_region_key
+
+```python
+split_region_key(key: str) -> tuple[str, str]
+```
+
+``(region, field)`` of a residual key; region '' for a key of a one-region run.
+
 #### parse_extra_line
 
 ```python
@@ -2248,7 +2288,14 @@ Courant or deltaT line, or None.
 Solver output -> job events: the one parser (Node only aggregates events).
 
 - `feed(raw: str) -> list[Event]`
+- `residual_event(name: str, value: float) -> Event`: A ``residual`` event for the open step (``name`` already keyed); kept in the step.
 - `snapshot() -> dict`
+
+#### class RegionProgressParser(ProgressParser)
+
+A multi-region solver's log (chtMultiRegionSimpleFoam, chtMultiRegionFoam).
+
+- `feed(raw: str) -> list[Event]`
 
 Constants:
 
@@ -2257,6 +2304,9 @@ Constants:
 - `RE_DELTAT = re.compile(r"^deltaT\s*=\s*([0-9.eE+-]+)")`
 - `RE_MPI_PREFIX = re.compile(r"^\s*\[\d+\]\s*")`
 - `RE_RESIDUAL_ANY = re.compile(r"Solving for (\w+), Initial residual = ([0-9.eE+-]+)")`
+- `RE_REGION_BLOCK = re.compile(r"^Solving for (fluid|solid) region (\w+)\s*$")`
+- `RE_REGION_COURANT = re.compile(r"^Region:\s*(\w+)\s+Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)")`
+- `REGION_KEY_SEP = ":"`
 - `PHASE_OF_STAGE = { "copy_to_wsl": "copy_in", "decompose": "decompose", "solve": "solve", "reconstruct": "reconstru...`
 
 ### magnusim_sdk.service

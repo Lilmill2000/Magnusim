@@ -197,7 +197,17 @@ def resolve_mesh(
         "mesh_id": (wanted or {}).get("id") if wanted else None,
         "mesh_name": (wanted or {}).get("name") if wanted else None,
         "wsl_case": (live or {}).get("wsl_case") if isinstance(live, dict) else None,
+        # A mesh of several material regions (host API 1.8): [{name, role, bodies, cells}],
+        # one cellZone each; a case writer names the solve case's regions after them. Left out
+        # for a mesh of one region.
+        **({"regions": _mesh_regions(live)} if _mesh_regions(live) else {}),
     }
+
+
+def _mesh_regions(live: Any) -> list[dict[str, Any]]:
+    """The regions a mesh's live result lists ([] for a mesh of one region)."""
+    rows = live.get("regions") if isinstance(live, dict) else None
+    return [dict(r) for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
 

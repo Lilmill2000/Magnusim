@@ -19,11 +19,17 @@ if str(_TOOLS) not in sys.path:
 def _foam_stamp(case_dir: Path, time: str) -> tuple[float, int]:
     best_m = 0.0
     best_n = 0
-    # Every field the time folder holds (U / p for Incompressible Flow, T for another analysis).
-    try:
-        files = [f for f in (case_dir / str(time)).iterdir() if f.is_file() and not f.name.startswith(".")]
-    except OSError:
-        files = []
+    # Every field the time folder holds (U / p for Incompressible Flow, T for another
+    # analysis); in a multi-region case every region's, and each region's mesh points.
+    from cfddesk.results.regions import region_names, stamp_files
+
+    if region_names(case_dir):
+        files = stamp_files(case_dir, time)
+    else:
+        try:
+            files = [f for f in (case_dir / str(time)).iterdir() if f.is_file() and not f.name.startswith(".")]
+        except OSError:
+            files = []
     for f in files:
         st = f.stat()
         best_m = max(best_m, float(st.st_mtime))

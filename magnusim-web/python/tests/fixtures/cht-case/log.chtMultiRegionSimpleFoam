@@ -1,0 +1,89 @@
+Time = 1
+
+
+Solving for fluid region air
+DILUPBiCGStab:  Solving for Ux, Initial residual = 0, Final residual = 0, No Iterations 0
+DILUPBiCGStab:  Solving for Uy, Initial residual = 1, Final residual = 0.0025320492, No Iterations 1
+DILUPBiCGStab:  Solving for Uz, Initial residual = 0, Final residual = 0, No Iterations 0
+DILUPBiCGStab:  Solving for h, Initial residual = 1, Final residual = 0.026723061, No Iterations 1
+Min/max T:300 349.99214
+GAMG:  Solving for p_rgh, Initial residual = 0.78672312, Final residual = 0.0063014276, No Iterations 3
+GAMG:  Solving for p_rgh, Initial residual = 0.032726724, Final residual = 0.00012291587, No Iterations 4
+time step continuity errors : sum local = 0.0058822332, global = 1.9102702e-17, cumulative = 1.9102702e-17
+Min/max rho:0.99518927 1.1610281
+
+Solving for solid region aluminium_6061
+DICPCG:  Solving for h, Initial residual = 1, Final residual = 0.0022875512, No Iterations 3
+Min/max T:349.99292 350
+
+Solving for solid region aluminium_6061
+DICPCG:  Solving for h, Initial residual = 0.0005784155, Final residual = 2.9096744e-06, No Iterations 2
+Min/max T:349.98767 350
+ExecutionTime = 0.01 s  ClockTime = 0 s
+
+volFieldValue Tmax_air write:
+    max(air) of T = 316.5805
+
+volFieldValue Tmax_aluminium_6061 write:
+    max(aluminium_6061) of T = 349.99989
+
+Time = 2
+
+
+Solving for fluid region air
+DILUPBiCGStab:  Solving for Ux, Initial residual = 0.86664978, Final residual = 0.0033118991, No Iterations 1
+DILUPBiCGStab:  Solving for Uy, Initial residual = 0.29830621, Final residual = 0.00088997221, No Iterations 1
+DILUPBiCGStab:  Solving for Uz, Initial residual = 0.99910673, Final residual = 0.0026664659, No Iterations 1
+DILUPBiCGStab:  Solving for h, Initial residual = 0.14858629, Final residual = 0.0043915932, No Iterations 1
+Min/max T:300 349.98964
+GAMG:  Solving for p_rgh, Initial residual = 0.88439107, Final residual = 0.0070669992, No Iterations 3
+GAMG:  Solving for p_rgh, Initial residual = 0.0074777796, Final residual = 2.6847727e-05, No Iterations 4
+time step continuity errors : sum local = 0.0020865753, global = 1.7685832e-16, cumulative = 1.9596103e-16
+Min/max rho:0.99519638 1.1610281
+
+Solving for solid region aluminium_6061
+DICPCG:  Solving for h, Initial residual = 0.038767502, Final residual = 8.8940826e-05, No Iterations 3
+Min/max T:349.98854 350
+
+Solving for solid region aluminium_6061
+DICPCG:  Solving for h, Initial residual = 0.00010096312, Final residual = 4.9641778e-07, No Iterations 2
+Min/max T:349.98967 350
+ExecutionTime = 0.01 s  ClockTime = 0 s
+
+volFieldValue Tmax_air write:
+    max(air) of T = 323.11004
+
+volFieldValue Tmax_aluminium_6061 write:
+    max(aluminium_6061) of T = 349.99991
+
+Time = 3
+
+
+Solving for fluid region air
+DILUPBiCGStab:  Solving for Ux, Initial residual = 0.27819866, Final residual = 0.00087591355, No Iterations 1
+DILUPBiCGStab:  Solving for Uy, Initial residual = 0.72474468, Final residual = 0.0032527004, No Iterations 1
+DILUPBiCGStab:  Solving for Uz, Initial residual = 0.51633102, Final residual = 0.0020172409, No Iterations 1
+DILUPBiCGStab:  Solving for h, Initial residual = 0.062466592, Final residual = 0.0024560848, No Iterations 1
+Min/max T:300 349.99113
+GAMG:  Solving for p_rgh, Initial residual = 0.25413449, Final residual = 0.001311316, No Iterations 3
+GAMG:  Solving for p_rgh, Initial residual = 0.0028379621, Final residual = 1.0427553e-05, No Iterations 4
+time step continuity errors : sum local = 0.00029743533, global = -1.1901061e-16, cumulative = 7.6950415e-17
+Min/max rho:0.99519215 1.1610281
+
+Solving for solid region aluminium_6061
+DICPCG:  Solving for h, Initial residual = 0.015703852, Final residual = 3.3941516e-05, No Iterations 3
+Min/max T:349.98992 350
+
+Solving for solid region aluminium_6061
+DICPCG:  Solving for h, Initial residual = 3.5667873e-05, Final residual = 1.5495088e-07, No Iterations 2
+Min/max T:349.99029 350
+ExecutionTime = 0.01 s  ClockTime = 0 s
+
+volFieldValue Tmax_air write:
+    max(air) of T = 325.7799
+
+volFieldValue Tmax_aluminium_6061 write:
+    max(aluminium_6061) of T = 349.99992
+
+End
+

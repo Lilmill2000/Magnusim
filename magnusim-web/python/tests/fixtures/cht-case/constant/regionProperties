@@ -1,0 +1,9 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      regionProperties;
+}
+
+regions ( fluid (air) solid (aluminium_6061) );

@@ -321,6 +321,18 @@ def read_foam_grid(
         pass
     if reader.number_time_points > 0:
         reader.set_active_time_point(reader.number_time_points - 1)
+    from cfddesk.results.regions import read_regions, region_names
+
+    regions = region_names(case_dir)
+    if regions:
+        # A multi-region case: each region's mesh, never the unsplit one.
+        merged = read_regions(reader, regions)
+        if merged is None:
+            raise RuntimeError("OpenFOAM reader returned no region meshes")
+        field = _finalize_field(
+            merged, prefer_field, require_field=require_field, defaults=case_result_fields(case_dir)
+        )
+        return merged, foam, field, reader_decomposed
     mb = reader.read()
     if not isinstance(mb, pv.MultiBlock):
         grid = mb

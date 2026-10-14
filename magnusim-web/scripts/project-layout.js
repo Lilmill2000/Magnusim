@@ -254,10 +254,110 @@ export function caseFrameFields(caseDir) {
   return fields;
 }
 
-/** Viewer/API times need every frame field, so a half-copied live write is skipped. */
+const REGION_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const MAX_REGIONS = 32;
+/** Names a region may not take (in any case): python/cfddesk/wsl/region_rule.py RESERVED. */
+const NOT_REGIONS = new Set(
+  [
+    'polyMesh', 'uniform', 'regionProperties', 'cellToRegion', 'triSurface', 'extendedFeatureEdgeMesh',
+    'g', 'hRef', 'pRef', 'controlDict', 'fvSchemes', 'fvSolution', 'fvOptions', 'fvConstraints', 'fvModels',
+    'decomposeParDict', 'transportProperties', 'thermophysicalProperties', 'physicalProperties',
+    'turbulenceProperties', 'momentumTransport', 'radiationProperties', 'dynamicMeshDict',
+    'blockMeshDict', 'snappyHexMeshDict', 'surfaceFeatureExtractDict', 'extrudeMeshDict',
+    'changeDictionaryDict', 'createPatchDict', 'topoSetDict', 'include',
+    'constant', 'system', 'lagrangian', 'VTK', 'postProcessing', 'dynamicCode', 'MRFProperties',
+    'thermophysicalTransport', 'combustionProperties',
+    'T', 'U', 'p', 'p_rgh', 'k', 'epsilon', 'omega', 'nut', 'alphat', 'rho', 'phi', 'h', 'qr',
+  ].map((n) => n.toLowerCase()),
+);
+/** caseDir|sidecar mtime → regions (a sidecar is rewritten only when its case is). */
+const regionNamesCache = new Map();
+
+/**
+ * A multi-region case's regions (host API 1.8): the rows its sidecar lists in
+ * `regions` ({name, role}, written by its analysis's case writer), in order;
+ * [] for a case of one region or a list that is not valid (the runner refuses
+ * such a case; two names that differ only in case are one folder on Windows).
+ * Other keys in a row are ignored. The same reading as
+ * python/cfddesk/results/regions.case_regions.
+ * @param {string} caseDir
+ * @returns {ReadonlyArray<{ name: string, role: string }>}
+ */
+export function caseRegions(caseDir) {
+  const sidecar = join(String(caseDir || ''), 'w27-case.json');
+  let mtime = 0;
+  try {
+    mtime = statSync(sidecar).mtimeMs;
+  } catch {
+    return [];
+  }
+  const key = caseDir + '|' + mtime;
+  const hit = regionNamesCache.get(key);
+  if (hit) return hit;
+  /** @type {Array<{ name: string, role: string }>} */
+  let out = [];
+  try {
+    const rows = JSON.parse(readFileSync(sidecar, 'utf8')).regions;
+    if (Array.isArray(rows) && rows.length <= MAX_REGIONS) {
+      for (const row of rows) {
+        const name = row && typeof row === 'object' ? row.name : null;
+        const ok =
+          typeof name === 'string' &&
+          REGION_NAME_RE.test(name) &&
+          !NOT_REGIONS.has(name.toLowerCase()) &&
+          !name.toLowerCase().startsWith('processor') &&
+          (row.role === 'fluid' || row.role === 'solid') &&
+          !out.some((r) => r.name.toLowerCase() === name.toLowerCase());
+        if (!ok) {
+          out = [];
+          break;
+        }
+        out.push(Object.freeze({ name, role: String(row.role) }));
+      }
+    }
+  } catch {
+    out = [];
+  }
+  if (regionNamesCache.size > 500) regionNamesCache.clear();
+  const frozen = Object.freeze(out);
+  regionNamesCache.set(key, frozen);
+  return frozen;
+}
+
+/**
+ * The names of caseRegions, in order ([] for a case of one region).
+ * @param {string} caseDir
+ * @returns {string[]}
+ */
+export function caseRegionNames(caseDir) {
+  return caseRegions(caseDir).map((r) => r.name);
+}
+
+/**
+ * The folders a saved time's field files are in: `<case>/<time>`, or in a
+ * multi-region case each `<case>/<time>/<region>`.
+ * @param {string} caseDir
+ * @param {string | number} time
+ * @returns {string[]}
+ */
+export function timeFieldDirs(caseDir, time) {
+  const base = join(String(caseDir), String(time));
+  const regions = caseRegionNames(caseDir);
+  return regions.length ? regions.map((r) => join(base, r)) : [base];
+}
+
+/**
+ * Viewer/API times need every frame field, so a half-copied live write is skipped.
+ * A multi-region time needs a frame field in every region: the rule solve.sh
+ * copies a frame back by and the runner's case check holds a case to
+ * (python/cfddesk/wsl/foam_case.region_without_frame_field).
+ */
 export function foamTimeDirIsComplete(caseDir, name) {
   const base = join(caseDir, String(name));
-  return caseFrameFields(caseDir).every((f) => foamTimeHasField(base, f));
+  const fields = caseFrameFields(caseDir);
+  const regions = caseRegionNames(caseDir);
+  if (!regions.length) return fields.every((f) => foamTimeHasField(base, f));
+  return regions.every((r) => fields.some((f) => foamTimeHasField(join(base, r), f)));
 }
 
 export function listFoamTimeDirs(caseDir, opts) {
@@ -282,10 +382,9 @@ export function listFoamTimeDirs(caseDir, opts) {
     }
     if (!isDir) continue;
     if (!FOAM_TIME_DIR.test(name)) continue;
-    const base = join(caseDir, name);
     const ok = needComplete
       ? foamTimeDirIsComplete(caseDir, name)
-      : caseFrameFields(caseDir).some((f) => foamTimeHasField(base, f));
+      : timeFieldDirs(caseDir, name).some((d) => caseFrameFields(caseDir).some((f) => foamTimeHasField(d, f)));
     if (ok) times.push(name);
   }
   times.sort((a, b) => Number(a) - Number(b));

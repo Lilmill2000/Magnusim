@@ -32,10 +32,15 @@ from result_names import (  # noqa: E402, F401  (foam_kind / FIELD_NAME / shown_
     case_result_fields,
     default_shown_field,
     ensure_shown_field,
+    finite_range,
     foam_kind,
+    foam_paths,
     foam_source,
+    json_text,
     shown_fields,
 )
+
+from cfddesk.results.regions import REGION_ARRAY, case_regions, regions_without  # noqa: E402
 
 
 def read_internal_field(path: Path, kind: str):
@@ -258,6 +263,56 @@ def parse_foam_scalar_or_vector(path: Path, kind: str):
     }
 
 
+_N_CELLS = re.compile(rb"nCells:\s*(\d+)")
+
+
+def _region_cells(path: Path) -> int | None:
+    """The cell count of the region a field file ``<case>/<t>/<region>/<field>`` is
+    in, from its mesh's ``owner`` header (``note "... nCells:N ..."``), else None."""
+    owner = path.parent.parent.parent / "constant" / path.parent.name / "polyMesh" / "owner"
+    try:
+        with open(owner, "rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return None
+    m = _N_CELLS.search(head)
+    return int(m.group(1)) if m else None
+
+
+def parse_foam_fields(paths: list[Path], kind: str):
+    """The stats of a field over its files: one file as parse_foam_scalar_or_vector
+    says, or a multi-region case's file per region combined (the range over every
+    region; uniform only when every region holds the same uniform value)."""
+    if len(paths) == 1:
+        return parse_foam_scalar_or_vector(paths[0], kind)
+    parts = [parse_foam_scalar_or_vector(p, kind) for p in paths]
+    lo, hi, mean = ("umin", "umax", "umean") if kind == "vector" else ("pmin", "pmax", "pmean")
+    value = "uniform_vector" if kind == "vector" else "uniform_scalar"
+    if all(p.get("uniform") for p in parts) and all(p.get(value) == parts[0].get(value) for p in parts):
+        return {**parts[0], "source_path": ";".join(str(p) for p in paths)}
+    # Each region weighs its cells (a uniform region's from its mesh).
+    weights = [
+        int(p.get("n_cells_internal") or 0) or _region_cells(path) or 1 for p, path in zip(parts, paths, strict=True)
+    ]
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(str(p.get("sample_checksum_sha256")).encode("ascii"))
+    out = {k: v for k, v in parts[0].items() if k not in ("uniform_vector", "uniform_scalar")}
+    out.update({
+        "uniform": False,
+        "n_cells_internal": sum(int(p.get("n_cells_internal") or 0) for p in parts),
+        lo: min(float(p[lo]) for p in parts),
+        hi: max(float(p[hi]) for p in parts),
+        mean: sum(float(p[mean]) * w for p, w in zip(parts, weights, strict=True)) / sum(weights),
+        "nonzero": sum(int(p.get("nonzero") or 0) for p in parts),
+        "sample_checksum_sha256": h.hexdigest(),
+        "sample_tail": parts[-1].get("sample_tail"),
+        "source_path": ";".join(str(p) for p in paths),
+        "boundary_only": any(bool(p.get("boundary_only")) for p in parts),
+    })
+    return out
+
+
 _FOAM_TIME = re.compile(r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 
 
@@ -312,10 +367,9 @@ def series_field_range(case_dir: Path, field: str) -> dict:
         if src is None:
             continue
         foam_name, kind = src
-        path = case_dir / t / foam_name
         scale = field_scale(case_dir, foam_name)
         scaled = scaled or scale != 1.0
-        stats = parse_foam_scalar_or_vector(path, kind)
+        stats = parse_foam_fields(foam_paths(case_dir / t, foam_name), kind)
         a = float(stats["umin"] if kind == "vector" else stats["pmin"]) * scale
         b = float(stats["umax"] if kind == "vector" else stats["pmax"]) * scale
         frames.append({"time": t, "min": a, "max": b, "uniform": bool(stats.get("uniform"))})
@@ -357,7 +411,7 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
                 raise ValueError(f"{name} is a face field; it cannot be coloured")
         raise FileNotFoundError(f"time_not_found: missing OpenFOAM {field}: {time_dir / field}")
     foam_name, kind = src
-    foam_stats = parse_foam_scalar_or_vector(time_dir / foam_name, kind)
+    foam_stats = parse_foam_fields(foam_paths(time_dir, foam_name), kind)
 
     if mesh is None:
         try:
@@ -383,17 +437,23 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         surf = surf.cell_data_to_point_data(pass_cell_data=True)
 
     # W12: uniform foam at this time (e.g. 0/U = (0,0,0)) -> honest surface fill
+    # (never where a region has no such field: that stays NaN).
     if foam_stats.get("uniform"):
         fill = float(foam_stats["umin"] if kind == "vector" else foam_stats["pmin"]) * scale
         if field in surf.point_data:
-            surf.point_data[field][:] = fill
+            arr = surf.point_data[field]
+            arr[~np.isnan(arr)] = fill
         else:
             surf.point_data[field] = np.full(surf.n_points, fill, dtype=np.float64)
         if field in surf.cell_data:
-            surf.cell_data[field][:] = fill
+            arr = surf.cell_data[field]
+            arr[~np.isnan(arr)] = fill
 
-    # A magnitude keeps its vector on the points too (glyphs, inspect).
-    keep_point = [k for k in (field, foam_name if kind == "vector" else "") if k and k in surf.point_data]
+    # A magnitude keeps its vector on the points too (glyphs, inspect); a multi-region
+    # surface keeps each point's region (the viewer's region filter).
+    keep_point = [
+        k for k in (field, foam_name if kind == "vector" else "", REGION_ARRAY) if k and k in surf.point_data
+    ]
     keep_cell = [k for k in (field,) if k in surf.cell_data]
     for k in list(surf.point_data.keys()):
         if k not in keep_point:
@@ -410,8 +470,7 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
     vtp_sha = hashlib.sha256(vtp_bytes).hexdigest()
 
     arr_pt = np.asarray(surf.point_data[field]) if field in surf.point_data else None
-    surf_min = float(np.nanmin(arr_pt)) if arr_pt is not None else None
-    surf_max = float(np.nanmax(arr_pt)) if arr_pt is not None else None
+    surf_min, surf_max = finite_range(arr_pt)
 
     if kind == "vector":
         proof = dict(foam_stats)
@@ -459,14 +518,25 @@ def export_field(case_dir: Path, time: str, field: str, out_dir: Path, mesh=None
         "no_simscale_22_2": True,
         "uniform_foam": bool(foam_stats.get("uniform")),
         "foam_kind": kind,
+        **_region_meta(case_dir, time, field),
         # The range (min / max) is in what the surface shows (a kinematic field x rho).
         "range_scaled": True,
         "scaled_by_density": scale != 1.0,
         **({"pressure_range_unit": PRESSURE_UNIT, **pressure_meta(rho)} if scale != 1.0 else {}),
     }
-    out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    out_meta.write_text(json_text(meta, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"ok": True, "vtp": str(out_vtp), "meta": str(out_meta), "bytes": len(vtp_bytes)}))
     return meta
+
+
+def _region_meta(case_dir: Path, time: str, field: str) -> dict:
+    """A multi-region case's regions (``{name, role}``, in its order: the surface's
+    region array indexes them) and those with no such field (grey in the viewer);
+    nothing for a case of one region."""
+    regions = case_regions(case_dir)
+    if not regions:
+        return {}
+    return {"regions": regions, "regions_without_field": regions_without(case_dir, time, field)}
 
 
 def main():
@@ -482,7 +552,7 @@ def main():
         if not args.field:
             raise SystemExit(f"no result field in {args.case / str(args.time)}")
     if args.series_range:
-        print(json.dumps(series_field_range(args.case, args.field)))
+        print(json_text(series_field_range(args.case, args.field)))
         return
     out_dir = args.out_dir
     if out_dir is None:

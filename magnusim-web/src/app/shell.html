@@ -793,6 +793,17 @@
                 </div>
               </div>
             </div>
+            <div class="fp-block" id="regions-block" hidden>
+              <div class="fp-block-head">
+                <span>Regions</span>
+              </div>
+              <div class="fp-field">
+                <div class="fp-label">Show</div>
+                <select id="region-filter" class="fp-select" aria-label="Region">
+                  <option value="" selected>All regions</option>
+                </select>
+              </div>
+            </div>
             <div class="fp-block" id="cp-block" hidden>
               <div class="fp-block-head">
                 <span>Cutting planes</span>
@@ -1100,6 +1111,7 @@
             <div class="legend-ticks">
               <span>0.00</span><span>0.16</span><span>0.32</span><span>0.47</span><span>0.63</span><span>0.79</span>
             </div>
+            <div class="legend-note" id="legend-note" hidden></div>
           </div>
           <div id="legend-pt" class="legend legend-pt is-hidden" hidden aria-label="Particle trace legend">
             <div class="legend-head">

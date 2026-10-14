@@ -200,7 +200,23 @@ const WARNING_TEXT = Object.freeze({
 /** solve.sh warning codes (its `warning` events) the frame is told about, with the host's text. */
 const SOLVE_WARNING_TEXT = Object.freeze({
   log_kept: 'The earlier solver log could not be kept',
+  frame_not_back:
+    'The results of the last saved time did not come back to Windows. The case is kept in WSL for a day (its WSL case folder)',
 });
+
+/** A region name as the runner takes one (python/cfddesk/wsl/region_rule.py). */
+const REGION_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * foam_pre.sh's exit 46 for a listed region the steps made no mesh for (its error
+ * event and the relay's pre outcome name the region), in the host's words.
+ * @param {unknown} region
+ * @returns {string | null}
+ */
+function missingRegionText(region) {
+  if (typeof region !== 'string' || !REGION_RE.test(region)) return null;
+  return `The steps made no mesh for region ${region} (constant/${region}/polyMesh)`;
+}
 
 /** What the relay's gate refusals say when it gave no text of its own. */
 const GATE_TEXT = Object.freeze({
@@ -895,7 +911,7 @@ export function relayEvent(id, entry, ev) {
     }
     case 'error': {
       const code = Number(ev.code);
-      const message = /** @type {any} */ (WARNING_TEXT)[code];
+      const message = (code === 46 && missingRegionText(ev.region)) || /** @type {any} */ (WARNING_TEXT)[code];
       if (message) deliver(id, { event: 'warning', code, message });
       return;
     }
@@ -978,7 +994,7 @@ export function foamEndFromEvidence(rec, status) {
       const tool = typeof outcome.tool === 'string' && TOOL_RE.test(outcome.tool) ? outcome.tool : 'A step';
       const index = Number(outcome.index) || 0;
       if (exit === 50) return { status: 'failed', code: null, error: `${tool} wrote a time folder` };
-      if (exit === 46) return { status: 'failed', code: null, error: WARNING_TEXT[46] };
+      if (exit === 46) return { status: 'failed', code: null, error: missingRegionText(outcome.region) || WARNING_TEXT[46] };
       return { status: 'failed', code: null, error: `${tool} failed (exit ${exit ?? '?'}). See log.${tool}.${index} in the case folder` };
     }
     if (phase === 'solve') {

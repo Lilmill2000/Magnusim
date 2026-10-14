@@ -26,7 +26,7 @@ import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-
 import { simIsTransient } from './w30-transient.js';
 import { MAX_LOG_BYTES, jobLogPath } from './log.js';
 import { envGet } from './env-compat.js';
-import { foldSolveEvent } from './solve-fold.js';
+import { foldSolveEvent, regionSeries, regionsOf } from './solve-fold.js';
 import { checkRecordSave } from './link-stamp.js';
 import { LINK_BUILD_TEXT, linkStartRefusal, meshOutOfDate, runBuiltFrom } from './link-build.js';
 import { commitRpc } from './py-json.js';
@@ -261,7 +261,8 @@ function runAnalysisKeyOf(doc) {
 /**
  * One plotted point: each series takes the largest of its solver fields (U of
  * Ux/Uy/Uz, say), plus a per-step metric's max. An analysis that declares no
- * series keeps every number as it came.
+ * series keeps every number as it came. A multi-region run's row (`air:Ux`,
+ * `heater:h`) takes each series once per region (`air:U`, `heater:h`; regionSeries).
  */
 export function compactResidual(row, series) {
   if (!series || !series.length) {
@@ -270,7 +271,7 @@ export function compactResidual(row, series) {
     return out;
   }
   const out = { t: row.t };
-  for (const s of series) {
+  for (const s of regionSeries(series, regionsOf(row))) {
     const fields = s.fields && s.fields.length ? s.fields : [s.key];
     const bits = fields.map((k) => Number(row[k])).filter(Number.isFinite);
     if (bits.length) out[s.key] = Math.max(...bits);
@@ -326,7 +327,7 @@ function downsampleResidualsAt(series, at, maxPts = 200, spec = []) {
  * (or every one, for an analysis that solves a single field).
  */
 function rowHasResidual(row, spec = []) {
-  const solved = spec.filter((s) => !s.dashed);
+  const solved = regionSeries(spec, regionsOf(row)).filter((s) => !s.dashed);
   const fields = solved.length
     ? solved.flatMap((s) => (s.fields && s.fields.length ? s.fields : [s.key]))
     : Object.keys(row || {}).filter((k) => k !== 't');

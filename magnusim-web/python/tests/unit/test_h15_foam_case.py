@@ -107,11 +107,13 @@ def test_the_table_is_the_contracts():
         "extrudeMesh": [],
         "changeDictionary": [],
         "createPatch": ["-overwrite"],
-        "checkMesh": ["-allGeometry", "-allTopology"],
+        "checkMesh": ["-allGeometry", "-allRegions", "-allTopology"],
         "renumberMesh": ["-overwrite"],
         "potentialFoam": ["-initialiseUBCs", "-writep", "-writephi"],
-        "decomposePar": ["-force"],
-        "reconstructParMesh": ["-constant"],
+        "decomposePar": ["-allRegions", "-force"],
+        "reconstructParMesh": ["-allRegions", "-constant"],
+        "splitMeshRegions": ["-cellZones", "-cellZonesOnly", "-overwrite"],
+        "topoSet": [],
     }
     assert {t for t, r in STEP_TABLE.items() if r.parallel} == {
         "snappyHexMesh",
@@ -119,6 +121,7 @@ def test_the_table_is_the_contracts():
         "createPatch",
         "checkMesh",
         "renumberMesh",
+        "topoSet",
     }
     assert {t: r.host_adds for t, r in STEP_TABLE.items() if r.host_adds} == {
         "snappyHexMesh": ("-overwrite",),
@@ -126,6 +129,15 @@ def test_the_table_is_the_contracts():
         "renumberMesh": ("-overwrite",),
         "decomposePar": ("-force",),
         "reconstructParMesh": ("-constant",),
+        "splitMeshRegions": ("-overwrite",),
+    }
+    # -region <name> (host API 1.8): one of the case's regions.
+    assert {t for t, r in STEP_TABLE.items() if r.region_arg} == {
+        "changeDictionary",
+        "createPatch",
+        "checkMesh",
+        "renumberMesh",
+        "topoSet",
     }
 
 

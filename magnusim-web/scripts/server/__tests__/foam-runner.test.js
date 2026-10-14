@@ -888,6 +888,9 @@ describe('the end from evidence', () => {
     [rec, { outcome: { ok: false, phase: 'pre', tool: 'blockMesh', index: 1, exit_code: 1 } }, ['failed', null, 'blockMesh failed (exit 1). See log.blockMesh.1 in the case folder']],
     [rec, { outcome: { ok: false, phase: 'pre', tool: 'snappyHexMesh', index: 2, exit_code: 50 } }, ['failed', null, 'snappyHexMesh wrote a time folder']],
     [rec, { outcome: { ok: false, phase: 'pre', exit_code: 46 } }, ['failed', null, 'The case has no mesh (constant/polyMesh)']],
+    // foam_pre.sh: the steps made no mesh for a listed region (the relay names it).
+    [rec, { outcome: { ok: false, phase: 'pre', exit_code: 46, region: 'aluminium_6061' } }, ['failed', null, 'The steps made no mesh for region aluminium_6061 (constant/aluminium_6061/polyMesh)']],
+    [rec, { outcome: { ok: false, phase: 'pre', exit_code: 46, region: '../x y' } }, ['failed', null, 'The case has no mesh (constant/polyMesh)']],
     [rec, { outcome: { ok: false, phase: 'solve', exit_code: 1 } }, ['failed', null, 'pimpleFoam failed (exit 1)']],
     [rec, { outcome: { ok: false, phase: 'solve', exit_code: 47 } }, ['failed', null, 'The case copy could not be opened in WSL']],
     [rec, { outcome: { ok: false, phase: 'solve', exit_code: 48 } }, ['failed', null, 'A result frame could not be copied back']],
@@ -1026,6 +1029,27 @@ describe('events', () => {
     const warning = frames(rec.id).find((e) => e.event === 'warning');
     assert.deepEqual(warning, { event: 'warning', code: 48, message: 'A result frame could not be copied back' });
     assert.equal(relayEvent.length, 3);
+  });
+
+  it("foam_pre.sh's missing region and solve.sh's frame_not_back reach the frame in the host's words", () => {
+    const { rec, spawn } = started();
+    for (const ev of [
+      { event: 'error', code: 46, region: 'aluminium_6061', error: `The steps made no constant/aluminium_6061/polyMesh ${rec.case_dir}` },
+      { event: 'error', code: 46, region: 'a b', error: 'x' },
+      { event: 'warning', code: 'frame_not_back', message: `The latest saved time (20) ${rec.case_dir}` },
+    ]) {
+      spawn.onEvent(ev);
+    }
+    const warnings = frames(rec.id).filter((e) => e.event === 'warning');
+    assert.deepEqual(warnings, [
+      { event: 'warning', code: 46, message: 'The steps made no mesh for region aluminium_6061 (constant/aluminium_6061/polyMesh)' },
+      { event: 'warning', code: 46, message: 'The case has no mesh (constant/polyMesh)' },
+      {
+        event: 'warning',
+        code: 'frame_not_back',
+        message: 'The results of the last saved time did not come back to Windows. The case is kept in WSL for a day (its WSL case folder)',
+      },
+    ]);
   });
 });
 

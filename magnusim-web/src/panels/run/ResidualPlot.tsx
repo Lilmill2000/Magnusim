@@ -17,17 +17,72 @@ export interface ResidualSeries {
   max_key?: string;
   max_label?: string;
   swatch?: string;
+  /** A multi-region run's series: the region it was solved in (its key is `<region>:<key>`). */
+  region?: string;
 }
 
 /** Colors for series an analysis did not declare (a run read before the registry). */
 const FALLBACK_COLORS = ['#1570ef', '#6941c6', '#12b76a', '#f79009', '#0ba5ec', '#dd2590', '#667085'];
 
-/** The declared series, else one per number the rows carry. */
+/** The regions the rows name (keys `<region>:<field>`, a multi-region run), in order. */
+export function residualRegions(rows: Array<Record<string, number | undefined>>): string[] {
+  const out: string[] = [];
+  for (const row of rows) {
+    for (const k of Object.keys(row)) {
+      const at = k.indexOf(':');
+      if (at > 0 && !out.includes(k.slice(0, at))) out.push(k.slice(0, at));
+    }
+  }
+  return out;
+}
+
+/**
+ * The declared series, else one per number the rows carry. In a multi-region run
+ * each solved series is drawn once per region (`air:h`, `heater:h`): the first
+ * region in its declared color, the next ones in colors of their own (fallback
+ * colors no declared series uses, while there are any); dashed per-step metrics
+ * stay as declared.
+ */
 export function seriesFor(rows: Array<Record<string, number | undefined>>, declared: ResidualSeries[]): ResidualSeries[] {
-  if (declared.length) return declared;
-  const keys: string[] = [];
-  for (const row of rows) for (const k of Object.keys(row)) if (k !== 't' && !keys.includes(k)) keys.push(k);
-  return keys.map((key, i) => ({ key, label: key, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length], always: true }));
+  const regions = residualRegions(rows);
+  if (declared.length && !regions.length) return declared;
+  if (!declared.length) {
+    const keys: string[] = [];
+    for (const row of rows) for (const k of Object.keys(row)) if (k !== 't' && !keys.includes(k)) keys.push(k);
+    return keys.map((key, i) => {
+      const at = key.indexOf(':');
+      const region = at > 0 ? key.slice(0, at) : undefined;
+      return { key, label: region ? key.slice(at + 1) : key, color: FALLBACK_COLORS[i % FALLBACK_COLORS.length], always: true, region };
+    });
+  }
+  const out: ResidualSeries[] = [];
+  const taken = new Set(declared.map((s) => String(s.color).toLowerCase()));
+  const free = FALLBACK_COLORS.filter((c) => !taken.has(c.toLowerCase()));
+  const spares = free.length ? free : FALLBACK_COLORS;
+  let spare = 0;
+  regions.forEach((region, r) => {
+    for (const s of declared) {
+      if (s.dashed) continue;
+      const color = r === 0 ? s.color : spares[spare++ % spares.length];
+      out.push({ ...s, key: `${region}:${s.key}`, color, swatch: r === 0 ? s.swatch : undefined, region, always: false });
+    }
+  });
+  return [...out, ...declared.filter((s) => s.dashed)];
+}
+
+/** The legend's series in groups: one per region of a multi-region run, else one unnamed group. */
+export function legendGroups(series: ResidualSeries[]): Array<{ region: string; series: ResidualSeries[] }> {
+  const groups: Array<{ region: string; series: ResidualSeries[] }> = [];
+  for (const s of series) {
+    const region = s.region || '';
+    let group = groups.find((g) => g.region === region);
+    if (!group) {
+      group = { region, series: [] };
+      groups.push(group);
+    }
+    group.series.push(s);
+  }
+  return groups;
 }
 
 const W = 280;
@@ -223,7 +278,8 @@ export function ResidualPlot({
               {series.filter((s) => !s.dashed && Number(hover.row[s.key]) > 0).map((s, i) => (
                 <span key={s.key}>
                   {i ? ' · ' : ''}
-                  <span style={{ color: s.color }}>{s.label}</span> {Number(hover.row[s.key]).toExponential(1)}
+                  <span style={{ color: s.color }}>{s.region ? `${s.region} ${s.label}` : s.label}</span>{' '}
+                  {Number(hover.row[s.key]).toExponential(1)}
                 </span>
               ))}
             </div>
@@ -231,12 +287,26 @@ export function ResidualPlot({
         ) : null}
       </div>
       <div className="sim-residual-legend">
-        {[...legendSeries(rows, series), ...geo.metrics].map((s) => (
-          <span key={s.key}>
-            <Swatch s={s} />
-            {s.label}
-          </span>
-        ))}
+        {legendGroups([...legendSeries(rows, series), ...geo.metrics]).map((g) =>
+          g.region ? (
+            <span key={`region:${g.region}`} className="sim-residual-group" data-residual-region={g.region}>
+              <b className="sim-residual-region">{g.region}</b>
+              {g.series.map((s) => (
+                <span key={s.key}>
+                  <Swatch s={s} />
+                  {s.label}
+                </span>
+              ))}
+            </span>
+          ) : (
+            g.series.map((s) => (
+              <span key={s.key}>
+                <Swatch s={s} />
+                {s.label}
+              </span>
+            ))
+          ),
+        )}
       </div>
     </>
   );

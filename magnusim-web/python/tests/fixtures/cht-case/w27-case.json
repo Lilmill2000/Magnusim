@@ -1,0 +1,23 @@
+{
+  "solver": "chtMultiRegionSimpleFoam",
+  "regions": [
+    {
+      "name": "air",
+      "role": "fluid"
+    },
+    {
+      "name": "aluminium_6061",
+      "role": "solid"
+    }
+  ],
+  "pre_steps": [
+    {
+      "tool": "splitMeshRegions",
+      "args": [
+        "-cellZones",
+        "-overwrite"
+      ]
+    }
+  ],
+  "kinematic_fields": []
+}

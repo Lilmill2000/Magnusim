@@ -31,10 +31,15 @@ from result_names import (  # noqa: E402
     FIELD_NAME,
     dataset_shown_fields,
     ensure_shown_field,
+    field_folders,
+    foam_paths,
     foam_source,
+    json_text,
     mag_base,
     shown_fields,
 )
+
+from cfddesk.results.regions import REGION_ARRAY, region_names  # noqa: E402
 
 APPROACH = (
     "server-side sample_over_point / probe: Vite /api/inspect?x=&y=&z=&time= -> "
@@ -106,7 +111,9 @@ def _inside_point(grid: pv.DataSet, pt) -> list[float] | None:
 
 def probe_point(grid: pv.DataSet, xyz, names=None):
     """Probe ``names`` (default: every field the grid shows) at one point. A point
-    on the mesh's outer boundary reads the cell it lies on."""
+    on the mesh's outer boundary reads the cell it lies on. On a multi-region
+    volume (its points carry ``vtkRegion``) a hit also gives ``region_index``: the
+    region of the sample read, the one just inside for a boundary point."""
     pt = [float(xyz[0]), float(xyz[1]), float(xyz[2])]
     names = list(names) if names is not None else dataset_shown_fields(grid)
     sampled, hit = _sample_once(grid, pt, names)
@@ -124,6 +131,10 @@ def probe_point(grid: pv.DataSet, xyz, names=None):
         "value_checksum": float(_checksum(values, pt)) if hit else 0.0,
         "no_fake_value": True,
     }
+    if hit and REGION_ARRAY in sampled.point_data:
+        index = np.asarray(sampled.point_data[REGION_ARRAY], dtype=float).reshape(-1)
+        if index.size and np.isfinite(index[0]):
+            out["region_index"] = int(round(float(index[0])))
     return out
 
 
@@ -141,29 +152,40 @@ def _stored_uniform(path: Path) -> bool:
     return bool(_UNIFORM_HEAD.search(head))
 
 
+def _uniform_value(path: Path, kind: str) -> float | None:
+    if not _stored_uniform(path):
+        return None
+    try:
+        shape, data = read_internal_field(path, kind)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if shape != "uniform":
+        return None
+    # A field stored on the walls only (y+): the probe reads its wall values.
+    if boundary_only_values(path, kind) is not None:
+        return None
+    return float(np.linalg.norm(data)) if kind == "vector" else float(data)
+
+
 def uniform_values(case_dir: Path, time: str, names) -> dict[str, float]:
     """This time's uniform fields (e.g. 0/U = (0 0 0)) by shown name, as stored,
-    without touching any volume. A vector gives its magnitude."""
+    without touching any volume. A vector gives its magnitude. In a multi-region
+    case only a field every region holds with the one uniform value (a region
+    without the field keeps its "no value")."""
     time_dir = Path(case_dir) / str(time)
     out: dict[str, float] = {}
+    folders = len(field_folders(time_dir))
     for name in names:
         src = foam_source(time_dir, name)
         if src is None:
             continue
         foam_name, kind = src
-        path = time_dir / foam_name
-        if not _stored_uniform(path):
+        paths = foam_paths(time_dir, foam_name)
+        if len(paths) != folders:
             continue
-        try:
-            shape, data = read_internal_field(path, kind)
-        except (OSError, RuntimeError, ValueError):
-            continue
-        if shape != "uniform":
-            continue
-        # A field stored on the walls only (y+): the probe reads its wall values.
-        if boundary_only_values(path, kind) is not None:
-            continue
-        out[name] = float(np.linalg.norm(data)) if kind == "vector" else float(data)
+        found = {_uniform_value(p, kind) for p in paths}
+        if len(found) == 1 and None not in found:
+            out[name] = float(found.pop())  # type: ignore[arg-type]
     return out
 
 
@@ -213,6 +235,16 @@ def _field_names(fields, available: list[str]) -> list[str]:
     return names or list(available)
 
 
+def _region_at(probed: dict, case_dir: Path) -> str | None:
+    """The region a probe read (a multi-region case: probe_point's region_index),
+    else None."""
+    index = probed.get("region_index")
+    regions = region_names(case_dir)
+    if index is None or not regions:
+        return None
+    return regions[index] if 0 <= index < len(regions) else None
+
+
 def export_inspect(
     case_dir: Path,
     time: str,
@@ -250,6 +282,7 @@ def export_inspect(
     scales = {n: field_scale(case_dir, _foam_name(time_dir, n)) for n in names}
 
     probed = probe_point(grid, [x, y, z], names)
+    region = _region_at(probed, case_dir) if probed["hit"] else None
     values: dict[str, float | None] = dict(probed["values"])
     if probed["hit"]:
         for name in names:
@@ -273,7 +306,7 @@ def export_inspect(
     for name in names:
         src = foam_source(time_dir, name)
         if src is not None:
-            sources[name] = str(time_dir / src[0])
+            sources[name] = str(foam_paths(time_dir, src[0])[0])
 
     result = {
         "increment": "W13",
@@ -287,6 +320,7 @@ def export_inspect(
         "empty": probed["empty"],
         "reason": probed["reason"],
         "values": values,
+        **({"region": region} if region else {}),
         "fields": names,
         "fields_available": available,
         "value_checksum": probed["value_checksum"],
@@ -312,7 +346,7 @@ def export_inspect(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_meta = out_dir / "inspect.meta.json"
-    out_meta.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    out_meta.write_text(json_text(result, indent=2) + "\n", encoding="utf-8")
     summary = {
         "ok": True,
         "meta": str(out_meta),

@@ -53,13 +53,27 @@ def _analysis_models(analysis_key: str) -> list[Any]:
 
 
 def region_name(name: str, taken: set[str]) -> str:
-    """An OpenFOAM region name from a material name: lower-case word characters, unique in ``taken``."""
+    """An OpenFOAM region name from a material name: lower-case word characters, unique in ``taken``,
+    and a name the case's folders can take (``cfddesk.wsl.region_rule.region_name_ok``: not ``g``,
+    ``fvSchemes``, ``processor...``; at most 64 characters)."""
+    from cfddesk.wsl.region_rule import MAX_NAME, region_name_ok
+
     base = _WORD.sub("_", str(name or "").lower()).strip("_") or "region"
     if not base[0].isalpha():
         base = "r_" + base
-    out, n = base, 2
-    while out in taken:
-        out, n = f"{base}_{n}", n + 1
+    base = base[:MAX_NAME].rstrip("_")
+    if not region_name_ok(base):
+        base = ("r_" + base)[:MAX_NAME].rstrip("_")
+    out = base
+    # Bounded: each try is a new name, and at most len(taken) of them are taken (a
+    # base that is a word is never reserved once it ends in _<n>).
+    for n in range(2, len(taken) + 3):
+        if out not in taken and region_name_ok(out):
+            break
+        suffix = f"_{n}"
+        out = base[: MAX_NAME - len(suffix)].rstrip("_") + suffix
+    else:
+        raise ValueError(f"no free region name for {name!r}")
     taken.add(out)
     return out
 

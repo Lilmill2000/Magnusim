@@ -20,18 +20,61 @@
  *
  * A fold is any object with `current` and `held` (newSolveFold): callers keep
  * their own bookkeeping next to them.
+ *
+ * A multi-region run (host API 1.8; magnusim_sdk.progress.RegionProgressParser)
+ * keys its residuals `<region>:<field>` (`air:h`): regionsOf and regionSeries
+ * plot an analysis's declared series once per region.
  */
 
 /** The per-step numbers that are not residuals. */
 export const STEP_METRICS = Object.freeze(['co_max', 'co_mean', 'delta_t']);
 
-const FIELD_RE = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
+// A field, or a region's field (`air:h`).
+const FIELD_RE = /^(?:[A-Za-z][A-Za-z0-9_]{0,63}:)?[A-Za-z][A-Za-z0-9_.]{0,63}$/;
 const NOT_A_FIELD = new Set(['t', ...STEP_METRICS]);
 
 /**
  * @typedef {Record<string, number> & { t: number }} SolveStep
  * @typedef {{ current: SolveStep | null, held: Record<string, number> | null }} SolveFold
  */
+
+/**
+ * The regions a residual row names (`<region>:<field>` keys), in the order they appear.
+ * @param {Record<string, unknown> | null | undefined} row
+ * @returns {string[]}
+ */
+export function regionsOf(row) {
+  /** @type {string[]} */
+  const out = [];
+  for (const k of Object.keys(row || {})) {
+    const at = k.indexOf(':');
+    if (at > 0 && !out.includes(k.slice(0, at))) out.push(k.slice(0, at));
+  }
+  return out;
+}
+
+/**
+ * An analysis's declared residual series for a multi-region run: each solved
+ * series once per region, keyed `<region>:<key>` with its fields `<region>:<field>`
+ * and `region` set; dashed per-step metrics (the Courant number) stay as they are.
+ * With no regions the series come back unchanged.
+ * @param {any[]} series
+ * @param {string[]} regions
+ * @returns {any[]}
+ */
+export function regionSeries(series, regions) {
+  if (!regions.length || !Array.isArray(series)) return series;
+  const out = [];
+  for (const region of regions) {
+    for (const s of series) {
+      if (s.dashed) continue;
+      const fields = s.fields && s.fields.length ? s.fields : [s.key];
+      out.push({ ...s, key: `${region}:${s.key}`, region, fields: fields.map((f) => `${region}:${f}`) });
+    }
+  }
+  for (const s of series) if (s.dashed) out.push(s);
+  return out;
+}
 
 /** @param {unknown} v */
 function num(v) {

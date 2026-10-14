@@ -3,6 +3,8 @@
 ``ProgressParser`` passes solve.sh events through, times the solve phases from
 their ``t_wall`` stamps, and turns OpenFOAM ``Time =``, Courant, deltaT and
 ``Solving for`` lines into ``progress``, ``courant`` and ``residual`` events.
+``RegionProgressParser`` reads a multi-region solver's log (host API 1.8, e.g.
+chtMultiRegionSimpleFoam): its residuals are keyed ``<region>:<field>``.
 Standard library only.
 """
 
@@ -20,6 +22,11 @@ RE_DELTAT = re.compile(r"^deltaT\s*=\s*([0-9.eE+-]+)")
 RE_MPI_PREFIX = re.compile(r"^\s*\[\d+\]\s*")
 # Any solver's residual line: the field is whatever it solves for.
 RE_RESIDUAL_ANY = re.compile(r"Solving for (\w+), Initial residual = ([0-9.eE+-]+)")
+# A multi-region solver's block header, and its per-region Courant line (transient).
+RE_REGION_BLOCK = re.compile(r"^Solving for (fluid|solid) region (\w+)\s*$")
+RE_REGION_COURANT = re.compile(r"^Region:\s*(\w+)\s+Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)")
+# Joins a region and a field in a residual key: "air:h".
+REGION_KEY_SEP = ":"
 
 # solve.sh stage that starts each timed phase; any later stage/result ends it.
 PHASE_OF_STAGE = {
@@ -43,6 +50,17 @@ def parse_residual_line(line: str, pattern: re.Pattern[str] = RE_RESIDUAL_ANY) -
         return None
     name = match.group(1)
     return {"field": name, "initial": value, "fields": {name: value}}
+
+
+def region_key(region: str, field_name: str) -> str:
+    """The residual key of ``field_name`` solved in ``region``: ``<region>:<field>``."""
+    return f"{region}{REGION_KEY_SEP}{field_name}"
+
+
+def split_region_key(key: str) -> tuple[str, str]:
+    """``(region, field)`` of a residual key; region '' for a key of a one-region run."""
+    region, sep, name = str(key).partition(REGION_KEY_SEP)
+    return (region, name) if sep else ("", region)
 
 
 def parse_extra_line(line: str) -> dict[str, Any] | None:
@@ -196,22 +214,22 @@ class ProgressParser:
 
         residual = parse_residual_line(line, self.residual_re)
         if residual and self.current is not None:
-            name = str(residual["field"])
-            val = float(residual["initial"])
-            self.current[name] = val
-            fields = {
-                "time": self.current.get("t"),
-                "field": name,
-                "initial": val,
-                "fields": {name: val},
-            }
-            out.append(Event(event="residual", fields=fields))
+            out.append(self.residual_event(str(residual["field"]), float(residual["initial"])))
             return out
 
         # Pass through non-empty solver lines as log (skip blank)
         if line.strip():
             out.append(Event(event="log", fields={"line": line[:2000]}))
         return out
+
+    def residual_event(self, name: str, value: float) -> Event:
+        """A ``residual`` event for the open step (``name`` already keyed); kept in the step."""
+        assert self.current is not None
+        self.current[name] = value
+        return Event(
+            event="residual",
+            fields={"time": self.current.get("t"), "field": name, "initial": value, "fields": {name: value}},
+        )
 
     def snapshot(self) -> dict:
         cur = self.current or {}
@@ -231,3 +249,63 @@ class ProgressParser:
             "delta_t": cur.get("delta_t"),
             "phases": dict(self.phases),
         }
+
+
+@dataclass
+class RegionProgressParser(ProgressParser):
+    """A multi-region solver's log (chtMultiRegionSimpleFoam, chtMultiRegionFoam).
+
+    Each step solves its regions in blocks headed ``Solving for fluid region <r>``
+    or ``Solving for solid region <r>``. A residual is keyed ``<region>:<field>``
+    (``air:h``, ``heater:h``; :func:`region_key`), and only the FIRST residual of a
+    field in a region per step is kept: a solid's header repeats for each
+    non-orthogonal corrector, and a later pass's residual is not the step's.
+    A transient run's ``Region: <r> Courant Number`` lines give the step the
+    largest Courant number of its regions. Every other line reads as in
+    :class:`ProgressParser`. An analysis names it as its log parser
+    (``LogParserRef("magnusim_sdk.progress", "RegionProgressParser")``) or
+    subclasses it (``residual_re`` narrows the fields).
+    """
+
+    region: str = ""
+    _taken: set[str] = field(default_factory=set)
+    _co_max: float | None = None
+
+    def feed(self, raw: str) -> list[Event]:
+        line = RE_MPI_PREFIX.sub("", str(raw or ""))
+        block = RE_REGION_BLOCK.match(line.strip())
+        if block:
+            self.region = block.group(2)
+            return []
+        if RE_TIME.match(line):
+            out = super().feed(raw)
+            # A new step: no region yet, nothing taken, the Courant lines before it were its own.
+            self.region = ""
+            self._taken = set()
+            self._co_max = None
+            return out
+        courant = RE_REGION_COURANT.match(line)
+        if courant:
+            self._enter_solve()
+            if self.stage != "solve":
+                return []
+            mx = float(courant.group(3))
+            mean = float(courant.group(2))
+            # Regions print in turn before the step's Time line: the step shows the largest.
+            if self._co_max is not None and mx < self._co_max:
+                return []
+            self._co_max = mx
+            self.pending["co_mean"] = mean
+            self.pending["co_max"] = mx
+            return [Event(event="courant", fields={"mean": mean, "max": mx})]
+        if self.region:
+            residual = parse_residual_line(line, self.residual_re)
+            if residual is not None:
+                if self.current is None:
+                    return []
+                key = region_key(self.region, str(residual["field"]))
+                if key in self._taken:
+                    return []
+                self._taken.add(key)
+                return [self.residual_event(key, float(residual["initial"]))]
+        return super().feed(raw)

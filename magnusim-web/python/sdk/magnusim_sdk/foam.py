@@ -181,6 +181,16 @@ def parse_surface_field_value(text: str) -> dict:
     return out
 
 
+def start_time_folders(folder: Path) -> list[Path]:
+    """The start-time folders of a function object's folder, oldest first (a
+    continued run starts a new one). Times may be written with an exponent."""
+    try:
+        found = [d for d in Path(folder).iterdir() if d.is_dir() and re.fullmatch(r"\d+(\.\d+)?([eE][-+]?\d+)?", d.name)]
+    except OSError:
+        return []
+    return sorted(found, key=lambda d: float(d.name))
+
+
 def restart_dat_files(folder: Path, stem: str) -> list[Path]:
     """A function object's ``<stem>.dat`` files in each start-time folder of
     ``folder`` (``postProcessing/<name>``), oldest first.
@@ -189,31 +199,57 @@ def restart_dat_files(folder: Path, stem: str) -> list[Path]:
     same time finds ``<stem>.dat`` there and OpenFOAM writes ``<stem>_<time>.dat``
     beside it: that one is the later. Times may be written with an exponent.
     """
-    try:
-        times = sorted(
-            (d.name for d in folder.iterdir() if d.is_dir() and re.fullmatch(r"\d+(\.\d+)?([eE][-+]?\d+)?", d.name)),
-            key=float,
-        )
-    except OSError:
-        return []
     out: list[Path] = []
-    for t in times:
-        for f in (folder / t / f"{stem}.dat", folder / t / f"{stem}_{t}.dat"):
+    for d in start_time_folders(folder):
+        for f in (d / f"{stem}.dat", d / f"{stem}_{d.name}.dat"):
             if f.is_file():
                 out.append(f)
     return out
 
 
-def read_surface_field_value(case_dir: Path, name: str) -> dict | None:
+def function_object_folder(case_dir: Path, name: str, region: str = "") -> Path | None:
+    """The folder function object ``name`` writes its start-time folders in, or None.
+
+    ``postProcessing/<name>`` in a case of one region. In a multi-region case
+    (host API 1.8) a function object given ``region <r>`` writes to
+    ``postProcessing/<r>/<name>`` (field function objects: wallHeatFlux,
+    volFieldValue, surfaceFieldValue) or ``postProcessing/<name>/<r>`` (probes);
+    the first that exists.
+    """
+    root = Path(case_dir) / "postProcessing"
+    places = [root / region / name, root / name / region] if region else [root / name]
+    for folder in places:
+        if folder.is_dir():
+            return folder
+    return None
+
+
+def function_object_files(case_dir: Path, name: str, filename: str, region: str = "") -> list[Path]:
+    """File ``filename`` of function object ``name`` in each of its start-time
+    folders, oldest first (:func:`function_object_folder`; for a ``.dat`` file the
+    ``<stem>_<time>.dat`` a run started again from the same time writes comes after
+    its ``<stem>.dat``). A probes object's files are named after their field
+    (``T``, ``U``); a field function object's after its type (``wallHeatFlux.dat``).
+    """
+    folder = function_object_folder(case_dir, name, region)
+    if folder is None:
+        return []
+    if filename.endswith(".dat"):
+        return restart_dat_files(folder, filename[: -len(".dat")])
+    return [d / filename for d in start_time_folders(folder) if (d / filename).is_file()]
+
+
+def read_surface_field_value(case_dir: Path, name: str, region: str = "") -> dict | None:
     """``postProcessing/<name>/<time>/surfaceFieldValue.dat``, every time folder merged.
 
     A restart appends a new time folder (or, from the same time, a
     ``surfaceFieldValue_<time>.dat`` beside the first: restart_dat_files); its
-    rows supersede the earlier rows from its first time on. None when the
-    function object wrote nothing.
+    rows supersede the earlier rows from its first time on. ``region``: the
+    function object's region in a multi-region case (:func:`function_object_folder`).
+    None when the function object wrote nothing.
     """
-    folder = Path(case_dir) / "postProcessing" / name
-    if not folder.is_dir():
+    folder = function_object_folder(case_dir, name, region)
+    if folder is None:
         return None
     merged: dict | None = None
     for f in restart_dat_files(folder, "surfaceFieldValue"):

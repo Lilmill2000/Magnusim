@@ -54,6 +54,16 @@ latest saved time: the case check keeps its times and needs one (the
 ``.magnusim-ran`` rule still holds), and ``solve.sh`` runs in its restart mode.
 The case's own ``controlDict`` says ``startFrom latestTime``; the relay never
 changes it.
+
+A multi-region case (its ``w27-case.json`` lists ``regions``, host API 1.8),
+read after the prepare step: ``-region`` values must name one of them, each
+region gets its own ``system/<region>/decomposeParDict`` when ``n > 1``, and
+``foam_pre.sh`` and ``solve.sh`` get the region names. Before its solver, each
+region's ``0/<region>/`` must hold one of the run's frame fields (``solve.sh``
+counts a saved time as a frame only when every region wrote one). Only a core
+solve's sidecar must be readable; another case's that is not lists no regions.
+A continued core solve (``solver.restart``) never runs its case's ``pre_steps``:
+they made the mesh its saved times are on (a split mesh is already back).
 """
 
 from __future__ import annotations
@@ -86,6 +96,7 @@ from cfddesk.wsl.foam_case import (
     STOP_MARKER,
     FoamCaseError,
     case_pre_steps,
+    case_region_names,
     check_case_local,
     check_case_paths,
     check_steps,
@@ -94,6 +105,8 @@ from cfddesk.wsl.foam_case import (
     has_parallel_step,
     is_link,
     plugin_case_id_ok,
+    region_frame_problem,
+    region_name_ok,
     render_foam_pre,
     solve_case_id_ok,
     temp_path_problem,
@@ -959,6 +972,7 @@ class Relay:
         self.controller: StopController | None = None
         self.hooks: Any = None
         self.steps: list[dict[str, Any]] = []
+        self.regions: list[str] = []
         self.prepare: PrepareStep | None = None
         self.prepare_shape: dict[str, Any] | None = None
         self.solver: dict[str, Any] | None = None
@@ -1376,21 +1390,30 @@ class Relay:
             if code != 0:
                 return code, {"ok": False, "phase": "prepare", "job": self.prepare.job, "exit_code": code}
             try:
+                if s["kind"] == "solve":
+                    # A core solve's sidecar is read strictly first: its own reason
+                    # (a bad regions list) before the case check's lenient reading.
+                    case_region_names(self.case, strict=True)
                 self._check_case(own_marker=True)
             except FoamCaseError as exc:
                 self.writer.emit({"event": "refused", "code": exc.code, "error": exc.error})
                 return EXIT_REFUSED, {"ok": False, "phase": "gate", "code": exc.code, "error": exc.error}
-        if s["kind"] == "solve" and not self.steps:
-            # A core solve's case may ask for WSL steps before its solver (a
-            # potential-flow start): w27-case.json's pre_steps, from the one table.
-            try:
+        try:
+            # A multi-region case names its regions in w27-case.json (its writer has run now).
+            self.regions = case_region_names(self.case, strict=s["kind"] == "solve")
+            restart = bool(self.solver and self.solver["restart"])
+            if s["kind"] == "solve" and not self.steps and not restart:
+                # A core solve's case may ask for WSL steps before its solver (a
+                # potential-flow start, a region split): w27-case.json's pre_steps,
+                # from the one table. A continued run skips them: its saved times
+                # are on the mesh they made.
                 declared = case_pre_steps(self.case)
                 if declared:
-                    self.steps = check_steps(declared)
+                    self.steps = check_steps(declared, self.regions)
                     check_case_local(str(s["case_dir"]), None, declared, None, own_marker=True)
-            except FoamCaseError as exc:
-                self.writer.emit({"event": "refused", "code": exc.code, "error": exc.error})
-                return EXIT_REFUSED, {"ok": False, "phase": "gate", "code": exc.code, "error": exc.error}
+        except FoamCaseError as exc:
+            self.writer.emit({"event": "refused", "code": exc.code, "error": exc.error})
+            return EXIT_REFUSED, {"ok": False, "phase": "gate", "code": exc.code, "error": exc.error}
         solver = self.solver
         wants_parallel = has_parallel_step(self.steps) or bool(solver and solver["parallel"])
         n = 1
@@ -1406,6 +1429,9 @@ class Relay:
             from magnusim_sdk.foam import write_decompose_par_dict
 
             write_decompose_par_dict(self.case / "system" / "decomposeParDict", n)
+            for name in self.regions:
+                # decomposePar -allRegions reads each region's own dictionary.
+                write_decompose_par_dict(self.case / "system" / name / "decomposeParDict", n)
         if self.steps:
             self._phase = "pre"
             if self._stopped_now():
@@ -1421,6 +1447,9 @@ class Relay:
                 if result is not None:
                     failed["tool"] = result.get("tool")
                     failed["index"] = result.get("index")
+                    if region_name_ok(result.get("region")) and result.get("region") in self.regions:
+                        # foam_pre.sh: the steps made no mesh for this listed region (exit 46).
+                        failed["region"] = result.get("region")
                     given = result.get("exit_code")
                     if isinstance(given, int) and not isinstance(given, bool) and given != 0:
                         failed["exit_code"] = given
@@ -1431,6 +1460,13 @@ class Relay:
                 return EXIT_DONE, {"ok": True, "phase": "pre"}
         if solver is None:
             return EXIT_DONE, {"ok": True, "phase": "prepare"}
+        problem = region_frame_problem(self.case, solver["frame_fields"], self.regions) if self.regions else None
+        if problem:
+            # Every saved time would be "not written": the run would end with no results.
+            if self.steps:
+                self._remove_case()
+            self.writer.emit({"event": "refused", "code": "not_a_case", "error": problem})
+            return EXIT_REFUSED, {"ok": False, "phase": "gate", "code": "not_a_case", "error": problem}
         self._phase = "solve"
         if self._stopped_now():
             return self._stopped("solve")
@@ -1504,6 +1540,7 @@ class Relay:
             token=token,
             steps=self.steps,
             n_procs=n,
+            regions=self.regions,
         )
         folder = Path(tempfile.mkdtemp(prefix="cfddesk-foam-pre-"))
         script = folder / foam_pre_script_name(token)
@@ -1566,6 +1603,7 @@ class Relay:
             process_names=tuple(solver["process_names"]),
             frame_fields=tuple(solver["frame_fields"]),
             **({"restart": True} if solver["restart"] else {}),
+            **({"regions": tuple(self.regions)} if self.regions else {}),
         )
         on_line = self.hooks.feed if self.hooks is not None else None
         parser = self.parser if self.parser is not None else GenericParser()

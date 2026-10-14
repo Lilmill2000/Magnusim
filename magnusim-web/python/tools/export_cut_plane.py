@@ -31,11 +31,15 @@ from result_names import (  # noqa: E402
     dataset_vector,
     default_shown_field,
     ensure_shown_field,
+    finite_range,
     has_shown_field,
+    json_text,
     mag_base,
     resolve_shown_field,
     shown_fields,
 )
+
+from cfddesk.results.regions import REGION_ARRAY  # noqa: E402
 
 
 def read_volume_at_time(case_dir: Path, time: str):
@@ -147,6 +151,8 @@ def export_cut_plane(
         if k in sliced.point_data or k in sliced.cell_data
     }
     present.add(field)
+    # A multi-region slice keeps each point's region (the viewer's region filter).
+    present.add(REGION_ARRAY)
     for k in list(sliced.point_data.keys()):
         if k not in present:
             del sliced.point_data[k]
@@ -165,6 +171,8 @@ def export_cut_plane(
     else:
         sliced.save(str(out_vtp), binary=True)
         arr = np.asarray(sliced.point_data[field]) if field in sliced.point_data else None
+    # Finite values only: a field a region has not (U in a solid) is NaN there.
+    umin, umax = finite_range(arr)
 
     h = hashlib.sha256()
     with out_vtp.open("rb") as f:
@@ -184,15 +192,15 @@ def export_cut_plane(
         "n_points": n_points,
         "n_cells": n_cells,
         "empty": bool(empty),
-        "umin": float(np.nanmin(arr)) if arr is not None and arr.size else None,
-        "umax": float(np.nanmax(arr)) if arr is not None and arr.size else None,
+        "umin": umin,
+        "umax": umax,
         "volume_n_cells": int(getattr(mesh, "n_cells", 0) or 0),
         "asset_sha256": h.hexdigest(),
         "vtp": str(out_vtp),
         "method": "pyvista DataSet.slice on volume",
         **pressure_meta(rho),
     }
-    out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    out_meta.write_text(json_text(meta, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"ok": True, "n_cells": n_cells, "n_points": n_points, "empty": empty}))
     return meta
 

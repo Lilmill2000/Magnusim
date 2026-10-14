@@ -27,6 +27,7 @@ from case_volume import load_volume  # noqa: E402
 from result_names import (  # noqa: E402
     default_shown_field,
     foam_sources,
+    json_text,
     point_shown_field,
     resolve_shown_field,
 )
@@ -170,6 +171,11 @@ def sample_over_path(
     all_dist: list[float] = []
     all_val: list[float] = []
     all_xyz: list[list[float]] = []
+    # A multi-region case: samples in the mesh where the field has no value (U in a
+    # solid) are left out, and the series breaks there instead of joining across.
+    no_value = 0
+    breaks: list[int] = []
+    gap = False
     cum = 0.0
 
     for i in range(n_path - 1):
@@ -199,7 +205,12 @@ def sample_over_path(
                 continue
             v = float(raw[j])
             if not np.isfinite(v):
+                no_value += 1
+                gap = True
                 continue
+            if gap and all_val:
+                breaks.append(len(all_val))
+            gap = False
             all_dist.append(cum + float(local_t[j]) * seg_len)
             all_val.append(v)
             all_xyz.append([float(sp[j, 0]), float(sp[j, 1]), float(sp[j, 2])])
@@ -218,10 +229,14 @@ def sample_over_path(
     base["n_valid"] = n_valid
     base["empty"] = empty
     if empty:
-        base["reason"] = "miss_mesh"
+        # Through the mesh but only where the field is not defined: say so.
+        base["reason"] = "field_not_in_regions" if no_value else "miss_mesh"
         base["distance_max"] = float(cum) if cum > 0 else 0.0
     else:
         base["reason"] = "ok"
+        if breaks:
+            # Where a new run of values starts (an index into values).
+            base["breaks"] = breaks
         base["value_checksum"] = float(np.nansum(values))
         base["value_mean"] = float(np.nanmean(values))
         base["value_min"] = float(np.nanmin(values))
@@ -260,7 +275,7 @@ def export_plot_over_path(
         }
     )
     out_meta = out_dir / "plot_over_path.meta.json"
-    out_meta.write_text(json.dumps(series, indent=2) + "\n", encoding="utf-8")
+    out_meta.write_text(json_text(series, indent=2) + "\n", encoding="utf-8")
     print(
         json.dumps(
             {

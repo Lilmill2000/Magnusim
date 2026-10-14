@@ -11,6 +11,11 @@ WSL step table and ``foam_pre.sh``.
 - :data:`STEP_TABLE`: the WSL steps any plan may run (meshing utilities
   included), their flags and the ``decomposePar`` … ``reconstructParMesh``
   spans whose steps run in parallel. There is no JS copy.
+- :func:`case_regions`: a multi-region case's regions (``w27-case.json``
+  ``regions``, host API 1.8; the name rule is ``cfddesk.wsl.region_rule``):
+  ``-region <name>`` must name one of them, ``constant/regionProperties`` must
+  list the same ones, and ``foam_pre.sh`` and ``solve.sh`` bring each region's
+  folders back.
 - :func:`render_foam_pre`: ``templates/foam_pre.sh`` for a list of steps,
   rendered in one pass.
 
@@ -34,6 +39,8 @@ from typing import Any
 from cfddesk.registry.contract import APP_NAME_RE, LEGACY_FRAME_FIELDS, field_name_ok
 from cfddesk.runner.case_id import InvalidWslCaseId, slugify_wsl_case_id, validate_wsl_case_id
 from cfddesk.wsl.mesh_run import windows_to_wsl_path
+from cfddesk.wsl.region_rule import RegionListError, file_clash, parse_regions
+from cfddesk.wsl.region_rule import region_name_ok as region_name_ok
 
 
 class FoamCaseError(ValueError):
@@ -58,6 +65,9 @@ class StepRule:
     needs: str | None = None
     parallel: bool = False
     path_arg: bool = False
+    # ``-region <name>``: one of the case's regions (its ``needs`` is then that
+    # region's own dictionary, ``system/<name>/...``).
+    region_arg: bool = False
 
 
 STEP_TABLE: dict[str, StepRule] = {
@@ -66,16 +76,21 @@ STEP_TABLE: dict[str, StepRule] = {
     "surfaceFeatureExtract": StepRule(frozenset(), needs="system/surfaceFeatureExtractDict"),
     "snappyHexMesh": StepRule(frozenset({"-overwrite"}), ("-overwrite",), "system/snappyHexMeshDict", True),
     "extrudeMesh": StepRule(frozenset(), needs="system/extrudeMeshDict"),
-    "changeDictionary": StepRule(frozenset(), needs="system/changeDictionaryDict", parallel=True),
-    "createPatch": StepRule(frozenset({"-overwrite"}), ("-overwrite",), "system/createPatchDict", True),
-    "checkMesh": StepRule(frozenset({"-allGeometry", "-allTopology"}), parallel=True),
-    "renumberMesh": StepRule(frozenset({"-overwrite"}), ("-overwrite",), parallel=True),
+    "changeDictionary": StepRule(frozenset(), needs="system/changeDictionaryDict", parallel=True, region_arg=True),
+    "createPatch": StepRule(frozenset({"-overwrite"}), ("-overwrite",), "system/createPatchDict", True, region_arg=True),
+    "checkMesh": StepRule(frozenset({"-allGeometry", "-allTopology", "-allRegions"}), parallel=True, region_arg=True),
+    "renumberMesh": StepRule(frozenset({"-overwrite"}), ("-overwrite",), parallel=True, region_arg=True),
     # A potential-flow start (a core solve's case_pre_steps): writes U, p and phi into
     # 0/. Serial only: a span ends in reconstructParMesh, which brings back the mesh
     # but not the processors' 0/ fields, so a parallel run's start would be lost.
     "potentialFoam": StepRule(frozenset({"-writep", "-writephi", "-initialiseUBCs"}), needs="system/fvSolution"),
-    "decomposePar": StepRule(frozenset({"-force"}), ("-force",)),
-    "reconstructParMesh": StepRule(frozenset({"-constant"}), ("-constant",)),
+    "decomposePar": StepRule(frozenset({"-force", "-allRegions"}), ("-force",)),
+    "reconstructParMesh": StepRule(frozenset({"-constant", "-allRegions"}), ("-constant",)),
+    # A multi-region case (conjugate heat transfer): one mesh with a cellZone per
+    # region, split into constant/<region>/polyMesh before the solver. The
+    # unsplit mesh stays. Serial only; -overwrite keeps it out of a time folder.
+    "splitMeshRegions": StepRule(frozenset({"-cellZones", "-cellZonesOnly", "-overwrite"}), ("-overwrite",)),
+    "topoSet": StepRule(frozenset(), needs="system/topoSetDict", parallel=True, region_arg=True),
 }
 SPAN_OPEN = "decomposePar"
 SPAN_CLOSE = "reconstructParMesh"
@@ -83,6 +98,11 @@ MESH_MAKERS = ("blockMesh", "gmshToFoam")
 MAX_STEPS = 16
 MAX_ARGS = 4
 MAX_ARG_LEN = 120
+REGION_FLAG = "-region"
+ALL_REGIONS_FLAG = "-allRegions"
+# Steps whose -region edits live in the region's 0/ fields: in parallel they would
+# edit processor*/0/<region>, which reconstructParMesh does not bring back.
+_REGION_SERIAL_ONLY = ("changeDictionary", "createPatch")
 
 FLAG_RE = re.compile(r"^-[A-Za-z][A-Za-z0-9]*$")
 PATH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$")
@@ -102,6 +122,10 @@ RAN_MARKER = ".magnusim-ran"
 STATUS_FILE = ".magnusim-run.json"
 NOT_AGAIN = "This case already ran. Write a new case folder for each run."
 NO_SAVED_TIME = "The case has no saved time to continue from."
+NO_SIDECAR_REGIONS = (
+    "constant/regionProperties is there, but w27-case.json lists no regions "
+    "(a multi-region case lists them in its regions)"
+)
 ROOT_UNUSABLE = "The WSL case folder setting is not usable"
 
 
@@ -263,6 +287,21 @@ def _shown(arg: str) -> str:
     return arg if _SHOWN_RE.match(arg) else "this argument"
 
 
+def _region_problem(value: str, regions: list[str] | None) -> str | None:
+    """Why ``value`` cannot follow ``-region``, or None. ``regions`` None: the
+    case's regions are not known yet (its writer has not run); the value is checked
+    against them once it has."""
+    if not region_name_ok(value):
+        return "the region must be a plain name"
+    if regions is None:
+        return None
+    if not regions:
+        return "the case lists no regions (w27-case.json regions)"
+    if value not in regions:
+        return f"{value} is not one of the case's regions"
+    return None
+
+
 def _path_arg_problem(arg: str) -> str | None:
     if not PATH_RE.match(arg) or any(part == ".." for part in arg.split("/")) or PLACEHOLDER_RE.search(arg):
         return "the path must be a plain path inside the case"
@@ -271,7 +310,7 @@ def _path_arg_problem(arg: str) -> str | None:
     return None
 
 
-def _one_step(index: int, raw: Any) -> dict[str, Any]:
+def _one_step(index: int, raw: Any, regions: list[str] | None = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise FoamCaseError("pre_not_allowed", f"Step {index}: a step is {{tool, args, parallel}}")
     extra = sorted(set(raw) - {"tool", "args", "parallel"})
@@ -302,7 +341,22 @@ def _one_step(index: int, raw: Any) -> dict[str, Any]:
         raise _step_err(index, tool, "it cannot run in parallel")
     flags: list[str] = []
     path: str | None = None
-    for pos, arg in enumerate(args):
+    region: str | None = None
+    pos = -1
+    while pos + 1 < len(args):
+        pos += 1
+        arg = args[pos]
+        if arg == REGION_FLAG and rule.region_arg:
+            if region is not None:
+                raise _step_err(index, tool, f"{arg} is given twice")
+            if pos + 1 >= len(args):
+                raise _step_err(index, tool, f"{arg} needs a region name")
+            why = _region_problem(args[pos + 1], regions)
+            if why:
+                raise _step_err(index, tool, why)
+            region = args[pos + 1]
+            pos += 1
+            continue
         if FLAG_RE.match(arg):
             if arg not in rule.flags:
                 raise _step_err(index, tool, f"{arg} is not allowed")
@@ -321,22 +375,34 @@ def _one_step(index: int, raw: Any) -> dict[str, Any]:
         raise _step_err(index, tool, f"{_shown(arg)} is not allowed")
     if rule.path_arg and path is None:
         raise _step_err(index, tool, "needs the path of a .msh file in the case")
+    if region is not None and ALL_REGIONS_FLAG in flags:
+        raise _step_err(index, tool, f"{REGION_FLAG} and {ALL_REGIONS_FLAG} cannot both be given")
+    if ALL_REGIONS_FLAG in flags and regions is not None and not regions:
+        raise _step_err(index, tool, f"{ALL_REGIONS_FLAG} needs the case's regions (w27-case.json regions)")
+    if region is not None and parallel and tool in _REGION_SERIAL_ONLY:
+        raise _step_err(
+            index, tool, f"with {REGION_FLAG} it runs serially only (reconstructParMesh brings back only the mesh)"
+        )
     out = flags + [flag for flag in rule.host_adds if flag not in flags]
+    if region is not None:
+        out += [REGION_FLAG, region]
     if path is not None:
         out.append(path)
     return {"tool": tool, "args": out, "parallel": parallel}
 
 
-def check_steps(pre: Any) -> list[dict[str, Any]]:
+def check_steps(pre: Any, regions: list[str] | None = None) -> list[dict[str, Any]]:
     """The steps, checked against the table and the span rules, with the flags the
-    host adds. Raises ``pre_not_allowed``."""
+    host adds. ``regions``: the case's regions a ``-region`` value must name and
+    ``-allRegions`` needs (None while the case is not written yet: only the name's
+    form is checked). Raises ``pre_not_allowed``."""
     if pre is None:
         return []
     if not isinstance(pre, list):
         raise FoamCaseError("pre_not_allowed", "The steps must be a list")
     if len(pre) > MAX_STEPS:
         raise FoamCaseError("pre_not_allowed", f"At most {MAX_STEPS} steps")
-    steps = [_one_step(i, raw) for i, raw in enumerate(pre, start=1)]
+    steps = [_one_step(i, raw, regions) for i, raw in enumerate(pre, start=1)]
     open_at: int | None = None
     for i, step in enumerate(steps, start=1):
         tool = step["tool"]
@@ -374,13 +440,25 @@ def _lenient_needs(pre: Any) -> tuple[list[str], list[tuple[int, str, str]]]:
             continue
         tools.append(tool)
         rule = STEP_TABLE[tool]
-        if rule.needs:
-            needs.append((i, tool, rule.needs))
         args = raw.get("args")
+        if rule.needs:
+            needs.append((i, tool, _region_needs(rule, args)))
         if rule.path_arg and isinstance(args, list) and args and isinstance(args[-1], str):
             if _path_arg_problem(args[-1]) is None:
                 needs.append((i, tool, args[-1]))
     return tools, needs
+
+
+def _region_needs(rule: StepRule, args: Any) -> str:
+    """The file a step needs: with ``-region <name>``, that region's own
+    ``system/<name>/...`` dictionary."""
+    assert rule.needs is not None
+    if rule.region_arg and isinstance(args, list) and REGION_FLAG in args:
+        at = args.index(REGION_FLAG)
+        name = args[at + 1] if at + 1 < len(args) else None
+        if isinstance(name, str) and region_name_ok(name) and rule.needs.startswith("system/"):
+            return f"system/{name}/{rule.needs[len('system/'):]}"
+    return rule.needs
 
 
 # ---------------------------------------------------------------------------
@@ -427,8 +505,39 @@ def _bad(text: str) -> FoamCaseError:
     return FoamCaseError("bad_request", text)
 
 
-def check_results(results: Any, case: Path) -> dict[str, Any]:
+def _in_zero(case: Path, name: str, regions: list[str]) -> bool:
+    """``0/<name>``, or in a multi-region case ``0/<region>/<name>`` of some region."""
+    if not regions:
+        return (case / "0" / name).is_file()
+    return any((case / "0" / r / name).is_file() for r in regions)
+
+
+def region_without_frame_field(case: str | Path, frames: Any, regions: list[str]) -> str | None:
+    """The first region whose ``0/<region>/`` holds none of the frame fields, else
+    None. ``solve.sh`` counts a saved time as a frame only when every
+    ``<t>/<region>/`` holds one of them (the results read times so too), so a region
+    without one would make every saved time "not written" and the run end with no
+    results."""
+    names = [str(f) for f in (frames or ())]
+    for region in regions or ():
+        if not any((Path(case) / "0" / region / name).is_file() for name in names):
+            return region
+    return None
+
+
+def region_frame_problem(case: str | Path, frames: Any, regions: list[str]) -> str | None:
+    """Why a multi-region case's frame fields cannot mark its frames (the text names
+    the region), else None."""
+    region = region_without_frame_field(case, frames, regions)
+    if region is None:
+        return None
+    shown = ", ".join(str(f) for f in frames or ())
+    return f"0/{region}/ holds none of the frame fields ({shown}): a saved time needs one in every region"
+
+
+def check_results(results: Any, case: Path, regions: list[str] | None = None) -> dict[str, Any]:
     """``{rho, kinematic_fields, frame_fields}`` from a submit's ``results``."""
+    regions = list(regions or [])
     if not isinstance(results, dict):
         raise _bad("results must be an object")
     extra = sorted(set(results) - {"rho", "kinematicFields", "frameFields"})
@@ -449,7 +558,7 @@ def check_results(results: Any, case: Path) -> dict[str, Any]:
     frames = results.get("frameFields")
     if frames is None:
         # A case written before API 1.1 names no frame fields: its frames are LEGACY_FRAME_FIELDS.
-        if all((case / "0" / name).is_file() for name in LEGACY_FRAME_FIELDS):
+        if all(_in_zero(case, name, regions) for name in LEGACY_FRAME_FIELDS):
             frames = list(LEGACY_FRAME_FIELDS)
         else:
             legacy = " and ".join(f"0/{name}" for name in LEGACY_FRAME_FIELDS)
@@ -459,8 +568,12 @@ def check_results(results: Any, case: Path) -> dict[str, Any]:
     for name in frames:
         if not field_name_ok(name):
             raise _bad("results.frameFields: each must be a field name")
-        if not (case / "0" / name).is_file():
-            raise _bad(f"results.frameFields: 0/{name} is not in the case")
+        if not _in_zero(case, name, regions):
+            where = f"0/<region>/{name}" if regions else f"0/{name}"
+            raise _bad(f"results.frameFields: {where} is not in the case")
+    problem = region_frame_problem(case, frames, regions)
+    if problem:
+        raise _bad(f"results.frameFields: {problem}")
     return {"rho": rho, "kinematic_fields": list(kinematic), "frame_fields": list(frames)}
 
 
@@ -490,6 +603,87 @@ def case_pre_steps(case_dir: str | Path) -> list[Any]:
     if not isinstance(raw, list):
         raise FoamCaseError("pre_not_allowed", f"{CASE_SIDECAR}: pre_steps must be a list")
     return raw
+
+
+def case_regions(case_dir: str | Path, *, strict: bool = True) -> list[dict[str, str]]:
+    """A multi-region case's regions: ``regions`` in its ``w27-case.json``
+    (``[{name, role}]``, role ``fluid`` or ``solid``; its analysis's case writer
+    puts them there; other keys in a row are ignored), [] for a case of one region.
+
+    ``strict`` (a core solve's case, read after its prepare step): a sidecar that
+    cannot be read, a ``regions`` that is not valid
+    (:func:`cfddesk.wsl.region_rule.parse_regions`) and a name that is a file of the
+    case's ``constant/``, ``system/`` or ``0/`` raise :class:`FoamCaseError`.
+    Otherwise (any other case: its sidecar is not the runner's to judge) each of
+    those means no regions."""
+    path = Path(case_dir) / CASE_SIDECAR
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        if not strict:
+            return []
+        raise FoamCaseError("not_a_case", f"{CASE_SIDECAR} could not be read") from None
+    try:
+        out = parse_regions(doc.get("regions") if isinstance(doc, dict) else None, where=CASE_SIDECAR)
+    except RegionListError as exc:
+        if not strict:
+            return []
+        raise FoamCaseError("not_a_case", str(exc)) from None
+    clash = file_clash(case_dir, [r["name"] for r in out])
+    if clash:
+        if not strict:
+            return []
+        raise FoamCaseError("not_a_case", f"{CASE_SIDECAR}: a region is named as the case's file {clash}")
+    return out
+
+
+def case_region_names(case_dir: str | Path, *, strict: bool = True) -> list[str]:
+    """The names of :func:`case_regions`."""
+    return [r["name"] for r in case_regions(case_dir, strict=strict)]
+
+
+def region_properties(case_dir: str | Path) -> dict[str, str] | None:
+    """``constant/regionProperties``'s ``regions ( fluid (a b) solid (c) )`` as
+    {name: role}, in its order; None when the file or the entry cannot be read."""
+    try:
+        text = (Path(case_dir) / "constant" / "regionProperties").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = re.search(r"(?<![A-Za-z0-9_])regions\s*\(", _strip_comments(text))
+    if not m:
+        return None
+    out: dict[str, str] = {}
+    depth, role = 1, None
+    for tok in re.findall(r"[()]|[^\s();]+", _strip_comments(text)[m.end():]):
+        if tok == "(":
+            depth += 1
+            if depth > 2 or role is None:
+                return None
+        elif tok == ")":
+            depth -= 1
+            role = None if depth == 1 else role
+            if depth == 0:
+                return out
+        elif depth == 1:
+            role = tok
+        else:
+            out[tok] = str(role)
+    return None
+
+
+def region_properties_problem(case_dir: str | Path, regions: list[dict[str, str]]) -> str | None:
+    """Why ``constant/regionProperties`` does not list the case's regions (same
+    names, same roles; ``-allRegions`` and the solver read it, not the sidecar), else None."""
+    listed = region_properties(case_dir)
+    if listed is None:
+        return "constant/regionProperties is missing or has no regions entry (the case lists regions in w27-case.json)"
+    wanted = {r["name"]: r["role"] for r in regions}
+    if listed != wanted:
+        shown = " ".join(f"{name} ({role})" for name, role in wanted.items())
+        return f"constant/regionProperties does not list the case's regions: {shown}"
+    return None
 
 
 def _has_saved_time(case: Path) -> bool:
@@ -566,12 +760,23 @@ def check_case_local(
         raise FoamCaseError("has_results", NOT_AGAIN)
     if restart and app is not None and not _has_saved_time(case):
         raise FoamCaseError("not_a_case", NO_SAVED_TIME)
-    steps = check_steps(pre)
+    # Any case may have a sidecar; one the runner cannot read lists no regions here
+    # (a core solve's is read again after its prepare step, strictly).
+    rows = case_regions(case, strict=False)
+    regions = [r["name"] for r in rows]
+    steps = check_steps(pre, regions)
+    if rows and (app is not None or any(ALL_REGIONS_FLAG in s["args"] for s in steps)):
+        problem = region_properties_problem(case, rows)
+        if problem:
+            raise FoamCaseError("not_a_case", problem)
+    if not rows and app is not None and (case / "constant" / "regionProperties").is_file():
+        # A multi-region solver reads regionProperties; run as one region, its results would be lost.
+        raise FoamCaseError("not_a_case", NO_SIDECAR_REGIONS)
     out: dict[str, Any] = {"ok": True, "steps": steps, "write_format": None, "results": None}
     if app is not None:
         out["write_format"] = str(dict_entry(top, "writeFormat") or "ascii").lower()
         if results is not None:
-            out["results"] = check_results(results, case)
+            out["results"] = check_results(results, case, regions)
     return out
 
 
@@ -581,7 +786,7 @@ def check_case_local(
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _FOAM_PRE_SH = _TEMPLATES / "foam_pre.sh"
-_PLACEHOLDERS = re.compile(r"__(DST|WIN_OUT|TOKEN|STEPS)__")
+_PLACEHOLDERS = re.compile(r"__(DST|WIN_OUT|TOKEN|STEPS|REGIONS)__")
 
 
 def foam_pre_template_path() -> Path:
@@ -604,6 +809,8 @@ def _steps_block(steps: list[dict[str, Any]], n_procs: int) -> str:
             continue
         args = " ".join(shlex.quote(str(a)) for a in step.get("args") or [])
         parallel = bool(step.get("parallel")) and n > 1
+        if tool == "splitMeshRegions":
+            lines.append("_drop_region_meshes")
         if parallel:
             words = f"mpirun --oversubscribe -np {n} {tool}" + (f" {args}" if args else "") + " -parallel"
         else:
@@ -615,9 +822,24 @@ def _steps_block(steps: list[dict[str, Any]], n_procs: int) -> str:
     return "\n".join(lines)
 
 
-def render_foam_pre(*, dst: str, win_out: str, token: str, steps: list[dict[str, Any]], n_procs: int) -> str:
+def regions_word_list(regions: Any) -> str:
+    """Region names as the scripts' ``REGIONS`` list (space separated); raises
+    ValueError for a name the scripts cannot take."""
+    names = [str(r) for r in (regions or ())]
+    for name in names:
+        if not region_name_ok(name):
+            raise ValueError(f"not a region name: {name!r}")
+    if len({n.casefold() for n in names}) != len(names):
+        raise ValueError("a region is listed twice (names that differ only in case are one folder on Windows)")
+    return " ".join(names)
+
+
+def render_foam_pre(
+    *, dst: str, win_out: str, token: str, steps: list[dict[str, Any]], n_procs: int, regions: Any = ()
+) -> str:
     """``templates/foam_pre.sh`` for checked steps (:func:`check_steps`), LF, one pass:
-    an inserted value is never scanned again."""
+    an inserted value is never scanned again. ``regions``: a multi-region case's
+    region names (:func:`case_region_names`); their folders come back too."""
     if not TOKEN_RE.match(str(token)):
         raise ValueError(f"bad token {token!r}")
     for value, what in ((dst, "dst"), (win_out, "win_out")):
@@ -625,5 +847,11 @@ def render_foam_pre(*, dst: str, win_out: str, token: str, steps: list[dict[str,
             raise ValueError(f"{what} cannot go into the script: {value!r}")
     raw = _FOAM_PRE_SH.read_text(encoding="utf-8").lstrip("﻿")
     raw = raw.replace("\r\n", "\n").replace("\r", "\n")
-    values = {"DST": str(dst), "WIN_OUT": str(win_out), "TOKEN": str(token), "STEPS": _steps_block(steps, n_procs)}
+    values = {
+        "DST": str(dst),
+        "WIN_OUT": str(win_out),
+        "TOKEN": str(token),
+        "STEPS": _steps_block(steps, n_procs),
+        "REGIONS": regions_word_list(regions),
+    }
     return _PLACEHOLDERS.sub(lambda m: values[m.group(1)], raw)

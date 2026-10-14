@@ -6,9 +6,16 @@ frame shows: a scalar by its own name, a vector ``X`` by its magnitude
 shown. The case sidecar (``w27-case.json``) may list the analysis's
 ``result_fields`` in order (``key``, ``kind``, ``unit_quantity``, ``label``);
 a tool asked for no field opens on the first of those the frame wrote.
+
+A multi-region case (``regions`` in the sidecar, host API 1.8) keeps a saved
+time's fields in a folder per region (``<t>/<region>/T``). The functions that
+take a time folder look in each region's folder then: a field is the frame's
+when any region wrote it, and ``foam_paths`` gives every region's file.
 """
 from __future__ import annotations
 
+import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -18,6 +25,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import case_sidecar  # noqa: E402
+
+_PY_ROOT = Path(__file__).resolve().parents[1]
+if str(_PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PY_ROOT))
+from cfddesk.results.regions import region_names  # noqa: E402
 
 FIELD_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
@@ -66,17 +78,38 @@ def mag_base(name: str) -> str:
     return name[3:] if name.startswith("mag") and len(name) > 3 else ""
 
 
+def field_folders(time_dir: Path) -> list[Path]:
+    """The folders a saved time's field files are in: the time folder, or in a
+    multi-region case each region's folder of it."""
+    time_dir = Path(time_dir)
+    names = region_names(time_dir.parent)
+    return [time_dir / r for r in names] if names else [time_dir]
+
+
+def foam_paths(time_dir: Path, name: str) -> list[Path]:
+    """Every file of field ``name`` in a saved time (one per region that wrote it)."""
+    return [d / name for d in field_folders(time_dir) if (d / name).is_file()]
+
+
+def _field_file(time_dir: Path, name: str) -> Path | None:
+    found = foam_paths(time_dir, name) if name else []
+    return found[0] if found else None
+
+
 def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
     """(file, kind) a shown field reads: the field's own file, or for ``mag<X>`` the vector ``X``.
 
-    None for a tensor or face field (or its ``mag``): it is never shown.
+    None for a tensor or face field (or its ``mag``): it is never shown. The file
+    is a name in the time folder (``foam_paths`` gives every region's).
     """
-    if (time_dir / field).is_file():
-        kind = foam_kind(time_dir / field)
+    own = _field_file(time_dir, field)
+    if own is not None:
+        kind = foam_kind(own)
         return None if kind in NEVER_SHOWN else (field, kind)
     base = mag_base(field)
-    if base and (time_dir / base).is_file():
-        if foam_kind(time_dir / base) in NEVER_SHOWN:
+    vec = _field_file(time_dir, base) if base else None
+    if vec is not None:
+        if foam_kind(vec) in NEVER_SHOWN:
             return None
         return base, "vector"
     return None
@@ -84,20 +117,25 @@ def foam_source(time_dir: Path, field: str) -> tuple[str, str] | None:
 
 def shown_fields(time_dir: Path) -> list[str]:
     """Every field a time folder can colour by: scalars by name, vectors as ``mag<name>``.
-    Tensors, face fields (phi) and old-time copies (U_0) are left out."""
+    Tensors, face fields (phi) and old-time copies (U_0) are left out. In a
+    multi-region case a field any region wrote."""
     out: list[str] = []
-    try:
-        # By name, ignoring case, on every OS (a POSIX Path sorts "U" before "k").
-        entries = sorted(Path(time_dir).iterdir(), key=lambda f: (f.name.casefold(), f.name))
-    except OSError:
-        return out
-    for f in entries:
+    entries: list[Path] = []
+    for folder in field_folders(time_dir):
+        try:
+            entries.extend(Path(folder).iterdir())
+        except OSError:
+            continue
+    # By name, ignoring case, on every OS (a POSIX Path sorts "U" before "k").
+    for f in sorted(entries, key=lambda f: (f.name.casefold(), f.name)):
         if not f.is_file() or not FIELD_NAME.match(f.name) or OLD_TIME.search(f.name):
             continue
         kind = foam_kind(f)
         if kind in NEVER_SHOWN:
             continue
-        out.append(("mag" + f.name) if kind == "vector" else f.name)
+        shown = ("mag" + f.name) if kind == "vector" else f.name
+        if shown not in out:
+            out.append(shown)
     return out
 
 
@@ -280,8 +318,9 @@ def _plain(value: Any, limit: int) -> str:
 def _row_shown_name(time_dir: Path, row: dict[str, str]) -> str:
     key = row["key"]
     kind = row.get("kind") or ""
-    if not kind and (time_dir / key).is_file():
-        kind = foam_kind(time_dir / key)
+    own = _field_file(time_dir, key) if not kind else None
+    if own is not None:
+        kind = foam_kind(own)
     return "mag" + key if kind == "vector" else key
 
 
@@ -298,7 +337,8 @@ def default_shown_field(case_dir: Path, time: str) -> str:
 
 
 def _vector_file(time_dir: Path, name: str) -> bool:
-    return bool(FIELD_NAME.match(name)) and (time_dir / name).is_file() and foam_kind(time_dir / name) == "vector"
+    found = _field_file(time_dir, name) if FIELD_NAME.match(name) else None
+    return found is not None and foam_kind(found) == "vector"
 
 
 def velocity_vector(case_dir: Path, time: str, requested: str = "") -> str | None:
@@ -314,11 +354,13 @@ def velocity_vector(case_dir: Path, time: str, requested: str = "") -> str | Non
             continue
         if _vector_file(time_dir, row["key"]):
             return row["key"]
-    try:
-        names = sorted(f.name for f in time_dir.iterdir() if f.is_file())
-    except OSError:
-        return None
-    vectors = [n for n in names if _vector_file(time_dir, n)]
+    names: set[str] = set()
+    for folder in field_folders(time_dir):
+        try:
+            names.update(f.name for f in folder.iterdir() if f.is_file())
+        except OSError:
+            continue
+    vectors = [n for n in sorted(names) if _vector_file(time_dir, n)]
     return vectors[0] if len(vectors) == 1 else None
 
 
@@ -332,6 +374,36 @@ def dataset_vector(case_dir: Path, time: str, dataset: Any, requested: str = "")
     return vectors[0] if len(vectors) == 1 else ""
 
 
+def finite_range(values: Any) -> tuple[float | None, float | None]:
+    """(min, max) of the finite values, (None, None) when there is none. A field
+    only some regions of a multi-region case have is NaN in the others: a slice
+    through those alone has no value at all."""
+    if values is None:
+        return None, None
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if not arr.size:
+        return None, None
+    return float(arr.min()), float(arr.max())
+
+
+def finite_json(value: Any) -> Any:
+    """``value`` with every NaN or infinite float as None (dicts, lists and tuples
+    walked), so the JSON it makes is JSON a browser reads."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: finite_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [finite_json(v) for v in value]
+    return value
+
+
+def json_text(value: Any, **kwargs: Any) -> str:
+    """``json.dumps`` of :func:`finite_json` ``(value)``, never NaN or Infinity."""
+    return json.dumps(finite_json(value), allow_nan=False, **kwargs)
+
+
 def foam_sources(time_dir: Path, names) -> dict[str, str]:
     """{shown name: the OpenFOAM file it reads} for the names the time folder holds."""
     out: dict[str, str] = {}
@@ -340,5 +412,5 @@ def foam_sources(time_dir: Path, names) -> dict[str, str]:
             continue
         src = foam_source(Path(time_dir), name)
         if src is not None:
-            out[name] = str(Path(time_dir) / src[0])
+            out[name] = str(foam_paths(Path(time_dir), src[0])[0])
     return out

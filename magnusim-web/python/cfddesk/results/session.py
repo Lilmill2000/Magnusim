@@ -50,11 +50,14 @@ def case_fingerprint(case_dir: Path) -> str:
     foams = sorted(case_dir.glob("*.foam"))
     for p in foams:
         parts.append(f"foam:{p.name}:{_mtime_ns(p)}")
-    points = case_dir / "constant" / "polyMesh" / "points"
-    owner = case_dir / "constant" / "polyMesh" / "owner"
-    for p in (points, owner):
-        if p.is_file():
-            parts.append(f"{p.relative_to(case_dir)}:{_mtime_ns(p)}:{p.stat().st_size}")
+    from cfddesk.results.regions import mesh_dirs, region_names
+
+    # Every mesh the results read: constant/polyMesh, or each region's.
+    for mesh in mesh_dirs(case_dir):
+        for p in (mesh / "points", mesh / "owner"):
+            if p.is_file():
+                parts.append(f"{p.relative_to(case_dir)}:{_mtime_ns(p)}:{p.stat().st_size}")
+    regions = region_names(case_dir)
     # Latest numeric time directory
     time_dirs: list[tuple[float, Path]] = []
     for child in case_dir.iterdir():
@@ -68,9 +71,12 @@ def case_fingerprint(case_dir: Path) -> str:
     if time_dirs:
         _, latest = max(time_dirs, key=lambda x: x[0])
         parts.append(f"time:{latest.name}:{_mtime_ns(latest)}")
-        for f in sorted(latest.iterdir()):
-            if f.is_file():
-                parts.append(f"{f.name}:{_mtime_ns(f)}:{f.stat().st_size}")
+        for folder in [latest / r for r in regions] or [latest]:
+            if not folder.is_dir():
+                continue
+            for f in sorted(folder.iterdir()):
+                if f.is_file():
+                    parts.append(f"{f.relative_to(latest).as_posix()}:{_mtime_ns(f)}:{f.stat().st_size}")
     raw = "\n".join(parts).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:24]
 

@@ -59,6 +59,7 @@ import {
   xAxisIsSeconds,
 } from '../analysis';
 import { mesherFor, mesherRows, refinementMenu, reportBits, stageText } from '../mesher';
+import { NO_VALUE_RGBA, normalizeRegions, polyDataInRegion, regionLabel, regionNote, regionsIn } from './resultRegions';
 import {
   defaultQuantity as monDefaultQuantity,
   detailRows as monitorDetailRows,
@@ -2777,6 +2778,9 @@ ptLut.setHueRange(RAINBOW_HUE, 0.0);
 ptLut.setSaturationRange(1.0, 1.0);
 ptLut.setValueRange(1.0, 1.0);
 ptLut.setNumberOfColors(256);
+// A multi-region case's field that some regions do not have (U in a solid) is NaN
+// there: drawn grey, and the legend says where (resultRegions.regionNote).
+try { lut.setNanColor(NO_VALUE_RGBA); } catch (_) {}
 surfaceMapper.setLookupTable(lut);
 surfaceMapper.setUseLookupTableScalarRange(true);
 cutMapper.setLookupTable(lut);
@@ -2840,9 +2844,10 @@ function boundsObj(bounds) {
 
 
 function percentilesOfScalarData(data, qs) {
-  const n = data && data.length ? data.length : 0;
+  // NaN (where a region has no such field) is no value: left out.
+  const a = data && data.length ? Array.from(data).filter((v) => Number.isFinite(v)) : [];
+  const n = a.length;
   if (!n) return (qs || []).map(() => null);
-  const a = Array.from(data);
   a.sort((x, y) => x - y);
   return (qs || []).map((q) => {
     const i = Math.min(n - 1, Math.max(0, Math.floor(Number(q) * (n - 1))));
@@ -7100,7 +7105,7 @@ function bindFieldSurface(pd) {
   styleFieldSurfaceActor();
   try {
     if (pd && pd.getNumberOfPoints && pd.getNumberOfPoints() > 0) {
-      surfaceMapper.setInputData(pd);
+      surfaceMapper.setInputData(regionView(pd));
       try { pd.modified(); } catch (_) {}
       try { surfaceMapper.update(); } catch (_) {}
       try { surfaceMapper.modified(); } catch (_) {}
@@ -7315,7 +7320,7 @@ function applyCutPlaneEntry(plane, entry) {
   if (!polyDataHasPolys(pd)) pd = triangulateCut(pd);
   const field = fieldKey(activeField);
   try {
-    plane.mapper.setInputData(pd);
+    plane.mapper.setInputData(regionView(pd));
     try { pd.modified(); } catch (_) {}
     try { plane.mapper.modified(); } catch (_) {}
     styleResultPlaneMapper(plane.mapper, field);
@@ -7574,6 +7579,7 @@ function applyLoadedField(field, entry, token, opts) {
   } catch (_) {}
   updateLegend(field, lo, hi);
   try { syncSharedLegend(); } catch (_) {}
+  try { syncLegendRegionNote(field, meta); } catch (_) {}
 
   const nPts = pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0;
   let cutFp = null;
@@ -7891,19 +7897,23 @@ function renderPopChart(meta) {
   const ymax = Math.max(...vals);
   const dx = xmax - xmin || 1;
   const dy = ymax - ymin || 1;
-  const pts = dists
-    .map((d, i) => {
-      const x = left + ((d - xmin) / dx) * (w - left - right);
-      const y = h - bottom - ((vals[i] - ymin) / dy) * (h - top - bottom);
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(' ');
+  // A multi-region path breaks where the field is not defined (meta.breaks: the
+  // index each new run of values starts at): one line per run, never joined across.
+  const breaks = new Set(((m && m.breaks) || []).map(Number));
+  /** @type {string[][]} */
+  const runs = [[]];
+  dists.forEach((d, i) => {
+    if (breaks.has(i) && runs[runs.length - 1].length) runs.push([]);
+    const x = left + ((d - xmin) / dx) * (w - left - right);
+    const y = h - bottom - ((vals[i] - ymin) / dy) * (h - top - bottom);
+    runs[runs.length - 1].push(`${x.toFixed(2)},${y.toFixed(2)}`);
+  });
   const label = (x, y, text, anchor) =>
     `<text x="${x}" y="${y}" font-size="9" fill="#6b7280" text-anchor="${anchor || 'start'}">${escapeXml(text)}</text>`;
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML =
     `<path d="M${left} ${top}V${h - bottom}H${w - right}" fill="none" stroke="#c4c9d2" stroke-width="1" />` +
-    `<polyline fill="none" stroke="#1570ef" stroke-width="2" points="${pts}" />` +
+    runs.map((r) => `<polyline fill="none" stroke="#1570ef" stroke-width="2" points="${r.join(' ')}" />`).join('') +
     `<text x="8" y="14" font-size="10" fill="#4b5563">${escapeXml(popChartTitle(m))}</text>` +
     label(left - 4, top + 4, toolNum(ymax), 'end') +
     label(left - 4, h - bottom, toolNum(ymin), 'end') +
@@ -7926,6 +7936,8 @@ function syncPopStatus(meta) {
   if (n < 1) text = 'Type a point as x, y, z in metres and press Add. A path needs at least two points.';
   else if (n < 2) text = 'Add a second point to make a path.';
   else if (m.reason === 'miss_mesh') text = 'The path does not pass through the model.';
+  else if (m.reason === 'field_not_in_regions')
+    text = `${fieldInfo(String(m.field_name || m.field || '')).label || 'This field'} is not defined in the regions the path passes through.`;
   else if (m.reason === 'api_error' || m.reason === 'fetch_error') text = 'The plot could not be made for this result.';
   else if (m.empty || !(m.values || []).length) text = 'Press Generate plot.';
   el.textContent = text;
@@ -8189,6 +8201,7 @@ async function loadIsoSurface(overrides) {
     await isoReader.setUrl(assetUrl);
     if (token !== isoLoadToken) return null;
     isoMapper.setInputConnection(isoReader.getOutputPort());
+    if (resultRegionIndex() >= 0) isoMapper.setInputData(regionView(isoReader.getOutputData()));
     isoMapper.setColorByArrayName(colorArr);
     try { applyResultDisplayScale(isoActor); } catch (_) {}
     isoActor.setVisibility(true);
@@ -8440,6 +8453,7 @@ async function loadIsoVolume(overrides) {
     await ivReader.setUrl(assetUrl);
     if (token !== ivLoadToken) return null;
     ivMapper.setInputConnection(ivReader.getOutputPort());
+    if (resultRegionIndex() >= 0) ivMapper.setInputData(regionView(ivReader.getOutputData()));
     ivMapper.setColorByArrayName(colorArr);
     try { applyResultDisplayScale(ivActor); } catch (_) {}
     ivActor.setVisibility(true);
@@ -14229,10 +14243,111 @@ function noteCaseFields(meta, casePath) {
     : null;
   const rows = 'result_fields' in meta ? (Array.isArray(meta.result_fields) ? meta.result_fields : null) : prev.rows;
   const next = { names: names || prev.names, rows };
+  noteCaseRegions(key, meta);
   if (caseFieldInfo.has(key) && JSON.stringify(next) === JSON.stringify(prev)) return;
   caseFieldInfo.set(key, next);
   if (key === caseFieldKey(getCaseDir())) syncColoringOptions();
 }
+
+// ---- a multi-region case's results (host API 1.8; resultRegions.ts) ----
+
+/** Per case folder: its regions ({name, role}) from /api/times or a field's meta. */
+const caseRegionInfo = new Map();
+/** The region the results show ('' = every region). */
+let resultRegionFilter = '';
+/** pd -> {index, out}: a dataset cut to the shown region, made once. */
+const regionViewCache = new WeakMap();
+
+function noteCaseRegions(key, meta) {
+  if (!meta) return;
+  // A /api/times answer always says (a case of one region leaves `regions` out); a
+  // field's meta names them only for a case of several.
+  if (!('regions' in meta) && !('times' in meta)) return;
+  caseRegionInfo.set(key, normalizeRegions(meta.regions));
+  if (key === caseFieldKey(getCaseDir())) syncRegionFilter();
+}
+
+/** The open case's regions ([] for a case of one region). */
+function resultRegions() {
+  return caseRegionInfo.get(caseFieldKey(getCaseDir())) || [];
+}
+
+/** The shown region's index in the case's list, -1 for every region. */
+function resultRegionIndex() {
+  if (!resultRegionFilter) return -1;
+  return resultRegions().findIndex((r) => r.name === resultRegionFilter);
+}
+
+/** What a result dataset shows: all of it, or the shown region's cells. */
+function regionView(pd) {
+  const index = resultRegionIndex();
+  if (index < 0 || !pd) return pd;
+  const hit = regionViewCache.get(pd);
+  if (hit && hit.index === index) return hit.out;
+  const out = polyDataInRegion(pd, index);
+  regionViewCache.set(pd, { index, out });
+  return out;
+}
+
+/** The Regions block of the Filters panel: shown for a case of several regions. */
+function syncRegionFilter() {
+  const block = document.getElementById('regions-block');
+  const sel = document.getElementById('region-filter');
+  if (!block || !sel) return;
+  const regions = resultRegions();
+  if (resultRegionFilter && !regions.some((r) => r.name === resultRegionFilter)) resultRegionFilter = '';
+  block.hidden = regions.length < 2;
+  const want = [['', 'All regions'], ...regions.map((r) => [r.name, regionLabel(r)])];
+  const have = Array.from(sel.options).map((o) => [o.value, o.textContent]);
+  if (JSON.stringify(have) !== JSON.stringify(want)) {
+    sel.replaceChildren(
+      ...want.map(([value, text]) => {
+        const o = document.createElement('option');
+        o.value = value;
+        o.textContent = text;
+        return o;
+      }),
+    );
+  }
+  sel.value = resultRegionFilter;
+}
+
+/** The legend's line for a field some regions do not have ("No U in solids (shown grey)"). */
+function syncLegendRegionNote(field, meta) {
+  const el = document.getElementById('legend-note');
+  if (!el) return;
+  const without = normalizeRegions(meta && meta.regions_without_field);
+  const text = meta && Array.isArray(meta.regions) ? regionNote(String(field || ''), without, normalizeRegions(meta.regions)) : '';
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+(function wireRegionFilter() {
+  const sel = document.getElementById('region-filter');
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    resultRegionFilter = String(sel.value || '');
+    loadField(fieldKey(activeField)).catch((e) => console.error('[CFD] region filter', e));
+  });
+})();
+
+/** Tests: the open case's regions, the shown one and what the surface draws. */
+window.__CFD_RESULT_REGIONS__ = () => {
+  let surface = null;
+  try { surface = surfaceMapper.getInputData(); } catch (_) { surface = null; }
+  const regions = resultRegions();
+  return {
+    regions,
+    filter: resultRegionFilter,
+    surface_cells: surface && surface.getNumberOfCells ? surface.getNumberOfCells() : 0,
+    surface_regions: regionsIn(surface).map((i) => (regions[i] ? regions[i].name : String(i))),
+    planes: resultPlanes.map((p) => {
+      let pd = null;
+      try { pd = p.mapper.getInputData(); } catch (_) { pd = null; }
+      return regionsIn(pd).map((i) => (regions[i] ? regions[i].name : String(i)));
+    }),
+  };
+};
 
 /**
  * The Coloring picker lists the run's result fields the frame wrote (a vector

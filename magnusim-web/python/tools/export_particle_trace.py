@@ -42,7 +42,9 @@ from result_names import (  # noqa: E402
     dataset_vector,
     dataset_vectors,
     ensure_shown_field,
+    finite_range,
     foam_sources,
+    json_text,
     resolve_shown_field,
     shown_fields,
 )
@@ -1802,8 +1804,8 @@ def export_particle_trace(
         "n_cells": n_cells,
         "bounds": list(map(float, tubes.bounds)) if n_points else list(map(float, bounds)),
         "mesh_checksum": mesh_checksum(pts, n_cells),
-        "vector_magnitude_min": float(np.nanmin(mag)) if mag is not None and mag.size else None,
-        "vector_magnitude_max": float(np.nanmax(mag)) if mag is not None and mag.size else None,
+        "vector_magnitude_min": finite_range(mag)[0],
+        "vector_magnitude_max": finite_range(mag)[1],
         "asset_bytes": len(vtp_bytes),
         "asset_sha256": vtp_sha,
         "source_vtu": str(vtu_path) if vtu_path.is_file() else None,
@@ -1819,7 +1821,7 @@ def export_particle_trace(
         if empty and empty_reason:
             meta["empty_reason"] = empty_reason
 
-    out_meta.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    out_meta.write_text(json_text(meta, indent=2) + "\n", encoding="utf-8")
     print(
         json.dumps(
             {

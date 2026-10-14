@@ -1,0 +1,52 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     chtMultiRegionSimpleFoam;
+startFrom       latestTime;
+startTime       0;
+stopAt          endTime;
+endTime         3;
+deltaT          1;
+writeControl    timeStep;
+writeInterval   3;
+writeFormat     ascii;
+writePrecision  8;
+runTimeModifiable true;
+functions
+{
+    Tmax_air
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          air;
+        regionType      all;
+        operation       max;
+        fields          (T);
+        writeFields     false;
+    }
+    Tmax_aluminium_6061
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        regionType      all;
+        operation       max;
+        fields          (T);
+        writeFields     false;
+    }
+    probes_aluminium_6061
+    {
+        type            probes;
+        libs            (sampling);
+        region          aluminium_6061;
+        fields          (T);
+        probeLocations  ((0.01 0.005 0.005));
+        writeControl    timeStep;
+        writeInterval   1;
+    }
+}

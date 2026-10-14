@@ -1,0 +1,84 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2606                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       volScalarField;
+    location    "3/aluminium_6061";
+    object      T;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   nonuniform List<scalar> 
+32
+(
+349.9962
+349.99886
+349.99964
+349.99992
+349.99442
+349.99788
+349.99924
+349.99981
+349.99463
+349.99793
+349.99925
+349.99982
+349.99648
+349.99892
+349.99965
+349.99992
+349.9962
+349.99886
+349.99964
+349.99992
+349.99441
+349.99788
+349.99924
+349.99981
+349.99463
+349.99793
+349.99925
+349.99982
+349.99648
+349.99892
+349.99965
+349.99992
+)
+;
+
+boundaryField
+{
+    walls
+    {
+        type            fixedValue;
+        value           uniform 350;
+    }
+    aluminium_6061_to_air
+    {
+        type            compressible::turbulentTemperatureRadCoupledMixed;
+        refValue        nonuniform List<scalar> 8(316.9883 323.73033 325.76907 320.13192 316.96712 323.71098 325.7799 320.16454);
+        refGradient     uniform 0;
+        valueFraction   nonuniform List<scalar> 8(0.00015710631 0.00015710631 0.00015710631 0.00015710631 0.00015710631 0.00015710631 0.00015710631 0.00015710631);
+        source          uniform 0;
+        value           nonuniform List<scalar> 8(349.99101 349.99029 349.99083 349.99179 349.99101 349.99029 349.99083 349.9918);
+        logInterval     -1;
+        writePrecision  8;
+        updateHeader    1;
+        writeToFile     0;
+        useUserTime     1;
+        kappaMethod     solidThermo;
+    }
+}
+
+
+// ************************************************************************* //

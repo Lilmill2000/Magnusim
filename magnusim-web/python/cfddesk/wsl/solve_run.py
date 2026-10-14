@@ -25,6 +25,7 @@ WRITE_NOW_SED = r"s/^[[:space:]]*stopAt.*/stopAt          writeNow;/"
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _SOLVE_SH = _TEMPLATES / "solve.sh"
+_PLACEHOLDERS = re.compile(r"__(DST|WIN_OUT|NPROCS|APP|KEEP_FRAMES|FRAME_FIELDS|RUN_ID|RESTART|REGIONS|ALL_REGIONS)__")
 
 
 class LineOut(Protocol):
@@ -68,17 +69,23 @@ def render_solve_script(
     keep_frames: str = "latest",
     frame_fields: tuple[str, ...] | list[str],
     restart: bool = False,
+    regions: tuple[str, ...] | list[str] = (),
 ) -> str:
-    """Substitute placeholders in ``templates/solve.sh`` (LF, no BOM).
+    """Substitute placeholders in ``templates/solve.sh`` (LF, no BOM), in one pass:
+    an inserted value is never scanned again.
 
     ``app`` is the program the analysis's launch spec names; ``keep_frames``
     (``all`` | ``latest``) which result frames come back to Windows;
     ``frame_fields`` the fields whose files mark a written frame (the
     launch spec's); ``restart`` continues a run from its latest saved time
     (the saved times stay, a parallel run decomposes the latest only, the
-    log so far is kept as log.<app>.N).
+    log so far is kept as log.<app>.N); ``regions`` a multi-region case's
+    region names (its ``w27-case.json`` ``regions``; empty for one region).
     """
+    from cfddesk.wsl.foam_case import regions_word_list
+
     _check_names(app)
+    region_words = regions_word_list(regions)
     if keep_frames not in ("all", "latest"):
         raise ValueError(f"keep_frames must be 'all' or 'latest', got {keep_frames!r}")
     fields = [str(f) for f in frame_fields]
@@ -88,16 +95,20 @@ def render_solve_script(
     if raw.startswith("\ufeff"):
         raw = raw.lstrip("\ufeff")
     n = max(1, int(n_procs))
-    text = (
-        raw.replace("__DST__", str(dst))
-        .replace("__WIN_OUT__", str(win_out))
-        .replace("__NPROCS__", str(n))
-        .replace("__APP__", app)
-        .replace("__KEEP_FRAMES__", keep_frames)
-        .replace("__FRAME_FIELDS__", " ".join(fields))
-        .replace("__RUN_ID__", str(run_id))
-        .replace("__RESTART__", "1" if restart else "0")
-    )
+    values = {
+        "DST": str(dst),
+        "WIN_OUT": str(win_out),
+        "NPROCS": str(n),
+        "APP": app,
+        "KEEP_FRAMES": keep_frames,
+        "FRAME_FIELDS": " ".join(fields),
+        "RUN_ID": str(run_id),
+        "RESTART": "1" if restart else "0",
+        "REGIONS": region_words,
+        # decomposePar / reconstructPar's flag for a multi-region case.
+        "ALL_REGIONS": " -allRegions" if region_words else "",
+    }
+    text = _PLACEHOLDERS.sub(lambda m: values[m.group(1)], raw)
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -112,6 +123,7 @@ def write_solve_script(
     keep_frames: str = "latest",
     frame_fields: tuple[str, ...] | list[str],
     restart: bool = False,
+    regions: tuple[str, ...] | list[str] = (),
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,6 +136,7 @@ def write_solve_script(
         keep_frames=keep_frames,
         frame_fields=frame_fields,
         restart=restart,
+        regions=regions,
     )
     path.write_bytes(body.encode("utf-8"))
     return path
@@ -141,13 +154,15 @@ def start_solve(
     frame_fields: tuple[str, ...],
     script_path: Path | None = None,
     restart: bool = False,
+    regions: tuple[str, ...] = (),
 ) -> subprocess.Popen:
     """Render solve.sh and spawn ``wsl -d <distro> -- bash <script>``.
 
     The Windows case at ``case_dir`` is copied into WSL by the bash template
     (same as historic ``buildSolveScript``). Caller should have written the
     case (e.g. via ``prepare_run``) before calling. ``restart``: the case
-    continues from its latest saved time (render_solve_script).
+    continues from its latest saved time; ``regions``: a multi-region case's
+    regions (render_solve_script).
     """
     case_dir = Path(case_dir).resolve()
     if not case_dir.is_dir():
@@ -174,6 +189,7 @@ def start_solve(
         keep_frames=keep_frames,
         frame_fields=frame_fields,
         restart=restart,
+        regions=regions,
     )
     sh_wsl = windows_to_wsl_path(script_path)
     argv = ["wsl", "-d", get_wsl_distro(), "--", "bash", sh_wsl]

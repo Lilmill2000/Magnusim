@@ -184,6 +184,8 @@ def test_every_allowed_flag_is_in_the_tools_help():
             assert re.search(rf"(^|\s){re.escape(flag)}(\s|$)", text, flags=re.M), f"{tool} -help has no {flag}"
         if rule.parallel:
             assert re.search(r"(^|\s)-parallel(\s|$)", text, flags=re.M), f"{tool} -help has no -parallel"
+        if rule.region_arg:
+            assert re.search(r"(^|\s)-region <name>", text, flags=re.M), f"{tool} -help has no -region <name>"
 
 
 def test_the_rendered_script_is_valid_bash(tmp_path: Path):

@@ -1,0 +1,84 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2606                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       volScalarField;
+    location    "3/air";
+    object      T;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   nonuniform List<scalar> 
+32
+(
+300.28862
+301.22227
+304.56813
+316.9883
+300.4515
+302.18372
+307.944
+323.73033
+300.40374
+302.28846
+309.49285
+325.76907
+300.21437
+301.4385
+306.82385
+320.13192
+300.27632
+301.18762
+304.51955
+316.96712
+300.43269
+302.12654
+307.86122
+323.71098
+300.38905
+302.23997
+309.43361
+325.7799
+300.20824
+301.41938
+306.81692
+320.16454
+)
+;
+
+boundaryField
+{
+    walls
+    {
+        type            fixedValue;
+        value           uniform 300;
+    }
+    air_to_aluminium_6061
+    {
+        type            compressible::turbulentTemperatureRadCoupledMixed;
+        refValue        nonuniform List<scalar> 8(349.99606 349.99405 349.99416 349.99619 349.99606 349.99405 349.99416 349.99619);
+        refGradient     uniform 0;
+        valueFraction   uniform 0.99984289;
+        source          uniform 0;
+        value           nonuniform List<scalar> 8(349.99078 349.98967 349.98993 349.99112 349.99077 349.98967 349.98994 349.99113);
+        logInterval     -1;
+        writePrecision  8;
+        updateHeader    1;
+        writeToFile     0;
+        useUserTime     1;
+        kappaMethod     fluidThermo;
+    }
+}
+
+
+// ************************************************************************* //

@@ -53,7 +53,7 @@ import { caseDirAllowedForAttach, caseDirBelongsToProject, caseDirBelongsToStudy
 import { PROJECTS_ROOT as PROJECTS_ROOT_FOR_ATTACH, caseDirBelongsToPluginStudy } from './project-isolation.js';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, relative } from 'node:path';
-import { listFoamTimeDirs } from './project-layout.js';
+import { caseRegionNames, caseRegions, listFoamTimeDirs, timeFieldDirs } from './project-layout.js';
 import { liveMeshJobSnapshot, meshGenerateLivePid, recoverStudyMeshesFromDisk, watchUnownedMeshGenerate } from './w21-mesh-generate.js';
 import { getActiveSimulation } from './w17-sim-catalog.js';
 import { assembleMeshDoc } from './study-io.js';
@@ -478,12 +478,35 @@ export function fieldNameParam(u, keys) {
   return '';
 }
 
+/**
+ * Whether a saved time holds field file `name`: in its folder, or in a
+ * multi-region case in some region's folder of it (timeFieldDirs).
+ */
+function timeHasFile(caseDir, time, name) {
+  return timeFieldDirs(caseDir, time).some((d) => existsSync(join(d, name)));
+}
+
 /** The OpenFOAM file a shown field reads at a time: itself, or for magX the vector X. */
 function foamNameFor(caseDir, time, field) {
   const name = String(field || '');
-  if (existsSync(join(caseDir, String(time), name))) return name;
-  if (/^mag[A-Za-z]/.test(name) && existsSync(join(caseDir, String(time), name.slice(3)))) return name.slice(3);
+  if (timeHasFile(caseDir, time, name)) return name;
+  if (/^mag[A-Za-z]/.test(name) && timeHasFile(caseDir, time, name.slice(3))) return name.slice(3);
   return name;
+}
+
+/** Every file of a shown field at a time: one, or one per region that wrote it. */
+function foamFieldPaths(caseDir, time, field) {
+  const name = foamNameFor(caseDir, time, field);
+  return timeFieldDirs(caseDir, time)
+    .map((d) => join(d, name))
+    .filter((p) => existsSync(p));
+}
+
+/** Each mesh's points file the results read (constant/polyMesh, or every region's). */
+function meshPointsFiles(caseDir) {
+  const regions = caseRegionNames(caseDir);
+  const meshes = regions.length ? regions.map((r) => join(caseDir, 'constant', r, 'polyMesh')) : [join(caseDir, 'constant', 'polyMesh')];
+  return meshes.map((m) => join(m, 'points'));
 }
 
 /**
@@ -519,18 +542,21 @@ function foamFileKind(path) {
 /**
  * The fields a saved time can colour by (python/tools/result_names.shown_fields):
  * a scalar by its name, a vector X as magX. Tensors, face fields (phi) and
- * old-time copies (U_0) are left out.
+ * old-time copies (U_0) are left out. A multi-region case: a field any region wrote.
  */
 export function caseShownFields(caseDir, time) {
-  const dir = join(String(caseDir), String(time));
-  let names = [];
-  try {
-    names = readdirSync(dir).sort();
-  } catch {
-    return [];
+  /** @type {Array<[string, string]>} name and folder */
+  const entries = [];
+  for (const dir of timeFieldDirs(String(caseDir), String(time))) {
+    try {
+      for (const name of readdirSync(dir)) entries.push([name, dir]);
+    } catch {
+      /* a region that wrote nothing */
+    }
   }
+  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const out = [];
-  for (const name of names) {
+  for (const [name, dir] of entries) {
     if (!isFieldName(name) || /_0$/.test(name)) continue;
     let file = false;
     try {
@@ -541,7 +567,8 @@ export function caseShownFields(caseDir, time) {
     if (!file) continue;
     const kind = foamFileKind(join(dir, name));
     if (kind === 'tensor' || kind === 'face') continue;
-    out.push(kind === 'vector' ? 'mag' + name : name);
+    const shown = kind === 'vector' ? 'mag' + name : name;
+    if (!out.includes(shown)) out.push(shown);
   }
   return out;
 }
@@ -605,30 +632,39 @@ function cacheKey(caseDir, time, field) {
   return join(scopedCacheDir(CACHE_ROOT, caseDir), `${field}-${h}`);
 }
 
-/** Every field file a time folder holds, for the volume tools' cache stamps. */
+/**
+ * Every field file a time folder holds, for the volume tools' cache stamps (in a
+ * multi-region case every region's, named <region>/<field>, and each region's points).
+ */
 function timeFolderStamp(caseDir, time) {
   const dir = join(caseDir, String(time));
-  let names = [];
-  try {
-    names = readdirSync(dir).filter((n) => !n.startsWith('.')).sort();
-  } catch {
-    return null;
-  }
+  const regions = caseRegionNames(caseDir);
   const parts = [];
-  for (const n of names) {
-    const f = join(dir, n);
+  for (const folder of timeFieldDirs(caseDir, time)) {
+    let names = [];
     try {
-      const st = statSync(f);
-      if (st.isFile()) parts.push(`${n}:${st.mtimeMs}:${st.size}`);
+      names = readdirSync(folder).filter((n) => !n.startsWith('.')).sort();
     } catch {
-      /* gone meanwhile */
+      if (!regions.length) return null;
+      continue;
+    }
+    const prefix = regions.length ? folder.slice(dir.length + 1) + '/' : '';
+    for (const n of names) {
+      const f = join(folder, n);
+      try {
+        const st = statSync(f);
+        if (st.isFile()) parts.push(`${prefix}${n}:${st.mtimeMs}:${st.size}`);
+      } catch {
+        /* gone meanwhile */
+      }
     }
   }
   if (!parts.length) return null;
-  const points = join(caseDir, 'constant', 'polyMesh', 'points');
-  if (existsSync(points)) {
-    const ps = statSync(points);
-    parts.push(`${points}:${ps.mtimeMs}:${ps.size}`);
+  for (const points of meshPointsFiles(caseDir)) {
+    if (existsSync(points)) {
+      const ps = statSync(points);
+      parts.push(`${points}:${ps.mtimeMs}:${ps.size}`);
+    }
   }
   const vtu = join(caseDir, '.cfddesk-prepared.vtu');
   if (existsSync(vtu)) {
@@ -640,15 +676,18 @@ function timeFolderStamp(caseDir, time) {
 }
 
 function foamStamp(caseDir, time, field) {
-  const foam = foamFieldPath(caseDir, time, field);
-  if (!existsSync(foam)) return null;
+  const files = foamFieldPaths(caseDir, time, field);
+  if (!files.length) return null;
   const parts = [];
-  const st = statSync(foam);
-  parts.push(`${foam}:${st.mtimeMs}:${st.size}`);
-  const points = join(caseDir, 'constant', 'polyMesh', 'points');
-  if (existsSync(points)) {
-    const ps = statSync(points);
-    parts.push(`${points}:${ps.mtimeMs}:${ps.size}`);
+  for (const foam of files) {
+    const st = statSync(foam);
+    parts.push(`${foam}:${st.mtimeMs}:${st.size}`);
+  }
+  for (const points of meshPointsFiles(caseDir)) {
+    if (existsSync(points)) {
+      const ps = statSync(points);
+      parts.push(`${points}:${ps.mtimeMs}:${ps.size}`);
+    }
   }
   const vtu = join(caseDir, '.cfddesk-prepared.vtu');
   if (existsSync(vtu)) {
@@ -773,10 +812,14 @@ function seriesRangeStamp(caseDir, field) {
   const name = String(field);
   return listCaseTimes(caseDir)
     .map((t) => {
-      const p = foamFieldPath(caseDir, t, name);
-      if (!existsSync(p)) return t;
-      const st = statSync(p);
-      return `${t}:${st.mtimeMs}:${st.size}`;
+      const files = foamFieldPaths(caseDir, t, name);
+      if (!files.length) return t;
+      return files
+        .map((p) => {
+          const st = statSync(p);
+          return `${t}:${st.mtimeMs}:${st.size}`;
+        })
+        .join(',');
     })
     .join('|');
 }
@@ -1970,8 +2013,10 @@ function listCaseTimes(caseDir) {
   return listFoamTimeDirs(caseDir, { complete: true });
 }
 
+/** The file a shown field reads at a time (in a multi-region case the first region's that wrote it). */
 function foamFieldPath(caseDir, time, field) {
-  return join(caseDir, String(time), foamNameFor(caseDir, time, field));
+  const files = foamFieldPaths(caseDir, time, field);
+  return files.length ? files[0] : join(caseDir, String(time), foamNameFor(caseDir, time, field));
 }
 
 
@@ -2273,6 +2318,7 @@ export function getCaseFieldApi() {
     syncActiveCaseToActiveProject,
     listCaseTimes,
     caseShownFields,
+    caseRegions,
     caseResultFieldRows,
     listCaseSeedFaces,
     foamFieldPath,

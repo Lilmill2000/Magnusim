@@ -4,7 +4,10 @@ Reads the OpenFOAM case on Windows with VTK's OpenFOAM reader (no WSL): for each
 asked time, the internal mesh and every boundary patch with all the fields the
 frame saved, as cell data. Each frame is a ``.vtm`` (a multiblock: the internal
 mesh ``.vtu`` and one ``.vtp`` per boundary patch); several frames also get a
-``.pvd`` time series. Everything goes into one zip with a README.
+``.pvd`` time series. Everything goes into one zip with a README. A
+multi-region case (``regions`` in its ``w27-case.json``, host API 1.8) gives a
+block per region, each with its internal mesh and patches; the unsplit mesh the
+case also holds is left out.
 
 Pressure: an incompressible case stores ``p`` divided by density (m^2/s^2). As
 the results view does (case_units), every field the case lists as kinematic is
@@ -31,6 +34,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from case_units import KINEMATIC_UNIT, case_density, kinematic_fields  # noqa: E402
+
+_PY_ROOT = Path(__file__).resolve().parents[1]
+if str(_PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PY_ROOT))
+from cfddesk.results.regions import region_names  # noqa: E402
 
 PA_SUFFIX = "_Pa"
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -182,10 +190,27 @@ def write_pvd(path: Path, frames: list[tuple[str, str]]) -> None:
     )
 
 
+def _wanted(name: str, regions: list[str]) -> bool:
+    """A reader entry the export holds: the internal mesh and each patch, never a
+    patch group (its patches twice); in a multi-region case only the regions'."""
+    if not regions:
+        return name == "internalMesh" or not name.startswith(("group/", "lagrangian/"))
+    for region in regions:
+        head = f"/{region}/"
+        if name.startswith(head):
+            return not name[len(head) :].startswith(("group/", "lagrangian/"))
+    return False
+
+
 def _open_reader(case_dir: Path):
     import pyvista as pv
 
-    if not (case_dir / "constant" / "polyMesh").is_dir():
+    regions = region_names(case_dir)
+    if regions:
+        missing = [r for r in regions if not (case_dir / "constant" / r / "polyMesh").is_dir()]
+        if missing:
+            raise ExportError(f"The run's case has no mesh for region {missing[0]} (constant/{missing[0]}/polyMesh is missing).")
+    elif not (case_dir / "constant" / "polyMesh").is_dir():
         raise ExportError("The run's case has no mesh (constant/polyMesh is missing).")
     foam = next(iter(sorted(case_dir.glob("*.foam"))), None)
     if foam is None:
@@ -199,8 +224,7 @@ def _open_reader(case_dir: Path):
     reader.cell_to_point_creation = False
     reader.disable_all_patch_arrays()
     for name in reader.patch_array_names:
-        # The internal mesh and each patch; never a patch group (its patches twice).
-        if name == "internalMesh" or not str(name).startswith(("group/", "lagrangian/")):
+        if _wanted(str(name), regions):
             reader.enable_patch_array(name)
     return reader
 
@@ -245,6 +269,7 @@ def export_vtk(case_dir: Path, times: list[str], out_dir: Path, name: str = "res
     vtms: list[str] = []
     fields: list[str] = []
     n_cells = 0
+    regions = region_names(case_dir)
     for i, t in enumerate(times):
         label = f"frame {i + 1} of {n}" if n > 1 else "the frame"
         emit("progress", fraction=round(0.9 * i / n, 4), message=f"Reading {label}", time=t)
@@ -256,6 +281,7 @@ def export_vtk(case_dir: Path, times: list[str], out_dir: Path, name: str = "res
         emit("progress", fraction=round(0.9 * (i + 0.5) / n, 4), message=f"Writing {label}", time=t)
         folder = f"{name}/{safe_name(t, 'frame')}"
         tree: dict = {}
+        frame_cells = 0
         for path, dataset in leaves:
             scale_to_pa(dataset, rho, kinematic)
             dataset.field_data["Magnusim_units"] = [note]
@@ -271,7 +297,9 @@ def export_vtk(case_dir: Path, times: list[str], out_dir: Path, name: str = "res
                 if arr not in fields and not str(arr).lower().startswith("vtk"):
                     fields.append(str(arr))
             if path and path[-1][1] == "internalMesh":
-                n_cells = max(n_cells, int(dataset.n_cells))
+                # Every region's internal mesh (one in a case of one region).
+                frame_cells += int(dataset.n_cells)
+        n_cells = max(n_cells, frame_cells)
         vtm = f"{name}_{safe_name(t, 'frame')}.vtm"
         write_vtm(stage / vtm, tree)
         frames.append((t, vtm))
@@ -290,6 +318,11 @@ def export_vtk(case_dir: Path, times: list[str], out_dir: Path, name: str = "res
                 *(["Each frame is also a .vtm on its own."] if pvd else []),
                 "Each frame holds the internal mesh (internalMesh.vtu) and each boundary patch",
                 "(boundary/<patch>.vtp), with every saved field as cell data.",
+                *(
+                    [f"The case has {len(regions)} regions ({', '.join(regions)}): each is a block of its own."]
+                    if regions
+                    else []
+                ),
                 "",
                 "Frames: " + ", ".join(times),
                 "Fields: " + ", ".join(fields),
