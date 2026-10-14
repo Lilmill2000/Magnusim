@@ -272,6 +272,66 @@ describe('MaterialsPanel', () => {
     expect(nu.value).toBe('2.0000e-5');
   });
 
+  it("a fluid picked while a new fluid's first save is on its way saves on that fluid and stays on screen", async () => {
+    stored = null;
+    // The runtime reloads the panel after each save (cfd:material), as in the app.
+    window.__CFD_MATERIAL_APPLY__ = vi.fn(() => {
+      window.dispatchEvent(new CustomEvent('cfd:material'));
+    });
+    // Each save waits for the test: the first is written at once and its answer held (the
+    // server has it, the page not yet); the second is held before it is written.
+    const gates: Array<() => void> = [];
+    const heldSave = (writeFirst: boolean) => async (_method: string, params?: { body?: { air?: Record<string, unknown> } }) => {
+      const air = params?.body?.air;
+      if (writeFirst) stored = air || null;
+      await new Promise<void>((r) => gates.push(r));
+      if (!writeFirst) stored = air || null;
+      return { air, materials: [air] };
+    };
+    workerRpc.mockImplementationOnce(heldSave(true)).mockImplementationOnce(heldSave(false));
+    const loads = () => vi.mocked(fetch).mock.calls.filter(([u]) => String(u).includes('/api/materials')).length;
+    const settle = () =>
+      act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+    const { container } = renderPanel();
+    const fluid = (await screen.findByLabelText('Fluid')) as HTMLSelectElement;
+    expect(fluid.value).toBe('air');
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-volume="Body1"] button') as HTMLElement);
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalledTimes(1));
+    const first = lastSavedAir();
+    expect(first).toMatchObject({ name: 'Air', assigned_volumes: ['Body1'] });
+
+    // Water is picked before the first save's answer is back.
+    await act(async () => {
+      fireEvent.change(fluid, { target: { value: 'water' } });
+    });
+    expect(fluid.value).toBe('water');
+    const loadsBefore = loads();
+    // The answer lands: Water's save goes out, and the first save's reload reads Air.
+    await act(async () => {
+      gates.shift()?.();
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(loads()).toBeGreaterThan(loadsBefore));
+    await settle();
+    // Water is saved on the study's fluid, not as a second fluid beside it...
+    expect(lastSavedAir()).toMatchObject({ id: first.id, name: 'Water', preset: 'water', assigned_volumes: ['Body1'] });
+    // ...and that reload did not put Air back on screen.
+    expect(fluid.value).toBe('water');
+
+    await act(async () => {
+      gates.shift()?.();
+    });
+    await settle();
+    expect(stored).toMatchObject({ id: first.id, name: 'Water' });
+    expect(fluid.value).toBe('water');
+    expect((screen.getByLabelText('Density') as HTMLInputElement).value).toBe('998.2');
+  });
+
   it('Delete goes through the runtime', async () => {
     renderPanel();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument());

@@ -50,13 +50,16 @@ function plainLabel(label: string): string {
 
 /**
  * Opens once the panel's saved fluid has loaded. `dropped`: the panel left that
- * simulation (or closed) first, and what waited on it is not done.
+ * simulation (or closed) first, and what waited on it is not done. `savesStarted` and
+ * `savesDone` count that simulation's saves: started, and finished (written or not).
  */
 interface LoadGate {
   promise: Promise<void>;
   open: () => void;
   done: boolean;
   dropped: boolean;
+  savesStarted: number;
+  savesDone: number;
 }
 
 function loadGate(): LoadGate {
@@ -71,6 +74,8 @@ function loadGate(): LoadGate {
     },
     done: false,
     dropped: false,
+    savesStarted: 0,
+    savesDone: 0,
   };
   return gate;
 }
@@ -125,11 +130,11 @@ function FluidPanel(props: IslandProps) {
   // simulation's, and a load landing while a field was being typed in replaced the typing.
   const [ready, setReady] = useState(false);
   const gate = useRef<LoadGate>(NO_LOAD_YET);
-  // Loads show in order: an older answer, or one read before a save started, never
-  // replaces what is on screen (the save's own reload follows it).
+  // Loads show in order: an older answer, or one that may have been read before a save
+  // was written (a save started after the load, or was still on its way when it started),
+  // never replaces what is on screen (the save's own reload follows it).
   const loadSeq = useRef(0);
   const shownSeq = useRef(0);
-  const savesStarted = useRef(0);
 
   function ids() {
     return scopeIds({
@@ -167,13 +172,17 @@ function FluidPanel(props: IslandProps) {
     const scoped = scopeIds(props);
     const g = gate.current;
     const seq = ++loadSeq.current;
-    const savesBefore = savesStarted.current;
+    const savesBefore = g.savesStarted;
+    // A save still queued or on its way: this load may read the server before it is
+    // written (a fluid picked while the first save of a new fluid was on its way came back
+    // as the old fluid when that first save's own reload landed).
+    const saving = g.savesDone !== g.savesStarted;
     void apiGet('/api/materials', {
       project_id: scoped.project_id || undefined,
       simulation_id: scoped.simulation_id || undefined,
     })
       .then((j) => {
-        if (g !== gate.current || seq < shownSeq.current || savesBefore !== savesStarted.current) return;
+        if (g !== gate.current || seq < shownSeq.current || saving || savesBefore !== g.savesStarted) return;
         shownSeq.current = seq;
         const doc = j as { materials?: SavedMaterial[]; air?: SavedMaterial | null };
         const rows = Array.isArray(doc.materials) ? doc.materials : doc.air ? [doc.air] : [];
@@ -216,7 +225,13 @@ function FluidPanel(props: IslandProps) {
   ): Promise<unknown> {
     const g = gate.current;
     if (!g.done) return g.promise.then(() => (g.dropped ? undefined : save(next)));
-    savesStarted.current += 1;
+    g.savesStarted += 1;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      g.savesDone += 1;
+    };
     const cur = live.current;
     const fields = {
       values: next.values ? { ...cur.values, ...next.values } : cur.values,
@@ -229,7 +244,7 @@ function FluidPanel(props: IslandProps) {
     if (next.volumes !== undefined) setVolumes(fields.volumes);
     if (next.preset !== undefined) setPreset(fields.preset);
     if (next.name !== undefined) setName(fields.name);
-    const run = async () => {
+    const write = async () => {
       const scoped = ids();
       if (!scoped.project_id || !scoped.simulation_id) {
         setNote('Create a simulation first.');
@@ -240,6 +255,7 @@ function FluidPanel(props: IslandProps) {
         setNote("Fluids are not available: this simulation's analysis plugin is off or did not load.");
         return;
       }
+      // The fluid this save writes: the one the save before it wrote, when one did.
       const rec = materialRecord(m, live.current.material, fields, {
         simulation_id: scoped.simulation_id,
         geometry_id: scoped.geometry_id || undefined,
@@ -259,9 +275,24 @@ function FluidPanel(props: IslandProps) {
         },
       });
       const saved = (doc.materials || []).find((r) => r.id === rec.id) || doc.air || rec;
-      setMaterial(saved);
+      if (g === gate.current) {
+        setMaterial(saved);
+        // A save queued behind this one runs before the next render: it reads the fluid
+        // now. It read the fluid from before this save, and a new study's first save (a
+        // body assigned) had none: a fluid picked meanwhile was saved as a second fluid.
+        live.current = { ...live.current, material: saved };
+      }
       setNote('');
+      // Done before the runtime hears of it: the reload it starts reads this save.
+      finish();
       applyMaterial(saved as Record<string, unknown>, scoped.project_id);
+    };
+    const run = async () => {
+      try {
+        await write();
+      } finally {
+        finish();
+      }
     };
     const p = queue.current.then(run).catch((e) => setNote(e instanceof Error ? e.message : 'Material save failed'));
     queue.current = p;
