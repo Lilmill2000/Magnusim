@@ -60,6 +60,10 @@ test('the viewport job chip names the mesh stage as the Mesh panel does, never b
 
   await page.goto(`/#/p/${encodeURIComponent(PID)}`);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 60_000 });
+  // The seeded part is shown once its preview is made: until then the chip says "Preparing
+  // Elbow" after the mesh's stage (connection-limit-cad.spec.js), and this test reads the
+  // mesh's own chip.
+  await page.waitForFunction(() => !!(window.__CFD_W16__ && window.__CFD_W16__.ready), null, { timeout: 60_000 });
   await page.waitForFunction(() => typeof window.__CFD_MESH_OPEN_SETTINGS__ === 'function');
   await page.evaluate((id) => window.__CFD_MESH_OPEN_SETTINGS__(id), meshId);
   const form = page.locator('#panel-mesh-form .cfd-island');
