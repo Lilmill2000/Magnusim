@@ -103,9 +103,14 @@ def _is_replace_lock(exc: BaseException) -> bool:
     return exc.errno in _WIN_LOCK_ERRNOS
 
 
-def atomic_write(path: Path, doc: dict[str, Any]) -> None:
-    """Write JSON next to ``path`` then replace. Retry Windows lock (WinError 5/32)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def atomic_write(path: Path, doc: dict[str, Any], *, make_dirs: bool = True) -> None:
+    """Write JSON next to ``path`` then replace. Retry Windows lock (WinError 5/32).
+
+    ``make_dirs=False``: the folder must be there; a missing one raises FileNotFoundError
+    and is not made.
+    """
+    if make_dirs:
+        path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=str(path.parent))
     try:
@@ -948,10 +953,25 @@ def write_json(project_dir: Path, rel: str, body: dict[str, Any], *, sim_id: str
     return doc
 
 
-def write_project(project_dir: Path, body: dict[str, Any]) -> dict[str, Any]:
+class ProjectGoneError(FileNotFoundError):
+    """A save of a project whose project.json is gone: the project was deleted."""
+
+    def __init__(self, project_dir: Path) -> None:
+        super().__init__(f"project not found: {Path(project_dir).name} (deleted)")
+
+
+def write_project(project_dir: Path, body: dict[str, Any], *, create: bool = False) -> dict[str, Any]:
+    """Save ``project.json``. Only a new project (``create``, in its folder) has none yet.
+
+    A save can run after the project was deleted: the worker answers one request at a
+    time, so a save waits behind earlier ones. It raises ProjectGoneError then, and never
+    makes the deleted project's folder or project.json again.
+    """
     if not isinstance(body, dict):
         raise ValueError("body must be object")
     path = project_dir / "project.json"
+    if not (project_dir.is_dir() if create else path.is_file()):
+        raise ProjectGoneError(project_dir)
     if not body.get("id"):
         body = {**body, "id": project_dir.name}
     body = dict(body)
@@ -960,7 +980,7 @@ def write_project(project_dir: Path, body: dict[str, Any]) -> dict[str, Any]:
     marker = read_json(path).get(MIGRATION_MARKER)
     if marker is not None:
         body[MIGRATION_MARKER] = marker
-    atomic_write(path, body)
+    atomic_write(path, body, make_dirs=False)
     return body
 
 

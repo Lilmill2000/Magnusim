@@ -156,12 +156,18 @@ function readActiveId() {
   }
 }
 
-function writeActiveId(id) {
+/**
+ * Make `id` the active project (null: none). A project whose project.json is gone (it was
+ * deleted) never is: false, and the active project stays as it was.
+ */
+export function writeActiveId(id) {
+  if (id && !existsSync(projectJsonPath(id))) return false;
   ensureProjectsRoot();
   writeFileSync(ACTIVE_PATH, JSON.stringify({ project_id: id, updated_at: new Date().toISOString() }, null, 2), 'utf8');
   try {
     if (activeProjectListener) activeProjectListener(id || null);
   } catch (_) {}
+  return true;
 }
 
 function projectDir(id) {
@@ -178,19 +184,34 @@ function readProject(id) {
   return JSON.parse(readFileSync(p, 'utf8'));
 }
 
-function writeProject(proj) {
+/**
+ * A save of a project whose project.json is gone (it was deleted) throws this (a 404 to the
+ * route), and makes nothing: not the project's folder, not its project.json.
+ */
+function projectGone(id) {
+  return Object.assign(new Error(`project not found: ${id} (deleted)`), { status: 404 });
+}
+
+/** Saves project.json; only a new project (`create`) is saved where there is none. */
+function writeProject(proj, { create = false } = {}) {
   const dir = projectDir(proj.id);
+  if (!create && !existsSync(projectJsonPath(proj.id))) throw projectGone(proj.id);
   mkdirSync(geometriesRoot(dir), { recursive: true });
   if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
-  const written = commitRpcSync('project.write_project', { project_dir: dir, doc: proj });
+  const written = commitRpcSync('project.write_project', { project_dir: dir, doc: proj, create });
   if (written && typeof written === 'object') Object.assign(proj, written);
   invalidateProjectsListCache();
   return proj;
 }
 
-/** writeProject through the long-lived worker, so a geometry switch does not hold the server. */
+/**
+ * writeProject through the long-lived worker, so a geometry switch does not hold the server.
+ * The worker answers one request at a time: this save can run after the project was
+ * deleted, and the worker then refuses it (it never makes the project again).
+ */
 async function writeProjectAsync(proj) {
   const dir = projectDir(proj.id);
+  if (!existsSync(projectJsonPath(proj.id))) throw projectGone(proj.id);
   mkdirSync(geometriesRoot(dir), { recursive: true });
   if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
   const written = await commitRpc('project.write_project', { project_dir: dir, doc: proj });
@@ -579,7 +600,7 @@ function createProject(body) {
     soft_pass_avoided: true,
     increment: 'W16',
   };
-  writeProject(proj);
+  writeProject(proj, { create: true });
   writeActiveId(id);
   return { ok: true, status: 201, body: { ok: true, ...proj, active: true } };
 }
@@ -1459,21 +1480,15 @@ function syncMeshActiveToGeometry(projectId, geomId) {
   }
 }
 
-async function persistActiveGeometry(proj, parts, activeId, stepSource) {
-  const projectId = proj.id;
+/** The parts whose STEP is there, and the one shown: `activeId`'s, else the first (null: none). */
+function shownPart(proj, parts, activeId) {
   const live = parts.filter((p) => p && p.id && p.step_path && geomFileExists(p.step_path));
-  if (!live.length) {
-    proj.geometry = null;
-    proj.geometries = [];
-    proj.active_geometry_id = null;
-    proj.updated_at = new Date().toISOString();
-    await writeProjectAsync(proj);
-    return { ok: true, empty: true, project: proj, geometry: null, geometries: [] };
-  }
-  const want = String(activeId || proj.active_geometry_id || live[0].id);
-  const active = live.find((p) => p.id === want) || live[0];
-  const preview = await ensureCadPreviewAt(projectId, active.step_path, cadPaths(projectId, active.id));
-  if (!preview.ok) return preview;
+  const want = String(activeId || proj.active_geometry_id || (live[0] && live[0].id) || '');
+  return { live, active: live.find((p) => p.id === want) || live[0] || null };
+}
+
+/** Shows `active` in `proj` (in memory): its record, drawn from the preview files `preview` names. */
+function showPart(proj, live, active, preview, stepSource) {
   let cadMeta = null;
   if (existsSync(preview.meta)) {
     try {
@@ -1482,7 +1497,7 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
       cadMeta = null;
     }
   }
-  const geometry = geometryRecordFromPart(projectId, active, preview, cadMeta, stepSource);
+  const geometry = geometryRecordFromPart(proj.id, active, preview, cadMeta, stepSource);
   for (const p of live) {
     p.body_offset = 0;
     p.assembly_bodies = localBodiesForPart(p);
@@ -1490,8 +1505,44 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
   proj.geometry = geometry;
   proj.geometries = live;
   proj.active_geometry_id = active.id;
+  return geometry;
+}
+
+/**
+ * Saves a project read earlier; false when it was deleted meanwhile (the save waits on the
+ * worker, which answers one request at a time), and then nothing was saved.
+ */
+async function saveUnlessDeleted(proj) {
+  try {
+    await writeProjectAsync(proj);
+  } catch (e) {
+    if (existsSync(projectJsonPath(proj.id))) throw e;
+    return false;
+  }
+  return existsSync(projectJsonPath(proj.id));
+}
+
+function projectDeletedAnswer(projectId) {
+  return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
+}
+
+async function persistActiveGeometry(proj, parts, activeId, stepSource) {
+  const projectId = proj.id;
+  const { live, active } = shownPart(proj, parts, activeId);
+  if (!active) {
+    proj.geometry = null;
+    proj.geometries = [];
+    proj.active_geometry_id = null;
+    proj.updated_at = new Date().toISOString();
+    if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(projectId);
+    return { ok: true, empty: true, project: proj, geometry: null, geometries: [] };
+  }
+  const preview = await ensureCadPreviewAt(projectId, active.step_path, cadPaths(projectId, active.id));
+  if (!preview.ok) return preview;
+  const geometry = showPart(proj, live, active, preview, stepSource);
   proj.updated_at = new Date().toISOString();
-  await writeProjectAsync(proj);
+  // A project deleted while its save waited is not made the active project again.
+  if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(projectId);
   writeActiveId(projectId);
   syncMeshActiveToGeometry(projectId, active.id);
   // Best-effort and not needed by the workbench: render the home-card thumbnail after
@@ -1507,6 +1558,31 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
     geometries: live,
     active_geometry_id: active.id,
   };
+}
+
+/**
+ * A project as GET /api/project answers it. A read writes nothing: no project.json save
+ * (Home lists the projects by their Modified time), no new active project, no CAD preview.
+ * Such a save waited on the worker, and a project deleted meanwhile came back. The shown
+ * geometry's record is drawn here, in memory, from its cached preview; with none yet the
+ * saved record is answered, and the page's /api/geometry/cad makes the preview.
+ */
+function projectForRead(proj) {
+  const parts = geometriesOf(proj);
+  if (parts.length < 2) return proj;
+  const read = { ...proj };
+  const { live, active } = shownPart(read, parts);
+  if (!active) return Object.assign(read, { geometry: null, geometries: [], active_geometry_id: null });
+  const paths = cadPaths(read.id, active.id);
+  const saved = read.geometry && read.geometry.id === active.id ? read.geometry : null;
+  const cached = cadPreviewFilesReady(paths) && existsSync(paths.meta) && !linkFenceAnswer(paths.dir);
+  if (cached || !saved) {
+    showPart(read, live, active, paths, (saved && saved.step_source) || 'hydrate');
+  } else {
+    read.geometries = live;
+    read.active_geometry_id = active.id;
+  }
+  return read;
 }
 
 function stlNeedsCadRefresh(outStl) {
@@ -2583,18 +2659,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       // only a fallback (it is rewritten by whichever tab opened last).
       const pinned = String(u.searchParams.get('project_id') || '').trim();
       const result = pinned ? getProjectById(pinned) : getActiveProject();
-      if (result.ok && result.body.project) {
-        const geos = geometriesOf(result.body.project);
-        if (geos.length > 1) {
-          const persisted = await persistActiveGeometry(
-            result.body.project,
-            geos,
-            result.body.project.active_geometry_id,
-            'hydrate',
-          );
-          if (persisted.ok && persisted.project) result.body.project = persisted.project;
-        }
-      }
+      if (result.ok && result.body.project) result.body.project = projectForRead(result.body.project);
       res.setHeader('X-CFD-Source', 'project-get');
       if (result.body.project && result.body.project.id) {
         res.setHeader('X-CFD-Project-Id', result.body.project.id);
@@ -2602,14 +2667,9 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       return sendJson(res, result.status, result.body);
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && parts[2]) {
-      let proj = ensureGeometriesHydrated(readProject(parts[2]));
+      const proj = ensureGeometriesHydrated(readProject(parts[2]));
       if (!proj) return sendJson(res, 404, { error: 'project not found', id: parts[2] });
-      const geos = geometriesOf(proj);
-      if (geos.length > 1) {
-        const persisted = await persistActiveGeometry(proj, geos, proj.active_geometry_id, 'hydrate');
-        if (persisted.ok && persisted.project) proj = persisted.project;
-      }
-      return sendJson(res, 200, { ok: true, project: proj, increment: 'W16' });
+      return sendJson(res, 200, { ok: true, project: projectForRead(proj), increment: 'W16' });
     }
     return sendJson(res, 405, { error: 'method not allowed for /api/project' });
   }

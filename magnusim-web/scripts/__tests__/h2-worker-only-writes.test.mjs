@@ -51,9 +51,11 @@ describe('gate:h2-worker-only-writes', () => {
   it('commits project.json through project.write_project', () => {
     const dir = mkdtempSync(join(tmpdir(), 'magnusim-h2-write-'));
     try {
+      // A new project's first save (an existing one needs its project.json there).
       const written = commitRpcSync('project.write_project', {
         project_dir: dir,
         doc: { id: 'h2write', title: 'Renamed' },
+        create: true,
       });
       assert.equal(written.title, 'Renamed');
       const onDisk = JSON.parse(readFileSync(join(dir, 'project.json'), 'utf8'));

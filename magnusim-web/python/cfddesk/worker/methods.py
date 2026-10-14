@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -441,7 +444,7 @@ def project_create(title: str = "", name: str = "", folder: str = "", **extra: A
         "persistence": "filesystem",
         "increment": "W16",
     }
-    ww.write_project(root, doc)
+    ww.write_project(root, doc, create=True)
     set_active_id(pid)
     return {"ok": True, "id": pid, "project": doc, "increment": "W16"}
 
@@ -1081,11 +1084,51 @@ def project_write_json(
     return ww.write_json(root, rel, payload, sim_id=sim_id)
 
 
+def _test_project_write_hold(root: Path) -> str:
+    """MAGNUSIM_TEST_PROJECT_WRITE_HOLD=<file> (tests only, inert when unset).
+
+    While the file is there, a project.write_project of the project it names (of any
+    project when it is empty) waits before it writes, as it does behind an earlier, slow
+    request on this serial worker. ``held <id>`` and ``end <id>`` lines are added to
+    ``<file>.log``. Returns the log path when it held, else "".
+
+    Only in the long-lived worker (``python -m cfddesk.worker``): a synchronous write
+    (Node's commitRpcSync runs this method in a one-off process it waits for) would
+    hold the whole server.
+    """
+    hold = os.environ.get("MAGNUSIM_TEST_PROJECT_WRITE_HOLD", "").strip()
+    if not hold:
+        return ""
+    main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    if getattr(main_spec, "name", "") != "cfddesk.worker.__main__":
+        return ""
+    try:
+        want = Path(hold).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if want and want != root.name:
+        return ""
+    log = f"{hold}.log"
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(f"held {root.name}\n")
+    while Path(hold).exists():
+        time.sleep(0.1)
+    return log
+
+
 @rpc("project.write_project")
-def project_write_project(project_dir: str = "", doc: dict | None = None, body: dict | None = None, **extra: Any) -> Any:
+def project_write_project(
+    project_dir: str = "", doc: dict | None = None, body: dict | None = None, create: bool = False, **extra: Any
+) -> Any:
     root = Path(project_dir)
     payload = doc if isinstance(doc, dict) else body if isinstance(body, dict) else extra
-    return ww.write_project(root, payload)
+    held = _test_project_write_hold(root)
+    try:
+        return ww.write_project(root, payload, create=bool(create))
+    finally:
+        if held:
+            with open(held, "a", encoding="utf-8") as f:
+                f.write(f"end {root.name}\n")
 
 
 @rpc("project.write_simulation")
