@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from cfddesk.registry import load_all, reset_for_tests
+from tests.unit.bundled_manifests import installed
 
 
 @pytest.fixture(autouse=True)
@@ -28,11 +29,14 @@ def test_each_analysis_row_names_its_own_monitor_types(tmp_path: Path) -> None:
     hub = load_all(web_root=tmp_path, force=True)
     rows = {r["key"]: r for r in hub.registry("analysis").describe()}
     owner = {r["key"]: r.get("plugin") for r in hub.registry("monitor").describe()}
-    for key in ("incompressible_steady", "incompressible_transient", "heat_transfer_steady", "heat_transfer_transient"):
+    ht = installed("heat_transfer")
+    keys = ("incompressible_steady", "incompressible_transient")
+    for key in keys + (("heat_transfer_steady", "heat_transfer_transient") if ht else ()):
         monitors = rows[key]["monitors"]
         assert monitors, key
         assert {owner[m] for m in monitors} == {rows[key]["plugin"]}, (key, monitors)
     assert "area_average" in rows["incompressible_steady"]["monitors"]
-    assert "ht_wall_heat_flux" in rows["heat_transfer_steady"]["monitors"]
-    assert "ht_wall_heat_flux" not in rows["incompressible_steady"]["monitors"]
-    assert "area_average" not in rows["heat_transfer_steady"]["monitors"]
+    if ht:
+        assert "ht_wall_heat_flux" in rows["heat_transfer_steady"]["monitors"]
+        assert "ht_wall_heat_flux" not in rows["incompressible_steady"]["monitors"]
+        assert "area_average" not in rows["heat_transfer_steady"]["monitors"]

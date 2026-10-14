@@ -16,9 +16,13 @@ from cfddesk.registry import (
 )
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub, plugin_catalog
+from tests.unit.bundled_manifests import installed
 
-# Heat Transfer ships on (HT D4): its keys load with the app's.
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "buoyantSimpleFoam", "buoyantPimpleFoam"}
+# Heat Transfer ships on (HT D4): its keys load with the app's, when it is installed
+# (CI's core-without-optional-plugins job has only the required plugins).
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"} | (
+    {"buoyantSimpleFoam", "buoyantPimpleFoam"} if installed("heat_transfer") else set()
+)
 
 
 @pytest.fixture(autouse=True)

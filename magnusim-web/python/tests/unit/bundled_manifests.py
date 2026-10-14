@@ -39,6 +39,16 @@ def default_off_keys(folder: Path = BUNDLED) -> list[str]:
     return sorted(k for k, m in bundled_manifests(folder).items() if m.get("default_enabled", True) is False)
 
 
+def installed(key: str) -> bool:
+    """Whether the bundled plugin ``key`` is in the folder the registry reads: the app's,
+    or ``MAGNUSIM_BUNDLED_DIR`` (CI's core-without-optional-plugins job, which holds only
+    the required plugins). A test of an optional plugin's keys asks this first."""
+    from cfddesk.registry.discovery import bundled_dir_for
+
+    folder = bundled_dir_for(WEB)
+    return folder is not None and folder.is_dir() and key in bundled_manifests(folder)
+
+
 def required_only_copy(dest: Path, folder: Path = BUNDLED) -> Path:
     """A bundled folder at ``dest`` holding only the required plugins (``required =
     true``): the app without its optional plugins, whichever ship on."""

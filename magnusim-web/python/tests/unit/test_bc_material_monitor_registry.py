@@ -21,12 +21,15 @@ from cfddesk.registry import (
 )
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub
+from tests.unit.bundled_manifests import installed
 
-# Heat Transfer ships on (HT D4): its keys load with the app's.
-EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible", "thermo_fluid"}
-EXPECTED_MONITOR_KEYS = {
-    "area_average", "flow_rate", "forces", "probe", "ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple",
-}
+# Heat Transfer ships on (HT D4): its keys load with the app's, when it is installed
+# (CI's core-without-optional-plugins job has only the required plugins).
+HT = installed("heat_transfer")
+EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid"} if HT else set())
+EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"} | (
+    {"ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple"} if HT else set()
+)
 
 
 @pytest.fixture(autouse=True)

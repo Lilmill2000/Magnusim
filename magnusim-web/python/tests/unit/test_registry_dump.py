@@ -19,10 +19,13 @@ sys.path.insert(0, str(TOOLS))
 
 from registry_dump import DUMP_KINDS, dump_registry, main  # noqa: E402
 
-from tests.unit.bundled_manifests import default_on_keys  # noqa: E402
+from tests.unit.bundled_manifests import default_on_keys, installed  # noqa: E402
 
-# Heat Transfer ships on (HT D4): its keys load with the app's.
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "buoyantSimpleFoam", "buoyantPimpleFoam"}
+# Heat Transfer ships on (HT D4): its keys load with the app's, when it is installed
+# (CI's core-without-optional-plugins job has only the required plugins).
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"} | (
+    {"buoyantSimpleFoam", "buoyantPimpleFoam"} if installed("heat_transfer") else set()
+)
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 EXPECTED_FILTER_KEYS = {
     "cut_plane",

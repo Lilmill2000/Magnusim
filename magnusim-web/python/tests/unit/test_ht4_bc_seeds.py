@@ -15,6 +15,7 @@ import pytest
 
 from cfddesk.registry import load_all, reset_for_tests
 from cfddesk.registry.discovery import RegistryHub
+from tests.unit.bundled_manifests import installed
 
 HEAD = """
 from cfddesk.registry import AnalysisType
@@ -70,9 +71,10 @@ def test_an_analysis_publishes_its_bc_seeds(tmp_path: Path, monkeypatch: pytest.
     json.dumps(rows["fx_seeded"]["bc_seeds"])
     # Incompressible Flow's analyses seed nothing (its new Wall keeps starting slip).
     assert rows["incompressible_steady"]["bc_seeds"] == {}
-    # Heat Transfer's new Wall starts no-slip.
-    assert rows["heat_transfer_steady"]["bc_seeds"] == {"wall": {"wall_type": "No-slip"}}
-    assert rows["heat_transfer_transient"]["bc_seeds"] == {"wall": {"wall_type": "No-slip"}}
+    # Heat Transfer's new Wall starts no-slip (when it is installed).
+    if installed("heat_transfer"):
+        assert rows["heat_transfer_steady"]["bc_seeds"] == {"wall": {"wall_type": "No-slip"}}
+        assert rows["heat_transfer_transient"]["bc_seeds"] == {"wall": {"wall_type": "No-slip"}}
 
 
 @pytest.mark.parametrize(
