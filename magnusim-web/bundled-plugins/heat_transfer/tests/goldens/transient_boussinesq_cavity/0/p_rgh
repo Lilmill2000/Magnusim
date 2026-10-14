@@ -1,0 +1,49 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p_rgh;
+}
+
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    walls
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    inlet
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    outlet
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    heater
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    cold_plate
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    lid
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    side
+    {
+        type          symmetry;
+    }
+}

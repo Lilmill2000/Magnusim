@@ -32,6 +32,9 @@ EventKind = Literal[
     "error",
     # API 1.4: a run that ended itself because it converged (an analysis's log parser).
     "converged",
+    # API 1.8: the plain reason a solver died, as an analysis's log parser read it
+    # from the solver's output ({"reason": "..."}); a failed run says it.
+    "failed_reason",
 ]
 
 KNOWN_KINDS = frozenset(
@@ -48,6 +51,7 @@ KNOWN_KINDS = frozenset(
         "result",
         "error",
         "converged",
+        "failed_reason",
     }
 )
 

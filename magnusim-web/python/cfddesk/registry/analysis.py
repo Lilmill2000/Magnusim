@@ -301,6 +301,12 @@ class AnalysisType:
     # (cfddesk.registry.bc.BcFieldGroup), e.g. a heat-transfer analysis's
     # temperatures on another plugin's inlets and walls.
     bc_fields: tuple[Any, ...] = ()
+    # API 1.8: what a new BC of a family starts with in this analysis's studies,
+    # {bc_family key: {field: value}}: over the family's own seed and over the rule
+    # that a new BC of the family the study's defaults name starts on the other
+    # choice. A heat-transfer analysis's new Wall starts no-slip (it is added for
+    # the heat through it, and a slip wall has no boundary layer).
+    bc_seeds: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict[str, Any]:

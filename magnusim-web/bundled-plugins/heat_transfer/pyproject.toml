@@ -1,0 +1,14 @@
+# Heat Transfer's own tests: `pytest bundled-plugins/heat_transfer/tests`.
+# They drive the core (cfddesk) and Incompressible Flow's exported module, so
+# both are on the path here. The plugin package itself imports only
+# magnusim_sdk, cfddesk.registry and incompressible_flow.flow_bcs
+# (python/tools/plugin_boundary.py).
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../incompressible_flow", "../../python", "../../python/tools", "../../python/sdk"]
+markers = [
+  "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
+  "occt: needs cadquery-ocp and a STEP fixture",
+  "slow: > 10 s",
+]
+addopts = ["-m", "not wsl"]

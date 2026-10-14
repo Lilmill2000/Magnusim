@@ -1,0 +1,55 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       polyBoundaryMesh;
+    location    "constant/polyMesh";
+    object      boundary;
+}
+
+7
+(
+    walls
+    {
+        type            wall;
+        inGroups        1(wall);
+        nFaces          10;
+        startFace       100;
+    }
+    inlet
+    {
+        type            wall;
+        nFaces          4;
+        startFace       110;
+    }
+    outlet
+    {
+        type            wall;
+        nFaces          4;
+        startFace       114;
+    }
+    heater
+    {
+        type            wall;
+        nFaces          4;
+        startFace       118;
+    }
+    cold_plate
+    {
+        type            wall;
+        nFaces          4;
+        startFace       122;
+    }
+    lid
+    {
+        type            wall;
+        nFaces          4;
+        startFace       126;
+    }
+    side
+    {
+        type            symmetry;
+        nFaces          4;
+        startFace       130;
+    }
+)

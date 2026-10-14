@@ -1,0 +1,50 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      omega;
+}
+
+dimensions      [0 0 -1 0 0 0 0];
+
+internalField   uniform 22.3806;
+
+boundaryField
+{
+    walls
+    {
+        type          omegaWallFunction;
+        value          uniform 22.3806;
+    }
+    inlet
+    {
+        type          fixedValue;
+        value          uniform 22.3806;
+    }
+    outlet
+    {
+        type          inletOutlet;
+        inletValue          uniform 22.3806;
+        value          uniform 22.3806;
+    }
+    heater
+    {
+        type          omegaWallFunction;
+        value          uniform 22.3806;
+    }
+    cold_plate
+    {
+        type          omegaWallFunction;
+        value          uniform 22.3806;
+    }
+    lid
+    {
+        type          omegaWallFunction;
+        value          uniform 22.3806;
+    }
+    side
+    {
+        type          symmetry;
+    }
+}

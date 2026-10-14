@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   defaultResultField,
   fieldInfoIn,
+  legendUnitsIn,
   normalizeFilterSet,
   resultRowsFor,
   rowShownName,
@@ -131,5 +132,37 @@ describe('a saved view on the fields a case shows', () => {
     expect(Object.keys(normalizeFilterSet(odd, ['magU']).scale)).toEqual(['magU']);
     expect(normalizeFilterSet(view('k'), [])).toEqual(view('k'));
     expect(normalizeFilterSet({ ...view('cellVolume') }, ['magU']).field).toBe('cellVolume');
+  });
+});
+
+describe('legendUnitsIn (API 1.8)', () => {
+  const heat = resultRowsFor({
+    caseRows: [
+      { key: 'T', label: 'Temperature', unit_quantity: 'temperature', kind: 'scalar', unit: 'K' },
+      { key: 'p', label: 'Pressure', unit_quantity: 'pressure', kind: 'scalar', unit: 'Pa' },
+    ],
+    wrote: ['T', 'p'],
+  });
+
+  it('shows a temperature in °C (metric) or °F (imperial); the values stay K', () => {
+    const c = legendUnitsIn(heat, 'T', false);
+    expect(c.unit).toBe('°C');
+    expect(c.show(293.15)).toBeCloseTo(20, 9);
+    expect(c.back(25)).toBeCloseTo(298.15, 9);
+    const f = legendUnitsIn(heat, 'T', true);
+    expect(f.unit).toBe('°F');
+    expect(f.show(373.15)).toBeCloseTo(212, 9);
+    expect(f.back(32)).toBeCloseTo(273.15, 9);
+    // A span of ticks keeps its size in °C and grows by 1.8 in °F.
+    expect(c.show(310) - c.show(300)).toBeCloseTo(10, 9);
+    expect(f.show(310) - f.show(300)).toBeCloseTo(18, 9);
+  });
+
+  it('leaves every other field as stored', () => {
+    const p = legendUnitsIn(heat, 'p', true);
+    expect(p.unit).toBe('Pa');
+    expect(p.show(101.5)).toBe(101.5);
+    expect(p.back(7)).toBe(7);
+    expect(legendUnitsIn(heat, 'nothing', false)).toMatchObject({ unit: '' });
   });
 });

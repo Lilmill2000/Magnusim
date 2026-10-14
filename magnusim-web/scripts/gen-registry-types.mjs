@@ -51,6 +51,8 @@ export interface RegistryRow {
   default_solver?: string;
   /** @deprecated API 1.0: present only when an analysis sets it; an analysis's settings_schema carries its turbulence choice. */
   turbulence_models?: string[];
+  /** The monitor types a user may add to its runs; absent when it names none (every user-creatable type). */
+  monitors?: string[];
   /** Analysis contract (API 1.1): what the core shows about an analysis. */
   contract?: string;
   family?: AnalysisFamily | null;
@@ -94,6 +96,8 @@ export interface RegistryRow {
   material_models?: string[];
   /** Analyses (API 1.8): the fields it adds to the BCs of its studies. */
   bc_fields?: BcFieldGroupRow[];
+  /** Analyses (API 1.8): what a new BC of a family starts with in its studies, {bc_family key: {field: value}}. */
+  bc_seeds?: Record<string, Record<string, unknown>>;
   /** Material models (API 1.4): presets, and how a study's material record stores the properties. */
   library?: Array<Record<string, unknown>>;
   /** Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }. */

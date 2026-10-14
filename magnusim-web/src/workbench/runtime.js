@@ -88,6 +88,7 @@ import {
   familyForType as bcFamilyForType,
   isUnitOf,
   newBcRecord,
+  analysisBcSeed,
   familyKeyOf as bcFamilyKeyOf,
   typeChangeFields,
   valueQuantity as bcValueQuantity,
@@ -184,6 +185,7 @@ import {
   FIELD_NAME_RE,
   defaultResultField as pickDefaultResultField,
   fieldInfoIn,
+  legendUnitsIn,
   normalizeFilterSet,
   resultRowsFor,
   toolOptions,
@@ -659,6 +661,23 @@ function resultFieldNames(opts) {
 function fieldInfo(field) {
   const name = fieldKey(field);
   return fieldInfoIn(resultFieldRows(), name);
+}
+
+/** A legend's unit and tick conversion for a field (a temperature in °C or °F; values stay K). */
+function legendUnits(field) {
+  return legendUnitsIn(resultFieldRows(), fieldKey(field), prefersImperialUnits());
+}
+
+/**
+ * A field value as a tool's input shows it: in the shown unit (a temperature in
+ * °C or °F, legendUnits), six significant digits. `shownToolValue(f, v, true)`
+ * reads a typed value back to the stored unit.
+ */
+function shownToolValue(field, v, back) {
+  const u = legendUnits(field);
+  const n = Number(v);
+  if (!Number.isFinite(n)) return n;
+  return back ? u.back(n) : Number(u.show(n).toPrecision(6));
 }
 
 /** The field results open on: the current one if listed, else the first. */
@@ -4151,7 +4170,7 @@ function setLegendTickText(tickEl, text) {
   tickEl.textContent = text;
 }
 
-function paintLegendTrackTicks(el, fallbackLo, fallbackHi) {
+function paintLegendTrackTicks(el, fallbackLo, fallbackHi, field) {
   if (!el) return;
   const ticks = el.querySelectorAll('.legend-ticks span');
   if (!ticks.length) return;
@@ -4160,20 +4179,23 @@ function paintLegendTrackTicks(el, fallbackLo, fallbackHi) {
   const lo = track ? track[0] : fallbackLo;
   const hi = track ? track[1] : fallbackHi;
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+  // Ticks in the legend's unit (a temperature in °C or °F); the scale stays in K.
+  const units = legendUnits(target ? target.field : field);
+  const span = units.show(hi) - units.show(lo);
   const n = ticks.length;
   for (let i = 0; i < n; i++) {
     const t = lo + (hi - lo) * (i / Math.max(1, n - 1));
-    setLegendTickText(ticks[i], legendTick(t, hi - lo));
+    setLegendTickText(ticks[i], legendTick(units.show(t), span));
   }
 }
 
 function updateLegend(field, lo, hi) {
-  paintLegendTrackTicks(document.getElementById('legend'), lo, hi);
+  paintLegendTrackTicks(document.getElementById('legend'), lo, hi, field);
   const title = document.querySelector('#legend .legend-title');
   const units = document.querySelector('#legend .legend-units');
   const info = fieldInfo(field);
   if (title) title.textContent = info.label;
-  if (units) units.textContent = info.unit;
+  if (units) units.textContent = legendUnits(field).unit;
   const coloring = document.getElementById('cp-coloring') || document.getElementById('coloring-select');
   if (coloring && coloring.tagName === 'SELECT') {
     syncColoringOptions();
@@ -4869,8 +4891,8 @@ function updatePtLegend(field, lo, hi) {
   const title = el.querySelector('.legend-title');
   const units = el.querySelector('.legend-units');
   if (title) title.textContent = 'Particle trace · ' + fieldInfo(field).label;
-  if (units) units.textContent = fieldInfo(field).unit;
-  paintLegendTrackTicks(el, lo, hi);
+  if (units) units.textContent = legendUnits(field).unit;
+  paintLegendTrackTicks(el, lo, hi, field);
 }
 
 // Range of the field the visible particle trace is coloured by, or null when
@@ -5073,6 +5095,7 @@ function layoutLegendScaleHandles(el) {
   const [trackLo, trackHi] = legendHandleTrack(target);
   const [lo, hi] = legendScaleRange(target);
   const span = trackHi - trackLo;
+  const units = legendUnits(target.field);
   const loF = span > 0 ? Math.min(1, Math.max(0, (lo - trackLo) / span)) : 0;
   const hiF = span > 0 ? Math.min(1, Math.max(0, (hi - trackLo) / span)) : 1;
   loH.style.left = loF * 100 + '%';
@@ -5086,7 +5109,7 @@ function layoutLegendScaleHandles(el) {
   const placeVal = (node, value, frac, which) => {
     if (!node) return;
     if (!(node.firstElementChild && node.firstElementChild.tagName === 'INPUT')) {
-      node.textContent = legendTick(value, span);
+      node.textContent = legendTick(units.show(value), units.show(trackHi) - units.show(trackLo));
     }
     node.style.left = frac * 100 + '%';
     node.style.transform =
@@ -5199,12 +5222,14 @@ function beginLegendTickEdit(legendEl, tickEl, which) {
   const shown = legendDisplayRange(target.field);
   const [lo, hi] = shown || legendScaleRange(target);
   const cur = which === 'lo' ? lo : hi;
+  // Typed in the legend's unit (a temperature in °C or °F), kept in the stored one.
+  const units = legendUnits(target.field);
   const prevText = tickEl.textContent;
   const input = document.createElement('input');
   input.type = 'number';
   input.step = 'any';
   input.className = 'legend-tick-input';
-  input.value = Number.isFinite(cur) ? String(+cur.toPrecision(6)) : '';
+  input.value = Number.isFinite(cur) ? String(+units.show(cur).toPrecision(6)) : '';
   input.setAttribute('aria-label', which === 'lo' ? 'Scale minimum' : 'Scale maximum');
   tickEl.textContent = '';
   tickEl.appendChild(input);
@@ -5212,7 +5237,7 @@ function beginLegendTickEdit(legendEl, tickEl, which) {
   const finish = (commit) => {
     if (done) return;
     done = true;
-    const v = Number(input.value);
+    const v = units.back(Number(input.value));
     tickEl.textContent = prevText;
     if (commit && input.value.trim() !== '' && Number.isFinite(v)) {
       const nlo = which === 'lo' ? v : lo;
@@ -7874,8 +7899,8 @@ function renderPopChart(meta) {
   if (!wrap || !svg) return;
   const m = meta || popMeta;
   const dists = (m && m.distances) || [];
-  const vals = (m && m.values) || [];
-  const empty = !m || m.empty || !vals.length;
+  const raw = (m && m.values) || [];
+  const empty = !m || m.empty || !raw.length;
   syncPopStatus(m);
   if (empty) {
     wrap.hidden = true;
@@ -7883,6 +7908,9 @@ function renderPopChart(meta) {
     if (metaEl) metaEl.textContent = '';
     return;
   }
+  // Values in the shown unit (a temperature in °C or °F): the curve is the same shape.
+  const popUnits = legendUnits(String(m.field_name || m.field || toolField(popState.field) || ''));
+  const vals = raw.map((v) => popUnits.show(Number(v)));
   wrap.hidden = false;
   const w = 320;
   const h = 160;
@@ -7921,7 +7949,7 @@ function renderPopChart(meta) {
     label(w - right, h - bottom + 12, toolNum(xmax), 'end') +
     label((left + w - right) / 2, h - 4, 'Distance along the path (m)', 'middle');
   if (metaEl) {
-    const unit = fieldInfo(String(m.field_name || m.field || '')).unit;
+    const unit = popUnits.unit;
     metaEl.textContent = `${m.n_samples} samples, from ${toolNum(ymin)} to ${toolNum(ymax)}${unit ? ' ' + unit : ''}`;
   }
 }
@@ -7949,7 +7977,8 @@ function popChartTitle(m) {
   const name = String((m && (m.field_name || m.field)) || toolField(popState.field) || '');
   if (!name) return '';
   const info = fieldInfo(name);
-  return info.unit ? info.label + ' (' + info.unit + ')' : info.label;
+  const unit = legendUnits(name).unit;
+  return unit ? info.label + ' (' + unit + ')' : info.label;
 }
 
 function escapeXml(s) {
@@ -8228,8 +8257,9 @@ function syncIsoStatus(meta) {
     const hi = Number(m.scalar_max);
     if (m.iso_field && Number.isFinite(lo) && Number.isFinite(hi)) {
       const info = fieldInfo(m.iso_field);
-      const unit = info.unit ? ' ' + info.unit : '';
-      text = `No surface at this value. ${info.label} goes from ${toolNum(lo)} to ${toolNum(hi)}${unit} at this time.`;
+      const shown = legendUnits(m.iso_field);
+      const unit = shown.unit ? ' ' + shown.unit : '';
+      text = `No surface at this value. ${info.label} goes from ${toolNum(shown.show(lo))} to ${toolNum(shown.show(hi))}${unit} at this time.`;
     } else {
       text = 'The surface could not be made for this result.';
     }
@@ -8249,9 +8279,9 @@ function syncIsoChromeFromState() {
   const en = document.getElementById('iso-enabled');
   const fields = isoToolFields(isoState);
   if (sc) sc.value = fields.iso;
-  if (val) val.value = String(isoState.iso_value);
-  // The iso value is in the picked field's unit.
-  if (unit) unit.textContent = fields.iso ? fieldInfo(fields.iso).unit : '';
+  // The iso value is in the picked field's shown unit (a temperature in °C or °F); stored as the case has it.
+  if (val) val.value = String(fields.iso ? shownToolValue(fields.iso, isoState.iso_value) : isoState.iso_value);
+  if (unit) unit.textContent = fields.iso ? legendUnits(fields.iso).unit : '';
   if (col) col.value = fields.color;
   if (vec) vec.checked = !!isoState.vectors;
   if (op) op.value = String(isoState.opacity);
@@ -8366,8 +8396,10 @@ function syncIvRangeText() {
   }
   const lo = Math.min(Number(ivState.iso_value_low), Number(ivState.iso_value_high));
   const hi = Math.max(Number(ivState.iso_value_low), Number(ivState.iso_value_high));
-  const unit = fieldInfo(m.iso_field).unit;
-  el.textContent = `From ${toolNum(smin + lo * (smax - smin))} to ${toolNum(smin + hi * (smax - smin))}${unit ? ' ' + unit : ''}`;
+  const shown = legendUnits(m.iso_field);
+  const unit = shown.unit;
+  const at = (f) => toolNum(shown.show(smin + f * (smax - smin)));
+  el.textContent = `From ${at(lo)} to ${at(hi)}${unit ? ' ' + unit : ''}`;
 }
 
 /** Why the iso volume draws nothing, or nothing to say. */
@@ -12418,8 +12450,8 @@ function syncCompareResultsLegend() {
       const title = legendB.querySelector('.legend-title');
       const units = legendB.querySelector('.legend-units');
       if (title) title.textContent = fieldInfo(R.field).label;
-      if (units) units.textContent = fieldInfo(R.field).unit;
-      paintLegendTrackTicks(legendB, rb[0], rb[1]);
+      if (units) units.textContent = legendUnits(R.field).unit;
+      paintLegendTrackTicks(legendB, rb[0], rb[1], R.field);
     }
   }
   // Pane B trace: same rule as the main viewer — shares the surface scale
@@ -14419,7 +14451,7 @@ function syncToolFieldOptions() {
     if (scEl) scEl.value = f.iso;
     if (colEl) colEl.value = f.color;
     const unit = unitId && document.getElementById(unitId);
-    if (unit) unit.textContent = f.iso ? fieldInfo(f.iso).unit : '';
+    if (unit) unit.textContent = f.iso ? legendUnits(f.iso).unit : '';
   }
   const fieldOpt = document.querySelector('#parts-style option[value="field"]');
   if (fieldOpt && fields.length && !activeField) fieldOpt.textContent = fieldInfo(defaultResultField()).label;
@@ -14562,7 +14594,8 @@ btnIsoSurface?.addEventListener('click', () => {
   };
   const read = () => {
     if (sc) isoState.iso_field = sc.value || '';
-    if (val) isoState.iso_value = Number(val.value);
+    // Typed in the shown unit; kept as the case stores it.
+    if (val) isoState.iso_value = shownToolValue(isoToolFields(isoState).iso, val.value, true);
     if (col) isoState.color_field = col.value || '';
     if (vec) isoState.vectors = !!vec.checked;
     if (op) {
@@ -16428,12 +16461,14 @@ function inspectPinCardInner(pt, idx, many) {
   const rows = [];
   if (many) rows.push('<div class="inspect-pin-n">' + (idx + 1) + '</div>');
   if (pt.hit) {
-    // One row per shown field, with its label and unit.
+    // One row per shown field, with its label and unit (a temperature in the legend's °C or °F).
     for (const name of inspectRowNames(pt)) {
       const info = fieldInfo(name);
+      const units = legendUnits(name);
+      const v = pt.values[name];
       rows.push(
         '<div class="inspect-pin-row" data-field="' + escapeHtml(name) + '"><span>' + escapeHtml(info.label) + '</span><b>' +
-        escapeHtml(inspectFmtValue(pt.values[name], info.unit)) + '</b></div>'
+        escapeHtml(inspectFmtValue(typeof v === 'number' ? units.show(v) : v, units.unit)) + '</b></div>'
       );
     }
   } else {
@@ -26633,6 +26668,18 @@ function openProjectUnits() {
 window.__CFD_PROJECT_UNITS__ = openProjectUnits;
 
 /** The open project's units win; Settings only sets the default for new projects. */
+/**
+ * The Run panel's failure line: the error's first line, at most RUN_FAILURE_LINE_MAX
+ * characters, an ellipsis when cut. A parser's failed_reason (at most as long:
+ * core-solve.js FAILED_REASON_MAX) always shows whole.
+ */
+const RUN_FAILURE_LINE_MAX = 160;
+function runFailureLine(err) {
+  const first = String(err).split('\n')[0];
+  return first.length > RUN_FAILURE_LINE_MAX ? first.slice(0, RUN_FAILURE_LINE_MAX - 1) + '…' : first;
+}
+window.__CFD_RUN_FAILURE_LINE__ = runFailureLine;
+
 function prefersImperialUnits() {
   const u = openProjectUnits();
   if (u) return /imperial/i.test(u);
@@ -26887,7 +26934,7 @@ function updateBcClient(id, patch) {
     const family = bcFamilyForType(next.bc_type);
     const nextType = family ? String(family.record_type) : String(next.bc_type);
     const oldName = bc.name;
-    if (family) Object.assign(bc, typeChangeFields(bc, family, imperial, bcDefaults()));
+    if (family) Object.assign(bc, typeChangeFields(bc, family, imperial, bcDefaults(), studyBcSeed(family)));
     bc.bc_type = nextType;
     bc.name = renameBcForType(bc, nextType);
     if (oldName !== bc.name) {
@@ -27320,10 +27367,11 @@ async function createBcClient(bcType, opts) {
   const pid = currentProjectId();
   // New BCs start in the open project's units, from their family's seed; a BC
   // of the family the study's defaults use starts on the other choice (default
-  // no-slip walls: a new Wall is slip).
+  // no-slip walls: a new Wall is slip), unless the study's analysis seeds that
+  // field itself (API 1.8 bc_seeds: a Heat Transfer study's new Wall is no-slip).
   const imperial = prefersImperialUnits();
   const family = bcFamilyForType(bcType);
-  const seed = family ? newBcRecord(family, imperial, bcDefaults()) : { bc_type: bcType };
+  const seed = family ? newBcRecord(family, imperial, bcDefaults(), studyBcSeed(family)) : { bc_type: bcType };
   const local = {
     ...seed,
     id: newClientBcId(),
@@ -30569,7 +30617,8 @@ function highlightAaFaces(faces, focus) {
 /** The monitor types a user may add to a run (the registry's monitor rows, for the run's analysis). */
 function registryMonitorTypes(rec) {
   const reg = useProjectStore.getState().registry;
-  const key = rec && typeof runAnalysisKeyOf === 'function' ? runAnalysisKeyOf(rec) : '';
+  // The run's analysis, else (no run record yet) the open study's: never every plugin's types.
+  const key = rec ? runAnalysisKeyOf(rec) : siblingKey(studyAnalysisType(), 'steady');
   return monitorTypes((reg && reg.monitor) || [], key ? analysisRow(key) : null);
 }
 
@@ -31413,6 +31462,12 @@ function toggleAssignAaFace(face) {
 /** The open study's analysis (the family its runs solve with). */
 function studyAnalysisType() {
   return (studyCatalog && studyCatalog.simulation && studyCatalog.simulation.analysis_type) || defaultAnalysisKey();
+}
+
+/** What the open study's analysis seeds on a new BC of `family` (API 1.8 bc_seeds), or null. */
+function studyBcSeed(family) {
+  const key = studyAnalysisType();
+  return analysisBcSeed(analysisRow(key) || analysisRow(siblingKey(key, 'steady')), family);
 }
 
 /** The analysis a run solves with: its stamp, else its study's family at its time dependency. */
@@ -32798,7 +32853,7 @@ function computeRunState() {
     let line = '-';
     if (failed) {
       const err = run.error || run.note || '';
-      line = err ? String(err).split('\n')[0].slice(0, 160) : 'Solve failed. Open Job / debug for the log.';
+      line = err ? runFailureLine(err) : 'Solve failed. Open Job / debug for the log.';
     } else if (running && runTransient) {
       if (run.stop_requested && stage === 'solve') line = 'Writing t = ' + formatSimTime(simT) + ', then reconstructing…';
       else if (stage === 'solve' && (simT > 0 || runLiveFrameCount(run) > 0)) line = transientProgressText(run, end);

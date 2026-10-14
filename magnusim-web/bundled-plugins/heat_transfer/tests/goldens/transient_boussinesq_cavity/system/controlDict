@@ -1,0 +1,72 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     buoyantPimpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         20;
+deltaT          0.002;
+writeControl    adjustableRunTime;
+writeInterval   2;
+purgeWrite      0;
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable true;
+
+adjustTimeStep  yes;
+maxCo           0.5;
+maxDeltaT       2;
+
+functions
+{
+    ht_wall_heat_flux
+    {
+        type            wallHeatFlux;
+        libs            (fieldFunctionObjects);
+        patches         ( walls inlet outlet heater cold_plate lid );
+        executeControl  timeStep;
+        executeInterval 1;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_htc_raw
+    {
+        type            heatTransferCoeff;
+        libs            (fieldFunctionObjects);
+        field           T;
+        patches         ( walls inlet outlet heater cold_plate lid );
+        htcModel        fixedReferenceTemperature;
+        TRef            298.15;
+        result          htcRaw;
+        writeControl    none;
+        log             false;
+    }
+    ht_htc
+    {
+        type            reference;
+        libs            (fieldFunctionObjects);
+        field           htcRaw;
+        refValue        constant 0;
+        scale           -1;
+        result          htc;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_rho
+    {
+        type            writeObjects;
+        libs            (utilityFunctionObjects);
+        objects         ( rho );
+        writeOption     anyWrite;
+        writeControl    writeTime;
+    }
+}

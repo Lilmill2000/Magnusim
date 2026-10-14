@@ -17,7 +17,8 @@ from cfddesk.registry import (
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub, plugin_catalog
 
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
+# Heat Transfer ships on (HT D4): its keys load with the app's.
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "buoyantSimpleFoam", "buoyantPimpleFoam"}
 
 
 @pytest.fixture(autouse=True)

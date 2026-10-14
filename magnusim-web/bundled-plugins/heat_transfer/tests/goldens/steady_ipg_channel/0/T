@@ -1,0 +1,56 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      T;
+}
+
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   uniform 293.15;
+
+boundaryField
+{
+    walls
+    {
+        type          zeroGradient;
+    }
+    inlet
+    {
+        type          fixedValue;
+        value          uniform 293.15;
+    }
+    outlet
+    {
+        type          inletOutlet;
+        inletValue          uniform 295.15;
+        value          uniform 295.15;
+    }
+    heater
+    {
+        type          externalWallHeatFluxTemperature;
+        mode          flux;
+        q          uniform 2500;
+        kappaMethod          fluidThermo;
+        value          uniform 293.15;
+    }
+    cold_plate
+    {
+        type          fixedValue;
+        value          uniform 283.15;
+    }
+    lid
+    {
+        type          externalWallHeatFluxTemperature;
+        mode          coefficient;
+        h          uniform 12;
+        Ta          constant 288.15;
+        kappaMethod          fluidThermo;
+        value          uniform 293.15;
+    }
+    side
+    {
+        type          symmetry;
+    }
+}

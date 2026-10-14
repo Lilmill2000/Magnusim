@@ -21,7 +21,8 @@ from registry_dump import DUMP_KINDS, dump_registry, main  # noqa: E402
 
 from tests.unit.bundled_manifests import default_on_keys  # noqa: E402
 
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
+# Heat Transfer ships on (HT D4): its keys load with the app's.
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "buoyantSimpleFoam", "buoyantPimpleFoam"}
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 EXPECTED_FILTER_KEYS = {
     "cut_plane",

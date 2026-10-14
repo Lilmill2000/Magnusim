@@ -28,8 +28,8 @@ where = ["."]
 include = ["cfddesk*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "../bundled-plugins/airfoil/tests", "../bundled-plugins/incompressible_flow/tests", "../templates/plugin/tests"]
-pythonpath = [".", "tools", "sdk", "../bundled-plugins/incompressible_flow"]
+testpaths = ["tests", "../bundled-plugins/airfoil/tests", "../bundled-plugins/heat_transfer/tests", "../bundled-plugins/incompressible_flow/tests", "../templates/plugin/tests"]
+pythonpath = [".", "tools", "sdk", "../bundled-plugins/incompressible_flow", "../bundled-plugins/heat_transfer"]
 markers = [
   "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
   "occt: needs cadquery-ocp and a STEP fixture",

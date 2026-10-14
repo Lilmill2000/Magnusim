@@ -12,6 +12,7 @@ const STEPS = {
     'cfddesk',
     '../bundled-plugins/incompressible_flow/incompressible_flow',
     '../bundled-plugins/incompressible_flow/plugin.py',
+    '../bundled-plugins/heat_transfer/heat_transfer',
   ],
   pytest: ['-m', 'pytest', '-q', '-p', 'no:cacheprovider'],
 };

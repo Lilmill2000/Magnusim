@@ -32,6 +32,9 @@
  * - A run that ended itself because it converged (API 1.4): its analysis's log
  *   parser said so with a `converged` event (the runner's frames leave it out, so
  *   it is read back from the end of the job log) and its doc gets `converged`.
+ * - A run whose solver died of a cause its analysis's log parser knows (API 1.8):
+ *   the parser's `failed_reason` event, read back the same way, is the failed
+ *   run's error and starts its note.
  *
  * - A continued run (F6: its runner record says restart, its doc has `continued`):
  *   the relay counts its steps from 0 and its residuals start at the time it
@@ -62,6 +65,11 @@ export const LOG_EXCERPT_CHARS = 6000;
 export const CONVERGED_TAIL_BYTES = 256 * 1024;
 /** What ended a converged run: its residuals met their targets, or a monitor settled. */
 const CONVERGED_BY = new Set(['residuals', 'monitor']);
+/**
+ * The longest failure reason a log parser may give (API 1.8 `failed_reason`): the
+ * Run panel's failure line (RUN_FAILURE_LINE_MAX in runtime.js) shows it whole.
+ */
+export const FAILED_REASON_MAX = 160;
 
 /**
  * @typedef {{
@@ -217,6 +225,38 @@ export function solverLogExcerpt(rec) {
  * @returns {{ by: string, time: number | null } | null}
  */
 export function convergedFromJobLog(logPath) {
+  const ev = lastJobLogEvent(logPath, 'converged', (e) => CONVERGED_BY.has(String(e.by)));
+  return ev ? { by: String(ev.by), time: finite(ev.time) ? Number(ev.time) : null } : null;
+}
+
+/**
+ * The plain reason a run's log parser gave for its solver's death (API 1.8:
+ * `{event: 'failed_reason', reason}`), read from the end of its job log, or null.
+ * One line of plain text, at most FAILED_REASON_MAX characters.
+ * @param {unknown} logPath
+ * @returns {string | null}
+ */
+export function failedReasonFromJobLog(logPath) {
+  const ok = (/** @type {any} */ e) => typeof e.reason === 'string' && plainReason(e.reason) !== null;
+  const ev = lastJobLogEvent(logPath, 'failed_reason', ok);
+  return ev ? plainReason(ev.reason) : null;
+}
+
+/** @param {string} text */
+function plainReason(text) {
+  const t = String(text).trim();
+  // eslint-disable-next-line no-control-regex
+  if (!t || t.length > FAILED_REASON_MAX || /[\u0000-\u001f\u007f-\u009f]/.test(t)) return null;
+  return t;
+}
+
+/**
+ * The last `{event: <kind>}` row (that `accept` takes) in the end of a job log, or null.
+ * @param {unknown} logPath
+ * @param {string} kind
+ * @param {(ev: any) => boolean} accept
+ */
+function lastJobLogEvent(logPath, kind, accept) {
   if (!logPath) return null;
   try {
     // Rows are written in batches: the last ones may still wait.
@@ -247,15 +287,15 @@ export function convergedFromJobLog(logPath) {
   const lines = text.split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
-    if (!line.includes('converged')) continue;
+    if (!line.includes(kind)) continue;
     let raw = line.trim();
     const at = raw.indexOf('{');
     if (at < 0) continue;
     raw = raw.slice(at);
     try {
       const ev = JSON.parse(raw);
-      if (!ev || ev.event !== 'converged' || !CONVERGED_BY.has(String(ev.by))) continue;
-      return { by: String(ev.by), time: finite(ev.time) ? Number(ev.time) : null };
+      if (!ev || ev.event !== kind || !accept(ev)) continue;
+      return ev;
     } catch {
       /* not an event row */
     }
@@ -551,7 +591,9 @@ export function onCoreSolveEvent(rec, ev) {
  * (`ctx.converged`, its parser's event) says so in its note and `converged`.
  * @param {any} doc the run doc
  * @param {any} rec the ended runner record
- * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string, converged?: { by: string, time: number | null } | null }} [ctx]
+ * A failed run whose log parser named the cause (`ctx.reason`, API 1.8) has it as its
+ * error, and its note starts with it.
+ * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string, converged?: { by: string, time: number | null } | null, reason?: string | null }} [ctx]
  */
 export function endedRunDoc(doc, rec, ctx = {}) {
   const d = doc || {};
@@ -585,8 +627,14 @@ export function endedRunDoc(doc, rec, ctx = {}) {
     error = runnerText || FOAM_TEXT.launch;
     note = `Failed to start ${app}: ${error}`;
   } else if (runnerText && /^\S+ failed \(exit [^)]*\)$/.test(runnerText)) {
-    // The solver's own exit: the note the old path wrote ("simpleFoam failed (exit 1).").
-    note = sentence(runnerText);
+    // The solver's own exit: the note the old path wrote ("simpleFoam failed (exit 1)."),
+    // after the cause when the analysis's log parser named one.
+    if (ctx.reason) {
+      error = ctx.reason;
+      note = `${sentence(ctx.reason)} ${sentence(runnerText)}`;
+    } else {
+      note = sentence(runnerText);
+    }
   } else {
     error = runnerText || `${app} failed`;
     note = sentence(error);
@@ -670,6 +718,7 @@ export function onCoreSolveEnd(rec) {
       saved: savedTimesIn(rec.case_dir),
       excerpt: solverLogExcerpt(rec),
       converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) : null,
+      reason: rec.status === 'failed' ? failedReasonFromJobLog(rec.log_path) : null,
     });
     // A run deleted meanwhile stays deleted.
     if (doc && s.host) s.host.writeRunDoc(String(rec.project_id), { ...doc, ...out, run_id: String(rec.run_id) });
@@ -717,6 +766,7 @@ export function reconcileEndedRun(projectId, doc, rec) {
       saved: savedTimesIn(rec.case_dir),
       excerpt: solverLogExcerpt(rec),
       converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) : null,
+      reason: rec.status === 'failed' ? failedReasonFromJobLog(rec.log_path) : null,
     }),
   };
   const sid = String(doc.simulation_id || rec.simulation_id || '');

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import committed from '../scripts/generated/registry.json';
 import type { BcFamilyRow, RegistryDescribe } from './api/registry.gen';
 import {
+  analysisBcSeed,
   canonicalBcType,
   colorOf,
   completeBcRecord,
@@ -133,6 +134,22 @@ describe('new records', () => {
     expect(newBcRecord(family('wall'), true, { wall_type: 'slip' }).wall_type).toBe('No-slip');
     // Families the defaults do not name keep their seed.
     expect(newBcRecord(family('pressure_outlet'), false, { wall_type: 'Slip' })).not.toHaveProperty('wall_type');
+  });
+
+  it("the study's analysis seeds its own fields over the default-family rule (API 1.8 bc_seeds)", () => {
+    // A Heat Transfer study: its new Wall starts no-slip, whatever the defaults say.
+    const ht = (committed as unknown as RegistryDescribe).analysis.find((r) => r.key === 'heat_transfer_steady');
+    const seed = analysisBcSeed(ht, family('wall'));
+    expect(seed).toEqual({ wall_type: 'No-slip' });
+    expect(newBcRecord(family('wall'), false, { wall_type: 'No-slip' }, seed).wall_type).toBe('No-slip');
+    expect(newBcRecord(family('wall'), true, { wall_type: 'Slip' }, seed).wall_type).toBe('No-slip');
+    expect(analysisBcSeed(ht, family('velocity_inlet'))).toBeNull();
+    // Incompressible Flow seeds nothing: its new Wall keeps the default-family rule.
+    const inc = (committed as unknown as RegistryDescribe).analysis.find((r) => r.key === 'incompressible_steady');
+    expect(analysisBcSeed(inc, family('wall'))).toBeNull();
+    expect(newBcRecord(family('wall'), false, { wall_type: 'No-slip' }, analysisBcSeed(inc, family('wall'))).wall_type).toBe('Slip');
+    // A type change to Wall in a Heat Transfer study: no-slip too.
+    expect(typeChangeFields({ bc_type: 'Pressure' }, family('wall'), false, { wall_type: 'No-slip' }, seed).wall_type).toBe('No-slip');
   });
 
   it('a seed is a copy, never the registry row itself', () => {

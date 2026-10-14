@@ -327,6 +327,12 @@
       "time_dependency": "steady",
       "default_solver": "simpleFoam",
       "category": "FLUID DYNAMICS",
+      "monitors": [
+        "area_average",
+        "flow_rate",
+        "forces",
+        "probe"
+      ],
       "contract": "1.5",
       "family": {
         "key": "incompressible",
@@ -1214,7 +1220,8 @@
       "material_models": [
         "newtonian_incompressible"
       ],
-      "bc_fields": []
+      "bc_fields": [],
+      "bc_seeds": {}
     },
     {
       "key": "incompressible_transient",
@@ -1579,6 +1586,12 @@
       "time_dependency": "transient",
       "default_solver": "pimpleFoam",
       "category": "FLUID DYNAMICS",
+      "monitors": [
+        "area_average",
+        "flow_rate",
+        "forces",
+        "probe"
+      ],
       "contract": "1.5",
       "family": {
         "key": "incompressible",
@@ -2501,7 +2514,1773 @@
       "material_models": [
         "newtonian_incompressible"
       ],
-      "bc_fields": []
+      "bc_fields": [],
+      "bc_seeds": {}
+    },
+    {
+      "key": "heat_transfer_steady",
+      "label": "Heat Transfer",
+      "plugin": "heat_transfer",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gravity": {
+            "type": "string",
+            "default": "-z",
+            "enum": [
+              "off",
+              "-z",
+              "+z",
+              "-y",
+              "+y",
+              "-x",
+              "+x",
+              "custom"
+            ],
+            "x-cfddesk": {
+              "group": "gravity",
+              "enum_labels": [
+                "Off",
+                "\u2212Z (down along Z)",
+                "+Z",
+                "\u2212Y (down along Y)",
+                "+Y",
+                "\u2212X",
+                "+X",
+                "Custom direction"
+              ]
+            },
+            "title": "Gravity",
+            "description": "The direction gravity pulls in, in the model's coordinates. With gravity, warm fluid rises (natural convection). Off solves forced convection only."
+          },
+          "gravity_vector": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              -1.0
+            ],
+            "x-cfddesk": {
+              "group": "gravity",
+              "depends_on": {
+                "gravity": "custom"
+              }
+            },
+            "title": "Gravity direction",
+            "description": "Any direction; its length does not matter (the magnitude below sets it)."
+          },
+          "gravity_magnitude": {
+            "type": "number",
+            "default": 9.80665,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "acceleration",
+              "group": "gravity"
+            },
+            "title": "Gravity magnitude"
+          },
+          "density_model": {
+            "type": "string",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "perfect_gas",
+              "boussinesq",
+              "constant"
+            ],
+            "x-cfddesk": {
+              "group": "fluid",
+              "enum_labels": [
+                "From the fluid (gas: perfect gas, liquid: Boussinesq)",
+                "Incompressible perfect gas",
+                "Boussinesq",
+                "Constant density"
+              ]
+            },
+            "title": "Density",
+            "description": "How the fluid's density follows its temperature. Incompressible perfect gas (gases): \u03c1 = p_op M / (R T). Boussinesq (liquids, small temperature differences): \u03c1 = \u03c1\u2080 (1 \u2212 \u03b2 (T \u2212 T_ref)). Constant density only suits forced convection, with gravity off."
+          },
+          "operating_pressure": {
+            "type": "number",
+            "default": 101325.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "pressure",
+              "group": "fluid"
+            },
+            "title": "Operating pressure",
+            "description": "The absolute pressure of the surroundings. Pressures in boundary conditions and results are relative to it (gauge); it sets the density of a perfect gas."
+          },
+          "reference_temperature": {
+            "type": "number",
+            "default": 293.15,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "group": "fluid"
+            },
+            "title": "Reference temperature",
+            "description": "The temperature the Boussinesq density and the heat transfer coefficient results are measured against; usually the surroundings' or the inlet's."
+          },
+          "initial_temperature": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "group": "fluid",
+              "optional": true
+            },
+            "title": "Starting temperature",
+            "description": "The fluid's temperature everywhere when the solve starts. Blank uses the reference temperature."
+          },
+          "turbulence_model": {
+            "type": "string",
+            "default": "kOmegaSST",
+            "enum": [
+              "laminar",
+              "kOmegaSST",
+              "kEpsilon",
+              "realizableKE"
+            ],
+            "x-cfddesk": {
+              "group": "flow",
+              "enum_labels": [
+                "Laminar",
+                "k-omega SST",
+                "k-epsilon",
+                "Realizable k-epsilon"
+              ]
+            },
+            "title": "Turbulence model",
+            "description": "Laminar suits slow natural convection (a Rayleigh number below about 10\u2079) and low-Reynolds flow. k-omega SST is the general-purpose model and handles walls at any y+; k-epsilon and realizable k-epsilon use wall functions (y+ above about 30)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "numerics_preset": {
+            "type": "string",
+            "default": "robust",
+            "enum": [
+              "robust",
+              "accurate"
+            ],
+            "x-cfddesk": {
+              "group": "solution",
+              "enum_labels": [
+                "Robust",
+                "Accurate"
+              ]
+            },
+            "title": "Numerics",
+            "description": "Robust solves the turbulence equations to first order with strongly limited gradients and suits any mesh. Accurate is second order throughout with full non-orthogonal correction: sharper on a good mesh, but it may not converge on a poor one. Energy is second order in both."
+          },
+          "relax_u": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation U",
+            "description": "Under-relaxation of velocity and turbulence (0 to 1). Lower it if the solve oscillates."
+          },
+          "relax_p": {
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation p_rgh",
+            "description": "Under-relaxation of the pressure (0 to 1)."
+          },
+          "relax_h": {
+            "type": "number",
+            "default": 0.5,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation"
+            },
+            "title": "Relaxation energy",
+            "description": "Under-relaxation of the energy equation (0 to 1). 0.5 keeps the heat balance of a flow through openings; a closed natural-convection case settles sooner at 0.9."
+          },
+          "residual_target": {
+            "type": "number",
+            "default": 1e-05,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "residuals"
+            },
+            "title": "Residual target",
+            "description": "The run stops once the velocity, energy and pressure residuals are all below it."
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors",
+            "description": "Extra pressure corrections for skewed cells: 0 for clean hex meshes, 1 to 3 for tetrahedra."
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "integer",
+            "default": 1000,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Number of iterations",
+            "description": "Iterations to run. The run stops earlier when the residuals reach their target."
+          },
+          "write_interval": {
+            "type": "integer",
+            "default": 100,
+            "minimum": 1,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Write interval",
+            "description": "How often results are saved, in iterations."
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "buoyantSimpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "time_dependency": "steady",
+      "default_solver": "buoyantSimpleFoam",
+      "category": "HEAT TRANSFER",
+      "monitors": [
+        "ht_wall_heat_flux",
+        "ht_surface_temperature",
+        "ht_thermocouple"
+      ],
+      "contract": "1.5",
+      "family": {
+        "key": "heat_transfer",
+        "label": "Heat transfer",
+        "title": "Heat Transfer",
+        "description": "Temperature and flow of one fluid heated or cooled through its walls and inlets, with buoyancy (natural convection) or without it (forced convection). Density follows the temperature: Boussinesq for liquids, incompressible perfect gas for gases.",
+        "tags": [
+          "HEAT TRANSFER",
+          "NATURAL AND FORCED CONVECTION",
+          "BUOYANCY"
+        ],
+        "study_name": "Heat transfer"
+      },
+      "algorithm_label": "SIMPLE",
+      "residual_keys": [
+        "U",
+        "p_rgh",
+        "h",
+        "k",
+        "omega",
+        "epsilon"
+      ],
+      "residual_series": [
+        {
+          "key": "U",
+          "label": "U",
+          "color": "#1570ef",
+          "fields": [
+            "Ux",
+            "Uy",
+            "Uz"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "u"
+        },
+        {
+          "key": "p_rgh",
+          "label": "p_rgh",
+          "color": "#6941c6",
+          "fields": [
+            "p_rgh"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "p"
+        },
+        {
+          "key": "h",
+          "label": "h (energy)",
+          "color": "#d92d20",
+          "fields": [
+            "h"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": ""
+        },
+        {
+          "key": "k",
+          "label": "k",
+          "color": "#12b76a",
+          "fields": [
+            "k"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "k"
+        },
+        {
+          "key": "omega",
+          "label": "\u03c9",
+          "color": "#f79009",
+          "fields": [
+            "omega"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "w"
+        },
+        {
+          "key": "epsilon",
+          "label": "\u03b5",
+          "color": "#0ba5ec",
+          "fields": [
+            "epsilon"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "epsilon"
+        }
+      ],
+      "x_axis": "iterations",
+      "result_fields": [
+        {
+          "key": "T",
+          "label": "Temperature",
+          "unit_quantity": "temperature",
+          "kind": "scalar",
+          "unit": "K",
+          "magnitude_label": "",
+          "shown": "T"
+        },
+        {
+          "key": "U",
+          "label": "Velocity",
+          "unit_quantity": "velocity",
+          "kind": "vector",
+          "unit": "m/s",
+          "magnitude_label": "Velocity Magnitude",
+          "shown": "magU"
+        },
+        {
+          "key": "p",
+          "label": "Pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "p"
+        },
+        {
+          "key": "p_rgh",
+          "label": "Pressure without hydrostatic",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "p_rgh"
+        },
+        {
+          "key": "rho",
+          "label": "Density",
+          "unit_quantity": "density",
+          "kind": "scalar",
+          "unit": "kg/m\u00b3",
+          "magnitude_label": "",
+          "shown": "rho"
+        },
+        {
+          "key": "wallHeatFlux",
+          "label": "Wall heat flux",
+          "unit_quantity": "heat_flux",
+          "kind": "scalar",
+          "unit": "W/m\u00b2",
+          "magnitude_label": "",
+          "shown": "wallHeatFlux"
+        },
+        {
+          "key": "htc",
+          "label": "Heat transfer coefficient",
+          "unit_quantity": "heat_transfer_coefficient",
+          "kind": "scalar",
+          "unit": "W/(m\u00b2\u00b7K)",
+          "magnitude_label": "",
+          "shown": "htc"
+        },
+        {
+          "key": "k",
+          "label": "Turbulent kinetic energy",
+          "unit_quantity": "specific_energy",
+          "kind": "scalar",
+          "unit": "m\u00b2/s\u00b2",
+          "magnitude_label": "",
+          "shown": "k"
+        },
+        {
+          "key": "omega",
+          "label": "Specific dissipation rate",
+          "unit_quantity": "specific_dissipation_rate",
+          "kind": "scalar",
+          "unit": "1/s",
+          "magnitude_label": "",
+          "shown": "omega"
+        },
+        {
+          "key": "epsilon",
+          "label": "Turbulent dissipation rate",
+          "unit_quantity": "dissipation_rate",
+          "kind": "scalar",
+          "unit": "m\u00b2/s\u00b3",
+          "magnitude_label": "",
+          "shown": "epsilon"
+        },
+        {
+          "key": "nut",
+          "label": "Turbulent viscosity",
+          "unit_quantity": "kinematic_viscosity",
+          "kind": "scalar",
+          "unit": "m\u00b2/s",
+          "magnitude_label": "",
+          "shown": "nut"
+        }
+      ],
+      "kinematic_fields": [],
+      "monitor_quantities": [
+        {
+          "key": "Q",
+          "label": "Heat flow",
+          "sample": "Q_W",
+          "component": null,
+          "unit_quantity": "power",
+          "unit": "W",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "heat_W"
+        },
+        {
+          "key": "q_avg",
+          "label": "Mean heat flux",
+          "sample": "q_avg_W_m2",
+          "component": null,
+          "unit_quantity": "heat_flux",
+          "unit": "W/m\u00b2",
+          "color": "#f79009",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "mean_heat_flux_W_m2"
+        },
+        {
+          "key": "q_max",
+          "label": "Largest heat flux",
+          "sample": "q_max_W_m2",
+          "component": null,
+          "unit_quantity": "heat_flux",
+          "unit": "W/m\u00b2",
+          "color": "#dc6803",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "max_heat_flux_W_m2"
+        },
+        {
+          "key": "T_avg",
+          "label": "Average temperature",
+          "sample": "T_avg_K",
+          "component": null,
+          "unit_quantity": "temperature",
+          "unit": "K",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "average_temperature_K"
+        },
+        {
+          "key": "T_max",
+          "label": "Highest temperature",
+          "sample": "T_max_K",
+          "component": null,
+          "unit_quantity": "temperature",
+          "unit": "K",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "max_temperature_K"
+        },
+        {
+          "key": "T_pt",
+          "label": "Temperature",
+          "sample": "T_K",
+          "component": null,
+          "unit_quantity": "temperature",
+          "unit": "K",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "temperature_K"
+        },
+        {
+          "key": "Q_in",
+          "label": "Heat in",
+          "sample": "Q_in_W",
+          "component": null,
+          "unit_quantity": "power",
+          "unit": "W",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "heat_in_W"
+        },
+        {
+          "key": "Q_out",
+          "label": "Heat out",
+          "sample": "Q_out_W",
+          "component": null,
+          "unit_quantity": "power",
+          "unit": "W",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "heat_out_W"
+        },
+        {
+          "key": "imbalance",
+          "label": "Imbalance",
+          "sample": "imbalance_pct",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "%",
+          "color": "#667085",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "imbalance_pct"
+        }
+      ],
+      "live_metrics": [],
+      "ui": {
+        "study_settings": "heat_transfer.study",
+        "run_settings": "heat_transfer.run"
+      },
+      "study_defaults": {
+        "analysis_type": "heat_transfer_steady",
+        "analysis": "Heat transfer",
+        "analysis_title": "Heat Transfer",
+        "category": "HEAT TRANSFER",
+        "time_dependency": "Steady-state",
+        "algorithm": "SIMPLE",
+        "gravity": "-z",
+        "gravity_vector": [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        "gravity_magnitude": 9.80665,
+        "density_model": "auto",
+        "operating_pressure": 101325.0,
+        "reference_temperature": 293.15,
+        "turbulence_model": "kOmegaSST"
+      },
+      "run_defaults": {
+        "end_time": 1000,
+        "write_interval": 100
+      },
+      "bc_types": [
+        "velocity_inlet_fixed",
+        "velocity_inlet_volumetric",
+        "velocity_inlet_mass",
+        "velocity_outlet",
+        "pressure_outlet_gauge",
+        "wall_noslip",
+        "wall_slip",
+        "symmetry",
+        "freestream",
+        "total_pressure_inlet",
+        "wall_moving",
+        "wall_rotating"
+      ],
+      "material_models": [
+        "thermo_fluid"
+      ],
+      "bc_fields": [
+        {
+          "key": "ht_inlet_thermal",
+          "title": "Thermal",
+          "families": [
+            "velocity_inlet",
+            "total_pressure_inlet"
+          ],
+          "ui": "",
+          "description": "",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "inlet_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature"
+                },
+                "title": "Inlet temperature",
+                "description": "The temperature of the fluid coming in."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "key": "ht_opening_thermal",
+          "title": "Thermal",
+          "families": [
+            "velocity_outlet",
+            "pressure_outlet",
+            "freestream"
+          ],
+          "ui": "",
+          "description": "Fluid leaving takes its own temperature; fluid coming back in has this one.",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "backflow_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature"
+                },
+                "title": "Temperature of inflow",
+                "description": "The temperature of any fluid that flows in through this boundary (usually the surroundings')."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "key": "ht_wall_thermal",
+          "title": "Thermal",
+          "families": [
+            "wall"
+          ],
+          "ui": "",
+          "description": "Heat through the wall.",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "thermal_condition": {
+                "type": "string",
+                "default": "adiabatic",
+                "enum": [
+                  "adiabatic",
+                  "temperature",
+                  "heat_flux",
+                  "heat_transfer_coefficient"
+                ],
+                "x-cfddesk": {
+                  "enum_labels": [
+                    "Adiabatic (no heat through it)",
+                    "Fixed temperature",
+                    "Heat flux",
+                    "Heat transfer coefficient"
+                  ]
+                },
+                "title": "Thermal",
+                "description": "Adiabatic lets no heat through. A fixed temperature holds the wall at it. A heat flux puts that much heat per area into the fluid (negative takes it out). A heat transfer coefficient exchanges heat with an ambient temperature outside the wall."
+              },
+              "wall_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature",
+                  "depends_on": {
+                    "thermal_condition": "temperature"
+                  }
+                },
+                "title": "Wall temperature"
+              },
+              "wall_heat_flux": {
+                "type": "number",
+                "default": 1000.0,
+                "x-cfddesk": {
+                  "quantity": "heat_flux",
+                  "depends_on": {
+                    "thermal_condition": "heat_flux"
+                  }
+                },
+                "title": "Heat flux",
+                "description": "Heat per area into the fluid; negative cools it."
+              },
+              "wall_htc": {
+                "type": "number",
+                "default": 10.0,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "heat_transfer_coefficient",
+                  "depends_on": {
+                    "thermal_condition": "heat_transfer_coefficient"
+                  }
+                },
+                "title": "Heat transfer coefficient"
+              },
+              "ambient_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature",
+                  "depends_on": {
+                    "thermal_condition": "heat_transfer_coefficient"
+                  }
+                },
+                "title": "Ambient temperature"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      ],
+      "bc_seeds": {
+        "wall": {
+          "wall_type": "No-slip"
+        }
+      }
+    },
+    {
+      "key": "heat_transfer_transient",
+      "label": "Heat Transfer (Transient)",
+      "plugin": "heat_transfer",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gravity": {
+            "type": "string",
+            "default": "-z",
+            "enum": [
+              "off",
+              "-z",
+              "+z",
+              "-y",
+              "+y",
+              "-x",
+              "+x",
+              "custom"
+            ],
+            "x-cfddesk": {
+              "group": "gravity",
+              "enum_labels": [
+                "Off",
+                "\u2212Z (down along Z)",
+                "+Z",
+                "\u2212Y (down along Y)",
+                "+Y",
+                "\u2212X",
+                "+X",
+                "Custom direction"
+              ]
+            },
+            "title": "Gravity",
+            "description": "The direction gravity pulls in, in the model's coordinates. With gravity, warm fluid rises (natural convection). Off solves forced convection only."
+          },
+          "gravity_vector": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "default": [
+              0.0,
+              0.0,
+              -1.0
+            ],
+            "x-cfddesk": {
+              "group": "gravity",
+              "depends_on": {
+                "gravity": "custom"
+              }
+            },
+            "title": "Gravity direction",
+            "description": "Any direction; its length does not matter (the magnitude below sets it)."
+          },
+          "gravity_magnitude": {
+            "type": "number",
+            "default": 9.80665,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "acceleration",
+              "group": "gravity"
+            },
+            "title": "Gravity magnitude"
+          },
+          "density_model": {
+            "type": "string",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "perfect_gas",
+              "boussinesq",
+              "constant"
+            ],
+            "x-cfddesk": {
+              "group": "fluid",
+              "enum_labels": [
+                "From the fluid (gas: perfect gas, liquid: Boussinesq)",
+                "Incompressible perfect gas",
+                "Boussinesq",
+                "Constant density"
+              ]
+            },
+            "title": "Density",
+            "description": "How the fluid's density follows its temperature. Incompressible perfect gas (gases): \u03c1 = p_op M / (R T). Boussinesq (liquids, small temperature differences): \u03c1 = \u03c1\u2080 (1 \u2212 \u03b2 (T \u2212 T_ref)). Constant density only suits forced convection, with gravity off."
+          },
+          "operating_pressure": {
+            "type": "number",
+            "default": 101325.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "pressure",
+              "group": "fluid"
+            },
+            "title": "Operating pressure",
+            "description": "The absolute pressure of the surroundings. Pressures in boundary conditions and results are relative to it (gauge); it sets the density of a perfect gas."
+          },
+          "reference_temperature": {
+            "type": "number",
+            "default": 293.15,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "group": "fluid"
+            },
+            "title": "Reference temperature",
+            "description": "The temperature the Boussinesq density and the heat transfer coefficient results are measured against; usually the surroundings' or the inlet's."
+          },
+          "initial_temperature": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "group": "fluid",
+              "optional": true
+            },
+            "title": "Starting temperature",
+            "description": "The fluid's temperature everywhere when the solve starts. Blank uses the reference temperature."
+          },
+          "turbulence_model": {
+            "type": "string",
+            "default": "kOmegaSST",
+            "enum": [
+              "laminar",
+              "kOmegaSST",
+              "kEpsilon",
+              "realizableKE"
+            ],
+            "x-cfddesk": {
+              "group": "flow",
+              "enum_labels": [
+                "Laminar",
+                "k-omega SST",
+                "k-epsilon",
+                "Realizable k-epsilon"
+              ]
+            },
+            "title": "Turbulence model",
+            "description": "Laminar suits slow natural convection (a Rayleigh number below about 10\u2079) and low-Reynolds flow. k-omega SST is the general-purpose model and handles walls at any y+; k-epsilon and realizable k-epsilon use wall functions (y+ above about 30)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "numerics_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "numerics_preset": {
+            "type": "string",
+            "default": "robust",
+            "enum": [
+              "robust",
+              "accurate"
+            ],
+            "x-cfddesk": {
+              "group": "solution",
+              "enum_labels": [
+                "Robust",
+                "Accurate"
+              ]
+            },
+            "title": "Numerics",
+            "description": "Robust solves the turbulence equations to first order with strongly limited gradients and suits any mesh. Accurate is second order throughout with full non-orthogonal correction: sharper on a good mesh, but it may not converge on a poor one. Energy is second order in both."
+          },
+          "n_non_orthogonal": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 0,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "solution"
+            },
+            "title": "Non-orthogonal correctors",
+            "description": "Extra pressure corrections for skewed cells: 0 for clean hex meshes, 1 to 3 for tetrahedra."
+          }
+        },
+        "additionalProperties": false
+      },
+      "control_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "end_time": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "s",
+              "group": "control"
+            },
+            "title": "Simulation time",
+            "description": "Simulated time to stop at, in seconds."
+          },
+          "write_count": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 5000,
+            "x-cfddesk": {
+              "group": "control"
+            },
+            "title": "Result frames",
+            "description": "Result frames saved over the simulation time."
+          },
+          "time_step_mode": {
+            "type": "string",
+            "default": "adjustable",
+            "enum": [
+              "adjustable",
+              "fixed"
+            ],
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "enum_labels": [
+                "Adjustable",
+                "Fixed"
+              ]
+            },
+            "title": "Time step",
+            "description": "Adjustable keeps the Courant number at or below the maximum; fixed uses one step throughout."
+          },
+          "max_co": {
+            "type": "number",
+            "default": 0.8,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Max Courant",
+            "description": "Largest Courant number allowed when the time step adjusts."
+          },
+          "delta_t": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "s",
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Initial time step",
+            "description": "Blank calculates it from the mean cell size and the case's speed."
+          },
+          "max_delta_t": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "unit": "s",
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Max time step",
+            "description": "Blank uses the frame interval, so every frame is written."
+          },
+          "time_scheme": {
+            "type": "string",
+            "default": "Euler",
+            "enum": [
+              "Euler",
+              "backward"
+            ],
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "enum_labels": [
+                "Euler (1st order)",
+                "Backward (2nd order)"
+              ]
+            },
+            "title": "Time scheme"
+          },
+          "n_outer_correctors": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 50,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Outer correctors",
+            "description": "PIMPLE outer loops per time step. 1 is PISO mode."
+          },
+          "n_correctors": {
+            "type": "integer",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true
+            },
+            "title": "Pressure correctors"
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "buoyantPimpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "time_dependency": "transient",
+      "default_solver": "buoyantPimpleFoam",
+      "category": "HEAT TRANSFER",
+      "monitors": [
+        "ht_wall_heat_flux",
+        "ht_surface_temperature",
+        "ht_thermocouple"
+      ],
+      "contract": "1.5",
+      "family": {
+        "key": "heat_transfer",
+        "label": "Heat transfer",
+        "title": "Heat Transfer",
+        "description": "Temperature and flow of one fluid heated or cooled through its walls and inlets, with buoyancy (natural convection) or without it (forced convection). Density follows the temperature: Boussinesq for liquids, incompressible perfect gas for gases.",
+        "tags": [
+          "HEAT TRANSFER",
+          "NATURAL AND FORCED CONVECTION",
+          "BUOYANCY"
+        ],
+        "study_name": "Heat transfer"
+      },
+      "algorithm_label": "PIMPLE",
+      "residual_keys": [
+        "U",
+        "p_rgh",
+        "h",
+        "k",
+        "omega",
+        "epsilon"
+      ],
+      "residual_series": [
+        {
+          "key": "U",
+          "label": "U",
+          "color": "#1570ef",
+          "fields": [
+            "Ux",
+            "Uy",
+            "Uz"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "u"
+        },
+        {
+          "key": "p_rgh",
+          "label": "p_rgh",
+          "color": "#6941c6",
+          "fields": [
+            "p_rgh"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "p"
+        },
+        {
+          "key": "h",
+          "label": "h (energy)",
+          "color": "#d92d20",
+          "fields": [
+            "h"
+          ],
+          "always": true,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": ""
+        },
+        {
+          "key": "k",
+          "label": "k",
+          "color": "#12b76a",
+          "fields": [
+            "k"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "k"
+        },
+        {
+          "key": "omega",
+          "label": "\u03c9",
+          "color": "#f79009",
+          "fields": [
+            "omega"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "w"
+        },
+        {
+          "key": "epsilon",
+          "label": "\u03b5",
+          "color": "#0ba5ec",
+          "fields": [
+            "epsilon"
+          ],
+          "always": false,
+          "dashed": false,
+          "max_key": "",
+          "max_label": "",
+          "swatch": "epsilon"
+        },
+        {
+          "key": "co_mean",
+          "label": "Co mean",
+          "color": "#667085",
+          "fields": [
+            "co_mean"
+          ],
+          "always": false,
+          "dashed": true,
+          "max_key": "co_max",
+          "max_label": "max",
+          "swatch": "co"
+        }
+      ],
+      "x_axis": "seconds",
+      "result_fields": [
+        {
+          "key": "T",
+          "label": "Temperature",
+          "unit_quantity": "temperature",
+          "kind": "scalar",
+          "unit": "K",
+          "magnitude_label": "",
+          "shown": "T"
+        },
+        {
+          "key": "U",
+          "label": "Velocity",
+          "unit_quantity": "velocity",
+          "kind": "vector",
+          "unit": "m/s",
+          "magnitude_label": "Velocity Magnitude",
+          "shown": "magU"
+        },
+        {
+          "key": "p",
+          "label": "Pressure",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "p"
+        },
+        {
+          "key": "p_rgh",
+          "label": "Pressure without hydrostatic",
+          "unit_quantity": "pressure",
+          "kind": "scalar",
+          "unit": "Pa",
+          "magnitude_label": "",
+          "shown": "p_rgh"
+        },
+        {
+          "key": "rho",
+          "label": "Density",
+          "unit_quantity": "density",
+          "kind": "scalar",
+          "unit": "kg/m\u00b3",
+          "magnitude_label": "",
+          "shown": "rho"
+        },
+        {
+          "key": "wallHeatFlux",
+          "label": "Wall heat flux",
+          "unit_quantity": "heat_flux",
+          "kind": "scalar",
+          "unit": "W/m\u00b2",
+          "magnitude_label": "",
+          "shown": "wallHeatFlux"
+        },
+        {
+          "key": "htc",
+          "label": "Heat transfer coefficient",
+          "unit_quantity": "heat_transfer_coefficient",
+          "kind": "scalar",
+          "unit": "W/(m\u00b2\u00b7K)",
+          "magnitude_label": "",
+          "shown": "htc"
+        },
+        {
+          "key": "k",
+          "label": "Turbulent kinetic energy",
+          "unit_quantity": "specific_energy",
+          "kind": "scalar",
+          "unit": "m\u00b2/s\u00b2",
+          "magnitude_label": "",
+          "shown": "k"
+        },
+        {
+          "key": "omega",
+          "label": "Specific dissipation rate",
+          "unit_quantity": "specific_dissipation_rate",
+          "kind": "scalar",
+          "unit": "1/s",
+          "magnitude_label": "",
+          "shown": "omega"
+        },
+        {
+          "key": "epsilon",
+          "label": "Turbulent dissipation rate",
+          "unit_quantity": "dissipation_rate",
+          "kind": "scalar",
+          "unit": "m\u00b2/s\u00b3",
+          "magnitude_label": "",
+          "shown": "epsilon"
+        },
+        {
+          "key": "nut",
+          "label": "Turbulent viscosity",
+          "unit_quantity": "kinematic_viscosity",
+          "kind": "scalar",
+          "unit": "m\u00b2/s",
+          "magnitude_label": "",
+          "shown": "nut"
+        }
+      ],
+      "kinematic_fields": [],
+      "monitor_quantities": [
+        {
+          "key": "Q",
+          "label": "Heat flow",
+          "sample": "Q_W",
+          "component": null,
+          "unit_quantity": "power",
+          "unit": "W",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "heat_W"
+        },
+        {
+          "key": "q_avg",
+          "label": "Mean heat flux",
+          "sample": "q_avg_W_m2",
+          "component": null,
+          "unit_quantity": "heat_flux",
+          "unit": "W/m\u00b2",
+          "color": "#f79009",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "mean_heat_flux_W_m2"
+        },
+        {
+          "key": "q_max",
+          "label": "Largest heat flux",
+          "sample": "q_max_W_m2",
+          "component": null,
+          "unit_quantity": "heat_flux",
+          "unit": "W/m\u00b2",
+          "color": "#dc6803",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "max_heat_flux_W_m2"
+        },
+        {
+          "key": "T_avg",
+          "label": "Average temperature",
+          "sample": "T_avg_K",
+          "component": null,
+          "unit_quantity": "temperature",
+          "unit": "K",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "average_temperature_K"
+        },
+        {
+          "key": "T_max",
+          "label": "Highest temperature",
+          "sample": "T_max_K",
+          "component": null,
+          "unit_quantity": "temperature",
+          "unit": "K",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "max_temperature_K"
+        },
+        {
+          "key": "T_pt",
+          "label": "Temperature",
+          "sample": "T_K",
+          "component": null,
+          "unit_quantity": "temperature",
+          "unit": "K",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "temperature_K"
+        },
+        {
+          "key": "Q_in",
+          "label": "Heat in",
+          "sample": "Q_in_W",
+          "component": null,
+          "unit_quantity": "power",
+          "unit": "W",
+          "color": "#d92d20",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "heat_in_W"
+        },
+        {
+          "key": "Q_out",
+          "label": "Heat out",
+          "sample": "Q_out_W",
+          "component": null,
+          "unit_quantity": "power",
+          "unit": "W",
+          "color": "#1570ef",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": true,
+          "csv": "heat_out_W"
+        },
+        {
+          "key": "imbalance",
+          "label": "Imbalance",
+          "sample": "imbalance_pct",
+          "component": null,
+          "unit_quantity": "",
+          "unit": "%",
+          "color": "#667085",
+          "magnitude": false,
+          "direction_from": "",
+          "direction": [
+            "",
+            ""
+          ],
+          "plot": true,
+          "details": true,
+          "headline": false,
+          "csv": "imbalance_pct"
+        }
+      ],
+      "live_metrics": [
+        {
+          "key": "delta_t",
+          "label": "\u0394t",
+          "format": "time",
+          "max_key": ""
+        },
+        {
+          "key": "co_mean",
+          "label": "Co",
+          "format": "sig2",
+          "max_key": "co_max"
+        }
+      ],
+      "ui": {
+        "study_settings": "heat_transfer.study",
+        "run_settings": "heat_transfer.run"
+      },
+      "study_defaults": {
+        "analysis_type": "heat_transfer_transient",
+        "analysis": "Heat transfer",
+        "analysis_title": "Heat Transfer",
+        "category": "HEAT TRANSFER",
+        "time_dependency": "Transient",
+        "algorithm": "PIMPLE",
+        "gravity": "-z",
+        "gravity_vector": [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        "gravity_magnitude": 9.80665,
+        "density_model": "auto",
+        "operating_pressure": 101325.0,
+        "reference_temperature": 293.15,
+        "turbulence_model": "kOmegaSST"
+      },
+      "run_defaults": {
+        "end_time": 10.0,
+        "write_count": 20,
+        "time_step_mode": "adjustable",
+        "max_co": 0.8,
+        "delta_t": null,
+        "max_delta_t": null,
+        "time_scheme": "Euler",
+        "n_outer_correctors": 1,
+        "n_correctors": 2
+      },
+      "bc_types": [
+        "velocity_inlet_fixed",
+        "velocity_inlet_volumetric",
+        "velocity_inlet_mass",
+        "velocity_outlet",
+        "pressure_outlet_gauge",
+        "wall_noslip",
+        "wall_slip",
+        "symmetry",
+        "freestream",
+        "total_pressure_inlet",
+        "wall_moving",
+        "wall_rotating"
+      ],
+      "material_models": [
+        "thermo_fluid"
+      ],
+      "bc_fields": [
+        {
+          "key": "ht_inlet_thermal",
+          "title": "Thermal",
+          "families": [
+            "velocity_inlet",
+            "total_pressure_inlet"
+          ],
+          "ui": "",
+          "description": "",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "inlet_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature"
+                },
+                "title": "Inlet temperature",
+                "description": "The temperature of the fluid coming in."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "key": "ht_opening_thermal",
+          "title": "Thermal",
+          "families": [
+            "velocity_outlet",
+            "pressure_outlet",
+            "freestream"
+          ],
+          "ui": "",
+          "description": "Fluid leaving takes its own temperature; fluid coming back in has this one.",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "backflow_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature"
+                },
+                "title": "Temperature of inflow",
+                "description": "The temperature of any fluid that flows in through this boundary (usually the surroundings')."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "key": "ht_wall_thermal",
+          "title": "Thermal",
+          "families": [
+            "wall"
+          ],
+          "ui": "",
+          "description": "Heat through the wall.",
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "thermal_condition": {
+                "type": "string",
+                "default": "adiabatic",
+                "enum": [
+                  "adiabatic",
+                  "temperature",
+                  "heat_flux",
+                  "heat_transfer_coefficient"
+                ],
+                "x-cfddesk": {
+                  "enum_labels": [
+                    "Adiabatic (no heat through it)",
+                    "Fixed temperature",
+                    "Heat flux",
+                    "Heat transfer coefficient"
+                  ]
+                },
+                "title": "Thermal",
+                "description": "Adiabatic lets no heat through. A fixed temperature holds the wall at it. A heat flux puts that much heat per area into the fluid (negative takes it out). A heat transfer coefficient exchanges heat with an ambient temperature outside the wall."
+              },
+              "wall_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature",
+                  "depends_on": {
+                    "thermal_condition": "temperature"
+                  }
+                },
+                "title": "Wall temperature"
+              },
+              "wall_heat_flux": {
+                "type": "number",
+                "default": 1000.0,
+                "x-cfddesk": {
+                  "quantity": "heat_flux",
+                  "depends_on": {
+                    "thermal_condition": "heat_flux"
+                  }
+                },
+                "title": "Heat flux",
+                "description": "Heat per area into the fluid; negative cools it."
+              },
+              "wall_htc": {
+                "type": "number",
+                "default": 10.0,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "heat_transfer_coefficient",
+                  "depends_on": {
+                    "thermal_condition": "heat_transfer_coefficient"
+                  }
+                },
+                "title": "Heat transfer coefficient"
+              },
+              "ambient_temperature": {
+                "type": "number",
+                "default": 293.15,
+                "minimum": 0.0,
+                "x-cfddesk": {
+                  "quantity": "temperature",
+                  "depends_on": {
+                    "thermal_condition": "heat_transfer_coefficient"
+                  }
+                },
+                "title": "Ambient temperature"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      ],
+      "bc_seeds": {
+        "wall": {
+          "wall_type": "No-slip"
+        }
+      }
     }
   ],
   "solver": [
@@ -2533,6 +4312,38 @@
         }
       ],
       "application": "pimpleFoam",
+      "time_dependency": "transient",
+      "parallel": "mpirun",
+      "stop_strategy": "stopAt_writeNow"
+    },
+    {
+      "key": "buoyantSimpleFoam",
+      "label": "buoyantSimpleFoam (buoyant SIMPLE steady)",
+      "plugin": "heat_transfer",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "buoyantSimpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "application": "buoyantSimpleFoam",
+      "time_dependency": "steady",
+      "parallel": "mpirun",
+      "stop_strategy": "stopAt_writeNow"
+    },
+    {
+      "key": "buoyantPimpleFoam",
+      "label": "buoyantPimpleFoam (buoyant PIMPLE transient)",
+      "plugin": "heat_transfer",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "buoyantPimpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "application": "buoyantPimpleFoam",
       "time_dependency": "transient",
       "parallel": "mpirun",
       "stop_strategy": "stopAt_writeNow"
@@ -4591,6 +6402,208 @@
       },
       "custom_preset": "custom",
       "role": "fluid"
+    },
+    {
+      "key": "thermo_fluid",
+      "label": "Fluid (thermal)",
+      "plugin": "heat_transfer",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "rho": {
+            "type": "number",
+            "default": 1.204,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "density",
+              "group": "thermal"
+            },
+            "title": "(\u03c1) Density",
+            "description": "At the reference temperature. A gas's density follows the ideal gas law from its molar mass (incompressible perfect gas); a liquid's follows its thermal expansion (Boussinesq)."
+          },
+          "mu": {
+            "type": "number",
+            "default": 1.825e-05,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "dynamic_viscosity",
+              "group": "thermal"
+            },
+            "title": "(\u03bc) Dynamic viscosity"
+          },
+          "cp": {
+            "type": "number",
+            "default": 1007.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "specific_heat",
+              "group": "thermal"
+            },
+            "title": "(cp) Specific heat"
+          },
+          "k": {
+            "type": "number",
+            "default": 0.02514,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "thermal_conductivity",
+              "group": "thermal"
+            },
+            "title": "(k) Thermal conductivity"
+          },
+          "beta": {
+            "type": "number",
+            "default": 0.003411,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "thermal_expansion",
+              "group": "thermal"
+            },
+            "title": "(\u03b2) Thermal expansion",
+            "description": "Used by the Boussinesq density model: \u03c1 = \u03c1\u2080 (1 \u2212 \u03b2 (T \u2212 T_ref))."
+          },
+          "molar_mass": {
+            "type": "number",
+            "default": 28.97,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "molar_mass",
+              "group": "thermal"
+            },
+            "title": "(M) Molar mass",
+            "description": "Used by the incompressible perfect gas model: \u03c1 = p_op M / (R T)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "library": [
+        {
+          "key": "air",
+          "name": "Air",
+          "values": {
+            "rho": 1.204,
+            "mu": 1.825e-05,
+            "cp": 1007.0,
+            "k": 0.02514,
+            "beta": 0.003411,
+            "molar_mass": 28.97
+          },
+          "library": "HT_AIR",
+          "codes": [
+            "HT_AIR",
+            "DEFAULT"
+          ],
+          "names": [
+            "Air"
+          ]
+        },
+        {
+          "key": "water",
+          "name": "Water",
+          "values": {
+            "rho": 998.0,
+            "mu": 0.001002,
+            "cp": 4182.0,
+            "k": 0.598,
+            "beta": 0.000207,
+            "molar_mass": 18.015
+          },
+          "library": "HT_WATER",
+          "codes": [
+            "HT_WATER"
+          ],
+          "names": [
+            "Water"
+          ]
+        },
+        {
+          "key": "oil_vg32",
+          "name": "Oil (ISO VG 32)",
+          "values": {
+            "rho": 869.0,
+            "mu": 0.075,
+            "cp": 1881.0,
+            "k": 0.145,
+            "beta": 0.0007,
+            "molar_mass": 400.0
+          },
+          "library": "HT_OIL_VG32",
+          "codes": [
+            "HT_OIL_VG32"
+          ],
+          "names": [
+            "Oil (ISO VG 32)"
+          ]
+        },
+        {
+          "key": "nitrogen",
+          "name": "Nitrogen",
+          "values": {
+            "rho": 1.165,
+            "mu": 1.76e-05,
+            "cp": 1040.0,
+            "k": 0.0253,
+            "beta": 0.003411,
+            "molar_mass": 28.013
+          },
+          "library": "HT_NITROGEN",
+          "codes": [
+            "HT_NITROGEN"
+          ],
+          "names": [
+            "Nitrogen"
+          ]
+        },
+        {
+          "key": "custom",
+          "name": "Custom fluid",
+          "values": {
+            "rho": 1.204,
+            "mu": 1.825e-05,
+            "cp": 1007.0,
+            "k": 0.02514,
+            "beta": 0.003411,
+            "molar_mass": 28.97
+          },
+          "library": "HT_CUSTOM_FLUID",
+          "codes": [
+            "HT_CUSTOM_FLUID"
+          ],
+          "names": []
+        }
+      ],
+      "record_keys": {
+        "rho": [
+          "density",
+          "rho"
+        ],
+        "mu": [
+          "dynamic_viscosity",
+          "mu"
+        ],
+        "cp": [
+          "specific_heat",
+          "cp"
+        ],
+        "k": [
+          "thermal_conductivity",
+          "k"
+        ],
+        "beta": [
+          "thermal_expansion",
+          "beta"
+        ],
+        "molar_mass": [
+          "molar_mass"
+        ]
+      },
+      "record_constants": {
+        "type": "Fluid",
+        "properties_at": "20 \u00b0C"
+      },
+      "custom_preset": "custom",
+      "role": "fluid"
     }
   ],
   "monitor": [
@@ -4717,6 +6730,71 @@
         "Ux",
         "Uy",
         "Uz"
+      ],
+      "boundary_kinds": [],
+      "study_note": "",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "ht_wall_heat_flux",
+      "label": "Wall heat flux",
+      "plugin": "heat_transfer",
+      "target": "boundary",
+      "description": "The heat through the walls you pick (W, positive into the fluid) and its mean and largest flux per area, at every saved step.",
+      "aliases": [],
+      "user_creatable": true,
+      "quantities": [
+        "Q",
+        "q_avg",
+        "q_max"
+      ],
+      "boundary_kinds": [
+        "wall"
+      ],
+      "study_note": "",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "ht_surface_temperature",
+      "label": "Surface temperature",
+      "plugin": "heat_transfer",
+      "target": "boundary",
+      "description": "The average and the highest temperature on the boundaries you pick, at every saved step.",
+      "aliases": [],
+      "user_creatable": true,
+      "quantities": [
+        "T_avg",
+        "T_max"
+      ],
+      "boundary_kinds": [],
+      "study_note": "",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "ht_thermocouple",
+      "label": "Thermocouple",
+      "plugin": "heat_transfer",
+      "target": "point",
+      "description": "The temperature at points you place in the fluid, over the run.",
+      "aliases": [],
+      "user_creatable": true,
+      "quantities": [
+        "T_pt"
       ],
       "boundary_kinds": [],
       "study_note": "",
@@ -5209,7 +7287,7 @@
     {
       "key": "incompressible_flow",
       "name": "Incompressible Flow",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "requires": [],
       "provides": {},
       "ui": "ui",
@@ -5219,11 +7297,32 @@
       ],
       "description": "Steady-state and transient incompressible flow of one fluid (simpleFoam, pimpleFoam).",
       "source": "bundled",
-      "api_version": "1.5",
+      "api_version": "1.8",
       "overrides": [],
       "tier": "bundled",
       "required": true,
       "requires_plugins": []
+    },
+    {
+      "key": "heat_transfer",
+      "name": "Heat Transfer",
+      "version": "0.1.0-dev",
+      "requires": [],
+      "provides": {},
+      "ui": "ui",
+      "ui_entry": "index.tsx",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "Buoyant and forced convection of one fluid with temperature (buoyantSimpleFoam, buoyantPimpleFoam).",
+      "source": "bundled",
+      "api_version": "1.8",
+      "overrides": [],
+      "tier": "bundled",
+      "required": false,
+      "requires_plugins": [
+        "incompressible_flow>=1.1"
+      ]
     }
   ],
   "default_analysis": {

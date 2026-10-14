@@ -273,6 +273,7 @@ class Registry(Generic[T]):
                     "default_solver",
                     "category",
                     "turbulence_models",
+                    "monitors",
                 ):
                     if not hasattr(spec, extra):
                         continue
@@ -280,7 +281,9 @@ class Registry(Generic[T]):
                     if val is None:
                         continue
                     # API 1.0 turbulence fields: published only when the analysis sets them.
-                    if extra in ("default_turbulence", "turbulence_models") and not val:
+                    # The monitor types a user may add to its runs: only when it names them
+                    # (an analysis that names none offers every user-creatable type).
+                    if extra in ("default_turbulence", "turbulence_models", "monitors") and not val:
                         continue
                     row[extra] = list(val) if isinstance(val, tuple) else val
                 from cfddesk.registry.contract import describe_extra

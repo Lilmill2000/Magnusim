@@ -144,12 +144,50 @@ def _offered_families(hub: RegistryHub, spec: Any) -> list[str]:
     ]
 
 
+def _validate_bc_seeds(hub: RegistryHub, spec: Any) -> None:
+    """An analysis's ``bc_seeds`` (API 1.8): families it offers, fields they hold, plain values
+    (a choice field's value one of its choices)."""
+    seeds = dict(getattr(spec, "bc_seeds", None) or {})
+    if not seeds:
+        return
+    key = getattr(spec, "key", "?")
+    families = hub.registry("bc_family")
+    offered = set(_offered_families(hub, spec))
+    for fam_key, seed in seeds.items():
+        if str(fam_key) not in offered:
+            raise RegistryError(
+                f"analysis {key!r}: bc_seeds names bc_family {fam_key!r}, which it does not offer; offered={sorted(offered)}"
+            )
+        if not isinstance(seed, dict) or not seed:
+            raise RegistryError(f"analysis {key!r}: bc_seeds[{fam_key!r}] must be a non-empty dict of field values")
+        fields = {f.key: f for f in getattr(families.get(str(fam_key)), "fields", ()) or ()}
+        for fk, value in seed.items():
+            if fk not in fields:
+                raise RegistryError(
+                    f"analysis {key!r}: bc_seeds[{fam_key!r}] field {fk!r} is not a field of the family; fields={sorted(fields)}"
+                )
+            if not isinstance(value, (str, int, float, bool)):
+                raise RegistryError(f"analysis {key!r}: bc_seeds[{fam_key!r}][{fk!r}] must be a string, number or bool")
+            choices = tuple(getattr(fields[fk], "choices", ()) or ())
+            if choices and value not in choices:
+                raise RegistryError(
+                    f"analysis {key!r}: bc_seeds[{fam_key!r}][{fk!r}] = {value!r} is not one of {list(choices)}"
+                )
+
+
+def bc_seeds_row(spec: Any) -> dict[str, dict[str, Any]]:
+    """An analysis row's ``bc_seeds`` (API 1.8): {bc_family key: {field: value}}."""
+    return {str(k): dict(v) for k, v in dict(getattr(spec, "bc_seeds", None) or {}).items()}
+
+
 def validate_analysis_bc_fields(hub: RegistryHub) -> None:
     """Fail (``analysis '<key>': ...``) when an analysis's BC field groups (API 1.8) name a
-    family that is not registered, repeat a key, or use a record key a family or the host holds."""
+    family that is not registered, repeat a key, or use a record key a family or the host holds;
+    or when its ``bc_seeds`` name a family it does not offer or a field the family does not hold."""
     families = hub.registry("bc_family")
     family_keys = set(families.keys())
     for spec in hub.registry("analysis").items():
+        _validate_bc_seeds(hub, spec)
         groups = tuple(getattr(spec, "bc_fields", ()) or ())
         if not groups:
             continue

@@ -22,8 +22,11 @@ from cfddesk.registry import (
 from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub
 
-EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"}
-EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"}
+# Heat Transfer ships on (HT D4): its keys load with the app's.
+EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible", "thermo_fluid"}
+EXPECTED_MONITOR_KEYS = {
+    "area_average", "flow_rate", "forces", "probe", "ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple",
+}
 
 
 @pytest.fixture(autouse=True)

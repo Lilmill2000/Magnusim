@@ -1,0 +1,80 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2606                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       dictionary;
+    location    "400/uniform/functionObjects";
+    object      functionObjectProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+cdf7e925f5746741c316f5fbcf39ad0dfca90775
+{
+    ht_wall_heat_flux
+    {
+        scalar
+        {
+            min(hot)        2.724277563036136;
+            max(hot)        29.44152628497503;
+            int(hot)        0.01691909260696992;
+            min(cold)       -29.47093091527791;
+            max(cold)       -2.723664396724517;
+            int(cold)       -0.01693539588090527;
+            min(walls)      0;
+            max(walls)      0;
+            int(walls)      0;
+        }
+    }
+    ht_Tavg_hot
+    {
+        scalar
+        {
+            areaAverage(hot,T) 303.15;
+        }
+    }
+    ht_Tmax_hot
+    {
+        scalar
+        {
+            max(hot,T)      303.15;
+        }
+    }
+    ht_Tavg_cold
+    {
+        scalar
+        {
+            areaAverage(cold,T) 293.15;
+        }
+    }
+    ht_Tmax_cold
+    {
+        scalar
+        {
+            max(cold,T)     293.15;
+        }
+    }
+    ht_probe_tc
+    {
+        scalar
+        {
+            average(T)      299.1481438326891;
+            min(T)          297.6468207678943;
+            max(T)          300.6494668974839;
+        }
+        label
+        {
+            size(T)         2;
+        }
+    }
+}
+
+
+// ************************************************************************* //

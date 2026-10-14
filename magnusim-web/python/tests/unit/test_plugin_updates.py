@@ -194,18 +194,18 @@ def test_an_incompressible_flow_update_stays_required_with_its_default_analysis(
     upd = plugins / "incompressible_flow"
     shutil.copytree(bundled / "incompressible_flow", upd)
     text = (upd / "manifest.toml").read_text(encoding="utf-8")
-    assert 'version = "1.0.0"' in text and "required = true" in text
-    text = text.replace('version = "1.0.0"', 'version = "1.0.1"').replace("required = true", "required = false")
+    assert 'version = "1.1.0"' in text and "required = true" in text
+    text = text.replace('version = "1.1.0"', 'version = "1.1.1"').replace("required = true", "required = false")
     (upd / "manifest.toml").write_text(text, encoding="utf-8")
     hub = load_all()
     m = hub.manifests["incompressible_flow"]
-    assert (m.version, m.tier, m.required) == ("1.0.1", "bundled", True)
+    assert (m.version, m.tier, m.required) == ("1.1.1", "bundled", True)
     assert hub.plugin_dir("incompressible_flow") == upd
     assert hub.required_failures == []
     assert get_registry("analysis").owner("incompressible_steady") == "incompressible_flow"
     assert getattr(m, "default_analysis", None)
     row = _row("incompressible_flow")
-    assert (row["copy"], row["required"], row["bundled_version"]) == ("update", True, "1.0.0")
+    assert (row["copy"], row["required"], row["bundled_version"]) == ("update", True, "1.1.0")
 
 
 def test_a_user_plugin_with_its_own_key_is_unaffected(folders):
@@ -224,17 +224,17 @@ def test_an_update_unloaded_by_the_checks_after_loading_falls_back_to_the_app_co
     shutil.copytree(bundled / "incompressible_flow", upd)
     text = (upd / "manifest.toml").read_text(encoding="utf-8")
     assert 'steady = "incompressible_steady"' in text
-    text = text.replace('version = "1.0.0"', 'version = "1.0.1"').replace(
+    text = text.replace('version = "1.1.0"', 'version = "1.1.1"').replace(
         'steady = "incompressible_steady"', 'steady = "incompressible_nowhere"'
     )
     (upd / "manifest.toml").write_text(text, encoding="utf-8")
     hub = load_all()
     m = hub.manifests["incompressible_flow"]
-    assert (m.version, m.required) == ("1.0.0", True)
+    assert (m.version, m.required) == ("1.1.0", True)
     assert hub.plugin_dir("incompressible_flow") == bundled / "incompressible_flow"
     assert hub.required_failures == []
     assert get_registry("analysis").owner("incompressible_steady") == "incompressible_flow"
     row = _row("incompressible_flow")
     assert (row["copy"], row["status"]) == ("app", "enabled")
     [unused] = row["unused_copies"]
-    assert unused["version"] == "1.0.1" and "incompressible_nowhere" in unused["reason"]
+    assert unused["version"] == "1.1.1" and "incompressible_nowhere" in unused["reason"]

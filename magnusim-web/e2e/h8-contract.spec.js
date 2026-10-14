@@ -315,11 +315,12 @@ test('gate:h8-stub-analysis a simulation type the core does not know runs throug
   stage(t0, `stub run done: laplacianFoam, frames ${frames.join(',')}`);
 
   // Its results colour by what it writes (T, in K): the core's results viewer
-  // reads the analysis's result_fields, not a fixed U and p.
+  // reads the analysis's result_fields, not a fixed U and p. A temperature's legend
+  // shows the project's unit (API 1.8: °C in this metric project).
   await page.locator(`[data-w27-run-results="${rid}"] > .tree-row .tl`).first().click();
   await expect(page.locator('#parts-block')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('#legend .legend-title')).toHaveText('Temperature', { timeout: 60_000 });
-  await expect(page.locator('#legend .legend-units')).toHaveText('K');
+  await expect(page.locator('#legend .legend-units')).toHaveText('°C');
   await expect(page.locator('#cp-coloring option:not([hidden])')).toHaveText(['Temperature']);
   const tRange = await page.evaluate(() => window.__CFD_W6__ && window.__CFD_W6__.foam_proof);
   expect(tRange && tRange.min != null && tRange.max != null, JSON.stringify(tRange)).toBe(true);

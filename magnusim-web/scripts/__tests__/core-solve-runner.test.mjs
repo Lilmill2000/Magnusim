@@ -536,6 +536,57 @@ describe('the end', () => {
     assert.equal(runDoc(rid).note, doc.note);
   });
 
+  describe("a solver that died of a cause its parser names (API 1.8 failed_reason)", () => {
+    const REASON = 'Boussinesq density reached zero: use incompressible perfect gas';
+
+    /** A run whose relay passes on the parser's failed_reason, then the solver exits 136. */
+    async function dieWithReason(rid) {
+      const { out, done } = await start(rid);
+      const job = out.bodyExtra.runner_job_id;
+      relay([{ event: 'stage', stage: 'solve' }, ...step(1), ...step(2)]);
+      relay([{ event: 'failed_reason', reason: REASON }]);
+      // The relay's events as the job log holds them (what the end reads back).
+      const logPath = store.readFoamRecord(job).log_path;
+      mkdirSync(join(ROOT, 'logs'), { recursive: true });
+      writeFileSync(
+        logPath,
+        [
+          JSON.stringify({ ts: 't', kind: 'solve', event: 'progress', time: 2 }),
+          JSON.stringify({ ts: 't', kind: 'solve', event: 'failed_reason', reason: REASON }),
+          JSON.stringify({ ts: 't', kind: 'solve', event: 'result', ok: false, exit_code: 136 }),
+        ].join('\n') + '\n',
+      );
+      writeFileSync(join(caseOf(rid), 'log.simpleFoam'), 'Time = 1\nTime = 2\nFloating point exception\n');
+      writeStatus(rid, { outcome: { ok: false, phase: 'solve', exit_code: 136 }, clean: true, exit_code: 136, n_procs: 1 });
+      return { job, done, spawn: fx.spawned[fx.spawned.length - 1] };
+    }
+
+    it("its run doc's error is the reason and its note starts with it", async () => {
+      const rid = draftRun();
+      const { done, spawn } = await dieWithReason(rid);
+      spawn.onExit(0);
+      spawn.onClose();
+      const doc = runDoc(rid);
+      assert.deepEqual([doc.status, doc.error, doc.note], ['failed', REASON, `${REASON}. simpleFoam failed (exit 136).`]);
+      assert.deepEqual(done.map((d) => [d.status, d.error]), [['failed', REASON]]);
+    });
+
+    it('a doc still running when that record ended reads as failed with the reason too', async () => {
+      const rid = draftRun();
+      const { spawn } = await dieWithReason(rid);
+      spawn.onExit(0);
+      spawn.onClose();
+      w27.patchRunDocIfPresent(PID, rid, { status: 'running', note: 'simpleFoam serial', error: null });
+      const shown = w27.getRunStatus(PID, rid, SID).body.run;
+      assert.deepEqual([shown.status, shown.error, shown.note], ['failed', REASON, `${REASON}. simpleFoam failed (exit 136).`]);
+    });
+
+    it('a run that fails with no reason in its log keeps the note it had', async () => {
+      const { doc } = await endAs('failed');
+      assert.deepEqual([doc.status, doc.note], ['failed', 'simpleFoam failed (exit 1).']);
+    });
+  });
+
   it('a record the store no longer has: the old probe decides (no spawn here, the doc is left)', async () => {
     const rid = draftRun({ status: 'running', runner_job_id: 'fc-gone00-000000', wsl_case: '' });
     const shown = w27.getRunStatus(PID, rid, SID).body.run;

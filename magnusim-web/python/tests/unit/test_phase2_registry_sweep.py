@@ -44,11 +44,14 @@ from registry_dump import (  # noqa: E402
     main,
 )
 
-EXPECTED_ANALYSIS_KEYS = {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY}
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"}
+# Heat Transfer ships on (HT D4): its keys load with the app's.
+EXPECTED_ANALYSIS_KEYS = {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY, "heat_transfer_steady", "heat_transfer_transient"}
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam", "buoyantSimpleFoam", "buoyantPimpleFoam"}
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
-EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"}
-EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"}
+EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible", "thermo_fluid"}
+EXPECTED_MONITOR_KEYS = {
+    "area_average", "flow_rate", "forces", "probe", "ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple",
+}
 EXPECTED_FILTER_KEYS = {
     "cut_plane",
     "streamlines",

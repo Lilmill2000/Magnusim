@@ -1,7 +1,7 @@
 key = "incompressible_flow"
 name = "Incompressible Flow"
-version = "1.0.0"
-api_version = "1.5"
+version = "1.1.0"
+api_version = "1.8"
 tier = "bundled"
 required = true
 license = "GPL-3.0-or-later"
@@ -10,6 +10,10 @@ authors = ["Magnusim"]
 # The study and run panels' settings (TSX, bundled by the host when served).
 ui = "ui"
 ui_entry = "index.tsx"
+# Modules another plugin may import when it names incompressible_flow in its
+# requires_plugins (host API 1.8): the flow boundary conditions (U and
+# turbulence per patch) a solver of the same flow reuses.
+exports = ["incompressible_flow.flow_bcs"]
 protected = [
   "analysis:incompressible_steady",
   "analysis:incompressible_transient",

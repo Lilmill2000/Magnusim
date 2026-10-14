@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { MonitorQuantity, RegistryRow, RunMonitor } from './api/registry.gen';
 import {
   LEGACY_MONITOR_QUANTITIES,
@@ -261,5 +261,54 @@ describe('rows that name their quantities (Forces monitors)', () => {
     );
     expect(csv[2].split(',').slice(-3)).toEqual(['1.2', '0.5', '0.24']);
     expect(monitorCsv(forces, rowQuantities(forces, all), false).split('\n')[0]).toBe('iteration,Fd_N,Fl_N,Fx_N,Cd');
+  });
+});
+
+describe('temperatures (API 1.8): stored in K, shown in the project\'s unit', () => {
+  const tq: MonitorQuantity = {
+    key: 'T_pt',
+    label: 'Temperature',
+    sample: 'T_K',
+    component: null,
+    unit_quantity: 'temperature',
+    unit: 'K',
+    color: '#d92d20',
+    magnitude: false,
+    direction_from: '',
+    direction: ['', ''],
+    plot: true,
+    details: true,
+    headline: true,
+    csv: 'temperature_K',
+  };
+  const tc: RunMonitor = { key: 'tc', name: 'Thermocouple', default_quantity: 'T_pt', series: [{ t: 5, T_K: 303.15 }] };
+  const units = (u: string) => {
+    window.__CFD_PROJECT_UNITS__ = () => u;
+  };
+  afterEach(() => {
+    delete window.__CFD_PROJECT_UNITS__;
+  });
+
+  it('shows °C in a metric project and °F in an imperial one', () => {
+    units('metric');
+    expect(detailRows(tc, [tq])).toEqual([['Temperature', '30.0 °C']]);
+    expect(monitorCsv(tc, [tq], true).split('\n')).toEqual(['time_s,temperature_C', '5,30']);
+    expect(monitorsCsv([tc], [tq], true).split('\n')[0]).toBe('"time_s","Thermocouple Temperature [°C]"');
+    units('imperial');
+    expect(detailRows(tc, [tq])).toEqual([['Temperature', '86.0 °F']]);
+    expect(monitorCsv(tc, [tq], true).split('\n')[0]).toBe('time_s,temperature_F');
+  });
+
+  it('leaves a quantity in another unit alone', () => {
+    units('metric');
+    expect(detailRows(tc, [{ ...tq, unit: '°C' }])).toEqual([['Temperature', '303 °C']]);
+  });
+
+  it('a summary item of a temperature quantity holds K and shows °C or °F, like the samples', () => {
+    const items = [{ label: 'Hottest', value: 303.15, quantity: 'T_pt', unit: '' }];
+    units('metric');
+    expect(summaryText(items, [tq])).toBe('Hottest 30.0 °C');
+    units('imperial');
+    expect(summaryText(items, [tq])).toBe('Hottest 86.0 °F');
   });
 });

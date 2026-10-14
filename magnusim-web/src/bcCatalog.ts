@@ -159,21 +159,40 @@ function seedOf(family: BcFamilyRow, imperial: boolean): Record<string, unknown>
  * A new BC of `family`: its bc_type and the family's seed for the unit
  * system. A BC of the family the study's defaults use exists to differ from
  * them, so a field the defaults name starts on its first choice that is not
- * the default (default no-slip walls: a new Wall starts slip).
+ * the default (default no-slip walls: a new Wall starts slip). The study's
+ * analysis may seed fields of its own (API 1.8 `bc_seeds`, `analysisSeed`):
+ * those win over both (a Heat Transfer study's new Wall starts no-slip).
  */
 export function newBcRecord(
   family: BcFamilyRow,
   imperial: boolean,
   studyDefaults?: Record<string, unknown> | null,
+  analysisSeed?: Record<string, unknown> | null,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { bc_type: String(family.record_type), ...seedOf(family, imperial) };
   const props = fieldProps(family);
+  const seeded = analysisSeed && typeof analysisSeed === 'object' ? analysisSeed : {};
   for (const k of defaultsFields(family, studyDefaults)) {
+    if (k in seeded) continue;
     const current = normalizeChoice(props[k], (studyDefaults || {})[k]);
     const other = (props[k].enum || []).find((c) => c !== current);
     if (other !== undefined) out[k] = other;
   }
+  for (const [k, v] of Object.entries(seeded)) out[k] = copy(v);
   return out;
+}
+
+/**
+ * What an analysis seeds on a new BC of a family (its registry row's API 1.8
+ * `bc_seeds[family key]`), or null.
+ */
+export function analysisBcSeed(
+  row: { bc_seeds?: Record<string, Record<string, unknown>> } | null | undefined,
+  family: BcFamilyRow | null | undefined,
+): Record<string, unknown> | null {
+  const seeds = row && row.bc_seeds && typeof row.bc_seeds === 'object' ? row.bc_seeds : null;
+  const own = seeds && family ? seeds[String(family.key)] : null;
+  return own && typeof own === 'object' ? own : null;
 }
 
 function valueRowMatches(row: BcFamilyValue, record: Record<string, unknown>): boolean {
@@ -283,8 +302,9 @@ export function typeChangeFields(
   family: BcFamilyRow,
   imperial: boolean,
   studyDefaults?: Record<string, unknown> | null,
+  analysisSeed?: Record<string, unknown> | null,
 ): Record<string, unknown> {
-  const seed = newBcRecord(family, imperial, studyDefaults);
+  const seed = newBcRecord(family, imperial, studyDefaults, analysisSeed);
   delete seed.bc_type;
   const props = fieldProps(family);
   const patch: Record<string, unknown> = {};

@@ -1,0 +1,130 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     buoyantSimpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         400;
+deltaT          1;
+writeControl    timeStep;
+writeInterval   400;
+purgeWrite      0;
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   6;
+runTimeModifiable true;
+
+functions
+{
+    ht_wall_heat_flux
+    {
+        type            wallHeatFlux;
+        libs            (fieldFunctionObjects);
+        patches         ( hot cold walls );
+        executeControl  timeStep;
+        executeInterval 1;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_htc_raw
+    {
+        type            heatTransferCoeff;
+        libs            (fieldFunctionObjects);
+        field           T;
+        patches         ( hot cold walls );
+        htcModel        fixedReferenceTemperature;
+        TRef            298.15;
+        result          htcRaw;
+        writeControl    none;
+        log             false;
+    }
+    ht_htc
+    {
+        type            reference;
+        libs            (fieldFunctionObjects);
+        field           htcRaw;
+        refValue        constant 0;
+        scale           -1;
+        result          htc;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_rho
+    {
+        type            writeObjects;
+        libs            (utilityFunctionObjects);
+        objects         ( rho );
+        writeOption     anyWrite;
+        writeControl    writeTime;
+    }
+    ht_Tavg_hot
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            hot;
+        operation       areaAverage;
+        fields          ( T );
+    }
+    ht_Tmax_hot
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            hot;
+        operation       max;
+        fields          ( T );
+    }
+    ht_Tavg_cold
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            cold;
+        operation       areaAverage;
+        fields          ( T );
+    }
+    ht_Tmax_cold
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            cold;
+        operation       max;
+        fields          ( T );
+    }
+    ht_probe_tc
+    {
+        type            probes;
+        libs            (sampling);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        fields          ( T );
+        probeLocations  ( (0.05 0.05 0.005) (0.02 0.08 0.005) );
+    }
+}

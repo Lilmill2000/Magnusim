@@ -1,0 +1,18 @@
+key = "heat_transfer"
+name = "Heat Transfer"
+version = "0.1.0-dev"
+api_version = "1.8"
+tier = "bundled"
+required = false
+# Ships on (it can be turned off in Settings > Plugins). Incompressible Flow
+# stays the default analysis of a new study.
+default_enabled = true
+license = "GPL-3.0-or-later"
+description = "Buoyant and forced convection of one fluid with temperature (buoyantSimpleFoam, buoyantPimpleFoam)."
+authors = ["Magnusim"]
+# Builds on Incompressible Flow's BC kinds and imports its exported flow BCs
+# (incompressible_flow.flow_bcs, from 1.1).
+requires_plugins = ["incompressible_flow>=1.1"]
+# The study and run panels' settings (TSX, bundled by the host when served).
+ui = "ui"
+ui_entry = "index.tsx"

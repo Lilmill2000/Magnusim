@@ -24,6 +24,10 @@ const STUDY_ADDED = '[data-study-reference]';
 const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue]';
 // A converged run's tree badge (F5), left out of the tree's comparison.
 const TREE_ADDED = '[data-run-converged]';
+// The Create Simulation list's rows of the analyses of a bundled plugin that ships on
+// after the baseline was recorded (Heat Transfer, HT4), left out of the comparison: every
+// row the baseline has (Incompressible Flow's and the test plugins') still must match.
+const OTHER_ANALYSES = '#cs-type-list li:has(> [data-analysis-key^="heat_transfer_"])';
 // The Cores row (its setting and its hint) every run panel gained after v0.2.0 (F10),
 // left out of the comparison.
 const CORES_ADDED = '[data-run-cores], [data-run-cores-hint]';
@@ -166,9 +170,9 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await page.locator('#btn-create-simulation').click();
   const modal = page.locator('#modal-create-simulation .cfd-modal-card');
   await expect(page.locator('#cs-type-list [data-analysis-key]').first()).toBeVisible();
-  await capture(page, 'create-modal-steady', modal);
+  await capture(page, 'create-modal-steady', modal, { skip: OTHER_ANALYSES });
   await page.locator('#cs-time-dep [data-time-dep="Transient"]').click();
-  await capture(page, 'create-modal-transient', modal);
+  await capture(page, 'create-modal-transient', modal, { skip: OTHER_ANALYSES });
   await page.locator('#cs-cancel').click();
   await expect(page.locator('#modal-create-simulation')).toBeHidden();
 

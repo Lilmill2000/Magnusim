@@ -63,13 +63,13 @@ def _sha(p: Path) -> str:
 # ---- magnusim_sdk.link ------------------------------------------------------------------
 
 
-def test_the_sdk_is_1_4_0_and_its_link_module_imports_without_ocp():
+def test_the_sdk_is_1_5_0_and_its_link_module_imports_without_ocp():
     script = (
         "import sys; sys.path.insert(0, SDK_ROOT); import magnusim_sdk, magnusim_sdk.link as l; "
         "print(magnusim_sdk.SDK_VERSION); print(sorted(m for m in sys.modules if m.split('.')[0] in {'OCP', 'cfddesk', 'numpy'}))"
     ).replace("SDK_ROOT", repr(str(SDK)))
     out = subprocess.run([sys.executable, "-I", "-S", "-c", script], capture_output=True, text=True, check=True, cwd=str(WEB.parent))
-    assert out.stdout.split() == ["1.4.0", "[]"], out.stdout
+    assert out.stdout.split() == ["1.5.0", "[]"], out.stdout
 
 
 def test_core_numbers_faces_with_the_sdk_walker():

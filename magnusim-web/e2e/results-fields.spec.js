@@ -269,7 +269,8 @@ test("results tools list the run's result fields with their units", async ({ pag
   // ---- B ----
   await openResults(runB.rid);
   await expect(page.locator('#legend .legend-title')).toHaveText('Temperature', { timeout: 60_000 });
-  await expect(page.locator('#legend .legend-units')).toHaveText('K');
+  // A temperature's legend shows the project's unit (API 1.8: °C metric), its data in K.
+  await expect(page.locator('#legend .legend-units')).toHaveText('°C');
   await expect.poll(() => optionTexts('#cp-coloring')).toEqual(['Temperature']);
   for (const sel of ['#iso-scalar', '#iv-scalar', '#pop-field-variable']) {
     expect(await optionTexts(sel), sel).toEqual(['Temperature']);
@@ -279,7 +280,7 @@ test("results tools list the run's result fields with their units", async ({ pag
   await expect(ptBtn).toHaveAttribute('title', 'This case has no velocity field');
   const rowsB = await inspectMiddle();
   expect(rowsB.map((r) => [r.field, r.label])).toEqual([['T', 'Temperature']]);
-  expect(rowsB[0].value).toMatch(/ K$/);
+  expect(rowsB[0].value).toMatch(/ °C$/);
   expect(await filtersText()).not.toMatch(/Velocity|Pressure/);
 
   // ---- C ----

@@ -1,0 +1,49 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nut;
+}
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    walls
+    {
+        type          nutkWallFunction;
+        value          uniform 0;
+    }
+    inlet
+    {
+        type          calculated;
+        value          uniform 0;
+    }
+    outlet
+    {
+        type          calculated;
+        value          uniform 0;
+    }
+    heater
+    {
+        type          nutkWallFunction;
+        value          uniform 0;
+    }
+    cold_plate
+    {
+        type          nutkWallFunction;
+        value          uniform 0;
+    }
+    lid
+    {
+        type          nutkWallFunction;
+        value          uniform 0;
+    }
+    side
+    {
+        type          symmetry;
+    }
+}

@@ -15,7 +15,7 @@
  * A scalar is shown by its key, a vector X by its magnitude magX; a tensor is
  * never shown.
  */
-import { siUnitLabel } from '../units/convert';
+import { fromSi, preferredUnit, siUnitLabel, toSi } from '../units/convert';
 
 /** A plain field name: what a tool may send and a cache path may hold. */
 export const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -145,6 +145,29 @@ export function defaultResultField(fields: readonly ShownField[], current?: stri
 export function fieldInfoIn(fields: readonly ShownField[], name: string): { name: string; label: string; unit: string } {
   const hit = fields.find((f) => f.name === name);
   return hit ? { name, label: hit.label, unit: hit.unit } : { name, label: name, unit: '' };
+}
+
+/**
+ * How a legend shows a field (API 1.8): a temperature in the project's unit (°C
+ * metric, °F imperial), its ticks converted (an affine conversion: the colours and
+ * the values the data holds stay in K); every other field in the unit it is stored
+ * in. `show` turns a stored value into the one written on the legend, `back` a
+ * typed one into the stored one.
+ */
+export interface LegendUnits {
+  unit: string;
+  show: (stored: number) => number;
+  back: (shown: number) => number;
+}
+
+export function legendUnitsIn(fields: readonly ShownField[], name: string, imperial: boolean): LegendUnits {
+  const hit = fields.find((f) => f.name === name);
+  if (hit && hit.unitQuantity === 'temperature') {
+    const unit = preferredUnit('temperature', imperial);
+    return { unit, show: (v) => fromSi('temperature', v, unit), back: (v) => toSi('temperature', v, unit) };
+  }
+  const same = (v: number) => v;
+  return { unit: hit ? hit.unit : '', show: same, back: same };
 }
 
 export type ToolOption = { value: string; label: string };

@@ -10,9 +10,13 @@
  * still renders: the quantities fall back to the analysis's registry row, then
  * to LEGACY_MONITOR_QUANTITIES (the API 1.1 table, python/cfddesk/registry/contract.py),
  * and the summary to the API 1.1 flow `balance`.
+ *
+ * A temperature quantity (unit_quantity 'temperature', samples in K) is shown,
+ * plotted and exported in the project's unit (API 1.8: °C metric, °F imperial).
  */
 import type { MonitorQuantity, MonitorSummaryItem, RegistryRow, RunMonitor, RunMonitors } from './api/registry.gen';
-import { siUnitLabel } from './units/convert';
+import { prefersImperial } from './prefs';
+import { fromSi, preferredUnit, siUnitLabel } from './units/convert';
 
 /** A run_monitors answer as GET /api/run/monitors gives it: any key may be missing. */
 export type MonitorAnswer = Partial<RunMonitors> & { analysis_key?: string | null };
@@ -158,12 +162,22 @@ function finite(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** The value `q` reads from a point (its component of a list sample), or null. */
+/** The unit a temperature quantity stored in K is shown in (°C or °F), else null. */
+function shownTemperatureUnit(q: MonitorQuantity): string | null {
+  if (q.unit_quantity !== 'temperature' || (q.unit && q.unit !== 'K')) return null;
+  return preferredUnit('temperature', prefersImperial());
+}
+
+/**
+ * The value `q` reads from a point (its component of a list sample), or null; a
+ * temperature in the unit it is shown in.
+ */
 export function pickSample(q: MonitorQuantity, sample: MonitorSample | null | undefined): number | null {
   if (!sample) return null;
   const raw = sample[q.sample];
-  if (q.component != null) return Array.isArray(raw) ? finite(raw[q.component]) : null;
-  return Array.isArray(raw) ? null : finite(raw);
+  const v = q.component != null ? (Array.isArray(raw) ? finite(raw[q.component]) : null) : Array.isArray(raw) ? null : finite(raw);
+  const tUnit = v != null ? shownTemperatureUnit(q) : null;
+  return tUnit && v != null ? fromSi('temperature', v, tUnit) : v;
 }
 
 /** The value as shown and plotted: its absolute value for a magnitude quantity. */
@@ -172,9 +186,16 @@ export function shownValue(q: MonitorQuantity, sample: MonitorSample | null | un
   return v != null && q.magnitude ? Math.abs(v) : v;
 }
 
-/** The unit label `q`'s samples are in. */
+/** The unit label `q`'s values are shown in (a temperature in °C or °F). */
 export function unitOf(q: MonitorQuantity): string {
-  return q.unit || siUnitLabel(q.unit_quantity);
+  return shownTemperatureUnit(q) || q.unit || siUnitLabel(q.unit_quantity);
+}
+
+/** A quantity's column in a monitor's CSV: its own; a temperature's names the unit it is in. */
+function csvColumn(q: MonitorQuantity): string {
+  const tUnit = shownTemperatureUnit(q);
+  if (!tUnit) return q.csv;
+  return q.csv.replace(/_K$/, '') + (tUnit === '°F' ? '_F' : '_C');
 }
 
 /** A number with about three significant digits (exponent form outside 1e-3 to 1e5). */
@@ -293,7 +314,7 @@ const csvCell = (v: unknown) => {
 /** One monitor's series as CSV: the time (or iteration) and each exported quantity, signed. */
 export function monitorCsv(row: RunMonitor | null | undefined, qs: readonly MonitorQuantity[], timeAxis: boolean): string {
   const cols = qs.filter((q) => q.csv);
-  const lines = [[timeAxis ? 'time_s' : 'iteration', ...cols.map((q) => q.csv)].join(',')];
+  const lines = [[timeAxis ? 'time_s' : 'iteration', ...cols.map((q) => csvColumn(q))].join(',')];
   for (const s of (row && Array.isArray(row.series) ? row.series : []) as MonitorSample[]) {
     lines.push([csvCell(s.t), ...cols.map((q) => csvCell(pickSample(q, s)))].join(','));
   }
@@ -374,7 +395,11 @@ export function summaryText(items: readonly MonitorSummaryItem[], qs: readonly M
     .map((item) => {
       const q = quantityByKey(qs, item.quantity) || quantityByKey(LEGACY_MONITOR_QUANTITIES, item.quantity);
       const unit = String(item.unit || '');
-      const value = q ? formatMonitorValue(q, item.value) : unit === '%' ? fmtPercent(item.value) : withUnit(fmtNum(item.value), unit);
+      // A temperature item holds K, as samples do: shown in °C or °F like them.
+      const tUnit = q ? shownTemperatureUnit(q) : null;
+      const n = finite(item.value);
+      const shown = tUnit && n != null ? fromSi('temperature', n, tUnit) : item.value;
+      const value = q ? formatMonitorValue(q, shown) : unit === '%' ? fmtPercent(item.value) : withUnit(fmtNum(item.value), unit);
       return String(item.label || '') + ' ' + value;
     })
     .join(' · ');

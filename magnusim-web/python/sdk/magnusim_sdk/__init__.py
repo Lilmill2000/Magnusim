@@ -14,6 +14,6 @@ and ``link`` (linking a geometry, 1.3: the face numbering rule, the face-name
 sidecar writer and the host's checks; OCP is imported only when they run).
 """
 
-SDK_VERSION = "1.4.0"
+SDK_VERSION = "1.5.0"
 
 __all__ = ["SDK_VERSION"]

@@ -1,0 +1,156 @@
+{
+  "endTime": 400.0,
+  "writeInterval": 400.0,
+  "nProcs": 1,
+  "solver": "buoyantSimpleFoam",
+  "time_dependency": "Steady-state",
+  "rho": 1.0,
+  "nu": 2.639e-05,
+  "kinematic_fields": [],
+  "patches": [
+    "hot",
+    "cold",
+    "walls",
+    "sym"
+  ],
+  "mapped": [
+    {
+      "id": "b1",
+      "name": "hot",
+      "bc_type": "Wall",
+      "patch": "hot",
+      "faces": [
+        "f1"
+      ],
+      "face_area_m2": null,
+      "kind": "wall",
+      "wall": "no_slip",
+      "mode": "temperature",
+      "T": 303.15
+    },
+    {
+      "id": "b2",
+      "name": "cold",
+      "bc_type": "Wall",
+      "patch": "cold",
+      "faces": [
+        "f2"
+      ],
+      "face_area_m2": null,
+      "kind": "wall",
+      "wall": "no_slip",
+      "mode": "temperature",
+      "T": 293.15
+    },
+    {
+      "id": "b3",
+      "name": "sym",
+      "bc_type": "Symmetry",
+      "patch": "sym",
+      "faces": [
+        "f3"
+      ],
+      "face_area_m2": null,
+      "kind": "symmetry"
+    }
+  ],
+  "thermal": {
+    "hot": {
+      "kind": "wall",
+      "wall": "no_slip",
+      "mode": "temperature",
+      "T": 303.15
+    },
+    "cold": {
+      "kind": "wall",
+      "wall": "no_slip",
+      "mode": "temperature",
+      "T": 293.15
+    },
+    "walls": {
+      "kind": "wall",
+      "wall": "no_slip",
+      "mode": "adiabatic"
+    },
+    "sym": {
+      "kind": "symmetry"
+    }
+  },
+  "wall_patches": [
+    "hot",
+    "cold",
+    "walls"
+  ],
+  "opening_patches": [],
+  "ht_monitors": [
+    {
+      "id": "mon1",
+      "name": "Hot wall",
+      "type": "ht_wall_heat_flux",
+      "patches": [
+        "hot"
+      ]
+    },
+    {
+      "id": "mon2",
+      "name": "Cold wall T",
+      "type": "ht_surface_temperature",
+      "patches": [
+        "cold"
+      ]
+    },
+    {
+      "id": "mon3",
+      "name": "TC",
+      "type": "ht_thermocouple",
+      "points": [
+        [
+          0.05,
+          0.05,
+          0.005
+        ],
+        [
+          0.02,
+          0.08,
+          0.005
+        ]
+      ],
+      "key": "ht_probe_tc"
+    }
+  ],
+  "fluid": {
+    "name": "Cavity fluid",
+    "rho": 1.0,
+    "mu": 2.639e-05,
+    "cp": 1000.0,
+    "k": 0.03717,
+    "beta": 0.001,
+    "molar_mass": 28.97,
+    "prandtl": 0.7099811676082862
+  },
+  "density_model": "boussinesq",
+  "gravity_m_s2": [
+    0.0,
+    -9.80665,
+    0.0
+  ],
+  "operating_pressure_Pa": 101325.0,
+  "reference_temperature_K": 298.15,
+  "initial_temperature_K": 298.15,
+  "turbulence": {
+    "model": "laminar",
+    "speed_ref_m_s": 1.0,
+    "hydraulic_diameter_m": 0.05
+  },
+  "numerics": {
+    "preset": "accurate",
+    "residual": 1e-06,
+    "n_non_orthogonal": 0,
+    "relax_u": 0.7,
+    "relax_p_rgh": 0.3,
+    "relax_h": 0.5
+  },
+  "n_cells": 400,
+  "mesh_id": null,
+  "run_id": "r1"
+}
