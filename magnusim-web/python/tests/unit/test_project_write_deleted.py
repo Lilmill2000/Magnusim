@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from cfddesk.project import link, scope
 from cfddesk.project import web_writes as ww
 from cfddesk.worker.methods import project_create, project_write_project
 
@@ -85,3 +86,37 @@ def test_a_new_project_is_written_only_into_its_own_folder(tmp_path: Path, monke
     monkeypatch.setenv("MAGNUSIM_PROJECTS_ROOT", str(tmp_path))
     made = project_create(title="Made")
     assert _title(tmp_path / made["id"]) == "Made"
+
+
+# Other worker calls that read project.json and save it back (a run's stamp, the migration
+# marker, a linked geometry's record): a project deleted between that read and the save is
+# not made again either.
+_OTHER_WRITERS = [
+    ("a run's stamp", ww, "read_json", lambda p: ww.stamp_run_on_project(p, {"id": "run-1", "status": "done"})),
+    ("the migration marker", scope, "_read_json", lambda p: scope._mark_migration(p, True)),
+    ("a linked geometry's record", link, "_read", lambda p: link.upsert_geometry(p, {"id": "g1", "name": "Plate"})),
+]
+
+
+@pytest.mark.parametrize(("what", "module", "reader", "save"), _OTHER_WRITERS, ids=[w[0] for w in _OTHER_WRITERS])
+def test_a_project_deleted_while_another_save_of_it_runs_is_not_made_again(
+    tmp_path: Path, monkeypatch, what, module, reader, save
+):
+    project = _project(tmp_path)
+    geom = project / "geometries" / "Geometry_g1"
+    geom.mkdir(parents=True)
+    (geom / "id.json").write_text(json.dumps({"id": "g1", "name": "Plate"}) + "\n", encoding="utf-8")
+    real_read = getattr(module, reader)
+
+    def deleted_after_the_read(path, *args, **kwargs):
+        doc = real_read(path, *args, **kwargs)
+        if Path(path) == project / "project.json" and project.exists():
+            shutil.rmtree(project)
+        return doc
+
+    monkeypatch.setattr(module, reader, deleted_after_the_read)
+    try:
+        save(project)
+    except FileNotFoundError:
+        pass
+    assert not project.exists(), f"{what}: {sorted(p.name for p in project.rglob('*'))}"

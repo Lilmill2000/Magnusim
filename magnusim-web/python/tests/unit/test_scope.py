@@ -92,9 +92,9 @@ def _record_writes(monkeypatch) -> list[str]:
     names: list[str] = []
     real = ww.atomic_write
 
-    def spy(path, doc):
+    def spy(path, doc, **kwargs):
         names.append(Path(path).name)
-        real(path, doc)
+        real(path, doc, **kwargs)
 
     monkeypatch.setattr(scope_mod, "atomic_write", spy, raising=False)
     monkeypatch.setattr(ww, "atomic_write", spy)

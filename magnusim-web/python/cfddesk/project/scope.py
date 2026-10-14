@@ -112,7 +112,7 @@ def _mark_migration(project_dir: Path, value: bool | str) -> None:
     # Replace the file whole: Node parses project.json on every request, and a
     # truncate-then-write lets it read half a file.
     try:
-        atomic_write(path, doc)
+        atomic_write(path, doc, make_dirs=False)
     except OSError:
         # A reader held project.json through every retry. The next tree call marks it.
         pass

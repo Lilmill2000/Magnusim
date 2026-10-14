@@ -517,7 +517,7 @@ def set_materials(
         }
         proj["updated_at"] = doc["updated_at"]
         proj["increment"] = "W18"
-        atomic_write(proj_path, proj)
+        atomic_write(proj_path, proj, make_dirs=False)
     return doc
 
 
@@ -584,7 +584,7 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geomet
         }
         proj["updated_at"] = doc["updated_at"]
         proj["increment"] = "W19"
-        atomic_write(proj_path, proj)
+        atomic_write(proj_path, proj, make_dirs=False)
     return doc
 
 
@@ -619,7 +619,7 @@ def set_mesh_settings(project_dir: Path, body: dict[str, Any], *, sim_id: str = 
         }
         proj["updated_at"] = doc["updated_at"]
         proj["increment"] = inc
-        atomic_write(proj_path, proj)
+        atomic_write(proj_path, proj, make_dirs=False)
     return doc
 
 
@@ -673,7 +673,7 @@ def set_refinements(
         }
         proj["updated_at"] = doc["updated_at"]
         proj["increment"] = "W26"
-        atomic_write(proj_path, proj)
+        atomic_write(proj_path, proj, make_dirs=False)
     return doc
 
 
@@ -728,7 +728,7 @@ def set_result_controls(
         }
         proj["updated_at"] = doc["updated_at"]
         proj["increment"] = "W22"
-        atomic_write(proj_path, proj)
+        atomic_write(proj_path, proj, make_dirs=False)
     return doc
 
 
@@ -771,7 +771,7 @@ def stamp_run_on_project(project_dir: Path, body: dict[str, Any]) -> None:
     }
     proj["updated_at"] = now_iso()
     proj["increment"] = "W27"
-    atomic_write(proj_path, proj)
+    atomic_write(proj_path, proj, make_dirs=False)
 
 
 def run_upsert(

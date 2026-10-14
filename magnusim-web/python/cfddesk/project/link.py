@@ -797,7 +797,7 @@ def upsert_geometry(project_dir: Path | str, record: dict[str, Any]) -> dict[str
     if not isinstance(proj, dict):
         raise LinkError("project_not_found", "project.json is missing")
     added = _put_record(proj, dict(record), read_state(geom["dir"]), root.name)
-    atomic_write(path, proj)
+    atomic_write(path, proj, make_dirs=False)
     return {"ok": True, "added": added}
 
 
@@ -823,7 +823,7 @@ def repair_project(project_dir: Path | str) -> list[str]:
         _put_record(proj, geometry_record(root.name, geom, geom["state"]), geom["state"], root.name)
         added.append(str(geom["id"]))
     if added:
-        atomic_write(path, proj)
+        atomic_write(path, proj, make_dirs=False)
     return added
 
 
