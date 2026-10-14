@@ -103,6 +103,11 @@ jobs:
       - run: npx playwright test -c bundled-plugins/tunnel2d/e2e/playwright.config.js
         env:
           CI: "1"
+      # The Heat Transfer plugin's browser suite (it ships on). Its study, BC, monitor and
+      # results tests run here on committed cases; the ones that mesh or solve skip (no WSL).
+      - run: npx playwright test -c bundled-plugins/heat_transfer/e2e/playwright.config.js
+        env:
+          CI: "1"
 
   # The analysis contract's boundary: the core never imports a bundled plugin,
   # plugins import only magnusim_sdk, cfddesk.registry and the standard library,
