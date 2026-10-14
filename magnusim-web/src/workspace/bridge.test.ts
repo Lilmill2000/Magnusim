@@ -896,16 +896,21 @@ describe('WorkspaceCalls: plugin OpenFOAM cases (compute.*, results.openIn3D)', 
     release();
     await following;
     expect(events()).toEqual([{ event: 'start' }, { event: 'progress', points: [{ t: 0.1 }, { t: 0.2 }] }, { event: 'time_saved', t: 0.1 }]);
-    // A reconnect: a new snapshot of a case already seen sends nothing more while it runs...
-    es.emit('snapshot', { jobs: [caseJob({ seq: 8 })], live: { job_id: JOB, points: [{ t: 0.3 }] } });
+    // A reconnect: a new snapshot of a case already seen sends only the live points newer
+    // than the frame's last (not its start again, nor the points it has); the events up to
+    // the snapshot's seq are not sent again...
+    es.emit('snapshot', { jobs: [caseJob({ seq: 8 })], live: { job_id: JOB, points: [{ t: 0.1 }, { t: 0.2 }, { t: 0.3 }] } });
     es.emit('case', { job_id: JOB, seq: 8, ev: { event: 'stage', stage: 'copy' } });
-    expect(events().length).toBe(3);
+    expect(events().slice(3)).toEqual([{ event: 'progress', points: [{ t: 0.3 }] }]);
+    // ...a second one with nothing newer sends nothing...
+    es.emit('snapshot', { jobs: [caseJob({ seq: 8 })], live: { job_id: JOB, points: [{ t: 0.2 }, { t: 0.3 }] } });
+    expect(events().length).toBe(4);
     // ...and its end once, in the frame's result shape, also when the snapshot says it first.
     const result = { exit_code: 0, n_procs: 1, phases: { solve: 3 }, saved_times: [0.1, 0.2], last_saved: 0.2, write_format: 'binary' };
     es.emit('case', { job_id: JOB, seq: 9, ev: { event: 'end', status: 'done', error: null, code: null, result } });
     es.emit('snapshot', { jobs: [caseJob({ status: 'done', seq: 9 })], live: null });
     es.emit('case', { job_id: JOB, seq: 10, ev: { event: 'end', status: 'done', error: null, code: null, result } });
-    expect(events().slice(3)).toEqual([
+    expect(events().slice(4)).toEqual([
       {
         event: 'end',
         status: 'done',
@@ -922,13 +927,14 @@ describe('WorkspaceCalls: plugin OpenFOAM cases (compute.*, results.openIn3D)', 
     const es = FakeEventSource.made[0];
     // The status answered first: the case was caught up from it (start, no points).
     expect(events()).toEqual([{ event: 'start' }]);
+    // The snapshot then gives the points the status had not (not the start again).
     es.emit('snapshot', { jobs: [caseJob({ seq: 5 })], live: { job_id: JOB, points: [{ t: 1 }] } });
-    expect(events()).toEqual([{ event: 'start' }]);
+    expect(events()).toEqual([{ event: 'start' }, { event: 'progress', points: [{ t: 1 }] }]);
     es.emit('snapshot', {
       jobs: [caseJob({ status: 'stopped', seq: 12, result: { savedTimes: [0.1], lastSaved: 0.1, phases: {}, writeFormat: 'binary' } })],
       live: null,
     });
-    expect(events()[1]).toEqual({
+    expect(events()[2]).toEqual({
       event: 'end',
       status: 'stopped',
       error: null,
@@ -937,7 +943,38 @@ describe('WorkspaceCalls: plugin OpenFOAM cases (compute.*, results.openIn3D)', 
     });
     // Anything older than what the snapshot said is dropped.
     es.emit('case', { job_id: JOB, seq: 11, ev: { event: 'time_saved', t: 0.2 } });
-    expect(events().length).toBe(2);
+    expect(events().length).toBe(3);
+  });
+
+  it('a case queued when the stream dropped and running at the reconnect: its start, then the live points', async () => {
+    const c = calls_();
+    await c.handle('compute.events', { jobId: JOB2 });
+    const es = FakeEventSource.made[0];
+    expect(events(JOB2)).toEqual([{ event: 'queued', ahead: 2 }]);
+    // The start and the first points came while the stream was down.
+    es.emit('snapshot', { jobs: [caseJob({ id: JOB2, seq: 7 })], live: { job_id: JOB2, points: [{ t: 0.1 }, { t: 0.2 }] } });
+    es.emit('case', { job_id: JOB2, seq: 7, ev: { event: 'progress', points: [{ t: 0.2 }] } });
+    es.emit('case', { job_id: JOB2, seq: 8, ev: { event: 'progress', points: [{ t: 0.3 }] } });
+    expect(events(JOB2)).toEqual([
+      { event: 'queued', ahead: 2 },
+      { event: 'start' },
+      { event: 'progress', points: [{ t: 0.1 }, { t: 0.2 }] },
+      { event: 'progress', points: [{ t: 0.3 }] },
+    ]);
+  });
+
+  it('pins the case channel while a followed case has not ended (a hidden tab keeps its stream), and lets it go once every one has', async () => {
+    const c = calls_();
+    statusOf[JOB] = caseJob({ status: 'done', seq: 4 });
+    await c.handle('compute.events', { jobId: JOB });
+    const es = FakeEventSource.made[0];
+    expect(es.pins.at(-1), 'only a case that has ended').toBe(false);
+    await c.handle('compute.events', { jobId: JOB2 });
+    expect(es.pins.at(-1), 'a queued case').toBe(true);
+    es.emit('case', { job_id: JOB2, seq: 2, ev: { event: 'start' } });
+    expect(es.pins.at(-1)).toBe(true);
+    es.emit('case', { job_id: JOB2, seq: 3, ev: { event: 'end', status: 'done', error: null, code: null, result: null } });
+    expect(es.pins.at(-1), 'every case has ended').toBe(false);
   });
 
   it('catches up a queued case with its place, and a finished one with its end', async () => {

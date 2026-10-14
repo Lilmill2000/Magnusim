@@ -21,10 +21,13 @@
  * Plugin OpenFOAM cases (1.3): compute.* submits a case the page wrote in its
  * study's folder, and follows, stops and lists the study's cases. One event
  * stream per channel carries every followed case; a reconnect's snapshot
- * catches each case up, and an event the frame already has (by seq) is dropped.
+ * catches each case up (its end, or its start and the live points the frame has
+ * not had), and an event the frame already has (by seq) is dropped.
  * Every stream the bridge follows (a job's, the cases', the link's) is a channel on
  * the tab's one event stream (src/api/eventHub.ts): the browser's connections to the
- * app are few, and the host page's streams share them with every tab.
+ * app are few, and the host page's streams share them with every tab. A hidden tab
+ * lets that stream go unless a channel is pinned: a job's always are, the cases'
+ * while a followed case has not ended, the link's while the page waits for a link.
  *
  * Linked geometries (1.5): project.linkGeometry sends the study's saved design to
  * /api/plugin-geometry/link and stays pending until the job it started ends, following
@@ -387,11 +390,23 @@ interface LinkWait {
   oldName?: string;
 }
 
-/** A followed case: the last seq the frame was given; `held` keeps its events until it is caught up. */
+/**
+ * A followed case: the last seq the frame was given; `held` keeps its events until it is
+ * caught up. `started` and `lastT` (the time of the last progress point given) are what a
+ * reconnect's snapshot catches the frame up from.
+ */
 interface FollowedCase {
   seq: number;
   endSent: boolean;
   held: Array<{ seq: number; ev: JobEvent }> | null;
+  started: boolean;
+  lastT: number | null;
+}
+
+/** The time of a progress point (its `t`), or null when it has none. */
+function pointTime(p: unknown): number | null {
+  const t = p && typeof p === 'object' ? Number((p as { t?: unknown }).t) : NaN;
+  return Number.isFinite(t) ? t : null;
 }
 
 export const THEME: ThemeInfo = { name: 'light', stylesheet: '/plugin-sdk/theme.css' };
@@ -1463,8 +1478,9 @@ export class WorkspaceCalls {
   private async followCase(jobId: string): Promise<void> {
     const epoch = this.epoch;
     const known = this.cases.get(jobId);
-    if (!known) this.cases.set(jobId, { seq: 0, endSent: false, held: [] });
+    if (!known) this.cases.set(jobId, { seq: 0, endSent: false, held: [], started: false, lastT: null });
     this.openCaseStream();
+    this.pinCaseStream();
     let job: ComputeJob;
     try {
       job = await this.caseStatus(jobId);
@@ -1472,11 +1488,28 @@ export class WorkspaceCalls {
       // Not a case of this study: it is not followed.
       const c = this.cases.get(jobId);
       if (!known && c && c.held) this.cases.delete(jobId);
+      this.pinCaseStream();
       throw err;
     }
     if (epoch !== this.epoch) return;
     const c = this.cases.get(jobId);
     if (c && c.held) this.catchUp(jobId, c, job, null);
+  }
+
+  /**
+   * A followed case that has not ended keeps the tab's event stream while the tab is hidden
+   * (src/api/eventHub.ts lets an unpinned one go after a few seconds): every event of a
+   * running case reaches the page, as a job's do (a plot of its residuals has no gap).
+   */
+  private pinCaseStream(): void {
+    let live = false;
+    for (const c of this.cases.values()) {
+      if (!c.endSent) {
+        live = true;
+        break;
+      }
+    }
+    this.caseStream?.pin(live);
   }
 
   /** One stream per channel for every followed case of this study. */
@@ -1505,6 +1538,7 @@ export class WorkspaceCalls {
       // The browser reconnects by itself (and the next snapshot catches up); a closed stream is opened again by the next compute.events.
       if (es.readyState === EventSource.CLOSED && this.caseStream === es) this.caseStream = null;
     };
+    this.pinCaseStream();
   }
 
   private onSnapshot(snap: { jobs?: ComputeJob[]; live?: { job_id?: string; points?: unknown[] } | null }): void {
@@ -1515,13 +1549,30 @@ export class WorkspaceCalls {
         this.catchUp(job.id, c, job, snap.live || null);
         continue;
       }
-      // Seen before (a reconnect): only an end the frame has not had.
-      if (CASE_DONE.has(job.status) && !c.endSent) {
-        c.endSent = true;
-        this.pushCase(job.id, { event: 'end', status: job.status, error: job.error ?? null, code: job.code ?? null, result: caseResult(job.result) });
+      // Seen before (a reconnect, or the status caught it up first): what the frame has not
+      // had. An end; for a case running now, its start (it heard it queued) and the live
+      // points newer than the last it was given (the events meanwhile are not sent again).
+      if (CASE_DONE.has(job.status)) {
+        if (!c.endSent) {
+          c.endSent = true;
+          this.pushCase(job.id, { event: 'end', status: job.status, error: job.error ?? null, code: job.code ?? null, result: caseResult(job.result) });
+        }
+      } else if (job.status === 'running' && !c.endSent) {
+        if (!c.started) this.pushCase(job.id, { event: 'start' });
+        const live = snap.live && snap.live.job_id === job.id && Array.isArray(snap.live.points) ? snap.live.points : [];
+        const last = c.lastT;
+        const newer =
+          last == null
+            ? live
+            : live.filter((p) => {
+                const t = pointTime(p);
+                return t != null && t > last;
+              });
+        if (newer.length) this.pushCase(job.id, { event: 'progress', points: newer });
       }
       c.seq = Math.max(c.seq, Number(job.seq) || 0);
     }
+    this.pinCaseStream();
   }
 
   /** The frame's first view of a followed case, then the events that came meanwhile (newer ones only). */
@@ -1540,6 +1591,7 @@ export class WorkspaceCalls {
       this.pushCase(jobId, { event: 'end', status: job.status, error: job.error ?? null, code: job.code ?? null, result: caseResult(job.result) });
     }
     for (const h of held.sort((a, b) => a.seq - b.seq)) this.onCaseEvent(jobId, h.seq, h.ev);
+    this.pinCaseStream();
   }
 
   private onCaseEvent(jobId: string, seq: number, ev: JobEvent): void {
@@ -1555,12 +1607,21 @@ export class WorkspaceCalls {
       if (c.endSent) return;
       c.endSent = true;
       this.pushCase(jobId, { ...ev, result: caseResult(ev.result) });
+      this.pinCaseStream();
       return;
     }
     this.pushCase(jobId, ev);
   }
 
   private pushCase(jobId: string, data: JobEvent): void {
+    const c = this.cases.get(jobId);
+    if (c && data.event === 'start') c.started = true;
+    if (c && data.event === 'progress' && Array.isArray(data.points)) {
+      for (const p of data.points) {
+        const t = pointTime(p);
+        if (t != null && (c.lastT == null || t > c.lastT)) c.lastT = t;
+      }
+    }
     this.push({ event: 'job', jobId, data });
   }
 
