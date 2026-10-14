@@ -1362,7 +1362,8 @@ async function ensureCadPreview(projectId, geomId, opts = {}) {
   const paths = cadPaths(id, part ? part.id : null);
   const preview = await ensureCadPreviewAt(id, stepPath, paths, opts);
   if (!preview.ok) return { ...preview, project: proj };
-  return { ...preview, project: proj };
+  // Whether it is the project's active geometry (asked for by none, or by its own id).
+  return { ...preview, project: proj, active: !geomId || !!(part && part.id === activeGeometryId(proj)) };
 }
 
 function copyIfExists(src, dest) {
@@ -2750,6 +2751,9 @@ export async function handleW16Api(req, res, u, parts, helpers) {
           const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
           res.setHeader('X-CFD-Source', 'geometry-cad-preview');
           res.setHeader('X-CFD-Project-Id', pid || '');
+          // The page's viewport reads the shown geometry's face table and, for the project's
+          // active one, takes it as the active face table too (not downloaded twice).
+          res.setHeader('X-CFD-Active-Geometry', preview.active ? '1' : '0');
           res.setHeader('Cache-Control', 'no-store');
           return sendJson(res, 200, meta);
         } catch (e) {

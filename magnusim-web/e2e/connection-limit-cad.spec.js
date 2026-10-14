@@ -15,11 +15,24 @@ import { serverAnswersIn, stager, watchRequests } from './support/link-streams.j
 // the tab asks again, one request at a time, and its viewport says "Preparing <part>…".
 // Two projects, so the tabs' requests differ (a second tab asking for the very same URLs
 // waits on the browser's cache instead of taking a connection).
+// A part whose preview is made loads as before: its face table, faces and edges asked for
+// at once, and its face table once.
 // MAGNUSIM_TEST_PREVIEW_HOLD holds each preview once made, before it is placed. No WSL.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ELBOW = resolve(HERE, '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.step');
 const stage = stager('connection-limit-cad');
+
+/** A project with elbow.step, its preview made at the import: {pid, step}. */
+async function importedProject(request, host, title) {
+  const p = await request.post(`${host.base}/api/project`, { data: { title, folder: 'My Projects', units: 'Metric', category: 'Other' } });
+  const pj = await p.json();
+  expect(p.ok(), JSON.stringify(pj)).toBe(true);
+  const imported = await request.post(`${host.base}/api/geometry/import`, { data: { project_id: pj.id, step_path: ELBOW, filename: 'elbow.step' } });
+  const ij = await imported.json();
+  expect(imported.ok(), JSON.stringify(ij)).toBe(true);
+  return { pid: pj.id, step: ij.geometry.step_path };
+}
 
 /** A project with elbow.step whose preview is gone (its picture is made first): {pid, step}. */
 async function plainProject(request, host, title) {
@@ -103,5 +116,36 @@ test.describe('parts whose previews are being made, in two tabs', () => {
         .poll(() => tab.evaluate(() => !!(window.__CFD_W16__ && window.__CFD_W16__.ready)), { timeout: 60_000, message: 'the part shows once its preview is made' })
         .toBe(true);
     }
+  });
+
+  test('a part whose preview is made: its face table, faces and edges are asked for at once, and its face table once', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const project = await importedProject(request, host, 'Preview made');
+    /** The viewport's asks for the part, in order: [what, part], what = 'asked' | 'answered'. */
+    const seen = [];
+    const partOf = (url) => {
+      const u = new URL(url);
+      return u.pathname === '/api/geometry/cad' ? u.searchParams.get('part') || 'faces' : '';
+    };
+    page.on('request', (r) => {
+      if (partOf(r.url())) seen.push(['asked', partOf(r.url())]);
+    });
+    page.on('response', (r) => {
+      if (partOf(r.url())) seen.push(['answered', partOf(r.url()), r.status()]);
+    });
+    await page.goto(`${host.base}/#/p/${project.pid}`);
+    await expect
+      .poll(() => page.evaluate(() => !!(window.__CFD_W16__ && window.__CFD_W16__.ready && window.__CFD_W16__.fingerprint && window.__CFD_W16__.fingerprint.nCells > 0)), {
+        timeout: 60_000,
+        message: 'the part is on screen',
+      })
+      .toBe(true);
+    await page.waitForTimeout(1_000);
+    stage(`the viewport's asks: ${seen.map((s) => s.join(' ')).join(', ')}`);
+    const at = (what, part) => seen.findIndex((s) => s[0] === what && s[1] === part);
+    expect(at('asked', 'faces'), 'its faces are asked for').toBeGreaterThanOrEqual(0);
+    expect(at('asked', 'faces'), 'its faces are asked for before its face table has answered').toBeLessThan(at('answered', 'preview'));
+    expect(at('asked', 'edges'), 'its edges too').toBeLessThan(at('answered', 'preview'));
+    expect(seen.filter((s) => s[0] === 'asked' && s[1] === 'preview').length, 'its face table, once (it is the active geometry)').toBe(1);
   });
 });

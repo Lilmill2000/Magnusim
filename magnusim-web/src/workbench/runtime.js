@@ -20014,11 +20014,15 @@ async function loadOfficialCadCom(token) {
       isCurrent: () => (token == null || token === cadLoadToken) && String((w16State.project && w16State.project.id) || '') === String(pid),
     });
     if (got.superseded || got.status !== 200) return;
-    const meta = got.body;
-    rememberOfficialCom(meta);
-    // A linked geometry's face and body names, for the face and body lists (API 1.5).
-    try { setShownFaceTable(meta, (w16State.geometry && w16State.geometry.id) || ''); } catch (_) {}
+    applyOfficialCadMeta(got.body);
   } catch (_) {}
+}
+
+/** The active geometry's face table (part=preview): its centre of mass, bounds and names. */
+function applyOfficialCadMeta(meta) {
+  rememberOfficialCom(meta);
+  // A linked geometry's face and body names, for the face and body lists (API 1.5).
+  try { setShownFaceTable(meta, (w16State.geometry && w16State.geometry.id) || ''); } catch (_) {}
 }
 
 function clearCadEdgeDisplay() {
@@ -20049,33 +20053,46 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   cadInsideFaces = new Map();
   cadLoadInFlight = token;
   clearCadPreparing();
-  // The face table first: a part whose preview is not made yet is made now, and the server
-  // answers "being prepared" until it is (it never holds the request: the browser's
-  // connections to the app are few). Asked again, one request at a time, while the chip
-  // says so; the faces and edges then come at once, and the vtk readers never see a 202.
+  // The face table, the faces and the edges are asked for at once. A part whose preview is
+  // not made yet is made now, and the server answers "being prepared" (202) until it is (it
+  // never holds a request: the browser's connections to the app are few): the face table is
+  // then asked again, one request at a time, while the chip says so, and the faces and edges
+  // once it is made (a vtk reader takes only a 200, and rejects a 202 without reading it).
   const previewUrl = cadPreviewUrlOf(facesUrl);
-  if (previewUrl) {
-    const pid = w16State.project && w16State.project.id;
-    const name = w16State.geometry && w16State.geometry.name;
-    let got = null;
-    try {
-      got = await waitCadPreview(previewUrl, {
+  const pid = w16State.project && w16State.project.id;
+  const name = w16State.geometry && w16State.geometry.name;
+  const previewP = previewUrl
+    ? waitCadPreview(previewUrl, {
         isCurrent: () => token === cadLoadToken && String((w16State.project && w16State.project.id) || '') === String(pid || ''),
         onPending: () => setCadPreparing(token, name),
-      });
-    } catch (_) {
-      got = null;
-    }
+      }).catch(() => null)
+    : Promise.resolve(null);
+  // Whether the preview is made (the face table answered 200).
+  const madeP = previewP.then((got) => {
     clearCadPreparing(token);
-    if (got && got.superseded) {
-      if (cadLoadInFlight === token) cadLoadInFlight = 0;
-      return { fp: { empty: true }, stale: true };
-    }
-    if (got && got.status === 200) cadInsideFaces = insideFacesFromTable(got.body && got.body.faces);
-  }
-  loadOfficialCadCom(token).catch(() => {});
-  const facesP = geomCadFaceReader.setUrl(facesUrl);
-  const edgesP = edgesUrl ? geomCadEdgeReader.setUrl(edgesUrl) : Promise.resolve();
+    return !!(got && !got.superseded && got.status === 200);
+  });
+  const readCadPart = (reader, url) =>
+    reader.setUrl(url).catch((err) => {
+      if (!(err && err.xhr && err.xhr.status === 202)) throw err;
+      return madeP.then((made) => {
+        // Another part's load took over: this one ends stale (below).
+        if (token !== cadLoadToken) return undefined;
+        if (!made) throw err;
+        return reader.setUrl(url);
+      });
+    });
+  const facesP = readCadPart(geomCadFaceReader, facesUrl);
+  const edgesP = edgesUrl ? readCadPart(geomCadEdgeReader, edgesUrl) : Promise.resolve();
+  previewP.then((got) => {
+    if ((got && got.superseded) || token !== cadLoadToken) return;
+    const made = !!(got && got.status === 200);
+    if (made) cadInsideFaces = insideFacesFromTable(got.body && got.body.faces);
+    // The project's active geometry (the one shown, as a rule): its face table is the one
+    // loadOfficialCadCom reads, so it is not downloaded twice.
+    if (made && got.active) applyOfficialCadMeta(got.body);
+    else loadOfficialCadCom(token).catch(() => {});
+  });
   try {
     await facesP;
   } finally {

@@ -280,9 +280,8 @@ test('gate:l2-e2e crash and fence: an update that cannot finish fences its geome
     await openProject(page, host, scope.pid);
     expect(await shownPart(page, host, scope.pid, gid)).toEqual({ status: 200, zmax: 35, faces: 21 });
     const shownNow = () => page.evaluate(() => ({ id: window.__CFD_W16__?.geometry?.id || null, ready: !!window.__CFD_W16__?.ready, cells: window.__CFD_W16__?.fingerprint?.nCells || 0 }));
-    // Its faces are on screen (the viewport reads the part's face table first, then its faces).
-    await expect.poll(async () => (await shownNow()).cells, { timeout: 60_000 }).toBeGreaterThan(0);
     const before = await shownNow();
+    expect(before.cells).toBeGreaterThan(0);
     const r = await link(request, host, scope, 'v2', 2, 1);
     expect(r.choosing, 'the geometry is in use: the host asks').toBeTruthy();
     await chooseApi(request, host, scope, r.job_id, 'overwrite');

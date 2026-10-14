@@ -48,8 +48,11 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A project with one plate and no preview yet; with `modifier`, a zone on it (its own STEP). */
-function seedProject(pid, { modifier = false } = {}) {
+/**
+ * A project with one plate and no preview yet; with `modifier`, a zone on it (its own STEP);
+ * with `second`, a teardrop as a second geometry (not the active one).
+ */
+function seedProject(pid, { modifier = false, second = false } = {}) {
   const dir = join(root, pid);
   mkdirSync(dir, { recursive: true });
   const folder = createGeometryFolder(dir, { id: 'g-plate', name: 'transient-test', original_filename: 'transient-test.step' });
@@ -63,7 +66,14 @@ function seedProject(pid, { modifier = false } = {}) {
     cpSync(join(FIXTURES, 'transient-test-teardrop.step'), modStep);
     part.modifiers = [{ id: 'mod-zone', name: 'zone', step_path: modStep }];
   }
-  writeJsonAtomic(join(dir, 'project.json'), { id: pid, title: pid, units: 'Metric', folder: 'My Projects', geometries: [part], active_geometry_id: 'g-plate' });
+  const parts = [part];
+  if (second) {
+    const other = createGeometryFolder(dir, { id: 'g-drop', name: 'teardrop', original_filename: 'teardrop.step' });
+    const dropStep = join(other.dir, 'source.step');
+    cpSync(join(FIXTURES, 'transient-test-teardrop.step'), dropStep);
+    parts.push({ id: 'g-drop', name: 'teardrop', original_filename: 'teardrop.step', step_path: dropStep, source_kind: 'step', n_solids: 1 });
+  }
+  writeJsonAtomic(join(dir, 'project.json'), { id: pid, title: pid, units: 'Metric', folder: 'My Projects', geometries: parts, active_geometry_id: 'g-plate' });
   return { dir, stepPath, modStep };
 }
 
@@ -266,6 +276,22 @@ describe('GET /api/geometry/cad while the preview is being made', () => {
     } finally {
       held.release();
       setCadPreviewWriterForTests(null);
+    }
+  });
+
+  it("says whether the face table is the project's active geometry's (the page then reads it once)", { timeout: 300_000 }, async () => {
+    const pid = 'cad-wait-active';
+    seedProject(pid, { second: true });
+    const q = `project_id=${pid}`;
+    const asks = [
+      [`/api/geometry/cad?${q}&part=preview`, '1'],
+      [`/api/geometry/cad?${q}&geometry_id=g-plate&part=preview`, '1'],
+      [`/api/geometry/cad?${q}&geometry_id=g-drop&part=preview`, '0'],
+    ];
+    for (const [path, active] of asks) {
+      const r = await askUntilDone(path);
+      assert.equal(r.status, 200, `${path}: ${JSON.stringify(r.body).slice(0, 200)}`);
+      assert.equal(r.headers['x-cfd-active-geometry'], active, path);
     }
   });
 
