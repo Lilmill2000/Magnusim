@@ -1006,6 +1006,7 @@ export class WorkspaceCalls {
         ask: prev ? prev.ask : null,
         oldName: prev ? prev.oldName : undefined,
       });
+      this.pinLinkStream();
       // It may have ended before the stream heard of it: its status says.
       void api<{ job?: { status?: string; result?: unknown; error?: string | null; code?: string | null; seq?: number } }>(
         `/api/plugin-geometry/status?${this.q({ plugin: s.plugin, study_id: s.studyId, job_id: jobId })}`,
@@ -1117,6 +1118,7 @@ export class WorkspaceCalls {
       const w = this.linkWaits.get(jobId);
       this.linkWaits.delete(jobId);
       this.linkJobs.delete(jobId);
+      this.pinLinkStream();
       w?.fail(new BridgeError((e as Error).message || 'The answer was refused', code));
     }
   }
@@ -1146,6 +1148,16 @@ export class WorkspaceCalls {
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED && this.linkStream === es) this.linkStream = null;
     };
+    this.pinLinkStream();
+  }
+
+  /**
+   * A link this page waits for keeps the tab's event stream while the tab is hidden (its end
+   * settles the page's call, CAD's exit-hook link among them); a page that only follows
+   * `geometry` catches up from the snapshot when the tab is shown again.
+   */
+  private pinLinkStream(): void {
+    this.linkStream?.pin(this.linkWaits.size > 0);
   }
 
   /** A link job's state as the snapshot or its status has it: an ended one settles. */
@@ -1211,6 +1223,7 @@ export class WorkspaceCalls {
     if (!wait) return;
     this.linkWaits.delete(jobId);
     this.linkJobs.delete(jobId);
+    this.pinLinkStream();
     if (status === 'done' && result) wait.done(linkResultOf(result));
     else wait.fail(new BridgeError(String(ev.error || `The link ended ${status || 'without a result'}`), String(ev.code || status || 'failed')));
   }

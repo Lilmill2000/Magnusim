@@ -18,6 +18,11 @@
  * - A refused channel is CLOSED and gets `error`; one the server ended (`_closed`, a job
  *   that ended) is CLOSED with no error. A dropped stream: every channel is CONNECTING
  *   and gets `error`, as an EventSource's reconnect does.
+ * - A hidden tab lets its stream go after 3 s unless a channel is pinned (a job's are, and
+ *   a workspace pins its link while it waits for one): its channels stay, CONNECTING. Shown
+ *   again, it opens the stream, and once its channels are asked for again the window hears
+ *   `cfd:events-resumed` (what happened meanwhile is read again by those who need it). A
+ *   tab that starts hidden opens its stream when it is first shown.
  *
  * The tab's id is new for each page load (never in sessionStorage: a duplicated tab copies
  * it). The census test (eventHub.census.test.ts) keeps `new EventSource(` to this file.
@@ -31,12 +36,14 @@ const OPEN = 1;
 const CLOSED = 2;
 /** The stream closes this long after its last channel goes. */
 const IDLE_CLOSE_MS = 2000;
+/** A hidden tab keeps its stream this long. */
+const HIDDEN_GRACE_MS = 3000;
 /** After a refusal as stale, a new hello is waited for this long, then the stream opens again. */
 const STALE_REOPEN_MS = 3000;
 /** A stream the browser gave up on opens again after this long. */
 const REOPEN_MS = 2000;
 
-/** What a stream of the app looked like to its callers: an EventSource's shape. */
+/** What a stream of the app looked like to its callers: an EventSource's shape, and a pin. */
 export interface ChannelHandle {
   readonly url: string;
   readonly readyState: number;
@@ -49,6 +56,8 @@ export interface ChannelHandle {
   addEventListener(type: string, fn: (ev: MessageEvent) => void): void;
   removeEventListener(type: string, fn: (ev: MessageEvent) => void): void;
   close(): void;
+  /** Keep the stream while the tab is hidden (true for a job's channel from the start). */
+  pin(on: boolean): void;
 }
 
 interface HubState {
@@ -65,8 +74,14 @@ interface HubState {
   types: Set<string>;
   esTypes: Set<string>;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  hiddenTimer: ReturnType<typeof setTimeout> | null;
   staleTimer: ReturnType<typeof setTimeout> | null;
   reopenTimer: ReturnType<typeof setTimeout> | null;
+  /** The stream was let go (or not opened) because the tab was hidden. */
+  heldBack: boolean;
+  /** Say `cfd:events-resumed` once the channels are asked for again. */
+  resumePending: boolean;
+  visibilityWired: boolean;
 }
 
 const KEY = Symbol.for('magnusim.eventHub.client');
@@ -94,8 +109,12 @@ function freshState(): HubState {
     types: new Set(['message']),
     esTypes: new Set(),
     idleTimer: null,
+    hiddenTimer: null,
     staleTimer: null,
     reopenTimer: null,
+    heldBack: false,
+    resumePending: false,
+    visibilityWired: false,
   };
 }
 
@@ -105,6 +124,10 @@ function hub(): HubState {
   if (!s) {
     s = freshState();
     g[KEY] = s;
+  }
+  if (!s.visibilityWired && typeof document !== 'undefined') {
+    s.visibilityWired = true;
+    document.addEventListener('visibilitychange', () => syncStream());
   }
   return s;
 }
@@ -117,6 +140,7 @@ class Channel implements ChannelHandle {
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
   onopen: ((ev: Event) => void) | null = null;
+  pinned: boolean;
   private readonly listeners = new Map<string, Set<Listener>>();
 
   constructor(
@@ -124,7 +148,9 @@ class Channel implements ChannelHandle {
     readonly cid: string,
     readonly kind: Kind,
     readonly params: Record<string, string>,
-  ) {}
+  ) {
+    this.pinned = kind === 'job';
+  }
 
   addEventListener(type: string, fn: (ev: MessageEvent) => void): void {
     let set = this.listeners.get(type);
@@ -162,6 +188,12 @@ class Channel implements ChannelHandle {
     if (this.readyState === CLOSED) return;
     this.readyState = CLOSED;
     dropChannel(this, true);
+  }
+
+  pin(on: boolean): void {
+    if (this.pinned === !!on) return;
+    this.pinned = !!on;
+    syncStream();
   }
 }
 
@@ -221,17 +253,27 @@ function listenFor(es: EventSource, type: string): void {
   es.addEventListener(type, (e) => onFrame(es, type, e as MessageEvent));
 }
 
-function clearTimer(name: 'idleTimer' | 'staleTimer' | 'reopenTimer'): void {
+function hidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+function anyPinned(): boolean {
+  for (const ch of hub().channels.values()) if (ch.pinned) return true;
+  return false;
+}
+
+function clearTimer(name: 'idleTimer' | 'hiddenTimer' | 'staleTimer' | 'reopenTimer'): void {
   const s = hub();
   const t = s[name];
   if (t) clearTimeout(t);
   s[name] = null;
 }
 
-/** Open or keep the stream while there are channels; let it go 2 s after the last one. */
+/** Open, keep or let go of the stream, for the channels there are and whether the tab is shown. */
 function syncStream(): void {
   const s = hub();
   if (!s.channels.size) {
+    clearTimer('hiddenTimer');
     if (s.es && !s.idleTimer) {
       s.idleTimer = setTimeout(() => {
         s.idleTimer = null;
@@ -241,7 +283,29 @@ function syncStream(): void {
     return;
   }
   clearTimer('idleTimer');
-  if (!s.es && !s.reopenTimer) openStream();
+  if (!hidden() || anyPinned()) {
+    clearTimer('hiddenTimer');
+    if (!s.es && !s.reopenTimer) openStream();
+    return;
+  }
+  if (!s.es) {
+    s.heldBack = true;
+    return;
+  }
+  if (!s.hiddenTimer) {
+    s.hiddenTimer = setTimeout(() => {
+      s.hiddenTimer = null;
+      if (hidden() && !anyPinned() && hub().es) release();
+    }, HIDDEN_GRACE_MS);
+  }
+}
+
+/** The tab is hidden: the stream goes, its channels wait (no error). */
+function release(): void {
+  const s = hub();
+  closeStream();
+  s.heldBack = true;
+  for (const ch of s.channels.values()) if (ch.readyState === OPEN) ch.readyState = CONNECTING;
 }
 
 function closeStream(): void {
@@ -283,6 +347,10 @@ function onHello(es: EventSource, e: MessageEvent): void {
   clearTimer('staleTimer');
   s.toUnsubscribe.clear();
   for (const ch of s.channels.values()) if (ch.readyState !== CLOSED) s.toSubscribe.add(ch);
+  if (s.heldBack) {
+    s.heldBack = false;
+    s.resumePending = true;
+  }
   queueFlush();
 }
 
@@ -377,12 +445,15 @@ function flush(): void {
   }
   const list = [...s.toSubscribe].filter((ch) => ch.readyState !== CLOSED && s.channels.get(ch.cid) === ch);
   s.toSubscribe.clear();
-  if (list.length) void subscribe(conn, list);
+  const resumed = s.resumePending;
+  s.resumePending = false;
+  if (list.length) void subscribe(conn, list, resumed);
+  else if (resumed) announceResumed();
 }
 
 type SubscribeAnswer = { results?: Array<{ cid?: string; ok?: boolean }> };
 
-async function subscribe(conn: string, list: Channel[]): Promise<void> {
+async function subscribe(conn: string, list: Channel[], resumed: boolean): Promise<void> {
   const s = hub();
   let r: Response;
   try {
@@ -397,12 +468,14 @@ async function subscribe(conn: string, list: Channel[]): Promise<void> {
     setTimeout(() => {
       if (hub().conn !== conn) return;
       for (const ch of list) if (ch.readyState !== CLOSED && hub().channels.get(ch.cid) === ch) hub().toSubscribe.add(ch);
+      if (resumed) hub().resumePending = true;
       queueFlush();
     }, 1000);
     return;
   }
   if (r.status === 409) {
     // Not this stream's any more: the next hello asks for every channel again.
+    if (resumed) s.resumePending = true;
     if (s.conn === conn) {
       s.conn = '';
       clearTimer('staleTimer');
@@ -421,8 +494,11 @@ async function subscribe(conn: string, list: Channel[]): Promise<void> {
   } catch {
     body = null;
   }
-  // The stream went meanwhile: the next hello asks for them again.
-  if (s.conn !== conn) return;
+  if (s.conn !== conn) {
+    // The stream went meanwhile (hidden, or dropped): the next hello asks for them again.
+    if (resumed) s.resumePending = true;
+    return;
+  }
   const answered = new Map<string, boolean>();
   for (const res of (body && body.results) || []) if (res && typeof res.cid === 'string') answered.set(res.cid, !!res.ok);
   const late: string[] = [];
@@ -440,6 +516,11 @@ async function subscribe(conn: string, list: Channel[]): Promise<void> {
     for (const cid of late) s.toUnsubscribe.add(cid);
     queueFlush();
   }
+  if (resumed) announceResumed();
+}
+
+function announceResumed(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('cfd:events-resumed'));
 }
 
 /** Tests: a new tab id, no stream, no channels. */
@@ -447,12 +528,12 @@ export function resetEventHubForTests(): void {
   const g = globalThis as unknown as Record<symbol, HubState | undefined>;
   const s = g[KEY];
   if (s) {
-    for (const name of ['idleTimer', 'staleTimer', 'reopenTimer'] as const) {
+    for (const name of ['idleTimer', 'hiddenTimer', 'staleTimer', 'reopenTimer'] as const) {
       const t = s[name];
       if (t) clearTimeout(t);
     }
     if (s.es) s.es.close();
-    g[KEY] = freshState();
+    g[KEY] = { ...freshState(), visibilityWired: s.visibilityWired };
   }
 }
 

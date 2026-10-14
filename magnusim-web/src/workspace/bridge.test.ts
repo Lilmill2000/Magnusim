@@ -674,6 +674,8 @@ class FakeEventSource {
   readonly url: string;
   readyState = 1;
   onerror: (() => void) | null = null;
+  /** What the bridge said with pin(): keep the tab's stream while it is hidden. */
+  pins: boolean[] = [];
   private readonly listeners = new Map<string, Array<(e: MessageEvent) => void>>();
   constructor(url: string) {
     this.url = url;
@@ -684,6 +686,9 @@ class FakeEventSource {
   }
   emit(type: string, data: unknown): void {
     for (const fn of this.listeners.get(type) || []) fn(new MessageEvent(type, { data: JSON.stringify(data) }));
+  }
+  pin(on: boolean): void {
+    this.pins.push(on);
   }
   fail(): void {
     this.readyState = 2;
@@ -1407,6 +1412,17 @@ describe('WorkspaceCalls: linked geometries (project.linkGeometry, API 1.5)', ()
     ]);
     // The host hears the result and what of it touched the user's setup (nothing in the end event here).
     expect(h.linkReport).toHaveBeenCalledWith(RESULT, { movedFar: [], split: [], merged: [], stale: [], inside: [] });
+  });
+
+  it('pins the link channel while the page waits for its link (a hidden tab keeps its stream), and lets it go once the link ends', async () => {
+    const c = linkCalls();
+    const p = c.handle('project.linkGeometry', CALL);
+    await vi.waitFor(() => expect(c.linkJobs.has(LJOB)).toBe(true));
+    const es = FakeEventSource.made[0];
+    expect(es.pins.at(-1)).toBe(true);
+    es.emit('link', { job_id: LJOB, seq: 9, ev: { event: 'end', status: 'done', result: RESULT } });
+    await p;
+    expect(es.pins.at(-1)).toBe(false);
   });
 
   it('keeps link jobs follow-only: nothing a page calls stops one', async () => {

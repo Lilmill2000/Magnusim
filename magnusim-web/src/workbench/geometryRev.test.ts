@@ -196,6 +196,21 @@ describe('the rev a tab shows, and the stamp on its saves', () => {
     expect(FakeEventSource.made.slice(3).map((es) => es.url)).toEqual(FakeEventSource.made.slice(0, 3).map((es) => es.url));
   });
 
+  it('a tab shown again (its event stream back, cfd:events-resumed) reads the tree once while it follows linked geometries', () => {
+    const sync = vi.fn();
+    window.addEventListener('cfd:tree-sync', sync);
+    try {
+      window.dispatchEvent(new CustomEvent('cfd:events-resumed'));
+      expect(sync).not.toHaveBeenCalled();
+      noteTreeGeometries('p1', [{ id: 'g1', rev: 1, source: SRC }]);
+      window.dispatchEvent(new CustomEvent('cfd:events-resumed'));
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect((sync.mock.calls[0][0] as CustomEvent).detail).toEqual({ link: true });
+    } finally {
+      window.removeEventListener('cfd:tree-sync', sync);
+    }
+  });
+
   it("a page opened while an update is queued or running shows it from the stream's snapshot; a question waiting shows as choosing", () => {
     noteTreeGeometries('p1', [{ id: 'g1', rev: 1, source: SRC }]);
     const es = FakeEventSource.made[0];

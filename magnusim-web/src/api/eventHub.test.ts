@@ -222,3 +222,113 @@ describe('one event stream per tab', () => {
     expect(() => openChannel('/api/elsewhere/events')).toThrow(/no event channel/);
   });
 });
+
+describe('a tab in the background', () => {
+  let state: 'visible' | 'hidden' = 'visible';
+  const setVisibility = (next: 'visible' | 'hidden') => {
+    state = next;
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  beforeEach(() => {
+    state = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    delete (document as unknown as Record<string, unknown>).visibilityState;
+  });
+
+  it('lets its stream go 3 s after it is hidden (its channels wait, no error); shown again, one call asks for them all and the window hears cfd:events-resumed', async () => {
+    const a = openChannel('/api/plugin-geometry/events?project_id=p1&plugin=link-demo&study_id=st-1');
+    const b = openChannel('/api/plugin-cases/events?project_id=p1&plugin=demo&study_id=st-1');
+    const errors = vi.fn();
+    a.onerror = errors;
+    b.addEventListener('error', errors);
+    const resumed = vi.fn();
+    window.addEventListener('cfd:events-resumed', resumed);
+    try {
+      FakeEventSource.made[0].hello('c1');
+      await settle();
+      setVisibility('hidden');
+      vi.advanceTimersByTime(2900);
+      expect(FakeEventSource.made[0].readyState).not.toBe(2);
+      vi.advanceTimersByTime(200);
+      expect(FakeEventSource.made[0].readyState).toBe(2);
+      expect(eventHubState().open).toBe(false);
+      expect([a.readyState, b.readyState]).toEqual([0, 0]);
+      expect(errors).not.toHaveBeenCalled();
+      // Shown again: a new stream, and once it says hello, one call for both channels.
+      setVisibility('visible');
+      expect(FakeEventSource.made).toHaveLength(2);
+      FakeEventSource.made[1].hello('c2');
+      await settle();
+      expect(subscribes()).toHaveLength(2);
+      expect(subscribes()[1].body.channels).toHaveLength(2);
+      expect(resumed).toHaveBeenCalledTimes(1);
+      expect([a.readyState, b.readyState]).toEqual([1, 1]);
+    } finally {
+      window.removeEventListener('cfd:events-resumed', resumed);
+    }
+  });
+
+  it('shown again within 3 s: the stream stays and nothing is asked again; hidden for 3 s after that, it goes', async () => {
+    openChannel('/api/plugin-geometry/events?project_id=p1&plugin=link-demo&study_id=st-1');
+    FakeEventSource.made[0].hello('c1');
+    await settle();
+    setVisibility('hidden');
+    vi.advanceTimersByTime(2000);
+    setVisibility('visible');
+    vi.advanceTimersByTime(5000);
+    expect(FakeEventSource.made).toHaveLength(1);
+    expect(FakeEventSource.made[0].readyState).not.toBe(2);
+    expect(subscribes()).toHaveLength(1);
+    // The grace starts again from the next hide.
+    setVisibility('hidden');
+    vi.advanceTimersByTime(2900);
+    expect(FakeEventSource.made[0].readyState).not.toBe(2);
+    vi.advanceTimersByTime(200);
+    expect(FakeEventSource.made[0].readyState).toBe(2);
+  });
+
+  it("keeps its stream while a channel is pinned (a job's from the start, a link a page waits for); lets it go once none is", async () => {
+    const job = openChannel('/api/jobs/job-1/events?project_id=p1');
+    const link = openChannel('/api/plugin-geometry/events?project_id=p1&plugin=link-demo&study_id=st-1');
+    FakeEventSource.made[0].hello('c1');
+    await settle();
+    setVisibility('hidden');
+    vi.advanceTimersByTime(10_000);
+    expect(FakeEventSource.made[0].readyState).not.toBe(2);
+    job.close();
+    link.pin(true);
+    vi.advanceTimersByTime(10_000);
+    expect(FakeEventSource.made[0].readyState).not.toBe(2);
+    link.pin(false);
+    vi.advanceTimersByTime(3100);
+    expect(FakeEventSource.made[0].readyState).toBe(2);
+    // A job followed while the tab is hidden opens the stream at once.
+    openChannel('/api/jobs/job-2/events?project_id=p1');
+    expect(FakeEventSource.made).toHaveLength(2);
+  });
+
+  it('a tab that starts hidden opens its stream only once it is shown, then hears cfd:events-resumed', async () => {
+    state = 'hidden';
+    const resumed = vi.fn();
+    window.addEventListener('cfd:events-resumed', resumed);
+    try {
+      const h = openChannel('/api/plugin-geometry/events?project_id=p1&plugin=link-demo&study_id=st-1');
+      vi.advanceTimersByTime(10_000);
+      await settle();
+      expect(FakeEventSource.made).toHaveLength(0);
+      expect(h.readyState).toBe(0);
+      setVisibility('visible');
+      expect(FakeEventSource.made).toHaveLength(1);
+      FakeEventSource.made[0].hello('c1');
+      await settle();
+      expect(subscribes()).toHaveLength(1);
+      expect(resumed).toHaveBeenCalledTimes(1);
+      expect(h.readyState).toBe(1);
+    } finally {
+      window.removeEventListener('cfd:events-resumed', resumed);
+    }
+  });
+});

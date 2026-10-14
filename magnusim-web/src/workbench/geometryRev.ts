@@ -450,6 +450,15 @@ export function noteTreeGeometries(projectId: string, geometries: LinkTreeNode[]
   changed();
 }
 
+// A hidden tab lets its event stream go (src/api/eventHub.ts): a link that ended meanwhile
+// shows only in the tree (a snapshot reads the tree again only for a row shown updating),
+// so a tab shown again that follows linked geometries reads it once.
+if (typeof window !== 'undefined') {
+  window.addEventListener('cfd:events-resumed', () => {
+    if (streams.size) window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { link: true } }));
+  });
+}
+
 /** Where a geometry's link stream reads from: its project, plugin and study. */
 const scopes = new Map<string, { projectId: string; plugin: string; studyId: string }>();
 
