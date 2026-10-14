@@ -115,6 +115,15 @@ names a root the run uses as it is (its server start never empties it).
 - **Every bug fixed gets a browser test in a suite that runs by default.** It
   asserts what the user sees, after the action and after a reload. It runs in
   every full run, and whenever a change can affect its suite.
+- **A race gets a test that forces its timing**, so it fails every time on the code
+  before the fix (check that by reverting the fix once), not only on a slow runner.
+  Hold a request with `page.route` until the test lets it through (the viewport menu
+  before the first tree read, `e2e/geometry-actions.spec.js`), or use a test-only
+  switch: the server's are `MAGNUSIM_TEST_*` environment variables (pass them with
+  `startHost({ env })`); the page's are `window.__CFD_TEST_*__` globals the test sets,
+  never the app. `window.__CFD_TEST_WORKSPACE_CLOSE_MS__ = N` keeps a workspace
+  mounted N ms after the address left it (`e2e/link-leave.spec.js`, a quick way out
+  and back).
 - **A plugin's tests go in its own suite**, not in `e2e/`.
 - **A test that needs WSL** says so with `test.skip(!WSL, NO_WSL)` from
   `e2e/toolchain.js`, so the fast tier skips it cleanly. Setup that needs no

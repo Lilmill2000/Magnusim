@@ -43,6 +43,9 @@ import { e2eTemp, startHost } from './support/host-server.mjs';
 //     same job; a page reload while it waits says the update goes on; a stall still asks;
 //   - a part that waited under the results loads however they close (a mesh row), and picks
 //     wait until it does.
+//   - "Leave anyway", then the same workspace again at once, before it closed (the address
+//     comes straight back): the next Back runs the hook again and asks (32c9c56; a slow runner
+//     hit it by chance).
 
 const SHOTS = process.env.MAGNUSIM_L3_SHOTS || '';
 const CAVITY = resolve('python/tests/fixtures/foam-results/cavity-2d');
@@ -761,6 +764,42 @@ test.describe('exit sync (host API 1.6)', () => {
     await openProject(page, host, pid);
     await expect(geomRow(page, gid).locator('[data-geom-link-status]')).toHaveText('Not up to date with Demo 1.', { timeout: 30_000 });
     stage(t1, 'tab reload: nothing linked');
+  });
+
+  test('gate:l3-exits Leave anyway, then the same workspace again before it closed: the next Back runs the hook again and asks @plugins', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const pid = await newProject(request, host, 'Leave and come back');
+    const scope = await demoStudy(request, host, pid);
+    await openProject(page, host, pid);
+    const frame = await openWs(page, scope);
+    await frame.locator('#hook-mode').fill('throw');
+    // A slow machine: the workspace closes 3 s after the address left it (test-only switch,
+    // WorkspaceOverlay testCloseDelayMs), so the way back below lands on the same open workspace.
+    await page.evaluate(() => {
+      window.__CFD_TEST_WORKSPACE_CLOSE_MS__ = 3000;
+    });
+    const runs = hookLog(host, scope).length;
+    await page.locator('#workspace-overlay [data-ws-back]').click();
+    const left = await hookFailed(page, true);
+    expect([left.title, left.copy]).toEqual(["Couldn't update the project", 'Link demo: The export failed. The project is unchanged.']);
+    await expect(page).toHaveURL(new RegExp(`#/p/${pid}$`));
+    // Straight back to the same workspace (well within the approval's 10 s).
+    await page.evaluate((h) => {
+      window.location.hash = h;
+    }, `#/p/${pid}/ws/link-demo/demo/${scope.sid}`);
+    await expect(page).toHaveURL(new RegExp(`/ws/link-demo/demo/${scope.sid}$`));
+    // The same page is still there (the overlay never closed): the timing was forced.
+    await expect(frame.locator('#hook-mode')).toHaveValue('throw');
+    expect(hookLog(host, scope).length).toBe(runs + 1);
+    // Back: the hook runs again, and its question shows; Stay keeps the workspace.
+    await page.locator('#workspace-overlay [data-ws-back]').click();
+    const again = await hookFailed(page, false);
+    expect([again.title, again.copy, again.yes, again.no]).toEqual(["Couldn't update the project", 'Link demo: The export failed. The project is unchanged.', 'Leave anyway', 'Stay']);
+    expect(hookLog(host, scope).length).toBe(runs + 2);
+    await expect(page).toHaveURL(new RegExp(`/ws/link-demo/demo/${scope.sid}$`));
+    await page.evaluate(() => {
+      delete window.__CFD_TEST_WORKSPACE_CLOSE_MS__;
+    });
   });
 
   test('gate:l3-exits a stall, a throw, a page reload during the hook, a double Back, nav.back() inside the hook, and a dirty page that links without saving @plugins', async ({ page, request }, testInfo) => {

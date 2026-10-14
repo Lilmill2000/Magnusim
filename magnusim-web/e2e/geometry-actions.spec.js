@@ -36,6 +36,9 @@ import { e2eTemp, killTree, startHost } from './support/host-server.mjs';
 //      removed"), the new box is never its; its next edit asks: "Not now" adds nothing,
 //      "Add as new geometry" adds "box v2" and leaves the new box as it was.
 //  13. Two bodies: the viewport right-click on the second body passes that body.
+//  14. A right-click on the part before the project tree's first read lands (the read held
+//      back): the menu opens without the action, and gains "Edit in Demo" when the read
+//      lands, in the same open menu (f4c044e; the Linux runner hit it by chance).
 
 const FX = resolve('python/tests/fixtures/edit-plugins/edit-demo/workspace/fixtures');
 const TWO_BODIES = resolve('python/tests/fixtures/geometry/two-boxes-shared-face.brep');
@@ -344,6 +347,48 @@ test.describe('geometry actions (host API 1.7)', () => {
     await expect(page.frameLocator('#workspace-frame').locator('#title')).toHaveText('box', { timeout: 60_000 });
     await expect(page.frameLocator('#workspace-frame').locator('#launch')).toHaveText('null');
     expect(JSON.parse(await page.frameLocator('#workspace-frame').locator('#ctx').textContent()).id).toBe(gid);
+  });
+
+  test('a right-click before the project tree is read: the open menu gains "Edit in Demo" when the read lands, with no second right-click @plugins', async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const pid = await newProject(request, host, 'Actions menu before the tree');
+    await importFile(request, host, pid, 'box.step');
+    // Every read of the project tree waits until the test lets it through.
+    let release = () => undefined;
+    const held = new Promise((r) => (release = r));
+    let reads = 0;
+    await page.route('**/api/project/tree**', async (route) => {
+      reads += 1;
+      await held;
+      await route.continue().catch(() => undefined);
+    });
+    await openProject(page, host, pid);
+    const at = await partPoint(page);
+    expect(reads).toBeGreaterThan(0);
+    await page.mouse.click(at.x, at.y, { button: 'right' });
+    const menu = page.locator('#face-ctx-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('#face-ctx-hide')).toBeVisible();
+    // The tree is not read yet: the menu has no action.
+    await expect(menu.locator('[data-geom-action]')).toHaveCount(0);
+    // From now on, any close of the menu is recorded (the action must come into THIS menu).
+    await page.evaluate(() => {
+      const m = document.getElementById('face-ctx-menu');
+      window.__menuClosed = 0;
+      new MutationObserver(() => {
+        if (m.hidden) window.__menuClosed += 1;
+      }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+    });
+    release();
+    const item = menu.locator('[data-geom-action="demo"]');
+    await expect(item).toContainText('Edit in Demo', { timeout: 30_000 });
+    await expect(item).toBeEnabled();
+    await expect(menu).toBeVisible();
+    expect(await page.evaluate(() => window.__menuClosed)).toBe(0);
+    await page.unroute('**/api/project/tree**');
+    // It works from there: the study opens.
+    await item.click();
+    await expect(page).toHaveURL(new RegExp(`#/p/${pid}/ws/edit-demo/demo/st-[0-9a-f]+$`));
   });
 
   test('two bodies: the viewport right-click on the second body passes that body and its face, as the face table names it @plugins', async ({ page, request }) => {

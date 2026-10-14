@@ -137,17 +137,45 @@ function coverWorkbench(): () => void {
  * A plugin workspace over its project's workbench (`#/p/<pid>/ws/<plugin>/<ws>/<sid>`).
  * The workbench stays underneath with its tree and scope; Back returns to it.
  */
+/**
+ * Test only (e2e): `window.__CFD_TEST_WORKSPACE_CLOSE_MS__ = N` keeps a workspace mounted N ms
+ * (at most 10 s) after the address left it, as a slow machine does before React closes it, so a
+ * way out and straight back lands on the same open workspace. Never set by the app; unset, a
+ * workspace closes as soon as the address leaves it.
+ */
+function testCloseDelayMs(): number {
+  const v = typeof window === 'undefined' ? undefined : (window as { __CFD_TEST_WORKSPACE_CLOSE_MS__?: unknown }).__CFD_TEST_WORKSPACE_CLOSE_MS__;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, 10_000) : 0;
+}
+
 export function WorkspaceOverlay() {
   const route = useHashRoute();
   const projectId = useProjectStore((s) => s.projectId);
   const host = typeof document !== 'undefined' ? document.getElementById('workspace-overlay') : null;
   const ws = route.view === 'workbench' ? (route as { workspace?: WorkspaceRoute | null }).workspace || null : null;
   const open = !!(host && ws && ws.projectId === projectId);
+  // The test-only close delay (testCloseDelayMs): the last open workspace, and since when it is closing.
+  const last = useRef<{ ws: WorkspaceRoute; closingAt: number } | null>(null);
+  const [, redraw] = useState(0);
+  let shown: WorkspaceRoute | null = open ? ws : null;
+  if (shown) last.current = { ws: shown, closingAt: 0 };
+  else if (last.current) {
+    const hold = testCloseDelayMs();
+    if (hold && last.current.closingAt === 0) last.current.closingAt = Date.now();
+    if (hold && Date.now() - last.current.closingAt < hold) shown = last.current.ws;
+    else last.current = null;
+  }
+  const holding = !open && !!shown;
   useEffect(() => {
-    if (host) host.hidden = !open;
-  }, [host, open]);
-  if (!open || !host || !ws) return null;
-  return createPortal(<WorkspaceView key={`${ws.projectId}/${ws.plugin}/${ws.workspace}/${ws.studyId}`} route={ws} />, host);
+    if (!holding || !last.current) return undefined;
+    const t = setTimeout(() => redraw((n) => n + 1), Math.max(0, testCloseDelayMs() - (Date.now() - last.current.closingAt)) + 1);
+    return () => clearTimeout(t);
+  }, [holding]);
+  useEffect(() => {
+    if (host) host.hidden = !shown;
+  }, [host, shown]);
+  if (!shown || !host) return null;
+  return createPortal(<WorkspaceView key={`${shown.projectId}/${shown.plugin}/${shown.workspace}/${shown.studyId}`} route={shown} />, host);
 }
 
 function WorkspaceView({ route }: { route: WorkspaceRoute }) {
