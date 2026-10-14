@@ -7,7 +7,8 @@
  *
  * A read now writes nothing, and no save makes a deleted project again: the worker refuses
  * a save of a project whose project.json is gone, and a project deleted while its save
- * waited is not made the active one.
+ * waited is not made the active one. A geometry or study switch whose save the worker
+ * refused that way answers that the project was deleted (404), not a server error.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -27,10 +28,12 @@ if (!VENV && !process.env.MAGNUSIM_PYTHON && !process.env.CFDDESK_PYTHON) {
   const r = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' });
   if (r.status === 0 && r.stdout.trim()) process.env.MAGNUSIM_PYTHON = r.stdout.trim();
 }
-const { createGeometryFolder, writeJsonAtomic } = await import('../project-layout.js');
+const { createGeometryFolder, createStudyFolder, writeJsonAtomic } = await import('../project-layout.js');
 const { attachWorkerBridge, commitRpcSync } = await import('../py-json.js');
+const { saveCatalog } = await import('../w17-sim-catalog.js');
 const w16 = await import('../w16-project-geometry.js');
 const { handleW16Api, setCadPreviewWriterForTests, setThumbRendererForTests } = w16;
+const { handleW17Api } = await import('../w17-simulation.js');
 
 // No thumbnail renders here: a stand-in picture.
 setThumbRendererForTests(async (args) => {
@@ -89,7 +92,7 @@ function seedProject(pid, { previews = true } = {}) {
   return dir;
 }
 
-async function call(method, path, body) {
+async function call(method, path, body, handler = handleW16Api) {
   const url = new URL(path, 'http://localhost');
   const res = {
     statusCode: 200,
@@ -110,9 +113,12 @@ async function call(method, path, body) {
     },
     readJsonBody: async () => body,
   };
-  await handleW16Api({ method, headers: { 'content-type': 'application/json' } }, res, url, url.pathname.split('/').filter(Boolean), helpers);
+  await handler({ method, headers: { 'content-type': 'application/json' } }, res, url, url.pathname.split('/').filter(Boolean), helpers);
   return res;
 }
+
+/** The server's answer to a route that threw: a 500 with its message. */
+const asServerError = (e) => ({ statusCode: 500, body: { error: String((e && e.message) || e) } });
 
 const ACTIVE = join(root, 'active.json');
 const activeId = () => (existsSync(ACTIVE) ? JSON.parse(readFileSync(ACTIVE, 'utf8')).project_id || null : null);
@@ -239,6 +245,44 @@ describe('a project deleted while one of its saves waits on the worker', () => {
     assert.equal(listing(dir), '', `the deleted project is back: ${dir}`);
     assert.notEqual(activeId(), pid, 'the deleted project is the active project again');
     assert.equal(shown.statusCode, 404, JSON.stringify(shown.body));
+  });
+});
+
+describe('a study switch of a project deleted while its save waits on the worker', () => {
+  it('answers that the project was deleted, and the project stays deleted', { timeout: 120_000 }, async () => {
+    const pid = 'study-switch-delete';
+    const dir = seedProject(pid);
+    for (const [id, geom, name] of [
+      ['sim-round', 'g-round', 'Round study'],
+      ['sim-tear', 'g-tear', 'Tear study'],
+    ]) {
+      createStudyFolder(dir, geom, { id, name });
+    }
+    saveCatalog(pid, {
+      simulations: [
+        { id: 'sim-round', name: 'Round study', geometry_id: 'g-round' },
+        { id: 'sim-tear', name: 'Tear study', geometry_id: 'g-tear' },
+      ],
+      active_id: 'sim-tear',
+    });
+    setActive(pid);
+    const held = holdSaves(pid);
+    // Another tab switches to the other study: the project is saved through the worker.
+    const switching = call('POST', '/api/simulation/activate', { project_id: pid, simulation_id: 'sim-round' }, handleW17Api).catch(
+      asServerError,
+    );
+    await held.saveHeld();
+
+    const deleted = await call('POST', '/api/project/delete', { project_id: pid });
+    assert.equal(deleted.statusCode, 200, JSON.stringify(deleted.body));
+    assert.equal(existsSync(dir), false);
+    held.release();
+    const switched = await switching;
+
+    assert.equal(listing(dir), '', `the deleted project is back: ${dir}`);
+    assert.notEqual(activeId(), pid, 'the deleted project is the active project again');
+    assert.equal(switched.statusCode, 404, JSON.stringify(switched.body));
+    assert.equal(switched.body.error, 'project deleted while it was saved');
   });
 });
 

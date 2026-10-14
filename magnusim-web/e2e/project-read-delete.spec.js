@@ -10,8 +10,9 @@ import { expect, test } from './support/stress.js';
 // request at a time, so that save can wait behind an earlier, slow request; a project
 // deleted on Home meanwhile came back: the save made its folder again with a project.json,
 // and the read made it the active project. After a refresh its card was on Home again.
-// A read now saves nothing; a save that does wait there (a geometry switch) is refused by
-// the worker once its project is gone.
+// A read now saves nothing; a save that does wait there (a geometry or study switch) is
+// refused by the worker once its project is gone, and the switch answers that the project
+// was deleted.
 //
 // A server of its own. Its test switches, inert until their files are made:
 //   MAGNUSIM_TEST_PROJECT_WRITE_HOLD  the worker holds a project.json save of the project
@@ -200,31 +201,54 @@ test.describe('Home reads the active project while it is deleted', () => {
     await expectStaysDeleted(page, request, pid);
   });
 
-  test('a project deleted while its geometry switch waits on the worker to save stays deleted', async ({ page, request }) => {
+  test('a project deleted while a geometry switch and a study switch wait on the worker to save stays deleted', async ({ page, request }) => {
     test.setTimeout(300_000);
     page.setDefaultTimeout(30_000);
     const { pid } = await twoGeometryProject(request, `e2e switch delete ${stamp()}`);
     const proj = (await getJson(request, `${host.base}/api/project?project_id=${encodeURIComponent(pid)}`)).project;
     const other = proj.geometries.find((g) => g.id !== proj.active_geometry_id).id;
+    // A study on each geometry; the second one made is the active study.
+    const studies = [];
+    for (const gid of [other, proj.active_geometry_id]) {
+      const r = await request.post(`${host.base}/api/simulation`, { data: { project_id: pid, geometry_id: gid } });
+      const text = await r.text();
+      expect(r.ok(), text.slice(0, 400)).toBe(true);
+      studies.push(JSON.parse(text).simulation.id);
+    }
+    const catalog = join(host.projects, pid, 'simulations.json');
+    const activeStudy = () => (existsSync(catalog) ? JSON.parse(readFileSync(catalog, 'utf8')).active_id : null);
+    expect(activeStudy()).toBe(studies[1]);
     await page.goto(`${host.base}/#/`);
     await page.locator(`.home-card[data-project-id="${pid}"]`).waitFor({ timeout: 60_000 });
 
-    // Another tab shows the project's other geometry: the worker holds that save.
+    // Other tabs show the project's other geometry, and its other study: the worker holds
+    // the first save, and the second waits behind it (the worker answers one at a time).
+    // The tabs are stand-ins (their requests): what they show then is not checked here.
     const log = `${writeHold}.log`;
     rmSync(log, { force: true });
     writeFileSync(writeHold, pid);
     const switching = request.post(`${host.base}/api/geometry/activate`, { data: { project_id: pid, geometry_id: other } });
     await expect.poll(() => logged(log, `held ${pid}`), { timeout: 60_000 }).toBe(true);
+    const switchingStudy = request.post(`${host.base}/api/simulation/activate`, { data: { project_id: pid, simulation_id: studies[0] } });
+    // Its catalog is written first, then its project.json save is sent to the worker.
+    await expect.poll(activeStudy, { timeout: 30_000 }).toBe(studies[0]);
 
     await deleteOnHome(page, pid);
     await expect.poll(listed(request)).not.toContain(pid);
     expect(existsSync(join(host.projects, pid))).toBe(false);
 
-    // The save runs on a project that is gone: the switch fails, and nothing is made again.
+    // The saves run on a project that is gone: the switches answer that, and nothing is
+    // made again.
     rmSync(writeHold, { force: true });
     await expect.poll(() => logged(log, `end ${pid}`), { timeout: 60_000 }).toBe(true);
-    const switched = await switching;
-    expect.soft(switched.status(), (await switched.text()).slice(0, 400)).toBe(404);
+    for (const [what, answer] of [
+      ['the geometry switch', await switching],
+      ['the study switch', await switchingStudy],
+    ]) {
+      const text = (await answer.text()).slice(0, 400);
+      expect.soft(answer.status(), `${what}: ${text}`).toBe(404);
+      expect.soft(text, what).toContain('project deleted while it was saved');
+    }
 
     await expectStaysDeleted(page, request, pid);
   });

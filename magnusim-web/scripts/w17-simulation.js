@@ -112,11 +112,19 @@ function writeProject(proj) {
 /**
  * The same write through the long-lived worker. Switching study must not hold the whole
  * server while a new Python process starts (about a second each time).
+ * The worker answers one request at a time, so this save can run after the project was
+ * deleted, and the worker refuses it then (it never makes the project again). False when
+ * the project was deleted meanwhile.
  */
-async function writeProjectAsync(proj) {
-  const written = await commitRpc('project.write_project', { project_dir: projectDir(proj.id), doc: proj });
-  if (written && typeof written === 'object') Object.assign(proj, written);
-  return proj;
+async function saveUnlessDeleted(proj) {
+  try {
+    const written = await commitRpc('project.write_project', { project_dir: projectDir(proj.id), doc: proj });
+    if (written && typeof written === 'object') Object.assign(proj, written);
+  } catch (e) {
+    if (existsSync(projectJsonPath(proj.id))) throw e;
+    return false;
+  }
+  return existsSync(projectJsonPath(proj.id));
 }
 
 function newSimId() {
@@ -895,7 +903,9 @@ async function activateSimulation(body) {
   if (sim) {
     touchProjectSimRef(proj, sim);
     if (sim.geometry_id) proj.active_geometry_id = sim.geometry_id;
-    await writeProjectAsync(proj);
+    if (!(await saveUnlessDeleted(proj))) {
+      return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
+    }
   }
   return { ok: true, status: 200, body: catalogPayload(projectId, proj, cat) };
 }
