@@ -13,6 +13,7 @@ import {
   pageFetchAnswers,
   renameStudy,
   serverAnswersIn,
+  serverChannels,
   showsProject,
   shownZmax,
   stager,
@@ -39,8 +40,11 @@ import {
 //   - one tab on a project with three linked geometries and a plain part whose preview is
 //     being made (MAGNUSIM_TEST_PREVIEW_HOLD holds it): a rename, and the part once made;
 //   - a second tab on a Demo study's workspace: a link's events still reach its page and
-//     the first tab's viewport (the one stream carries them), and a rename lands.
-// No WSL. Each test prints how many link streams its tabs hold, and on a failure which of
+//     the first tab's viewport (the one stream carries them), and a rename lands;
+//   - a tab whose event stream is cut (as a restart of the app server cuts it): it connects
+//     again by itself, asks for its channels again, and a link made after it still shows.
+// The server counts what each tab's stream carries (MAGNUSIM_TEST_EVENT_HUB, its own count,
+// not the browser's): a tab on Home holds none. No WSL. Each test prints how many link streams its tabs hold, and on a failure which of
 // the page's requests got no answer while the server answered at once from outside the browser.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -65,7 +69,7 @@ test.describe('the browser connection limit (6 to the app server)', () => {
       projects,
       bundledDir: bundledIfOnly(tmp),
       pluginsFrom: 'python/tests/fixtures/link-plugins',
-      env: { MAGNUSIM_TEST_PREVIEW_HOLD: hold },
+      env: { MAGNUSIM_TEST_PREVIEW_HOLD: hold, MAGNUSIM_TEST_EVENT_HUB: '1' },
     });
     stage(`server up at ${host.base}`);
   });
@@ -114,7 +118,14 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     await page.locator('#folder-chip').click();
     const card = page.locator(`.home-card[data-project-id="${project.pid}"]`);
     await expect(card).toBeVisible({ timeout: 30_000 });
-    await page.waitForTimeout(1_000);
+    const homeTab = seen.tabIdOf(page);
+    expect(homeTab, "tab 1's event stream").toBeTruthy();
+    // Home follows nothing of the project: the server carries no channel for the tab (its
+    // stream closes 2 s after its last channel goes), and the browser holds no stream for it.
+    await expect
+      .poll(() => serverChannels(request, host, homeTab), { timeout: 10_000, message: 'the server carries no channel for the tab on Home' })
+      .toBe(0);
+    await expect.poll(() => seen.openStreams(page), { timeout: 10_000, message: 'the tab on Home holds no event stream' }).toBe(0);
     stage(`tab 1 is on Home; link streams it still holds: ${seen.openStreams(page)}`);
     const tab2 = await context.newPage();
     await showsProject(tab2, host, project, seen, { ready: false });
@@ -166,7 +177,9 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     const made = () => (existsSync(`${hold}.log`) ? readFileSync(`${hold}.log`, 'utf8') : '').split(/\r?\n/).includes(`made ${plain.step_path}`);
     try {
       const seen = watchRequests(page.context());
-      await showsProject(page, host, project, seen, { ready: false });
+      // Not waiting for every stream to connect: with the previews held, one could not (the
+      // rename below is what the user feels).
+      await showsProject(page, host, project, seen, { ready: false, streams: false });
       await expect.poll(made, { timeout: 120_000, message: "the tab's load makes the part's preview" }).toBe(true);
       stage(`the preview is being made; link streams the tab holds: ${seen.openStreams(page)}; its requests with no answer: ${seen.unanswered(page).join(', ') || 'none'}`);
       await renameStudy(page, project.studies[1].sid, 'Demo 2 renamed');
@@ -208,6 +221,12 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     });
     const tab2 = await context.newPage();
     await showsProject(tab2, host, project, seen);
+    // Both tabs follow the project's three linked geometries: a rename in tab 1 lands (on the
+    // old code six streams were held here, and this rename was never saved).
+    const other = project.studies.find((s) => s !== target);
+    await renameStudy(page, other.sid, `${other.title} renamed`);
+    await expectRenamed(page, request, host, project.pid, other.sid, `${other.title} renamed`, seen, stage);
+    // The study's workspace in tab 2: its page follows the link events too (a third channel).
     await tab2.evaluate((h) => {
       window.location.hash = h;
     }, `#/p/${project.pid}/ws/link-demo/demo/${target.sid}`);
@@ -221,8 +240,45 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     await expect(frame.locator('#link-events')).toHaveText(/(^|, )rev 2$/, { timeout: 60_000 });
     await expect.poll(() => shownZmax(page), { timeout: 60_000, message: "tab 1's viewport shows v2" }).toBe(30);
     expect(await page.evaluate(() => window.__sameLoad === true), 'tab 1 was not reloaded').toBe(true);
-    await renameStudy(page, project.studies[0].sid, 'Demo 1 renamed');
-    await expectRenamed(page, request, host, project.pid, project.studies[0].sid, 'Demo 1 renamed', seen, stage);
+    await renameStudy(page, other.sid, `${other.title} renamed again`);
+    await expectRenamed(page, request, host, project.pid, other.sid, `${other.title} renamed again`, seen, stage);
     await tab2.close();
+  });
+
+  test('a tab whose event stream is cut (a restart of the app server): it connects again, asks for its channels again, and a link made after it shows @plugins', async ({ page, request }) => {
+    test.setTimeout(420_000);
+    const project = await linkedProject(request, host, 'Held streams reconnect', 2, stage);
+    const seen = watchRequests(page.context());
+    let streamsAsked = 0;
+    page.on('request', (r) => {
+      if (new URL(r.url()).pathname === '/api/events') streamsAsked += 1;
+    });
+    await showsProject(page, host, project, seen);
+    await expect.poll(() => page.evaluate(() => !!(window.__CFD_W16__ && window.__CFD_W16__.ready)), { timeout: 60_000 }).toBe(true);
+    const shownId = await page.evaluate(() => String(window.__CFD_W16__.geometry.id));
+    const target = project.studies.find((s) => s.gid === shownId);
+    expect(target, `the tab shows one of the linked geometries (${shownId})`).toBeTruthy();
+    expect(await shownZmax(page)).toBe(35);
+    await page.evaluate(() => {
+      window.__sameLoad = true;
+    });
+    const tab = seen.tabIdOf(page);
+    expect(tab, "the tab's event stream").toBeTruthy();
+    // Its two linked geometries' channels, on the server.
+    await expect.poll(() => serverChannels(request, host, tab), { timeout: 15_000 }).toBe(2);
+    const asked = streamsAsked;
+    // The stream is cut as a restart cuts it: the server forgets its channels.
+    const cut = await request.post(`${host.base}/api/test/event-hub/drop`, { data: { tab } });
+    expect((await cut.json()).dropped, 'the tab had a stream to cut').toBe(1);
+    // The page connects again by itself and asks for both channels again.
+    await expect.poll(() => streamsAsked, { timeout: 15_000, message: 'the page opens its stream again' }).toBeGreaterThan(asked);
+    await expect
+      .poll(() => serverChannels(request, host, tab), { timeout: 30_000, message: 'the server carries both channels again' })
+      .toBe(2);
+    stage(`stream cut and taken again: ${streamsAsked - asked} new stream request(s); the server carries 2 channels`);
+    // A link made now reaches the tab on its new stream: the viewport shows v2, with no reload.
+    await linkVersion(request, host, project.pid, target.sid, 'v2', 2, 1);
+    await expect.poll(() => shownZmax(page), { timeout: 60_000, message: 'the viewport shows v2' }).toBe(30);
+    expect(await page.evaluate(() => window.__sameLoad === true), 'the tab was not reloaded').toBe(true);
   });
 });

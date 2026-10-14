@@ -9,6 +9,8 @@ import {
   linkVersion,
   linkedProject,
   renameStudy,
+  serverChannels,
+  serverStream,
   shownZmax,
   stager,
   watchRequests,
@@ -21,7 +23,11 @@ import {
 // lets its stream go (after a few seconds) unless it follows a job, and takes it again when it
 // is shown: the snapshots and one tree read catch it up, so a geometry linked meanwhile shows.
 // Playwright's pages are always visible: the five background tabs say they are hidden
-// (document.visibilityState) from their first script on. No WSL.
+// (document.visibilityState) from their first script on. A tab the user leaves after it was
+// shown (or the old tab a new run.bat start leaves behind) is hidden by saying so, as the
+// browser does; the server's own count says what it holds then (MAGNUSIM_TEST_EVENT_HUB), and
+// a page that waits for a link keeps its stream (MAGNUSIM_TEST_SLOT_HOLD keeps the link
+// queued) until the link ends. No WSL.
 
 const stage = stager('connection-limit-hidden');
 
@@ -33,6 +39,15 @@ async function hiddenTab(context) {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
   });
   return tab;
+}
+
+/** The tab is hidden (the user went to another tab or app): it says so, as the browser does. */
+function hideTab(tab) {
+  return tab.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
 }
 
 /** The tab is shown again: it says so, as the browser does. */
@@ -59,6 +74,7 @@ test.describe('tabs in the background and the browser connection limit', () => {
       projects,
       bundledDir: bundledIfOnly(tmp),
       pluginsFrom: 'python/tests/fixtures/link-plugins',
+      env: { MAGNUSIM_TEST_EVENT_HUB: '1', MAGNUSIM_TEST_SLOT_HOLD: '1' },
     });
     stage(`server up at ${host.base}`);
   });
@@ -107,5 +123,89 @@ test.describe('tabs in the background and the browser connection limit', () => {
     await showTab(tab2);
     await expect.poll(() => shownZmax(tab2), { timeout: 15_000, message: 'the tab shown again shows v2' }).toBe(30);
     for (const tab of hidden) await tab.close();
+  });
+
+  test('a tab hidden after it was shown lets its stream go and takes it back when shown; one whose page waits for a link keeps it until the link ends @plugins', async ({ page, request }) => {
+    test.setTimeout(600_000);
+    const project = await linkedProject(request, host, 'Hidden after shown', 2, stage);
+    const context = page.context();
+    const seen = watchRequests(context);
+    const ready = async (tab) => {
+      await tab.goto(`${host.base}/#/p/${project.pid}`);
+      await tab.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project.pid, { timeout: 60_000 });
+      for (const s of project.studies) await expect(geometryRow(tab, s.gid)).toBeVisible({ timeout: 60_000 });
+      await expect.poll(() => tab.evaluate(() => !!(window.__CFD_W16__ && window.__CFD_W16__.ready)), { timeout: 60_000 }).toBe(true);
+    };
+    // The tab in front, and a second one the user looks at first.
+    await ready(page);
+    const back = await context.newPage();
+    await ready(back);
+    const shownId = await back.evaluate(() => String(window.__CFD_W16__.geometry.id));
+    const target = project.studies.find((s) => s.gid === shownId);
+    expect(target, `the tab shows one of the linked geometries (${shownId})`).toBeTruthy();
+    expect(await shownZmax(back)).toBe(35);
+    const backTab = seen.tabIdOf(back);
+    expect(backTab, "the tab's event stream").toBeTruthy();
+    await expect.poll(() => serverChannels(request, host, backTab), { timeout: 15_000, message: 'its two linked geometries, on the server' }).toBe(2);
+
+    // The user goes to another tab: after a few seconds the server holds nothing for it.
+    await hideTab(back);
+    const hiddenAt = Date.now();
+    await expect
+      .poll(() => serverStream(request, host, backTab), { timeout: 15_000, message: 'the hidden tab lets its stream go' })
+      .toBeNull();
+    const after = Date.now() - hiddenAt;
+    expect(after, 'it was kept for the grace first').toBeGreaterThanOrEqual(2_500);
+    await expect.poll(() => seen.openStreams(back), { timeout: 5_000, message: 'the browser holds no stream for it' }).toBe(0);
+    await back.waitForTimeout(3_000);
+    expect(await serverStream(request, host, backTab), 'it stays let go while hidden').toBeNull();
+    stage(`the hidden tab let its stream go after ${after} ms; the browser holds ${seen.openStreams(back)} for it`);
+
+    // v2 is linked meanwhile: the tab in front shows it, the hidden one does not yet.
+    await linkVersion(request, host, project.pid, target.sid, 'v2', 2, 1);
+    await expect.poll(() => shownZmax(page), { timeout: 60_000, message: 'the tab in front shows v2' }).toBe(30);
+    expect(await shownZmax(back), 'the hidden tab still shows v1').toBe(35);
+    // Shown again: its stream and both channels are back on the server, and it catches up.
+    await showTab(back);
+    await expect.poll(() => serverChannels(request, host, backTab), { timeout: 15_000, message: 'its channels, back on the server' }).toBe(2);
+    await expect.poll(() => shownZmax(back), { timeout: 15_000, message: 'the tab shown again shows v2' }).toBe(30);
+
+    // Its page waits for a link (queued: the compute slot is held) when the user leaves the tab.
+    const other = project.studies.find((s) => s !== target);
+    let held = false;
+    try {
+      const h = await request.post(`${host.base}/api/test/slot-hold`);
+      expect(h.ok(), await h.text()).toBe(true);
+      held = true;
+      await back.evaluate((hash) => {
+        window.location.hash = hash;
+      }, `#/p/${project.pid}/ws/link-demo/demo/${other.sid}`);
+      const frame = back.frameLocator('#workspace-frame');
+      await expect(frame.locator('#link-title')).toHaveText(other.title, { timeout: 60_000 });
+      const accepted = back.waitForResponse((r) => new URL(r.url()).pathname === '/api/plugin-geometry/link' && r.request().method() === 'POST', {
+        timeout: 60_000,
+      });
+      await frame.locator('#link-v2').click();
+      const answer = await (await accepted).json();
+      expect(answer.job_id && answer.queued, `the link waits in the queue: ${JSON.stringify(answer)}`).toBeTruthy();
+      await expect(frame.locator('#link-status')).toHaveText('Linking v2…');
+      await hideTab(back);
+      await back.waitForTimeout(6_000);
+      const kept = await serverStream(request, host, backTab);
+      expect(kept, 'a hidden tab whose page waits for a link keeps its stream').not.toBeNull();
+      stage(`hidden 6 s while its page waits for a link: the server carries ${kept && kept.channels} channel(s) for it`);
+      // The link ends while the tab is still hidden: its page hears it.
+      await request.post(`${host.base}/api/test/slot-release`);
+      held = false;
+      await request.post(`${host.base}/api/compute-queue/kick`, { data: { project_id: project.pid } });
+      await expect(frame.locator('#link-status')).toHaveText(/ rev 2$/, { timeout: 180_000 });
+    } finally {
+      if (held) await request.post(`${host.base}/api/test/slot-release`);
+    }
+    // Nothing waits any more: the hidden tab lets its stream go.
+    await expect
+      .poll(() => serverStream(request, host, backTab), { timeout: 15_000, message: 'once the link ended, the hidden tab lets its stream go' })
+      .toBeNull();
+    await back.close();
   });
 });

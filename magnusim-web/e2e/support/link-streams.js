@@ -108,8 +108,14 @@ export async function linkedProject(request, host, title, n, stage) {
 export function watchRequests(context) {
   /** @type {Map<import('@playwright/test').Request, {page: any, url: string, method: string, answered: boolean, at: number}>} */
   const live = new Map();
+  /** The id each page's event hub gave its tab (from its /api/events?tab= stream). */
+  const tabIds = new Map();
   const track = (page) => {
-    page.on('request', (r) => live.set(r, { page, url: r.url(), method: r.method(), answered: false, at: Date.now() }));
+    page.on('request', (r) => {
+      live.set(r, { page, url: r.url(), method: r.method(), answered: false, at: Date.now() });
+      const u = new URL(r.url());
+      if (u.pathname === '/api/events' && u.searchParams.get('tab')) tabIds.set(page, u.searchParams.get('tab'));
+    });
     page.on('response', (res) => {
       const rec = live.get(res.request());
       if (rec) rec.answered = true;
@@ -121,6 +127,8 @@ export function watchRequests(context) {
   context.on('page', track);
   const isStream = (rec) => STREAM.test(new URL(rec.url).pathname);
   return {
+    /** The tab id of `page`'s one event stream ('' before it opened one). */
+    tabIdOf: (page) => tabIds.get(page) || '',
     /** Link streams `page` holds open (or every tab's, without one). */
     openStreams: (page) => [...live.values()].filter((r) => isStream(r) && r.answered && (!page || r.page === page)).length,
     /** Link streams asked for and not connected yet. */
@@ -138,13 +146,32 @@ export const studyRow = (page, sid) => page.locator(`[data-plugin-study="${sid}"
 
 /**
  * A tab shows the project: every linked geometry's row is in its tree (the tree read that
- * painted them also opened their link streams), and every stream it asked for is connected.
+ * painted them also opened their link streams), and every stream it asked for is connected
+ * (unless `streams` is false: a test whose point is that the page still answers when one
+ * cannot connect).
  */
-export async function showsProject(page, host, project, seen, { ready = true } = {}) {
+export async function showsProject(page, host, project, seen, { ready = true, streams = true } = {}) {
   await page.goto(`${host.base}/#/p/${project.pid}`);
   if (ready) await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project.pid, { timeout: 60_000 });
   for (const s of project.studies) await expect(geometryRow(page, s.gid)).toBeVisible({ timeout: 60_000 });
-  await expect.poll(() => seen.waitingStreams(), { timeout: 30_000, message: 'every link stream asked for is connected' }).toBe(0);
+  if (streams) await expect.poll(() => seen.waitingStreams(), { timeout: 30_000, message: 'every link stream asked for is connected' }).toBe(0);
+}
+
+/**
+ * What the server holds for a tab's event stream (its host has MAGNUSIM_TEST_EVENT_HUB=1,
+ * scripts/server/event-hub.ts): {channels, kinds: {link, case, job}}, or null when the tab
+ * has no stream open there. The server's own count, not the browser's.
+ */
+export async function serverStream(request, host, tabId) {
+  const j = await getJson(request, `${host.base}/api/test/event-hub`);
+  expect(j && j.ok, `the test route answers (MAGNUSIM_TEST_EVENT_HUB=1): ${JSON.stringify(j)}`).toBe(true);
+  return (tabId && j.tabs[tabId]) || null;
+}
+
+/** The channels the server carries for a tab: 0 when it holds no stream for it. */
+export async function serverChannels(request, host, tabId) {
+  const s = await serverStream(request, host, tabId);
+  return s ? s.channels : 0;
 }
 
 /** Whether a plain request from the page gets an answer within `ms` (it is aborted after). */

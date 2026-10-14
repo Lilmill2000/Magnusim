@@ -26,6 +26,14 @@
  *
  * The state is on globalThis, so a Vite re-import of this module shares it. Not gated
  * (link-gate.js): nothing here reads or writes a record itself.
+ *
+ * MAGNUSIM_TEST_EVENT_HUB=1 (read once, when this module loads) also registers, for the
+ * browser tests (the server's own count of what each tab holds, not the browser's):
+ *   GET  /api/test/event-hub   {ok, tabs: {<tab>: {channels, kinds: {<kind>: n}}}}: the streams
+ *        open now and the channels each carries;
+ *   POST /api/test/event-hub/drop {tab?}  {ok, dropped}: that tab's stream (every one, without
+ *        a tab) is cut as a restart or a lost connection cuts it; its channels end, and the
+ *        page's EventSource connects again.
  */
 import { randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
@@ -49,6 +57,7 @@ interface HubState {
   kinds: Map<string, ChannelOpen>;
 }
 
+const TEST_ROUTES = process.env.MAGNUSIM_TEST_EVENT_HUB === '1';
 const HEARTBEAT_MS = 15_000;
 const TAB_RE = /^[A-Za-z0-9-]{8,64}$/;
 const CID_RE = /^[a-z]{1,16}:[0-9]{1,12}$/;
@@ -216,6 +225,46 @@ export function registerEventHubRoutes(router: Router): void {
       end();
     }
     ctx.sendJson(200, { ok: true });
+  });
+
+  if (TEST_ROUTES) registerTestRoutes(router);
+}
+
+/** MAGNUSIM_TEST_EVENT_HUB=1 only (see the header): what each tab's stream carries, and a cut. */
+function registerTestRoutes(router: Router): void {
+  router.get('/api/test/event-hub', (ctx) => {
+    const tabs: Record<string, { channels: number; kinds: Record<string, number> }> = {};
+    for (const [tabId, tab] of hub().tabs) {
+      const kinds: Record<string, number> = {};
+      for (const cid of tab.channels.keys()) {
+        const kind = cid.split(':')[0];
+        kinds[kind] = (kinds[kind] || 0) + 1;
+      }
+      tabs[tabId] = { channels: tab.channels.size, kinds };
+    }
+    ctx.sendJson(200, { ok: true, tabs });
+  });
+
+  router.post('/api/test/event-hub/drop', async (ctx) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await ctx.readJsonBody()) || {};
+    } catch {
+      body = {};
+    }
+    const only = String(body.tab || '');
+    let dropped = 0;
+    for (const [tabId, tab] of [...hub().tabs]) {
+      if (only && tabId !== only) continue;
+      dropped += 1;
+      dropTab(tabId, tab);
+      try {
+        tab.res.destroy();
+      } catch {
+        /* closed */
+      }
+    }
+    ctx.sendJson(200, { ok: true, dropped });
   });
 }
 

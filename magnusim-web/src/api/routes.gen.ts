@@ -134,6 +134,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/simulation-control' },
   { method: 'GET', path: '/api/simulation/**rest' },
   { method: 'POST', path: '/api/simulation/**rest' },
+  { method: 'GET', path: '/api/test/event-hub' },
+  { method: 'POST', path: '/api/test/event-hub/drop' },
   { method: 'POST', path: '/api/test/slot-hold' },
   { method: 'POST', path: '/api/test/slot-release' },
   { method: 'GET', path: '/api/times' },
