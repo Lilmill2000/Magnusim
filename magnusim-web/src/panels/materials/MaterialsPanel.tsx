@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../../api/client';
-import { bodyDisplay, subscribeFaceNames } from '../../workbench/faceNames';
+import { bodyDisplay, subscribeFaceNames, useFaceNamesVersion } from '../../workbench/faceNames';
 import { linkedWorkerRpc, stampRecords } from '../../workbench/geometryRev';
 import { SciNumberInput } from '../../forms/SciNumberInput';
 import {
@@ -278,6 +278,8 @@ export function MaterialsPanel(props: IslandProps) {
 
   // A linked geometry's body names arrive with its preview: show "Fluid (Body1)".
   useEffect(() => subscribeFaceNames(() => setBodies(geometryBodies())), []);
+  // The body names (bodyDisplay) of a table set while this panel mounted too.
+  useFaceNamesVersion();
 
   useEffect(
     () =>

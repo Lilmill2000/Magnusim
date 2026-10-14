@@ -28,6 +28,19 @@ function defaultPython() {
 
 export const PYTHON = envGet('PYTHON') || defaultPython();
 
+/**
+ * Whether PYTHON can be started: a path that exists, or a bare command name
+ * ("python3", "python": no python/.venv, as in CI) that the system finds on PATH
+ * when it is spawned. A bare name is never a file here, so existsSync alone
+ * wrongly called it missing.
+ */
+export function pythonFound(py = PYTHON) {
+  const s = String(py || '');
+  if (!s) return false;
+  if (!/[\\/]/.test(s)) return true;
+  return existsSync(s);
+}
+
 /** Absolute path of a tool script, e.g. pyTool('export_case_field.py'). */
 export function pyTool(name) {
   return join(PY_TOOLS, name);

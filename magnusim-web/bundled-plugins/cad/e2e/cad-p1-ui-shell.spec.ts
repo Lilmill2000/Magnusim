@@ -283,8 +283,12 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     // ux010 (Daniel: a SCALE MODELS section, labelled like the others): VIEW and EDIT are icons at
     // 1600 px too since then, to leave the labelled Banana for scale its room.
     await expect(bar).toHaveAttribute('data-fit', '1');
-    await expect(bar).toHaveAttribute('data-fit-scale', '0');
-    // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon (data-fit-scale), checked by cad-ux010-banana.
+    // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon (data-fit-scale), checked by
+    // cad-ux010-banana: labelled at 1600 px, and at 1280 px with Segoe UI (Windows). A wider font
+    // (Linux CI's DejaVu Sans) may take its label at 1280 px, never a modelling command's (below);
+    // no group goes to icons there (cad-p4b-toolbar-wide-text checks the order with wider text).
+    if (size.width > 1280 || process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-scale', '0');
+    await expect(bar).toHaveAttribute('data-fit-icons', '');
     const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command]').evaluateAll((els) =>
       els.map((b) => {
         const s = getComputedStyle(b);

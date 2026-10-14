@@ -537,13 +537,43 @@ function renderCards() {
       empty.textContent = 'No projects here yet. Create one to start.';
     }
   }
-  grid.querySelectorAll('.home-thumb-img').forEach((img) => {
+  grid.querySelectorAll<HTMLImageElement>('.home-thumb-img').forEach((img) => {
     img.addEventListener('error', () => {
       const span = document.createElement('span');
       span.textContent = img.getAttribute('data-fallback') || 'P';
+      const src = img.getAttribute('src') || '';
       img.replaceWith(span);
+      // A picture still being made answers 202 (the server never holds the request
+      // for a render): ask again a few times and put the picture in when it is made.
+      if (src) retryThumb(span, img, src, 0);
     });
   });
+}
+
+// Spaced out (2 s, 3.2 s, 5.1 s, ... about a minute in all) so the cards' asks never
+// crowd the page's own requests.
+const THUMB_RETRIES = 7;
+const THUMB_RETRY_MS = 2000;
+
+function retryThumb(span: HTMLElement, img: HTMLImageElement, src: string, attempt: number): void {
+  if (attempt >= THUMB_RETRIES) return;
+  window.setTimeout(() => {
+    if (!span.isConnected) return;
+    // A fetch asking for an image: 202 (still being made) asks again later, 200 puts the
+    // picture in, anything else (204: no picture) stops. Nothing here logs a browser error.
+    const url = `${src}${src.includes('?') ? '&' : '?'}try=${attempt + 1}`;
+    fetch(url, { headers: { Accept: 'image/*' }, cache: 'no-store' })
+      .then((r) => {
+        if (!span.isConnected) return;
+        if (r.status === 200) {
+          img.src = url;
+          span.replaceWith(img);
+        } else if (r.status === 202) {
+          retryThumb(span, img, src, attempt + 1);
+        }
+      })
+      .catch(() => {});
+  }, Math.round(THUMB_RETRY_MS * 1.6 ** attempt));
 }
 
 function selectedProject() {

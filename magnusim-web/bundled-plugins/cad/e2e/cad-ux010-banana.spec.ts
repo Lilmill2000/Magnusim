@@ -186,10 +186,26 @@ test('cad:ux010-banana-empty with no body the banana lies at the origin; right-c
   const { seen, frame } = await freshPart(page, request);
   // SCALE MODELS is labelled like every group at 1920, 1600 and 1280 px (VIEW and EDIT go to
   // icons first); at 1150 and 1000 px its button goes to its icon, its heading stays. Sketch keeps
-  // its label down to 1280 px; the toolbar never scrolls.
+  // its label down to 1280 px; the toolbar never scrolls. At 1280 px that is with Segoe UI
+  // (Windows, Daniel's screen); with a wider font (Linux CI's DejaVu Sans) SCALE MODELS may go to
+  // its icon there, as the first thing to give room: every modelling command keeps its label and
+  // no group goes to icons (cad-p4b-toolbar-wide-text checks the order with wider text).
   for (const width of [1920, 1600, 1280, 1150, 1000]) {
     await page.setViewportSize({ width, height: 900 });
-    await expect(tb(frame)).toHaveAttribute('data-fit-scale', width >= 1280 ? '0' : '1');
+    if (width !== 1280 || process.platform === 'win32') await expect(tb(frame)).toHaveAttribute('data-fit-scale', width >= 1280 ? '0' : '1');
+    else {
+      await expect.poll(() => tb(frame).evaluate(() => window.innerWidth)).toBe(width);
+      // The fit runs before paint once the toolbar has seen its new width: two frames later it is done.
+      await tb(frame).evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    }
+    const scaleIcon = (await tb(frame).getAttribute('data-fit-scale')) === '1';
+    if (width >= 1280) {
+      await expect(tb(frame)).toHaveAttribute('data-fit-icons', '');
+      const labels = await tb(frame)
+        .locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command] .tb-txt')
+        .evaluateAll((els) => els.filter((t) => !(getComputedStyle(t).position !== 'absolute' && t.getBoundingClientRect().width > 12)).map((t) => t.textContent));
+      expect(labels, `modelling commands without their label at ${width}`).toEqual([]);
+    }
     expect(await tb(frame).evaluate((el) => el.scrollWidth - el.clientWidth), `the toolbar scrolls at ${width}`).toBeLessThanOrEqual(1);
     const r = (await button(frame).boundingBox())!;
     expect(r.x + r.width, `the banana inside the frame at ${width}`).toBeLessThanOrEqual(width + 0.5);
@@ -198,7 +214,7 @@ test('cad:ux010-banana-empty with no body the banana lies at the origin; right-c
     await expect(heading).toHaveText('SCALE MODELS');
     expect((await heading.boundingBox())!.height, `one line at ${width}`).toBeLessThan(16);
     const shown = (sel: string) => tb(frame).locator(sel).evaluate((t) => (getComputedStyle(t).position !== 'absolute' && t.getBoundingClientRect().width > 12 ? t.textContent : ''));
-    expect(await shown('.tb-btn[data-command="scale.banana"] .tb-txt'), `the banana's label at ${width}`).toBe(width >= 1280 ? 'Banana for scale' : '');
+    expect(await shown('.tb-btn[data-command="scale.banana"] .tb-txt'), `the banana's label at ${width}`).toBe(scaleIcon ? '' : 'Banana for scale');
     if (width >= 1280) expect(await shown('.tb-btn[data-command="sketch.new"] .tb-txt'), `Sketch's label at ${width}`).toBe('Sketch');
   }
   await page.setViewportSize({ width: 1600, height: 1000 });

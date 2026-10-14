@@ -152,10 +152,14 @@ export function selectTool(mode: SketchMode): SketchTool {
   // arrow (the hover highlight still shows what is under it); a drag of it says why in the panel.
   const cursorFor = (h: SketchHit | null): string => {
     if (!h || h.what === 'constraint') return '';
+    // The origin never moves (CI run 37, a slow runner: hovered before the sketch's analysis was in,
+    // it showed the hand and kept it). Without the analysis nothing is known to move yet: the arrow,
+    // until the analysis lands (the cursor follows it, below).
+    if (h.id === ORIGIN) return '';
     const a = mode.view.get().analysis;
-    if (!a) return 'move';
+    if (!a) return '';
     const s = h.what === 'point' ? a.perPoint[h.id] : a.perEntity[h.id];
-    return s === 'fully' || h.id === ORIGIN ? '' : 'move';
+    return s === 'fully' ? '' : 'move';
   };
   /** Sketch u/v to frame client px: the view's own projection; without a view (unit tests), the press's local scale. */
   const screenOf = (p: { at: Vec2; px: number; client: [number, number] }): ((uv: Vec2) => [number, number] | null) => {
@@ -200,6 +204,16 @@ export function selectTool(mode: SketchMode): SketchTool {
   };
   const offSel = mode.services.selection.subscribe(() => pickRadius());
   const offDraft = mode.view.subscribe((v, prev) => {
+    // The cursor follows the analysis, not only the pointer: what is under a pointer that stays put
+    // became draggable or fully defined (the analysis came after the hover, or an edit changed it).
+    if (v.analysis !== prev.analysis && !press && !v.dragging && !radius.dragging && !radius.hovered) {
+      queueMicrotask(() => {
+        const now = mode.view.get();
+        if (mode.tool?.id !== 'select' || press || now.dragging || radius.dragging || radius.hovered) return;
+        const want = cursorFor(now.hover);
+        if (want !== now.cursor) mode.view.set({ cursor: want });
+      });
+    }
     // After an edit, an Undo or a Redo (they clear the preview): the arrow drawn again, or gone with its arc.
     const lost = !!prev.preview?.handles?.length && !v.preview?.handles?.length;
     if ((v.draft === prev.draft && !lost) || radius.dragging || !radius.target) return;

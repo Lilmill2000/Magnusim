@@ -25,7 +25,7 @@ if (!VENV && !process.env.MAGNUSIM_PYTHON && !process.env.CFDDESK_PYTHON) {
   if (r.status === 0 && r.stdout.trim()) process.env.MAGNUSIM_PYTHON = r.stdout.trim();
 }
 const { createGeometryFolder, geometriesRoot, writeJsonAtomic } = await import('../project-layout.js');
-const { handleW16Api, setThumbRendererForTests } = await import('../w16-project-geometry.js');
+const { geometryThumbWithin, handleW16Api, setThumbRendererForTests, thumbRendersRunningForTests } = await import('../w16-project-geometry.js');
 
 const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'python', 'tests', 'fixtures', 'geometry');
 
@@ -58,7 +58,7 @@ function seedProject(pid) {
   return dir;
 }
 
-async function call(method, path, body) {
+async function call(method, path, body, headers = {}) {
   const url = new URL(path, 'http://localhost');
   const res = {
     statusCode: 200,
@@ -79,7 +79,7 @@ async function call(method, path, body) {
     },
     readJsonBody: async () => body,
   };
-  await handleW16Api({ method, headers: { 'content-type': 'application/json' } }, res, url, url.pathname.split('/').filter(Boolean), helpers);
+  await handleW16Api({ method, headers: { 'content-type': 'application/json', ...headers } }, res, url, url.pathname.split('/').filter(Boolean), helpers);
   return res;
 }
 
@@ -104,6 +104,89 @@ function holdThumbRenders() {
   };
   return { started, release, renderStarted };
 }
+
+describe('a thumbnail render that hangs', () => {
+  it('is stopped at its limit, its process ends, and the failure is answered at once after', { timeout: 300_000 }, async () => {
+    // MAGNUSIM_TEST_THUMB_FAIL=hang: the render's Python never ends (a driver that never
+    // answers). The request is not held, the render is stopped at MAGNUSIM_THUMB_TIMEOUT_MS,
+    // and the card's picture request is then "no picture" (204), never an error status.
+    const pid = 'thumb-hangs';
+    seedProject(pid);
+    process.env.MAGNUSIM_TEST_THUMB_FAIL = 'hang';
+    process.env.MAGNUSIM_THUMB_TIMEOUT_MS = '2000';
+    try {
+      const first = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`);
+      assert.equal(first.statusCode, 202, JSON.stringify(first.body));
+      // The same render's end (the request above started it).
+      const got = await geometryThumbWithin(pid, 240_000);
+      assert.equal(got.status, 500, JSON.stringify(got.body));
+      assert.match(String(got.body.detail), /no answer in 2000 ms/);
+      assert.equal(thumbRendersRunningForTests(), 0, 'a stopped render is still counted as running');
+      // Remembered: answered at once, no new render; an image request gets "no picture".
+      const t0 = Date.now();
+      const again = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`, undefined, { accept: 'image/avif,image/webp,*/*' });
+      assert.ok(Date.now() - t0 < 1_000, `took ${Date.now() - t0} ms`);
+      assert.equal(again.statusCode, 204);
+      assert.equal(again.headers['cache-control'], 'no-store');
+      assert.equal(thumbRendersRunningForTests(), 0);
+    } finally {
+      delete process.env.MAGNUSIM_TEST_THUMB_FAIL;
+      delete process.env.MAGNUSIM_THUMB_TIMEOUT_MS;
+    }
+  });
+
+  it('a render that fails (MAGNUSIM_TEST_THUMB_FAIL=1) answers an image request "no picture"', { timeout: 300_000 }, async () => {
+    const pid = 'thumb-fails';
+    seedProject(pid);
+    process.env.MAGNUSIM_TEST_THUMB_FAIL = '1';
+    try {
+      let got;
+      const by = Date.now() + 240_000;
+      do {
+        got = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`, undefined, { accept: 'image/*' });
+        if (got.statusCode === 202) await new Promise((r) => setTimeout(r, 200));
+      } while (got.statusCode === 202 && Date.now() < by);
+      assert.equal(got.statusCode, 204);
+      assert.match(String(got.headers['x-cfd-thumb']), /thumb render failed/);
+      const json = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`);
+      assert.equal(json.statusCode, 500);
+      assert.equal(thumbRendersRunningForTests(), 0);
+    } finally {
+      delete process.env.MAGNUSIM_TEST_THUMB_FAIL;
+    }
+  });
+});
+
+describe('a thumbnail request while the picture is still being made', () => {
+  it('answers "being made" at once instead of holding the connection, then the picture', { timeout: 300_000 }, async () => {
+    // Home asks for every card's picture together; a request held for a slow render
+    // filled the browser's six connections, and the page's next request (a new folder)
+    // was never sent (CI, once Python was found on Linux).
+    const pid = 'thumb-not-held';
+    seedProject(pid);
+    const held = holdThumbRenders();
+    try {
+      const t0 = Date.now();
+      const first = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`);
+      const took = Date.now() - t0;
+      await held.renderStarted();
+      assert.equal(first.statusCode, 202, JSON.stringify(first.body));
+      assert.equal(first.body.pending, true);
+      assert.equal(first.headers['cache-control'], 'no-store');
+      assert.ok(took < 10_000, `held ${took} ms`);
+      held.release();
+      let got = first;
+      for (let i = 0; i < 100 && got.statusCode !== 200; i += 1) {
+        await new Promise((r) => setTimeout(r, 100));
+        got = await call('GET', `/api/geometry/thumb?project_id=${pid}&v=x-pending`);
+      }
+      assert.equal(got.statusCode, 200);
+    } finally {
+      held.release();
+      setThumbRendererForTests(null);
+    }
+  });
+});
 
 describe('a thumbnail rendered while its geometry is deleted', () => {
   it('does not bring the deleted geometry folder back', { timeout: 300_000 }, async () => {

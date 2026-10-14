@@ -4,7 +4,7 @@ import type { BcFamilyRow } from '../../api/registry.gen';
 import { canonicalBcType, colorOf, defaultsChoiceText, familiesFor, familyOf, timeTableText } from '../../bcCatalog';
 import { SchemaForm } from '../../forms/SchemaForm';
 import { dispatchPanelDone, type IslandProps } from '../../islands';
-import { faceDisplay, lostDisplay, subscribeFaceNames } from '../../workbench/faceNames';
+import { faceDisplay, lostDisplay, useFaceNamesVersion } from '../../workbench/faceNames';
 import { usePluginUiLoaded, useSlotComponent, type BcSettingsProps } from '../../plugin-api/slots';
 import {
   bcFlowBasis,
@@ -356,9 +356,8 @@ export function BcEditor() {
   const state = useBcState();
   const families = useFamilies(state?.analysis_key) || [];
   const [note, setNote] = useState('');
-  // A linked geometry's face names arrive with its preview.
-  const [, setNamesSeen] = useState(0);
-  useEffect(() => subscribeFaceNames(() => setNamesSeen((n) => n + 1)), []);
+  // A linked geometry's face names arrive with its preview (also while this panel mounts).
+  useFaceNamesVersion();
   const bc = state?.bcs.find((b) => String(b.id) === String(state.active_id)) || null;
   if (!bc || !state) {
     return (

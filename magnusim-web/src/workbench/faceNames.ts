@@ -7,7 +7,13 @@
  * lists show "Label (Body2)", else "Name (Body2)", else "Body2". Matching and every
  * stored value keep the host's labels ("face 12@Body1", "Body2"); only the text changes.
  * Long match keys never show when a label exists.
+ *
+ * A React component reads them with useFaceNamesVersion(): it re-renders on every new
+ * table, also one set between its first render and its subscription (a panel that
+ * opens while the shown geometry's preview is still on its way, right after a reload).
  */
+import { useSyncExternalStore } from 'react';
+
 const FACE_RE = /^\s*face\s*(\d+)\s*(?:@\s*Body\s*(\d+))?\s*$/i;
 
 interface Named {
@@ -18,6 +24,8 @@ interface Named {
 let faces = new Map<number, Named>();
 let bodies = new Map<string, Named>();
 let geometryId = '';
+// Goes up with every table set: what a component compares to know it missed one.
+let version = 0;
 const listeners = new Set<() => void>();
 
 /** The shown geometry's face table (its cad_preview.json, as /api/geometry/cad?part=preview answers it). */
@@ -39,7 +47,22 @@ export function setShownFaceTable(meta: unknown, id?: string | null): void {
   faces = nextFaces;
   bodies = nextBodies;
   geometryId = String(id || '');
+  version += 1;
   for (const fn of [...listeners]) fn();
+}
+
+/** How many tables were set so far (a snapshot for useSyncExternalStore). */
+export function faceNamesVersion(): number {
+  return version;
+}
+
+/**
+ * Re-render on every new face table. useSyncExternalStore checks the version again after
+ * it subscribes, so a table set between the render and the subscription is not missed (a
+ * plain useEffect subscription missed it: the list kept "face 15@Body1").
+ */
+export function useFaceNamesVersion(): number {
+  return useSyncExternalStore(subscribeFaceNames, faceNamesVersion, faceNamesVersion);
 }
 
 /** The geometry whose names are held (''). */
@@ -80,5 +103,6 @@ export function resetFaceNamesForTests(): void {
   faces = new Map();
   bodies = new Map();
   geometryId = '';
+  version += 1;
   listeners.clear();
 }

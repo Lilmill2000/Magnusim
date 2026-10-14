@@ -49,6 +49,31 @@ async function still(page: Page) {
   await expect.poll(() => cad<boolean>(page, (() => (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { state: { get(): { animating: boolean } } } } } } } }).__CAD__.services.viewport.get().handle.state.get().animating) as never)).toBe(false);
 }
 
+/**
+ * The view framed on what is drawn now (Fit, as the user presses it) and resting: a sketch just
+ * added may still be framed by the view on its own, a moment later (the check once sketch mode
+ * ends, or the next rebuild's refit), and a point projected before that move is not where the
+ * click lands (CI run 39: the click on a new sketch's line picked nothing). After Fit nothing is
+ * off-screen and the framed sphere holds the sketch, so neither moves the camera again; the
+ * point must then stay put across two looks (`fit` false: only that).
+ */
+async function framedAndStill(page: Page, frame: FrameLocator, p: V3, fit = true) {
+  if (fit) await tb(frame).locator('[data-command="view.fit"]').click();
+  let last: [number, number] | null = null;
+  await expect
+    .poll(
+      async () => {
+        await still(page);
+        const now = await modelOnPage(page, p);
+        const same = !!last && Math.abs(now[0] - last[0]) < 0.5 && Math.abs(now[1] - last[1]) < 0.5;
+        last = now;
+        return same;
+      },
+      { intervals: [300] },
+    )
+    .toBe(true);
+}
+
 /** A click on empty view space (right of the middle): lets go of the selection. */
 async function clickEmpty(page: Page) {
   const box = (await page.locator('#workspace-frame').boundingBox())!;
@@ -365,12 +390,13 @@ test('cad:p4a-construct-edges a Point at a vertex, an Axis along an edge and a P
 
   // A sketch with a line (a Sweep path, say) on Top, off the block: Plane "Normal to a curve" on it, at its start.
   await addSketch(page, { at: [60, 0], size: [20, 10] });
+  await framedAndStill(page, frame, [70, 0, 0]);
   await clickEmpty(page);
   await tb(frame).locator('[data-command="construct.plane"]').click();
   await expect(p.locator('[data-panel-title]')).toHaveText('Plane 2');
   await p.locator('[data-field="method"] select').selectOption('normal_to_curve');
   await page.mouse.move(5, 5);
-  await still(page);
+  await framedAndStill(page, frame, [70, 0, 0], false);
   // The rectangle's first line runs from (60, 0) to (80, 0) on Top.
   at = await modelOnPage(page, [70, 0, 0]);
   await page.mouse.click(at[0], at[1]);

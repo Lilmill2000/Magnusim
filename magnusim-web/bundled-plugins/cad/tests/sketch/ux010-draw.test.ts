@@ -154,6 +154,37 @@ describe('construction drawing (Construction / X with nothing selected)', () => 
   });
 });
 
+describe('the Select tool cursor follows the analysis (CI run 37: a hover before it kept the hand)', () => {
+  const px = 0.1;
+  const ev = (at: Vec2): SketchPointer => ({ type: 'move', uv: at, px, ctrl: false, shift: false, pressed: false, clientX: at[0] / px, clientY: -at[1] / px });
+  it('the origin is never draggable; before the analysis nothing shows the hand; when it lands a free point under a still pointer gets the hand, a fully defined one keeps the arrow', async () => {
+    h = await sketchHarness({ points: { a: [10, 0], b: [30, 0] }, entities: [{ id: 'l', kind: 'line', p: ['a', 'b'] }] });
+    const analysis = h.mode.view.get().analysis;
+    expect(analysis).not.toBeNull();
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    // The analysis not in yet (a slow machine): the origin, then a free end: the arrow.
+    h.mode.view.set({ analysis: null });
+    h.mode.tool!.pointer(ev([0, 0]));
+    expect(h.mode.view.get().hover).toMatchObject({ id: 'origin' });
+    expect(h.mode.view.get().cursor).toBe('');
+    h.mode.tool!.pointer(ev([30, 0]));
+    expect(h.mode.view.get().hover).toMatchObject({ what: 'point', id: 'b' });
+    expect(h.mode.view.get().cursor).toBe('');
+    // It lands with the pointer still: the free end gets the hand.
+    h.mode.view.set({ analysis });
+    await tick();
+    expect(h.mode.view.get().cursor).toBe('move');
+    // Back on the origin with the analysis in: the arrow; an analysis that says the end is fully defined: the arrow.
+    h.mode.tool!.pointer(ev([0, 0]));
+    expect(h.mode.view.get().cursor).toBe('');
+    h.mode.tool!.pointer(ev([30, 0]));
+    expect(h.mode.view.get().cursor).toBe('move');
+    h.mode.view.set({ analysis: { ...analysis!, perPoint: { ...analysis!.perPoint, b: 'fully' } } });
+    await tick();
+    expect(h.mode.view.get().cursor).toBe('');
+  });
+});
+
 describe('review S2: a sloppy click stays a click', () => {
   it('click-drag only when held >= 150 ms and moved > 12 px, or moved > 30 px', () => {
     expect(isClickDrag(60, 20)).toBe(false);

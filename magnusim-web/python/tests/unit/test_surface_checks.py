@@ -151,5 +151,7 @@ def test_thin_curved_sheet_meshes(tmp_path, gap_factor, monkeypatch):
         # Without it the crossings are found and meshed finer before the fill.
         assert any("crossing triangle pair" in ln for ln in repairs)
     # Whatever crossings were left are gone before the fill.
-    assert not any(ln.endswith("left after 3 round(s)") for ln in repairs)
+    # Only the failure line names pairs left; "no crossing triangles left after 3
+    # round(s)" is a success (Linux's tessellation takes all three rounds to clear).
+    assert not any("crossing triangle pair(s) left after" in ln for ln in repairs)
     assert not repairs or repairs[-1].startswith("surface repair: no crossing triangles left")

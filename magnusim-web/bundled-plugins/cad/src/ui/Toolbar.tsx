@@ -11,8 +11,10 @@
 // and EDIT show icons only first, then the less-used commands go, one by one in
 // FOLD_ORDER, into their group's "More" menu (Fusion style: "SOLID: Extrude,
 // Revolve, More ▾"); the menu lists each one with its icon, shortcut and
-// tooltip. Only below that (narrower than 1280 px) every group but the primary
-// action shows icons (the label stays in the tooltip and the accessible name).
+// tooltip. Only below that (narrower than 1280 px, or wider text) the groups sit
+// closer, then go to icons one group at a time (ICON_ORDER), and last every group
+// but the primary action shows icons (the label stays in the tooltip and the
+// accessible name).
 // Review P2/P3 round 1: at 1280 px Undo, Redo and some views were scrolled out
 // of reach, with no scrollbar in real Chrome.
 // P4b fix round 1 (Daniel, 2026-10-06: "I prefer 1280 px (model) but let people
@@ -135,6 +137,17 @@ export const KEEP_IN_VIEW: readonly string[] = [
  */
 export const AFTER_VIEW: ReadonlySet<string> = new Set(['scale']);
 const KEEP_SET: ReadonlySet<string> = new Set(KEEP_IN_VIEW);
+
+/**
+ * Wider text than the toolbar was measured with (a larger system font, Windows text scaling or
+ * browser zoom, Linux's fallback fonts) must not cost Sketch its label first. When the toolbar
+ * still does not fit with every foldable command folded, the groups first sit closer together
+ * (`is-fit-tight`), then go to icons one group at a time in this order, the least used first
+ * (`is-icons`; the heading stays, the labels stay the tooltips and the accessible names), and only
+ * then every group but the primary action (the last step, which takes SKETCH's and DRAW's labels).
+ * Groups not listed (SKETCH, DRAW; CONSTRAIN is icons by design) wait for that last step.
+ */
+export const ICON_ORDER: readonly string[] = ['file', 'inspect', 'construct', 'pattern', 'modify', 'cfd', 'solid', 'sketch-modify', 'dimension'];
 
 /** Sentence case for the More menu's name: "MODIFY" -> "Modify", "CFD PREP" -> "Cfd prep". */
 function groupWords(label: string): string {
@@ -388,6 +401,7 @@ function Group({
   sketchTool,
   end = false,
   primary = false,
+  icons = false,
   custom,
   menu,
   drag,
@@ -402,6 +416,8 @@ function Group({
   sketchTool: string | null;
   end?: boolean;
   primary?: boolean;
+  /** The frame is too narrow for its labels (ICON_ORDER): its buttons show icons only. */
+  icons?: boolean;
   custom?: GroupCustom;
   /** VIEW, EDIT and the primary action: their right-click menu (Reset toolbar). */
   menu?(x: number, y: number): void;
@@ -432,8 +448,9 @@ function Group({
   };
   return (
     <div
-      className={`tb-group${end ? ' is-end' : ''}${at?.kind === 'refused' && at.group === id ? ' is-drop-refused' : ''}`}
+      className={`tb-group${end ? ' is-end' : ''}${icons ? ' is-icons' : ''}${at?.kind === 'refused' && at.group === id ? ' is-drop-refused' : ''}`}
       data-group={id}
+      data-icons={icons ? '1' : undefined}
       data-drop-refused={at?.kind === 'refused' && at.group === id ? '1' : undefined}
       role="group"
       aria-label={label}
@@ -856,8 +873,9 @@ function DragGhost({ view, ghostRef }: { view: DragView; ghostRef: React.RefObje
 /**
  * How compact the toolbar must be to show every command without scrolling:
  * 0 labels everywhere, 1 VIEW and EDIT as icons, 1 + k the first k foldable
- * commands (FOLD_ORDER) in their group's More menu, `max` every group but the
- * primary action as icons too. Measured after each render (before paint);
+ * commands (FOLD_ORDER) in their group's More menu, then the groups closer
+ * together, then the groups of ICON_ORDER as icons one by one, `max` every group
+ * but the primary action as icons too. Measured after each render (before paint);
  * measured again from 0 when the toolbar's width, the mode or its commands change.
  */
 function useFitLevel(mode: Mode, content: string, max: number): { ref: (node: HTMLDivElement | null) => void; level: number } {
@@ -944,7 +962,9 @@ export function Toolbar() {
   // button goes to its icon (its heading stays, as every group's does), before anything folds.
   const hasScale = groups.some((g) => AFTER_VIEW.has(g.group));
   const scaleStep = hasScale ? 1 : 0;
-  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 2 + scaleStep);
+  // The mode's groups that go to icons one by one once everything foldable is folded.
+  const iconGroups = ICON_ORDER.filter((g) => groups.some((x) => x.group === g));
+  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 3 + iconGroups.length + scaleStep);
   // Tests wait for the stored layout: the attribute is set without a render.
   const bar = useRef<HTMLDivElement | null>(null);
   const fitRef = fit.ref;
@@ -965,17 +985,20 @@ export function Toolbar() {
     };
   }, [prefs, mode]);
   // Steps: 0 labels; 1 VIEW and EDIT icons; 2 SCALE MODELS' icon (when there); then the folds;
-  // the last, every group but the primary action as icons.
+  // then the groups closer together (tight); then ICON_ORDER's groups to icons one by one; the
+  // last, every group but the primary action as icons.
   const level = fit.level >= 2 ? fit.level - scaleStep : fit.level;
   const scaleIcons = scaleStep > 0 && fit.level >= 2;
   const fitFolded = new Set(foldable.slice(0, Math.max(0, Math.min(level - 1, foldable.length))));
+  const tight = level >= foldable.length + 2;
+  const fitIcons = new Set(iconGroups.slice(0, Math.max(0, level - (foldable.length + 2))));
   const folded = new Set([...placedMore, ...fitFolded]);
   const cz = customizer(services, prefs, lmode, ml, fitFolded);
   // UX 0.1.0: dragging between a group's More and its bar (the handlers read this render's layout).
   const live = useRef<DragLive>({ services, prefs, mode: lmode, m: ml, groups: [] });
   live.current = { services, prefs, mode: lmode, m: ml, groups: groups.map((g) => ({ group: g.group, label: g.label, order: g.order })) };
   const drag = useToolbarDrag(bar, live);
-  const iconLevel = level >= foldable.length + 2 ? 2 : level >= 1 ? 1 : 0;
+  const iconLevel = level >= foldable.length + 3 + iconGroups.length ? 2 : level >= 1 ? 1 : 0;
   const view = viewCommands(services, mode);
   // Sketch mode undoes inside the sketch (its own Undo / Redo); model mode the document's.
   const editIds = mode === 'sketch' ? [WELL_KNOWN_COMMANDS.sketchUndo, WELL_KNOWN_COMMANDS.sketchRedo] : [UNDO_ID, REDO_ID];
@@ -987,12 +1010,14 @@ export function Toolbar() {
     <>
       <div
         ref={barRef}
-        className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}${scaleIcons ? ' is-fit-scale' : ''}`}
+        className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}${scaleIcons ? ' is-fit-scale' : ''}${tight ? ' is-fit-tight' : ''}`}
         role="toolbar"
         aria-label="Commands"
         data-cad-toolbar={mode}
         data-fit={iconLevel}
         data-fit-scale={scaleIcons ? '1' : '0'}
+        data-fit-tight={tight ? '1' : '0'}
+        data-fit-icons={[...fitIcons].join(' ')}
         data-folded={folded.size}
         data-fit-folded={fitFolded.size}
         data-layout={isDefault(ml) ? 'default' : 'custom'}
@@ -1011,6 +1036,7 @@ export function Toolbar() {
             services={services}
             panel={panel}
             sketchTool={sketchTool}
+            icons={fitIcons.has(g.group)}
             custom={cz.forGroup(g.group, g.order)}
             drag={drag.view}
             startDrag={(c, from, e) => drag.start(c, g.group, from, e)}

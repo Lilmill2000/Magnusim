@@ -155,6 +155,42 @@ test('cad:ux010-cursors the sketch cursors are our own SVGs with a keyword fallb
   expect(seen.csp, 'CSP violations (a cursor image refused)').toEqual([]);
 });
 
+test('cad:ux010-cursor-analysis the cursor follows the sketch analysis, not only the pointer: before it is in, the origin and a free end show the arrow; when it lands under a still pointer the free end gets the hand (CI run 37)', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await page.keyboard.press('l');
+  await clickAt(page, [10, 10]);
+  await clickAt(page, [40, 10]);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await sketchIdle(page);
+  // A slow machine: the analysis not in yet when the pointer arrives.
+  await cad(page, (() => {
+    const v = (window as unknown as W).__CAD__.services.apis.get().sketch.view;
+    (window as unknown as { __heldAnalysis: unknown }).__heldAnalysis = v.get().analysis;
+    v.set({ analysis: null });
+  }) as never);
+  const [ox, oy] = await at(page, [0, 0, 0]);
+  await page.mouse.move(ox - 40, oy + 40);
+  await page.mouse.move(ox, oy, { steps: 4 });
+  await expect.poll(async () => (await cursor(page)).inline).toMatch(/^(default|auto|)$/);
+  const [ex, ey] = await at(page, [40, 10, 0]);
+  await page.mouse.move(ex + 30, ey);
+  await page.mouse.move(ex, ey, { steps: 4 });
+  await expect.poll(() => cad<string | null>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch.view.get().hover?.id ?? null) as never)).not.toBeNull();
+  expect((await cursor(page)).inline).toMatch(/^(default|auto|)$/);
+  // The analysis lands; the pointer does not move: the free end now shows the hand.
+  await cad(page, (() => {
+    const v = (window as unknown as W).__CAD__.services.apis.get().sketch.view;
+    v.set({ analysis: (window as unknown as { __heldAnalysis: unknown }).__heldAnalysis });
+  }) as never);
+  await expectCursor(page, 'move', 'grab', 'M14.4 14V4.6');
+  // And back on the origin with the analysis in: the arrow.
+  await page.mouse.move(ox, oy, { steps: 4 });
+  await expectCursor(page, 'default', 'default');
+  expect(seen.errors).toEqual([]);
+});
+
 test('cad:ux010-points sketch points are round: the material cuts a circle; on screen the centre is the point colour and the corner of the old square is not', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await enterSketchOnTop(page, frame);

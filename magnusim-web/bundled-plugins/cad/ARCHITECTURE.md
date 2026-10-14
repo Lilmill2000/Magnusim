@@ -589,8 +589,13 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   change): first VIEW and EDIT show icons only (their glyphs are the usual ones;
   the label stays the tooltip and the accessible name), then commands fold one by
   one into their group's **More ▾** menu in `FOLD_ORDER` (`src/ui/Toolbar.tsx`),
-  the least used first. Only below that (narrower than 1280 px) every group but
-  the primary action shows icons. The More button is narrower than a command
+  the least used first. Only below that (narrower than 1280 px, or wider text: a
+  larger system font, text scaling or browser zoom, Linux's fallback fonts) the
+  groups sit closer (`is-fit-tight`), then whole groups go to icons one at a time
+  in `ICON_ORDER` (FILE, INSPECT, CONSTRUCT, PATTERN, MODIFY, CFD PREP, SOLID;
+  sketch mode MODIFY, DIMENSION; headings kept), and last every group but the
+  primary action shows icons, so Sketch keeps its label longest (CI on Linux,
+  2026-10-13: DejaVu Sans took it at 1280 px). The More button is narrower than a command
   (40 px, the caret in its padding), so folding a group's first command frees
   room; it carries `data-tb-more`, `data-more-commands` and `aria-expanded`, is
   drawn pressed while one of its commands' panels or tools is open, and its menu
@@ -652,7 +657,9 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     `toolbar-layout.json` (the sandboxed frame has no localStorage). The e2e that
     change it (`cad:p4b-toolbar-customize`, `-tabs`, `-migrate`) run in the serial
     phase: the server keeps one prefs file per plugin. The toolbar carries `data-folded` (all in More),
-    `data-fit-folded` (folded for the width), `data-layout` (default | custom)
+    `data-fit-folded` (folded for the width), `data-fit` (0 labels, 1 VIEW and EDIT icons, 2 every
+    group icons), `data-fit-scale`, `data-fit-tight` and `data-fit-icons` (the groups gone to icons
+    for the width), `data-layout` (default | custom)
     and `data-layout-ready`.
   - **The priority** (most used stays longest; SolidWorks' CommandManager and
     Fusion's toolbar promote the same core commands, weighted for Magnusim's

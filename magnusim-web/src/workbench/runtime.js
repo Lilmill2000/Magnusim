@@ -190,6 +190,7 @@ import {
 } from './resultFields';
 import { createToastQueue } from './toastQueue';
 import { runProgressText } from './runProgressText';
+import { importFailureText } from './importFailureText';
 import { carrySettle } from './runSettle';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
@@ -20227,8 +20228,9 @@ async function importGeometryClient(opts, upload) {
   }
   const j = await r.json();
   if (!r.ok) {
-    publishW16({ ready: false, note: j.error || 'geometry import failed', last_import_error: j });
-    throw new Error(j.error || 'geometry import failed');
+    const why = importFailureText(j, 'geometry import failed');
+    publishW16({ ready: false, note: why, last_import_error: j });
+    throw new Error(why);
   }
   const geom = j.geometry;
   w16State.project = j.project
@@ -20412,7 +20414,8 @@ async function runGeometryImport(label, work) {
     console.error('[CFD W16] import', e);
     confirmAction({
       title: 'Could not import ' + label,
-      copy: (e && e.message) || String(e),
+      // A reader's failed request or a server body is a plain object: its reason, in words.
+      copy: importFailureText(e),
       yes: 'OK',
       notice: true,
     });
