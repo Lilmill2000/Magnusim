@@ -19,7 +19,8 @@ import { serverAnswersIn, stager, watchRequests } from './support/link-streams.j
 // waits on the browser's cache instead of taking a connection).
 // A part whose preview is made loads as before: its face table, faces and edges asked for
 // at once, and its face table once. A part being prepared while a mesh runs keeps the mesh's
-// chip (its stage and time), and says the part after it.
+// chip (its stage and time), and says the part after it. A project left while its part is
+// prepared ends that load quietly (its faces and edges asked for meanwhile raise no error).
 // MAGNUSIM_TEST_PREVIEW_HOLD holds each preview once made, before it is placed. No WSL.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -193,5 +194,39 @@ test.describe('parts whose previews are being made, in two tabs', () => {
     }
     // Once the part is made, the chip is the mesh's alone.
     await expect(chip).toHaveText(/^Meshing .* · Snapping the mesh to the surface$/, { timeout: 30_000 });
+  });
+
+  test('a project left while its part is prepared: the next project opens with no error, and the part is not drawn there', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const one = await plainProject(request, host, 'Left while prepared');
+    const other = await request.post(`${host.base}/api/project`, { data: { title: 'Opened meanwhile', folder: 'My Projects', units: 'Metric', category: 'Other' } });
+    const oj = await other.json();
+    expect(other.ok(), JSON.stringify(oj)).toBe(true);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`page error: ${String(e)}`));
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(`console error: ${m.text()}`);
+    });
+    rmSync(`${hold}.log`, { force: true });
+    writeFileSync(hold, '');
+    try {
+      await page.goto(`${host.base}/#/p/${one.pid}`);
+      await expect.poll(() => (existsSync(`${hold}.log`) ? readFileSync(`${hold}.log`, 'utf8') : ''), { timeout: 120_000 }).toContain('made ');
+      await expect(page.locator('#viewport-job-label')).toContainText('Preparing elbow', { timeout: 15_000 });
+      // The user opens another project (in the same page) while the part is prepared.
+      await page.evaluate((h) => {
+        window.location.hash = h;
+      }, `#/p/${oj.id}`);
+      await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, oj.id, { timeout: 60_000 });
+      // The left part's load ends at its next ask (at most 2 s): quietly.
+      await page.waitForTimeout(4_000);
+      expect(errors, 'no error from the load the user left').toEqual([]);
+      await expect(page.locator('#viewport-job-chip')).toBeHidden();
+    } finally {
+      rmSync(hold, { force: true });
+    }
+    await page.waitForTimeout(2_000);
+    expect(errors, 'nor once the left part is made').toEqual([]);
+    expect(await page.evaluate(() => !!(window.__CFD_W16__ && window.__CFD_W16__.ready)), 'the other project shows no part').toBe(false);
   });
 });

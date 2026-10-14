@@ -20071,23 +20071,29 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
         onPending: () => setCadPreparing(token, name),
       }).catch(() => null)
     : Promise.resolve(null);
-  // Whether the preview is made (the face table answered 200).
+  // Whether the preview is made (the face table answered 200). `superseded`: the part is no
+  // longer wanted while it was prepared (another part's load, or another project shown).
+  let superseded = false;
   const madeP = previewP.then((got) => {
     clearCadPreparing(token);
+    if (got && got.superseded) superseded = true;
     return !!(got && !got.superseded && got.status === 200);
   });
   const readCadPart = (reader, url) =>
     reader.setUrl(url).catch((err) => {
       if (!(err && err.xhr && err.xhr.status === 202)) throw err;
       return madeP.then((made) => {
-        // Another part's load took over: this one ends stale (below).
-        if (token !== cadLoadToken) return undefined;
+        // No longer wanted: this load ends stale (below), with nothing read.
+        if (superseded || token !== cadLoadToken) return undefined;
         if (!made) throw err;
         return reader.setUrl(url);
       });
     });
   const facesP = readCadPart(geomCadFaceReader, facesUrl);
   const edgesP = edgesUrl ? readCadPart(geomCadEdgeReader, edgesUrl) : Promise.resolve();
+  // Edges that fail are left out (below), and when the faces fail too the load says so once:
+  // never an unhandled rejection.
+  edgesP.catch(() => undefined);
   previewP.then((got) => {
     if ((got && got.superseded) || token !== cadLoadToken) return;
     const made = !!(got && got.status === 200);
@@ -20102,7 +20108,7 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   } finally {
     if (cadLoadInFlight === token) cadLoadInFlight = 0;
   }
-  if (token !== cadLoadToken) return { fp: { empty: true }, stale: true };
+  if (superseded || token !== cadLoadToken) return { fp: { empty: true }, stale: true };
   geomMapper.setInputConnection(geomCadFaceReader.getOutputPort());
   const pd = geomCadFaceReader.getOutputData();
   const fp = fingerprintGeomPolyData(pd);
