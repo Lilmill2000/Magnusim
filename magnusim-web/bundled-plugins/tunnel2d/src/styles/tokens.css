@@ -15,6 +15,15 @@
   /* Selection and the pose a dragged body is going to */
   --t2d-select: #1570ef;
   --t2d-ghost: #475467;
+  /* The sketcher (as CAD's sketch: blue under-defined, ink fully defined, red over-defined;
+     CAD's pick green for the selection), on a halo of the page colour over any field */
+  --t2d-sketch-under: var(--mg-primary);
+  --t2d-sketch-full: var(--mg-text);
+  --t2d-sketch-over: var(--mg-danger);
+  --t2d-sketch-construction: var(--mg-text-muted);
+  --t2d-sketch-pick: #12855a;
+  --t2d-sketch-halo: var(--mg-bg);
+  --t2d-sketch-preview: var(--mg-primary);
   /* Flow markers: tracers on a field (dark) and on the plain background (light); the plain
      background itself (a smoke tunnel's dark); streamlines and arrows on a field */
   --t2d-particle-dark: #1a1d24;

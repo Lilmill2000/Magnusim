@@ -5,6 +5,7 @@
 import { parseCode } from '../geometry/naca';
 import { MAX_POINTS, MIN_POINTS } from '../geometry/datfile';
 import { referenceLength, type Shape } from '../geometry/shapes';
+import type { SketchData } from '../sketch/model';
 
 /**
  * 2: rakes, and the view's tracers, trail, arrows and streamlines; 3: the flow model; 4: the
@@ -166,6 +167,29 @@ const num = (v: unknown, what: string, lo = -Infinity, hi = Infinity): number =>
 };
 const oneOf = <T extends string>(v: unknown, opts: readonly T[], fallback: T): T => (opts.includes(v as T) ? (v as T) : fallback);
 
+/** A sketch from a file: its points finite, its entities referring to points that exist. */
+function parseSketch(raw: unknown): SketchData {
+  const o = (raw ?? {}) as Record<string, any>;
+  const points: SketchData['points'] = {};
+  const pts = o.points && typeof o.points === 'object' ? o.points : {};
+  const ids = Object.keys(pts);
+  if (ids.length > 5000) throw new SceneError('A sketch may have at most 5,000 points.');
+  for (const id of ids) {
+    const p = pts[id];
+    if (!Array.isArray(p) || p.length !== 2 || !p.every((v: unknown) => Number.isFinite(Number(v)))) throw new SceneError(`Sketch point ${id} is not two numbers.`);
+    points[id] = [Number(p[0]), Number(p[1])];
+  }
+  const entities = Array.isArray(o.entities) ? o.entities : [];
+  const constraints = Array.isArray(o.constraints) ? o.constraints : [];
+  if (entities.length > 5000 || constraints.length > 10000) throw new SceneError('That sketch is too large.');
+  const has = (id: unknown) => typeof id === 'string' && (id in points || id === 'origin');
+  for (const e of entities) {
+    const refs: unknown[] = e?.kind === 'line' ? e.p ?? [] : e?.kind === 'circle' ? [e.c] : e?.kind === 'arc' ? [e.c, e.a, e.b] : e?.kind === 'point' ? [e.p] : e?.kind === 'spline' ? e.pts ?? [] : [null];
+    if (typeof e?.id !== 'string' || !Array.isArray(refs) || !refs.every(has)) throw new SceneError(`Sketch entity ${String(e?.id)} refers to points that are not in the sketch.`);
+  }
+  return { points, entities, constraints };
+}
+
 function parseShape(s: unknown): Shape {
   const o = (s ?? {}) as Record<string, unknown>;
   switch (o.kind) {
@@ -187,6 +211,8 @@ function parseShape(s: unknown): Shape {
       return { kind: 'ellipse', width: num(o.width, 'Width', 1e-4, 1000), height: num(o.height, 'Height', 1e-4, 1000) };
     case 'plate':
       return { kind: 'plate', length: num(o.length, 'Length', 1e-4, 1000), thickness: num(o.thickness, 'Thickness', 1e-5, 1000) };
+    case 'sketch':
+      return { kind: 'sketch', name: String(o.name ?? 'Sketch').slice(0, 80), sketch: parseSketch(o.sketch) };
     default:
       throw new SceneError(`Unknown body shape “${String(o.kind)}”.`);
   }

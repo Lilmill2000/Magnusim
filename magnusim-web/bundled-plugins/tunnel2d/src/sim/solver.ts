@@ -79,6 +79,8 @@ export class Solver {
   private staging: GPUBuffer[] = [];
   private stepPipe!: GPUComputePipeline;
   private stepPipeKey = '';
+  /** Step pipelines built (null: being built in the background), by their constants. */
+  private pipes = new Map<string, GPUComputePipeline | null>();
   private stepBG: [GPUBindGroup, GPUBindGroup] | null = null;
   private slotBGs: GPUBindGroup[] = [];
   private slotBuf: GPUBuffer;
@@ -230,29 +232,61 @@ export class Solver {
       this.gen++;
     }
     const bulk = p.bulkKeep ?? 0;
-    const key = `${this.config.walls}|${p.smagorinsky}|${turb}|${bulk}|${this.config.patch}|${this.refining}`;
+    const key = this.pipeKey(p.smagorinsky, turb, bulk);
     if (key !== this.stepPipeKey || force) {
-      this.stepPipe = this.device.createComputePipeline({
-        layout: 'auto',
-        compute: {
-          module: this.stepModule,
-          entryPoint: 'step',
-          constants: {
-            WALLS: WALLS[this.config.walls],
-            SMAG: p.smagorinsky ? 1 : 0,
-            TURB: TURB[turb],
-            KEEP_BULK: bulk,
-            PATCH: this.config.patch ? 1 : 0,
-            AUXW: this.refining ? 1 : 0,
-            MOMW: this.refining ? 1 : 0,
-          },
-        },
-      });
+      this.stepPipe = this.pipes.get(key) ?? this.device.createComputePipeline(this.pipeDesc(p.smagorinsky, turb, bulk));
+      this.pipes.set(key, this.stepPipe);
+      this.warmOther(p.smagorinsky, turb, bulk);
       this.stepPipeKey = key;
       this.stepBG = null;
       this.slotBGs = [];
       // A new pipeline has its own layouts: groups made for the old one no longer fit.
       this.gen++;
+    }
+  }
+
+  private pipeKey(smag: boolean, turb: keyof typeof TURB, bulk: number) {
+    return `${this.config.walls}|${smag}|${turb}|${bulk}|${this.config.patch}|${this.refining}`;
+  }
+
+  private pipeDesc(smag: boolean, turb: keyof typeof TURB, bulk: number): GPUComputePipelineDescriptor {
+    return {
+      layout: 'auto',
+      compute: {
+        module: this.stepModule,
+        entryPoint: 'step',
+        constants: {
+          WALLS: WALLS[this.config.walls],
+          SMAG: smag ? 1 : 0,
+          TURB: TURB[turb],
+          KEEP_BULK: bulk,
+          PATCH: this.config.patch ? 1 : 0,
+          AUXW: this.refining ? 1 : 0,
+          MOMW: this.refining ? 1 : 0,
+        },
+      },
+    };
+  }
+
+  /**
+   * Build the other flow model's step pipelines in the background (the turbulence model and
+   * the resolved flow, with and without its subgrid model): a switch between them (a sketch's
+   * outline opening or closing, a body added to an empty tunnel) then finds its pipeline
+   * ready, instead of holding the GPU while it is built.
+   */
+  private warmOther(smag: boolean, turb: keyof typeof TURB, bulk: number) {
+    const other: [boolean, keyof typeof TURB][] = turb === 'sa' ? [[false, 'off'], [true, 'off']] : [[false, 'sa']];
+    if (turb !== 'sa') other.push([!smag, 'off']);
+    for (const [s, t] of other) {
+      const k = this.pipeKey(s, t, bulk);
+      if (this.pipes.has(k)) continue;
+      this.pipes.set(k, null);
+      this.device
+        .createComputePipelineAsync(this.pipeDesc(s, t, bulk))
+        .then((pl) => {
+          if (this.pipes.get(k) === null) this.pipes.set(k, pl);
+        })
+        .catch(() => this.pipes.delete(k));
     }
   }
 

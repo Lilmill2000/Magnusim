@@ -6,7 +6,7 @@
 // must change size, or bodies that join or part, are rebuilt with what the old patches held
 // copied over. Everything happens at a frame's start, when every level is at the same time.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { bbox, transform, type Pose, type Poly } from '../geometry/polygon';
+import { bboxRings, transformRings, type Pose, type Rings } from '../geometry/polygon';
 import { Refinement, type PatchRect } from './refine';
 import type { FrameResult, Physics, Solver } from './solver';
 
@@ -15,7 +15,7 @@ export interface ManagedBody {
   /** The shape's key (outline, cell size, band): a change rebakes its fields. */
   key: string;
   /** Outline in coarse cells, body frame. */
-  local: Poly;
+  local: Rings;
   band?: number;
   /** Coarse poses at the frame's start and end. */
   from: Pose;
@@ -92,8 +92,7 @@ export class RefineManager {
 
   /** A body's margined box at a level, in that level's parent cells (`k` of them per coarse cell, origin `o`). */
   private box(b: ManagedBody, level: number, k = 1, o = { x: 0, y: 0 }): Box {
-    const w = transform(b.local, b.to);
-    const bb = bbox(w);
+    const bb = bboxRings(transformRings(b.local, b.to));
     const L = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0) * k;
     const m = MARGINS[level];
     const X = (x: number) => k * (x - o.x);

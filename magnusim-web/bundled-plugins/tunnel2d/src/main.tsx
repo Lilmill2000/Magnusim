@@ -10,6 +10,8 @@ import { App } from './app/App';
 import { loadScene, Saver } from './app/persist';
 import { Store } from './app/store';
 import { exposeTestHandle } from './app/debug';
+import { SketchEditor } from './sketch/editor';
+import { SketchSolver } from './sketch/solve';
 import type { Palette } from './render/renderer';
 import { Engine } from './sim/engine';
 import { shaderErrors } from './sim/shaders';
@@ -131,10 +133,13 @@ async function main() {
   };
   await engine.setScene(loaded.scene);
   engine.start();
-  exposeTestHandle({ ws, store, engine, device });
+  // The sketcher: its solver (CAD's PlaneGCS worker) starts on the first sketch edited.
+  let solver: SketchSolver | null = null;
+  const editor = new SketchEditor(store, engine, () => (solver ??= new SketchSolver((url) => ws.spawnWorker(url))));
+  exposeTestHandle({ ws, store, engine, device, editor });
   window.addEventListener('pagehide', () => void saver.flush());
 
-  root.render(createElement(App, { ws, store, engine, units: ws.context.units, problem: loaded.problem }));
+  root.render(createElement(App, { ws, store, engine, editor, units: ws.context.units, problem: loaded.problem }));
 }
 
 void main();

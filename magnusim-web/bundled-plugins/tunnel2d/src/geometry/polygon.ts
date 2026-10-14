@@ -118,3 +118,41 @@ export function selfIntersects(p: Poly): boolean {
   }
   return false;
 }
+
+/** An outline of one or more rings (a sketch can have islands and holes): even-odd inside. */
+export type Rings = Poly[];
+
+/** Inside an even number of rings: outside (a hole in a body, or between islands). */
+export function containsRings(rings: Rings, x: number, y: number): boolean {
+  let inside = false;
+  for (const r of rings) if (contains(r, x, y)) inside = !inside;
+  return inside;
+}
+
+/** Signed distance to the nearest ring edge: negative inside (even-odd). */
+export function signedDistanceRings(rings: Rings, x: number, y: number): number {
+  let d = Infinity;
+  for (const r of rings) d = Math.min(d, Math.abs(signedDistance(r, x, y)));
+  return containsRings(rings, x, y) ? -d : d;
+}
+
+export function transformRings(rings: Rings, pose: Pose, scale = 1): Rings {
+  return rings.map((r) => transform(r, pose, scale));
+}
+
+/** The largest distance of any ring's vertex from the origin. */
+export function radiusRings(rings: Rings): number {
+  return rings.reduce((m, r) => Math.max(m, radius(r)), 0);
+}
+
+export function bboxRings(rings: Rings): { x0: number; y0: number; x1: number; y1: number } {
+  const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  for (const r of rings) {
+    const q = bbox(r);
+    b.x0 = Math.min(b.x0, q.x0);
+    b.y0 = Math.min(b.y0, q.y0);
+    b.x1 = Math.max(b.x1, q.x1);
+    b.y1 = Math.max(b.y1, q.y1);
+  }
+  return b;
+}

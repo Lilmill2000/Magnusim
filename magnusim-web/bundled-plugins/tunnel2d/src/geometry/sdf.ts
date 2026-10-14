@@ -3,7 +3,7 @@
 // Narrow band: exact distances within `band` cells of the outline, ±band beyond it
 // (the solver only needs the sign away from the wall).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { bbox, type Poly } from './polygon';
+import { bboxRings, type Poly, type Rings } from "./polygon";
 
 export interface SdfGrid {
   data: Float32Array<ArrayBuffer>;
@@ -24,9 +24,16 @@ export const SDF_BAND = 4;
 export const SDF_TEXELS_PER_CELL = 2;
 const MAX_TEXELS = 4_000_000;
 
-/** Bake the outline `poly` (local coordinates in cells, counter-clockwise). */
-export function bakeSdf(poly: Poly, band = SDF_BAND): SdfGrid {
-  const b = bbox(poly);
+/**
+ * Bake an outline (local coordinates in cells): one polygon, or several rings filled
+ * even-odd (a ring inside another is a hole).
+ */
+export function bakeSdf(outline: Poly | Rings, band = SDF_BAND): SdfGrid {
+  const rings: Rings =
+    outline.length && Array.isArray(outline[0])
+      ? (outline as Rings)
+      : [outline as Poly];
+  const b = bboxRings(rings);
   const margin = band + 2;
   let texel = 1 / SDF_TEXELS_PER_CELL;
   let w = Math.ceil((b.x1 - b.x0 + 2 * margin) / texel) + 1;
@@ -39,32 +46,46 @@ export function bakeSdf(poly: Poly, band = SDF_BAND): SdfGrid {
   const ox = b.x0 - margin;
   const oy = b.y0 - margin;
   const data = new Float32Array(w * h).fill(band);
-  const n = poly.length / 2;
 
   // Exact distance near each edge: visit only the texels within `band` of it.
-  for (let e = 0; e < n; e++) {
-    const ax = poly[2 * e];
-    const ay = poly[2 * e + 1];
-    const bx = poly[2 * ((e + 1) % n)];
-    const by = poly[2 * ((e + 1) % n) + 1];
-    const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - band - ox) / texel));
-    const i1 = Math.min(w - 1, Math.ceil((Math.max(ax, bx) + band - ox) / texel));
-    const j0 = Math.max(0, Math.floor((Math.min(ay, by) - band - oy) / texel));
-    const j1 = Math.min(h - 1, Math.ceil((Math.max(ay, by) + band - oy) / texel));
-    const dx = bx - ax;
-    const dy = by - ay;
-    const l2 = dx * dx + dy * dy;
-    for (let j = j0; j <= j1; j++) {
-      const y = oy + j * texel;
-      for (let i = i0; i <= i1; i++) {
-        const x = ox + i * texel;
-        let t = l2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / l2 : 0;
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const ex = x - (ax + t * dx);
-        const ey = y - (ay + t * dy);
-        const d = Math.sqrt(ex * ex + ey * ey);
-        const k = j * w + i;
-        if (d < data[k]) data[k] = d;
+  for (const poly of rings) {
+    const n = poly.length / 2;
+    for (let e = 0; e < n; e++) {
+      const ax = poly[2 * e];
+      const ay = poly[2 * e + 1];
+      const bx = poly[2 * ((e + 1) % n)];
+      const by = poly[2 * ((e + 1) % n) + 1];
+      const i0 = Math.max(
+        0,
+        Math.floor((Math.min(ax, bx) - band - ox) / texel),
+      );
+      const i1 = Math.min(
+        w - 1,
+        Math.ceil((Math.max(ax, bx) + band - ox) / texel),
+      );
+      const j0 = Math.max(
+        0,
+        Math.floor((Math.min(ay, by) - band - oy) / texel),
+      );
+      const j1 = Math.min(
+        h - 1,
+        Math.ceil((Math.max(ay, by) + band - oy) / texel),
+      );
+      const dx = bx - ax;
+      const dy = by - ay;
+      const l2 = dx * dx + dy * dy;
+      for (let j = j0; j <= j1; j++) {
+        const y = oy + j * texel;
+        for (let i = i0; i <= i1; i++) {
+          const x = ox + i * texel;
+          let t = l2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / l2 : 0;
+          t = t < 0 ? 0 : t > 1 ? 1 : t;
+          const ex = x - (ax + t * dx);
+          const ey = y - (ay + t * dy);
+          const d = Math.sqrt(ex * ex + ey * ey);
+          const k = j * w + i;
+          if (d < data[k]) data[k] = d;
+        }
       }
     }
   }
@@ -74,13 +95,16 @@ export function bakeSdf(poly: Poly, band = SDF_BAND): SdfGrid {
   for (let j = 0; j < h; j++) {
     const y = oy + j * texel;
     xs.length = 0;
-    for (let e = 0; e < n; e++) {
-      const ay = poly[2 * e + 1];
-      const by = poly[2 * ((e + 1) % n) + 1];
-      if (ay > y !== by > y) {
-        const ax = poly[2 * e];
-        const bx = poly[2 * ((e + 1) % n)];
-        xs.push(ax + ((y - ay) * (bx - ax)) / (by - ay));
+    for (const poly of rings) {
+      const n = poly.length / 2;
+      for (let e = 0; e < n; e++) {
+        const ay = poly[2 * e + 1];
+        const by = poly[2 * ((e + 1) % n) + 1];
+        if (ay > y !== by > y) {
+          const ax = poly[2 * e];
+          const bx = poly[2 * ((e + 1) % n)];
+          xs.push(ax + ((y - ay) * (bx - ax)) / (by - ay));
+        }
       }
     }
     xs.sort((a, c) => a - c);
@@ -92,7 +116,9 @@ export function bakeSdf(poly: Poly, band = SDF_BAND): SdfGrid {
   }
 
   let bound = 0;
-  for (let i = 0; i < n; i++) bound = Math.max(bound, Math.hypot(poly[2 * i], poly[2 * i + 1]));
+  for (const poly of rings)
+    for (let i = 0; i < poly.length; i += 2)
+      bound = Math.max(bound, Math.hypot(poly[i], poly[i + 1]));
   return { data, w, h, ox, oy, texel, band, bound: bound + 1 };
 }
 

@@ -2,31 +2,35 @@
 // selection, the turn handle and the pose a body is being dragged to.
 // Drag a body to move it, its round handle to turn it (Shift: whole degrees), empty
 // space or the middle button to pan, the wheel to zoom; double-click empty space fits.
+// While a sketch body is being edited, the left button belongs to the sketch editor (the
+// middle button still pans and the wheel zooms).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef } from 'react';
-import { contains, transform, type Poly } from '../geometry/polygon';
-import { outline } from '../geometry/shapes';
+import { containsRings, transformRings, type Rings } from '../geometry/polygon';
+import { hasOutline, outlineRings, profileOf } from '../geometry/shapes';
 import type { Engine } from '../sim/engine';
 import type { Body, Rake, Scene } from '../scene/scene';
 import type { Store } from '../app/store';
+import type { Palette, SketchEditor } from '../sketch/editor';
 
 const HANDLE_GAP_PX = 26;
 const HANDLE_R_PX = 7;
 
-const outlines = new Map<string, Poly>();
-function localOutline(b: Body): Poly {
+const outlines = new Map<string, Rings>();
+function localOutline(b: Body): Rings {
   const key = JSON.stringify(b.shape);
   let p = outlines.get(key);
   if (!p) {
-    p = outline(b.shape);
+    p = outlineRings(b.shape);
     if (outlines.size > 64) outlines.clear();
     outlines.set(key, p);
   }
   return p;
 }
 
-export function worldOutline(b: Body, pose: { x: number; y: number; angle: number }): Poly {
-  return transform(localOutline(b), { x: pose.x, y: pose.y, theta: (-pose.angle * Math.PI) / 180 });
+/** A body's outline rings in the world at a pose. */
+export function worldOutline(b: Body, pose: { x: number; y: number; angle: number }): Rings {
+  return transformRings(localOutline(b), { x: pose.x, y: pose.y, theta: (-pose.angle * Math.PI) / 180 });
 }
 
 type Drag =
@@ -40,9 +44,8 @@ export function turnHandle(engine: Engine, b: Body): { x: number; y: number; cx:
   const v = engine.worldView;
   const toScreen = (x: number, y: number) => ({ x: v.w / 2 + (x - v.cx) / v.mpp, y: v.h / 2 - (y - v.cy) / v.mpp });
   const pose = engine.livePose(b.id) ?? { x: b.x, y: b.y, angle: b.angle };
-  const poly = worldOutline(b, pose);
-  let top = Infinity;
-  for (let i = 1; i < poly.length; i += 2) top = Math.min(top, toScreen(0, poly[i]).y);
+  let top = toScreen(0, pose.y).y;
+  for (const poly of worldOutline(b, pose)) for (let i = 1; i < poly.length; i += 2) top = Math.min(top, toScreen(0, poly[i]).y);
   const c = toScreen(pose.x, pose.y);
   return { x: c.x, y: top - HANDLE_GAP_PX, cx: c.x, cy: c.y };
 }
@@ -54,8 +57,24 @@ export function fitView(engine: Engine, scene: Scene) {
   engine.worldView = { ...v, cx: length / 2, cy: height / 2, mpp };
 }
 
-export function Viewport({ engine, store, onStatus }: { engine: Engine; store: Store; onStatus?: (text: string) => void }) {
+/** The sketch's colours, from the tokens (as CAD's sketch: blue under-defined, ink fully, red over). */
+function sketchPalette(css: CSSStyleDeclaration): Palette {
+  const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+  return {
+    under: v('--t2d-sketch-under', 'blue'),
+    fully: v('--t2d-sketch-full', 'black'),
+    over: v('--t2d-sketch-over', 'red'),
+    construction: v('--t2d-sketch-construction', 'gray'),
+    pick: v('--t2d-sketch-pick', 'green'),
+    halo: v('--t2d-sketch-halo', 'white'),
+    preview: v('--t2d-sketch-preview', 'blue'),
+  };
+}
+
+export function Viewport({ engine, store, editor, onStatus }: { engine: Engine; store: Store; editor?: SketchEditor; onStatus?: (text: string) => void }) {
   const wrap = useRef<HTMLDivElement>(null);
+  /** The last left press (for click counts: a PointerEvent's detail is not one). */
+  const lastPress = useRef({ t: 0, x: 0, y: 0, n: 0 });
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -131,6 +150,7 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
     const sel = css.getPropertyValue('--t2d-select').trim() || 'black';
     const ghost = css.getPropertyValue('--t2d-ghost').trim() || 'gray';
     const handleFill = css.getPropertyValue('--mg-bg').trim() || 'white';
+    const pal = sketchPalette(css);
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const o = overlay.current;
@@ -175,22 +195,45 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
         }
         g.globalAlpha = 1;
       }
+      const sketching = editor?.editing ? editor.bodyId : null;
       for (const b of scene.bodies) {
-        const isSel = b.id === selected;
+        // The sketch being edited draws itself (its own points and curves, no turn handle).
+        const isSel = b.id === selected && b.id !== sketching;
         const target =
           d && (d.kind === 'move' || d.kind === 'turn') && d.id === b.id
             ? { x: d.kind === 'move' ? d.bodyX : d.x, y: d.kind === 'move' ? d.bodyY : d.y, angle: d.angle }
             : null;
         const pose = poseOf(b);
-        const path = (poly: Poly) => {
+        const path = (rings: Rings) => {
           g.beginPath();
-          for (let i = 0; i < poly.length; i += 2) {
-            const s = toScreen(poly[i], poly[i + 1]);
-            if (i === 0) g.moveTo(s.x, s.y);
-            else g.lineTo(s.x, s.y);
+          for (const poly of rings) {
+            for (let i = 0; i < poly.length; i += 2) {
+              const s = toScreen(poly[i], poly[i + 1]);
+              if (i === 0) g.moveTo(s.x, s.y);
+              else g.lineTo(s.x, s.y);
+            }
+            g.closePath();
           }
-          g.closePath();
         };
+        if (b.shape.kind === 'sketch' && b.id !== sketching && !hasOutline(b.shape)) {
+          // A sketch with no closed outline is not in the flow: its curves, faint, where it is.
+          const th = (-pose.angle * Math.PI) / 180;
+          const c = Math.cos(th);
+          const s = Math.sin(th);
+          g.beginPath();
+          for (const poly of profileOf(b.shape.sketch).curves) {
+            poly.forEach(([u, v], i) => {
+              const p = toScreen(pose.x + (c * u - s * v) / 1000, pose.y + (s * u + c * v) / 1000);
+              if (i === 0) g.moveTo(p.x, p.y);
+              else g.lineTo(p.x, p.y);
+            });
+          }
+          g.setLineDash([4, 4]);
+          g.strokeStyle = isSel ? sel : ghost;
+          g.lineWidth = 1.5;
+          g.stroke();
+          g.setLineDash([]);
+        }
         if (!b.enabled) {
           path(worldOutline(b, pose));
           g.setLineDash([4, 4]);
@@ -238,16 +281,17 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
           g.stroke();
         }
       }
+      if (sketching) editor!.draw(g, toScreen, pal);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [engine, store]);
+  }, [engine, store, editor]);
 
   const hitBody = (wx: number, wy: number): Body | null => {
     const bodies = store.get().scene.bodies;
     for (let i = bodies.length - 1; i >= 0; i--) {
       const b = bodies[i];
-      if (contains(worldOutline(b, poseOf(b)), wx, wy)) return b;
+      if (containsRings(worldOutline(b, poseOf(b)), wx, wy)) return b;
     }
     return null;
   };
@@ -289,6 +333,20 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
       return;
     }
     if (e.button !== 0) return;
+    if (editor?.editing) {
+      // The press is the sketch's: no focus change (a dimension's value box opening now keeps
+      // its focus), and keys go to the sketch, not to a panel control left focused.
+      e.preventDefault();
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== document.body) active.blur();
+      const r = wrap.current!.getBoundingClientRect();
+      const lp = lastPress.current;
+      const now = performance.now();
+      const n = now - lp.t < 400 && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) < 6 ? lp.n + 1 : 1;
+      lastPress.current = { t: now, x: e.clientX, y: e.clientY, n };
+      editor.pointerDown(w.x, w.y, { x: e.clientX - r.left, y: e.clientY - r.top }, { shift: e.shiftKey, clicks: n }, toScreen);
+      return;
+    }
     const { scene, selected } = store.get();
     const selBody = scene.bodies.find((b) => b.id === selected);
     if (selBody && !selBody.locked) {
@@ -319,6 +377,12 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
 
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current;
+    if (editor?.editing && (!d || d.kind !== 'pan')) {
+      const w = toWorld(e.clientX, e.clientY);
+      editor.pointerMove(w.x, w.y);
+      wrap.current!.style.cursor = 'crosshair';
+      return;
+    }
     if (!d) {
       const w = toWorld(e.clientX, e.clientY);
       const rk = hitRake(e.clientX, e.clientY);
@@ -368,6 +432,10 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
+    if (editor?.editing && !d) {
+      editor.pointerUp();
+      return;
+    }
     onStatus?.('');
     if (!d || d.kind === 'pan') return;
     if (d.kind === 'rake') {
@@ -391,6 +459,7 @@ export function Viewport({ engine, store, onStatus }: { engine: Engine; store: S
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (editor?.editing) return;
     const w = toWorld(e.clientX, e.clientY);
     if (!hitBody(w.x, w.y)) fitView(engine, store.get().scene);
   };

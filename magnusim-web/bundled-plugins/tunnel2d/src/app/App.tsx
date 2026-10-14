@@ -3,7 +3,7 @@
 import { Button, ColorLegend, DisabledReason, type UnitSystem } from '@magnusim/plugin-ui';
 import type { Workspace } from '@magnusim/workspace';
 import { useEffect, useState } from 'react';
-import { referenceLength } from '../geometry/shapes';
+import { hasOutline, referenceLength } from '../geometry/shapes';
 import type { FieldMode, Scene } from '../scene/scene';
 import { particleMap, type Engine } from '../sim/engine';
 import { mapRgb, type MapName } from '../render/renderer';
@@ -11,6 +11,8 @@ import { BodiesPanel, BodyPanel, TunnelPanel, ViewPanel, WindPanel, fmtRe } from
 import { MarkersPanel, RakePanel, rakeName } from '../ui/markers';
 import { Viewport, fitView } from '../ui/Viewport';
 import { PresetPanel, PresetPicker } from '../ui/presets';
+import { DimensionInput, SketchBar } from '../ui/sketchbar';
+import type { SketchEditor } from '../sketch/editor';
 import { useStore, type Store } from './store';
 
 /** The legend's title, unit and the factor from the dimensionless field to it. */
@@ -70,7 +72,7 @@ function StatusLine({ engine, store }: { engine: Engine; store: Store }) {
 function Legend({ engine, store }: { engine: Engine; store: Store }) {
   useTicker(400);
   const scene = useStore(store, (s) => s.scene);
-  const first = scene.bodies.find((b) => b.enabled);
+  const first = scene.bodies.find((b) => b.enabled && hasOutline(b.shape));
   const lRef = first ? referenceLength(first.shape) : scene.tunnel.height / 8;
   const lg = legendFor(scene.view.field, scene, lRef);
   const auto = engine.autoRangeNow;
@@ -149,7 +151,7 @@ function RangeInputs({ lo, hi, onCommit }: { lo: number; hi: number; onCommit: (
   );
 }
 
-export function App({ ws, store, engine, units: units0, problem }: { ws: Workspace; store: Store; engine: Engine; units: UnitSystem; problem: string }) {
+export function App({ ws, store, engine, editor, units: units0, problem }: { ws: Workspace; store: Store; engine: Engine; editor: SketchEditor; units: UnitSystem; problem: string }) {
   const [units, setUnits] = useState<UnitSystem>(units0);
   const [paused, setPaused] = useState(false);
   const [unstable, setUnstable] = useState(false);
@@ -158,6 +160,24 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
   const saveError = useStore(store, (s) => s.saveError);
   const selectedRake = useStore(store, (s) => s.scene.rakes.find((r) => r.id === s.selected) ?? null);
   useEffect(() => ws.on('units', setUnits), [ws]);
+  // Selecting another body (or the sketch body going: undo, remove) ends the edit.
+  useEffect(
+    () =>
+      store.subscribe(() => {
+        if (!editor.bodyId) return;
+        const { scene, selected } = store.get();
+        if (selected !== editor.bodyId || !scene.bodies.some((b) => b.id === editor.bodyId && b.shape.kind === 'sketch')) editor.close();
+      }),
+    [editor, store],
+  );
+  const undo = () => {
+    store.undo();
+    editor.resync();
+  };
+  const redo = () => {
+    store.redo();
+    editor.resync();
+  };
   useEffect(() => {
     engine.onUnstable = () => {
       setUnstable(true);
@@ -184,10 +204,13 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
-        store.undo();
+        undo();
       } else if (mod && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
         e.preventDefault();
-        store.redo();
+        redo();
+      } else if (editor.editing && e.key !== ' ') {
+        // Sketching: Escape, Enter and Delete are the sketch's (never the body's).
+        if (editor.key(e.key)) e.preventDefault();
       } else if (e.key === ' ' && !mod) {
         e.preventDefault();
         togglePause();
@@ -229,10 +252,10 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
           Reset flow
         </Button>
         <span className="t2d-sep" />
-        <Button variant="neutral" onClick={() => store.undo()} disabled={!store.canUndo} title="Ctrl+Z" attrs={{ 'data-t2d-undo': '1' }}>
+        <Button variant="neutral" onClick={undo} disabled={!store.canUndo} title="Ctrl+Z" attrs={{ 'data-t2d-undo': '1' }}>
           Undo
         </Button>
-        <Button variant="neutral" onClick={() => store.redo()} disabled={!store.canRedo} title="Ctrl+Y" attrs={{ 'data-t2d-redo': '1' }}>
+        <Button variant="neutral" onClick={redo} disabled={!store.canRedo} title="Ctrl+Y" attrs={{ 'data-t2d-redo': '1' }}>
           Redo
         </Button>
         <Button variant="neutral" onClick={() => fitView(engine, store.get().scene)} title="Double-click empty space" attrs={{ 'data-t2d-fit': '1' }}>
@@ -248,7 +271,7 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
         <aside className="t2d-side">
           <PresetPanel store={store} engine={engine} />
           <WindPanel store={store} engine={engine} units={units} />
-          <BodiesPanel store={store} ws={ws} />
+          <BodiesPanel store={store} ws={ws} editor={editor} />
           <MarkersPanel store={store} ws={ws} />
           <TunnelPanel store={store} engine={engine} units={units} />
           <ViewPanel store={store} />
@@ -269,12 +292,14 @@ export function App({ ws, store, engine, units: units0, problem }: { ws: Workspa
               <DisabledReason reason="The flow became unstable and was stopped." fix={{ label: 'Reset flow', onFix: resetFlow }} role="alert" />
             </div>
           ) : null}
-          <Viewport engine={engine} store={store} onStatus={setHint} />
+          <Viewport engine={engine} store={store} editor={editor} onStatus={setHint} />
+          <SketchBar editor={editor} />
+          <DimensionInput editor={editor} />
           <Legend engine={engine} store={store} />
           <StatusLine engine={engine} store={store} />
         </div>
         <aside className="t2d-side t2d-side--right">
-          {selectedRake ? <RakePanel store={store} ws={ws} units={units} rake={selectedRake} /> : <BodyPanel store={store} ws={ws} units={units} engine={engine} />}
+          {selectedRake ? <RakePanel store={store} ws={ws} units={units} rake={selectedRake} /> : <BodyPanel store={store} ws={ws} units={units} engine={engine} editor={editor} />}
         </aside>
       </div>
     </div>

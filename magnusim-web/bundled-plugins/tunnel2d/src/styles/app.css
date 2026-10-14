@@ -322,3 +322,111 @@ html {
   color: var(--mg-text-muted);
   font-size: var(--mg-text-xs);
 }
+
+/* The sketch toolbar, over the top of the view while a sketch body is edited */
+.t2d-sketchbar {
+  position: absolute;
+  top: var(--mg-space-3);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: max-content;
+  z-index: 3;
+  max-width: calc(100% - 2 * var(--mg-space-3));
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-1);
+  padding: var(--mg-space-2);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
+}
+.t2d-sketchbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mg-space-1);
+}
+.t2d-sketchbar-title {
+  font-weight: 600;
+  margin-right: var(--mg-space-2);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.t2d-tool {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--mg-text);
+  padding: 4px;
+  border-radius: var(--mg-radius-xs);
+  cursor: pointer;
+  display: inline-flex;
+}
+.t2d-tool:hover {
+  background: var(--mg-btn-neutral-hover);
+}
+.t2d-tool.is-on {
+  border-color: var(--mg-primary);
+  color: var(--mg-primary);
+  background: var(--mg-surface);
+}
+.t2d-tool:focus-visible {
+  outline: 2px solid var(--mg-focus);
+}
+.t2d-sketchbar-status {
+  font-size: var(--mg-text-sm);
+  color: var(--mg-text-muted);
+}
+.t2d-sketch-chip {
+  padding: 1px var(--mg-space-2);
+  border-radius: var(--mg-radius-xs);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.t2d-sketch-chip--under {
+  color: var(--t2d-sketch-under);
+}
+.t2d-sketch-chip--fully {
+  color: var(--t2d-sketch-full);
+}
+.t2d-sketch-chip--over,
+.t2d-sketch-chip--open {
+  color: var(--t2d-sketch-over);
+}
+.t2d-sketch-chip--unsolved {
+  color: var(--mg-text-muted);
+}
+.t2d-sketch-help {
+  max-width: 520px;
+}
+.t2d-sketch-message {
+  font-size: var(--mg-text-sm);
+  color: var(--mg-danger);
+  max-width: 640px;
+}
+/* A dimension's value box, centred on its label */
+.t2d-dim-edit {
+  position: absolute;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+}
+.t2d-dim-edit .mgk-input {
+  width: 96px;
+}
+.t2d-dim-error {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  padding: 2px var(--mg-space-2);
+  white-space: nowrap;
+  font-size: var(--mg-text-sm);
+  color: var(--mg-danger);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-danger);
+  border-radius: var(--mg-radius-xs);
+}

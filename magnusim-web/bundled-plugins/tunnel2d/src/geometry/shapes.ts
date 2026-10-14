@@ -3,7 +3,8 @@
 // An airfoil turns about its quarter chord; the other shapes about their centre.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { generate } from './naca';
-import { ensureCcw, type Poly } from './polygon';
+import { bboxRings, ensureCcw, type Poly, type Rings } from './polygon';
+import { sketchProfile, type Profile, type SketchData } from '../sketch/model';
 
 export type Shape =
   | { kind: 'naca'; code: string; chord: number }
@@ -11,7 +12,9 @@ export type Shape =
   | { kind: 'circle'; diameter: number }
   | { kind: 'rect'; width: number; height: number }
   | { kind: 'ellipse'; width: number; height: number }
-  | { kind: 'plate'; length: number; thickness: number };
+  | { kind: 'plate'; length: number; thickness: number }
+  /** Drawn with the sketcher (points in mm, origin at the body's pivot). */
+  | { kind: 'sketch'; name: string; sketch: SketchData };
 
 export type ShapeKind = Shape['kind'];
 
@@ -73,9 +76,55 @@ function section(x: number[], y: number[], chord: number, minThickness = 0): Pol
   return ensureCcw(out);
 }
 
-/** The outline; `minThickness` (same units) keeps an airfoil's rear half at least that thick (see thickenRear). */
+const profiles = new WeakMap<SketchData, Profile>();
+
+/** A sketch's loops and what stops them (cached per sketch object: edits make new ones). */
+export function profileOf(s: SketchData): Profile {
+  let p = profiles.get(s);
+  if (!p) {
+    p = sketchProfile(s);
+    profiles.set(s, p);
+  }
+  return p;
+}
+
+/** A sketch's rings in metres. */
+function sketchRings(s: SketchData): Rings {
+  return profileOf(s).rings.map((r) => ensureCcw(r.flatMap(([x, y]) => [x / 1000, y / 1000])));
+}
+
+/** Whether a shape has an outline the flow can see (a sketch needs a closed loop). */
+export const hasOutline = (shape: Shape): boolean => shape.kind !== 'sketch' || sketchRings(shape.sketch).length > 0;
+
+/**
+ * Every ring of the outline (one, except for a sketch: islands and holes, filled even-odd;
+ * none when a sketch has no closed loop). `minThickness` as for outline.
+ */
+export function outlineRings(shape: Shape, minThickness = 0): Rings {
+  if (shape.kind === 'sketch') return sketchRings(shape.sketch);
+  return [outline(shape, minThickness)];
+}
+
+/**
+ * The outline; `minThickness` (same units) keeps an airfoil's rear half at least that thick
+ * (see thickenRear). A sketch's largest ring (empty without one): outlineRings has them all.
+ */
 export function outline(shape: Shape, minThickness = 0): Poly {
   switch (shape.kind) {
+    case 'sketch': {
+      const rings = sketchRings(shape.sketch);
+      let best: Poly = [];
+      let area = -1;
+      for (const r of rings) {
+        const b = bboxRings([r]);
+        const a = (b.x1 - b.x0) * (b.y1 - b.y0);
+        if (a > area) {
+          area = a;
+          best = r;
+        }
+      }
+      return best;
+    }
     case 'naca': {
       const s = generate(shape.code, 121);
       return section(s.x, s.y, shape.chord, minThickness);
@@ -106,6 +155,21 @@ export function referenceLength(shape: Shape): number {
       return shape.height;
     case 'plate':
       return shape.length;
+    case 'sketch': {
+      // Its larger extent. Not closed (yet, or a side deleted for a moment): the curves drawn
+      // so far, so the flow model Auto picks does not change under it. Nothing drawn: 1 cm,
+      // so nothing divides by 0.
+      const rings = sketchRings(shape.sketch);
+      if (rings.length) {
+        const b = bboxRings(rings);
+        return Math.max(b.x1 - b.x0, b.y1 - b.y0);
+      }
+      const pts = profileOf(shape.sketch).curves.flat();
+      if (!pts.length) return 0.01;
+      const xs = pts.map((p) => p[0]);
+      const ys = pts.map((p) => p[1]);
+      return Math.max(0.01, (Math.max(...xs) - Math.min(...xs)) / 1000, (Math.max(...ys) - Math.min(...ys)) / 1000);
+    }
   }
 }
 
@@ -123,5 +187,7 @@ export function shapeLabel(shape: Shape): string {
       return 'Rectangle';
     case 'plate':
       return 'Flat plate';
+    case 'sketch':
+      return shape.name || 'Sketch';
   }
 }

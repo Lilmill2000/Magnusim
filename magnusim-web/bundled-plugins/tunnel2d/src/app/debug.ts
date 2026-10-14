@@ -5,7 +5,8 @@ import type { Engine } from '../sim/engine';
 import { runSchaferTurek } from '../sim/validate';
 import { airfoilCase, plateCase, runCase, type AirfoilSpec, type PlateSpec } from '../sim/validateRans';
 import { turnHandle, worldOutline } from '../ui/Viewport';
-import { contains, signedDistance } from '../geometry/polygon';
+import { containsRings, signedDistanceRings } from '../geometry/polygon';
+import type { SketchEditor } from '../sketch/editor';
 import type { Store } from './store';
 
 declare global {
@@ -14,7 +15,7 @@ declare global {
   }
 }
 
-export function exposeTestHandle({ store, engine, device }: { ws: Workspace; store: Store; engine: Engine; device: GPUDevice }) {
+export function exposeTestHandle({ store, engine, device, editor }: { ws: Workspace; store: Store; engine: Engine; device: GPUDevice; editor: SketchEditor }) {
   window.__TUNNEL__ = {
     ready: true,
     scene: () => store.get().scene,
@@ -83,9 +84,9 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
           }
         }
         for (const { poly } of bodies) {
-          if (contains(poly, x, y) && signedDistance(poly, x, y) < -0.5 * dx) {
+          if (containsRings(poly, x, y) && signedDistanceRings(poly, x, y) < -0.5 * dx) {
             inside++;
-            if (insideAt.length < 6) insideAt.push({ x, y, depthCells: signedDistance(poly, x, y) / dx, age: r.meta[4 * i], src: r.meta[4 * i + 1], prevX: (r.pos[4 * i + 2] + 0.5) * dx, prevY: (r.pos[4 * i + 3] + 0.5) * dx });
+            if (insideAt.length < 6) insideAt.push({ x, y, depthCells: signedDistanceRings(poly, x, y) / dx, age: r.meta[4 * i], src: r.meta[4 * i + 1], prevX: (r.pos[4 * i + 2] + 0.5) * dx, prevY: (r.pos[4 * i + 3] + 0.5) * dx });
           }
         }
       }
@@ -103,12 +104,12 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
       let insideSum = 0;
       for (const poly of polys) {
         let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-        for (let i = 0; i < poly.length; i += 2) { x0 = Math.min(x0, poly[i]); x1 = Math.max(x1, poly[i]); y0 = Math.min(y0, poly[i + 1]); y1 = Math.max(y1, poly[i + 1]); }
+        for (const ring of poly) for (let i = 0; i < ring.length; i += 2) { x0 = Math.min(x0, ring[i]); x1 = Math.max(x1, ring[i]); y0 = Math.min(y0, ring[i + 1]); y1 = Math.max(y1, ring[i + 1]); }
         for (let j = Math.max(0, Math.floor(y0 / d.dx)); j <= Math.min(d.ny - 1, Math.ceil(y1 / d.dx)); j++) {
           for (let i = Math.max(0, Math.floor(x0 / d.dx)); i <= Math.min(d.nx - 1, Math.ceil(x1 / d.dx)); i++) {
             const x = (i + 0.5) * d.dx;
             const y = (j + 0.5) * d.dx;
-            if (contains(poly, x, y) && signedDistance(poly, x, y) < -d.dx) {
+            if (containsRings(poly, x, y) && signedDistanceRings(poly, x, y) < -d.dx) {
               const k = j * d.nx + i;
               insideSum += d.data[4 * k] + d.data[4 * k + 1] + d.data[4 * k + 2] + d.data[4 * k + 3];
             }
@@ -131,5 +132,12 @@ export function exposeTestHandle({ store, engine, device }: { ws: Workspace; sto
     refine: () => engine.refineInfo(),
     /** The rheoscopic field, summed up; null when the view is off. */
     rheo: () => engine.readRheo(),
+    /** The sketcher: what it edits, its status, and where its dimension labels are (CSS px, in the frame). */
+    sketch: () => {
+      const v = engine.worldView;
+      const r = engine.canvas.getBoundingClientRect();
+      const toScreen = (x: number, y: number) => ({ x: r.left + v.w / 2 + (x - v.cx) / v.mpp, y: r.top + v.h / 2 - (y - v.cy) / v.mpp });
+      return { bodyId: editor.bodyId, tool: editor.tool, status: editor.status, words: editor.statusWords(), message: editor.message, selection: editor.selection, busy: editor.busy, labels: editor.editing ? editor.dimensionLabels(toScreen) : [] };
+    },
   };
 }

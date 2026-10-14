@@ -6,6 +6,9 @@
 // 2. The plugin's own checks of the model, run through its solver: a flat plate's skin
 //    friction against White's turbulent law, and NACA 0012 at Re 6 million and 4° against
 //    the NASA SA result.
+// 3. Switching the flow model while the flow runs (resolved, the model, back) never holds
+//    the flow still or drops it to a few steps a frame (the solver builds the other model's
+//    pipelines ahead of time; a frame held up once is not a slow GPU).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
 import { T, newTunnel, openTunnel, pageXY, scene, stats, useTunnelHost } from './helpers.js';
@@ -90,4 +93,43 @@ test("the model's checks: flat-plate skin friction and NACA 0012 lift at Re 6 mi
   expect(Math.abs(foil.cl / 0.44 - 1)).toBeLessThan(0.05);
   expect(foil.clSpread).toBeLessThan(0.01);
   expect(foil.cd).toBeGreaterThan(0.005);
+});
+
+test('switching the flow model while the flow runs never stalls it', async ({ page, request }) => {
+  env.needsFastGpu();
+  const study = await newTunnel(env.host, request, 'Model switch');
+  const frame = await openTunnel(env.host, page, study);
+  // A fixed grid: Auto picks one per flow model, and a new grid is a new flow.
+  await frame.getByRole('combobox', { name: 'Resolution' }).selectOption('medium');
+  await page.waitForTimeout(4000);
+  await T(frame, () => {
+    window.__rec = [];
+    window.__recT = setInterval(() => {
+      const s = window.__TUNNEL__.stats();
+      window.__rec.push([performance.now(), s.simTime, s.stepsPerFrame]);
+    }, 50);
+  });
+  await page.waitForTimeout(1500);
+  const model = frame.getByRole('combobox', { name: 'Flow model' });
+  for (const m of ['resolved', 'sa', 'resolved', 'auto']) {
+    await model.selectOption(m);
+    await page.waitForTimeout(2500);
+  }
+  const rec = await T(frame, () => {
+    clearInterval(window.__recT);
+    return window.__rec;
+  });
+  const before = rec.slice(0, 25).map((r) => r[2]).sort((a, b) => a - b)[12];
+  let freeze = 0;
+  let since = rec[0][0];
+  for (let i = 1; i < rec.length; i++) {
+    if (rec[i][1] !== rec[i - 1][1]) since = rec[i][0];
+    freeze = Math.max(freeze, rec[i][0] - since);
+  }
+  // Each model runs at its own rate (the turbulence model's step costs more): the fewest
+  // against the model's own, after its first half second.
+  const fewest = Math.min(...rec.slice(25).map((r) => r[2]));
+  console.log(`model switch: longest freeze ${Math.round(freeze)} ms, steps a frame ${before} before, ${fewest} at the fewest`);
+  expect(freeze, 'the flow stood still this long (ms)').toBeLessThan(400);
+  expect(fewest, `steps a frame fell to ${fewest} from ${before}`).toBeGreaterThan(before * 0.25);
 });

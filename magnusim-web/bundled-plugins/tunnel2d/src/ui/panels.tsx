@@ -5,11 +5,14 @@ import type { Workspace } from '@magnusim/workspace';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { DatError, parseDat } from '../geometry/datfile';
 import { NacaError, parseCode } from '../geometry/naca';
-import { outline, referenceLength, shapeLabel, type Shape } from '../geometry/shapes';
-import { radius } from '../geometry/polygon';
+import { hasOutline, outlineRings, profileOf, referenceLength, shapeLabel, type Shape } from '../geometry/shapes';
+import { radiusRings } from '../geometry/polygon';
 import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type FlowModel, type RefineLevels, type Resolution, type Scene, type Walls } from '../scene/scene';
 import { RESOLUTION_CELLS, gridFor, type Engine } from '../sim/engine';
 import { useStore, type Store } from '../app/store';
+import { emptySketch } from '../sketch/model';
+import type { SketchEditor } from '../sketch/editor';
+import { useEditor } from './sketchbar';
 
 const fmt3 = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 });
 export const fmtRe = (v: number) => fmt3.format(v);
@@ -65,7 +68,9 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
   const [, tick] = useState(0);
   useEffect(() => engine.subscribe(() => tick((n) => n + 1)), [engine]);
   const set = (flow: Partial<Scene['flow']>) => store.commit({ ...scene, flow: { ...scene.flow, ...flow } });
-  const ref = scene.bodies.find((b) => b.id === selected) ?? scene.bodies.find((b) => b.enabled) ?? null;
+  // The selected body, or the first in the flow (a sketch with no closed outline is not).
+  const inFlow = (b: Body) => b.enabled && hasOutline(b.shape);
+  const ref = scene.bodies.find((b) => b.id === selected && hasOutline(b.shape)) ?? scene.bodies.find(inFlow) ?? null;
   const re = ref ? engine.reynoldsFor(ref) : null;
   const map = engine.lattice;
   const model = engine.flowModel;
@@ -128,7 +133,7 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
           ) : null}
         </div>
       ) : (
-        <Hint>Add a body to see its Reynolds number.</Hint>
+        <Hint>{scene.bodies.length ? 'No body is in the flow: put one in to see its Reynolds number.' : 'Add a body to see its Reynolds number.'}</Hint>
       )}
     </Section>
   );
@@ -268,8 +273,8 @@ export function ViewPanel({ store }: { store: Store }) {
  * larger one). Where none is free, the tunnel's middle. */
 function newBody(scene: Scene, shape: Shape, name: string): Body {
   const { length, height } = scene.tunnel;
-  const r = radius(outline(shape));
-  const others = scene.bodies.map((b) => ({ x: b.x, y: b.y, r: radius(outline(b.shape)) }));
+  const r = radiusRings(outlineRings(shape));
+  const others = scene.bodies.map((b) => ({ x: b.x, y: b.y, r: radiusRings(outlineRings(b.shape)) }));
   const free = (x: number, y: number) => others.every((o) => Math.hypot(o.x - x, o.y - y) > (o.r + r) * 1.1);
   let at = { x: length * 0.35, y: height / 2 };
   search: for (const fx of [0.3, 0.42, 0.54, 0.66, 0.24]) {
@@ -302,7 +307,28 @@ export function addShape(store: Store, kind: Shape['kind']): void {
   store.select(b.id);
 }
 
-export function BodiesPanel({ store, ws }: { store: Store; ws: Workspace }) {
+/** A new sketch body (empty: it joins the flow once its outline closes), opened in the sketcher. */
+export function addSketch(store: Store, editor: SketchEditor): void {
+  const scene = store.get().scene;
+  const n = scene.bodies.filter((b) => b.shape.kind === 'sketch').length;
+  const name = n ? `Sketch ${n + 1}` : 'Sketch';
+  const b = newBody(scene, { kind: 'sketch', name, sketch: emptySketch() }, name);
+  store.commit({ ...scene, bodies: [...scene.bodies, b] });
+  editor.open(b.id, 'line');
+}
+
+/** Why a sketch is not in the flow ('' when its outline is closed). */
+export function sketchProblem(shape: Shape): string {
+  if (shape.kind !== 'sketch') return '';
+  const p = profileOf(shape.sketch);
+  if (p.rings.length) return '';
+  if (!shape.sketch.entities.some((e) => !e.construction && e.kind !== 'point')) return 'It has no outline yet: draw a closed outline.';
+  if (p.branch.length) return `Its outline branches (${p.branch.length === 1 ? 'a point where three or more curves meet' : `${p.branch.length} points where three or more curves meet`}): a body’s outline is a closed loop.`;
+  if (p.open.length) return `Its outline is not closed (${p.open.length} open ${p.open.length === 1 ? 'end' : 'ends'}, circled in red): join them to close it.`;
+  return 'It has no closed outline.';
+}
+
+export function BodiesPanel({ store, ws, editor }: { store: Store; ws: Workspace; editor: SketchEditor }) {
   const scene = useStore(store, (s) => s.scene);
   const selected = useStore(store, (s) => s.selected);
   const file = useRef<HTMLInputElement>(null);
@@ -343,8 +369,9 @@ export function BodiesPanel({ store, ws }: { store: Store; ws: Workspace }) {
             { value: 'rect', label: 'Rectangle' },
             { value: 'ellipse', label: 'Ellipse' },
             { value: 'plate', label: 'Flat plate' },
+            { value: 'sketch', label: 'Sketch…' },
           ]}
-          onChange={(v) => v && addShape(store, v as Shape['kind'])}
+          onChange={(v) => (v === 'sketch' ? addSketch(store, editor) : v && addShape(store, v as Shape['kind']))}
         />
         <Button variant="neutral" disabled={full} onClick={() => file.current?.click()} attrs={{ 'data-t2d-import': '1' }}>
           Import .dat…
@@ -416,7 +443,8 @@ function spinCapped(engine: Engine, b: Body): number | null {
   return cap !== null && Math.abs(b.spin) > cap ? cap : null;
 }
 
-export function BodyPanel({ store, ws, units, engine }: { store: Store; ws: Workspace; units: UnitSystem; engine: Engine }) {
+export function BodyPanel({ store, ws, units, engine, editor }: { store: Store; ws: Workspace; units: UnitSystem; engine: Engine; editor: SketchEditor }) {
+  useEditor(editor);
   const scene = useStore(store, (s) => s.scene);
   const selected = useStore(store, (s) => s.selected);
   const [codeError, setCodeError] = useState('');
@@ -488,6 +516,35 @@ export function BodyPanel({ store, ws, units, engine }: { store: Store; ws: Work
         </>
       );
       break;
+    case 'sketch': {
+      const editing = editor.editing && editor.bodyId === b.id;
+      const problem = sketchProblem(b.shape);
+      shapeFields = (
+        <>
+          <div className="t2d-add-row">
+            {editing ? (
+              <Button variant="primary" onClick={() => editor.close()} attrs={{ 'data-t2d-sketch-done': 'panel' }}>
+                Done
+              </Button>
+            ) : (
+              <Button variant="secondary" onClick={() => editor.open(b.id, 'select')} attrs={{ 'data-t2d-sketch-edit': b.id }}>
+                Edit sketch
+              </Button>
+            )}
+          </div>
+          {problem ? (
+            <Hint tone="warning">
+              <span data-t2d-sketch-problem>Not in the flow. {problem}</span>
+            </Hint>
+          ) : (
+            <Hint>
+              Size {fmtRe(referenceLength(b.shape) * 1000)} mm across. Its origin is the body’s pivot: position and angle move and turn it about there.
+            </Hint>
+          )}
+        </>
+      );
+      break;
+    }
     case 'plate':
       shapeFields = (
         <>

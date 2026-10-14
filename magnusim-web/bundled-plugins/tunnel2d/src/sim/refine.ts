@@ -18,7 +18,10 @@
 // patch, ½ back). A patch can hold patches of its own (its fine grid is a Solver).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { bakeSdf, type SdfGrid } from '../geometry/sdf';
-import { transform, type Pose, type Poly } from '../geometry/polygon';
+import { transformRings, type Pose, type Poly, type Rings } from '../geometry/polygon';
+
+/** One polygon or several rings, as rings. */
+export const asRings = (o: Poly | Rings): Rings => (o.length && Array.isArray(o[0]) ? (o as Rings) : [o as Poly]);
 import { POST_RR, TABLES, WG } from './kernels';
 import { Solver, type FrameResult, type Physics } from './solver';
 
@@ -342,7 +345,7 @@ export class Patch {
 /** A body for a refinement chain: its outline in coarse cells (body frame) and its coarse poses. */
 export interface RefineBody {
   key: string;
-  local: Poly;
+  local: Poly | Rings;
   band?: number;
   from: Pose;
   to: Pose;
@@ -453,7 +456,7 @@ export class Refinement {
           const key = `${b.key}@L${i + 1}`;
           let sdf = this.sdfs.get(key);
           if (!sdf) {
-            sdf = bakeSdf(transform(b.local, { x: 0, y: 0, theta: 0 }, s), b.band);
+            sdf = bakeSdf(transformRings(asRings(b.local), { x: 0, y: 0, theta: 0 }, s), b.band);
             this.sdfs.set(key, sdf);
           }
           return { key, sdf, from: this.poseAt(i, b.from), to: this.poseAt(i, b.to) };

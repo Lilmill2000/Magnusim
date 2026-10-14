@@ -3,9 +3,9 @@
 // back (speed, Reynolds numbers, forces, the field's range, trouble).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ColormapName } from '@magnusim/plugin-ui';
-import { outline, referenceLength } from '../geometry/shapes';
+import { hasOutline, outlineRings, referenceLength } from '../geometry/shapes';
 import { bakeSdf, type SdfGrid } from '../geometry/sdf';
-import { radius, transform } from '../geometry/polygon';
+import { radiusRings, transformRings, type Rings } from '../geometry/polygon';
 import { Renderer, type Palette, type ViewXform } from '../render/renderer';
 import { FLUIDS, LIMITS, flowModelFor, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
 import { Dye, type DyeSource } from './dye';
@@ -117,8 +117,8 @@ interface BodyState {
   body: Body;
   key: string;
   sdf: SdfGrid;
-  /** Outline in lattice cells, body frame (the refinement bakes its own fields from it). */
-  local: number[];
+  /** Outline rings in lattice cells, body frame (the refinement bakes its own fields from them). */
+  local: Rings;
   rCells: number;
   /** Lattice pose now. */
   pose: { x: number; y: number; theta: number };
@@ -166,6 +166,9 @@ export class Engine {
   private raf = 0;
   private stepsTarget = 64;
   private gpuMs = 0;
+  /** GPU time per step (ms), and frames in a row far slower than it (see frame()). */
+  private perStepMs = 0;
+  private slowFrames = 0;
   private lastFrame = 0;
   private fpsEma = 0;
   private readPending = false;
@@ -456,7 +459,8 @@ export class Engine {
 
   private syncBodies(scene: Scene) {
     const dx = this.map!.dx;
-    const live = scene.bodies.filter((b) => b.enabled).slice(0, MAX_BODIES);
+    // A sketch with no closed loop yet has no outline: it stays out of the flow (its panel says why).
+    const live = scene.bodies.filter((b) => b.enabled && hasOutline(b.shape)).slice(0, MAX_BODIES);
     const keep = new Set(live.map((b) => b.id));
     for (const id of [...this.bodies.keys()]) if (!keep.has(id)) this.bodies.delete(id);
     for (const b of live) {
@@ -469,14 +473,14 @@ export class Engine {
       const target = this.targetPose(b);
       if (!st || st.key !== key) {
         // Drawn the same wherever they fall (shapes.thickenRear).
-        const local = transform(outline(b.shape, (TE_MIN_CELLS * dx) / scale), { x: 0, y: 0, theta: 0 }, 1 / dx);
+        const local = transformRings(outlineRings(b.shape, (TE_MIN_CELLS * dx) / scale), { x: 0, y: 0, theta: 0 }, 1 / dx);
         const sdf = bakeSdf(local, band);
         this.bodies.set(b.id, {
           body: b,
           key,
           sdf,
           local,
-          rCells: radius(local),
+          rCells: radiusRings(local),
           pose: st?.pose ?? target,
           spinAngle: st?.spinAngle ?? 0,
           vel: st?.vel ?? { x: 0, y: 0, theta: 0 },
@@ -851,9 +855,20 @@ export class Engine {
     if (steps > 0) {
       void this.device.queue.onSubmittedWorkDone().then(() => {
         const ms = performance.now() - t0;
-        this.gpuMs = this.gpuMs ? this.gpuMs * 0.8 + ms * 0.2 : ms;
-        const perStep = this.gpuMs / steps;
-        const want = FRAME_BUDGET_MS / Math.max(1e-4, perStep);
+        const perStep = ms / steps;
+        // A frame held up by something other than its steps (shaders built for a new flow
+        // model, a sketch's body baked again) says nothing about the GPU's speed: alone it
+        // would drop the steps to a few and they would take seconds to climb back. Only a
+        // slowdown that lasts (a finer grid, refinement) is taken as one.
+        if (this.perStepMs && perStep > 4 * this.perStepMs && ++this.slowFrames < 4) return;
+        this.slowFrames = 0;
+        // Per step, so frames of few steps and of many average alike.
+        this.perStepMs = this.perStepMs ? this.perStepMs * 0.8 + perStep * 0.2 : perStep;
+        this.gpuMs = this.perStepMs * steps;
+        let want = FRAME_BUDGET_MS / Math.max(1e-4, this.perStepMs);
+        // At a few steps a frame the fixed wait for the GPU dominates and makes a step look
+        // dear: a frame done within half the budget may double (back up in a few frames).
+        if (ms < FRAME_BUDGET_MS / 2) want = Math.max(want, steps * 2);
         this.stepsTarget = Math.max(1, Math.min(MAX_STEPS, this.stepsTarget * 0.7 + want * 0.3));
       });
     }
