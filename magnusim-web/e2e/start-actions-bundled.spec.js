@@ -126,40 +126,46 @@ async function load(page, url) {
 }
 
 // How many actions each place draws for what the page was sent (start actions with a
-// workspace, each place cut at its cap). Used only to wait until the page has drawn what
-// it was sent, so a place that should be empty is checked after the page drew it; what
-// it shows is then compared with the manifests.
+// workspace, each place cut at its cap), read from the server (serverAnswer). Used only to
+// wait until the page has drawn it, so a place that should be empty is checked after the
+// page drew it; what it shows is then compared with the manifests.
 function sentCounts(actions) {
   const n = Object.fromEntries(PLACES.map((p) => [p, 0]));
   for (const a of actions) if (a && a.workspace) for (const p of a.places || []) if (p in n && n[p] < CAPS[p]) n[p] += 1;
   return n;
 }
 
-// A project, loaded fresh (or reloaded) and drawn from the tree it was sent.
+// What the server answers `path` now, read beside the page, not from its responses. A
+// response the page gets is not always the loading page's: one the page being replaced
+// asked for (Back from a workspace syncs the tree, a plugin change reads the plugin list
+// again) can land after a reload or load has started, and once that page is gone so is the
+// body ("No resource with given identifier found", CI run #41). The counts below read only
+// which plugins are on and their start actions, which nothing changes while a page loads,
+// so this is what the loading page was sent.
+async function serverAnswer(page, path) {
+  const r = await page.request.get(`${host.base}${path}`);
+  expect(r.ok(), `${path}: ${r.status()} ${await r.text()}`).toBe(true);
+  return r.json();
+}
+
+// A project, loaded fresh (or reloaded) and drawn from its tree.
 async function openProject(page, pid, { reload = false } = {}) {
-  const tree = page.waitForResponse((r) => {
-    const u = new URL(r.url());
-    return u.pathname === '/api/project/tree' && u.searchParams.get('project_id') === pid && r.ok();
-  }, { timeout: 60_000 }).then((r) => r.json()); // read at once: a later reload drops the body
   if (reload) await page.reload();
   else await load(page, `${host.base}/#/p/${pid}`);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id && window.__CFD_PLUGINS_READY__ === true, pid, { timeout: 60_000 });
-  const doc = await tree;
+  const doc = await serverAnswer(page, `/api/project/tree?project_id=${encodeURIComponent(pid)}`);
   const n = sentCounts((doc.plugin_study_kinds || []).map((k) => k.workspace && k.start_action));
   await expect(page.locator('#btn-add-geometry')).toBeVisible({ timeout: 60_000 });
   await expect(headerButtons(page)).toHaveCount(n.header, { timeout: 30_000 });
   await expect(emptyButtons(page)).toHaveCount(n.empty_project, { timeout: 30_000 });
 }
 
-// Home, loaded fresh (or reloaded), with its cards and drawn from the plugins it was sent.
+// Home, loaded fresh (or reloaded), with its cards and drawn from the plugins that are on.
 async function goHome(page, reload = false) {
-  const plugins = page
-    .waitForResponse((r) => new URL(r.url()).pathname === '/api/plugins' && r.ok(), { timeout: 60_000 })
-    .then((r) => r.json()); // read at once: a later reload drops the body
   if (reload) await page.reload();
   else await load(page, `${host.base}/#/`);
-  const rows = (await plugins).plugins || [];
   await expect(page.locator('#home-grid [data-project-id]').first()).toBeVisible({ timeout: 60_000 });
+  const rows = (await serverAnswer(page, '/api/plugins')).plugins || [];
   const n = sentCounts(rows.filter((r) => r.status === 'enabled').flatMap((r) => r.start_actions || []));
   await expect(homeButtons(page)).toHaveCount(n.home, { timeout: 30_000 });
 }
@@ -335,3 +341,76 @@ test('a bundled plugin that ships off has no start actions only because it is of
     await expectProjectPlaces(page, onActions, `with ${p.key} off again`);
   }
 });
+
+// CI run #41, forced. Back from a workspace syncs the tree (cfd:tree-sync), and the reload
+// right after it found that read of the page being replaced still out: its answer landed
+// once the reload had started, the helper waiting for "a tree answer" took it, and the page
+// it belonged to was gone before its body was read ("No resource with given identifier
+// found ... a response that was navigated away from"). Here such a read of the old page
+// (the tree's, or Home's plugin list, which a plugin change reads again) answers after the
+// reload has asked for the new page and before that page commits, with an answer no page
+// should draw from; the places must still be counted from the reloaded page's own.
+const CUT_OFF = [
+  {
+    what: 'a project',
+    read: (pid) => (u) => u.pathname === '/api/project/tree' && u.searchParams.get('project_id') === pid,
+    sync: null,
+    open: (page, pid) => openProject(page, pid),
+    reload: (page, pid) => openProject(page, pid, { reload: true }),
+    check: (page) => expectProjectPlaces(page, onActions, 'after a reload that cut off a tree read'),
+  },
+  {
+    what: 'Home',
+    read: () => (u) => u.pathname === '/api/plugins',
+    sync: { plugins: true },
+    open: (page) => goHome(page),
+    reload: (page) => goHome(page, true),
+    check: (page) => expectHomePlaces(page, onActions, 'after a reload that cut off a plugin list read'),
+  },
+];
+
+for (const c of CUT_OFF) {
+  test(`${c.what}, reloaded while the page it replaces still has a read out, counts its places from the reloaded page`, async ({ page, request }) => {
+    test.setTimeout(120_000);
+    page.setDefaultTimeout(30_000);
+    const pid = await newProject(request, `Reload cuts off a read (${c.what})`);
+    await c.open(page, pid);
+    const isRead = c.read(pid);
+    const isPage = (u) => u.origin === host.base && u.pathname === '/';
+    // The old page's next read is held; reads after it (the new page's) go on as sent.
+    let held = null;
+    let readOut;
+    const oldRead = new Promise((done) => (readOut = done));
+    const onRead = async (route) => {
+      if (held) return route.continue();
+      held = route;
+      readOut();
+    };
+    // The reload's request for the new page: the held read answers first and lands in the
+    // old page, then the new page loads.
+    let landed = null;
+    const onPage = async (route) => {
+      try {
+        const answer = page.waitForEvent('response', { predicate: (r) => isRead(new URL(r.url())), timeout: 30_000 });
+        await held.fulfill({ status: 200, contentType: 'text/plain', body: 'an answer to the page being replaced' });
+        landed = await answer;
+      } finally {
+        await route.continue();
+      }
+    };
+    await page.route(isRead, onRead);
+    await page.route(isPage, onPage);
+    try {
+      await page.evaluate((detail) => window.dispatchEvent(new CustomEvent('cfd:tree-sync', detail ? { detail } : undefined)), c.sync);
+      await oldRead;
+      await c.reload(page, pid);
+      // The race really ran: the old page's read answered while the reload was under way.
+      expect(landed && landed.status(), "the old page's read answered during the reload").toBe(200);
+      await c.check(page);
+      stage(t0, `${c.what}: reloaded past a read of the page it replaced`);
+    } finally {
+      await page.unroute(isRead, onRead).catch(() => undefined);
+      await page.unroute(isPage, onPage).catch(() => undefined);
+    }
+  });
+}
