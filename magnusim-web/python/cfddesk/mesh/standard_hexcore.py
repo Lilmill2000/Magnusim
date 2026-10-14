@@ -1213,17 +1213,40 @@ def _fragment_regions(gmsh, bodies, solid, regions, scale: float, log) -> dict[i
     if len(set(body_of_input)) != len(body_of_input):
         raise RuntimeError("the bodies could not be told apart after healing (two volumes match one body)")
     gmsh.option.setNumber("Geometry.OCCUnionUnify", 0)
-    _out, out_map = gmsh.model.occ.fragment(bodies[:1], bodies[1:])
+    if len(bodies) > 1:
+        _out, out_map = gmsh.model.occ.fragment(bodies[:1], bodies[1:])
+    else:
+        out_map = [[(3, int(bodies[0][1]))]]
     gmsh.model.occ.synchronize()
     region_of_vol: dict[int, int] = {}
+    dropped: list[tuple[int, int]] = []
     for i, pieces in enumerate(out_map):
         k = regions.region_of_body(body_of_input[i])
         for dim, tag in pieces:
-            if int(dim) == 3:
+            if int(dim) != 3:
+                continue
+            if k < 0:
+                dropped.append((3, int(tag)))
+            else:
                 region_of_vol[int(tag)] = k
+    if dropped:
+        # A body no material names is left out: its volume goes, and the faces it shared
+        # with a kept body stay as that body's boundary; its other faces go with it.
+        gmsh.model.occ.remove(dropped, recursive=False)
+        gmsh.model.occ.synchronize()
+        kept = {int(t) for t in region_of_vol}
+        orphans = [
+            (2, int(s))
+            for _d, s in gmsh.model.getEntities(2)
+            if not any(int(v) in kept for v in gmsh.model.getAdjacencies(2, s)[0])
+        ]
+        if orphans:
+            gmsh.model.occ.remove(orphans, recursive=True)
+            gmsh.model.occ.synchronize()
+        log(f"left out of the mesh (no material): {', '.join(regions.left_out_labels())}")
     log(
         f"{len(bodies)} bodies fragmented into {len(gmsh.model.getEntities(3))} volume(s) in "
-        f"{len(regions.names)} regions: " + ", ".join(regions.names)
+        f"{len(regions.names)} region(s): " + ", ".join(regions.names)
     )
     return region_of_vol
 
@@ -1386,7 +1409,8 @@ def _build_standard_msh_once(
     inside = shared_face_ids(solid)
     # Several regions (host API 1.8): the bodies are fragmented, each gmsh volume
     # belongs to its body's region, and the faces between volumes are meshed once.
-    multi = regions is not None and len(regions.names) > 1 and solid.mesh_triangles is None
+    # (One region with bodies left out takes this path too: they are fragmented off and removed.)
+    multi = regions is not None and solid.mesh_triangles is None
     region_of_vol: dict[int, int] = {}
     tet_region: np.ndarray = np.zeros(0, dtype=np.int64)
     prism_region: np.ndarray = np.zeros(0, dtype=np.int64)

@@ -1002,6 +1002,8 @@ export function persistMeshResult(projectId, resultFields) {
     surface_size_m: resultFields.surface_size_m ?? null,
     // Host API 1.8: a mesh of several regions (a study's materials), one cellZone each.
     regions: Array.isArray(resultFields.regions) ? resultFields.regions : null,
+    // Host API 1.8: bodies no material names, left out of the mesh.
+    left_out: Array.isArray(resultFields.left_out) ? resultFields.left_out : null,
     note: resultFields.note,
     increment,
   };
@@ -1518,6 +1520,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       layers_applied: lastResult && lastResult.layers_applied != null ? !!lastResult.layers_applied : null,
       surface_size_m: (lastResult && lastResult.surface_size_m) || null,
       regions: lastResult && Array.isArray(lastResult.regions) ? lastResult.regions : null,
+      left_out: lastResult && Array.isArray(lastResult.left_out) ? lastResult.left_out : null,
       signal: signal || null,
       note:
         status === 'done'
@@ -1968,6 +1971,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       counts_source: counts.counts_source || 'polyMesh/points+owner',
       feature_marks_total: lastResult && lastResult.feature_marks_total != null ? lastResult.feature_marks_total : null,
       regions: lastResult && Array.isArray(lastResult.regions) ? lastResult.regions : null,
+      left_out: lastResult && Array.isArray(lastResult.left_out) ? lastResult.left_out : null,
       fingerprint_after: null,
       snappy_geometry_rev: lastResult && lastResult.snappy_geometry_rev != null ? lastResult.snappy_geometry_rev : null,
       block_used: lastResult && lastResult.block != null ? lastResult.block : null,

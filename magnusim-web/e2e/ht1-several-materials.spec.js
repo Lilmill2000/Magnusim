@@ -207,4 +207,19 @@ test("two materials mesh as two regions (HT2): each region's cells shown; the me
   const meshRow = study.locator('[data-w20-mesh-item]').first();
   await meshRow.locator(':scope > .tree-row .tl').click();
   await expect(stale).toContainText("made before this simulation's materials changed", { timeout: 30_000 });
+
+  // Body2 on no material: it is left out of the mesh, and the panel says so.
+  await study.locator(`[data-w18-material-id="${fluidId}"] > .tree-row .tl`).click();
+  await record.locator('[data-volume="Body2"] button').click();
+  await expect.poll(async () => (await mats()).flatMap((m) => m.assigned_volumes || []).sort()).toEqual(['Body1']);
+  await meshRow.locator(':scope > .tree-row .tl').click();
+  await form.locator('[data-mesh-generate="1"]').click();
+  await expect
+    .poll(async () => {
+      const r = ((await meshesNow())[0] || {}).live_mesh_result || {};
+      return r.status === 'done' && r.left_out ? `done ${r.left_out.join()}` : /failed|stopped/.test(String(r.status)) ? `${r.status} ${r.error}` : 'wait';
+    }, { timeout: 480_000, intervals: [3_000] })
+    .toBe('done Body2');
+  await expect(meta).toContainText('left out (no material): Body2', { timeout: 30_000 });
+  await expect(stale).toHaveCount(0);
 });

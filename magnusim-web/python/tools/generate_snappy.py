@@ -218,36 +218,35 @@ def boundary_patches(
 
     project = Project.from_solid(solid, scale_to_metres=scale, units_confirmed=True)
     web_bcs = study_web_bcs(project_dir, None, simulation_id=simulation_id or None)
-    inside = shared_face_ids(solid)
-    refusal = bc_refusal(
-        ((str(b.get("name") or "a boundary condition"), face_ids_from_web_bc(b, n_faces)) for b in web_bcs),
-        inside,
-        face_bodies(solid),
-    )
-    if refusal:
-        raise RuntimeError(refusal)
-    from cfddesk.project.regions import mesh_region_refusal
-
-    refusal = mesh_region_refusal(project_dir, simulation_id, "snappy_hexdominant")
-    if refusal:
-        raise RuntimeError(refusal)
-    from cfddesk.project.regions import mesh_regions
+    from cfddesk.project.regions import mesh_region_refusal, mesh_regions
 
     mesh_regs = mesh_regions(project_dir, simulation_id, solid)
     if isinstance(mesh_regs, str):
         raise RuntimeError(mesh_regs)
+    bodies_of = face_bodies(solid)
+    shared = shared_face_ids(solid)
+    # Faces two kept bodies share are inside; a left-out body's faces are in no surface.
+    inside = mesh_regs.inside(shared, bodies_of) if mesh_regs else shared
+    excluded = {**inside, **{f: f for f in mesh_regs.left_out_faces(bodies_of)}} if mesh_regs else inside
+    named = [(str(b.get("name") or "a boundary condition"), face_ids_from_web_bc(b, n_faces)) for b in web_bcs]
+    refusal = bc_refusal(named, inside, bodies_of) or (mesh_regs.left_out_refusal(named, bodies_of) if mesh_regs else None)
+    if refusal:
+        raise RuntimeError(refusal)
+    refusal = mesh_region_refusal(project_dir, simulation_id, "snappy_hexdominant", n_bodies=len(solid.volumes))
+    if refusal:
+        raise RuntimeError(refusal)
     project = _apply_web_bcs(project, web_bcs, n_faces)
     sizes, _mins, size_notes = load_surface_custom_sizes(project_dir, mesh_id, n_faces, diag_m)
     inflates = load_inflate_refs(project_dir, mesh_id, n_faces, h_wall_m, extra_face_sizes=sizes)
-    drop_inside_faces(inside, sizes, _mins, size_notes, inflates)
+    drop_inside_faces(excluded, sizes, _mins, size_notes, inflates)
     project, inflates = bind_inflate_patches(project, inflates, n_faces)
     if mesh_regs is None:
         project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
     else:
-        project = _add_region_walls(project, leftover_faces(project, n_faces, inside), mesh_regs, face_bodies(solid))
+        project = _add_region_walls(project, leftover_faces(project, n_faces, excluded), mesh_regs, bodies_of)
     patch_types = emitted_patch_types(project)
     patches = write_patch_stls(
-        tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types, inside=inside
+        tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types, inside=excluded
     )
     interfaces: list[dict[str, str]] = []
     locations = None
@@ -295,6 +294,7 @@ def boundary_patches(
         "locations": locations,
         "interfaces": interfaces,
         "mesh_regions": mesh_regs.summary() if mesh_regs is not None else [],
+        "left_out": mesh_regs.left_out_labels() if mesh_regs is not None else [],
         "location_m": location.point_metres,
         "layer_specs": layer_specs,
         "refine_regions": regions,
@@ -592,6 +592,7 @@ def main() -> int:
             case_dir=str(case_dir),
             **mesh_input,
             **({"regions": region_rows} if region_rows else {}),
+            **({"left_out": prep["left_out"]} if prep.get("left_out") else {}),
         )
     except Exception as exc:
         return _result(False, error=str(exc), traceback=traceback.format_exc()[-2000:])

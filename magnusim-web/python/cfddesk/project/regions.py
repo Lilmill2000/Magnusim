@@ -64,26 +64,58 @@ def region_name(name: str, taken: set[str]) -> str:
     return out
 
 
-def study_regions(project_dir: Path | str, sim_id: str | None) -> list[dict[str, Any]]:
-    """The study's regions: ``[{name, role, material_id, material_name, model, bodies}]``.
-
-    Empty for a study whose analysis offers one material model (one fluid region,
-    as always) and for records with no bodies.
-    """
-    root = Path(project_dir)
-    sid = str(sim_id or "").strip()
+def _placed(root: Path, sid: str) -> tuple[dict[str, Any] | None, list[tuple[dict[str, Any], list[str]]]]:
+    """The study and its material records that have bodies, with their bodies."""
     study = find_study(root, sid) if sid else None
     if not study:
-        return []
+        return None, []
     placed: list[tuple[dict[str, Any], list[str]]] = []
     for rec in assemble_study_materials(root, sid):
         vols = rec.get("assigned_volumes")
         bodies = list(dict.fromkeys(str(v) for v in vols if str(v))) if isinstance(vols, list) else []
         if bodies:
             placed.append((rec, bodies))
+    return study, placed
+
+
+def study_regions(project_dir: Path | str, sim_id: str | None) -> list[dict[str, Any]]:
+    """The study's regions: ``[{name, role, material_id, material_name, model, bodies}]``.
+
+    Empty for a study whose analysis offers one material model (one fluid region,
+    as always), for a study with one material, and for records with no bodies.
+    """
+    study, placed = _placed(Path(project_dir), str(sim_id or "").strip())
     # One material (every Incompressible Flow study) is one region: no registry needed.
-    if len(placed) <= 1:
+    if study is None or len(placed) <= 1:
         return []
+    return _rows(study, placed)
+
+
+def regions_for_mesh(project_dir: Path | str, sim_id: str | None, n_bodies: int) -> list[dict[str, Any]]:
+    """The regions a mesh of this study is split into, or [] when it is meshed as before
+    (every body one fluid region).
+
+    An analysis that offers several material models (heat transfer) meshes each
+    material's bodies as a region and leaves out a body no material names; one
+    material on every body is meshed as before. An analysis with one model meshes
+    every body as one fluid, whatever its records say.
+    """
+    study, placed = _placed(Path(project_dir), str(sim_id or "").strip())
+    if study is None or not placed:
+        return []
+    every = {f"Body{i + 1}" for i in range(int(n_bodies))}
+    # One material on every body (every Incompressible Flow study too): as before, no registry needed.
+    if len(placed) == 1 and every and every <= set(placed[0][1]):
+        return []
+    rows = _rows(study, placed)
+    covered = {b for r in rows for b in r["bodies"]}
+    if len(rows) == 1 and every and every <= covered:
+        return []
+    return rows
+
+
+def _rows(study: dict[str, Any], placed: list[tuple[dict[str, Any], list[str]]]) -> list[dict[str, Any]]:
+    """Region rows of the placed records ([] for an analysis with one material model)."""
     models = _analysis_models(str(study.get("analysis_type") or ""))
     if len(models) <= 1:
         return []
@@ -120,6 +152,9 @@ class MeshRegions:
     roles: tuple[str, ...]
     bodies: tuple[tuple[int, ...], ...]
     interfaces: frozenset[int] = field(default_factory=frozenset)
+    # 0-based bodies no material names: left out of the mesh (their faces are no
+    # patch; a face a kept body shares with one is a boundary of the kept body).
+    left_out: tuple[int, ...] = ()
 
     def region_of_body(self, body: int) -> int:
         for k, members in enumerate(self.bodies):
@@ -134,6 +169,38 @@ class MeshRegions:
             for n, r, bs in zip(self.names, self.roles, self.bodies, strict=True)
         ]
 
+    def left_out_labels(self) -> list[str]:
+        return [f"Body{b + 1}" for b in self.left_out]
+
+    def left_out_faces(self, bodies: dict[int, int]) -> set[int]:
+        """Face ids of the left-out bodies (``bodies``: face id -> 1-based body)."""
+        gone = {b + 1 for b in self.left_out}
+        return {int(f) for f, b in bodies.items() if b in gone}
+
+    def inside(self, shared: dict[int, int], bodies: dict[int, int]) -> dict[int, int]:
+        """The shared faces still inside the mesh: both bodies kept. A face a kept body
+        shares with a left-out one is a boundary of the kept body."""
+        gone = {b + 1 for b in self.left_out}
+        return {
+            int(f): int(t)
+            for f, t in shared.items()
+            if bodies.get(int(f)) not in gone and bodies.get(int(t)) not in gone
+        }
+
+    def left_out_refusal(self, named_faces, bodies: dict[int, int]) -> str | None:
+        """Why the mesh can't be made when a BC is on a left-out body's face; else None."""
+        gone = {b + 1 for b in self.left_out}
+        for name, fids in named_faces:
+            for fid in fids:
+                body = bodies.get(int(fid))
+                if body in gone:
+                    return (
+                        f"Face {int(fid) + 1}@Body{body} is on Body{body}, which this simulation leaves out of the "
+                        f'mesh (it has no material), so it can\'t take a boundary condition. Remove it from "{name}", '
+                        f"or give Body{body} a material."
+                    )
+        return None
+
 
 def regions_signature(summary: list[dict[str, Any]] | None) -> list[list[Any]]:
     """A region summary as a stable comparable value (region order does not matter)."""
@@ -145,15 +212,15 @@ def regions_signature(summary: list[dict[str, Any]] | None) -> list[list[Any]]:
 
 
 def mesh_regions(project_dir: Path | str, sim_id: str | None, solid: Any) -> MeshRegions | str | None:
-    """The regions a mesher splits ``solid`` into for this study: None for one region
-    (every body meshed as one fluid, as always), else the regions, or the reason it
-    cannot be meshed (a body no material names)."""
-    regions = study_regions(project_dir, sim_id)
-    if len(regions) <= 1:
-        return None
+    """The regions a mesher splits ``solid`` into for this study (``regions_for_mesh``):
+    None when it is meshed as before (every body one fluid region), else the regions
+    and the bodies left out, or the reason it cannot be meshed."""
     from cfddesk.cad.shared_faces import face_bodies, shared_face_ids
 
     n_bodies = len(getattr(solid, "volumes", None) or [])
+    regions = regions_for_mesh(project_dir, sim_id, n_bodies)
+    if not regions:
+        return None
     body_of: dict[int, int] = {}
     for k, region in enumerate(regions):
         for label in region["bodies"]:
@@ -161,26 +228,23 @@ def mesh_regions(project_dir: Path | str, sim_id: str | None, solid: Any) -> Mes
             if not m or not (1 <= int(m.group(1)) <= n_bodies):
                 return f"{region['material_name'] or region['name']} names {label}, which this part does not have."
             body_of[int(m.group(1)) - 1] = k
-    missing = [b for b in range(n_bodies) if b not in body_of]
-    if missing:
-        names = ", ".join(f"Body{b + 1}" for b in missing)
-        verb = "has" if len(missing) == 1 else "have"
-        return (
-            f"{names} {verb} no material. In this simulation every body is meshed with its material: "
-            "give it one in Materials."
-        )
+    # A body no material names is left out of the mesh.
+    left_out = tuple(b for b in range(n_bodies) if b not in body_of)
     bodies = face_bodies(solid)
     shared = shared_face_ids(solid)
     interfaces = frozenset(
         int(f)
         for f, other in shared.items()
-        if body_of.get(bodies.get(int(f), 0) - 1) != body_of.get(bodies.get(int(other), 0) - 1)
+        if (a := body_of.get(bodies.get(int(f), 0) - 1)) is not None
+        and (b := body_of.get(bodies.get(int(other), 0) - 1)) is not None
+        and a != b
     )
     return MeshRegions(
         names=tuple(r["name"] for r in regions),
         roles=tuple(r["role"] for r in regions),
         bodies=tuple(tuple(sorted(b for b, k in body_of.items() if k == i)) for i in range(len(regions))),
         interfaces=interfaces,
+        left_out=left_out,
     )
 
 
@@ -202,12 +266,23 @@ def body_centroids(solid: Any) -> list[tuple[float, float, float]]:
     return out
 
 
-def mesh_region_refusal(project_dir: Path | str, sim_id: str | None, mesher_key: str) -> str | None:
+def mesh_region_refusal(
+    project_dir: Path | str, sim_id: str | None, mesher_key: str, n_bodies: int | None = None
+) -> str | None:
     """Why this mesher cannot mesh the study, when its materials make more than one
-    region and the mesher has no ``multi_region``; None otherwise."""
-    regions = study_regions(project_dir, sim_id)
-    if len(regions) <= 1:
-        return None
+    region or leave a body out (``n_bodies`` known) and the mesher has no
+    ``multi_region``; None otherwise."""
+    if n_bodies is not None:
+        regions = regions_for_mesh(project_dir, sim_id, n_bodies)
+        if not regions:
+            return None
+        covered = {b for r in regions for b in r["bodies"]}
+        left = [f"Body{i + 1}" for i in range(n_bodies) if f"Body{i + 1}" not in covered]
+    else:
+        regions = study_regions(project_dir, sim_id)
+        left = []
+        if len(regions) <= 1:
+            return None
     try:
         mesher = _registry("mesher").get(mesher_key)
     except Exception:
@@ -216,6 +291,11 @@ def mesh_region_refusal(project_dir: Path | str, sim_id: str | None, mesher_key:
         return None
     label = str(getattr(mesher, "label", "") or mesher_key or "This mesher")
     names = ", ".join(f"{r['material_name'] or r['name']} ({r['role']})" for r in regions)
+    if left:
+        return (
+            f"{label} meshes every body as one fluid, but this simulation leaves {', '.join(left)} out "
+            f"(no material) and meshes {names}. Mesh it with a mesher that keeps materials apart."
+        )
     return (
         f"{label} meshes every body as one fluid, but this simulation has {len(regions)} materials: {names}. "
         "Mesh it with a mesher that keeps materials apart."

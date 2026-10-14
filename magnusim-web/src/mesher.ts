@@ -100,6 +100,9 @@ export function reportBits(
       if (r.name && Number.isFinite(cells)) bits.push(`${String(r.name)}: ${cells.toLocaleString('en-US')} cells`);
     }
   }
+  // Bodies no material names, left out of the mesh.
+  const leftOut = Array.isArray(result.left_out) ? result.left_out.map(String).filter(Boolean) : [];
+  if (leftOut.length) bits.push(`left out (no material): ${leftOut.join(', ')}`);
   return bits;
 }
 

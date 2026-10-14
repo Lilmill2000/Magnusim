@@ -382,14 +382,17 @@ def _build_fields(node: dict[str, Any], rev: int | None, built: int | None, gene
     return node
 
 
-def _regions_now(root: Path, sid: str) -> list[dict[str, Any]]:
-    """The study's regions now (host API 1.8; [] for one region), as a mesh records them."""
-    from cfddesk.project.regions import study_regions
+def _regions_now(root: Path, sid: str, n_bodies: int) -> list[dict[str, Any]] | None:
+    """The study's mesh regions now (host API 1.8; [] when it is meshed as before), as a
+    mesh records them; None when the geometry's bodies are not known (nothing to compare)."""
+    from cfddesk.project.regions import regions_for_mesh
 
+    if n_bodies <= 0:
+        return None
     try:
-        return study_regions(root, sid)
+        return regions_for_mesh(root, sid, n_bodies)
     except Exception:
-        return []
+        return None
 
 
 def _regions_changed(node: dict[str, Any], live: dict[str, Any], generated: bool, regions_now: list | None) -> dict[str, Any]:
@@ -529,7 +532,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
             sid = str(study.get("id") or "")
             sscope = ScopeId(project_id, gid, sid)
             study_dir = Path(study["dir"])
-            regions_now = _regions_now(root, sid)
+            regions_now = _regions_now(root, sid, len(_body_names(geom, proj)))
             study_nodes.append(
                 {
                     "id": sid,

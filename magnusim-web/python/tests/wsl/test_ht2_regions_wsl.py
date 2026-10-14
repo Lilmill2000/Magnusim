@@ -118,3 +118,46 @@ def test_w7_hex_dominant_two_materials(tmp_path: Path) -> None:
     finally:
         remove_wsl_case(wsl_case)
     _assert_two_regions(case, res)
+
+
+ONE = [{"id": "m-air", "name": "Air", "material_model": "example_heat_fluid", "assigned_volumes": ["Body1"], "simulation_id": "sim_1"}]
+
+
+@pytest.mark.parametrize("mesher", ["standard", "hex_dominant"])
+def test_w8_a_body_with_no_material_is_left_out(tmp_path: Path, mesher: str) -> None:
+    """Air on Body1 only: box 2 is left out; the mesh is box 1 alone, the face it shared a wall."""
+    proj = _heat_project(tmp_path, ONE, "face 1@Body1", "face 3@Body1")
+    case = tmp_path / "case"
+    wsl_case = f"cfddesk-golden-w8-{uuid.uuid4().hex[:8]}"
+    argv = ["--project-dir", str(proj), "--case-dir", str(case), "--wsl-case", wsl_case, "--generate-id", "golden",
+            "--fineness", "3", "--add-layers", "1", "--mesh-id", "mesh_1", "--simulation-id", "sim_1"]
+    if mesher == "standard":
+        tool = "generate_standard.py"
+        argv += ["--hex-core", "1", "--threads", "4"]
+    else:
+        tool = "generate_snappy.py"
+        step = next(proj.rglob("source.step"))
+        r = subprocess.run(
+            [sys.executable, str(TOOLS / "convert_step_to_stl.py"), "--step", str(step), "--out", str(step.with_name("Body1.stl")), "--cad-quality"],
+            cwd=str(PY), capture_output=True, text=True, timeout=600,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join([str(PY), str(PY / "sdk")])},
+        )
+        assert r.returncode == 0, r.stderr[-2000:]
+    try:
+        res = _run([str(TOOLS / tool), *argv])
+    finally:
+        remove_wsl_case(wsl_case)
+    assert res["left_out"] == ["Body2"]
+    assert [r["name"] for r in res["regions"]] == ["air"]
+    assert set(cell_zone_sizes(case / "constant" / "polyMesh")) == {"air"}
+    check = run_wsl_bash(
+        f"cd '{windows_to_wsl_path(case)}' && {OPENFOAM_WRAPPER} bash -c 'checkMesh -noFunctionObjects'",
+        timeout=900,
+    )
+    assert check.returncode == 0 and _checkmesh_ok(check.stdout, allow_skew=True), check.stdout[-3000:]
+    # Box 1 alone: the mesh ends at x = 10 mm.
+    pts = run_wsl_bash(
+        f"cd '{windows_to_wsl_path(case)}' && {OPENFOAM_WRAPPER} bash -c 'checkMesh -noFunctionObjects' | grep -i 'bounding box'",
+        timeout=900,
+    )
+    assert "(0.01 " in pts.stdout or "0.0100" in pts.stdout or "(0.01" in pts.stdout, pts.stdout

@@ -42,8 +42,8 @@ def _mat(mid: str, name: str, model: str, bodies: list[str]) -> dict:
     return {"id": mid, "name": name, "material_model": model, "assigned_volumes": bodies, "simulation_id": "sim_1"}
 
 
-def _heat_project(tmp: Path, materials: list[dict]) -> Path:
-    proj = _project(tmp, "face 8@Body2")
+def _heat_project(tmp: Path, materials: list[dict], inlet: str = "face 8@Body2", outlet: str = "face 1@Body1") -> Path:
+    proj = _project(tmp, inlet, outlet)
     ident = Path(find_study(proj, "sim_1")["dir"]) / "id.json"  # type: ignore[index]
     doc = json.loads(ident.read_text(encoding="utf-8"))
     ident.write_text(json.dumps({**doc, "analysis_type": "example_heat_steady"}) + "\n", encoding="utf-8")
@@ -109,7 +109,7 @@ def test_two_materials_mesh_as_two_cell_zones_meeting_at_the_interface(tmp_path:
     assert on_interface == []
     assert _cells_meet_across_the_interface(msh)
     log = (case / "log.gmsh_host.txt").read_text(encoding="utf-8")
-    assert "2 bodies fragmented into 2 volume(s) in 2 regions: air, aluminium_6061" in log
+    assert "2 bodies fragmented into 2 volume(s) in 2 region(s): air, aluminium_6061" in log
     assert "fused" not in log
     # The hex core needs one volume: never with two regions.
     assert result["hex_core_applied"] is False
@@ -142,11 +142,61 @@ def test_one_material_on_both_bodies_meshes_as_before(tmp_path: Path) -> None:
     assert "2 bodies fused into 1 fluid volume(s)" in (case / "log.gmsh_host.txt").read_text(encoding="utf-8")
 
 
-def test_a_body_with_no_material_is_refused_with_the_fix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_body_with_no_material_is_left_out(tmp_path: Path) -> None:
     proj = _heat_project(tmp_path, TWO)
-    three = SimpleNamespace(volumes=[object(), object(), object()], mesh_triangles=None, faces=[])
-    why = mesh_regions(proj, "sim_1", three)
-    assert why == "Body3 has no material. In this simulation every body is meshed with its material: give it one in Materials."
+    three = SimpleNamespace(volumes=[SimpleNamespace(face_ids=()) for _ in range(3)], mesh_triangles=None, faces=[])
+    regions = mesh_regions(proj, "sim_1", three)
+    assert not isinstance(regions, str) and regions is not None
+    assert regions.left_out == (2,) and regions.left_out_labels() == ["Body3"]
+    assert regions.left_out_faces({0: 1, 1: 2, 2: 3, 3: 3}) == {2, 3}
+    # A face Body1 shares with the left-out Body3 is Body1's boundary, not inside.
+    assert regions.inside({0: 2, 2: 0, 1: 4, 4: 1}, {0: 1, 1: 1, 2: 3, 4: 2}) == {1: 4, 4: 1}
+    why = regions.left_out_refusal([("Heater", [2])], {2: 3})
+    assert why is not None and why.startswith("Face 3@Body3 is on Body3, which this simulation leaves out of the mesh")
+
+
+@pytest.mark.parametrize(
+    ("materials", "left_out", "bcs"),
+    [
+        # Air on Body1 only: Body2 is left out, one region (its BCs on box 1).
+        ([_mat("m-air", "Air", "example_heat_fluid", ["Body1"])], ["Body2"], ("face 1@Body1", "face 3@Body1")),
+        # The solid only: the fluid body is left out (its BCs on box 2).
+        ([_mat("m-al", "Aluminium 6061", "example_heat_solid", ["Body2"])], ["Body1"], ("face 8@Body2", "face 9@Body2")),
+    ],
+)
+def test_a_body_with_no_material_is_left_out_of_the_mesh(
+    tmp_path: Path, materials: list[dict], left_out: list[str], bcs: tuple[str, str]
+) -> None:
+    proj = _heat_project(tmp_path, materials, *bcs)
+    case = tmp_path / "case"
+    rc, result, out = _generate(
+        "generate_standard.py", proj, case, "--hex-core", "0", "--add-layers", "0", "--threads", "1", "--prepare-only",
+    )
+    assert rc == 0 and result.get("ok"), out[-3000:]
+    names, xs, rows = _msh(case / "constant" / "triSurface" / "geometry.msh")
+    kept = [n for d, n in names.values() if d == 3]
+    assert len(kept) == 1
+    # No cell is in the left-out box: box 1 is x < 10 mm, box 2 x > 10 mm.
+    gone_left = left_out == ["Body1"]
+    cells_x = [
+        sum(xs[n] for n in v[3 + v[2] :]) / len(v[3 + v[2] :]) for v in rows if v[1] in (4, 5, 6, 7)
+    ]
+    assert cells_x and all((x > INTERFACE_X_M) if gone_left else (x < INTERFACE_X_M) for x in cells_x)
+    # The face the kept box shared with the left-out one is now its boundary (a wall).
+    on_interface = [v for v in rows if v[1] == 2 and all(abs(xs[n] - INTERFACE_X_M) < 1e-9 for n in v[3 + v[2] :])]
+    assert on_interface
+    log = (case / "log.gmsh_host.txt").read_text(encoding="utf-8")
+    assert f"left out of the mesh (no material): {', '.join(left_out)}" in log
+
+
+def test_a_bc_on_a_left_out_body_is_refused(tmp_path: Path) -> None:
+    """The inlet is face 8@Body2 (_project): leaving Body2 out refuses it, with the fix."""
+    proj = _heat_project(tmp_path, [_mat("m-air", "Air", "example_heat_fluid", ["Body1"])])
+    rc, result, out = _generate(
+        "generate_standard.py", proj, tmp_path / "case", "--hex-core", "0", "--threads", "1", "--prepare-only",
+    )
+    assert not result.get("ok"), out[-2000:]
+    assert "is on Body2, which this simulation leaves out of the mesh (it has no material)" in str(result.get("error"))
 
 
 def test_region_signatures_ignore_order_and_see_a_body_move() -> None:

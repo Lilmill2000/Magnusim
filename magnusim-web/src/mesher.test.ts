@@ -64,6 +64,11 @@ describe('what the page shows for a mesher comes from its registry row', () => {
     ]);
     // One region says nothing more.
     expect(reportBits(standard, { regions: regions.slice(0, 1) }, fmt)).toEqual(['Standard']);
+    // Bodies left out (no material) are named.
+    expect(reportBits(standard, { regions: regions.slice(0, 1), left_out: ['Body3', 'Body4'] }, fmt)).toEqual([
+      'Standard',
+      'left out (no material): Body3, Body4',
+    ]);
   });
 
   it("offers the mesher's refinement types, and the core two before the registry loads", () => {

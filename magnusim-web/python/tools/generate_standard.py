@@ -152,6 +152,12 @@ def _region_rows(regions, cells: dict[str, int]) -> list[dict]:
     return [{**row, "cells": int(cells.get(row["name"], 0))} for row in regions.summary()]
 
 
+def _left_out(regions) -> dict:
+    """``{"left_out": ["Body3"]}`` for a mesh that leaves bodies out (no material), else {}."""
+    labels = regions.left_out_labels() if regions is not None else []
+    return {"left_out": labels} if labels else {}
+
+
 def _add_default_walls(project: Project, leftover: list[int]) -> Project:
     """Every face no BC claims → one ``walls`` patch (type wall).
 
@@ -308,24 +314,22 @@ def main() -> int:
             simulation_id=str(args.simulation_id or "") or None,
             mesh_id=str(args.mesh_id or "") or None,
         )
-        inside = shared_face_ids(solid)
-        refusal = bc_refusal(
-            ((str(b.get("name") or "a boundary condition"), face_ids_from_web_bc(b, n_faces)) for b in web_bcs),
-            inside,
-            face_bodies(solid),
-        )
-        if refusal:
-            return _result(False, error=refusal)
-        from cfddesk.project.regions import mesh_region_refusal
-
-        refusal = mesh_region_refusal(project_dir, str(args.simulation_id or ""), "standard")
-        if refusal:
-            return _result(False, error=refusal)
-        from cfddesk.project.regions import mesh_regions
+        from cfddesk.project.regions import mesh_region_refusal, mesh_regions
 
         regions = mesh_regions(project_dir, str(args.simulation_id or ""), solid)
         if isinstance(regions, str):
             return _result(False, error=regions)
+        bodies_of = face_bodies(solid)
+        # Faces two kept bodies share are inside; a left-out body's faces are in no patch.
+        inside = regions.inside(shared_face_ids(solid), bodies_of) if regions else shared_face_ids(solid)
+        excluded = {**inside, **{f: f for f in regions.left_out_faces(bodies_of)}} if regions else inside
+        named = [(str(b.get("name") or "a boundary condition"), face_ids_from_web_bc(b, n_faces)) for b in web_bcs]
+        refusal = bc_refusal(named, inside, bodies_of) or (regions.left_out_refusal(named, bodies_of) if regions else None)
+        if refusal:
+            return _result(False, error=refusal)
+        refusal = mesh_region_refusal(project_dir, str(args.simulation_id or ""), "standard", n_bodies=len(solid.volumes))
+        if refusal:
+            return _result(False, error=refusal)
         project = _apply_web_bcs(project, web_bcs, n_faces)
 
         bbox = shape_bbox(solid.shape, unit="native")
@@ -356,12 +360,12 @@ def main() -> int:
             sizing.h_surface_m,
             extra_face_sizes=extra_face_sizes,
         )
-        drop_inside_faces(inside, extra_face_sizes, extra_face_mins, ref_notes, inflates)
+        drop_inside_faces(excluded, extra_face_sizes, extra_face_mins, ref_notes, inflates)
         project, inflates = bind_inflate_patches(project, inflates, n_faces)
         if regions is None:
             project = _add_default_walls(project, leftover_faces(project, n_faces, inside))
         else:
-            project = _add_region_walls(project, leftover_faces(project, n_faces, inside), regions, face_bodies(solid))
+            project = _add_region_walls(project, leftover_faces(project, n_faces, excluded), regions, bodies_of)
         _progress(
             "sizing",
             fineness=fineness,
@@ -604,6 +608,7 @@ def main() -> int:
                 region_rows = [{**r, "cells": int(zones.get(r["name"], r["cells"]))} for r in region_rows]
         if region_rows:
             meta["regions"] = region_rows
+            meta.update(_left_out(regions))
         (case_dir / "standard-meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         # The mesh and its logs are on Windows; nothing reads the WSL copy again.
         remove_wsl_case(wsl_case)
@@ -626,6 +631,7 @@ def main() -> int:
             surface_size_m=sizing.h_surface_m,
             generate_id=args.generate_id,
             **({"regions": region_rows} if region_rows else {}),
+            **_left_out(regions),
         )
     except Exception as exc:
         traceback.print_exc()
