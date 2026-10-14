@@ -4,6 +4,7 @@ import {
   canPickInto,
   facePicksPaused,
   fetchLinkedSave,
+  forgetLinkedGeometries,
   linkJobOf,
   linkedWorkerRpc,
   noteTreeGeometries,
@@ -168,6 +169,21 @@ describe('the rev a tab shows, and the stamp on its saves', () => {
     } finally {
       window.removeEventListener('cfd:tree-sync', sync);
     }
+  });
+
+  it('leaving the project closes its link streams (Home holds none); the next tree read opens them again', () => {
+    const geoms = ['st-1', 'st-2', 'st-3'].map((sid, i) => ({ id: `g${i + 1}`, rev: 1, source: { ...SRC, study_id: sid } }));
+    noteTreeGeometries('p1', geoms);
+    expect(FakeEventSource.made).toHaveLength(3);
+    expect(shownGeometryRev('g2')).toBe(1);
+    forgetLinkedGeometries();
+    expect(FakeEventSource.made.map((es) => es.readyState)).toEqual([2, 2, 2]);
+    expect(shownGeometryRev('g2')).toBeNull();
+    // Back on the same project: its streams open again.
+    noteTreeGeometries('p1', geoms);
+    expect(FakeEventSource.made).toHaveLength(6);
+    expect(FakeEventSource.made.slice(3).map((es) => es.readyState)).toEqual([1, 1, 1]);
+    expect(FakeEventSource.made.slice(3).map((es) => es.url)).toEqual(FakeEventSource.made.slice(0, 3).map((es) => es.url));
   });
 
   it("a page opened while an update is queued or running shows it from the stream's snapshot; a question waiting shows as choosing", () => {

@@ -551,18 +551,29 @@ export async function chooseLinkFromRow(geometryId: string): Promise<boolean> {
   return true;
 }
 
-/** Tests: forget everything this module holds. */
-export function resetGeometryRevForTests(): void {
-  shown.clear();
-  plainSeen.clear();
-  olderRuns.clear();
-  jobs.clear();
+/**
+ * The tab left the project (Home): its link streams close and what it showed of the
+ * project's linked geometries is forgotten. A tab on Home kept one stream per linked
+ * geometry of the project it had shown, and the browser's 6 connections to the app are
+ * shared by all of its tabs: with a second tab on that project, every request waited.
+ * The next tree read of a project opens its streams again.
+ */
+export function forgetLinkedGeometries(): void {
   for (const es of streams.values()) es.close();
   streams.clear();
   scopes.clear();
-  listeners.clear();
-  projectOf = '';
+  jobs.clear();
+  shown.clear();
+  plainSeen.clear();
+  olderRuns.clear();
   reloading = new Map();
+  projectOf = '';
+}
+
+/** Tests: forget everything this module holds. */
+export function resetGeometryRevForTests(): void {
+  forgetLinkedGeometries();
+  listeners.clear();
   picksPaused = 0;
   host.activeGeometryId = () => '';
   host.reloadGeometry = () => undefined;

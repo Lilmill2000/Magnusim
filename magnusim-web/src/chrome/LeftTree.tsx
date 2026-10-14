@@ -6,7 +6,7 @@ import { defaultFluidName, defaultPreset, hasSeveralMaterials, modelOf } from '.
 import { pluginStudyScope, scopeBelongsToProject } from '../scope';
 import { headerKinds, kindKey } from '../workspace/startActions';
 import { bodyDisplay, faceDisplay, faceNamesGeometry, subscribeFaceNames } from '../workbench/faceNames';
-import { chooseLinkFromRow, linkJobOf, noteTreeGeometries, subscribeLinkedGeometries } from '../workbench/geometryRev';
+import { chooseLinkFromRow, forgetLinkedGeometries, linkJobOf, noteTreeGeometries, subscribeLinkedGeometries } from '../workbench/geometryRev';
 import {
   linkedGeometryByStudy,
   readSetupTree,
@@ -1019,6 +1019,8 @@ export function LeftTree() {
   useEffect(() => {
     if (!projectId) {
       docRef.current = null;
+      // No project: none of its link streams stays open (however Home was reached).
+      forgetLinkedGeometries();
       paint();
       window.addEventListener('cfd:tree-sync', paint);
       return () => window.removeEventListener('cfd:tree-sync', paint);

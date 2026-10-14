@@ -206,6 +206,7 @@ import {
   canPickInto,
   facePicksPaused,
   fetchLinkedSave,
+  forgetLinkedGeometries,
   pauseFacePicks,
   reloadLinkedToServer,
   runOlderGeometry,
@@ -20787,6 +20788,8 @@ function resetWorkbenchScope(nextId) {
     } catch (_) {}
   } else {
     preparedProjectId = null;
+    // Home holds none of the project's link streams (the browser's connections are few).
+    try { forgetLinkedGeometries(); } catch (_) {}
   }
   try { cancelResultsPrefetch(); } catch (_) {}
   try { hideAllTreeDetails(); } catch (_) {}
