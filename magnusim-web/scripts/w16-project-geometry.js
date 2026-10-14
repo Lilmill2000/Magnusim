@@ -1699,12 +1699,13 @@ async function renderGeometryThumb(projectId, retried = false) {
     return { ok: false, status: 500, body: { error: 'thumb script missing', path: THUMB_SCRIPT } };
   }
   const failKey = thumbFailureKey(id, geomId, freshnessSrc);
-  const failedAt = thumbFailures.get(failKey);
-  if (failedAt && Date.now() - failedAt < THUMB_FAILED_MS) {
+  const failed = thumbFailures.get(failKey);
+  if (failed && Date.now() - failed.at < THUMB_FAILED_MS) {
     if (existsSync(out) && statSync(out).size > 80) {
       return { ok: true, path: out, bytes: readFileSync(out), stale: true, project: proj };
     }
-    return { ok: false, status: 500, body: { error: 'thumb render failed', detail: 'failed a moment ago; not tried again yet', project_id: id } };
+    // The first failure's reason, kept: "not tried again" alone hid why.
+    return { ok: false, status: 500, body: { error: 'thumb render failed', detail: `${failed.detail} (not tried again yet)`, project_id: id } };
   }
   // Rendered outside the project, then moved in by placeThumb: render_geometry_thumb.py
   // makes the folder it writes to.
@@ -1717,7 +1718,7 @@ async function renderGeometryThumb(projectId, retried = false) {
     }
     thumbFailures.delete(failKey);
   } catch (e) {
-    thumbFailures.set(failKey, Date.now());
+    thumbFailures.set(failKey, { at: Date.now(), detail: String(e).slice(0, 2000) });
     rmSync(rendered, { force: true });
     if (existsSync(out) && statSync(out).size > 80) {
       return { ok: true, path: out, bytes: readFileSync(out), stale: true, project: proj };
