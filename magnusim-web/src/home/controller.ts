@@ -119,8 +119,8 @@ function projectHash(id) {
   return `#/p/${encodeURIComponent(id)}`;
 }
 
-export function parseHomeRoute() {
-  const h = String(location.hash || '').replace(/^#/, '');
+export function parseHomeRoute(hash = location.hash) {
+  const h = String(hash || '').replace(/^#/, '');
   const proj = h.match(/^\/p\/([^/]+)$/);
   if (proj) return { view: 'workbench', projectId: decodeURIComponent(proj[1]), filter: null, workspace: null };
   // A plugin workspace opens over its project's workbench.

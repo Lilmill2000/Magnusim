@@ -5,7 +5,7 @@ import { apiGet } from '../api/client';
 import type { RegistryRow } from '../api/registry.gen';
 import { SchemaForm } from '../forms/SchemaForm';
 import { PanelBoundary } from '../islands';
-import { filterWidgetEntries, panelsFor, useViewer } from '../plugin-api';
+import { filterWidgetEntries, panelsFor, usePanelsVersion, useViewer } from '../plugin-api';
 import { sameProjectRuns } from '../panels/run/residuals';
 import { useProjectStore } from '../store/project';
 import type { LayerId } from '../viewer/layers';
@@ -31,16 +31,6 @@ function Hosted({ children }: { children: ReactNode }) {
   if (!children) return null;
   if (host) return createPortal(children, host);
   return <>{children}</>;
-}
-
-function usePanelTick(): number {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const bump = () => setTick((n) => n + 1);
-    window.addEventListener('cfd:panels', bump);
-    return () => window.removeEventListener('cfd:panels', bump);
-  }, []);
-  return tick;
 }
 
 const FILTER_LAYERS: Record<string, LayerId> = {
@@ -108,7 +98,7 @@ export function pluginFilterRows(rows: RegistryRow[]): RegistryRow[] {
 
 export function FiltersPanel() {
   useViewer();
-  usePanelTick();
+  usePanelsVersion();
   const projectId = useProjectStore((s) => s.projectId);
   const filters = pluginFilterRows((useProjectStore((s) => s.registry?.filter) || []) as RegistryRow[]);
   if (!projectId) return null;
