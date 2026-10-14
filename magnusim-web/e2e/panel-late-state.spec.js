@@ -134,6 +134,12 @@ test('a study change that lands as the Simulation panel opens shows in the panel
     return { titleAtRelease, titleAtPublish, published, order, runtime: window.__CFD_STUDY_STATE__.name };
   });
   console.log('[late-state]', JSON.stringify(late));
+  // The panel subscribed only after the publish: one that subscribed first (opened from a
+  // click, say) hears it whatever its code, and this test would no longer test anything.
+  expect(
+    late.order.slice(0, 3),
+    'timing not forced: the publish must land after the panel is on screen and before it subscribes',
+  ).toEqual(['panel on screen', 'publish', 'subscribe']);
   expect(late.titleAtRelease).toBe(oldName);
   expect(late.published).toBe(newName);
   expect(late.titleAtPublish).toBe(oldName);
