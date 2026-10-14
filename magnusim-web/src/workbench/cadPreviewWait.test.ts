@@ -36,27 +36,37 @@ afterEach(() => {
 });
 
 describe('a preview asked for until it is made', () => {
-  it("waits the server's Retry-After, half as long again each time, at most 5 s, one request at a time; a 200 is the preview", async () => {
+  it("waits the server's Retry-After, half as long again each time, at most 2 s, one request at a time; a 200 is the preview", async () => {
     const meta = { n_faces: 12, faces: [] };
     const f = answers([() => pending('1'), () => pending('1'), () => pending('1'), () => pending('3'), () => pending('3'), () => new Response(JSON.stringify(meta), { status: 200 })]);
     const onPending = vi.fn();
     const done = waitCadPreview('/api/geometry/cad?project_id=p1&part=preview', { onPending });
     await vi.runAllTimersAsync();
     expect(await done).toEqual({ status: 200, body: meta });
-    // 1 s, 1.5 s, 2.25 s, 3.375 s (more than the 3 s asked for), then 5 s at most.
+    // 1 s, 1.5 s, then 2 s at most (a part made is on screen at most 2 s after), however
+    // long the server asks to wait.
     const gaps = f.at.slice(1).map((t, i) => t - f.at[i]);
-    expect(gaps).toEqual([1000, 1500, 2250, 3375, 5000]);
+    expect(gaps).toEqual([1000, 1500, 2000, 2000, 2000]);
     expect(onPending).toHaveBeenCalledTimes(1);
     expect(f.most()).toBe(1);
     expect(f.fn.mock.calls[0][1]).toMatchObject({ cache: 'no-store' });
   });
 
-  it('a Retry-After longer than the backoff is honoured; no Retry-After waits 1 s', async () => {
+  it('no Retry-After waits 1 s; a longer one than 2 s waits 2 s', async () => {
     const f = answers([() => pending(null), () => pending('4'), () => new Response('{}', { status: 200 })]);
     const done = waitCadPreview('/x');
     await vi.runAllTimersAsync();
     await done;
-    expect(f.at.slice(1).map((t, i) => t - f.at[i])).toEqual([1000, 4000]);
+    expect(f.at.slice(1).map((t, i) => t - f.at[i])).toEqual([1000, 2000]);
+  });
+
+  it("says whether the server answered the project's active geometry", async () => {
+    answers([
+      () => new Response('{"n_faces":3}', { status: 200, headers: { 'X-CFD-Active-Geometry': '1' } }),
+      () => new Response('{"n_faces":4}', { status: 200, headers: { 'X-CFD-Active-Geometry': '0' } }),
+    ]);
+    expect(await waitCadPreview('/x')).toEqual({ status: 200, body: { n_faces: 3 }, active: true });
+    expect(await waitCadPreview('/x')).toEqual({ status: 200, body: { n_faces: 4 }, active: false });
   });
 
   it('stops once the preview is no longer wanted: superseded, and nothing more is asked', async () => {

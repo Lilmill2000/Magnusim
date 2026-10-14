@@ -8,9 +8,15 @@
  * two tabs, froze every tab. Now the server answers 202 {pending} with Retry-After after a
  * quarter of a second, and the page asks again, one request at a time, until it is made (200)
  * or fails (any other status, returned as it is). A 202 is `r.ok`: only a 200 is the preview.
+ * A preview made is shown at most 2 s after it is (the asks are a second apart, then 1.5 s,
+ * then 2 s: each holds a connection a quarter of a second at most).
  */
 
-export type CadPreviewAnswer = { superseded?: false; status: number; body: unknown } | { superseded: true };
+/**
+ * The answer: its status and body (the parsed JSON), and `active` when the server says whether
+ * the geometry is the project's active one (X-CFD-Active-Geometry); or superseded.
+ */
+export type CadPreviewAnswer = { superseded?: false; status: number; body: unknown; active?: boolean } | { superseded: true };
 
 export interface CadPreviewWaitOpts {
   /** False once the caller no longer wants this preview (another part, another project). */
@@ -19,8 +25,8 @@ export interface CadPreviewWaitOpts {
   onPending?: () => void;
 }
 
-/** The longest wait between two asks. */
-const MAX_WAIT_MS = 5000;
+/** The longest wait between two asks: a part made is on screen this soon after. */
+const MAX_WAIT_MS = 2000;
 /** How often a wait checks that the preview is still wanted. */
 const CHECK_MS = 100;
 
@@ -43,7 +49,7 @@ async function pause(ms: number, isCurrent: () => boolean): Promise<void> {
  * GET `url` until the preview is made: { status: 200, body } then (the parsed JSON for
  * part=preview), { status, body } for any other answer but 202, or { superseded: true } once
  * `isCurrent` turns false. Each wait is the server's Retry-After (1 s without one), longer
- * by half each time, at most 5 s.
+ * by half each time, at most 2 s.
  */
 export async function waitCadPreview(url: string, opts: CadPreviewWaitOpts = {}): Promise<CadPreviewAnswer> {
   const isCurrent = opts.isCurrent || (() => true);
@@ -51,6 +57,8 @@ export async function waitCadPreview(url: string, opts: CadPreviewWaitOpts = {})
   let wait = 0;
   for (;;) {
     if (!isCurrent()) return { superseded: true };
+    // The server marks every answer no-store (a 200 too), so the browser never kept one;
+    // asking no-store also keeps two tabs' asks for the same URL off the browser's cache lock.
     const r = await fetch(url, { cache: 'no-store' });
     if (!isCurrent()) return { superseded: true };
     if (r.status !== 202) {
@@ -60,7 +68,8 @@ export async function waitCadPreview(url: string, opts: CadPreviewWaitOpts = {})
       } catch {
         body = null;
       }
-      return { status: r.status, body };
+      const active = r.headers.get('X-CFD-Active-Geometry');
+      return active == null ? { status: r.status, body } : { status: r.status, body, active: active === '1' };
     }
     await r.text().catch(() => '');
     if (!told) {

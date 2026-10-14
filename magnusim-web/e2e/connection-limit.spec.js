@@ -175,6 +175,12 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     rmSync(`${hold}.log`, { force: true });
     writeFileSync(hold, '');
     const made = () => (existsSync(`${hold}.log`) ? readFileSync(`${hold}.log`, 'utf8') : '').split(/\r?\n/).includes(`made ${plain.step_path}`);
+    // When the page asks for the part's face table (it asks again while the part is prepared).
+    const asks = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.pathname === '/api/geometry/cad' && u.searchParams.get('part') === 'preview') asks.push(Date.now());
+    });
     try {
       const seen = watchRequests(page.context());
       // Not waiting for every stream to connect: with the previews held, one could not (the
@@ -186,6 +192,13 @@ test.describe('the browser connection limit (6 to the app server)', () => {
       await expectRenamed(page, request, host, project.pid, project.studies[1].sid, 'Demo 2 renamed', seen, stage);
       // The viewport says what it waits for.
       await expect(page.locator('#viewport-job-label')).toContainText('Preparing elbow', { timeout: 15_000 });
+      // It asks again at most 2 s apart (each ask holds a connection a quarter of a second at
+      // most), so the part is on screen at most 2 s after it is made (the old asks reached 5 s
+      // apart: 1.25, 1.75, 2.5, 3.6 s, then 5 s).
+      await expect.poll(() => asks.length, { timeout: 30_000, message: 'the face table is asked for again and again' }).toBeGreaterThanOrEqual(7);
+      const gaps = asks.slice(1).map((t, i) => t - asks[i]);
+      stage(`the face table was asked for ${asks.length} times while the part was prepared, ${gaps.join(', ')} ms apart`);
+      expect(Math.max(...gaps), 'never more than 2 s (and the time an ask takes) apart').toBeLessThanOrEqual(3_000);
     } finally {
       rmSync(hold, { force: true });
     }
