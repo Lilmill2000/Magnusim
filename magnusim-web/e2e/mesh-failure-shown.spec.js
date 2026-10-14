@@ -99,9 +99,14 @@ test('a mesh that fails says why, and nothing shows it meshing after the end, ev
   let releaseStream = () => {};
   const streamHeld = new Promise((resolve) => (releaseStream = resolve));
   let streams = 0;
-  await page.route('**/api/jobs/*/events*', async (route) => {
-    streams += 1;
-    await streamHeld;
+  // The job's channel on the page's one event stream is asked for here (the server sends its
+  // snapshot and replay when it opens it).
+  await page.route(/\/api\/events\/subscribe(\?|$)/, async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    if ((body.channels || []).some((c) => c && c.kind === 'job')) {
+      streams += 1;
+      await streamHeld;
+    }
     await route.continue();
   });
   await openProject(page);
@@ -127,7 +132,7 @@ test('a mesh that fails says why, and nothing shows it meshing after the end, ev
   await page.waitForTimeout(3_000);
   await expectFailedShown(page, form, PLC_REASON);
 
-  await page.unroute('**/api/jobs/*/events*');
+  await page.unroute(/\/api\/events\/subscribe(\?|$)/);
   await page.reload();
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
   await page.waitForFunction(() => typeof window.__CFD_MESH_OPEN_SETTINGS__ === 'function');

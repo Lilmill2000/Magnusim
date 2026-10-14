@@ -22,6 +22,9 @@
  * study's folder, and follows, stops and lists the study's cases. One event
  * stream per channel carries every followed case; a reconnect's snapshot
  * catches each case up, and an event the frame already has (by seq) is dropped.
+ * Every stream the bridge follows (a job's, the cases', the link's) is a channel on
+ * the tab's one event stream (src/api/eventHub.ts): the browser's connections to the
+ * app are few, and the host page's streams share them with every tab.
  *
  * Linked geometries (1.5): project.linkGeometry sends the study's saved design to
  * /api/plugin-geometry/link and stays pending until the job it started ends, following
@@ -58,6 +61,7 @@ import type {
   ViewState,
   WorkspaceContext,
 } from '../plugin-sdk/workspace';
+import { openChannel, type ChannelHandle } from '../api/eventHub';
 import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
@@ -472,14 +476,14 @@ export class WorkspaceCalls {
   private leave: LeaveRun | null = null;
   /** The name of the geometry this study links, as the last link or question said. */
   private linkedName = '';
-  private linkStream: EventSource | null = null;
+  private linkStream: ChannelHandle | null = null;
   private wantsGeometry = false;
   /** Link jobs whose end the page was told of (`geometry` once per job). */
   private readonly linkEnds = new Set<string>();
-  private readonly streams = new Map<string, EventSource>();
+  private readonly streams = new Map<string, ChannelHandle>();
   /** The study's plugin cases the frame follows (compute.events), and their one stream. */
   private readonly cases = new Map<string, FollowedCase>();
-  private caseStream: EventSource | null = null;
+  private caseStream: ChannelHandle | null = null;
   /** Uploads this workspace began (the only ones it may send to, commit or abort). */
   private readonly uploads = new Map<string, OpenUpload>();
   /** Bumped by close(): an upload begun before it is aborted when its answer comes. */
@@ -1121,7 +1125,7 @@ export class WorkspaceCalls {
   private openLinkStream(): void {
     if (this.linkStream) return;
     const s = this.scope;
-    const es = new EventSource(`/api/plugin-geometry/events?${this.q({ plugin: s.plugin, study_id: s.studyId })}`);
+    const es = openChannel(`/api/plugin-geometry/events?${this.q({ plugin: s.plugin, study_id: s.studyId })}`);
     this.linkStream = es;
     es.addEventListener('snapshot', (e) => {
       try {
@@ -1403,7 +1407,7 @@ export class WorkspaceCalls {
   /** Forward a job's events to the frame until it ends (one stream per job). */
   private follow(jobId: string): void {
     if (this.streams.has(jobId)) return;
-    const es = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events?${this.q()}`);
+    const es = openChannel(`/api/jobs/${encodeURIComponent(jobId)}/events?${this.q()}`);
     this.streams.set(jobId, es);
     es.addEventListener('event', (e) => {
       try {
@@ -1465,7 +1469,7 @@ export class WorkspaceCalls {
   /** One stream per channel for every followed case of this study. */
   private openCaseStream(): void {
     if (this.caseStream) return;
-    const es = new EventSource(`/api/plugin-cases/events?${this.caseQuery()}`);
+    const es = openChannel(`/api/plugin-cases/events?${this.caseQuery()}`);
     this.caseStream = es;
     es.addEventListener('snapshot', (e) => {
       try {

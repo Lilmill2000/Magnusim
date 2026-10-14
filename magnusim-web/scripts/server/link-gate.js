@@ -60,6 +60,8 @@ export const UNGATED_PREFIXES = Object.freeze([
   '/api/case',
   '/api/compute-queue',
   '/api/cut-plane',
+  // The tab's one event stream (event-hub.ts): its channels read only what their own routes read.
+  '/api/events',
   '/api/fields',
   '/api/folders',
   '/api/inspect',

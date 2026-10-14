@@ -477,6 +477,7 @@ Rules:
 
 1. Only the workspace that started a job can follow or stop it, while it stays open. Any other id is refused with "not allowed: …".
 2. A page opened again cannot find a job that is still running. Have the job write its result in your folder (`PluginData`), and read it with `ws.data` when the page opens.
+3. Follow jobs with `ws.jobs.events` and cases with `ws.compute.events`, never with an `EventSource` of your own. The browser opens at most 6 connections to the app for all of its tabs, and a stream holds one while it is open. The app carries every stream a tab follows on one connection.
 
 ### OpenFOAM cases and results
 

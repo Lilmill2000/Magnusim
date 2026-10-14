@@ -22,12 +22,13 @@
  * - a second tab: each tree read compares a linked geometry's rev and names with the
  *   ones shown and loads it again, once, when they differ (only its names when the rev
  *   is the same: the faces file is not loaded again); this study's link events
- *   (`/api/plugin-geometry/events`) say when a job is queued, running or ended, for the
- *   geometry's row, and an ended one reads the tree again.
+ *   (`/api/plugin-geometry/events`, a channel on the tab's one event stream) say when a job
+ *   is queued, running or ended, for the geometry's row, and an ended one reads the tree again.
  *
  * The census test (geometryRev.census.test.ts) lists every save site of these records
  * and fails on one that does not go through this module.
  */
+import { openChannel, type ChannelHandle } from '../api/eventHub';
 import { workerRpc } from '../api/workerRpc';
 import { confirmAction } from './dialogs';
 import { sendLinkChoice, showLinkChoice, type LinkQuestion } from '../workspace/linkChoice';
@@ -96,7 +97,7 @@ const shown = new Map<string, Shown>();
 /** Geometries this tab has seen as plain imports (API 1.7): one a study then takes over is loaded again. */
 const plainSeen = new Set<string>();
 const jobs = new Map<string, LinkJobView>();
-const streams = new Map<string, EventSource>();
+const streams = new Map<string, ChannelHandle>();
 const listeners = new Set<() => void>();
 /** Started runs made on an older rev of their linked geometry, by run id: the geometry's name. */
 const olderRuns = new Map<string, string>();
@@ -455,7 +456,8 @@ const scopes = new Map<string, { projectId: string; plugin: string; studyId: str
 function openStream(projectId: string, geometryId: string, plugin: string, studyId: string, key: string): void {
   if (typeof EventSource === 'undefined') return;
   const q = new URLSearchParams({ project_id: projectId, plugin, study_id: studyId });
-  const es = new EventSource(`/api/plugin-geometry/events?${q.toString()}`);
+  // A channel on the tab's one event stream (the browser's connections to the app are few).
+  const es = openChannel(`/api/plugin-geometry/events?${q.toString()}`);
   streams.set(key, es);
   scopes.set(geometryId, { projectId, plugin, studyId });
   const set = (view: LinkJobView | null) => {

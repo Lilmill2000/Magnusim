@@ -23,6 +23,7 @@ import { CASE_BUSY, PluginFileError, PluginFiles, caseBusy, registerPluginFileRo
 import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 import { registerPluginCaseRoutes } from './plugin-cases.ts';
 import { registerLinkRoutes } from './link-routes.ts';
+import { registerChannelKind, registerEventHubRoutes, type ChannelOpened, type ChannelSend } from './event-hub.ts';
 import { cancelStudyQuestions } from './link-job.js';
 import { dropFoamJobs, queuedFoamNames, relabelFoamJobs } from './compute-queue.ts';
 import { activeCaseKeys, bumpPluginEpoch, rowNameOf, stopFoamCasesFor, studyHasActiveCase } from '../foam-runner.js';
@@ -109,6 +110,50 @@ function rpcStatus(err: unknown): { status: number; body: Record<string, unknown
     return { status, body: { error: err.message, code: err.code, ...(typeof why === 'string' ? { reason: why } : {}), ok: false } };
   }
   return { status: 500, body: { error: String(err instanceof Error ? err.message : err), ok: false } };
+}
+
+const JOB_ENDED = ['done', 'failed', 'stopped'];
+
+/**
+ * A job's snapshot and its events so far, then each new one and its end; `done` runs after
+ * the end (at once for a job that has ended). The order is the one the mesh watcher's
+ * ended guard relies on (runtime.js watchJobEvents). Returns the stop.
+ */
+function followJob(jobs: JobManager, job: JobRecord, send: ChannelSend, done: () => void): () => void {
+  send('snapshot', job);
+  for (const ev of job.events) send('event', ev);
+  if (JOB_ENDED.includes(job.status)) {
+    send('end', job);
+    done();
+    return () => undefined;
+  }
+  const bus = jobs.onEvents(job.id);
+  const onEv = (ev: object) => send('event', ev);
+  const onEnd = (rec: JobRecord) => {
+    send('end', rec);
+    stop();
+    done();
+  };
+  const stop = () => {
+    bus.off('event', onEv);
+    bus.off('end', onEnd);
+  };
+  bus.on('event', onEv);
+  bus.on('end', onEnd);
+  return stop;
+}
+
+/**
+ * A job's events on a tab's one event stream (event-hub.ts, kind `job`): params {project_id,
+ * job_id}, refused as GET /api/jobs/:id/events refuses (400, 404, 403). Its end ends the channel.
+ */
+export function openJobChannel(jobs: JobManager, params: Record<string, unknown>, send: ChannelSend, done: () => void): ChannelOpened {
+  const project = String(params.project_id || '').trim();
+  const job = jobs.get(String(params.job_id || ''));
+  if (!project) return { ok: false, status: 400, error: 'project_id required' };
+  if (!job) return { ok: false, status: 404, error: 'job not found' };
+  if (job.project !== project) return { ok: false, status: 403, error: 'job belongs to another project' };
+  return { ok: true, cleanup: followJob(jobs, job, send, done) };
 }
 
 async function workerJson(
@@ -476,6 +521,11 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     ctx.sendJson(200, { ok: true, jobs: deps.jobs.list({ kind, project }) });
   });
 
+  // One event stream per tab (GET /api/events): links, cases and jobs are channels on it.
+  registerEventHubRoutes(router);
+  registerChannelKind('job', (params, send, done) => openJobChannel(deps.jobs, params, send, done));
+
+  // A job's events on a stream of its own; the app's pages follow jobs on the tab's one stream.
   router.get('/api/jobs/:id/events', (ctx) => {
     const project = ctx.scope.projectId;
     const job = deps.jobs.get(ctx.params.id);
@@ -491,32 +541,22 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
       ctx.sendJson(403, { error: 'job belongs to another project' });
       return;
     }
-    ctx.res.statusCode = 200;
-    ctx.res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    ctx.res.setHeader('Cache-Control', 'no-store');
-    ctx.res.setHeader('Connection', 'keep-alive');
-    writeSse(ctx.res, 'snapshot', job);
-    for (const ev of job.events) writeSse(ctx.res, 'event', ev);
-    if (['done', 'failed', 'stopped'].includes(job.status)) {
-      writeSse(ctx.res, 'end', job);
-      ctx.res.end();
-      return;
-    }
-    const bus = deps.jobs.onEvents(job.id);
-    const onEv = (ev: object) => writeSse(ctx.res, 'event', ev);
-    const onEnd = (rec: JobRecord) => {
-      writeSse(ctx.res, 'end', rec);
-      cleanup();
-      ctx.res.end();
+    const res = ctx.res;
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Connection', 'keep-alive');
+    let ended = false;
+    const stop = followJob(deps.jobs, job, (event, data) => writeSse(res, event, data), () => {
+      ended = true;
+      res.end();
+    });
+    if (ended) return;
+    const closed = () => {
+      stop();
+      res.off('close', closed);
     };
-    const cleanup = () => {
-      bus.off('event', onEv);
-      bus.off('end', onEnd);
-      ctx.res.off('close', cleanup);
-    };
-    bus.on('event', onEv);
-    bus.on('end', onEnd);
-    ctx.res.on('close', cleanup);
+    res.on('close', closed);
   });
 
   router.get('/api/jobs/:id', (ctx) => {

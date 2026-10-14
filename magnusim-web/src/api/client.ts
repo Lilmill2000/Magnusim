@@ -1,3 +1,5 @@
+import { openChannel } from './eventHub';
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -44,7 +46,8 @@ export function subscribeJobEvents(
   projectId?: string,
 ): () => void {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  const es = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events${query}`);
+  // A channel on the tab's one event stream, shaped like the EventSource this was.
+  const es = openChannel(`/api/jobs/${encodeURIComponent(jobId)}/events${query}`);
   es.onmessage = onEvent;
   es.addEventListener('snapshot', onEvent);
   es.addEventListener('event', onEvent);

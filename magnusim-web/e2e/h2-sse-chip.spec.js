@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { mockJobChannel } from './support/event-hub-mock.js';
 
 const PROJECT_A = 'sample-project-steady-state-e2e';
 
@@ -11,13 +12,8 @@ test('gate:h2-sse-chip mesh progress reaches the viewport chip', async ({ page }
   await page.addInitScript(() => {
     window.__CFD_DISABLE_RUN_STATUS_POLL__ = true;
   });
-  await page.route('**/api/jobs/job-h2/events*', async (route) => {
-    await route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store' },
-      body: 'event: event\ndata: {"event":"progress","stage":"gmsh","status":"running"}\n\n',
-    });
-  });
+  // The job's events on the page's one event stream.
+  await mockJobChannel(page, 'job-h2', [['event', { event: 'progress', stage: 'gmsh', status: 'running' }]]);
   await page.goto(`/#/p/${encodeURIComponent(PROJECT_A)}`);
   await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
   await page.waitForFunction(() => typeof window.__CFD_WATCH_JOB__ === 'function');

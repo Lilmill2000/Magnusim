@@ -280,8 +280,9 @@ test('gate:l2-e2e crash and fence: an update that cannot finish fences its geome
     await openProject(page, host, scope.pid);
     expect(await shownPart(page, host, scope.pid, gid)).toEqual({ status: 200, zmax: 35, faces: 21 });
     const shownNow = () => page.evaluate(() => ({ id: window.__CFD_W16__?.geometry?.id || null, ready: !!window.__CFD_W16__?.ready, cells: window.__CFD_W16__?.fingerprint?.nCells || 0 }));
+    // Its faces are on screen (the viewport reads the part's face table first, then its faces).
+    await expect.poll(async () => (await shownNow()).cells, { timeout: 60_000 }).toBeGreaterThan(0);
     const before = await shownNow();
-    expect(before.cells).toBeGreaterThan(0);
     const r = await link(request, host, scope, 'v2', 2, 1);
     expect(r.choosing, 'the geometry is in use: the host asks').toBeTruthy();
     await chooseApi(request, host, scope, r.job_id, 'overwrite');
@@ -602,7 +603,8 @@ test.describe('linked geometries: labels (L2 step 2)', () => {
     const ctx2 = await browser.newContext();
     const tab2 = await ctx2.newPage();
     try {
-      await tab2.route('**/api/plugin-geometry/events**', (r) => r.abort());
+      // Its one event stream (src/api/eventHub.ts) carries the link events: cut.
+      await tab2.route(/\/api\/events\?/, (r) => r.abort());
       await openProject(tab2, host, scope.pid);
       await tab2.evaluate((x) => window.__CFD_OPEN_BC__(x), side);
       await expect(tab2.locator('#panel-bc-editor .cfd-island [data-bc-editor="1"]')).toHaveAttribute('data-bc-id', side, { timeout: 15_000 });

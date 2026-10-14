@@ -49,6 +49,8 @@ export const CONTRACT_SPECS = ['e2e/h5-plugins.spec.js', 'e2e/h8-contract.spec.j
 export const HOST_PATHS = {
   cad: [
     'src/workspace/',
+    // The bridge's job, case and link streams are channels on the tab's one event stream.
+    'src/api/eventHub.ts',
     'src/plugin-sdk/',
     'src/plugin-api/',
     // The UI kit: every workspace frame loads /plugin-sdk/plugin-ui.css and its import-map entry.
@@ -128,6 +130,7 @@ export const LINK_HOST_PATHS = [
   'scripts/server/',
   'src/workbench/jobQueueOrder.ts',
   'src/workbench/geometryRev.ts',
+  'src/api/eventHub.ts',
   'src/workbench/faceNames.ts',
   'src/workspace/linkChoice.ts',
   'src/workspace/linkReport.ts',

@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { subscribeJobEvents } from './client';
 
+// The tab's one event stream (src/api/eventHub.ts) hands each stream out as a channel shaped
+// like an EventSource: here, the test's fake one.
+vi.mock('./eventHub', () => ({
+  openChannel: (url: string) => {
+    const es = new (globalThis as unknown as { EventSource: new (u: string) => Record<string, unknown> }).EventSource(url);
+    if (typeof es.pin !== 'function') es.pin = () => undefined;
+    return es;
+  },
+}));
+
 describe('job stream lifecycle', () => {
   afterEach(() => vi.unstubAllGlobals());
   it('delivers snapshot/event messages and closes terminal streams', () => {

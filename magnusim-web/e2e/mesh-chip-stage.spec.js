@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { seedElbowProject } from './prepare-projects.js';
+import { mockJobChannel } from './support/event-hub-mock.js';
 
 // The viewport's job chip named the running mesh stage by its raw key ("Meshing ... ·
 // prepare_input") while the Mesh panel said "Building the mesh input". The chip names
@@ -38,13 +39,8 @@ test('the viewport job chip names the mesh stage as the Mesh panel does, never b
     window.__CFD_DISABLE_RUN_STATUS_POLL__ = true;
   });
   let stage = 'prepare_input';
-  await page.route(`**/api/jobs/${JOB}/events*`, async (route) => {
-    await route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store' },
-      body: `event: event\ndata: ${JSON.stringify({ event: 'progress', stage, status: 'running' })}\n\n`,
-    });
-  });
+  // The job's events on the page's one event stream: its stage when the job is followed.
+  await mockJobChannel(page, JOB, () => [['event', { event: 'progress', stage, status: 'running' }]]);
   await page.route(/\/api\/mesh\/generate(\?|$)/, async (route) => {
     await route.fulfill({
       status: 202,

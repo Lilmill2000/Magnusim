@@ -8,6 +8,16 @@ import type { StudyRecord } from '../plugin-sdk/workspace';
 import { WorkspaceBridge, WorkspaceCalls, viewState, type BridgeHooks, type BridgeScope, type LeaveActivity } from './bridge';
 import { installWorkspaceLeaveGuard, leaveWorkspaceTo, registerOpenWorkspace, type GuardedWorkspace } from './leaveGuard';
 
+// The tab's one event stream (src/api/eventHub.ts) hands each stream out as a channel shaped
+// like an EventSource: here, the test's fake one.
+vi.mock('../api/eventHub', () => ({
+  openChannel: (url: string) => {
+    const es = new (globalThis as unknown as { EventSource: new (u: string) => Record<string, unknown> }).EventSource(url);
+    if (typeof es.pin !== 'function') es.pin = () => undefined;
+    return es;
+  },
+}));
+
 const SCOPE: BridgeScope = { plugin: 'link-demo', pluginName: 'Link demo', workspace: 'demo', projectId: 'proj-a', projectTitle: 'Project A', studyId: 'st-1' };
 const STUDY = { id: 'st-1', kind: 'demo', title: 'Demo 1', rev: 3 } as unknown as StudyRecord;
 const LJOB = 'gl-mg1abc2d-0a1b2c';

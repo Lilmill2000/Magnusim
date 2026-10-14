@@ -14,7 +14,8 @@
  *   GET  /api/plugin-geometry/linked?project_id&plugin&study_id   {ok, linked: LinkedGeometry | null}
  *   GET  /api/plugin-geometry/status?project_id&plugin&study_id&job_id   {ok, job}
  *   GET  /api/plugin-geometry/events?project_id&plugin&study_id   (SSE) a snapshot of the
- *       study's jobs, then {job_id, seq, ev} per event
+ *       study's jobs, then {job_id, seq, ev} per event; the same as channel kind `link` of
+ *       a tab's one event stream (event-hub.ts), which the app's pages use
  *   GET  /api/geometry/lost-faces?project_id&geometry_id   a geometry's link for its panel:
  *       {linked, rev, name, source, last_update, entries: [lost entries by record]}
  *   POST /api/geometry/lost-faces/forget   {project_id, geometry_id, geometry_rev, study_id?,
@@ -33,6 +34,7 @@
 import type { RequestContext, Router } from './router.ts';
 import type { WorkerClient } from './worker.ts';
 import { writeSse } from './jobs.ts';
+import { registerChannelKind, type ChannelOpened, type ChannelSend } from './event-hub.ts';
 import type { PluginFiles } from './plugin-files.ts';
 import { registerGeometryEditRoutes } from './geometry-edit-routes.ts';
 import { claimComputeSlot, releaseComputeSlot, sameProjectFolder } from '../compute-slot.js';
@@ -71,15 +73,48 @@ function sendLinkError(ctx: RequestContext, err: unknown): void {
   ctx.sendJson(500, { ok: false, code: 'error', error: 'The request failed' });
 }
 
-function scopeOf(ctx: RequestContext): Scope {
-  const q = ctx.url.searchParams;
-  const projectId = String(q.get('project_id') || ctx.scope.projectId || '').trim();
-  const plugin = String(q.get('plugin') || '').trim();
-  const studyId = String(q.get('study_id') || '').trim();
+function scopeFrom(projectId: string, plugin: string, studyId: string): Scope {
   if (!projectId) throw new LinkJobError(400, 'bad_request', 'project_id required');
   if (!PLUGIN_KEY_RE.test(plugin) || /[. ]$/.test(plugin)) throw new LinkJobError(400, 'bad_request', 'invalid plugin key');
   if (!STUDY_ID_RE.test(studyId)) throw new LinkJobError(400, 'bad_request', 'invalid study id');
   return { projectId, plugin, studyId };
+}
+
+function scopeOf(ctx: RequestContext): Scope {
+  const q = ctx.url.searchParams;
+  return scopeFrom(
+    String(q.get('project_id') || ctx.scope.projectId || '').trim(),
+    String(q.get('plugin') || '').trim(),
+    String(q.get('study_id') || '').trim(),
+  );
+}
+
+/** A study's link jobs as they are now (`snapshot`), then {job_id, seq, ev} per event (`link`). Returns the stop. */
+function followLinkEvents(s: Scope, send: ChannelSend): () => void {
+  send('snapshot', { jobs: studyLinkJobs(s.projectId, s.plugin, s.studyId).map(linkJobOf) });
+  const bus = linkEventBus();
+  const onEvent = (msg: Json) => {
+    if (!msg || msg.plugin !== s.plugin || msg.study_id !== s.studyId) return;
+    if (!sameProjectFolder(msg.project_id, s.projectId)) return;
+    send('link', { job_id: msg.job_id, seq: msg.seq, ev: msg.ev });
+  };
+  bus.on('event', onEvent);
+  return () => bus.off('event', onEvent);
+}
+
+/**
+ * A study's link events on a tab's one event stream (event-hub.ts, kind `link`): params
+ * {project_id, plugin, study_id}, checked as GET /api/plugin-geometry/events checks them.
+ */
+export function openLinkChannel(params: Record<string, unknown>, send: ChannelSend): ChannelOpened {
+  let s: Scope;
+  try {
+    s = scopeFrom(String(params.project_id || '').trim(), String(params.plugin || '').trim(), String(params.study_id || '').trim());
+  } catch (err) {
+    const e = err as { status?: number; message?: string };
+    return { ok: false, status: Number(e.status) || 400, error: String(e.message || 'bad_request') };
+  }
+  return { ok: true, cleanup: followLinkEvents(s, send) };
 }
 
 /** A record of this scope, or null. */
@@ -91,6 +126,7 @@ function inScope(rec: any, s: Scope): any {
 
 export function registerLinkRoutes(router: Router, deps: { worker: WorkerClient; files: PluginFiles }): void {
   configureLinkJobs({ worker: deps.worker, files: deps.files });
+  registerChannelKind('link', openLinkChannel);
   // Editing a project geometry (API 1.7): its target, file and faces, and the actions' resolver.
   registerGeometryEditRoutes(router, deps.worker);
   const own = { underscoreAlias: false };
@@ -166,7 +202,8 @@ export function registerLinkRoutes(router: Router, deps: { worker: WorkerClient;
     own,
   );
 
-  // One stream per open page (and the workbench): this study's link jobs only.
+  // This study's link jobs only, on a stream of its own. The app's pages follow them on the
+  // tab's one stream instead (openLinkChannel); this route stays for other callers.
   router.add(
     ['GET'],
     '/api/plugin-geometry/events',
@@ -183,14 +220,7 @@ export function registerLinkRoutes(router: Router, deps: { worker: WorkerClient;
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Connection', 'keep-alive');
-      writeSse(res, 'snapshot', { jobs: studyLinkJobs(s.projectId, s.plugin, s.studyId).map(linkJobOf) });
-      const bus = linkEventBus();
-      const onEvent = (msg: Json) => {
-        if (!msg || msg.plugin !== s.plugin || msg.study_id !== s.studyId) return;
-        if (!sameProjectFolder(msg.project_id, s.projectId)) return;
-        writeSse(res, 'link', { job_id: msg.job_id, seq: msg.seq, ev: msg.ev });
-      };
-      bus.on('event', onEvent);
+      const stop = followLinkEvents(s, (event, data) => writeSse(res, event, data));
       const beat = setInterval(() => {
         try {
           res.write(': heartbeat\n\n');
@@ -200,7 +230,7 @@ export function registerLinkRoutes(router: Router, deps: { worker: WorkerClient;
       }, HEARTBEAT_MS);
       beat.unref();
       const cleanup = () => {
-        bus.off('event', onEvent);
+        stop();
         clearInterval(beat);
         res.off('close', cleanup);
       };

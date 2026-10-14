@@ -14,6 +14,7 @@ import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts
 import { PluginFileError, caseKeyOf, type PluginFiles } from './plugin-files.ts';
 import { enqueueFoamJob, queueAheadOf, queuedFoamCount, scheduleComputeQueueKick } from './compute-queue.ts';
 import { writeSse } from './jobs.ts';
+import { registerChannelKind, type ChannelOpened, type ChannelSend } from './event-hub.ts';
 import { sameProjectFolder } from '../compute-slot.js';
 import {
   FOAM_JOB_RE,
@@ -85,9 +86,10 @@ function pick(ctx: RequestContext, body: Json, name: string): unknown {
 }
 
 function scopeOf(ctx: RequestContext, body: Json): Scope {
-  const projectId = str(pick(ctx, body, 'project_id') || ctx.scope.projectId).trim();
-  const plugin = str(pick(ctx, body, 'plugin')).trim();
-  const studyId = str(pick(ctx, body, 'study_id')).trim();
+  return scopeFrom(str(pick(ctx, body, 'project_id') || ctx.scope.projectId).trim(), str(pick(ctx, body, 'plugin')).trim(), str(pick(ctx, body, 'study_id')).trim());
+}
+
+function scopeFrom(projectId: string, plugin: string, studyId: string): Scope {
   if (!projectId) throw new CaseError(400, 'bad_request', 'project_id required');
   if (!PLUGIN_KEY_RE.test(plugin) || /[. ]$/.test(plugin)) throw new CaseError(400, 'bad_request', 'invalid plugin key');
   if (!STUDY_ID_RE.test(studyId)) throw new CaseError(400, 'bad_request', 'invalid study id');
@@ -287,8 +289,42 @@ function sendCaseError(ctx: RequestContext, err: unknown): void {
   fail(ctx, 500, 'error', 'The request failed');
 }
 
+/** A study's cases as they are now (`snapshot`, with the running one's live points), then {job_id, seq, ev} per event (`case`). Returns the stop. */
+function followCaseEvents(s: Scope, send: ChannelSend): () => void {
+  const mine = (listFoamRecords({ kind: 'foam' }) as Rec[]).filter((r) => inScope(r, s)).slice(0, 50);
+  const running = mine.find((r) => r.status === 'running');
+  send('snapshot', {
+    jobs: mine.map(computeJobOf),
+    live: running ? { job_id: running.id, points: recentFoamPoints(running.id, 400) } : null,
+  });
+  const bus = foamEventBus();
+  const onEvent = (msg: Rec) => {
+    if (!msg || msg.kind !== 'foam' || msg.plugin !== s.plugin || msg.study_id !== s.studyId) return;
+    if (!sameProjectFolder(msg.project_id, s.projectId)) return;
+    send('case', { job_id: msg.job_id, seq: msg.seq, ev: msg.ev });
+  };
+  bus.on('event', onEvent);
+  return () => bus.off('event', onEvent);
+}
+
+/**
+ * A study's cases on a tab's one event stream (event-hub.ts, kind `case`): params
+ * {project_id, plugin, study_id}, checked as GET /api/plugin-cases/events checks them.
+ */
+export function openCaseChannel(params: Record<string, unknown>, send: ChannelSend): ChannelOpened {
+  let s: Scope;
+  try {
+    s = scopeFrom(str(params.project_id).trim(), str(params.plugin).trim(), str(params.study_id).trim());
+  } catch (err) {
+    const e = err as { status?: number; message?: string };
+    return { ok: false, status: Number(e.status) || 400, error: String(e.message || 'bad_request') };
+  }
+  return { ok: true, cleanup: followCaseEvents(s, send) };
+}
+
 export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): void {
   const { worker, files } = deps;
+  registerChannelKind('case', openCaseChannel);
 
   router.post('/api/plugin-cases/submit', async (ctx) => {
     const body = await bodyOf(ctx);
@@ -471,7 +507,8 @@ export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): 
     }
   });
 
-  // One stream per open workspace: this study's cases only.
+  // This study's cases only, on a stream of its own. The app's workspaces follow them on the
+  // tab's one stream instead (openCaseChannel); this route stays for other callers.
   router.get('/api/plugin-cases/events', (ctx) => {
     let s: Scope;
     try {
@@ -485,19 +522,7 @@ export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Connection', 'keep-alive');
-    const mine = (listFoamRecords({ kind: 'foam' }) as Rec[]).filter((r) => inScope(r, s)).slice(0, 50);
-    const running = mine.find((r) => r.status === 'running');
-    writeSse(res, 'snapshot', {
-      jobs: mine.map(computeJobOf),
-      live: running ? { job_id: running.id, points: recentFoamPoints(running.id, 400) } : null,
-    });
-    const bus = foamEventBus();
-    const onEvent = (msg: Rec) => {
-      if (!msg || msg.kind !== 'foam' || msg.plugin !== s.plugin || msg.study_id !== s.studyId) return;
-      if (!sameProjectFolder(msg.project_id, s.projectId)) return;
-      writeSse(res, 'case', { job_id: msg.job_id, seq: msg.seq, ev: msg.ev });
-    };
-    bus.on('event', onEvent);
+    const stop = followCaseEvents(s, (event, data) => writeSse(res, event, data));
     const beat = setInterval(() => {
       try {
         res.write(': heartbeat\n\n');
@@ -507,7 +532,7 @@ export function registerPluginCaseRoutes(router: Router, deps: PluginCaseDeps): 
     }, HEARTBEAT_MS);
     beat.unref();
     const cleanup = () => {
-      bus.off('event', onEvent);
+      stop();
       clearInterval(beat);
       res.off('close', cleanup);
     };

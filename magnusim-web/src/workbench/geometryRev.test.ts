@@ -17,6 +17,16 @@ import {
   withGeometryRev,
 } from './geometryRev';
 
+// The tab's one event stream (src/api/eventHub.ts) hands each stream out as a channel shaped
+// like an EventSource: here, the test's fake one.
+vi.mock('../api/eventHub', () => ({
+  openChannel: (url: string) => {
+    const es = new (globalThis as unknown as { EventSource: new (u: string) => Record<string, unknown> }).EventSource(url);
+    if (typeof es.pin !== 'function') es.pin = () => undefined;
+    return es;
+  },
+}));
+
 const confirmAction = vi.fn(async () => true);
 vi.mock('./dialogs', () => ({ confirmAction: (o: unknown) => confirmAction(o as never) }));
 
