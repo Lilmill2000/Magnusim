@@ -221,6 +221,33 @@ describe('one event stream per tab', () => {
   it('only the app\'s own stream URLs become channels', () => {
     expect(() => openChannel('/api/elsewhere/events')).toThrow(/no event channel/);
   });
+
+  it('ready() says when the server has a channel: true once its subscribe is answered, false when it is refused or closed', async () => {
+    answer = (body) =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          results: (body.channels || []).map((c, i) => (i === 1 ? { cid: c.cid, ok: false, status: 403, error: 'not this project' } : { cid: c.cid, ok: true })),
+        }),
+        { status: 200 },
+      );
+    const link = openChannel('/api/plugin-geometry/events?project_id=p1&plugin=link-demo&study_id=st-1');
+    const refused = openChannel('/api/jobs/job-other/events?project_id=p1');
+    const closed = openChannel('/api/plugin-cases/events?project_id=p1&plugin=demo&study_id=st-1');
+    const said: string[] = [];
+    void link.ready().then((ok) => said.push(`link ${ok}`));
+    void refused.ready().then((ok) => said.push(`refused ${ok}`));
+    void closed.ready().then((ok) => said.push(`closed ${ok}`));
+    closed.close();
+    await settle();
+    // Nothing is on the server before the stream says hello.
+    expect(said).toEqual(['closed false']);
+    FakeEventSource.made[0].hello('c1');
+    await settle();
+    expect(said).toEqual(['closed false', 'link true', 'refused false']);
+    // Asked again once it is on the server: at once.
+    expect(await link.ready()).toBe(true);
+  });
 });
 
 describe('a tab in the background', () => {

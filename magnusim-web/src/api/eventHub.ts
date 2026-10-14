@@ -18,6 +18,8 @@
  * - A refused channel is CLOSED and gets `error`; one the server ended (`_closed`, a job
  *   that ended) is CLOSED with no error. A dropped stream: every channel is CONNECTING
  *   and gets `error`, as an EventSource's reconnect does.
+ * - `ready()` says when the server has a channel (its subscribe answered, or a first frame
+ *   came): a caller whose request starts what the channel reports waits for it first.
  * - A hidden tab lets its stream go after 3 s unless a channel is pinned (a job's are, and
  *   a workspace pins its link while it waits for one): its channels stay, CONNECTING. Shown
  *   again, it opens the stream, and once its channels are asked for again the window hears
@@ -58,6 +60,8 @@ export interface ChannelHandle {
   close(): void;
   /** Keep the stream while the tab is hidden (true for a job's channel from the start). */
   pin(on: boolean): void;
+  /** True once the server has this channel (OPEN), false once it is closed or refused. */
+  ready(): Promise<boolean>;
 }
 
 interface HubState {
@@ -142,6 +146,7 @@ class Channel implements ChannelHandle {
   onopen: ((ev: Event) => void) | null = null;
   pinned: boolean;
   private readonly listeners = new Map<string, Set<Listener>>();
+  private readyWaiters: Array<(ok: boolean) => void> = [];
 
   constructor(
     readonly url: string,
@@ -187,6 +192,7 @@ class Channel implements ChannelHandle {
   close(): void {
     if (this.readyState === CLOSED) return;
     this.readyState = CLOSED;
+    this.settleReady(false);
     dropChannel(this, true);
   }
 
@@ -194,6 +200,19 @@ class Channel implements ChannelHandle {
     if (this.pinned === !!on) return;
     this.pinned = !!on;
     syncStream();
+  }
+
+  ready(): Promise<boolean> {
+    if (this.readyState === OPEN) return Promise.resolve(true);
+    if (this.readyState === CLOSED) return Promise.resolve(false);
+    return new Promise((done) => this.readyWaiters.push(done));
+  }
+
+  /** Answer the ready() calls waiting: the channel is on the server (true), or closed (false). */
+  settleReady(ok: boolean): void {
+    const waiting = this.readyWaiters;
+    this.readyWaiters = [];
+    for (const done of waiting) done(ok);
   }
 }
 
@@ -381,6 +400,7 @@ function onClosed(es: EventSource, e: MessageEvent): void {
   const ch = frame ? s.channels.get(frame.c) : undefined;
   if (!ch) return;
   ch.readyState = CLOSED;
+  ch.settleReady(false);
   dropChannel(ch, false);
 }
 
@@ -408,6 +428,7 @@ function onStreamError(es: EventSource): void {
 function opened(ch: Channel): void {
   if (ch.readyState !== CONNECTING) return;
   ch.readyState = OPEN;
+  ch.settleReady(true);
   ch.fire(new Event('open'));
 }
 
@@ -415,6 +436,7 @@ function opened(ch: Channel): void {
 function refuse(ch: Channel): void {
   if (ch.readyState === CLOSED) return;
   ch.readyState = CLOSED;
+  ch.settleReady(false);
   dropChannel(ch, false);
   ch.fire(new Event('error'));
 }

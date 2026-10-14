@@ -73,6 +73,11 @@ export const HOST_SDK_MAJOR = 1;
 export const HOST_API_VERSION = '1.8';
 /** A link job's id (gl-<time>-<hex>, scripts/link-store.js LINK_JOB_RE). */
 const LINK_JOB_ID = /^gl-[a-z0-9]{6,12}-[0-9a-f]{6}$/;
+/**
+ * How long a link waits for its channel to be on the server before it is sent anyway (the
+ * channel's snapshot and the job's status still settle it; only progress could be missed).
+ */
+const LINK_CHANNEL_WAIT_MS = 5000;
 const PROBE_MS = 1500;
 const METHOD_NAME = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,120}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
@@ -492,6 +497,8 @@ export class WorkspaceCalls {
   /** The name of the geometry this study links, as the last link or question said. */
   private linkedName = '';
   private linkStream: ChannelHandle | null = null;
+  /** Link calls on their way to the server (their channel is pinned meanwhile). */
+  private linkCalls = 0;
   private wantsGeometry = false;
   /** Link jobs whose end the page was told of (`geometry` once per job). */
   private readonly linkEnds = new Set<string>();
@@ -973,13 +980,24 @@ export class WorkspaceCalls {
     }
     const token = typeof params.token === 'string' ? params.token.slice(0, 64) : '';
     const body = { project_id: s.projectId, plugin: s.plugin, study_id: s.studyId, ...linkBody(params) };
-    // Open the stream first, so the job's first events are not missed.
+    // The study's link channel is on the server before the link is sent, so the events of the
+    // job it starts reach this page (its channel on the tab's one stream is asked for in a
+    // batch, after this call would have gone). Pinned meanwhile: a hidden tab opens it too.
     this.openLinkStream();
     const epoch = this.epoch;
-    const answer = await api<{ result?: LinkResult; job_id?: string; geometry_id?: string; created?: boolean; choosing?: LinkQuestion }>(
-      `/api/plugin-geometry/link?${this.q()}`,
-      { body },
-    );
+    this.linkCalls += 1;
+    this.pinLinkStream();
+    let answer: { result?: LinkResult; job_id?: string; geometry_id?: string; created?: boolean; choosing?: LinkQuestion };
+    try {
+      await this.linkChannelReady();
+      answer = await api<{ result?: LinkResult; job_id?: string; geometry_id?: string; created?: boolean; choosing?: LinkQuestion }>(
+        `/api/plugin-geometry/link?${this.q()}`,
+        { body },
+      );
+    } finally {
+      this.linkCalls -= 1;
+      this.pinLinkStream();
+    }
     if (answer.result) {
       const done = linkResultOf(answer.result);
       if (done.name) this.linkedName = done.name;
@@ -1167,12 +1185,27 @@ export class WorkspaceCalls {
   }
 
   /**
-   * A link this page waits for keeps the tab's event stream while the tab is hidden (its end
-   * settles the page's call, CAD's exit-hook link among them); a page that only follows
-   * `geometry` catches up from the snapshot when the tab is shown again.
+   * A link this page waits for, or is sending, keeps the tab's event stream while the tab is
+   * hidden (its end settles the page's call, CAD's exit-hook link among them); a page that
+   * only follows `geometry` catches up from the snapshot when the tab is shown again.
    */
   private pinLinkStream(): void {
-    this.linkStream?.pin(this.linkWaits.size > 0);
+    this.linkStream?.pin(this.linkWaits.size > 0 || this.linkCalls > 0);
+  }
+
+  /** The link channel is on the server, or LINK_CHANNEL_WAIT_MS went by (it is sent anyway). */
+  private async linkChannelReady(): Promise<void> {
+    const es = this.linkStream;
+    if (!es || typeof es.ready !== 'function') return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<void>((done) => {
+      timer = setTimeout(done, LINK_CHANNEL_WAIT_MS);
+    });
+    try {
+      await Promise.race([es.ready(), late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** A link job's state as the snapshot or its status has it: an ended one settles. */
