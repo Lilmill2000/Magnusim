@@ -105,9 +105,11 @@ test.describe('renders hang (MAGNUSIM_TEST_THUMB_FAIL=hang)', () => {
     await page.goto(`${host.base}/#/`);
     const card = page.locator(`.home-card[data-project-id="${pid}"]`);
     await card.waitFor({ timeout: 60_000 });
-    // The pictures are being made (none can be: every render hangs) ...
-    await expect.poll(() => seen.thumbAnswers.length, { timeout: 30_000 }).toBeGreaterThanOrEqual(4);
-    expect(seen.thumbAnswers.every((s) => s === 202), JSON.stringify(seen.thumbAnswers)).toBe(true);
+    // The pictures are being made (none can be: every render hangs) ... A part's own render
+    // starts at its import and may already be stopped at its limit when Home asks (204,
+    // remembered); the seeded projects' renders start now and are still stuck (202).
+    await expect.poll(() => seen.thumbAnswers.filter((s) => s === 202).length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+    expect(seen.thumbAnswers.every((s) => s === 202 || s === 204), JSON.stringify(seen.thumbAnswers)).toBe(true);
     // ... and the page's own requests are answered meanwhile: a rename lands at once.
     const t0 = Date.now();
     await card.click();
