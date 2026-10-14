@@ -10,6 +10,9 @@
 //    and is removed with Delete; hovering over the flow reads it in the toolbar's hint.
 // 4. An angle sweep of NACA 0012 over -4..4°: lift antisymmetric, the slope XFOIL gives, the
 //    angle put back, the rows kept with the scene.
+// 5. The inflow ahead of a lifting airfoil keeps one total pressure across the tunnel (the
+//    inlet and the open edges hold the wind plus the airfoil's far vortex, its circulation from
+//    its lift), and turns up ahead of it; a walled tunnel's inlet holds the plain wind.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
 import { T, newTunnel, openTunnel, pageXY, scene, useTunnelHost, worldToPage } from './helpers.js';
@@ -241,4 +244,44 @@ test('an angle sweep of NACA 0012: lift antisymmetric with the slope XFOIL gives
   expect(s.sweep.model).toBe('sa');
   await expect(frame.locator('[data-t2d-sweep-rows]')).toContainText('NACA 0012 · Re 660,000 · turbulence model');
   await expect(frame.getByRole('img', { name: 'Drag polar' })).toBeVisible();
+});
+
+test("the inflow ahead of a lifting airfoil keeps one total pressure, and turns up ahead of it", async ({ page, request }) => {
+  env.needsFastGpu();
+  test.setTimeout(240_000);
+  const study = await newTunnel(env.host, request, 'Far field');
+  const frame = await openTunnel(env.host, page, study);
+  const s0 = await scene(frame);
+  const b = s0.bodies[0];
+  const U = s0.flow.speed;
+  await page.waitForTimeout(12_000);
+  // The far field's circulation is the airfoil's lift (Kutta-Joukowski), lift up: clockwise.
+  const ff = await T(frame, () => window.__TUNNEL__.farField());
+  expect(ff).toHaveLength(1);
+  expect(ff[0].gamma).toBeLessThan(0);
+  const cl = (await T(frame, (id) => window.__TUNNEL__.bodyLive(id), b.id)).cl;
+  expect(Math.abs(ff[0].cl / cl - 1), `far field Cl ${ff[0].cl} against the body's ${cl}`).toBeLessThan(0.05);
+  // Total pressure (Cp + |u|²/U²) across the inflow, 0.5 to 1.5 m from the inlet, bottom to top.
+  const pts = [];
+  for (const x of [0.5, 1, 1.5]) for (let k = 0; k < 9; k++) pts.push({ x, y: 0.4 + k * 0.4 });
+  const acc = pts.map(() => ({ tot: 0, v: 0 }));
+  for (let n = 0; n < 10; n++) {
+    const r = await T(frame, (p) => window.__TUNNEL__.readAt(p), pts);
+    r.forEach((q, i) => {
+      acc[i].tot += (q.cp + (q.speed / U) ** 2) / 10;
+      acc[i].v += q.v / 10;
+    });
+    await page.waitForTimeout(150);
+  }
+  const tots = acc.map((a) => a.tot);
+  const spread = Math.max(...tots) - Math.min(...tots);
+  console.log(`inflow total pressure ${Math.min(...tots).toFixed(3)} to ${Math.max(...tots).toFixed(3)}`);
+  // Held to a uniform wind it spread over 0.930 to 1.040; with the far field, within 0.01.
+  expect(spread).toBeLessThan(0.03);
+  // Upwash: the flow a chord and a half ahead, at the airfoil's height, turns up.
+  const ahead = pts.findIndex((p) => p.x === 1 && Math.abs(p.y - b.y) < 1e-9);
+  expect(acc[ahead].v).toBeGreaterThan(0.01 * U);
+  // A walled tunnel's inlet is the tunnel's own: no far-field vortex there.
+  await frame.getByRole('combobox', { name: 'Walls' }).selectOption('slip');
+  await expect.poll(async () => (await T(frame, () => window.__TUNNEL__.farField()))[0]?.gamma, { timeout: 30_000 }).toBe(0);
 });

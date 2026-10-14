@@ -133,6 +133,11 @@ interface BodyState {
   fyEma: number;
   /** Moment about the pivot (lattice, counter-clockwise positive), averaged as the forces. */
   mzEma: number;
+  /**
+   * Its lift averaged over a couple of passes of the flow (lattice): its circulation for the far
+   * field (a shedding body's swing is damped, as its shed vortices cancel it far away).
+   */
+  fyMean: number;
   /** Forces per step for the tests (lattice units), the most recent first trimmed. */
   history: number[];
   /** Force coefficients through time (simulated seconds), a few dozen samples per convective time (Cm nose up positive). */
@@ -151,6 +156,13 @@ export interface FlowReading {
   /** The point is inside a body (no flow there). */
   inBody: boolean;
 }
+
+/**
+ * Passes of the flow past a body its far-field circulation is averaged over: short enough to
+ * follow an angle change within a sweep's settling (2 % left after 8 passes), long enough to
+ * damp a shedding body's lift swing (a period is about 6 passes).
+ */
+const FAR_FIELD_PASSES = 2;
 
 /** Points across the free stream just past the inlet's absorbing layer: its density is the reference. */
 const REF_POINTS = 16;
@@ -511,6 +523,7 @@ export class Engine {
           fxEma: 0,
           fyEma: 0,
           mzEma: 0,
+          fyMean: 0,
           history: [],
           samples: { t: [], cd: [], cl: [], cm: [] },
         });
@@ -735,6 +748,30 @@ export class Engine {
     );
   }
 
+  /**
+   * A body's circulation for the far field (cells × lattice speed, counter-clockwise positive):
+   * from its mean lift, Kutta-Joukowski (L = -ρUΓ). Open tunnels only (a walled tunnel's inlet is
+   * the tunnel's own); capped at a lift coefficient of 4.
+   */
+  private circulation(st: BodyState, scene: Scene, map: LatticeMap): number {
+    if (scene.tunnel.walls !== 'farfield') return 0;
+    const L = referenceLength(st.body.shape) / map.dx;
+    const cap = 0.5 * map.u * map.u * L * 4;
+    return -Math.max(-cap, Math.min(cap, st.fyMean)) / map.u;
+  }
+
+  /** The circulation the far field holds round each body now (tests). */
+  farField(): { id: string; gamma: number; cl: number }[] {
+    const map = this.map;
+    const scene = this.scene;
+    if (!map || !scene) return [];
+    return this.order.map((id) => {
+      const st = this.bodies.get(id)!;
+      const L = referenceLength(st.body.shape) / map.dx;
+      return { id, gamma: this.circulation(st, scene, map), cl: st.fyMean / (0.5 * map.u * map.u * L) };
+    });
+  }
+
   /** A body's coefficient samples from simulated time `from` on (copies; empty without the body). */
   samplesOf(id: string, from = 0): { t: number[]; cd: number[]; cl: number[]; cm: number[] } {
     const sm = this.bodies.get(id)?.samples;
@@ -775,6 +812,7 @@ export class Engine {
       st.fxEma = 0;
       st.fyEma = 0;
       st.mzEma = 0;
+      st.fyMean = 0;
       st.history = [];
       st.samples = { t: [], cd: [], cl: [], cm: [] };
     }
@@ -868,7 +906,7 @@ export class Engine {
         st.vel = { x: capped ? mx / steps : vx, y: capped ? my / steps : vy, theta: Math.abs(mt) >= maxTurn ? mt / steps : vt };
         st.pose = { x: from.x + mx, y: from.y + my, theta: from.theta + mt };
       }
-      gpuBodies.push({ key: `${id}:${st.key}`, sdf: st.sdf, from: steps === 0 ? st.pose : from, to: st.pose });
+      gpuBodies.push({ key: `${id}:${st.key}`, sdf: st.sdf, from: steps === 0 ? st.pose : from, to: st.pose, gamma: this.circulation(st, scene, map) });
     }
     solver.setBodies(gpuBodies);
     const enc = this.device.createCommandEncoder();
@@ -1074,6 +1112,11 @@ export class Engine {
       st.fyEma = st.fyEma ? st.fyEma * (1 - a) + fy * a : fy;
       const mz = f.mz / r.steps;
       st.mzEma = st.mzEma ? st.mzEma * (1 - a) + mz * a : mz;
+      if (this.map) {
+        const passes = FAR_FIELD_PASSES * (referenceLength(st.body.shape) / this.map.dx / this.map.u);
+        const b = Math.min(1, r.steps / Math.max(1, passes));
+        st.fyMean = st.fyMean * (1 - b) + fy * b;
+      }
       if (this.recordForces) {
         for (let s = 0; s < r.steps; s++) st.history.push(f.perStep[2 * s], f.perStep[2 * s + 1]);
       }

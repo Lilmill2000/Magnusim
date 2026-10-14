@@ -30,6 +30,8 @@ export function exposeTestHandle({ store, engine, device, editor }: { ws: Worksp
     /** The flow at world points, and the pressure coefficient round a body. */
     readAt: (pts: { x: number; y: number }[]) => engine.readAt(pts),
     surfaceCp: (id: string) => engine.surfaceCp(id),
+    /** Each body's circulation in the far field (the inlet, the open edges and the absorbing layers hold it). */
+    farField: () => engine.farField(),
     /** The displayed field sampled every 4 cells (NaN in bodies), as a plain array. */
     sampleField: async () => {
       const s = await engine.sampleField();

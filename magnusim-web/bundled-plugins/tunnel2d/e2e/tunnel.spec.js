@@ -87,7 +87,12 @@ async function pageXY(page, frame, xy) {
 /** |field| statistics of the sampled field: max, and the x of its weighted centre (cells/4). */
 async function fieldStats(frame) {
   return T(frame, async () => {
-    const s = await window.__TUNNEL__.sampleField();
+    // Null while another read is in flight (the colour range reads every 400 ms): try again.
+    let s = null;
+    for (let t = 0; t < 50 && !s; t++) {
+      s = await window.__TUNNEL__.sampleField();
+      if (!s) await new Promise((r) => setTimeout(r, 50));
+    }
     const st = window.__TUNNEL__.stats();
     const w = Math.ceil(st.nx / 4);
     let max = 0;
@@ -403,7 +408,12 @@ test('a fast drag leaves no sound waves ringing through the tunnel', async ({ pa
   await frame.getByRole('combobox', { name: 'Show' }).selectOption('schlieren');
   const band = () =>
     T(frame, async () => {
-      const s = await window.__TUNNEL__.sampleField();
+      // Null while another read is in flight (the colour range reads every 400 ms): try again.
+      let s = null;
+      for (let t = 0; t < 50 && !s; t++) {
+        s = await window.__TUNNEL__.sampleField();
+        if (!s) await new Promise((r) => setTimeout(r, 50));
+      }
       const st = window.__TUNNEL__.stats();
       const w = Math.ceil(st.nx / 4);
       const h = Math.ceil(st.ny / 4);

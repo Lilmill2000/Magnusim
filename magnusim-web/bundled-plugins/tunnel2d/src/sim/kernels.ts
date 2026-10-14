@@ -57,7 +57,7 @@ struct Body {
   c0: vec2f, c1: vec2f,
   a0: f32, a1: f32, bound: f32, texel: f32,
   org: vec2f, w: u32, h: u32,
-  off: u32, band: f32, p1: u32, p2: u32,
+  off: u32, band: f32, gamma: f32, p2: u32,
 };
 struct Hit { d: f32, b: u32 };
 
@@ -118,6 +118,26 @@ fn feqAt(k: u32, rho: f32, u: vec2f) -> f32 {
   let c = vec2f(CXF[k], CYF[k]);
   let cu = dot(c, u);
   return WF[k] * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * dot(u, u));
+}
+
+/**
+ * The free stream as it is far from the bodies, at p: the wind plus each body's far-field
+ * vortex (its circulation, from its lift: Kutta-Joukowski), with the pressure Bernoulli gives
+ * (velocity x, y and density). A lifting body turns the flow ahead of it (upwash) and speeds
+ * it over its top a long way out: held to a uniform wind at the inlet two chords upstream,
+ * that flow is cut off and the inflow's total pressure skewed. Within a body's own reach the
+ * vortex is capped (it stands for the body only far away).
+ */
+fn farField(p: vec2f) -> vec3f {
+  var u = vec2f(P.uIn, 0.0);
+  for (var b = 0u; b < P.nBodies; b++) {
+    let g = B[b].gamma;
+    if (g == 0.0) { continue; }
+    let r = p - B[b].c1;
+    let r2 = max(dot(r, r), 4.0 * B[b].bound * B[b].bound);
+    u += (g / (6.2831853 * r2)) * vec2f(-r.y, r.x);
+  }
+  return vec3f(u, 1.0 + 1.5 * (P.uIn * P.uIn - dot(u, u)));
 }
 `;
 
@@ -390,7 +410,7 @@ export function stepShader(patch = false): string {
       yEdge = `if (${out}) {
       if (WALLS == 1u) { f${k} = ${rd(i, 'idx')}; }
       else if (WALLS == 0u) { f${k} = ${rd(MIRY[k], `u32(i32(x) - (${cx})) + y * P.nx`)}; }
-      else if (WALLS == 3u) { f${k} = ${n10(W[k])} * (3.0 * ${n1(cx)} * P.uIn + 4.5 * ${n1(cx * cx)} * P.uIn * P.uIn - 1.5 * P.uIn * P.uIn); }
+      else if (WALLS == 3u) { let ff = farField(vec2f(f32(i32(x) - (${cx})), f32(i32(y) - (${cy})))); f${k} = feqAt(${k}u, ff.z, ff.xy) - ${n10(W[k])}; }
       else { f${k} = ${rd(k, `u32(i32(x) - (${cx})) + ${wrapY} * P.nx`)}; }
     } else `;
     }
@@ -519,8 +539,9 @@ export function stepShader(patch = false): string {
 `;
   }
   collide += `  if (sig > 0.0) {
-    let uT = P.uIn;
-${Array.from({ length: 9 }, (_, k) => `    o${k} = mix(o${k}, ${n10(W[k])} * (3.0 * ${n1(CX[k])} * uT + 4.5 * ${n1(CX[k] * CX[k])} * uT * uT - 1.5 * uT * uT), sig);`).join('\n')}
+    // The absorbing layers relax to the far field (the wind, and each body's far vortex).
+    let ff = farField(vec2f(xf, f32(y)));
+${Array.from({ length: 9 }, (_, k) => `    o${k} = mix(o${k}, feqAt(${k}u, ff.z, ff.xy) - ${n10(W[k])}, sig);`).join('\n')}
   }
 ${Array.from({ length: 9 }, (_, k) => `  fout[${k}u * P.n + idx] = o${k};`).join('\n')}
 `;
@@ -615,19 +636,23 @@ fn step(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   var f0 = ${rd(0, 'idx')};
   ${pull}
   if (x == 0u) {
-    var u = P.uIn;
+    // Zou-He velocity inlet: the far field's velocity (the wind, turned by the bodies' far
+    // vortices), or the channel profile.
+    var u = farField(vec2f(0.0, f32(y))).xy;
     if (P.profile == 1u) {
       let H = f32(P.ny);
       let yy = f32(y) + 0.5;
-      u = 4.0 * P.uIn * yy * (H - yy) / (H * H);
+      u = vec2f(4.0 * P.uIn * yy * (H - yy) / (H * H), 0.0);
     }
-    let r = (1.0 + f0 + f2 + f4 + 2.0 * (f3 + f6 + f7)) / (1.0 - u);
-    f1 = f3 + (2.0 / 3.0) * r * u;
-    f5 = f7 - 0.5 * (f2 - f4) + (1.0 / 6.0) * r * u;
-    f8 = f6 + 0.5 * (f2 - f4) + (1.0 / 6.0) * r * u;
+    let r = (1.0 + f0 + f2 + f4 + 2.0 * (f3 + f6 + f7)) / (1.0 - u.x);
+    f1 = f3 + (2.0 / 3.0) * r * u.x;
+    f5 = f7 - 0.5 * (f2 - f4) + 0.5 * r * u.y + (1.0 / 6.0) * r * u.x;
+    f8 = f6 + 0.5 * (f2 - f4) - 0.5 * r * u.y + (1.0 / 6.0) * r * u.x;
   }
   if (x == P.nx - 1u) {
-    let uo = f0 + f2 + f4 + 2.0 * (f1 + f5 + f8);
+    // Zou-He pressure outlet at the far field's pressure (populations are stored less their
+    // weights: their sum is the density less 1).
+    let uo = f0 + f2 + f4 + 2.0 * (f1 + f5 + f8) - (farField(vec2f(f32(x), f32(y))).z - 1.0);
     f3 = f1 - (2.0 / 3.0) * uo;
     f7 = f5 + 0.5 * (f2 - f4) - (1.0 / 6.0) * uo;
     f6 = f8 - 0.5 * (f2 - f4) - (1.0 / 6.0) * uo;

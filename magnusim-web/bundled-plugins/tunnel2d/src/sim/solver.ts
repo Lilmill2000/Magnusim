@@ -42,6 +42,8 @@ export interface GpuBody {
   sdf: SdfGrid;
   from: { x: number; y: number; theta: number };
   to: { x: number; y: number; theta: number };
+  /** Its circulation (cells × lattice speed, counter-clockwise positive) for the far field; 0: none. */
+  gamma?: number;
 }
 
 export interface FrameResult {
@@ -372,6 +374,7 @@ export class Solver {
       u[o + 11] = b.sdf.h;
       u[o + 12] = this.sdfOffsets[i] ?? 0;
       f[o + 13] = b.sdf.band;
+      f[o + 14] = b.gamma ?? 0;
     });
     this.device.queue.writeBuffer(this.bodiesBuf, 0, this.bodyData);
   }
