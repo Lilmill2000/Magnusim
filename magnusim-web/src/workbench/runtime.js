@@ -194,6 +194,7 @@ import {
 import { createToastQueue } from './toastQueue';
 import { runProgressText } from './runProgressText';
 import { importFailureText } from './importFailureText';
+import { waitCadPreview } from './cadPreviewWait';
 import { carrySettle } from './runSettle';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
@@ -17487,6 +17488,13 @@ function syncToolbarPresence() {
 
 const viewportBusy = { results: 0, cut: 0, mesh: 0 };
 const viewportBusyStarted = { results: 0, cut: 0, mesh: 0 };
+/**
+ * The part whose preview is being made for the viewport's load ({token, name, since}), or
+ * null: the viewport's chip says "Preparing <part>…" meanwhile, so a part that takes
+ * minutes to prepare does not look like a frozen app.
+ */
+let cadPreparing = null;
+
 let projectOpenCount = 0;
 let projectOpenStarted = 0;
 let viewportChipTimer = 0;
@@ -17558,7 +17566,13 @@ function syncViewportJobChip() {
   let holdAfter = true;
   const stage = workbenchStage();
   const post = stage === 'results' || stage === 'mesh';
-  if (projectOpenCount > 0) {
+  if (cadPreparing) {
+    // The part's preview is being made (a big STEP takes minutes): said, not a frozen app.
+    show = true;
+    label = 'Preparing ' + cadPreparing.name + '…';
+    time = formatElapsed(Date.now() - cadPreparing.since);
+    holdAfter = false;
+  } else if (projectOpenCount > 0) {
     show = true;
     label = 'Opening project';
     if (!projectOpenStarted) projectOpenStarted = Date.now();
@@ -19963,16 +19977,21 @@ function insideFacesFromTable(faces) {
   return out;
 }
 
-async function loadCadInsideFaces(facesUrl, token) {
-  cadInsideFaces = new Map();
+/** The face table (part=preview) of a part's faces URL, or '' for a URL that has none. */
+function cadPreviewUrlOf(facesUrl) {
   const url = String(facesUrl || '').replace(/([?&])part=faces(?=&|$)/, '$1part=preview');
-  if (!/[?&]part=preview(&|$)/.test(url)) return;
-  try {
-    const r = await fetch(url);
-    if (!r.ok || token !== cadLoadToken) return;
-    const meta = await r.json();
-    if (token === cadLoadToken) cadInsideFaces = insideFacesFromTable(meta && meta.faces);
-  } catch (_) {}
+  return /[?&]part=preview(&|$)/.test(url) ? url : '';
+}
+
+function setCadPreparing(token, name) {
+  cadPreparing = { token, name: String(name || '').trim() || 'the part', since: Date.now() };
+  try { syncViewportJobChip(); } catch (_) {}
+}
+
+function clearCadPreparing(token) {
+  if (!cadPreparing || (token != null && cadPreparing.token !== token)) return;
+  cadPreparing = null;
+  try { syncViewportJobChip(); } catch (_) {}
 }
 
 /** Say why a face inside the part was not put on the boundary condition. */
@@ -19986,13 +20005,16 @@ function refuseInsideFace(label) {
 
 window.__CFD_INSIDE_FACES__ = () => Array.from(cadInsideFaces.keys());
 
-async function loadOfficialCadCom() {
+async function loadOfficialCadCom(token) {
   const pid = w16State.project && w16State.project.id;
   if (!pid) return;
   try {
-    const r = await fetch('/api/geometry/cad?project_id=' + encodeURIComponent(pid) + '&part=preview');
-    if (!r.ok) return;
-    const meta = await r.json();
+    // Only a 200 is the face table: a 202 (being prepared) is r.ok too.
+    const got = await waitCadPreview('/api/geometry/cad?project_id=' + encodeURIComponent(pid) + '&part=preview', {
+      isCurrent: () => (token == null || token === cadLoadToken) && String((w16State.project && w16State.project.id) || '') === String(pid),
+    });
+    if (got.superseded || got.status !== 200) return;
+    const meta = got.body;
     rememberOfficialCom(meta);
     // A linked geometry's face and body names, for the face and body lists (API 1.5).
     try { setShownFaceTable(meta, (w16State.geometry && w16State.geometry.id) || ''); } catch (_) {}
@@ -20024,9 +20046,34 @@ async function loadGeometryCad(facesUrl, edgesUrl, opts) {
   // The user's camera stays exactly as it is (a landing after they moved it): no framing.
   const holdCamera = !!(opts && opts.holdCamera);
   clearCadEdgeDisplay();
-  loadOfficialCadCom().catch(() => {});
-  loadCadInsideFaces(facesUrl, token);
+  cadInsideFaces = new Map();
   cadLoadInFlight = token;
+  clearCadPreparing();
+  // The face table first: a part whose preview is not made yet is made now, and the server
+  // answers "being prepared" until it is (it never holds the request: the browser's
+  // connections to the app are few). Asked again, one request at a time, while the chip
+  // says so; the faces and edges then come at once, and the vtk readers never see a 202.
+  const previewUrl = cadPreviewUrlOf(facesUrl);
+  if (previewUrl) {
+    const pid = w16State.project && w16State.project.id;
+    const name = w16State.geometry && w16State.geometry.name;
+    let got = null;
+    try {
+      got = await waitCadPreview(previewUrl, {
+        isCurrent: () => token === cadLoadToken && String((w16State.project && w16State.project.id) || '') === String(pid || ''),
+        onPending: () => setCadPreparing(token, name),
+      });
+    } catch (_) {
+      got = null;
+    }
+    clearCadPreparing(token);
+    if (got && got.superseded) {
+      if (cadLoadInFlight === token) cadLoadInFlight = 0;
+      return { fp: { empty: true }, stale: true };
+    }
+    if (got && got.status === 200) cadInsideFaces = insideFacesFromTable(got.body && got.body.faces);
+  }
+  loadOfficialCadCom(token).catch(() => {});
   const facesP = geomCadFaceReader.setUrl(facesUrl);
   const edgesP = edgesUrl ? geomCadEdgeReader.setUrl(edgesUrl) : Promise.resolve();
   try {
@@ -37744,9 +37791,13 @@ async function reloadShownFaceNames(geomId) {
   if (!pid || !geomId) return false;
   try {
     const q = new URLSearchParams({ project_id: String(pid), geometry_id: String(geomId), part: 'preview', t: String(Date.now()) });
-    const r = await fetch('/api/geometry/cad?' + q.toString(), { cache: 'no-store' });
-    if (!r.ok) return false;
-    const meta = await r.json();
+    // Only a 200 is the face table: a 202 (being prepared) is r.ok too.
+    const got = await waitCadPreview('/api/geometry/cad?' + q.toString(), {
+      isCurrent: () =>
+        String(currentProjectId() || '') === String(pid) && String((w16State.geometry && w16State.geometry.id) || '') === String(geomId),
+    });
+    if (got.superseded || got.status !== 200) return false;
+    const meta = got.body;
     if (String(currentProjectId() || '') !== String(pid)) return false;
     setShownFaceTable(meta, geomId);
   } catch (_) {

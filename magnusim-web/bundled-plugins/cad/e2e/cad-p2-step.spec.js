@@ -49,6 +49,7 @@ import { dirname, join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { appPythonMissing, findAppPython } from '../scripts/app-python.mjs';
+import { cadPreviewReady } from '../../../e2e/support/cad-preview.mjs';
 import { addSolid, baseUrl, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, soloVolume, chipVolumes, commandControl } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -600,7 +601,7 @@ test("cad:p2-step-vortex-fluid Daniel's flow: Enclosure minus Vortex = the fluid
   expect(meta.n_solids).toBe(1);
   expect(meta.faces.length).toBe(REF.step_roundtrip_cut.reimport_faces);
   // The page's own call, asked again: the same geometry the viewer shows.
-  const again = await (await request.get(`${baseUrl()}/api/geometry/cad?project_id=${encodeURIComponent(projectId)}&part=preview`)).json();
+  const again = await (await cadPreviewReady(request, `${baseUrl()}/api/geometry/cad?project_id=${encodeURIComponent(projectId)}&part=preview`)).json();
   expect(again.faces.length).toBe(REF.step_roundtrip_cut.reimport_faces);
   await shot(page, 'p2-vortex-fluid-core-geometry');
   expect(seen.csp, 'CSP violations').toEqual([]);

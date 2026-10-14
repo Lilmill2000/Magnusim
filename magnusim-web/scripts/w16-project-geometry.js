@@ -1096,18 +1096,84 @@ async function ensureCadPreviewAt(projectId, stepPath, paths) {
     }
     return { ok: true, ...paths, step_path: stepPath, cached: true };
   }
+  // A build that failed is answered again while its STEP file is the one it read (for
+  // CAD_FAILURE_KEEP_MS): a page that asks again until its preview is made would otherwise
+  // start it once more each time, and never hear why it fails.
+  const stamp = cadSourceStamp(stepPath);
+  const failed = cadPreviewFailures.get(paths.meta);
+  if (failed) {
+    if (failed.stamp === stamp && Date.now() - failed.at < CAD_FAILURE_KEEP_MS) return failed.result;
+    cadPreviewFailures.delete(paths.meta);
+  }
   // One build per preview at a time: requests that come while it runs (the page asks
   // for faces, edges and meta together) wait for it, instead of rewriting the files
   // another request is reading.
   let build = cadPreviewBuilds.get(paths.meta);
   if (!build) {
-    build = buildCadPreviewAt(projectId, stepPath, paths).finally(() => cadPreviewBuilds.delete(paths.meta));
+    build = buildCadPreviewAt(projectId, stepPath, paths)
+      .catch((e) => ({ ok: false, status: 500, body: { error: 'CAD preview failed', detail: String(e), project_id: projectId } }))
+      .then((result) => {
+        if (result && result.ok) cadPreviewFailures.delete(paths.meta);
+        else cadPreviewFailures.set(paths.meta, { result, stamp, at: Date.now() });
+        return result;
+      })
+      .finally(() => cadPreviewBuilds.delete(paths.meta));
     cadPreviewBuilds.set(paths.meta, build);
   }
   return build;
 }
 
 const cadPreviewBuilds = new Map();
+/** Failed builds by preview (its meta path): {result, stamp, at}. */
+const cadPreviewFailures = new Map();
+const CAD_FAILURE_KEEP_MS = 60_000;
+
+/** The STEP file a preview is made from, as it is now (a mesh import's sidecar until its STEP is written). */
+function cadSourceStamp(stepPath) {
+  return fileStamp(existsSync(stepPath) ? stepPath : geometrySidecarPath(stepPath));
+}
+
+/**
+ * How long a request for a CAD preview waits for its build. A build takes seconds to
+ * minutes, and the viewport asks for a part's faces, edges and face table together: held
+ * that long, two tabs' requests filled the browser's six connections to the app and every
+ * other request of every tab waited. Past this the answer is "being prepared" (202) while
+ * the build goes on; the page asks again.
+ */
+export const CAD_WAIT_MS = 250;
+
+/** `job` (a preview's build), or { pending: true } when it has not ended within `waitMs`. */
+async function withinCadWait(job, waitMs = CAD_WAIT_MS) {
+  // It goes on after a pending answer: its failure is kept (above), never thrown at no one.
+  job.catch(() => {});
+  let timer;
+  const late = new Promise((resolveLate) => {
+    timer = setTimeout(() => resolveLate({ pending: true }), waitMs);
+  });
+  try {
+    return await Promise.race([job, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The shown geometry's preview, or { pending: true } while it is being made (see CAD_WAIT_MS). */
+export function ensureCadPreviewWithin(projectId, geomId, waitMs = CAD_WAIT_MS) {
+  return withinCadWait(ensureCadPreview(projectId, geomId), waitMs);
+}
+
+/** "Being prepared": 202 with Retry-After, never kept (a HEAD gets no body). */
+function sendCadPending(req, res, sendJson, pid) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Retry-After', '1');
+  res.setHeader('X-CFD-Project-Id', pid || '');
+  if (req.method === 'HEAD') {
+    res.statusCode = 202;
+    res.end();
+    return true;
+  }
+  return sendJson(res, 202, { ok: false, pending: true, code: 'preview_pending', error: 'The part is being prepared.' });
+}
 
 /** Writes a preview's three files where `out` names them: the worker, else the script. */
 async function writeCadPreviewWithPython(stepPath, out) {
@@ -1116,7 +1182,8 @@ async function writeCadPreviewWithPython(stepPath, out) {
   if (!existsSync(CAD_PREVIEW_SCRIPT)) {
     throw Object.assign(new Error('CAD preview script missing'), { scriptMissing: true });
   }
-  return runPython([CAD_PREVIEW_SCRIPT, '--step', stepPath, '--edges', out.edges, '--faces', out.faces, '--meta', out.meta]);
+  // The worker's limit: a script that never ends would hold its preview's build for good.
+  return runPython([CAD_PREVIEW_SCRIPT, '--step', stepPath, '--edges', out.edges, '--faces', out.faces, '--meta', out.meta], { timeoutMs: 180_000 });
 }
 let writeCadPreview = writeCadPreviewWithPython;
 
@@ -2310,6 +2377,11 @@ async function activateGeometry(opts) {
   };
 }
 
+/**
+ * A modifier's preview file, or { pending: true } while it is being made (CAD_WAIT_MS).
+ * No page asks for one today (GET /api/geometry/cad?modifier_id): it is answered as the
+ * geometry's own preview is.
+ */
 async function readCadForModifier(projectId, geomId, modId, part) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, status: 404, body: { error: 'no project' } };
@@ -2321,7 +2393,8 @@ async function readCadForModifier(projectId, geomId, modId, part) {
     return { ok: false, status: 404, body: { error: 'modifier not found', geometry_id: aid, modifier_id: modId } };
   }
   const paths = modifierCadPaths(id, host.id, rec.id);
-  const preview = await ensureCadPreviewAt(id, rec.step_path, paths);
+  const preview = await withinCadWait(ensureCadPreviewAt(id, rec.step_path, paths));
+  if (preview.pending) return preview;
   if (!preview.ok) return preview;
   const file = part === 'edges' ? paths.edges : part === 'meta' ? paths.meta : paths.faces;
   if (!existsSync(file)) return { ok: false, status: 404, body: { error: 'modifier CAD missing', path: file } };
@@ -2618,6 +2691,8 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       if (result.ok) res.setHeader('X-CFD-Project-Id', result.body.project_id);
       return sendJson(res, result.status, result.body);
     }
+    // A preview not made within CAD_WAIT_MS is answered "being prepared" (202, Retry-After)
+    // while it is made: the page asks again (src/workbench/cadPreviewWait.ts).
     if (parts[2] === 'cad' && (req.method === 'GET' || req.method === 'HEAD')) {
       const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
       const geomId = String(u.searchParams.get('geometry_id') || '').trim() || undefined;
@@ -2626,6 +2701,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       if (modId) {
         const part = partRaw === 'edges' ? 'edges' : partRaw === 'meta' || partRaw === 'preview' ? 'meta' : 'faces';
         const got = await readCadForModifier(pid, geomId, modId, part);
+        if (got.pending) return sendCadPending(req, res, sendJson, pid);
         if (!got.ok) return sendJson(res, got.status || 404, got.body || { error: 'modifier CAD failed' });
         if (part === 'meta') {
           res.setHeader('X-CFD-Source', 'geometry-modifier-cad-preview');
@@ -2645,7 +2721,8 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         return true;
       }
       if (partRaw === 'preview' || partRaw === 'meta') {
-        const preview = await ensureCadPreview(pid, geomId);
+        const preview = await ensureCadPreviewWithin(pid, geomId);
+        if (preview.pending) return sendCadPending(req, res, sendJson, pid);
         if (!preview.ok) return sendJson(res, preview.status || 404, preview.body || { error: 'CAD preview failed' });
         const metaPath = preview.meta || cadPaths(pid, geomId).meta;
         if (!existsSync(metaPath)) return sendJson(res, 404, { error: 'CAD preview meta missing' });
@@ -2660,7 +2737,8 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         }
       }
       const part = partRaw === 'edges' ? 'edges' : 'faces';
-      const preview = await ensureCadPreview(pid, geomId);
+      const preview = await ensureCadPreviewWithin(pid, geomId);
+      if (preview.pending) return sendCadPending(req, res, sendJson, pid);
       if (!preview.ok) return sendJson(res, preview.status || 404, preview.body || { error: 'CAD preview failed' });
       const got = readCadForProject(pid, part, geomId);
       if (!got.ok) return sendJson(res, got.status, got.body);

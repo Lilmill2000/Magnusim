@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error the app's host helper is plain JavaScript (e2e/host-server.d.mts types CAD's wrapper only)
+import { cadPreviewReady } from '../../../e2e/support/cad-preview.mjs';
 import { startHost } from '../../../e2e/support/host-server.mjs';
 import { geometryRow, partOpened, workspaceFrame } from './helpers';
 
@@ -84,7 +85,8 @@ export async function importGeometry(request: APIRequestContext, pid: string, pa
 
 /** The geometry's faces as the app reads them (its preview). */
 export async function metaOf(request: APIRequestContext, pid: string, gid: string): Promise<{ faces: MetaFace[]; nFaces: number; zmax: number }> {
-  const r = await request.get(`${baseUrl()}/api/geometry/cad?project_id=${pid}&geometry_id=${gid}&part=meta`, { timeout: 600_000 });
+  // A preview being made is answered "being prepared" (202) until it is: asked again.
+  const r = await cadPreviewReady(request, `${baseUrl()}/api/geometry/cad?project_id=${pid}&geometry_id=${gid}&part=meta`, 600_000);
   expect(r.ok(), await r.text()).toBe(true);
   const m = await r.json();
   return { faces: m.faces as MetaFace[], nFaces: Number(m.n_faces), zmax: Number(m.bounds?.zmax) };

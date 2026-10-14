@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NO_WSL } from './toolchain.js';
+import { cadPreviewReady } from './support/cad-preview.mjs';
 
 // Two boxes that share a face (a conformal two-body part): box 1 is x 0..10 mm, box 2 is
 // x 10..30 mm, and the x = 10 face belongs to both. The face list and the mesher number
@@ -185,7 +186,7 @@ async function clickFaceAtX(page, x) {
 
 /** Every face in the face list is drawn in the viewport under its own number and body. */
 async function expectViewportMatchesFaceList(page, request, q) {
-  const meta = await json(request, q('/api/geometry/cad', { part: 'preview' }));
+  const meta = await (await cadPreviewReady(request, q('/api/geometry/cad', { part: 'preview' }))).json();
   expect(meta.n_solids).toBe(2);
   expect(meta.faces.map((f) => f.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   const drawn = await viewportFaces(page);
@@ -265,7 +266,8 @@ test('an old preview with the old viewport face ids is rebuilt when the project 
   await page.reload();
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
   await waitForCadFaces(page);
-  expect((await json(request, q('/api/geometry/cad', { part: 'preview' }))).preview_version).toBe(8);
+  // The old preview is made again (being prepared until then).
+  expect((await (await cadPreviewReady(request, q('/api/geometry/cad', { part: 'preview' }))).json()).preview_version).toBe(8);
   // Every face is drawn under the number the face list gives it again; box 2's far end
   // is face 8 (the old preview drew it as face 7, the shared face's number in Body2).
   await expectViewportMatchesFaceList(page, request, q);
