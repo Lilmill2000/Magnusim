@@ -597,6 +597,7 @@ The browser test reaches the app's test harness through one module: `e2e/support
 | `NO_GEOMETRY_PROJECT`, `prepareE2eProjectsRoot` | The core's seeded test projects |
 | `seedElbowProject` | A fresh copy of the elbow sample (a study with mesh, Air and BCs) |
 | `appSuiteConfig` | A Playwright config on the core's app server (bundled plugins) |
+| `test`, `expect` | Playwright's `test` and `expect`, CPU-throttled in a stress run (docs/TESTING.md, "Stress runs"). Import them from here to let a stress run reach your specs |
 | `NO_WSL`, `NO_HEAVY`, `wslPathExists` | Whether WSL and OpenFOAM tests can run here |
 | `settleE2eToolchain` | Looks for WSL and OpenFOAM once, in the runner, so every worker reads the same `NO_WSL` and `NO_HEAVY`. Call it in your `playwright.config.js` |
 | `computeQueue`, `waitSlotFree`, `foamRecords`, `killFoamRelays`, `removeTestWslRoot` | The compute slot, for tests that run OpenFOAM |
