@@ -182,6 +182,10 @@ def _reconcile_and_save(root: Path) -> bool:
     if changed and (is_python_project_doc(existing) or mode == "python"):
         try:
             reconciled.save(proj_path)
+        except ww.ProjectGoneError:
+            # Deleted meanwhile: the runs' mirrors below would make its folder again.
+            # project.hydrate then answers "project not found".
+            return False
         except Exception:
             changed = True
     if changed:

@@ -410,6 +410,9 @@ def write_through_project(
         try:
             proj.save(proj_path)
             mode = "python"
+        except ProjectGoneError:
+            # Deleted while this save waited: the mirrors below would make its folder again.
+            raise
         except Exception:
             mode = mode if mode != "python" else "synthesized"
     kinds = [kind if kind != "bcs" else "boundary_conditions"]

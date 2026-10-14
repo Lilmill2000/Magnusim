@@ -1297,17 +1297,30 @@ class Project:
         return d
 
     def save(self, path: str | Path) -> None:
-        """Atomic write; snapshots the pre-upgrade file once on schema bump."""
+        """Atomic write; snapshots the pre-upgrade file once on schema bump.
+
+        The folder must be there; it is never made. A save can run after its project was
+        deleted (the worker answers one request at a time), and that project stays deleted:
+        ProjectGoneError (a FileNotFoundError), nothing written.
+        """
+        from cfddesk.project.web_writes import ProjectGoneError
+
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        old_version = _read_version(path)
-        if old_version is not None and old_version < PROJECT_VERSION:
-            backup = path.with_name(f"{path.name}.v{old_version}.bak")
-            if not backup.exists():
-                shutil.copy2(path, backup)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        if not path.parent.is_dir():
+            raise ProjectGoneError(path.parent)
+        try:
+            old_version = _read_version(path)
+            if old_version is not None and old_version < PROJECT_VERSION:
+                backup = path.with_name(f"{path.name}.v{old_version}.bak")
+                if not backup.exists():
+                    shutil.copy2(path, backup)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+        except FileNotFoundError as exc:
+            if not path.parent.is_dir():
+                raise ProjectGoneError(path.parent) from exc
+            raise
 
     @staticmethod
     def from_dict(data: dict, project_dir: str | Path | None = None) -> Project:

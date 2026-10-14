@@ -7,6 +7,7 @@ brought the deleted project back: its folder, a project.json, a card on Home.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 from pathlib import Path
@@ -14,8 +15,12 @@ from pathlib import Path
 import pytest
 
 from cfddesk.project import link, scope
+from cfddesk.project import model as model_mod
 from cfddesk.project import web_writes as ww
+from cfddesk.project.model import Project
+from cfddesk.worker import methods
 from cfddesk.worker.methods import project_create, project_write_project
+from tests.conftest import PROJECTS
 
 
 def _project(root: Path, pid: str = "proj") -> Path:
@@ -153,3 +158,79 @@ def test_a_project_deleted_while_another_save_of_it_runs_is_not_made_again(
     assert reached == [name], f"{what}: the save never got to {name}"
     assert not project.exists(), f"{what}: {_left(project)}"
 
+
+# A project.json in the desktop app's typed format is saved whole (Project.save) by a study
+# setting's save and by the hydrate's runs reconcile.
+def _typed_project(root: Path, pid: str = "proj") -> Path:
+    dest = root / pid
+    (dest / "geometry").mkdir(parents=True)
+    doc = Project.from_dict(json.loads((PROJECTS / "v15.json").read_text(encoding="utf-8"))).to_dict()
+    (dest / "project.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return dest
+
+
+def test_a_typed_save_of_a_deleted_project_is_refused_and_makes_nothing(tmp_path: Path):
+    project = _typed_project(tmp_path)
+    typed = Project.load(project / "project.json")
+    typed.save(project / "project.json")
+    shutil.rmtree(project)
+    with pytest.raises(ww.ProjectGoneError, match="project not found: proj"):
+        typed.save(project / "project.json")
+    assert not project.exists()
+
+
+def _delete_while_typed_save_runs(monkeypatch, project: Path, when: str) -> list[str]:
+    """Delete ``project`` before its Project.save starts, or inside it (after its check)."""
+    reached: list[str] = []
+    path = project / "project.json"
+
+    def gone() -> None:
+        reached.append(when)
+        shutil.rmtree(project)
+
+    if when == "before the save":
+        real_save = Project.save
+
+        def deleted_then_saved(self, at):
+            if Path(at) == path and project.exists():
+                gone()
+            return real_save(self, at)
+
+        monkeypatch.setattr(Project, "save", deleted_then_saved)
+    else:
+        real_version = model_mod._read_version
+
+        def deleted_inside_the_save(at):
+            version = real_version(at)
+            if Path(at) == path and project.exists():
+                gone()
+            return version
+
+        monkeypatch.setattr(model_mod, "_read_version", deleted_inside_the_save)
+    return reached
+
+
+_WHEN = ["before the save", "inside the save"]
+
+
+@pytest.mark.parametrize("when", _WHEN)
+def test_a_study_setting_save_of_a_typed_project_deleted_meanwhile_makes_nothing(tmp_path: Path, monkeypatch, when):
+    project = _typed_project(tmp_path)
+    reached = _delete_while_typed_save_runs(monkeypatch, project, when)
+    with pytest.raises(ww.ProjectGoneError):
+        ww.write_through_project(project, "materials", _MATERIALS)
+    assert reached == [when]
+    assert not project.exists(), _left(project)
+
+
+@pytest.mark.parametrize("when", _WHEN)
+def test_the_hydrate_runs_reconcile_of_a_typed_project_deleted_meanwhile_makes_nothing(
+    tmp_path: Path, monkeypatch, when
+):
+    project = _typed_project(tmp_path)
+    # project.json is saved only when the runs on disk change it.
+    monkeypatch.setattr(Project, "reconcile_runs_from_disk", lambda self, _root: dataclasses.replace(self))
+    reached = _delete_while_typed_save_runs(monkeypatch, project, when)
+    assert methods._reconcile_and_save(project) is False
+    assert reached == [when]
+    assert not project.exists(), _left(project)

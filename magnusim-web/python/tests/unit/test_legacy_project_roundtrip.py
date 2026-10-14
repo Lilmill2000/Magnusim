@@ -218,8 +218,11 @@ def test_v15_file_saves_its_legacy_blocks_unchanged(tmp_path: Path):
     solver / boundary / numerics / initial_conditions blocks as the file has them."""
     doc = _fixture(15)
     first = tmp_path / "first" / "project.json"
-    Project.from_dict(copy.deepcopy(doc)).save(first)
     second = tmp_path / "second" / "project.json"
+    # A save never makes its project's folder (a deleted project stays deleted).
+    first.parent.mkdir()
+    second.parent.mkdir()
+    Project.from_dict(copy.deepcopy(doc)).save(first)
     Project.from_dict(json.loads(first.read_text(encoding="utf-8"))).save(second)
     assert first.read_bytes() == second.read_bytes()
     saved = json.loads(first.read_text(encoding="utf-8"))
