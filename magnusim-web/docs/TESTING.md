@@ -110,6 +110,46 @@ than 8083 gets its own projects root and prefs (`e2e/.tmp-projects-<port>`,
 again, so a shared root lost a running test's projects. `MAGNUSIM_E2E_PROJECTS_ROOT`
 names a root the run uses as it is (its server start never empties it).
 
+## Stress runs (slow pages)
+
+A CI runner is slower than a desktop, and a race between the page and the app's
+answers can show there only. `MAGNUSIM_E2E_CPU_THROTTLE=N` (N > 1) slows every
+page of a test's browser context N times through the DevTools protocol
+(`Emulation.setCPUThrottlingRate`): the test's page before the test starts, a
+popup or second tab as it opens, and a frame with a process of its own. A
+workspace frame shares its page's process in Playwright's Chromium, so the
+page's throttle covers it. The app server keeps its speed. Unset, it changes
+nothing and opens no DevTools session. The first test of each worker logs
+`[stress] pages CPU-throttled Nx`.
+
+```sh
+MAGNUSIM_E2E_CPU_THROTTLE=4 npx playwright test e2e/link-leave.spec.js
+MAGNUSIM_E2E_CPU_THROTTLE=6 npm run test:e2e -- e2e/cad-p4a-construct.spec.ts   # in bundled-plugins/cad
+```
+
+A spec takes part when it imports `test` and `expect` from the harness instead of
+`@playwright/test`: core specs from `e2e/support/stress.js`, a plugin suite on the
+core's Playwright from `e2e/support/plugin-suite.js`, CAD's specs from
+`bundled-plugins/cad/e2e/stress.ts` (CAD's own `@playwright/test`, the same
+`e2e/support/cpu-throttle.mjs`). Specs opt in one by one (a one-line import
+change); the others run unthrottled. Types still come from `@playwright/test`. A
+context a test makes itself (`browser.newContext()`) is not throttled.
+
+- **A stress pass is separate and never gates.** Run it nightly or before a
+  release, not in the CI that gates a push: timeouts sized for a normal run can
+  fail under it without a bug. Use 4×, and 6× for CAD's view timing (camera
+  refits, picks by screen position).
+- **Mirror settings.** Match GitHub's runner first: 4 cores (`taskset -c a,b,c,d`),
+  one Playwright worker (the configs' default), Python on `PATH`, `CI=1`. Then
+  add the throttle. Capping the whole machine (`taskset` to 1 core, a systemd
+  `CPUQuota`) slows the server and the page alike, so it keeps their order and
+  shows no race.
+- **It does not replace a forcing test.** On 2026-10-14 neither of that day's
+  GitHub-only failures (`link-leave.spec.js` "a stall, a throw, a page reload…",
+  CAD `cad:p4a-construct-edges`) failed at 4×, 6× or 10× on the code before
+  their fixes. Throttling looks for a race. Once a race is found, the test that
+  keeps it fixed forces its timing (below).
+
 ## Writing tests
 
 - **Every bug fixed gets a browser test in a suite that runs by default.** It
@@ -125,6 +165,9 @@ names a root the run uses as it is (its server start never empties it).
   mounted N ms after the address left it (`e2e/link-leave.spec.js`, a quick way out
   and back).
 - **A plugin's tests go in its own suite**, not in `e2e/`.
+- **To let a stress run reach a spec**, import `test` and `expect` from the harness:
+  `./support/stress.js` (core), `../../../e2e/support/plugin-suite.js` (a plugin
+  suite), `./stress` (CAD) ("Stress runs").
 - **A test that needs WSL** says so with `test.skip(!WSL, NO_WSL)` from
   `e2e/toolchain.js`, so the fast tier skips it cleanly. Setup that needs no
   solver (copying settings, editing refinements, picking engines) belongs in a

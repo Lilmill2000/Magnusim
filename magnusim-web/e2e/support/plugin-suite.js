@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { seedElbowProject as seedCoreElbowProject } from '../prepare-projects.js';
 
 export { appSuiteConfig } from './app-config.js';
+// `test` and `expect` for the specs: @playwright/test's, CPU-throttled in a stress run (stress.js).
+export { expect, test } from './stress.js';
 export { NO_HEAVY, NO_WSL, settleE2eToolchain, wslPathExists } from '../toolchain.js';
 export { computeQueue, foamRecords, killFoamRelays, removeTestWslRoot, waitSlotFree } from './compute-slot.js';
 export { addAir, addBc, createStudy, setup } from './two-plates.js';
