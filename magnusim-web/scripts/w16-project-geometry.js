@@ -1487,16 +1487,21 @@ function shownPart(proj, parts, activeId) {
   return { live, active: live.find((p) => p.id === want) || live[0] || null };
 }
 
-/** Shows `active` in `proj` (in memory): its record, drawn from the preview files `preview` names. */
-function showPart(proj, live, active, preview, stepSource) {
-  let cadMeta = null;
-  if (existsSync(preview.meta)) {
-    try {
-      cadMeta = JSON.parse(readFileSync(preview.meta, 'utf8'));
-    } catch {
-      cadMeta = null;
-    }
+/** A CAD preview's cad_preview.json (null: none, or unreadable). */
+function previewMeta(preview) {
+  if (!existsSync(preview.meta)) return null;
+  try {
+    return JSON.parse(readFileSync(preview.meta, 'utf8'));
+  } catch {
+    return null;
   }
+}
+
+/**
+ * Shows `active` in `proj` (in memory): its record, with the preview files `preview` names
+ * and the counts `cadMeta` gives (null: not known).
+ */
+function showPart(proj, live, active, preview, cadMeta, stepSource) {
   const geometry = geometryRecordFromPart(proj.id, active, preview, cadMeta, stepSource);
   for (const p of live) {
     p.body_offset = 0;
@@ -1539,7 +1544,7 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
   }
   const preview = await ensureCadPreviewAt(projectId, active.step_path, cadPaths(projectId, active.id));
   if (!preview.ok) return preview;
-  const geometry = showPart(proj, live, active, preview, stepSource);
+  const geometry = showPart(proj, live, active, preview, previewMeta(preview), stepSource);
   proj.updated_at = new Date().toISOString();
   // A project deleted while its save waited is not made the active project again.
   if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(projectId);
@@ -1561,11 +1566,16 @@ async function persistActiveGeometry(proj, parts, activeId, stepSource) {
 }
 
 /**
- * A project as GET /api/project answers it. A read writes nothing: no project.json save
- * (Home lists the projects by their Modified time), no new active project, no CAD preview.
- * Such a save waited on the worker, and a project deleted meanwhile came back. The shown
- * geometry's record is drawn here, in memory, from its cached preview; with none yet the
- * saved record is answered, and the page's /api/geometry/cad makes the preview.
+ * A project as GET /api/project answers it. This read saves nothing of its own: no
+ * project.json save (Home lists the projects by their Modified time), no new active
+ * project, no CAD preview, no thumbnail. Such a save waited on the worker, and a project
+ * deleted meanwhile came back. (ensureGeometriesHydrated, which the route runs first, still
+ * repairs a legacy or a linked geometry's record.)
+ *
+ * The shown geometry's record is drawn here, in memory, from the preview that opening the
+ * project shows as it is (ensureCadPreviewAt). Without one the saved record is answered;
+ * when that is another geometry's, the shown part's record, its counts not known yet. The
+ * page's /api/geometry/cad makes the preview.
  */
 function projectForRead(proj) {
   const parts = geometriesOf(proj);
@@ -1575,13 +1585,13 @@ function projectForRead(proj) {
   if (!active) return Object.assign(read, { geometry: null, geometries: [], active_geometry_id: null });
   const paths = cadPaths(read.id, active.id);
   const saved = read.geometry && read.geometry.id === active.id ? read.geometry : null;
-  const cached = cadPreviewFilesReady(paths) && existsSync(paths.meta) && !linkFenceAnswer(paths.dir);
-  if (cached || !saved) {
-    showPart(read, live, active, paths, (saved && saved.step_source) || 'hydrate');
-  } else {
-    read.geometries = live;
-    read.active_geometry_id = active.id;
-  }
+  // Not a preview made again before it is shown (face ids of an older version), and not a
+  // fenced linked geometry's, whose files and records may disagree.
+  const cached =
+    !linkFenceAnswer(paths.dir) && cadPreviewFilesReady(paths) && existsSync(paths.meta) && !cadPreviewFaceIdsStaleAt(paths);
+  if (cached) showPart(read, live, active, paths, previewMeta(paths), (saved && saved.step_source) || 'hydrate');
+  else if (saved) Object.assign(read, { geometries: live, active_geometry_id: active.id });
+  else showPart(read, live, active, paths, null, 'hydrate');
   return read;
 }
 

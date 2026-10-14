@@ -5,7 +5,7 @@
  * worker, which answers one request at a time: a project deleted while it waited came back
  * (its folder, a project.json, the active project), and its card was on Home again.
  *
- * A read now writes nothing, and no save makes a deleted project again: the worker refuses
+ * A read now saves nothing, and no save makes a deleted project again: the worker refuses
  * a save of a project whose project.json is gone, and a project deleted while its save
  * waited is not made the active one. A geometry or study switch whose save the worker
  * refused that way answers that the project was deleted (404), not a server error.
@@ -35,12 +35,17 @@ const w16 = await import('../w16-project-geometry.js');
 const { handleW16Api, setCadPreviewWriterForTests, setThumbRendererForTests } = w16;
 const { handleW17Api } = await import('../w17-simulation.js');
 
-// No thumbnail renders here: a stand-in picture.
+// No thumbnail renders here: a stand-in picture. Each render's arguments are kept (the
+// picture is rendered outside the project; its source, a preview or STL, is in it).
+const thumbRenders = [];
 setThumbRendererForTests(async (args) => {
+  thumbRenders.push(args.join(' '));
   const out = args[args.indexOf('--out') + 1];
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, Buffer.alloc(256, 7));
 });
+/** The thumbnail renders of `pid`'s geometry. */
+const thumbsOf = (pid) => thumbRenders.filter((args) => args.includes(pid));
 
 afterEach(() => {
   attachWorkerBridge(null);
@@ -120,10 +125,33 @@ async function call(method, path, body, handler = handleW16Api) {
 /** The server's answer to a route that threw: a 500 with its message. */
 const asServerError = (e) => ({ statusCode: 500, body: { error: String((e && e.message) || e) } });
 
+/** Rewrites a seeded project's project.json. */
+function editProject(dir, edit) {
+  const file = join(dir, 'project.json');
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  edit(doc);
+  writeJsonAtomic(file, doc);
+}
+
+/** Counts the CAD previews made (none here: each one fails). */
+function countPreviewBuilds() {
+  const counter = { builds: 0 };
+  setCadPreviewWriterForTests(async () => {
+    counter.builds += 1;
+    throw new Error('a read makes no preview');
+  });
+  return counter;
+}
+
+/** Time for a render a read started without waiting for it. */
+const settle = () => new Promise((r) => setTimeout(r, 500));
+
 const ACTIVE = join(root, 'active.json');
 const activeId = () => (existsSync(ACTIVE) ? JSON.parse(readFileSync(ACTIVE, 'utf8')).project_id || null : null);
 const setActive = (id) => writeFileSync(ACTIVE, JSON.stringify({ project_id: id }));
 const listing = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).join(', ') || '(empty folder)' : '');
+/** A seeded part's folder. */
+const partDir = (dir, gid) => dirname(JSON.parse(readFileSync(join(dir, 'project.json'), 'utf8')).geometries.find((g) => g.id === gid).step_path);
 
 /** project.json as it is on disk: its text and its age. */
 function stampOf(dir) {
@@ -177,6 +205,9 @@ describe("a read of a project (GET /api/project) writes nothing", () => {
       assert.deepEqual(stampOf(dir), before, `${path} saved project.json`);
       assert.equal(activeId(), 'read-other', `${path} made the project the active one`);
     }
+    // Home's card asks for its own picture: a read renders none (it used to, after it saved).
+    await settle();
+    assert.deepEqual(thumbsOf(pid), [], 'a read rendered a thumbnail');
 
     // The active project, as Home reads it.
     setActive(pid);
@@ -192,19 +223,111 @@ describe("a read of a project (GET /api/project) writes nothing", () => {
     const dir = seedProject(pid, { previews: false });
     setActive(pid);
     const before = stampOf(dir);
-    let builds = 0;
-    setCadPreviewWriterForTests(async () => {
-      builds += 1;
-      throw new Error('a read makes no preview');
-    });
+    const counter = countPreviewBuilds();
 
     const r = await call('GET', '/api/project');
     assert.equal(r.statusCode, 200, JSON.stringify(r.body));
-    assert.equal(builds, 0, 'the read made a CAD preview');
+    assert.equal(counter.builds, 0, 'the read made a CAD preview');
     assert.equal(r.body.project.geometry.id, 'g-tear');
     assert.equal(r.body.project.geometry.fingerprint.n_faces, 5, 'the saved record');
     assert.deepEqual(stampOf(dir), before, 'the read saved project.json');
     assert.equal(listing(join(dir, 'geometry')).includes('cad_'), false, listing(join(dir, 'geometry')));
+    await settle();
+    assert.deepEqual(thumbsOf(pid), [], 'a read rendered a thumbnail');
+  });
+});
+
+describe("what a read shows of the shown geometry when its preview can't be used as it is", () => {
+  /** GET /api/project of `pid`, made the active project: its project, after the checks every read passes. */
+  async function read(pid, dir) {
+    setActive(pid);
+    const before = stampOf(dir);
+    const counter = countPreviewBuilds();
+    const r = await call('GET', '/api/project');
+    assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+    assert.equal(r.body.project.id, pid);
+    assert.equal(counter.builds, 0, 'the read made a CAD preview');
+    assert.deepEqual(stampOf(dir), before, 'the read saved project.json');
+    assert.equal(activeId(), pid);
+    return r.body.project;
+  }
+
+  it('a linked update that did not finish (fenced): the saved record, not its files', async () => {
+    const pid = 'read-fenced';
+    const dir = seedProject(pid);
+    // Its commit journal is there and no job of this server owns it: its files and its
+    // records may disagree until the recovery runs.
+    const tear = partDir(dir, 'g-tear');
+    assert.ok(existsSync(join(tear, 'cad_preview.json')), listing(join(dir, 'geometry')));
+    mkdirSync(join(tear, 'link'), { recursive: true });
+    writeFileSync(join(tear, 'link', 'commit.json'), JSON.stringify({ job: 'a-job-of-an-earlier-server' }));
+
+    const proj = await read(pid, dir);
+    assert.equal(proj.geometry.id, 'g-tear');
+    assert.equal(proj.geometry.fingerprint.n_faces, 5, 'the saved record (its preview says 9)');
+    assert.equal(proj.active_geometry_id, 'g-tear');
+
+    // With no saved record of it, its record is drawn without its files' counts.
+    editProject(dir, (doc) => {
+      doc.geometry = { ...doc.geometry, id: 'g-round', name: 'round' };
+    });
+    const drawn = await read(pid, dir);
+    assert.equal(drawn.geometry.id, 'g-tear');
+    assert.equal(drawn.geometry.fingerprint.n_faces, null, "counts read from a fenced geometry's files");
+  });
+
+  it('a preview that opening the project makes again (older face ids): the saved record', async () => {
+    const pid = 'read-stale-face-ids';
+    const dir = seedProject(pid);
+    // A version 7 preview of a shape with a face two solids share (the same area and
+    // centroid twice): its viewport face ids name other faces, so it is made again.
+    writeFileSync(
+      join(partDir(dir, 'g-tear'), 'cad_preview.json'),
+      JSON.stringify({
+        preview_version: 7,
+        n_faces: 9,
+        faces: [
+          { area: 2, centroid: [0, 0, 1] },
+          { area: 2, centroid: [0, 0, 1] },
+        ],
+      }),
+    );
+
+    const proj = await read(pid, dir);
+    assert.equal(proj.geometry.id, 'g-tear');
+    assert.equal(proj.geometry.fingerprint.n_faces, 5, 'the saved record (the old preview says 9)');
+  });
+
+  it("no preview, and the saved record is another geometry's: the shown part, its counts not known yet", async () => {
+    const pid = 'read-other-record';
+    const dir = seedProject(pid, { previews: false });
+    editProject(dir, (doc) => {
+      doc.geometry = { ...doc.geometry, id: 'g-round', name: 'round' };
+    });
+
+    const proj = await read(pid, dir);
+    assert.equal(proj.active_geometry_id, 'g-tear');
+    assert.equal(proj.geometry.id, 'g-tear', "the record is the shown geometry's");
+    assert.equal(proj.geometry.name, 'tear');
+    assert.match(proj.geometry.faces_url, /geometry_id=g-tear/, 'the page asks for the shown preview');
+    assert.equal(proj.geometry.fingerprint.n_faces, null, 'face count');
+    assert.equal(proj.geometry.fingerprint.n_solids, null, 'solid count');
+    assert.deepEqual(proj.geometries.map((g) => g.id), ['g-round', 'g-tear']);
+  });
+
+  it('no STEP left: no geometry shown, and project.json still lists them', async () => {
+    const pid = 'read-no-step';
+    const dir = seedProject(pid);
+    for (const g of ['g-round', 'g-tear']) rmSync(join(partDir(dir, g), 'source.step'));
+
+    const proj = await read(pid, dir);
+    assert.equal(proj.geometry, null);
+    assert.deepEqual(proj.geometries, []);
+    assert.equal(proj.active_geometry_id, null);
+    const saved = JSON.parse(readFileSync(join(dir, 'project.json'), 'utf8'));
+    assert.deepEqual(saved.geometries.map((g) => g.id), ['g-round', 'g-tear'], 'the read changed what project.json lists');
+    await settle();
+    assert.deepEqual(thumbsOf(pid), [], 'a read rendered a thumbnail');
   });
 });
 

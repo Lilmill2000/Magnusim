@@ -10,9 +10,9 @@ import { expect, test } from './support/stress.js';
 // request at a time, so that save can wait behind an earlier, slow request; a project
 // deleted on Home meanwhile came back: the save made its folder again with a project.json,
 // and the read made it the active project. After a refresh its card was on Home again.
-// A read now saves nothing; a save that does wait there (a geometry or study switch) is
-// refused by the worker once its project is gone, and the switch answers that the project
-// was deleted.
+// A read now saves nothing and waits on nothing; a save that does wait there (a geometry or
+// study switch) is refused by the worker once its project is gone, and the switch answers
+// that the project was deleted.
 //
 // A server of its own. Its test switches, inert until their files are made:
 //   MAGNUSIM_TEST_PROJECT_WRITE_HOLD  the worker holds a project.json save of the project
@@ -130,11 +130,13 @@ test.describe('Home reads the active project while it is deleted', () => {
     expect(await listed(request)()).not.toContain(pid);
   }
 
-  test("a project deleted while Home's read of it waits on the worker stays deleted", async ({ page, request }) => {
+  test("Home's read of the active project saves nothing, and the project deleted on Home stays deleted", async ({ page, request }) => {
     test.setTimeout(300_000);
     page.setDefaultTimeout(30_000);
     const { pid } = await twoGeometryProject(request, `e2e read delete ${stamp()}`);
     expect((await getJson(request, `${host.base}/api/projects`)).active_project_id).toBe(pid);
+    const projectJson = join(host.projects, pid, 'project.json');
+    const saved = statSync(projectJson).mtimeMs;
 
     // The worker holds this project's next project.json save (as behind a slow request).
     const log = `${writeHold}.log`;
@@ -147,13 +149,15 @@ test.describe('Home reads the active project while it is deleted', () => {
     await page.goto(`${host.base}/#/`);
     const card = page.locator(`.home-card[data-project-id="${pid}"]`);
     await card.waitFor({ timeout: 60_000 });
-    // Home's read of the active project waits on its save (a read that saves nothing
-    // answers instead).
+    // Home's read of the active project answers, or it waits on a save of the project.
     await expect
       .poll(() => (logged(log, `held ${pid}`) ? 'held' : answered ? 'answered' : ''), { timeout: 60_000 })
       .not.toBe('');
     const held = logged(log, `held ${pid}`);
-    test.info().annotations.push({ type: 'read', description: held ? 'waited on its save' : 'saved nothing' });
+    // A read saves nothing. (Its save used to wait on the worker, and a project deleted
+    // meanwhile came back: the checks after the delete below.)
+    expect.soft(held, "Home's read saved the project through the worker (and waited on it)").toBe(false);
+    if (!held) expect.soft(statSync(projectJson).mtimeMs, "Home's read wrote project.json").toBe(saved);
 
     await deleteOnHome(page, pid);
     await expect.poll(listed(request)).not.toContain(pid);
@@ -167,36 +171,45 @@ test.describe('Home reads the active project while it is deleted', () => {
     await expectStaysDeleted(page, request, pid);
   });
 
-  test("a project deleted while Home's read of it makes its CAD preview stays deleted", async ({ page, request }) => {
+  test("Home's read does not wait on the active project's CAD preview, and the project deleted meanwhile stays deleted", async ({
+    page,
+    request,
+  }) => {
     test.setTimeout(300_000);
     page.setDefaultTimeout(30_000);
     const { pid, step } = await twoGeometryProject(request, `e2e read preview delete ${stamp()}`);
     expect((await getJson(request, `${host.base}/api/projects`)).active_project_id).toBe(pid);
-    // The active geometry (the last import) loses its preview: Home's read makes it again.
-    for (const f of ['cad_faces.vtp', 'cad_edges.vtp', 'cad_preview.json']) rmSync(join(dirname(step), f), { force: true });
+    const proj = (await getJson(request, `${host.base}/api/project?project_id=${encodeURIComponent(pid)}`)).project;
+    expect(proj.geometry.step_path).toBe(step);
 
+    // The active geometry (the last import) lost its preview, and it is being made again
+    // (as when the project is opened): the preview waits to be placed.
+    for (const f of ['cad_faces.vtp', 'cad_edges.vtp', 'cad_preview.json']) rmSync(join(dirname(step), f), { force: true });
     const log = `${previewHold}.log`;
     rmSync(log, { force: true });
     writeFileSync(previewHold, '');
+    const q = `project_id=${encodeURIComponent(pid)}&geometry_id=${encodeURIComponent(proj.active_geometry_id)}`;
+    const making = request.get(`${host.base}/api/geometry/cad?${q}&part=meta`, { timeout: 180_000 }).catch(() => null);
+    await expect.poll(() => logged(log, `made ${step}`), { timeout: 120_000 }).toBe(true);
+
     let answered = false;
     page.on('response', (r) => {
       if (isProjectRead(r)) answered = true;
     });
     await page.goto(`${host.base}/#/`);
     await page.locator(`.home-card[data-project-id="${pid}"]`).waitFor({ timeout: 60_000 });
-    await expect
-      .poll(() => (logged(log, `made ${step}`) ? 'made' : answered ? 'answered' : ''), { timeout: 120_000 })
-      .not.toBe('');
-    const held = logged(log, `made ${step}`);
-    test.info().annotations.push({ type: 'read', description: held ? 'waited on its CAD preview' : 'made no preview' });
+    // Home's read answers while the preview still waits: it does not wait on it (it used
+    // to make it, and could wait on it for minutes).
+    await expect.poll(() => answered, { timeout: 30_000, message: "Home's read waited on the project's CAD preview" }).toBe(true);
+    expect(logged(log, `end ${step}`), 'the preview was placed before Home read the project').toBe(false);
 
     await deleteOnHome(page, pid);
     await expect.poll(listed(request)).not.toContain(pid);
     expect(existsSync(join(host.projects, pid))).toBe(false);
 
     rmSync(previewHold, { force: true });
-    if (held) await expect.poll(() => logged(log, `end ${step}`), { timeout: 60_000 }).toBe(true);
-    await expect.poll(() => answered, { timeout: 60_000 }).toBe(true);
+    await expect.poll(() => logged(log, `end ${step}`), { timeout: 60_000 }).toBe(true);
+    await making;
 
     await expectStaysDeleted(page, request, pid);
   });
