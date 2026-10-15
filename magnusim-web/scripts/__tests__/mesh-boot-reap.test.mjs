@@ -1,10 +1,11 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
+import { removeTree } from '../remove-tree.js';
 
 // Server boot reaps mesh generators a previous server left running, but only those of
 // its own projects folder: e2e hosts (startHost) boot on their own roots while the
@@ -17,7 +18,7 @@ const { PYTHON } = await import('../python-env.js');
 const { reapOrphanMeshGeneratorsOnBoot, pidIsAlive } = await import('../w21-mesh-generate.js');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-after(() => rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+after(() => removeTree(tmp, { maxRetries: 5, retryDelay: 200 }));
 
 function fakeGenerator(tools, projectDir) {
   const caseDir = join(projectDir, 'meshes', 'Mesh_1', 'case');

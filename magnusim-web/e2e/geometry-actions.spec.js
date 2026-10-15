@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, isAbsolute, join, resolve } from 'node:path';
+import { removeTree } from '../scripts/remove-tree.js';
 import { prepareE2eProjectsRoot } from './prepare-projects.js';
 import { getJson } from './support/compute-slot.js';
 import { e2eTemp, killTree, startHost } from './support/host-server.mjs';
@@ -693,7 +694,7 @@ test.describe('geometry actions: a crash in the adoption (host API 1.7)', () => 
     } finally {
       host?.stop();
       try {
-        rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+        await removeTree(tmp, { maxRetries: 8, retryDelay: 200 });
       } catch {
         /* the next run's temp root is its own */
       }

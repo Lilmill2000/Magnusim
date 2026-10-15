@@ -39,6 +39,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { removeTreeSync } from '../../scripts/remove-tree.js';
 import { prepareE2eProjectsRoot } from '../prepare-projects.js';
 
 export const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -237,7 +238,7 @@ export async function startHost(options = {}) {
     }
     if (config) rmSync(config, { force: true });
     try {
-      rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      removeTreeSync(tmp, { maxRetries: 5, retryDelay: 200 });
     } catch {
       /* a file may still be held for a moment; the OS temp cleaner takes it */
     }

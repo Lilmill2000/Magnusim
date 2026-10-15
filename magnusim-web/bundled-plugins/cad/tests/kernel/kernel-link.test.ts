@@ -18,7 +18,8 @@
 // Owner: LINK.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -131,8 +132,21 @@ beforeAll(async () => {
 }, 60_000);
 
 // Removing the temp folder took over 10 s once on Windows (a scanner holding the new files): give it time.
-afterAll(() => {
-  if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+// The retries are ours: Node 24's rm options maxRetries/retryDelay are not honoured
+// by rmSync on Windows (it fails at the first EPERM), and the plugin never imports
+// the core's remove-tree helper. Retry n waits n * 200 ms.
+afterAll(async () => {
+  if (!tmp) return;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(tmp, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (!['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(code) || attempt >= 5) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+    }
+  }
 }, 60_000);
 
 function doc(bodies: Record<string, { name: string; simulation?: false }>, features: { id: string; name: string }[] = []): CadDoc {

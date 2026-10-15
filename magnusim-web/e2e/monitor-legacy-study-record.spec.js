@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { findStudy, studyResultControlsPath, writeJsonAtomic } from '../scripts/project-layout.js';
+import { removeTree } from '../scripts/remove-tree.js';
 import { seedElbowProject } from './prepare-projects.js';
 
 // A study saved before monitors moved onto the run keeps a lone study-level monitor
@@ -27,7 +27,7 @@ test('a monitor added to a run gets its own id and name when the study has an ol
   test.setTimeout(180_000);
   page.setDefaultTimeout(30_000);
   const dir = join(PROJECTS, PROJECT);
-  rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  await removeTree(dir, { maxRetries: 8, retryDelay: 100 });
   seedElbowProject(PROJECTS, PROJECT, 'Legacy study monitor');
   const study = findStudy(dir, SIM);
   expect(study, 'the seeded study folder').toBeTruthy();
@@ -103,6 +103,6 @@ test('a monitor added to a run gets its own id and name when the study has an ol
     // retries a folder being written to), then remove whatever is left.
     await page.goto('about:blank').catch(() => {});
     await request.post('/api/project/delete', { data: { project_id: PROJECT } }).catch(() => {});
-    rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    await removeTree(dir, { maxRetries: 8, retryDelay: 100 });
   }
 });
