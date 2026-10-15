@@ -56,7 +56,7 @@ EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"} | (
 )
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
 EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid", "thermo_solid"} if HT else set())
-EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"} | (
+EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "force", "forces", "probe"} | (
     {"ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple"} if HT else set()
 )
 EXPECTED_FILTER_KEYS = {

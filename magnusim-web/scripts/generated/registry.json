@@ -329,6 +329,7 @@
       "category": "FLUID DYNAMICS",
       "monitors": [
         "area_average",
+        "force",
         "flow_rate",
         "forces",
         "probe"
@@ -1588,6 +1589,7 @@
       "category": "FLUID DYNAMICS",
       "monitors": [
         "area_average",
+        "force",
         "flow_rate",
         "forces",
         "probe"
@@ -7131,6 +7133,46 @@
             "title": "Fields"
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "force",
+      "label": "Force",
+      "plugin": "incompressible_flow",
+      "target": "patch",
+      "description": "Force and moment on the wall faces you pick, with their pressure and viscous parts, along the study's drag and lift directions, and their coefficients once the study has a reference area, at every saved step.",
+      "aliases": [],
+      "user_creatable": true,
+      "quantities": [
+        "Fd",
+        "Fl",
+        "Fs",
+        "Fdp",
+        "Fdv",
+        "Fx",
+        "Fy",
+        "Fz",
+        "Fpx",
+        "Fpy",
+        "Fpz",
+        "Fvx",
+        "Fvy",
+        "Fvz",
+        "Mx",
+        "My",
+        "Mz",
+        "Cd",
+        "Cl",
+        "Cs",
+        "Cm"
+      ],
+      "boundary_kinds": [],
+      "study_note": "Uses the study's reference values: speed, area, length, directions and centre of rotation.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },

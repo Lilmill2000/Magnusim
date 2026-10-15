@@ -76,6 +76,19 @@ a turbulent viscosity that `nuTilda` is solved back from.
 
 ## Changes
 
+- **Force on picked faces (Result control > Surface data > Force).** The force on
+  exactly the faces a user picks in the 3D view, as Area average picks them (one
+  face, several, or a whole wall, with no wall BC needed): total, pressure and
+  viscous force, drag, lift and side along the study's reference directions, the
+  moment about its centre of rotation, and the coefficients once it has a reference
+  area, live while it solves, in the run's results and in the CSVs. The writer moves
+  the mesh faces of each picked CAD face into a patch of their own in the run's copy
+  of the mesh (`force_faces.py`, `polymesh.py`: `mgf_<face>__<wall patch>`, with
+  the wall's boundary conditions, so the flow is the same) and measures them with
+  `forces` / `forceCoeffs`; a whole-wall Forces monitor measures the pieces of its
+  walls too. Only wall faces: a face on an inlet or outlet is refused at Start. A
+  continued run keeps the split it started with. Runs without a Force write their
+  cases exactly as before.
 - **Reference vectors are kept (with host API 1.8's study route).** The study panel's
   Reference values save the centre of rotation and the drag and lift directions
   (`ref_cofr`, `ref_drag_dir`, `ref_lift_dir`, three numbers each) on the study. The

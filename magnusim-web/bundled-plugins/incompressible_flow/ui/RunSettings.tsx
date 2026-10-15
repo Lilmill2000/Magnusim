@@ -11,6 +11,7 @@ import { host } from './host';
 import {
   choiceOf,
   defaultWindow,
+  isForceKind,
   readSettle,
   settleChoices,
   settleNumber,
@@ -207,7 +208,7 @@ function SettleStop({
       `Ends the run once ${settleSentence(chosen, settle, transient)}.` +
       (!transient
         ? ' The residual targets still end it too.'
-        : chosen.kind !== 'forces' && frame > 0
+        : !isForceKind(chosen.kind) && frame > 0
           ? ` A window shorter than ${settleNumber((10 * frame) / 50)} s (10 monitor samples) is made that long.`
           : '');
   } else if (!choices.length) {
@@ -215,9 +216,9 @@ function SettleStop({
   }
   // A stop that would not be written says so, and how to fix it.
   let warn = problem ? `Not used as set: ${problem}.` : '';
-  if (problem && chosen && chosen.kind === 'forces') warn += " Set it in the study's Reference values.";
+  if (problem && chosen && isForceKind(chosen.kind)) warn += " Set it in the study's Reference values.";
   else if (problem) warn += ' Pick another, or Off.';
-  else if (chosen && chosen.kind === 'forces' && !run.study) {
+  else if (chosen && isForceKind(chosen.kind) && !run.study) {
     warn = `Force coefficients need the study's reference area${chosen.quantity.key === 'Cm' ? ' and length' : ''} (Reference values).`;
   }
   return (

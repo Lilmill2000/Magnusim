@@ -300,9 +300,9 @@ test('run monitors are drawn from the plugin: quantities, defaults, summary, exp
   await expect(page.locator('#modal-result-control')).toBeVisible();
   await expect(page.locator('#rc-type-list .cs-group-label')).toHaveText(['SURFACE DATA', 'BOUNDARY DATA', 'POINT DATA']);
   const types = page.locator('#rc-type-list [data-rc-type]');
-  await expect(types).toHaveCount(3);
+  await expect(types).toHaveCount(4);
   await expect(types.first()).toHaveAttribute('data-rc-type', 'area_average');
-  await expect(types).toHaveText(['Area average', 'Forces', 'Point probe']);
+  await expect(types).toHaveText(['Area average', 'Force', 'Forces', 'Point probe']);
   await expect(types.first()).toHaveClass(/is-selected/);
   await expect(page.locator('#rc-detail-title')).toHaveText('Area average');
   await expect(page.locator('#rc-detail-hint')).toHaveText(`${areaAverage.description} Add it here, then pick faces in the viewport.`);

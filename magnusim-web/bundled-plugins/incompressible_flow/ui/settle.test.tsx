@@ -6,7 +6,7 @@ import { unregisterPlugin } from '../../../src/plugin-api';
 import { pluginHost } from '../../../src/plugins/loader';
 import { useProjectStore } from '../../../src/store/project';
 import { register } from './index';
-import { settleChoices, settleKind } from './settle';
+import { settleChoices, settleKind, settleProblem } from './settle';
 
 // F5: "Stop when a monitor settles" in the run panel, and how a finished run ended.
 const UI = { study_settings: 'incompressible_flow.study', run_settings: 'incompressible_flow.run' };
@@ -116,6 +116,17 @@ describe('the quantities a run can stop on', () => {
       'Inlet · Velocity',
       'Inlet · Flow rate',
     ]);
+  });
+
+  it('a Force on picked faces stops on its coefficients once it has faces', () => {
+    const force = { source: 'monitor', id: 'rc-face', name: 'Force 1', kind: 'force', targets: 2 } as RunSettleMonitor;
+    expect(settleKind(force)).toBe('force');
+    expect(settleChoices([force]).map((c) => c.label)).toEqual(['Force 1 · Cd', 'Force 1 · Cl', 'Force 1 · Cs', 'Force 1 · Cm']);
+    expect(settleKind({ ...force, targets: 0 })).toBe('');
+    const chosen = settleChoices([force]);
+    const setting = { source: 'monitor' as const, id: 'rc-face', quantity: 'Cd', tolerance: 0.001, window: 100 };
+    expect(settleProblem(setting, chosen, [force], { ref_area: 0 })).toBe("force coefficients need the study's reference area");
+    expect(settleProblem(setting, chosen, [force], { ref_area: 0.5 })).toBe('');
   });
 });
 

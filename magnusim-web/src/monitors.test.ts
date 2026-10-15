@@ -191,6 +191,18 @@ describe('monitor types', () => {
     expect(resolveMonitorType({ monitor_type: 'missing_type', category: 'Surface data' }, creatable)).toBeNull();
     expect(resolveMonitorType(null, creatable)).toBeNull();
   });
+
+  it('matches an older record by whole words: a "Forces" record is not a "Force"', () => {
+    const withForce: RegistryRow[] = [
+      ...types,
+      { key: 'force', label: 'Force', aliases: [], user_creatable: true },
+      { key: 'forces', label: 'Forces', aliases: [], user_creatable: true },
+    ];
+    expect(resolveMonitorType({ kind: 'Forces', name: 'Forces 1' }, withForce)?.key).toBe('forces');
+    expect(resolveMonitorType({ name: 'Force 2' }, withForce)?.key).toBe('force');
+    expect(resolveMonitorType({ category: 'Surface data', name: 'Force 2' }, withForce)?.key).toBe('area_average');
+    expect(resolveMonitorType({ monitor_type: 'force', category: 'Surface data' }, withForce)?.key).toBe('force');
+  });
 });
 
 describe('rows that name their quantities (Forces monitors)', () => {

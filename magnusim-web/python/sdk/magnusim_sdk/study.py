@@ -170,10 +170,16 @@ def list_aa_faces(aa: dict | None) -> list[str]:
 
 
 def run_custom_monitors(result_controls: list | None) -> list[dict[str, Any]]:
-    """Area-average monitors a run carries (name + assigned faces), in order."""
+    """Area-average monitors a run carries (name + assigned faces), in order.
+
+    A record that names its ``monitor_type`` is one only when that type is
+    ``area_average`` (a Force on picked faces is "Surface data" too).
+    """
     out: list[dict[str, Any]] = []
     for rec in result_controls or []:
         if not isinstance(rec, dict):
+            continue
+        if rec.get("monitor_type") and rec.get("monitor_type") != "area_average":
             continue
         label = " ".join(str(rec.get(k) or "") for k in ("kind", "type", "name", "category"))
         if not re.search(r"area average|surface data", label, re.I):

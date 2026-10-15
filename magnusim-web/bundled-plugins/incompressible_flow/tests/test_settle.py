@@ -295,6 +295,21 @@ def test_what_cannot_be_watched_is_not_written_and_says_why():
     assert settle_target(_spec(), None) is None
 
 
+def test_a_force_on_picked_faces_settles_on_its_own_coefficients():
+    rcs = _spec().result_controls + [{"id": "rc-face", "name": "Force 1", "monitor_type": "force", "faces": ["face 3"]}]
+    plan = plan_settle(
+        _spec(result_controls=rcs, settle=_settle("rc-face", "Cd", tolerance=0.001)),
+        forces_plans=FORCES,
+        force_plans=[{"id": "rc-face", "key": "force_force_1", "coeffs_key": "fcoeffs_force_1", "moment_coefficient": True}],
+    )
+    assert (plan["object"], plan["field"], plan["label"]) == ("fcoeffs_force_1", "Cd", "Force 1 · Cd")
+    unplaced = plan_settle(
+        _spec(result_controls=rcs, settle=_settle("rc-face", "Cd")),
+        force_plans=[{"id": "rc-face", "key": None, "coeffs_key": None}],
+    )
+    assert unplaced["error"] == "Force 1 measures no wall faces on this mesh"
+
+
 def test_a_transient_window_spans_at_least_ten_monitor_samples():
     ctrl = SimpleNamespace(write_interval=0.1)  # samples every 0.002 s: at least 0.02 s
     short = _plan(_spec(settle=_settle("bc-in", "p", "boundary", 1.0, 0.005), transient=ctrl, time_dependency="transient"))

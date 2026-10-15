@@ -26,7 +26,7 @@ from typing import Any, TypeGuard
 
 from magnusim_sdk.foam import read_surface_field_value
 
-from .forces_results import forces_row
+from .forces_results import force_control_row, forces_row
 from .materials import LEGACY_AIR
 from .monitors import AREA_AVERAGE_QUANTITY_KEYS
 from .probes_results import probe_rows
@@ -235,6 +235,11 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
     for plan in meta.get("forces_monitors") or []:
         if isinstance(plan, dict):
             row = forces_row(case, plan, reference, rho)
+            if row:
+                custom.append(row)
+    for plan in meta.get("force_controls") or []:
+        if isinstance(plan, dict):
+            row = force_control_row(case, plan, reference, rho)
             if row:
                 custom.append(row)
     for plan in meta.get("probe_monitors") or []:

@@ -3,8 +3,9 @@ run monitors carry, and which result controls are custom monitors.
 
 ``area_average`` (area-averaged velocity and pressure on a patch or on faces
 the user picks), ``flow_rate`` (volumetric flow through a patch), ``forces``
-(force, moment and their coefficients on whole wall boundaries) and ``probe``
-(velocity and pressure at points in the fluid).
+(force, moment and their coefficients on whole wall boundaries), ``force`` (the
+same on exactly the wall faces the user picks: incompressible_flow.force_faces)
+and ``probe`` (velocity and pressure at points in the fluid).
 The case writer emits their function objects (incompressible_flow.function_objects,
 incompressible_flow.force_objects); the ``write_function_object`` hooks here
 give the same text for one patch.
@@ -254,6 +255,23 @@ def forces_monitor_records(result_controls: list | None) -> list[dict[str, Any]]
             boundaries = [str(b) for b in (rec.get("boundaries") or []) if b]
             out.append({"id": rec.get("id"), "name": str(rec.get("name") or "Forces"), "boundaries": boundaries})
     return out
+
+
+def build_force() -> MonitorType:
+    """Force on picked faces: one face, several, or a whole wall, with no wall BC needed."""
+    return MonitorType(
+        key="force",
+        label="Force",
+        target="patch",
+        description=(
+            "Force and moment on the wall faces you pick, with their pressure and viscous parts, "
+            "along the study's drag and lift directions, and their coefficients once the study has "
+            "a reference area, at every saved step."
+        ),
+        user_creatable=True,
+        quantities=FORCE_QUANTITY_KEYS + FORCE_COEFFICIENT_KEYS + MOMENT_COEFFICIENT_KEYS,
+        study_note="Uses the study's reference values: speed, area, length, directions and centre of rotation.",
+    )
 
 
 def build_probe() -> MonitorType:

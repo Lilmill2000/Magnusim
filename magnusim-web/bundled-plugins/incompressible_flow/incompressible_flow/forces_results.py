@@ -188,3 +188,18 @@ def forces_row(case_dir: Path, plan: dict[str, Any], reference: dict[str, Any], 
         "details": details,
         "note": " ".join(notes),
     }
+
+
+def force_control_row(case_dir: Path, plan: dict[str, Any], reference: dict[str, Any], rho: float) -> dict[str, Any] | None:
+    """One Force control's row (the force on the faces it picked): a Forces row that
+    names its faces instead of walls."""
+    row = forces_row(case_dir, plan, reference, rho)
+    if row is None:
+        return None
+    faces = [str(f) for f in plan.get("faces") or []]
+    row["type"] = "force"
+    row["key"] = plan.get("key") or f"force:{plan.get('id') or plan.get('name')}"
+    row["name"] = plan.get("name") or "Force"
+    row["faces"] = faces
+    row["details"] = [["Faces", ", ".join(faces) or "—"], *[d for d in row["details"] if d[0] != "Walls"]]
+    return row

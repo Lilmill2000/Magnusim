@@ -84,6 +84,7 @@ QUANTITIES: dict[str, tuple[SettleQuantity, ...]] = {
     "area_average": AREA_AVERAGE,
     "boundary": BOUNDARY,
     "forces": FORCES,
+    "force": FORCES,
     "probe": PROBE,
 }
 
@@ -189,6 +190,7 @@ def plan_settle(
     *,
     custom_meta: list[dict[str, Any]] | None = None,
     forces_plans: list[dict[str, Any]] | None = None,
+    force_plans: list[dict[str, Any]] | None = None,
     probe_plans: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """The runTimeControl the case gets: ``{object, field, tolerance, window, label, text}``
@@ -217,10 +219,12 @@ def plan_settle(
         if meta is None:
             return {"error": f"{target['name']} is not placed on any faces of this geometry", "label": label}
         region = obj = str(meta["key"])
-    elif kind == "forces":
-        plan = next((p for p in forces_plans or [] if str(p.get("id") or "") == ident), None)
+    elif kind in ("forces", "force"):
+        plans = forces_plans if kind == "forces" else force_plans
+        plan = next((p for p in plans or [] if str(p.get("id") or "") == ident), None)
         if plan is None or not plan.get("key"):
-            return {"error": f"{target['name']} measures no walls on this mesh", "label": label}
+            what = "walls" if kind == "forces" else "wall faces"
+            return {"error": f"{target['name']} measures no {what} on this mesh", "label": label}
         if not plan.get("coeffs_key"):
             return {"error": "force coefficients need the study's reference area", "label": label}
         if q.key == "Cm" and not plan.get("moment_coefficient"):

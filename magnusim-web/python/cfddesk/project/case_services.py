@@ -18,6 +18,40 @@ class CaseServices:
         self.simulation_id = simulation_id
         self.mesh_id = mesh_id
         self._tess: Any = None
+        self._face_index: Any = None
+
+    def nearest_face_numbers(self, points: Any) -> Any:
+        """The CAD face each point (metres) lies on: its web face number (``face 12``
+        is 12), by the nearest triangle of the study's tessellation; 0 for every
+        point when the study has no CAD (host API 1.8, Force result controls)."""
+        import numpy as np
+
+        query = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        tess = self._tessellation()
+        if not tess or not len(query):
+            return np.zeros(len(query), dtype=np.int64)
+        if self._face_index is None:
+            from cfddesk.cad.nearest_face import FaceIndex
+
+            pts_m, tri, fid = tess
+            self._face_index = FaceIndex(pts_m, tri, fid)
+        return self._face_index.nearest(query) + 1
+
+    def face_bounds(self, numbers: Any) -> Any:
+        """The box ``(lo, hi)`` (metres) around the CAD faces with these web face
+        numbers, or None when none of them is on this geometry."""
+        import numpy as np
+
+        tess = self._tessellation()
+        if not tess:
+            return None
+        pts_m, tri, fid = tess
+        want = np.asarray([int(n) - 1 for n in numbers or []], dtype=np.int64)
+        sel = tri[np.isin(fid, want)]
+        if not len(sel):
+            return None
+        corners = pts_m[sel].reshape(-1, 3)
+        return corners.min(axis=0), corners.max(axis=0)
 
     def _tessellation(self) -> Any:
         if self._tess is None:

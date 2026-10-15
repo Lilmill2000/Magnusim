@@ -38,16 +38,24 @@ export interface SettleChoice {
 const PRESSURE: SettleQuantity = { key: 'p', label: 'Pressure', unit: 'Pa', tolerance: 1 };
 const VELOCITY: SettleQuantity = { key: 'U', label: 'Velocity', unit: 'm/s', tolerance: 0.01 };
 
+const FORCE_COEFFICIENTS: readonly SettleQuantity[] = [
+  { key: 'Cd', label: 'Cd', unit: '', tolerance: 0.001 },
+  { key: 'Cl', label: 'Cl', unit: '', tolerance: 0.001 },
+  { key: 'Cs', label: 'Cs', unit: '', tolerance: 0.001 },
+  { key: 'Cm', label: 'Cm', unit: '', tolerance: 0.001 },
+];
+
+/** Whether a monitor kind measures forces (whole walls, or picked faces): its stop watches a coefficient. */
+export function isForceKind(kind: string): boolean {
+  return kind === 'forces' || kind === 'force';
+}
+
 /** Per monitor kind (a result control's monitor_type, or 'boundary'). */
 export const SETTLE_QUANTITIES: Record<string, readonly SettleQuantity[]> = {
   area_average: [PRESSURE, VELOCITY],
   boundary: [PRESSURE, VELOCITY, { key: 'Q', label: 'Flow rate', unit: 'm³/s', tolerance: 1e-6 }],
-  forces: [
-    { key: 'Cd', label: 'Cd', unit: '', tolerance: 0.001 },
-    { key: 'Cl', label: 'Cl', unit: '', tolerance: 0.001 },
-    { key: 'Cs', label: 'Cs', unit: '', tolerance: 0.001 },
-    { key: 'Cm', label: 'Cm', unit: '', tolerance: 0.001 },
-  ],
+  forces: FORCE_COEFFICIENTS,
+  force: FORCE_COEFFICIENTS,
   probe: [
     { ...PRESSURE, label: 'Pressure (average of its points)' },
     { ...VELOCITY, label: 'Velocity (average of its points)' },
@@ -133,7 +141,7 @@ export function settleProblem(
     if (m.targets === 0) return `${m.name} is not placed on anything yet`;
     return `${m.name} has no quantity the stop can watch`;
   }
-  if (chosen.kind === 'forces' && study) {
+  if (isForceKind(chosen.kind) && study) {
     if (!positive(study.ref_area)) return "force coefficients need the study's reference area";
     if (chosen.quantity.key === 'Cm' && !positive(study.ref_length)) {
       return "the moment coefficient needs the study's reference length";

@@ -31000,7 +31000,7 @@ async function addProbeAtPoint(point) {
   }
   const rcs = (rec.result_controls || []).map((r) => ({ ...r }));
   const rcId = stampRcId();
-  const nextRc = { ...newMonitorRecord(typeRow, rcId, nextAaName(rcs, typeRow.label)), points: [p] };
+  const nextRc = { ...newMonitorRecord(typeRow, rcId, nextAaName(rcs, typeRow.label, typeRow.key)), points: [p] };
   rcs.push(nextRc);
   rec.result_controls = rcs;
   const j = await persistRunSettings({ run_id: rec.id, result_controls: rcs });
@@ -31452,7 +31452,7 @@ function toggleAssignAaFace(face) {
     closeRcTypeModal();
     const rec = findRunRecord(runId);
     const rcs = ((rec && rec.result_controls) || []).map((r) => ({ ...r }));
-    const name = nextAaName(rcs, typeRow.label);
+    const name = nextAaName(rcs, typeRow.label, typeRow.key);
     const rcId = stampRcId();
     const target = monitorTargetOf(typeRow);
     // A monitor on boundaries starts on every one it can measure (Forces: every wall).
@@ -31895,10 +31895,16 @@ function nextClientRunName() {
   return 'Run ' + n;
 }
 
-function nextAaName(rcs, label) {
+function nextAaName(rcs, label, key) {
   const base = String(label || 'Area average');
   const word = base.toLowerCase();
-  const n = (rcs || []).filter((r) => String(r.kind || r.name || '').toLowerCase().includes(word)).length;
+  // Its own type's records ("Force 2" after "Force 1", whatever "Forces" there are);
+  // a record saved before types by its kind or name.
+  const n = (rcs || []).filter((r) =>
+    key && r.monitor_type
+      ? String(r.monitor_type) === String(key)
+      : String(r.kind || r.name || '').toLowerCase().split(/\s+\d+$/)[0] === word
+  ).length;
   return base + ' ' + (n + 1);
 }
 
@@ -34879,7 +34885,12 @@ async function renameActiveRunClient(name) {
     const runId = (typeof resultCatalog !== 'undefined' && resultCatalog.editing_run_id) || (runCatalog && runCatalog.selected_run_id);
     const data = runId ? monState.byRun[runId] : null;
     const faces = new Set(((typeof resultCatalog !== 'undefined' && resultCatalog.draft_faces) || []).map(String));
-    const mons = ((data && data.monitors) || []).filter((m) => (m.faces || []).some((f) => faces.has(String(f))));
+    const editing = typeof resultCatalog !== 'undefined' ? resultCatalog.area_average_1 : null;
+    // A Force shows its own row (the force on its faces), not the boundaries those faces are on.
+    const mons =
+      editing && editing.monitor_type === 'force'
+        ? ((data && data.custom) || []).filter((m) => m.type === 'force' && String(m.id) === String(editing.id))
+        : ((data && data.monitors) || []).filter((m) => (m.faces || []).some((f) => faces.has(String(f))));
     if (!mons.length) {
       wrap.hidden = true;
       list.innerHTML = '';

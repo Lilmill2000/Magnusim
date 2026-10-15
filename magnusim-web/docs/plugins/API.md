@@ -2883,6 +2883,7 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | material | `thermo_fluid` | Fluid (thermal) | heat_transfer |
 | material | `thermo_solid` | Solid (thermal) | heat_transfer |
 | monitor | `area_average` | Area average | incompressible_flow |
+| monitor | `force` | Force | incompressible_flow |
 | monitor | `flow_rate` | Flow rate | incompressible_flow |
 | monitor | `forces` | Forces | incompressible_flow |
 | monitor | `probe` | Point probe | incompressible_flow |

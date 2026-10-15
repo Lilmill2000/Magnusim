@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NO_WSL, PYTHON, waitSlotFree } from '../../../e2e/support/plugin-suite.js';
@@ -388,6 +389,16 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
   await expect
     .poll(async () => ((await runs()).find((r) => r.id === run2)?.result_controls || []).map((rc) => rc.faces))
     .toEqual([[`face ${outlet.id}@Body1`]]);
+  // ... and a Force on a wall face: the real mesh's faces of that CAD face, measured on their own.
+  const wall = meta.faces.find((f) => f.id !== inlet.id && f.id !== outlet.id);
+  await page.locator(`button.rc-plus[data-w27-run-plus="${run2}"]`).click();
+  await page.locator('#rc-type-list [data-rc-type="force"]').click();
+  await page.locator('#rc-apply').click();
+  await expect(page.locator('#aa-panel-title')).toHaveText('Force 1');
+  await clickFace(wall.id);
+  await expect
+    .poll(async () => ((await runs()).find((r) => r.id === run2)?.result_controls || []).find((rc) => rc.monitor_type === 'force')?.faces)
+    .toEqual([`face ${wall.id}@Body1`]);
   await openRun(run2);
   await expect(runPanel.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
   await runPanel.locator('[data-run-start]').click();
@@ -397,6 +408,16 @@ test('results tools on a solved run, monitors, copied run settings, and stopping
   stage(`monitor ${custom.name}: ${(custom.series || []).length} points, final ${JSON.stringify(custom.final)}`);
   expect((custom.series || []).length).toBeGreaterThan(0);
   expect(JSON.stringify(custom.faces || [])).toContain(`face ${outlet.id}@Body1`);
+  const force = (mon.custom || []).find((m) => m.type === 'force') || {};
+  stage(`force ${force.name}: ${(force.series || []).length} points, F ${JSON.stringify(force.last && force.last.F_N)}`);
+  expect(force.faces).toEqual([`face ${wall.id}@Body1`]);
+  expect((force.series || []).length).toBeGreaterThan(0);
+  expect(Math.hypot(...force.last.F_N)).toBeGreaterThan(0);
+  // The real mesh's faces of that wall face were split into a patch of their own (only in the run's case).
+  const run2Case = (await runs()).find((r) => r.id === run2).case_dir;
+  const boundary = readFileSync(join(run2Case, 'constant', 'polyMesh', 'boundary'), 'utf8');
+  const piece = new RegExp(`mgf_${wall.id}__\\w+\\s*\\{[^}]*nFaces\\s+(\\d+);`).exec(boundary);
+  expect(piece && Number(piece[1]), boundary.slice(0, 2000)).toBeGreaterThan(0);
 
   // Run 3 runs long and is stopped from its panel.
   await page.locator(`#left-tree [data-w17-sim-id="${sid}"] [data-w27-sim-control="1"] > .tree-row .tl`).first().click();

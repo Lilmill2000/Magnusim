@@ -21,6 +21,7 @@ protected = [
   "solver:pimpleFoam",
   "material:newtonian_incompressible",
   "monitor:area_average",
+  "monitor:force",
   "monitor:flow_rate",
   "monitor:forces",
   "monitor:probe",

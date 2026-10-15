@@ -1427,9 +1427,53 @@ def _join_functions(text: str, extra: str) -> str:
     return text + "\n" + extra
 
 
-def _reference_monitors(spec: Any, poly_dst: Path | None, functions_text: str) -> tuple[str, dict[str, Any]]:
-    """The function objects of Forces monitors (which measure against the study's
-    reference values) and Point probes, and what the sidecar records about them."""
+def _force_problem(spec: Any) -> str | None:
+    """Why the run's Force controls cannot be measured as picked: a face on a
+    boundary that is not a wall (splitting an inlet would give each piece its flow)."""
+    from .force_faces import face_number, force_records
+
+    owners: dict[int, str] = {}
+    for m in spec.mapped or []:
+        bc = _bc_dict(m.get("bc") or {})
+        if is_wall_bc(bc):
+            continue
+        for label in bc.get("faces") or []:
+            n = face_number(label)
+            if n is not None:
+                owners.setdefault(n, str(bc.get("name") or m.get("patch") or "a boundary"))
+    for rec in force_records(getattr(spec, "result_controls", None)):
+        for label in rec["faces"]:
+            n = face_number(label)
+            if n in owners:
+                return (
+                    f'{rec["name"]} measures walls: face {n} is on "{owners[n]}", which is not a wall. '
+                    "Pick wall faces in its panel."
+                )
+    return None
+
+
+def _split_force_faces(spec: Any, poly_dst: Path | None, patch_names: list[str], services: Any, *, restart: bool) -> dict[str, Any]:
+    """Split the mesh faces of the run's Force controls into patches of their own
+    (incompressible_flow.force_faces); only wall patches give faces."""
+    from .force_faces import force_records, plan_force_faces
+
+    records = force_records(getattr(spec, "result_controls", None))
+    if not records:
+        return {"pieces": {}, "plans": [], "notes": []}
+    walls = set(patch_names)
+    for m in spec.mapped or []:
+        if not is_wall_bc(_bc_dict(m.get("bc") or {})):
+            walls.discard(str(m.get("patch") or ""))
+    return plan_force_faces(poly_dst, records, walls, services, restart=restart)
+
+
+def _reference_monitors(
+    spec: Any, poly_dst: Path | None, functions_text: str, force_split: dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any]]:
+    """The function objects of Forces monitors and Force controls (which measure
+    against the study's reference values) and Point probes, and what the sidecar
+    records about them."""
+    from .force_faces import force_functions_text, with_coefficients, with_pieces
     from .force_objects import (
         forces_functions_text,
         plan_forces_monitors,
@@ -1445,7 +1489,13 @@ def _reference_monitors(spec: Any, poly_dst: Path | None, functions_text: str) -
 
         mesh_patches = set(_parse_boundary_patches(poly_dst / "boundary"))
     forces = plan_forces_monitors(spec, mesh_patches, reference)
+    # A wall split for a Force control is still all of the wall a Forces monitor measures.
+    pieces = (force_split or {}).get("pieces") or {}
+    for plan in forces:
+        plan["patches"] = with_pieces(plan["patches"], pieces)
     text = _join_functions(functions_text, forces_functions_text(forces, reference, transient=spec.transient))
+    force_plans = with_coefficients(list((force_split or {}).get("plans") or []), reference)
+    text = _join_functions(text, force_functions_text(force_plans, reference, transient=spec.transient))
     probes = plan_probe_monitors(spec)
     text = _join_functions(text, probes_functions_text(probes, transient=spec.transient))
     from .pressure_coefficient import pressure_coefficient_text
@@ -1455,6 +1505,7 @@ def _reference_monitors(spec: Any, poly_dst: Path | None, functions_text: str) -
     return text, {
         "reference": reference.to_json(),
         "forces_monitors": forces,
+        "force_controls": force_plans,
         "probe_monitors": probes,
         "pressure_coefficient": bool(cp),
     }
@@ -1471,6 +1522,9 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     (out / "0").mkdir(exist_ok=True)
     (out / "constant").mkdir(exist_ok=True)
     (out / "system").mkdir(exist_ok=True)
+    problem = _force_problem(spec)
+    if problem:
+        return {"ok": False, "error": problem}
     restart = getattr(spec, "restart", None)
     restart_from: float | None = None
     if restart:
@@ -1519,6 +1573,17 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     }
 
     U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values, patch_turb=patch_turb)
+    # Force controls: the mesh faces of their picked faces in patches of their own,
+    # each with its wall's boundary conditions (the flow is the same).
+    force_split = _split_force_faces(spec, poly_dst, patch_names, services, restart=restart_from is not None)
+    if force_split["pieces"]:
+        from .force_faces import owner_entries
+
+        pieces = force_split["pieces"]
+        U = owner_entries(U, pieces)
+        p = owner_entries(p, pieces)
+        turb_patches = {name: owner_entries(entries, pieces) for name, entries in turb_patches.items()}
+        patch_names = _patch_names(spec, poly_dst)
     # The study's starting flow (Still: 0, as before the setting existed).
     u0, u0_from = initial_velocity(spec, speed_ref)
     write_vol_field(
@@ -1633,7 +1698,7 @@ RAS
     functions_text += "\n" + result_fields_functions_text(
         turbulent=model != "laminar", rho=float(spec.rho), transient=spec.transient
     )
-    functions_text, monitor_meta = _reference_monitors(spec, poly_dst, functions_text)
+    functions_text, monitor_meta = _reference_monitors(spec, poly_dst, functions_text, force_split)
     # "Stop when a monitor settles": a runTimeControl after the monitors it reads.
     from .runspec import convergence_stops_off
     from .settle import plan_settle, settle_functions_text
@@ -1647,6 +1712,7 @@ RAS
             spec,
             custom_meta=custom_meta,
             forces_plans=monitor_meta["forces_monitors"],
+            force_plans=monitor_meta["force_controls"],
             probe_plans=monitor_meta["probe_monitors"],
         )
     )

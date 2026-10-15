@@ -18,6 +18,7 @@ from incompressible_flow.materials import build_newtonian_incompressible
 from incompressible_flow.monitors import (
     build_area_average,
     build_flow_rate,
+    build_force,
     build_forces,
     build_probe,
 )
@@ -45,6 +46,8 @@ def register(hub: Any) -> None:
     hub.registry("material").register(build_newtonian_incompressible(), plugin=KEY)
     monitors = hub.registry("monitor")
     monitors.register(build_area_average(), plugin=KEY)
+    # Right after Area average: both are picked faces (the menu's SURFACE DATA).
+    monitors.register(build_force(), plugin=KEY)
     monitors.register(build_flow_rate(), plugin=KEY)
     monitors.register(build_forces(), plugin=KEY)
     monitors.register(build_probe(), plugin=KEY)

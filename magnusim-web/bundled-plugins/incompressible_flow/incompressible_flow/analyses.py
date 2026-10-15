@@ -84,7 +84,7 @@ _RESULT_FIELDS: tuple[ResultField, ...] = (
 )
 
 # MonitorType keys (wired to registry in land5; flow->flow_rate bag fix).
-_MONITORS: tuple[str, ...] = ("area_average", "flow_rate", "forces", "probe")
+_MONITORS: tuple[str, ...] = ("area_average", "force", "flow_rate", "forces", "probe")
 
 _MATERIAL_MODELS: tuple[str, ...] = ("newtonian_incompressible",)
 

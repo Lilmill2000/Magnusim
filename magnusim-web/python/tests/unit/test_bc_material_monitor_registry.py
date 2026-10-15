@@ -27,7 +27,7 @@ from tests.unit.bundled_manifests import installed
 # optional plugins). HT5 adds its solid model and its Solid wall (a BC type and family).
 HT = installed("heat_transfer")
 EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid", "thermo_solid"} if HT else set())
-EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"} | (
+EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "force", "forces", "probe"} | (
     {"ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple"} if HT else set()
 )
 HT_BC_KEYS = ("ht_solid_wall",) if HT else ()  # tests.unit.if_bc_keys.ht_bc_keys

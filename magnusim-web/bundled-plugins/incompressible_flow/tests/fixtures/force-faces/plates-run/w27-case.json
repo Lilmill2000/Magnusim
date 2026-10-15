@@ -1,0 +1,105 @@
+{
+  "rho": 1.196,
+  "nu": 1.529e-05,
+  "reference": {
+    "speed_m_s": 0.1,
+    "speed_auto": true,
+    "pressure_Pa": 0.0,
+    "rho": 1.196,
+    "area_m2": 0.001,
+    "length_m": 0.5,
+    "cofr_m": [
+      0.25,
+      0.0,
+      0.001
+    ],
+    "drag_dir": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "lift_dir": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "side_dir": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "drag_auto": false,
+    "lift_auto": false,
+    "notes": []
+  },
+  "forces_monitors": [
+    {
+      "id": "walls",
+      "name": "Walls",
+      "key": "forces_walls",
+      "coeffs_key": "coeffs_walls",
+      "patches": [
+        "walls",
+        "mgf_11__walls",
+        "mgf_12__walls",
+        "mgf_13__walls"
+      ],
+      "boundaries": [
+        "Walls with no boundary condition"
+      ],
+      "missing": [],
+      "notes": [],
+      "moment_coefficient": true
+    }
+  ],
+  "force_controls": [
+    {
+      "id": "entrance",
+      "name": "Entrance",
+      "faces": [
+        "face 11@Body1"
+      ],
+      "key": "force_entrance",
+      "coeffs_key": "fcoeffs_entrance",
+      "patches": [
+        "mgf_11__walls"
+      ],
+      "boundaries": [],
+      "missing": [],
+      "notes": [],
+      "moment_coefficient": true
+    },
+    {
+      "id": "developed",
+      "name": "Developed",
+      "faces": [
+        "face 12@Body1"
+      ],
+      "key": "force_developed",
+      "coeffs_key": "fcoeffs_developed",
+      "patches": [
+        "mgf_12__walls"
+      ],
+      "boundaries": [],
+      "missing": [],
+      "notes": [],
+      "moment_coefficient": true
+    },
+    {
+      "id": "top",
+      "name": "Top",
+      "faces": [
+        "face 13@Body1"
+      ],
+      "key": "force_top",
+      "coeffs_key": "fcoeffs_top",
+      "patches": [
+        "mgf_13__walls"
+      ],
+      "boundaries": [],
+      "missing": [],
+      "notes": [],
+      "moment_coefficient": true
+    }
+  ]
+}

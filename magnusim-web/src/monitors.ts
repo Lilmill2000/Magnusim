@@ -438,9 +438,11 @@ export function resolveMonitorType(rc: MonitorRecord | null | undefined, types: 
     .join(' ')
     .toLowerCase();
   if (!text) return null;
+  // Whole words: an older "Forces 1" is not a "Force".
+  const hasWord = (w: string) => new RegExp(`(^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`).test(text);
   for (const t of types) {
     const words = [t.label, ...(t.aliases || [])].map((w) => String(w || '').trim().toLowerCase()).filter(Boolean);
-    if (words.some((w) => text.includes(w))) return t;
+    if (words.some(hasWord)) return t;
   }
   return null;
 }
