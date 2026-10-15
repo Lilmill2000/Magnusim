@@ -16,6 +16,7 @@ import {
   properties,
   recordValues,
   roleOf,
+  takesAnyNumber,
   type MaterialModelRow,
   type SavedMaterial,
 } from '../../materialModel';
@@ -227,7 +228,16 @@ export function MultiMaterialsPanel(props: IslandProps & { analysisKey: string }
     const p = presetByKey(model, key);
     if (!p) return;
     if (p.key === customPresetKey(model)) return save({ preset: p.key, name: p.name });
-    return save({ preset: p.key, name: p.name, values: presetValues(p) });
+    // A value the new preset does not define (a solid's heat source) stays with the record;
+    // one it defines is the preset's.
+    const own = live.current.draft.values;
+    const fill = presetValues(p);
+    const kept = Object.fromEntries(
+      properties(model)
+        .filter((prop) => !(prop.key in fill) && own[prop.key] !== undefined)
+        .map((prop) => [prop.key, own[prop.key]]),
+    );
+    return save({ preset: p.key, name: p.name, values: { ...kept, ...fill } });
   }
 
   function toggleBody(body: string) {
@@ -385,7 +395,7 @@ export function MultiMaterialsPanel(props: IslandProps & { analysisKey: string }
                     value={shown ?? null}
                     label={plainLabel(prop.label)}
                     onCommit={(v) => {
-                      if (!(v > 0)) return;
+                      if (takesAnyNumber(prop) ? !Number.isFinite(v) : !(v > 0)) return;
                       const values = { ...live.current.draft.values, [prop.key]: q ? convertQuantity(q, v, unit, SI_DEFAULT[q]) : v };
                       void save({ values });
                     }}

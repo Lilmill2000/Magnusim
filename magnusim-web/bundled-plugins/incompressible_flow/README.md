@@ -74,6 +74,18 @@ epsilon; under Spalart-Allmaras it sets `nuTilda` instead: Auto is 3 x the fluid
 viscosity, a viscosity ratio (no intensity) or an intensity and length scale give
 a turbulent viscosity that `nuTilda` is solved back from.
 
+## Changes
+
+- **Reference vectors are kept (with host API 1.8's study route).** The study panel's
+  Reference values save the centre of rotation and the drag and lift directions
+  (`ref_cofr`, `ref_drag_dir`, `ref_lift_dir`, three numbers each) on the study. The
+  route before kept scalars only, so a typed vector went back to blank and Forces
+  monitors used the origin and the automatic directions whatever was typed; now they
+  use what the study holds (`reference.py`), so a study with typed vectors writes
+  different forces (`CofR`, `dragDir`, `liftDir`). Blanking a vector (or a reference
+  value) clears it again, and a copied study carries them. Studies saved before have
+  none stored, so they write the case as before.
+
 ## Tests
 
 | What | Where | Run |

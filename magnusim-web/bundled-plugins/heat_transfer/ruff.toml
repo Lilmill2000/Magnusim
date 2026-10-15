@@ -3,3 +3,4 @@ extend = "../../python/pyproject.toml"
 [lint.per-file-ignores]
 # OpenFOAM field names (U, T, p_rgh) keep their case.
 "heat_transfer/writer.py" = ["N802", "N806"]
+"heat_transfer/cht_writer.py" = ["N802", "N806"]

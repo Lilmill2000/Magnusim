@@ -252,7 +252,7 @@ export function buildSimulation(body, project) {
   const algorithm = d.algorithm || algorithmLabelFor(analysisType);
   // Every setting the analysis seeds (its settings_schema defaults and whatever its
   // study_defaults adds), stored as given: the core names none of them.
-  const settings = studyPhysicsFrom(d);
+  const settings = studyPhysicsFrom(d, analysisType);
   const sim = {
     ...settings,
     id,
@@ -706,12 +706,138 @@ const STUDY_IDENTITY_KEYS = new Set([
   'dir',
 ]);
 
-/** A study's settings (every scalar that is not its identity): what a new study is seeded with and a copy carries. */
-export function studyPhysicsFrom(src) {
+/** The most a structured study value may hold (host API 1.8). */
+export const STUDY_VALUE_LIMITS = Object.freeze({ items: 64, keys: 64, depth: 4, chars: 16384 });
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * A plain JSON value within STUDY_VALUE_LIMITS (finite numbers, strings, booleans, null,
+ * arrays and plain objects, no __proto__ / constructor / prototype key), as a fresh copy;
+ * undefined when it is not one.
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function plainJsonValue(value, depth = 0) {
+  if (value === null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string') return value.length <= STUDY_VALUE_LIMITS.chars ? value : undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'object' || depth >= STUDY_VALUE_LIMITS.depth) return undefined;
+  if (Array.isArray(value)) {
+    if (value.length > STUDY_VALUE_LIMITS.items) return undefined;
+    const out = [];
+    for (const v of value) {
+      const c = plainJsonValue(v, depth + 1);
+      if (c === undefined) return undefined;
+      out.push(c);
+    }
+    return out;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return undefined;
+  const keys = Object.keys(value);
+  if (keys.length > STUDY_VALUE_LIMITS.keys) return undefined;
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  for (const k of keys) {
+    if (UNSAFE_KEYS.has(k)) return undefined;
+    const c = plainJsonValue(/** @type {Record<string, unknown>} */ (value)[k], depth + 1);
+    if (c === undefined) return undefined;
+    out[k] = c;
+  }
+  return out;
+}
+
+/**
+ * The settings schema properties of a study's analysis ({} when it has none): its registry
+ * row's `schema` (what registry.describe and the committed dump carry; `settings_schema`
+ * read too) and its `numerics_schema`.
+ * @param {unknown} analysisKey
+ * @returns {Record<string, any>}
+ */
+export function settingsProperties(analysisKey) {
+  const row = /** @type {any} */ (analysisByKey(String(analysisKey || '')));
+  /** @type {Record<string, any>} */
+  const out = {};
+  for (const schema of [row && row.numerics_schema, row && row.settings_schema, row && row.schema]) {
+    const props = schema && typeof schema === 'object' ? schema.properties : null;
+    if (props && typeof props === 'object') Object.assign(out, props);
+  }
+  return out;
+}
+
+/**
+ * How a study keeps `value` under `key` (host API 1.8). A scalar is kept as given (a
+ * string up to STUDY_VALUE_LIMITS.chars). An array or object is kept only for a key of
+ * the analysis's settings schema, as plain JSON within STUDY_VALUE_LIMITS in that key's
+ * shape (a vector3 is three finite numbers); for any other key it is left out, as it
+ * always was. null clears a schema key (a blanked direction) and is ignored for others.
+ * Returns { value } to keep, { clear: true } to remove the key, { skip: true } to leave
+ * the study as it is, or { error } with the reason.
+ * @param {string} key
+ * @param {unknown} value
+ * @param {Record<string, any>} props
+ * @returns {{ value: unknown } | { clear: true } | { skip: true } | { error: string }}
+ */
+export function studyValue(key, value, props) {
+  const prop = Object.prototype.hasOwnProperty.call(props || {}, key) ? props[key] : null;
+  const title = String((prop && prop.title) || key);
+  if (value === undefined) return { skip: true };
+  if (value === null) return prop ? { clear: true } : { skip: true };
+  if (typeof value !== 'object') {
+    if (typeof value === 'string' && value.length > STUDY_VALUE_LIMITS.chars) {
+      return { error: `${title}: the text is too long (at most ${STUDY_VALUE_LIMITS.chars} characters).` };
+    }
+    if (prop && (prop.type === 'array' || prop.type === 'object')) {
+      return { error: prop.type === 'array' ? `${title} takes a list.` : `${title} takes a set of named values.` };
+    }
+    return { value };
+  }
+  if (!prop) return { skip: true };
+  const clean = plainJsonValue(value);
+  if (clean === undefined) {
+    return { error: `${title}: not a plain value (too large, or holding something other than numbers and text).` };
+  }
+  if (prop.type === 'array') {
+    if (!Array.isArray(clean)) return { error: `${title} takes a list.` };
+    const items = prop.items && typeof prop.items === 'object' ? prop.items : {};
+    if ((items.type === 'number' || items.type === 'integer') && !clean.every((v) => typeof v === 'number')) {
+      return { error: `${title} takes numbers only.` };
+    }
+    if (items.type === 'integer' && !clean.every((v) => Number.isInteger(v))) {
+      return { error: `${title} takes whole numbers only.` };
+    }
+    const lo = Number.isInteger(prop.minItems) ? prop.minItems : 0;
+    const hi = Number.isInteger(prop.maxItems) ? prop.maxItems : STUDY_VALUE_LIMITS.items;
+    if (clean.length < lo || clean.length > hi) {
+      return { error: lo === hi ? `${title} takes ${lo} numbers.` : `${title} takes ${lo} to ${hi} values.` };
+    }
+    return { value: clean };
+  }
+  if (prop.type === 'object') {
+    return Array.isArray(clean) ? { error: `${title} takes a set of named values.` } : { value: clean };
+  }
+  return { error: `${title} takes a single value.` };
+}
+
+/**
+ * A study's settings: what a new study is seeded with and a copy carries. Every scalar
+ * that is not its identity; an array or object only for a key of the analysis's
+ * settings_schema (`analysisKey`), in its shape (host API 1.8: a custom gravity
+ * direction).
+ */
+export function studyPhysicsFrom(src, analysisKey) {
+  const props = settingsProperties(analysisKey || (src && src.analysis_type));
+  /** @type {Record<string, unknown>} */
   const out = {};
   for (const [key, value] of Object.entries(src || {})) {
-    if (STUDY_IDENTITY_KEYS.has(key)) continue;
-    if (value == null || typeof value === 'object') continue;
+    if (STUDY_IDENTITY_KEYS.has(key) || UNSAFE_KEYS.has(key)) continue;
+    if (value == null) continue;
+    if (typeof value === 'object') {
+      const kept = studyValue(key, value, props);
+      if ('value' in kept) out[key] = kept.value;
+      continue;
+    }
     out[key] = value;
   }
   return out;
@@ -755,7 +881,7 @@ function createSimulation(body) {
     // Copy / clone keeps the source study's physics (turbulence model and the other
     // study-level settings), not the new-study defaults: cloned results were solved with them.
     const src = known.find((s) => s && String(s.id) === String(body.copy_from));
-    if (src) Object.assign(built.sim, studyPhysicsFrom(src));
+    if (src) Object.assign(built.sim, studyPhysicsFrom(src, built.sim.analysis_type));
   }
   const named = assignStudyNames([...known, built.sim]);
   const sim = named.find((s) => s.id === built.sim.id) || built.sim;
@@ -863,13 +989,23 @@ function updateSimulation(body) {
     'scope',
     'kind',
   ]);
+  // Scalars as given; arrays and objects in the analysis's shape; null clears a schema key (API 1.8).
+  const props = settingsProperties(sim.analysis_type);
+  /** @type {Record<string, unknown>} */
+  const patch = {};
+  /** @type {string[]} */
+  const unset = [];
   for (const [key, value] of Object.entries(body || {})) {
-    if (skip.has(key)) continue;
-    if (value == null || typeof value === 'object') continue;
-    sim[key] = value;
+    if (skip.has(key) || UNSAFE_KEYS.has(key)) continue;
+    const kept = studyValue(key, value, props);
+    if ('error' in kept) return { ok: false, status: 400, body: { ok: false, error: kept.error, key, project_id: projectId } };
+    if ('value' in kept) patch[key] = kept.value;
+    else if ('clear' in kept) unset.push(key);
   }
+  Object.assign(sim, patch);
+  for (const key of unset) delete sim[key];
   sim.updated_at = now;
-  const cat = upsertSimulationInCatalog(projectId, proj, sim, true);
+  const cat = upsertSimulationInCatalog(projectId, proj, sim, true, unset);
   const next = (cat.simulations || []).find((s) => s.id === sim.id) || sim;
   touchProjectSimRef(proj, next);
   writeProject(proj);

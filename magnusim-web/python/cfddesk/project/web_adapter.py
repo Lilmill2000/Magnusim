@@ -197,6 +197,8 @@ def resolve_mesh(
         "mesh_id": (wanted or {}).get("id") if wanted else None,
         "mesh_name": (wanted or {}).get("name") if wanted else None,
         "wsl_case": (live or {}).get("wsl_case") if isinstance(live, dict) else None,
+        # The mesher it was made with (the mesh record's; Start's checks may need it).
+        **({"engine": str(wanted["ui_mesh_engine"])} if wanted and wanted.get("ui_mesh_engine") else {}),
         # A mesh of several material regions (host API 1.8): [{name, role, bodies, cells}],
         # one cellZone each; a case writer names the solve case's regions after them. Left out
         # for a mesh of one region.

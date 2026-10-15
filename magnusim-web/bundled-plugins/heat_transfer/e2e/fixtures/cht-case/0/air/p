@@ -1,0 +1,35 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    inlet
+    {
+        type          calculated;
+        value          uniform 0;
+    }
+    outlet
+    {
+        type          calculated;
+        value          uniform 0;
+    }
+    walls
+    {
+        type          calculated;
+        value          uniform 0;
+    }
+    air_to_aluminium_6061
+    {
+        type          calculated;
+        value          uniform 0;
+    }
+}

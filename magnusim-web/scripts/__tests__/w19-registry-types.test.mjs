@@ -130,6 +130,8 @@ describe('BC types come from the registry', () => {
       'Freestream',
       'Wall',
       'Symmetry',
+      // Heat Transfer's own (a solid body's outer face), registered after Incompressible Flow's.
+      'Solid wall',
     ]);
   });
 

@@ -14,6 +14,11 @@ W/m² and the heat transfer coefficient in W/(m²·K).
 
 The walls no BC claims are adiabatic.
 
+A solid body's outer faces take a "Solid wall" (this plugin's own BC family,
+offered in Heat Transfer studies): adiabatic, a fixed temperature, a heat flux
+into the solid or a heat transfer coefficient to an ambient temperature. A Wall
+on a solid's face is read the same way (its Thermal fields; it has no flow).
+
 A field the record does not hold is solved at the value the BC editor shows for
 it, the field's own default (an inlet at 20 °C, whatever the study's reference
 temperature): what the editor shows and what is solved never differ.
@@ -24,7 +29,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from cfddesk.registry.bc import BcFieldGroup
+from cfddesk.registry.bc import BcFamily, BcFieldGroup, BcTypeSpec
 from cfddesk.registry.schema import SchemaField
 
 from .physics import DEFAULT_REFERENCE_T
@@ -44,7 +49,13 @@ BC_TYPES: tuple[str, ...] = (
     "total_pressure_inlet",
     "wall_moving",
     "wall_rotating",
+    # This plugin's own: a solid body's outer face.
+    "ht_solid_wall",
 )
+
+SOLID_WALL_FAMILY = "solid_wall"
+SOLID_WALL_TYPE = "ht_solid_wall"
+SOLID_WALL_RECORD = "Solid wall"
 
 # A new Wall in a Heat Transfer study starts no-slip (host API 1.8 bc_seeds): it is
 # added for the heat through it, and a slip wall has no boundary layer (Start refuses
@@ -135,6 +146,75 @@ AMBIENT_T = SchemaField(
     depends_on={"thermal_condition": HTC},
 )
 
+SOLID_WALL_FIELDS: tuple[SchemaField, ...] = (
+    SchemaField(
+        WALL_MODE.key,
+        WALL_MODE.label,
+        "choice",
+        default=ADIABATIC,
+        choices=WALL_MODES,
+        choice_labels=WALL_MODE_LABELS,
+        description=(
+            "Adiabatic lets no heat through. A fixed temperature holds the face at it. A heat flux puts "
+            "that much heat per area into the solid (negative takes it out). A heat transfer coefficient "
+            "exchanges heat with an ambient temperature outside the face."
+        ),
+    ),
+    WALL_T,
+    SchemaField(
+        WALL_Q.key,
+        WALL_Q.label,
+        "float",
+        default=1000.0,
+        quantity="heat_flux",
+        depends_on={"thermal_condition": HEAT_FLUX},
+        description="Heat per area into the solid; negative cools it.",
+    ),
+    WALL_H,
+    AMBIENT_T,
+)
+
+
+def _resolve_solid_wall(_rec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    return SOLID_WALL_TYPE, {}
+
+
+SOLID_WALL_BC_TYPE = BcTypeSpec(
+    SOLID_WALL_TYPE,
+    "Solid wall",
+    "wall",
+    "wall",
+    SOLID_WALL_FIELDS,
+    family=SOLID_WALL_FAMILY,
+)
+
+SOLID_WALL_BC_FAMILY = BcFamily(
+    key=SOLID_WALL_FAMILY,
+    label="Solid wall",
+    record_type=SOLID_WALL_RECORD,
+    color="wall",
+    hint="A solid body's outer face: adiabatic, a temperature, a heat flux or a heat transfer coefficient",
+    variants=(SOLID_WALL_TYPE,),
+    defaults={"metric": {"thermal_condition": ADIABATIC}, "imperial": {"thermal_condition": ADIABATIC}},
+    fields=SOLID_WALL_FIELDS,
+    resolve=_resolve_solid_wall,
+)
+
+
+def is_solid_wall(rec: dict[str, Any] | None) -> bool:
+    raw = str((rec or {}).get("bc_type") or "").strip().lower().replace("_", " ")
+    return raw == SOLID_WALL_RECORD.lower()
+
+
+def record_kind(rec: dict[str, Any] | None) -> str | None:
+    """What a BC record is: one of Incompressible Flow's kinds, ``solid_wall``, or None."""
+    from incompressible_flow.flow_bcs import boundary_kind
+
+    if is_solid_wall(rec):
+        return "solid_wall"
+    return boundary_kind(rec)
+
+
 BC_FIELDS: tuple[BcFieldGroup, ...] = (
     BcFieldGroup("ht_inlet_thermal", "Thermal", (INLET_T,), families=INLET_FAMILIES),
     BcFieldGroup(
@@ -207,7 +287,7 @@ def thermal_problem(rec: dict[str, Any], kind: str) -> str | None:
     elif kind in ("pressure", "velocity_outlet", "freestream"):
         if backflow_temperature(d) <= 0:
             return "its temperature of inflow must be above absolute zero"
-    elif kind == "wall":
+    elif kind in ("wall", "solid_wall"):
         w = wall_thermal(d)
         if w["mode"] == FIXED_T and w["T"] <= 0:
             return "its wall temperature must be above absolute zero"

@@ -1,6 +1,6 @@
 """The study settings a Heat Transfer solve reads: gravity, the density model,
 the operating pressure and reference temperature, the starting temperature,
-the turbulence model and the steady numerics.
+the turbulence model, the steady numerics and the heat sources in solid bodies.
 
 The study panel saves these keys on the study's record (``simulations.json``);
 ``physics_from_record`` reads them with their defaults, so a study that never
@@ -229,6 +229,136 @@ def physics_problem(rec: dict[str, Any] | None) -> str | None:
         vec = _vec(rec.get("gravity_vector"))
         if vec is not None and not any(vec):
             return "the gravity direction has no length (all three components are 0)"
+    return None
+
+
+# --- Heat sources in solid bodies ------------------------------------------------
+#
+# The study record's ``heat_sources``: {<material record id>: {"mode", "power_W",
+# "power_density_W_m3"}}, one per solid material (its bodies are one region), saved as
+# JSON text (a study record keeps plain values only; an object is read too). Mode
+# "power" is the total heat the bodies give off (W), "density" a heat per volume
+# (W/m³), "none" no source. A material that is no longer solid keeps its row: the
+# study switches back and forth without losing it.
+
+HEAT_SOURCE_MODES: tuple[str, ...] = ("none", "power", "density")
+
+
+@dataclass(frozen=True)
+class HeatSource:
+    mode: str = "none"
+    power_w: float = 0.0
+    power_density_w_m3: float = 0.0
+
+    @property
+    def on(self) -> bool:
+        if self.mode == "power":
+            return self.power_w != 0
+        if self.mode == "density":
+            return self.power_density_w_m3 != 0
+        return False
+
+    def total_w(self, volume_m3: float) -> float:
+        """The heat the source gives off, W (a source per volume: over ``volume_m3``)."""
+        if self.mode == "power":
+            return self.power_w
+        if self.mode == "density":
+            return self.power_density_w_m3 * volume_m3
+        return 0.0
+
+
+def heat_sources_raw(rec: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The study record's ``heat_sources`` as a dict (JSON text or an object), else None."""
+    raw = (rec or {}).get("heat_sources") if isinstance(rec, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    return raw if isinstance(raw, dict) else None
+
+
+def heat_sources_from_record(rec: dict[str, Any] | None) -> dict[str, HeatSource]:
+    """The study's heat sources by material record id (a row the solve cannot use is left out:
+    :func:`heat_source_problem` names it)."""
+    raw = heat_sources_raw(rec)
+    out: dict[str, HeatSource] = {}
+    if not isinstance(raw, dict):
+        return out
+    for mid, row in raw.items():
+        if not isinstance(row, dict):
+            continue
+        mode = str(row.get("mode") or "none").strip().lower()
+        if mode not in HEAT_SOURCE_MODES:
+            continue
+        power = _num(row.get("power_W"))
+        density = _num(row.get("power_density_W_m3"))
+        out[str(mid)] = HeatSource(mode=mode, power_w=power or 0.0, power_density_w_m3=density or 0.0)
+    return out
+
+
+def heat_source_of_material(mat: dict[str, Any] | None) -> HeatSource | None:
+    """A solid material record's heat source (``heat_source_W`` or ``heat_source_W_m3``),
+    None when the record holds neither (a study saved before the source moved onto the
+    record keeps it in the study's ``heat_sources``)."""
+    from .materials import SOURCE_KEYS
+
+    if not isinstance(mat, dict) or all(mat.get(k) in (None, "") for k in SOURCE_KEYS):
+        return None
+    power = _num(mat.get(SOURCE_KEYS[0])) or 0.0
+    density = _num(mat.get(SOURCE_KEYS[1])) or 0.0
+    if power:
+        return HeatSource(mode="power", power_w=power, power_density_w_m3=density)
+    if density:
+        return HeatSource(mode="density", power_density_w_m3=density)
+    return HeatSource()
+
+
+def heat_sources_of(study: dict[str, Any] | None, solids: list[dict[str, Any]]) -> dict[str, HeatSource]:
+    """Each solid record's heat source by its id: its own, else (an older study) the
+    study's ``heat_sources`` row for it."""
+    older = heat_sources_from_record(study)
+    out: dict[str, HeatSource] = {}
+    for mat in solids:
+        mid = str(mat.get("id") or "")
+        own = heat_source_of_material(mat)
+        if own is not None:
+            out[mid] = own
+        elif mid in older:
+            out[mid] = older[mid]
+    return out
+
+
+def heat_source_problem(study: dict[str, Any] | None, solids: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """A solid's heat source the solve cannot use ({message, material}: the record to fix,
+    None for the study's older ``heat_sources``), else None."""
+    from .materials import SOURCE_KEYS
+
+    for mat in solids:
+        name = str(mat.get("name") or "a solid")
+        if any(mat.get(k) not in (None, "") and _num(mat.get(k)) is None for k in SOURCE_KEYS):
+            return {"message": f"{name}'s heat source is not a number", "material": mat}
+        if _num(mat.get(SOURCE_KEYS[0])) and _num(mat.get(SOURCE_KEYS[1])):
+            return {
+                "message": f"{name} has a heat source both in total and per volume: set one of them to 0",
+                "material": mat,
+            }
+    rec = study
+    if isinstance(rec, dict) and isinstance(rec.get("heat_sources"), str) and heat_sources_raw(rec) is None:
+        return {"message": "the heat sources were not saved as readable JSON", "material": None}
+    raw = heat_sources_raw(rec)
+    if raw is None:
+        return None
+    older = {str(m.get("id")) for m in solids if heat_source_of_material(m) is None}
+    for mid, row in raw.items():
+        if str(mid) not in older or not isinstance(row, dict):
+            continue
+        mode = str(row.get("mode") or "none").strip().lower()
+        key = {"power": "power_W", "density": "power_density_W_m3"}.get(mode)
+        if key and row.get(key) not in (None, "") and _num(row.get(key)) is None:
+            return {"message": "a heat source's value is not a number", "material": None}
     return None
 
 

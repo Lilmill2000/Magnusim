@@ -9,7 +9,7 @@ from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 
 from .bcs import BC_FIELDS, BC_SEEDS, BC_TYPES
-from .materials import FLUID_MODEL
+from .materials import FLUID_MODEL, SOLID_MODEL
 from .monitors import MONITOR_KEYS, MONITOR_QUANTITIES
 from .physics import (
     DEFAULT_DENSITY,
@@ -268,11 +268,17 @@ def _decision(spec: Any, ctx: CaseContext) -> dict[str, Any]:
     override = getattr(ctx.inputs, "transient_override", None) if ctx.inputs is not None else None
     control = control_to_web(spec.transient, override) if spec.transient is not None else None
     density = spec.density_model
+    label = physics_label(spec.physics, density)
+    if spec.cht:
+        from .cht import bodies_text, record_bodies
+
+        solids = [b for rec in spec.solid_records for b in record_bodies(rec)]
+        label = f"conjugate heat transfer ({bodies_text(solids)} solid)" + (f", {label}" if spec.fluid_records else "")
     out: dict[str, Any] = {
         "bcs": rows,
         "transient_control": control,
         "note_detail": describe_transient(control) if control is not None else "",
-        "physics_label": physics_label(spec.physics, density),
+        "physics_label": label,
         "algorithm": algorithm_label(spec.time_dependency),
         "n_procs": spec.n_procs,
         "end_time": spec.end_time,
@@ -283,7 +289,9 @@ def _decision(spec: Any, ctx: CaseContext) -> dict[str, Any]:
     if convergence_stops_off(spec):
         out["stops_off"] = True
         return out
-    if spec.transient is None:
+    # chtMultiRegionSimpleFoam does not stop on its residuals (it runs its iterations,
+    # or until a monitor settles).
+    if spec.transient is None and not spec.cht:
         out["residual_control"] = True
     if spec.settle:
         stop = _stop_when(spec)
@@ -296,6 +304,8 @@ def _stop_when(spec: Any) -> dict[str, Any] | None:
     """The settle stop as the run record keeps it: ``{label, text}``, or ``{error, label?}``."""
     from .settle import plan_settle
 
+    if spec.cht:
+        return _cht_stop_when(spec)
     patches = {str(rec.get("id")): f"bc_{rec.get('id')}" for rec in spec.records}
     plans = []
     for m in spec.monitors:
@@ -307,6 +317,30 @@ def _stop_when(spec: Any) -> dict[str, Any] | None:
             row["patches"] = [patches.get(str(b), str(b)) for b in m.get("boundaries") or []]
         plans.append(row)
     plan = plan_settle(spec, plans)
+    if plan is None:
+        return None
+    if "error" in plan:
+        return {k: plan[k] for k in ("label", "error") if k in plan}
+    return {"label": plan["label"], "text": plan["text"]}
+
+
+def _cht_stop_when(spec: Any) -> dict[str, Any] | None:
+    """A CHT run's settle stop as its case will be written (its objects are per region)."""
+    from pathlib import Path
+
+    from .cht import ChtError, layout
+    from .cht_functions import plan_cht_monitors
+    from .cht_writer import _patch_records
+    from .settle import plan_settle
+
+    mesh = (spec.inputs.mesh or {}) if spec.inputs is not None else {}
+    poly = Path(spec.mesh_case_dir) / "constant" / "polyMesh"
+    try:
+        lay = layout(mesh.get("regions"), [*spec.fluid_records, *spec.solid_records], poly, keep=True)
+        by_patch = _patch_records(spec, list(lay.patch_types))
+        plan = plan_settle(spec, plan_cht_monitors(spec, lay, by_patch, out=Path(spec.mesh_case_dir), poly_dir=poly))
+    except ChtError:
+        return None
     if plan is None:
         return None
     if "error" in plan:
@@ -337,16 +371,28 @@ def plan_case(ctx: CaseContext) -> dict[str, Any]:
     return {"ok": True, "run_id": spec.run_id, "solver": solver_app(spec), **_decision(spec, ctx)}
 
 
+def study_is_cht(inputs: Any) -> bool:
+    """The run's study has a body of a solid material (the core's RunInputs)."""
+    from .contract import study_solids
+
+    if inputs is None:
+        return False
+    return bool(study_solids(getattr(inputs, "materials", None) or {}, getattr(inputs, "simulation_id", None)))
+
+
 def _launch(td: str) -> Any:
     from . import contract as hc
 
     default = hc.TRANSIENT_SOLVER if td == "transient" else hc.STEADY_SOLVER
+    cht = hc.CHT_TRANSIENT_SOLVER if td == "transient" else hc.CHT_STEADY_SOLVER
 
-    def launch(solver_key: str | None = None, **_ignored: Any) -> Any:
+    def launch(solver_key: str | None = None, inputs: Any = None, **_ignored: Any) -> Any:
+        """The buoyant solver, or the CHT one when the run's study has a solid body (host API
+        1.8 passes the run's inputs when it plans a run). The log parser reads both."""
         from cfddesk.registry.contract import ContractError, LaunchSpec
         from cfddesk.registry.discovery import get_registry
 
-        key = str(solver_key or default)
+        key = cht if study_is_cht(inputs) else str(solver_key or default)
         solvers = get_registry("solver")
         if key not in set(solvers.keys()):
             raise ContractError(f"solver {key!r} is not registered")
@@ -398,6 +444,7 @@ def _build(td: str) -> AnalysisType:
     transient = td == "transient"
     key = TRANSIENT_KEY if transient else STEADY_KEY
     solver = hc.TRANSIENT_SOLVER if transient else hc.STEADY_SOLVER
+    cht_solver = hc.CHT_TRANSIENT_SOLVER if transient else hc.CHT_STEADY_SOLVER
     return AnalysisType(
         key=key,
         label=f"{LABEL} (Transient)" if transient else LABEL,
@@ -405,17 +452,17 @@ def _build(td: str) -> AnalysisType:
         time_dependency="transient" if transient else "steady",
         fields=_FIELDS,
         bc_types=BC_TYPES,
-        material_models=(FLUID_MODEL,),
-        solver_backends=(solver,),
+        material_models=(FLUID_MODEL, SOLID_MODEL),
+        solver_backends=(solver, cht_solver),
         default_solver=solver,
         monitors=MONITOR_KEYS,
         result_fields=RESULT_FIELDS,
         settings_schema=settings_schema(),
         numerics_schema=numerics_schema(transient=transient),
         control_schema=control_schema(transient=transient),
-        region_roles=("fluid",),
+        region_roles=("fluid", "solid"),
         write_case=write_case,
-        requires=(Requirement("wsl_tool", solver),),
+        requires=(Requirement("wsl_tool", solver), Requirement("wsl_tool", cht_solver)),
         bc_fields=BC_FIELDS,
         bc_seeds=BC_SEEDS,
         **_contract_fields(td, key=key),

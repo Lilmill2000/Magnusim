@@ -44,17 +44,18 @@ from registry_dump import (  # noqa: E402
     main,
 )
 
+# Heat Transfer ships on (HT D4): its keys load with the app's.
 from tests.unit.bundled_manifests import installed  # noqa: E402
 
-# Heat Transfer ships on (HT D4): its keys load with the app's, when it is installed
-# (CI's core-without-optional-plugins job has only the required plugins).
 HT = installed("heat_transfer")
 EXPECTED_ANALYSIS_KEYS = {DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY} | (
     {"heat_transfer_steady", "heat_transfer_transient"} if HT else set()
 )
-EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"} | ({"buoyantSimpleFoam", "buoyantPimpleFoam"} if HT else set())
+EXPECTED_SOLVER_KEYS = {"simpleFoam", "pimpleFoam"} | (
+    {"buoyantSimpleFoam", "buoyantPimpleFoam", "chtMultiRegionSimpleFoam", "chtMultiRegionFoam"} if HT else set()
+)
 EXPECTED_MESHER_KEYS = {"standard", "cfmesh", "snappy_hexdominant"}
-EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid"} if HT else set())
+EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid", "thermo_solid"} if HT else set())
 EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"} | (
     {"ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple"} if HT else set()
 )
@@ -94,10 +95,11 @@ def test_builtin_keys_match_land2_through_land6():
     assert set(get_registry("solver").keys()) == EXPECTED_SOLVER_KEYS
     assert EXPECTED_MESHER_KEYS <= set(get_registry("mesher").keys())
     assert set(get_registry("bc").keys()) == set(BC_TYPES.keys())
-    from tests.unit.if_bc_keys import IF_BC_FAMILIES, IF_BC_KEYS
+    from tests.unit.if_bc_keys import IF_BC_FAMILIES, IF_BC_KEYS, ht_bc_families, ht_bc_keys
 
-    assert tuple(get_registry("bc").keys()) == IF_BC_KEYS
-    assert tuple(get_registry("bc_family").keys()) == IF_BC_FAMILIES
+    # Heat Transfer (when installed) adds its Solid wall after Incompressible Flow's.
+    assert tuple(get_registry("bc").keys()) == IF_BC_KEYS + ht_bc_keys()
+    assert tuple(get_registry("bc_family").keys()) == IF_BC_FAMILIES + ht_bc_families()
     assert set(get_registry("material").keys()) == EXPECTED_MATERIAL_KEYS
     assert set(get_registry("monitor").keys()) == EXPECTED_MONITOR_KEYS
     assert set(get_registry("filter").keys()) == EXPECTED_FILTER_KEYS

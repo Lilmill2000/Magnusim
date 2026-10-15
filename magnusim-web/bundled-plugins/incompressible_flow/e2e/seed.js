@@ -11,6 +11,8 @@ export const RUN_SETTINGS_PROJECT = 'run-settings-e2e';
 export const STUDY_START_PROJECT = 'study-start-numerics-e2e';
 /** Own elbow project for convergence.spec.js: a settle stop on a draft run, and finished runs that converged. */
 export const CONVERGENCE_PROJECT = 'convergence-e2e';
+/** Own elbow project for reference-vectors.spec.js: it saves, copies and clears the study's reference vectors. */
+export const REFERENCE_PROJECT = 'reference-vectors-e2e';
 
 /** @param {string} destRoot the test projects root */
 export default function seed(destRoot) {
@@ -18,4 +20,5 @@ export default function seed(destRoot) {
   seedElbowProject(destRoot, RUN_SETTINGS_PROJECT, 'Run settings');
   seedElbowProject(destRoot, STUDY_START_PROJECT, 'Study start and numerics');
   seedElbowProject(destRoot, CONVERGENCE_PROJECT, 'Convergence');
+  seedElbowProject(destRoot, REFERENCE_PROJECT, 'Reference vectors');
 }

@@ -184,7 +184,8 @@ def migrate_root_siblings(project_dir: Path) -> bool:
     return changed
 
 
-def _body_names(geom: dict[str, Any], proj: dict[str, Any]) -> list[str]:
+def body_names(geom: dict[str, Any], proj: dict[str, Any]) -> list[str]:
+    """A geometry's body labels (its record, else the project's row for it)."""
     names: list[str] = []
     for src in (geom.get("bodies"), geom.get("assembly_bodies")):
         if not isinstance(src, list):
@@ -201,7 +202,7 @@ def _body_names(geom: dict[str, Any], proj: dict[str, Any]) -> list[str]:
     rows = raw_geoms if isinstance(raw_geoms, list) else []
     for row in rows:
         if isinstance(row, dict) and str(row.get("id") or "") == gid:
-            return _body_names(row, {})
+            return body_names(row, {})
     return []
 
 
@@ -532,7 +533,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
             sid = str(study.get("id") or "")
             sscope = ScopeId(project_id, gid, sid)
             study_dir = Path(study["dir"])
-            regions_now = _regions_now(root, sid, len(_body_names(geom, proj)))
+            regions_now = _regions_now(root, sid, len(body_names(geom, proj)))
             study_nodes.append(
                 {
                     "id": sid,
@@ -558,7 +559,7 @@ def build_project_tree(project_dir: Path, project_id: str) -> dict[str, Any]:
             "id": gid,
             "name": str(geom.get("name") or geom.get("original_filename") or "Geometry"),
             "key": gscope.key(),
-            "bodies": _body_names(geom, proj),
+            "bodies": body_names(geom, proj),
             "studies": study_nodes,
         }
         _link_fields(node, geom)

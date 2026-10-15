@@ -1,0 +1,25 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p_rgh;
+}
+
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    walls
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+    air_to_aluminium_6061
+    {
+        type          fixedFluxPressure;
+        value          uniform 0;
+    }
+}

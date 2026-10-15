@@ -1,0 +1,25 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      k;
+}
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0.00375000;
+
+boundaryField
+{
+    walls
+    {
+        type          kqRWallFunction;
+        value          uniform 0.00375000;
+    }
+    air_to_aluminium_6061
+    {
+        type          kqRWallFunction;
+        value          uniform 0.00375000;
+    }
+}

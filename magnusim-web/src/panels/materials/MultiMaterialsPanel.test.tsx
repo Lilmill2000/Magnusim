@@ -167,4 +167,56 @@ describe('panel', () => {
     expect(screen.queryByLabelText('Material type')).toBeNull();
     expect(document.querySelector('[data-materials-list]')).toBeNull();
   });
+
+  it('a property with no minimum (a heat source) takes 0 and below, and stays when the preset changes', async () => {
+    // API 1.8: a schema property without a minimum takes any finite number; one with a minimum stays above 0.
+    const withSource: MaterialModelRow = {
+      ...SOLID,
+      schema: {
+        properties: {
+          ...(SOLID.schema?.properties || {}),
+          heat_source_W: { title: 'Heat source', default: 0, 'x-cfddesk': { quantity: 'power' } },
+        },
+      },
+    };
+    useProjectStore.setState({ registry: { ...REGISTRY, material: [FIXTURE_MODEL, withSource] } as never });
+    stored = [AIR, { ...SINK, heat_source_W: 10 }];
+    // The route answers with what was saved (the panel reloads on cfd:material).
+    workerRpc.mockImplementation(async (_method, params) => {
+      stored = params?.body?.materials || stored;
+      return { materials: stored };
+    });
+    render(<MaterialsPanel panelId="panel-air-material" itemId="m-al" projectId="p1" simId="s1" scope="p:p1/s:s1" />);
+    const source = (await screen.findByLabelText('Heat source', { selector: 'input' })) as HTMLInputElement;
+    await waitFor(() => expect(source.value).toBe('10'));
+    expect(document.querySelector('[data-material-property="heat_source_W"] .bc-unit-label')?.textContent).toBe('W');
+    for (const [typed, saved] of [['0', 0], ['-5', -5]] as const) {
+      workerRpc.mockClear();
+      await act(async () => {
+        fireEvent.change(source, { target: { value: typed } });
+        fireEvent.blur(source);
+      });
+      await waitFor(() => expect(workerRpc).toHaveBeenCalled());
+      const rec = (lastSave().materials || []).find((m) => m.id === 'm-al');
+      expect(rec?.heat_source_W).toBe(saved);
+    }
+    // A conductivity of 0 is not saved (its schema has a minimum).
+    workerRpc.mockClear();
+    const k = screen.getByLabelText('Thermal conductivity', { selector: 'input' }) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(k, { target: { value: '0' } });
+      fireEvent.blur(k);
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(workerRpc).not.toHaveBeenCalled();
+    // Another preset: its conductivity, the source kept.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Solid'), { target: { value: 'cu' } });
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalled());
+    const rec = (lastSave().materials || []).find((m) => m.id === 'm-al');
+    expect(rec).toMatchObject({ preset: 'cu', thermal_conductivity: 398, heat_source_W: -5 });
+    expect((screen.getByLabelText('Heat source', { selector: 'input' }) as HTMLInputElement).value).toBe('-5');
+    workerRpc.mockImplementation(async (_method, params) => ({ materials: params?.body?.materials }));
+  });
 });

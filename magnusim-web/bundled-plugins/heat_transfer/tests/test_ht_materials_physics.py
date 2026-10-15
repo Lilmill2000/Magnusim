@@ -31,17 +31,18 @@ def test_the_presets_the_materials_panel_offers():
         assert all(v > 0 for v in row["values"].values()), row["name"]
 
 
-def test_only_the_fluid_model_is_registered():
-    """HT4 solves fluids only: no solid model is offered (a dead control); HT5 adds it."""
+def test_the_fluid_and_the_solid_models_are_registered():
+    """HT5: a body of a solid material conducts heat (conjugate heat transfer)."""
     from cfddesk.registry import load_all, reset_for_tests
     from cfddesk.registry.discovery import get_registry
 
     reset_for_tests()
     load_all()
     mine = [k for k in get_registry("material").keys() if str(k).startswith("thermo_")]
-    assert mine == ["thermo_fluid"]
+    assert mine == ["thermo_fluid", "thermo_solid"]
+    assert get_registry("material").get("thermo_solid").role == "solid"
     analysis = get_registry("analysis").get("heat_transfer_steady")
-    assert analysis.material_models == ("thermo_fluid",) and analysis.region_roles == ("fluid",)
+    assert analysis.material_models == ("thermo_fluid", "thermo_solid") and analysis.region_roles == ("fluid", "solid")
 
 
 def test_a_record_reads_its_own_numbers_then_its_preset():

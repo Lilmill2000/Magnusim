@@ -45,6 +45,8 @@ from cfddesk.registry.solver import SolverApp
 PLUGIN = "stub-cht"
 ANALYSIS = "stub_cht_steady"
 SOLVER = "chtMultiRegionSimpleFoam"
+# Its own key for the solver (Heat Transfer registers chtMultiRegionSimpleFoam's).
+SOLVER_KEY = "stub_cht_simple"
 PREPARE_JOB = "stub-cht.write_run_case"
 PARSER = LogParserRef("magnusim_sdk.progress", "RegionProgressParser")
 T_FLUID_WALL = 300.0
@@ -416,7 +418,7 @@ def register(hub: Any) -> None:
     materials.register(SOLID, plugin=PLUGIN)
     hub.registry("solver").register(
         SolverApp(
-            key=SOLVER,
+            key=SOLVER_KEY,
             label="chtMultiRegionSimpleFoam (steady conjugate heat transfer)",
             application=SOLVER,
             time_dependency="steady",
@@ -434,8 +436,8 @@ def register(hub: Any) -> None:
             fields=("T", "U", "p_rgh", "p"),
             material_models=(FLUID.key, SOLID.key),
             region_roles=("fluid", "solid"),
-            solver_backends=(SOLVER,),
-            default_solver=SOLVER,
+            solver_backends=(SOLVER_KEY,),
+            default_solver=SOLVER_KEY,
             result_fields=(
                 ResultField("T", "Temperature", "temperature", "scalar"),
                 ResultField("U", "Velocity", "velocity", "vector", magnitude_label="Velocity magnitude"),

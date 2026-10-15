@@ -32,3 +32,17 @@ IF_BC_FAMILIES: tuple[str, ...] = (
     "wall",
     "symmetry",
 )
+
+
+def ht_bc_keys() -> tuple[str, ...]:
+    """Heat Transfer's own BC type (its Solid wall), after Incompressible Flow's, when it is
+    installed (CI also runs the core without the optional plugins)."""
+    from tests.unit.bundled_manifests import installed
+
+    return ("ht_solid_wall",) if installed("heat_transfer") else ()
+
+
+def ht_bc_families() -> tuple[str, ...]:
+    from tests.unit.bundled_manifests import installed
+
+    return ("solid_wall",) if installed("heat_transfer") else ()

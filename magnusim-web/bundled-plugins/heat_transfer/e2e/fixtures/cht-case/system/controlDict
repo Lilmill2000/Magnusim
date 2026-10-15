@@ -1,0 +1,189 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     chtMultiRegionSimpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         800;
+deltaT          1;
+writeControl    timeStep;
+writeInterval   800;
+purgeWrite      0;
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   6;
+runTimeModifiable true;
+
+functions
+{
+    ht_wall_heat_flux_air
+    {
+        type            wallHeatFlux;
+        libs            (fieldFunctionObjects);
+        region          air;
+        patches         ( walls air_to_aluminium_6061 );
+        executeControl  timeStep;
+        executeInterval 1;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_wall_heat_flux_aluminium_6061
+    {
+        type            wallHeatFlux;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        patches         ( aluminium_6061_walls outlet walls aluminium_6061_to_air );
+        executeControl  timeStep;
+        executeInterval 1;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_htc_raw
+    {
+        type            heatTransferCoeff;
+        libs            (fieldFunctionObjects);
+        region          air;
+        field           T;
+        patches         ( walls air_to_aluminium_6061 );
+        htcModel        fixedReferenceTemperature;
+        TRef            293.15;
+        result          htcRaw;
+        writeControl    none;
+        log             false;
+    }
+    ht_htc
+    {
+        type            reference;
+        libs            (fieldFunctionObjects);
+        region          air;
+        field           htcRaw;
+        refValue        constant 0;
+        scale           -1;
+        result          htc;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_rho
+    {
+        type            writeObjects;
+        libs            (utilityFunctionObjects);
+        region          air;
+        objects         ( rho );
+        writeOption     anyWrite;
+        writeControl    writeTime;
+    }
+    ht_enthalpy_inlet
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        region          air;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            inlet;
+        operation       weightedSum;
+        weightField     phi;
+        fields          ( h );
+    }
+    ht_enthalpy_outlet
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        region          air;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            outlet;
+        operation       weightedSum;
+        weightField     phi;
+        fields          ( h );
+    }
+    ht_Tbody_avg_aluminium_6061
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      all;
+        operation       volAverage;
+        fields          ( T );
+    }
+    ht_Tbody_max_aluminium_6061
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      all;
+        operation       max;
+        fields          ( T );
+    }
+    ht_Tavg_air_outlet
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        region          air;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            outlet;
+        operation       areaAverage;
+        fields          ( T );
+    }
+    ht_Tmax_air_outlet
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        region          air;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            outlet;
+        operation       max;
+        fields          ( T );
+    }
+    ht_probe_tc_air
+    {
+        type            probes;
+        libs            (sampling);
+        region          air;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        fields          ( T );
+        probeLocations  ( (0.005 0.005 0.005) );
+    }
+    ht_probe_tc_aluminium_6061
+    {
+        type            probes;
+        libs            (sampling);
+        region          aluminium_6061;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        fields          ( T );
+        probeLocations  ( (0.02 0.005 0.005) );
+    }
+}

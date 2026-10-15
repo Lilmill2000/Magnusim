@@ -2774,6 +2774,11 @@
           "kind": "wsl_tool",
           "name": "buoyantSimpleFoam",
           "version_spec": ""
+        },
+        {
+          "kind": "wsl_tool",
+          "name": "chtMultiRegionSimpleFoam",
+          "version_spec": ""
         }
       ],
       "time_dependency": "steady",
@@ -2789,11 +2794,12 @@
         "key": "heat_transfer",
         "label": "Heat transfer",
         "title": "Heat Transfer",
-        "description": "Temperature and flow of one fluid heated or cooled through its walls and inlets, with buoyancy (natural convection) or without it (forced convection). Density follows the temperature: Boussinesq for liquids, incompressible perfect gas for gases.",
+        "description": "Temperature and flow of one fluid heated or cooled through its walls and inlets, with buoyancy (natural convection) or without it (forced convection), and heat conducted through solid bodies (conjugate heat transfer). Density follows the temperature: Boussinesq for liquids, incompressible perfect gas for gases.",
         "tags": [
           "HEAT TRANSFER",
           "NATURAL AND FORCED CONVECTION",
-          "BUOYANCY"
+          "BUOYANCY",
+          "CONJUGATE HEAT TRANSFER"
         ],
         "study_name": "Heat transfer"
       },
@@ -3204,10 +3210,12 @@
         "freestream",
         "total_pressure_inlet",
         "wall_moving",
-        "wall_rotating"
+        "wall_rotating",
+        "ht_solid_wall"
       ],
       "material_models": [
-        "thermo_fluid"
+        "thermo_fluid",
+        "thermo_solid"
       ],
       "bc_fields": [
         {
@@ -3667,6 +3675,11 @@
           "kind": "wsl_tool",
           "name": "buoyantPimpleFoam",
           "version_spec": ""
+        },
+        {
+          "kind": "wsl_tool",
+          "name": "chtMultiRegionFoam",
+          "version_spec": ""
         }
       ],
       "time_dependency": "transient",
@@ -3682,11 +3695,12 @@
         "key": "heat_transfer",
         "label": "Heat transfer",
         "title": "Heat Transfer",
-        "description": "Temperature and flow of one fluid heated or cooled through its walls and inlets, with buoyancy (natural convection) or without it (forced convection). Density follows the temperature: Boussinesq for liquids, incompressible perfect gas for gases.",
+        "description": "Temperature and flow of one fluid heated or cooled through its walls and inlets, with buoyancy (natural convection) or without it (forced convection), and heat conducted through solid bodies (conjugate heat transfer). Density follows the temperature: Boussinesq for liquids, incompressible perfect gas for gases.",
         "tags": [
           "HEAT TRANSFER",
           "NATURAL AND FORCED CONVECTION",
-          "BUOYANCY"
+          "BUOYANCY",
+          "CONJUGATE HEAT TRANSFER"
         ],
         "study_name": "Heat transfer"
       },
@@ -4130,10 +4144,12 @@
         "freestream",
         "total_pressure_inlet",
         "wall_moving",
-        "wall_rotating"
+        "wall_rotating",
+        "ht_solid_wall"
       ],
       "material_models": [
-        "thermo_fluid"
+        "thermo_fluid",
+        "thermo_solid"
       ],
       "bc_fields": [
         {
@@ -4344,6 +4360,38 @@
         }
       ],
       "application": "buoyantPimpleFoam",
+      "time_dependency": "transient",
+      "parallel": "mpirun",
+      "stop_strategy": "stopAt_writeNow"
+    },
+    {
+      "key": "chtMultiRegionSimpleFoam",
+      "label": "chtMultiRegionSimpleFoam (conjugate heat transfer, steady)",
+      "plugin": "heat_transfer",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "chtMultiRegionSimpleFoam",
+          "version_spec": ""
+        }
+      ],
+      "application": "chtMultiRegionSimpleFoam",
+      "time_dependency": "steady",
+      "parallel": "mpirun",
+      "stop_strategy": "stopAt_writeNow"
+    },
+    {
+      "key": "chtMultiRegionFoam",
+      "label": "chtMultiRegionFoam (conjugate heat transfer, transient)",
+      "plugin": "heat_transfer",
+      "requires": [
+        {
+          "kind": "wsl_tool",
+          "name": "chtMultiRegionFoam",
+          "version_spec": ""
+        }
+      ],
+      "application": "chtMultiRegionFoam",
       "time_dependency": "transient",
       "parallel": "mpirun",
       "stop_strategy": "stopAt_writeNow"
@@ -5386,6 +5434,91 @@
       "patch_type": "patch",
       "family": "total_pressure_inlet",
       "match": []
+    },
+    {
+      "key": "ht_solid_wall",
+      "label": "Solid wall",
+      "plugin": "heat_transfer",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_condition": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "temperature",
+              "heat_flux",
+              "heat_transfer_coefficient"
+            ],
+            "x-cfddesk": {
+              "enum_labels": [
+                "Adiabatic (no heat through it)",
+                "Fixed temperature",
+                "Heat flux",
+                "Heat transfer coefficient"
+              ]
+            },
+            "title": "Thermal",
+            "description": "Adiabatic lets no heat through. A fixed temperature holds the face at it. A heat flux puts that much heat per area into the solid (negative takes it out). A heat transfer coefficient exchanges heat with an ambient temperature outside the face."
+          },
+          "wall_temperature": {
+            "type": "number",
+            "default": 293.15,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "depends_on": {
+                "thermal_condition": "temperature"
+              }
+            },
+            "title": "Wall temperature"
+          },
+          "wall_heat_flux": {
+            "type": "number",
+            "default": 1000.0,
+            "x-cfddesk": {
+              "quantity": "heat_flux",
+              "depends_on": {
+                "thermal_condition": "heat_flux"
+              }
+            },
+            "title": "Heat flux",
+            "description": "Heat per area into the solid; negative cools it."
+          },
+          "wall_htc": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "heat_transfer_coefficient",
+              "depends_on": {
+                "thermal_condition": "heat_transfer_coefficient"
+              }
+            },
+            "title": "Heat transfer coefficient"
+          },
+          "ambient_temperature": {
+            "type": "number",
+            "default": 293.15,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "depends_on": {
+                "thermal_condition": "heat_transfer_coefficient"
+              }
+            },
+            "title": "Ambient temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "supported": true,
+      "semantic": "wall",
+      "patch_type": "wall",
+      "family": "solid_wall",
+      "match": []
     }
   ],
   "bc_family": [
@@ -6217,6 +6350,103 @@
         "additionalProperties": false
       },
       "ui": "incompressible_flow.bc"
+    },
+    {
+      "key": "solid_wall",
+      "label": "Solid wall",
+      "plugin": "heat_transfer",
+      "record_type": "Solid wall",
+      "aliases": [],
+      "color": "wall",
+      "hint": "A solid body's outer face: adiabatic, a temperature, a heat flux or a heat transfer coefficient",
+      "variants": [
+        "ht_solid_wall"
+      ],
+      "defaults": {
+        "metric": {
+          "thermal_condition": "adiabatic"
+        },
+        "imperial": {
+          "thermal_condition": "adiabatic"
+        }
+      },
+      "values": [],
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "thermal_condition": {
+            "type": "string",
+            "default": "adiabatic",
+            "enum": [
+              "adiabatic",
+              "temperature",
+              "heat_flux",
+              "heat_transfer_coefficient"
+            ],
+            "x-cfddesk": {
+              "enum_labels": [
+                "Adiabatic (no heat through it)",
+                "Fixed temperature",
+                "Heat flux",
+                "Heat transfer coefficient"
+              ]
+            },
+            "title": "Thermal",
+            "description": "Adiabatic lets no heat through. A fixed temperature holds the face at it. A heat flux puts that much heat per area into the solid (negative takes it out). A heat transfer coefficient exchanges heat with an ambient temperature outside the face."
+          },
+          "wall_temperature": {
+            "type": "number",
+            "default": 293.15,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "depends_on": {
+                "thermal_condition": "temperature"
+              }
+            },
+            "title": "Wall temperature"
+          },
+          "wall_heat_flux": {
+            "type": "number",
+            "default": 1000.0,
+            "x-cfddesk": {
+              "quantity": "heat_flux",
+              "depends_on": {
+                "thermal_condition": "heat_flux"
+              }
+            },
+            "title": "Heat flux",
+            "description": "Heat per area into the solid; negative cools it."
+          },
+          "wall_htc": {
+            "type": "number",
+            "default": 10.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "heat_transfer_coefficient",
+              "depends_on": {
+                "thermal_condition": "heat_transfer_coefficient"
+              }
+            },
+            "title": "Heat transfer coefficient"
+          },
+          "ambient_temperature": {
+            "type": "number",
+            "default": 293.15,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "temperature",
+              "depends_on": {
+                "thermal_condition": "heat_transfer_coefficient"
+              }
+            },
+            "title": "Ambient temperature"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ui": ""
     }
   ],
   "material": [
@@ -6604,6 +6834,267 @@
       },
       "custom_preset": "custom",
       "role": "fluid"
+    },
+    {
+      "key": "thermo_solid",
+      "label": "Solid (thermal)",
+      "plugin": "heat_transfer",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "rho": {
+            "type": "number",
+            "default": 2700.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "density",
+              "group": "thermal"
+            },
+            "title": "(\u03c1) Density"
+          },
+          "cp": {
+            "type": "number",
+            "default": 896.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "specific_heat",
+              "group": "thermal"
+            },
+            "title": "(cp) Specific heat",
+            "description": "How much heat it stores: how fast it warms in a transient run."
+          },
+          "k": {
+            "type": "number",
+            "default": 167.0,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "thermal_conductivity",
+              "group": "thermal"
+            },
+            "title": "(k) Thermal conductivity",
+            "description": "The same in every direction."
+          },
+          "heat_source_W": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "quantity": "power",
+              "group": "heat_source"
+            },
+            "title": "Heat source",
+            "description": "The heat the solid gives off, spread evenly through it (a chip, a heater). 0 is none; below 0 takes heat out. Give it in total here or per volume below, not both."
+          },
+          "heat_source_W_m3": {
+            "type": "number",
+            "default": 0.0,
+            "x-cfddesk": {
+              "quantity": "power_density",
+              "group": "heat_source"
+            },
+            "title": "Heat source per volume",
+            "description": "The same heat as a rate per volume of the solid."
+          }
+        },
+        "additionalProperties": false
+      },
+      "library": [
+        {
+          "key": "aluminium_6061",
+          "name": "Aluminium 6061",
+          "values": {
+            "rho": 2700.0,
+            "cp": 896.0,
+            "k": 167.0
+          },
+          "library": "HT_AL6061",
+          "codes": [
+            "HT_AL6061",
+            "DEFAULT"
+          ],
+          "names": [
+            "Aluminium 6061"
+          ]
+        },
+        {
+          "key": "aluminium",
+          "name": "Aluminium (pure)",
+          "values": {
+            "rho": 2702.0,
+            "cp": 903.0,
+            "k": 237.0
+          },
+          "library": "HT_AL",
+          "codes": [
+            "HT_AL"
+          ],
+          "names": [
+            "Aluminium (pure)"
+          ]
+        },
+        {
+          "key": "copper",
+          "name": "Copper",
+          "values": {
+            "rho": 8933.0,
+            "cp": 385.0,
+            "k": 401.0
+          },
+          "library": "HT_CU",
+          "codes": [
+            "HT_CU"
+          ],
+          "names": [
+            "Copper"
+          ]
+        },
+        {
+          "key": "steel",
+          "name": "Steel (plain carbon, AISI 1010)",
+          "values": {
+            "rho": 7832.0,
+            "cp": 434.0,
+            "k": 63.9
+          },
+          "library": "HT_STEEL",
+          "codes": [
+            "HT_STEEL"
+          ],
+          "names": [
+            "Steel (plain carbon, AISI 1010)"
+          ]
+        },
+        {
+          "key": "stainless_304",
+          "name": "Stainless steel 304",
+          "values": {
+            "rho": 7900.0,
+            "cp": 477.0,
+            "k": 14.9
+          },
+          "library": "HT_SS304",
+          "codes": [
+            "HT_SS304"
+          ],
+          "names": [
+            "Stainless steel 304"
+          ]
+        },
+        {
+          "key": "brass",
+          "name": "Brass (70 % copper, 30 % zinc)",
+          "values": {
+            "rho": 8530.0,
+            "cp": 380.0,
+            "k": 110.0
+          },
+          "library": "HT_BRASS",
+          "codes": [
+            "HT_BRASS"
+          ],
+          "names": [
+            "Brass (70 % copper, 30 % zinc)"
+          ]
+        },
+        {
+          "key": "fr4",
+          "name": "FR-4 (circuit board)",
+          "values": {
+            "rho": 1850.0,
+            "cp": 1100.0,
+            "k": 0.29
+          },
+          "library": "HT_FR4",
+          "codes": [
+            "HT_FR4"
+          ],
+          "names": [
+            "FR-4 (circuit board)"
+          ]
+        },
+        {
+          "key": "glass",
+          "name": "Glass (soda-lime plate)",
+          "values": {
+            "rho": 2500.0,
+            "cp": 750.0,
+            "k": 1.4
+          },
+          "library": "HT_GLASS",
+          "codes": [
+            "HT_GLASS"
+          ],
+          "names": [
+            "Glass (soda-lime plate)"
+          ]
+        },
+        {
+          "key": "abs",
+          "name": "ABS",
+          "values": {
+            "rho": 1050.0,
+            "cp": 1400.0,
+            "k": 0.17
+          },
+          "library": "HT_ABS",
+          "codes": [
+            "HT_ABS"
+          ],
+          "names": [
+            "ABS"
+          ]
+        },
+        {
+          "key": "pla",
+          "name": "PLA",
+          "values": {
+            "rho": 1240.0,
+            "cp": 1800.0,
+            "k": 0.13
+          },
+          "library": "HT_PLA",
+          "codes": [
+            "HT_PLA"
+          ],
+          "names": [
+            "PLA"
+          ]
+        },
+        {
+          "key": "custom",
+          "name": "Custom solid",
+          "values": {
+            "rho": 2700.0,
+            "cp": 896.0,
+            "k": 167.0
+          },
+          "library": "HT_CUSTOM_SOLID",
+          "codes": [
+            "HT_CUSTOM_SOLID"
+          ],
+          "names": []
+        }
+      ],
+      "record_keys": {
+        "rho": [
+          "density",
+          "rho"
+        ],
+        "cp": [
+          "specific_heat",
+          "cp"
+        ],
+        "k": [
+          "thermal_conductivity",
+          "k"
+        ]
+      },
+      "record_constants": {
+        "type": "Solid",
+        "properties_at": "20 \u00b0C"
+      },
+      "custom_preset": "custom",
+      "role": "solid"
     }
   ],
   "monitor": [
@@ -6790,7 +7281,7 @@
       "label": "Thermocouple",
       "plugin": "heat_transfer",
       "target": "point",
-      "description": "The temperature at points you place in the fluid, over the run.",
+      "description": "The temperature at points you place in the fluid or in a solid body (a point reads the body it is in), over the run.",
       "aliases": [],
       "user_creatable": true,
       "quantities": [
@@ -7314,7 +7805,7 @@
       "authors": [
         "Magnusim"
       ],
-      "description": "Buoyant and forced convection of one fluid with temperature (buoyantSimpleFoam, buoyantPimpleFoam).",
+      "description": "Buoyant and forced convection of one fluid with temperature, and conjugate heat transfer through solid bodies (buoyantSimpleFoam, buoyantPimpleFoam, chtMultiRegionSimpleFoam, chtMultiRegionFoam).",
       "source": "bundled",
       "api_version": "1.8",
       "overrides": [],

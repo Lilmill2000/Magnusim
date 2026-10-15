@@ -513,9 +513,9 @@ def test_setting_field_alias_still_works():
     from cfddesk.registry.schema import SchemaField as SF
 
     assert SettingField is SF
-    from tests.unit.if_bc_keys import IF_BC_KEYS
+    from tests.unit.if_bc_keys import IF_BC_KEYS, ht_bc_keys
 
-    assert tuple(BC_TYPES) == IF_BC_KEYS
+    assert tuple(BC_TYPES) == IF_BC_KEYS + ht_bc_keys()
     f = SettingField("v", "V", "float", default=1.0, unit="m/s")
     assert f.key == "v"
     assert f.min is None

@@ -23,13 +23,14 @@ from cfddesk.registry.analysis import DEFAULT_STEADY_KEY, DEFAULT_TRANSIENT_KEY
 from cfddesk.registry.discovery import get_hub
 from tests.unit.bundled_manifests import installed
 
-# Heat Transfer ships on (HT D4): its keys load with the app's, when it is installed
-# (CI's core-without-optional-plugins job has only the required plugins).
+# Heat Transfer ships on (HT D4): its keys load with the app's (not in CI's run without the
+# optional plugins). HT5 adds its solid model and its Solid wall (a BC type and family).
 HT = installed("heat_transfer")
-EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid"} if HT else set())
+EXPECTED_MATERIAL_KEYS = {"newtonian_incompressible"} | ({"thermo_fluid", "thermo_solid"} if HT else set())
 EXPECTED_MONITOR_KEYS = {"area_average", "flow_rate", "forces", "probe"} | (
     {"ht_wall_heat_flux", "ht_surface_temperature", "ht_thermocouple"} if HT else set()
 )
+HT_BC_KEYS = ("ht_solid_wall",) if HT else ()  # tests.unit.if_bc_keys.ht_bc_keys
 
 
 @pytest.fixture(autouse=True)
@@ -45,15 +46,16 @@ def test_load_all_registers_bc_material_monitor_keys():
     assert set(bc.keys()) == set(BC_TYPES.keys())
     from tests.unit.if_bc_keys import IF_BC_KEYS
 
-    assert tuple(bc.keys()) == IF_BC_KEYS
-    # Incompressible Flow owns the BC types; BC_TYPES is a view over the hub
-    # (the same objects, not a second copy).
-    assert {bc.owner(k) for k in bc.keys()} == {"incompressible_flow"}
+    assert tuple(bc.keys()) == IF_BC_KEYS + HT_BC_KEYS
+    # Incompressible Flow owns its BC types (Heat Transfer its Solid wall); BC_TYPES is a
+    # view over the hub (the same objects, not a second copy).
+    assert {bc.owner(k) for k in bc.keys() if k not in HT_BC_KEYS} == {"incompressible_flow"}
+    assert {bc.owner(k) for k in HT_BC_KEYS} <= {"heat_transfer"}
     for key, spec in BC_TYPES.items():
         assert bc.get(key) is spec
         assert isinstance(bc.get(key), BcTypeSpec)
     families = hub.registry("bc_family")
-    assert {families.owner(k) for k in families.keys()} == {"incompressible_flow"}
+    assert {families.owner(k) for k in families.keys() if k != "solid_wall"} == {"incompressible_flow"}
     assert {v for f in families.items() for v in f.variants} == set(bc.keys())
 
     mat = get_registry("material")

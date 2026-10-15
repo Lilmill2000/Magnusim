@@ -288,14 +288,17 @@ def boundary_patches(
             for n in size_notes
         ]
         regions = write_refine_stls(tri_dir, pts_m, tris, fids, groups)
-    location = find_location_in_mesh(solid, scale)
+    # A mesh of several regions is placed by its regions' points (locationsInMesh); the
+    # part's own point would be found by classifying the whole compound, which fails for
+    # some parts of several bodies (a body after the first read as outside).
+    location_m = locations[0][0] if locations else find_location_in_mesh(solid, scale).point_metres
     return {
         "patches": patches,
         "locations": locations,
         "interfaces": interfaces,
         "mesh_regions": mesh_regs.summary() if mesh_regs is not None else [],
         "left_out": mesh_regs.left_out_labels() if mesh_regs is not None else [],
-        "location_m": location.point_metres,
+        "location_m": location_m,
         "layer_specs": layer_specs,
         "refine_regions": regions,
         "inflate": inflate_notes(inflates),

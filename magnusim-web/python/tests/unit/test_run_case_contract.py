@@ -54,6 +54,37 @@ def test_launch_spec_new_fields_default_to_the_legacy_rules():
     assert contract.serial_below_cells(_spec(serial_below_cells=1234), "steady") == 1234
 
 
+def test_only_a_launch_hook_that_names_inputs_is_given_the_run_inputs():
+    """API 1.8: a hook whose signature names ``inputs`` gets the run's RunInputs; one with
+    **kwargs only does not (it may pass its keywords on to something that does not know
+    ``inputs``), and one with neither is called as before."""
+    from types import SimpleNamespace
+
+    seen: dict[str, object] = {}
+
+    def named(solver_key: str = "", inputs: object = None) -> LaunchSpec:
+        seen["named"] = inputs
+        return _spec()
+
+    def forwards(**kw: object) -> LaunchSpec:
+        app = str(get_registry("solver").get(_steady().default_solver).application)
+        # A hook that forwards its keywords: inputs would reach LaunchSpec and fail.
+        return LaunchSpec(app, "latest", (app,), "sigterm", True, contract.GENERIC_LOG_PARSER,
+                          **{k: v for k, v in kw.items() if k != "solver_key"})
+
+    def plain(solver_key: str = "") -> LaunchSpec:
+        return _spec()
+
+    solvers = get_registry("solver")
+    marker = object()
+    for name, fn in (("named", named), ("forwards", forwards), ("plain", plain)):
+        analysis = SimpleNamespace(key=f"x_{name}", default_solver=_steady().default_solver,
+                                   time_dependency="steady", launch=fn)
+        out = contract.launch_spec(analysis, solvers, inputs=marker)
+        assert isinstance(out, LaunchSpec)
+    assert seen["named"] is marker
+
+
 @pytest.mark.parametrize("cells", [-1, True, 1.5, "100"])
 def test_a_bad_serial_below_cells_is_refused(cells):
     with pytest.raises(ContractError, match="serial_below_cells"):

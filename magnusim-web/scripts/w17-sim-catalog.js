@@ -527,12 +527,20 @@ export function setActiveSimulation(projectId, proj, simId) {
   return { active_id: simId, simulations: list, updated_at: doc.updated_at };
 }
 
-export function upsertSimulationInCatalog(projectId, proj, sim, makeActive = true) {
+/**
+ * Save `sim` over its catalog row (merged into what the row holds). `unset` names keys the
+ * row no longer has (a setting cleared: host API 1.8).
+ * @param {string[]} [unset]
+ */
+export function upsertSimulationInCatalog(projectId, proj, sim, makeActive = true, unset = []) {
   const cat = ensureCatalog(projectId, proj);
   const list = (cat.simulations || []).slice();
   const i = list.findIndex((s) => s.id === sim.id);
-  if (i >= 0) list[i] = { ...list[i], ...sim };
-  else list.push(sim);
+  if (i >= 0) {
+    const row = { ...list[i], ...sim };
+    for (const key of unset || []) delete row[key];
+    list[i] = row;
+  } else list.push(sim);
   return saveCatalog(projectId, {
     simulations: list,
     active_id: makeActive ? sim.id : cat.active_id,

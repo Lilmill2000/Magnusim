@@ -138,7 +138,7 @@ def _decide(
                 out["patches"] = first["patches"]
             return out, None, None, {}
     try:
-        launch = contract.launch_spec(analysis, get_registry("solver"), solver_key=inputs.solver_key)
+        launch = contract.launch_spec(analysis, get_registry("solver"), solver_key=inputs.solver_key, inputs=inputs)
     except contract.ContractError as exc:
         return {"ok": False, "error": f"{key}: {exc}"}, None, None, {}
     decision = {

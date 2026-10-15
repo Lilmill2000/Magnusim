@@ -106,6 +106,19 @@ def test_launch_specs():
     assert t.log_parser.module == "incompressible_flow.parser" and t.log_parser.factory == "IncompressibleParser"
 
 
+def test_the_launch_is_the_same_with_or_without_the_run_inputs(tmp_path: Path):
+    """API 1.8 gives a launch hook that names ``inputs`` the run's RunInputs: Incompressible
+    Flow's launch does not depend on them (each analysis plans the same run either way)."""
+    from cfddesk.project.run_inputs import RunInputs
+
+    solvers = get_registry("solver")
+    inputs = RunInputs(project_dir=tmp_path, run_id="run_1", simulation_id="sim_1", mesh_id="mesh_1", n_procs=4,
+                       require_mesh=False, time_dependency="steady", analysis_key="incompressible_steady",
+                       solver_key="simpleFoam")
+    for key in ("incompressible_steady", "incompressible_transient"):
+        assert contract.launch_spec(_analysis(key), solvers, inputs=inputs) == contract.launch_spec(_analysis(key), solvers)
+
+
 def test_log_parsers():
     from magnusim_sdk.progress import ProgressParser as GenericParser
 

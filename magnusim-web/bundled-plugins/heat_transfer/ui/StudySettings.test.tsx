@@ -6,7 +6,8 @@ import { unregisterPlugin } from '../../../src/plugin-api';
 import { pluginHost } from '../../../src/plugins/loader';
 import { useProjectStore } from '../../../src/store/project';
 import { register } from './index';
-import { shownSettingsSchema, solverLine } from './StudySettings';
+import { STANDARD_MESH_NOTE, heatSourceOf, shownNumericsSchema, shownSettingsSchema, solverLine } from './StudySettings';
+import { placedMaterials } from './materials';
 
 // Heat Transfer's study settings in the core's study panel: the physics rows from the
 // analysis's schema, temperatures in the project's units, and which solver runs.
@@ -39,8 +40,28 @@ const numericsSchema = {
   type: 'object',
   properties: {
     numerics_preset: { type: 'string', title: 'Numerics', enum: ['robust', 'accurate'], default: 'robust', 'x-cfddesk': { enum_labels: ['Robust', 'Accurate'] } },
+    residual_target: { type: 'number', title: 'Residual target', default: 1e-5 },
   },
 };
+
+const AIR = { id: 'm-air', name: 'Air', material_model: 'thermo_fluid', assigned_volumes: ['Body1'] };
+const AL = { id: 'm-al', name: 'Aluminium 6061', material_model: 'thermo_solid', assigned_volumes: ['Body2'] };
+
+/**
+ * The materials route answers with these records (the panel reads them as the Materials
+ * panel does); the mesh route with a mesh of `engine` ('' for no mesh yet).
+ */
+function materials(rows: unknown[], engine = 'snappy_hexdominant') {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes('/api/materials')) return new Response(JSON.stringify({ materials: rows }), { status: 200 });
+    if (String(input).includes('/api/mesh')) {
+      return new Response(JSON.stringify({ mesh: engine ? { id: 'mesh_1', ui_mesh_engine: engine } : null }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
 
 function study(overrides: Partial<StudyState> = {}, record: Record<string, unknown> = {}): StudyState {
   return {
@@ -51,6 +72,7 @@ function study(overrides: Partial<StudyState> = {}, record: Record<string, unkno
     analysis_type: 'heat_transfer_steady',
     time_dependency: 'Steady-state',
     algorithm: 'SIMPLE',
+    project_id: 'proj',
     record: { id: 'sim_1', gravity: '-z', reference_temperature: 293.15, ...record },
     ...overrides,
   };
@@ -92,6 +114,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  delete window.__CFD_PROJECT_UNITS__;
   unregisterPlugin('heat_transfer');
   delete window.__CFD_STUDY_STATE__;
   delete window.__CFD_PLUGINS_READY__;
@@ -152,7 +176,125 @@ describe('Heat Transfer study settings', () => {
   });
 });
 
+describe('Heat Transfer study settings with a solid body (conjugate heat transfer)', () => {
+  it('says the solver runs CHT and why, and hides the residual target', async () => {
+    materials([AIR, AL]);
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByText('Conjugate heat transfer with chtMultiRegionSimpleFoam: Body2 is Aluminium 6061 (solid). Body1 is Air (fluid).')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Residual target')).toBeNull();
+    expect(screen.getByText(/does not stop on its residuals/)).toBeInTheDocument();
+    expect(screen.getByText('Heat source: Aluminium 6061 (Body2)')).toBeInTheDocument();
+  });
+
+  it("shows each solid's heat source from its material, and where to set it", async () => {
+    materials([AIR, { ...AL, heat_source_W: 10, heat_source_W_m3: 0 }, { id: 'm-cu', name: 'Copper', material_model: 'thermo_solid', assigned_volumes: ['Body3'] }]);
+    renderPanel();
+    await waitFor(() => expect(screen.getAllByText(/^Heat source: /)).toHaveLength(2));
+    const al = document.querySelector('[data-ht-heat-source="m-al"] [data-ht-heat-source-value]')!;
+    expect(al.textContent).toBe('10 W');
+    expect(document.querySelector('[data-ht-heat-source="m-cu"] [data-ht-heat-source-value]')!.textContent).toBe('None');
+    expect(screen.getByText(/A solid's heat source is set in its material/)).toBeInTheDocument();
+    // Nothing is written to the study.
+    expect(window.__CFD_STUDY_UPDATE__).not.toHaveBeenCalled();
+  });
+
+  it('shows a heat source in BTU/h in an imperial project; per volume; both (to fix); an older study row', async () => {
+    window.__CFD_PROJECT_UNITS__ = () => 'Imperial';
+    materials([AIR, { ...AL, heat_source_W: 10 }]);
+    renderPanel();
+    await waitFor(() =>
+      expect(document.querySelector('[data-ht-heat-source="m-al"] [data-ht-heat-source-value]')?.textContent).toBe('34.12 BTU/h'),
+    );
+    cleanup();
+    delete window.__CFD_PROJECT_UNITS__;
+    materials([AIR, { ...AL, heat_source_W: 0, heat_source_W_m3: 2.5e5 }]);
+    renderPanel();
+    await waitFor(() =>
+      expect(document.querySelector('[data-ht-heat-source="m-al"] [data-ht-heat-source-value]')?.textContent).toBe('250000 W/m³'),
+    );
+    cleanup();
+    materials([AIR, { ...AL, heat_source_W: 3, heat_source_W_m3: 100 }]);
+    renderPanel();
+    await waitFor(() =>
+      expect(document.querySelector('[data-ht-heat-source="m-al"] [data-ht-heat-source-value]')?.textContent).toBe(
+        '3 W and 100 W/m³ (set one of them to 0)',
+      ),
+    );
+    cleanup();
+    // A study saved before the source moved onto the material: its row still shows.
+    materials([AIR, AL]);
+    window.__CFD_STUDY_STATE__ = study({}, { heat_sources: JSON.stringify({ 'm-al': { mode: 'power', power_W: 7, power_density_W_m3: 0 } }) });
+    renderPanel();
+    await waitFor(() =>
+      expect(document.querySelector('[data-ht-heat-source="m-al"] [data-ht-heat-source-value]')?.textContent).toBe('7 W'),
+    );
+  });
+
+  it('says that a Standard mesh reads wall heat high, and not for a Hex-dominant one', async () => {
+    materials([AIR, AL], 'standard');
+    renderPanel();
+    expect(await screen.findByText(STANDARD_MESH_NOTE)).toBeInTheDocument();
+    expect(STANDARD_MESH_NOTE).toContain('about 6 % high');
+    cleanup();
+    materials([AIR, AL], '');
+    renderPanel();
+    // No mesh yet: Standard is what Generate uses unless another is picked.
+    expect(await screen.findByText(STANDARD_MESH_NOTE)).toBeInTheDocument();
+    cleanup();
+    materials([AIR, AL], 'snappy_hexdominant');
+    renderPanel();
+    await screen.findByText(/Conjugate heat transfer/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(STANDARD_MESH_NOTE)).toBeNull();
+    cleanup();
+    // Buoyant flow (no solid): no note.
+    materials([AIR], 'standard');
+    renderPanel();
+    await screen.findByText(/Solves buoyant flow/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(STANDARD_MESH_NOTE)).toBeNull();
+  });
+
+  it('goes back to buoyant flow when the solid becomes fluid', async () => {
+    const f = materials([AIR, { ...AL, heat_source_W: 10 }]);
+    renderPanel();
+    await screen.findByText(/Conjugate heat transfer/);
+    f.mockImplementation(async (input: RequestInfo | URL) =>
+      String(input).includes('/api/mesh')
+        ? new Response(JSON.stringify({ mesh: null }), { status: 200 })
+        : new Response(JSON.stringify({ materials: [AIR, { ...AL, material_model: 'thermo_fluid' }] }), { status: 200 }),
+    );
+    act(() => {
+      window.dispatchEvent(new CustomEvent('cfd:material'));
+    });
+    await screen.findByText(/Solves buoyant flow of one fluid with buoyantSimpleFoam/);
+    expect(screen.queryByText(/Heat source:/)).toBeNull();
+    expect(window.__CFD_STUDY_UPDATE__).not.toHaveBeenCalled();
+  });
+});
+
 describe('helpers', () => {
+  it('solverLine follows the materials', () => {
+    const rows = placedMaterials([AIR, AL, { id: 'x', name: 'Copper', material_model: 'thermo_solid', assigned_volumes: ['Body3', 'Body4'] }]);
+    expect(solverLine(true, rows)).toBe(
+      'Conjugate heat transfer with chtMultiRegionFoam: Body2 is Aluminium 6061 and Body3 and Body4 are Copper (solid). Body1 is Air (fluid).',
+    );
+    expect(solverLine(false, placedMaterials([AL]))).toBe(
+      'Conjugate heat transfer with chtMultiRegionSimpleFoam: Body2 is Aluminium 6061 (solid). No body is fluid: heat conduction through the solids only.',
+    );
+    expect(solverLine(false, placedMaterials([AIR]))).toContain('every body is fluid. Body1 is Air.');
+    expect(Object.keys(shownNumericsSchema(numericsSchema as never, true).properties || {})).toEqual(['numerics_preset']);
+    expect(Object.keys(shownNumericsSchema(numericsSchema as never, false).properties || {})).toContain('residual_target');
+    expect(heatSourceOf({ heat_sources: { a: { mode: 'density', power_density_W_m3: '5' } } }, 'a')).toEqual({
+      mode: 'density',
+      power_W: 0,
+      power_density_W_m3: 5,
+    });
+    expect(heatSourceOf({}, 'a').mode).toBe('none');
+  });
+
   it('solverLine and shownSettingsSchema', () => {
     expect(solverLine(false)).toContain('buoyantSimpleFoam');
     expect(solverLine(true)).toContain('buoyantPimpleFoam');

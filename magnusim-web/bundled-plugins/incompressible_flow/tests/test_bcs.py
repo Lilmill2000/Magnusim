@@ -121,11 +121,11 @@ def test_a_non_finite_direction_vector_is_refused():
 def test_the_plugin_registers_the_stored_keys_and_its_families():
     hub = get_hub()
     reg = hub.registry("bc")
-    assert tuple(reg.keys()) == IF_KEYS == bcs.BC_KEYS
-    assert {reg.owner(k) for k in reg.keys()} == {"incompressible_flow"}
+    # Another plugin may add its own BC types and families after these (Heat Transfer's Solid wall).
+    mine = [k for k in reg.keys() if reg.owner(k) == "incompressible_flow"]
+    assert tuple(mine) == IF_KEYS == bcs.BC_KEYS == tuple(reg.keys())[: len(IF_KEYS)]
     fams = hub.registry("bc_family")
-    assert fams.keys() == FAMILIES
-    assert {fams.owner(k) for k in fams.keys()} == {"incompressible_flow"}
+    assert [k for k in fams.keys() if fams.owner(k) == "incompressible_flow"] == FAMILIES == fams.keys()[: len(FAMILIES)]
     assert hub.failures == []
     for analysis in ("incompressible_steady", "incompressible_transient"):
         assert tuple(hub.registry("analysis").get(analysis).bc_types) == IF_KEYS
@@ -232,7 +232,7 @@ def test_generic_fields_keep_their_choices_and_defaults_consistent():
 
 
 def test_describe_rows_are_plain_json_without_resolve():
-    rows = {row["key"]: row for row in get_hub().registry("bc_family").describe()}
+    rows = {row["key"]: row for row in get_hub().registry("bc_family").describe() if row.get("plugin") in (None, "incompressible_flow")}
     assert list(rows) == FAMILIES
     for row in rows.values():
         assert "resolve" not in row

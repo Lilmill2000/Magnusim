@@ -1,0 +1,18 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvOptions;
+}
+
+ht_heat_source
+{
+    type            scalarSemiImplicitSource;
+    selectionMode   all;
+    volumeMode      absolute;
+    sources
+    {
+        h           (0.05 0);
+    }
+}

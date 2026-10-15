@@ -58,14 +58,16 @@ def test_a_ready_channel_and_cavity_have_no_issues():
     assert contract.validate_ready(_ctx(materials=(WATER,), bcs=CAVITY_BCS, study={"gravity": "-y"})) == []
 
 
-def test_a_solid_material_a_development_build_saved_is_refused_with_the_reason():
+def test_a_solid_material_makes_the_study_conjugate_heat_transfer():
+    """A solid body: the CHT checks run (heat_transfer.cht_ready); without a mesh case they
+    stop at the mesh (test_ht5_cht.py has the rest)."""
     issue = _first(_ctx(materials=(AIR, ALUMINIUM)))
     assert issue is not None
-    assert issue["message"] == (
-        "Body2 has the solid material Aluminium 6061. Heat Transfer solves fluids only (buoyant flow): "
-        "give every body a fluid material."
-    )
-    assert issue["fix"] == {"go": "material", "id": "m-al", "name": "Aluminium 6061"}
+    assert issue["message"] == "Mesh 1 has no case folder: generate it again."
+    assert issue["fix"] == {"go": "mesh", "id": "mesh_1", "name": "Mesh 1"}
+    # A solid's property at 0 is refused first, by name.
+    issue = _first(_ctx(materials=(AIR, {**ALUMINIUM, "thermal_conductivity": 0})))
+    assert issue["message"] == 'Material "Aluminium 6061": its thermal conductivity is 0; it must be above 0.'
 
 
 def test_a_fluid_property_at_zero_is_refused_at_start():
@@ -215,7 +217,9 @@ def test_the_analyses_as_the_registry_holds_them(loaded):
     steady, transient = loaded.get(STEADY_KEY), loaded.get(TRANSIENT_KEY)
     assert loaded.owner(STEADY_KEY) == "heat_transfer"
     assert steady.family.key == transient.family.key == "heat_transfer"
-    assert steady.material_models == ("thermo_fluid",)
+    assert steady.material_models == ("thermo_fluid", "thermo_solid")
+    assert steady.region_roles == ("fluid", "solid")
+    assert steady.solver_backends == ("buoyantSimpleFoam", "chtMultiRegionSimpleFoam")
     assert [g.key for g in steady.bc_fields] == ["ht_inlet_thermal", "ht_opening_thermal", "ht_wall_thermal"]
     launch = core_contract.launch_spec(steady, get_registry("solver"))
     assert (launch.app, launch.keep_frames, launch.kinematic_fields, launch.frame_fields) == (

@@ -139,3 +139,47 @@ test('X-CFD-Material-Name is the saved material name (Air stays Air)', () => {
   assert.equal(materialHeaderName({ name: 'Wasser ä' }), encodeURIComponent('Wasser ä'));
   assert.equal(materialHeaderName({}), 'Air');
 });
+
+test('a property with no minimum (a heat source) keeps 0 and below, and stays when the preset changes (API 1.8)', async () => {
+  const { loadCommittedRegistry, resetRegistryCache, setLiveRegistry } = await import('../registry-defaults.js');
+  const committed = loadCommittedRegistry();
+  const solid = {
+    key: 'fx_solid',
+    label: 'Solid',
+    role: 'solid',
+    schema: {
+      properties: {
+        k: { title: 'Conductivity', default: 167, minimum: 0 },
+        heat_source_W: { title: 'Heat source', default: 0 },
+      },
+    },
+    library: [
+      { key: 'al', name: 'Aluminium 6061', values: { k: 167 }, library: 'AL', codes: ['AL', 'DEFAULT'] },
+      { key: 'cu', name: 'Copper', values: { k: 398 }, library: 'CU', codes: ['CU'] },
+      { key: 'heater', name: 'Heater', values: { k: 20, heat_source_W: 3 }, library: 'HEATER', codes: ['HEATER'] },
+    ],
+    record_keys: { k: ['thermal_conductivity', 'k'] },
+    custom_preset: 'custom',
+  };
+  assert.ok(setLiveRegistry({ ...committed, material: [...(committed.material || []), solid] }));
+  try {
+    const first = built({ ...BODY, material_model: 'fx_solid', preset: 'al', heat_source_W: -5 });
+    assert.equal(first.heat_source_W, -5);
+    const zero = built({ material_model: 'fx_solid', preset: 'al', heat_source_W: 0 }, first);
+    assert.equal(zero.heat_source_W, 0);
+    // A conductivity of 0 is not taken (its schema has a minimum): the saved one stays.
+    assert.equal(built({ material_model: 'fx_solid', preset: 'al', k: 0 }, first).k, 167);
+    const copper = built({ material_model: 'fx_solid', preset: 'cu' }, first);
+    assert.equal(copper.k, 398);
+    assert.equal(copper.heat_source_W, -5);
+    // A preset that defines the value: the preset's, not the saved one.
+    assert.equal(built({ material_model: 'fx_solid', preset: 'heater' }, first).heat_source_W, 3);
+    // Blank text, a list or a boolean is no number: the saved value stays.
+    for (const raw of [' ', '', [], [7], true]) {
+      assert.equal(built({ material_model: 'fx_solid', preset: 'al', heat_source_W: raw }, first).heat_source_W, -5, JSON.stringify(raw));
+    }
+    assert.equal(built({ material_model: 'fx_solid', preset: 'al', heat_source_W: '2.5' }, first).heat_source_W, 2.5);
+  } finally {
+    resetRegistryCache();
+  }
+});

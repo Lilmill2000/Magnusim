@@ -737,8 +737,27 @@ def run_monitors(spec: Any, case_dir: Path) -> dict[str, Any]:
     return answer
 
 
-def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None) -> LaunchSpec:
+def _takes_inputs(fn: Callable[..., Any]) -> bool:
+    """The launch hook names an ``inputs`` parameter (a hook that only takes ``**kwargs`` is
+    not given it: it may pass its keywords on to something that does not know it)."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    p = params.get("inputs")
+    return p is not None and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+
+
+def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None, inputs: Any = None) -> LaunchSpec:
     """How to run a case of ``spec``: its launch hook, else its default solver's app.
+
+    ``inputs`` (API 1.8) is the run's ``RunInputs`` when the core plans a run: a hook
+    whose signature names an ``inputs`` parameter gets it (one with ``**kwargs`` only
+    does not), so the solver may follow the study (a heat transfer study with a solid body runs a multi-region solver).
+    Called without them (the relay reading the run's log parser), the hook answers for
+    no run in particular; its log parser must read every run it plans.
 
     A ``prepare_job`` must be a registered JobKind. One of a plugin other than
     the analysis's (what an analysis cloned from another plugin's with
@@ -749,7 +768,7 @@ def launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = Non
     fn = _hook(spec, "launch")
     key = solver_key or getattr(spec, "default_solver", "")
     if callable(fn):
-        out = fn(solver_key=key)
+        out = fn(solver_key=key, inputs=inputs) if inputs is not None and _takes_inputs(fn) else fn(solver_key=key)
         if not isinstance(out, LaunchSpec):
             raise ContractError(f"{spec.key}.launch must return a LaunchSpec, got {out!r}")
     else:

@@ -34,6 +34,7 @@ def test_bc_menu_rpc_is_unchanged():
     """bc.menu stays a 1.x surface: the same keys and labels as before the BC
     types moved into Incompressible Flow, now read from its families."""
     from cfddesk.worker.methods import bc_menu
+    from tests.unit.if_bc_keys import ht_bc_families
 
     def var(key, label, reg, subs=()):
         return {
@@ -83,6 +84,12 @@ def test_bc_menu_rpc_is_unchanged():
                 ],
             },
             {"key": "symmetry", "label": "Symmetry", "variants": [var("default", "Symmetry", "symmetry")]},
+            # Heat Transfer's Solid wall, when it is installed.
+            *(
+                [{"key": "solid_wall", "label": "Solid wall", "variants": [var("default", "Solid wall", "ht_solid_wall")]}]
+                if ht_bc_families()
+                else []
+            ),
         ],
     }
 

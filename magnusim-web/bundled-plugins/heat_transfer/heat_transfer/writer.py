@@ -45,7 +45,7 @@ from .settle import plan_settle, settle_functions_text
 from .transient import TransientControl, foam_num
 
 _TIME_NAME = re.compile(r"^\d+(\.\d+)?(?:[eE][+-]?\d+)?$")
-_LOG_PART = re.compile(r"^log\.(buoyantSimpleFoam|buoyantPimpleFoam)\.\d+$")
+_LOG_PART = re.compile(r"^log\.(buoyantSimpleFoam|buoyantPimpleFoam|chtMultiRegionSimpleFoam|chtMultiRegionFoam)\.\d+$")
 PRT = 0.85
 
 
@@ -295,6 +295,7 @@ def control_dict_text(
     spec: HtSpec,
     functions: str,
     restart_from: float | None,
+    max_di: float | None = None,
 ) -> str:
     restart = restart_from is not None
     t = spec.transient
@@ -338,7 +339,7 @@ timePrecision   8;
 runTimeModifiable true;
 
 adjustTimeStep  {"yes" if t.adjust_time_step else "no"};
-maxCo           {foam_num(t.max_co)};
+maxCo           {foam_num(t.max_co)};{f"{chr(10)}maxDi           {foam_num(max_di)};" if max_di is not None else ""}
 maxDeltaT       {foam_num(t.max_delta_t)};
 
 functions
@@ -437,16 +438,35 @@ def thermal_entries(
 # ---------------------------------------------------------------------------
 
 
+def _is_frame(folder: Path, regions: list[str]) -> bool:
+    """A saved time with its frame: T and U (one region), or T in every region's folder."""
+    if regions:
+        return all((folder / r / "T").is_file() for r in regions)
+    return (folder / "T").is_file() and (folder / "U").is_file()
+
+
+def case_regions(out_dir: Path) -> list[str]:
+    """The regions a run's case was written with (its ``w27-case.json``), [] for one region."""
+    try:
+        doc = json.loads((out_dir / "w27-case.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = doc.get("regions") if isinstance(doc, dict) else None
+    return [str(r["name"]) for r in rows if isinstance(r, dict) and r.get("name")] if isinstance(rows, list) else []
+
+
 def latest_saved_time(out_dir: Path) -> float | None:
-    """The latest saved time (> 0) of a run's case whose frame has T and U, or None."""
+    """The latest saved time (> 0) of a run's case whose frame has T and U (in a case of
+    several regions: T in every region), or None."""
     best: float | None = None
     if not out_dir.is_dir():
         return None
+    regions = case_regions(out_dir)
     for child in out_dir.iterdir():
         if not (child.is_dir() and _TIME_NAME.match(child.name)):
             continue
         t = float(child.name)
-        if t > 0 and (child / "T").is_file() and (child / "U").is_file() and (best is None or t > best):
+        if t > 0 and _is_frame(child, regions) and (best is None or t > best):
             best = t
     return best
 
@@ -468,6 +488,8 @@ def _clean_prior_run(out_dir: Path, *, keep_times: bool) -> None:
         "postProcessing",
         "log.buoyantSimpleFoam",
         "log.buoyantPimpleFoam",
+        "log.chtMultiRegionSimpleFoam",
+        "log.chtMultiRegionFoam",
         "log.decomposePar",
         "log.reconstructPar",
         "log.reconstructPar.live",
@@ -495,9 +517,28 @@ def _copy_polymesh(src_case: Path, out_dir: Path) -> Path | None:
 
 
 def solver_app(spec: HtSpec) -> str:
+    """buoyantSimpleFoam / buoyantPimpleFoam, or with a solid body chtMultiRegionSimpleFoam /
+    chtMultiRegionFoam (the solver follows the study's materials)."""
     from .contract import STEADY_SOLVER, TRANSIENT_SOLVER
 
+    if spec.cht:
+        from .cht_writer import solver_app as cht_app
+
+        return cht_app(spec)
     return TRANSIENT_SOLVER if spec.transient is not None else STEADY_SOLVER
+
+
+def _clean_regions(out: Path) -> None:
+    """What a conjugate heat transfer case written here before left: its regions'
+    folders and its regionProperties (a case of one region must not have them)."""
+    (out / "constant" / "regionProperties").unlink(missing_ok=True)
+    for folder in ("constant", "system", "0"):
+        root = out / folder
+        if not root.is_dir():
+            continue
+        for child in list(root.iterdir()):
+            if child.is_dir() and child.name not in ("polyMesh", "triSurface"):
+                shutil.rmtree(child, ignore_errors=True)
 
 
 def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
@@ -512,6 +553,15 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
         restart_from = latest_saved_time(out)
         if restart_from is None:
             return {"ok": False, "error": "This run has no saved result to continue from."}
+        if bool(case_regions(out)) != spec.cht:
+            was = "conjugate heat transfer" if not spec.cht else "buoyant flow of one fluid"
+            return {
+                "ok": False,
+                "error": (
+                    f"This run solved {was}, and the study's materials have changed since (the solver follows "
+                    "them): start a new run."
+                ),
+            }
         if float(spec.end_time) <= restart_from:
             return {
                 "ok": False,
@@ -524,6 +574,12 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
             every = float(f"{span / n:.12g}")
             spec = dataclasses.replace(spec, transient=dataclasses.replace(spec.transient, write_interval=every), write_interval=every)
     _clean_prior_run(out, keep_times=restart_from is not None)
+    if spec.cht:
+        from .cht_writer import write_cht_case
+
+        return write_cht_case(spec, out, restart_from=restart_from)
+    if restart_from is None:
+        _clean_regions(out)
 
     kept = out / "constant" / "polyMesh"
     poly_dst = kept if restart_from is not None and (kept / "owner").is_file() else _copy_polymesh(Path(spec.mesh_case_dir), out)

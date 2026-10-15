@@ -98,6 +98,19 @@ describe('recordValues', () => {
   it("no record yet is a new material: the preset's values", () => {
     expect(recordValues(m, null)).toEqual({ nu: 1.516e-5, rho: 1.204 });
   });
+
+  it('a property with no minimum reads 0 and below, and only numbers (API 1.8)', () => {
+    const solid = {
+      ...m,
+      schema: { properties: { ...(m.schema?.properties || {}), q: { title: 'Heat source', default: 0 } } },
+    };
+    expect(recordValues(solid, { name: 'Air', q: -5 }).q).toBe(-5);
+    expect(recordValues(solid, { name: 'Air', q: 0 }).q).toBe(0);
+    expect(recordValues(solid, { name: 'Air', q: '2.5' }).q).toBe(2.5);
+    for (const raw of [' ', '', [7], [], true, null]) expect(recordValues(solid, { name: 'Air', q: raw }).q).toBeUndefined();
+    // A property with a minimum still reads above 0 only.
+    expect(recordValues(solid, { name: 'Air', density: 0 }).rho).toBe(1.196);
+  });
 });
 
 describe('propertyRecordKeys', () => {

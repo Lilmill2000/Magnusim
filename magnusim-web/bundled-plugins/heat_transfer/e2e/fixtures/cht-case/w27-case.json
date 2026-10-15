@@ -1,0 +1,420 @@
+{
+  "endTime": 800.0,
+  "writeInterval": 800.0,
+  "nProcs": 1,
+  "solver": "chtMultiRegionSimpleFoam",
+  "time_dependency": "Steady-state",
+  "regions": [
+    {
+      "name": "air",
+      "role": "fluid"
+    },
+    {
+      "name": "aluminium_6061",
+      "role": "solid"
+    }
+  ],
+  "kinematic_fields": [],
+  "cht": true,
+  "region_rows": [
+    {
+      "name": "air",
+      "role": "fluid",
+      "bodies": [
+        "Body1"
+      ],
+      "material_id": "m-air",
+      "material": "Air",
+      "label": "Body1 (Air)",
+      "patches": [
+        "inlet",
+        "outlet",
+        "walls"
+      ],
+      "interfaces": [
+        "air_to_aluminium_6061"
+      ],
+      "volume_m3": 9.984740005922084e-07,
+      "fluid": {
+        "name": "Air",
+        "density_model": "perfect_gas"
+      },
+      "walls": [
+        "walls"
+      ]
+    },
+    {
+      "name": "aluminium_6061",
+      "role": "solid",
+      "bodies": [
+        "Body2"
+      ],
+      "material_id": "m-al",
+      "material": "Aluminium 6061",
+      "label": "Body2 (Aluminium 6061)",
+      "patches": [
+        "aluminium_6061_walls",
+        "outlet",
+        "walls"
+      ],
+      "interfaces": [
+        "aluminium_6061_to_air"
+      ],
+      "volume_m3": 2.0011701628429955e-06,
+      "source": {
+        "mode": "power",
+        "value": 0.05,
+        "W": 0.05
+      },
+      "solid": {
+        "name": "Aluminium 6061",
+        "rho": 2700.0,
+        "cp": 896.0,
+        "k": 167.0
+      },
+      "walls": [
+        "aluminium_6061_walls",
+        "outlet",
+        "walls"
+      ]
+    }
+  ],
+  "touching": [
+    [
+      "air",
+      "aluminium_6061"
+    ]
+  ],
+  "fluid_region": "air",
+  "patches": [
+    "aluminium_6061_walls",
+    "inlet",
+    "outlet",
+    "walls"
+  ],
+  "mapped": [
+    {
+      "id": "bc-in",
+      "name": "inlet",
+      "bc_type": "Velocity inlet",
+      "patch": "inlet",
+      "regions": [
+        "air"
+      ],
+      "faces": [
+        "face 1@Body1"
+      ],
+      "face_area_m2": null
+    },
+    {
+      "id": "bc-out",
+      "name": "outlet",
+      "bc_type": "Pressure",
+      "patch": "outlet",
+      "regions": [
+        "air",
+        "aluminium_6061"
+      ],
+      "faces": [
+        "face 4@Body1"
+      ],
+      "face_area_m2": null
+    }
+  ],
+  "thermal": {
+    "air/inlet": {
+      "region": "air",
+      "patch": "inlet",
+      "kind": "inlet",
+      "T_K": 293.15
+    },
+    "air/outlet": {
+      "region": "air",
+      "patch": "outlet",
+      "kind": "pressure",
+      "T_K": 293.15,
+      "p_Pa": 0.0
+    },
+    "air/walls": {
+      "region": "air",
+      "patch": "walls",
+      "kind": "wall",
+      "wall": "no_slip",
+      "mode": "adiabatic"
+    },
+    "aluminium_6061/aluminium_6061_walls": {
+      "region": "aluminium_6061",
+      "patch": "aluminium_6061_walls",
+      "kind": "solid_wall",
+      "mode": "adiabatic"
+    },
+    "aluminium_6061/outlet": {
+      "region": "aluminium_6061",
+      "patch": "outlet",
+      "kind": "solid_wall",
+      "mode": "adiabatic"
+    },
+    "aluminium_6061/walls": {
+      "region": "aluminium_6061",
+      "patch": "walls",
+      "kind": "solid_wall",
+      "mode": "adiabatic"
+    }
+  },
+  "opening_patches": [
+    "inlet",
+    "outlet"
+  ],
+  "sources_W": 0.05,
+  "ht_monitors": [
+    {
+      "id": "mon-tc",
+      "name": "TC",
+      "type": "ht_thermocouple",
+      "cht": true,
+      "points": [
+        [
+          0.005,
+          0.005,
+          0.005
+        ],
+        [
+          0.02,
+          0.005,
+          0.005
+        ]
+      ],
+      "key": "ht_probe_tc",
+      "probes": [
+        {
+          "key": "ht_probe_tc_air",
+          "region": "air",
+          "index": [
+            0
+          ]
+        },
+        {
+          "key": "ht_probe_tc_aluminium_6061",
+          "region": "aluminium_6061",
+          "index": [
+            1
+          ]
+        }
+      ],
+      "outside": []
+    },
+    {
+      "id": "mon-out",
+      "name": "Outlet T",
+      "type": "ht_surface_temperature",
+      "cht": true,
+      "patches": [
+        "outlet"
+      ],
+      "targets": [
+        {
+          "region": "air",
+          "patch": "outlet"
+        }
+      ]
+    }
+  ],
+  "gravity_m_s2": [
+    0.0,
+    0.0,
+    -9.80665
+  ],
+  "operating_pressure_Pa": 101325.0,
+  "reference_temperature_K": 293.15,
+  "initial_temperature_K": 293.15,
+  "turbulence": {
+    "model": "laminar",
+    "speed_ref_m_s": 0.2,
+    "hydraulic_diameter_m": 0.05
+  },
+  "numerics": {
+    "preset": "robust",
+    "n_non_orthogonal": 1,
+    "relax_u": 0.7,
+    "relax_p_rgh": 0.3,
+    "relax_h": 0.5
+  },
+  "n_cells": 6678,
+  "mesh_id": "mesh_1",
+  "run_id": "r1a02ff7d",
+  "pre_steps": [
+    {
+      "tool": "splitMeshRegions",
+      "args": [
+        "-cellZonesOnly",
+        "-overwrite"
+      ]
+    }
+  ],
+  "rho": 1.2043175745580352,
+  "nu": 1.515381024535613e-05,
+  "fluid": {
+    "name": "Air",
+    "rho": 1.204,
+    "mu": 1.825e-05,
+    "cp": 1007.0,
+    "k": 0.02514,
+    "beta": 0.003411,
+    "molar_mass": 28.97,
+    "prandtl": 0.7310163086714399
+  },
+  "density_model": "perfect_gas",
+  "analysis_key": "heat_transfer_steady",
+  "frame_fields": [
+    "T",
+    "U"
+  ],
+  "result_fields": [
+    {
+      "key": "T",
+      "label": "Temperature",
+      "unit_quantity": "temperature",
+      "kind": "scalar",
+      "unit": "K",
+      "magnitude_label": "",
+      "shown": "T"
+    },
+    {
+      "key": "U",
+      "label": "Velocity",
+      "unit_quantity": "velocity",
+      "kind": "vector",
+      "unit": "m/s",
+      "magnitude_label": "Velocity Magnitude",
+      "shown": "magU"
+    },
+    {
+      "key": "p",
+      "label": "Pressure",
+      "unit_quantity": "pressure",
+      "kind": "scalar",
+      "unit": "Pa",
+      "magnitude_label": "",
+      "shown": "p"
+    },
+    {
+      "key": "p_rgh",
+      "label": "Pressure without hydrostatic",
+      "unit_quantity": "pressure",
+      "kind": "scalar",
+      "unit": "Pa",
+      "magnitude_label": "",
+      "shown": "p_rgh"
+    },
+    {
+      "key": "rho",
+      "label": "Density",
+      "unit_quantity": "density",
+      "kind": "scalar",
+      "unit": "kg/m\u00b3",
+      "magnitude_label": "",
+      "shown": "rho"
+    },
+    {
+      "key": "wallHeatFlux",
+      "label": "Wall heat flux",
+      "unit_quantity": "heat_flux",
+      "kind": "scalar",
+      "unit": "W/m\u00b2",
+      "magnitude_label": "",
+      "shown": "wallHeatFlux"
+    },
+    {
+      "key": "htc",
+      "label": "Heat transfer coefficient",
+      "unit_quantity": "heat_transfer_coefficient",
+      "kind": "scalar",
+      "unit": "W/(m\u00b2\u00b7K)",
+      "magnitude_label": "",
+      "shown": "htc"
+    },
+    {
+      "key": "k",
+      "label": "Turbulent kinetic energy",
+      "unit_quantity": "specific_energy",
+      "kind": "scalar",
+      "unit": "m\u00b2/s\u00b2",
+      "magnitude_label": "",
+      "shown": "k"
+    },
+    {
+      "key": "omega",
+      "label": "Specific dissipation rate",
+      "unit_quantity": "specific_dissipation_rate",
+      "kind": "scalar",
+      "unit": "1/s",
+      "magnitude_label": "",
+      "shown": "omega"
+    },
+    {
+      "key": "epsilon",
+      "label": "Turbulent dissipation rate",
+      "unit_quantity": "dissipation_rate",
+      "kind": "scalar",
+      "unit": "m\u00b2/s\u00b3",
+      "magnitude_label": "",
+      "shown": "epsilon"
+    },
+    {
+      "key": "nut",
+      "label": "Turbulent viscosity",
+      "unit_quantity": "kinematic_viscosity",
+      "kind": "scalar",
+      "unit": "m\u00b2/s",
+      "magnitude_label": "",
+      "shown": "nut"
+    }
+  ],
+  "prepare_report": {
+    "ok": true,
+    "case_dir": "C:\\Users\\drmil\\AppData\\Local\\Temp\\pytest-of-drmil\\pytest-4760\\test_the_e2e_fixture_cht_case0\\proj\\geometries\\Geometry_two\\simulations\\Heat_transfer\\simulation_runs\\HT5_r1a02ff7d\\case",
+    "solver": "chtMultiRegionSimpleFoam",
+    "n_procs": 1,
+    "patches": [
+      "aluminium_6061_walls",
+      "inlet",
+      "outlet",
+      "walls"
+    ],
+    "regions": [
+      "air",
+      "aluminium_6061"
+    ],
+    "polyMesh_copied": true,
+    "bcs": [
+      {
+        "name": "inlet",
+        "bc_type": "Velocity inlet",
+        "kind": "inlet",
+        "faces": [
+          "face 1@Body1"
+        ],
+        "value": 0.2,
+        "unit": "m/s"
+      },
+      {
+        "name": "outlet",
+        "bc_type": "Pressure",
+        "kind": "pressure",
+        "faces": [
+          "face 4@Body1"
+        ],
+        "value": 0,
+        "unit": "Pa"
+      }
+    ],
+    "transient_control": null,
+    "note_detail": "",
+    "physics_label": "conjugate heat transfer (Body2 solid), Laminar, incompressible perfect gas, gravity",
+    "algorithm": "SIMPLE",
+    "end_time": 800.0,
+    "write_interval": 800.0,
+    "density_model": "perfect_gas",
+    "transient": false
+  }
+}

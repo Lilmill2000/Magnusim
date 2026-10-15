@@ -247,11 +247,30 @@ function recordKeysOf(model, field) {
   return Array.isArray(keys) && keys.length ? keys.map(String) : [field];
 }
 
+/**
+ * A property whose schema gives no minimum takes any finite number, 0 and below too
+ * (host API 1.8: a solid's heat source); one with a minimum must be above 0.
+ */
+function takesAnyNumber(model, field) {
+  const props = (model && model.schema && model.schema.properties) || {};
+  const prop = Object.prototype.hasOwnProperty.call(props, field) ? props[field] : null;
+  return !!prop && typeof prop.minimum !== 'number';
+}
+
+/** A number, or text that is one (not blank text, a list or a boolean); else `fallback`. */
+function anyNumber(raw, fallback) {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : fallback;
+  if (typeof raw !== 'string' || !raw.trim()) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 /** A saved record's value of a model property (any of its record keys), or undefined. */
 function savedNumber(model, rec, field) {
   if (!rec) return undefined;
+  const read = takesAnyNumber(model, field) ? anyNumber : fluidNumber;
   for (const k of recordKeysOf(model, field).concat(field)) {
-    const n = fluidNumber(rec[k], undefined);
+    const n = read(rec[k], undefined);
     if (n !== undefined) return n;
   }
   return undefined;
@@ -312,9 +331,12 @@ export function buildAirMaterial(body, existing) {
   ]);
   for (const field of fields) {
     const given = savedNumber(model, body, field);
-    const saved = samePreset ? savedNumber(model, existing, field) : undefined;
+    // A value the new preset does not define (a solid's heat source) stays when the preset
+    // changes; one it defines is the preset's.
+    const presetHas = Object.prototype.hasOwnProperty.call(presetValues, field);
+    const saved = samePreset || !presetHas ? savedNumber(model, existing, field) : undefined;
     const fill = samePreset ? legacyValues[field] : presetValues[field];
-    const v = given ?? saved ?? fluidNumber(fill, undefined);
+    const v = given ?? saved ?? (takesAnyNumber(model, field) ? anyNumber : fluidNumber)(fill, undefined);
     if (v === undefined) continue;
     for (const k of recordKeysOf(model, field)) values[k] = v;
   }

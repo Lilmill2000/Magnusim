@@ -5,7 +5,7 @@ monitors carry, and which of a run's result controls are its monitors.
   and its mean and largest flux per area, at every iteration (or time step);
 - ``ht_surface_temperature`` (boundaries): the area-averaged and the highest
   temperature on the boundaries you pick;
-- ``ht_thermocouple`` (points): the temperature at points in the fluid over
+- ``ht_thermocouple`` (points): the temperature at points in the fluid or a solid over
   time.
 
 Every run also gets the energy balance: the heat in and out through the walls
@@ -104,7 +104,7 @@ def build_thermocouple() -> MonitorType:
         key=THERMOCOUPLE,
         label="Thermocouple",
         target="point",
-        description="The temperature at points you place in the fluid, over the run.",
+        description="The temperature at points you place in the fluid or in a solid body (a point reads the body it is in), over the run.",
         user_creatable=True,
         quantities=THERMOCOUPLE_QUANTITIES,
     )

@@ -8,6 +8,7 @@ conditions, its own settings).
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -63,10 +64,46 @@ def ready_context(
         patches=tuple(mesh.get("patches") or ()),
         study=study,
         read_study=read_study,
-        mesh={"mesh_id": mesh.get("mesh_id"), "mesh_name": mesh.get("mesh_name"), "ok": bool(mesh.get("ok"))},
+        mesh={
+            "mesh_id": mesh.get("mesh_id"),
+            "mesh_name": mesh.get("mesh_name"),
+            "ok": bool(mesh.get("ok")),
+            **_mesh_regions(root, sid, mesh),
+        },
         materials=tuple(assemble_study_materials(root, sid)) if sid else (),
         bcs=tuple(assemble_study_bcs(root, sid)) if sid else (),
     )
+
+
+def _mesh_regions(root: Path, sid: str, mesh: dict[str, Any]) -> dict[str, Any]:
+    """Host API 1.8: a mesh of several regions gives its ``regions`` ([{name, role, bodies,
+    cells}], as ``RunInputs.mesh``); a mesh whose regions are not the ones the study's
+    materials make now (a body given another material, or a solid one, after it was made)
+    gets ``out_of_date_materials`` (the tree's rule, ``cfddesk.project.scope``); ``engine``
+    is the mesher it was made with (``standard``, ``snappy_hexdominant``, ``cfmesh``)."""
+    out: dict[str, Any] = {}
+    regions = mesh.get("regions")
+    if isinstance(regions, list) and regions:
+        out["regions"] = [dict(r) for r in regions if isinstance(r, dict)]
+    if mesh.get("engine"):
+        out["engine"] = str(mesh["engine"])
+    if not sid or not mesh.get("ok"):
+        return out
+    try:
+        from cfddesk.project.paths import find_geometry, find_study
+        from cfddesk.project.regions import regions_for_mesh, regions_signature
+        from cfddesk.project.scope import body_names
+
+        study = find_study(root, sid) or {}
+        geom = find_geometry(root, str(study.get("geometry_id") or "")) or {}
+        proj = _read(root / "project.json") or {}
+        n_bodies = len(body_names(geom, proj if isinstance(proj, dict) else {}))
+        if n_bodies > 0 and regions_signature(out.get("regions")) != regions_signature(regions_for_mesh(root, sid, n_bodies)):
+            out["out_of_date_materials"] = True
+    except Exception as exc:
+        # Not out of date as far as this check knows; say why it could not tell.
+        print(f"[readiness] the mesh's regions could not be checked against the materials: {exc!r}", file=sys.stderr)
+    return out
 
 
 def _read(path: Path) -> Any:

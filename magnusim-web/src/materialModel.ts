@@ -53,7 +53,16 @@ export interface MaterialProperty {
   quantity: Quantity | null;
   /** The schema's own unit label, for a property with no quantity. */
   unit: string;
+  /**
+   * The schema's minimum. A property with one must be above 0 (a density); one with
+   * none takes any finite number, 0 and below too (host API 1.8: a solid's heat source).
+   */
   min?: number;
+}
+
+/** A property that takes any finite number (its schema has no minimum). */
+export function takesAnyNumber(prop: MaterialProperty | undefined): boolean {
+  return !!prop && prop.min === undefined;
 }
 
 /** A material record as saved on disk (what the case writer reads). */
@@ -217,6 +226,14 @@ function positive(raw: unknown): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/** A number, or text that is one (not blank text, a list or a boolean). */
+function finite(raw: unknown): number | undefined {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : undefined;
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 /** A preset's values (a fresh copy). */
 export function presetValues(p: MaterialPreset | undefined): Record<string, number> {
   return { ...(p?.values || {}) };
@@ -236,13 +253,16 @@ export function recordValues(
   if (!record) return presetValues(p);
   const fill = { ...presetValues(p), ...(p?.legacy_values || {}) };
   const out: Record<string, number> = {};
-  const keys = new Set([...properties(model).map((prop) => prop.key), ...Object.keys(fill)]);
+  const props = properties(model);
+  const anyNumber = new Set(props.filter(takesAnyNumber).map((prop) => prop.key));
+  const keys = new Set([...props.map((prop) => prop.key), ...Object.keys(fill)]);
   for (const key of keys) {
+    const read = anyNumber.has(key) ? finite : positive;
     const saved = recordKeys(model, key)
       .concat(key)
-      .map((k) => positive(record?.[k]))
+      .map((k) => read(record?.[k]))
       .find((v) => v !== undefined);
-    const v = saved ?? positive(fill[key]);
+    const v = saved ?? read(fill[key]);
     if (v !== undefined) out[key] = v;
   }
   return out;

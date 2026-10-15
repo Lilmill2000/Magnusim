@@ -188,16 +188,16 @@ test('a Heat Transfer study: its physics, a fluid and a wall’s temperature in 
   await gravity.selectOption({ label: '−Y (down along Y)' });
   await expect.poll(async () => (await s.study()).gravity).toBe('-y');
 
-  // A fluid material: the Materials "+" opens the thermal fluid, Air first. One model only:
-  // no "Material type" choice (no solid offered that every run would refuse).
+  // A fluid material: the Materials "+" opens the thermal fluid, Air first; the Material
+  // type offers the thermal solid too (HT5: a solid body makes it conjugate heat transfer).
   const studyRow = page.locator(`#left-tree [data-w17-sim-id="${s.sid}"]`);
   await studyRow.locator('[data-w18-mat-plus]').click();
   const picker = page.locator('#panel-material-picker .cfd-island, #panel-air-material .cfd-island').first();
   await expect(picker).toBeVisible({ timeout: 15_000 });
   await expect(picker.getByLabel('Fluid')).toHaveValue('air');
   await expect(picker.getByLabel('Thermal expansion')).toBeVisible();
-  await expect(picker.getByLabel('Material type')).toHaveCount(0);
-  await expect(picker.getByText('Aluminium 6061')).toHaveCount(0);
+  await expect(picker.getByLabel('Material type').locator('option')).toHaveText(['Fluid (thermal)', 'Solid (thermal)']);
+  await expect(picker.getByLabel('Material type')).toHaveValue('thermo_fluid');
   await picker.locator('[data-volume="Body1"] button').first().click();
   await expect.poll(async () => (await s.mats()).map((m) => [m.name, m.material_model, m.assigned_volumes])).toEqual([
     ['Air', 'thermo_fluid', ['Body1']],

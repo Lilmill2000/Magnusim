@@ -9,6 +9,7 @@ import type { RJSFSchema } from '@rjsf/utils';
 import type { RunSettingsProps } from '../../../src/plugin-api';
 import type { RunSettleMonitor, RunState } from '../../../src/panels/legacyBridge';
 import { host } from './host';
+import { SOLID_MODEL, scopeProject, useStudyMaterials } from './materials';
 
 export interface SettleQuantity {
   key: string;
@@ -98,6 +99,9 @@ export function settleSentence(c: SettleChoice, s: SettleSetting, transient: boo
 function SettleStop({ run, saveSettle }: { run: RunState; saveSettle: RunSettingsProps['saveSettle'] }) {
   const transient = run.transient;
   const imperial = host().pluginUi.unitSystem() === 'imperial';
+  // A conjugate heat transfer run (a solid body) never stops on its residuals.
+  const materials = useStudyMaterials(scopeProject(host().scope), String((run.study && run.study.id) || ''));
+  const cht = materials ? materials.some((m) => m.model === SOLID_MODEL) : null;
   const choices = settleChoices(run.monitors);
   const settle = readSettle(run.settle);
   const chosen = settle ? choices.find((c) => c.id === settle.id && c.quantity.key === settle.quantity) || null : null;
@@ -130,7 +134,7 @@ function SettleStop({ run, saveSettle }: { run: RunState; saveSettle: RunSetting
   const defaultWindow = transient ? (frame > 0 ? frame : 1) : 50;
   let hint = '';
   if (settle && chosen && !chosen.problem) {
-    hint = `Ends the run once ${settleSentence(chosen, settle, transient, imperial)}.` + (transient ? '' : ' The residual target still ends it too.');
+    hint = `Ends the run once ${settleSentence(chosen, settle, transient, imperial)}.` + (transient || cht !== false ? '' : ' The residual target still ends it too.');
   } else if (!choices.length) {
     hint = 'Add a Wall heat flux, Surface temperature or Thermocouple monitor (Monitors +) to stop on.';
   }

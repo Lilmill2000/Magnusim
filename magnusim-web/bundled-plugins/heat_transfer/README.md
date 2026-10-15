@@ -2,7 +2,8 @@
 
 A bundled Magnusim plugin (version `0.1.0-dev`, host API 1.8, GPL-3.0-or-later): the
 temperature and flow of one fluid heated or cooled through its walls and inlets, with
-buoyancy (natural convection) or without it (forced convection). It ships turned on and
+buoyancy (natural convection) or without it (forced convection), and heat conducted
+through solid bodies (conjugate heat transfer, CHT). It ships turned on and
 can be turned off in Settings > Plugins. It builds on Incompressible Flow's boundary
 conditions (`requires_plugins = ["incompressible_flow>=1.1"]`) and imports only
 `magnusim_sdk`, `cfddesk.registry` and Incompressible Flow's exported
@@ -12,8 +13,30 @@ conditions (`requires_plugins = ["incompressible_flow>=1.1"]`) and imports only
 
 One simulation type, **Heat Transfer** (Steady-state and Transient):
 
-- **Solvers:** OpenFOAM v2606 `buoyantSimpleFoam` (steady) and `buoyantPimpleFoam`
-  (transient). Every body is fluid: a study whose bodies have one fluid material.
+- **Solvers:** the solver follows the study's materials. Every body fluid (one fluid
+  material): OpenFOAM v2606 `buoyantSimpleFoam` (steady) and `buoyantPimpleFoam`
+  (transient). A body of a solid material: conjugate heat transfer with
+  `chtMultiRegionSimpleFoam` / `chtMultiRegionFoam`, the fluid and every solid solved
+  together. The study panel says which runs and why ("Conjugate heat transfer with
+  chtMultiRegionSimpleFoam: Body2 is Aluminium 6061 (solid). Body1 is Air (fluid).");
+  giving the body back a fluid material goes back to buoyant flow, and no setting is lost
+  (a solid's heat source stays on its material record). A body no material names is left
+  out of the mesh.
+- **Conjugate heat transfer:** each material with bodies is one region (the mesh has a
+  cell zone per region, made by Standard or Hex-dominant; the case splits it with
+  `splitMeshRegions -cellZonesOnly` before the solver, so a material on two separate
+  bodies is still one region). The faces two regions share are coupled
+  (`compressible::turbulentTemperatureRadCoupledMixed` on both sides). A solid region may
+  have a **heat source**, set in its material (Materials, the solid: "Heat source" in W,
+  or "Heat source per volume" in W/m³, one of them; spread evenly; 0 is none, below 0
+  takes heat out; BTU/h or BTU/(h·ft³) in an imperial project). It is kept on the
+  material record, so a copied study's solid keeps it; the study panel lists each solid's
+  source. (A study saved by an earlier build with its sources on the study record still
+  reads them.) A solid's outer faces take a **Solid wall** (this plugin's BC: adiabatic, a
+  fixed temperature, a heat flux into the solid, or a heat transfer coefficient to an
+  ambient temperature, `externalWallHeatFluxTemperature`); a Wall on a solid's face is
+  read the same way; a solid's faces no BC claims are adiabatic. One fluid at most; no
+  fluid at all solves conduction through the solids only.
 - **Gravity:** off, or along ±X, ±Y, ±Z or a custom direction, with its magnitude
   (9.80665 m/s² by default). Off solves forced convection with the same solvers.
 - **Density:** incompressible perfect gas (gases: ρ = p_op M / (R T)), Boussinesq
@@ -58,13 +81,25 @@ One simulation type, **Heat Transfer** (Steady-state and Transient):
   stored in a transient one). "Stop when a monitor settles" watches a monitor on one
   boundary or a thermocouple; a temperature's tolerance is a difference in °C or °F.
   Runs can be continued.
+- **Monitors in a CHT run:** a boundary's part in each body it is on; a thermocouple's
+  points each read the body they are in (a point in a solid reads the solid's
+  temperature; a point outside the mesh says so); every solid gets its own row (average
+  and highest temperature); the energy balance counts the heat sources, the heat through
+  every body's outer faces and the heat the flow carries through the openings (the faces
+  between bodies are inside it). The run's monitors also give the heat through each
+  interface. Residuals per region (`air:h`, `aluminium_6061:h`). Results: T in every body,
+  U, p, p_rgh and rho in the fluid (grey in the solids, and the legend says so), wall heat
+  flux on outer faces and interfaces in each body, the heat transfer coefficient on the
+  fluid's walls and interfaces. A CHT run does not stop on its residuals (the solver has
+  no such stop; the study panel hides the residual target): it runs its iterations, or
+  until a monitor settles. Continue keeps the split mesh and its saved times.
 
 ## What Start refuses, with the reason
 
-- a body with a material other than one fluid (a solid record a development build saved
-  included), a fluid property at 0 or below (a thermal expansion of 0 is accepted: no
-  buoyancy from temperature), a study setting saved as 0 (operating pressure, reference
-  or starting temperature, residual target, a relaxation, gravity magnitude);
+- more than one fluid material, a fluid or solid property at 0 or below (a thermal
+  expansion of 0 is accepted: no buoyancy from temperature), a study setting saved as 0
+  (operating pressure, reference or starting temperature, residual target, a relaxation,
+  gravity magnitude);
 - each BC's Incompressible Flow checks, in Incompressible Flow's own words, and its
   Thermal fields (temperatures above absolute zero, a heat transfer coefficient above 0);
 - a slip wall with heat through it (a slip wall has no boundary layer);
@@ -74,14 +109,61 @@ One simulation type, **Heat Transfer** (Steady-state and Transient):
 - constant density with gravity, perfect gas for a liquid, and Boussinesq when β·ΔT of
   the boundary temperatures reaches 0.2.
 
+A conjugate heat transfer study, besides:
+
+- a mesh made before the materials changed (each material's bodies are a region of their
+  own: generate it again; a cfMesh mesh adds that cfMesh can't mesh solid bodies
+  separately);
+- a solid about one cell thick: half or more of its cells near its surface (a point on
+  it) touch the surface on every side (refine the mesh there; HT0's heat sink with fins
+  one cell thick diverged, 70 %; with 2.5 mm fins it converged, 23 %). Counted among the
+  cells near the surface, so a thick base does not hide thin fins (the same 1.5 mm fins
+  on a 10 mm base: 66 %);
+- a solid's heat source given both in total and per volume (set one to 0), or not a
+  number;
+- an inlet, outlet, pressure boundary or freestream on a solid body's faces, and a Solid
+  wall on a fluid's;
+- a fluid region with no inlet or outlet, gravity off and no moving wall;
+- a body (or group of touching bodies) with no way for its temperature to be set (every
+  face adiabatic, no heat source, no flow through it); in a steady solve, heat that comes
+  in (a source, a heat flux) with no face that takes it out (a fixed temperature, a heat
+  transfer coefficient, or the flow through an inlet and an outlet), or heat that only
+  goes out (a source or a heat flux below 0) with nothing that sets a temperature;
+- Boussinesq when β·ΔT of the boundary temperatures (the solids' faces included)
+  reaches 0.2, and Boussinesq on a gas while a solid has a heat source (how hot it gets
+  is not known before the solve: HT0's air round a 10 W heater ran to 600 K, where
+  Boussinesq's density reaches 0; use incompressible perfect gas).
+
 Temperatures in these messages show in the project's unit.
 
 ## Limits of this version
 
-- **Fluids only.** Heat conduction through solid bodies (conjugate heat transfer) is not
-  part of 0.1.0-dev; the Materials panel offers fluids only.
-- One fluid per study; constant properties.
-- No radiation, temperature-dependent properties, heat sources, porous media, species.
+- One fluid per study; constant properties; a solid's conductivity is the same in every
+  direction.
+- No radiation, temperature-dependent properties, contact resistance between bodies, thin
+  walls on shared faces, porous media, species. Bodies that touch over part of a face are
+  not coupled there.
+- On a tetrahedral mesh (Standard) the heat through a solid's fixed-temperature face reads
+  high: the composite wall below gave 6.35 % more heat on 195 345 tetrahedra (the
+  temperature inside the solids was right to 0.45 % of ΔT), and 0.11 % on Hex-dominant
+  hexahedra. Corrected schemes for the solids ("Accurate" numerics: `Gauss linear
+  corrected`, `snGrad corrected`) do not fix it (+6.97 %): the error is the gradient at
+  the wall of a tetrahedron next to it, which OpenFOAM does not correct. The study panel
+  of a conjugate heat transfer study whose mesh is Standard says so ("On a Standard mesh
+  (tetrahedra) the heat through a solid's walls reads about 6 % high (its temperatures
+  are right): mesh with Hex-dominant for heat numbers."). Use Hex-dominant for heat
+  through solids' faces held at a temperature.
+- Start reads the unsplit mesh once (patches, the regions they touch, how thin each solid
+  is) and keeps what it found beside the mesh (`<mesh case>/ht-mesh-summary.json`, keyed
+  by the mesh files' sizes and times): a 2 million cell ascii mesh is checked in about
+  3 s within about 450 MB, and a later check of the same mesh reads only that file. The
+  solids' volumes are worked out only for a heat source given per volume, and a
+  thermocouple's region only for its points; a mesh that cannot be read, or one too
+  large for the memory free, is a plain reason at Start.
+- The energy balance counts the heat the flow carries through the openings, not heat
+  conducted through them: with a hot body right next to an inlet, heat diffusing back out
+  of the inlet shows as an imbalance.
+- The starting temperature is the same in every body.
 - A Boussinesq run that still drives the density to zero fails with "Boussinesq density
   reached zero: use incompressible perfect gas" (the solver's log names Boussinesq, its
   density reached zero and the solver died).
@@ -101,6 +183,24 @@ Constant properties at 20 °C and 1 atm.
 | Nitrogen | 1.165 | 1.76e-5 | 1040 | 0.0253 | 3.411e-3 (1/T) | 28.013 | Çengel & Ghajar, Table A-16 (gases at 1 atm), interpolated to 20 °C |
 | Custom fluid | Air's | | | | | | the user's own |
 
+## Solid presets and their sources
+
+Constant properties at 20 to 27 °C. Conductivity is the same in every direction.
+
+| Solid | ρ kg/m³ | cp J/(kg·K) | k W/(m·K) | Source |
+|---|---|---|---|---|
+| Aluminium 6061 (T6) | 2700 | 896 | 167 | ASM Handbook Vol. 2 (Properties of Wrought Aluminum Alloys), 6061-T6 at 25 °C; the same values in MatWeb's 6061-T6 data sheet |
+| Aluminium (pure) | 2702 | 903 | 237 | Incropera, DeWitt, Bergman & Lavine, *Fundamentals of Heat and Mass Transfer*, 6th ed., Table A.1 (300 K) |
+| Copper (pure) | 8933 | 385 | 401 | Incropera et al., Table A.1 (300 K) |
+| Steel (plain carbon, AISI 1010) | 7832 | 434 | 63.9 | Incropera et al., Table A.1 (300 K) |
+| Stainless steel 304 | 7900 | 477 | 14.9 | Incropera et al., Table A.1 (AISI 304, 300 K) |
+| Brass (70 % Cu, 30 % Zn, cartridge brass) | 8530 | 380 | 110 | Incropera et al., Table A.1 (300 K) |
+| FR-4 (circuit board) | 1850 | 1100 | 0.29 | typical laminate data sheet values, through the board's thickness (along the board about 0.8): approximate, use the board maker's data |
+| Glass (soda-lime plate) | 2500 | 750 | 1.4 | Incropera et al., Table A.3 (glass, plate (soda lime), 300 K) |
+| ABS | 1050 | 1400 | 0.17 | typical moulding-grade data sheet values (ρ 1.04 to 1.06 g/cm³, k 0.14 to 0.19 W/(m·K), cp 1.3 to 1.5 kJ/(kg·K)): approximate |
+| PLA | 1240 | 1800 | 0.13 | Farah, Anderson & Langer, "Physical and mechanical properties of PLA, and their functions in widespread applications", Adv. Drug Deliv. Rev. 107 (2016), Table 2 (ρ 1.24 g/cm³, k 0.13 W/(m·K)); cp of amorphous PLA near 20 °C about 1.2 to 1.8 kJ/(kg·K), the upper value taken: approximate |
+| Custom solid | Aluminium 6061's | | | the user's own |
+
 ## Layout
 
 | Path | What it is |
@@ -110,7 +210,9 @@ Constant properties at 20 °C and 1 atm.
 | `heat_transfer/contract.py` | the family, what blocks a run, run models, residual series |
 | `heat_transfer/physics.py`, `materials.py`, `bcs.py` | study settings, the fluid model, Thermal BC fields and the new Wall's seed |
 | `heat_transfer/runspec.py`, `writer.py`, `functions.py`, `settle.py`, `transient.py` | the case a run writes |
-| `heat_transfer/parser.py`, `results.py`, `monitors.py` | the solver log, monitors and energy balance |
+| `heat_transfer/cht.py`, `polymesh.py`, `cht_writer.py`, `cht_functions.py` | a CHT case: its regions from the mesh and the materials, its files and function objects |
+| `heat_transfer/cht_ready.py` | what blocks a CHT run |
+| `heat_transfer/parser.py`, `results.py`, `cht_results.py`, `monitors.py` | the solver log, monitors and energy balance |
 | `heat_transfer/jobs/write_run_case.py` | the run's prepare step (its `LaunchSpec.prepare_job`) |
 | `ui/` | the study and run panels' settings |
 | `tests/` | pytest (writer goldens, contract, results; `-m wsl` the solve proofs) |
@@ -129,6 +231,29 @@ by the app's run path (the first two meshed by Standard):
 | Boussinesq with β·ΔT = 2.1 | 20 × 20 blockMesh | solver exits (136); the run's reason "Boussinesq density reached zero: use incompressible perfect gas" | the reason shows |
 | The e2e fixture cavity, 400 iterations | 20 × 20 blockMesh | htc 3.34 W/(m²·K) on both the hot and the cold wall (h = q / (T_wall − T_ref) face by face); `rho` written | positive h on both |
 | Turbulent channel: k-omega SST, perfect gas, gravity, floor at 60 °C, roof with h = 10 W/(m²·K) to 10 °C, 300 iterations | 40 × 30 blockMesh | runs with the wall functions; floor htc 5.93 W/(m²·K), the roof takes 0.133 W out | runs |
+
+## Validation (HT5, conjugate heat transfer)
+
+`tests/test_ht5_cht_wsl.py` (`pytest -m wsl`): each case set up as a study, meshed by the
+app's mesher and run the way Start runs it (the runner's relay: the plugin's prepare job,
+the WSL `splitMeshRegions` step, `solve.sh`), read back through the analysis's own monitors.
+
+| Case | Mesh | Result | Target |
+|---|---|---|---|
+| Composite wall: steel 10 mm and stainless steel 20 mm side by side, 100 °C and 20 °C on their outer faces | Hex-dominant, 13 634 cells | heat 5.34348 W against 5.33769 W from 1D (+0.11 %); every cell within 0.48 % of ΔT of the 1D profile; balance 0.0001 % | within 1 % |
+| The same wall on a Standard mesh | Standard, 195 345 tetrahedra | heat 5.67675 W (+6.35 %; with corrected schemes for the solids, 194 709 cells: +6.97 %); every cell within 0.45 % of ΔT of the profile | the study panel's note (about 6 % high) |
+| Heated block: stainless steel 40 × 40 × 10 mm, 10 W, h = 500 W/(m²·K) to 20 °C on its bottom | Hex-dominant, 12 576 cells, one region (no split) | heat out 10.00000 W; T_max 307.752 K against 307.747 K from 1D (rise 0.03 % off) | 1 %, 5 % |
+| The same with 625 000 W/m³ | the same | source 9.99988 W (the mesh's volume), heat out 9.99988 W, T_max as above | 1 %, 5 % |
+| Heat sink in a channel: aluminium base and 4 fins, 10 W, air at 0.5 m/s and 20 °C, gravity, laminar, 4 ranks | Hex-dominant, 95 902 cells (air 74 893, sink 21 009) | m·cp·ΔT_bulk 10.01280 W against the 10 W source (0.13 %, 4000 iterations; 1.3 % at 1500); the interface takes 9.9996 W; sink T_max 359.215 K (a rise of 66.07 K) | within 2 % |
+| Its highest temperature against a finer mesh (forced convection: with gravity the finer mesh resolves an unsteady plume a steady solve does not settle on) | Hex-dominant, 95 902 and 156 123 cells | T_max rise 67.273 K and 66.774 K (+0.75 %); balances 0.28 % and 0.002 % | within 5 % |
+| Two separate aluminium blocks (20 × 10 × 20 mm, 40 mm apart), one material with 1 W, in an air channel at 0.5 m/s, gravity off | Hex-dominant, 62 953 cells (air 56 688, aluminium 6 265) | one solid region of two pieces (`splitMeshRegions -cellZonesOnly`: every cell in a region, the interfaces `air_to_aluminium_6061` / `aluminium_6061_to_air`, no `domain<N>`); both blocks at 47 °C; m·cp·ΔT_bulk 0.98809 W (1.19 %) | within 2 % |
+| A closed box of air (100 mm, walls at 20 °C, no opening) with a 2 W aluminium block, gravity, perfect gas | Hex-dominant, 17 620 cells | solves; 1.99996 W out through the walls (0.002 %); the block at 142.2 °C | within 2 % |
+| The same sink, transient on 2 ranks | the same | 20 steps of 2 ms, frames 0.01 to 0.04 s in both regions, continued to 0.06 s (no split again) | runs, writes frames, continues |
+| The composite wall with "Stop when a monitor settles" (the cold face's heat flow within 0.001 W over 20 iterations) | Hex-dominant, fineness 2 | ended at iteration 168 of 2000; the log parser reads it as settled | stops early |
+
+At 0.2 m/s the same sink's steady solve did not settle (the heat carried out swung
+between 9.7 and 10.2 W: the plume of a mixed-convection flow at that speed is unsteady);
+solve such a case as a transient study.
 
 The app-path e2e (`e2e/ht4-heat-transfer.spec.js`, with `MAGNUSIM_E2E_WSL=1`) meshes and
 solves the same cavity through the browser and checks a channel's written case (see the

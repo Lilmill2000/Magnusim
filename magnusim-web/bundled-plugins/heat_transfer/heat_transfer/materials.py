@@ -1,18 +1,22 @@
-"""Heat Transfer's material model: a fluid with thermal properties.
+"""Heat Transfer's material models: a fluid and a solid with thermal properties.
 
-``thermo_fluid`` (role fluid): density, dynamic viscosity, specific heat,
-thermal conductivity, thermal expansion and molar mass. Constant properties,
-at 20 °C and 1 atm; the sources are in the plugin's README.
+- ``thermo_fluid`` (role fluid): density, dynamic viscosity, specific heat,
+  thermal conductivity, thermal expansion and molar mass;
+- ``thermo_solid`` (role solid): density, specific heat and thermal conductivity
+  (the same in every direction).
+
+Constant properties, at 20 °C (and 1 atm for the fluids); the sources are in the
+plugin's README.
 
 A study of a Heat Transfer analysis holds one material record per group of
-bodies (host API 1.8); every body of a fluid record is fluid. Solids (heat
-conduction through solid bodies) are not part of this version: a record of the
-solid model a development build saved (``thermo_solid``) is refused at Start.
+bodies (host API 1.8): every body of a fluid record is fluid, every body of a
+solid record is a solid that conducts heat (conjugate heat transfer). A body no
+record names is left out of the mesh.
 
-``fluid_props`` reads one saved record: its own numbers, else its preset's
-(a record keeps the numbers it was saved with). ``fluid_problem`` says which
-saved number cannot be solved with (a thermal expansion of 0 is a real value:
-no buoyancy from temperature).
+``fluid_props`` / ``solid_props`` read one saved record: its own numbers, else
+its preset's (a record keeps the numbers it was saved with). ``fluid_problem`` /
+``solid_problem`` say which saved number cannot be solved with (a thermal
+expansion of 0 is a real value: no buoyancy from temperature).
 """
 
 from __future__ import annotations
@@ -25,8 +29,6 @@ from cfddesk.registry.material import MaterialModel
 from cfddesk.registry.schema import SchemaField
 
 FLUID_MODEL = "thermo_fluid"
-# The solid model of development builds: no longer registered; a study that
-# still holds one of its records is refused at Start (heat_transfer.contract).
 SOLID_MODEL = "thermo_solid"
 CUSTOM_PRESET = "custom"
 
@@ -87,6 +89,36 @@ FLUID_PRESETS: tuple[dict[str, Any], ...] = (
 )
 
 
+def _solid_row(key: str, name: str, *, rho: float, cp: float, k: float, library: str, codes: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {
+        "key": key,
+        "name": name,
+        "values": {"rho": rho, "cp": cp, "k": k},
+        "library": library,
+        "codes": codes or (library,),
+        "names": (name,),
+    }
+
+
+# At 20 to 27 °C (README: sources). FR-4's conductivity is through the board's
+# thickness (along the board it conducts about three times better).
+SOLID_PRESETS: tuple[dict[str, Any], ...] = (
+    _solid_row("aluminium_6061", "Aluminium 6061", rho=2700.0, cp=896.0, k=167.0, library="HT_AL6061",
+               codes=("HT_AL6061", "DEFAULT")),
+    _solid_row("aluminium", "Aluminium (pure)", rho=2702.0, cp=903.0, k=237.0, library="HT_AL"),
+    _solid_row("copper", "Copper", rho=8933.0, cp=385.0, k=401.0, library="HT_CU"),
+    _solid_row("steel", "Steel (plain carbon, AISI 1010)", rho=7832.0, cp=434.0, k=63.9, library="HT_STEEL"),
+    _solid_row("stainless_304", "Stainless steel 304", rho=7900.0, cp=477.0, k=14.9, library="HT_SS304"),
+    _solid_row("brass", "Brass (70 % copper, 30 % zinc)", rho=8530.0, cp=380.0, k=110.0, library="HT_BRASS"),
+    _solid_row("fr4", "FR-4 (circuit board)", rho=1850.0, cp=1100.0, k=0.29, library="HT_FR4"),
+    _solid_row("glass", "Glass (soda-lime plate)", rho=2500.0, cp=750.0, k=1.4, library="HT_GLASS"),
+    _solid_row("abs", "ABS", rho=1050.0, cp=1400.0, k=0.17, library="HT_ABS"),
+    _solid_row("pla", "PLA", rho=1240.0, cp=1800.0, k=0.13, library="HT_PLA"),
+    # The user's own: starts from Aluminium 6061's numbers and keeps the ones typed.
+    {**_solid_row(CUSTOM_PRESET, "Custom solid", rho=2700.0, cp=896.0, k=167.0, library="HT_CUSTOM_SOLID"), "names": ()},
+)
+
+
 # How a study's material record stores each property: the record keys that may
 # hold it, the first preferred.
 FLUID_RECORD_KEYS: dict[str, tuple[str, ...]] = {
@@ -100,6 +132,11 @@ FLUID_RECORD_KEYS: dict[str, tuple[str, ...]] = {
 # Properties that may be 0 (thermal expansion: no buoyancy from temperature);
 # every other one must be above 0.
 ZERO_ALLOWED: frozenset[str] = frozenset({"beta"})
+SOLID_RECORD_KEYS: dict[str, tuple[str, ...]] = {
+    "rho": ("density", "rho"),
+    "cp": ("specific_heat", "cp"),
+    "k": ("thermal_conductivity", "k"),
+}
 PROPERTY_LABELS: dict[str, str] = {
     "rho": "density",
     "mu": "dynamic viscosity",
@@ -140,6 +177,55 @@ def build_thermo_fluid() -> MaterialModel:
         record_constants={"type": "Fluid", "properties_at": "20 °C"},
         custom_preset=CUSTOM_PRESET,
     )
+
+
+def _solid_schema() -> tuple[SchemaField, ...]:
+    al = SOLID_PRESETS[0]["values"]
+    return (
+        SchemaField("rho", "(ρ) Density", "float", default=al["rho"], min=0.0, quantity="density", group="thermal"),
+        SchemaField("cp", "(cp) Specific heat", "float", default=al["cp"], min=0.0, quantity="specific_heat",
+                    group="thermal", description="How much heat it stores: how fast it warms in a transient run."),
+        SchemaField("k", "(k) Thermal conductivity", "float", default=al["k"], min=0.0, quantity="thermal_conductivity",
+                    group="thermal", description="The same in every direction."),
+        # No minimum: 0 is no source, below 0 takes heat out (host: any finite number).
+        SchemaField("heat_source_W", "Heat source", "float", default=0.0, quantity="power", group="heat_source",
+                    description="The heat the solid gives off, spread evenly through it (a chip, a heater). "
+                    "0 is none; below 0 takes heat out. Give it in total here or per volume below, not both."),
+        SchemaField("heat_source_W_m3", "Heat source per volume", "float", default=0.0, quantity="power_density",
+                    group="heat_source", description="The same heat as a rate per volume of the solid."),
+    )
+
+
+# A solid record's heat source (host API 1.8: kept on the record, so it copies and
+# goes with it): total W, or W/m3.
+SOURCE_KEYS: tuple[str, str] = ("heat_source_W", "heat_source_W_m3")
+
+
+def build_thermo_solid() -> MaterialModel:
+    return MaterialModel(
+        key=SOLID_MODEL,
+        label="Solid (thermal)",
+        role="solid",
+        properties_schema=_solid_schema(),
+        library=SOLID_PRESETS,
+        record_keys=SOLID_RECORD_KEYS,
+        record_constants={"type": "Solid", "properties_at": "20 °C"},
+        custom_preset=CUSTOM_PRESET,
+    )
+
+
+@dataclass(frozen=True)
+class SolidProps:
+    """One solid record's properties, SI."""
+
+    name: str
+    rho: float
+    cp: float
+    k: float
+
+    @property
+    def diffusivity(self) -> float:
+        return self.k / (self.rho * self.cp) if self.rho > 0 and self.cp > 0 else 0.0
 
 
 @dataclass(frozen=True)
@@ -228,7 +314,21 @@ def fluid_props(rec: dict[str, Any]) -> FluidProps:
 def fluid_problem(rec: dict[str, Any]) -> str | None:
     """A saved property the solve cannot use, in the user's words, else None: one of 0 or
     below (thermal expansion: below 0)."""
-    for prop, names in FLUID_RECORD_KEYS.items():
+    return _problem(rec, FLUID_RECORD_KEYS)
+
+
+def solid_props(rec: dict[str, Any]) -> SolidProps:
+    v = _read(rec, SOLID_RECORD_KEYS, SOLID_PRESETS)
+    return SolidProps(name=str(rec.get("name") or "Solid"), **v)
+
+
+def solid_problem(rec: dict[str, Any]) -> str | None:
+    """A saved property of a solid record the solve cannot use (0 or below), else None."""
+    return _problem(rec, SOLID_RECORD_KEYS)
+
+
+def _problem(rec: dict[str, Any], keys: dict[str, tuple[str, ...]]) -> str | None:
+    for prop, names in keys.items():
         got = _saved(rec, names)
         if got is not None and not _usable(prop, got):
             limit = "at least 0" if prop in ZERO_ALLOWED else "above 0"
@@ -249,7 +349,7 @@ def record_bodies(rec: dict[str, Any]) -> list[str]:
 
 
 def study_materials(materials: Any, sim_id: str | None) -> list[dict[str, Any]]:
-    """This plugin's material records of a study (fluid, and a development build's solid), in order."""
+    """This plugin's material records of a study (fluid and solid), in order."""
     from magnusim_sdk.study import matches_study
 
     rows = materials.get("materials") if isinstance(materials, dict) else materials

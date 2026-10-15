@@ -8,7 +8,7 @@ required = false
 # stays the default analysis of a new study.
 default_enabled = true
 license = "GPL-3.0-or-later"
-description = "Buoyant and forced convection of one fluid with temperature (buoyantSimpleFoam, buoyantPimpleFoam)."
+description = "Buoyant and forced convection of one fluid with temperature, and conjugate heat transfer through solid bodies (buoyantSimpleFoam, buoyantPimpleFoam, chtMultiRegionSimpleFoam, chtMultiRegionFoam)."
 authors = ["Magnusim"]
 # Builds on Incompressible Flow's BC kinds and imports its exported flow BCs
 # (incompressible_flow.flow_bcs, from 1.1).

@@ -1,9 +1,10 @@
 """What a Heat Transfer run's case is written from (``HtSpec``).
 
 ``load_spec(inputs)`` reads the core's ``RunInputs`` of one run: the study's
-material records (one fluid in this version), its settings
-(heat_transfer.physics), its BC records, the run's monitors, settle stop and
-time control, and the mesh.
+material records (one fluid, and any number of solids), its settings
+(heat_transfer.physics, the heat sources too), its BC records, the run's
+monitors, settle stop and time control, and the mesh. A study with a solid
+material solves conjugate heat transfer (``HtSpec.cht``).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from .materials import (
     study_materials,
 )
 from .monitors import monitor_records
-from .physics import StudyPhysics, physics_from_record
+from .physics import HeatSource, StudyPhysics, heat_sources_of, physics_from_record
 from .settle import clean_settle
 from .transient import STEADY_DEFAULTS, TransientControl, resolve_transient
 
@@ -56,10 +57,16 @@ class HtSpec:
     analysis_key: str = ""
     ok: bool = True
     error: str | None = None
+    heat_sources: dict[str, HeatSource] = field(default_factory=dict)
 
     @property
     def density_model(self) -> str:
         return self.physics.density_for(self.fluid)
+
+    @property
+    def cht(self) -> bool:
+        """A body of a solid material: conjugate heat transfer (several regions)."""
+        return bool(self.solid_records)
 
 
 def _mesh_cell_size(case_dir: Path, n_cells: int | None) -> float | None:
@@ -129,6 +136,7 @@ def load_spec(inputs: Any) -> HtSpec:
         face_props=dict(inputs.face_props or {}),
         restart=dict(inputs.restart) if getattr(inputs, "restart", None) else None,
         analysis_key=str(inputs.analysis_key or ""),
+        heat_sources=heat_sources_of(inputs.study or None, solids),
     )
     if not mesh.get("ok") and inputs.require_mesh:
         return replace(spec, ok=False, error=str(mesh.get("error") or "mesh not ready"))

@@ -2,9 +2,11 @@
 the run settings model, how a run is launched and the residual series.
 
 One family, "Heat transfer" (a Steady/Transient pair): the solver follows the
-study's materials. In this version every body is fluid, and the solver is
-buoyantSimpleFoam (steady) or buoyantPimpleFoam (transient); a study that
-still holds a development build's solid material is refused with the reason.
+study's materials. Every body fluid: buoyant flow of one fluid,
+buoyantSimpleFoam (steady) or buoyantPimpleFoam (transient). A body of a solid
+material: conjugate heat transfer, chtMultiRegionSimpleFoam or
+chtMultiRegionFoam (heat_transfer.cht_ready says what blocks such a run).
+Switching a body's material switches the solver; no setting is lost.
 
 Start's messages show temperatures in the project's units (°C metric, °F
 imperial); a temperature difference shows as a difference (no offset).
@@ -27,16 +29,19 @@ FAMILY = AnalysisFamily(
     title="Heat Transfer",
     description=(
         "Temperature and flow of one fluid heated or cooled through its walls and inlets, with "
-        "buoyancy (natural convection) or without it (forced convection). Density follows the "
-        "temperature: Boussinesq for liquids, incompressible perfect gas for gases."
+        "buoyancy (natural convection) or without it (forced convection), and heat conducted "
+        "through solid bodies (conjugate heat transfer). Density follows the temperature: "
+        "Boussinesq for liquids, incompressible perfect gas for gases."
     ),
-    tags=("HEAT TRANSFER", "NATURAL AND FORCED CONVECTION", "BUOYANCY"),
+    tags=("HEAT TRANSFER", "NATURAL AND FORCED CONVECTION", "BUOYANCY", "CONJUGATE HEAT TRANSFER"),
     study_name="Heat transfer",
 )
 
 CATEGORY = "HEAT TRANSFER"
 STEADY_SOLVER = "buoyantSimpleFoam"
 TRANSIENT_SOLVER = "buoyantPimpleFoam"
+CHT_STEADY_SOLVER = "chtMultiRegionSimpleFoam"
+CHT_TRANSIENT_SOLVER = "chtMultiRegionFoam"
 
 RESIDUAL_SERIES: tuple[dict, ...] = (
     {"key": "U", "label": "U", "color": "#1570ef", "fields": ["Ux", "Uy", "Uz"], "swatch": "u"},
@@ -116,13 +121,20 @@ def boundary_temperatures(records: Any) -> list[tuple[str, float]]:
     wall temperatures and the ambient of a heat transfer coefficient."""
     from incompressible_flow.flow_bcs import boundary_kind
 
-    from .bcs import FIXED_T, HTC, backflow_temperature, inlet_temperature, wall_thermal
+    from .bcs import (
+        FIXED_T,
+        HTC,
+        backflow_temperature,
+        inlet_temperature,
+        is_solid_wall,
+        wall_thermal,
+    )
 
     out: list[tuple[str, float]] = []
     for rec in records or []:
         if not isinstance(rec, dict):
             continue
-        kind = boundary_kind(rec)
+        kind = "wall" if is_solid_wall(rec) else boundary_kind(rec)
         name = str(rec.get("name") or "a boundary")
         if kind in ("inlet", "total_pressure"):
             out.append((name, inlet_temperature(rec)))
@@ -172,24 +184,22 @@ def _fmt_t(kelvin: float, imperial: bool = False) -> str:
     return f"{kelvin - 273.15:.4g} °C"
 
 
+def study_solids(materials: Any, sim_id: str | None) -> list[dict[str, Any]]:
+    """The study's solid material records that have bodies (any: conjugate heat transfer)."""
+    from .materials import SOLID_MODEL, record_bodies, study_materials
+
+    rows = materials if isinstance(materials, dict) else list(materials or [])
+    return [m for m in study_materials(rows, sim_id) if m.get("material_model") == SOLID_MODEL and record_bodies(m)]
+
+
 def material_issue(materials: Any, sim_id: str | None) -> dict[str, Any] | None:
-    """What the study's materials lack or hold that this version cannot solve, else None."""
-    from .materials import FLUID_MODEL, SOLID_MODEL, fluid_problem, record_bodies, study_materials
+    """What the study's materials lack or hold that cannot be solved, else None."""
+    from .materials import FLUID_MODEL, fluid_problem, record_bodies, solid_problem, study_materials
 
     mats = study_materials(list(materials or []), sim_id)
-    solids = [m for m in mats if m.get("material_model") == SOLID_MODEL and record_bodies(m)]
+    solids = study_solids(materials, sim_id)
     fluids = [m for m in mats if m.get("material_model") == FLUID_MODEL and record_bodies(m)]
-    if solids:
-        s = solids[0]
-        bodies = ", ".join(record_bodies(s)[:3])
-        return {
-            "message": (
-                f"{bodies} has the solid material {s.get('name') or 'Solid'}. Heat Transfer solves fluids only "
-                "(buoyant flow): give every body a fluid material."
-            ),
-            "fix": {"go": "material", "id": s.get("id"), "name": s.get("name")},
-        }
-    if not fluids:
+    if not fluids and not solids:
         return {"message": "Assign a fluid to a volume first", "fix": {"go": "material"}}
     for f in fluids:
         problem = fluid_problem(f)
@@ -207,12 +217,20 @@ def material_issue(materials: Any, sim_id: str | None) -> dict[str, Any] | None:
             ),
             "fix": {"go": "material", "id": fluids[1].get("id"), "name": fluids[1].get("name")},
         }
+    for s in solids:
+        problem = solid_problem(s)
+        if problem:
+            return {
+                "message": f'Material "{s.get("name") or "Solid"}": {problem}.',
+                "fix": {"go": "material", "id": s.get("id"), "name": s.get("name")},
+            }
     return None
 
 
 def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     """What blocks a run: the materials, a patch per BC, each BC's settings, what moves
-    the fluid, a pressure level, and the density model against gravity and the temperatures."""
+    the fluid, a pressure level, and the density model against gravity and the temperatures.
+    A study with a solid body: heat_transfer.cht_ready (its mesh's regions too)."""
     from incompressible_flow.flow_bcs import (
         boundary_kind,
         first_boundary_problem,
@@ -221,7 +239,7 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     )
     from magnusim_sdk.study import bc_faces, map_bc_to_patch, matches_study
 
-    from .bcs import ADIABATIC, FIXED_T, HEAT_FLUX, HTC, thermal_problem, wall_mode
+    from .bcs import ADIABATIC, FIXED_T, HEAT_FLUX, HTC, is_solid_wall, thermal_problem, wall_mode
     from .materials import FLUID_MODEL, fluid_props, record_bodies, study_materials
     from .physics import physics_from_record, physics_problem
 
@@ -233,6 +251,20 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     setting = physics_problem(ctx.study if isinstance(ctx.study, dict) else None)
     if setting:
         return [{"message": f"Study settings: {setting}.", "fix": {"go": "study"}}]
+    if study_solids(ctx.materials, sid):
+        from .cht import placed_records
+        from .cht_ready import validate_cht
+
+        mats = study_materials(list(ctx.materials), sid)
+        fluid_recs = [m for m in mats if m.get("material_model") == FLUID_MODEL and record_bodies(m)]
+        return validate_cht(
+            ctx,
+            placed_records(mats),
+            fluid_props(fluid_recs[0]) if fluid_recs else None,
+            physics_from_record(ctx.study if isinstance(ctx.study, dict) else None),
+            transient=study_is_transient(ctx.study),
+            imperial=imperial,
+        )
     fluid_rec = next(
         m for m in study_materials(list(ctx.materials), sid) if m.get("material_model") == FLUID_MODEL and record_bodies(m)
     )
@@ -269,6 +301,16 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     for bc in records:
         kind = boundary_kind(bc) or ""
         fix = {"go": "bc", "id": bc.get("id"), "name": bc.get("name")}
+        if is_solid_wall(bc):
+            return [
+                {
+                    "message": (
+                        f'Solid wall "{bc.get("name")}" is on a fluid body: every body of this simulation is fluid. '
+                        "Give its faces a Wall, or give the body a solid material (conjugate heat transfer)."
+                    ),
+                    "fix": fix,
+                }
+            ]
         problem = thermal_problem(bc, kind)
         if not problem and transient and kind in ("pressure", "total_pressure") and varies_with_time(bc, transient=True):
             problem = (

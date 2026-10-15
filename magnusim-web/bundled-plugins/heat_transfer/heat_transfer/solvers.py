@@ -19,6 +19,32 @@ def build_buoyant_simple_foam() -> SolverApp:
     )
 
 
+def build_cht_multi_region_simple_foam() -> SolverApp:
+    return SolverApp(
+        key="chtMultiRegionSimpleFoam",
+        label="chtMultiRegionSimpleFoam (conjugate heat transfer, steady)",
+        application="chtMultiRegionSimpleFoam",
+        time_dependency="steady",
+        parallel="mpirun",
+        stop_strategy="stopAt_writeNow",
+        script_template="solve",
+        requires=(Requirement("wsl_tool", "chtMultiRegionSimpleFoam"),),
+    )
+
+
+def build_cht_multi_region_foam() -> SolverApp:
+    return SolverApp(
+        key="chtMultiRegionFoam",
+        label="chtMultiRegionFoam (conjugate heat transfer, transient)",
+        application="chtMultiRegionFoam",
+        time_dependency="transient",
+        parallel="mpirun",
+        stop_strategy="stopAt_writeNow",
+        script_template="solve",
+        requires=(Requirement("wsl_tool", "chtMultiRegionFoam"),),
+    )
+
+
 def build_buoyant_pimple_foam() -> SolverApp:
     return SolverApp(
         key="buoyantPimpleFoam",

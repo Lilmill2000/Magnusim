@@ -14,6 +14,9 @@ Every monitor is one row (a thermocouple one row per point) with a series of
 samples (heat_transfer.monitors.MONITOR_QUANTITIES). The answer's ``summary`` is
 the energy balance: the heat that comes in and goes out through the walls and
 the openings, and how far they differ.
+
+A conjugate heat transfer case (its sidecar says ``cht``) is read region by
+region: heat_transfer.cht_results.
 """
 
 from __future__ import annotations
@@ -61,8 +64,14 @@ def read_wall_heat_flux(case_dir: Path) -> dict[float, dict[str, tuple[float, fl
     folder = Path(case_dir) / "postProcessing" / WALL_HEAT_FLUX_OBJECT
     if not folder.is_dir():
         return {}
+    return read_wall_heat_flux_files(restart_dat_files(folder, "wallHeatFlux"))
+
+
+def read_wall_heat_flux_files(files: list[Path]) -> dict[float, dict[str, tuple[float, float, float]]]:
+    """{time: {patch: (min W/m², max W/m², heat W)}} of a wallHeatFlux object's files,
+    oldest first (a later file's rows replace the earlier ones from its first time on)."""
     out: dict[float, dict[str, tuple[float, float, float]]] = {}
-    for f in restart_dat_files(folder, "wallHeatFlux"):
+    for f in files:
         rows: dict[float, dict[str, tuple[float, float, float]]] = {}
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
@@ -103,32 +112,43 @@ def read_probe_temperatures(case_dir: Path, key: str) -> tuple[list[list[float]]
         f = folder / start / "T"
         if not f.is_file():
             continue
-        these: list[list[Any]] = []
-        for raw in f.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith("#"):
-                m = re.match(r"^#\s*Probe\s+(\d+)\s*\(([^)]*)\)", line)
-                if m and int(m.group(1)) >= len(points):
-                    try:
-                        points.append([float(c) for c in m.group(2).split()])
-                    except ValueError:
-                        points.append([])
-                continue
-            toks = line.split()
-            try:
-                vals: list[Any] = [float(toks[0])]
-                for tok in toks[1:]:
-                    v = float(tok)
-                    vals.append(None if v <= -1e299 or not math.isfinite(v) else v)
-            except (ValueError, IndexError):
-                continue
-            these.append(vals)
+        these = parse_probe_file(f, points)
         if these:
             first = these[0][0]
             rows = [r for r in rows if r[0] < first] + these
     return points, rows
+
+
+def parse_probe_file(f: Path, points: list[list[float]] | None = None) -> list[list[Any]]:
+    """The rows ``[t, T_0, T_1, ...]`` of one probes file (None for a point outside the
+    mesh); its points' coordinates are added to ``points`` when given."""
+    these: list[list[Any]] = []
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return these
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            m = re.match(r"^#\s*Probe\s+(\d+)\s*\(([^)]*)\)", line)
+            if points is not None and m and int(m.group(1)) >= len(points):
+                try:
+                    points.append([float(c) for c in m.group(2).split()])
+                except ValueError:
+                    points.append([])
+            continue
+        toks = line.split()
+        try:
+            vals: list[Any] = [float(toks[0])]
+            for tok in toks[1:]:
+                v = float(tok)
+                vals.append(None if v <= -1e299 or not math.isfinite(v) else v)
+        except (ValueError, IndexError):
+            continue
+        these.append(vals)
+    return these
 
 
 def _surface(case_dir: Path, patch: str) -> tuple[float | None, dict[float, float], dict[float, float]]:
@@ -154,12 +174,21 @@ def _row(plan: dict[str, Any], key: str, series: list[dict[str, Any]], quantitie
     }
 
 
-def _wall_heat_flux_row(case: Path, plan: dict[str, Any], whf: dict[float, dict[str, tuple[float, float, float]]]) -> dict[str, Any] | None:
+def _wall_heat_flux_row(
+    case: Path,
+    plan: dict[str, Any],
+    whf: dict[float, dict[str, tuple[float, float, float]]],
+    *,
+    area: float | None = None,
+) -> dict[str, Any] | None:
+    """A wall heat flux monitor's row; ``area`` (m²) when the caller knows it (a CHT
+    case), else the patches' areas from their surface objects."""
     patches = list(plan.get("patches") or [])
     if not patches or not whf:
         return None
-    areas = [(_surface(case, p)[0] or 0.0) for p in patches]
-    area = sum(areas) or None
+    if area is None:
+        areas = [(_surface(case, p)[0] or 0.0) for p in patches]
+        area = sum(areas) or None
     series = []
     for t in sorted(whf):
         got = [whf[t][p] for p in patches if p in whf[t]]
@@ -326,6 +355,10 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
     """``{rho, monitors, custom, balance, summary, summary_warn}`` for the case in ``case_dir``."""
     case = Path(case_dir)
     meta = _meta(case)
+    if meta.get("cht"):
+        from .cht_results import cht_run_monitors
+
+        return cht_run_monitors(case, meta)
     try:
         rho = float(meta.get("rho") or 0) or None
     except (TypeError, ValueError):

@@ -2588,7 +2588,7 @@ Registered analysis / physics type (incompressible, CHT, ...).
 | `study_defaults` | `Callable[[str], dict[str, Any]] \| None` | `None` |  |
 | `validate_ready` | `Callable[[Any], list[Any]] \| None` | `None` |  |
 | `run_model` | `Any` | `None` |  |
-| `launch` | `Callable[..., Any] \| None` | `None` |  |
+| `launch` | `Callable[..., Any] \| None` | `None` | (solver_key=..., inputs=...) -> LaunchSpec. API 1.8: a hook whose signature names an ``inputs`` parameter gets the run's RunInputs when the core plans a run (Start, Continue). |
 | `log_parser` | `Any` | `None` |  |
 | `frame_fields` | `tuple[str, ...]` | `()` |  |
 | `kinematic_fields` | `tuple[str, ...] \| None` | `None` | Contract 1.4: fields its cases store divided by density (shown times rho). None = not declared (the case's sidecar keeps what write_case put there); () = none. |
@@ -2757,7 +2757,7 @@ A run's monitor results as its analysis reads them (none for an analysis without
 #### launch_spec
 
 ```python
-launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None) -> LaunchSpec
+launch_spec(spec: Any, solver_registry: Any, *, solver_key: str | None = None, inputs: Any = None) -> LaunchSpec
 ```
 
 How to run a case of ``spec``: its launch hook, else its default solver's app.
@@ -2853,6 +2853,8 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | solver | `pimpleFoam` | pimpleFoam (PIMPLE transient) | incompressible_flow |
 | solver | `buoyantSimpleFoam` | buoyantSimpleFoam (buoyant SIMPLE steady) | heat_transfer |
 | solver | `buoyantPimpleFoam` | buoyantPimpleFoam (buoyant PIMPLE transient) | heat_transfer |
+| solver | `chtMultiRegionSimpleFoam` | chtMultiRegionSimpleFoam (conjugate heat transfer, steady) | heat_transfer |
+| solver | `chtMultiRegionFoam` | chtMultiRegionFoam (conjugate heat transfer, transient) | heat_transfer |
 | mesher | `standard` | Standard | builtin |
 | mesher | `cfmesh` | cfMesh cartesianMesh (legacy) | builtin |
 | mesher | `snappy_hexdominant` | Hex-dominant | builtin |
@@ -2868,6 +2870,7 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | bc | `wall_moving` | Wall | incompressible_flow |
 | bc | `wall_rotating` | Wall | incompressible_flow |
 | bc | `total_pressure_inlet` | Total pressure inlet | incompressible_flow |
+| bc | `ht_solid_wall` | Solid wall | heat_transfer |
 | bc_family | `velocity_inlet` | Velocity inlet | incompressible_flow |
 | bc_family | `velocity_outlet` | Velocity outlet | incompressible_flow |
 | bc_family | `pressure_outlet` | Pressure | incompressible_flow |
@@ -2875,8 +2878,10 @@ What ships: the core builtins and the bundled plugins (the whole record, with sc
 | bc_family | `freestream` | Freestream | incompressible_flow |
 | bc_family | `wall` | Wall | incompressible_flow |
 | bc_family | `symmetry` | Symmetry | incompressible_flow |
+| bc_family | `solid_wall` | Solid wall | heat_transfer |
 | material | `newtonian_incompressible` | Newtonian (incompressible) | incompressible_flow |
 | material | `thermo_fluid` | Fluid (thermal) | heat_transfer |
+| material | `thermo_solid` | Solid (thermal) | heat_transfer |
 | monitor | `area_average` | Area average | incompressible_flow |
 | monitor | `flow_rate` | Flow rate | incompressible_flow |
 | monitor | `forces` | Forces | incompressible_flow |

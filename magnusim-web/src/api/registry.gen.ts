@@ -2,9 +2,9 @@
 export type AnalysisKey = 'incompressible_steady' | 'incompressible_transient' | 'heat_transfer_steady' | 'heat_transfer_transient' | (string & {});
 export type FilterKey = 'cut_plane' | 'streamlines' | 'plot_over_path' | 'iso_surface' | 'iso_volume' | 'inspect_point' | 'surface_field' | 'mesh_surface' | 'mesh_section' | (string & {});
 export type MesherKey = 'standard' | 'cfmesh' | 'snappy_hexdominant' | (string & {});
-export type MaterialKey = 'newtonian_incompressible' | 'thermo_fluid' | (string & {});
-export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | 'symmetry' | 'freestream' | 'wall_moving' | 'wall_rotating' | 'total_pressure_inlet' | (string & {});
-export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'total_pressure_inlet' | 'freestream' | 'wall' | 'symmetry' | (string & {});
+export type MaterialKey = 'newtonian_incompressible' | 'thermo_fluid' | 'thermo_solid' | (string & {});
+export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | 'symmetry' | 'freestream' | 'wall_moving' | 'wall_rotating' | 'total_pressure_inlet' | 'ht_solid_wall' | (string & {});
+export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'total_pressure_inlet' | 'freestream' | 'wall' | 'symmetry' | 'solid_wall' | (string & {});
 export type MonitorKey = 'area_average' | 'flow_rate' | 'forces' | 'probe' | 'ht_wall_heat_flux' | 'ht_surface_temperature' | 'ht_thermocouple' | (string & {});
 
 export interface RegistryRow {

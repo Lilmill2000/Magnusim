@@ -278,7 +278,9 @@ class AnalysisType:
     study_defaults: Callable[[str], dict[str, Any]] | None = None
     validate_ready: Callable[[Any], list[Any]] | None = None  # (ReadyContext) -> issues
     run_model: Any = None  # RunModel: defaults / normalize / preview
-    launch: Callable[..., Any] | None = None  # (solver_key=...) -> LaunchSpec
+    # (solver_key=..., inputs=...) -> LaunchSpec. API 1.8: a hook whose signature names an
+    # ``inputs`` parameter gets the run's RunInputs when the core plans a run (Start, Continue).
+    launch: Callable[..., Any] | None = None
     log_parser: Any = None  # LogParserRef to the solver-output parser
     frame_fields: tuple[str, ...] = ()  # fields that mark a written frame ("" = fields)
     # Contract 1.4: fields its cases store divided by density (shown times rho).

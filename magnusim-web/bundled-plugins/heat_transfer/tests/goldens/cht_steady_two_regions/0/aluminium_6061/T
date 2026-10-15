@@ -1,0 +1,29 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      T;
+}
+
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   uniform 293.15;
+
+boundaryField
+{
+    walls
+    {
+        type          fixedValue;
+        value          uniform 300;
+    }
+    aluminium_6061_to_air
+    {
+        type          compressible::turbulentTemperatureRadCoupledMixed;
+        Tnbr          T;
+        kappaMethod          solidThermo;
+        qr          none;
+        qrNbr          none;
+        value          uniform 293.15;
+    }
+}

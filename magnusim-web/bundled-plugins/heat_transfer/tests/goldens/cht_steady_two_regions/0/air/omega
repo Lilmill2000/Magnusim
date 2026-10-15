@@ -1,0 +1,25 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      omega;
+}
+
+dimensions      [0 0 -1 0 0 0 0];
+
+internalField   uniform 31.9438;
+
+boundaryField
+{
+    walls
+    {
+        type          omegaWallFunction;
+        value          uniform 31.9438;
+    }
+    air_to_aluminium_6061
+    {
+        type          omegaWallFunction;
+        value          uniform 31.9438;
+    }
+}

@@ -4,7 +4,12 @@ own end when it converged, and the plain reason a run died of a known cause.
 Residuals: Ux, Uy, Uz, h (energy), p_rgh and the turbulence fields, the first
 "Solving for" line of each per iteration (buoyantSimpleFoam / buoyantPimpleFoam,
 OpenFOAM ESI v2606). With ``momentumPredictor no`` there are no U lines; none
-of the series is required.
+of the series is required. A conjugate heat transfer run's log
+(chtMultiRegionSimpleFoam / chtMultiRegionFoam) reads as the SDK's
+``RegionProgressParser`` reads it: residuals keyed ``<region>:<field>`` (``air:h``,
+``aluminium_6061:h``), the first of a field in a region per step, and the
+largest Courant number of the regions. One parser reads both (the relay asks the
+analysis for its parser without the run's study).
 
 A ``converged`` event (API 1.4) when buoyantSimpleFoam's residualControl is met
 ("SIMPLE solution converged in N iterations") or the settle stop's condition is
@@ -25,7 +30,7 @@ import re
 from dataclasses import dataclass
 
 from magnusim_sdk.events import Event
-from magnusim_sdk.progress import RE_MPI_PREFIX, ProgressParser
+from magnusim_sdk.progress import RE_MPI_PREFIX, RegionProgressParser
 
 from .settle import SETTLE_CONDITION
 
@@ -49,7 +54,7 @@ def _float(text: str) -> float | None:
 
 
 @dataclass
-class HeatParser(ProgressParser):
+class HeatParser(RegionProgressParser):
     residual_re = RESIDUAL_FIELDS
     settle_met: bool = False
     converged: dict | None = None
@@ -70,7 +75,7 @@ class HeatParser(ProgressParser):
 
     def feed(self, raw: str) -> list[Event]:
         line = RE_MPI_PREFIX.sub("", str(raw or ""))
-        if self.current is not None:
+        if self.current is not None and not self.region:
             hit = RESIDUAL_FIELDS.search(line)
             # Only the first residual of a field in each iteration counts (a second
             # one is a non-orthogonal or PIMPLE corrector).

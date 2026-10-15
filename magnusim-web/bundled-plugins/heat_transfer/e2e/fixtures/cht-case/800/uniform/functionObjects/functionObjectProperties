@@ -1,0 +1,119 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2606                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       dictionary;
+    location    "800/uniform/functionObjects";
+    object      functionObjectProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+cdf7e925f5746741c316f5fbcf39ad0dfca90775
+{
+    ht_wall_heat_flux_air
+    {
+        scalar
+        {
+            min(walls)      0;
+            max(walls)      0;
+            int(walls)      0;
+            min(air_to_aluminium_6061) 150.34480658199;
+            max(air_to_aluminium_6061) 1163.887472707835;
+            int(air_to_aluminium_6061) 0.05000000000312548;
+        }
+    }
+    ht_wall_heat_flux_aluminium_6061
+    {
+        scalar
+        {
+            min(aluminium_6061_walls) 0;
+            max(aluminium_6061_walls) 0;
+            int(aluminium_6061_walls) 0;
+            min(walls)      0;
+            max(walls)      0;
+            int(walls)      0;
+            min(aluminium_6061_to_air) -1163.88747270783;
+            max(aluminium_6061_to_air) -150.3448065819919;
+            int(aluminium_6061_to_air) -0.05000000000312549;
+        }
+    }
+    ht_enthalpy_inlet
+    {
+        scalar
+        {
+            weightedSum(inlet,h) 0.1210173435473134;
+        }
+    }
+    ht_enthalpy_outlet
+    {
+        scalar
+        {
+            weightedSum(outlet,h) -0.07105283762480454;
+        }
+    }
+    ht_Tbody_avg_aluminium_6061
+    {
+        scalar
+        {
+            volAverage(aluminium_6061,T) 316.8351398544159;
+        }
+    }
+    ht_Tbody_max_aluminium_6061
+    {
+        scalar
+        {
+            max(aluminium_6061,T) 316.8450832709174;
+        }
+    }
+    ht_Tavg_air_outlet
+    {
+        scalar
+        {
+            areaAverage(outlet,T) 294.7716750075344;
+        }
+    }
+    ht_Tmax_air_outlet
+    {
+        scalar
+        {
+            max(outlet,T)   314.0361981549014;
+        }
+    }
+    ht_probe_tc_air
+    {
+        scalar
+        {
+            average(T)      293.1489955063607;
+            min(T)          293.1489955063607;
+            max(T)          293.1489955063607;
+        }
+        label
+        {
+            size(T)         1;
+        }
+    }
+    ht_probe_tc_aluminium_6061
+    {
+        scalar
+        {
+            average(T)      316.836488680886;
+            min(T)          316.836488680886;
+            max(T)          316.836488680886;
+        }
+        label
+        {
+            size(T)         1;
+        }
+    }
+}
+
+
+// ************************************************************************* //

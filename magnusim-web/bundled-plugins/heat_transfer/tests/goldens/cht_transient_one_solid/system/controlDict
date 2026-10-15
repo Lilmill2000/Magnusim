@@ -1,0 +1,69 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     chtMultiRegionFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         2;
+deltaT          5e-4;
+writeControl    adjustableRunTime;
+writeInterval   0.5;
+purgeWrite      0;
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable true;
+
+adjustTimeStep  yes;
+maxCo           0.8;
+maxDi           10;
+maxDeltaT       0.5;
+
+functions
+{
+    ht_wall_heat_flux_aluminium_6061
+    {
+        type            wallHeatFlux;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        patches         ( walls );
+        executeControl  timeStep;
+        executeInterval 1;
+        writeControl    writeTime;
+        log             false;
+    }
+    ht_Tbody_avg_aluminium_6061
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      all;
+        operation       volAverage;
+        fields          ( T );
+    }
+    ht_Tbody_max_aluminium_6061
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        region          aluminium_6061;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+        writeFields     false;
+        regionType      all;
+        operation       max;
+        fields          ( T );
+    }
+}

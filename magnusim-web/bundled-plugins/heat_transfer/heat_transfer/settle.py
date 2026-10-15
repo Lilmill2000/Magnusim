@@ -13,6 +13,12 @@ boundary:
 - Wall heat flux · Heat flow: the ``wallHeatFlux`` object's ``int(<patch>)``;
 - Surface temperature · Average / Highest: ``areaAverage(<patch>,T)`` / ``max(<patch>,T)``;
 - Thermocouple · Temperature: the mean over its points, ``average(T)``.
+
+In a conjugate heat transfer case the objects are per region
+(heat_transfer.cht_functions): a boundary monitor watches one boundary in one
+region, a thermocouple its points in one region, and the ``runTimeControl``
+names a region (without one it finds no mesh in a multi-region case and never
+checks its condition: HT5).
 """
 
 from __future__ import annotations
@@ -106,6 +112,8 @@ def plan_settle(spec: Any, monitor_plans: list[dict[str, Any]]) -> dict[str, Any
 
     tol, unit = shown_tolerance(q, float(settle["tolerance"]), imperial=project_imperial(getattr(spec, "project_dir", None)))
     text = f"{label} stayed within {number_text(tol)} {unit} of its average over {span}"
+    if plan.get("cht"):
+        return _plan_cht(plan, kind, q, settle, label=label, name=name, text=text, window=window)
     if kind == THERMOCOUPLE:
         if not plan.get("points"):
             return {"error": f"{name} has no points placed", "label": label}
@@ -126,14 +134,48 @@ def plan_settle(spec: Any, monitor_plans: list[dict[str, Any]]) -> dict[str, Any
     return {"object": obj, "field": fld, "tolerance": float(settle["tolerance"]), "window": window, "label": label, "text": text}
 
 
-def settle_functions_text(plan: dict[str, Any] | None) -> str:
-    """The runTimeControl block for a written plan ('' when there is none)."""
+def _plan_cht(
+    plan: dict[str, Any], kind: str, q: SettleQuantity, settle: dict[str, Any], *, label: str, name: str, text: str, window: float
+) -> dict[str, Any]:
+    """The stop of a conjugate heat transfer case's monitor (its objects are per region)."""
+    from .cht_functions import surface_objects, wall_heat_flux_object
+
+    if kind == THERMOCOUPLE:
+        probes = list(plan.get("probes") or [])
+        if not plan.get("points"):
+            return {"error": f"{name} has no points placed", "label": label}
+        if not probes:
+            return {"error": f"{name} has no point inside the mesh", "label": label}
+        if len(probes) > 1:
+            return {"error": f"{name} has points in {len(probes)} bodies; the stop watches a thermocouple in one", "label": label}
+        obj, fld = str(probes[0]["key"]), "average(T)"
+    else:
+        targets = list(plan.get("targets") or [])
+        if not targets:
+            return {"error": f"{name} is on no boundary of this mesh", "label": label}
+        if len(targets) > 1:
+            return {"error": f"{name} is on {len(targets)} boundaries; the stop watches a monitor on one", "label": label}
+        region, patch = str(targets[0]["region"]), str(targets[0]["patch"])
+        if kind == WALL_HEAT_FLUX:
+            obj, fld = wall_heat_flux_object(region), f"int({patch})"
+        elif q.key == "T_max":
+            obj, fld = surface_objects(region, patch)[1], f"max({patch},T)"
+        else:
+            obj, fld = surface_objects(region, patch)[0], f"areaAverage({patch},T)"
+    return {"object": obj, "field": fld, "tolerance": float(settle["tolerance"]), "window": window, "label": label, "text": text}
+
+
+def settle_functions_text(plan: dict[str, Any] | None, *, region: str = "") -> str:
+    """The runTimeControl block for a written plan ('' when there is none). ``region``: any
+    region of a multi-region case (the object needs one to load; it reads the watched
+    object's results whatever their region)."""
     if not plan or "error" in plan:
         return ""
+    region_line = f"\n        region          {region};" if region else ""
     return f"""    {SETTLE_OBJECT}
     {{
         type            runTimeControl;
-        libs            (utilityFunctionObjects);
+        libs            (utilityFunctionObjects);{region_line}
         conditions
         {{
             {SETTLE_CONDITION}
