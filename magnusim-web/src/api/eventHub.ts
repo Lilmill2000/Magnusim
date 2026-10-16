@@ -229,7 +229,7 @@ function channelOf(url: string): { kind: Kind; params: Record<string, string> } 
   if (u.pathname === '/api/plugin-cases/events') return { kind: 'case', params };
   // A channel name only (no such route): `?role=relay` is the page's assistant relay.
   if (u.pathname === '/api/assistant/events') return { kind: 'assistant', params };
-  const job =/^\/api\/jobs\/([^/]+)\/events$/.exec(u.pathname);
+  const job = /^\/api\/jobs\/([^/]+)\/events$/.exec(u.pathname);
   if (job) return { kind: 'job', params: { ...params, job_id: decodeURIComponent(job[1]) } };
   throw new Error(`no event channel for ${url}`);
 }
