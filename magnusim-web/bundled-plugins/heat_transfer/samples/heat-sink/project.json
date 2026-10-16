@@ -1,0 +1,129 @@
+{
+  "id": "{{project_id}}",
+  "title": "Heat sink",
+  "description": "An aluminium heat sink with a 10 W source on the floor of an air channel: conjugate heat transfer.",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects",
+  "created_at": "2026-10-15T14:56:36.958Z",
+  "updated_at": "2026-10-15T14:56:51Z",
+  "geometry": {
+    "id": "geom-2b482092",
+    "name": "heat-sink",
+    "bodies": [
+      "Body1",
+      "Body2"
+    ],
+    "volume": "Body1",
+    "step_path": "{{project_dir}}/geometries/Geometry_heat-sink/source.step",
+    "step_source": "upload",
+    "original_filename": "heat-sink.step",
+    "original_path": null,
+    "source_kind": "step",
+    "length_unit": null,
+    "representation": "step",
+    "tessellated": false,
+    "watertight": true,
+    "faces_path": "{{project_dir}}/geometries/Geometry_heat-sink/cad_faces.vtp",
+    "edges_path": "{{project_dir}}/geometries/Geometry_heat-sink/cad_edges.vtp",
+    "faces_url": "/api/geometry/cad?project_id={{project_id}}&geometry_id=geom-2b482092&part=faces",
+    "edges_url": "/api/geometry/cad?project_id={{project_id}}&geometry_id=geom-2b482092&part=edges",
+    "stl_path": null,
+    "stl_url": null,
+    "fingerprint": {
+      "empty": false,
+      "n_faces": 41,
+      "n_edges": 108,
+      "n_solids": 2,
+      "bounds": {
+        "xmin": 0,
+        "xmax": 200,
+        "ymin": 0,
+        "ymax": 50,
+        "zmin": 0,
+        "zmax": 50
+      },
+      "center_of_mass": [
+        100.00000000000003,
+        25.000000000000007,
+        25.000000000000004
+      ],
+      "center_of_mass_kind": "volume",
+      "representation": "step",
+      "watertight": true
+    },
+    "imported_at": "2026-10-15T14:56:38.938Z",
+    "soft_pass_avoided": true,
+    "note": "STEP stored as CAD. Not tessellated to STL on import.",
+    "modifiers": []
+  },
+  "persistence": "filesystem",
+  "layout_version": 2,
+  "projects_root": "{{projects_root}}",
+  "project_json": "{{project_dir}}/project.json",
+  "soft_pass_avoided": true,
+  "increment": "W19",
+  "geometries": [
+    {
+      "id": "geom-2b482092",
+      "name": "heat-sink",
+      "original_filename": "heat-sink.step",
+      "original_path": null,
+      "source_kind": "step",
+      "length_unit": null,
+      "representation": "step",
+      "tessellated": false,
+      "watertight": true,
+      "step_path": "{{project_dir}}/geometries/Geometry_heat-sink/source.step",
+      "n_solids": 2,
+      "n_faces": 41,
+      "body_offset": 0,
+      "imported_at": "2026-10-15T14:56:38.938Z",
+      "note": "STEP stored as CAD. Not tessellated to STL on import.",
+      "assembly_bodies": [
+        "Body1",
+        "Body2"
+      ]
+    }
+  ],
+  "active_geometry_id": "geom-2b482092",
+  "simulation": {
+    "id": "sim-mv9nwemq-472577",
+    "name": "Heat transfer Steady-state",
+    "analysis": "Heat transfer",
+    "analysis_type": "heat_transfer_steady",
+    "time_dependency": "Steady-state",
+    "algorithm": "SIMPLE",
+    "geometry_id": "geom-2b482092",
+    "simulation_json": "{{project_dir}}/simulation.json",
+    "created_at": "2026-10-15T14:56:41.234Z"
+  },
+  "active_simulation_id": "sim-mv9nwemq-472577",
+  "siblings_migrated": true,
+  "materials": {
+    "air": {
+      "id": "mat-mv9nwgne-3af9e5",
+      "name": "Air",
+      "assigned_volumes": [
+        "Body1"
+      ],
+      "materials_json": "{{project_dir}}/geometries/Geometry_heat-sink/simulations/Heat_transfer_Steady-state/materials.json",
+      "updated_at": "2026-10-15T14:56:44Z"
+    },
+    "materials_json": "{{project_dir}}/geometries/Geometry_heat-sink/simulations/Heat_transfer_Steady-state/materials.json",
+    "count": 2
+  },
+  "boundary_conditions": {
+    "count": 2,
+    "names": [
+      "Outlet",
+      "Inlet"
+    ],
+    "types": [
+      "Pressure",
+      "Velocity inlet"
+    ],
+    "boundary_conditions_json": "{{project_dir}}/geometries/Geometry_heat-sink/simulations/Heat_transfer_Steady-state/boundary_conditions.json",
+    "updated_at": "2026-10-15T14:56:51Z"
+  }
+}

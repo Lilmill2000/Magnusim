@@ -1222,7 +1222,8 @@
         "newtonian_incompressible"
       ],
       "bc_fields": [],
-      "bc_seeds": {}
+      "bc_seeds": {},
+      "default_mesher": ""
     },
     {
       "key": "incompressible_transient",
@@ -2517,7 +2518,8 @@
         "newtonian_incompressible"
       ],
       "bc_fields": [],
-      "bc_seeds": {}
+      "bc_seeds": {},
+      "default_mesher": ""
     },
     {
       "key": "heat_transfer_steady",
@@ -2750,7 +2752,7 @@
         "properties": {
           "end_time": {
             "type": "integer",
-            "default": 1000,
+            "default": 1500,
             "minimum": 1,
             "x-cfddesk": {
               "group": "control"
@@ -3197,7 +3199,7 @@
         "turbulence_model": "kOmegaSST"
       },
       "run_defaults": {
-        "end_time": 1000,
+        "end_time": 1500,
         "write_interval": 100
       },
       "bc_types": [
@@ -3364,7 +3366,8 @@
         "wall": {
           "wall_type": "No-slip"
         }
-      }
+      },
+      "default_mesher": "snappy_hexdominant"
     },
     {
       "key": "heat_transfer_transient",
@@ -4298,7 +4301,8 @@
         "wall": {
           "wall_type": "No-slip"
         }
-      }
+      },
+      "default_mesher": "snappy_hexdominant"
     }
   ],
   "solver": [
@@ -7839,7 +7843,7 @@
     {
       "key": "heat_transfer",
       "name": "Heat Transfer",
-      "version": "0.1.0-dev",
+      "version": "0.1.0",
       "requires": [],
       "provides": {},
       "ui": "ui",

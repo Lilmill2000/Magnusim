@@ -1,0 +1,731 @@
+{
+  "preview_version": 8,
+  "step_path": "{{project_dir}}/geometries/Geometry_heat-sink/source.step",
+  "edges_vtp": "{{project_dir}}/geometries/Geometry_heat-sink/cad_edges.vtp",
+  "faces_vtp": "{{project_dir}}/geometries/Geometry_heat-sink/cad_faces.vtp",
+  "representation": "step",
+  "display": "occt-prs3d",
+  "tessellated": false,
+  "n_solids": 2,
+  "bodies": [
+    "Body1",
+    "Body2"
+  ],
+  "n_faces": 41,
+  "n_edges": 108,
+  "n_edge_polylines": 108,
+  "n_edge_points": 216,
+  "n_display_tris": 136,
+  "bounds": {
+    "xmin": 0,
+    "xmax": 200,
+    "ymin": 0,
+    "ymax": 50,
+    "zmin": 0,
+    "zmax": 50
+  },
+  "linear_deflection": 0.016970562748477143,
+  "angular_deflection": 0.08726646259971647,
+  "deviation_coefficient": 0.0001,
+  "deviation_angle_deg": 5,
+  "status": 0,
+  "center_of_mass": [
+    100.00000000000003,
+    25.000000000000007,
+    25.000000000000004
+  ],
+  "center_of_mass_kind": "volume",
+  "faces": [
+    {
+      "id": 1,
+      "area": 2500,
+      "centroid": [
+        0,
+        25,
+        25
+      ],
+      "normal": [
+        -1,
+        0,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1
+    },
+    {
+      "id": 2,
+      "area": 8400,
+      "centroid": [
+        100,
+        0,
+        25
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1
+    },
+    {
+      "id": 3,
+      "area": 10000,
+      "centroid": [
+        100,
+        25,
+        50
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 1
+    },
+    {
+      "id": 4,
+      "area": 10000,
+      "centroid": [
+        100,
+        50,
+        25
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1
+    },
+    {
+      "id": 5,
+      "area": 10000,
+      "centroid": [
+        100,
+        25,
+        0
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 1
+    },
+    {
+      "id": 6,
+      "area": 2500,
+      "centroid": [
+        200,
+        25,
+        25
+      ],
+      "normal": [
+        1,
+        0,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1
+    },
+    {
+      "id": 7,
+      "area": 999.9999999999998,
+      "centroid": [
+        100,
+        12.5,
+        45
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 41
+    },
+    {
+      "id": 8,
+      "area": 519.9999999999995,
+      "centroid": [
+        120,
+        10.19230769230769,
+        25
+      ],
+      "normal": [
+        -1,
+        0,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 26
+    },
+    {
+      "id": 9,
+      "area": 999.9999999999998,
+      "centroid": [
+        100,
+        12.5,
+        5
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 39
+    },
+    {
+      "id": 10,
+      "area": 519.9999999999995,
+      "centroid": [
+        80,
+        10.19230769230769,
+        25
+      ],
+      "normal": [
+        1,
+        0,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 24
+    },
+    {
+      "id": 11,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        43
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 25
+    },
+    {
+      "id": 12,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        7
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 38
+    },
+    {
+      "id": 13,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        9
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 37
+    },
+    {
+      "id": 14,
+      "area": 320,
+      "centroid": [
+        100,
+        5,
+        13
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 36
+    },
+    {
+      "id": 15,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        17
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 35
+    },
+    {
+      "id": 16,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        19
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 34
+    },
+    {
+      "id": 17,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        21
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 33
+    },
+    {
+      "id": 18,
+      "area": 320,
+      "centroid": [
+        100,
+        5,
+        25
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 32
+    },
+    {
+      "id": 19,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        29
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 31
+    },
+    {
+      "id": 20,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        31
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 30
+    },
+    {
+      "id": 21,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        33
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 29
+    },
+    {
+      "id": 22,
+      "area": 320,
+      "centroid": [
+        100,
+        5,
+        37
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 28
+    },
+    {
+      "id": 23,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        41
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 1,
+      "shared_with": 27
+    },
+    {
+      "id": 24,
+      "area": 519.9999999999995,
+      "centroid": [
+        80,
+        10.19230769230769,
+        25
+      ],
+      "normal": [
+        -1,
+        0,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 10
+    },
+    {
+      "id": 25,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        43
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 11
+    },
+    {
+      "id": 26,
+      "area": 519.9999999999995,
+      "centroid": [
+        120,
+        10.19230769230769,
+        25
+      ],
+      "normal": [
+        1,
+        0,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 8
+    },
+    {
+      "id": 27,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        41
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 23
+    },
+    {
+      "id": 28,
+      "area": 320,
+      "centroid": [
+        100,
+        5,
+        37
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 22
+    },
+    {
+      "id": 29,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        33
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 21
+    },
+    {
+      "id": 30,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        31
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 20
+    },
+    {
+      "id": 31,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        29
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 19
+    },
+    {
+      "id": 32,
+      "area": 320,
+      "centroid": [
+        100,
+        5,
+        25
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 18
+    },
+    {
+      "id": 33,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        21
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 17
+    },
+    {
+      "id": 34,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        19
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 16
+    },
+    {
+      "id": 35,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        17
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 15
+    },
+    {
+      "id": 36,
+      "area": 320,
+      "centroid": [
+        100,
+        5,
+        13
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 14
+    },
+    {
+      "id": 37,
+      "area": 799.9999999999999,
+      "centroid": [
+        100,
+        15,
+        9
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 13
+    },
+    {
+      "id": 38,
+      "area": 160,
+      "centroid": [
+        100,
+        25,
+        7
+      ],
+      "normal": [
+        0,
+        1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 12
+    },
+    {
+      "id": 39,
+      "area": 999.9999999999998,
+      "centroid": [
+        100,
+        12.5,
+        5
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 9
+    },
+    {
+      "id": 40,
+      "area": 1599.9999999999998,
+      "centroid": [
+        100,
+        0,
+        25
+      ],
+      "normal": [
+        0,
+        -1,
+        0
+      ],
+      "surface_type": "Plane",
+      "body": 2
+    },
+    {
+      "id": 41,
+      "area": 999.9999999999998,
+      "centroid": [
+        100,
+        12.5,
+        45
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "surface_type": "Plane",
+      "body": 2,
+      "shared_with": 7
+    }
+  ],
+  "faces_length_unit": "mm"
+}

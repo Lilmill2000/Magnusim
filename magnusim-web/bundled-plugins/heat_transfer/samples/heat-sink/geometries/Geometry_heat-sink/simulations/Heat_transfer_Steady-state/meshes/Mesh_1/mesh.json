@@ -1,0 +1,40 @@
+{
+  "id": "mesh-mv9nwml9-c9727f",
+  "name": "Mesh 1",
+  "settings": {
+    "name": "Mesh 1",
+    "algorithm": "Standard",
+    "sizing": "Automatic",
+    "fineness": 4,
+    "fineness_labels": {
+      "coarse": "COARSE",
+      "fine": "FINE"
+    },
+    "curvature": "Automatic",
+    "automatic_boundary_layers": true,
+    "physics_based_meshing": true,
+    "hex_element_core": true,
+    "automatic_extrusion_meshing": false,
+    "preferred_cpus": "Automatic (max 16)",
+    "preferred_cpus_label": "Preferred number of CPUs",
+    "requires_upgrade": true,
+    "maximum_meshing_runtime": "1.8e+4",
+    "maximum_meshing_runtime_unit": "s",
+    "advanced": {
+      "small_feature_suppression": "",
+      "small_feature_suppression_unit": "m",
+      "mesh_engine": "snappy_hexdominant",
+      "gap_refinement_factor": 0.05,
+      "global_gradation_rate": 1.22
+    },
+    "mesher_settings": {}
+  },
+  "generated": false,
+  "live_mesh_result": null,
+  "geometry_id": "geom-2b482092",
+  "simulation_id": "sim-mv9nwemq-472577",
+  "created_at": "2026-10-15T14:56:51.563Z",
+  "updated_at": "2026-10-15T14:56:52.104Z",
+  "ui_mesh_engine": "snappy_hexdominant",
+  "case_dir": "{{project_dir}}/geometries/Geometry_heat-sink/simulations/Heat_transfer_Steady-state/meshes/Mesh_1/case"
+}

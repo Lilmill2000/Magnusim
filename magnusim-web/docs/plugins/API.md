@@ -67,6 +67,7 @@ schema_version = 1
 | `workspaces` | array of tables |  | 1.1 | Full pages the plugin draws in a sandboxed frame. |
 | `start_actions` | array of tables |  | 1.4 | Buttons that create a study of a kind and open it in its workspace. |
 | `geometry_actions` | array of tables |  | 1.7 | Actions on a project geometry ("Edit in ..."): each opens a study of a kind that links geometry in its workspace, to edit that geometry and send the edit back. |
+| `samples` | array of tables |  | 1.8 | Sample projects Home offers while the plugin is on: each a folder in the plugin holding a project (inputs only), copied into the projects folder as a new project when opened. |
 | `files` | table |  | 1.2 | Size limits for the plugin's own files in a project. |
 | `python` | table |  | 1.1 | The plugin's own Python environment, built from its lock file, and its service. |
 
@@ -112,6 +113,15 @@ schema_version = 1
 | `icon` | string | `""` |  | One SVG path; the kind's icon when left out. (matches `^[MmLlHhVvCcSsQqTtAaZz0-9 ,.\-eE]{0,4000}$`) |
 | `formats` | array of string | `["step","iges","brep"]` |  | The imports it edits (default: all). "mesh" and a format this host does not know are left out with a warning; a mesh import is never offered. (each one of `"step"`, `"iges"`, `"brep"`) |
 | `places` | array of string | `["tree","viewport","panel"]` |  | Where the host offers it (default: all): the tree's right-click menu, the viewport's right-click on the part, the Geometry panel. A place this host does not know is left out with a warning. (each one of `"tree"`, `"viewport"`, `"panel"`) |
+
+### [[samples]]
+
+| Key | Type | Default | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `key` | string |  |  | Lower-case letters, digits and '-', unique in the plugin. (matches `^[a-z0-9][a-z0-9-]{0,39}$`; required) |
+| `title` | string |  |  | Home's menu item and the new project's title, one line. (at most 40 characters; required) |
+| `hint` | string | `""` |  | A line under the menu item: what the sample shows. (at most 160 characters) |
+| `path` | string | `""` |  | A folder inside the plugin's folder holding project.json and the project's inputs. A folder that is missing or has no project.json is left out with a warning. (required) |
 
 ### [[requires]]
 
@@ -1593,6 +1603,7 @@ interface RegistryRow
 - `material_models?: string[] | undefined`
 - `bc_fields?: BcFieldGroupRow[] | undefined`: Analyses (API 1.8): the fields it adds to the BCs of its studies.
 - `bc_seeds?: Record<string, Record<string, unknown>> | undefined`: Analyses (API 1.8): what a new BC of a family starts with in its studies, {bc_family key: {field: value}}.
+- `default_mesher?: string | undefined`: Analyses (API 1.8): the mesher a new mesh of its studies starts with ("" = the app's default; src/defaultMesher.ts).
 - `library?: Record<string, unknown>[] | undefined`: Material models (API 1.4): presets, and how a study's material record stores the properties.
 - `record_keys?: Record<string, string[]> | undefined`: Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }.
 - `record_constants?: Record<string, unknown> | undefined`: Values every record of the model carries.
@@ -2599,6 +2610,7 @@ Registered analysis / physics type (incompressible, CHT, ...).
 | `live_metrics` | `tuple[dict[str, Any], ...] \| None` | `None` | Contract 1.5: the per-step numbers the Run panel's progress line shows, {key, label, format: "time" \| "sig2", max_key?} each (contract.live_metrics). None = not declared (the panel keeps its time step and Courant text for a transient run); () = none. |
 | `bc_fields` | `tuple[Any, ...]` | `()` | API 1.8: fields this analysis adds to the BCs of its studies (cfddesk.registry.bc.BcFieldGroup), e.g. a heat-transfer analysis's temperatures on another plugin's inlets and walls. |
 | `bc_seeds` | `dict[str, dict[str, Any]]` | `field(default_factory=dict)` | API 1.8: what a new BC of a family starts with in this analysis's studies, {bc_family key: {field: value}}: over the family's own seed and over the rule that a new BC of the family the study's defaults name starts on the other choice. A heat-transfer analysis's new Wall starts no-slip (it is added for the heat through it, and a slip wall has no boundary layer). |
+| `default_mesher` | `str` | `""` | API 1.8: the mesher (a MeshBackend key) a NEW mesh of this analysis's studies starts with; "" = the app's default. An existing mesh keeps its mesher, and a copy keeps its source's. A key no plugin registers is ignored with a warning on the plugin's Settings row (cfddesk.registry.mesher.note_default_meshers). |
 
 ### cfddesk.registry.contract
 

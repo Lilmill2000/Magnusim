@@ -1790,6 +1790,25 @@ def plugins_list() -> dict[str, Any]:
     return {"ok": True, "plugins": plugin_catalog(root)}
 
 
+@rpc("plugins.sample")
+def plugins_sample(key: str = "", sample: str = "") -> dict[str, Any]:
+    """A sample project of a plugin that is on (manifest ``[[samples]]``, API 1.8): its
+    title and folder, for the server to copy into the projects folder."""
+    from cfddesk.registry.discovery import plugin_state, sample_folder
+
+    root = web_root()
+    hub = load_all(web_root=root)
+    # On = loaded and not turned off (no whole plugin catalog for one plugin's state).
+    manifest = hub.manifests.get(str(key))
+    if manifest is None or str(key) in plugin_state(root).disabled:
+        raise RpcError(-32004, f"plugin {key!r} is not on")
+    found = sample_folder(hub, str(key), str(sample))
+    if found is None:
+        raise RpcError(-32004, f"{manifest.name or key} has no sample {sample!r}")
+    spec, folder = found
+    return {"ok": True, "plugin": str(key), "sample": spec.key, "title": spec.title, "dir": str(folder)}
+
+
 def _set_plugin_enabled(key: str, enabled: bool) -> dict[str, Any]:
     """Turn a plugin on or off: the worker is the one writer of both lists.
 

@@ -5335,6 +5335,32 @@ body.is-recording #viewport-gizmo {
 .ws-start-icon { flex: none; }
 .home-start-host { display: flex; gap: 8px; flex: 0 1 auto; min-width: 0; }
 .home-start-host:empty { display: none; }
+/* Open sample (API 1.8): a button and its menu of the plugins' sample projects. */
+.home-sample-host { display: flex; flex: none; }
+.home-sample-host:empty { display: none; }
+.home-samples { position: relative; display: flex; }
+.home-samples > .home-btn { white-space: nowrap; }
+.home-samples-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 80;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #c5cad3;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(26, 29, 36, 0.16);
+}
+.home-samples-item { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; border: 0; background: transparent; color: #1a1d24; font-family: inherit; padding: 8px 10px; border-radius: 4px; cursor: pointer; }
+.home-samples-item:hover:not(:disabled) { background: #eef0f4; }
+.home-samples-item:disabled { cursor: default; opacity: 0.7; }
+.home-samples-title { font-size: 13px; font-weight: 600; }
+.home-samples-hint { font-size: 12px; line-height: 1.35; color: #5b6575; }
+.home-samples-error { margin: 4px 6px; font-size: 12px; color: #b42318; }
 /* A start button gives way first: cut with an ellipsis (its full text is its tooltip). */
 .home-start-host .home-btn { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* With start buttons the header is a row that gives way instead of overflowing: the

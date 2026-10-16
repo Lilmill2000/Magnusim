@@ -309,6 +309,11 @@ class AnalysisType:
     # choice. A heat-transfer analysis's new Wall starts no-slip (it is added for
     # the heat through it, and a slip wall has no boundary layer).
     bc_seeds: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # API 1.8: the mesher (a MeshBackend key) a NEW mesh of this analysis's studies
+    # starts with; "" = the app's default. An existing mesh keeps its mesher, and a
+    # copy keeps its source's. A key no plugin registers is ignored with a warning on
+    # the plugin's Settings row (cfddesk.registry.mesher.note_default_meshers).
+    default_mesher: str = ""
 
 
 def schema_defaults(fields: tuple[SchemaField, ...] | list[SchemaField]) -> dict[str, Any]:

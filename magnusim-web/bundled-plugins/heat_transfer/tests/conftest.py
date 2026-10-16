@@ -24,6 +24,20 @@ for _root in (PLUGIN_ROOT, IF_ROOT):
         sys.path.append(str(_root))
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "validation: the validation set (WSL, about two hours); runs only with -m validation")
+
+
+def pytest_collection_modifyitems(config, items):
+    """The validation set runs when asked for (``-m validation``, or HT_VALIDATION=1), not
+    in every ``-m wsl`` run."""
+    if "validation" in (config.getoption("markexpr", "") or "") or os.environ.get("HT_VALIDATION") == "1":
+        return
+    skip = pytest.mark.skip(reason="the validation set runs with -m validation (or HT_VALIDATION=1)")
+    for item in items:
+        if item.get_closest_marker("validation"):
+            item.add_marker(skip)
+
 
 @pytest.fixture(autouse=True)
 def _own_local_json(request, tmp_path_factory, monkeypatch):

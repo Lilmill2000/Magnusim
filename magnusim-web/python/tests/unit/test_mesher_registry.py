@@ -53,7 +53,8 @@ def test_analysis_type_has_no_mesh_bags():
     names = {f.name for f in fields(AnalysisType)}
     assert "mesh_backends" not in names
     assert "mesh_backend" not in names
-    assert "default_mesher" not in names
+    # API 1.8: one key, what a new mesh of the analysis's studies starts with (not a bag).
+    assert "default_mesher" in names
     assert "meshers" not in names
     # solver_backends remains the wired bag pattern (land3); mesh has none yet
     assert "solver_backends" in names
@@ -64,7 +65,9 @@ def test_load_all_registers_mesher_keys():
     reg = get_registry("mesher")
     assert EXPECTED_MESHER_KEYS <= set(reg.keys())
     assert hub.registry("mesher") is reg
-    assert analysis_has_mesh_bags(hub) is False
+    named = [s for s in hub.registry("analysis").items() if str(getattr(s, "default_mesher", "") or "")]
+    assert analysis_has_mesh_bags(hub) is bool(named)
+    assert all(s.default_mesher in reg.keys() for s in named)
 
 
 def test_mesher_specs_shape():

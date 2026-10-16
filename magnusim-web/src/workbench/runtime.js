@@ -48,6 +48,7 @@ import { useProjectStore } from '../store/project';
 import { workspaceHash } from '../workspace/route';
 import { confirmLeaveWorkspace } from '../workspace/leaveGuard';
 import { confirmAction, dialogBusy, promptName } from './dialogs';
+import { defaultMeshEngine } from '../defaultMesher';
 import {
   analysisMissingText,
   analysisRow,
@@ -28244,10 +28245,14 @@ async function createMeshClient() {
   const name = String((nameEl && nameEl.value) || '').trim() || nextClientMeshName();
   const id = newClientMeshId();
   const study = typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {};
+  // The mesher a new mesh of this study starts with (API 1.8 default_mesher): the rule
+  // the server's createMesh uses too (src/defaultMesher.ts), from the same registry rows.
+  const reg = useProjectStore.getState().registry;
+  const engine = defaultMeshEngine(analysisRow(studyAnalysisType()), (reg && reg.mesher) || []);
   const settings = {
     ...W20_DEFAULTS,
     name,
-    advanced: { ...(W20_DEFAULTS.advanced || {}) },
+    advanced: { ...(W20_DEFAULTS.advanced || {}), ...(engine ? { mesh_engine: engine } : {}) },
   };
   const local = {
     id,

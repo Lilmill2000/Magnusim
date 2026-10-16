@@ -225,6 +225,10 @@ def describe_extra(spec: Any) -> dict[str, Any]:
         # of a family starts with in them.
         "bc_fields": _bc_field_groups(spec),
         "bc_seeds": _bc_seeds(spec),
+        # API 1.8: the mesher a new mesh of its studies starts with ("" = the app's
+        # default). The page and the server use it only when that mesher is registered
+        # (src/defaultMesher.ts); loading warns when it is not (mesher.note_default_meshers).
+        "default_mesher": str(_hook(spec, "default_mesher") or ""),
     }
 
 

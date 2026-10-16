@@ -6,16 +6,14 @@ September 2026 readiness audit. This list preserves the intended work.
 - **Static structural simulation:** add the analysis definition, material model,
   boundary conditions, mesher/solver integration, and result controls before
   exposing it in the analysis picker.
-- **Virtual thermocouple:** implement temperature-capable analysis and monitor
-  output before restoring the point-data monitor option.
-- **Energy (temperature) and passive species:** removed from the study panel in
-  Phase 6 (2026-09-24) because no solve path ever read them. To restore: solve
-  T and N species as transported scalars (OpenFOAM `scalarTransport` function
-  objects work with simpleFoam/pimpleFoam), add inlet temperature/concentration
-  and wall thermal type (fixed T, heat flux, adiabatic) to the BC editor, add
-  thermal/species diffusivity (Pr, Sc), show T and species as result fields,
-  and prove it with a WSL solve. Passive temperature ignores buoyancy; hot air
-  rising needs the buoyant solver family, which is a separate, larger feature.
+- **Passive species:** a scalar the flow carries without changing it (a
+  concentration, a dye, smoke): solve N species as transported scalars
+  (OpenFOAM `scalarTransport` function objects work with simpleFoam/pimpleFoam
+  and with the Heat Transfer plugin's buoyant solvers), add each species'
+  inlet concentration and wall condition to the BC editor and its diffusivity
+  (Sc), show the species as result fields, and prove it with a WSL solve.
+  Temperature, buoyancy and heat conducted through solids ship in the Heat
+  Transfer plugin 0.1.0.
 
 - **Plugin workspaces, later (Plugin Host H13):** a workspace opens only for a
   study in a project. To add: global workspaces that open without a project,
@@ -171,16 +169,52 @@ September 2026 readiness audit. This list preserves the intended work.
   - solve hooks in a process of their own, so a plugin cannot end or bend a
     core run.
 
-- **Faces two bodies share (October 2026):** every body is one fluid region, so
-  a face two bodies share whole is inside the fluid. Each mesher meshes
-  through it, and a BC on it is refused (`cfddesk/cad/shared_faces.py`). To
-  add:
+- **Faces two bodies share (October 2026):** bodies of one material are one
+  region, so a face two of them share whole is inside it. Each mesher meshes
+  through it, and a BC on it is refused (`cfddesk/cad/shared_faces.py`).
+  Bodies of different materials (a Heat Transfer study) are regions of their
+  own, and the face between them is a coupled interface. To add:
   - a thin wall there (a zero-thickness baffle, wall on both sides), made by
     an explicit Wall BC on the face, in all three meshers;
   - bodies that touch over only part of a face: they are not found as
-    sharing, so each body keeps its own wall there;
-  - one region per body (solids, conjugate heat transfer), where the shared
-    face becomes an interface.
+    sharing, so each body keeps its own wall there (and Heat Transfer does not
+    couple them there).
+- **Heat Transfer, after 0.1.0 (`bundled-plugins/heat_transfer`):**
+  - radiation (P1, fvDOM, solar load);
+  - temperature-dependent properties, and anisotropic conductivity (a circuit
+    board conducts better along its layers);
+  - contact resistance between two bodies (a layer's thickness and
+    conductivity, written on both sides of the interface);
+  - thin walls (baffles) on shared faces, and bodies that touch over only
+    part of a face (not coupled there today);
+  - Joule heating, humidity and condensation, phase change, porous media,
+    rotating zones (MRF);
+  - solid regions on cfMesh (it is refused with the reason today);
+  - a Mesh panel warning for a solid about one cell thick (Start refuses it
+    today), Wall heat flux monitors on the faces between bodies (the run's
+    monitors list each interface's heat), a starting temperature per body;
+  - a K/°C/°F picker on the results legend, and a gravity arrow in the
+    viewport while the study panel is open;
+  - the energy balance counts the heat the flow carries through openings, not
+    heat conducted back out of an inlet;
+  - heat through walls on Standard (tetrahedral) meshes: the validation read
+    it up to about 14 % high next to a laminar flow (the laminar pipes),
+    about 20 % low with wall functions (the turbulent pipe), about 6 % high
+    through a solid's walls (the gradient at the wall of a tetrahedron;
+    corrected schemes do not help), and within 1.5 % in the cavity; the
+    study panel says so, and a Heat Transfer study's new mesh starts on
+    Hex-dominant. A wall-normal correction, or prism layers that always
+    hold, would fix it;
+  - the turbulent pipe (Re = 50 000, k-omega SST, wall functions) reads
+    about 10 % under Gnielinski's correlation on Hex-dominant, more than the
+    correlation's own scatter, and why is not known yet (its slices are 17.5
+    to 22.5 D after a uniform inlet; the wall's y+ is about 12 to 56, so part
+    of the first cells sit in the buffer layer): a longer pipe or a fully
+    developed inlet, and y+ near 1 with low-Re wall treatment or y+ above 30
+    everywhere, would tell which;
+  - the validation set's tolerances, once its first full run is reviewed
+    (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`), and
+    its public page.
 
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder

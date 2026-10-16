@@ -1,0 +1,36 @@
+{
+  "id": "mat-mv9nwgne-3af9e5",
+  "name": "Air",
+  "type": "Fluid",
+  "properties_at": "20 °C",
+  "density": 1.204,
+  "rho": 1.204,
+  "dynamic_viscosity": 0.00001825,
+  "mu": 0.00001825,
+  "specific_heat": 1007,
+  "cp": 1007,
+  "thermal_conductivity": 0.02514,
+  "k": 0.02514,
+  "thermal_expansion": 0.003411,
+  "beta": 0.003411,
+  "molar_mass": 28.97,
+  "library": "HT_AIR",
+  "material_model": "thermo_fluid",
+  "preset": "air",
+  "assigned_volumes": [
+    "Body1"
+  ],
+  "assigned_volume": "Body1",
+  "body_ids": [
+    "Body1"
+  ],
+  "volume_ids": [
+    "Body1"
+  ],
+  "simulation_id": "sim-mv9nwemq-472577",
+  "geometry_id": "geom-2b482092",
+  "project_id": "{{project_id}}",
+  "saved": true,
+  "created_at": "2026-10-15T14:56:43.850Z",
+  "updated_at": "2026-10-15T14:56:43.850Z"
+}

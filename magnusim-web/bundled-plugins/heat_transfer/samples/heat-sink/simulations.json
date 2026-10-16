@@ -1,0 +1,53 @@
+{
+  "active_id": "sim-mv9nwemq-472577",
+  "simulations": [
+    {
+      "id": "sim-mv9nwemq-472577",
+      "name": "Heat transfer Steady-state",
+      "geometry_id": "geom-2b482092",
+      "analysis": "Heat transfer",
+      "analysis_type": "heat_transfer_steady",
+      "time_dependency": "Steady-state",
+      "algorithm": "SIMPLE",
+      "created_at": "2026-10-15T14:56:41.234Z",
+      "updated_at": "2026-10-15T14:56:48.647Z",
+      "folder": "Heat_transfer_Steady-state",
+      "sort_index": 0,
+      "category": "HEAT TRANSFER",
+      "gravity": "-y",
+      "gravity_vector": [
+        0,
+        0,
+        -1
+      ],
+      "gravity_magnitude": 9.80665,
+      "density_model": "auto",
+      "operating_pressure": 101325,
+      "reference_temperature": 293.15,
+      "turbulence_model": "laminar",
+      "project_id": "{{project_id}}",
+      "analysis_title": "Heat Transfer",
+      "defaults": {
+        "category": "HEAT TRANSFER",
+        "gravity": "-z",
+        "gravity_vector": [
+          0,
+          0,
+          -1
+        ],
+        "gravity_magnitude": 9.80665,
+        "density_model": "auto",
+        "operating_pressure": 101325,
+        "reference_temperature": 293.15,
+        "turbulence_model": "kOmegaSST",
+        "time_dependency": "Steady-state",
+        "algorithm": "SIMPLE"
+      },
+      "geometry_name": "heat-sink",
+      "geometry_body": "Body1",
+      "persistence": "filesystem",
+      "increment": "W17"
+    }
+  ],
+  "updated_at": "2026-10-15T14:56:48.667Z"
+}

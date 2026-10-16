@@ -35,6 +35,7 @@ import { writeJsonCli, writeProjectCli } from './py-json.js';
 import {
   MESH_ENGINES,
   buildMeshDefaultsFromRegistry,
+  defaultMeshEngineFor,
 } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc, meshDocLogIsBloated } from './mesh-live-slim.js';
 import { recoverStudyMeshesFromDisk, stopMeshGenerate } from './w21-mesh-generate.js';
@@ -245,6 +246,18 @@ function cloneDefaultSettings(name) {
   };
 }
 
+/**
+ * A NEW mesh's settings in study `sim`: the defaults, on the mesher the study's analysis
+ * starts a new mesh with (host API 1.8 default_mesher; registry-defaults.js
+ * defaultMeshEngineFor, the Mesh form's rule too). Never for an existing mesh or a copy.
+ */
+function newMeshSettings(name, sim) {
+  const settings = cloneDefaultSettings(name);
+  const engine = defaultMeshEngineFor(sim && sim.analysis_type);
+  if (engine) settings.advanced.mesh_engine = engine;
+  return settings;
+}
+
 function cloneSettings(src, name) {
   const s = src || {};
   return {
@@ -290,6 +303,11 @@ function migrateMeshEngineEntry(entry) {
     },
     changed,
   };
+}
+
+/** The engine a settings record names, as an entry's ui_mesh_engine records it. */
+function engineOf(settings) {
+  return String((settings && settings.advanced && settings.advanced.mesh_engine) || '') || 'standard';
 }
 
 function makeMeshEntry(raw) {
@@ -787,8 +805,15 @@ function bankExact(settings) {
   );
 }
 
-function buildSettings(body, existing) {
+/**
+ * @param {object} body the request
+ * @param {{ settings?: object }} [existing] the mesh's saved record
+ * @param {string} [bankEngine] the engine Restore defaults gives (the study's new-mesh
+ *   mesher, registry-defaults.js defaultMeshEngineFor); the app's default when absent
+ */
+function buildSettings(body, existing, bankEngine) {
   const src = body || {};
+  const defaultEngine = String(bankEngine || '') || W20_DEFAULTS.advanced.mesh_engine;
   const advIn = src.advanced || {};
   const existingSettings = (existing && existing.settings) || {};
   const existingAdv = existingSettings.advanced || {};
@@ -870,7 +895,7 @@ function buildSettings(body, existing) {
           ),
       small_feature_suppression_unit: W20_DEFAULTS.advanced.small_feature_suppression_unit,
       mesh_engine: useBank
-        ? W20_DEFAULTS.advanced.mesh_engine
+        ? defaultEngine
         : asEngine(
             advIn.mesh_engine !== undefined ? advIn.mesh_engine : existingAdv.mesh_engine,
             W20_DEFAULTS.advanced.mesh_engine
@@ -912,7 +937,7 @@ function buildSettings(body, existing) {
       preferred_cpus: W20_DEFAULTS.preferred_cpus,
       maximum_meshing_runtime: W20_DEFAULTS.maximum_meshing_runtime,
       maximum_meshing_runtime_unit: W20_DEFAULTS.maximum_meshing_runtime_unit,
-      advanced: { ...W20_DEFAULTS.advanced },
+      advanced: { ...W20_DEFAULTS.advanced, mesh_engine: defaultEngine },
       mesher_settings: {},
     });
   }
@@ -996,13 +1021,16 @@ async function createMesh(body) {
   const settings = src
     ? cloneSettings(src.settings, name)
     : body && body.fineness != null
-      ? buildSettings({ ...body, name }, { settings: cloneDefaultSettings(name) })
-      : cloneDefaultSettings(name);
+      ? buildSettings({ ...body, name }, { settings: newMeshSettings(name, sim) }, defaultMeshEngineFor(sim && sim.analysis_type))
+      : newMeshSettings(name, sim);
   if (settings) settings.name = name;
   const entry = makeMeshEntry({
     id: body && body.id,
     name,
     settings,
+    // The engine it was made with (the study's default, or the source's for a copy): an
+    // entry without one reads a cfmesh as the old bug stamp (migrateMeshEngineEntry).
+    ui_mesh_engine: engineOf(settings),
     geometry_id: geomId,
     simulation_id: sim.id,
     created_at: now,
@@ -1087,11 +1115,14 @@ async function upsertMesh(body) {
       body: { error: 'mesh not found in this study', project_id: projectId },
     };
   }
+  const autoCreated = !active;
   if (!active) {
     const name = nextMeshName(scoped);
+    const fresh = newMeshSettings(name, sim);
     active = makeMeshEntry({
       name,
-      settings: cloneDefaultSettings(name),
+      settings: fresh,
+      ui_mesh_engine: engineOf(fresh),
       geometry_id: geomId,
       simulation_id: sim.id,
       created_at: now,
@@ -1110,6 +1141,7 @@ async function upsertMesh(body) {
     }
     if (src && src.id !== active.id) {
       active.settings = cloneSettings(src.settings, active.name);
+      active.ui_mesh_engine = engineOf(active.settings);
       active.updated_at = now;
       return saveComposed(projectId, proj, sim, existing, meshes, active, now, {
         copied: true,
@@ -1117,9 +1149,17 @@ async function upsertMesh(body) {
       });
     }
   }
-  const settings = buildSettings(body || {}, { settings: active.settings });
+  // Restore defaults is the defaults of a new mesh of this study: its analysis's mesher.
+  const settings = buildSettings(body || {}, { settings: active.settings }, defaultMeshEngineFor(sim && sim.analysis_type));
   if (body && (body.reset_defaults === true || body.use_bank_defaults === true)) {
     settings.name = String(body.name || active.name || settings.name);
+  }
+  if (autoCreated && settings.advanced) {
+    // A save with no mesh yet makes the study's first mesh. The form it comes from shows
+    // the app's defaults (Standard) when there is no mesh, so the engine it sends is not a
+    // pick: the new mesh starts on the study's mesher, like every new mesh, and a pick
+    // is made on the mesh afterwards.
+    settings.advanced.mesh_engine = engineOf(active.settings);
   }
   active.settings = settings;
   active.name = settings.name;

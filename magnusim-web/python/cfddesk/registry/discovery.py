@@ -25,6 +25,7 @@ from cfddesk.registry.manifest import (
     FilesSpec,
     GeometryAction,
     PluginManifest,
+    Sample,
     StartAction,
     StudyKind,
     WorkspaceSpec,
@@ -658,6 +659,19 @@ def _validate_cross_refs(hub: RegistryHub) -> None:
     raise RegistryError("cross-reference validation did not settle after unloading plugins")
 
 
+def _note_default_meshers(hub: RegistryHub) -> None:
+    """API 1.8 ``AnalysisType.default_mesher``: one naming a mesher no plugin registers is
+    warned about on its plugin's Settings row (the analysis still loads; new meshes start
+    on the app's default mesher)."""
+    from cfddesk.registry.mesher import note_default_meshers
+
+    for owner, why in note_default_meshers(hub):
+        manifest = hub.manifests.get(owner)
+        if manifest is not None and why not in manifest.manifest_warnings:
+            manifest.manifest_warnings.append(why)
+        log.warning("plugin %s: %s", owner, why)
+
+
 def _failure_row(
     key: str, error: str, meta: dict[str, Any] | None = None, *, source: str = "local"
 ) -> dict[str, Any]:
@@ -958,6 +972,80 @@ def geometry_actions_from_meta(
     return out, warnings
 
 
+SAMPLE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+SAMPLE_TITLE_MAX = 40
+SAMPLE_HINT_MAX = 160
+
+
+def samples_from_meta(meta: dict[str, Any], plugin_dir: Path) -> tuple[list[Sample], list[str]]:
+    """Validate ``[[samples]]`` (API 1.8): (samples, warnings).
+
+    Each sample has a ``key`` (lower-case letters, digits and '-', unique), a ``title``
+    and an optional ``hint`` (one line each, at most 40 and 160 characters) and a
+    ``path``: a folder inside the plugin's folder. A bad table raises ValueError (the
+    plugin fails to load); a folder that is missing or holds no project.json is left out
+    with a warning.
+    """
+    raw = meta.get("samples")
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        raise ValueError("must be an array of tables")
+    root = plugin_dir.resolve()
+    out: list[Sample] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("each sample is a table")
+        key = row.get("key")
+        if not isinstance(key, str) or not SAMPLE_KEY_RE.match(key):
+            raise ValueError("each sample needs a key of lower-case letters, digits and '-' (at most 40)")
+        if key in seen:
+            raise ValueError(f"{key}: two samples have this key")
+        seen.add(key)
+        try:
+            title = _action_text(row, "title", SAMPLE_TITLE_MAX, required=True)
+            hint = _action_text(row, "hint", SAMPLE_HINT_MAX)
+        except ValueError as exc:
+            raise ValueError(f"{key}: {exc}") from None
+        path = row.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"{key}: needs a path (a folder in the plugin's folder)")
+        rel = path.strip().replace("\\", "/")
+        folder = (root / rel).resolve()
+        if rel.startswith("/") or ":" in rel or folder == root or root not in folder.parents:
+            raise ValueError(f"{key}: path {path!r} must be a folder inside the plugin's folder")
+        if not (folder / "project.json").is_file():
+            warnings.append(f"manifest [[samples]]: {key}: {path!r} has no project.json; left out")
+            continue
+        out.append(Sample(key, title, hint, rel))
+    return out, warnings
+
+
+def sample_row(sample: Sample) -> dict[str, Any]:
+    """A sample as the catalog publishes it (no paths)."""
+    return {"key": sample.key, "title": sample.title, "hint": sample.hint}
+
+
+def sample_folder(hub: RegistryHub, plugin: str, key: str) -> tuple[Sample, Path] | None:
+    """A loaded plugin's sample and its folder (None when it has no such sample, or when
+    its folder is no longer inside the plugin's: the hub is cached from load time, and a
+    link or junction put in its place since would lead elsewhere)."""
+    manifest = hub.manifests.get(str(plugin))
+    folder = hub.plugin_dir(str(plugin))
+    if manifest is None or folder is None:
+        return None
+    sample = next((s for s in manifest.samples if s.key == key), None)
+    if sample is None:
+        return None
+    root = Path(folder).resolve()
+    path = (Path(folder) / sample.path).resolve()
+    if root not in path.parents:
+        return None
+    return (sample, path) if (path / "project.json").is_file() else None
+
+
 def geometry_action_row(manifest: PluginManifest, action: GeometryAction) -> dict[str, Any]:
     """A geometry action as the catalog and the tree's kind rows publish it."""
     kind = next((k for k in manifest.study_kinds if k.key == action.study_kind), None)
@@ -1111,6 +1199,12 @@ def _load_folder_plugin(
         hub.failures.append(_failure_row(key, f"manifest [[geometry_actions]]: {exc}", meta, source=source))
         return None, True
     try:
+        samples, sample_warnings = samples_from_meta(meta, plugin_dir)
+        manifest_warnings = manifest_warnings + sample_warnings
+    except ValueError as exc:
+        hub.failures.append(_failure_row(key, f"manifest [[samples]]: {exc}", meta, source=source))
+        return None, True
+    try:
         files = files_spec_from_meta(meta)
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [files]: {exc}", meta, source=source))
@@ -1154,6 +1248,7 @@ def _load_folder_plugin(
         result.workspaces = workspaces
         result.start_actions = start_actions
         result.geometry_actions = geometry_actions
+        result.samples = samples
         result.manifest_warnings = manifest_warnings
         result.files = files
         result.python_env = python_env
@@ -1194,6 +1289,7 @@ def _load_folder_plugin(
         workspaces=workspaces,
         start_actions=start_actions,
         geometry_actions=geometry_actions,
+        samples=samples,
         manifest_warnings=manifest_warnings,
         files=files,
         python_env=python_env,
@@ -1841,6 +1937,7 @@ def load_all(
     folder_fail = folder_fail or u_scan_fail
     # After plugins: every AnalysisType bag key must resolve (solver/bc/material/monitor).
     _validate_cross_refs(hub)
+    _note_default_meshers(hub)
     _check_default_analysis(hub)
     # An update these checks unloaded: load everything once more with the app's own
     # copy of it instead (as when an update fails to load), saying why.
@@ -1900,6 +1997,7 @@ def _catalog_row(
     start_actions: list[dict[str, Any]] | None = None,
     copy: dict[str, Any] | None = None,
     geometry_actions: list[dict[str, Any]] | None = None,
+    samples: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     copy = copy or {}
     return {
@@ -1946,6 +2044,8 @@ def _catalog_row(
         "start_actions": list(start_actions or []),
         # API 1.7: its geometry actions ("Edit in ..."), only while it is loaded and on.
         "geometry_actions": list(geometry_actions or []),
+        # API 1.8: its sample projects (Home's Open sample), only while it is loaded and on.
+        "samples": list(samples or []),
     }
 
 
@@ -2081,6 +2181,7 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                     if status == "enabled"
                     else []
                 ),
+                samples=[sample_row(s) for s in (getattr(manifest, "samples", None) or [])] if status == "enabled" else [],
                 copy=_copy_fields(hub, manifest.key, tier),
             )
         )

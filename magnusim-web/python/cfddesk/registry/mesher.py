@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 # The refinement records the host stores (scripts/w26-mesh-refinements.js).
 HOST_REFINEMENT_TYPES = ("surface_custom_sizing", "inflate_boundary_layer")
 
+# Core meshers that are product engines (a pick in the Mesh panel), in this order: the
+# same list as src/defaultMesher.ts CORE_MESH_ENGINES (a test pins the two equal).
+CORE_MESH_ENGINES = ("standard", "cfmesh", "snappy_hexdominant")
+
 
 @dataclass(frozen=True)
 class MeshBackend:
@@ -86,17 +90,55 @@ def validate_mesher(spec: Any) -> None:
 
 
 def analysis_has_mesh_bags(hub: RegistryHub) -> bool:
-    """True if any AnalysisType exposes mesh_backends / mesh_backend string bags.
-
-    land4 soft-pass: AnalysisType currently has none — do not invent a bag.
-    Kept as a probe so a later land can wire validation when bags appear.
+    """True if any AnalysisType names meshers: mesh_backends / mesh_backend string bags
+    (none exist), or a ``default_mesher`` (API 1.8, one key: what a new mesh starts with).
     """
     for spec in hub.registry("analysis").items():
-        if hasattr(spec, "mesh_backends") or hasattr(spec, "mesh_backend"):
+        if hasattr(spec, "mesh_backends") or hasattr(spec, "mesh_backend") or hasattr(spec, "meshers"):
             return True
-        if hasattr(spec, "default_mesher") or hasattr(spec, "meshers"):
+        if str(getattr(spec, "default_mesher", "") or "").strip():
             return True
     return False
+
+
+def new_mesh_engines(hub: RegistryHub) -> list[str]:
+    """The meshers a new mesh can use, the rule of src/defaultMesher.ts newMeshEngines: the
+    core's product engines that are registered, in that order, then every mesher a plugin
+    registers (a core mesher that is not a product engine is not one)."""
+    reg = hub.registry("mesher")
+    keys = reg.keys()
+    out = [k for k in CORE_MESH_ENGINES if k in keys]
+    for key in keys:
+        if reg.owner(key) != "builtin" and key not in out:
+            out.append(key)
+    return out
+
+
+def note_default_meshers(hub: RegistryHub) -> list[tuple[str, str]]:
+    """After every plugin registered: each analysis whose ``default_mesher`` is not a mesher
+    a new mesh can use (``new_mesh_engines``), as (owner plugin, warning). The analysis
+    still loads; new meshes in its studies start on the app's default mesher
+    (src/defaultMesher.ts, the same rule). A builtin analysis that does so is a core bug
+    (RegistryError)."""
+    from cfddesk.registry.base import RegistryError
+
+    meshers = set(new_mesh_engines(hub))
+    specs = hub.registry("analysis")
+    out: list[tuple[str, str]] = []
+    for spec in specs.items():
+        want = str(getattr(spec, "default_mesher", "") or "").strip()
+        if not want or want in meshers:
+            continue
+        key = str(getattr(spec, "key", "?"))
+        owner = specs.owner(key) if key in specs.keys() else "builtin"
+        why = (
+            f"analysis {key!r}: default_mesher {want!r} is not a mesher this app has "
+            f"(meshers: {', '.join(sorted(meshers))}); new meshes in its studies start on the app's default mesher"
+        )
+        if owner == "builtin":
+            raise RegistryError(why)
+        out.append((owner, why))
+    return out
 
 
 def geometry_region_count(project: Any) -> int:

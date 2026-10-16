@@ -245,6 +245,14 @@
       "description": "Actions on a project geometry (\"Edit in ...\"): each opens a study of a kind that links geometry in its workspace, to edit that geometry and send the edit back.",
       "x-since": "1.7"
     },
+    "samples": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sample"
+      },
+      "description": "Sample projects Home offers while the plugin is on: each a folder in the plugin holding a project (inputs only), copied into the projects folder as a new project when opened.",
+      "x-since": "1.8"
+    },
     "files": {
       "type": "object",
       "properties": {
@@ -508,6 +516,40 @@
       "required": [
         "study_kind",
         "label"
+      ],
+      "additionalProperties": false
+    },
+    "Sample": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+          "description": "Lower-case letters, digits and '-', unique in the plugin."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Home's menu item and the new project's title, one line."
+        },
+        "hint": {
+          "type": "string",
+          "default": "",
+          "maxLength": 160,
+          "description": "A line under the menu item: what the sample shows."
+        },
+        "path": {
+          "type": "string",
+          "default": "",
+          "minLength": 1,
+          "description": "A folder inside the plugin's folder holding project.json and the project's inputs. A folder that is missing or has no project.json is left out with a warning."
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "path"
       ],
       "additionalProperties": false
     },

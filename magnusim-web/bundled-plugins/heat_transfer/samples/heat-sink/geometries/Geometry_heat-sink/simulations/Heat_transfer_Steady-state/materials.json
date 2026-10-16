@@ -1,0 +1,118 @@
+{
+  "materials": [
+    {
+      "id": "mat-mv9nwgne-3af9e5",
+      "name": "Air",
+      "simulation_id": "sim-mv9nwemq-472577",
+      "mesh_id": null,
+      "run_id": null,
+      "type": "Fluid",
+      "properties_at": "20 °C",
+      "density": 1.204,
+      "rho": 1.204,
+      "dynamic_viscosity": 0.00001825,
+      "mu": 0.00001825,
+      "specific_heat": 1007,
+      "cp": 1007,
+      "thermal_conductivity": 0.02514,
+      "k": 0.02514,
+      "thermal_expansion": 0.003411,
+      "beta": 0.003411,
+      "molar_mass": 28.97,
+      "library": "HT_AIR",
+      "material_model": "thermo_fluid",
+      "preset": "air",
+      "assigned_volumes": [
+        "Body1"
+      ],
+      "assigned_volume": "Body1",
+      "body_ids": [
+        "Body1"
+      ],
+      "volume_ids": [
+        "Body1"
+      ],
+      "geometry_id": "geom-2b482092",
+      "project_id": "{{project_id}}",
+      "saved": true,
+      "created_at": "2026-10-15T14:56:43.850Z",
+      "updated_at": "2026-10-15T14:56:43.850Z"
+    },
+    {
+      "id": "mat-mv9nwgsr-ac1106",
+      "name": "Aluminium 6061",
+      "simulation_id": "sim-mv9nwemq-472577",
+      "mesh_id": null,
+      "run_id": null,
+      "type": "Solid",
+      "properties_at": "20 °C",
+      "density": 2700,
+      "rho": 2700,
+      "specific_heat": 896,
+      "cp": 896,
+      "thermal_conductivity": 167,
+      "k": 167,
+      "library": "HT_AL6061",
+      "material_model": "thermo_solid",
+      "preset": "aluminium_6061",
+      "assigned_volumes": [
+        "Body2"
+      ],
+      "assigned_volume": "Body2",
+      "body_ids": [
+        "Body2"
+      ],
+      "volume_ids": [
+        "Body2"
+      ],
+      "geometry_id": "geom-2b482092",
+      "project_id": "{{project_id}}",
+      "saved": true,
+      "created_at": "2026-10-15T14:56:44.043Z",
+      "updated_at": "2026-10-15T14:56:44.348Z",
+      "heat_source_W": 10
+    }
+  ],
+  "updated_at": "2026-10-15T14:56:44Z",
+  "persistence": "filesystem",
+  "air": {
+    "id": "mat-mv9nwgne-3af9e5",
+    "name": "Air",
+    "simulation_id": "sim-mv9nwemq-472577",
+    "mesh_id": null,
+    "run_id": null,
+    "type": "Fluid",
+    "properties_at": "20 °C",
+    "density": 1.204,
+    "rho": 1.204,
+    "dynamic_viscosity": 0.00001825,
+    "mu": 0.00001825,
+    "specific_heat": 1007,
+    "cp": 1007,
+    "thermal_conductivity": 0.02514,
+    "k": 0.02514,
+    "thermal_expansion": 0.003411,
+    "beta": 0.003411,
+    "molar_mass": 28.97,
+    "library": "HT_AIR",
+    "material_model": "thermo_fluid",
+    "preset": "air",
+    "assigned_volumes": [
+      "Body1"
+    ],
+    "assigned_volume": "Body1",
+    "body_ids": [
+      "Body1"
+    ],
+    "volume_ids": [
+      "Body1"
+    ],
+    "geometry_id": "geom-2b482092",
+    "project_id": "{{project_id}}",
+    "saved": true,
+    "created_at": "2026-10-15T14:56:43.850Z",
+    "updated_at": "2026-10-15T14:56:43.850Z"
+  },
+  "simulation_id": "sim-mv9nwemq-472577",
+  "project_id": "{{project_id}}"
+}

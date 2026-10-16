@@ -14,7 +14,7 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
   export type MaterialKey = 'newtonian_incompressible' | 'thermo_fluid' | 'thermo_solid' | (string & {});
   export type BcKey = 'velocity_inlet_fixed' | 'velocity_inlet_volumetric' | 'velocity_inlet_mass' | 'velocity_outlet' | 'pressure_outlet_gauge' | 'wall_noslip' | 'wall_slip' | 'symmetry' | 'freestream' | 'wall_moving' | 'wall_rotating' | 'total_pressure_inlet' | 'ht_solid_wall' | (string & {});
   export type BcFamilyKey = 'velocity_inlet' | 'velocity_outlet' | 'pressure_outlet' | 'total_pressure_inlet' | 'freestream' | 'wall' | 'symmetry' | 'solid_wall' | (string & {});
-  export type MonitorKey = 'area_average' | 'flow_rate' | 'forces' | 'probe' | 'ht_wall_heat_flux' | 'ht_surface_temperature' | 'ht_thermocouple' | (string & {});
+  export type MonitorKey = 'area_average' | 'force' | 'flow_rate' | 'forces' | 'probe' | 'ht_wall_heat_flux' | 'ht_surface_temperature' | 'ht_thermocouple' | (string & {});
   export interface RegistryRow {
       key: string;
       label: string;
@@ -79,6 +79,8 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
       bc_fields?: BcFieldGroupRow[];
       /** Analyses (API 1.8): what a new BC of a family starts with in its studies, {bc_family key: {field: value}}. */
       bc_seeds?: Record<string, Record<string, unknown>>;
+      /** Analyses (API 1.8): the mesher a new mesh of its studies starts with ("" = the app's default; src/defaultMesher.ts). */
+      default_mesher?: string;
       /** Material models (API 1.4): presets, and how a study's material record stores the properties. */
       library?: Array<Record<string, unknown>>;
       /** Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }. */

@@ -15,14 +15,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appDefaultMeshEngine, defaultMeshEngine, newMeshEngines } from '../src/defaultMesher.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REGISTRY_JSON_PATH = join(__dirname, 'generated', 'registry.json');
 
-/** Mesher keys used as W20 advanced.mesh_engine (not algorithm-only backends). */
-// Hex-dominant (snappyHexMesh) is a product engine too; leaving it out coerced a
-// saved Hex-dominant pick back to Standard.
-const MESH_ENGINE_PRODUCT_KEYS = Object.freeze(['standard', 'cfmesh', 'snappy_hexdominant']);
+/* Mesher keys used as W20 advanced.mesh_engine (not algorithm-only backends): the
+   core's product engines (Hex-dominant included: leaving it out coerced a saved
+   Hex-dominant pick back to Standard) and every plugin mesher, src/defaultMesher.ts. */
 
 let _cache = null;
 /** Live registry.describe doc from the worker (builtins + loaded plugins). */
@@ -465,20 +465,24 @@ export function mesherEngineOf(key) {
  * Every accepted key is guaranteed present in the registry (no parallel dict).
  */
 export function meshEngineKeys() {
-  const dump = new Set(mesherKeys());
-  const keys = MESH_ENGINE_PRODUCT_KEYS.filter((k) => dump.has(k));
-  for (const row of mesherEntries()) {
-    const key = row && row.key != null ? String(row.key) : '';
-    const plugin = row && row.plugin != null ? String(row.plugin) : 'builtin';
-    if (key && plugin !== 'builtin' && !keys.includes(key)) keys.push(key);
-  }
+  const keys = newMeshEngines(mesherEntries());
   if (keys.length === 0) {
-    throw new Error(
-      'registry.json mesher[] has no product mesh_engine keys ' +
-        `(expected intersection with ${MESH_ENGINE_PRODUCT_KEYS.join(', ')})`
-    );
+    throw new Error('registry.json mesher[] has no product mesh_engine keys (no mesher a new mesh can use)');
   }
   return keys;
+}
+
+/**
+ * The mesher a new mesh of a study of analysis `key` starts with (src/defaultMesher.ts,
+ * the rule the Mesh form uses too): the analysis row's default_mesher (host API 1.8)
+ * when a new mesh can use it, else the app's default.
+ * @param {unknown} key
+ * @returns {string}
+ */
+export function defaultMeshEngineFor(key) {
+  // A study with no analysis_type is the default analysis's, as the page reads it
+  // (runtime.js studyAnalysisType).
+  return defaultMeshEngine(analysisByKey(String(key || '') || defaultAnalysisKey()), mesherEntries());
 }
 
 /**
@@ -538,7 +542,7 @@ export function buildW17DefaultsFromRegistry() {
  */
 export function buildMeshDefaultsFromRegistry() {
   const engines = meshEngineKeys();
-  const defaultEngine = engines.includes('standard') ? 'standard' : engines[0];
+  const defaultEngine = appDefaultMeshEngine(engines);
   const standard = mesherByKey('standard') || mesherByKey(defaultEngine);
   return Object.freeze({
     algorithm_label: String((standard && standard.label) || 'Standard'),

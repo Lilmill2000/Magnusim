@@ -94,7 +94,7 @@ def _row(answer: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def test_composite_wall_matches_the_1d_solution(tmp_path: Path, wsl: str) -> None:
-    line, err_in, err_out, worst = _composite_wall(tmp_path, wsl, mesher=os.environ.get("HT5_WALL_MESHER", "snappy"))
+    line, err_in, err_out, worst, _info = _composite_wall(tmp_path, wsl, mesher=os.environ.get("HT5_WALL_MESHER", "snappy"))
     _note("ht5-composite-wall", line)
     assert err_in < 0.01 and err_out < 0.01, line
     assert worst < 0.01, line
@@ -109,7 +109,7 @@ def test_composite_wall_on_a_standard_mesh_reads_the_heat_the_note_says(tmp_path
 
     ui = (Path(__file__).resolve().parents[1] / "ui" / "StudySettings.tsx").read_text(encoding="utf-8")
     note_pct = float(re.search(r"STANDARD_HEAT_HIGH_PCT = (\d+(?:\.\d+)?)", ui).group(1))  # type: ignore[union-attr]
-    line, err_in, err_out, worst = _composite_wall(tmp_path, wsl, mesher="standard", numerics=numerics)
+    line, err_in, err_out, worst, _info = _composite_wall(tmp_path, wsl, mesher="standard", numerics=numerics)
     _note(f"ht5-composite-wall-standard-{numerics}", line)
     assert worst < 0.02, line
     # The note's number ("about N % high") is what the default numerics read.
@@ -117,7 +117,11 @@ def test_composite_wall_on_a_standard_mesh_reads_the_heat_the_note_says(tmp_path
         assert abs(100 * err_in - note_pct) < 2.0, line
 
 
-def _composite_wall(tmp_path: Path, wsl: str, *, mesher: str, numerics: str = "robust") -> tuple[str, float, float, float]:
+def _composite_wall(
+    tmp_path: Path, wsl: str, *, mesher: str, numerics: str = "robust"
+) -> tuple[str, float, float, float, dict[str, Any]]:
+    """The wall solved: (line, |heat in error|, |heat out error|, worst cell off the 1D
+    profile as a share of ΔT, the numbers: analytic and measured heat, cells, iterations)."""
     import numpy as np
     from ht_cht_wsl import (
         box,
@@ -185,7 +189,9 @@ def _composite_wall(tmp_path: Path, wsl: str, *, mesher: str, numerics: str = "r
             f"laplacian {lap}): analytic {q * area:.5f} W, heat in {q_hot:.5f} W ({100 * err_in:+.3f} %), out {-q_cold:.5f} W "
             f"({100 * err_out:+.3f} %), interface T {t_iface:.3f} K, worst cell T off the 1D profile {100 * worst:.3f} % of ΔT, "
             f"{res.get('n_cells')} cells, {iterations} iterations, balance {answer['summary']}")
-    return line, abs(err_in), abs(err_out), worst
+    info = {"q_analytic_W": q * area, "q_in_W": q_hot, "q_out_W": -q_cold, "worst_share": worst, "t_iface_K": t_iface,
+            "cells": res.get("n_cells"), "iterations": int(last), "mesher": mesher, "case": case}
+    return line, abs(err_in), abs(err_out), worst, info
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +201,17 @@ def _composite_wall(tmp_path: Path, wsl: str, *, mesher: str, numerics: str = "r
 
 @pytest.mark.parametrize("mode", ["power", "density"])
 def test_heated_block_gives_its_source_out_and_its_1d_temperature(tmp_path: Path, wsl: str, mode: str) -> None:
+    line, info = _heated_block(tmp_path, wsl, mode)
+    _note(f"ht5-heated-block-{mode}", line)
+    power = info["power_W"]
+    assert abs(info["source_W"] - power) / power < 0.01, line
+    assert abs(info["out_W"] - power) / power < 0.01, line
+    assert info["rise_error"] < 0.05, line
+
+
+def _heated_block(tmp_path: Path, wsl: str, mode: str) -> tuple[str, dict[str, Any]]:
+    """The block solved: (line, its numbers: source, heat out, T_max and its 1D estimate,
+    cells, iterations)."""
     from ht_cht_wsl import box, face_at, faces_of, mesh, ok, ready, solve, step_of, study
 
     from heat_transfer.results import run_monitors
@@ -230,10 +247,10 @@ def test_heated_block_gives_its_source_out_and_its_1d_temperature(tmp_path: Path
     line = (f"heated block (stainless 40x40x10 mm, {mode}: {source}, h {h:g} to {ta - 273.15:g} °C): source in the case "
             f"{side['sources_W']:.5f} W, heat out {out:.5f} W ({100 * abs(out - power) / power:.3f} %), T_max {t_max:.3f} K vs 1D "
             f"{t_est:.3f} K (rise {100 * rise_err:.2f} % off), {res.get('n_cells')} cells, balance {answer['summary']}")
-    _note(f"ht5-heated-block-{mode}", line)
-    assert abs(side["sources_W"] - power) / power < 0.01, line
-    assert abs(out - power) / power < 0.01, line
-    assert rise_err < 0.05, line
+    times = [float(d.name) for d in case.iterdir() if d.is_dir() and d.name.replace(".", "").isdigit()]
+    info = {"power_W": power, "source_W": side["sources_W"], "out_W": out, "t_max_K": t_max, "t_est_K": t_est,
+            "rise_error": rise_err, "cells": res.get("n_cells"), "iterations": int(max(times)), "case": case}
+    return line, info
 
 
 # ---------------------------------------------------------------------------

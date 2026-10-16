@@ -18,7 +18,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-STEADY_DEFAULTS: dict[str, Any] = {"end_time": 1000, "write_interval": 100}
+# 1500 iterations: the heat-sink sample carries its 10 W out within about 1 % by then (VALIDATION.md, README).
+STEADY_DEFAULTS: dict[str, Any] = {"end_time": 1500, "write_interval": 100}
 
 TRANSIENT_DEFAULTS: dict[str, Any] = {
     "end_time": 10.0,

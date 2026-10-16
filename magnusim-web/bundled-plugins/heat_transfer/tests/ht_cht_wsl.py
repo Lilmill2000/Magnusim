@@ -299,7 +299,7 @@ def ok(code: int, events: list[dict[str, Any]], case: Path) -> None:
         return
     tails = []
     for name in ("log.prepare", "log.splitMeshRegions.1", "log.chtMultiRegionSimpleFoam", "log.chtMultiRegionFoam",
-                 "log.decomposePar", "log.reconstructPar"):
+                 "log.buoyantSimpleFoam", "log.buoyantPimpleFoam", "log.decomposePar", "log.reconstructPar"):
         p = case / name
         if p.is_file():
             tails.append(f"== {name}\n" + p.read_text(encoding="utf-8", errors="replace")[-3000:])

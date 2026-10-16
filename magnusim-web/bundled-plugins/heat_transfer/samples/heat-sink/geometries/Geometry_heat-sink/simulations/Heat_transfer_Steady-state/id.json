@@ -1,0 +1,13 @@
+{
+  "id": "sim-mv9nwemq-472577",
+  "name": "Heat transfer Steady-state",
+  "geometry_id": "geom-2b482092",
+  "kind": "simulation",
+  "analysis": "Heat transfer",
+  "analysis_type": "heat_transfer_steady",
+  "time_dependency": "Steady-state",
+  "algorithm": "SIMPLE",
+  "created_at": "2026-10-15T14:56:41.234Z",
+  "updated_at": "2026-10-15T14:56:51.563Z",
+  "sort_index": 0
+}

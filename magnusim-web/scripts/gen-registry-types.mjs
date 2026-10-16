@@ -98,6 +98,8 @@ export interface RegistryRow {
   bc_fields?: BcFieldGroupRow[];
   /** Analyses (API 1.8): what a new BC of a family starts with in its studies, {bc_family key: {field: value}}. */
   bc_seeds?: Record<string, Record<string, unknown>>;
+  /** Analyses (API 1.8): the mesher a new mesh of its studies starts with ("" = the app's default; src/defaultMesher.ts). */
+  default_mesher?: string;
   /** Material models (API 1.4): presets, and how a study's material record stores the properties. */
   library?: Array<Record<string, unknown>>;
   /** Property -> the record keys that may hold it, e.g. { nu: ['kinematic_viscosity', 'nu'] }. */

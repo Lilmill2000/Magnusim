@@ -1,6 +1,6 @@
 import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
-import { removeTreeSync } from './remove-tree.js';
+import { removeTree, removeTreeSync } from './remove-tree.js';
 // @ts-nocheck
 /**
  * W16 — project create + geometry import (filesystem persistence).
@@ -14,17 +14,21 @@ import { removeTreeSync } from './remove-tree.js';
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { cp as fsCp, rename as fsRename } from 'node:fs/promises';
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
+  rmdirSync,
   statSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,14 +42,15 @@ import {
   matchesStudy,
   primaryGeometryId,
 } from './w16-geometry-scope.js';
-import { firstLegacySimId, getActiveSimulation } from './w17-sim-catalog.js';
-import { projectSolveSummary } from './w27-solve.js';
+import { firstLegacySimId, getActiveSimulation, readCatalog } from './w17-sim-catalog.js';
+import { createDraftRun, projectSolveSummary } from './w27-solve.js';
 import { computeSlotHolder, folderBusyMessage, holderNamesProject, projectBusyMessage } from './compute-slot.js';
 import { computeRowsForProject, dropComputeRows } from './server/compute-queue.ts';
 import { envGet } from './env-compat.js';
 import { thumbRenderTimeoutMs, thumbTestStandIn } from './server/thumb-render.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
+import { fillSampleFolder, sampleProblem } from './project-sample.js';
 import { geometryFenced, isLinkedGeometryDir, markRemovedStudies, onGeometryRemove } from './server/link-job.js';
 import { linkOverlay } from './server/link-overlay.js';
 import {
@@ -601,6 +606,214 @@ function createProject(body) {
     increment: 'W16',
   };
   writeProject(proj, { create: true });
+  writeActiveId(id);
+  return { ok: true, status: 201, body: { ok: true, ...proj, active: true } };
+}
+
+/** `title`, or `title 2`, `title 3`, ...: the first no project here has. */
+function freeProjectTitle(title) {
+  const taken = new Set(listProjects().map((p) => String((p && p.title) || '').trim().toLowerCase()));
+  if (!taken.has(title.toLowerCase())) return title;
+  for (let n = 2; ; n++) {
+    const next = `${title} ${n}`;
+    if (!taken.has(next.toLowerCase())) return next;
+  }
+}
+
+/**
+ * A copied sample's CAD previews (cad_faces.vtp, cad_edges.vtp, cad_preview.json of each
+ * geometry) stamped now: a copy keeps the shipped files' times, and a source.step written
+ * later (a checkout, a zip) would make every copy build its preview again (cadPreviewFreshAt).
+ */
+function freshenSamplePreviews(dest) {
+  const root = geometriesRoot(dest);
+  if (!existsSync(root)) return;
+  const now = new Date();
+  for (const name of readdirSync(root)) {
+    const dir = join(root, name);
+    if (!lstatSync(dir).isDirectory()) continue;
+    for (const file of ['cad_faces.vtp', 'cad_edges.vtp', 'cad_preview.json']) {
+      const path = join(dir, file);
+      if (existsSync(path) && lstatSync(path).isFile()) utimesSync(path, now, now);
+    }
+  }
+}
+
+/**
+ * Where a sample is made before it is a project: a folder of the projects folder no project
+ * list reads (no project.json of its own, a name starting with a dot).
+ */
+const SAMPLE_STAGING = '.sample-staging';
+
+/** Rename a folder, again for a while when Windows holds it (an indexer, a scanner). */
+async function renameFolder(from, to) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fsRename(from, to);
+      return;
+    } catch (e) {
+      const code = String((e && e.code) || '');
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(code) || attempt >= 10) throw e;
+      await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+    }
+  }
+}
+
+/**
+ * Remove what a sample copy left under SAMPLE_STAGING when the app stopped in the middle of
+ * it (a crash, a kill): entries older than `maxAgeMs`. Runs before each sample is opened, one
+ * at a time, so no copy of this server is in there while it does. Returns the names removed.
+ */
+export async function sweepSampleStaging(root = PROJECTS_ROOT, maxAgeMs = 60 * 60 * 1000) {
+  const stagingRoot = join(root, SAMPLE_STAGING);
+  const removed = [];
+  let names = [];
+  try {
+    names = readdirSync(stagingRoot);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    const dir = join(stagingRoot, name);
+    try {
+      if (Date.now() - lstatSync(dir).mtimeMs < maxAgeMs) continue;
+      await removeTree(dir);
+      removed.push(name);
+    } catch (e) {
+      console.warn('[CFD W16] sample staging sweep', dir, e);
+    }
+  }
+  return removed;
+}
+
+/** The sample being opened (each waits for the one before). @type {Promise<unknown>} */
+let sampleChain = Promise.resolve();
+
+/**
+ * A plugin's sample project (manifest [[samples]], API 1.8) as a new project: the sample's
+ * folder copied into the projects folder with its placeholders filled in
+ * (scripts/project-sample.js), a new id, a title no project here has ("Heat sink", then
+ * "Heat sink 2", ...) and the folder asked for, and a new draft run in each study (a
+ * sample ships no runs: a run's id names its WSL case, so two copies never share one).
+ * It becomes the active project. The worker names the folder, only for a plugin that is on.
+ * One at a time (two at once would pick the same free title).
+ */
+export function createProjectFromSample(body) {
+  const run = sampleChain.then(() => copySample(body));
+  sampleChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * The copy is made, checked again and filled in under SAMPLE_STAGING, then moved into
+ * place whole, so no list ever shows a half-made project; anything that fails removes
+ * only what this call made.
+ */
+async function copySample(body) {
+  ensureProjectsRoot();
+  await sweepSampleStaging();
+  const plugin = String((body && body.plugin) || '').trim();
+  const sample = String((body && body.sample) || '').trim();
+  if (!plugin || !sample) return { ok: false, status: 400, body: { error: 'plugin and sample required' } };
+  let found;
+  try {
+    found = await commitRpc('plugins.sample', { key: plugin, sample });
+  } catch (e) {
+    // The worker's "not on" / "no such sample" (-32004) is the caller's 404; anything else
+    // (the worker gone, a crash) is the app's, 503.
+    const why = String((e && e.message) || e);
+    if (e && Number(e.code) === -32004) return { ok: false, status: 404, body: { error: why } };
+    return { ok: false, status: 503, body: { error: `could not read the sample: ${why}` } };
+  }
+  const src = String((found && found.dir) || '');
+  let problem = '';
+  try {
+    problem = sampleProblem(src);
+  } catch (e) {
+    problem = `the sample's folder cannot be read: ${String((e && e.message) || e)}`;
+  }
+  if (problem) return { ok: false, status: 500, body: { error: problem } };
+  const title = freeProjectTitle(String((found && found.title) || 'Sample').trim() || 'Sample');
+  const id = newProjectId(title);
+  const dest = projectDir(id);
+  const stagingRoot = join(PROJECTS_ROOT, SAMPLE_STAGING);
+  const staging = join(stagingRoot, id);
+  const now = new Date().toISOString();
+  const refuse = (why) => ({ ok: false, status: 500, body: { error: `could not open the sample: ${why}` } });
+  let placed = false;
+  const fail = async (why) => {
+    // Only what this call made: its staging folder, and the project once it moved there.
+    for (const dir of placed ? [staging, dest] : [staging]) {
+      try {
+        await removeTree(dir);
+      } catch (e) {
+        console.warn('[CFD W16] sample cleanup', dir, e);
+      }
+    }
+    try {
+      rmdirSync(stagingRoot); // only when empty
+    } catch {
+      /* kept */
+    }
+    invalidateProjectsListCache();
+    return refuse(why);
+  };
+  if (existsSync(dest)) return refuse(`a project ${id} is already there`);
+  try {
+    mkdirSync(stagingRoot, { recursive: true });
+    mkdirSync(staging); // not recursive: one that is there already is not ours
+  } catch (e) {
+    return refuse(String((e && e.message) || e));
+  }
+  let proj;
+  try {
+    // Links were refused above; none is followed while copying. `staging` is the empty folder
+    // this call just made, so nothing there is replaced (force: false); errorOnExist stays off
+    // because Node on Linux refuses a copy into an existing folder with it on.
+    await fsCp(src, staging, { recursive: true, errorOnExist: false, force: false, verbatimSymlinks: true });
+    // Checked again on the copy: a link made, or files grown, since the check above.
+    const again = sampleProblem(staging);
+    if (again) return await fail(again);
+    fillSampleFolder(staging, { projectDir: dest, projectsRoot: PROJECTS_ROOT, projectId: id });
+    freshenSamplePreviews(staging);
+    proj = Object.assign(JSON.parse(readFileSync(join(staging, 'project.json'), 'utf8')), {
+      id,
+      title,
+      folder: String((body && body.folder) || ROOT_FOLDER).trim() || ROOT_FOLDER,
+      created_at: now,
+      updated_at: now,
+      persistence: 'filesystem',
+      projects_root: PROJECTS_ROOT,
+      project_json: projectJsonPath(id),
+      sample: { plugin, key: String(found.sample || sample) },
+    });
+    // Whole before it can be listed: the worker writes it (project.write_project) in the
+    // staging folder, and the folder moves into place with it.
+    if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
+    const written = commitRpcSync('project.write_project', { project_dir: staging, doc: proj });
+    if (written && typeof written === 'object') Object.assign(proj, written);
+    if (existsSync(dest)) return await fail(`a project ${id} is already there`);
+    await renameFolder(staging, dest);
+    placed = true;
+    invalidateProjectsListCache();
+  } catch (e) {
+    return await fail(String((e && e.message) || e));
+  }
+  try {
+    rmdirSync(stagingRoot); // only when empty
+  } catch {
+    /* another copy is under way, or something was left: kept */
+  }
+  // The project's studies as the app reads them (its folders, then the index).
+  for (const sid of readCatalog(id).simulations.map((s) => String((s && s.id) || '')).filter(Boolean)) {
+    let made;
+    try {
+      made = await createDraftRun({ projectId: id, simulationId: sid });
+    } catch (e) {
+      made = { ok: false, error: String((e && e.message) || e) };
+    }
+    if (!made || made.ok === false) return await fail(`no draft run for study ${sid}: ${(made && made.error) || 'unknown'}`);
+  }
   writeActiveId(id);
   return { ok: true, status: 201, body: { ok: true, ...proj, active: true } };
 }
@@ -2638,6 +2851,18 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       const id = String(body.project_id || body.id || '').trim();
       const result = deleteProject(id);
       if (result.ok) res.setHeader('X-CFD-Project-Id', id);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'POST' && parts[2] === 'sample') {
+      let body = {};
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
+      }
+      const result = await createProjectFromSample(body);
+      res.setHeader('X-CFD-Source', 'project-sample');
+      if (result.ok && 'id' in result.body) res.setHeader('X-CFD-Project-Id', result.body.id);
       return sendJson(res, result.status, result.body);
     }
     if (req.method === 'POST' && parts[2] === 'open') {

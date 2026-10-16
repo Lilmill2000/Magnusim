@@ -223,6 +223,11 @@ function currentFolderName() {
   return '';
 }
 
+/** The folder Home shows now ('' for All projects or Recent): where a new project goes. */
+export function homeFolderNow() {
+  return String(currentFolderName() || '').trim();
+}
+
 function visibleProjects() {
   let list = state.projects.slice();
   if (state.filter === 'recent') {

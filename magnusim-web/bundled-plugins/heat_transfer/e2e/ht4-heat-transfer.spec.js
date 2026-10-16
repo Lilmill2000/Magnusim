@@ -473,7 +473,8 @@ test('WSL: a heated cavity meshed and solved through the app; its heat flux, ene
   await page.evaluate((f) => window.__CFD_ASSIGN_FACE__(Number(f.match(/\d+/)[0])), faceAt(list, 'z', 2, 1));
   await expect.poll(async () => (((await s.bcs()).find((b) => b.id === sym.id) || {}).faces || []).length).toBe(2);
 
-  // A mesh: Standard at fineness 4 (about 50,000 cells on this 2 mm slab), with layers.
+  // A mesh: Standard (picked: a Heat Transfer study's new mesh starts on Hex-dominant) at
+  // fineness 4 (about 50,000 cells on this 2 mm slab), with layers.
   const meshesNow = async () => (await json(request, s.q('/api/mesh', { simulation_id: s.sid }))).meshes || [];
   const studyRow = page.locator(`#left-tree [data-w17-sim-id="${s.sid}"]`);
   await studyRow.locator('[data-w20-mesh="1"] > .tree-row .tl').first().click();
@@ -481,6 +482,9 @@ test('WSL: a heated cavity meshed and solved through the app; its heat flux, ene
   const form = page.locator('#panel-mesh-form .cfd-island');
   await expect(form.locator('[data-schema-key="fineness"] input')).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await meshesNow()).length, { timeout: 15_000 }).toBe(1);
+  await form.locator('details.mesh-advanced > summary').click();
+  await form.locator('select[data-mesh-engine="1"]').selectOption('standard');
+  await expect.poll(async () => (await meshesNow())[0]?.settings?.advanced?.mesh_engine).toBe('standard');
   await form.locator('[data-schema-key="fineness"] input').fill('4');
   await form.locator('[data-schema-key="fineness"] input').press('Enter');
   await form.locator('[data-mesh-generate="1"]').click();
@@ -571,13 +575,17 @@ test('WSL: a channel set up only through the panels writes the case the panels s
   await page.evaluate((f) => window.__CFD_ASSIGN_FACE__(Number(f.match(/\d+/)[0])), faceAt(list, 'z', 2, 1));
   await expect.poll(async () => (((await s.bcs()).find((b) => b.id === sym.id) || {}).faces || []).length).toBe(2);
 
-  // A coarse mesh, then a short run started from the Run panel.
+  // A coarse Standard mesh (picked: a new one starts on Hex-dominant), then a short run
+  // started from the Run panel.
   const meshesNow = async () => (await json(request, s.q('/api/mesh', { simulation_id: s.sid }))).meshes || [];
   await studyRow.locator('[data-w20-mesh="1"] > .tree-row .tl').first().click();
   await page.locator('#btn-create-mesh').click({ timeout: 15_000 });
   const form = page.locator('#panel-mesh-form .cfd-island');
   await expect(form.locator('[data-schema-key="fineness"] input')).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await meshesNow()).length, { timeout: 15_000 }).toBe(1);
+  await form.locator('details.mesh-advanced > summary').click();
+  await form.locator('select[data-mesh-engine="1"]').selectOption('standard');
+  await expect.poll(async () => (await meshesNow())[0]?.settings?.advanced?.mesh_engine).toBe('standard');
   await form.locator('[data-schema-key="fineness"] input').fill('2');
   await form.locator('[data-schema-key="fineness"] input').press('Enter');
   await form.locator('[data-mesh-generate="1"]').click();

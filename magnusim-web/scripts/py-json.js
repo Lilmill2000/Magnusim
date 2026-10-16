@@ -130,12 +130,17 @@ function mapProjectCliToRpc(args, stdinObj) {
 
 function dispatchMethod(method, params) {
   const stdin = JSON.stringify({ method, params: params || {} });
+  // An RpcError comes back as its code and message (thrown below), as the worker answers it.
   const code = [
     'import json, sys',
     'import cfddesk.worker.methods',
-    'from cfddesk.worker.rpc import dispatch',
+    'from cfddesk.worker.rpc import RpcError, dispatch',
     'req = json.loads(sys.stdin.read())',
-    'print(json.dumps(dispatch(req["method"], req.get("params") or {}), default=str))',
+    'try:',
+    '    out = dispatch(req["method"], req.get("params") or {})',
+    'except RpcError as e:',
+    '    out = {"__rpc_error__": e.to_dict()}',
+    'print(json.dumps(out, default=str))',
   ].join('\n');
   const r = spawnSync(PYTHON, ['-c', code], {
     cwd: PY_ROOT,
@@ -164,6 +169,10 @@ function dispatchMethod(method, params) {
     );
   }
   const doc = JSON.parse(line);
+  const rpcError = doc && typeof doc === 'object' ? doc.__rpc_error__ : null;
+  if (rpcError && typeof rpcError === 'object') {
+    throw Object.assign(new Error(String(rpcError.message || 'rpc error')), { code: rpcError.code, data: rpcError.data });
+  }
   if (r.status && r.status !== 0 && !(doc && doc.ok === false)) {
     throw new Error('project rpc exit ' + String(r.status) + ': ' + String(r.stderr || line).slice(0, 500));
   }

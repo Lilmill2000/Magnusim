@@ -190,7 +190,8 @@ async function setHeatSource(page, value) {
 }
 
 const sourceShown = (panel, id) => panel.locator(`[data-ht-heat-source="${id}"] [data-ht-heat-source-value]`);
-const STANDARD_NOTE = /On a Standard mesh \(tetrahedra\) the heat through a solid's walls reads about \d+ % high/;
+const STANDARD_NOTE =
+  /On a Standard mesh \(tetrahedra\) the heat through walls is less accurate: up to about \d+ % high next to a laminar flow and about \d+ % low with wall functions/;
 
 const CHT_LINE = 'Conjugate heat transfer with chtMultiRegionSimpleFoam: Body2 is Aluminium 6061 (solid). Body1 is Air (fluid).';
 
@@ -199,6 +200,8 @@ test('a solid body makes the study conjugate heat transfer: the panel says why, 
   const s = await heatStudy(page, request);
   let panel = await openStudy(page, s);
   await expect(panel.locator('[data-ht-solver="1"]')).toHaveText(/^Solves buoyant flow of one fluid with buoyantSimpleFoam/);
+  // No mesh yet: a new one starts on Hex-dominant, so no Standard note.
+  await expect(panel.locator('[data-ht-solver="1"]')).toBeVisible();
   await expect(panel.locator('[data-ht-standard-mesh="1"]')).toHaveCount(0);
   const { air, al } = await airAndAluminium(page, s);
   // A 10 W heat source in the block, in its material (W in a metric project), saved on the record.
@@ -213,19 +216,30 @@ test('a solid body makes the study conjugate heat transfer: the panel says why, 
   await expect(panel.locator(`[data-ht-heat-source="${al.id}"]`)).toContainText('Heat source: Aluminium 6061 (Body2)');
   await expect(sourceShown(panel, al.id)).toHaveText('10 W');
   await expect(panel.locator('[data-ht-heat-source-hint="1"]')).toContainText("A solid's heat source is set in its material");
-  // No mesh yet: Standard is what Generate would use, and its wall heat reads high.
-  await expect(panel.locator('[data-ht-standard-mesh="1"]')).toHaveText(STANDARD_NOTE);
+  // No mesh yet (a new one starts on Hex-dominant): no note.
+  await expect(panel.locator('[data-ht-standard-mesh="1"]')).toHaveCount(0);
   // Gravity along -Y (the channel's floor is y = 0).
   await panel.locator('[data-schema-key="gravity"] select').selectOption({ label: '−Y (down along Y)' });
   await expect.poll(async () => (await s.study()).gravity).toBe('-y');
 
-  // A Hex-dominant mesh: no note.
+  // A new mesh starts on Hex-dominant (no note); set to Standard, the note says what its
+  // walls' heat reads; back on Hex-dominant, no note.
   const meshesNow = async () => (await json(request, s.q('/api/mesh', { simulation_id: s.sid }))).meshes || [];
   await s.studyRow.locator('[data-w20-mesh="1"] > .tree-row .tl').first().click();
   await page.locator('#btn-create-mesh').click({ timeout: 15_000 });
   const form = page.locator('#panel-mesh-form .cfd-island');
   await expect.poll(async () => (await meshesNow()).length, { timeout: 15_000 }).toBe(1);
+  await expect.poll(async () => (await meshesNow())[0]?.settings?.advanced?.mesh_engine).toBe('snappy_hexdominant');
   await form.locator('details.mesh-advanced > summary').click();
+  await expect(form.locator('select[data-mesh-engine="1"]')).toHaveValue('snappy_hexdominant');
+  await form.locator('select[data-mesh-engine="1"]').selectOption('standard');
+  await expect.poll(async () => (await meshesNow())[0]?.settings?.advanced?.mesh_engine).toBe('standard');
+  panel = await reopenStudy(page, s);
+  await expect(panel.locator('[data-ht-standard-mesh="1"]')).toHaveText(STANDARD_NOTE, { timeout: 30_000 });
+  const meshFolder = s.studyRow.locator('li[data-w20-mesh="1"]').first();
+  if (!(await meshFolder.evaluate((el) => el.classList.contains('expanded')))) await meshFolder.locator(':scope > .tree-row .tw').click();
+  await s.studyRow.locator(`[data-w20-mesh-item="${(await meshesNow())[0].id}"] > .tree-row .tl`).first().click();
+  if (!(await form.locator('details.mesh-advanced').evaluate((el) => el.open))) await form.locator('details.mesh-advanced > summary').click();
   await form.locator('select[data-mesh-engine="1"]').selectOption('snappy_hexdominant');
   await expect.poll(async () => (await meshesNow())[0]?.settings?.advanced?.mesh_engine).toBe('snappy_hexdominant');
   panel = await reopenStudy(page, s);

@@ -1,6 +1,6 @@
 key = "heat_transfer"
 name = "Heat Transfer"
-version = "0.1.0-dev"
+version = "0.1.0"
 api_version = "1.8"
 tier = "bundled"
 required = false
@@ -16,3 +16,11 @@ requires_plugins = ["incompressible_flow>=1.1"]
 # The study and run panels' settings (TSX, bundled by the host when served).
 ui = "ui"
 ui_entry = "index.tsx"
+
+# Home's Open sample (host API 1.8): a project of inputs only, made in the app
+# (scripts/sample-from-project.mjs), copied as a new project when opened.
+[[samples]]
+key = "heat-sink"
+title = "Heat sink"
+hint = "An aluminium heat sink with a 10 W source in an air channel: conjugate heat transfer, ready to mesh"
+path = "samples/heat-sink"

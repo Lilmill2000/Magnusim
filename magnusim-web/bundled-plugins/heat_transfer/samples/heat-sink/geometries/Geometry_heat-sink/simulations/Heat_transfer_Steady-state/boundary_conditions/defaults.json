@@ -1,0 +1,11 @@
+{
+  "defaults": {
+    "wall_type": "No-slip"
+  },
+  "defaults_by_simulation": {
+    "sim-mv9nwemq-472577": {
+      "wall_type": "No-slip"
+    }
+  },
+  "simulation_id": "sim-mv9nwemq-472577"
+}

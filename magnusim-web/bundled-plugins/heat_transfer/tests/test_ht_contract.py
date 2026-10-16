@@ -197,7 +197,7 @@ def test_bc_problems_come_with_their_name():
 
 
 def test_run_models():
-    assert contract.STEADY_RUN_MODEL.defaults() == {"end_time": 1000, "write_interval": 100}
+    assert contract.STEADY_RUN_MODEL.defaults() == {"end_time": 1500, "write_interval": 100}
     assert contract.STEADY_RUN_MODEL.normalize({"end_time": "250", "write_interval": 0}) == {"end_time": 250, "write_interval": 1}
     t = contract.TRANSIENT_RUN_MODEL.normalize({"end_time": 4, "write_count": 8, "max_delta_t": 9, "settle": None})
     assert t["end_time"] == 4 and t["write_count"] == 8 and t["max_delta_t"] == 0.5 and t["settle"] is None
@@ -254,7 +254,7 @@ def test_the_host_loads_it_from_a_plugins_folder(tmp_path):
         assert [f for f in hub.failures if f["key"] == "heat_transfer"] == []
         manifest = hub.manifests["heat_transfer"]
         assert manifest.license == "GPL-3.0-or-later"
-        assert manifest.version == "0.1.0-dev"
+        assert manifest.version == "0.1.0"
     finally:
         reset_for_tests()
 

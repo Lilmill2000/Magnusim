@@ -77,6 +77,22 @@ class GeometryAction:
 
 
 @dataclass(frozen=True)
+class Sample:
+    """A sample project a plugin ships (manifest ``[[samples]]``, API 1.8).
+
+    ``path`` is a folder inside the plugin's own folder holding a project as the app
+    saves one, inputs only (project.json, the geometry, the studies' materials, BCs,
+    settings; no mesh or results). Home lists the samples of the plugins that are on;
+    opening one copies the folder into the projects folder as a new project.
+    """
+
+    key: str
+    title: str
+    hint: str = ""
+    path: str = ""
+
+
+@dataclass(frozen=True)
 class WorkspaceSpec:
     """A full workspace a plugin draws itself (manifest ``[[workspaces]]``, API 1.1).
 
@@ -167,6 +183,8 @@ class PluginManifest:
     start_actions: list[StartAction] = field(default_factory=list)
     # Actions that open a project geometry in a workspace to edit it ([[geometry_actions]], API 1.7).
     geometry_actions: list[GeometryAction] = field(default_factory=list)
+    # Sample projects Home offers while the plugin is on ([[samples]], API 1.8).
+    samples: list[Sample] = field(default_factory=list)
     # What the manifest asked for that this host ignores (shown on its Settings row).
     manifest_warnings: list[str] = field(default_factory=list)
     # Size limits for its own files in a project ([files]).

@@ -82,7 +82,7 @@ How to choose:
 1. Your tool has its own screens (a sketcher, a polar bench, an optimiser): make a **workspace**.
 2. You add a physics model that the core meshes, runs and shows like its own: make an **analysis**.
 3. You change one control or panel inside the workbench: make a **panel**.
-4. You need both: one plugin may hold all three. Incompressible Flow is an analysis with panels. Airfoil is a workspace that runs OpenFOAM cases.
+4. You need both: one plugin may hold all three. Incompressible Flow is an analysis with panels. Airfoil is a workspace that runs OpenFOAM cases. Heat Transfer is an analysis with panels whose cases have several regions.
 
 Worked examples in the app:
 
@@ -90,6 +90,7 @@ Worked examples in the app:
 | --- | --- |
 | `bundled-plugins/airfoil` | A workspace plugin: own environment, service, jobs, OpenFOAM cases, start actions, its own e2e suite |
 | `bundled-plugins/incompressible_flow` | An analysis plugin: the analysis contract, BC families, a material model, settings panels |
+| `bundled-plugins/heat_transfer` | The multi-region example: an analysis whose solver follows the study's materials (one fluid: buoyant flow; a solid body: conjugate heat transfer), fluid and solid material models, meshes and cases of several regions, fields on another plugin's BCs, region-aware monitors, a sample project (`[[samples]]`), a validation set |
 | `python/tests/fixtures/plugins/stub-analysis` | The smallest complete analysis, on `laplacianFoam` |
 | `python/tests/fixtures/kit-plugins/kit-demo` | A schema field widget drawn with the UI kit |
 | `python/tests/fixtures/workspace-plugins/ws-demo` | A workspace with modules, React, WebAssembly and a worker |

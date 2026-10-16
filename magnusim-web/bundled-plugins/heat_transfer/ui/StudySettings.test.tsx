@@ -6,7 +6,13 @@ import { unregisterPlugin } from '../../../src/plugin-api';
 import { pluginHost } from '../../../src/plugins/loader';
 import { useProjectStore } from '../../../src/store/project';
 import { register } from './index';
-import { STANDARD_MESH_NOTE, heatSourceOf, shownNumericsSchema, shownSettingsSchema, solverLine } from './StudySettings';
+import {
+  STANDARD_MESH_NOTE,
+  heatSourceOf,
+  shownNumericsSchema,
+  shownSettingsSchema,
+  solverLine,
+} from './StudySettings';
 import { placedMaterials } from './materials';
 
 // Heat Transfer's study settings in the core's study panel: the physics rows from the
@@ -91,6 +97,7 @@ beforeEach(() => {
           schema: settingsSchema,
           numerics_schema: numericsSchema,
           ui: { study_settings: 'heat_transfer.study', run_settings: 'heat_transfer.run' },
+          default_mesher: 'snappy_hexdominant',
         },
         {
           key: 'heat_transfer_transient',
@@ -100,6 +107,7 @@ beforeEach(() => {
           schema: settingsSchema,
           numerics_schema: numericsSchema,
           ui: { study_settings: 'heat_transfer.study', run_settings: 'heat_transfer.run' },
+          default_mesher: 'snappy_hexdominant',
         },
       ],
     },
@@ -236,12 +244,16 @@ describe('Heat Transfer study settings with a solid body (conjugate heat transfe
     materials([AIR, AL], 'standard');
     renderPanel();
     expect(await screen.findByText(STANDARD_MESH_NOTE)).toBeInTheDocument();
-    expect(STANDARD_MESH_NOTE).toContain('about 6 % high');
+    expect(STANDARD_MESH_NOTE).toContain('up to about 14 % high next to a laminar flow');
+    expect(STANDARD_MESH_NOTE).toContain('about 20 % low with wall functions');
+    expect(STANDARD_MESH_NOTE).toContain("about 6 % high through a solid's walls");
     cleanup();
     materials([AIR, AL], '');
     renderPanel();
-    // No mesh yet: Standard is what Generate uses unless another is picked.
-    expect(await screen.findByText(STANDARD_MESH_NOTE)).toBeInTheDocument();
+    // No mesh yet: a new one starts on Hex-dominant (the analysis's default_mesher), so no note.
+    await screen.findByText(/Conjugate heat transfer/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(STANDARD_MESH_NOTE)).toBeNull();
     cleanup();
     materials([AIR, AL], 'snappy_hexdominant');
     renderPanel();
@@ -249,8 +261,13 @@ describe('Heat Transfer study settings with a solid body (conjugate heat transfe
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(STANDARD_MESH_NOTE)).toBeNull();
     cleanup();
-    // Buoyant flow (no solid): no note.
+    // Buoyant flow (no solid) on Standard: the same note.
     materials([AIR], 'standard');
+    renderPanel();
+    await screen.findByText(/Solves buoyant flow/);
+    expect(await screen.findByText(STANDARD_MESH_NOTE)).toBeInTheDocument();
+    cleanup();
+    materials([AIR], 'snappy_hexdominant');
     renderPanel();
     await screen.findByText(/Solves buoyant flow/);
     await new Promise((r) => setTimeout(r, 50));

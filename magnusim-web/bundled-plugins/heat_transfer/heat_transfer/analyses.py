@@ -438,6 +438,11 @@ def _contract_fields(td: str, *, key: str) -> dict[str, Any]:
     }
 
 
+# A new mesh of a Heat Transfer study starts on Hex-dominant (host API 1.8 default_mesher):
+# on Standard's tetrahedra the heat through walls is less accurate (VALIDATION.md).
+DEFAULT_MESHER = "snappy_hexdominant"
+
+
 def _build(td: str) -> AnalysisType:
     from . import contract as hc
 
@@ -465,6 +470,7 @@ def _build(td: str) -> AnalysisType:
         requires=(Requirement("wsl_tool", solver), Requirement("wsl_tool", cht_solver)),
         bc_fields=BC_FIELDS,
         bc_seeds=BC_SEEDS,
+        default_mesher=DEFAULT_MESHER,
         **_contract_fields(td, key=key),
     )
 

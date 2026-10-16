@@ -7,7 +7,7 @@ JSON Schema (``docs/plugins/manifest.schema.json``, written by
 (``tools/plugin_check.py``):
 
 - the tables of arrays (``[[study_kinds]]``, ``[[workspaces]]``,
-  ``[[start_actions]]``, ``[[geometry_actions]]``) take their keys, types and defaults from the
+  ``[[start_actions]]``, ``[[geometry_actions]]``, ``[[samples]]``) take their keys, types and defaults from the
   dataclasses' fields, so a field added there shows up here;
 - every top-level ``PluginManifest`` field is mapped to its manifest key or
   listed as one the host sets itself. A field this module does not know makes
@@ -63,6 +63,7 @@ FEATURE_API: dict[str, str] = {
     "default_analysis.study_name": "1.4",
     "geometry_actions": "1.7",
     "exports": "1.8",
+    "samples": "1.8",
 }
 
 # PluginManifest fields that are not manifest keys: the host or register() sets them.
@@ -188,6 +189,14 @@ TOP_LEVEL: dict[str, dict[str, Any]] = {
             "in its workspace, to edit that geometry and send the edit back."
         ),
     },
+    "samples": {
+        "type": "array",
+        "items": "Sample",
+        "description": (
+            "Sample projects Home offers while the plugin is on: each a folder in the plugin holding a project "
+            "(inputs only), copied into the projects folder as a new project when opened."
+        ),
+    },
     "files": {
         "type": "object",
         "properties": {
@@ -311,6 +320,22 @@ ARRAY_TABLES: dict[str, tuple[type, tuple[str, ...], dict[str, dict[str, Any]]]]
                 "description": (
                     "Where the host offers it (default: all): the tree's right-click menu, the viewport's right-click "
                     "on the part, the Geometry panel. A place this host does not know is left out with a warning."
+                ),
+            },
+        },
+    ),
+    "Sample": (
+        manifest_mod.Sample,
+        ("key", "title", "path"),
+        {
+            "key": {"pattern": r"^[a-z0-9][a-z0-9-]{0,39}$", "description": "Lower-case letters, digits and '-', unique in the plugin."},
+            "title": {"minLength": 1, "maxLength": 40, "description": "Home's menu item and the new project's title, one line."},
+            "hint": {"maxLength": 160, "description": "A line under the menu item: what the sample shows."},
+            "path": {
+                "minLength": 1,
+                "description": (
+                    "A folder inside the plugin's folder holding project.json and the project's inputs. A folder "
+                    "that is missing or has no project.json is left out with a warning."
                 ),
             },
         },

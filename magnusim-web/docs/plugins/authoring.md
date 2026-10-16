@@ -227,7 +227,37 @@ assert heat.bc_fields[0].families == ("velocity_inlet",)
 
 **Several materials per study.** A `MaterialModel` has a `role`, `"fluid"` (the default) or `"solid"`. An analysis that lists more than one model in `material_models` lets a study hold several material records, one per group of bodies: the Materials tree lists each, "+" adds one, its panel picks the model ("Type"), the preset and the bodies, and a body belongs to one record at a time (assigning it takes it from the other). Each record with bodies is one region of the mesh, with its model's role (`cfddesk.project.regions.study_regions`; Start's `ReadyContext.mesh` gives the mesh's `regions` and `out_of_date_materials` when they are no longer the study's): Standard and Hex-dominant mesh such a study with one cellZone per region (named after it: lower-case word characters, and never a name a case's files have or another region's, `r_g`, `air_2`; `cfddesk.wsl.region_rule`), the faces between regions meshed through, so `splitMeshRegions -cellZonesOnly` gives a CHT case its regions (one region per cellZone, even when a material's bodies are apart; `-cellZones` would walk the mesh and name each separate piece `domain<N>`) and their `<a>_to_<b>` interface patches; cfMesh refuses it. A record names its model in `material_model`. An analysis with one model keeps the one-fluid panel.
 
+**The mesher a new mesh starts with.** An analysis may name it, `default_mesher` (a mesher's key): a new mesh in its studies starts on it, when that mesher is registered, instead of the app's default (Standard). Heat Transfer names Hex-dominant (`"snappy_hexdominant"`), because the heat through walls is more accurate on its hexahedra. Restore defaults on a mesh gives it back. An existing mesh keeps its mesher and a copy keeps its source's; a mesher a new mesh cannot use (none registers it, or a core mesher that is not a product engine) is ignored with a warning on your plugin's Settings row (new meshes then start on the app's default).
+
+```python test
+from cfddesk.registry import AnalysisType
+
+heat = AnalysisType(key="my_heat_steady", label="Heat", category="heat", time_dependency="steady", fields=("T",),
+                    default_mesher="snappy_hexdominant")
+assert heat.default_mesher == "snappy_hexdominant"
+```
+
 **Units.** Temperatures are shown and typed in °C (metric) or °F (imperial), stored in K; a schema form's temperature field has a K/°C/°F picker. New quantities: `heat_flux`, `heat_transfer_coefficient`, `thermal_conductivity`, `specific_heat`, `power`, `power_density`, `thermal_expansion`, `acceleration`, `dynamic_viscosity` and `molar_mass` (`magnusim_sdk.units`, and the kit's `UNITS`).
+
+## Sample projects (1.8)
+
+A plugin may ship ready-made projects that show what it does. Home's **Open sample** lists the samples of every plugin that is on; a pick copies one into the projects folder as a new project (titled as no project there is: "Heat sink", then "Heat sink 2") and opens it. A sample holds a project's inputs: the geometry, its studies with their materials, BCs, mesh settings and monitors. It holds no mesh and no results, and no runs: each study of the copy gets a new draft run (a run's id names its WSL case, so two copies never share one).
+
+```toml
+[[samples]]
+key = "heat-sink"            # lower-case letters, digits and '-'; unique in the plugin
+title = "Heat sink"          # the menu item and the new project's title, at most 40 characters
+hint = "An aluminium heat sink with a 10 W source in an air channel: conjugate heat transfer, ready to mesh"
+path = "samples/heat-sink"   # a folder inside the plugin holding project.json
+```
+
+Make the folder from a project you set up in the app (before Generate):
+
+```bash
+node scripts/sample-from-project.mjs <projects folder>/<project id> bundled-plugins/<key>/samples/<name>
+```
+
+It copies the project without its mesh case folder and its runs, and writes its JSON files with three placeholders where a project holds its own place: `{{project_dir}}` (the project's folder; the parts of a path under it joined with `/`), `{{projects_root}}` (only as a whole string: a path under it would lead into other projects) and `{{project_id}}`. The copy fills them in for its own folder, so a sample opens on any PC. The tool refuses a project whose mesh was generated, one holding a link or junction or more than 64 MB of files, and JSON that still names a folder outside the project; opening refuses those too, and any string naming a place on a PC (a drive, UNC or absolute POSIX path; the app's `/api/...` URLs are fine). Check the folder in (`plugin:pack` packs it with the plugin) and give it a default-suite e2e that opens it from Home. A bad `[[samples]]` table fails the plugin's load with the reason; a folder that is missing or holds no `project.json` is left out with a warning on the plugin's Settings row (`plugin:check` shows it).
 
 ## UI
 

@@ -1,6 +1,6 @@
 # Heat Transfer
 
-A bundled Magnusim plugin (version `0.1.0-dev`, host API 1.8, GPL-3.0-or-later): the
+A bundled Magnusim plugin (version `0.1.0`, host API 1.8, GPL-3.0-or-later): the
 temperature and flow of one fluid heated or cooled through its walls and inlets, with
 buoyancy (natural convection) or without it (forced convection), and heat conducted
 through solid bodies (conjugate heat transfer, CHT). It ships turned on and
@@ -8,6 +8,39 @@ can be turned off in Settings > Plugins. It builds on Incompressible Flow's boun
 conditions (`requires_plugins = ["incompressible_flow>=1.1"]`) and imports only
 `magnusim_sdk`, `cfddesk.registry` and Incompressible Flow's exported
 `incompressible_flow.flow_bcs`.
+
+## Getting started
+
+**The sample.** Home → **Open sample** → **Heat sink** copies a ready project into your
+projects: an aluminium heat sink (a base 40 × 40 mm and 5 mm thick with four fins 4 mm
+thick and 20 mm tall) with a 10 W heat source, on the floor of an air channel
+200 × 50 × 50 mm, air coming in at 0.5 m/s and 20 °C, gravity along −Y, laminar. Its
+mesh is set to Hex-dominant (fineness 4, about 126 000 cells): click Generate, then Start
+the run as it comes (1500 iterations, a steady study's default; meshing and the run took
+under 3 minutes in the test). The run's panel lists the energy balance (the 10 W in, and
+9.96 to 10.02 W out with the air in two test runs: within 0.4 %) and the sink's own
+temperatures (86.3 °C at its hottest); Results show T in the air and the sink. Open it again for a second copy ("Heat sink 2").
+
+**Your own part.** Create Simulation → **Heat Transfer** (steady or transient). Then:
+
+1. **Materials** ("+" in the study's Materials): a fluid (air, water, oil, nitrogen, or
+   your own) on the fluid bodies. That is all **buoyant flow** needs: one fluid, with or
+   without gravity. For **conjugate heat transfer** give the solid bodies a solid material
+   (aluminium, copper, steel, FR-4, ...) and, in that material, a heat source if it makes
+   heat. The study panel says which solver runs and why. A body with no material is left
+   out of the mesh.
+2. **Study settings:** gravity (its direction, or off for forced convection), the density
+   model, the reference and starting temperatures, the turbulence model.
+3. **Boundary conditions:** Incompressible Flow's inlets, outlets and walls, each with a
+   Thermal group (an inlet's temperature; a wall adiabatic, at a fixed temperature, with a
+   heat flux or a heat transfer coefficient). A solid's outer faces take a **Solid wall**.
+   Faces between bodies of different materials are coupled on their own.
+4. **Mesh** with Hex-dominant: a new mesh in a Heat Transfer study starts on it (Standard
+   works too, but the heat through walls is less accurate on it, see Limits; cfMesh cannot
+   mesh solids separately). Fins need at least 2 to 3
+   cells across: Start says so when a solid is about one cell thick.
+5. **Run:** add monitors (wall heat flux, surface temperature, thermocouples) and Start.
+   Every run shows its energy balance.
 
 ## What it solves
 
@@ -140,19 +173,33 @@ Temperatures in these messages show in the project's unit.
 
 - One fluid per study; constant properties; a solid's conductivity is the same in every
   direction.
-- No radiation, temperature-dependent properties, contact resistance between bodies, thin
-  walls on shared faces, porous media, species. Bodies that touch over part of a face are
-  not coupled there.
-- On a tetrahedral mesh (Standard) the heat through a solid's fixed-temperature face reads
-  high: the composite wall below gave 6.35 % more heat on 195 345 tetrahedra (the
-  temperature inside the solids was right to 0.45 % of ΔT), and 0.11 % on Hex-dominant
-  hexahedra. Corrected schemes for the solids ("Accurate" numerics: `Gauss linear
-  corrected`, `snGrad corrected`) do not fix it (+6.97 %): the error is the gradient at
-  the wall of a tetrahedron next to it, which OpenFOAM does not correct. The study panel
-  of a conjugate heat transfer study whose mesh is Standard says so ("On a Standard mesh
-  (tetrahedra) the heat through a solid's walls reads about 6 % high (its temperatures
-  are right): mesh with Hex-dominant for heat numbers."). Use Hex-dominant for heat
-  through solids' faces held at a temperature.
+- No radiation (P1, fvDOM, solar load), temperature-dependent or anisotropic properties,
+  contact resistance between bodies, thin walls (baffles) on shared faces, Joule heating,
+  humidity or condensation, phase change, porous media, MRF, species. Bodies that touch over
+  part of a face are not coupled there. cfMesh cannot mesh solid bodies separately (Generate
+  says so).
+- A solid about one cell thick is refused at Start; the Mesh panel does not warn about it
+  yet.
+- A Wall heat flux monitor picks boundaries, not the faces between bodies; the heat through
+  each interface is listed with the run's monitors.
+- Results legends show temperature in the project's unit (°C or °F) with no K/°C/°F picker
+  of their own; the viewport shows no gravity arrow.
+- On a tetrahedral mesh (Standard) the heat through walls is less accurate: up to about
+  14 % high next to a laminar flow (the validation set's laminar pipes; within 0.1 % on
+  Hex-dominant), about 20 % low with wall functions (the turbulent pipe; −10 % on
+  Hex-dominant), about 6 % high through a solid's walls, and within 1.5 % in a natural
+  convection cavity. Through a solid's fixed-temperature face: the
+  composite wall below gave 6.35 % more heat on 195 345 tetrahedra (the temperature inside
+  the solids was right to 0.45 % of ΔT), and 0.11 % on Hex-dominant hexahedra. Corrected
+  schemes for the solids ("Accurate" numerics: `Gauss linear corrected`, `snGrad
+  corrected`) do not fix it (+6.97 %): the error is the gradient at the wall of a
+  tetrahedron next to it, which OpenFOAM does not correct. The study panel of every Heat
+  Transfer study whose mesh is Standard says so ("On a Standard mesh (tetrahedra) the heat
+  through walls is less accurate: up to about 14 % high next to a laminar flow and about
+  20 % low with wall functions (the validation's pipes), about 6 % high through a solid's
+  walls; natural convection in a cavity was within 1.5 %. Mesh with Hex-dominant for heat
+  numbers."), and a new mesh in a Heat Transfer study starts on Hex-dominant. Use
+  Hex-dominant for heat numbers.
 - Start reads the unsplit mesh once (patches, the regions they touch, how thin each solid
   is) and keeps what it found beside the mesh (`<mesh case>/ht-mesh-summary.json`, keyed
   by the mesh files' sizes and times): a 2 million cell ascii mesh is checked in about
@@ -215,10 +262,51 @@ Constant properties at 20 to 27 °C. Conductivity is the same in every direction
 | `heat_transfer/parser.py`, `results.py`, `cht_results.py`, `monitors.py` | the solver log, monitors and energy balance |
 | `heat_transfer/jobs/write_run_case.py` | the run's prepare step (its `LaunchSpec.prepare_job`) |
 | `ui/` | the study and run panels' settings |
-| `tests/` | pytest (writer goldens, contract, results; `-m wsl` the solve proofs) |
+| `samples/heat-sink/` | the heat-sink sample Home opens (`[[samples]]`; inputs only) |
+| `validation/` | the validation set's results (`results.json`) and the script that writes `VALIDATION.md` |
+| `tests/` | pytest (writer goldens, contract, results; `-m wsl` the solve proofs; `-m validation` the validation set) |
 | `e2e/` | the plugin's browser suite |
 
-## Validation (HT4)
+## Validation
+
+The validation set compares the plugin with published results: de Vahl Davis's square
+cavity at Ra = 10³ to 10⁶, laminar pipes with a fixed wall heat flux and a fixed wall
+temperature (Shah & London), a turbulent pipe against Gnielinski's correlation, and the
+composite wall and heated block below. Each case runs through the app's own path
+(mesher, prepare job, `solve.sh`), Hex-dominant for every case and Standard on the pipes.
+The numbers, the setups and the sources: [VALIDATION.md](VALIDATION.md). It is
+report-only for now; `pytest -m validation` runs it.
+
+The full run of 2026-10-15 (Heat Transfer 0.1.0, OpenFOAM v2606), the error against the
+reference (± the case's own uncertainty: for the cavity half the gap between its hot and
+cold walls, for the pipes the standard error of the slices' mean):
+
+| Case | Reference | Hex-dominant | Standard |
+|---|---|---|---|
+| Cavity, Ra = 10³ / 10⁴ / 10⁵ / 10⁶: Nu-bar (the mean of the hot and cold walls) | 1.118 / 2.243 / 4.519 / 8.800 | +0.00 / +0.09 / −0.55 / −0.63 ± 0.89 % | |
+| The same: Nu_max on the hot wall (y/L 0.01 to 0.99) | 1.505 / 3.528 / 7.717 / 17.925 | +0.13 / −0.17 / −1.37 / −4.83 % (each peak within 0.005 L of the reference's height) | |
+| Laminar pipe, fixed wall heat flux: Nu | 4.364 | −0.09 ± 1.44 % | +13.8 ± 0.2 % |
+| Laminar pipe, fixed wall temperature: Nu | 3.657 | −0.35 ± 1.77 % | +13.1 ± 0.3 % |
+| Turbulent pipe, Re = 50 000 (k-omega SST, wall functions), 17.5 to 22.5 D from the inlet: Nu | 106.9 (Gnielinski) | −9.6 % (y+ 12 to 56) | −20.5 % (y+ 46 to 108) |
+| Composite wall: heat | 5.338 W | +0.11 % | |
+| Heated block: heat out, highest temperature rise | 10 W, 14.60 K | +0.00 %, +0.03 % | |
+
+The cavity's reference is de Vahl Davis's Nu-bar, the cavity's mean Nusselt number; his
+hot-wall values Nu_0 are 1.117, 2.238, 4.509 and 8.817, and the hot wall alone read
+1.1180, 2.2449, 4.4940 and 8.8219. Standard meshes (tetrahedra) read the heat through walls
+up to about 14 % high next to a laminar flow, about 20 % low with wall functions, about 6 %
+high through a solid's walls (the boundary gradient of a tetrahedron next to a wall), and
+within 1.5 % in a cavity (the Ra = 10⁵ proof below, meshed by Standard); the study panel says so for every Heat Transfer study on a
+Standard mesh, and a new mesh in a Heat Transfer study starts on Hex-dominant. Use
+Hex-dominant for heat numbers. The turbulent pipe reads about 10 % under Gnielinski's
+correlation on Hex-dominant (−7.9 % on a finer mesh, fineness 7, 293 760 cells): more than
+the correlation's own scatter, and why is not known yet. Its slices are 17.5 to 22.5 D
+after a uniform inlet, where the flow is still developing, and its wall's y+ runs from 12
+to 56, so part of the first cells sit in the buffer layer, where wall functions are least
+accurate; a longer pipe, a developed inlet and a mesh with y+ above 30 (or near 1) would
+tell which.
+
+## Proofs (HT4)
 
 `tests/test_ht_wsl_proofs.py` (`pytest -m wsl`, OpenFOAM v2606 in WSL), each case written
 by the app's run path (the first two meshed by Standard):
@@ -232,7 +320,7 @@ by the app's run path (the first two meshed by Standard):
 | The e2e fixture cavity, 400 iterations | 20 × 20 blockMesh | htc 3.34 W/(m²·K) on both the hot and the cold wall (h = q / (T_wall − T_ref) face by face); `rho` written | positive h on both |
 | Turbulent channel: k-omega SST, perfect gas, gravity, floor at 60 °C, roof with h = 10 W/(m²·K) to 10 °C, 300 iterations | 40 × 30 blockMesh | runs with the wall functions; floor htc 5.93 W/(m²·K), the roof takes 0.133 W out | runs |
 
-## Validation (HT5, conjugate heat transfer)
+## Proofs (HT5, conjugate heat transfer)
 
 `tests/test_ht5_cht_wsl.py` (`pytest -m wsl`): each case set up as a study, meshed by the
 app's mesher and run the way Start runs it (the runner's relay: the plugin's prepare job,

@@ -6,8 +6,9 @@
  * heat source (set in its material: it copies and goes with the record), time
  * dependency, algorithm, and the numerics. Every value reaches the written case
  * (heat_transfer.physics). Temperatures show in °C or °F (the project's units)
- * with a K/°C/°F picker; they are saved in K. A conjugate heat transfer study on
- * a Standard mesh says that its wall heat reads high there (tetrahedra).
+ * with a K/°C/°F picker; they are saved in K. A study on a Standard mesh says
+ * how far the heat through walls was off there in the validation set and HT5's proofs
+ * (tetrahedra). A new mesh of a Heat Transfer study starts on Hex-dominant.
  */
 import type { RJSFSchema } from '@rjsf/utils';
 import { useEffect, useState } from 'react';
@@ -158,8 +159,11 @@ function HeatSources({ record, solids }: { record: Record<string, unknown>; soli
   );
 }
 
-/** The mesher of the study's mesh ('standard' until another is picked; '' while unknown). */
-export function useStudyMeshEngine(projectId: string, simId: string): string {
+/**
+ * The mesher of the study's mesh; with no mesh yet, `fresh`: the one a new mesh starts
+ * with (the analysis row's default_mesher, host API 1.8). '' while unknown.
+ */
+export function useStudyMeshEngine(projectId: string, simId: string, fresh = ''): string {
   const [engine, setEngine] = useState('');
   useEffect(() => {
     if (!projectId || !simId) {
@@ -173,7 +177,7 @@ export function useStudyMeshEngine(projectId: string, simId: string): string {
         .then((r) => r.json())
         .then((j: { mesh?: { ui_mesh_engine?: string; settings?: { advanced?: { mesh_engine?: string } } } | null }) => {
           const m = (j && j.mesh) || null;
-          if (live) setEngine(String((m && (m.ui_mesh_engine || m.settings?.advanced?.mesh_engine)) || 'standard'));
+          if (live) setEngine(m ? String(m.ui_mesh_engine || m.settings?.advanced?.mesh_engine || 'standard') : fresh);
         })
         .catch(() => {
           if (live) setEngine('');
@@ -187,16 +191,23 @@ export function useStudyMeshEngine(projectId: string, simId: string): string {
       window.removeEventListener('cfd:mesh-settings', load);
       window.removeEventListener('cfd:mesh-job', load);
     };
-  }, [projectId, simId]);
+  }, [projectId, simId, fresh]);
   return engine;
 }
 
 /** HT5's composite wall on a Standard mesh read this much more heat through its walls than the exact answer. */
 export const STANDARD_HEAT_HIGH_PCT = 6;
+/** The validation set's laminar pipes on a Standard mesh read Nu up to this much high (VALIDATION.md). */
+export const STANDARD_LAMINAR_HIGH_PCT = 14;
+/** Its turbulent pipe (k-omega SST, wall functions) on a Standard mesh read Nu about this much low. */
+export const STANDARD_TURBULENT_LOW_PCT = 20;
 
+/** The note of a study on a Standard mesh: how far the heat through walls was off there. */
 export const STANDARD_MESH_NOTE =
-  `On a Standard mesh (tetrahedra) the heat through a solid's walls reads about ${STANDARD_HEAT_HIGH_PCT} % high ` +
-  '(its temperatures are right): mesh with Hex-dominant for heat numbers.';
+  `On a Standard mesh (tetrahedra) the heat through walls is less accurate: up to about ${STANDARD_LAMINAR_HIGH_PCT} % ` +
+  `high next to a laminar flow and about ${STANDARD_TURBULENT_LOW_PCT} % low with wall functions (the validation's pipes), ` +
+  `about ${STANDARD_HEAT_HIGH_PCT} % high through a solid's walls; natural convection in a cavity was within 1.5 %. ` +
+  'Mesh with Hex-dominant for heat numbers.';
 
 function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -209,7 +220,11 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
   const materials = useStudyMaterials(String(study.project_id || ''), String(study.id || ''));
   const solids = (materials || []).filter((m) => m.model === SOLID_MODEL);
   const cht = solids.length > 0;
-  const engine = useStudyMeshEngine(String(study.project_id || ''), String(study.id || ''));
+  const engine = useStudyMeshEngine(
+    String(study.project_id || ''),
+    String(study.id || ''),
+    String((row as { default_mesher?: string } | undefined)?.default_mesher || ''),
+  );
   const settingsSchema = shownSettingsSchema(
     tools.mergeObjectSchemas([(row?.schema || row?.settings_schema) as RJSFSchema | undefined]),
     record,
@@ -234,7 +249,7 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
         onCommit={commit(settingsSchema)}
       />
       {cht ? <HeatSources record={record} solids={solids} /> : null}
-      {cht && engine === 'standard' ? (
+      {engine === 'standard' && materials !== null ? (
         <p className="mat-assign-hint sim-def-hint" data-ht-standard-mesh="1">
           {STANDARD_MESH_NOTE}
         </p>

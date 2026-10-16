@@ -1,0 +1,26 @@
+{
+  "mesh_id": null,
+  "run_id": null,
+  "saved": true,
+  "created_at": "2026-10-15T14:56:50.954Z",
+  "updated_at": "2026-10-15T14:56:50.954Z",
+  "persistence": "filesystem",
+  "geometry_id": "geom-2b482092",
+  "pressure_type": "Fixed value",
+  "value": 0,
+  "unit": "Pa",
+  "turbulence_spec": "Auto",
+  "turbulence_intensity": 5,
+  "turbulence_length_scale": 0.01,
+  "turbulence_viscosity_ratio": 10,
+  "boundary_conditions_json": "{{project_dir}}/geometries/Geometry_heat-sink/simulations/Heat_transfer_Steady-state/boundary_conditions.json",
+  "id": "bc-mv9nwm43-90b386",
+  "name": "Outlet",
+  "bc_type": "Pressure",
+  "faces": [
+    "face 6@Body1"
+  ],
+  "face": "face 6@Body1",
+  "simulation_id": "sim-mv9nwemq-472577",
+  "project_id": "{{project_id}}"
+}

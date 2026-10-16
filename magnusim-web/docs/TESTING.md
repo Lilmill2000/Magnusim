@@ -14,8 +14,10 @@ run depends on what you are doing.
 | While you work on something | `npm run typecheck`, the unit tests for that area, and the e2e specs for what you touched | seconds to minutes |
 | Before a local commit | `npm run test:e2e:changed`: the suites your change can affect, without WSL meshes and solves | minutes |
 | Before a push, and nightly | `npm run test:e2e`: every suite, with real meshes and solves | about 47 min |
+| Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about two hours |
 
-The full run is the gate before a push. It is not needed for every commit.
+The full run is the gate before a push. It is not needed for every commit. A
+validation set is never part of `-m wsl`: its cases run only when asked for.
 
 | Command | What it runs |
 |---|---|
