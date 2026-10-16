@@ -7860,6 +7860,25 @@
       "requires_plugins": [
         "incompressible_flow>=1.1"
       ]
+    },
+    {
+      "key": "tunnel2d",
+      "name": "2D Wind Tunnel",
+      "version": "0.1.0",
+      "requires": [],
+      "provides": {},
+      "ui": null,
+      "ui_entry": "index.js",
+      "authors": [
+        "Magnusim"
+      ],
+      "description": "A real-time 2D wind tunnel on the GPU: set the wind speed, drop in airfoils and shapes, drag and turn them, and watch the flow (speed, pressure, vorticity) answer as you move them. Needs a browser with WebGPU.",
+      "source": "bundled",
+      "api_version": "1.4",
+      "overrides": [],
+      "tier": "bundled",
+      "required": false,
+      "requires_plugins": []
     }
   ],
   "default_analysis": {
