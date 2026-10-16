@@ -32,7 +32,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError } from './http.ts';
 import type { RequestContext, RouteHandler, Router } from './router.ts';
-import { assistantAccess, REMOTE_BODY } from './assistant/access.ts';
+import { assistantAccess, REMOTE_BODY, TURN_HEADER } from './assistant/access.ts';
 import { assistantDataDir, assistantHomeIsOverridden, secretsDir } from './assistant/home.ts';
 import { spendLedger, type SpendLedger } from './assistant/ledger.ts';
 import { alog } from './assistant/log.ts';
@@ -47,8 +47,7 @@ import { DEPS_MISSING_TEXT, depsStatus } from './assistant/providers/load-sdk.ts
 import { runConnectionTest } from './assistant/provider-test.ts';
 import { ProviderError, type ModelInfo, type ProviderId } from './assistant/types.ts';
 
-/** Sent by the Assistant's own tool calls to the app's routes; its own routes refuse it. */
-export const TURN_HEADER = 'x-magnusim-assistant-turn';
+export { TURN_HEADER };
 
 export interface AssistantDeps {
   worker?: unknown;

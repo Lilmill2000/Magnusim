@@ -19,6 +19,9 @@ export const REMOTE_MESSAGE =
 
 export const REMOTE_BODY = Object.freeze({ ok: false, available: false, reason: 'remote', error: REMOTE_MESSAGE });
 
+/** Sent by the Assistant's own tool calls to the app's routes (host-call.ts); its own routes refuse it. */
+export const TURN_HEADER = 'x-magnusim-assistant-turn';
+
 /** The one access predicate for every Assistant route, channel and tool call. */
 export function assistantAccess(req: IncomingMessage): boolean {
   return isLocalOperator(req);

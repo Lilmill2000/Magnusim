@@ -294,6 +294,16 @@ export function pluginLoaded(key) {
 }
 
 /**
+ * Every loaded plugin's row ({ key, name, version, … }) from the live registry, or []
+ * while it is not loaded yet (the Assistant's app_status tool lists them).
+ * @returns {Array<Record<string, any>>}
+ */
+export function loadedPlugins() {
+  if (!_live || !Array.isArray(_live.plugins)) return [];
+  return _live.plugins.filter((p) => p && typeof p === 'object');
+}
+
+/**
  * The boundary conditions the user can pick: the registered BC families
  * (registry kind bc_family; { key, label, record_type, aliases, defaults,
  * values, fields, ... }), from the plugins that register them.
