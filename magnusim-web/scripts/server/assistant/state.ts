@@ -44,8 +44,8 @@ export interface AssistantState {
     queue: Promise<unknown>;
   };
   ledger: SpendLedger | null;
-  /** Secret values every log line and error text is scrubbed of (redact.ts). */
-  redactions: string[];
+  /** Secret values every log line and error text is scrubbed of (redact.ts): each secret's forms, oldest first. */
+  redactions: string[][];
   shutdownHooks: Set<() => void>;
   /** The current server lifetime has been shut down (a server registering clears it). */
   shutDown: boolean;

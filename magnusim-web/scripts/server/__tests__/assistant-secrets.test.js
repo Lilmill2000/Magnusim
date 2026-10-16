@@ -20,7 +20,7 @@ const { fileProtector } = await import('../assistant/secrets/file.ts');
 const { pickProtector, ProtectorError } = await import('../assistant/secrets/protector.ts');
 const store = await import('../assistant/secrets/store.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
-const { redact } = await import('../assistant/redact.ts');
+const { redact, registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { ProviderError } = await import('../assistant/types.ts');
 
 const CANARY = 'sk-ant-canary-0123456789-ZZtop-9Qa1';
@@ -168,6 +168,28 @@ describe('saving, using and removing a key', () => {
     assert.equal(redact('plain-local-token-77'), 'plain-local-token-77', 'a later run knows it only once used');
     assert.equal(await make(spy()).withKey('openai_compatible', async (k) => k), 'plain-local-token-77');
     assert.equal(redact('plain-local-token-77'), '[redacted]');
+  });
+
+  it('past 64 secrets, redaction forgets the one registered longest ago, never the longest one', () => {
+    const LONG = 'LocalServerToken_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789';
+    const OLD = 'old-token-01';
+    registerSecretForRedaction(OLD);
+    registerSecretForRedaction(LONG);
+    const tokens = Array.from({ length: 63 }, (_, i) => `tok${String(i).padStart(7, '0')}`);
+    for (const t of tokens) registerSecretForRedaction(t);
+    assert.equal(redact(`bad token ${LONG}`), 'bad token [redacted]', 'the long key is still scrubbed');
+    assert.equal(redact(OLD), OLD, 'the oldest one went');
+    assert.equal(redact(tokens[0]), '[redacted]');
+    // Used again, a key counts as new.
+    registerSecretForRedaction(LONG);
+    registerSecretForRedaction('one-more-token-01');
+    assert.equal(redact(LONG), '[redacted]');
+    assert.equal(redact(tokens[0]), tokens[0]);
+    // A key that holds another is still removed whole, and its escaped forms too.
+    registerSecretForRedaction('abc/def+ghi');
+    registerSecretForRedaction('abc/def+ghi-and-more');
+    assert.equal(redact('k=abc/def+ghi-and-more'), 'k=[redacted]');
+    assert.equal(redact(`u=${encodeURIComponent('abc/def+ghi')}`), 'u=[redacted]');
   });
 
   it('status() never decrypts: a later run reads the files with no helper, and unwraps on first use only', async () => {

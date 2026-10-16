@@ -17,25 +17,25 @@ const PATTERNS: Array<[RegExp, string]> = [
   [/Bearer\s+\S{12,}/gi, `Bearer ${MASK}`],
 ];
 
-/** Every later redact() also removes `value` (and its JSON- and URL-escaped forms). */
+/**
+ * Every later redact() also removes `value` (and its JSON- and URL-escaped forms). Past
+ * MAX_SECRETS, the secret registered (or used) longest ago is forgotten first.
+ */
 export function registerSecretForRedaction(value: string): void {
   const v = String(value || '');
   if (v.length < MIN_SECRET) return;
   const list = assistantState().redactions;
-  const forms = new Set([v, JSON.stringify(v).slice(1, -1), encodeURIComponent(v)]);
-  for (const form of forms) {
-    const at = list.indexOf(form);
-    if (at >= 0) list.splice(at, 1);
-    list.push(form);
-  }
+  const at = list.findIndex((forms) => forms[0] === v);
+  if (at >= 0) list.splice(at, 1);
+  list.push([...new Set([v, JSON.stringify(v).slice(1, -1), encodeURIComponent(v)])]);
   while (list.length > MAX_SECRETS) list.shift();
-  // Longest first, so a key that contains another is removed whole.
-  list.sort((a, b) => b.length - a.length);
 }
 
 export function redact(text: unknown): string {
   let out = typeof text === 'string' ? text : String(text ?? '');
-  for (const secret of assistantState().redactions) {
+  // Longest first, so a key that contains another is removed whole.
+  const secrets = assistantState().redactions.flat().sort((a, b) => b.length - a.length);
+  for (const secret of secrets) {
     if (out.includes(secret)) out = out.split(secret).join(MASK);
   }
   for (const [re, mask] of PATTERNS) out = out.replace(re, mask);
