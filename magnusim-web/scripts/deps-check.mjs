@@ -32,7 +32,7 @@ function readJson(file) {
  * @param {string} webRoot
  * @returns {string[]}
  */
-export function depsProblems(webRoot) {
+function depsProblems(webRoot) {
   let deps;
   try {
     deps = readJson(join(webRoot, 'package.json')).dependencies || {};
@@ -66,5 +66,8 @@ function main() {
   return problems.length ? 1 : 0;
 }
 
-// exitCode, not exit(): the lines above reach a pipe in full first.
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main();
+// Always, with no is-this-the-entry guard: through a junction or a directory link
+// (run.bat's cd /d "%~dp0" and Setup.ps1's Resolve-Path keep one), argv[1] names
+// the link while import.meta.url names the real file, and such a guard would skip
+// the check and exit 0. exitCode, not exit(): the lines above reach a pipe in full first.
+process.exitCode = main();

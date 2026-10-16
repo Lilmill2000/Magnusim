@@ -8,7 +8,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,6 +118,31 @@ describe('deps-check.mjs', () => {
     const r = check(null, copy);
     assert.equal(r.code, 1, r.out);
     assert.match(r.out, /^pad-left is not installed/m);
+  });
+
+  it('run through a junction or directory link to its web folder (run.bat and Setup.ps1 keep the link): it still checks', (t) => {
+    const installed = { ...INSTALLED };
+    delete installed['pad-left'];
+    const root = webFolder({ deps: DEPS, locked: LOCKED, installed });
+    mkdirSync(join(root, 'scripts'));
+    copyFileSync(SCRIPT, join(root, 'scripts', 'deps-check.mjs'));
+    const links = mkdtempSync(join(tmpdir(), 'deps-check-link-'));
+    temps.push(links);
+    const link = join(links, 'web');
+    try {
+      symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (e) {
+      t.skip(`no junction or directory link here: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    // Node gives the entry module its real path while argv[1] keeps the link's.
+    const byFullPath = check(null, join(link, 'scripts', 'deps-check.mjs'));
+    // As run.bat runs it: from the folder (through the link), by a relative path.
+    const fromFolder = spawnSync(process.execPath, [join('scripts', 'deps-check.mjs')], { encoding: 'utf8', cwd: link });
+    for (const r of [byFullPath, { code: fromFolder.status, out: `${fromFolder.stdout}${fromFolder.stderr}` }]) {
+      assert.equal(r.code, 1, r.out);
+      assert.match(r.out, /^pad-left is not installed/m);
+    }
   });
 });
 
