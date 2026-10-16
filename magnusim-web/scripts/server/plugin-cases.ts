@@ -296,7 +296,7 @@ function sendCaseError(ctx: RequestContext, err: unknown): void {
 }
 
 /** A study's cases as they are now (`snapshot`, with the running one's live points), then {job_id, seq, ev} per event (`case`). Returns the stop. */
-function followCaseEvents(s: Scope, send: ChannelSend): () => void {
+function followCaseEvents(s: Scope, send: (event: string, payload: unknown) => void): () => void {
   const mine = (listFoamRecords({ kind: 'foam' }) as Rec[]).filter((r) => inScope(r, s)).slice(0, 50);
   const running = mine.find((r) => r.status === 'running');
   send('snapshot', {

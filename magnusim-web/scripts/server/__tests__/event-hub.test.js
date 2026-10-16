@@ -5,6 +5,9 @@
 // each channel is refused on its own as its old route refused it, a job that ended replays
 // and ends its channel, and nothing is left listening once a channel or the stream ends.
 // The real router and the channel kinds of link-routes.ts, plugin-cases.ts and routes.ts.
+// A channel's open also learns whose it is (tab, conn, cid) and whether its stream and its
+// subscribe both came from this PC; its send answers false only when a frame can never
+// arrive; and a stream from elsewhere never takes a tab id a stream on this PC holds.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -29,6 +32,13 @@ const { gateClassOf } = await import('../link-gate.js');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jobs = new JobManager({ cacheDir: join(root, 'cache') });
+/** Each channel of the test's own kind `probe`: what its open was given, and its cleanups. */
+const probes = [];
+const probeOf = (tab, cid) => probes.findLast((p) => p.meta?.tab === tab && p.meta?.cid === cid);
+/** The server's own record of a tab's stream. */
+const hubTab = (tab) => globalThis[Symbol.for('magnusim.eventHub')].tabs.get(tab);
+/** Requests from elsewhere, as isLocalOperator sees them: a proxy, the tunnel, a public Host. */
+const ELSEWHERE = [{ 'x-forwarded-for': '203.0.113.9' }, { 'cf-connecting-ip': '203.0.113.9' }, { host: 'magnusim.example.org' }];
 /** @type {http.Server} */
 let server;
 let base = '';
@@ -39,6 +49,11 @@ before(async () => {
   registerChannelKind('link', openLinkChannel);
   registerChannelKind('case', openCaseChannel);
   registerChannelKind('job', (params, send, done) => openJobChannel(jobs, params, send, done));
+  registerChannelKind('probe', (params, send, done, meta) => {
+    const p = { params, send, done, meta, cleaned: 0 };
+    probes.push(p);
+    return { ok: true, cleanup: () => void (p.cleaned += 1) };
+  });
   server = await new Promise((done) => {
     const s = http.createServer(async (req, res) => {
       try {
@@ -62,13 +77,20 @@ after(async () => {
 });
 
 /** A tab's stream, read as it comes: its frames ({event, data}) and its `hello` conn. */
-function openStream(tab) {
+function openStream(tab, headers = {}) {
   const frames = [];
   let raw = '';
   let conn = '';
   let req;
+  let incoming;
   const ready = new Promise((resolve, reject) => {
-    req = http.get(`${base}/api/events?tab=${tab}`, (res) => {
+    req = http.get(`${base}/api/events?tab=${tab}`, { headers }, (res) => {
+      incoming = res;
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error(`the stream was answered ${res.statusCode}`));
+        return;
+      }
       res.setEncoding('utf8');
       res.on('data', (chunk) => {
         raw += chunk;
@@ -102,6 +124,9 @@ function openStream(tab) {
     },
     /** The frames of one channel: [event, payload]. */
     of: (cid) => frames.filter((f) => f.data && f.data.c === cid).map((f) => [f.event, f.data.d]),
+    /** Stop reading it (the server's socket buffer fills), and read on. */
+    pause: () => incoming.pause(),
+    resume: () => incoming.resume(),
     close: () => req.destroy(),
   };
 }
@@ -109,6 +134,39 @@ function openStream(tab) {
 async function post(path, body) {
   const r = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   return { status: r.status, body: await r.json() };
+}
+
+/** A POST with its own headers (from elsewhere), as {status, body}. */
+function postFrom(headers, path, body) {
+  const data = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = http.request(base + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers } }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+/** The status a GET /api/events with these headers is answered with (the request then goes). */
+function streamStatus(tab, headers) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`${base}/api/events?tab=${tab}`, { headers }, (res) => {
+      resolve(res.statusCode);
+      req.destroy();
+    });
+    req.on('error', (e) => (e.code === 'ECONNRESET' ? undefined : reject(e)));
+  });
+}
+
+/** Wait (a 5 s ceiling) for what a stream or the server does next. */
+async function until(test, what) {
+  const by = Date.now() + 5000;
+  while (!test() && Date.now() < by) await sleep(10);
+  assert.ok(test(), what);
 }
 
 let tabN = 0;
@@ -290,5 +348,160 @@ describe('one event stream per tab', () => {
     const r = await fetch(`${base}/api/events?tab=${encodeURIComponent('../x')}`);
     assert.equal(r.status, 400);
     for (const p of ['/api/events', '/api/events/subscribe', '/api/events/unsubscribe']) assert.equal(gateClassOf(p), 'reviewed', p);
+  });
+});
+
+describe("what a channel knows: its tab, and whether it is this PC's", { timeout: 30_000 }, () => {
+  const subscribe = (tab, conn, cids) => post('/api/events/subscribe', { tab, conn, channels: cids.map((cid) => ({ cid, kind: 'probe', params: { n: cid } })) });
+
+  it('open gets meta {tab, conn, cid, local}: local for a stream and a subscribe from this PC', async () => {
+    const tab = newTab();
+    const s = openStream(tab);
+    await s.ready;
+    const r = await subscribe(tab, s.conn, ['probe:1', 'probe:2']);
+    assert.ok(r.body.results.every((x) => x.ok), JSON.stringify(r.body));
+    const p = probeOf(tab, 'probe:2');
+    assert.deepEqual({ ...p.meta }, { tab, conn: s.conn, cid: 'probe:2', local: true });
+    assert.deepEqual(p.params, { n: 'probe:2' });
+    assert.equal(Object.isFrozen(p.meta), true);
+    assert.equal(probeOf(tab, 'probe:1').meta.cid, 'probe:1');
+    s.close();
+  });
+
+  it('local is false when the stream, or only the subscribe, came through a proxy, the tunnel or a public Host; the existing kinds still open there', async () => {
+    for (const from of ELSEWHERE) {
+      const label = JSON.stringify(from);
+      // A stream from elsewhere: no channel on it is local, even with a subscribe from this PC.
+      const away = newTab();
+      const s = openStream(away, from);
+      await s.ready;
+      const r = await post('/api/events/subscribe', {
+        tab: away,
+        conn: s.conn,
+        channels: [
+          { cid: 'probe:1', kind: 'probe', params: {} },
+          { cid: 'link:2', ...link('st-1') },
+        ],
+      });
+      assert.ok(r.body.results.every((x) => x.ok), `${label} ${JSON.stringify(r.body)}`);
+      assert.equal(probeOf(away, 'probe:1').meta.local, false, label);
+      await new Promise((d) => setImmediate(d));
+      assert.deepEqual(s.of('link:2'), [['snapshot', { jobs: [] }]], label);
+      // A stream from this PC with a subscribe from elsewhere: not local either.
+      const here = newTab();
+      const h = openStream(here);
+      await h.ready;
+      const r2 = await postFrom(from, '/api/events/subscribe', { tab: here, conn: h.conn, channels: [{ cid: 'probe:3', kind: 'probe', params: {} }] });
+      assert.equal(r2.status, 200, label);
+      assert.equal(probeOf(here, 'probe:3').meta.local, false, label);
+      // The same stream, asked from this PC: local.
+      await subscribe(here, h.conn, ['probe:4']);
+      assert.equal(probeOf(here, 'probe:4').meta.local, true, label);
+      s.close();
+      h.close();
+    }
+  });
+
+  it("a stream from elsewhere for a tab id this PC's stream holds gets 409 and that stream goes on; one from this PC still replaces it", async () => {
+    const tab = newTab();
+    const s = openStream(tab);
+    await s.ready;
+    await subscribe(tab, s.conn, ['probe:1']);
+    const p = probeOf(tab, 'probe:1');
+    for (const from of ELSEWHERE) assert.equal(await streamStatus(tab, from), 409, JSON.stringify(from));
+    // Nothing of this PC's stream ended: same stream, its channel sends, a subscribe on it works.
+    assert.equal(hubTab(tab).conn, s.conn);
+    assert.equal(p.cleaned, 0);
+    assert.equal(p.send('ping', { n: 1 }), true);
+    await until(() => s.of('probe:1').length === 1, 'the frame arrived');
+    assert.deepEqual(s.of('probe:1'), [['ping', { n: 1 }]]);
+    assert.equal((await subscribe(tab, s.conn, ['probe:2'])).status, 200);
+    // A tab id a stream from elsewhere holds is replaced as before, from anywhere.
+    const away = newTab();
+    const a1 = openStream(away, ELSEWHERE[0]);
+    await a1.ready;
+    const a2 = openStream(away, ELSEWHERE[1]);
+    await a2.ready;
+    assert.equal(hubTab(away).conn, a2.conn);
+    const a3 = openStream(away);
+    await a3.ready;
+    assert.equal(hubTab(away).conn, a3.conn);
+    // Now this PC's: a stream from elsewhere is refused.
+    assert.equal(await streamStatus(away, ELSEWHERE[0]), 409);
+    // This PC's own second stream of the tab still replaces the first, and its channels end.
+    const again = openStream(tab);
+    await again.ready;
+    assert.equal(hubTab(tab).conn, again.conn);
+    assert.equal(p.cleaned, 1);
+    for (const x of [s, again, a1, a2, a3]) x.close();
+  });
+
+  it('send answers false once its channel ended: unsubscribed, ended by the server, its stream replaced, closed or cut', async () => {
+    const tab = newTab();
+    const s = openStream(tab);
+    await s.ready;
+    await subscribe(tab, s.conn, ['probe:1', 'probe:2', 'probe:3']);
+    const [one, two, three] = ['probe:1', 'probe:2', 'probe:3'].map((cid) => probeOf(tab, cid));
+    assert.deepEqual([one.send('a', 1), two.send('a', 2), three.send('a', 3)], [true, true, true]);
+    // Unsubscribed.
+    await post('/api/events/unsubscribe', { tab, conn: s.conn, cids: ['probe:1'] });
+    assert.equal(one.cleaned, 1);
+    assert.equal(one.send('b', 1), false);
+    // Ended by the server (done): the page hears _closed, and nothing after it.
+    two.done();
+    assert.equal(two.send('b', 2), false);
+    // The stream replaced by a new one of the same tab.
+    const again = openStream(tab);
+    await again.ready;
+    assert.equal(three.cleaned, 1);
+    assert.equal(three.send('b', 3), false);
+    await sleep(50);
+    assert.deepEqual(s.of('probe:1'), [['a', 1]]);
+    assert.deepEqual(s.of('probe:2'), [['a', 2], ['_closed', undefined]]);
+    assert.deepEqual(s.of('probe:3'), [['a', 3]]);
+    // The stream closed by the page.
+    await subscribe(tab, again.conn, ['probe:4']);
+    const four = probeOf(tab, 'probe:4');
+    assert.equal(four.send('a', 4), true);
+    again.close();
+    await until(() => four.cleaned === 1, 'the closed stream ended its channel');
+    assert.equal(four.send('b', 4), false);
+    // A stream cut on the server's side: false at once, before its close is heard.
+    const tab2 = newTab();
+    const c = openStream(tab2);
+    await c.ready;
+    await subscribe(tab2, c.conn, ['probe:5']);
+    const five = probeOf(tab2, 'probe:5');
+    hubTab(tab2).res.destroy();
+    assert.equal(five.cleaned, 0);
+    assert.equal(five.send('b', 5), false);
+    s.close();
+    c.close();
+  });
+
+  it('send of a 1 MB frame on a healthy stream answers true while the socket buffer is full (backpressure is not failure), and every frame arrives whole', async () => {
+    const tab = newTab();
+    const s = openStream(tab);
+    await s.ready;
+    await subscribe(tab, s.conn, ['probe:1']);
+    const p = probeOf(tab, 'probe:1');
+    s.pause();
+    const big = 'x'.repeat(1024 * 1024);
+    const res = hubTab(tab).res;
+    let sent = 0;
+    while (!res.writableNeedDrain && sent < 32) {
+      assert.equal(p.send('big', { i: sent, big }), true, `frame ${sent}`);
+      sent += 1;
+    }
+    assert.equal(res.writableNeedDrain, true, 'the socket buffer is full');
+    assert.equal(p.send('small', { after: sent }), true);
+    s.resume();
+    await until(() => s.of('probe:1').length === sent + 1, 'every frame arrived');
+    const got = s.of('probe:1');
+    assert.deepEqual(
+      got.map(([e, d]) => (e === 'big' ? `big:${d.i}:${d.big.length}` : `${e}:${d.after}`)),
+      [...Array.from({ length: sent }, (_, i) => `big:${i}:${big.length}`), `small:${sent}`],
+    );
+    s.close();
   });
 });

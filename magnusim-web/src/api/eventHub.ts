@@ -9,7 +9,9 @@
  * stream (/api/events, scripts/server/event-hub.ts) and each of those streams is a channel
  * on it: `openChannel(url)` takes the URL the stream had and answers a handle shaped like
  * an EventSource (readyState, addEventListener, onmessage/onerror/onopen, close), whose
- * events are the ones that stream sent, with the same data.
+ * events are the ones that stream sent, with the same data. The assistant's channel
+ * (`/api/assistant/events?role=relay`) never was a stream: that URL is only its name, and it
+ * is not pinned unless its caller pins it.
  *
  * - The stream opens with the first channel and closes 2 s after the last one goes, so
  *   Home and a project with nothing to follow hold no connection.
@@ -31,7 +33,7 @@
  */
 
 type Listener = (ev: Event) => void;
-type Kind = 'link' | 'job' | 'case';
+type Kind = 'link' | 'job' | 'case' | 'assistant';
 
 const CONNECTING = 0;
 const OPEN = 1;
@@ -225,14 +227,16 @@ function channelOf(url: string): { kind: Kind; params: Record<string, string> } 
   });
   if (u.pathname === '/api/plugin-geometry/events') return { kind: 'link', params };
   if (u.pathname === '/api/plugin-cases/events') return { kind: 'case', params };
-  const job = /^\/api\/jobs\/([^/]+)\/events$/.exec(u.pathname);
+  // A channel name only (no such route): `?role=relay` is the page's assistant relay.
+  if (u.pathname === '/api/assistant/events') return { kind: 'assistant', params };
+  const job =/^\/api\/jobs\/([^/]+)\/events$/.exec(u.pathname);
   if (job) return { kind: 'job', params: { ...params, job_id: decodeURIComponent(job[1]) } };
   throw new Error(`no event channel for ${url}`);
 }
 
 /**
  * A channel on the tab's stream for what `url` streamed (a link, job or plugin case stream
- * of the app), shaped like the EventSource that url had.
+ * of the app, or the assistant's channel name), shaped like the EventSource that url had.
  */
 export function openChannel(url: string): ChannelHandle {
   const s = hub();

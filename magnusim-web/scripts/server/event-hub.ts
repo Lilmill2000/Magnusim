@@ -10,7 +10,9 @@
  *
  *   GET  /api/events?tab=<id>   (SSE) `retry: 1000`, then `hello {conn}`, a heartbeat every
  *        15 s, and each channel's frames as `event: <type>` with data {c: <cid>, d: <payload>}.
- *        A second stream of the same tab replaces the first (its channels end).
+ *        A second stream of the same tab replaces the first (its channels end), except that a
+ *        stream from elsewhere (not this PC, isLocalOperator) never takes a tab id a stream
+ *        on this PC holds: 409, and the stream on this PC goes on.
  *   POST /api/events/subscribe   {tab, conn, channels: [{cid, kind, params}]}
  *        200 {ok, results: [{cid, ok: true} | {cid, ok: false, status, error}]}; 409 {stale}
  *        when the tab has no stream or `conn` is not its stream's (the page waits for the
@@ -20,9 +22,14 @@
  *
  * A channel kind is registered by the module whose events it carries (registerChannelKind):
  * `link` (link-routes.ts), `case` (plugin-cases.ts) and `job` (routes.ts). Its open(params,
- * send, done) checks the params as its own route does and answers the refusal, or starts
+ * send, done, meta) checks the params as its own route does and answers the refusal, or starts
  * sending and returns its cleanup; done() ends a channel from the server's side (a job that
  * ended), which the page hears as `_closed {c}`.
+ *   meta {tab, conn, cid, local}: whose channel it is, and `local` true only when both the
+ *        stream and this subscribe came from this PC (a kind for this PC only refuses the rest).
+ *   send(event, payload) answers false only when the frame can never arrive: the channel
+ *        ended, the tab's stream is no longer the one it was opened on, or that stream has
+ *        ended. A full socket buffer is not that (the frame waits in it), so it answers true.
  *
  * The state is on globalThis, so a Vite re-import of this module shares it. Not gated
  * (link-gate.js): nothing here reads or writes a record itself.
@@ -38,15 +45,26 @@
 import { randomBytes } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import type { Router } from './router.ts';
+import { isLocalOperator } from './http.ts';
 import { writeSse } from './jobs.ts';
 
-export type ChannelSend = (event: string, payload: unknown) => void;
+/** False only when the frame can never arrive (see the header); never for a full buffer. */
+export type ChannelSend = (event: string, payload: unknown) => boolean;
 export type ChannelOpened = { ok: true; cleanup: () => void } | { ok: false; status: number; error: string };
-export type ChannelOpen = (params: Record<string, unknown>, send: ChannelSend, done: () => void) => ChannelOpened;
+/** Whose channel it is; `local` only when its stream and its subscribe both came from this PC. */
+export interface ChannelMeta {
+  readonly tab: string;
+  readonly conn: string;
+  readonly cid: string;
+  readonly local: boolean;
+}
+export type ChannelOpen = (params: Record<string, unknown>, send: ChannelSend, done: () => void, meta: ChannelMeta) => ChannelOpened;
 
 interface Tab {
   res: ServerResponse;
   conn: string;
+  /** The stream came from this PC (isLocalOperator when it opened). */
+  local: boolean;
   /** What ends each channel (unsubscribe, a new stream, the stream closed), by cid. */
   channels: Map<string, () => void>;
   beat: ReturnType<typeof setInterval>;
@@ -100,7 +118,7 @@ function dropTab(tabId: string, tab: Tab): void {
 }
 
 /** Open one channel on a tab's stream; its result for the subscribe answer. */
-function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>): Record<string, unknown> {
+function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>, local: boolean): Record<string, unknown> {
   const s = hub();
   const cid = String(spec.cid || '');
   if (!CID_RE.test(cid)) return { cid, ok: false, status: 400, error: 'invalid channel id' };
@@ -120,8 +138,11 @@ function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>): Re
     ended = true;
     cleanup?.();
   };
+  // res.write()'s own false only says the buffer is full: the frame still goes.
   const send: ChannelSend = (event, payload) => {
-    if (!ended && live()) writeSse(tab.res, event, { c: cid, d: payload });
+    if (ended || !live() || tab.res.writableEnded || tab.res.destroyed) return false;
+    writeSse(tab.res, event, { c: cid, d: payload });
+    return true;
   };
   // The server ends it (a job that ended): the page hears `_closed`.
   const done = () => {
@@ -130,9 +151,10 @@ function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>): Re
     end();
     if (live()) writeSse(tab.res, '_closed', { c: cid });
   };
+  const meta: ChannelMeta = Object.freeze({ tab: tabId, conn: tab.conn, cid, local });
   let out: ChannelOpened;
   try {
-    out = open(params, send, done);
+    out = open(params, send, done, meta);
   } catch (e) {
     console.warn('[events] channel open', e);
     out = { ok: false, status: 500, error: 'The channel could not be opened' };
@@ -154,7 +176,10 @@ export function registerEventHubRoutes(router: Router): void {
     const tabId = String(ctx.url.searchParams.get('tab') || '');
     if (!TAB_RE.test(tabId)) return ctx.sendJson(400, { ok: false, error: 'invalid tab id' });
     const s = hub();
+    const local = isLocalOperator(ctx.req);
     const old = s.tabs.get(tabId);
+    // A stream from elsewhere never replaces one on this PC (its channels would end).
+    if (old && old.local && !local) return ctx.sendJson(409, { ok: false, error: 'this tab id is in use' });
     if (old) {
       dropTab(tabId, old);
       try {
@@ -179,7 +204,7 @@ export function registerEventHubRoutes(router: Router): void {
       }
     }, HEARTBEAT_MS);
     beat.unref();
-    const tab: Tab = { res, conn, channels: new Map(), beat };
+    const tab: Tab = { res, conn, local, channels: new Map(), beat };
     s.tabs.set(tabId, tab);
     const closed = () => {
       res.off('close', closed);
@@ -203,8 +228,9 @@ export function registerEventHubRoutes(router: Router): void {
     }
     const list = Array.isArray(body.channels) ? body.channels : null;
     if (!list || list.length > MAX_BATCH) return ctx.sendJson(400, { ok: false, error: 'channels must be a list' });
+    const local = tab.local && isLocalOperator(ctx.req);
     const results = list.map((spec) =>
-      spec && typeof spec === 'object' ? openChannel(tabId, tab, spec as Record<string, unknown>) : { cid: '', ok: false, status: 400, error: 'invalid channel' },
+      spec && typeof spec === 'object' ? openChannel(tabId, tab, spec as Record<string, unknown>, local) : { cid: '', ok: false, status: 400, error: 'invalid channel' },
     );
     ctx.sendJson(200, { ok: true, results });
   });

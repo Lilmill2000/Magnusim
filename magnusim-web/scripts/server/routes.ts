@@ -119,7 +119,7 @@ const JOB_ENDED = ['done', 'failed', 'stopped'];
  * the end (at once for a job that has ended). The order is the one the mesh watcher's
  * ended guard relies on (runtime.js watchJobEvents). Returns the stop.
  */
-function followJob(jobs: JobManager, job: JobRecord, send: ChannelSend, done: () => void): () => void {
+function followJob(jobs: JobManager, job: JobRecord, send: (event: string, payload: unknown) => void, done: () => void): () => void {
   send('snapshot', job);
   for (const ev of job.events) send('event', ev);
   if (JOB_ENDED.includes(job.status)) {

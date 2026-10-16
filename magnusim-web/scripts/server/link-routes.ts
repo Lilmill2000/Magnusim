@@ -90,7 +90,7 @@ function scopeOf(ctx: RequestContext): Scope {
 }
 
 /** A study's link jobs as they are now (`snapshot`), then {job_id, seq, ev} per event (`link`). Returns the stop. */
-function followLinkEvents(s: Scope, send: ChannelSend): () => void {
+function followLinkEvents(s: Scope, send: (event: string, payload: unknown) => void): () => void {
   send('snapshot', { jobs: studyLinkJobs(s.projectId, s.plugin, s.studyId).map(linkJobOf) });
   const bus = linkEventBus();
   const onEvent = (msg: Json) => {

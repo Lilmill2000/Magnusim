@@ -220,6 +220,27 @@ describe('one event stream per tab', () => {
 
   it('only the app\'s own stream URLs become channels', () => {
     expect(() => openChannel('/api/elsewhere/events')).toThrow(/no event channel/);
+    expect(() => openChannel('/api/assistant/turns?role=relay')).toThrow(/no event channel/);
+  });
+
+  it("the assistant relay's channel name is kind assistant with params {role: 'relay'}, on the tab's one stream", async () => {
+    const link = openChannel('/api/plugin-geometry/events?project_id=p1&plugin=link-demo&study_id=st-1');
+    const relay = openChannel('/api/assistant/events?role=relay');
+    const linked = vi.fn();
+    relay.addEventListener('linked', linked);
+    FakeEventSource.made[0].hello('c1');
+    await settle();
+    expect(FakeEventSource.made).toHaveLength(1);
+    expect(subscribes()).toHaveLength(1);
+    const asked = subscribes()[0].body.channels!;
+    expect(asked.map((c) => c.kind)).toEqual(['link', 'assistant']);
+    expect(asked[1].params).toEqual({ role: 'relay' });
+    // The server's channel ids are [a-z]{1,16}:[0-9]{1,12} (scripts/server/event-hub.ts).
+    expect(asked[1].cid).toMatch(/^assistant:[0-9]{1,12}$/);
+    expect([link.readyState, relay.readyState]).toEqual([1, 1]);
+    FakeEventSource.made[0].frame('linked', asked[1].cid, { link: 'abc' });
+    expect(linked).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((linked.mock.calls[0][0] as MessageEvent).data)).toEqual({ link: 'abc' });
   });
 
   it('ready() says when the server has a channel: true once its subscribe is answered, false when it is refused or closed', async () => {
@@ -335,6 +356,27 @@ describe('a tab in the background', () => {
     // A job followed while the tab is hidden opens the stream at once.
     openChannel('/api/jobs/job-2/events?project_id=p1');
     expect(FakeEventSource.made).toHaveLength(2);
+  });
+
+  it("does not keep its stream for the assistant's channel unless that is pinned", async () => {
+    const relay = openChannel('/api/assistant/events?role=relay');
+    FakeEventSource.made[0].hello('c1');
+    await settle();
+    setVisibility('hidden');
+    vi.advanceTimersByTime(3100);
+    expect(FakeEventSource.made[0].readyState).toBe(2);
+    expect(relay.readyState).toBe(relay.CONNECTING);
+    // Pinned (the server says a turn uses this tab), a hidden tab keeps the stream.
+    setVisibility('visible');
+    FakeEventSource.made[1].hello('c2');
+    await settle();
+    relay.pin(true);
+    setVisibility('hidden');
+    vi.advanceTimersByTime(10_000);
+    expect(FakeEventSource.made[1].readyState).not.toBe(2);
+    relay.pin(false);
+    vi.advanceTimersByTime(3100);
+    expect(FakeEventSource.made[1].readyState).toBe(2);
   });
 
   it('a tab that starts hidden opens its stream only once it is shown, then hears cfd:events-resumed', async () => {
