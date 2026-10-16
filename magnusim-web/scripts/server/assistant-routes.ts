@@ -74,7 +74,10 @@ export function local(handler: RouteHandler): RouteHandler {
       return;
     }
     const method = ctx.method.toUpperCase();
-    if (method !== 'GET' && method !== 'HEAD' && !/application\/json/i.test(String(ctx.req.headers['content-type'] || ''))) {
+    // The media type itself, not a parameter: "text/plain;x=application/json" is a simple
+    // type a page elsewhere may send with no preflight.
+    const mediaType = String(ctx.req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (method !== 'GET' && method !== 'HEAD' && mediaType !== 'application/json') {
       ctx.sendJson(415, { ok: false, code: 'json_only', error: 'Send the request as JSON (Content-Type: application/json).' });
       return;
     }

@@ -6,9 +6,9 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-assistant-routes-'));
@@ -28,6 +28,7 @@ const { assistantGuard, isAssistantPath, REMOTE_BODY } = await import('../assist
 const routes = await import('../assistant-routes.ts');
 const { assistantState, onAssistantShutdown, resetAssistantState } = await import('../assistant/state.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
+const home = await import('../assistant/home.ts');
 
 const CANARY = 'sk-ant-api03-CANARY-route-canary-0123456789-XyZ9';
 
@@ -257,6 +258,18 @@ describe('local(): JSON only, never from a tool call, errors redacted', () => {
       assert.equal(r.status, 415, String(ct));
       assert.equal(r.json.code, 'json_only');
     }
+    // The media type decides, not a parameter naming JSON: a simple type needs no preflight.
+    for (const ct of ['text/plain;x=application/json', 'text/plain; charset=application/json', 'application/jsonx', 'application/json-patch+json']) {
+      const r = await request('POST', '/api/assistant/settings', { headers: { 'content-type': ct }, body: '{"privacy":"allow"}' });
+      assert.equal(r.status, 415, ct);
+      assert.equal(r.json.code, 'json_only', ct);
+    }
+    // JSON with parameters or in capitals passes the check (and is refused here as a setting, so nothing is written).
+    for (const ct of ['application/json; charset=utf-8', 'Application/JSON', 'application/json ;charset=UTF-8']) {
+      const r = await request('POST', '/api/assistant/settings', { headers: { 'content-type': ct }, body: '{"privacy":"sometimes"}' });
+      assert.equal(r.status, 400, ct);
+      assert.equal(r.json.field, 'privacy', ct);
+    }
     const t = await get('/api/assistant/status', { headers: { [routes.TURN_HEADER]: 't-1' } });
     assert.equal(t.status, 403);
     assert.equal(t.json.code, 'recursion');
@@ -464,17 +477,37 @@ describe('the test routes need their switch', () => {
     process.env.MAGNUSIM_TEST_ASSISTANT = saved;
   });
 
-  it('a reset removes files only from a test home', async () => {
-    const saved = { home: process.env.MAGNUSIM_ASSISTANT_HOME, local: process.env.MAGNUSIM_LOCAL_JSON };
-    delete process.env.MAGNUSIM_ASSISTANT_HOME;
-    delete process.env.MAGNUSIM_LOCAL_JSON;
+  it('a reset removes files only from a test home (the real folder, here a stand-in, keeps its files)', async () => {
+    const OVERRIDES = ['MAGNUSIM_ASSISTANT_HOME', 'CFDDESK_ASSISTANT_HOME', 'MAGNUSIM_LOCAL_JSON', 'CFDDESK_LOCAL_JSON'];
+    const FOLDERS = ['APPDATA', 'USERPROFILE', 'HOME', 'XDG_CONFIG_HOME'];
+    const saved = Object.fromEntries([...OVERRIDES, ...FOLDERS].map((n) => [n, process.env[n]]));
+    // Every folder the real home is found from points into a temp stand-in first, so even a
+    // broken check (or one broken on purpose) reaches only the stand-in, never this PC's keys.
+    const user = join(ROOT, 'real-user');
+    process.env.APPDATA = join(user, 'AppData', 'Roaming');
+    process.env.USERPROFILE = user;
+    process.env.HOME = user;
+    process.env.XDG_CONFIG_HOME = join(user, '.config');
+    for (const n of OVERRIDES) delete process.env[n];
     try {
+      assert.equal(home.assistantHomeIsOverridden(), false);
+      const real = home.assistantHome();
+      assert.ok(real.startsWith(user + sep), `the real home resolves into the stand-in: ${real}`);
+      const files = ['settings.json', 'spend.json'].map((n) => join(home.assistantDataDir(), n))
+        .concat(['keys.json', 'master.json'].map((n) => join(home.secretsDir(), n)));
+      for (const f of files) {
+        mkdirSync(dirname(f), { recursive: true });
+        writeFileSync(f, '{"kept":true}\n');
+      }
       const r = await post('/api/test/assistant/reset', { files: true });
       assert.equal(r.status, 409);
       assert.equal(r.json.code, 'real_home');
+      for (const f of files) assert.equal(readFileSync(f, 'utf8'), '{"kept":true}\n', f);
     } finally {
-      process.env.MAGNUSIM_ASSISTANT_HOME = saved.home;
-      process.env.MAGNUSIM_LOCAL_JSON = saved.local;
+      for (const [n, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[n];
+        else process.env[n] = v;
+      }
     }
   });
 
