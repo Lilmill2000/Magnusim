@@ -16,31 +16,48 @@ import { e2eTemp, startHost } from './support/host-server.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STEP = resolve(HERE, '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.step');
 
-/** Three more projects with a part each (the seeded sample project is a fourth). */
+/**
+ * Three more projects with a part each (the seeded sample projects are more). A part's
+ * picture starts rendering at its import: `importedAt` is the time just before each import.
+ */
 async function seedProjects(request, base, tag) {
   const ids = [];
+  const importedAt = new Map();
   for (const n of [1, 2, 3]) {
     const made = await (await request.post(`${base}/api/project`, {
       data: { title: `e2e thumb ${tag} ${n}`, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' },
     })).json();
+    importedAt.set(made.id, Date.now());
     const imported = await request.post(`${base}/api/geometry/import`, { data: { project_id: made.id, step_path: STEP, filename: `part-${n}.step` } });
     expect(imported.ok(), await imported.text()).toBe(true);
     ids.push(made.id);
   }
-  return ids;
+  return { ids, importedAt };
 }
 
-/** The page's console errors and every thumbnail answer it gets. */
+const thumbProject = (url) => new URL(url).searchParams.get('project_id') || '';
+
+/**
+ * The page's console errors, every thumbnail answer it gets (status, project, the server's
+ * X-CFD-Thumb reason, when), and when it first asked for each project's picture.
+ */
 function watch(page) {
   const errors = [];
   const thumbAnswers = [];
+  const firstAsked = new Map();
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
-  page.on('response', (r) => {
-    if (r.url().includes('/api/geometry/thumb')) thumbAnswers.push(r.status());
+  page.on('request', (r) => {
+    if (!r.url().includes('/api/geometry/thumb')) return;
+    const project = thumbProject(r.url());
+    if (!firstAsked.has(project)) firstAsked.set(project, Date.now());
   });
-  return { errors, thumbAnswers };
+  page.on('response', (r) => {
+    if (!r.url().includes('/api/geometry/thumb')) return;
+    thumbAnswers.push({ status: r.status(), project: thumbProject(r.url()), why: r.headers()['x-cfd-thumb'] || '', at: Date.now() });
+  });
+  return { errors, thumbAnswers, firstAsked };
 }
 
 /**
@@ -60,7 +77,7 @@ async function expectQuietCards(page, seen, deadlineMs) {
     }
   }
   expect(seen.thumbAnswers.length).toBeGreaterThanOrEqual(4);
-  expect(seen.thumbAnswers.every((s) => s === 204 || s === 202), JSON.stringify(seen.thumbAnswers)).toBe(true);
+  expect(seen.thumbAnswers.every((a) => a.status === 204 || a.status === 202), JSON.stringify(seen.thumbAnswers)).toBe(true);
   expect(seen.errors.filter((t) => /thumb|Failed to load resource/i.test(t)), seen.errors.join(' | ')).toEqual([]);
   expect(await page.locator('.home-thumb-img').count()).toBe(0);
   expect(await page.locator('.home-thumb span').count()).toBeGreaterThanOrEqual(4);
@@ -86,12 +103,13 @@ test.describe('renders fail (MAGNUSIM_TEST_THUMB_FAIL=1)', () => {
 });
 
 test.describe('renders hang (MAGNUSIM_TEST_THUMB_FAIL=hang)', () => {
+  const RENDER_LIMIT_MS = 8000;
   let host;
   test.beforeAll(async () => {
     host = await startHost({
       name: 'home-thumb-hang',
       tmp: e2eTemp('home-thumb-hang'),
-      env: { MAGNUSIM_TEST_THUMB_FAIL: 'hang', MAGNUSIM_THUMB_TIMEOUT_MS: '8000' },
+      env: { MAGNUSIM_TEST_THUMB_FAIL: 'hang', MAGNUSIM_THUMB_TIMEOUT_MS: String(RENDER_LIMIT_MS) },
     });
   });
   test.afterAll(() => {
@@ -100,16 +118,27 @@ test.describe('renders hang (MAGNUSIM_TEST_THUMB_FAIL=hang)', () => {
 
   test('a rename lands while every picture is stuck, then the cards show their initials with no error', async ({ page, request }) => {
     test.setTimeout(400_000);
-    const [pid] = await seedProjects(request, host.base, 'hang');
+    const { ids, importedAt } = await seedProjects(request, host.base, 'hang');
+    const [pid] = ids;
     const seen = watch(page);
     await page.goto(`${host.base}/#/`);
     const card = page.locator(`.home-card[data-project-id="${pid}"]`);
     await card.waitFor({ timeout: 60_000 });
-    // The pictures are being made (none can be: every render hangs) ... A part's own render
-    // starts at its import and may already be stopped at its limit when Home asks (204,
-    // remembered); the seeded projects' renders start now and are still stuck (202).
-    await expect.poll(() => seen.thumbAnswers.filter((s) => s === 202).length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
-    expect(seen.thumbAnswers.every((s) => s === 202 || s === 204), JSON.stringify(seen.thumbAnswers)).toBe(true);
+    // The pictures are being made (none can be: every render hangs): 202 ...
+    await expect.poll(() => seen.thumbAnswers.filter((a) => a.status === 202).length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+    // ... unless a card may honestly have no picture (204): the seeded project with no
+    // geometry has nothing to draw, and a render stopped at its limit is remembered as
+    // failed. A render starts no earlier than its part's import (this test's parts render
+    // from then on) or the page's first ask for it, so a picture asked for before that
+    // plus the limit is still being made.
+    const notBeingMade = seen.thumbAnswers.filter((a) => {
+      if (a.status === 202) return false;
+      if (a.status !== 204) return true;
+      if (a.why === 'no geometry imported') return ids.includes(a.project);
+      const from = Math.min(importedAt.get(a.project) ?? Infinity, seen.firstAsked.get(a.project) ?? Infinity);
+      return !(a.why.startsWith('thumb render failed') && a.at >= from + RENDER_LIMIT_MS);
+    });
+    expect(notBeingMade, JSON.stringify(seen.thumbAnswers)).toEqual([]);
     // ... and the page's own requests are answered meanwhile: a rename lands at once.
     const t0 = Date.now();
     await card.click();
