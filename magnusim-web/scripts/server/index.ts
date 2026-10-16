@@ -13,6 +13,9 @@ import { attachWorkerBridge } from '../py-json.js';
 import { registerLiveRoutes } from './live-routes.js';
 import { registerVtkExportRoutes } from './vtk-export.ts';
 import { setLiveRegistry } from '../registry-defaults.js';
+import { boundPortFromListen } from '../w32-prefs.js';
+import { assistantGuard } from './assistant/access.ts';
+import { registerAssistantRoutes } from './assistant-routes.ts';
 
 export { Router, dispatch } from './router.ts';
 export { WorkerClient, getWorker, WorkerUnavailableError, RpcError } from './worker.ts';
@@ -87,6 +90,7 @@ export function createApiPlugin() {
         sdkVariant,
       });
       registerVtkExportRoutes(router, { jobs, cacheDir });
+      const assistant = registerAssistantRoutes(router, { worker, services, port: () => boundPortFromListen(server) });
       // The boot queue kick may start a plugin mesher; wait for the live registry.
       void registryReady.finally(() => live.boot());
 
@@ -100,6 +104,9 @@ export function createApiPlugin() {
           // Plugin workspace frames have an opaque origin (Origin: null); they may GET
           // the SDK and their own workspace files, and nothing else.
           if (!isFrameAssetRequest(req.method, url)) assertSameOrigin(req);
+          // The Assistant is for this PC only: anyone else gets 403 before any body is read,
+          // on the path the router will match (scripts/server/assistant/access.ts).
+          if (assistantGuard(req, res)) return;
           if (!registrySettled) {
             // First requests after boot: bounded wait so plugin keys resolve.
             let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,6 +130,11 @@ export function createApiPlugin() {
       });
 
       const stop = () => {
+        try {
+          assistant.shutdown();
+        } catch {
+          /* ignore */
+        }
         try {
           worker.stop();
         } catch {

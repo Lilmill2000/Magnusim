@@ -62,6 +62,8 @@ async function allRoutes() {
     resetCaseIdle() {},
     envInstaller: () => ({ get: () => null, start: () => ({ state: 'installing', log: [] }) }),
   });
+  const { registerAssistantRoutes } = await import('../assistant-routes.ts');
+  registerAssistantRoutes(router, { worker, services: null, port: () => 0 });
   return router.list();
 }
 
@@ -81,6 +83,11 @@ describe('the census: every registered route is gated or reviewed', () => {
       assert.equal(gate.gateClassOf(p), 'gated', p);
     }
     for (const p of ['/api/mesh/surface', '/api/mesh/section']) assert.equal(gate.gateClassOf(p), 'exception', p);
+    // The Assistant's routes are registered and reviewed (its home is outside every project).
+    for (const p of ['/api/assistant/status', '/api/assistant/settings', '/api/assistant/key', '/api/assistant/key/remove']) {
+      assert.ok(paths.has(p), p);
+      assert.equal(gate.gateClassOf(p), 'reviewed', p);
+    }
     for (const p of ['/api/mesh-surface', '/api/simulation-control', '/api/compute-queue', '/api/case', '/api/jobs/x/events', '/api/plugin/x/y', '/api/projects', '/api/fields/U']) {
       assert.equal(gate.gateClassOf(p), 'reviewed', p);
     }

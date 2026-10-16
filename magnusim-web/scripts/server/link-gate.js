@@ -55,6 +55,10 @@ export const WORKER_UNGATED = Object.freeze(['bc.menu', 'registry.reload', 'sim.
  */
 export const UNGATED_PREFIXES = Object.freeze([
   '/api/_routes',
+  // The Assistant (assistant-routes.ts): its settings, keys and spend live in its own home,
+  // never in a project. Its tools reach project records only through the app's own routes,
+  // which pass the gate themselves.
+  '/api/assistant',
   // A geometry action's resolver (API 1.7): reads the geometry, writes only a plugin study's record.
   '/api/geometry-actions',
   '/api/case',

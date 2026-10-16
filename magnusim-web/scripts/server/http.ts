@@ -38,8 +38,27 @@ export const JSON_BODY_LIMIT = 2 * 1024 * 1024;
  */
 export const PLUGIN_DATA_BODY_LIMIT = 9 * 1024 * 1024;
 
+/**
+ * The Assistant's bodies are small, but for a workspace tool's result (images) and the
+ * tool list a workspace offers; a key is a few hundred bytes.
+ */
+export const ASSISTANT_BODY_LIMITS: Readonly<Record<string, number>> = Object.freeze({
+  '/api/assistant/relay/result': 10 * 1024 * 1024,
+  '/api/assistant/relay/tools': 512 * 1024,
+  '/api/assistant/key': 16 * 1024,
+});
+/** Every other Assistant route (the test-only ones too). */
+export const ASSISTANT_BODY_LIMIT = 64 * 1024;
+
+/** The body limit of the route the router will match (so `/api//assistant/key` reads as `/api/assistant/key`). */
 export function jsonBodyLimit(pathname: string): number {
-  return pathname === '/api/plugin-data/write' ? PLUGIN_DATA_BODY_LIMIT : JSON_BODY_LIMIT;
+  const path = canonicalPath(pathname);
+  if (path === '/api/plugin-data/write') return PLUGIN_DATA_BODY_LIMIT;
+  if (Object.hasOwn(ASSISTANT_BODY_LIMITS, path)) return ASSISTANT_BODY_LIMITS[path];
+  for (const prefix of ['/api/assistant', '/api/test/assistant']) {
+    if (path === prefix || path.startsWith(`${prefix}/`)) return ASSISTANT_BODY_LIMIT;
+  }
+  return JSON_BODY_LIMIT;
 }
 
 export async function readJsonBody(req: IncomingMessage, limit = JSON_BODY_LIMIT): Promise<Record<string, unknown>> {

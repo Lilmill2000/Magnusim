@@ -4,5 +4,5 @@
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["./**/*.ts", "../assistant-routes.ts"]
+  "include": ["./**/*.ts", "../assistant-routes.ts", "../shims.d.ts"]
 }

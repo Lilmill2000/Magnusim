@@ -95,6 +95,68 @@ dropped for the run, and core solves never wait for one. A plugin whose code
 ends that process, crashes it or patches the runtime can still end or bend a
 run.
 
+## The Assistant and API keys
+
+The Assistant (Settings → Assistant, off until turned on) lets a model the owner
+chooses work in Magnusim: a cloud provider with the owner's own API key, or a
+local server on this PC.
+
+It is for this PC only. Every Assistant request must come from a browser or
+program on this PC talking to Magnusim directly (a loopback Host and connection,
+no `X-Forwarded-*`, `Forwarded` or `CF-*` headers), checked on the path as the
+server routes it, before anything is read. Through a reverse proxy or the
+public tunnel visitors are anonymous, so every Assistant request answers 403:
+"The Assistant and its API keys can only be set up and used on the PC running
+Magnusim."
+
+Keys are write-only. Settings can save or remove a key and shows only whether
+one is set, with its last four characters when it is long. No request returns a
+key, none takes one in its URL, and log lines and error texts are scrubbed of
+saved keys and of anything shaped like one. A key is never put in an environment
+variable, so the Python worker, jobs and plugin services never inherit it. Keys
+are kept outside the install folder, in `%APPDATA%\Magnusim\secrets` (the
+user's application-data folder on other systems), encrypted with AES-256-GCM
+under a master key:
+
+- On Windows the master key is protected with DPAPI for the signed-in Windows
+  account, through Windows PowerShell 5.1; the bytes travel to it only on its
+  standard input, never on a command line. It protects keys from other accounts
+  and other PCs, not from other programs running as the same account. If Windows
+  blocks that helper (Constrained Language Mode, application control or an
+  antivirus), keys can't be saved on that PC; there is no unencrypted fallback,
+  and a local server still works.
+- On other systems the master key is kept in a file only the user's account can
+  read (mode 0600, in a 0700 folder). The operating system does not encrypt it,
+  and Settings says so.
+
+Removing Magnusim's folder does not remove `%APPDATA%\Magnusim`; remove keys in
+Settings before handing the PC to someone else.
+
+Any program and any other account signed in to this PC can call the
+Assistant's requests: the local check proves a request came from this PC, not
+who sent it. Another account can't read the key, but can spend it within the
+limits. The per-turn and per-day spending limits are checked before each step
+of the Assistant's work, so one step can go a little over; two copies of
+Magnusim run by one account share the day's limit and can pass it by up to
+twice.
+
+A plugin's page code that runs inside the app (not a sandboxed workspace frame)
+has the app's own origin. It can start the Assistant, answer its questions,
+replace a key, and read a key while it is typed into Settings. Workspace frames
+cannot reach the app's API. Plugins can't replace the Assistant's Settings
+step. Install only plugins you trust.
+
+Project data goes to a cloud provider only when the person asks about a project
+and the privacy setting allows it: asked once per project (the default), always,
+or never. A local server keeps it on this PC; a server address outside this PC
+needs a confirmation and is then treated as a cloud provider. Text that comes
+from projects and plugins (names, logs, results) reaches the model as data,
+never as instructions, and the app asks before the Assistant starts a
+computation or does anything that can't be undone.
+
+The Assistant's test switches (`MAGNUSIM_TEST_ASSISTANT_*`) work only together
+with `MAGNUSIM_TEST_ASSISTANT=1`; `run.bat` and Setup never set them.
+
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new
 tracking; it does not remove files from old commits. Review existing history
