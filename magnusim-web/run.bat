@@ -31,6 +31,10 @@ if not exist "node_modules\vite" (
   )
 )
 
+REM A copy installed by an older release may lack packages a newer one added (scripts\deps-check.mjs).
+REM npm install --no-save leaves package-lock.json as it is; offline it fails, and the app starts anyway.
+node scripts\deps-check.mjs >nul 2>&1 || (echo Updating web app packages... & call npm install --no-save --no-audit --no-fund || echo Some packages could not be updated; Magnusim starts anyway. Run Setup.bat when online.)
+
 for /f "usebackq delims=" %%P in (`node --input-type=module -e "import {listenPort} from './scripts/prefs.js'; process.stdout.write(String(listenPort()))"`) do set MAGNUSIM_PORT=%%P
 if not defined MAGNUSIM_PORT set MAGNUSIM_PORT=8082
 set CFDDESK_PORT=%MAGNUSIM_PORT%

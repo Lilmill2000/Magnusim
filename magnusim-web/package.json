@@ -37,6 +37,7 @@
     "prove:node-siblings": "node scripts/__tests__/prove-no-node-sibling-writes.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
     "@kitware/vtk.js": "^32.12.1",
     "@rjsf/core": "^6.10.0",
     "@rjsf/utils": "^6.10.0",
@@ -44,6 +45,7 @@
     "@tanstack/react-query": "^5.102.8",
     "@vitejs/plugin-react": "^4.7.0",
     "clsx": "^2.1.1",
+    "openai": "7.27.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zustand": "^5.0.15"

@@ -425,15 +425,25 @@ function Install-NpmPackages {
 
     Set-Location $WebRoot
 
+    # Every package the app lists, each at its lockfile version (scripts\deps-check.mjs), so a
+
+    # copy installed by an older release gets the packages a newer one added. Vite, which
+
+    # runs the app, is a dev package: it is looked for as before.
+
     $vite = Join-Path $WebRoot 'node_modules\vite\package.json'
 
-    $vtk = Join-Path $WebRoot 'node_modules\@kitware\vtk.js\package.json'
+    if ((Test-Path $vite) -and (Test-Cmd 'node')) {
 
-    if ((Test-Path $vite) -and (Test-Path $vtk)) {
+        & node (Join-Path $WebRoot 'scripts\deps-check.mjs')
 
-        Write-Ok 'npm packages already installed'
+        if ($LASTEXITCODE -eq 0) {
 
-        return
+            Write-Ok 'npm packages already installed'
+
+            return
+
+        }
 
     }
 

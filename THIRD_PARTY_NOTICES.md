@@ -117,6 +117,25 @@ OpenFOAM 2D engine meshes with that Gmsh and runs its cases in the WSL OpenFOAM
 described above (gmshToFoam, extrudeMesh, createPatch, checkMesh, simpleFoam); the
 plugin ships no part of OpenFOAM, only the case dictionaries it writes.
 
+## The Assistant's provider packages
+
+The Assistant reaches the cloud model providers a user chooses, and local
+servers that answer in the same format, through the providers' official
+JavaScript packages. They are pinned in `magnusim-web/package.json` and
+`package-lock.json`, and Setup (`npm ci`) or `run.bat` installs them into
+`magnusim-web/node_modules`; none is shipped in the repository:
+
+- `@anthropic-ai/sdk` 0.131.0 (MIT), with `standardwebhooks` 1.1.1 (MIT),
+  `@stablelib/base64` 1.0.1 (MIT), `fast-sha256` 1.3.0 (Unlicense),
+  `json-schema-to-ts` 3.1.1 (MIT), `ts-algebra` 2.0.0 (MIT) and
+  `@babel/runtime` 7.29.7 (MIT, which vtk.js uses too);
+- `openai` 7.27.0 (Apache-2.0), which has no dependencies.
+
+These licenses are compatible with Magnusim's GPL-3.0-or-later license. Each
+package's license text is in its folder under `node_modules`, except
+`standardwebhooks`, whose `package.json` declares MIT and which ships no license
+file.
+
 ## Other dependencies
 
 The JavaScript dependency inventory is recorded in `magnusim-web/package-lock.json`;

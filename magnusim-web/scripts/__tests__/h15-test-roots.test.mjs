@@ -34,6 +34,7 @@ export const H15_TESTS = [
   '__tests__/job-runner-close.test.mjs',
   '__tests__/stop-targets.test.mjs',
   '__tests__/h15-test-roots.test.mjs',
+  '__tests__/assistant-boundaries.test.mjs',
 ];
 
 /** Code only (comments may mention imports). */
