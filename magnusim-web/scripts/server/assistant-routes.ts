@@ -17,6 +17,12 @@
  *   POST /api/assistant/settings        a partial change → status; 400 {error, field}; 409 {needs_confirm:'base_url'}
  *   POST /api/assistant/key             {provider, key} → status (+ warning); 400; 409 storage_unavailable; 500
  *   POST /api/assistant/key/remove      {provider} → status; 400
+ *   GET  /api/assistant/models?provider= {ok, models, source}: the curated list, merged with what
+ *                                        the provider lists for this key ('provider'), or what the
+ *                                        local server lists ('server'); 400; 502 {code, error, models}
+ *   POST /api/assistant/test            {} → Settings' connection test: {ok:true, model, served_by,
+ *                                        ms, tools, cost_usd} or {ok:false, code, error}; 400 when
+ *                                        it can't start; 409 while one runs
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -31,9 +37,15 @@ import { assistantDataDir, assistantHomeIsOverridden, secretsDir } from './assis
 import { spendLedger, type SpendLedger } from './assistant/ledger.ts';
 import { alog } from './assistant/log.ts';
 import { redact } from './assistant/redact.ts';
-import { consentCount, isLoopbackUrl, loadSettings, saveSettings, type AssistantSettings } from './assistant/settings.ts';
+import { consentCount, isLoopbackUrl, loadSettings, PROVIDER_IDS, saveSettings, type AssistantSettings } from './assistant/settings.ts';
 import { isKeySlot, KeyError, secretStore, type Store } from './assistant/secrets/store.ts';
-import { assistantState, beginAssistantLifetime, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
+import { assistantState, beginAssistantLifetime, onAssistantShutdown, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
+import { curatedModels, FALLBACK_TARGETS, PRICES_AS_OF, priceInfo } from './assistant/prices.ts';
+import { createAdapter, destinationOf, isCloud, PROVIDER_LABELS } from './assistant/providers/index.ts';
+import { testProviderUrl } from './assistant/providers/endpoints.ts';
+import { DEPS_MISSING_TEXT, depsStatus } from './assistant/providers/load-sdk.ts';
+import { runConnectionTest } from './assistant/provider-test.ts';
+import { ProviderError, type ModelInfo, type ProviderId } from './assistant/types.ts';
 
 /** Sent by the Assistant's own tool calls to the app's routes; its own routes refuse it. */
 export const TURN_HEADER = 'x-magnusim-assistant-turn';
@@ -104,6 +116,8 @@ interface StatusSources {
   settings: AssistantSettings;
   store: Store;
   ledger: SpendLedger;
+  /** Whether the provider packages are installed. */
+  deps: 'ok' | 'missing';
 }
 
 /** One part of the status. Later parts (packages, providers, models, prices, readiness) are added here. */
@@ -126,7 +140,45 @@ const STATUS_PARTS: StatusPart[] = [
   ({ store }) => ({ keys: store.status(), storage: store.storage(), keys_notice: store.notice() }),
   ({ ledger }) => ({ spent_today_usd: round4(ledger.spentToday()) }),
   ({ store }) => ({ test_protector: store.testProtector }),
+  ({ settings: s, deps }) => {
+    const provider = s.provider;
+    const model = provider === 'off' ? '' : s.models[provider];
+    return {
+      deps,
+      providers: PROVIDER_IDS.map((id) => ({
+        id,
+        label: PROVIDER_LABELS[id],
+        cloud: isCloud({ provider: id, base_url: s.base_url }),
+        destination: destinationOf({ provider: id, base_url: s.base_url }),
+        key: id === 'openai_compatible' ? 'optional' : 'required',
+        models: curatedModels(id),
+      })),
+      price: provider === 'off' || !model ? null : priceInfo(provider, model),
+      prices_as_of: PRICES_AS_OF,
+      /** The provider may retry a declined request on an older model of its own (Opus and Sonnet 5.5). */
+      fallback:
+        provider === 'anthropic' && Object.hasOwn(FALLBACK_TARGETS, model) ? { on: true, targets: [...FALLBACK_TARGETS[model]] } : { on: false, targets: [] },
+      /** MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL is in use (both cloud providers go to a fake). */
+      test_provider: testProviderUrl() !== null,
+    };
+  },
+  (src) => readiness(src),
 ];
+
+/** Whether a turn or the Test could start now, and the first reason it can't. */
+function readiness({ settings: s, store, deps }: StatusSources): { ready: boolean; ready_reason: string | null } {
+  const no = (ready_reason: string) => ({ ready: false, ready_reason });
+  if (s.provider === 'off') return no('provider_off');
+  if (deps === 'missing') return no('deps_missing');
+  if (!s.models[s.provider]) return no('no_model');
+  const key = store.status()[s.provider];
+  if (s.provider !== 'openai_compatible') {
+    if (store.storage().kind === 'unavailable') return no('storage_unavailable');
+    if (!key.set) return no('no_key');
+  }
+  if (key.set && key.state === 'unreadable') return no('key_unreadable');
+  return { ready: true, ready_reason: null };
+}
 
 /** Adds a part to every status answer (for the commits that bring providers, models and turns). */
 export function addStatusPart(part: StatusPart): void {
@@ -136,11 +188,106 @@ export function addStatusPart(part: StatusPart): void {
 /** What GET /api/assistant/status answers. Reads files; never runs a helper. */
 export async function assistantStatus(): Promise<Record<string, unknown>> {
   const store = secretStore();
-  const [settings, ledger] = await Promise.all([loadSettings(), spendLedger(), store.load()]);
-  const sources: StatusSources = { settings, store, ledger };
+  const [settings, ledger, , deps] = await Promise.all([loadSettings(), spendLedger(), store.load(), depsStatus()]);
+  const sources: StatusSources = { settings, store, ledger, deps: deps.state };
   const out: Record<string, unknown> = { ok: true, available: true };
   for (const part of STATUS_PARTS) Object.assign(out, part(sources));
   return out;
+}
+
+// ---------------------------------------------------------------- models and the connection test
+
+function isProviderId(v: unknown): v is ProviderId {
+  return typeof v === 'string' && (PROVIDER_IDS as readonly string[]).includes(v);
+}
+
+const MODELS_TIMEOUT_MS = 20_000;
+const TEST_TIMEOUT_MS = 180_000;
+
+type Answer = { status: number; body: Record<string, unknown> };
+
+/** A signal that aborts after `ms`, or when the server shuts the Assistant down. */
+function boundedSignal(ms: number): { signal: AbortSignal; abort: AbortController; done(): void } {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), ms);
+  timer.unref?.();
+  const off = onAssistantShutdown(() => abort.abort());
+  return {
+    signal: abort.signal,
+    abort,
+    done() {
+      clearTimeout(timer);
+      off();
+    },
+  };
+}
+
+/** GET /api/assistant/models: the curated list first, then what the provider (or local server) lists. */
+async function listModels(provider: ProviderId, settings: AssistantSettings): Promise<Answer> {
+  const curated: ModelInfo[] = curatedModels(provider);
+  const deps = await depsStatus();
+  if (deps.state === 'missing') {
+    if (provider !== 'openai_compatible') return { status: 200, body: { ok: true, models: curated, source: 'curated' } };
+    return { status: 502, body: { ok: false, code: 'deps_missing', error: DEPS_MISSING_TEXT, models: [] } };
+  }
+  const store = secretStore();
+  await store.load();
+  if (provider !== 'openai_compatible' && !store.status()[provider].set) return { status: 200, body: { ok: true, models: curated, source: 'curated' } };
+  const bound = boundedSignal(MODELS_TIMEOUT_MS);
+  try {
+    const listed = await createAdapter({ ...settings, provider }, store).listModels(bound.signal);
+    if (provider === 'openai_compatible') return { status: 200, body: { ok: true, models: listed, source: 'server' } };
+    const known = new Set(curated.map((m) => m.id));
+    const extra = listed.filter((m) => !known.has(m.id)).sort((a, b) => a.id.localeCompare(b.id));
+    return { status: 200, body: { ok: true, models: [...curated, ...extra], source: 'provider' } };
+  } catch (err) {
+    const e = err instanceof ProviderError ? err : new ProviderError('other', 'The model list could not be read.');
+    return { status: 502, body: { ok: false, code: e.code, error: e.message, models: curated } };
+  } finally {
+    bound.done();
+  }
+}
+
+/** POST /api/assistant/test: refused (400) when it can't start, 409 while one runs; else the result. */
+async function connectionTest(): Promise<Answer> {
+  const settings = await loadSettings();
+  const refuse = (code: string, error: string, status = 400): Answer => ({ status, body: { ok: false, code, error } });
+  const provider = settings.provider;
+  if (provider === 'off') return refuse('provider_off', 'Choose a provider first.');
+  if ((await depsStatus()).state === 'missing') return refuse('deps_missing', DEPS_MISSING_TEXT);
+  const model = settings.models[provider];
+  if (!model) return refuse('no_model', 'Choose a model first.');
+  const store = secretStore();
+  await store.load();
+  const key = store.status()[provider];
+  if (provider !== 'openai_compatible') {
+    const storage = store.storage();
+    if (storage.kind === 'unavailable') return refuse('storage_unavailable', storage.note);
+    if (!key.set) return refuse('no_key', `No key is saved for ${PROVIDER_LABELS[provider]}. Add one first.`);
+  }
+  if (key.set && key.state === 'unreadable') return refuse('no_key', "The saved key can't be decrypted on this account. Enter it again.");
+  const st = assistantState();
+  if (st.test) return refuse('busy', 'A test is already running.', 409);
+  const bound = boundedSignal(TEST_TIMEOUT_MS);
+  st.test = { abort: bound.abort };
+  try {
+    const ledger = await spendLedger();
+    const adapter = createAdapter(settings, store);
+    const result = await runConnectionTest({
+      adapter,
+      provider,
+      model,
+      effort: settings.effort,
+      ledger,
+      dayCapUsd: provider === 'openai_compatible' ? null : settings.caps.day_usd,
+      signal: bound.signal,
+    });
+    alog('info', 'connection test', { provider, model, ok: result.ok, code: result.ok ? null : result.code, usd: result.cost_usd });
+    return { status: 200, body: { ...result, spent_today_usd: round4(ledger.spentToday()) } };
+  } finally {
+    bound.done();
+    if (assistantState().test?.abort === bound.abort) assistantState().test = null;
+  }
 }
 
 // ---------------------------------------------------------------- routes
@@ -263,6 +410,29 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
         throw err;
       }
       ctx.sendJson(200, await assistantStatus());
+    }),
+  );
+
+  router.get(
+    '/api/assistant/models',
+    local(async (ctx) => {
+      const settings = await loadSettings();
+      const asked = ctx.url.searchParams.get('provider') || settings.provider;
+      if (!isProviderId(asked)) {
+        ctx.sendJson(400, { ok: false, code: 'bad_provider', error: 'Unknown provider.' });
+        return;
+      }
+      const r = await listModels(asked, settings);
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/test',
+    local(async (ctx) => {
+      await ctx.readJsonBody();
+      const r = await connectionTest();
+      ctx.sendJson(r.status, r.body);
     }),
   );
 

@@ -44,6 +44,8 @@ export interface AssistantState {
     queue: Promise<unknown>;
   };
   ledger: SpendLedger | null;
+  /** Settings' connection test while one runs (one at a time). */
+  test: { abort: AbortController } | null;
   /** Secret values every log line and error text is scrubbed of (redact.ts): each secret's forms, oldest first. */
   redactions: string[][];
   shutdownHooks: Set<() => void>;
@@ -64,6 +66,7 @@ function fresh(): AssistantState {
     secrets: { master: null, masterId: null, unwrap: null, store: null },
     settings: { path: null, cache: null, queue: Promise.resolve() },
     ledger: null,
+    test: null,
     redactions: [],
     shutdownHooks: new Set(),
     shutDown: false,

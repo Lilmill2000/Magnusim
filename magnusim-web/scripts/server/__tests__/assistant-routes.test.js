@@ -146,7 +146,7 @@ const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'];
 describe('only on this PC: the remote census', () => {
   it('every Assistant route, every method, every forwarding variant and the tunnel host: 403 remote, nothing read or written', async () => {
     const paths = [...new Set(router.list().map((r) => r.path))].filter((p) => p.startsWith('/api/assistant') || p.startsWith('/api/test/assistant'));
-    assert.deepEqual(paths.sort(), ['/api/assistant/key', '/api/assistant/key/remove', '/api/assistant/settings', '/api/assistant/status', '/api/test/assistant/reset', '/api/test/assistant/state']);
+    assert.deepEqual(paths.sort(), ['/api/assistant/key', '/api/assistant/key/remove', '/api/assistant/models', '/api/assistant/settings', '/api/assistant/status', '/api/assistant/test', '/api/test/assistant/reset', '/api/test/assistant/state']);
     let n = 0;
     for (const route of paths) {
       const path = route.replace(/:[A-Za-z]+/g, 'x').replace(/\*\*[A-Za-z]*/g, 'x');

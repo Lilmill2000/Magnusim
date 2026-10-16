@@ -199,6 +199,49 @@ context a test makes itself (`browser.newContext()`) is not throttled.
 
   The header of `e2e/support/host-server.mjs` lists them all.
 
+## The Assistant in tests
+
+No test reaches a real model provider or this PC's real Assistant files.
+
+- **The fake provider.** `e2e/support/fake-llm.mjs` is a small server the test
+  process starts: `const fake = await startFakeLlm()`. It speaks three dialects (the
+  first cloud dialect, the second cloud dialect and the local-server dialect) over
+  server-sent events, and the app's real adapters talk to it.
+  - `fake.reply(...steps)` queues the next answers, one per request. A step can
+    stream text, thinking and tool calls, set usage and the stop reason, refuse,
+    answer as a fallback model, `hold` until `fake.release(name)`, send an overload
+    error, drop the connection, or wait before it answers (the file's header lists
+    every field).
+  - `fake.failNext({status, body, headers, times})` answers the next request(s) with
+    an error; add `'x-should-retry': 'false'` to stop the client's own retries.
+  - `fake.models(list)` sets what the model lists answer.
+  - `fake.requests()` lists every request with its headers and body;
+    `fake.disconnects()` counts answers the client closed early.
+  - Like the real services, it answers 400 when a request breaks a rule: a tool call
+    left without its result, an echoed opaque part (thinking, fallback, encrypted
+    reasoning) that changed, a strict tool schema with a limit keyword, a replayed
+    reasoning item without its encrypted content. So a test that passes against it
+    has sent what the real service accepts.
+- **Pointing the app at it.** Both cloud adapters go to the fake with
+  `MAGNUSIM_TEST_ASSISTANT=1` and `MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL=<fake.base>`.
+  The address is honoured only with the switch, in a test home and for plain http on
+  this PC; status reports `test_provider: true` while it is in use. The local server
+  needs no switch: save `fake.compatBase` as its address in Settings.
+- **Other switches.** Each needs `MAGNUSIM_TEST_ASSISTANT=1` and is otherwise
+  ignored with a log line: `MAGNUSIM_TEST_ASSISTANT_PROTECTOR=blocked|timeout|slow:<ms>|file`
+  sets how keys are encrypted (`file` avoids the Windows helper in node tests). The
+  switch itself also registers `GET /api/test/assistant/state` and
+  `POST /api/test/assistant/reset`. `run.bat` and the setup scripts set none of them,
+  and a test checks that.
+- **Home isolation.** The Assistant keeps its keys, settings and spend in
+  `MAGNUSIM_ASSISTANT_HOME`, else beside `MAGNUSIM_LOCAL_JSON` (`local.json` →
+  `local.assistant/`). Every node test sets both to temp paths before its first app
+  import (and lists itself in `H15_TESTS`); e2e servers get their own folder from
+  `e2e/support/app-config.js` and `startHost()`.
+- **Node tests** import the fake dynamically (`await import('../../../e2e/support/fake-llm.mjs')`)
+  after setting those paths, start it, then set the provider address before the first
+  request (the app reads it once).
+
 ## A bundled plugin's own suite
 
 A bundled plugin keeps its browser tests in `bundled-plugins/<key>/e2e/`, in

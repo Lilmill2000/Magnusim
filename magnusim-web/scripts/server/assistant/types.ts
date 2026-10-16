@@ -40,7 +40,11 @@ export type StreamEvent =
   | { kind: 'text'; text: string } | { kind: 'thinking'; text: string }
   | { kind: 'tool_call'; callId: string; name: string } | { kind: 'usage'; usage: Usage }
   | { kind: 'fallback'; from: string; to: string };
-export interface ProviderResult { message: AssistantMessage; stop: StopReason; usage: Usage; attempts: Attempt[]; servedBy: string; refusal?: { category: string | null; explanation: string } }
+export interface ProviderResult {
+  message: AssistantMessage; stop: StopReason; usage: Usage; attempts: Attempt[]; servedBy: string; refusal?: { category: string | null; explanation: string };
+  /** A local model wrote a tool call as text instead of calling the tool (its chat template doesn't do tools). */
+  toolCallAsText?: boolean;
+}
 export type ProviderErrorCode = 'no_key' | 'deps_missing' | 'auth' | 'model' | 'rate_limit' | 'overloaded' | 'server'
   | 'bad_request' | 'context' | 'unreachable' | 'timeout' | 'aborted' | 'blocked_origin' | 'other';
 export class ProviderError extends Error {
