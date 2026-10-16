@@ -8,10 +8,12 @@
 //   statement `import type` loads nothing and is allowed; `import { type X }` still
 //   loads the module and is not. Inside the server's assistant code no other file
 //   loads a module by a variable specifier, require or createRequire.
-// - Importing vite.config.js (the whole server graph) creates no assistant folder.
+// - Importing vite.config.js (the whole server graph) creates no assistant folder,
+//   not even later, by fs calls or timers its modules start and leave running.
 // These hold vacuously until the files they name exist; the self-tests show they bite.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -151,6 +153,34 @@ export function boundaryProblems(web) {
   return problems;
 }
 
+/**
+ * Import `entry` in a child Node whose projects root, local settings file and assistant
+ * home lie in a fresh folder, and let the child exit by itself: Node exits only once the
+ * fs calls and timers its modules started have finished, so anything they create exists
+ * by then (a check right after an in-process import misses what is still under way).
+ * Whether the assistant home, or the one MAGNUSIM_LOCAL_JSON alone would give, exists then.
+ */
+function foldersAfterImport(entry) {
+  const dir = mkdtempSync(join(ROOT, 'import-'));
+  const home = join(dir, 'assistant-home');
+  const derived = join(dir, 'local.assistant');
+  const env = {
+    ...process.env,
+    MAGNUSIM_PROJECTS_ROOT: join(dir, 'projects'),
+    MAGNUSIM_LOCAL_JSON: join(dir, 'local.json'),
+    MAGNUSIM_ASSISTANT_HOME: home,
+  };
+  const code = `await import(${JSON.stringify(pathToFileURL(entry).href)});`;
+  const r = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', code], {
+    encoding: 'utf8',
+    env,
+    timeout: 120_000,
+  });
+  const out = `${r.error ? `${r.error.message}\n` : ''}${r.stdout}${r.stderr}`;
+  assert.ok(r.status === 0 && !r.signal, `importing ${entry} failed or kept Node running:\n${out}`);
+  return { home: existsSync(home), derived: existsSync(derived) };
+}
+
 describe('assistant boundaries: self-test', () => {
   it('reads every way a file names a module, and which of them load nothing', () => {
     const refs = (file, text) => moduleRefs(file, text).map((r) => `${r.spec}${r.typeOnly ? ' (type)' : ''}`);
@@ -239,6 +269,29 @@ describe('assistant boundaries: self-test', () => {
     });
     assert.deepEqual(boundaryProblems(web), { page: [], sdkLoads: [], loadSdk: [], assistantLoaders: [] });
   });
+
+  it('the import check sees a folder made at once, after settings reads, by a timer, or by a module imported on the way', () => {
+    const home = 'process.env.MAGNUSIM_ASSISTANT_HOME';
+    const derived = "process.env.MAGNUSIM_LOCAL_JSON.replace(/\\.json$/, '.assistant')";
+    const web = tree({
+      'at-once.mjs': `import { mkdirSync } from 'node:fs';\nmkdirSync(${home}, { recursive: true });\n`,
+      // A settings load left running, then a mkdir: still under way when the import resolves.
+      'after-reads.mjs': [
+        "import { mkdir, readFile } from 'node:fs/promises';",
+        'const settings = () => readFile(process.env.MAGNUSIM_LOCAL_JSON, "utf8").catch(() => "{}");',
+        `void settings().then(settings).then(() => mkdir(${derived}, { recursive: true }));`,
+        '',
+      ].join('\n'),
+      'by-timer.mjs': `import { mkdirSync } from 'node:fs';\nsetTimeout(() => mkdirSync(${home}, { recursive: true }), 300);\n`,
+      'entry.mjs': "import './after-reads.mjs';\nexport default {};\n",
+      'quiet.mjs': "import { readFile } from 'node:fs/promises';\nvoid readFile(process.env.MAGNUSIM_LOCAL_JSON).catch(() => null);\n",
+    });
+    assert.deepEqual(foldersAfterImport(join(web, 'at-once.mjs')), { home: true, derived: false });
+    assert.deepEqual(foldersAfterImport(join(web, 'after-reads.mjs')), { home: false, derived: true });
+    assert.deepEqual(foldersAfterImport(join(web, 'by-timer.mjs')), { home: true, derived: false });
+    assert.deepEqual(foldersAfterImport(join(web, 'entry.mjs')), { home: false, derived: true });
+    assert.deepEqual(foldersAfterImport(join(web, 'quiet.mjs')), { home: false, derived: false });
+  });
 });
 
 describe('assistant boundaries in this tree', () => {
@@ -260,12 +313,7 @@ describe('assistant boundaries in this tree', () => {
     assert.deepEqual(problems.assistantLoaders, []);
   });
 
-  it('importing vite.config.js (the whole server graph) creates no assistant folder', async () => {
-    const home = process.env.MAGNUSIM_ASSISTANT_HOME;
-    const derived = join(ROOT, 'local.assistant'); // what MAGNUSIM_LOCAL_JSON alone would give
-    const config = (await import(`${pathToFileURL(join(WEB, 'vite.config.js')).href}?boundaries=1`)).default;
-    assert.equal(typeof config, 'object');
-    assert.equal(existsSync(home), false, `${home} was created at import`);
-    assert.equal(existsSync(derived), false, `${derived} was created at import`);
+  it('importing vite.config.js (the whole server graph) creates no assistant folder, then or later', () => {
+    assert.deepEqual(foldersAfterImport(join(WEB, 'vite.config.js')), { home: false, derived: false });
   });
 });
