@@ -363,8 +363,11 @@ export const ASSISTANT_IMAGE_BYTES = 1.5 * 1024 * 1024;
 const ASSISTANT_GUIDE_MAX = 4000;
 const ASSISTANT_RISKS = new Set<string>(['read', 'edit', 'compute', 'destructive']);
 const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-/** The codes a page's own error keeps; any other reads "failed". */
-const ASSISTANT_PAGE_CODES = new Set(['invalid_input', 'busy', 'not_ready', 'failed']);
+/**
+ * The codes a page's own error keeps: its handler's (invalid_input, busy, not_ready, failed) and
+ * no_tool, which the SDK answers for a tool it holds no handler for. Any other reads "failed".
+ */
+const ASSISTANT_PAGE_CODES = new Set(['invalid_input', 'busy', 'not_ready', 'failed', 'no_tool']);
 const notConnected = (): AssistantRegistration => ({ available: false, accepted: [], refused: [], reason: 'not_connected' });
 
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
@@ -465,9 +468,10 @@ async function blobBase64(blob: Blob): Promise<string> {
 
 /**
  * The page's assistant.result as the call's outcome (1.9, unreleased): its error with a code from
- * the page's list (else `failed`); its result checked (`bad_result`: not `{text?, data?, images?}`
- * with text, plain JSON data and PNG, JPEG or WebP Blobs) and capped (`too_large`: text over 64 KB,
- * data over 256 KB as JSON, more than 4 images or one over 1.5 MB), its images read to base64.
+ * the page's list, or the SDK's own `no_tool` (else `failed`); its result checked (`bad_result`:
+ * not `{text?, data?, images?}` with text, plain JSON data and PNG, JPEG or WebP Blobs) and capped
+ * (`too_large`: text over 64 KB, data over 256 KB as JSON, more than 4 images or one over 1.5 MB),
+ * its images read to base64.
  */
 export async function assistantCallOutcome(params: Record<string, unknown>): Promise<AssistantCallOutcome> {
   const bad = (why: string): AssistantCallOutcome => ({ ok: false, code: 'bad_result', message: `The tool's result was refused: ${why}.` });
@@ -1272,10 +1276,12 @@ export class WorkspaceCalls {
    * list is abandoned then). Only the verdict of the page's last register, in this channel, is kept.
    */
   private async registerAssistantTools(params: Record<string, unknown>): Promise<AssistantRegistration> {
-    const reg = checkAssistantTools(params);
-    if (!this.hooks.assistantTools) return { available: false, accepted: [], refused: [], reason: 'no_assistant' };
+    // Every register the page sent is its last one, even one refused here: the SDK counts each one
+    // that left the page, so an earlier list's verdict is kept on both sides or on neither.
     const serial = ++this.assistantSerial;
     const epoch = this.epoch;
+    const reg = checkAssistantTools(params);
+    if (!this.hooks.assistantTools) return { available: false, accepted: [], refused: [], reason: 'no_assistant' };
     let pub: AssistantPublication;
     try {
       pub = this.hooks.assistantTools(reg);

@@ -22,7 +22,7 @@ Not released yet: `API_VERSION` stays 1.8 until these ship. Each only adds. The 
 
 **Bridge messages:** `assistant.register {tools, guide?}` → `{available, accepted, refused, reason?}`; `assistant.progress {call, fraction?, label?}`; `assistant.result {call, ok, result | error}` (`error` is `{message, code?}`); events `assistantInvoke {call, turn, tool, input}` and `assistantAbort {call}`.
 
-**Codes:** a page's error keeps `invalid_input`, `busy`, `not_ready` or `failed` (any other code reads `failed`); the host's are `no_tool`, `busy` (another call runs, or the page is covered), `aborted`, `closed`, `stalled`, `leaving`, `too_large` and `bad_result`. `assistant.register` refuses a list that is not one with `bad_request`, and one over 512 KB with `too_large`.
+**Codes:** a page's error keeps `invalid_input`, `busy`, `not_ready` or `failed`, or the SDK's `no_tool` for a tool it holds no handler for (any other code reads `failed`); the host's are `no_tool`, `busy` (another call runs, or the page is covered), `aborted`, `closed`, `stalled`, `leaving`, `too_large` and `bad_result`. `assistant.register` refuses a list that is not one with `bad_request`, and one over 512 KB with `too_large`.
 
 ## 1.8
 

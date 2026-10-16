@@ -2,9 +2,10 @@
 // assistant.register (shape checks, the app's verdict, the 5 s bound and abandon()), invokeTool
 // (refusals, the stall window that progress and the page's calls in flight hold open, Stop with
 // its 2 s wait, the result's checks and caps, images read to base64), a leave and a closed
-// channel ending the call, and what the allowlist does with the new messages.
+// channel ending the call, and what the allowlist does with the new messages; then the real SDK
+// against this bridge, so both sides keep the same tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { StudyRecord } from '../plugin-sdk/workspace';
+import { connect, type AssistantTool, type StudyRecord } from '../plugin-sdk/workspace';
 import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_DATA_BYTES,
@@ -66,6 +67,23 @@ class FakePort {
 class FakeChannel {
   readonly port1 = new FakePort();
   readonly port2 = new FakePort();
+  constructor() {
+    this.port1.other = this.port2;
+    this.port2.other = this.port1;
+  }
+}
+
+/** A port that copies what it is sent, as a real one does: what cannot be copied throws a DataCloneError and is not sent. */
+class CopyingPort extends FakePort {
+  postMessage(data: unknown): void {
+    super.postMessage(structuredClone(data));
+  }
+}
+
+/** A channel whose page side (port2) copies what the page sends. */
+class PageCopyingChannel {
+  readonly port1 = new FakePort();
+  readonly port2 = new CopyingPort();
   constructor() {
     this.port1.other = this.port2;
     this.port2.other = this.port1;
@@ -371,6 +389,29 @@ describe('assistant.register (1.9, unreleased)', () => {
     expect(t.calls.assistantTool('slow_add')).toBeNull();
     t.end();
   });
+
+  it('a register refused here (bad_request, too_large) is still the last one: a list still waiting for its verdict is not kept', async () => {
+    const h = hooks();
+    const t = await connected(h);
+    const verdicts: Array<(v: unknown) => void> = [];
+    h.assistantTools.mockImplementation(() => Object.assign(new Promise((r) => verdicts.push(r)), { abandon: vi.fn() }));
+    const refused: Array<[Record<string, unknown>, string]> = [
+      [{ tools: [{ ...ADD, name: 'a'.repeat(65) }] }, 'bad_request'],
+      [{ tools: [{ ...ADD, inputSchema: { ...SCHEMA, description: 'x'.repeat(600 * KB) } }] }, 'too_large'],
+    ];
+    for (const [i, [params, code]] of refused.entries()) {
+      const waiting = t.send('assistant.register', { tools: [ADD] });
+      await settle(() => verdicts.length === i + 1, 'the list');
+      expect((await t.call('assistant.register', params)).error?.code).toBe(code);
+      verdicts[i]({ available: true, accepted: ['add'], refused: [] });
+      await settle(() => !!waiting(), 'its verdict');
+      // The page hears it; neither side keeps it (the SDK counted the refused register as its last one).
+      expect(waiting()?.result).toMatchObject({ available: true, accepted: ['add'] });
+      expect(t.calls.assistantTool('add')).toBeNull();
+    }
+    expect(h.assistantTools).toHaveBeenCalledTimes(2);
+    t.end();
+  });
 });
 
 describe('invokeTool (1.9, unreleased)', () => {
@@ -434,13 +475,15 @@ describe('invokeTool (1.9, unreleased)', () => {
     t.end();
   });
 
-  it("the page's error keeps a code from its own list (invalid_input, busy, not_ready, failed), else failed", async () => {
+  it("the page's error keeps a code from its own list (invalid_input, busy, not_ready, failed) or the SDK's no_tool, else failed", async () => {
     const t = await connected();
     await t.call('assistant.register', { tools: [ADD] });
     const cases: Array<[Record<string, unknown> | undefined, string, string]> = [
       [{ code: 'busy', message: `The sketch is open${BEL}` }, 'busy', 'The sketch is open'],
       [{ code: 'invalid_input', message: 'by must not be 0' }, 'invalid_input', 'by must not be 0'],
       [{ code: 'not_ready', message: 'Still loading' }, 'not_ready', 'Still loading'],
+      // The SDK's answer for a tool it holds no handler for.
+      [{ code: 'no_tool', message: 'This page has no tool named "add".' }, 'no_tool', 'This page has no tool named "add".'],
       [{ code: 'plugin_off', message: 'Spoofed' }, 'failed', 'Spoofed'],
       [{ code: 'stalled' }, 'failed', 'The tool failed.'],
       [undefined, 'failed', 'The tool failed.'],
@@ -699,6 +742,79 @@ describe('the allowlist and the assistant (1.9, unreleased)', () => {
       expect(r.error).toEqual({ message: `not allowed: ${JSON.stringify(method)}`, code: 'not_allowed' });
     }
     expect(t.h.log).toHaveBeenCalledWith(expect.stringContaining('not allowed: "assistant.invoke"'), { tools: [] });
+    t.end();
+  });
+});
+
+/**
+ * The real SDK (connect()) in a page talking to this bridge: what the SDK posts to its parent reaches
+ * the bridge as the frame's message, the bridge's welcome reaches the SDK with its port, and what the
+ * page sends on the port is copied, as a real port does.
+ */
+async function sdkConnected(h = hooks()) {
+  vi.stubGlobal('MessageChannel', PageCopyingChannel);
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  const win = frame.contentWindow as Window;
+  const parent = { postMessage: (data: unknown) => void window.dispatchEvent(new MessageEvent('message', { data, source: win })) };
+  const parentOf = vi.spyOn(window, 'parent', 'get').mockReturnValue(parent as unknown as Window);
+  (win as unknown as { postMessage: (...a: unknown[]) => void }).postMessage = (data: unknown, _origin: unknown, ports: unknown[] = []) => {
+    const ev = new Event('message');
+    Object.defineProperties(ev, { source: { value: parent }, data: { value: data }, ports: { value: ports } });
+    window.dispatchEvent(ev);
+  };
+  const calls = new WorkspaceCalls(SCOPE, h);
+  const bridge = new WorkspaceBridge(frame, calls, h);
+  const detach = bridge.attach();
+  try {
+    const ws = await connect({ timeoutMs: 1000 });
+    const end = () => {
+      detach();
+      frame.remove();
+      parentOf.mockRestore();
+    };
+    return { ws, h, calls, bridge, end };
+  } catch (e) {
+    detach();
+    parentOf.mockRestore();
+    throw e;
+  }
+}
+
+describe('the SDK and the bridge together (1.9, unreleased)', () => {
+  const TOOL = ADD as AssistantTool;
+  const call = (bridge: WorkspaceBridge) =>
+    bridge.invokeTool({ call: 's', turn: 't', tool: 'add', input: { by: 2 }, timeoutS: 60, signal: new AbortController().signal, onProgress: () => undefined });
+
+  it("a register the host refuses, or one that never left the page, keeps both sides' tools the same", async () => {
+    const h = hooks();
+    const verdicts: Array<(v: unknown) => void> = [];
+    h.assistantTools.mockImplementation((reg: { tools: CheckedTool[] } | null) =>
+      reg === null ? acceptAll(null) : Object.assign(new Promise((r) => verdicts.push(r)), { abandon: vi.fn() }),
+    );
+    const t = await sdkConnected(h);
+    const assistant = t.ws.assistant!;
+    const handler = vi.fn(async () => 'Counter is 2');
+    // A list waits for its verdict; a newer one the host refuses (a name too long) is the last one, on both sides.
+    const one = assistant.register([TOOL], handler);
+    await settle(() => verdicts.length === 1, 'the first list');
+    await expect(assistant.register([{ ...TOOL, name: 'a'.repeat(65) }], handler)).rejects.toMatchObject({ code: 'bad_request' });
+    verdicts[0]({ available: true, accepted: ['add'], refused: [] });
+    expect(await one).toMatchObject({ available: true, accepted: ['add'] });
+    expect(t.calls.assistantTool('add')).toBeNull();
+    expect(await call(t.bridge)).toEqual({ ok: false, code: 'no_tool', message: 'the workspace has no tool named "add"' });
+    // A list that cannot be copied never reaches the host: the one before it is still the last one, on both sides.
+    const two = assistant.register([TOOL], handler);
+    await settle(() => verdicts.length === 2, 'the second list');
+    const uncopyable = { ...TOOL, inputSchema: { ...TOOL.inputSchema, check: () => true } } as AssistantTool;
+    const err = await assistant.register([uncopyable], handler).catch((e: unknown) => e);
+    expect((err as Error).name).toBe('DataCloneError');
+    expect(verdicts).toHaveLength(2);
+    verdicts[1]({ available: true, accepted: ['add'], refused: [] });
+    expect(await two).toMatchObject({ available: true, accepted: ['add'] });
+    expect(t.calls.assistantTool('add')).not.toBeNull();
+    expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Counter is 2' } });
+    expect(handler).toHaveBeenCalledTimes(1);
     t.end();
   });
 });

@@ -1000,7 +1000,8 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   };
   port.start();
 
-  function call<T = unknown>(method: string, params: Record<string, unknown> = {}, transfer?: Transferable[]): Promise<T> {
+  /** Ask the host; `sent` runs once the message left the page (never when it could not be copied). */
+  function call<T = unknown>(method: string, params: Record<string, unknown> = {}, transfer?: Transferable[], sent?: () => void): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const id = nextId++;
       pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -1012,6 +1013,7 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         pending.delete(id);
         throw e;
       }
+      sent?.();
     });
   }
 
@@ -1324,10 +1326,15 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         });
         const params: Record<string, unknown> = { tools: wire };
         if (opts && opts.guide !== undefined) params.guide = String(opts.guide);
-        const serial = ++assistantSerial;
+        // Only a list that reached the host is the last one: the host counts each register it got
+        // (one it refused too), and one that could not be copied never got there.
+        let serial = 0;
         // The host answers once the app has the list; the handler is kept only then (an older
         // host's "not_allowed" rejects, and nothing is kept).
-        const answer = (await call<AssistantRegistration | null>('assistant.register', params)) || ({} as AssistantRegistration);
+        const answer =
+          (await call<AssistantRegistration | null>('assistant.register', params, undefined, () => {
+            serial = ++assistantSerial;
+          })) || ({} as AssistantRegistration);
         const reg: AssistantRegistration = {
           available: answer.available === true,
           accepted: Array.isArray(answer.accepted) ? answer.accepted.filter((n): n is string => typeof n === 'string') : [],

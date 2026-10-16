@@ -813,6 +813,23 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     expect(older).not.toHaveBeenCalled();
   });
 
+  it('a register that could not be copied never reached the host: the one before it is still the last one', async () => {
+    const answers: Array<(v: unknown) => void> = [];
+    const { ws, posts, push } = await open((method) => (method === 'assistant.register' ? new Promise((r) => answers.push(r)) : { ok: true }), { clone: true });
+    const first = vi.fn(async () => 'first');
+    const one = ws.assistant!.register([ADD], first);
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    const uncopyable = { ...ADD, inputSchema: { ...SCHEMA, check: () => true } } as unknown as AssistantTool;
+    const err = await ws.assistant!.register([uncopyable], vi.fn()).catch((e: unknown) => e);
+    expect((err as Error).name).toBe('DataCloneError');
+    expect(methods(posts)).toEqual(['assistant.register']);
+    answers[0]({ available: true, accepted: ['add'], refused: [] });
+    await one;
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(results(posts)[0]).toEqual({ call: 'ai-1', ok: true, result: { text: 'first' } });
+  });
+
   it('a host without it refuses with not_allowed: register rejects and nothing is kept', async () => {
     const { ws, posts, push } = await open((method) => {
       if (method === 'assistant.register') throw Object.assign(new Error('not allowed: "assistant.register"'), { code: 'not_allowed' });
