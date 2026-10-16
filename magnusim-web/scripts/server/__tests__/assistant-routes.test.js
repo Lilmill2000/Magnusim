@@ -26,7 +26,7 @@ const { Router, dispatch } = await import('../router.ts');
 const { assertSameOrigin, HttpError, jsonBodyLimit, sendJson } = await import('../http.ts');
 const { assistantGuard, isAssistantPath, REMOTE_BODY } = await import('../assistant/access.ts');
 const routes = await import('../assistant-routes.ts');
-const { assistantState, resetAssistantState } = await import('../assistant/state.ts');
+const { assistantState, onAssistantShutdown, resetAssistantState } = await import('../assistant/state.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 
 const CANARY = 'sk-ant-api03-CANARY-route-canary-0123456789-XyZ9';
@@ -482,5 +482,59 @@ describe('the test routes need their switch', () => {
     const files = [join(WEB, 'run.bat'), ...readdirSync(join(WEB, 'setup')).filter((n) => /\.(ps1|bat|cmd)$/i.test(n)).map((n) => join(WEB, 'setup', n))];
     assert.ok(files.length >= 3, files.join());
     for (const f of files) assert.doesNotMatch(readFileSync(f, 'utf8'), /MAGNUSIM_TEST_/, f);
+  });
+});
+
+// Vite restarts the server inside this process: the state stays on globalThis, and the
+// routes are registered again. Each close must end its own server's lifetime only.
+describe('a server restarted in the same process', () => {
+  const saveKey = async () => {
+    const r = await post('/api/assistant/key', { provider: 'openai', key: 'sk-proj-restart-key-0001' });
+    assert.equal(r.status, 200);
+    assert.ok(assistantState().secrets.master, 'the master is cached after a save');
+  };
+
+  it("Vite's order (the new server registers, then the old one closes): the old close ends nothing, the new one's runs its hooks", async () => {
+    const old = routes.registerAssistantRoutes(new Router());
+    await saveKey();
+    const boot = assistantState().bootId;
+    let ran = 0;
+    const next = routes.registerAssistantRoutes(new Router());
+    assert.notEqual(assistantState().bootId, boot, 'a new server lifetime has a new boot id');
+    onAssistantShutdown(() => (ran += 1));
+    old.shutdown();
+    assert.equal(ran, 0, "the old server's close leaves the new server's hooks");
+    assert.ok(assistantState().secrets.master, '... and its master key');
+    assert.equal(assistantState().shutDown, false);
+    next.shutdown();
+    assert.equal(ran, 1, "the new server's close runs them");
+    assert.equal(assistantState().secrets.master, null);
+    assert.equal(assistantState().shutDown, true);
+  });
+
+  it('closed, then registered again: the second close runs the hooks added since and drops the master key', async () => {
+    const first = routes.registerAssistantRoutes(new Router());
+    await saveKey();
+    first.shutdown();
+    assert.equal(assistantState().secrets.master, null);
+    const second = routes.registerAssistantRoutes(new Router());
+    assert.equal(assistantState().shutDown, false, 'a new server is not shut down');
+    let ran = 0;
+    onAssistantShutdown(() => (ran += 1));
+    await saveKey();
+    second.shutdown();
+    assert.equal(ran, 1);
+    assert.equal(assistantState().secrets.master, null);
+  });
+
+  it('a test reset forgets the state, not the running server: its close still drops the master key', async () => {
+    const h = routes.registerAssistantRoutes(new Router());
+    assert.equal((await post('/api/test/assistant/reset', {})).status, 200);
+    let ran = 0;
+    onAssistantShutdown(() => (ran += 1));
+    await saveKey();
+    h.shutdown();
+    assert.equal(ran, 1);
+    assert.equal(assistantState().secrets.master, null);
   });
 });

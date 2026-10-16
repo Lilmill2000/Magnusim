@@ -2,12 +2,19 @@
  * The Assistant's in-memory state, on globalThis so a Vite re-import of these modules
  * shares one copy (as link-gate.js keeps its gates). It is made at its first use, never
  * when a module loads.
+ *
+ * Each server that registers the Assistant's routes starts a lifetime, and its close ends
+ * only that lifetime. Vite restarts a server inside the same process, and builds the new
+ * server before it closes the old one, so the old one's close finds its lifetime
+ * superseded and leaves the state (turns, hooks, the master key) to the new server.
  */
 import { randomBytes } from 'node:crypto';
 import type { SpendLedger } from './ledger.ts';
 import type { AssistantSettings } from './settings.ts';
 
 const KEY = Symbol.for('magnusim.assistant');
+/** The current server lifetime's number, apart from the state: a test reset forgets the state, never the running server. */
+const LIFETIME = Symbol.for('magnusim.assistant.lifetime');
 
 export interface AssistantState {
   /** Changes at every server start (and every test reset). */
@@ -40,12 +47,15 @@ export interface AssistantState {
   /** Secret values every log line and error text is scrubbed of (redact.ts). */
   redactions: string[];
   shutdownHooks: Set<() => void>;
+  /** The current server lifetime has been shut down (a server registering clears it). */
   shutDown: boolean;
 }
 
+const newBootId = () => randomBytes(8).toString('hex');
+
 function fresh(): AssistantState {
   return {
-    bootId: randomBytes(8).toString('hex'),
+    bootId: newBootId(),
     turns: new Map(),
     conversations: new Map(),
     links: new Map(),
@@ -79,11 +89,41 @@ export function onAssistantShutdown(fn: () => void): () => void {
   };
 }
 
-/** The server is closing: stop what runs (turns, timers) and drop the master key. */
-export function shutdownAssistant(): void {
+function lifetime(): { current: number } {
+  const g = globalThis as unknown as Record<symbol, { current: number } | undefined>;
+  let l = g[LIFETIME];
+  if (!l) {
+    l = { current: 0 };
+    g[LIFETIME] = l;
+  }
+  return l;
+}
+
+/**
+ * A server registered the Assistant's routes: its lifetime begins, with a new boot id and
+ * not shut down. Returns the lifetime's number, for that server's shutdownAssistant().
+ */
+export function beginAssistantLifetime(): number {
+  const l = lifetime();
+  l.current += 1;
+  const s = (globalThis as unknown as Record<symbol, AssistantState | undefined>)[KEY];
+  if (s) {
+    s.bootId = newBootId();
+    s.shutDown = false;
+  }
+  return l.current;
+}
+
+/**
+ * The server is closing: stop what runs (turns, timers) and drop the master key. With the
+ * server's lifetime number, a lifetime a newer server has superseded does nothing. Each
+ * call runs the hooks added since the last one, so a later server's close still runs its own.
+ */
+export function shutdownAssistant(lifetimeNumber?: number): void {
+  if (lifetimeNumber !== undefined && lifetimeNumber !== lifetime().current) return;
   const g = globalThis as unknown as Record<symbol, AssistantState | undefined>;
   const s = g[KEY];
-  if (!s || s.shutDown) return;
+  if (!s) return;
   s.shutDown = true;
   for (const fn of [...s.shutdownHooks]) {
     try {

@@ -33,7 +33,7 @@ import { alog } from './assistant/log.ts';
 import { redact } from './assistant/redact.ts';
 import { consentCount, isLoopbackUrl, loadSettings, saveSettings, type AssistantSettings } from './assistant/settings.ts';
 import { isKeySlot, KeyError, secretStore, type Store } from './assistant/secrets/store.ts';
-import { assistantState, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
+import { assistantState, beginAssistantLifetime, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
 
 /** Sent by the Assistant's own tool calls to the app's routes; its own routes refuse it. */
 export const TURN_HEADER = 'x-magnusim-assistant-turn';
@@ -47,7 +47,7 @@ export interface AssistantDeps {
 
 export interface AssistantHandle {
   readonly deps: AssistantDeps;
-  /** The server is closing: stop what the Assistant runs and drop the master key. */
+  /** The server is closing: stop what the Assistant runs and drop the master key (nothing once a newer server registered). */
   shutdown(): void;
 }
 
@@ -265,10 +265,12 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
 
   if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router);
 
+  // This server's lifetime: after a Vite restart the old server's close ends nothing of the new one's.
+  const lifetime = beginAssistantLifetime();
   return {
     deps,
     shutdown() {
-      shutdownAssistant();
+      shutdownAssistant(lifetime);
     },
   };
 }
