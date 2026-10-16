@@ -83,10 +83,17 @@ const NO_KEY: KeyStatus = { set: false, last4: null, set_at: null, state: 'none'
 
 const isCloud = (p: ProviderChoice): p is 'anthropic' | 'openai' => p === 'anthropic' || p === 'openai';
 
-/** $0.42, or $0.125 when cents are not enough. */
+/** A price: $0.42, or $0.125 when cents are not enough. */
 function money(n: number): string {
   const cents = n * 100;
   return `$${Math.abs(cents - Math.round(cents)) < 1e-9 ? n.toFixed(2) : n.toFixed(3)}`;
+}
+
+/** Dollars and cents ("Spent today: $0.42 of $15.00"); a spend under a cent is "under $0.01", never $0.00. */
+function cents(n: number): string {
+  const v = Number.isFinite(n) && n > 0 ? n : 0;
+  const text = v.toFixed(2);
+  return v > 0 && Number(text) === 0 ? 'under $0.01' : `$${text}`;
 }
 
 function hostOf(url: string): string {
@@ -129,17 +136,28 @@ export function priceLine(s: AssistantStatus): string | null {
   return `${money(p.input)} in · ${money(p.output)} out per million tokens${asOf}.`;
 }
 
+/** Whether the status says a declined request may be retried on another model: `true`, a non-empty list, or `{on: true}`. */
 function hasFallback(s: AssistantStatus): boolean {
-  return Array.isArray(s.fallback) ? s.fallback.length > 0 : !!s.fallback;
+  const f = s.fallback;
+  if (f === true) return true;
+  if (Array.isArray(f)) return f.length > 0;
+  return typeof f === 'object' && f !== null && f.on === true;
 }
+
+/** Tool-call verdicts that say tool calling works, and those that say it doesn't. */
+const TOOLS_WORK: ReadonlySet<unknown> = new Set(['works', 'ok', true]);
+const TOOLS_FAIL: ReadonlySet<unknown> = new Set(['not_used', 'as_text', false]);
 
 /** The Test result line, and whether everything works. */
 export function testLine(a: TestAnswer): { ok: boolean; text: string } {
   if (!a.ok) return { ok: false, text: a.error || 'The test failed.' };
   const secs = (Number(a.ms) / 1000).toFixed(1);
   const cost = typeof a.cost_usd === 'number' && a.cost_usd > 0 ? ` ($${a.cost_usd.toFixed(4)})` : '';
-  const works = a.tools === 'ok' || a.tools === true;
-  return { ok: works, text: `Connected to ${a.served_by || a.model} in ${secs} s${cost}. ${works ? 'Tool calling works.' : TEMPLATE_TEXT}` };
+  const connected = `Connected to ${a.served_by || a.model} in ${secs} s${cost}.`;
+  if (TOOLS_WORK.has(a.tools)) return { ok: true, text: `${connected} Tool calling works.` };
+  if (TOOLS_FAIL.has(a.tools)) return { ok: false, text: `${connected} ${TEMPLATE_TEXT}` };
+  // A verdict this page doesn't know: the connection works; say nothing about tools.
+  return { ok: true, text: connected };
 }
 
 function supportsTextSecurity(): boolean {
@@ -484,8 +502,13 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
       (e: unknown) => {
         if (ac.signal.aborted) return;
         // A server without the models route: the chosen model and "Other model id…" still work.
-        if (e instanceof AssistantApiError && e.status === 404) setList({ state: 'none', models: [] });
-        else setList({ state: 'error', models: [], error: e instanceof Error ? e.message : String(e) });
+        if (e instanceof AssistantApiError && e.status === 404) {
+          setList({ state: 'none', models: [] });
+          return;
+        }
+        // A listing the provider refused may still come with the models Magnusim knows.
+        const sent = e instanceof AssistantApiError ? (e.body as { models?: unknown }).models : undefined;
+        setList({ state: 'error', models: Array.isArray(sent) ? (sent as ModelInfo[]) : [], error: e instanceof Error ? e.message : String(e) });
       },
     );
     return () => ac.abort();
@@ -745,7 +768,7 @@ function LimitsBlock({ status }: { status: AssistantStatus }) {
       {cloud ? (
         <>
           <p className="wiz-assistant-status" data-assistant-spent="1">
-            Spent today: {money(Number(status.spent_today_usd) || 0)} of {money(caps.day_usd)}
+            Spent today: {cents(Number(status.spent_today_usd))} of {cents(caps.day_usd)}
           </p>
           <p className="wiz-assistant-meta">{LIMITS_TEXT}</p>
           <p className="wiz-assistant-meta" data-assistant-shared-pc="1">

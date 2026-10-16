@@ -89,8 +89,11 @@ export interface AssistantStatus {
   price?: PriceInfo | null;
   /** With the model adapters: the date the price table was read. */
   prices_as_of?: string;
-  /** With the model adapters: the provider may retry a declined request on an older model. */
-  fallback?: boolean | string[] | null;
+  /**
+   * With the model adapters: the provider may retry a declined request on an older model.
+   * On only as `true`, a non-empty list of models, or `{on: true, targets}`.
+   */
+  fallback?: boolean | string[] | { on: boolean; targets?: string[] } | null;
   /** With the model adapters: the test provider address switch is in use. */
   test_provider?: boolean;
   /** With the model adapters. */
@@ -105,9 +108,16 @@ export interface ModelsAnswer {
   source?: string;
 }
 
-/** POST /api/assistant/test. `tools` is 'ok' when the model called the test tool. */
+/**
+ * How the Test's model handled the test tool: 'works' (it called it), 'not_used' (it just
+ * answered) or 'as_text' (it wrote the call as text: a chat template without tools). The
+ * page also reads 'ok' and true as working, and false as not.
+ */
+export type ToolsVerdict = 'works' | 'not_used' | 'as_text' | 'ok' | boolean;
+
+/** POST /api/assistant/test. */
 export type TestAnswer =
-  | { ok: true; model: string; served_by?: string | null; ms: number; tools: 'ok' | 'not_used' | string | boolean; cost_usd?: number | null }
+  | { ok: true; model: string; served_by?: string | null; ms: number; tools: ToolsVerdict | string; cost_usd?: number | null }
   | { ok: false; code?: string; error: string };
 
 /** A refused change (400 {error, field}, or 409 {needs_confirm}). */

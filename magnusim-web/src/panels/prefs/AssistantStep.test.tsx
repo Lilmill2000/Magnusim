@@ -10,6 +10,7 @@ import {
   LOCAL_PRICE_TEXT,
   LOCAL_PRIVACY_TEXT,
   SHARED_PC_TEXT,
+  testLine,
   UNKNOWN_PRICE_TEXT,
 } from './AssistantStep';
 
@@ -406,6 +407,32 @@ describe('AssistantStep cloud', () => {
     expect(q('[data-assistant-fallback-note]')).toBeNull();
   });
 
+  it.each([
+    ['true', true, true],
+    ['a list of models', ['claude-opus-5', 'claude-opus-4-8'], true],
+    ['{on: true, targets}', { on: true, targets: ['claude-opus-5', 'claude-opus-4-8'] }, true],
+    ['{on: false, targets: []}', { on: false, targets: [] }, false],
+    ['an object without on', { targets: ['claude-opus-5'] }, false],
+    ['false', false, false],
+    ['an empty list', [], false],
+    ['null', null, false],
+    ['a string', 'yes', false],
+  ])('the fallback note shows only when the status says it is on: %s', async (_name, fallback, shown) => {
+    await ready({ provider: 'anthropic', fallback });
+    expect(q('[data-assistant-fallback-note]') !== null).toBe(shown);
+  });
+
+  it.each([
+    [0.4213, 'Spent today: $0.42 of $15.00'],
+    [0, 'Spent today: $0.00 of $15.00'],
+    [0.0021, 'Spent today: under $0.01 of $15.00'],
+    [0.006, 'Spent today: $0.01 of $15.00'],
+    [12.5, 'Spent today: $12.50 of $15.00'],
+  ])("today's spend is in dollars and cents: %s", async (spent, text) => {
+    await ready({ provider: 'anthropic', spent_today_usd: spent });
+    expect(q('[data-assistant-spent]')!.textContent).toBe(text);
+  });
+
   it('a limit saves on Enter; an invalid one shows its error and keeps what was typed', async () => {
     await ready({ provider: 'anthropic' });
     const turn = q<HTMLInputElement>('[data-assistant-cap-turn-usd]')!;
@@ -463,8 +490,54 @@ describe('AssistantStep models and Test', () => {
     expect(screen.getByRole('option', { name: 'Choose a model' })).toBeDisabled();
   });
 
+  it('a listing the provider refused still offers the models the server sent, and says why', async () => {
+    modelsAnswer = {
+      status: 502,
+      body: {
+        ok: false,
+        code: 'auth',
+        error: 'Anthropic refused the key.',
+        models: [
+          { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', priced: true },
+          { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', priced: true },
+        ],
+      },
+    };
+    await ready({ provider: 'anthropic' });
+    await waitFor(() => expect(q('[data-assistant-models-error]')).toHaveTextContent("Couldn't list the models: Anthropic refused the key."));
+    const select = q<HTMLSelectElement>('[data-assistant-model]')!;
+    expect(within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).toEqual([
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      '(other model id)',
+    ]);
+    expect(select.value).toBe('claude-opus-5-5');
+    fireEvent.change(select, { target: { value: 'claude-sonnet-5-5' } });
+    await waitFor(() => expect(q('[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'claude-sonnet-5-5'));
+  });
+
+  it.each([
+    ['works', true, 'Tool calling works.'],
+    ['ok', true, 'Tool calling works.'],
+    [true, true, 'Tool calling works.'],
+    ['not_used', false, "But the model didn't call the test tool"],
+    ['as_text', false, "But the model didn't call the test tool"],
+    [false, false, "But the model didn't call the test tool"],
+  ])('the Test reads the tool verdict %s', (tools, works, sentence) => {
+    const line = testLine({ ok: true, model: 'm-1', ms: 1000, tools: tools as 'works' });
+    expect(line.ok).toBe(works);
+    expect(line.text.startsWith('Connected to m-1 in 1.0 s. ')).toBe(true);
+    expect(line.text).toContain(sentence);
+    expect(line.text.includes('Tool calling works.')).toBe(works);
+  });
+
+  it('a verdict the page does not know claims neither way', () => {
+    const line = testLine({ ok: true, model: 'm-1', ms: 1000, tools: 'maybe' as 'works' });
+    expect(line).toEqual({ ok: true, text: 'Connected to m-1 in 1.0 s.' });
+  });
+
   it('Test shows the connection, its time and cost, and reads the spend again', async () => {
-    testAnswer = { status: 200, body: { ok: true, model: 'claude-opus-5-5', served_by: 'claude-opus-5-5', ms: 1432, tools: 'ok', cost_usd: 0.0021 } };
+    testAnswer = { status: 200, body: { ok: true, model: 'claude-opus-5-5', served_by: 'claude-opus-5-5', ms: 1432, tools: 'works', cost_usd: 0.0021 } };
     await ready({ provider: 'anthropic' });
     const gets = () => requests.filter((r) => r.path === '/api/assistant/status').length;
     const before = gets();
@@ -473,8 +546,9 @@ describe('AssistantStep models and Test', () => {
     const result = q('[data-assistant-test-result]')!;
     expect(result).toHaveAttribute('role', 'status');
     await waitFor(() => expect(result).toHaveTextContent('Connected to claude-opus-5-5 in 1.4 s ($0.0021). Tool calling works.'));
+    expect(result).toHaveAttribute('data-assistant-test-result', 'ok');
     await waitFor(() => expect(gets()).toBeGreaterThan(before));
-    await waitFor(() => expect(q('[data-assistant-spent]')).toHaveTextContent('Spent today: $0.422 of $15.00'));
+    await waitFor(() => expect(q('[data-assistant-spent]')).toHaveTextContent('Spent today: $0.42 of $15.00'));
   });
 
   it('Test says when the model did not call the tool, and shows an error as it came', async () => {
