@@ -19,6 +19,8 @@ export const H15_TESTS = [
   'server/__tests__/assistant-home.test.js',
   'server/__tests__/assistant-settings.test.js',
   'server/__tests__/assistant-ledger.test.js',
+  'server/__tests__/assistant-secrets.test.js',
+  'server/__tests__/assistant-dpapi.test.js',
   '__tests__/project-delete-jobs.test.mjs',
   '__tests__/wsl-case-watch.test.mjs',
   '__tests__/solve-hooks.test.mjs',
