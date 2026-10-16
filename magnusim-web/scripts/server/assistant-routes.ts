@@ -31,7 +31,12 @@
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
  *   POST /api/assistant/gates/:id       {allow} → {ok}; 409 {already} (the first answer wins); 404
  *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
- *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools)
+ *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools):
+ *                                        {ok, tabs:[{tab, connected, since, workspace, tools, refused,
+ *                                        active_turns, hold_until}]} (since and hold_until: ms since 1970)
+ *   POST /api/assistant/relay/tools     the page relay (assistant/relay.ts): a tab's workspace tools,
+ *   POST /api/assistant/relay/progress  a call's ack and progress, and its result; and the event hub's
+ *   POST /api/assistant/relay/result    channel kind `assistant` {role:'relay'}, for this PC only
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -40,6 +45,7 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError } from './http.ts';
+import { registerChannelKind } from './event-hub.ts';
 import type { RequestContext, RouteHandler, Router } from './router.ts';
 import { assistantAccess, REMOTE_BODY, TURN_HEADER } from './assistant/access.ts';
 import { assistantDataDir, assistantHomeIsOverridden, secretsDir } from './assistant/home.ts';
@@ -62,6 +68,7 @@ import { defaultHostTools } from './assistant/host-tools.ts';
 import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
+import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 
 export { TURN_HEADER };
 
@@ -72,6 +79,8 @@ export interface AssistantDeps {
   port?: () => number;
   /** Tests: parts of the turn machinery replaced (the clock, the gate waits, the registry). */
   turns?: Partial<TurnManagerDeps>;
+  /** Tests: the relay's timings and the plugins it finds loaded. */
+  relay?: Partial<Omit<RelayOptions, 'registry' | 'turns'>>;
 }
 
 export interface AssistantHandle {
@@ -79,6 +88,8 @@ export interface AssistantHandle {
   /** The tools the turns are offered (the page relay registers workspaces here). */
   readonly registry: Registry;
   readonly turns: TurnManager;
+  /** The page relay: how turns reach the workspace open in an app tab. */
+  readonly relay: Relay;
   /** The server is closing: stop what the Assistant runs and drop the master key (nothing once a newer server registered). */
   shutdown(): void;
 }
@@ -160,6 +171,11 @@ const STATUS_PARTS: StatusPart[] = [
   ({ store }) => ({ keys: store.status(), storage: store.storage(), keys_notice: store.notice() }),
   ({ ledger }) => ({ spent_today_usd: round4(ledger.spentToday()) }),
   ({ store }) => ({ test_protector: store.testProtector }),
+  () => {
+    // The relay's test switches in use (null when not).
+    const sw = relaySwitches();
+    return { test_hold_ms: sw.holdMs, test_ack_ms: sw.ackMs };
+  },
   ({ settings: s, deps }) => {
     const provider = s.provider;
     const model = provider === 'off' ? '' : s.models[provider];
@@ -348,7 +364,7 @@ function keyRefusal(ctx: RequestContext, err: unknown, store: Store): boolean {
   return true;
 }
 
-function registerTestRoutes(router: Router, turns: TurnManager): void {
+function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): void {
   router.get(
     '/api/test/assistant/state',
     local(async (ctx) => {
@@ -360,11 +376,12 @@ function registerTestRoutes(router: Router, turns: TurnManager): void {
         boot: st.bootId,
         running: turns.running().length,
         turns: st.turns.size,
-        links: {},
+        links: relay.snapshot(),
         gates: turns.gates.openCount(),
         reservations: ledger.openCount(),
         protector: store.testProtector ?? store.protector.kind,
-        hold_ms: null,
+        hold_ms: relay.holdMs,
+        ack_ms: relay.ackMs,
       });
     }),
   );
@@ -472,8 +489,38 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
   );
 }
 
+/** The page relay's routes and its event-hub channel kind (assistant/relay.ts does the work). */
+function registerRelayRoutes(router: Router, relay: Relay): void {
+  registerChannelKind('assistant', (params, send, done, meta) => relay.open(params, send, done, meta));
+
+  router.post(
+    '/api/assistant/relay/tools',
+    local(async (ctx) => {
+      const r = relay.register(await ctx.readJsonBody());
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/relay/progress',
+    local(async (ctx) => {
+      const r = relay.progress(await ctx.readJsonBody());
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/relay/result',
+    local(async (ctx) => {
+      const r = relay.result(await ctx.readJsonBody());
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+}
+
 export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}): AssistantHandle {
   const turns = turnManager(deps);
+  const relay = createRelay({ clock: turns.clock, keepPresenter: !!deps.turns?.presenter, ...deps.relay, registry: turns.registry, turns });
   router.get(
     '/api/assistant/status',
     local(async (ctx) => {
@@ -566,8 +613,9 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   );
 
   registerTurnRoutes(router, turns);
+  registerRelayRoutes(router, relay);
 
-  if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns);
+  if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay);
 
   // This server's lifetime: after a Vite restart the old server's close ends nothing of the new one's.
   const lifetime = beginAssistantLifetime();
@@ -575,8 +623,10 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     deps,
     registry: turns.registry,
     turns,
+    relay,
     shutdown() {
       shutdownAssistant(lifetime);
+      relay.shutdown();
     },
   };
 }

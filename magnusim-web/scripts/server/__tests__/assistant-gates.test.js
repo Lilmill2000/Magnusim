@@ -1,8 +1,10 @@
 // The Assistant's questions (Foundation spec 6.4, 10.1, 10.4): held on the server; the
 // first answer wins; the timeout denies; Stop withdraws; nothing allows by itself; a
 // tab-bound question is shown again when its tab's link returns, and after the link has
-// been gone 15 s the turn gets a note while the route still answers.
-import { after, describe, it } from 'node:test';
+// been gone 15 s the turn gets a note while the route still answers. Through the page
+// relay (a real hub and page): a gate frame in the bound tab, sent again when the tab
+// links again, and gate_closed for each way it closes.
+import { after, afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -15,7 +17,7 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete process.env[k];
 
-const { FakeClock, makeManager, settled, eventsOf, hostTool, until, tick } = await import('./assistant-harness.js');
+const { FakeClock, makeManager, settled, eventsOf, hostTool, until, tick, relayServer } = await import('./assistant-harness.js');
 const { GateBroker, GATE_UNSEEN_NOTE, GATE_TIMEOUT_MS, GATE_UNSEEN_MS, NO_PRESENTER } = await import('../assistant/gates.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -160,7 +162,7 @@ describe('a question for an app tab', { timeout: 20_000 }, () => {
     assert.equal(events.filter((e) => e.type === 'unseen').length, 1, 'once');
     assert.equal(b.answer(view.id, false), 'ok');
     assert.equal(await answer, 'deny');
-    // With no presenter (this commit: the page relay comes next) a tab's question is unseen from the start.
+    // With no presenter (no page relay) a tab's question is unseen from the start.
     const n = broker({ presenter: NO_PRESENTER });
     const q = ask(n.b, n.events, REQ, TURN('T1'));
     n.clock.advance(GATE_UNSEEN_MS);
@@ -212,5 +214,66 @@ describe('a question for an app tab', { timeout: 20_000 }, () => {
       handle.shutdown();
       await new Promise((r) => server.close(r));
     }
+  });
+});
+
+describe('the page relay shows a tab-bound question in its tab', { timeout: 30_000 }, () => {
+  const servers = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) await s.close();
+  });
+  /** A turn bound to a linked tab whose model calls the destructive host tool `zap`. */
+  async function zapTurn() {
+    const m = makeManager({ dir: ROOT, provider: 'openai_compatible', projects: { p1: { id: 'p1', title: 'Wing', created_at: null } }, hostTools: [hostTool('zap', { risk: 'destructive' })] });
+    const s = await relayServer(m);
+    servers.push(s);
+    const page = await s.page();
+    const link = await page.open();
+    assert.equal((await s.register(link, 1)).status, 200);
+    m.provider.script({ tools: [{ name: 'zap' }] }, { text: 'Done.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Zap it', tab: page.tab });
+    assert.equal(started.status, 202);
+    const t = s.handle.turns.get(started.json.turn);
+    const shown = (await page.frame('gate')).gate;
+    return { m, s, page, t, shown };
+  }
+
+  it('a gate frame on the tab’s live link; the link gone 15 s: a note; sent again when the tab links again; the route still answers, and the page hears gate_closed', async () => {
+    const { m, s, page, t, shown } = await zapTurn();
+    const logged = eventsOf(t).find((e) => e.type === 'gate').gate;
+    assert.deepEqual(shown, logged, 'the turn’s own question');
+    assert.equal(shown.tool, 'zap');
+    page.serverDrop();
+    await until(() => s.relay.snapshot()[page.tab]?.connected === false, 5000, 'the link to go');
+    m.clock.advance(GATE_UNSEEN_MS - 1);
+    assert.equal(eventsOf(t).filter((e) => e.type === 'note' && e.text === GATE_UNSEEN_NOTE).length, 0);
+    m.clock.advance(1);
+    assert.equal(eventsOf(t).filter((e) => e.type === 'note' && e.text === GATE_UNSEEN_NOTE).length, 1, 'the note after 15 s');
+    // The same tab links again: the question comes again, after `linked`.
+    const back = await s.page(page.tab);
+    await back.open();
+    const again = (await back.frame('gate')).gate;
+    assert.equal(again.id, shown.id);
+    assert.equal(back.frames.find((f) => f.c === 'assistant:1').event, 'linked');
+    // Still answerable through the route; the page's dialog is told to go.
+    const r = await s.post(`/api/assistant/gates/${shown.id}`, { allow: true });
+    assert.equal(r.status, 200);
+    assert.deepEqual(await back.frame('gate_closed'), { gate: shown.id, answer: 'allow', by: 'user' });
+    await settled(t);
+    assert.equal(t.state, 'done');
+  });
+
+  it('gate_closed also when the question times out, and when Stop withdraws it', async () => {
+    const timed = await zapTurn();
+    timed.m.clock.advance(GATE_TIMEOUT_MS);
+    assert.deepEqual(await timed.page.frame('gate_closed'), { gate: timed.shown.id, answer: 'deny', by: 'timeout' });
+    await settled(timed.t);
+    assert.equal(timed.t.state, 'done', 'declined: the model went on');
+    const stopped = await zapTurn();
+    const r = await stopped.s.post(`/api/assistant/turns/${stopped.t.id}/stop`, {});
+    assert.equal(r.status, 200);
+    assert.deepEqual(await stopped.page.frame('gate_closed'), { gate: stopped.shown.id, answer: 'deny', by: 'stop' });
+    await settled(stopped.t);
+    assert.equal(stopped.t.state, 'stopped');
   });
 });

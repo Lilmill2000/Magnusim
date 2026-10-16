@@ -1,10 +1,14 @@
-// Shared helpers for the Assistant's loop, gate and CLI tests (not a test file itself):
-// a fake clock, ScriptedProvider (a ProviderAdapter whose answers a test scripts) and a
-// TurnManager built on them with an in-memory settings object, a fake key store, a real
-// spend ledger in a temp folder and a real tool registry.
+// Shared helpers for the Assistant's loop, gate, CLI and relay tests (not a test file
+// itself): a fake clock, ScriptedProvider (a ProviderAdapter whose answers a test scripts)
+// and a TurnManager built on them with an in-memory settings object, a fake key store, a
+// real spend ledger in a temp folder and a real tool registry; and, for the page relay, a
+// server wired as index.ts wires one (the event hub and the Assistant's routes) with a
+// page client that holds a tab's event stream and speaks the relay.
 //
 // A test sets its temp roots first and then imports this file dynamically: the app
 // modules below load only then.
+import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
 const { ProviderError } = await import('../assistant/types.ts');
@@ -341,4 +345,191 @@ export function checkInvariants(assert, conv, requests, label = '') {
     const results = next.parts.filter((p) => p.type === 'tool_result').map((p) => p.callId);
     assert.deepEqual(results, calls, `${label} message ${i + 1} answers every call of message ${i} once, in order`);
   }
+}
+
+// ---------------------------------------------------------------- the page relay
+
+const EMPTY_SCHEMA = Object.freeze({ type: 'object', properties: {}, additionalProperties: false });
+const BY_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: { by: { type: 'integer', minimum: -100, maximum: 100 } },
+  required: ['by'],
+  additionalProperties: false,
+});
+
+/** The demo workspace's tools as its page registers them (the e2e fixture's, less the image). */
+export function demoTools() {
+  return [
+    { name: 'get_count', description: 'Reads the counter.', inputSchema: EMPTY_SCHEMA, risk: 'read' },
+    { name: 'add', title: 'Add to the counter', description: 'Adds to the counter.', inputSchema: BY_SCHEMA, risk: 'edit' },
+    { name: 'slow_add', title: 'Add slowly', description: 'Adds, slowly.', inputSchema: BY_SCHEMA, risk: 'edit', timeoutS: 30 },
+    { name: 'reset', title: 'Reset the counter', description: 'Sets the counter to 0.', inputSchema: EMPTY_SCHEMA, risk: 'destructive' },
+  ];
+}
+
+/** The scope the host gives a demo frame. */
+export const DEMO_WORKSPACE = Object.freeze({ project_id: 'p1', plugin: 'ai-demo', workspace: 'Counter', study_id: 's1' });
+
+/** pluginLoaded for the relay: the demo plugin is on while `state.on`. */
+export function demoLoaded(state = { on: true }) {
+  return (key) => (state.on && key === 'ai-demo' ? { key, name: 'Workspace demo' } : null);
+}
+
+export const newTabId = () => `tab-${randomBytes(6).toString('hex')}`;
+
+async function requestJson(base, method, path, body, headers = {}) {
+  const r = await fetch(`${base}${path}`, {
+    method,
+    headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
+    ...(body !== undefined ? { body: typeof body === 'string' ? body : JSON.stringify(body) } : {}),
+  });
+  const text = await r.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    /* not JSON */
+  }
+  return { status: r.status, json };
+}
+
+/** The server's own record of a tab's stream (event-hub.ts state). */
+export function hubTab(tab) {
+  return globalThis[Symbol.for('magnusim.eventHub')]?.tabs.get(tab) ?? null;
+}
+
+/**
+ * A tab of the app: its event stream (GET /api/events), read frame by frame, and the
+ * relay's channel on it. Frames: {event, c, d} (`hello` has no c).
+ */
+export async function relayPage(base, tab = newTabId(), { headers = {} } = {}) {
+  const page = { tab, frames: [], conn: null, status: 0, ended: false, req: null };
+  let raw = '';
+  await new Promise((resolve) => {
+    page.req = http.get(`${base}/api/events?tab=${tab}`, { headers, agent: false }, (res) => {
+      page.status = res.statusCode;
+      if (res.statusCode !== 200) {
+        res.resume();
+        resolve();
+        return;
+      }
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        raw += chunk;
+        let cut;
+        while ((cut = raw.indexOf('\n\n')) >= 0) {
+          const block = raw.slice(0, cut);
+          raw = raw.slice(cut + 2);
+          const ev = /^event: (.*)$/m.exec(block);
+          const data = /^data: (.*)$/m.exec(block);
+          if (!ev) continue;
+          const parsed = data ? JSON.parse(data[1]) : null;
+          if (ev[1] === 'hello') {
+            page.conn = parsed.conn;
+            resolve();
+            continue;
+          }
+          page.frames.push({ event: ev[1], c: parsed?.c ?? null, d: parsed?.d ?? null });
+        }
+      });
+      res.on('close', () => {
+        page.ended = true;
+        resolve();
+      });
+      res.on('error', () => undefined);
+    });
+    page.req.on('error', () => {
+      page.ended = true;
+      resolve();
+    });
+  });
+  /** Subscribes a relay channel (cid `assistant:N`); its result row. */
+  page.subscribe = async (cid = 'assistant:1', params = { role: 'relay' }, h = {}) => {
+    const r = await requestJson(base, 'POST', '/api/events/subscribe', { tab, conn: page.conn, channels: [{ cid, kind: 'assistant', params }] }, h);
+    return r.json?.results?.[0] ?? r;
+  };
+  page.unsubscribe = (cid = 'assistant:1') => requestJson(base, 'POST', '/api/events/unsubscribe', { tab, conn: page.conn, cids: [cid] });
+  /** The payloads of a channel's frames of one type so far. */
+  page.of = (event, cid = 'assistant:1') => page.frames.filter((f) => f.c === cid && f.event === event).map((f) => f.d);
+  /** Waits for the n-th (0-based) frame of a type on a channel and returns its payload. */
+  page.frame = (event, n = 0, cid = 'assistant:1', ms = 5000) => until(() => page.of(event, cid)[n], ms, `${event} #${n} on ${cid}`);
+  /** Subscribes and waits for its `linked` frame: the link. */
+  page.open = async (cid = 'assistant:1') => {
+    const before = page.of('linked', cid).length;
+    const r = await page.subscribe(cid);
+    if (!r.ok) throw new Error(`the relay channel was refused: ${r.status} ${r.error}`);
+    return (await page.frame('linked', before, cid)).link;
+  };
+  /** The server cuts the tab's stream (as a lost connection does); its channels end. */
+  page.serverDrop = () => hubTab(tab)?.res.destroy();
+  page.close = () => page.req.destroy();
+  return page;
+}
+
+/**
+ * A server as index.ts wires the relay: the same-origin check and the Assistant's prefix
+ * guard, then a real Router with the event hub and the Assistant's routes, over
+ * http.createServer. `m` is a makeManager() (its clock drives the relay's timers too);
+ * `o.loaded` is the demo plugin's state for pluginLoaded ({on}); `o.relay` more relay options.
+ */
+export async function relayServer(m, o = {}) {
+  const { Router, dispatch } = await import('../router.ts');
+  const { registerEventHubRoutes } = await import('../event-hub.ts');
+  const { assertSameOrigin, sendJson } = await import('../http.ts');
+  const { assistantGuard } = await import('../assistant/access.ts');
+  const routes = await import('../assistant-routes.ts');
+  const router = new Router();
+  registerEventHubRoutes(router);
+  const loaded = o.loaded ?? { on: true };
+  const handle = routes.registerAssistantRoutes(router, { turns: m.deps, relay: { pluginLoaded: demoLoaded(loaded), ...(o.relay || {}) } });
+  const server = http.createServer(async (req, res) => {
+    try {
+      assertSameOrigin(req);
+      if (assistantGuard(req, res)) return;
+      if (!(await dispatch(router, req, res))) sendJson(res, 404, { error: 'route not found' });
+    } catch (err) {
+      if (!res.headersSent) sendJson(res, err?.status || 500, { error: String(err?.message || err) });
+    }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (path, body, headers) => requestJson(base, 'POST', path, body, headers);
+  const get = (path, headers) => requestJson(base, 'GET', path, undefined, headers);
+  return {
+    base,
+    handle,
+    relay: handle.relay,
+    loaded,
+    post,
+    get,
+    page: (tab, opts) => relayPage(base, tab, opts),
+    /** POST /relay/tools for the demo workspace. */
+    register: (link, rev, tools = demoTools(), extra = {}) => post('/api/assistant/relay/tools', { link, rev, workspace: { ...DEMO_WORKSPACE }, tools, ...extra }),
+    progress: (link, call, extra = {}) => post('/api/assistant/relay/progress', { link, call, ...extra }),
+    result: (link, call, extra = { ok: true }) => post('/api/assistant/relay/result', { link, call, ...extra }),
+    tabs: async () => (await get('/api/assistant/tabs')).json.tabs,
+    async close() {
+      handle.shutdown();
+      server.closeAllConnections?.();
+      await new Promise((r) => server.close(r));
+    },
+  };
+}
+
+/** A workspace tool's run as the runner calls it: {promise, abort}. */
+export function runTool(def, input, ctx, { turn = 't-test', progress = () => {} } = {}) {
+  const ac = new AbortController();
+  const promise = def.run(input, { signal: ac.signal, ctx, turn, progress });
+  return { promise, abort: (reason) => ac.abort(reason) };
+}
+
+/** Whether a promise has settled by now (after its microtasks and one turn of the event loop). */
+export async function settledNow(promise) {
+  let done = false;
+  promise.then(
+    () => (done = true),
+    () => (done = true),
+  );
+  await tick();
+  return done;
 }

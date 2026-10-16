@@ -1578,13 +1578,43 @@ export function studyHasActiveCase(projectId, plugin, studyId) {
 
 /**
  * Turning a plugin off, removing its environment or the Reload button bump it; a
- * submit checks it after each await, so one that raced such a change fails.
+ * submit checks it after each await, so one that raced such a change fails. The
+ * listeners (onPluginEpochBump) hear it at once, before the caller goes on to the worker.
  * @param {string} key a plugin key, or '*' for every plugin
  */
 export function bumpPluginEpoch(key) {
   const e = R().epochs;
-  if (key === '*') e.all += 1;
-  else e.byKey.set(String(key), (e.byKey.get(String(key)) || 0) + 1);
+  const k = key === '*' ? '*' : String(key);
+  if (k === '*') e.all += 1;
+  else e.byKey.set(k, (e.byKey.get(k) || 0) + 1);
+  for (const fn of [...epochListeners()]) {
+    try {
+      fn(k);
+    } catch (err) {
+      console.warn('[foam-runner] plugin epoch listener failed', err);
+    }
+  }
+}
+
+/** The listeners of bumpPluginEpoch (on the runner's global state, so a Vite re-import shares them). */
+function epochListeners() {
+  const r = /** @type {any} */ (R());
+  if (!r.epochListeners) r.epochListeners = new Set();
+  return /** @type {Set<(key: string) => void>} */ (r.epochListeners);
+}
+
+/**
+ * Hears every bump, synchronously, with the plugin key or '*' (the Assistant's relay drops
+ * that plugin's workspace tools and fails their calls before the worker answers).
+ * @param {(key: string) => void} fn
+ * @returns {() => void} removes it
+ */
+export function onPluginEpochBump(fn) {
+  const set = epochListeners();
+  set.add(fn);
+  return () => {
+    set.delete(fn);
+  };
 }
 
 /** @param {string} key */

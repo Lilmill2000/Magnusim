@@ -1,12 +1,14 @@
 // The tool registry (Foundation spec 7.1, 7.3, 7.5, 10.1): provider-safe names and plugin
 // slugs, what a registration may hold and why a tool is refused, stable order and bytes,
 // the per-request caps, tab, project and connection scoping, and the plugin-epoch fence
-// that removes a plugin's tools the moment it is turned off, swapped or reset.
-import { after, describe, it } from 'node:test';
+// that removes a plugin's tools the moment it is turned off, swapped or reset: with the
+// page relay, before the worker answers, and a frame's pinned epoch is refused after.
+import { after, afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-assistant-registry-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
@@ -324,5 +326,116 @@ describe('the plugin-epoch fence', () => {
     assert.equal(r.toolsFor(ctx()).length, 4);
     bumpPluginEpoch('*');
     assert.deepEqual(names(r.toolsFor(ctx())), ['alpha'], "'*' fences every plugin");
+  });
+});
+
+// The fence with the page relay (spec 7.5, 8.4): the relay hears each bump at once and drops
+// the plugin's registrations and calls before the worker answers; a frame's pinned epoch then
+// stays refused, and a fresh frame needs its plugin loaded.
+const { makeManager, relayServer, demoTools, runTool, until } = await import('./assistant-harness.js');
+const { beginAssistantLifetime, resetAssistantState } = await import('../assistant/state.ts');
+after(() => resetAssistantState());
+
+/** A worker whose call waits until the test releases it (as a slow plugins.disable). */
+function heldWorker() {
+  const w = { calls: [], answered: false, release: null };
+  w.call = (method, params) =>
+    new Promise((resolve) => {
+      w.calls.push({ method, params });
+      w.release = (answer) => {
+        w.answered = true;
+        resolve(answer);
+      };
+    });
+  return w;
+}
+
+/** The plugin-off route's order (routes.ts POST /api/plugins/:key/disable): bump, the worker, bump. */
+async function disablePlugin(worker, key) {
+  bumpPluginEpoch(key);
+  const answer = await worker.call('plugins.disable', { key });
+  if (answer.ok) bumpPluginEpoch(key);
+  return answer;
+}
+
+describe('the fence and the page relay', { timeout: 30_000 }, () => {
+  const relayCtx = (tab) => ({ tab, projectId: 'p1', simulationId: 's1', cloud: false, local: true });
+  const servers = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) await s.close();
+  });
+
+  it('bumpPluginEpoch removes the tools and fails a pending call before a held fake worker answers; the page hears `unregistered`', async () => {
+    // The real plugin-off route bumps before it waits for the worker, as disablePlugin does here.
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'routes.ts'), 'utf8');
+    const route = src.slice(src.indexOf("router.post('/api/plugins/:key/disable'"));
+    const bumpAt = route.indexOf('bumpPluginEpoch(key);');
+    const workerAt = route.indexOf("await workerAnswer(deps, 'plugins.disable'");
+    assert.ok(bumpAt > 0 && workerAt > bumpAt, 'the route bumps, then waits for the worker');
+    const m = makeManager({ dir: ROOT, provider: 'openai_compatible' });
+    const s = await relayServer(m);
+    servers.push(s);
+    const page = await s.page();
+    const link = await page.open();
+    assert.equal((await s.register(link, 1)).status, 200);
+    const c = relayCtx(page.tab);
+    const add = m.registry.toolsFor(c).find((t) => t.localName === 'add');
+    const call = runTool(add, { by: 1 }, c);
+    const inv = await page.frame('invoke');
+    await s.progress(link, inv.call, { ack: true });
+    let out = null;
+    call.promise.then((o) => (out = o));
+    const worker = heldWorker();
+    const disable = disablePlugin(worker, 'ai-demo');
+    await until(() => out, 2000, 'the call to fail');
+    assert.equal(worker.answered, false, 'the worker has not answered');
+    assert.deepEqual([out.ok, out.error.code, out.error.message], [false, 'plugin_off', 'Workspace demo was turned off or replaced while the tool ran; it may or may not have finished.']);
+    assert.deepEqual(m.registry.toolsFor(c), [], 'its tools are gone');
+    assert.deepEqual(await s.tabs(), []);
+    assert.deepEqual(await page.frame('unregistered'), { reason: 'plugin_off' });
+    assert.equal(s.relay.snapshot()[page.tab].pending, 0);
+    assert.equal(worker.answered, false, 'all of it before the worker answered');
+    assert.deepEqual((await s.result(link, inv.call, { ok: true, result: 'late' })).json, { ok: true, stale: true }, 'its late answer is ignored');
+    worker.release({ ok: true });
+    assert.deepEqual(await disable, { ok: true });
+  });
+
+  it('after the bump a re-POST with the frame’s old epoch is 409 plugin_changed; a fresh POST while pluginLoaded is null is 409 plugin_off; loaded again, a fresh frame registers; after a server restart an old token counts as fresh', async () => {
+    const m = makeManager({ dir: ROOT, provider: 'openai_compatible' });
+    const s = await relayServer(m);
+    servers.push(s);
+    const page = await s.page();
+    const link = await page.open();
+    const first = await s.register(link, 1);
+    const token = first.json.epoch;
+    assert.equal((await s.register(link, 2, demoTools(), { epoch: token })).status, 200, 'pinned and unchanged: taken');
+    const other = await s.register(link, 3, demoTools(), { epoch: token, workspace: { project_id: 'p1', plugin: 'other-plugin', workspace: 'Other', study_id: '' } });
+    assert.deepEqual([other.status, other.json.code], [409, 'plugin_changed'], "another plugin's frame can't use it");
+    bumpPluginEpoch('ai-demo');
+    assert.deepEqual(await page.frame('unregistered', 0), { reason: 'plugin_off' });
+    const changed = await s.register(link, 4, demoTools(), { epoch: token });
+    assert.deepEqual([changed.status, changed.json.code], [409, 'plugin_changed']);
+    assert.match(changed.json.error, /^Workspace demo was turned off, replaced or reset/);
+    s.loaded.on = false;
+    const fresh = await s.register(link, 5);
+    assert.deepEqual([fresh.status, fresh.json.code], [409, 'plugin_off']);
+    assert.deepEqual(await s.tabs(), []);
+    s.loaded.on = true;
+    const back = await s.register(link, 6);
+    assert.equal(back.status, 200);
+    assert.notEqual(back.json.epoch, token, 'a new token under the new epoch');
+    // A server restart in this process (Vite's): another boot id, so the token counts as fresh.
+    beginAssistantLifetime();
+    s.loaded.on = false;
+    const offAfter = await s.register(link, 7, demoTools(), { epoch: back.json.epoch });
+    assert.deepEqual([offAfter.status, offAfter.json.code], [409, 'plugin_off']);
+    s.loaded.on = true;
+    const restarted = await s.register(link, 8, demoTools(), { epoch: back.json.epoch });
+    assert.equal(restarted.status, 200);
+    assert.notEqual(restarted.json.epoch, back.json.epoch);
+    // '*' (Reload) fences every plugin's frames.
+    bumpPluginEpoch('*');
+    assert.deepEqual(await page.frame('unregistered', 1), { reason: 'plugin_off' });
+    assert.equal((await s.register(link, 9, demoTools(), { epoch: restarted.json.epoch })).json.code, 'plugin_changed');
   });
 });

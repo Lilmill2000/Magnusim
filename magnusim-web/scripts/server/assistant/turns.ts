@@ -485,6 +485,15 @@ export interface TurnManagerDeps {
 
 export type Answer = { status: number; body: Record<string, unknown> };
 
+/** A turn of the manager started or ended. */
+export type TurnChange = 'started' | 'ended';
+
+/** What the relay knows of a tab beyond its registration (ms since 1970, or null). */
+export interface TabInfo {
+  since: number | null;
+  hold_until: number | null;
+}
+
 const refuse = (status: number, code: string, error: string, extra: Record<string, unknown> = {}): Answer => ({
   status,
   body: { ok: false, code, error, ...extra },
@@ -509,9 +518,11 @@ export class TurnManager {
   readonly runner: ToolRunner;
   readonly conversations: Conversations;
   readonly registry: Registry;
+  readonly clock: Clock;
   private readonly d: TurnManagerDeps;
-  private readonly clock: Clock;
   private readonly watched = new WeakSet<object>();
+  private readonly turnListeners = new Set<(t: Turn, change: TurnChange) => void>();
+  private tabInfo: ((tab: string) => TabInfo | null) | null = null;
 
   constructor(d: TurnManagerDeps) {
     this.d = d;
@@ -525,6 +536,29 @@ export class TurnManager {
 
   private turns(): Map<string, Turn> {
     return assistantState().turns as Map<string, Turn>;
+  }
+
+  /** Hears each turn this manager starts, as it starts and as it ends (the relay counts a tab's bound turns). */
+  onTurnChange(fn: (t: Turn, change: TurnChange) => void): () => void {
+    this.turnListeners.add(fn);
+    return () => {
+      this.turnListeners.delete(fn);
+    };
+  }
+
+  private turnChanged(t: Turn, change: TurnChange): void {
+    for (const fn of [...this.turnListeners]) {
+      try {
+        fn(t, change);
+      } catch (err) {
+        alog('warn', 'a turn listener failed', { error: redact(err instanceof Error ? err.message : String(err)).slice(0, 200) });
+      }
+    }
+  }
+
+  /** What /tabs adds to a tab's registration (the relay: since when, and its hold). */
+  setTabInfo(fn: ((tab: string) => TabInfo | null) | null): void {
+    this.tabInfo = fn;
   }
 
   private onGate(e: GateEvent): void {
@@ -646,10 +680,12 @@ export class TurnManager {
       settings: turnSettings,
       clock: this.clock,
       gates: this.gates,
+      onEnded: (ended) => this.turnChanged(ended, 'ended'),
     });
     conv.running = id;
     conv.lastUsed = this.clock.now();
     this.turns().set(id, t);
+    this.turnChanged(t, 'started');
     this.launch(t, secrets);
     return { status: 202, body: { ok: true, conversation: conv.id, turn: id } };
   }
@@ -741,21 +777,27 @@ export class TurnManager {
     return { status: 200, body: { ok: true, forgotten: r === 'ok' } };
   }
 
-  /** GET /api/assistant/tabs: what each app tab registered. */
+  /**
+   * GET /api/assistant/tabs: what each app tab registered, connected or dormant (its link
+   * gone, kept for the hold time), since when (ms since 1970, or null), its running bound
+   * turns and its hold (ms since 1970, or null).
+   */
   tabs(): Answer {
     const reg = this.d.registry;
     const tabs = reg.tabIds().map((tab) => {
       const w = reg.workspaceOf(tab);
+      const info = this.tabInfo?.(tab) ?? null;
       return {
         tab,
         connected: !!w?.connected,
+        since: info?.since ?? null,
         workspace: w
           ? { project_id: w.reg.projectId, plugin: w.reg.plugin, plugin_name: w.reg.pluginName, workspace: w.reg.workspace, study_id: w.reg.studyId }
           : null,
         tools: w?.tools ?? [],
         refused: w?.refused ?? [],
         active_turns: this.activeForTab(tab),
-        hold_until: null,
+        hold_until: info?.hold_until ?? null,
       };
     });
     return { status: 200, body: { ok: true, tabs } };

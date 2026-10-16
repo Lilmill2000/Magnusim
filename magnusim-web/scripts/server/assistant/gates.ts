@@ -79,11 +79,11 @@ export type GateOwner = { kind: 'turn'; id: string; tab: string | null } | { kin
 export interface GatePresenter {
   /** Shows `view`; false when it can't be shown now (its tab has no live link). */
   present(view: GateView, owner: GateOwner): boolean;
-  /** The gate closed (answered, timed out or withdrawn): take it down. */
-  withdraw(view: GateView, owner: GateOwner): void;
+  /** The gate closed (answered, timed out or withdrawn): take it down. `closed` says how. */
+  withdraw(view: GateView, owner: GateOwner, closed: { answer: GateAnswer; by: GateClosedBy }): void;
 }
 
-/** Reaches nobody: every tab-bound gate counts as unseen (the next commit's page relay replaces it). */
+/** Reaches nobody: every tab-bound gate counts as unseen (the server's page relay, assistant/relay.ts, replaces it). */
 export const NO_PRESENTER: GatePresenter = Object.freeze({
   present: () => false,
   withdraw: () => {},
@@ -230,7 +230,7 @@ export class GateBroker {
           const map = table();
           if (map.get(id) === entry) map.set(id, { state: 'closed', view, answer, by, at: this.clock.now() });
           try {
-            this.presenter.withdraw(view, owner);
+            this.presenter.withdraw(view, owner, { answer, by });
           } catch {
             /* the dialog goes with its page */
           }

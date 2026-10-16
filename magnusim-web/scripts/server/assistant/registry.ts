@@ -214,6 +214,11 @@ export class Registry implements ToolRegistry {
     };
   }
 
+  /** A plugin's epoch now (the relay pins a page's registrations to it). */
+  currentEpoch(key: string): string {
+    return this.epochOf(key);
+  }
+
   /** A registration's fence: its plugin's epoch is still the one it was made under. */
   fenced(source: ToolSource): boolean {
     if (source.kind === 'host') return false;

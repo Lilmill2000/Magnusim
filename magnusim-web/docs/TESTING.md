@@ -230,7 +230,13 @@ No test reaches a real model provider or this PC's real Assistant files.
   needs no switch: save `fake.compatBase` as its address in Settings.
 - **Other switches.** Each needs `MAGNUSIM_TEST_ASSISTANT=1` and is otherwise
   ignored with a log line: `MAGNUSIM_TEST_ASSISTANT_PROTECTOR=blocked|timeout|slow:<ms>|file`
-  sets how keys are encrypted (`file` avoids the Windows helper in node tests). The
+  sets how keys are encrypted (`file` avoids the Windows helper in node tests).
+  `MAGNUSIM_TEST_ASSISTANT_HOLD_MS=<ms>` shortens how long an app tab stays linked after
+  its last turn (10 minutes otherwise), which is also how long a tab whose link dropped
+  keeps its tools as not connected; `MAGNUSIM_TEST_ASSISTANT_ACK_MS=<ms>` shortens how
+  long the server waits for a page to acknowledge a tool call (10 s otherwise). Both
+  take whole milliseconds from 1 to 3600000, and status reports them as `test_hold_ms`
+  and `test_ack_ms` while in use. The
   switch itself also registers `GET /api/test/assistant/state` and
   `POST /api/test/assistant/reset`. `run.bat` and the setup scripts set none of them,
   and a test checks that.
