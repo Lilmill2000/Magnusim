@@ -88,16 +88,22 @@ const NO_KEY: KeyStatus = { set: false, last4: null, set_at: null, state: 'none'
 
 const isCloud = (p: ProviderChoice): p is 'anthropic' | 'openai' => p === 'anthropic' || p === 'openai';
 
-/** Which key the provider would use: none, or the one saved at that time (a new save is another key). */
+/** Which key the provider would use (none, or the one saved at that time: a new save is another key), and whether it opens. */
 function keyStamp(status: AssistantStatus, provider: ProviderId): string {
   const k = status.keys?.[provider];
   return k?.set ? `set:${k.set_at ?? ''}:${k.state}` : 'none';
 }
 
-/** What a Test result is about: the provider, its model, a local server's address, and the key. */
+/**
+ * What a Test result is about: the provider, its model, a local server's address, and which
+ * key. Not whether the key opens: the server learns that only when it tries the key, often on
+ * this very Test, and its refusal is the result to keep.
+ */
 function testKey(status: AssistantStatus, provider: ProviderId): string {
   const where = provider === 'openai_compatible' ? status.base_url : '';
-  return `test:${provider}:${status.models?.[provider] ?? ''}:${where}:${keyStamp(status, provider)}`;
+  const k = status.keys?.[provider];
+  const key = k?.set ? `set:${k.set_at ?? ''}` : 'none';
+  return `test:${provider}:${status.models?.[provider] ?? ''}:${where}:${key}`;
 }
 
 /** A price: $0.42, or $0.125 when cents are not enough. */

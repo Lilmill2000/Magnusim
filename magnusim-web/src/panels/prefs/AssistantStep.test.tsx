@@ -37,6 +37,8 @@ let testAnswer: Answer;
 let requests: Request[];
 /** Set to hold the next key save until released. */
 let holdKey: { release?: () => void } | null;
+/** What the server learns while it runs a Test (say, that the saved key can't be opened). */
+let onTest: (() => void) | null;
 
 function baseStatus(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -102,7 +104,10 @@ async function route(method: string, path: string, body: Record<string, unknown>
     return { status: 200, body: status };
   }
   if (path.startsWith('/api/assistant/models')) return modelsAnswer;
-  if (path === '/api/assistant/test') return testAnswer;
+  if (path === '/api/assistant/test') {
+    onTest?.();
+    return testAnswer;
+  }
   return { status: 404, body: { ok: false, error: 'not found' } };
 }
 
@@ -116,6 +121,7 @@ beforeEach(() => {
   testAnswer = { status: 404, body: { ok: false, error: 'not found' } };
   requests = [];
   holdKey = null;
+  onTest = null;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -692,6 +698,32 @@ describe('AssistantStep models and Test', () => {
     fireEvent.click(q('[data-assistant-key-save]')!);
     await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('Token set'));
     expect(result()).toHaveAttribute('data-assistant-test-result', 'idle');
+  });
+
+  it("a Test that finds the saved key can't be opened keeps saying so; a key saved again starts afresh", async () => {
+    const refusal = "The saved key can't be decrypted on this account. Enter it again.";
+    const saved = { set: true, last4: 'abcd', set_at: '2026-10-16T09:00:00.000Z' };
+    testAnswer = { status: 400, body: { ok: false, code: 'no_key', error: refusal } };
+    await ready({ provider: 'anthropic', keys: { anthropic: { ...saved, state: 'ok' }, openai: NO_KEY, openai_compatible: NO_KEY } });
+    // The server learns that the key can't be opened only when it tries it: here, on the Test.
+    onTest = () => {
+      status = { ...status, keys: { ...(status.keys as object), anthropic: { ...saved, state: 'unreadable' } } };
+    };
+    const reads = () => requests.filter((r) => r.path === '/api/assistant/status').length;
+    const before = reads();
+    fireEvent.click(q('[data-assistant-test]')!);
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent("Your saved key can't be decrypted"));
+    const result = () => q('[data-assistant-test-result]')!;
+    expect(result()).toHaveAttribute('data-assistant-test-result', 'failed');
+    expect(result()).toHaveTextContent(refusal);
+
+    const input = q<HTMLInputElement>('[data-assistant-key-input]')!;
+    input.value = 'sk-ant-e2e-0123456789-wxyz';
+    fireEvent.click(q('[data-assistant-key-save]')!);
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('Key set, ends in …wxyz'));
+    expect(result()).toHaveAttribute('data-assistant-test-result', 'idle');
+    expect(result().textContent).toBe('');
   });
 
   it('a server without the Test route says so plainly', async () => {
