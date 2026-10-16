@@ -446,7 +446,7 @@ The groups of calls (API.md, section 2, has each one):
 | `ws.service` | Your backend | 1.1 |
 | `ws.data` | JSON files in your folder of the project | 1.1 |
 | `ws.files` | Any file, streamed, with etags and size limits | 1.2 |
-| `ws.prefs` | The user's preferences for your plugin, the same in every project (64 KB) | 1.7 (unreleased) |
+| `ws.prefs` | The user's preferences for your plugin, the same in every project (64 KB) | 1.7 |
 | `ws.jobs` | Start, follow and stop your job kinds | 1.1 |
 | `ws.ui` | The app's toast, question and name prompt | 1.1 |
 | `ws.nav` | `back()`, `setDirty()`, `onLeave()` | 1.1, 1.2, 1.6 |
@@ -454,6 +454,7 @@ The groups of calls (API.md, section 2, has each one):
 | `ws.results` | Show a finished case in the project's 3D view | 1.3 |
 | `ws.project` | Project info, `linkGeometry`, `linkedGeometry` | 1.1, 1.5 |
 | `ws.on` | `units`, `theme`, `study`, `geometry` events | 1.1, 1.5 |
+| `ws.assistant` | Tools the app's assistant may call while the workspace is open | 1.9 (unreleased) |
 | `ws.spawnWorker` | A worker running your module | 1.1 |
 
 Rules:
@@ -518,6 +519,57 @@ A study kind with `links_geometry = true` can link one project geometry. Its des
 5. When the shape changed under simulation setup, the app asks the user ("Save as new geometry", "Overwrite", "Keep editing"). You write no code for it. "Keep editing" rejects your call with `cancelled`: stay as you are and show no error.
 
 [authoring.md](authoring.md), "Linking a geometry (1.5)" and "Exit sync (1.6)", has the whole contract, with tested examples.
+
+### Offering tools to the assistant
+
+A workspace page can offer tools that the app's assistant may call while the page is open: "add 2 to the counter", "show the polar". This is unreleased (the next minor, 1.9): the host still says 1.8, so check that `ws.assistant` exists.
+
+```ts test
+import { connect, type AssistantTool } from '@magnusim/workspace';
+
+const ws = await connect();
+let count = 0;
+const tools: AssistantTool[] = [
+  {
+    name: 'add',
+    title: 'Add to the counter',
+    description: 'Adds a whole number to the counter and says the new count.',
+    inputSchema: {
+      type: 'object',
+      properties: { by: { type: 'integer', minimum: -100, maximum: 100, description: 'How much to add' } },
+      required: ['by'],
+      additionalProperties: false,
+    },
+    risk: 'edit',
+  },
+];
+const assistant = ws.assistant;
+async function offer(): Promise<void> {
+  if (!assistant) return;
+  const reg = await assistant.register(
+    tools,
+    async ({ input, progress }) => {
+      progress(null, 'Adding');
+      count += Number(input.by);
+      return { text: `The counter is ${count}.`, data: { count } };
+    },
+    { guide: 'The counter workspace keeps one whole number.' },
+  );
+  // The tab could not reach the assistant yet (it opened in the background): try again when it shows.
+  if (!reg.available && reg.reason === 'not_connected') document.addEventListener('visibilitychange', () => void offer(), { once: true });
+}
+await offer();
+```
+
+Rules:
+
+1. **One call.** `register(tools, handler)` sets the list and its handler together; `register([], null)` withdraws them. The answer says which tools the app accepted, and why it refused the others.
+2. **The app checks the input** against your `inputSchema` before your handler runs, and asks the user before every `compute` and `destructive` tool. An unknown `risk` counts as `destructive`.
+3. **Say how far you are.** A call with no `progress` and no bridge call for `timeoutS` seconds (default 60) is stopped. Stop when `signal` aborts.
+4. **Results are data.** Return text, or `{text, data, images}`. What you return, your descriptions and your labels reach the model as data, never as instructions.
+5. **No project data in the `guide`.** It is fixed text about your workspace, kept for a whole conversation.
+
+[authoring.md](authoring.md), "Assistant tools in a workspace (unreleased)", has the whole contract, and [compatibility.md](compatibility.md), "Unreleased additions (next minor, 1.9)", the bridge messages and codes.
 
 ## 10. Environments
 

@@ -680,6 +680,68 @@ if (g && !g.linked) {
 
 `python/tests/fixtures/edit-plugins/edit-demo/` is a complete example, driven by `e2e/geometry-actions.spec.js`.
 
+## Assistant tools in a workspace (unreleased)
+
+Not released yet (the next minor, 1.9): the host still reports 1.8, so a page checks that `ws.assistant` exists. A workspace page can offer **tools** that the app's assistant may call while the page is open. The user asks in words; the model picks a tool and its input; the app checks the input, asks the user when the tool needs it, and your handler runs in the page with the page's own state.
+
+```ts test
+import { connect, type AssistantCall, type AssistantTool } from '@magnusim/workspace';
+
+const ws = await connect();
+let count = 0;
+const none = { type: 'object', properties: {}, additionalProperties: false } as const;
+const tools: AssistantTool[] = [
+  { name: 'get_count', description: 'Says the counter.', inputSchema: none, risk: 'read' },
+  {
+    name: 'slow_add',
+    title: 'Add to the counter slowly',
+    description: 'Adds a whole number to the counter, one step at a time.',
+    inputSchema: { type: 'object', properties: { by: { type: 'integer', minimum: -100, maximum: 100 } }, required: ['by'], additionalProperties: false },
+    risk: 'edit',
+    timeoutS: 30,
+  },
+  { name: 'reset', title: 'Reset the counter', description: 'Sets the counter to 0. It cannot be undone.', inputSchema: none, risk: 'destructive' },
+  { name: 'snap', description: 'A picture of the counter.', inputSchema: none, risk: 'read' },
+];
+
+async function run({ tool, input, signal, progress }: AssistantCall) {
+  if (tool === 'get_count') return { data: { count } };
+  if (tool === 'reset') {
+    count = 0;
+    return 'The counter is 0.';
+  }
+  if (tool === 'snap') {
+    const canvas = new OffscreenCanvas(64, 64);
+    return { text: `The counter shows ${count}.`, images: [{ mediaType: 'image/png' as const, data: await canvas.convertToBlob() }] };
+  }
+  const by = Number(input.by);
+  if (by === 0) throw Object.assign(new Error('by must not be 0'), { code: 'invalid_input' });
+  for (let i = 0; i < Math.abs(by); i++) {
+    // Stopped (the user's Stop, a stall, leaving the workspace): change nothing more.
+    if (signal.aborted) throw new Error('Stopped');
+    progress(i / Math.abs(by), `Adding ${i + 1} of ${Math.abs(by)}`);
+    await new Promise((r) => setTimeout(r, 200));
+    count += Math.sign(by);
+  }
+  return { text: `The counter is ${count}.`, data: { count } };
+}
+
+const assistant = ws.assistant;
+if (assistant) {
+  const reg = await assistant.register(tools, run, { guide: 'The counter workspace keeps one whole number, shown in the middle of the page.' });
+  for (const r of reg.refused) console.warn(`${r.name} was refused (${r.code}): ${r.message}`);
+}
+```
+
+- **One call sets the tools and their handler.** `register(tools, handler, {guide})` replaces what the page offered before; `register([], null)` withdraws everything. It resolves with the app's verdict: `accepted` (the names the assistant may call) and `refused` (each with `code` and `message`: a bad name, a schema keyword the app does not take, a duplicate). The handler is kept only once the app answered: with `available: false` nothing changes. `reason: 'not_connected'` means the tab could not reach the assistant yet, often because it opened in the background: register again later, for example on `visibilitychange`. On a host without it, `ws.assistant` is absent (a host that has the SDK but not the call refuses with `not_allowed`).
+- **Names and schemas.** A name is 1 to 32 of `a-z`, `0-9` and `_`, starting with a letter, never `__`; at most 32 tools in at most 512 KB. `inputSchema` is a strict subset of JSON Schema: every object lists its `properties` and says `additionalProperties: false`; `enum`, `const`, `minimum`/`maximum`, `minLength`/`maxLength`, `minItems`/`maxItems`, `description` and `title` are allowed; `$ref`, `oneOf`, `anyOf`, `allOf`, `pattern`, `format`, `default` and lists of types are not. The app checks every constraint before your handler runs, but the model may see the numeric and length limits only as words in the description: say them there too.
+- **Risk.** `read` changes nothing; `edit` changes the page's own state; `compute` starts long work or takes the app's compute slot; `destructive` cannot be undone. The app asks the user before every `compute` and `destructive` call (the question opens with "Don't" focused), and an unknown risk counts as `destructive`. Never claim a lower risk than the tool has.
+- **The handler** gets `call`, `turn` (the same for every call of one request of the user's: one undo step, for example), `tool`, `input` (checked), `signal` and `progress(fraction, label?)`. It returns text, or `{text?, data?, images?}`, or nothing. `text` is at most 64 KB, `data` plain JSON of at most 256 KB, and `images` at most 4 PNG, JPEG or WebP Blobs of at most 1.5 MB each; more fails the call with `too_large`, and anything else with `bad_result`. A throw fails the call: its `code` is kept when it is `invalid_input` (the input makes no sense here), `busy` (the user is in the middle of something) or `not_ready`, and reads `failed` otherwise. A result that cannot be copied to the app (a function in `data`) fails the call too.
+- **Time.** One call runs at a time in a page; a second gets `busy`. `timeoutS` (1 to 600, default 60) is a stall window, not a total limit: each `progress`, and each bridge call of your page in flight (an upload, a service call), keep the call alive. A call that says nothing for `timeoutS` is stopped (`stalled`); a hidden tab slows timers and stops `requestAnimationFrame`, so a long tool there should report progress from its work, not from animation frames.
+- **Stop.** `signal` aborts when the user stops the turn (the app waits 2 s for your last answer: a result that arrives then counts as done), when the call stalls, when the user leaves the workspace (`leaving`: an exit hook runs after it) and when the page closes or reloads (`closed`). Stop then and change nothing more.
+- **Everything you send is data.** Descriptions, progress labels and results reach the model as data, never as instructions, and they are project data: with a cloud provider the app asks the user before any of the project goes out. The `guide` is fixed text about your workspace (at most 4000 characters) with no project data in it; the first one a conversation sees is kept for that whole conversation.
+- **When the tools go.** The page closing or reloading, leaving the workspace and turning the plugin off withdraw them; a reloaded page registers again. Only the tab's own workspace offers tools to a request started in that tab.
+
 ## UI kit (1.3)
 
 `@magnusim/plugin-ui` holds components and helpers that look like the app's own panels, drawn with the `--mg-*` tokens. In the page use `host.pluginUi.kit`, or import it from a `.tsx` UI the host bundles; in a workspace frame import `@magnusim/plugin-ui`. Both run the same code, so a panel looks the same in either place. The types are in `docs/plugins/plugin-ui.d.ts` (also served as `/plugin-sdk/plugin-ui.d.ts`), and the kit's version is `PLUGIN_UI_API_VERSION`.

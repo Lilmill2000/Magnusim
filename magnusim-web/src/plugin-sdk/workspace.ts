@@ -63,6 +63,7 @@ export interface WorkspaceContext {
    * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
    * ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the
    * refusal: an older host rejects a call it does not know with code "not_allowed".
+   * `ws.assistant` (unreleased in 1.8: check that it exists).
    */
   hostVersion: string;
   /**
@@ -441,6 +442,113 @@ export interface LeaveEvent {
  */
 export type LeaveHandler = (leave: LeaveEvent) => Promise<{ view?: ViewState } | void> | { view?: ViewState } | void;
 
+/**
+ * How much a tool of the app's assistant may change (unreleased, next host minor 1.9).
+ * `read` changes nothing; `edit` changes this page's own state; `compute` starts work that
+ * takes time or the app's compute slot; `destructive` can't be undone. The app asks the user
+ * before every `compute` and `destructive` call. An unknown risk counts as `destructive`.
+ */
+export type AssistantRisk = 'read' | 'edit' | 'compute' | 'destructive';
+
+/**
+ * A tool's input, in the subset of JSON Schema the app accepts (unreleased, 1.9): every object
+ * lists its `properties` and says `additionalProperties: false`. No `$ref`, `oneOf`, `anyOf`,
+ * `allOf`, `pattern`, `format` or `default`.
+ */
+export type AssistantSchema =
+  | { type: 'string'; description?: string; enum?: string[]; minLength?: number; maxLength?: number }
+  | { type: 'number' | 'integer'; description?: string; minimum?: number; maximum?: number; enum?: number[] }
+  | { type: 'boolean'; description?: string }
+  | { type: 'array'; description?: string; items: AssistantSchema; minItems?: number; maxItems?: number }
+  | AssistantObjectSchema;
+
+/** An object in a tool's input schema (unreleased, 1.9): the tool's whole input is one. */
+export interface AssistantObjectSchema {
+  type: 'object';
+  description?: string;
+  properties: Record<string, AssistantSchema>;
+  required?: string[];
+  additionalProperties: false;
+}
+
+/**
+ * A tool the app's assistant may call while this workspace is open (unreleased, 1.9). The app
+ * checks every constraint before your handler runs; the model may see the numeric and length
+ * limits only as words in the description.
+ */
+export interface AssistantTool {
+  /** 1 to 32 of a-z, 0-9 and "_", starting with a letter, never "__". Unique in this page. */
+  name: string;
+  /** A short name for the user (the app's question names the tool by it). */
+  title?: string;
+  /** What it does, for the model: plain text, at most 1024 characters. */
+  description: string;
+  inputSchema: AssistantObjectSchema;
+  risk: AssistantRisk;
+  /** Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit. */
+  timeoutS?: number;
+}
+
+/** One call of a tool, as the handler gets it (unreleased, 1.9). */
+export interface AssistantCall {
+  /** The call's id. */
+  call: string;
+  /** The assistant's turn that made the call: calls of one turn share it (one undo step, for example). */
+  turn: string;
+  /** The tool's name, as registered. */
+  tool: string;
+  /** The input, already checked against the tool's inputSchema. */
+  input: Record<string, unknown>;
+  /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
+  signal: AbortSignal;
+  /** Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. */
+  progress(fraction: number | null, label?: string): void;
+}
+
+/** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB. */
+export interface AssistantImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+  data: Blob;
+}
+
+/**
+ * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most
+ * 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with
+ * code "too_large". Everything in it reaches the model as data, never as instructions.
+ */
+export type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[] } | void;
+
+/**
+ * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
+ * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+ */
+export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
+
+/** The app's answer to ws.assistant.register (unreleased, 1.9). */
+export interface AssistantRegistration {
+  /** False when the app's assistant could not take the tools now (`reason` says why); nothing changed then. */
+  available: boolean;
+  /** The names of the tools the assistant may call. */
+  accepted: string[];
+  /** The tools it refused, each with why. */
+  refused: Array<{ name: string; code: string; message: string }>;
+  /** Why not available: "not_connected" (try again later), "no_assistant", "remote", … */
+  reason?: string;
+}
+
+/** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
+export interface WorkspaceAssistant {
+  /**
+   * Set this page's tools and their handler in one step; register([], null) withdraws them.
+   * `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation).
+   * Resolves once the app has the list. available:false with reason 'not_connected' means the app could not
+   * reach the assistant from this tab yet (for example the tab opened in the background): call register again
+   * later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay.
+   * Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
+   */
+  register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+}
+
 export interface ConfirmOptions {
   title: string;
   message?: string;
@@ -669,6 +777,11 @@ export interface Workspace {
     openIn3D(caseRel: string): Promise<{ opened: boolean }>;
   };
   /**
+   * Tools this page offers to the app's assistant (unreleased, next host minor 1.9; absent on an
+   * older host, so check that it exists, and catch "not_allowed" from a host without it).
+   */
+  readonly assistant?: WorkspaceAssistant;
+  /**
    * Live changes the host pushes. Returns a function that stops listening.
    * `study`: the study changed (renamed in the header, or saved): save next with its `rev`.
    */
@@ -731,6 +844,36 @@ function newInstance(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** The codes a tool's error keeps (unreleased, 1.9); any other reads "failed". */
+const ASSISTANT_PAGE_CODES = new Set(['invalid_input', 'busy', 'not_ready', 'failed']);
+
+/** A handler's result as the host takes it: text alone becomes `{text}`, nothing `{}`; only text, data and images go. */
+function assistantResultOf(out: unknown): unknown {
+  if (out === undefined || out === null) return {};
+  if (typeof out === 'string') return { text: out };
+  if (typeof out !== 'object' || Array.isArray(out)) return out;
+  const r = out as { text?: unknown; data?: unknown; images?: unknown };
+  const result: Record<string, unknown> = {};
+  if (r.text !== undefined) result.text = r.text;
+  if (r.data !== undefined) result.data = r.data;
+  if (r.images !== undefined) result.images = r.images;
+  return result;
+}
+
+/** A handler's throw as the call's error: its message, and its code only when the page may give it. */
+function assistantErrorOf(e: unknown): { code: string; message: string } {
+  const fields = (e && typeof e === 'object' ? e : {}) as { code?: unknown; message?: unknown };
+  const code = fields.code;
+  let message = '';
+  try {
+    // An Error's (or a DOMException's) message, else the thrown value as text.
+    message = typeof fields.message === 'string' ? fields.message : e && typeof e === 'object' ? '' : String(e ?? '');
+  } catch {
+    // Not text at all: no message.
+  }
+  return { code: typeof code === 'string' && ASSISTANT_PAGE_CODES.has(code) ? code : 'failed', message: message || 'The tool failed.' };
+}
+
 /**
  * Say hello to the host and get the workspace's context and bridge.
  * Rejects when the page is not a Magnusim workspace or the host does not answer.
@@ -780,6 +923,12 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   // The exit hook (host 1.6), and the leaves it is running, by the host's id for each.
   let leaveHandler: LeaveHandler | null = null;
   const leaves = new Map<string, AbortController>();
+  // The tools this page offers the app's assistant (unreleased, 1.9): the handler and the names the
+  // host accepted, committed together once it answers; the calls running, by the host's id for each.
+  let assistantHandler: AssistantHandler | null = null;
+  let assistantAccepted = new Set<string>();
+  let assistantSerial = 0;
+  const assistantCalls = new Map<string, AbortController>();
   let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
@@ -835,6 +984,15 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       leaves.get(id)?.abort(new DOMException('The leave was cancelled', 'AbortError'));
       return;
     }
+    if (msg.event === 'assistantInvoke') {
+      void runAssistantCall(msg.data);
+      return;
+    }
+    if (msg.event === 'assistantAbort') {
+      const id = String(((msg.data || {}) as { call?: unknown }).call || '');
+      assistantCalls.get(id)?.abort(new DOMException('The call was stopped', 'AbortError'));
+      return;
+    }
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
     if (msg.event === 'theme') ctx.theme = msg.data as ThemeInfo;
     if (msg.event === 'study') ctx.study = msg.data as StudyRecord;
@@ -846,8 +1004,14 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     return new Promise<T>((resolve, reject) => {
       const id = nextId++;
       pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      if (transfer && transfer.length) port.postMessage({ id, method, params }, transfer);
-      else port.postMessage({ id, method, params });
+      try {
+        if (transfer && transfer.length) port.postMessage({ id, method, params }, transfer);
+        else port.postMessage({ id, method, params });
+      } catch (e) {
+        // Not sent (a DataCloneError: something in it cannot be copied to the host): no answer comes.
+        pending.delete(id);
+        throw e;
+      }
     });
   }
 
@@ -884,6 +1048,57 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       leaves.delete(id);
     }
     void call('nav.leaveDone', done).catch(() => undefined);
+  }
+
+  /**
+   * The app's assistant calls a tool of this page (unreleased, 1.9): the handler runs with the
+   * call's input, a signal and progress (sent as assistant.progress); its end goes back as
+   * assistant.result. A tool the host did not accept, or no handler, answers "no_tool" at once.
+   */
+  async function runAssistantCall(data: unknown): Promise<void> {
+    const d = (data || {}) as { call?: unknown; turn?: unknown; tool?: unknown; input?: unknown };
+    const id = typeof d.call === 'string' ? d.call : '';
+    if (!id || assistantCalls.has(id)) return;
+    const tool = typeof d.tool === 'string' ? d.tool : '';
+    const handler = assistantHandler;
+    const send = (answer: Record<string, unknown>) => call('assistant.result', { call: id, ...answer });
+    if (!handler || !assistantAccepted.has(tool)) {
+      void send({ ok: false, error: { code: 'no_tool', message: `This page has no tool named ${JSON.stringify(tool)}.` } }).catch(() => undefined);
+      return;
+    }
+    const ctl = new AbortController();
+    assistantCalls.set(id, ctl);
+    const input = d.input && typeof d.input === 'object' && !Array.isArray(d.input) ? (d.input as Record<string, unknown>) : {};
+    let answer: Record<string, unknown>;
+    try {
+      const out = await handler({
+        call: id,
+        turn: typeof d.turn === 'string' ? d.turn : '',
+        tool,
+        input,
+        signal: ctl.signal,
+        progress: (fraction, label) => {
+          if (ctl.signal.aborted) return;
+          const f = typeof fraction === 'number' && Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : null;
+          void call('assistant.progress', { call: id, fraction: f, ...(label ? { label: String(label) } : {}) }).catch(() => undefined);
+        },
+      });
+      answer = { ok: true, result: assistantResultOf(out) };
+    } catch (e) {
+      answer = { ok: false, error: assistantErrorOf(e) };
+    } finally {
+      assistantCalls.delete(id);
+    }
+    try {
+      await send(answer);
+    } catch (e) {
+      // The result could not be copied to the host (a function, a class instance it cannot clone):
+      // the call fails instead of never ending.
+      const err = (e && typeof e === 'object' ? e : {}) as { name?: unknown; message?: unknown };
+      if (err.name !== 'DataCloneError') return;
+      const why = typeof err.message === 'string' && err.message ? `: ${err.message}` : '';
+      void send({ ok: false, error: { code: 'failed', message: `The result could not be sent to the app${why}` } }).catch(() => undefined);
+    }
   }
 
   /** Listen to a job's events; the first listener asks the host to follow it (`method`). */
@@ -1092,6 +1307,39 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         if (handler !== null && typeof handler !== 'function') throw new TypeError('nav.onLeave takes a function, or null to clear it');
         await call('nav.leaveHook', { on: !!handler });
         leaveHandler = handler;
+      },
+    },
+    assistant: {
+      register: async (tools, handler, opts = {}) => {
+        if (!Array.isArray(tools)) throw new TypeError('assistant.register takes a list of tools ([] withdraws them)');
+        if (handler !== null && typeof handler !== 'function') throw new TypeError('assistant.register takes a function, or null with no tools');
+        if (tools.length > 0 && !handler) throw new TypeError('assistant.register needs a handler for its tools');
+        // Only the fields the host reads go: a tool object may carry the page's own things.
+        const wire = tools.map((t) => {
+          const tool = (t || {}) as Partial<AssistantTool>;
+          const out: Record<string, unknown> = { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, risk: tool.risk };
+          if (tool.title !== undefined) out.title = tool.title;
+          if (tool.timeoutS !== undefined) out.timeoutS = tool.timeoutS;
+          return out;
+        });
+        const params: Record<string, unknown> = { tools: wire };
+        if (opts && opts.guide !== undefined) params.guide = String(opts.guide);
+        const serial = ++assistantSerial;
+        // The host answers once the app has the list; the handler is kept only then (an older
+        // host's "not_allowed" rejects, and nothing is kept).
+        const answer = (await call<AssistantRegistration | null>('assistant.register', params)) || ({} as AssistantRegistration);
+        const reg: AssistantRegistration = {
+          available: answer.available === true,
+          accepted: Array.isArray(answer.accepted) ? answer.accepted.filter((n): n is string => typeof n === 'string') : [],
+          refused: Array.isArray(answer.refused) ? answer.refused : [],
+          ...(typeof answer.reason === 'string' && answer.reason ? { reason: answer.reason } : {}),
+        };
+        // A later register call that went out meanwhile wins, whichever answer comes last.
+        if (reg.available && serial === assistantSerial) {
+          assistantHandler = tools.length ? handler : null;
+          assistantAccepted = new Set(tools.length ? reg.accepted : []);
+        }
+        return reg;
       },
     },
     on(event: string, fn: (data: never) => void) {

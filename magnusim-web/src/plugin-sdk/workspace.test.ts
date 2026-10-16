@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connect, SDK_VERSION, type Workspace, type WorkspaceContext } from './workspace';
+import { connect, SDK_VERSION, type AssistantTool, type Workspace, type WorkspaceContext } from './workspace';
 
 const MiB = 1024 * 1024;
 const SHA = 'ab'.repeat(32);
@@ -23,9 +23,12 @@ type Reply = (method: string, params: Params) => unknown;
  * Connect to a host behind a fake port. The port clones what it is sent with
  * its transfer list, as a real one does (so a transferred buffer is detached
  * on the frame's side), records it and answers from `reply` (a throw is a refusal).
+ * With `clone`, it clones every message as a real port does (what cannot be copied
+ * throws a DataCloneError, and is never sent).
  */
 async function open(
   reply: Reply,
+  opts: { clone?: boolean } = {},
 ): Promise<{ ws: Workspace; posts: Post[]; hello: ReturnType<typeof vi.fn>; push: (msg: Record<string, unknown>) => void }> {
   const posts: Post[] = [];
   const port = {
@@ -34,7 +37,7 @@ async function open(
     postMessage(msg: { id: number; method: string; params: Params }, ...rest: [Transferable[]?]) {
       const transfer = rest[0];
       const handedOver = !!transfer && transfer.includes(msg.params.data as Transferable);
-      const got = transfer ? structuredClone(msg, { transfer }) : msg;
+      const got = transfer ? structuredClone(msg, { transfer }) : opts.clone ? structuredClone(msg) : msg;
       posts.push({ method: got.method, params: got.params, args: 1 + rest.length, transfer, handedOver });
       Promise.resolve()
         .then(() => reply(got.method, got.params))
@@ -663,5 +666,207 @@ describe('ws.project.geometrySource and geometryFaces (host 1.7)', () => {
 
   it('the SDK says 1.4.0', () => {
     expect(SDK_VERSION).toBe('1.4.0');
+  });
+});
+
+describe('ws.assistant (unreleased, next host minor 1.9)', () => {
+  const SCHEMA = { type: 'object', properties: { by: { type: 'integer', minimum: -100, maximum: 100 } }, required: ['by'], additionalProperties: false } as const;
+  const ADD: AssistantTool = { name: 'add', description: 'Adds `by` to the counter.', inputSchema: SCHEMA, risk: 'edit' };
+  const RESET: AssistantTool = { name: 'reset', description: 'Sets the counter to 0.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, risk: 'destructive' };
+  const results = (posts: Post[]) => posts.filter((p) => p.method === 'assistant.result').map((p) => p.params);
+  /** The results by call id (calls end in any order). */
+  const byCall = (posts: Post[]) => Object.fromEntries(results(posts).map((r) => [String(r.call), r]));
+  /** A host that takes every tool it is offered. */
+  const accepting: Reply = (method, params) =>
+    method === 'assistant.register' ? { available: true, accepted: (params.tools as Array<{ name: string }>).map((t) => t.name), refused: [] } : { ok: true };
+  const invoke = (push: (msg: Record<string, unknown>) => void, call: string, tool = 'add', input: unknown = { by: 2 }) =>
+    push({ event: 'assistantInvoke', data: { call, turn: 'turn-1', tool, input } });
+
+  it('is there (feature-detect it), and the SDK still says 1.4.0', async () => {
+    const { ws } = await open(accepting);
+    expect(typeof ws.assistant?.register).toBe('function');
+    expect(SDK_VERSION).toBe('1.4.0');
+  });
+
+  it('register sends only the fields the host reads, and awaits the host before it keeps the handler', async () => {
+    let answer: (v: unknown) => void = () => undefined;
+    const { ws, posts, push } = await open((method) => (method === 'assistant.register' ? new Promise((r) => (answer = r)) : { ok: true }));
+    const handler = vi.fn(async () => 'Counter is 2');
+    const mine = { ...ADD, title: 'Add to the counter', timeoutS: 30, draw: () => 1 } as AssistantTool;
+    const reg = ws.assistant!.register([mine], handler, { guide: 'Counter notes' });
+    await vi.waitFor(() => expect(methods(posts)).toContain('assistant.register'));
+    expect(posts[0].params).toEqual({
+      tools: [{ name: 'add', description: 'Adds `by` to the counter.', inputSchema: SCHEMA, risk: 'edit', title: 'Add to the counter', timeoutS: 30 }],
+      guide: 'Counter notes',
+    });
+    // The host has not answered: a call meanwhile finds no tool.
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(results(posts)[0]).toEqual({ call: 'ai-1', ok: false, error: { code: 'no_tool', message: 'This page has no tool named "add".' } });
+    expect(handler).not.toHaveBeenCalled();
+    answer({ available: true, accepted: ['add'], refused: [] });
+    await expect(reg).resolves.toEqual({ available: true, accepted: ['add'], refused: [] });
+    invoke(push, 'ai-2');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(2));
+    expect(results(posts)[1]).toEqual({ call: 'ai-2', ok: true, result: { text: 'Counter is 2' } });
+  });
+
+  it('the handler gets the call, turn, tool, input, a signal and progress; its result goes back as {text, data, images}', async () => {
+    const { ws, posts, push } = await open(accepting);
+    const png = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });
+    const seen: Array<Record<string, unknown>> = [];
+    await ws.assistant!.register([ADD, RESET], async (c) => {
+      seen.push({ call: c.call, turn: c.turn, tool: c.tool, input: c.input, aborted: c.signal.aborted });
+      if (c.tool === 'reset') return undefined;
+      c.progress(1.7, 'Adding');
+      c.progress(Number.NaN);
+      return { text: 'Counter is 2', data: { count: 2 }, images: [{ mediaType: 'image/png', data: png }], extra: 'left out' } as never;
+    });
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(seen).toEqual([{ call: 'ai-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, aborted: false }]);
+    expect(posts.filter((p) => p.method === 'assistant.progress').map((p) => p.params)).toEqual([
+      { call: 'ai-1', fraction: 1, label: 'Adding' },
+      { call: 'ai-1', fraction: null },
+    ]);
+    expect(results(posts)[0]).toEqual({ call: 'ai-1', ok: true, result: { text: 'Counter is 2', data: { count: 2 }, images: [{ mediaType: 'image/png', data: png }] } });
+    // Nothing returned: an empty result; an input that is not an object: {}. The same id
+    // again while it runs runs once.
+    invoke(push, 'ai-2', 'reset', 'junk');
+    invoke(push, 'ai-2', 'reset', 'junk');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(2));
+    expect(seen[1]).toMatchObject({ tool: 'reset', input: {} });
+    expect(results(posts)[1]).toEqual({ call: 'ai-2', ok: true, result: {} });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen).toHaveLength(2);
+    expect(results(posts)).toHaveLength(2);
+  });
+
+  it('assistantAbort aborts the signal; progress after it is not sent', async () => {
+    const { ws, posts, push } = await open(accepting);
+    let signal: AbortSignal | null = null;
+    let progress: ((f: number | null, l?: string) => void) | null = null;
+    await ws.assistant!.register([ADD], (c) => {
+      signal = c.signal;
+      progress = c.progress;
+      return new Promise((_, reject) => c.signal.addEventListener('abort', () => reject(c.signal.reason)));
+    });
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(signal).not.toBeNull());
+    push({ event: 'assistantAbort', data: { call: 'ai-other' } });
+    expect((signal as unknown as AbortSignal).aborted).toBe(false);
+    push({ event: 'assistantAbort', data: { call: 'ai-1' } });
+    expect((signal as unknown as AbortSignal).aborted).toBe(true);
+    (progress as unknown as (f: number | null, l?: string) => void)(0.5, 'too late');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(results(posts)[0]).toEqual({ call: 'ai-1', ok: false, error: { code: 'failed', message: 'The call was stopped' } });
+    expect(methods(posts)).not.toContain('assistant.progress');
+  });
+
+  it('available:false commits nothing: the earlier tools and handler stay; [] with null withdraws them', async () => {
+    let next: unknown = null;
+    const { ws, posts, push } = await open((method, params) => (method === 'assistant.register' && next ? next : accepting(method, params)));
+    const first = vi.fn(async () => 'first');
+    const second = vi.fn(async () => 'second');
+    await ws.assistant!.register([ADD], first);
+    next = { available: false, accepted: [], refused: [], reason: 'not_connected' };
+    expect(await ws.assistant!.register([RESET], second)).toEqual({ available: false, accepted: [], refused: [], reason: 'not_connected' });
+    invoke(push, 'ai-1');
+    invoke(push, 'ai-2', 'reset', {});
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(2));
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(byCall(posts)).toEqual({
+      'ai-1': { call: 'ai-1', ok: true, result: { text: 'first' } },
+      'ai-2': { call: 'ai-2', ok: false, error: { code: 'no_tool', message: 'This page has no tool named "reset".' } },
+    });
+    next = null;
+    expect(await ws.assistant!.register([], null)).toEqual({ available: true, accepted: [], refused: [] });
+    invoke(push, 'ai-3');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(3));
+    expect(byCall(posts)['ai-3']).toMatchObject({ ok: false, error: { code: 'no_tool' } });
+    expect(first).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tool the host refused, or no handler at all, answers no_tool; only the last register's answer is kept", async () => {
+    const answers: Array<(v: unknown) => void> = [];
+    const { ws, posts, push } = await open((method) => (method === 'assistant.register' ? new Promise((r) => answers.push(r)) : { ok: true }));
+    // No register yet.
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(results(posts)[0]).toMatchObject({ ok: false, error: { code: 'no_tool' } });
+    const older = vi.fn(async () => 'older');
+    const newer = vi.fn(async () => 'newer');
+    const one = ws.assistant!.register([ADD, RESET], older);
+    const two = ws.assistant!.register([ADD, RESET], newer);
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1]({ available: true, accepted: ['add'], refused: [{ name: 'reset', code: 'schema', message: 'no properties' }] });
+    await two;
+    // The first answer comes last: it is returned, not kept.
+    answers[0]({ available: true, accepted: ['add', 'reset'], refused: [] });
+    expect((await one).accepted).toEqual(['add', 'reset']);
+    invoke(push, 'ai-2');
+    invoke(push, 'ai-3', 'reset', {});
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(3));
+    expect(byCall(posts)['ai-2']).toEqual({ call: 'ai-2', ok: true, result: { text: 'newer' } });
+    expect(byCall(posts)['ai-3']).toEqual({ call: 'ai-3', ok: false, error: { code: 'no_tool', message: 'This page has no tool named "reset".' } });
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it('a host without it refuses with not_allowed: register rejects and nothing is kept', async () => {
+    const { ws, posts, push } = await open((method) => {
+      if (method === 'assistant.register') throw Object.assign(new Error('not allowed: "assistant.register"'), { code: 'not_allowed' });
+      return { ok: true };
+    });
+    const handler = vi.fn();
+    await expect(ws.assistant!.register([ADD], handler)).rejects.toMatchObject({ code: 'not_allowed' });
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(results(posts)[0]).toMatchObject({ ok: false, error: { code: 'no_tool' } });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('refuses wrong arguments with a TypeError before asking the host', async () => {
+    const { ws, posts } = await open(accepting);
+    await expect(ws.assistant!.register('add' as never, vi.fn())).rejects.toThrow(TypeError);
+    await expect(ws.assistant!.register([ADD], null)).rejects.toThrow(TypeError);
+    await expect(ws.assistant!.register([ADD], 'run' as never)).rejects.toThrow(TypeError);
+    expect(methods(posts)).toEqual([]);
+  });
+
+  it('a throw keeps its code only from the page list (invalid_input, busy, not_ready, failed); anything else is failed', async () => {
+    const { ws, posts, push } = await open(accepting);
+    const thrown: unknown[] = [
+      Object.assign(new Error('by must not be 0'), { code: 'invalid_input' }),
+      Object.assign(new Error('A sketch is open'), { code: 'busy' }),
+      Object.assign(new Error('Still loading'), { code: 'not_ready' }),
+      Object.assign(new Error('Spoofed'), { code: 'plugin_off' }),
+      Object.assign(new Error('Also spoofed'), { code: 'capped' }),
+      'a plain string',
+      undefined,
+    ];
+    let i = 0;
+    await ws.assistant!.register([ADD], () => {
+      throw thrown[i++];
+    });
+    for (let n = 1; n <= thrown.length; n++) invoke(push, `ai-${n}`);
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(thrown.length));
+    expect(Array.from({ length: thrown.length }, (_, k) => byCall(posts)[`ai-${k + 1}`].error)).toEqual([
+      { code: 'invalid_input', message: 'by must not be 0' },
+      { code: 'busy', message: 'A sketch is open' },
+      { code: 'not_ready', message: 'Still loading' },
+      { code: 'failed', message: 'Spoofed' },
+      { code: 'failed', message: 'Also spoofed' },
+      { code: 'failed', message: 'a plain string' },
+      { code: 'failed', message: 'The tool failed.' },
+    ]);
+  });
+
+  it('a result that cannot be copied to the host (DataCloneError) fails the call instead of never ending', async () => {
+    const { ws, posts, push } = await open(accepting, { clone: true });
+    await ws.assistant!.register([ADD], () => ({ text: 'ok', data: { redo: () => 1 } }));
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(results(posts)[0]).toEqual({ call: 'ai-1', ok: false, error: { code: 'failed', message: expect.stringContaining('The result could not be sent to the app') } });
   });
 });

@@ -203,6 +203,74 @@ const SDK_VERSION: "1.4.0"
 
 The bridge's version; a host accepts a workspace built for the same major version. 1.4.0 (host 1.7): ws.prefs, context.geometry and context.launch, ws.project.geometrySource and ws.project.geometryFaces, and linkGeometry's `originalNames` (editing a project geometry).
 
+#### AssistantCall
+
+```ts
+interface AssistantCall
+```
+
+One call of a tool, as the handler gets it (unreleased, 1.9).
+
+- `call: string`: The call's id.
+- `turn: string`: The assistant's turn that made the call: calls of one turn share it (one undo step, for example).
+- `tool: string`: The tool's name, as registered.
+- `input: Record<string, unknown>`: The input, already checked against the tool's inputSchema.
+- `signal: AbortSignal`: Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more.
+- `progress(fraction: number | null, label?: string | undefined): void`: Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+
+#### AssistantImage
+
+```ts
+interface AssistantImage
+```
+
+A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB.
+
+- `mediaType: "image/png" | "image/jpeg" | "image/webp"`
+- `data: Blob`
+
+#### AssistantObjectSchema
+
+```ts
+interface AssistantObjectSchema
+```
+
+An object in a tool's input schema (unreleased, 1.9): the tool's whole input is one.
+
+- `type: "object"`
+- `description?: string | undefined`
+- `properties: Record<string, AssistantSchema>`
+- `required?: string[] | undefined`
+- `additionalProperties: false`
+
+#### AssistantRegistration
+
+```ts
+interface AssistantRegistration
+```
+
+The app's answer to ws.assistant.register (unreleased, 1.9).
+
+- `available: boolean`: False when the app's assistant could not take the tools now (`reason` says why); nothing changed then.
+- `accepted: string[]`: The names of the tools the assistant may call.
+- `refused: { name: string; code: string; message: string; }[]`: The tools it refused, each with why.
+- `reason?: string | undefined`: Why not available: "not_connected" (try again later), "no_assistant", "remote", …
+
+#### AssistantTool
+
+```ts
+interface AssistantTool
+```
+
+A tool the app's assistant may call while this workspace is open (unreleased, 1.9). The app checks every constraint before your handler runs; the model may see the numeric and length limits only as words in the description.
+
+- `name: string`: 1 to 32 of a-z, 0-9 and "_", starting with a letter, never "__". Unique in this page.
+- `title?: string | undefined`: A short name for the user (the app's question names the tool by it).
+- `description: string`: What it does, for the model: plain text, at most 1024 characters.
+- `inputSchema: AssistantObjectSchema`
+- `risk: AssistantRisk`
+- `timeoutS?: number | undefined`: Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit.
+
 #### ClaimedTwice
 
 ```ts
@@ -679,8 +747,19 @@ interface Workspace
 - `compute.list(): Promise<ComputeJob[]>`: This study's cases, newest first (a reopened page finds its running case here).
 - `results: { … }`
 - `results.openIn3D(caseRel: string): Promise<{ opened: boolean; }>`: Show a finished case's saved frames in the project's 3D view. The app asks first when other results are on screen, and when the page has unsaved work. Resolves { opened: false } when the user cancels or stays; when it opens, the workspace closes, so the promise may never settle.
+- `assistant?: WorkspaceAssistant | undefined`: Tools this page offers to the app's assistant (unreleased, next host minor 1.9; absent on an older host, so check that it exists, and catch "not_allowed" from a host without it).
 - `on(event: "units", fn: (units: UnitSystem) => void): () => void; on(event: "theme", fn: (theme: ThemeInfo) => void): () => void; on(event: "study", fn: (study: StudyRecord) => void): () => void; on(event: "prefs", fn: (change: { key: string; value: unknown; }) => void): () => void; on(event: "geometry", fn: (g: { geometryId: string; rev: number; fromRev: number | null; }) => void): () => void`: Live changes the host pushes. Returns a function that stops listening. `study`: the study changed (renamed in the header, or saved): save next with its `rev`. `prefs` (host 1.7): a pref of this plugin changed in another tab (ws.prefs.onChange is the same). `geometry` (host 1.5): the geometry this study links was updated (by this page or another tab of the same study). Only the page of the study that owns it hears it.
 - `spawnWorker(url: string | URL): Worker`: Start an ES-module worker. A sandboxed frame cannot start a worker from a URL or a module worker from a blob; this starts a classic blob worker that imports your module. Messages posted before your module has loaded are held and handed to it, in order, once it has.
+
+#### WorkspaceAssistant
+
+```ts
+interface WorkspaceAssistant
+```
+
+Tools this page offers to the app's assistant (unreleased, next host minor 1.9).
+
+- `register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; } | undefined): Promise<AssistantRegistration>`: Set this page's tools and their handler in one step; register([], null) withdraws them. `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation). Resolves once the app has the list. available:false with reason 'not_connected' means the app could not reach the assistant from this tab yet (for example the tab opened in the background): call register again later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay. Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
 
 #### WorkspaceContext
 
@@ -696,9 +775,41 @@ interface WorkspaceContext
 - `study: StudyRecord`
 - `units: UnitSystem`
 - `theme: ThemeInfo`
-- `hostVersion: string`: The host's bridge API version ("1.7"). To use a call a later host added, compare it as numbers, major then minor (ws.nav.setDirty needs 1.2, ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5, ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the refusal: an older host rejects a call it does not know with code "not_allowed".
+- `hostVersion: string`: The host's bridge API version ("1.7"). To use a call a later host added, compare it as numbers, major then minor (ws.nav.setDirty needs 1.2, ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5, ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the refusal: an older host rejects a call it does not know with code "not_allowed". `ws.assistant` (unreleased in 1.8: check that it exists).
 - `geometry?: EditedGeometry | null | undefined`: The project geometry this study edits (host 1.7; absent on an older host): the one the user chose "Edit in …" on (a `[[geometry_actions]]` entry), or the one this study links. null for a study that edits no project geometry. Read its file with ws.project.geometrySource() and its faces with ws.project.geometryFaces().
 - `launch?: LaunchTarget | null | undefined`: What the user right-clicked to open this page (host 1.7): a face label ("face 3@Body1") or a body ("Body1") of `geometry`, from the viewport's menu. Given once, to the page load the action opened; a reload has none. null or absent otherwise.
+
+#### AssistantHandler
+
+```ts
+type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>
+```
+
+Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+
+#### AssistantResult
+
+```ts
+type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[]; } | void
+```
+
+What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with code "too_large". Everything in it reaches the model as data, never as instructions.
+
+#### AssistantRisk
+
+```ts
+type AssistantRisk = 'read' | 'edit' | 'compute' | 'destructive'
+```
+
+How much a tool of the app's assistant may change (unreleased, next host minor 1.9). `read` changes nothing; `edit` changes this page's own state; `compute` starts work that takes time or the app's compute slot; `destructive` can't be undone. The app asks the user before every `compute` and `destructive` call. An unknown risk counts as `destructive`.
+
+#### AssistantSchema
+
+```ts
+type AssistantSchema = { type: 'string'; description?: string; enum?: string[]; minLength?: number; maxLength?: number; } | { type: 'number' | 'integer'; description?: string; minimum?: number; maximum?: number; enum?: n...
+```
+
+A tool's input, in the subset of JSON Schema the app accepts (unreleased, 1.9): every object lists its `properties` and says `additionalProperties: false`. No `$ref`, `oneOf`, `anyOf`, `allOf`, `pattern`, `format` or `default`.
 
 #### ComputeStatus
 
