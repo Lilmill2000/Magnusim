@@ -14,6 +14,8 @@
  * server took it, `tools: []` follows at once (or the newer list that replaces it). A
  * refusal as plugin_off or plugin_changed, or an `unregistered` frame, makes the frame dead:
  * its lists are never sent again. Every new `linked` (a reconnect) sends the live list again.
+ * A restarted server that has not read its plugins yet answers plugin_off for a frame it took
+ * before (its token is of the old boot), or not_ready: tried again for about two minutes first.
  *
  * Tool calls: `invoke` is acknowledged from the frame's handler before the frame is asked
  * (the server's ack window catches a connection that is only half open), its progress goes
@@ -24,11 +26,14 @@
  *
  * Questions (`gate`): out of the workspace's full screen, then the app's own confirm dialog
  * with No focused (Enter and Escape answer No: a key meant for the workspace never allows),
- * then POST /api/assistant/gates/:id {allow}. `gate_closed` closes it unanswered.
+ * then POST /api/assistant/gates/:id {allow}. `gate_closed` closes it unanswered, and so do
+ * its expires_at and a new link that does not show it again (closed while the link was down).
  *
  * The tab's stream stays while it is hidden (pinned) while the server says turns are bound
  * to this tab or holds its link for a while after (`active {turns, hold_until}`), while a
- * call runs and while a question is open; otherwise a hidden tab lets it go as usual.
+ * call runs and while a question is open; otherwise a hidden tab lets it go as usual. A new
+ * link starts with no turns and no hold: its server says `active` right after `linked` when
+ * it has any.
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import type { AssistantRegistration } from '../plugin-sdk/workspace';
@@ -61,6 +66,15 @@ export const PROGRESS_INTERVAL_MS = 250;
 export const HOLD_MAX_MS = 15 * 60_000;
 /** A withdrawal that got no answer is tried again after this long. */
 const RETRY_MS = 1000;
+/**
+ * A list the server cannot take yet (just restarted, its plugins not read: plugin_off for a
+ * frame it took before, or not_ready) is tried again after these waits (about 2 min in all).
+ */
+export const NOT_YET_RETRY_MS: readonly number[] = [1000, 2000, 4000, 8000, 15_000, 30_000, 30_000, 30_000];
+/** A new link shows its open questions again at once: one not shown again by then was closed. */
+export const GATE_RESHOWN_MS = 5000;
+/** The longest a question stays open here when its expires_at is missing or far off. */
+const GATE_MAX_MS = 60 * 60_000;
 
 /** What the frame hears for an empty list, or when nothing of this page is on the server. */
 const NOTHING_HELD: AssistantRegistration = { available: true, accepted: [], refused: [] };
@@ -71,6 +85,14 @@ interface Invoke {
   ctl: AbortController;
   /** Settles once its result was sent and answered (or could not be). */
   done: Promise<void>;
+}
+
+interface OpenGate {
+  ctl: AbortController;
+  /** The link it was last shown on. */
+  link: string | null;
+  /** Closes it at its expires_at. */
+  timer: ReturnType<typeof setTimeout>;
 }
 
 interface Relay {
@@ -91,7 +113,11 @@ interface Relay {
   /** A channel refused (or ended by the server) opens again only for a newer list. */
   refusedRev: number;
   invokes: Map<string, Invoke>;
-  gates: Map<string, AbortController>;
+  gates: Map<string, OpenGate>;
+  /** After a new link: closes the questions it did not show again. */
+  gateCheck: ReturnType<typeof setTimeout> | null;
+  /** Tries so far of a list the server could not take yet (NOT_YET_RETRY_MS). */
+  notYet: number;
   turns: number;
   holdUntil: number;
   holdTimer: ReturnType<typeof setTimeout> | null;
@@ -221,7 +247,7 @@ function openRelay(r: Relay): void {
   });
   on('gate', (d) => onGate(r, d));
   on('gate_closed', (d) => {
-    if (typeof d.gate === 'string') r.gates.get(d.gate)?.abort();
+    if (typeof d.gate === 'string') r.gates.get(d.gate)?.ctl.abort();
   });
   on('unregistered', (d) => onUnregistered(r, d));
   ch.addEventListener('error', () => {
@@ -235,6 +261,25 @@ function onLinked(r: Relay, d: RelayFrameData['linked']): void {
   // Calls that came over an earlier link are gone on the server.
   for (const inv of r.invokes.values()) if (inv.link !== link) inv.ctl.abort();
   r.link = link;
+  // A new link starts with nothing bound: the server says `active` right after `linked` when
+  // turns are bound to this tab or its hold runs (a restarted one, or a hold that ran out while
+  // the link was down, has none, and an old count would pin the stream for good).
+  r.turns = 0;
+  r.holdUntil = 0;
+  // A fresh start: what waited for a retry goes now.
+  r.notYet = 0;
+  if (r.retryTimer) clearTimeout(r.retryTimer);
+  r.retryTimer = null;
+  // The open questions are shown again right after `linked`: one that is not was closed meanwhile.
+  if (r.gateCheck) clearTimeout(r.gateCheck);
+  r.gateCheck = null;
+  if (r.gates.size) {
+    r.gateCheck = setTimeout(() => {
+      r.gateCheck = null;
+      if (R !== r || r.link !== link) return;
+      for (const g of [...r.gates.values()]) if (g.link !== link) g.ctl.abort();
+    }, GATE_RESHOWN_MS);
+  }
   kick();
 }
 
@@ -332,6 +377,7 @@ async function register(r: Relay, link: string, pub: PublishedTools): Promise<vo
     return;
   }
   if (a.status === 200) {
+    r.notYet = 0;
     if (typeof a.body.epoch === 'string') pinWorkspaceFrameEpoch(pub.frameId, a.body.epoch);
     const cur = workspaceToolsSnapshot().current;
     const still = !!cur && cur.rev === pub.rev && live(cur);
@@ -351,6 +397,25 @@ async function register(r: Relay, link: string, pub: PublishedTools): Promise<vo
     r.postedOn = null;
     if (r.link === link) r.link = null;
     return;
+  }
+  // A token of this boot is never answered plugin_off (a changed plugin is plugin_changed): with
+  // one, the server restarted since and may not have read its plugins yet. Tried again first.
+  if (a.status === 409 && (code === 'not_ready' || (code === 'plugin_off' && epoch))) {
+    if (r.notYet < NOT_YET_RETRY_MS.length) {
+      const wait = NOT_YET_RETRY_MS[r.notYet];
+      r.notYet += 1;
+      r.postedOn = null;
+      r.retryTimer = setTimeout(() => {
+        r.retryTimer = null;
+        kick();
+      }, wait);
+      return;
+    }
+    r.notYet = 0;
+    if (code === 'not_ready') {
+      settleWorkspaceTools(pub.rev, refusal(code));
+      return;
+    }
   }
   if (a.status === 409 && (code === 'plugin_off' || code === 'plugin_changed')) {
     // Its plugin was turned off or replaced: the server dropped this tab's lists of it.
@@ -494,9 +559,20 @@ function gateCopy(g: GateView): string {
 
 function onGate(r: Relay, d: RelayFrameData['gate']): void {
   const g = d.gate;
-  if (!g || typeof g !== 'object' || typeof g.id !== 'string' || !g.id || r.gates.has(g.id)) return;
+  if (!g || typeof g !== 'object' || typeof g.id !== 'string' || !g.id) return;
+  const known = r.gates.get(g.id);
+  if (known) {
+    // Shown again (a new link): still open there, one dialog here.
+    known.link = r.link;
+    return;
+  }
   const ctl = new AbortController();
-  r.gates.set(g.id, ctl);
+  // The server closes it at its expires_at; a link that is down then never says so.
+  const expires = timeOf(g.expires_at);
+  const left = expires ? Math.max(0, expires - Date.now()) : GATE_MAX_MS;
+  const timer = setTimeout(() => ctl.abort(), Math.min(left, GATE_MAX_MS));
+  const open: OpenGate = { ctl, link: r.link, timer };
+  r.gates.set(g.id, open);
   updatePin(r);
   void (async () => {
     try {
@@ -509,7 +585,8 @@ function onGate(r: Relay, d: RelayFrameData['gate']): void {
     } catch (e) {
       console.warn('[CFD] assistant question', e);
     } finally {
-      if (r.gates.get(g.id) === ctl) r.gates.delete(g.id);
+      clearTimeout(timer);
+      if (r.gates.get(g.id) === open) r.gates.delete(g.id);
       if (R === r) {
         updatePin(r);
         kick();
@@ -590,6 +667,8 @@ export function startAssistantRelay(): () => void {
       refusedRev: 0,
       invokes: new Map(),
       gates: new Map(),
+      gateCheck: null,
+      notYet: 0,
       turns: 0,
       holdUntil: 0,
       holdTimer: null,
@@ -612,10 +691,14 @@ export function stopAssistantRelay(): void {
   R = null;
   r.unsubscribe();
   r.statusOff?.();
-  for (const ctl of r.gates.values()) ctl.abort();
+  for (const g of r.gates.values()) {
+    clearTimeout(g.timer);
+    g.ctl.abort();
+  }
   for (const inv of r.invokes.values()) inv.ctl.abort();
   if (r.holdTimer) clearTimeout(r.holdTimer);
   if (r.retryTimer) clearTimeout(r.retryTimer);
+  if (r.gateCheck) clearTimeout(r.gateCheck);
   r.ch?.close();
   r.ch = null;
 }

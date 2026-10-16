@@ -11,8 +11,9 @@
  *   `superseded` at once (available:false, so neither the bridge nor the page keeps it).
  * - The bridge waits 5 s for a verdict, then calls `abandon()`: that publication is never sent
  *   to the server, and the relay withdraws it if the server accepted it meanwhile.
- * - A frame's first accepted registration pins its plugin's epoch; every later one of that
- *   frame carries it. A frame whose plugin was turned off or replaced is dead: its lists are
+ * - A frame's accepted registration pins its plugin's epoch; every later one of that frame
+ *   carries it (within a server boot the answer is the same token; after a restart the new
+ *   boot's replaces it). A frame whose plugin was turned off or replaced is dead: its lists are
  *   refused here and never sent again (only a new frame registers that plugin again).
  * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays.
  *
@@ -69,7 +70,7 @@ interface ToolsState {
   current: Rec | null;
   /** Lists still waiting for their verdict. */
   waiting: Set<Rec>;
-  /** Each frame's pinned epoch (its first accepted registration's). */
+  /** Each frame's pinned epoch (its last accepted registration's). */
   epochs: Map<string, string>;
   /** Frames whose plugin went, with the reason. */
   dead: Map<string, string>;
@@ -224,10 +225,14 @@ export function workspaceFrameDead(frameId: string): boolean {
   return st().dead.has(frameId);
 }
 
-/** Pins the frame's epoch at its first accepted registration (later ones never move it). */
+/**
+ * Pins the frame's epoch from an accepted registration. Within a server boot every answer of
+ * the frame echoes the pinned token (a changed plugin is refused plugin_changed); a different
+ * one follows only a restart, and replaces it so the fence holds for the new boot too.
+ */
 export function pinWorkspaceFrameEpoch(frameId: string, epoch: string): void {
   const s = st();
-  if (!epoch || s.epochs.has(frameId) || s.dead.has(frameId)) return;
+  if (!epoch || s.dead.has(frameId)) return;
   s.epochs.set(frameId, epoch);
 }
 

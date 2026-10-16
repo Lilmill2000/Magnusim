@@ -13,7 +13,15 @@ import type { AssistantCallOutcome, AssistantInvoke, CheckedTool } from '../work
 import type { AssistantRegistration } from '../plugin-sdk/workspace';
 import { confirmAction, dialogBusy } from '../workbench/dialogs';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
-import { PROGRESS_INTERVAL_MS, RELAY_CHANNEL_URL, RESULT_BEFORE_UNREGISTER_MS, startAssistantRelay, stopAssistantRelay } from './relay';
+import {
+  GATE_RESHOWN_MS,
+  NOT_YET_RETRY_MS,
+  PROGRESS_INTERVAL_MS,
+  RELAY_CHANNEL_URL,
+  RESULT_BEFORE_UNREGISTER_MS,
+  startAssistantRelay,
+  stopAssistantRelay,
+} from './relay';
 import { resetStatusStore } from './status';
 import type { GateView } from './wire';
 
@@ -515,6 +523,91 @@ describe('registrations', () => {
     expect(channel().closed).toBe(true);
   });
 
+  it('after a restart, plugin_off for a frame the server took before is tried again until its plugins are read', async () => {
+    await registered();
+    channel().drop();
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    // The new server has not read its plugins yet: the old boot's token counts as fresh there.
+    const again = take('/api/assistant/relay/tools');
+    expect(again.body).toMatchObject({ link: LINK_B, epoch: 'boot-1:3', tools: [tool('add')] });
+    again.answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
+    await settle();
+    expect(workspaceToolsSnapshot().current).toMatchObject({ dead: false });
+    await settle(NOT_YET_RETRY_MS[0] - 1);
+    expect(toolPosts()).toHaveLength(2);
+    await settle(1);
+    expect(toolPosts()).toHaveLength(3);
+    expect(lastTools().body).toMatchObject({ link: LINK_B, epoch: 'boot-1:3', tools: [tool('add')] });
+    lastTools().answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
+    await settle(NOT_YET_RETRY_MS[1]);
+    expect(toolPosts()).toHaveLength(4);
+    accept(lastTools(), 'boot-2:3');
+    await settle(10 * 60_000);
+    expect(toolPosts()).toHaveLength(4);
+    // The frame registers again: not refused here, and it carries the new boot's token.
+    const later = register(['add', 'reset']);
+    await settle();
+    expect(lastTools().body).toMatchObject({ link: LINK_B, epoch: 'boot-2:3', tools: [tool('add'), tool('reset')] });
+    accept(lastTools(), 'boot-2:3');
+    expect(await later).toMatchObject({ available: true, accepted: ['add', 'reset'] });
+  });
+
+  it('a plugin still off after a restart: tried for a while, then the frame is dead; a fresh frame is dead at once', async () => {
+    await registered();
+    channel().drop();
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    for (const wait of NOT_YET_RETRY_MS) {
+      take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
+      await settle(wait);
+    }
+    expect(toolPosts()).toHaveLength(2 + NOT_YET_RETRY_MS.length);
+    take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
+    await settle(10 * 60_000);
+    expect(toolPosts()).toHaveLength(2 + NOT_YET_RETRY_MS.length);
+    expect(workspaceToolsSnapshot().current).toMatchObject({ dead: true });
+    expect(await register(['add'])).toMatchObject({ available: false, reason: 'plugin_off' });
+    // A frame the server never took has no token: its plugin_off is the plugin's state, dead at once.
+    const fresh = register(['add'], 'frame-2');
+    await settle();
+    // Nothing of the page was left on the server: the channel went, a new one opens for it.
+    channel().frame('linked', { link: LINK_C });
+    await settle();
+    expect(lastTools().body).not.toHaveProperty('epoch');
+    take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
+    expect(await fresh).toMatchObject({ available: false, reason: 'plugin_off' });
+    await settle(10 * 60_000);
+    expect(toolPosts()).toHaveLength(3 + NOT_YET_RETRY_MS.length);
+  });
+
+  it('a 409 not_ready (the server has not read its plugins yet) is tried again, for a fresh frame too', async () => {
+    startAssistantRelay();
+    const verdict = register(['add']);
+    await settle();
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'not_ready', error: 'starting' });
+    await settle(NOT_YET_RETRY_MS[0]);
+    expect(toolPosts()).toHaveLength(2);
+    accept(take('/api/assistant/relay/tools'));
+    expect(await verdict).toMatchObject({ available: true, accepted: ['add'] });
+  });
+
+  it("every accepted registration's token is the frame's from then on (a restart's new one replaces the old)", async () => {
+    await registered();
+    channel().drop();
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    expect(lastTools().body).toMatchObject({ epoch: 'boot-1:3' });
+    accept(take('/api/assistant/relay/tools'), 'boot-2:3');
+    await settle();
+    channel().drop();
+    channel().frame('linked', { link: LINK_C });
+    await settle();
+    expect(lastTools().body).toMatchObject({ link: LINK_C, epoch: 'boot-2:3' });
+  });
+
   it('[] unpublishes (tools: []) and closes the channel', async () => {
     await registered();
     const ch = channel();
@@ -594,6 +687,19 @@ describe('tool calls', () => {
     expect(running[0].req.signal.aborted).toBe(true);
   });
 
+  it('a new `linked` with no stream error first stops the calls of the earlier link; their result goes on that link', async () => {
+    await registered();
+    const ch = channel();
+    ch.frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 1 }, timeout_s: 30 });
+    const run = running[0];
+    // The hub moved the tab to a new stream: the channel stayed open and fired no error.
+    ch.frame('linked', { link: LINK_B });
+    expect(run.req.signal.aborted).toBe(true);
+    run.end({ ok: false, code: 'aborted', message: 'it was stopped before its page said it finished' });
+    await settle();
+    expect(take('/api/assistant/relay/result').body).toMatchObject({ link: LINK_A, call: 'call-1', ok: false, error: { code: 'aborted' } });
+  });
+
   it('a list that goes while a call runs: the result POST resolves before tools: [] is sent, and that before the channel closes', async () => {
     await registered();
     const ch = channel();
@@ -640,14 +746,30 @@ describe('questions (gates) as the app confirm dialog', () => {
     no: "Don't",
     risk: 'destructive',
     opened_at: '2026-10-16T10:00:00Z',
-    expires_at: '2026-10-16T10:10:00Z',
+    expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
     ...over,
   });
   const $ = (id: string) => document.getElementById(id) as HTMLElement;
 
   it('every kind is shown safe, out of full screen first, with its detail rows; Allow is a click', async () => {
     await registered();
+    // Leaving full screen takes a while: the dialog waits for it.
+    let outOfFullScreen: () => void = () => undefined;
+    vi.mocked(exitFrameFullscreen).mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          outOfFullScreen = () => {
+            log.push('out of full screen');
+            done();
+          };
+        }),
+    );
     channel().frame('gate', { gate: gate({ detail: [{ label: 'Cells', value: '1.2 M' }, { label: 'Time', value: 'about 4 min' }] }) });
+    await settle(1000);
+    expect(exitFrameFullscreen).toHaveBeenCalledTimes(1);
+    expect(confirmAction).not.toHaveBeenCalled();
+    expect($('modal-confirm').hidden).toBe(true);
+    outOfFullScreen();
     await settle();
     expect(log.indexOf('out of full screen')).toBeGreaterThan(-1);
     expect(vi.mocked(exitFrameFullscreen).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(confirmAction).mock.invocationCallOrder[0]);
@@ -701,6 +823,66 @@ describe('questions (gates) as the app confirm dialog', () => {
   });
 });
 
+describe('questions the server can no longer close', () => {
+  const view = (id: string, title: string, expiresInMs = 10 * 60_000): GateView => ({
+    id,
+    kind: 'confirm',
+    turn: 'turn-1',
+    title,
+    copy: 'Nothing runs until you choose.',
+    yes: 'Allow',
+    no: "Don't",
+    risk: 'edit',
+    opened_at: new Date(Date.now()).toISOString(),
+    expires_at: new Date(Date.now() + expiresInMs).toISOString(),
+  });
+  const $ = (id: string) => document.getElementById(id) as HTMLElement;
+
+  it('a question not shown again on a new link closes unanswered; one shown again stays', async () => {
+    await registered();
+    const ch = channel();
+    ch.frame('gate', { gate: view('g-1', 'First question?') });
+    ch.frame('gate', { gate: view('g-2', 'Second question?') });
+    await settle();
+    expect($('cf-heading').textContent).toBe('First question?');
+    // The link drops; g-1 is answered elsewhere meanwhile, so the new link shows only g-2 again.
+    ch.drop();
+    await settle();
+    ch.frame('linked', { link: LINK_B });
+    ch.frame('gate', { gate: view('g-2', 'Second question?') });
+    await settle(GATE_RESHOWN_MS - 1);
+    expect($('cf-heading').textContent).toBe('First question?');
+    expect($('modal-confirm').hidden).toBe(false);
+    await settle(1);
+    await settle(10);
+    // g-1 closed with no answer sent; g-2 is the dialog now, still on screen.
+    expect($('cf-heading').textContent).toBe('Second question?');
+    expect($('modal-confirm').hidden).toBe(false);
+    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    expect(ch.pinned).toBe(true);
+    $('cf-cancel').click();
+    await settle();
+    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/')).map((s) => [s.path, s.body])).toEqual([['/api/assistant/gates/g-2', { allow: false }]]);
+    expect(ch.pinned).toBe(false);
+  });
+
+  it('a question closes unanswered at its expires_at when the link stays down', async () => {
+    await registered();
+    const ch = channel();
+    ch.frame('gate', { gate: view('g-1', 'First question?', 60_000) });
+    await settle();
+    expect($('modal-confirm').hidden).toBe(false);
+    ch.drop();
+    await settle(60_000 - 1);
+    expect($('modal-confirm').hidden).toBe(false);
+    expect(ch.pinned).toBe(true);
+    await settle(1);
+    expect($('modal-confirm').hidden).toBe(true);
+    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    expect(ch.pinned).toBe(false);
+  });
+});
+
 describe('the hold (pinning the tab stream)', () => {
   it('active {turns:1} pins; hold_until keeps it after the turn; it goes at hold_until', async () => {
     await registered();
@@ -720,5 +902,31 @@ describe('the hold (pinning the tab stream)', () => {
     expect(ch.pinned).toBe(true);
     await settle(2000);
     expect(ch.pinned).toBe(false);
+  });
+
+  it("a new link starts with no turns and no hold: only that link's `active` pins again", async () => {
+    await registered();
+    const ch = channel();
+    ch.frame('active', { turns: 1, hold_until: null });
+    expect(ch.pinned).toBe(true);
+    // The stream drops: the pin stays, so a hidden tab gets its link back.
+    ch.drop();
+    await settle();
+    expect(ch.pinned).toBe(true);
+    // A restarted server (or one whose hold ran out while the PC slept) has no turns for it: no `active` follows.
+    ch.frame('linked', { link: LINK_B });
+    await settle();
+    accept(take('/api/assistant/relay/tools'));
+    await settle(60 * 60_000);
+    expect(ch.pinned).toBe(false);
+    // A server with a turn still bound to the tab says so right after `linked`.
+    ch.drop();
+    ch.frame('linked', { link: LINK_C });
+    ch.frame('active', { turns: 1, hold_until: null });
+    await settle();
+    expect(ch.pinned).toBe(true);
+    accept(take('/api/assistant/relay/tools'));
+    await settle(60 * 60_000);
+    expect(ch.pinned).toBe(true);
   });
 });
