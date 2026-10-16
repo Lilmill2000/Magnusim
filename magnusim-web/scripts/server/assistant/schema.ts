@@ -174,6 +174,7 @@ function checkNode(node: unknown, path: string, depth: number): SchemaCheck {
     }
     for (const name of names) {
       if (!name || name.length > 64) return bad('property names are 1 to 64 characters.');
+      if (name === '__proto__') return bad('a property may not be called "__proto__".');
       const r = checkNode(props[name], path ? `${path}.${name}` : name, depth + 1);
       if (!r.ok) return r;
     }
@@ -349,7 +350,9 @@ function stripNode(s: SchemaNode, v: unknown): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, x] of Object.entries(v)) {
     if (x === null && hasOwn(props, k) && !required.has(k)) continue;
-    out[k] = hasOwn(props, k) ? stripNode(props[k], x) : x;
+    // Defined, not assigned: an own "__proto__" key (JSON.parse makes one) stays a key that
+    // validation refuses, instead of becoming the prototype a tool would read through.
+    Object.defineProperty(out, k, { value: hasOwn(props, k) ? stripNode(props[k], x) : x, enumerable: true, writable: true, configurable: true });
   }
   return out;
 }

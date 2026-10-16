@@ -15,6 +15,12 @@
 import type { ImagePart, ToolResultPart } from './types.ts';
 
 const CONTROLS = /[\p{Cc}\u{2028}\u{2029}\u{200e}\u{200f}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu;
+const HAS_CONTROL = new RegExp(CONTROLS.source, 'u');
+
+/** Whether `text` holds a character cleanText would take out (for values that must stay exact). */
+export function hasControls(text: string): boolean {
+  return HAS_CONTROL.test(text);
+}
 
 export const TEXT_CAPS = Object.freeze({ name: 200, description: 1024, other: 2000 });
 export const JSON_CAPS = Object.freeze({ depth: 8, keys: 200, items: 200, bytes: 32 * 1024 });

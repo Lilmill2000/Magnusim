@@ -172,6 +172,26 @@ describe('emitSchema', () => {
     assert.deepEqual(stripNullOptionals(list, { rows: [{ a: null }, { a: 1 }] }), { rows: [{}, { a: 1 }] });
   });
 
+  it('stripNullOptionals never sets a prototype: a "__proto__" key stays a key, and validation refuses it', () => {
+    const s = obj({ simulation_id: { type: 'string', maxLength: 80 } }, []);
+    const long = 'x'.repeat(500);
+    const raw = JSON.parse(`{"__proto__":{"simulation_id":"${long}"}}`);
+    assert.match(validateInput(s, raw).error, /unknown field "__proto__"/);
+    const stripped = stripNullOptionals(s, raw);
+    assert.equal(Object.getPrototypeOf(stripped), Object.prototype);
+    assert.equal(stripped.simulation_id, undefined, 'nothing reads through a prototype');
+    assert.deepEqual(Object.keys(stripped), ['__proto__']);
+    assert.match(validateInput(s, stripped).error, /unknown field "__proto__"/);
+    // Deeper down, and where a tool reads a bounded number afterwards.
+    const nested = obj({ inner: obj({ by: { type: 'integer', minimum: -100, maximum: 100 } }, []) }, []);
+    const deep = stripNullOptionals(nested, JSON.parse('{"inner":{"__proto__":{"by":100000}}}'));
+    assert.equal(deep.inner.by, undefined);
+    assert.equal(validateInput(nested, deep).ok, false);
+    // A schema may not name a property "__proto__" either.
+    const named = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"}},"additionalProperties":false}');
+    assert.match(checkSchema(named).error, /__proto__/);
+  });
+
   it('limitWords says each limit in plain words', () => {
     assert.equal(limitWords({ type: 'integer', minimum: -100, maximum: 100 }), 'integer from -100 to 100');
     assert.equal(limitWords({ type: 'array', minItems: 1, maxItems: 20 }), '1 to 20 items');

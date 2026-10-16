@@ -216,6 +216,43 @@ describe('hostGet: the app’s own routes over loopback', () => {
     await assert.rejects(get('/api/project', { project_id: 'p9' }, { turn: 'c' }), (e) => e.code === 'http' && e.status === 404 && e.message === 'project not found');
     await assert.rejects(createHostCaller({ port: () => 0 })('/api/projects', {}, { turn: 'd' }), (e) => e.code === 'not_ready');
   });
+
+  it('an answer over 4 MB is refused, not read', async () => {
+    tick();
+    const get = createHostCaller({ port: () => app.port, now });
+    const normal = app.answers.get('/api/compute-queue');
+    app.answers.set('/api/compute-queue', () => ({ ok: true, pad: 'x'.repeat(4 * 1024 * 1024 + 1024) }));
+    try {
+      await assert.rejects(get('/api/compute-queue', {}, { turn: 'big' }), (e) => e instanceof HostCallError && e.code === 'too_large');
+    } finally {
+      app.answers.set('/api/compute-queue', normal);
+    }
+    tick();
+    await get('/api/compute-queue', {}, { turn: 'big' });
+  });
+
+  it('the app’s error text never carries a path to the model: a server error is a fixed line, a refusal is scrubbed', async () => {
+    const pathy = "[Errno 2] No such file or directory: 'C:\\Users\\someone\\Documents\\Magnusim Projects\\p1\\simulations.json'";
+    const normal = app.answers.get('/api/run/ready');
+    const t = tools();
+    try {
+      app.answers.set('/api/run/ready', () => ({ status: 500, body: { ok: false, error: pathy } }));
+      tick();
+      const out = await t.explain_ready.run({}, rt());
+      assert.deepEqual([out.ok, out.error.code, out.error.message], [false, 'app_error', 'The app had an error (HTTP 500).']);
+      const sent = resultText('explain_ready', out);
+      for (const bit of ['someone', 'Users', 'C:', 'Magnusim Projects', 'simulations.json']) assert.ok(!sent.includes(bit), bit);
+      // A refusal (4xx) keeps its words, with any path taken out.
+      app.answers.set('/api/run/ready', () => ({ status: 400, body: { ok: false, error: `bad study: ${pathy} and /home/someone/cases/s1 and \\\\server\\share\\someone\\x.json` } }));
+      tick();
+      const refused = await t.explain_ready.run({}, rt());
+      assert.equal(refused.error.code, 'app_error');
+      assert.match(refused.error.message, /^bad study: \[Errno 2\] No such file or directory: '\[path\]' and \[path\] and \[path\]$/);
+      assert.ok(!resultText('explain_ready', refused).includes('someone'));
+    } finally {
+      app.answers.set('/api/run/ready', normal);
+    }
+  });
 });
 
 describe('the host tools', () => {

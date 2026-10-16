@@ -20,6 +20,7 @@ const { createHostTools, connectionCheckTool } = await import('../assistant/host
 
 const EMPTY = { type: 'object', properties: {}, additionalProperties: false };
 const BY = { type: 'object', properties: { by: { type: 'integer', minimum: -100, maximum: 100 } }, required: ['by'], additionalProperties: false };
+const obj = (properties) => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 
 const wsTool = (name, extra = {}) => ({ name, description: `Does ${name}.`, inputSchema: EMPTY, risk: 'read', ...extra });
 const DEMO = () => [wsTool('get_count'), wsTool('add', { risk: 'edit', inputSchema: BY }), wsTool('reset', { risk: 'destructive' })];
@@ -137,6 +138,54 @@ describe('a workspace registration', () => {
     assert.equal(a.projectData, true);
   });
 
+  it('cleans and caps the text inside a schema too, and refuses enum or const values and property names with controls', () => {
+    const r = createToolRegistry();
+    const dirty = `Body \u202espoof\u0007 ${'y'.repeat(3000)}`;
+    const schema = {
+      type: 'object',
+      properties: {
+        body: { type: 'string', description: dirty, title: `T\u2028${'t'.repeat(300)}` },
+        list: { type: 'array', items: { type: 'object', properties: { leaf: { type: 'integer', description: 'Leaf\u202e.' } }, additionalProperties: false } },
+        mode: { type: 'string', enum: ['fast', 'fine'] },
+      },
+      additionalProperties: false,
+    };
+    const v = r.setWorkspace(
+      'T1',
+      'L1',
+      registration({
+        tools: [
+          wsTool('ok', { inputSchema: schema }),
+          wsTool('bad_enum', { inputSchema: obj({ m: { type: 'string', enum: ['a', 'b\u202e'] } }) }),
+          wsTool('bad_const', { inputSchema: obj({ m: { type: 'string', const: 'c\u0000' } }) }),
+          wsTool('bad_prop', { inputSchema: obj({ ['p\u202e']: { type: 'string' } }) }),
+        ],
+      }),
+    );
+    assert.deepEqual(v.accepted, ['ok']);
+    assert.deepEqual(v.refused.map((x) => [x.name, x.code]), [
+      ['bad_enum', 'bad_schema'],
+      ['bad_const', 'bad_schema'],
+      ['bad_prop', 'bad_schema'],
+    ]);
+    const [tool] = r.toolsFor(ctx());
+    const body = tool.schema.properties.body;
+    assert.ok(body.description.startsWith('Body spoof y'), body.description.slice(0, 20));
+    assert.equal(body.description.length, 1024);
+    assert.equal(body.title.length, 200);
+    const strings = [];
+    const walk = (v) => {
+      if (typeof v === 'string') strings.push(v);
+      else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) strings.push(k), walk(x);
+    };
+    walk(tool.schema);
+    assert.ok(!strings.some((x) => /[\p{Cc}\u2028\u202e]/u.test(x)), 'no control anywhere in what the provider gets');
+    assert.equal(tool.schema.properties.list.items.properties.leaf.description, 'Leaf .');
+    assert.deepEqual(tool.schema.properties.mode.enum, ['fast', 'fine'], 'values are kept exactly');
+    // The page's own object is never changed.
+    assert.equal(schema.properties.body.description, dirty);
+  });
+
   it('records its plugin epoch; a null registration removes the tab', () => {
     const r = createToolRegistry();
     r.setWorkspace('T1', 'L1', registration());
@@ -174,9 +223,18 @@ describe('toolsFor', () => {
     assert.deepEqual(names(r.toolsFor(ctx())), ['alpha'], 'a dormant registration offers nothing');
     const add = r.lookup(ctx({ tab: 'T2', projectId: 'p2' }), 'ai-demo__other');
     assert.equal(add.available(ctx({ tab: 'T2', projectId: 'p2' })), true);
+    // A new link does not bring the old registration back: the page must register again.
     r.setConnected('T1', 'L9', true);
+    assert.deepEqual(names(r.toolsFor(ctx())), ['alpha'], 'a new link offers nothing until the page registers on it');
+    assert.deepEqual([r.workspaceOf('T1').link, r.workspaceOf('T1').connected], ['L1', false]);
+    // Its own link coming back does.
+    r.setConnected('T1', 'L1', true);
     assert.deepEqual(names(r.toolsFor(ctx())), ['alpha', 'ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset']);
-    assert.equal(r.workspaceOf('T1').link, 'L9');
+    // A registration on the new link replaces it.
+    r.setConnected('T1', 'L1', false);
+    r.setWorkspace('T1', 'L9', registration({ tools: [wsTool('get_count')] }));
+    assert.deepEqual(names(r.toolsFor(ctx())), ['alpha', 'ai-demo__get_count']);
+    assert.equal(r.lookup(ctx(), 'ai-demo__get_count').source.link, 'L9');
   });
 
   it('host tools a context can’t use are not offered', () => {

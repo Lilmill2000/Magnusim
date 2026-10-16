@@ -23,7 +23,7 @@
 import { createHash } from 'node:crypto';
 import { pluginEpoch as foamPluginEpoch } from '../../foam-runner.js';
 import { checkSchema } from './schema.ts';
-import { cleanText, TEXT_CAPS } from './sanitize.ts';
+import { cleanText, hasControls, TEXT_CAPS } from './sanitize.ts';
 import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts';
 
 export type ToolSource =
@@ -275,9 +275,11 @@ export class Registry implements ToolRegistry {
     if (count >= REGISTRATION_MAX_TOOLS) return refuse('too_many', `A page may offer at most ${REGISTRATION_MAX_TOOLS} tools.`);
     const description = cleanText(raw.description, TEXT_CAPS.description);
     if (!description) return refuse('bad_description', 'A tool needs a description.');
-    const schema = raw.inputSchema;
-    const check = checkSchema(schema);
+    const check = checkSchema(raw.inputSchema);
     if (!check.ok) return refuse('bad_schema', check.error);
+    const cleaned = cleanSchemaText(raw.inputSchema, '');
+    if (typeof cleaned === 'string') return refuse('bad_schema', cleaned);
+    const schema = cleaned as unknown as JsonSchemaObject;
     const risk: Risk = RISKS.includes(raw.risk as Risk) ? (raw.risk as Risk) : 'destructive';
     const t = Number(raw.timeoutS);
     const timeoutS = Number.isFinite(t) ? Math.min(WORKSPACE_TIMEOUT_S.max, Math.max(WORKSPACE_TIMEOUT_S.min, Math.round(t))) : WORKSPACE_TIMEOUT_S.default;
@@ -289,7 +291,7 @@ export class Registry implements ToolRegistry {
       localName,
       title: cleanText(typeof raw.title === 'string' && raw.title ? raw.title : localName, TEXT_CAPS.name),
       description,
-      schema: structuredClone(schema) as JsonSchemaObject,
+      schema,
       risk,
       source,
       projectData: true,
@@ -322,15 +324,15 @@ export class Registry implements ToolRegistry {
     return true;
   }
 
-  /** The relay's link for `tab` came or went (a dormant registration offers nothing). */
+  /**
+   * The relay's link for `tab` came or went (a dormant registration offers nothing). Only
+   * the registration's own link brings it back: on a new link the page registers again
+   * (the re-POST checks its rev and epoch, spec 8.4) and setWorkspace replaces the entry.
+   */
   setConnected(tab: string, link: string, connected: boolean): void {
     const e = this.tabs.get(tab);
-    if (!e) return;
-    if (connected) {
-      e.link = link;
-      e.connected = true;
-      for (const t of e.tools) if (t.source.kind === 'workspace') t.source.link = link;
-    } else if (e.link === link) e.connected = false;
+    if (!e || e.link !== link) return;
+    e.connected = connected;
   }
 
   /** What a tab registered (for /tabs and diagnostics). */
@@ -381,6 +383,44 @@ export class Registry implements ToolRegistry {
     const { host, workspace, other } = this.candidates(ctx);
     return [...host, ...workspace, ...other].find((t) => t.name === name) ?? null;
   }
+}
+
+/**
+ * A copy of a checked schema with the text inside it cleaned and capped like the tool's
+ * own (descriptions 1024, titles 200): the provider sees every nested description. Values
+ * validation compares exactly (enum, const) and property names are refused, not
+ * rewritten, when they hold a control character. Returns the reason when refused.
+ */
+function cleanSchemaText(node: unknown, path: string): Record<string, unknown> | string {
+  const at = path || '(root)';
+  const n = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(n)) {
+    let value: unknown = v;
+    if (key === 'description') value = cleanText(v, TEXT_CAPS.description);
+    else if (key === 'title') value = cleanText(v, TEXT_CAPS.name);
+    else if (key === 'enum' || key === 'const') {
+      for (const x of key === 'enum' ? (v as unknown[]) : [v]) {
+        if (typeof x === 'string' && hasControls(x)) return `${at}: "${key}" values may not hold control characters.`;
+      }
+      value = structuredClone(v);
+    } else if (key === 'properties') {
+      const props: Record<string, unknown> = {};
+      for (const [name, child] of Object.entries(v as Record<string, unknown>)) {
+        if (hasControls(name)) return `${at}: property names may not hold control characters.`;
+        const c = cleanSchemaText(child, path ? `${path}.${name}` : name);
+        if (typeof c === 'string') return c;
+        Object.defineProperty(props, name, { value: c, enumerable: true, writable: true, configurable: true });
+      }
+      value = props;
+    } else if (key === 'items') {
+      const c = cleanSchemaText(v, `${path}[]`);
+      if (typeof c === 'string') return c;
+      value = c;
+    } else value = structuredClone(v);
+    out[key] = value;
+  }
+  return out;
 }
 
 function nameOf(raw: unknown): string {

@@ -11,9 +11,14 @@
  *   key or answer a question.
  * - 30 s per call; at most 5 calls a second per turn (a model in a loop can't hammer the
  *   serial worker); answers over 4 MB are refused.
+ * - The app's error text reaches the model only for a refusal (4xx), with any path taken
+ *   out; a server error (5xx: often an exception's text, with a full path and the user
+ *   name in it) is a fixed line, its text only in the log.
  */
 import http from 'node:http';
 import { TURN_HEADER } from './access.ts';
+import { alog } from './log.ts';
+import { redact } from './redact.ts';
 import { cleanText } from './sanitize.ts';
 
 export const HOST_GET_ALLOWLIST: readonly string[] = Object.freeze(['/api/compute-queue', '/api/projects', '/api/project', '/api/simulation', '/api/run/ready']);
@@ -39,6 +44,24 @@ export interface HostGetOptions {
   /** The turn the call is for (its id goes in the header); null for the Settings test. */
   turn: string | null;
   timeoutMs?: number;
+}
+
+const PATHS: readonly RegExp[] = [
+  // Quoted text holding a slash or a backslash (an exception's file name).
+  /(['"])[^'"\r\n]*[\\/][^'"\r\n]*\1/g,
+  // A drive path or a network share, to the end of the line or quote.
+  /\b[A-Za-z]:[\\/][^'"\r\n]*/g,
+  /\\\\[^\\\s'"]+\\[^'"\r\n]*/g,
+  // POSIX homes, mounts and temp folders.
+  /(?<![\w.])\/(?:home|Users|root|mnt|tmp|var|private|media|run|opt|srv)\/[^\s'"]*/g,
+];
+
+/** `text` with every local path replaced by [path] (quotes kept). */
+export function scrubPaths(text: string): string {
+  let out = text;
+  out = out.replace(PATHS[0], (_m, q: string) => `${q}[path]${q}`);
+  for (const re of PATHS.slice(1)) out = out.replace(re, '[path]');
+  return out;
 }
 
 export type HostGet = (path: string, query: Record<string, string | null | undefined>, o: HostGetOptions) => Promise<Record<string, unknown>>;
@@ -113,7 +136,13 @@ export function createHostCaller(o: HostCallerOptions): HostGet {
             }
             const status = res.statusCode ?? 0;
             if (status < 200 || status >= 300 || !body || typeof body !== 'object' || Array.isArray(body)) {
-              const said = body && typeof body === 'object' ? cleanText((body as { error?: unknown }).error, 300) : '';
+              const raw = body && typeof body === 'object' ? (body as { error?: unknown }).error : undefined;
+              if (status >= 500) {
+                alog('warn', 'a host tool read failed', { path, status, detail: redact(cleanText(raw, 300)) });
+                finish(new HostCallError('http', `The app had an error (HTTP ${status}).`, status));
+                return;
+              }
+              const said = cleanText(scrubPaths(cleanText(raw, 2000)), 300);
               finish(new HostCallError('http', said || `The app answered HTTP ${status}.`, status));
               return;
             }
