@@ -49,6 +49,11 @@ test.beforeAll(async () => {
     name: 'assistant-settings',
     env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base },
   });
+  // The server ignores the provider switch unless every condition for it holds, and then the
+  // cloud providers are the real ones: stop here, before any test saves a key.
+  const r = await fetch(`${host.base}/api/assistant/status`);
+  expect(r.status, 'status').toBe(200);
+  expect((await r.json()).test_provider, 'the cloud providers go to the fake').toBe(true);
 });
 
 test.afterAll(async () => {
