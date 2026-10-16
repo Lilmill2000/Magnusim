@@ -443,3 +443,42 @@ html {
   color: var(--mg-text-muted);
   margin-top: var(--mg-space-2);
 }
+
+/* The keyboard shortcuts, over the view's top right */
+.t2d-shortcuts {
+  position: absolute;
+  top: var(--mg-space-3);
+  right: var(--mg-space-3);
+  z-index: 5;
+  width: min(460px, calc(100% - 2 * var(--mg-space-3)));
+  max-height: calc(100% - 2 * var(--mg-space-3));
+  overflow: auto;
+  padding: var(--mg-space-3);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
+  font-size: var(--mg-text-sm);
+}
+.t2d-shortcuts:focus {
+  outline: none;
+}
+.t2d-shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: var(--mg-space-2);
+}
+.t2d-shortcuts td {
+  padding: 3px var(--mg-space-2) 3px 0;
+  vertical-align: top;
+}
+.t2d-shortcuts kbd {
+  font-family: inherit;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-xs);
+  background: var(--mg-surface);
+}

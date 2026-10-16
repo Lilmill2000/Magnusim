@@ -54,6 +54,27 @@ exact upstream commits, with our patches and the scripts that rebuild both
 modules, in `kernel-build/` and `solver-build/`; `LICENSES/README.md` also says
 how to rebuild the plugin with a changed OCCT or PlaneGCS.
 
+## 2D Wind Tunnel plugin
+
+The 2D Wind Tunnel plugin (`magnusim-web/bundled-plugins/tunnel2d`, bundled,
+off by default) is GPL-3.0-or-later. Its sketcher uses the CAD plugin's sketch
+code (Magnusim's own, GPL-3.0-or-later) and ships a copy of the CAD plugin's
+sketch solver, made by its build:
+
+- `workspace/solver/planegcs.wasm`: FreeCAD's PlaneGCS sketch solver
+  (LGPL-2.0-or-later) through the Salusoft89 `planegcs` wrapper
+  (LGPL-2.1-or-later), with Eigen 3.4.0 (MPL-2.0), Boost 1.86 headers
+  (BSL-1.0), the Emscripten runtime (MIT or UIUC/NCSA), LLVM's libc++,
+  libc++abi, libunwind and compiler-rt (Apache-2.0 WITH LLVM-exception) and
+  musl (MIT);
+- `workspace/app.js`: the inferno colour map (matplotlib, Smith and van der
+  Walt, CC0-1.0).
+
+The licence texts are in the plugin's `LICENSES/` (`LICENSES/README.md` lists
+each one). PlaneGCS's source, with our patches and its build, is the CAD
+plugin's `solver-build/`; rebuilding it there and then this plugin replaces the
+copy (see "Source and relinking" in `LICENSES/README.md`).
+
 ## XFOIL and the Airfoil plugin
 
 The optional Airfoil plugin (`magnusim-web/bundled-plugins/airfoil`) runs XFOIL

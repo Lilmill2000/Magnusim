@@ -17,9 +17,29 @@ September 2026 readiness audit. This list preserves the intended work.
 
 - **Plugin workspaces, later (Plugin Host H13):** a workspace opens only for a
   study in a project. To add: global workspaces that open without a project,
-  an “open with” hand-off that passes one plugin's result to another (for
-  example an airfoil from the Airfoil plugin into a 2D wind tunnel), and the
-  2D Wind Tunnel plugin itself.
+  and an “open with” hand-off that passes one plugin's result to another (for
+  example an airfoil from the Airfoil plugin into a 2D wind tunnel).
+
+- **2D Wind Tunnel, later:**
+  - **CAD sketches into the tunnel:** a tunnel body's sketch is already CAD's
+    sketch format; importing one from a CAD Part needs a host call that hands
+    a 2D profile across plugins.
+  - **XFOIL and NeuralFoil beside the tunnel's numbers:** the Airfoil plugin's
+    polars and Cp over the tunnel's surface-pressure plot and angle sweep (a
+    call across plugins).
+  - **Walled tunnels' far field:** an open tunnel holds a lifting body's
+    far-field vortex at its inlet and edges; a slip or solid-walled one would
+    need its image vortices, and keeps the plain wind at its inlet. The drag's
+    far-field source term is also left out.
+  - **16-bit populations:** tried in T6 and dropped. IEEE half precision, even
+    stored less the weights, moved the Schäfer–Turek Strouhal number from
+    0.302 to 0.42 at 20 cells per diameter (0.56 at 40), and was slower on the
+    test GPU. A custom 16-bit format (more mantissa, less exponent) might pass.
+  - **Sketcher tools:** trim, extend, offset, mirror and slots (CAD has them in
+    its own editor), and dimensions shown in the unit system's units (they are
+    typed in any, but shown in mm).
+  - **Sweep settings:** the passes to settle and to average are fixed at 8 and
+    4.
 
 - **CAD plugin host calls, still to add (G9):** a CAD Part becomes its
   project's linked geometry, with its face names as patch names (host API 1.5

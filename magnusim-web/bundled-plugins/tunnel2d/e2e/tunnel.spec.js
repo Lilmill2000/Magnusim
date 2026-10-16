@@ -56,6 +56,12 @@ const needsGpu = () => test.skip(!!noGpu, noGpu);
 const needsFastGpu = () => test.skip(!!(noGpu || slowGpu), noGpu || slowGpu);
 
 test.afterAll(() => host?.stop());
+// On the software adapter (CI) the page starts and draws far slower: every test that runs
+// there takes three times its time, and the page up to four minutes to be ready.
+const SOFTWARE = process.env.MAGNUSIM_E2E_WEBGPU === 'swiftshader' || (!!process.env.CI && process.env.MAGNUSIM_E2E_WEBGPU !== 'gpu');
+test.beforeEach(() => {
+  if (slowGpu) test.slow();
+});
 
 async function newTunnel(request, title) {
   const made = await request.post(`${host.base}/api/plugin-studies/create`, { data: { project_id: PROJECT, plugin: KEY, kind: KIND, title } });
@@ -70,7 +76,7 @@ async function openTunnel(page, study) {
   await expect(page.locator('#workspace-overlay [data-ws-crumb]')).toContainText(study.title, { timeout: 60_000 });
   let frame = null;
   await expect.poll(() => (frame = page.frames().find((f) => f.url().includes(`/plugins/${KEY}/`))) && true, { timeout: 60_000 }).toBe(true);
-  await expect.poll(() => frame.evaluate(() => !!window.__TUNNEL__?.ready).catch(() => false), { timeout: 90_000 }).toBe(true);
+  await expect.poll(() => frame.evaluate(() => !!window.__TUNNEL__?.ready).catch(() => false), { timeout: SOFTWARE ? 240_000 : 90_000 }).toBe(true);
   return frame;
 }
 

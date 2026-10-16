@@ -10,6 +10,7 @@ import { radiusRings } from '../geometry/polygon';
 import { FLUIDS, LIMITS, newBodyId, type Body, type FieldMode, type FlowModel, type RefineLevels, type Resolution, type Scene, type Walls } from '../scene/scene';
 import { RESOLUTION_CELLS, gridFor, type Engine } from '../sim/engine';
 import { useStore, type Store } from '../app/store';
+import { useEngineTick } from '../app/hooks';
 import { emptySketch } from '../sketch/model';
 import type { SketchEditor } from '../sketch/editor';
 import { useEditor } from './sketchbar';
@@ -65,8 +66,7 @@ export function liftBand(cells: number | null): number {
 export function WindPanel({ store, engine, units }: { store: Store; engine: Engine; units: UnitSystem }) {
   const scene = useStore(store, (s) => s.scene);
   const selected = useStore(store, (s) => s.selected);
-  const [, tick] = useState(0);
-  useEffect(() => engine.subscribe(() => tick((n) => n + 1)), [engine]);
+  useEngineTick(engine);
   const set = (flow: Partial<Scene['flow']>) => store.commit({ ...scene, flow: { ...scene.flow, ...flow } });
   // The selected body, or the first in the flow (a sketch with no closed outline is not).
   const inFlow = (b: Body) => b.enabled && hasOutline(b.shape);
@@ -141,8 +141,7 @@ export function WindPanel({ store, engine, units }: { store: Store; engine: Engi
 
 export function TunnelPanel({ store, engine, units }: { store: Store; engine: Engine; units: UnitSystem }) {
   const scene = useStore(store, (s) => s.scene);
-  const [, tick] = useState(0);
-  useEffect(() => engine.subscribe(() => tick((n) => n + 1)), [engine]);
+  useEngineTick(engine);
   const set = (t: Partial<Scene['tunnel']>) => store.commit({ ...scene, tunnel: { ...scene.tunnel, ...t } });
   const grid = engine.grid;
   const resLabel = (r: Exclude<Resolution, 'auto'>) => {

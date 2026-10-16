@@ -15,7 +15,7 @@
 //    its lift), and turns up ahead of it; a walled tunnel's inlet holds the plain wind.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { T, newTunnel, openTunnel, pageXY, scene, useTunnelHost, worldToPage } from './helpers.js';
+import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, T, useTunnelHost, worldToPage } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-forces');
 
@@ -83,7 +83,7 @@ function pressureMoment(cp) {
 
 test('NACA 0012 at 0°: no lift, no moment, the same pressure on both sides, and the basis stated', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(240_000);
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Forces 0012');
   const frame = await openTunnel(env.host, page, study);
   const id = (await scene(frame)).bodies[0].id;
@@ -112,7 +112,7 @@ test('NACA 0012 at 0°: no lift, no moment, the same pressure on both sides, and
 
 test('NACA 2412 at 6°: surface pressure against XFOIL, the moment two ways, and refined lift and moment', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(360_000);
+  scaledTimeout(360_000);
   const study = await newTunnel(env.host, request, 'Forces 2412');
   const frame = await openTunnel(env.host, page, study);
   const id = (await scene(frame)).bodies[0].id;
@@ -142,8 +142,10 @@ test('NACA 2412 at 6°: surface pressure against XFOIL, the moment two ways, and
 });
 
 test('probes read the flow, drag, are saved and deleted; hovering reads the flow under the pointer', async ({ page, request }) => {
-  env.needsGpu();
-  test.setTimeout(240_000);
+  // The readings come back from the GPU between frames, five a second: the software adapter
+  // takes longer than the hint's wait for one.
+  env.needsFastGpu();
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Probes');
   const frame = await openTunnel(env.host, page, study);
   const s0 = await scene(frame);
@@ -213,7 +215,7 @@ test('probes read the flow, drag, are saved and deleted; hovering reads the flow
 
 test('an angle sweep of NACA 0012: lift antisymmetric with the slope XFOIL gives, the angle put back, the rows kept', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(300_000);
+  scaledTimeout(300_000);
   const study = await newTunnel(env.host, request, 'Sweep');
   const frame = await openTunnel(env.host, page, study);
   const id = (await scene(frame)).bodies[0].id;
@@ -248,7 +250,7 @@ test('an angle sweep of NACA 0012: lift antisymmetric with the slope XFOIL gives
 
 test("the inflow ahead of a lifting airfoil keeps one total pressure, and turns up ahead of it", async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(240_000);
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Far field');
   const frame = await openTunnel(env.host, page, study);
   const s0 = await scene(frame);

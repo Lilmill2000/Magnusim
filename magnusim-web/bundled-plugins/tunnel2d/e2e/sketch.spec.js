@@ -12,7 +12,7 @@
 //    outline while the solver keeps its relations; Undo puts it back.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { T, newTunnel, openTunnel, scene, useTunnelHost, worldToPage } from './helpers.js';
+import { newTunnel, openTunnel, scaledTimeout, scene, T, useTunnelHost, worldToPage } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-sketch');
 
@@ -103,7 +103,7 @@ async function wake(page, frame, id, xs) {
 
 test('a sketched rectangle with a fillet, dimensioned: a new value makes the body taller and the flow sees it', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(420_000);
+  scaledTimeout(420_000);
   const study = await newTunnel(env.host, request, 'Sketch');
   const frame = await openTunnel(env.host, page, study);
   await clearBodies(frame);
@@ -209,7 +209,7 @@ test('a sketched rectangle with a fillet, dimensioned: a new value makes the bod
 
 test('an open outline is refused with its reason until it closes; a dragged point moves the outline', async ({ page, request }) => {
   env.needsGpu();
-  test.setTimeout(240_000);
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Sketch open');
   const frame = await openTunnel(env.host, page, study);
   await clearBodies(frame);
@@ -268,7 +268,7 @@ test('an open outline is refused with its reason until it closes; a dragged poin
 
 test('an outline opening and closing never stalls or restarts the flow, and Auto keeps its flow model', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(240_000);
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Sketch switch');
   const frame = await openTunnel(env.host, page, study);
   await clearBodies(frame);

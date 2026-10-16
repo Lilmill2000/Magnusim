@@ -10,7 +10,7 @@
 //    cells per chord with one patch level matches a uniform 100.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { T, newTunnel, openTunnel, pageXY, scene, stats, useTunnelHost } from './helpers.js';
+import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, stats, T, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-refine');
 
@@ -25,7 +25,7 @@ async function liftOver(page, frame, id, ms) {
 
 test('refining round the airfoil: patches, the lift a finer grid gives, model switches and drags', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(300_000);
+  scaledTimeout(300_000);
   const errors = [];
   page.on('console', (m) => {
     if ((m.type() === 'error' || m.type() === 'warning') && /Invalid|WebGPU|GPU/.test(m.text()) && !/powerPreference/.test(m.text())) errors.push(m.text());
@@ -90,7 +90,7 @@ test('refining round the airfoil: patches, the lift a finer grid gives, model sw
 
 test("the refinement's checks: the cylinder benchmark and an airfoil match the finer uniform grid", async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(300_000);
+  scaledTimeout(300_000);
   const study = await newTunnel(env.host, request, 'Refinement checks');
   const frame = await openTunnel(env.host, page, study);
   await frame.getByRole('button', { name: /pause/i }).first().click();

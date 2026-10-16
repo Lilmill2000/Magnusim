@@ -12,7 +12,7 @@
 //    focusing a control low in the side panel never scrolls the page (the toolbar stays).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { T, newTunnel, openTunnel, scene, stats, toggle, useTunnelHost, worldToPage } from './helpers.js';
+import { newTunnel, openTunnel, scaledTimeout, scene, SLOW, stats, T, toggle, useTunnelHost, worldToPage } from './helpers.js';
 
 const t = useTunnelHost('tunnel2d-markers');
 const KEEP_MS = process.env.MAGNUSIM_E2E_SOAK === '1' ? 300_000 : 30_000;
@@ -21,7 +21,7 @@ const particles = (frame) => T(frame, () => window.__TUNNEL__.particles());
 
 test('tracers fill the tunnel, stay out of bodies and keep their number while the airfoil is dragged', async ({ page, request }) => {
   t.needsFastGpu();
-  test.setTimeout(KEEP_MS + 240_000);
+  scaledTimeout(KEEP_MS + 240_000);
   const frame = await openTunnel(t.host, page, await newTunnel(t.host, request, 'Tracer tunnel'));
   const p0 = await particles(frame);
   expect(p0.tracers).toBeGreaterThan(500);
@@ -125,7 +125,7 @@ test('streamlines, velocity arrows and the plain background', async ({ page, req
   const frame = await openTunnel(t.host, page, await newTunnel(t.host, request, 'Lines tunnel'));
   await expect(frame.locator('[data-t2d-legend]')).toBeVisible();
   await toggle(frame, 'Streamlines');
-  await expect.poll(() => T(frame, () => window.__TUNNEL__.streamlines()), { timeout: 20_000 }).toBeGreaterThan(10);
+  await expect.poll(() => T(frame, () => window.__TUNNEL__.streamlines()), { timeout: 20_000 * SLOW }).toBeGreaterThan(10);
   // Arrows: with the flow paused (so nothing else moves), the view changes when they come on.
   await frame.locator('[data-t2d-play]').click();
   await page.waitForTimeout(500);

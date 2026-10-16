@@ -8,7 +8,7 @@
 //    tunnel there was before it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { newTunnel, openTunnel, scene, useTunnelHost } from './helpers.js';
+import { newTunnel, openTunnel, scaledTimeout, scene, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-presets');
 
@@ -26,7 +26,7 @@ const PRESETS = ['cylinder-re20', 'cylinder-re40', 'cylinder-re100', 'cylinder-r
 
 test('every preset runs at its real Reynolds number and measures what is published', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(600_000);
+  scaledTimeout(600_000);
   const study = await newTunnel(env.host, request, 'Presets');
   const frame = await openTunnel(env.host, page, study);
   for (const id of PRESETS) {

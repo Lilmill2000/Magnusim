@@ -11,7 +11,7 @@
 //    pipelines ahead of time; a frame held up once is not a slow GPU).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
-import { T, newTunnel, openTunnel, pageXY, scene, stats, useTunnelHost } from './helpers.js';
+import { newTunnel, openTunnel, pageXY, scaledTimeout, scene, stats, T, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-turb');
 
@@ -28,7 +28,7 @@ async function liftOver(page, frame, id, ms) {
 
 test('the default airfoil runs steadily on the turbulence model, with the lift XFOIL gives, and drags stably', async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(240_000);
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Turbulence model tunnel');
   const frame = await openTunnel(env.host, page, study);
   await expect(frame.locator('[data-t2d-re]')).toHaveAttribute('data-t2d-model', 'sa');
@@ -63,7 +63,7 @@ test('the default airfoil runs steadily on the turbulence model, with the lift X
 
 test("the model's checks: flat-plate skin friction and NACA 0012 lift at Re 6 million", async ({ page, request }) => {
   env.needsFastGpu();
-  test.setTimeout(240_000);
+  scaledTimeout(240_000);
   const study = await newTunnel(env.host, request, 'Turbulence checks');
   const frame = await openTunnel(env.host, page, study);
   // Pause the tunnel itself while the checks run.

@@ -21,6 +21,8 @@ export default defineConfig({
   testDir: HERE,
   outputDir: join(WEB_ROOT, 'test-results', 'tunnel2d'),
   timeout: 600_000,
+  // The software adapter draws about a frame a second: an expectation waits three times as long.
+  expect: { timeout: SOFTWARE ? 15_000 : 5_000 },
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,

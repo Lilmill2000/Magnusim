@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Button, ColorLegend, DisabledReason, type UnitSystem } from '@magnusim/plugin-ui';
 import type { Workspace } from '@magnusim/workspace';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { hasOutline, referenceLength } from '../geometry/shapes';
 import type { FieldMode, Scene } from '../scene/scene';
 import { particleMap, type Engine } from '../sim/engine';
@@ -17,6 +17,10 @@ import type { SweepHost } from '../sim/sweep';
 import type { ProbeFeed } from '../ui/probeFeed';
 import { ForcesPanel, SurfacePanel, SweepPanel } from '../ui/forces';
 import { ProbePanel, ProbesPanel } from '../ui/probes';
+import { ShortcutsHelp } from '../ui/shortcuts';
+import { Capture, type LegendSpec } from './capture';
+import { useWorkspaceUnits } from './hooks';
+import { FLUIDS } from '../scene/scene';
 import { useStore, type Store } from './store';
 
 /** The legend's title, unit and the factor from the dimensionless field to it. */
@@ -37,6 +41,62 @@ function legendFor(field: FieldMode, scene: Scene, lRefM: number): { title: stri
     case 'rheoscopic':
       return { title: '', unit: '', k: 1, centred: false };
   }
+}
+
+/** The legend as the view shows it now (for captures), or null when no field is shown. */
+function legendNow(engine: Engine, scene: Scene): LegendSpec | null {
+  if (scene.view.field === 'none' || scene.view.field === 'rheoscopic') return null;
+  const first = scene.bodies.find((b) => b.enabled && hasOutline(b.shape));
+  const lg = legendFor(scene.view.field, scene, first ? referenceLength(first.shape) : scene.tunnel.height / 8);
+  const auto = engine.autoRangeNow;
+  const lo = scene.view.autoRange ? (auto?.lo ?? scene.view.min / lg.k) : scene.view.min / lg.k;
+  const hi = scene.view.autoRange ? (auto?.hi ?? scene.view.max / lg.k) : scene.view.max / lg.k;
+  return { title: lg.title, unit: lg.unit, lo: lo * lg.k, hi: hi * lg.k, rgb: mapRgb(particleMap(scene.view)) };
+}
+
+/** A capture's caption: what is in the tunnel and what it runs at. */
+function captionNow(engine: Engine, scene: Scene): string {
+  const first = scene.bodies.find((b) => b.enabled && hasOutline(b.shape));
+  const re = first ? engine.reynoldsFor(first) : null;
+  const t = engine.stats.simTime;
+  const parts = [
+    first ? first.name : '',
+    `${fmtRe(scene.flow.speed)} m/s, ${FLUIDS[scene.flow.fluid].label}`,
+    re ? (engine.flowModel === 'sa' ? `Re ${fmtRe(re.real)}, turbulence model` : engine.lattice?.capped ? `Re (sim) ${fmtRe(re.sim)} of ${fmtRe(re.real)}` : `Re ${fmtRe(re.real)}`) : '',
+    `t = ${t < 1 ? `${(t * 1000).toPrecision(3)} ms` : `${t.toPrecision(4)} s`}`,
+    'Magnusim 2D Wind Tunnel',
+  ];
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** The ordered views the number keys pick (the View panel's order). */
+const FIELD_KEYS: FieldMode[] = ['particles', 'vorticity', 'speed', 'pressure', 'schlieren', 'rheoscopic', 'none'];
+
+function RecordButton({ capture, onError }: { capture: Capture; onError: (m: string) => void }) {
+  useSyncExternalStore(
+    (fn) => capture.subscribe(fn),
+    () => capture.version,
+  );
+  useTicker(500);
+  const rec = capture.recording;
+  const secs = rec ? Math.floor((performance.now() - rec.since) / 1000) : 0;
+  return (
+    <Button
+      variant={rec ? 'danger' : 'neutral'}
+      disabled={!rec && !capture.canRecord}
+      title={capture.canRecord ? 'Shift+C' : 'This browser cannot record the view'}
+      attrs={{ 'data-t2d-record': rec ? 'on' : 'off' }}
+      onClick={() => {
+        if (rec) capture.stopRecording();
+        else {
+          const why = capture.startRecording();
+          if (why) onError(why);
+        }
+      }}
+    >
+      {rec ? `Stop recording ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : 'Record'}
+    </Button>
+  );
 }
 
 function useTicker(ms: number) {
@@ -174,7 +234,7 @@ export function App({
   units: UnitSystem;
   problem: string;
 }) {
-  const [units, setUnits] = useState<UnitSystem>(units0);
+  const units = useWorkspaceUnits(ws, units0);
   const [paused, setPaused] = useState(false);
   const [unstable, setUnstable] = useState(false);
   const [hint, setHint] = useState('');
@@ -183,7 +243,6 @@ export function App({
   const selectedRake = useStore(store, (s) => s.scene.rakes.find((r) => r.id === s.selected) ?? null);
   const selectedProbe = useStore(store, (s) => s.scene.probes.find((p) => p.id === s.selected) ?? null);
   const selectedBody = useStore(store, (s) => s.scene.bodies.find((b) => b.id === s.selected) ?? null);
-  useEffect(() => ws.on('units', setUnits), [ws]);
   // Selecting another body (or the sketch body going: undo, remove) ends the edit.
   useEffect(
     () =>
@@ -194,6 +253,28 @@ export function App({
       }),
     [editor, store],
   );
+  const [help, setHelp] = useState(false);
+  const [capture] = useState(
+    () =>
+      new Capture(
+        engine,
+        () => legendNow(engine, store.get().scene),
+        () => captionNow(engine, store.get().scene),
+      ),
+  );
+  const picture = () => {
+    void capture
+      .screenshot()
+      .then((name) => ws.ui.toast(`Saved the view as ${name}.`, { kind: 'success' }))
+      .catch((err) => ws.ui.toast(String(err instanceof Error ? err.message : err), { kind: 'error' }));
+  };
+  const toggleRecording = () => {
+    if (capture.recording) capture.stopRecording();
+    else {
+      const why = capture.startRecording();
+      if (why) void ws.ui.toast(why, { kind: 'error' });
+    }
+  };
   const undo = () => {
     store.undo();
     editor.resync();
@@ -238,6 +319,36 @@ export function App({
       } else if (e.key === ' ' && !mod) {
         e.preventDefault();
         togglePause();
+      } else if (e.key === '?' && !mod) {
+        e.preventDefault();
+        setHelp((h) => !h);
+      } else if (!mod && !e.altKey && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        resetFlow();
+      } else if (!mod && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        fitView(engine, store.get().scene);
+      } else if (!mod && e.key === '.') {
+        e.preventDefault();
+        engine.stepOnce();
+      } else if (!mod && !e.altKey && e.key === 'c') {
+        e.preventDefault();
+        picture();
+      } else if (!mod && !e.altKey && e.key === 'C') {
+        e.preventDefault();
+        toggleRecording();
+      } else if (!mod && !e.altKey && /^[1-7]$/.test(e.key)) {
+        e.preventDefault();
+        const s = store.get().scene;
+        store.commit({ ...s, view: { ...s.view, field: FIELD_KEYS[Number(e.key) - 1] } }, false);
+      } else if (!mod && (e.code === 'BracketLeft' || e.code === 'BracketRight') && store.get().selected) {
+        const s = store.get().scene;
+        const b = s.bodies.find((x) => x.id === store.get().selected);
+        if (!b || b.locked) return;
+        e.preventDefault();
+        // ] raises the leading side (the angle's positive sense), [ lowers it.
+        const d = (e.code === 'BracketRight' ? 1 : -1) * (e.shiftKey ? 10 : 1);
+        store.updateBody(b.id, { angle: Math.max(-180, Math.min(180, Math.round((b.angle + d) * 1000) / 1000)) });
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && store.get().selected) {
         e.preventDefault();
         const s = store.get().scene;
@@ -274,7 +385,7 @@ export function App({
         <Button variant={paused ? 'primary' : 'secondary'} onClick={togglePause} attrs={{ 'data-t2d-play': paused ? 'paused' : 'running' }} title="Space">
           {paused ? 'Run' : 'Pause'}
         </Button>
-        <Button variant="neutral" onClick={resetFlow} attrs={{ 'data-t2d-reset': '1' }} title="Start the flow again from a uniform stream">
+        <Button variant="neutral" onClick={resetFlow} attrs={{ 'data-t2d-reset': '1' }} title="Start the flow again from a uniform stream (R)">
           Reset flow
         </Button>
         <span className="t2d-sep" />
@@ -284,8 +395,19 @@ export function App({
         <Button variant="neutral" onClick={redo} disabled={!store.canRedo} title="Ctrl+Y" attrs={{ 'data-t2d-redo': '1' }}>
           Redo
         </Button>
-        <Button variant="neutral" onClick={() => fitView(engine, store.get().scene)} title="Double-click empty space" attrs={{ 'data-t2d-fit': '1' }}>
+        <Button variant="neutral" onClick={() => fitView(engine, store.get().scene)} title="F, or double-click empty space" attrs={{ 'data-t2d-fit': '1' }}>
           Fit view
+        </Button>
+        <Button variant="neutral" onClick={() => engine.stepOnce()} disabled={!paused} title="Run one frame of the paused flow (.)" attrs={{ 'data-t2d-step': '1' }}>
+          Step
+        </Button>
+        <span className="t2d-sep" />
+        <Button variant="neutral" onClick={picture} title="Save a picture of the view (C)" attrs={{ 'data-t2d-picture': '1' }}>
+          Picture
+        </Button>
+        <RecordButton capture={capture} onError={(m) => void ws.ui.toast(m, { kind: 'error' })} />
+        <Button variant="neutral" onClick={() => setHelp((h) => !h)} title="Keyboard shortcuts (?)" attrs={{ 'data-t2d-shortcuts-open': '1' }}>
+          Shortcuts
         </Button>
         <span className="t2d-sep" />
         <PresetPicker store={store} engine={engine} ws={ws} />
@@ -321,6 +443,7 @@ export function App({
           ) : null}
           <Viewport engine={engine} store={store} editor={editor} units={units} onStatus={setHint} />
           <SketchBar editor={editor} />
+          {help ? <ShortcutsHelp onClose={() => setHelp(false)} /> : null}
           <DimensionInput editor={editor} />
           <Legend engine={engine} store={store} />
           <StatusLine engine={engine} store={store} />

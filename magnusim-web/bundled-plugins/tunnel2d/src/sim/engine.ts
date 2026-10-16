@@ -187,6 +187,8 @@ const SAMPLES_MAX = 40_000;
 type Listener = () => void;
 
 const benchCache = new Map<string, number>();
+/** Below this (million lattice updates a second) a device is too slow for the full benchmark: T0's slowest GPU, an AMD iGPU, ran 425. */
+const SLOW_DEVICE_MLUPS = 100;
 
 export class Engine {
   readonly device: GPUDevice;
@@ -224,6 +226,15 @@ export class Engine {
   private refine: RefineManager | null = null;
   private physics: Physics | null = null;
   paused = false;
+  /** Set to run one frame's steps while paused (the "step" key). */
+  private stepRequest = false;
+  /** Called right after each frame is submitted (captures read the GPU canvas then). */
+  afterFrame: (() => void) | null = null;
+
+  /** Run one frame's worth of steps while paused. */
+  stepOnce() {
+    this.stepRequest = true;
+  }
   unstable = false;
   palette: Palette;
   /** What the canvas shows: the world point at its centre (m), metres per CSS pixel, its size. */
@@ -315,10 +326,16 @@ export class Engine {
    * itself: a grid that fits the GPU's cache runs much faster per cell than one that does
    * not, so a small grid's speed says little about a big one's.
    */
+  /** This device's speed from its last benchmark (million lattice updates a second), or 0. */
+  private deviceMlups = 0;
+
   async benchmarkAt(nx: number, ny: number, turb: 'off' | 'sa' = 'off'): Promise<number> {
     const key = `${nx}x${ny}|${turb}`;
     const cached = benchCache.get(key);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      this.deviceMlups = cached;
+      return cached;
+    }
     const s = new Solver(this.device, { nx, ny, walls: 'slip' });
     if (turb === 'sa') s.setPhysics({ u: U_LATTICE, tau: 0.51, smagorinsky: false, smagCs: SMAG_CS, turb: 'sa', nuMol: 1e-6, nuFloor: U_LATTICE / GRID_RE_MAX });
     else s.setPhysics({ u: U_LATTICE, tau: 0.51, smagorinsky: true, smagCs: SMAG_CS });
@@ -328,6 +345,19 @@ export class Engine {
       this.device.queue.submit([enc.finish()]);
       await this.device.queue.onSubmittedWorkDone();
     };
+    // A first look: a device far slower than any GPU (Chrome's software adapter, a few
+    // MLUPS) answers from four steps. The full run below would take it minutes, and the page
+    // waits on this before it shows anything.
+    await run(2);
+    const tq = performance.now();
+    await run(4);
+    const quick = (nx * ny * 4) / (Math.max(0.1, performance.now() - tq) / 1000) / 1e6;
+    if (quick < SLOW_DEVICE_MLUPS) {
+      s.destroy();
+      benchCache.set(key, quick);
+      this.deviceMlups = quick;
+      return quick;
+    }
     await run(30);
     const steps = Math.max(40, Math.min(400, Math.round(2e8 / (nx * ny))));
     const t0 = performance.now();
@@ -336,6 +366,7 @@ export class Engine {
     s.destroy();
     const mlups = (nx * ny * steps) / (ms / 1000) / 1e6;
     benchCache.set(key, mlups);
+    this.deviceMlups = mlups;
     return mlups;
   }
 
@@ -366,6 +397,11 @@ export class Engine {
     const { nx, ny } = gridFor(scene, cells);
     const gridKey = `${nx}x${ny}|${scene.tunnel.walls}|${scene.tunnel.length}`;
     if (gridKey !== this.gridKey) {
+      // Start the steps a frame where this device carries them (its speed from the last
+      // benchmark, then they adapt): a slow device would spend its first frames, tens of
+      // seconds each on the software adapter, on far too many.
+      if (this.deviceMlups) this.stepsTarget = Math.max(1, Math.min(MAX_STEPS, (this.deviceMlups * 1e3 * FRAME_BUDGET_MS) / (nx * ny)));
+      this.perStepMs = 0;
       this.refine?.clear();
       this.solver?.destroy();
       this.solver = new Solver(this.device, { nx, ny, walls: scene.tunnel.walls });
@@ -865,7 +901,8 @@ export class Engine {
     this.lastFrame = now;
     this.fpsEma = this.fpsEma ? this.fpsEma * 0.9 + (1000 / Math.max(1, wall)) * 0.1 : 60;
 
-    let steps = this.paused || this.unstable ? 0 : Math.round(this.stepsTarget);
+    let steps = (this.paused && !this.stepRequest) || this.unstable ? 0 : Math.round(this.stepsTarget);
+    this.stepRequest = false;
     if (steps > 0 && scene.view.speed === 'realtime') steps = Math.max(1, Math.min(steps, Math.round(wall / 1000 / map.dt)));
     // Each refinement level doubles the fine steps a frame's per-step slots must hold.
     steps = Math.min(MAX_STEPS >> this.refineLevels(scene), steps);
@@ -1024,6 +1061,7 @@ export class Engine {
     const t0 = performance.now();
     this.device.queue.submit([enc.finish()]);
     this.simTime += steps * map.dt;
+    this.afterFrame?.();
 
     if (steps > 0) {
       void this.device.queue.onSubmittedWorkDone().then(() => {

@@ -8,6 +8,15 @@ import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '../../../e2e/support/pl
 export const KEY = 'tunnel2d';
 export const KIND = 'tunnel';
 export const PROJECT = NO_GEOMETRY_PROJECT;
+/** The software adapter (CI): the page starts and draws far slower, so its waits are longer. */
+const SOFTWARE = process.env.MAGNUSIM_E2E_WEBGPU === 'swiftshader' || (!!process.env.CI && process.env.MAGNUSIM_E2E_WEBGPU !== 'gpu');
+/** How much longer a wait is on the software adapter. */
+export const SLOW = SOFTWARE ? 3 : 1;
+
+/** A test's time limit, three times as long on the software adapter. */
+export function scaledTimeout(ms) {
+  test.setTimeout(ms * SLOW);
+}
 
 /**
  * Start this file's server in beforeAll and stop it in afterAll. Returns a getter for the
@@ -32,6 +41,11 @@ export function useTunnelHost(name) {
     else if (adapter.software) state.slowGpu = 'only the software WebGPU adapter (SwiftShader) is here: it runs the flow about a thousand times slower than a GPU, so this test runs where there is one (it does on every local run)';
   });
   test.afterAll(() => state.host?.stop());
+  // On the software adapter every test that runs takes three times its time (a test that
+  // sets its own limit uses scaledTimeout).
+  test.beforeEach(() => {
+    if (state.slowGpu) test.slow();
+  });
   return {
     get host() {
       return state.host;
@@ -54,7 +68,7 @@ export async function openTunnel(host, page, study) {
   await expect(page.locator('#workspace-overlay [data-ws-crumb]')).toContainText(study.title, { timeout: 60_000 });
   let frame = null;
   await expect.poll(() => (frame = page.frames().find((f) => f.url().includes(`/plugins/${KEY}/`))) && true, { timeout: 60_000 }).toBe(true);
-  await expect.poll(() => frame.evaluate(() => !!window.__TUNNEL__?.ready).catch(() => false), { timeout: 90_000 }).toBe(true);
+  await expect.poll(() => frame.evaluate(() => !!window.__TUNNEL__?.ready).catch(() => false), { timeout: SOFTWARE ? 240_000 : 90_000 }).toBe(true);
   return frame;
 }
 
