@@ -59,6 +59,23 @@ export class FakeClock {
     this.t = end;
   }
 
+  /**
+   * As advance, but promise callbacks run after each timer, as Node runs them between two
+   * timer callbacks (so code that a timer's callback lets go on runs before the next timer).
+   */
+  async advanceAsync(ms) {
+    const end = this.t + ms;
+    for (;;) {
+      const due = [...this.timers.values()].filter((x) => x.at <= end).sort((a, b) => a.at - b.at || a.id - b.id)[0];
+      if (!due) break;
+      this.timers.delete(due.id);
+      this.t = Math.max(this.t, due.at);
+      due.fn();
+      await tick();
+    }
+    this.t = end;
+  }
+
   pending() {
     return this.timers.size;
   }
@@ -370,9 +387,20 @@ export function demoTools() {
 /** The scope the host gives a demo frame. */
 export const DEMO_WORKSPACE = Object.freeze({ project_id: 'p1', plugin: 'ai-demo', workspace: 'Counter', study_id: 's1' });
 
-/** pluginLoaded for the relay: the demo plugin is on while `state.on`. */
+/**
+ * pluginLoaded for the relay: the demo plugin is on while `state.on`. Its row is one object
+ * per live registry read (`state.doc`), as registry-defaults.js gives the same row until the
+ * registry is read again; `state.doc === null`: no live registry is loaded.
+ */
 export function demoLoaded(state = { on: true }) {
-  return (key) => (state.on && key === 'ai-demo' ? { key, name: 'Workspace demo' } : null);
+  const rows = new WeakMap();
+  return (key) => {
+    if (!state.on || key !== 'ai-demo' || state.doc === null) return null;
+    const doc = state.doc ?? state;
+    let row = rows.get(doc);
+    if (!row) rows.set(doc, (row = { key, name: 'Workspace demo' }));
+    return row;
+  };
 }
 
 export const newTabId = () => `tab-${randomBytes(6).toString('hex')}`;
@@ -470,7 +498,10 @@ export async function relayPage(base, tab = newTabId(), { headers = {} } = {}) {
  * A server as index.ts wires the relay: the same-origin check and the Assistant's prefix
  * guard, then a real Router with the event hub and the Assistant's routes, over
  * http.createServer. `m` is a makeManager() (its clock drives the relay's timers too);
- * `o.loaded` is the demo plugin's state for pluginLoaded ({on}); `o.relay` more relay options.
+ * `o.loaded` is the demo plugin's state for pluginLoaded ({on, doc}: doc is the live registry
+ * read in place, null when none is loaded); `o.relay` more relay options. registryChanged()
+ * is the worker's 'registry-changed' (a registry-changing call answered; the live registry is
+ * read again after it) and registryRead() that read landing.
  */
 export async function relayServer(m, o = {}) {
   const { Router, dispatch } = await import('../router.ts');
@@ -480,8 +511,18 @@ export async function relayServer(m, o = {}) {
   const routes = await import('../assistant-routes.ts');
   const router = new Router();
   registerEventHubRoutes(router);
-  const loaded = o.loaded ?? { on: true };
-  const handle = routes.registerAssistantRoutes(router, { turns: m.deps, relay: { pluginLoaded: demoLoaded(loaded), ...(o.relay || {}) } });
+  const loaded = o.loaded ?? { on: true, doc: {} };
+  const changed = new Set();
+  const relay = {
+    pluginLoaded: demoLoaded(loaded),
+    liveRegistry: () => loaded.doc ?? null,
+    onRegistryChanged: (fn) => {
+      changed.add(fn);
+      return () => changed.delete(fn);
+    },
+    ...(o.relay || {}),
+  };
+  const handle = routes.registerAssistantRoutes(router, { turns: m.deps, relay });
   const server = http.createServer(async (req, res) => {
     try {
       assertSameOrigin(req);
@@ -500,6 +541,12 @@ export async function relayServer(m, o = {}) {
     handle,
     relay: handle.relay,
     loaded,
+    registryChanged: () => {
+      for (const fn of [...changed]) fn();
+    },
+    registryRead: () => {
+      loaded.doc = {};
+    },
     post,
     get,
     page: (tab, opts) => relayPage(base, tab, opts),

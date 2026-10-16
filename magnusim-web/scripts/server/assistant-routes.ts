@@ -518,9 +518,31 @@ function registerRelayRoutes(router: Router, relay: Relay): void {
   );
 }
 
+/**
+ * The worker's 'registry-changed' (worker.ts: a plugin turned on or off, installed, removed
+ * or reloaded; index.ts reads the live registry again after it), for the relay.
+ */
+function registryChanges(worker: unknown): RelayOptions['onRegistryChanged'] {
+  const w = worker as { on?: unknown; off?: unknown } | null | undefined;
+  if (!w || typeof w.on !== 'function' || typeof w.off !== 'function') return undefined;
+  const on = w.on as (event: string, fn: () => void) => void;
+  const off = w.off as (event: string, fn: () => void) => void;
+  return (fn) => {
+    on.call(w, 'registry-changed', fn);
+    return () => off.call(w, 'registry-changed', fn);
+  };
+}
+
 export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}): AssistantHandle {
   const turns = turnManager(deps);
-  const relay = createRelay({ clock: turns.clock, keepPresenter: !!deps.turns?.presenter, ...deps.relay, registry: turns.registry, turns });
+  const relay = createRelay({
+    clock: turns.clock,
+    keepPresenter: !!deps.turns?.presenter,
+    onRegistryChanged: registryChanges(deps.worker),
+    ...deps.relay,
+    registry: turns.registry,
+    turns,
+  });
   router.get(
     '/api/assistant/status',
     local(async (ctx) => {

@@ -13,7 +13,9 @@
  * 5. compute and destructive tools ask first (a confirm gate); a no, the timeout or Stop
  *    means it doesn't run (`declined`). An unknown risk counts as destructive.
  * 6. The tool runs with its stall window (reset by progress); Stop and the turn's
- *    minutes cap abort it through the call's signal (`stopped`, `capped`).
+ *    minutes cap abort it through the call's signal (`stopped`, `capped`). An aborted tool
+ *    has ABORT_GRACE_MS for its last answer; then the runner stops waiting and says so on
+ *    the call's `released` signal (the relay frees the tab before the next call can start).
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts).
  */
 import { alog } from './log.ts';
@@ -298,8 +300,9 @@ export class ToolRunner {
     let lateOrNone = false;
     let graceTimer: unknown = null;
     let onAbort: (() => void) | null = null;
+    const released = new AbortController();
     const ran = Promise.resolve()
-      .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? null, progress }))
+      .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? null, progress, released: released.signal }))
       .then(
         (out): ToolOutcome | null => {
           if (signal.aborted) lateOrNone = true;
@@ -313,7 +316,11 @@ export class ToolRunner {
       );
     const gaveUp = new Promise<null>((resolve) => {
       onAbort = () => {
-        graceTimer = clock.setTimeout(() => resolve(null), this.graceMs);
+        graceTimer = clock.setTimeout(() => {
+          // Synchronously, before the caller can go on to its next call.
+          released.abort();
+          resolve(null);
+        }, this.graceMs);
       };
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });

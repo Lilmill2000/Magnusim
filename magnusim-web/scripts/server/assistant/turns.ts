@@ -784,9 +784,11 @@ export class TurnManager {
    */
   tabs(): Answer {
     const reg = this.d.registry;
-    const tabs = reg.tabIds().map((tab) => {
-      const w = reg.workspaceOf(tab);
+    const tabs = reg.tabIds().flatMap((tab) => {
+      // The relay first: a registration it finds its plugin no longer has goes before it is listed.
       const info = this.tabInfo?.(tab) ?? null;
+      const w = reg.workspaceOf(tab);
+      if (!w) return [];
       return {
         tab,
         connected: !!w?.connected,

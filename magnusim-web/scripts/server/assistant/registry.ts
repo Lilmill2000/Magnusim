@@ -18,6 +18,8 @@
  * - Fence: a registration records its plugin's epoch (foam-runner.js pluginEpoch); a
  *   plugin turned off, swapped or reset bumps it, and from then on its tools are neither
  *   offered nor available.
+ * - A tool belongs to its registration: once the tab registers again (even on the same
+ *   link), a tool of the earlier one, still in a step's offered list, is unavailable.
  * - An unknown risk counts as destructive.
  */
 import { createHash } from 'node:crypto';
@@ -57,6 +59,8 @@ export interface ToolRunContext {
   ctx: ToolCtx;
   turn: string | null;
   progress(fraction: number | null, label: string): void;
+  /** Aborts when the runner stops waiting for this call (it was aborted and its grace ran out). */
+  released?: AbortSignal;
 }
 
 export interface ToolDef {
@@ -95,7 +99,17 @@ export interface WorkspaceRegistration {
   tools: unknown[];
   guide?: string;
   /** Runs one call in the page (the relay); a registration without it can't run anything. */
-  invoke?(call: { tool: string; input: Record<string, unknown>; timeoutS: number; signal: AbortSignal; turn: string | null; progress(f: number | null, label: string): void }): Promise<ToolOutcome>;
+  invoke?(call: {
+    tool: string;
+    input: Record<string, unknown>;
+    timeoutS: number;
+    signal: AbortSignal;
+    released?: AbortSignal;
+    turn: string | null;
+    progress(f: number | null, label: string): void;
+  }): Promise<ToolOutcome>;
+  /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
+  ready?(): true | string;
 }
 
 export interface Refusal {
@@ -172,6 +186,8 @@ export function providerTools(tools: readonly ToolDef[]): ProviderTool[] {
 interface TabEntry {
   tab: string;
   link: string;
+  /** This registration's own source: its tools carry it, and only they belong to it. */
+  source: ToolSource;
   reg: WorkspaceRegistration;
   epoch: string;
   tools: ToolDef[];
@@ -264,7 +280,7 @@ export class Registry implements ToolRegistry {
       }
     }
     tools.sort(byName);
-    this.tabs.set(tab, { tab, link, reg, epoch, tools, refused, guide: cleanText(reg.guide ?? '', GUIDE_MAX), connected: true });
+    this.tabs.set(tab, { tab, link, source, reg, epoch, tools, refused, guide: cleanText(reg.guide ?? '', GUIDE_MAX), connected: true });
     return { accepted: tools.map((t) => t.localName), refused };
   }
 
@@ -312,7 +328,7 @@ export class Registry implements ToolRegistry {
           const message = `The page hosting ${source.workspace} isn't connected.`;
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, turn: rt.turn, progress: rt.progress });
+        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
       },
     };
   }
@@ -323,10 +339,12 @@ export class Registry implements ToolRegistry {
     if (this.fenced(source)) return `${source.pluginName} was turned off or replaced.`;
     const entry = this.tabs.get(source.tab);
     if (!entry || entry.link !== source.link) return `${source.workspace} is no longer open.`;
+    // The tab registered again since this tool was offered: only the new list's tools run.
+    if (entry.source !== source) return `${source.workspace} changed its tools since they were offered; use the tools offered now.`;
     if (!entry.connected) return `The page hosting ${source.workspace} isn't connected.`;
     if (ctx.tab !== source.tab) return 'That tool belongs to another tab.';
     if ((ctx.projectId ?? '') !== source.projectId) return 'That tool belongs to another project.';
-    return true;
+    return entry.reg.ready?.() ?? true;
   }
 
   /**

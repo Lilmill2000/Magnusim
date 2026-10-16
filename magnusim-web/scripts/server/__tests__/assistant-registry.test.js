@@ -438,4 +438,63 @@ describe('the fence and the page relay', { timeout: 30_000 }, () => {
     assert.deepEqual(await page.frame('unregistered', 1), { reason: 'plugin_off' });
     assert.equal((await s.register(link, 9, demoTools(), { epoch: restarted.json.epoch })).json.code, 'plugin_changed');
   });
+
+  it('the live registry read again after a plugin change: a frame that registers before that read lands is kept but offered to nobody, then goes (`unregistered`) when its plugin is off, or is offered when it is on; with no live registry loaded, the same', async () => {
+    const m = makeManager({ dir: ROOT, provider: 'openai_compatible' });
+    const s = await relayServer(m);
+    servers.push(s);
+    const page = await s.page();
+    const link = await page.open();
+    assert.equal((await s.register(link, 1)).status, 200);
+    const c = relayCtx(page.tab);
+    assert.equal(m.registry.toolsFor(c).length, 4);
+    // Turned off: bump, the worker (worker.ts says the registry changed as its answer comes), bump.
+    const worker = heldWorker();
+    const disable = disablePlugin(worker, 'ai-demo');
+    assert.deepEqual(await page.frame('unregistered', 0), { reason: 'plugin_off' });
+    s.registryChanged();
+    worker.release({ ok: true });
+    assert.deepEqual(await disable, { ok: true });
+    // The live registry is read again a worker round trip later: until then it still lists the plugin.
+    const fresh = await s.register(link, 2);
+    assert.equal(fresh.status, 200, 'a new frame of it (no epoch): kept, the registry does not say yet');
+    assert.deepEqual(m.registry.toolsFor(c), [], 'offered to nobody until it does');
+    assert.equal((await s.tabs())[0].tools.length, 4);
+    // The read lands: the plugin is off. The registration goes as on a bump, before it is listed.
+    s.loaded.on = false;
+    s.registryRead();
+    assert.deepEqual(await s.tabs(), []);
+    assert.deepEqual(await page.frame('unregistered', 1), { reason: 'plugin_off' });
+    assert.equal(m.registry.workspaceOf(page.tab), null);
+    const off = await s.register(link, 3);
+    assert.deepEqual([off.status, off.json.code], [409, 'plugin_off'], 'from then on a fresh frame is refused');
+    // On again, then Reload (bump, the worker, bump): the plugin stays on, and a frame that
+    // registered before the read landed is offered once it lands.
+    s.loaded.on = true;
+    s.registryChanged();
+    s.registryRead();
+    bumpPluginEpoch('*');
+    s.registryChanged();
+    bumpPluginEpoch('*');
+    assert.equal((await s.register(link, 4)).status, 200);
+    assert.deepEqual(m.registry.toolsFor(c), []);
+    s.registryRead();
+    assert.equal(m.registry.toolsFor(c).length, 4, 'offered: the registry says it is on');
+    assert.equal(page.of('unregistered').length, 2, 'nothing more said to the page');
+    // No live registry loaded at all (its first read failed): kept, offered to nobody, until one is.
+    s.loaded.doc = null;
+    const none = await s.register(link, 5);
+    assert.equal(none.status, 200, 'not refused for good');
+    assert.deepEqual(m.registry.toolsFor(c), []);
+    s.registryRead();
+    assert.equal(m.registry.toolsFor(c).length, 4);
+    // Read without its plugin: it goes at the next offer.
+    s.loaded.doc = null;
+    assert.equal((await s.register(link, 6)).status, 200);
+    s.loaded.on = false;
+    s.registryRead();
+    assert.deepEqual(m.registry.toolsFor(c), []);
+    assert.deepEqual(await page.frame('unregistered', 2), { reason: 'plugin_off' });
+    assert.equal(m.registry.workspaceOf(page.tab), null);
+  });
 });

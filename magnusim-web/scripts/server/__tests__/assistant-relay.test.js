@@ -180,6 +180,35 @@ describe('registrations', { timeout: 30_000 }, () => {
     assert.equal(again.status, 200);
     assert.deepEqual((await s.tabs())[0].tools, ['ai-demo__add', 'ai-demo__get_count', 'ai-demo__slow_add']);
   });
+
+  it('a tool of an earlier registration never runs once the same link registered another: unavailable, nothing sent to the page, no question asked', async () => {
+    const { m, s } = await setup();
+    const page = await s.page();
+    const link = await page.open();
+    assert.equal((await s.register(link, 1)).status, 200);
+    // A step was offered rev 1's tools (project p1; add is an edit, asked nothing).
+    const offered = new Map(m.registry.toolsFor(ctx(page.tab)).map((d) => [d.name, d]));
+    const old = offered.get('ai-demo__add');
+    assert.equal(old.risk, 'edit');
+    // The same link registers another workspace: another project, and its add can't be undone.
+    const other = demoTools().map((t) => (t.name === 'add' ? { ...t, risk: 'destructive' } : t));
+    const two = await s.register(link, 2, other, { workspace: { ...DEMO_WORKSPACE, project_id: 'p2', workspace: 'Other counter' } });
+    assert.equal(two.status, 200);
+    assert.notEqual(old.available(ctx(page.tab)), true, "rev 1's tool is no longer available");
+    const run = await s.handle.turns.runner.run(
+      { type: 'tool_call', callId: 'k1', name: 'ai-demo__add', input: { by: 1 } },
+      { owner: { kind: 'turn', id: 't-x', tab: page.tab }, ctx: ctx(page.tab), signal: new AbortController().signal, offered },
+    );
+    assert.deepEqual([run.ok, run.code], [false, 'unavailable']);
+    const direct = await runTool(old, { by: 1 }, ctx(page.tab)).promise;
+    assert.deepEqual([direct.ok, direct.error.code], [false, 'unavailable']);
+    assert.deepEqual(page.of('invoke'), [], 'nothing reached the page');
+    assert.deepEqual([page.of('gate'), s.handle.turns.gates.pendingForTab(page.tab)], [[], []], 'no question asked');
+    // Rev 2's own tools are the ones offered now (its project's).
+    const p2 = { ...ctx(page.tab), projectId: 'p2' };
+    assert.equal(m.registry.toolsFor(p2).find((t) => t.name === 'ai-demo__add').risk, 'destructive');
+    assert.deepEqual(m.registry.toolsFor(ctx(page.tab)), []);
+  });
 });
 
 describe('a call', { timeout: 30_000 }, () => {
@@ -190,7 +219,7 @@ describe('a call', { timeout: 30_000 }, () => {
     const started = await s.post('/api/assistant/turns', { text: 'Add 2', tab: page.tab });
     assert.equal(started.status, 202, JSON.stringify(started.json));
     const t = s.handle.turns.get(started.json.turn);
-    assert.deepEqual(await page.frame('active', 0), { turns: 1, hold_until: null });
+    assert.deepEqual(await page.frame('active', 1), { turns: 1, hold_until: null });
     const inv = await page.frame('invoke', 0);
     assert.match(inv.call, /^rc-[0-9a-z]+-[0-9a-f]{6}$/);
     assert.deepEqual({ ...inv, call: null }, { call: null, turn: t.id, tool: 'add', input: { by: 2 }, timeout_s: 60 });
@@ -204,7 +233,7 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(JSON.parse(part.text), { tool: 'ai-demo__add', ok: true, data: { count: 2 }, text: 'Now 2' });
     assert.deepEqual((await s.result(link, inv.call, { ok: true })).json, { ok: true, stale: true });
     assert.deepEqual((await s.progress(link, inv.call, { ack: true })).json, { ok: true, stale: true });
-    assert.deepEqual(await page.frame('active', 1), { turns: 0, hold_until: t.endedAt + ASSISTANT_HOLD_MS }, 'the hold after its last bound turn');
+    assert.deepEqual(await page.frame('active', 2), { turns: 0, hold_until: t.endedAt + ASSISTANT_HOLD_MS }, 'the hold after its last bound turn');
   });
 
   it('the page’s answer is checked: its error codes from the known lists, else failed; results capped as the bridge caps them', () => {
@@ -255,10 +284,11 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(page.of('invoke'), []);
   });
 
-  it('no ack within the window: tab_disconnected (a half-open connection); an ack in time keeps the call going', async () => {
+  it('no ack within the window: tab_disconnected (a half-open connection), and the link counts as silent (not connected: nothing offered or sent, a turn on it 409 tab_hidden, its questions not shown) until the page is heard on it again; an ack in time keeps the call going; a silent link that ends leaves the registration for the hold', async () => {
     const { m, s } = await setup();
     const { page, link } = await linkedPage(s);
-    const call = runTool(toolOf(m, page.tab, 'add'), { by: 1 }, ctx(page.tab));
+    const add = toolOf(m, page.tab, 'add');
+    const call = runTool(add, { by: 1 }, ctx(page.tab));
     const inv = await page.frame('invoke');
     m.clock.advance(RELAY_ACK_MS - 1);
     assert.equal(await settledNow(call.promise), false);
@@ -266,7 +296,23 @@ describe('a call', { timeout: 30_000 }, () => {
     const out = await call.promise;
     assert.deepEqual([out.error.code], ['tab_disconnected']);
     assert.match(out.error.message, DISCONNECTED);
+    // Silent: no later call waits out the window again.
+    const [quiet] = await s.tabs();
+    assert.deepEqual([quiet.connected, quiet.since, quiet.tools.length], [false, m.clock.now(), 4]);
+    assert.deepEqual(m.registry.toolsFor(ctx(page.tab)), [], 'offered to nobody');
+    const again = await runTool(add, { by: 1 }, ctx(page.tab)).promise;
+    assert.deepEqual([again.ok, again.error.code], [false, 'unavailable']);
+    assert.equal(page.of('invoke').length, 1, 'nothing more was sent');
+    const hidden = await s.post('/api/assistant/turns', { text: 'Again', tab: page.tab });
+    assert.deepEqual([hidden.status, hidden.json.code], [409, 'tab_hidden']);
+    const owner = { kind: 'turn', id: 't-x', tab: page.tab };
+    assert.equal(s.relay.presenter.present({ id: 'g-1' }, owner), false, 'a question counts as not shown');
+    // The page answers late (it was busy, not gone): heard on its link, it is connected again.
+    m.clock.advance(5);
     assert.deepEqual((await s.result(link, inv.call, { ok: true })).json, { ok: true, stale: true });
+    const [heard] = await s.tabs();
+    assert.deepEqual([heard.connected, heard.since, heard.tools.length], [true, m.clock.now(), 4]);
+    assert.equal(s.relay.presenter.present({ id: 'g-2' }, owner), true);
     const next = runTool(toolOf(m, page.tab, 'add'), { by: 1 }, ctx(page.tab));
     const inv2 = await page.frame('invoke', 1);
     await s.progress(link, inv2.call, { ack: true });
@@ -274,6 +320,19 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.equal(await settledNow(next.promise), false, 'acknowledged: the ack window no longer applies');
     await s.result(link, inv2.call, { ok: true, result: 'added' });
     assert.deepEqual(await next.promise, { ok: true, text: 'added', summary: 'Done' });
+    // Silent again, and then its stream ends: the registration stays for the hold, then goes.
+    const last = runTool(toolOf(m, page.tab, 'add'), { by: 1 }, ctx(page.tab));
+    await page.frame('invoke', 2);
+    m.clock.advance(RELAY_ACK_MS);
+    assert.equal((await last.promise).error.code, 'tab_disconnected');
+    m.clock.advance(ASSISTANT_HOLD_MS);
+    assert.equal((await s.tabs()).length, 1, 'kept while its link is open');
+    page.serverDrop();
+    await until(() => !hubTab(page.tab), 5000, 'the stream to end');
+    m.clock.advance(ASSISTANT_HOLD_MS - 1);
+    assert.equal((await s.tabs()).length, 1);
+    m.clock.advance(1);
+    assert.deepEqual(await s.tabs(), []);
   });
 
   it('tools [] while a call runs: its result still counts (the page’s own closed); with none, closed after the 2 s grace; a channel that ends after the withdrawal: closed at once', async () => {
@@ -338,7 +397,7 @@ describe('a call', { timeout: 30_000 }, () => {
     await settled(t);
     assert.equal(t.state, 'done');
     assert.equal(B.page.of('invoke').length, 1);
-    assert.deepEqual(B.page.of('active'), [], "B's page never heard of A's turn");
+    assert.deepEqual(B.page.of('active'), [{ turns: 0, hold_until: null }], "B's page never heard of A's turn (only its own open's)");
   });
 
   it('a stall: the runner’s window (timeoutS + 10 s, reset by progress) sends abort {call}; the page’s last answer ends it as stalled', async () => {
@@ -397,6 +456,38 @@ describe('a call', { timeout: 30_000 }, () => {
     await s.result(link, inv3.call, { ok: true, result: '1' });
     assert.equal((await three.promise).ok, true);
   });
+
+  it('the runner gives up on a page that gave no last answer (a stall, or Stop): the tab is free at once for the next call, which the loop starts as soon as the first one’s result is in', async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    const offered = new Map(m.registry.toolsFor(ctx(page.tab)).map((d) => [d.name, d]));
+    const run = (id, name, signal) =>
+      s.handle.turns.runner.run({ type: 'tool_call', callId: id, name, input: name === 'ai-demo__get_count' ? {} : { by: 1 } }, { owner: { kind: 'turn', id: 't-x', tab: page.tab }, ctx: ctx(page.tab), signal, offered });
+    for (const [n, why] of [
+      [0, { code: 'stalled' }],
+      [1, { code: 'stopped' }],
+    ]) {
+      const ac = new AbortController();
+      const first = run(`k${n}a`, 'ai-demo__slow_add', ac.signal);
+      const inv = await page.frame('invoke', 2 * n);
+      await s.progress(link, inv.call, { ack: true });
+      // The next call of the step, started from the first one's result with only promise callbacks between.
+      let second = null;
+      const next = first.then(() => run(`k${n}b`, 'ai-demo__get_count', new AbortController().signal)).then((r) => (second = r));
+      ac.abort(why);
+      await page.frame('abort', n);
+      // Node runs promise callbacks between two timers that fall due together.
+      await m.clock.advanceAsync(ABORT_GRACE_MS);
+      assert.equal((await first).code, why.code);
+      await until(() => second || page.of('invoke')[2 * n + 1], 5000, 'the next call to end or reach the page');
+      assert.equal(second, null, `not refused: ${second && second.summary}`);
+      const inv2 = page.of('invoke')[2 * n + 1];
+      assert.equal(inv2.tool, 'get_count');
+      await s.result(link, inv2.call, { ok: true, result: '1' });
+      await next;
+      assert.deepEqual([second.ok, second.code], [true, null]);
+    }
+  });
 });
 
 describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
@@ -410,8 +501,9 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
     const t = s.handle.turns.get(st.json.turn);
     await settled(t);
     const holdUntil = t.endedAt + ASSISTANT_HOLD_MS;
-    await first.page.frame('active', 1);
+    await first.page.frame('active', 2);
     assert.deepEqual(first.page.of('active'), [
+      { turns: 0, hold_until: null },
       { turns: 1, hold_until: null },
       { turns: 0, hold_until: holdUntil },
     ]);
@@ -441,6 +533,31 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
     assert.deepEqual(await s.tabs(), []);
     const gone = await s.post('/api/assistant/turns', { text: 'Again', tab });
     assert.deepEqual([gone.status, gone.json.code], [400, 'bad_tab']);
+  });
+
+  it('`active` is always a channel’s second frame, none running and no hold too: a page that last heard of a bound turn learns, after a drop longer than the hold, that none run', async () => {
+    const { m, s } = await setup();
+    const first = await linkedPage(s);
+    const tab = first.page.tab;
+    const events = (p) => p.frames.filter((f) => f.c === 'assistant:1').map((f) => f.event);
+    assert.deepEqual(events(first.page).slice(0, 2), ['linked', 'active']);
+    assert.deepEqual(first.page.of('active'), [{ turns: 0, hold_until: null }]);
+    m.provider.script({ tools: [{ name: 'ai-demo__add', input: { by: 1 } }] }, { text: 'Done.' });
+    const st = await s.post('/api/assistant/turns', { text: 'Add', tab });
+    assert.equal(st.status, 202);
+    const t = s.handle.turns.get(st.json.turn);
+    assert.deepEqual(await first.page.frame('active', 1), { turns: 1, hold_until: null }, 'the page pins its channel');
+    await first.page.frame('invoke');
+    // The link drops while the turn runs; the turn ends unheard, and the hold passes.
+    first.page.serverDrop();
+    await settled(t);
+    assert.equal(first.page.of('active').length, 2, 'the end never reached that page');
+    m.clock.advance(ASSISTANT_HOLD_MS + 1);
+    const page = await s.page(tab);
+    await page.open();
+    await page.frame('active', 0, 'assistant:1', 2000);
+    assert.deepEqual(events(page).slice(0, 2), ['linked', 'active']);
+    assert.deepEqual(page.of('active'), [{ turns: 0, hold_until: null }], 'none run, no hold: the page lets its channel go');
   });
 
   it('the hold and ack test switches: honoured only with MAGNUSIM_TEST_ASSISTANT=1 in a test home, as whole milliseconds', () => {
