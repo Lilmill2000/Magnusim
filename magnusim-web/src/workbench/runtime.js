@@ -20450,6 +20450,8 @@ function selectImportedGeometry(geomId) {
 }
 
 async function importGeometryClient(opts, upload) {
+  // A project still opening would replace this import's geometry with its older answer.
+  if (projectOpening) await projectOpening;
   const payload = opts || {};
   if (w16State.project && w16State.project.id) {
     payload.project_id = payload.project_id || w16State.project.id;
@@ -20746,6 +20748,8 @@ async function createFromProjectModal() {
 window.__CFD_W16_CREATE__ = createProjectClient;
 
 let projectHydrateGen = 0;
+/** The project open in flight; an import waits for it (hydrateOpenProject). */
+let projectOpening = null;
 let lastUnifiedProjectId = null;
 let preparedProjectId = null;
 
@@ -20995,8 +20999,19 @@ function applyFetchedSetup({ sims, mat, bcs, mesh, refs, runs, rcs, ctrl }, pid)
   }
 }
 
-/** In-session project open: tree + settings first, CAD after. No full reload. */
-async function hydrateOpenProject(projectId, opts) {
+/**
+ * In-session project open: tree + settings first, CAD after. No full reload.
+ * Its project answer can land after a geometry import that started while it was
+ * loading, and would then show the project without that geometry: imports wait
+ * for it (importGeometryClient).
+ */
+function hydrateOpenProject(projectId, opts) {
+  const run = hydrateOpenProjectNow(projectId, opts);
+  projectOpening = run.catch(() => null);
+  return run;
+}
+
+async function hydrateOpenProjectNow(projectId, opts) {
   const o = opts || {};
   const id = String(projectId || '').trim();
   if (!id) return null;

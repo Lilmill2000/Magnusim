@@ -41,6 +41,28 @@ async function modelShown(page) {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
+/** A 1 cm cube as ASCII STL, written per run so the tests need no binary fixture. */
+function cubeStlFile() {
+  const v = [[0, 0, 0], [0.01, 0, 0], [0.01, 0.01, 0], [0, 0.01, 0], [0, 0, 0.01], [0.01, 0, 0.01], [0.01, 0.01, 0.01], [0, 0.01, 0.01]];
+  const tris = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6], [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3]];
+  const stl = ['solid cube', ...tris.flatMap((t) => ['facet normal 0 0 0', 'outer loop', ...t.map((i) => `vertex ${v[i].join(' ')}`), 'endloop', 'endfacet']), 'endsolid cube'].join('\n');
+  const file = join(mkdtempSync(join(tmpdir(), 'magnusim-e2e-')), 'cube.stl');
+  writeFileSync(file, stl);
+  return file;
+}
+
+/** A new empty project; returns its id. */
+async function newEmptyProject(page, title) {
+  await page.goto('/#/');
+  await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
+  const pid = await page.evaluate(async (t) => {
+    const out = await window.__CFD_W16_CREATE__({ title: t, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' });
+    return out && out.project && out.project.id;
+  }, title);
+  expect(pid).toBeTruthy();
+  return pid;
+}
+
 // The solve, transient, results and exports, study panel and physics tests are
 // Incompressible Flow's: bundled-plugins/incompressible_flow/e2e/solve-smoke.spec.js.
 test.describe('Magnusim smoke', () => {
@@ -231,20 +253,8 @@ test.describe('Magnusim smoke', () => {
 
   });
   test('fresh STL: Create Simulation appears without reload and lands on Run 1 with its reason', async ({ page, request }) => {
-    // A 1 cm cube as ASCII STL, written per run so the test needs no binary fixture.
-    const v = [[0, 0, 0], [0.01, 0, 0], [0.01, 0.01, 0], [0, 0.01, 0], [0, 0, 0.01], [0.01, 0, 0.01], [0.01, 0.01, 0.01], [0, 0.01, 0.01]];
-    const tris = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [2, 3, 7], [2, 7, 6], [1, 2, 6], [1, 6, 5], [0, 4, 7], [0, 7, 3]];
-    const stl = ['solid cube', ...tris.flatMap((t) => ['facet normal 0 0 0', 'outer loop', ...t.map((i) => `vertex ${v[i].join(' ')}`), 'endloop', 'endfacet']), 'endsolid cube'].join('\n');
-    const file = join(mkdtempSync(join(tmpdir(), 'magnusim-e2e-')), 'cube.stl');
-    writeFileSync(file, stl);
-
-    await page.goto('/#/');
-    await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
-    const pid = await page.evaluate(async () => {
-      const out = await window.__CFD_W16_CREATE__({ title: 'e2e fresh stl', description: '', category: 'Other', units: 'Metric', folder: 'My Projects' });
-      return out && out.project && out.project.id;
-    });
-    expect(pid).toBeTruthy();
+    const file = cubeStlFile();
+    const pid = await newEmptyProject(page, 'e2e fresh stl');
     await page.goto(`/#/p/${encodeURIComponent(pid)}`);
     await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
     await expect(page.locator('#btn-create-simulation')).toBeHidden();
@@ -274,6 +284,43 @@ test.describe('Magnusim smoke', () => {
       const treeRuns = (tree.geometries || []).flatMap((g) => g.studies || []).map((s) => `${s.id}:[${(s.runs || []).map((r) => r.name).join(',')}]`);
       throw new Error(`tree never showed Run 1. study ${sid}; server runs ${JSON.stringify(runs)}; server tree ${JSON.stringify(treeRuns)}`);
     }
+  });
+
+  test('an import while the project is still opening keeps the imported geometry', async ({ page }) => {
+    // On a busy machine the project's open answer came back after a quick STL import and
+    // showed the project without it: "Import STEP…" again, no Create Simulation (the
+    // fresh STL test above failed this way after the tests before it).
+    const file = cubeStlFile();
+    const pid = await newEmptyProject(page, 'e2e import while opening');
+    // Hold the open answer until the import has landed, or 4 s after Import (an import
+    // that waits for the open never lands first).
+    let release;
+    const held = new Promise((r) => { release = r; });
+    let openHeld = false;
+    page.on('response', (res) => {
+      if (res.url().includes('/api/geometry/import')) setTimeout(release, 1000);
+    });
+    await page.route('**/api/project/hydrate*', async (route) => {
+      if (openHeld) return route.continue();
+      openHeld = true;
+      // Read the answer now: a held fetch response can be disposed before it is used.
+      const res = await route.fetch();
+      const answer = { status: res.status(), headers: res.headers(), body: await res.body() };
+      await held;
+      await route.fulfill(answer);
+    });
+    await page.goto(`/#/p/${encodeURIComponent(pid)}`);
+    await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
+    await expect.poll(() => openHeld, { timeout: 30_000 }).toBe(true);
+
+    await page.locator('#geometry-file-input').setInputFiles(file);
+    await page.locator('#gu-import').click();
+    setTimeout(release, 4000);
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 30_000 });
+    await expect(page.locator('#btn-create-simulation')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('#left-tree')).toContainText('cube');
+    await expect(page.getByText('Import STEP, IGES, BREP, STL, OBJ or PLY to start the setup')).toBeHidden();
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
   test('Air: sci-notation viscosity saves; a viewport body click assigns and unassigns', async ({ page, request }) => {
