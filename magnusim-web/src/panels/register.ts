@@ -4,6 +4,7 @@ import { BcPanel } from './bcs/BcPanel';
 import { MaterialsPanel } from './materials/MaterialsPanel';
 import { GeometryPanel } from './geometry/GeometryPanel';
 import { MeshInspect, MeshSettings } from './mesh/MeshPanel';
+import { AssistantStep } from './prefs/AssistantStep';
 import { PluginsStep } from './prefs/PluginsStep';
 import { RunControl } from './run/RunControl';
 import { SimulationDefaults, SimulationHub } from './simulation/SimulationPanel';
@@ -24,6 +25,8 @@ export function registerAllIslands(): void {
   replacePanel('panel-sim-control', RunControl);
   replacePanel('panel-geometry', GeometryPanel);
   replacePanel('wiz-plugins', PluginsStep);
+  // The host's own: plugins can't replace it (plugin-api).
+  replacePanel('wiz-assistant', AssistantStep);
 }
 
 export function mountAllIslands(): void {

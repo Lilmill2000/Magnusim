@@ -1,13 +1,21 @@
 // @ts-nocheck
 /**
- * First-run setup and Settings wizard: units, hardware profile, listen port, workspace, plugins.
+ * First-run setup and Settings wizard: units, hardware profile, listen port, workspace,
+ * Assistant, plugins.
+ *
+ * Steps keep their ids (data-wiz-step / data-wiz-dot); WIZ_ORDER is the order they are
+ * walked in. Plugins stays id 5 and last (plugin guides and suites name it); the Assistant
+ * is id 6, shown before it.
  */
 import { mountIsland, unmountIsland } from '../islands';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
 const WIZ_WORKSPACE_STEP = 4;
-const WIZ_PLUGINS_STEP = 5;
+const WIZ_PLUGINS_STEP = 5; // stays 5 and last: GUIDE.md and the plugin suites name it
+const WIZ_ASSISTANT_STEP = 6;
+const WIZ_ORDER = [0, 1, 2, 3, 4, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
 const WIZ_LAST_STEP = WIZ_PLUGINS_STEP;
+const pos = (id) => WIZ_ORDER.indexOf(id);
 
 function $(id) {
   return document.getElementById(id);
@@ -68,8 +76,23 @@ const wizard = {
   saved: false,
 };
 
-function setStep(n) {
-  wizard.step = Math.max(0, Math.min(WIZ_LAST_STEP, n));
+// The Assistant step is mounted only while it is shown: it holds a key field.
+let assistantMounted = false;
+
+function mountAssistant(on) {
+  if (on && !assistantMounted) {
+    assistantMounted = true;
+    mountIsland('wiz-assistant', { scope: '' });
+  } else if (!on && assistantMounted) {
+    assistantMounted = false;
+    unmountIsland('wiz-assistant');
+  }
+}
+
+/** Shows step `id` (a known step id, else the first). */
+function setStep(id) {
+  wizard.step = pos(id) >= 0 ? id : WIZ_ORDER[0];
+  const at = pos(wizard.step);
   document.querySelectorAll('.wiz-pane').forEach((el) => {
     el.hidden = Number(el.getAttribute('data-wiz-step')) !== wizard.step;
   });
@@ -77,7 +100,7 @@ function setStep(n) {
     const i = Number(el.getAttribute('data-wiz-dot'));
     const on = i === wizard.step;
     el.classList.toggle('is-on', on);
-    el.classList.toggle('is-done', i < wizard.step);
+    el.classList.toggle('is-done', pos(i) >= 0 && pos(i) < at);
     if (on) el.setAttribute('aria-current', 'step');
     else el.removeAttribute('aria-current');
     el.tabIndex = 0;
@@ -85,11 +108,18 @@ function setStep(n) {
   const back = $('wiz-back');
   const next = $('wiz-next');
   const skip = $('wiz-skip');
-  if (back) back.hidden = wizard.step === 0;
+  if (back) back.hidden = at === 0;
   if (next) next.textContent = wizard.step === WIZ_LAST_STEP ? 'Finish' : 'Next';
   if (skip) skip.hidden = wizard.required;
   if (wizard.step === 2) startHardwareCheck();
+  mountAssistant(wizard.step === WIZ_ASSISTANT_STEP);
   if (wizard.step === WIZ_PLUGINS_STEP) mountIsland('wiz-plugins', { scope: '' });
+}
+
+/** The step `delta` places on in the walk (the first or last at the ends). */
+function stepBy(delta) {
+  const i = Math.max(0, Math.min(WIZ_ORDER.length - 1, pos(wizard.step) + delta));
+  return WIZ_ORDER[i];
 }
 
 function paintUnits() {
@@ -245,6 +275,7 @@ function hideWizard() {
   if (el) el.hidden = true;
   wizard.open = false;
   unmountIsland('wiz-plugins');
+  mountAssistant(false);
 }
 
 export function openSetupWizard(opts) {
@@ -269,9 +300,11 @@ export function openSetupWizard(opts) {
   paintWorkspace();
   const el = $('setup-wizard');
   if (el) el.hidden = false;
-  // Settings (after first run) opens on Workspace, as V0.1.0 did; Plugins is one step on.
-  // A link that is about plugins (a study whose plugin is off) opens on Plugins.
+  // Settings (after first run) opens on Workspace, as V0.1.0 did; Plugins is two steps on.
+  // A link that is about plugins (a study whose plugin is off) opens on Plugins, and one
+  // about the Assistant on the Assistant.
   if (!required && opts && opts.step === 'plugins') setStep(WIZ_PLUGINS_STEP);
+  else if (!required && opts && opts.step === 'assistant') setStep(WIZ_ASSISTANT_STEP);
   else setStep(!required && prefs.wizard_completed ? WIZ_WORKSPACE_STEP : 0);
 }
 
@@ -281,8 +314,8 @@ async function onNext() {
     hideWizard();
     return;
   }
-  if (wizard.step < WIZ_LAST_STEP) {
-    setStep(wizard.step + 1);
+  if (wizard.step !== WIZ_LAST_STEP) {
+    setStep(stepBy(1));
     return;
   }
   try {
@@ -316,7 +349,7 @@ let wizardWired = false;
 function wireWizard() {
   if (wizardWired) return;
   wizardWired = true;
-  $('wiz-back')?.addEventListener('click', () => setStep(wizard.step - 1));
+  $('wiz-back')?.addEventListener('click', () => setStep(stepBy(-1)));
   $('wiz-next')?.addEventListener('click', () => {
     onNext().catch((e) => console.warn('[CFD] wizard', e));
   });

@@ -114,8 +114,18 @@ export function resolvePanelId(panelId: string): string {
   return Object.prototype.hasOwnProperty.call(PANEL_ID_ALIASES, panelId) ? PANEL_ID_ALIASES[panelId] : panelId;
 }
 
+/**
+ * Host panels no plugin may replace. Settings → Assistant holds the field a provider key
+ * is typed into; a plugin's component there would see the key.
+ */
+const HOST_ONLY_PANELS: ReadonlySet<string> = new Set(['wiz-assistant']);
+
 function replacePanelFor(owner: string, requestedId: string, Component: ComponentType<IslandProps>): void {
   const panelId = resolvePanelId(requestedId);
+  if (owner !== HOST && HOST_ONLY_PANELS.has(panelId)) {
+    console.warn(`[plugins] ${owner}: the ${panelId} panel belongs to Magnusim and can't be replaced by a plugin`);
+    return;
+  }
   const ledger = ledgerFor(owner);
   // Remember the host's own component the first time, to restore it on disable.
   if (owner !== HOST && !ledger.islands.has(panelId)) ledger.islands.set(panelId, islandComponent(panelId));

@@ -1,0 +1,144 @@
+/**
+ * The Assistant's status as the page knows it (Foundation spec 4.4): one module store,
+ * read with useSyncExternalStore, that Settings → Assistant renders and changes. A publish
+ * replaces the snapshot.
+ *
+ * Answers can come back in any order, and a step can unmount and mount again while a save
+ * is on its way (the save outlives the component that started it). So:
+ * - every request takes the next sequence number;
+ * - a change's answer (each POST answers with the whole status) applies when it is newer
+ *   than the answer shown;
+ * - a read's answer is dropped while any change is in flight (it may predate the change),
+ *   and the status is read again once the last change has settled;
+ * - so is a read sent while a change was in flight that answers after it settled: the
+ *   server may have read the status before the change landed. It is read again at once.
+ *
+ * The store never holds a key: the key routes take one in their body and answer the
+ * status, which shows only whether a key is set and its last 4 characters.
+ */
+import { useSyncExternalStore } from 'react';
+import { AssistantApiError, assistantGet, assistantPost, RemoteError, REMOTE_TEXT } from './api';
+import type { AssistantStatus } from './wire';
+
+export type StatusSnapshot =
+  | { state: 'loading' }
+  | { state: 'remote'; message: string }
+  | { state: 'ready'; status: AssistantStatus }
+  | { state: 'error'; message: string };
+
+export type WriteResult = { ok: true; body: Record<string, unknown> } | { ok: false; error: AssistantApiError };
+
+const STATUS_PATH = '/api/assistant/status';
+
+let snap: StatusSnapshot = { state: 'loading' };
+let issued = 0;
+let applied = 0;
+let writesInFlight = 0;
+let refetchAfterWrites = false;
+const listeners = new Set<() => void>();
+
+function publish(next: StatusSnapshot): void {
+  snap = next;
+  for (const fn of [...listeners]) fn();
+}
+
+/** The status part of an answer (a key save adds `warning`, which belongs to that save only). */
+function readyFrom(body: Record<string, unknown>): StatusSnapshot {
+  const status = { ...body } as Record<string, unknown>;
+  delete status.warning;
+  return { state: 'ready', status: status as unknown as AssistantStatus };
+}
+
+function asApiError(err: unknown): AssistantApiError {
+  if (err instanceof AssistantApiError) return err;
+  return new AssistantApiError(0, {}, err instanceof Error ? err.message : String(err));
+}
+
+export function statusSnapshot(): StatusSnapshot {
+  return snap;
+}
+
+export function subscribeStatus(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+export function useAssistantStatus(): StatusSnapshot {
+  return useSyncExternalStore(subscribeStatus, statusSnapshot, statusSnapshot);
+}
+
+/** Reads the status again. Its answer is dropped when a change was sent meanwhile. */
+export async function refreshStatus(): Promise<void> {
+  const seq = ++issued;
+  const sentDuringWrite = writesInFlight > 0;
+  let next: StatusSnapshot;
+  try {
+    next = readyFrom(await assistantGet<Record<string, unknown>>(STATUS_PATH));
+  } catch (err) {
+    const e = asApiError(err);
+    next = e instanceof RemoteError ? { state: 'remote', message: REMOTE_TEXT } : { state: 'error', message: e.message };
+  }
+  if (writesInFlight > 0) {
+    refetchAfterWrites = true;
+    return;
+  }
+  if (seq <= applied) return;
+  if (sentDuringWrite) {
+    void refreshStatus();
+    return;
+  }
+  applied = seq;
+  publish(next);
+}
+
+/** Shows "loading" and reads the status again (Retry). */
+export function retryStatus(): Promise<void> {
+  publish({ state: 'loading' });
+  return refreshStatus();
+}
+
+/**
+ * POSTs a change whose answer is the whole status, and shows that answer unless a newer
+ * one is already shown. A refusal leaves the status as it is (and reads it again once
+ * nothing else is in flight); the caller shows the refusal where it belongs.
+ */
+export async function writeStatus(path: string, body: unknown): Promise<WriteResult> {
+  const seq = ++issued;
+  writesInFlight += 1;
+  try {
+    const answer = await assistantPost<Record<string, unknown>>(path, body);
+    if (seq > applied) {
+      applied = seq;
+      publish(readyFrom(answer));
+    }
+    return { ok: true, body: answer };
+  } catch (err) {
+    const e = asApiError(err);
+    if (e instanceof RemoteError) {
+      if (seq > applied) {
+        applied = seq;
+        publish({ state: 'remote', message: REMOTE_TEXT });
+      }
+    } else {
+      refetchAfterWrites = true;
+    }
+    return { ok: false, error: e };
+  } finally {
+    writesInFlight -= 1;
+    if (writesInFlight === 0 && refetchAfterWrites) {
+      refetchAfterWrites = false;
+      void refreshStatus();
+    }
+  }
+}
+
+/** Tests only: forget everything (a fresh page). */
+export function resetStatusStore(): void {
+  snap = { state: 'loading' };
+  issued = 0;
+  applied = 0;
+  writesInFlight = 0;
+  refetchAfterWrites = false;
+}

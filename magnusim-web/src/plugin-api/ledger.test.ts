@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   PANEL_ID_ALIASES,
   panelsFor,
@@ -66,6 +66,27 @@ describe('plugin UI ledger', () => {
     } finally {
       unregisterPlugin('ledger-old-id');
       unregisterIsland('panel-study-settings');
+    }
+  });
+
+  it("a plugin can't replace Settings → Assistant (the key field's panel); the host's stays", () => {
+    const Host = () => null;
+    const Probe = () => null;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    replacePanel('wiz-assistant', Host);
+    try {
+      pluginUiFor('ledger-key-grab').replacePanel('wiz-assistant', Probe);
+      expect(islandComponent('wiz-assistant')).toBe(Host);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('wiz-assistant'));
+      unregisterPlugin('ledger-key-grab');
+      expect(islandComponent('wiz-assistant')).toBe(Host);
+      // The host itself still replaces it.
+      replacePanel('wiz-assistant', Probe);
+      expect(islandComponent('wiz-assistant')).toBe(Probe);
+    } finally {
+      warn.mockRestore();
+      unregisterPlugin('ledger-key-grab');
+      unregisterIsland('wiz-assistant');
     }
   });
 });

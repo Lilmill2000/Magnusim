@@ -170,7 +170,7 @@ declare global {
       folderValueFromCreateModal?: () => string;
       submitProjectModal?: () => Promise<unknown>;
     };
-    __CFD_OPEN_WIZARD__?: (opts?: { required?: boolean }) => void;
+    __CFD_OPEN_WIZARD__?: (opts?: { required?: boolean; step?: 'plugins' | 'assistant' }) => void;
     __CFD_APPLY_WB_STAGE__?: () => void;
     __CFD_ADD_MATERIAL__?: (simId?: string) => void | Promise<unknown>;
     __CFD_ADD_BC__?: (simId?: string) => void | Promise<unknown>;

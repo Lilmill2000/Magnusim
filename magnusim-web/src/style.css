@@ -5129,6 +5129,60 @@ body.is-recording #viewport-gizmo {
 .wiz-plugin-warn { font-size: 12px; color: #b54708; }
 .wiz-plugin-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* Settings → Assistant (AssistantStep.tsx): compact blocks; the step scrolls with .wiz-main. */
+.wiz-assistant { display: flex; flex-direction: column; gap: var(--mg-space-3); }
+.wiz-assistant-block { display: flex; flex-direction: column; gap: var(--mg-space-1); }
+.wiz-assistant-block + .wiz-assistant-block { padding-top: var(--mg-space-3); border-top: 1px solid var(--mg-border-subtle); }
+.wiz-assistant-h { margin: 0; font-size: var(--mg-text-md); font-weight: var(--mg-weight-semibold); color: var(--mg-text-strong); }
+.wiz-assistant-options { display: grid; grid-template-columns: 1fr 1fr; gap: var(--mg-space-2); }
+.wiz-assistant-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mg-space-2);
+  padding: var(--mg-space-2) var(--mg-space-3);
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  cursor: pointer;
+}
+.wiz-assistant-option:hover { background: var(--mg-surface); }
+.wiz-assistant-option.is-selected { border-color: var(--mg-text-strong); box-shadow: inset 0 0 0 1px var(--mg-text-strong); }
+.wiz-assistant-option input { margin: 2px 0 0; flex-shrink: 0; }
+.wiz-assistant-option-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wiz-assistant-option-copy strong { font-size: var(--mg-text-md); }
+.wiz-assistant-option-copy span { font-size: var(--mg-text-sm); line-height: var(--mg-line); color: var(--mg-text-muted); }
+.wiz-assistant-inline-options { display: flex; flex-wrap: wrap; gap: var(--mg-space-1) var(--mg-space-4); }
+.wiz-assistant-inline-option { display: inline-flex; align-items: center; gap: 6px; font-size: var(--mg-text-md); cursor: pointer; }
+.wiz-assistant-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-2); }
+.wiz-assistant-row .home-btn { height: 30px; }
+.wiz-assistant-input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--mg-space-2);
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-sm);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font-family: inherit;
+  font-size: var(--mg-text-md);
+}
+.wiz-assistant-input:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+.wiz-assistant-input[aria-invalid="true"] { border-color: var(--mg-danger); }
+.wiz-assistant-wide { flex: 1 1 220px; }
+.wiz-assistant-caps { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: var(--mg-space-2); }
+.wiz-assistant-cap { display: flex; flex-direction: column; gap: 2px; font-size: var(--mg-text-sm); color: var(--mg-text-muted); }
+.wiz-assistant-cap .wiz-assistant-input { width: 100%; }
+.wiz-assistant-status { margin: 0; font-size: var(--mg-text-md); color: var(--mg-text-strong); }
+.wiz-assistant-meta,
+.wiz-assistant-note,
+.wiz-assistant-warn,
+.wiz-assistant-error { margin: 0; font-size: var(--mg-text-sm); line-height: var(--mg-line); }
+.wiz-assistant-meta { color: var(--mg-text-muted); }
+.wiz-assistant-note { font-size: var(--mg-text-md); color: var(--mg-text-body); }
+.wiz-assistant-warn { color: var(--mg-warning); }
+.wiz-assistant-error { color: var(--mg-danger); }
+.wiz-assistant-error-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-md); color: var(--mg-danger); }
+
 /* Plugin studies (H11): project-level studies a plugin owns, below SIMULATIONS.
    Shown in every stage (an empty project too); the simulations section's rules are untouched. */
 .plugin-studies-section {
