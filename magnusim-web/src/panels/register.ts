@@ -1,5 +1,5 @@
 import { clearIslands } from '../islands';
-import { replacePanel } from '../plugin-api';
+import { placeHostOnlyPanel, replacePanel } from '../plugin-api';
 import { BcPanel } from './bcs/BcPanel';
 import { MaterialsPanel } from './materials/MaterialsPanel';
 import { GeometryPanel } from './geometry/GeometryPanel';
@@ -25,8 +25,8 @@ export function registerAllIslands(): void {
   replacePanel('panel-sim-control', RunControl);
   replacePanel('panel-geometry', GeometryPanel);
   replacePanel('wiz-plugins', PluginsStep);
-  // The host's own: plugins can't replace it (plugin-api).
-  replacePanel('wiz-assistant', AssistantStep);
+  // The host's own: nothing else can replace it (plugin-api).
+  placeHostOnlyPanel('wiz-assistant', AssistantStep);
 }
 
 export function mountAllIslands(): void {

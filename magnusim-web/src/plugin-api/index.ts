@@ -115,20 +115,32 @@ export function resolvePanelId(panelId: string): string {
 }
 
 /**
- * Host panels no plugin may replace. Settings → Assistant holds the field a provider key
- * is typed into; a plugin's component there would see the key.
+ * Host panels nothing may replace. Settings → Assistant holds the field a provider key is
+ * typed into; another component there would see the key. Only placeHostOnlyPanel()
+ * places them: replacePanel() refuses them for every owner, the host's own included,
+ * because the host-owned API is on `window` (__CFD_PLUGIN_UI__, __CFD_REPLACE_PANEL__)
+ * where any in-page plugin code can call it.
  */
 const HOST_ONLY_PANELS: ReadonlySet<string> = new Set(['wiz-assistant']);
 
 function replacePanelFor(owner: string, requestedId: string, Component: ComponentType<IslandProps>): void {
   const panelId = resolvePanelId(requestedId);
-  if (owner !== HOST && HOST_ONLY_PANELS.has(panelId)) {
-    console.warn(`[plugins] ${owner}: the ${panelId} panel belongs to Magnusim and can't be replaced by a plugin`);
+  if (HOST_ONLY_PANELS.has(panelId)) {
+    console.warn(`[plugins] ${owner || 'page'}: the ${panelId} panel belongs to Magnusim and can't be replaced`);
     return;
   }
   const ledger = ledgerFor(owner);
   // Remember the host's own component the first time, to restore it on disable.
   if (owner !== HOST && !ledger.islands.has(panelId)) ledger.islands.set(panelId, islandComponent(panelId));
+  registerIsland(panelId, Component);
+}
+
+/**
+ * Places one of Magnusim's host-only panels (panels/register.ts). Nothing on `window`
+ * reaches it, so neither a plugin's API nor the page-wide host API can.
+ */
+export function placeHostOnlyPanel(panelId: string, Component: ComponentType<IslandProps>): void {
+  if (!HOST_ONLY_PANELS.has(panelId)) throw new Error(`${panelId} is not a host-only panel`);
   registerIsland(panelId, Component);
 }
 

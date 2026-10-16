@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   PANEL_ID_ALIASES,
   panelsFor,
+  placeHostOnlyPanel,
   pluginTreeNodes,
+  pluginUi,
   pluginUiFor,
   registeredPluginKeys,
   replacePanel,
@@ -69,20 +71,28 @@ describe('plugin UI ledger', () => {
     }
   });
 
-  it("a plugin can't replace Settings → Assistant (the key field's panel); the host's stays", () => {
+  it("nothing but Magnusim's own registration replaces Settings → Assistant (the key field's panel)", () => {
     const Host = () => null;
     const Probe = () => null;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    replacePanel('wiz-assistant', Host);
+    placeHostOnlyPanel('wiz-assistant', Host);
     try {
+      // A plugin's own API.
       pluginUiFor('ledger-key-grab').replacePanel('wiz-assistant', Probe);
       expect(islandComponent('wiz-assistant')).toBe(Host);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('wiz-assistant'));
       unregisterPlugin('ledger-key-grab');
       expect(islandComponent('wiz-assistant')).toBe(Host);
-      // The host itself still replaces it.
+      // The host-owned API the page puts on window (window.__CFD_PLUGIN_UI__)...
+      pluginUi.replacePanel('wiz-assistant', Probe);
+      expect(islandComponent('wiz-assistant')).toBe(Host);
+      // ...and the host's replacePanel, which window.__CFD_REPLACE_PANEL__ calls.
       replacePanel('wiz-assistant', Probe);
+      expect(islandComponent('wiz-assistant')).toBe(Host);
+      // Magnusim's own registration (panels/register.ts) places it, and only host-only panels.
+      placeHostOnlyPanel('wiz-assistant', Probe);
       expect(islandComponent('wiz-assistant')).toBe(Probe);
+      expect(() => placeHostOnlyPanel('panel-geometry', Probe)).toThrow(/not a host-only panel/);
     } finally {
       warn.mockRestore();
       unregisterPlugin('ledger-key-grab');
