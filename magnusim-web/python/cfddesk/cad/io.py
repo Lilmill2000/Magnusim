@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -596,18 +597,67 @@ def step_sidecar_path(step: str | Path) -> Path:
     return Path(step).with_suffix(".bbrep")
 
 
+def write_bbrep(
+    shape: TopoDS_Shape, dest: str | Path, *, triangles: bool = True, mtime_ns: int | None = None
+) -> bool:
+    """Write ``shape`` as a binary BREP at ``dest``; True when ``dest`` holds it.
+
+    Written in the system temp folder, then moved in: OCCT's writer crashes the process
+    (a segfault, no exception) when the folder it writes to is not there, as when a
+    geometry or project is removed while the file is made. A move into a removed folder
+    fails instead and never makes the folder, and no reader sees half a file.
+    ``triangles=False`` leaves out the shape's triangulation; ``mtime_ns`` gives the file
+    that modification time.
+    """
+    from OCP.BinTools import BinTools_FormatVersion
+
+    dest = Path(dest)
+    near = dest.with_name(f"{dest.stem}.{os.getpid()}.tmp{dest.suffix}")
+    tmp: Path | None = None
+    try:
+        fd, name = tempfile.mkstemp(prefix="cfd-bbrep-", suffix=".bbrep")
+        os.close(fd)
+        tmp = Path(name)
+        if triangles:
+            ok = BinTools.Write_s(shape, str(tmp))
+        else:
+            ok = BinTools.Write_s(shape, str(tmp), False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+        if not ok:
+            return False
+        if mtime_ns is not None:
+            os.utime(tmp, ns=(mtime_ns, mtime_ns))
+        try:
+            os.replace(tmp, dest)
+        except OSError:
+            if not dest.parent.is_dir():
+                return False
+            # Another volume: copied beside ``dest`` first, then renamed into place.
+            shutil.copy2(tmp, near)
+            if mtime_ns is not None:
+                os.utime(near, ns=(mtime_ns, mtime_ns))
+            os.replace(near, dest)
+        return dest.is_file()
+    except Exception:
+        return False
+    finally:
+        for path in (tmp, near):
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
 def write_step_sidecar(shape: TopoDS_Shape, step: str | Path) -> Path | None:
     """Binary BREP copy of the shape next to ``step`` (written after it, so it is newer).
 
     Reading a STEP of a faceted STL (100k+ faces) takes ~40 s; this reads in
-    under a second with the same faces in the same order.
+    under a second with the same faces in the same order. ``write_bbrep`` writes
+    it, so a geometry folder removed meanwhile is not made again (None).
     """
     dest = step_sidecar_path(step)
-    try:
-        if BinTools.Write_s(shape, str(dest)):
-            return dest
-    except Exception:
-        pass
+    if write_bbrep(shape, dest):
+        return dest
     try:
         dest.unlink(missing_ok=True)
     except OSError:

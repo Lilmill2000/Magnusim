@@ -46,8 +46,7 @@ def build(
     """Write the geometry files into ``out``; the report (raises LinkInputError on a refusal)."""
     import time
 
-    from OCP.BinTools import BinTools
-
+    from cfddesk.cad.io import write_bbrep
     from cfddesk.cad.link_input import (
         LinkInputError,
         canonical_names_sha256,
@@ -81,7 +80,11 @@ def build(
     if read.encoding == "binary":
         # The bytes the plugin sent: BinTools read them, so the host reads them too.
         stage("store_bbrep", lambda: shutil.copyfile(shape_path, bbrep))
-    elif not stage("store_bbrep", lambda: BinTools.Write_s(read.shape, str(bbrep))):
+    elif not stage("store_bbrep", lambda: write_bbrep(read.shape, bbrep)):
+        # ``write_bbrep``: the job's staging folder can be removed meanwhile (its project
+        # deleted, the job cancelled); then this is not the plugin's shape (preview_failed).
+        if not out.is_dir():
+            raise RuntimeError(f"the job's folder was removed: {out}")
         raise LinkInputError("bad_brep", "The shape could not be stored as a binary BREP.")
     meta_path = out / "cad_preview.json"
     meta = export_preview(

@@ -14,10 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 # The one face numbering rule (host API 1.5): every visit, one index per solid that
@@ -598,9 +595,7 @@ def ensure_step_sidecar(step: Path, shape, *, write: bool = True) -> tuple[Path 
     it are not bit-identical to the STEP's, and a plain import below the budget must
     mesh exactly as before (the meshing session's condition 1).
     """
-    from OCP.BinTools import BinTools, BinTools_FormatVersion
-
-    from cfddesk.cad.io import step_sidecar_path
+    from cfddesk.cad.io import step_sidecar_path, write_bbrep
 
     step = Path(step)
     side = step_sidecar_path(step)
@@ -612,27 +607,12 @@ def ensure_step_sidecar(step: Path, shape, *, write: bool = True) -> tuple[Path 
             return side, False
         if not write:
             return None, False
-        # Written in the system temp folder, then moved in: OCCT's writer crashes the process
-        # (no exception) when the folder is not there, as when the geometry is removed while
-        # its preview is made. A move into a removed folder fails instead, and never makes it.
-        fd, name = tempfile.mkstemp(prefix="cfd-sidecar-", suffix=".bbrep")
-        os.close(fd)
-        tmp = Path(name)
-        near = side.with_name(f"{side.stem}.{os.getpid()}.tmp.bbrep")
-        try:
-            BinTools.Write_s(shape, str(tmp), False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
-            os.utime(tmp, ns=(stamp, stamp))
-            try:
-                os.replace(tmp, side)
-            except OSError:
-                # Another volume: copied beside the STEP first, so no reader sees half a file.
-                shutil.copy2(tmp, near)
-                os.utime(near, ns=(stamp, stamp))
-                os.replace(near, side)
-        finally:
-            tmp.unlink(missing_ok=True)
-            near.unlink(missing_ok=True)
-        return (side, True) if side.is_file() else (None, False)
+        # ``write_bbrep`` writes it in the system temp folder and moves it in: OCCT's writer
+        # crashes the process when the folder is not there, as when the geometry is removed
+        # while its preview is made; the move fails instead, and never makes the folder.
+        if write_bbrep(shape, side, triangles=False, mtime_ns=stamp):
+            return side, True
+        return None, False
     except Exception:
         return None, False
 
