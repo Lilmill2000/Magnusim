@@ -44,6 +44,8 @@ export interface RunnerTurn {
 export interface CallAbort {
   code: 'stopped' | 'capped' | 'stalled';
   text?: string;
+  /** `stopped` because the server is stopping, not by the person (Stop, a key change). */
+  server?: boolean;
 }
 
 export interface RunOptions {
@@ -74,6 +76,14 @@ const GATE_INPUT = 400;
 
 export const STOPPED_BEFORE = 'Stopped by the user before this ran.';
 const STOPPED_DURING = 'Stopped by the user while it ran; it may or may not have finished.';
+const SERVER_BEFORE = 'The server stopped before this ran.';
+const SERVER_DURING = 'The server stopped while it ran; it may or may not have finished.';
+
+/** A stopped call's result text: by the person, or because the server stopped. */
+export function stoppedText(running: boolean, server = false): string {
+  if (server) return running ? SERVER_DURING : SERVER_BEFORE;
+  return running ? STOPPED_DURING : STOPPED_BEFORE;
+}
 
 export function riskOf(def: ToolDef | null): Risk {
   return def && RISKS.includes(def.risk) ? def.risk : 'destructive';
@@ -127,7 +137,9 @@ export function errorResult(call: ToolCallPart, code: string, message: string, h
 export function callAbortOf(signal: AbortSignal): CallAbort | null {
   if (!signal.aborted) return null;
   const r = signal.reason as Partial<CallAbort> | undefined;
-  if (r && (r.code === 'capped' || r.code === 'stalled' || r.code === 'stopped')) return { code: r.code, ...(r.text ? { text: r.text } : {}) };
+  if (r && (r.code === 'capped' || r.code === 'stalled' || r.code === 'stopped')) {
+    return { code: r.code, ...(r.text ? { text: r.text } : {}), ...(r.server === true ? { server: true } : {}) };
+  }
   return { code: 'stopped' };
 }
 
@@ -258,7 +270,7 @@ export class ToolRunner {
       return errorResult(call, 'capped', running ? `Stopped: ${text} It may or may not have finished.` : `Not run: ${text}`);
     }
     if (why.code === 'stalled') return errorResult(call, 'stalled', why.text || 'No progress for too long; it was stopped and may or may not have finished.');
-    return errorResult(call, 'stopped', running ? STOPPED_DURING : STOPPED_BEFORE);
+    return errorResult(call, 'stopped', stoppedText(running, why.server === true));
   }
 
   private async execute(call: ToolCallPart, def: ToolDef, input: Record<string, unknown>, o: RunOptions): Promise<RunResult> {

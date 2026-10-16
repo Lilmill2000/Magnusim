@@ -74,15 +74,22 @@ export function parseArgs(argv) {
   return o;
 }
 
+/** The app's port, picked as the app picks it (prefs.js listenPort: the saved port, then MAGNUSIM_PORT, then 8082). */
 async function defaultPort() {
-  const env = Number(process.env.MAGNUSIM_PORT || process.env.CFDDESK_PORT);
-  if (Number.isInteger(env) && env > 0) return env;
   try {
     const { listenPort } = await import('./prefs.js');
     return listenPort();
   } catch {
     return 8082;
   }
+}
+
+/** Controls, line and paragraph separators and bidi controls; \n and \t are kept. */
+const CONTROLS = /[\p{Cc}\p{Bidi_Control}\p{Zl}\p{Zp}]/gu;
+
+/** Model text for the terminal: nothing it could act on (escape sequences, carriage returns, bidi). */
+export function plainText(text) {
+  return String(text ?? '').replace(CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ''));
 }
 
 function call(port, method, path, body) {
@@ -309,7 +316,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
         if (o.json) out(`${JSON.stringify(e)}\n`);
         switch (e.type) {
           case 'text':
-            if (!o.json) print(e.text);
+            if (!o.json) print(plainText(e.text));
             break;
           case 'discard':
             if (!o.json) line('(the answer above was discarded)');

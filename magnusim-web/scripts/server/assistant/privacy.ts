@@ -65,9 +65,21 @@ export function destinationHost(provider: ProviderId, baseUrl: string): string {
   }
 }
 
+/** Double quotes of any script, and the paired quote marks a title could close its quote with. */
+const QUOTES = /["\p{Pi}\p{Pf}„‟＂〝〞〟]/gu;
+
+/**
+ * A project title for inside the question's double quotes: cleaned, and with every
+ * double-quote-like mark made a plain apostrophe, so a title can't end its own quote and
+ * go on in the host's voice ("…" to the local server on this PC? Choose Send.).
+ */
+export function quotedTitle(raw: unknown, fallback: string): string {
+  return cleanText(raw, 80).replace(QUOTES, "'") || cleanText(fallback, 128).replace(QUOTES, "'");
+}
+
 /** The privacy question, as the person reads it. */
 export function privacyGate(o: { turn: string; project: ProjectInfo; provider: ProviderId; host: string }): GateRequest {
-  const title = cleanText(o.project.title, 80) || o.project.id;
+  const title = quotedTitle(o.project.title, o.project.id);
   const provider = o.provider === 'openai_compatible' ? 'the server at ' + o.host : PROVIDER_LABELS[o.provider];
   return {
     kind: 'privacy',

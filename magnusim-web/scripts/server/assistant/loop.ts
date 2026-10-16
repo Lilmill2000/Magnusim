@@ -11,6 +11,7 @@
  *       a cap reached → this and every later call is answered `capped`
  *       a call declined → every later call `skipped`
  *       Stop → every later call `stopped`
+ *       a crash → the results so far kept, the rest `failed`, then t.crash
  *     one user message with every result, in call order
  *     steps cap: one more request (same tools, so the cached prefix holds) to sum up
  *
@@ -27,7 +28,7 @@ import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import { destinationHost, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
 import { providerTools, type ToolCtx, type ToolDef, type WorkspaceRegistration } from './registry.ts';
-import { errorResult, STOPPED_BEFORE, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
+import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
 import type { Caps, AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import type { Clock, GateBroker } from './gates.ts';
@@ -193,6 +194,25 @@ function freshOf(messages: readonly Message[]): { chars: number; images: Array<{
 }
 
 const isCall = (p: { type: string }): p is ToolCallPart => p.type === 'tool_call';
+
+export const CRASH_DURING = 'The Assistant hit an error while handling this call; it may or may not have run.';
+export const CRASH_BEFORE = 'Not run: the Assistant hit an error before this call.';
+
+/**
+ * Something threw mid-batch: the calls that ran keep their results, the one in hand may
+ * or may not have run, and the rest did not (conv.repair() stays the last resort).
+ */
+function answerAfterCrash(conv: Conversation, calls: readonly ToolCallPart[], results: readonly ToolResultPart[], inHand: number): void {
+  const parts = [...results];
+  for (let i = results.length; i < calls.length; i += 1) {
+    parts.push(errorResult(calls[i], 'failed', i === inHand ? CRASH_DURING : CRASH_BEFORE).part);
+  }
+  try {
+    conv.append({ role: 'user', parts });
+  } catch {
+    /* repair() answers them when the turn settles */
+  }
+}
 
 /** Runs the turn to its end. Errors other than the provider's reach the caller (TurnManager: t.crash). */
 export async function runTurn(t: LoopTurn, d: LoopDeps): Promise<void> {
@@ -390,6 +410,13 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     let out: ProviderResult | null = null;
     let streamed = false;
     let known: Usage | null = null;
+    // Billed for what was sent: the input known so far (else the estimate) and the output reserved.
+    const partialCost = () => {
+      const k = known as Usage | null;
+      return (k ? costOf(est.rates, { ...k, output: 0 }) : est.inputUsd) + (est.maxOut * est.rates.output) / 1e6;
+    };
+    // The attempt an overload cut short before the one resend: a streamed one was billed.
+    let resentCost = 0;
     let cost = 0;
     let costEstimated = false;
     try {
@@ -403,8 +430,10 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           t.onStream(step, e);
         },
         {
-          onResend: () => {
+          onResend: (err) => {
+            if (priced && (streamed || err.streamed)) resentCost = partialCost();
             streamed = false;
+            known = null;
             t.discard(step);
           },
           ...(d.resendDelayMs !== undefined ? { delayMs: d.resendDelayMs } : {}),
@@ -412,16 +441,20 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       );
       if (priced) {
         const c = requestCost(adapter.id, out.attempts);
-        cost = c.usd;
-        costEstimated = c.estimated;
+        cost = resentCost + c.usd;
+        costEstimated = c.estimated || resentCost > 0;
       }
+      // This request's tokens count before its usage event is logged.
+      const used = promptTokens(out.usage);
+      conv.promptTokens = used;
+      t.tokens += used + out.usage.output;
+      prev = { promptTokens: used, startedAt, cacheUsed: out.usage.cacheRead + out.usage.cacheWrite5m + out.usage.cacheWrite1h > 0 };
     } catch (err) {
       const aborted = t.signal.aborted || (err instanceof ProviderError && err.code === 'aborted');
+      cost = resentCost;
+      costEstimated = resentCost > 0;
       if (priced && (aborted || streamed || (err instanceof ProviderError && err.streamed))) {
-        // Billed for what was sent: the input known so far (else the estimate) and the output reserved.
-        const k = known as Usage | null;
-        const input = k ? costOf(est.rates, { ...k, output: 0 }) : est.inputUsd;
-        cost = input + (est.maxOut * est.rates.output) / 1e6;
+        cost += partialCost();
         costEstimated = true;
       }
       if (aborted || streamed) t.discard(step);
@@ -436,10 +469,6 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
 
     t.servedBy = out.servedBy || t.servedBy;
-    const used = promptTokens(out.usage);
-    conv.promptTokens = used;
-    t.tokens += used + out.usage.output;
-    prev = { promptTokens: used, startedAt, cacheUsed: out.usage.cacheRead + out.usage.cacheWrite5m + out.usage.cacheWrite1h > 0 };
 
     if (out.stop === 'refusal') {
       t.discard(step);
@@ -455,8 +484,9 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       return t.end('done', 'end_turn', null);
     }
 
-    t.setState('tools');
     const results: ToolResultPart[] = [];
+    /** The call the runner has in hand (until its result is kept), for a crash. */
+    let inHand = -1;
     let declined = false;
     let capped: CapHit | null = finalStep ? { reason: 'steps', text: capText('steps', caps) } : null;
     const notRun = (call: ToolCallPart, code: string, message: string) => {
@@ -465,31 +495,40 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       t.emit({ type: 'tool_result', call: call.callId, ok: false, code, summary: r.summary, ms: 0 });
       results.push(r.part);
     };
-    for (const call of calls) {
-      if (t.signal.aborted) {
-        notRun(call, 'stopped', STOPPED_BEFORE);
-        continue;
+    try {
+      t.setState('tools');
+      for (const call of calls) {
+        if (t.signal.aborted) {
+          notRun(call, 'stopped', stoppedText(false, t.stopEnd().reason === 'shutdown'));
+          continue;
+        }
+        if (!capped) capped = callCap(t, caps);
+        if (capped) {
+          notRun(call, 'capped', `Not run: ${capped.text}`);
+          continue;
+        }
+        if (declined) {
+          notRun(call, 'skipped', 'Skipped: an earlier call in this step was declined.');
+          continue;
+        }
+        t.calls += 1;
+        inHand = results.length;
+        const signal = t.callSignal();
+        let r;
+        try {
+          r = await d.runner.run(call, { owner: { kind: 'turn', id: t.id, tab: t.tab }, ctx, signal, turn: t, offered });
+        } finally {
+          t.callDone();
+        }
+        if (r.code === 'declined') declined = true;
+        // The minutes timer aborted this call (the step it used doesn't make this the steps cap).
+        if (callAbortOf(signal)?.code === 'capped') capped = { reason: 'turn_minutes', text: capText('turn_minutes', caps) };
+        results.push(r.part);
+        inHand = -1;
       }
-      if (!capped) capped = callCap(t, caps);
-      if (capped) {
-        notRun(call, 'capped', `Not run: ${capped.text}`);
-        continue;
-      }
-      if (declined) {
-        notRun(call, 'skipped', 'Skipped: an earlier call in this step was declined.');
-        continue;
-      }
-      t.calls += 1;
-      const signal = t.callSignal();
-      let r;
-      try {
-        r = await d.runner.run(call, { owner: { kind: 'turn', id: t.id, tab: t.tab }, ctx, signal, turn: t, offered });
-      } finally {
-        t.callDone();
-      }
-      if (r.code === 'declined') declined = true;
-      if (r.code === 'capped') capped = callCap(t, caps) ?? { reason: 'turn_minutes', text: capText('turn_minutes', caps) };
-      results.push(r.part);
+    } catch (err) {
+      answerAfterCrash(conv, calls, results, inHand);
+      throw err;
     }
     // Every call answered exactly once, in call order: capped, skipped and stopped ones too.
     conv.append({ role: 'user', parts: results });

@@ -92,6 +92,19 @@ const TERMINAL: ReadonlySet<TurnState> = new Set(['done', 'stopped', 'failed', '
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
+/** Controls, line and paragraph separators and bidi controls: the model's text keeps only \n and \t. */
+const STREAM_CONTROLS = /[\p{Cc}\p{Bidi_Control}\p{Zl}\p{Zp}]/gu;
+
+/**
+ * The model's text as clients show it: no escape sequences (a terminal acts on them, and
+ * they could hide or fake a question printed after them), carriage returns or bidi controls.
+ * Per character, so a sequence split across stream chunks goes too. The stored message is
+ * unchanged.
+ */
+export function plainModelText(text: string): string {
+  return text.replace(STREAM_CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ''));
+}
+
 export function newTurnId(now: number): string {
   return `t-${Math.max(0, Math.floor(now)).toString(36)}-${randomBytes(4).toString('hex')}`;
 }
@@ -137,6 +150,8 @@ export class Turn implements LoopTurn {
   private readonly abort = new AbortController();
   private stopAs: { state: EndState; reason: string; message: string | null } | null = null;
   private readonly log: TurnEvent[] = [];
+  /** The `end` event is logged: the log is complete. */
+  private closed = false;
   private seq = 0;
   /** The highest seq a reader has been given: text is merged only into events no one read yet. */
   private delivered = 0;
@@ -162,7 +177,7 @@ export class Turn implements LoopTurn {
     this.gates = o.gates;
     this.onEnded = o.onEnded;
     this.startedAt = o.clock.now();
-    this.abort.signal.addEventListener('abort', () => this.call?.abort({ code: 'stopped' } satisfies CallAbort), { once: true });
+    this.abort.signal.addEventListener('abort', () => this.call?.abort(this.stopAbort()), { once: true });
     this.offShutdown = onAssistantShutdown(() => this.shutdown());
     this.push({ type: 'state', state: 'starting' });
   }
@@ -177,12 +192,13 @@ export class Turn implements LoopTurn {
 
   // ------------------------------------------------------------ the log
 
-  private push(body: TurnEventBody): TurnEvent {
+  /** Logs an event; nothing is logged after `end` (the shutdown's loop still unwinds after it). */
+  private push(body: TurnEventBody): void {
+    if (this.closed) return;
     const e = { ...body, seq: ++this.seq, at: this.clock.now() } as TurnEvent;
     this.log.push(e);
     if (this.log.length > TURN_LIMITS.events) this.dropOne();
     this.wake(e);
-    return e;
   }
 
   /** The log is full: a note goes first, then the oldest text or progress (text_so_far keeps the text). */
@@ -233,14 +249,15 @@ export class Turn implements LoopTurn {
   onStream(step: number, e: StreamEvent): void {
     if (this.ended) return;
     if (e.kind === 'text') {
-      if (!e.text) return;
-      this.stepText.set(step, (this.stepText.get(step) ?? '') + e.text);
+      const text = plainModelText(e.text ?? '');
+      if (!text) return;
+      this.stepText.set(step, (this.stepText.get(step) ?? '') + text);
       const last = this.log[this.log.length - 1];
       if (last && last.type === 'text' && last.step === step && last.seq > this.delivered) {
-        last.text += e.text;
+        last.text += text;
         this.wake(null);
       } else {
-        this.push({ type: 'text', step, text: e.text });
+        this.push({ type: 'text', step, text });
       }
     } else if (e.kind === 'fallback') {
       this.push({ type: 'fallback', step, from: cleanText(e.from, 128), to: cleanText(e.to, 128) });
@@ -343,13 +360,18 @@ export class Turn implements LoopTurn {
   callSignal(): AbortSignal {
     const c = new AbortController();
     this.call = c;
-    if (this.abort.signal.aborted) c.abort({ code: 'stopped' } satisfies CallAbort);
+    if (this.abort.signal.aborted) c.abort(this.stopAbort());
     else if (this.minutes.up || this.activeMs() >= this.minutes.limitMs) c.abort({ code: 'capped', text: this.minutes.text } satisfies CallAbort);
     return c.signal;
   }
 
   callDone(): void {
     this.call = null;
+  }
+
+  /** How a stopped call reads: the server stopping, or the person (Stop, a key change). */
+  private stopAbort(): CallAbort {
+    return { code: 'stopped', ...(this.stopAs?.reason === 'shutdown' ? { server: true } : {}) };
   }
 
   // ------------------------------------------------------------ ending
@@ -365,7 +387,10 @@ export class Turn implements LoopTurn {
     this.abort.abort(new ProviderError('aborted', 'Stopped.'));
   }
 
-  /** The server is stopping: the turn ends now (failed), and its loop unwinds after. */
+  /**
+   * The server is stopping: the turn ends now (failed), and its loop unwinds after,
+   * answering its calls "The server stopped…" in the conversation; nothing more is logged.
+   */
   shutdown(): void {
     if (this.ended) return;
     this.stop('shutdown', 'The server stopped.', 'failed');
@@ -389,6 +414,7 @@ export class Turn implements LoopTurn {
     }
     this.push({ type: 'state', state });
     this.push({ type: 'end', state, reason: this.endReason, message: this.message });
+    this.closed = true;
     alog('info', 'turn ended', {
       id: this.id,
       provider: this.settings.provider,

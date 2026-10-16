@@ -7,10 +7,10 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-assistant-cli-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
@@ -31,6 +31,7 @@ const routes = await import('../assistant-routes.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
 const { hostTool } = await import('./assistant-harness.js');
+const { plainText } = await import(pathToFileURL(CLI).href);
 
 let server;
 let port;
@@ -65,10 +66,11 @@ after(async () => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** Runs the CLI; `input` is written to its stdin, which then closes. */
-function cli(args, input = '') {
+/** Runs the CLI (with --port unless `withPort` is false); `input` is written to its stdin, which then closes. */
+function cli(args, input = '', { withPort = true, env = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, '--port', String(port), ...args], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MAGNUSIM_PORT: '' } });
+    const argv = withPort ? [CLI, '--port', String(port), ...args] : [CLI, ...args];
+    const child = spawn(process.execPath, argv, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MAGNUSIM_PORT: '', ...env } });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
@@ -151,6 +153,38 @@ describe('assistant-run.mjs', () => {
     assert.match(help.stdout, /Keep the Magnusim window visible when you start a turn\. It may then be covered for up to 10 minutes between turns\./);
     assert.equal((await cli(['--nope', 'x'])).code, 1);
     assert.equal((await cli([])).code, 1);
+  });
+
+  it('without --port it dials the port the app listens on: the saved one before MAGNUSIM_PORT, as the app picks it', async () => {
+    const prefs = process.env.MAGNUSIM_LOCAL_JSON;
+    const before = existsSync(prefs) ? readFileSync(prefs, 'utf8') : null;
+    // A port nothing listens on, for the environment.
+    const spare = http.createServer();
+    await new Promise((r) => spare.listen(0, '127.0.0.1', r));
+    const dead = spare.address().port;
+    await new Promise((r) => spare.close(r));
+    writeFileSync(prefs, JSON.stringify({ ...(before ? JSON.parse(before) : {}), port }));
+    try {
+      fake.reply({ text: 'Port found.' });
+      const r = await cli(['Hello'], '', { withPort: false, env: { MAGNUSIM_PORT: String(dead) } });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(r.stdout, 'Port found.\n');
+    } finally {
+      if (before === null) rmSync(prefs, { force: true });
+      else writeFileSync(prefs, before);
+    }
+  });
+
+  it('model text prints with no terminal controls: nothing can hide or fake the question after it', async () => {
+    const ch = (n) => String.fromCharCode(n);
+    const [ESC, BEL, CSI] = [ch(0x1b), ch(0x07), ch(0x9b)];
+    fake.reply({ text: `Safe${ESC}[8m${ESC}]52;c;ZXZpbA==${BEL}\r\nshown`, tools: [{ name: 'reset_all', input: {} }] }, { text: 'Not reset.' });
+    const r = await cli(['Reset?'], 'n\n');
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(![...r.stdout].some((c) => c !== '\n' && /\p{Cc}/u.test(c)), JSON.stringify(r.stdout));
+    assert.match(r.stdout, /^Safe\[8m\]52;c;ZXZpbA==\nshown\n→ reset_all \{\}\n\? Allow the Assistant to reset every counter\?\n/);
+    // The terminal's own cleaning, whatever a server sends.
+    assert.equal(plainText(`a${ESC}[2Jb${CSI}0m\r\n\tc${ch(0x202e)}d${ch(0x2028)}`), 'a[2Jb0m\n\tcd');
   });
 
   it('says nothing about any provider by name (vendor-neutral text)', () => {
