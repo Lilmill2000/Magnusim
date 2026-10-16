@@ -263,8 +263,14 @@ export async function startHost(options = {}) {
       MAGNUSIM_PORT: String(port),
       MAGNUSIM_BOUND_PORT: String(port),
       MAGNUSIM_PLUGINS_DIR: pluginsDir,
+      // The Assistant's keys, settings and spend: never this PC's real ones.
+      MAGNUSIM_ASSISTANT_HOME: join(tmp, 'assistant'),
     };
     if (bundledDir) env.MAGNUSIM_BUNDLED_DIR = bundledDir;
+    // The Assistant's test switches only when this spec passes them.
+    for (const k of Object.keys(env)) {
+      if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete env[k];
+    }
     for (const [k, v] of Object.entries(extraEnv)) {
       if (v == null) delete env[k];
       else env[k] = String(v);

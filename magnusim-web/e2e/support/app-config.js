@@ -20,6 +20,14 @@ export const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '
  *                            seeds the suite's own projects into the projects root, after the core's
  *                            (e2e/support/seed-suite.js)
  */
+/** The Assistant's test switches are a spec's own choice (startHost({env})), never inherited. */
+function withoutAssistantTestSwitches(env) {
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete env[key];
+  }
+  return env;
+}
+
 export function appSuiteConfig({ testDir, name = 'core', seed = '' }) {
   const PORT = process.env.MAGNUSIM_E2E_PORT || '8083';
   const baseURL = `http://127.0.0.1:${PORT}`;
@@ -62,7 +70,7 @@ export function appSuiteConfig({ testDir, name = 'core', seed = '' }) {
       url: baseURL,
       reuseExistingServer: false,
       timeout: 120_000,
-      env: {
+      env: withoutAssistantTestSwitches({
         ...process.env,
         MAGNUSIM_PROJECTS_ROOT: projectsRoot,
         MAGNUSIM_LOCAL_JSON: prefsPath,
@@ -74,7 +82,9 @@ export function appSuiteConfig({ testDir, name = 'core', seed = '' }) {
           ? resolve(process.env.MAGNUSIM_E2E_PLUGINS_DIR)
           : join(WEB_ROOT, 'python', 'tests', 'fixtures', 'plugins'),
         MAGNUSIM_BOUND_PORT: String(PORT),
-      },
+        // The Assistant's keys, settings and spend: never this PC's real ones.
+        MAGNUSIM_ASSISTANT_HOME: join(WEB_ROOT, 'e2e', `.tmp-prefs${own}.assistant`),
+      }),
     },
   });
 }

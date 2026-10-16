@@ -18,6 +18,8 @@ const IGNORED_PARTS = [
   // Playwright's projects roots (.tmp-projects, .tmp-projects-<port>); a watched run
   // folder blocks the live-sync rename from WSL.
   '/.tmp-projects',
+  // A test server's Assistant home (e2e/.tmp-prefs<port>.assistant/): keys, settings, spend.
+  '.assistant/',
   '/.cache/',
   '/python/',
   // A plugin's own virtual environment or bytecode (plugins/<key>/.venv).

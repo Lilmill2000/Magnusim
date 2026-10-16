@@ -45,6 +45,11 @@ describe('vite steady mode', () => {
     }
   });
 
+  it('never serves a test server\'s Assistant home (keys, settings, spend)', async () => {
+    const c = await config(undefined);
+    assert.ok(c.server.fs.deny.includes('**/*.assistant/**'), 'fs.deny has the Assistant homes');
+  });
+
   it('run.bat starts steady and --live turns it off', async () => {
     const { readFileSync } = await import('node:fs');
     const bat = readFileSync(join(WEB, 'run.bat'), 'utf8');

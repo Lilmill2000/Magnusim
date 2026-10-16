@@ -14,6 +14,15 @@ export function parseUrl(reqUrl: string | undefined): URL {
   return new URL(reqUrl || '/', 'http://127.0.0.1');
 }
 
+/**
+ * A path as the router matches it: empty segments dropped (the router splits on '/' and
+ * keeps the non-empty parts), so `/api//x` reads `/api/x`. parseUrl has already folded
+ * `.` and `..` segments, `%2e%2e` included.
+ */
+export function canonicalPath(pathname: string): string {
+  return '/' + String(pathname || '').split('/').filter(Boolean).join('/');
+}
+
 export class HttpError extends Error {
   readonly status: number;
   constructor(status: number, message: string) { super(message); this.status = status; }

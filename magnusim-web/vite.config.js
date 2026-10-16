@@ -34,7 +34,7 @@ export default defineConfig({
     strictPort: true,
     allowedHosts,
     fs: {
-      deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/projects/**', '**/.cache/**', '**/runs/**', '**/python/**', '**/.*-local.json'],
+      deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/projects/**', '**/.cache/**', '**/runs/**', '**/python/**', '**/.*-local.json', '**/*.assistant/**'],
     },
     hmr: STEADY ? false : undefined,
     watch: STEADY

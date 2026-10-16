@@ -42,6 +42,9 @@ describe('Vite watch ignore', () => {
       'projects/p1/project.json',
       'e2e/.tmp-projects/p1/project.json',
       'e2e/.tmp-projects-8210/p1/project.json',
+      // A test server's Assistant home: its keys, settings and spend.
+      'e2e/.tmp-prefs.assistant/secrets/keys.json',
+      'e2e/.tmp-prefs-8730.assistant/assistant/settings.json',
       'python/cfddesk/registry/__init__.py',
       'plugins/demo/.venv/Lib/site.py',
       'plugins/demo/__pycache__/x.pyc',
@@ -67,6 +70,9 @@ describe('Vite watch ignore', () => {
       'bundled-plugins/cad/kernel-build/occt-patches/0001-fix.patch',
       'bundled-plugins/cad/ui/index.tsx',
       'scripts/server/index.ts',
+      // The Assistant's own source is not its home folder.
+      'src/assistant/status.ts',
+      'scripts/server/assistant/settings.ts',
     ]) {
       assert.ok(watched(rel), rel);
     }
@@ -127,6 +133,12 @@ const inGit = !probe.error && probe.status === 0 && probe.stdout.trim() === 'tru
 describe('git ignore', { skip: inGit ? false : 'needs git and a git checkout' }, () => {
   it('leaves a local OCCT source or build folder and its logs untracked', () => {
     for (const rel of ['occt-7.9.3/src/BRep/BRep_Builder.cxx', 'occt-build/x.ninja', 'ninja.log', 'occt-clone.log']) {
+      assert.equal(gitIgnores(rel), 0, rel);
+    }
+  });
+
+  it('leaves a test server\'s Assistant home untracked', () => {
+    for (const rel of ['e2e/.tmp-prefs.assistant/secrets/keys.json', 'e2e/.tmp-prefs-8730.assistant/assistant/spend.json']) {
       assert.equal(gitIgnores(rel), 0, rel);
     }
   });
