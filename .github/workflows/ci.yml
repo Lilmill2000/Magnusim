@@ -95,7 +95,7 @@ jobs:
       - run: npx playwright test -c bundled-plugins/airfoil/e2e/playwright.config.js
         env:
           CI: "1"
-      # The 2D Wind Tunnel's browser suite (it ships off; each test starts its own app server
+      # The 2D Wind Tunnel's browser suite (it ships on; each test starts its own app server
       # with it on). It solves the flow with WebGPU on the installed Chrome: on this GPU-less
       # runner its config asks for Chrome's software adapter (SwiftShader). Its page and UI tests
       # run here; the ones that need the flow to develop (the benchmark, drags, the soak) skip

@@ -6,8 +6,9 @@ version = "0.1.0"
 api_version = "1.4"
 tier = "bundled"
 required = false
-# Ships off: nothing of it runs until someone turns it on in Settings > Plugins.
-default_enabled = false
+# Ships on (it can be turned off in Settings > Plugins). Nothing of it runs until a
+# tunnel is opened: its header button and start actions are all it adds before that.
+default_enabled = true
 license = "GPL-3.0-or-later"
 description = "A real-time 2D wind tunnel on the GPU: set the wind speed, drop in airfoils and shapes, drag and turn them, and watch the flow (speed, pressure, vorticity) answer as you move them. Needs a browser with WebGPU."
 authors = ["Magnusim"]
