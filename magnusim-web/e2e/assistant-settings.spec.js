@@ -27,7 +27,12 @@ let host;
 
 test.beforeAll(async () => {
   test.setTimeout(180_000);
-  host = await startHost({ name: 'assistant-settings', env: { MAGNUSIM_TEST_ASSISTANT: '1' } });
+  // Cloud providers go to this PC, never to a vendor: a closed port until the fake provider
+  // comes with the model adapters (a saved test key would otherwise list models for real).
+  host = await startHost({
+    name: 'assistant-settings',
+    env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: 'http://127.0.0.1:9' },
+  });
 });
 
 test.afterAll(() => {
