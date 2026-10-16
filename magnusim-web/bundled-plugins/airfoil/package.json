@@ -8,6 +8,7 @@
   "magnusim": {
     "e2eHostPaths": [
       "src/workspace/",
+      "src/assistant/",
       "src/api/eventHub.ts",
       "src/plugin-sdk/",
       "src/plugin-api/",

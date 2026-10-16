@@ -7,6 +7,7 @@ import { Toast, type ToastKind } from '../plugin-ui';
 import { prefersImperial } from '../prefs';
 import { pluginStudyScope } from '../scope';
 import { useProjectStore } from '../store/project';
+import { newWorkspaceFrameId, publishWorkspaceTools, withdrawWorkspaceTools, type ToolInvoke } from './assistantTools';
 import { WorkspaceBridge, WorkspaceCalls, type BridgeHooks, type BridgeScope } from './bridge';
 import {
   cancelLeave,
@@ -567,7 +568,13 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       get: () => launchFor(route.projectId, route.plugin, route.studyId),
       drop: () => dropLaunch(route.projectId, route.plugin, route.studyId),
     };
-    const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, hooks, launch), hooks);
+    // The page's tools for the app's Assistant (1.9, unreleased) go to the page relay under this
+    // bridge's own frame id, for the workspace this route names (never what the frame says).
+    const frameId = newWorkspaceFrameId();
+    const toolsScope = { project_id: route.projectId, plugin: route.plugin, workspace: route.workspace, study_id: route.studyId };
+    const invoke: ToolInvoke = (req) => bridge.invokeTool(req);
+    const bridgeHooks: BridgeHooks = { ...hooks, assistantTools: (reg) => publishWorkspaceTools(toolsScope, frameId, reg, invoke) };
+    const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);
     bridgeRef.current = bridge;
     const detach = bridge.attach();
     const timer = setTimeout(() => {
@@ -578,6 +585,9 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
     return () => {
       clearTimeout(timer);
       detach();
+      // Its tools go with it (the bridge's close() withdrew them already when it had any):
+      // Back, another way out, the plugin-off card, a new attempt.
+      withdrawWorkspaceTools(frameId);
       // The page's full screen ends with its frame.
       if (document.fullscreenElement === frame) void document.exitFullscreen().catch(() => undefined);
     };

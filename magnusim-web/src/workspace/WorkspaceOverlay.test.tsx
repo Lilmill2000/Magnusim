@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { useProjectStore } from '../store/project';
 import { cssRules, ruleProps } from '../test/kitCss';
 import { confirmAction, dialogBusy, promptName } from '../workbench/dialogs';
+import { resetWorkspaceToolsForTests, settleWorkspaceTools, withdrawWorkspaceTools, workspaceToolsSnapshot } from './assistantTools';
 import { confirmLeaveWorkspace, installWorkspaceLeaveGuard, openWorkspaceRoute, workspaceDirty } from './leaveGuard';
 import { frameMayTakeFocus, pluginNotReady, WorkspaceOverlay } from './WorkspaceOverlay';
 
@@ -1056,6 +1057,93 @@ describe('the workspace overlay', () => {
       await waitFor(() => expect($('#modal-confirm').hidden).toBe(true));
       await later();
       expect(dialogBusy()).toBe(false);
+    });
+  });
+
+  describe("its page's tools for the app's Assistant (1.9, unreleased)", () => {
+    const ADD = {
+      name: 'add',
+      title: 'Add to the counter',
+      description: 'Adds `by` to the counter.',
+      risk: 'edit',
+      timeoutS: 30,
+      inputSchema: { type: 'object', properties: { by: { type: 'integer' } }, required: ['by'], additionalProperties: false },
+    };
+    // The workspace as the host's route names it (#/p/proj/ws/ws-demo/bench/st-1), never as the frame says.
+    const ROUTE_SCOPE = { project_id: 'proj', plugin: 'ws-demo', workspace: 'bench', study_id: 'st-1' };
+
+    beforeEach(() => {
+      resetWorkspaceToolsForTests();
+    });
+
+    /** The page offers its tools; the verdict comes when the test gives it (no relay runs here). */
+    async function offer(port: MessagePort) {
+      const answer = call(port, 'assistant.register', { tools: [ADD], guide: 'Counter notes' });
+      const pub = await waitFor(() => {
+        const c = workspaceToolsSnapshot().current;
+        if (!c || c.settled) throw new Error('nothing offered yet');
+        return c;
+      });
+      return { pub, answer };
+    }
+
+    it("hooks.assistantTools publishes the route's workspace under this bridge's frame id, and its invoke reaches this frame", async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      const { pub, answer } = await offer(port);
+      expect(pub).toMatchObject({ frameId: expect.stringMatching(/^frame-\d+$/), scope: ROUTE_SCOPE, guide: 'Counter notes', abandoned: false, dead: false });
+      expect(pub.tools.map((t) => t.name)).toEqual(['add']);
+      settleWorkspaceTools(pub.rev, { available: true, accepted: ['add'], refused: [] });
+      expect(await answer).toMatchObject({ result: { available: true, accepted: ['add'], refused: [] } });
+      // The relay's invoke runs the call in this frame (WorkspaceBridge.invokeTool).
+      const events: unknown[] = [];
+      port.onmessage = (e: MessageEvent) => void events.push(e.data);
+      const ctl = new AbortController();
+      const out = pub.invoke({ call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeoutS: 30, signal: ctl.signal, onProgress: () => undefined });
+      await waitFor(() => expect(events).toContainEqual({ event: 'assistantInvoke', data: { call: 'ai-1', turn: 'turn-1', tool: 'add', input: { by: 2 } } }));
+      // The page reloads itself: its call ends `closed` and its tools go; the same bridge keeps its frame id.
+      const next = await connect(frame, 'i2');
+      expect(await out).toMatchObject({ ok: false, code: 'closed' });
+      expect(workspaceToolsSnapshot().current).toBeNull();
+      const again = await offer(next);
+      expect(again.pub.frameId).toBe(pub.frameId);
+      expect(again.pub.rev).toBeGreaterThan(pub.rev);
+    });
+
+    it('Back (the bridge detached) withdraws them', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      const { pub } = await offer(port);
+      settleWorkspaceTools(pub.rev, { available: true, accepted: ['add'], refused: [] });
+      expect(workspaceToolsSnapshot().current).toMatchObject({ frameId: pub.frameId, settled: true });
+      $('[data-ws-back]').click();
+      await waitFor(() => expect($('#workspace-overlay').hidden).toBe(true));
+      expect(workspaceToolsSnapshot().current).toBeNull();
+    });
+
+    it('the plugin-off card withdraws them; Try again is a new frame, and the old one can no longer withdraw its list', async () => {
+      const { frame } = await open();
+      const port = await connect(frame);
+      const { pub } = await offer(port);
+      settleWorkspaceTools(pub.rev, { available: true, accepted: ['add'], refused: [] });
+      pluginStatus = 'disabled';
+      window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { plugins: true } }));
+      await waitFor(() => expect($('[data-ws-error] h2')).toHaveTextContent('Workspace demo is off.'));
+      expect(workspaceToolsSnapshot().current).toBeNull();
+      pluginStatus = 'enabled';
+      $('[data-ws-retry]').click();
+      const fresh = await waitFor(() => {
+        const f = document.getElementById('workspace-frame') as HTMLIFrameElement | null;
+        if (!f) throw new Error('no frame yet');
+        return f;
+      });
+      await act(async () => undefined);
+      const next = await connect(fresh, 'i2');
+      const again = await offer(next);
+      expect(again.pub.frameId).not.toBe(pub.frameId);
+      expect(again.pub.scope).toEqual(ROUTE_SCOPE);
+      withdrawWorkspaceTools(pub.frameId);
+      expect(workspaceToolsSnapshot().current).toMatchObject({ frameId: again.pub.frameId });
     });
   });
 });

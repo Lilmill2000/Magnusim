@@ -187,3 +187,83 @@ export interface TurnSummary {
   project_id: string | null;
   served_by: string | null;
 }
+
+/**
+ * What the server sends the page's relay (spec 8.4) on its hub channel (kind `assistant`,
+ * params {role:'relay'}): each frame is an event of the channel named by its type, with this data.
+ * `linked` is always the first, and comes again (a new link) after every reconnect.
+ */
+export interface RelayFrameData {
+  /** The channel's link token (24 hex): every relay POST carries it. */
+  linked: { link: string };
+  /**
+   * The Assistant turns bound to this tab now, and until when the tab's link is kept after
+   * the last one ended (ms since 1970 or an ISO date; null or absent: no hold).
+   */
+  active: { turns: number; hold_until?: number | string | null };
+  /** Run a tool of the page (`tool` is the page's own name for it). */
+  invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number };
+  abort: { call: string };
+  /** A question to show as the app's own confirm dialog. */
+  gate: { gate: GateView };
+  gate_closed: { gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' };
+  /** The server dropped this tab's registration (its plugin was turned off or replaced). */
+  unregistered: { reason: string };
+}
+
+export type RelayFrameType = keyof RelayFrameData;
+
+export type RelayFrame = { [K in RelayFrameType]: { type: K } & RelayFrameData[K] }[RelayFrameType];
+
+/** The workspace a registration belongs to (the host's route, never the frame's word). */
+export interface RelayWorkspace {
+  project_id: string;
+  plugin: string;
+  workspace: string;
+  study_id: string;
+}
+
+/** A page tool as the relay registers it (the bridge's checked shape). */
+export interface RelayTool {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  risk: 'read' | 'edit' | 'compute' | 'destructive';
+  timeoutS: number;
+}
+
+/** POST /api/assistant/relay/tools: `tools: []` unregisters. */
+export interface RelayToolsBody {
+  link: string;
+  /** Page-wide, above every rev this page sent before. */
+  rev: number;
+  /** The frame's pinned epoch (absent for a fresh frame). */
+  epoch?: string;
+  workspace: RelayWorkspace;
+  tools: RelayTool[];
+  guide?: string;
+}
+
+/** Its 200 answer; refusals are 409 {code:'no_channel'|'stale_rev'|'plugin_off'|'plugin_changed'} or 400. */
+export interface RelayToolsAnswer {
+  ok: true;
+  available: true;
+  accepted: string[];
+  refused: Array<{ name: string; code: string; message: string }>;
+  epoch: string;
+}
+
+/** POST /api/assistant/relay/progress: `ack` first (from the invoke frame's handler), then progress. */
+export interface RelayProgressBody {
+  link: string;
+  call: string;
+  ack?: true;
+  fraction?: number;
+  label?: string;
+}
+
+/** POST /api/assistant/relay/result: the call's end (images as base64). */
+export type RelayResultBody =
+  | { link: string; call: string; ok: true; result: { text?: string; data?: unknown; images?: Array<{ mediaType: string; data: string }> } }
+  | { link: string; call: string; ok: false; error: { code: string; message: string } };

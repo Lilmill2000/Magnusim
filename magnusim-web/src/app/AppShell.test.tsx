@@ -19,8 +19,26 @@ vi.mock('../viewer/index', () => ({ bindLegacyViewer: () => undefined }));
 vi.mock('../wizard/SetupWizard', () => ({ SetupWizard: () => null }));
 vi.mock('../workspace/WorkspaceOverlay', () => ({ WorkspaceOverlay: () => null }));
 vi.mock('../workspace/WorkspacesMenu', () => ({ WorkspacesMenu: () => null }));
+// The Assistant's page relay (its own tests: src/assistant/relay.test.ts).
+const relay = vi.hoisted(() => {
+  const stop = vi.fn();
+  return { stop, start: vi.fn(() => stop) };
+});
+vi.mock('../assistant/relay', () => ({ startAssistantRelay: relay.start }));
 
 import { AppShell } from './AppShell';
+
+describe("AppShell and the Assistant's page relay", () => {
+  it('starts it once with the shell and stops it when the shell goes', () => {
+    relay.start.mockClear();
+    relay.stop.mockClear();
+    const view = render(<AppShell />);
+    expect(relay.start).toHaveBeenCalledTimes(1);
+    expect(relay.stop).not.toHaveBeenCalled();
+    view.unmount();
+    expect(relay.stop).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('AppShell', () => {
   it("draws the app toast region, and an in-page plugin's toast shows in it", () => {

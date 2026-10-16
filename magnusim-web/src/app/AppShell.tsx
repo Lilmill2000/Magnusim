@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { RequiredPluginError } from './RequiredPluginError';
 import { ToastHost } from './ToastHost';
 import ReactDOM from 'react-dom/client';
+import { startAssistantRelay } from '../assistant/relay';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
 import { TopToolbar } from '../chrome/TopToolbar';
@@ -68,7 +69,12 @@ export function AppShell() {
       lastProject = next;
       void loadPluginUi(next ? `p:${next}` : '').catch(() => undefined);
     });
-    return unsubscribe;
+    // The open workspace's tools reach the Assistant through this tab (idle until one offers some).
+    const stopRelay = startAssistantRelay();
+    return () => {
+      unsubscribe();
+      stopRelay();
+    };
   }, []);
 
   return (

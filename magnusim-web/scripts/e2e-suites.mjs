@@ -49,6 +49,8 @@ export const CONTRACT_SPECS = ['e2e/h5-plugins.spec.js', 'e2e/h8-contract.spec.j
 export const HOST_PATHS = {
   cad: [
     'src/workspace/',
+    // The Assistant's page relay runs the open workspace's tools (bridge 1.9).
+    'src/assistant/',
     // The bridge's job, case and link streams are channels on the tab's one event stream.
     'src/api/eventHub.ts',
     'src/plugin-sdk/',
