@@ -879,11 +879,27 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     ]);
   });
 
-  it('a result that cannot be copied to the host (DataCloneError) fails the call instead of never ending', async () => {
+  it('a result that cannot be copied to the host (DataCloneError) fails the call instead of never ending, and leaves no call waiting', async () => {
     const { ws, posts, push } = await open(accepting, { clone: true });
-    await ws.assistant!.register([ADD], () => ({ text: 'ok', data: { redo: () => 1 } }));
+    // The SDK's calls waiting for the host's answer: the map that register's call goes into (the
+    // only map given a number key while register runs up to its first await).
+    const maps = new Set<Map<unknown, unknown>>();
+    const set = Map.prototype.set;
+    const spy = vi.spyOn(Map.prototype, 'set').mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      if (typeof key === 'number') maps.add(this);
+      return set.call(this, key, value);
+    });
+    const registered = ws.assistant!.register([ADD], () => ({ text: 'ok', data: { redo: () => 1 } }));
+    spy.mockRestore();
+    expect(maps.size).toBe(1);
+    const [waiting] = maps;
+    expect(waiting.size).toBe(1);
+    await registered;
+    expect(waiting.size).toBe(0);
     invoke(push, 'ai-1');
     await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
     expect(results(posts)[0]).toEqual({ call: 'ai-1', ok: false, error: { code: 'failed', message: expect.stringContaining('The result could not be sent to the app') } });
+    // The copy that failed is not waiting for an answer that never comes; the one sent instead was answered.
+    await vi.waitFor(() => expect(waiting.size).toBe(0));
   });
 });

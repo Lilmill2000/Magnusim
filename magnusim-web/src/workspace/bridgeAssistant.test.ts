@@ -692,6 +692,63 @@ describe('a leave and a closed channel end the call (1.9, unreleased)', () => {
     expect(t.calls.assistantTool('add')).toBeNull();
   });
 
+  it("a verdict that comes after its page's channel closed is not kept in the next page's channel", async () => {
+    const h = hooks();
+    const t = await connected(h);
+    let verdict: (v: unknown) => void = () => undefined;
+    h.assistantTools.mockImplementationOnce(() => Object.assign(new Promise((r) => (verdict = r)), { abandon: vi.fn() }));
+    t.send('assistant.register', { tools: [ADD] });
+    await settle(() => h.assistantTools.mock.calls.length === 1, 'the list');
+    // The page loads again (a new hello) while its list still waits.
+    window.dispatchEvent(new MessageEvent('message', { data: { magnusim: 'hello', sdkVersion: '1.4.0', instance: 'i2' }, source: t.win }));
+    await vi.waitFor(() => expect(t.posted.length).toBe(2));
+    expect(h.assistantTools).toHaveBeenLastCalledWith(null);
+    // Its verdict comes after all, once every microtask of the register has run.
+    verdict({ available: true, accepted: ['add'], refused: [] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.calls.assistantTool('add')).toBeNull();
+    expect(await t.bridge.invokeTool({ call: 's', turn: 't', tool: 'add', input: {}, timeoutS: 60, signal: new AbortController().signal, onProgress: () => undefined })).toMatchObject({
+      ok: false,
+      code: 'no_tool',
+    });
+    t.end();
+  });
+
+  it('a list close() abandoned is not abandoned again when its 5 s run out', async () => {
+    const h = hooks();
+    const t = await connected(h);
+    const abandon = vi.fn();
+    h.assistantTools.mockImplementationOnce(() => Object.assign(new Promise(() => undefined), { abandon }));
+    fakeTimers();
+    t.send('assistant.register', { tools: [ADD] });
+    await settle(() => h.assistantTools.mock.calls.length === 1, 'the list');
+    t.end();
+    expect(abandon).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(ASSISTANT_REGISTER_MS);
+    expect(abandon).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stop, then a leave or a closed channel within its 2 s: the call reads aborted, as stopped', async () => {
+    const stopped = { ok: false, code: 'aborted', message: 'it was stopped before its page said it finished' };
+    const t = await connected();
+    await t.call('assistant.register', { tools: [ADD] });
+    await t.call('nav.leaveHook', { on: true });
+    const a = invoke(t);
+    await settle(() => of(t.events, 'assistantInvoke').length === 1, 'the invoke');
+    a.ctl.abort();
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: () => undefined });
+    expect(await outcomeOf(a)).toEqual(stopped);
+    await settle(() => of(t.events, 'leave').length === 1, 'the leave');
+    t.end();
+    const t2 = await connected();
+    await t2.call('assistant.register', { tools: [ADD] });
+    const b = invoke(t2);
+    await settle(() => of(t2.events, 'assistantInvoke').length === 1, 'the invoke');
+    b.ctl.abort();
+    t2.end();
+    expect(await outcomeOf(b)).toEqual(stopped);
+  });
+
   it('a page that offered nothing: closing tells the app nothing; a reload must register again', async () => {
     const h = hooks();
     const t = await connected(h);
