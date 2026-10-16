@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const decode = (b64) => Buffer.from(b64, 'base64').toString('utf8');
+const mixedCase = (s) => s[0].toUpperCase() + s.slice(1).toLowerCase();
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // The vendor words, case-insensitive, as whole words: no letter right before or after, so
@@ -192,6 +193,8 @@ describe('vendor names stay in the assistant\'s own files', () => {
       'THIRD_PARTY_NOTICES.md': `${w.b}\n`,
       // Allowed path names (and contents): the provider adapters only.
       [`magnusim-web/scripts/server/assistant/providers/${w.c}-compatible.ts`]: `${w.c}\n`,
+      // Not allowed: a provider's name one folder below the adapters (its contents still may).
+      [`magnusim-web/scripts/server/assistant/providers/sub/${w.c}.ts`]: 'export {};\n',
       // Not allowed: one level too deep (`*` stays within a folder), or the right name in the wrong folder.
       'magnusim-web/e2e/sub/assistant-settings.spec.js': `${w.c}\n`,
       'magnusim-web/e2e/assistant-old/x.spec.js': `${w.c}\n`,
@@ -210,6 +213,11 @@ describe('vendor names stay in the assistant\'s own files', () => {
       [`magnusim-web/scripts/server/assistant/providers/${decode('Q0xBVURFLm1k')}`]: 'x\n',
       [decode('R0VNSU5JLm1k')]: 'x\n',
       [`magnusim-web/${decode('LndpbmRzdXJmcnVsZXM=')}`]: 'x\n',
+      // Coding-tool files in any case: the tools read these names case-insensitively on Windows.
+      [`docs/${decode('QUdFTlRTLm1k').toLowerCase()}`]: 'x\n',
+      [`magnusim-web/docs/${mixedCase(decode('R0VNSU5JLm1k'))}`]: 'x\n',
+      [`magnusim-web/src/${decode('bGxtcy50eHQ=').replace(/txt$/, 'TXT')}`]: 'x\n',
+      [`bundled-plugins/x/.${mixedCase(decode('Y3Vyc29y'))}/rules/y.mdc`]: 'x\n',
       // Not a coding-tool file: the pointer word on its own.
       [`magnusim-web/src/${decode('Y3Vyc29y')}.ts`]: 'export {};\n',
     };
@@ -234,6 +242,7 @@ describe('vendor names stay in the assistant\'s own files', () => {
       'magnusim-web/THIRD_PARTY_NOTICES.md:1',
       `magnusim-web/src/${w.b}.ts`,
       `magnusim-web/scripts/server/assistant/${w.b}.ts`,
+      `magnusim-web/scripts/server/assistant/providers/sub/${w.c}.ts`,
       `.${w.a}/settings.json`,
       `magnusim-web/.${decode('Y3Vyc29y')}/rules/x.mdc`,
       `.${decode('Y3Vyc29y')}rules`,
@@ -244,6 +253,10 @@ describe('vendor names stay in the assistant\'s own files', () => {
       `magnusim-web/scripts/server/assistant/providers/${decode('Q0xBVURFLm1k')}`,
       decode('R0VNSU5JLm1k'),
       `magnusim-web/${decode('LndpbmRzdXJmcnVsZXM=')}`,
+      `docs/${decode('QUdFTlRTLm1k').toLowerCase()}`,
+      `magnusim-web/docs/${mixedCase(decode('R0VNSU5JLm1k'))}`,
+      `magnusim-web/src/${decode('bGxtcy50eHQ=').replace(/txt$/, 'TXT')}`,
+      `bundled-plugins/x/.${mixedCase(decode('Y3Vyc29y'))}/rules/y.mdc`,
     ].sort();
     assert.deepEqual(where, expected, hits.join('\n'));
     // Two hits in one line are reported once, with the line's text.
