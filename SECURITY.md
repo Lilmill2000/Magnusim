@@ -155,7 +155,9 @@ never as instructions, and the app asks before the Assistant starts a
 computation or does anything that can't be undone.
 
 The Assistant's test switches (`MAGNUSIM_TEST_ASSISTANT_*`) work only together
-with `MAGNUSIM_TEST_ASSISTANT=1`; `run.bat` and Setup never set them.
+with `MAGNUSIM_TEST_ASSISTANT=1`; `run.bat` and Setup never set them. The
+stand-in key protector also needs a test home (`MAGNUSIM_ASSISTANT_HOME` or
+`MAGNUSIM_LOCAL_JSON`), so it never keeps the keys in this PC's real folder.
 
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new

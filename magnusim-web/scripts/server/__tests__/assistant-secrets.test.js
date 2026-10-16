@@ -23,6 +23,9 @@ const { resetAssistantState } = await import('../assistant/state.ts');
 const { redact, registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { ProviderError } = await import('../assistant/types.ts');
 
+/** The environment a test switch is honoured in: the switch on, and a test home. */
+const TEST_ENV = { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_ASSISTANT_HOME: join(ROOT, 'home') };
+
 const CANARY = 'sk-ant-canary-0123456789-ZZtop-9Qa1';
 const OTHER = 'sk-other-canary-abcdefghijklmnop';
 
@@ -330,7 +333,7 @@ describe('what goes wrong', () => {
   });
 
   it('blocked: keys cannot be stored, the reason is known without trying, and nothing is written', async () => {
-    const picked = pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'blocked' } });
+    const picked = pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'blocked' } });
     assert.equal(picked.test, 'blocked');
     const s = store.createSecretStore({ dir, picked });
     await s.load();
@@ -351,7 +354,7 @@ describe('what goes wrong', () => {
   });
 
   it('timeout: nothing written; the next save tries again only after 60 s', async () => {
-    const picked = pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'timeout' } });
+    const picked = pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'timeout' } });
     assert.equal(picked.test, 'timeout');
     let now = 1_000_000;
     let tries = 0;
@@ -436,7 +439,7 @@ describe('at the same time', () => {
   });
 
   it('the slow: test switch delays each helper run and keeps the file protector', async () => {
-    const picked = pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'slow:60' } });
+    const picked = pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'slow:60' } });
     assert.equal(picked.test, 'slow:60');
     assert.equal(picked.protector.kind, 'file');
     const t0 = Date.now();
@@ -446,7 +449,7 @@ describe('at the same time', () => {
   });
 });
 
-describe('the test switch needs MAGNUSIM_TEST_ASSISTANT=1', () => {
+describe('the test switch needs MAGNUSIM_TEST_ASSISTANT=1 and a test home', () => {
   function capture(fn) {
     const lines = [];
     const orig = console.warn;
@@ -473,14 +476,34 @@ describe('the test switch needs MAGNUSIM_TEST_ASSISTANT=1', () => {
     assert.equal(zero.out.protector, dpapi);
   });
 
+  it('outside a test home it is ignored with a warning: on Windows the real folder keeps DPAPI', () => {
+    let dpapiMade = 0;
+    const dpapi = { kind: 'dpapi', knownUnavailable: null, protect: async () => ({}), unprotect: async () => Buffer.alloc(32) };
+    const makeDpapi = () => (dpapiMade += 1, dpapi);
+    for (const value of ['file', 'slow:10', 'blocked', 'timeout']) {
+      const env = { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: value, APPDATA: join(ROOT, 'appdata') };
+      const { out, lines } = capture(() => pickProtector({ env, platform: 'win32', makeDpapi }));
+      assert.equal(out.protector, dpapi, value);
+      assert.equal(out.test, null, value);
+      assert.ok(lines.some((l) => /^\[assistant\] MAGNUSIM_TEST_ASSISTANT_PROTECTOR is ignored outside a test home/.test(l)), lines.join('\n'));
+    }
+    assert.equal(dpapiMade, 4);
+    // Any test home will do: its own variable, beside the local settings file, or their older names.
+    for (const home of [{ MAGNUSIM_ASSISTANT_HOME: join(ROOT, 'h') }, { MAGNUSIM_LOCAL_JSON: join(ROOT, 'l.json') }, { CFDDESK_ASSISTANT_HOME: join(ROOT, 'h') }, { CFDDESK_LOCAL_JSON: join(ROOT, 'l.json') }]) {
+      const out = pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'file', ...home }, platform: 'win32', makeDpapi });
+      assert.equal(out.test, 'file', JSON.stringify(home));
+      assert.equal(out.protector.kind, 'file', JSON.stringify(home));
+    }
+  });
+
   it('with it, the switch applies; an unknown value is ignored; unset gives the platform protector', () => {
     const makeDpapi = () => ({ kind: 'dpapi', knownUnavailable: null, protect: async () => ({}), unprotect: async () => Buffer.alloc(32) });
-    const on = pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'file' }, platform: 'win32', makeDpapi });
+    const on = pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'file' }, platform: 'win32', makeDpapi });
     assert.equal(on.protector.kind, 'file');
     assert.equal(on.test, 'file');
-    const blocked = pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'blocked' }, platform: 'win32', makeDpapi });
+    const blocked = pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'blocked' }, platform: 'win32', makeDpapi });
     assert.equal(blocked.protector.knownUnavailable, 'blocked');
-    const odd = capture(() => pickProtector({ env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'plaintext' }, platform: 'win32', makeDpapi }));
+    const odd = capture(() => pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'plaintext' }, platform: 'win32', makeDpapi }));
     assert.equal(odd.out.protector.kind, 'dpapi');
     assert.equal(odd.out.test, null);
     assert.equal(pickProtector({ env: {}, platform: 'win32', makeDpapi }).protector.kind, 'dpapi');

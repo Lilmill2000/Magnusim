@@ -7,11 +7,14 @@
  * - Other systems: a 0600 file in a 0700 folder (file.ts), and Settings says so.
  *
  * MAGNUSIM_TEST_ASSISTANT_PROTECTOR=blocked|timeout|slow:<ms>|file puts a stand-in in
- * its place for tests, and only together with MAGNUSIM_TEST_ASSISTANT=1: alone it is
- * ignored with a warning, so a stray variable can never put the Windows master key in a
- * plain file. No stand-in stores keys in plain text (`file` and `slow:` keep the master as
- * the file protector does). The store picks once, at its first use.
+ * its place for tests, and only together with MAGNUSIM_TEST_ASSISTANT=1 and a test home
+ * (MAGNUSIM_ASSISTANT_HOME or MAGNUSIM_LOCAL_JSON): otherwise it is ignored with a warning,
+ * so stray variables (a shell left set up for tests that then starts the app) can never
+ * put the Windows master key of this PC's real folder in a plain file. No stand-in stores
+ * keys in plain text (`file` and `slow:` keep the master as the file protector does). The
+ * store picks once, at its first use.
  */
+import { assistantHomeIsOverridden } from '../home.ts';
 import { alog } from '../log.ts';
 import { dpapiProtector } from './dpapi.ts';
 import { fileProtector } from './file.ts';
@@ -96,6 +99,10 @@ export function pickProtector(o: PickOptions = {}): PickedProtector {
   if (!raw) return { protector: native(), test: null };
   if (env.MAGNUSIM_TEST_ASSISTANT !== '1') {
     alog('warn', 'MAGNUSIM_TEST_ASSISTANT_PROTECTOR is ignored without MAGNUSIM_TEST_ASSISTANT=1');
+    return { protector: native(), test: null };
+  }
+  if (!assistantHomeIsOverridden({ env })) {
+    alog('warn', 'MAGNUSIM_TEST_ASSISTANT_PROTECTOR is ignored outside a test home (MAGNUSIM_ASSISTANT_HOME or MAGNUSIM_LOCAL_JSON)');
     return { protector: native(), test: null };
   }
   const nativeKind: ProtectorKind = platform === 'win32' ? 'dpapi' : 'file';
