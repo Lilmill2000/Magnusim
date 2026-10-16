@@ -13,7 +13,7 @@
  * routes that bring the model adapters. Until a server has them the step leaves those
  * parts out (a missing models list or Test route says so plainly, nothing more).
  */
-import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { AssistantApiError, assistantGet, assistantPost, REMOTE_TEXT } from '../../assistant/api';
 import { refreshStatus, retryStatus, useAssistantStatus, writeStatus } from '../../assistant/status';
 import type {
@@ -75,13 +75,30 @@ export const LOCAL_LIMITS_TEXT = 'Local servers cost nothing; the step and time 
 export const LOCAL_PRIVACY_TEXT = 'On this PC: project data stays here.';
 const OLLAMA_HINT_TEXT =
   "Ollama gives a model a 4K context unless told otherwise, which can silently cut off the tools Magnusim sends. Give the model a larger context (num_ctx in its Modelfile).";
-const TEMPLATE_TEXT =
-  "But the model didn't call the test tool, so it may not handle Magnusim's tools: its chat template may not support tool calls. In LM Studio, pick a model marked for tool use or load a template that has them.";
+const TEMPLATE_FIX = 'In LM Studio, pick a model marked for tool use or load a template that has them.';
+/** A local model wrote the test tool's call as text: its chat template has no tool calls. */
+export const AS_TEXT_TEXT = `But the model wrote the tool call as text instead of making it: its chat template doesn't support tool calls, so Magnusim's tools won't work with it. ${TEMPLATE_FIX}`;
+/** A local model answered without calling the test tool. */
+export const TEMPLATE_TEXT = `But the model didn't call the test tool, so it may not handle Magnusim's tools: its chat template may not support tool calls. ${TEMPLATE_FIX}`;
+/** A cloud model answered without calling the test tool (no chat template to blame). */
+export const NOT_USED_TEXT = "But the model didn't call the test tool, so it may not handle Magnusim's tools. Test again, or choose another model.";
 const NO_TEST_TEXT = "This copy of Magnusim can't test the connection yet.";
 
 const NO_KEY: KeyStatus = { set: false, last4: null, set_at: null, state: 'none' };
 
 const isCloud = (p: ProviderChoice): p is 'anthropic' | 'openai' => p === 'anthropic' || p === 'openai';
+
+/** Which key the provider would use: none, or the one saved at that time (a new save is another key). */
+function keyStamp(status: AssistantStatus, provider: ProviderId): string {
+  const k = status.keys?.[provider];
+  return k?.set ? `set:${k.set_at ?? ''}:${k.state}` : 'none';
+}
+
+/** What a Test result is about: the provider, its model, a local server's address, and the key. */
+function testKey(status: AssistantStatus, provider: ProviderId): string {
+  const where = provider === 'openai_compatible' ? status.base_url : '';
+  return `test:${provider}:${status.models?.[provider] ?? ''}:${where}:${keyStamp(status, provider)}`;
+}
 
 /** A price: $0.42, or $0.125 when cents are not enough. */
 function money(n: number): string {
@@ -144,20 +161,43 @@ function hasFallback(s: AssistantStatus): boolean {
   return typeof f === 'object' && f !== null && f.on === true;
 }
 
-/** Tool-call verdicts that say tool calling works, and those that say it doesn't. */
+/** Tool-call verdicts that say tool calling works, and those that say the model didn't call the tool. */
 const TOOLS_WORK: ReadonlySet<unknown> = new Set(['works', 'ok', true]);
-const TOOLS_FAIL: ReadonlySet<unknown> = new Set(['not_used', 'as_text', false]);
+const TOOLS_NOT_USED: ReadonlySet<unknown> = new Set(['not_used', false]);
 
-/** The Test result line, and whether everything works. */
-export function testLine(a: TestAnswer): { ok: boolean; text: string } {
+/** What a Test cost: "$0.0021", "about $0.0021" for a model Magnusim has no price for, "under $0.0001". */
+function testCost(usd: number, estimated: boolean): string {
+  const text = usd < 0.00005 ? 'under $0.0001' : `$${usd.toFixed(4)}`;
+  return estimated ? `about ${text}` : text;
+}
+
+/**
+ * The Test result line, and whether everything works. `provider` says which advice fits a
+ * model that didn't call the test tool: a local model's chat template, or not.
+ */
+export function testLine(a: TestAnswer, provider?: ProviderId): { ok: boolean; text: string } {
   if (!a.ok) return { ok: false, text: a.error || 'The test failed.' };
   const secs = (Number(a.ms) / 1000).toFixed(1);
-  const cost = typeof a.cost_usd === 'number' && a.cost_usd > 0 ? ` ($${a.cost_usd.toFixed(4)})` : '';
+  const estimated = (a as { estimated?: unknown }).estimated === true;
+  const cost = typeof a.cost_usd === 'number' && a.cost_usd > 0 ? ` (${testCost(a.cost_usd, estimated)})` : '';
   const connected = `Connected to ${a.served_by || a.model} in ${secs} s${cost}.`;
   if (TOOLS_WORK.has(a.tools)) return { ok: true, text: `${connected} Tool calling works.` };
-  if (TOOLS_FAIL.has(a.tools)) return { ok: false, text: `${connected} ${TEMPLATE_TEXT}` };
+  if (a.tools === 'as_text') return { ok: false, text: `${connected} ${AS_TEXT_TEXT}` };
+  if (TOOLS_NOT_USED.has(a.tools)) {
+    return { ok: false, text: `${connected} ${provider === 'anthropic' || provider === 'openai' ? NOT_USED_TEXT : TEMPLATE_TEXT}` };
+  }
   // A verdict this page doesn't know: the connection works; say nothing about tools.
   return { ok: true, text: connected };
+}
+
+/**
+ * A server's sentence with its `code` spans shown as code (the local-server hint names a
+ * command); text with an unmatched backtick shows as it came.
+ */
+export function withCode(text: string): ReactNode {
+  const parts = text.split('`');
+  if (parts.length < 3 || parts.length % 2 === 0) return text;
+  return parts.map((p, i) => (i % 2 ? <code key={i}>{p}</code> : p));
 }
 
 function supportsTextSecurity(): boolean {
@@ -227,7 +267,8 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
       {provider !== 'off' ? <KeyBlock key={`key:${provider}`} status={status} slot={provider} /> : null}
       {provider !== 'off' ? <ModelBlock key={`model:${provider}`} status={status} provider={provider} /> : null}
       {isCloud(provider) ? <EffortBlock status={status} /> : null}
-      {provider !== 'off' ? <TestBlock key={`test:${provider}`} /> : null}
+      {/* A result is about one provider, model, address and key: a change starts the block afresh. */}
+      {provider !== 'off' ? <TestBlock key={testKey(status, provider)} provider={provider} /> : null}
       {provider !== 'off' ? <PrivacyBlock status={status} provider={provider} /> : null}
       {provider !== 'off' ? <LimitsBlock status={status} /> : null}
       <TestSwitchLine status={status} />
@@ -438,35 +479,38 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
           {warning}
         </p>
       ) : null}
-      <div className="wiz-assistant-row">
-        {blocked ? null : (
-          <>
-            <input
-              ref={input}
-              className="wiz-assistant-input wiz-assistant-wide"
-              aria-label={label}
-              placeholder={token ? 'Only if your server asks for one' : `Paste your ${CLOUD_LABEL[slot as 'anthropic' | 'openai']} key`}
-              data-assistant-key-input="1"
-              {...IGNORED_BY_PASSWORD_MANAGERS}
-              {...(masked ? { type: 'text', style: TEXT_SECURITY } : { type: 'password' })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  void save();
-                }
-              }}
-            />
-            <button type="button" className="home-btn" data-assistant-key-save="1" disabled={!!busy} onClick={() => void save()}>
-              {busy === 'save' ? 'Saving…' : token ? 'Save token' : 'Save key'}
+      {/* Keys can't be stored and none is saved: no row at all (an empty one would still take a gap). */}
+      {blocked && !key.set ? null : (
+        <div className="wiz-assistant-row">
+          {blocked ? null : (
+            <>
+              <input
+                ref={input}
+                className="wiz-assistant-input wiz-assistant-wide"
+                aria-label={label}
+                placeholder={token ? 'Only if your server asks for one' : `Paste your ${CLOUD_LABEL[slot as 'anthropic' | 'openai']} key`}
+                data-assistant-key-input="1"
+                {...IGNORED_BY_PASSWORD_MANAGERS}
+                {...(masked ? { type: 'text', style: TEXT_SECURITY } : { type: 'password' })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void save();
+                  }
+                }}
+              />
+              <button type="button" className="home-btn" data-assistant-key-save="1" disabled={!!busy} onClick={() => void save()}>
+                {busy === 'save' ? 'Saving…' : token ? 'Save token' : 'Save key'}
+              </button>
+            </>
+          )}
+          {key.set ? (
+            <button type="button" className="home-btn" data-assistant-key-remove="1" disabled={!!busy} onClick={() => void remove()}>
+              {busy === 'remove' ? 'Removing…' : token ? 'Remove token' : 'Remove key'}
             </button>
-          </>
-        )}
-        {key.set ? (
-          <button type="button" className="home-btn" data-assistant-key-remove="1" disabled={!!busy} onClick={() => void remove()}>
-            {busy === 'remove' ? 'Removing…' : token ? 'Remove token' : 'Remove key'}
-          </button>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      )}
       {storage ? (
         <p className={blocked ? 'wiz-assistant-warn' : 'wiz-assistant-meta'} data-assistant-storage={storage.kind}>
           {storage.note}
@@ -490,8 +534,10 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
   const [tick, setTick] = useState(0);
   const [other, setOther] = useState(false);
   const [error, setError] = useState('');
-  // A local server's list depends on where it is.
+  // A local server's list depends on where it is; a provider's on the key (without one the
+  // server lists only the models Magnusim knows).
   const where = provider === 'openai_compatible' ? status.base_url : '';
+  const key = keyStamp(status, provider);
   useEffect(() => {
     const ac = new AbortController();
     setList((l) => ({ state: 'loading', models: l.models }));
@@ -512,7 +558,7 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
       },
     );
     return () => ac.abort();
-  }, [provider, where, tick]);
+  }, [provider, where, key, tick]);
 
   const choose = async (id: string) => {
     setError('');
@@ -565,7 +611,7 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
       {other ? <ModelIdField key={current} saved={current} onSaved={() => setOther(false)} onError={setError} /> : null}
       {list.state === 'error' ? (
         <p className="wiz-assistant-error" data-assistant-models-error="1">
-          Couldn't list the models: {list.error}
+          Couldn't list the models: {withCode(list.error ?? '')}
         </p>
       ) : null}
       {price ? (
@@ -645,13 +691,13 @@ function EffortBlock({ status }: { status: AssistantStatus }) {
 
 type TestView = { state: 'idle' } | { state: 'running' } | { state: 'done'; ok: boolean; text: string };
 
-function TestBlock() {
+function TestBlock({ provider }: { provider: ProviderId }) {
   const [view, setView] = useState<TestView>({ state: 'idle' });
   const run = async () => {
     setView({ state: 'running' });
     try {
       const answer = await assistantPost<TestAnswer>('/api/assistant/test', {});
-      setView({ state: 'done', ...testLine(answer) });
+      setView({ state: 'done', ...testLine(answer, provider) });
     } catch (e) {
       const text = e instanceof AssistantApiError && e.status === 404 ? NO_TEST_TEXT : e instanceof Error ? e.message : String(e);
       setView({ state: 'done', ok: false, text });
@@ -667,10 +713,10 @@ function TestBlock() {
         </button>
         <p
           role="status"
-          className={view.state === 'done' && !view.ok ? 'wiz-assistant-error' : 'wiz-assistant-meta'}
+          className={`wiz-assistant-test-line ${view.state === 'done' && !view.ok ? 'wiz-assistant-error' : 'wiz-assistant-meta'}`}
           data-assistant-test-result={view.state === 'done' ? (view.ok ? 'ok' : 'failed') : view.state}
         >
-          {view.state === 'done' ? view.text : view.state === 'running' ? 'Testing the connection…' : ''}
+          {view.state === 'done' ? withCode(view.text) : view.state === 'running' ? 'Testing the connection…' : ''}
         </p>
       </div>
     </div>

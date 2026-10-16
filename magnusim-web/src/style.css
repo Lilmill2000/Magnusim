@@ -5169,7 +5169,7 @@ body.is-recording #viewport-gizmo {
 .wiz-assistant-input:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
 .wiz-assistant-input[aria-invalid="true"] { border-color: var(--mg-danger); }
 .wiz-assistant-wide { flex: 1 1 220px; }
-.wiz-assistant-caps { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: var(--mg-space-2); }
+.wiz-assistant-caps { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: var(--mg-space-2); }
 .wiz-assistant-cap { display: flex; flex-direction: column; gap: 2px; font-size: var(--mg-text-sm); color: var(--mg-text-muted); }
 .wiz-assistant-cap .wiz-assistant-input { width: 100%; }
 .wiz-assistant-status { margin: 0; font-size: var(--mg-text-md); color: var(--mg-text-strong); }
@@ -5181,7 +5181,10 @@ body.is-recording #viewport-gizmo {
 .wiz-assistant-note { font-size: var(--mg-text-md); color: var(--mg-text-body); }
 .wiz-assistant-warn { color: var(--mg-warning); }
 .wiz-assistant-error { color: var(--mg-danger); }
+.wiz-assistant-test-line { flex: 1 1 240px; min-width: 0; }
 .wiz-assistant-error-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-md); color: var(--mg-danger); }
+/* A command in a server's sentence ("Ollama: `ollama serve`"). */
+.wiz-assistant code { padding: 0 var(--mg-space-1); border-radius: var(--mg-radius-xs); background: var(--mg-surface-muted); font-family: var(--mg-font-mono); }
 
 /* Plugin studies (H11): project-level studies a plugin owns, below SIMULATIONS.
    Shown in every stage (an empty project too); the simulations section's rules are untouched. */

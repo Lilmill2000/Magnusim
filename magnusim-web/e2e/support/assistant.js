@@ -47,6 +47,65 @@ export async function chooseProvider(page, id) {
   await expect(pane.locator('[data-assistant-provider]')).toHaveAttribute('data-assistant-provider', id);
 }
 
+/** Saves `key` in the step's key field and waits until the step shows it by its last 4. */
+export async function saveKey(page, key) {
+  const pane = assistantPane(page);
+  await pane.locator('[data-assistant-key-input]').fill(key);
+  await pane.locator('[data-assistant-key-save]').click();
+  await expect(pane.locator('[data-assistant-key-status]')).toHaveText(`Key set, ends in …${key.slice(-4)}`);
+  await expect(pane.locator('[data-assistant-key-input]')).toHaveValue('');
+}
+
+/** Presses Test, waits for the server's answer and returns the result line (`[data-assistant-test-result]`). */
+export async function pressTest(page) {
+  const pane = assistantPane(page);
+  const result = pane.locator('[data-assistant-test-result]');
+  const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/test' && r.request().method() === 'POST', {
+    timeout: 60_000,
+  });
+  await pane.locator('[data-assistant-test]').click();
+  await answered;
+  await expect(result).toHaveAttribute('data-assistant-test-result', /^(ok|failed)$/);
+  return result;
+}
+
+/**
+ * Collects the text of every API answer the page reads in full from now on (a stream never
+ * finishes, and is left out). `all()` resolves to [{url, t}].
+ */
+export function collectAnswers(page) {
+  const answers = [];
+  page.on('requestfinished', (req) => {
+    const url = req.url();
+    if (!url.includes('/api/')) return;
+    answers.push(
+      req
+        .response()
+        .then((r) => (r ? r.text() : ''))
+        .then(
+          (t) => ({ url, t }),
+          () => ({ url, t: '' }),
+        ),
+    );
+  });
+  return { all: () => Promise.all(answers) };
+}
+
+/**
+ * Where `secret` appears in one request the fake provider got (fake.requests()):
+ * 'header:<name>', 'path', 'query' or 'body', in that order; [] when nowhere.
+ */
+export function whereInRequest(req, secret) {
+  const out = [];
+  for (const [name, value] of Object.entries(req.headers || {})) {
+    if (String(value).includes(secret)) out.push(`header:${name.toLowerCase()}`);
+  }
+  if (String(req.path || '').includes(secret)) out.push('path');
+  if (String(req.query || '').includes(secret)) out.push('query');
+  if (req.body != null && JSON.stringify(req.body).includes(secret)) out.push('body');
+  return out;
+}
+
 /** GET /api/assistant/status from this PC (the test process). */
 export async function assistantStatus(request, base) {
   const r = await request.get(`${base}/api/assistant/status`);

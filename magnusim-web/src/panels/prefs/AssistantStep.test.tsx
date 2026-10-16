@@ -3,15 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_TEXT } from '../../assistant/api';
 import { resetStatusStore, statusSnapshot } from '../../assistant/status';
 import {
+  AS_TEXT_TEXT,
   AssistantStep,
   DEPS_TEXT,
   FALLBACK_TEXT,
   LOCAL_LIMITS_TEXT,
   LOCAL_PRICE_TEXT,
   LOCAL_PRIVACY_TEXT,
+  NOT_USED_TEXT,
   SHARED_PC_TEXT,
+  TEMPLATE_TEXT,
   testLine,
   UNKNOWN_PRICE_TEXT,
+  withCode,
 } from './AssistantStep';
 
 const confirmAction = vi.fn(async (_opts?: Record<string, unknown>) => false);
@@ -314,10 +318,21 @@ describe('AssistantStep key', () => {
     expect(q('[data-assistant-key-input]')).toBeNull();
     expect(q('[data-assistant-key-save]')).toBeNull();
     expect(q('[data-assistant-storage]')).toHaveTextContent("keys can't be saved on this PC");
+    // No empty row of controls left behind (it would still take a gap).
+    expect(q('[data-assistant-key="anthropic"] .wiz-assistant-row')).toBeNull();
     const local = q<HTMLInputElement>('[data-assistant-provider-option="openai_compatible"] input')!;
     expect(local.disabled).toBe(false);
     fireEvent.click(local);
     await waitFor(() => expect(q('[data-assistant-endpoint]')).toBeTruthy());
+  });
+
+  it('when key storage is blocked, a key saved before can still be removed', async () => {
+    const blocked = { kind: 'unavailable', reason: 'blocked', note: "Windows blocked the helper Magnusim uses to encrypt keys, so keys can't be saved on this PC. A local server still works." };
+    await ready({ provider: 'anthropic', storage: blocked, keys: { anthropic: { set: true, last4: 'abcd', set_at: 'x', state: 'ok' }, openai: NO_KEY, openai_compatible: NO_KEY } });
+    expect(q('[data-assistant-key-input]')).toBeNull();
+    const row = q('[data-assistant-key="anthropic"] .wiz-assistant-row')!;
+    expect(row.querySelectorAll('button')).toHaveLength(1);
+    expect(row.querySelector('[data-assistant-key-remove]')).toHaveTextContent('Remove key');
   });
 
   it('a local server offers an optional token', async () => {
@@ -517,18 +532,46 @@ describe('AssistantStep models and Test', () => {
   });
 
   it.each([
-    ['works', true, 'Tool calling works.'],
-    ['ok', true, 'Tool calling works.'],
-    [true, true, 'Tool calling works.'],
-    ['not_used', false, "But the model didn't call the test tool"],
-    ['as_text', false, "But the model didn't call the test tool"],
-    [false, false, "But the model didn't call the test tool"],
-  ])('the Test reads the tool verdict %s', (tools, works, sentence) => {
-    const line = testLine({ ok: true, model: 'm-1', ms: 1000, tools: tools as 'works' });
+    ['works', 'openai_compatible', true, 'Tool calling works.'],
+    ['ok', 'anthropic', true, 'Tool calling works.'],
+    [true, 'openai', true, 'Tool calling works.'],
+    ['as_text', 'openai_compatible', false, AS_TEXT_TEXT],
+    ['not_used', 'openai_compatible', false, TEMPLATE_TEXT],
+    [false, 'openai_compatible', false, TEMPLATE_TEXT],
+    ['not_used', 'anthropic', false, NOT_USED_TEXT],
+    ['not_used', 'openai', false, NOT_USED_TEXT],
+  ])('the Test reads the tool verdict %s from %s', (tools, provider, works, sentence) => {
+    const line = testLine({ ok: true, model: 'm-1', ms: 1000, tools: tools as 'works' }, provider as 'anthropic');
     expect(line.ok).toBe(works);
-    expect(line.text.startsWith('Connected to m-1 in 1.0 s. ')).toBe(true);
-    expect(line.text).toContain(sentence);
-    expect(line.text.includes('Tool calling works.')).toBe(works);
+    expect(line.text).toBe(`Connected to m-1 in 1.0 s. ${sentence}`);
+  });
+
+  it('only a local model is told about chat templates; a model that wrote the call as text is told so', () => {
+    const asText = testLine({ ok: true, model: 'qwen', ms: 2000, tools: 'as_text' }, 'openai_compatible').text;
+    expect(asText).toContain('wrote the tool call as text');
+    expect(asText).toContain("its chat template doesn't support tool calls");
+    const cloud = testLine({ ok: true, model: 'claude-opus-5-5', ms: 2000, tools: 'not_used' }, 'anthropic').text;
+    expect(cloud).not.toContain('template');
+    expect(cloud).not.toContain('LM Studio');
+  });
+
+  it.each([
+    [0.0021, false, '($0.0021)'],
+    [0.00002, false, '(under $0.0001)'],
+    [0.0021, true, '(about $0.0021)'],
+  ])('the Test cost %s (estimated %s) reads %s', (cost, estimated, shown) => {
+    const line = testLine({ ok: true, model: 'm-1', ms: 1400, tools: 'works', cost_usd: cost, estimated } as never, 'anthropic');
+    expect(line.text).toBe(`Connected to m-1 in 1.4 s ${shown}. Tool calling works.`);
+  });
+
+  it('shows a command in a server sentence as code, and text with a lone backtick as it came', () => {
+    const { container } = render(<p>{withCode('Ollama: `ollama serve` and test again.')}</p>);
+    expect(container.querySelector('code')).toHaveTextContent(/^ollama serve$/);
+    expect(container).toHaveTextContent('Ollama: ollama serve and test again.');
+    cleanup();
+    const lone = render(<p>{withCode('a ` b')}</p>);
+    expect(lone.container.querySelector('code')).toBeNull();
+    expect(lone.container).toHaveTextContent('a ` b');
   });
 
   it('a verdict the page does not know claims neither way', () => {
@@ -561,6 +604,94 @@ describe('AssistantStep models and Test', () => {
     fireEvent.click(q('[data-assistant-test]')!);
     await waitFor(() => expect(q('[data-assistant-test-result]')).toHaveTextContent('Nothing answered at http://127.0.0.1:1234/v1.'));
     expect(q('[data-assistant-test-result]')).toHaveAttribute('data-assistant-test-result', 'failed');
+  });
+
+  it("a local server that doesn't answer: the sentence as the server wrote it, its command shown as code", async () => {
+    const nothing =
+      'Nothing answered at http://127.0.0.1:1234/v1. Start the server (LM Studio: Developer → Start server; Ollama: `ollama serve`) and test again.';
+    testAnswer = { status: 200, body: { ok: false, code: 'unreachable', error: nothing, cost_usd: 0 } };
+    modelsAnswer = { status: 502, body: { ok: false, code: 'unreachable', error: nothing, models: [] } };
+    await ready({ provider: 'openai_compatible', models: { anthropic: 'a', openai: 'b', openai_compatible: 'qwen3.8-27b' } });
+    await waitFor(() => expect(q('[data-assistant-models-error]')).toBeTruthy());
+    expect(q('[data-assistant-models-error]')!.textContent).toBe(`Couldn't list the models: ${nothing.replace(/`/g, '')}`);
+    expect(q('[data-assistant-models-error] code')).toHaveTextContent(/^ollama serve$/);
+    fireEvent.click(q('[data-assistant-test]')!);
+    await waitFor(() => expect(q('[data-assistant-test-result]')).toHaveAttribute('data-assistant-test-result', 'failed'));
+    const result = q('[data-assistant-test-result]')!;
+    expect(result.textContent).toBe(
+      'Nothing answered at http://127.0.0.1:1234/v1. Start the server (LM Studio: Developer → Start server; Ollama: ollama serve) and test again.',
+    );
+    expect(result.querySelector('code')).toHaveTextContent(/^ollama serve$/);
+    expect(result.innerHTML).not.toContain('`');
+  });
+
+  it('a key saved or removed reads the model list again (with a key the provider lists its own)', async () => {
+    modelsAnswer = { status: 200, body: { ok: true, source: 'curated', models: [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', priced: true }] } };
+    await ready({ provider: 'anthropic' });
+    const lists = () => requests.filter((r) => r.path === '/api/assistant/models?provider=anthropic').length;
+    await waitFor(() => expect(lists()).toBe(1));
+    modelsAnswer = {
+      status: 200,
+      body: {
+        ok: true,
+        source: 'provider',
+        models: [
+          { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', priced: true },
+          { id: 'claude-next-1', label: 'claude-next-1', priced: false },
+        ],
+      },
+    };
+    const input = q<HTMLInputElement>('[data-assistant-key-input]')!;
+    input.value = 'sk-ant-e2e-0123456789-abcd';
+    fireEvent.click(q('[data-assistant-key-save]')!);
+    await waitFor(() => expect(lists()).toBe(2));
+    await waitFor(() => expect(within(q('[data-assistant-model]')!).getByRole('option', { name: 'claude-next-1' })).toBeTruthy());
+    // Another provider's key, arriving with another change's answer, changes nothing here.
+    status = { ...status, keys: { ...(status.keys as object), openai: { set: true, last4: 'zzzz', set_at: 'later', state: 'ok' } } };
+    fireEvent.change(q('[data-assistant-effort]')!, { target: { value: 'low' } });
+    await waitFor(() => expect(q('[data-assistant-effort]')).toHaveAttribute('data-assistant-effort', 'low'));
+    await Promise.resolve();
+    expect(lists()).toBe(2);
+    confirmAction.mockResolvedValueOnce(true);
+    fireEvent.click(q('[data-assistant-key-remove]')!);
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('No key'));
+    await waitFor(() => expect(lists()).toBe(3));
+  });
+
+  it('a Test result goes when the model, the address or the key changes; it stays while nothing did', async () => {
+    testAnswer = { status: 200, body: { ok: true, model: 'qwen3.8-27b', served_by: 'qwen3.8-27b', ms: 900, tools: 'works', cost_usd: 0 } };
+    modelsAnswer = { status: 200, body: { ok: true, source: 'server', models: [{ id: 'qwen3.8-27b', label: 'qwen3.8-27b', priced: true }, { id: 'gemma-4-31b', label: 'gemma-4-31b', priced: true }] } };
+    await ready({ provider: 'openai_compatible', models: { anthropic: 'a', openai: 'b', openai_compatible: 'qwen3.8-27b' } });
+    const result = () => q('[data-assistant-test-result]')!;
+    const tested = async () => {
+      fireEvent.click(q('[data-assistant-test]')!);
+      await waitFor(() => expect(result()).toHaveTextContent('Connected to qwen3.8-27b in 0.9 s. Tool calling works.'));
+    };
+    await tested();
+    // Another setting (privacy here is local, so a limit) leaves it.
+    const steps = q<HTMLInputElement>('[data-assistant-cap-steps]')!;
+    fireEvent.change(steps, { target: { value: '20' } });
+    fireEvent.blur(steps);
+    await waitFor(() => expect(q<HTMLInputElement>('[data-assistant-cap-steps]')!.value).toBe('20'));
+    expect(result()).toHaveTextContent('Tool calling works.');
+
+    await waitFor(() => expect(within(q('[data-assistant-model]')!).getByRole('option', { name: 'gemma-4-31b' })).toBeTruthy());
+    fireEvent.change(q('[data-assistant-model]')!, { target: { value: 'gemma-4-31b' } });
+    await waitFor(() => expect(q('[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'gemma-4-31b'));
+    expect(result()).toHaveAttribute('data-assistant-test-result', 'idle');
+    expect(result().textContent).toBe('');
+
+    await tested();
+    fireEvent.click(q('[data-assistant-endpoint-preset="ollama"]')!);
+    await waitFor(() => expect(q<HTMLInputElement>('[data-assistant-endpoint]')!.value).toBe('http://127.0.0.1:11434/v1'));
+    expect(result()).toHaveAttribute('data-assistant-test-result', 'idle');
+
+    await tested();
+    const input = q<HTMLInputElement>('[data-assistant-key-input]')!;
+    input.value = 'server-token-1';
+    fireEvent.click(q('[data-assistant-key-save]')!);
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('Token set'));
+    expect(result()).toHaveAttribute('data-assistant-test-result', 'idle');
   });
 
   it('a server without the Test route says so plainly', async () => {
