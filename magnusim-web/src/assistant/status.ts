@@ -7,7 +7,8 @@
  * is on its way (the save outlives the component that started it). So:
  * - every request takes the next sequence number;
  * - a change's answer (each POST answers with the whole status) applies when it is newer
- *   than the answer shown;
+ *   than the answer shown; an older one is not shown, and the status is read again once the
+ *   last change has settled (the newer answer may predate the older change on the server);
  * - a read's answer is dropped while any change is in flight (it may predate the change),
  *   and the status is read again once the last change has settled;
  * - so is a read sent while a change was in flight that answers after it settled: the
@@ -112,6 +113,10 @@ export async function writeStatus(path: string, body: unknown): Promise<WriteRes
     if (seq > applied) {
       applied = seq;
       publish(readyFrom(answer));
+    } else {
+      // A newer change answered first, maybe from before this one landed (a key save
+      // waits for the key to be encrypted): read the status again once nothing is in flight.
+      refetchAfterWrites = true;
     }
     return { ok: true, body: answer };
   } catch (err) {

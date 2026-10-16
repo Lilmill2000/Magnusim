@@ -90,6 +90,51 @@ describe('assistant status store', () => {
     expect(s.state === 'ready' && s.status.privacy).toBe('deny');
   });
 
+  it('an older change that answers after a newer one is read again: the newer answer may predate it', async () => {
+    const read = refreshStatus();
+    take(isGet).answer(200, status({ provider: 'anthropic', keys: { anthropic: { set: false, last4: null } } }));
+    await read;
+    // A key save (slow on the server: the key is encrypted first), then another change.
+    const key = writeStatus('/api/assistant/key', { provider: 'anthropic', key: 'k-0123456789abcdef' });
+    const other = writeStatus('/api/assistant/settings', { privacy: 'allow' });
+    await tick();
+    // The other change answers first, from before the key landed.
+    take((p) => p.url === '/api/assistant/settings').answer(
+      200,
+      status({ provider: 'anthropic', privacy: 'allow', keys: { anthropic: { set: false, last4: null } } }),
+    );
+    await other;
+    take((p) => p.url === '/api/assistant/key').answer(
+      200,
+      status({ provider: 'anthropic', privacy: 'allow', keys: { anthropic: { set: true, last4: 'cdef' } } }),
+    );
+    const r = await key;
+    expect(r.ok).toBe(true);
+    // Its answer is older than the one shown, so it isn't shown; the status is read again.
+    await tick();
+    const again = take(isGet);
+    again.answer(200, status({ provider: 'anthropic', privacy: 'allow', keys: { anthropic: { set: true, last4: 'cdef' } } }));
+    await tick();
+    await tick();
+    const s = statusSnapshot();
+    expect(s.state === 'ready' && (s.status.keys as Record<string, { set: boolean }>).anthropic.set).toBe(true);
+    expect(s.state === 'ready' && s.status.privacy).toBe('allow');
+  });
+
+  it('changes answered in order need no second read', async () => {
+    const first = writeStatus('/api/assistant/settings', { privacy: 'allow' });
+    const second = writeStatus('/api/assistant/settings', { effort: 'high' });
+    await tick();
+    take((p) => p.body.includes('allow')).answer(200, status({ privacy: 'allow' }));
+    await first;
+    take((p) => p.body.includes('high')).answer(200, status({ privacy: 'allow', effort: 'high' }));
+    await second;
+    await tick();
+    expect(pending).toHaveLength(0);
+    const s = statusSnapshot();
+    expect(s.state === 'ready' && s.status.effort).toBe('high');
+  });
+
   it('drops a read sent during a change that answers after it, and reads again', async () => {
     const write = writeStatus('/api/assistant/key', { provider: 'anthropic', key: 'k-0123456789abcdef' });
     // A step mounted again while the save is on its way: its read was answered from before the save.
