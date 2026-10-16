@@ -136,14 +136,26 @@ function capValid(key: keyof Caps, v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= b.min && v <= b.max && (!b.integer || Number.isInteger(v));
 }
 
+// Consents are keyed by project id and destination, which come from project files: any
+// name, "__proto__" and "constructor" included. So they are read as own properties only,
+// and written as own properties (never through the __proto__ setter).
+
+function ownValue<T>(obj: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(obj, key) ? obj[key] : undefined;
+}
+
+function setOwn<T>(obj: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
 function normalizeConsents(raw: unknown): Record<string, Consent> {
   const out: Record<string, Consent> = {};
   if (!isRecord(raw)) return out;
   for (const [pid, c] of Object.entries(raw)) {
     if (!pid || !isRecord(c) || !isRecord(c.to)) continue;
     const to: Record<string, string> = {};
-    for (const [dest, at] of Object.entries(c.to)) if (dest && typeof at === 'string') to[dest] = at;
-    out[pid] = { created_at: typeof c.created_at === 'string' ? c.created_at : null, to };
+    for (const [dest, at] of Object.entries(c.to)) if (dest && typeof at === 'string') setOwn(to, dest, at);
+    setOwn(out, pid, { created_at: typeof c.created_at === 'string' ? c.created_at : null, to });
   }
   return out;
 }
@@ -269,7 +281,8 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
   if ('caps' in patch) {
     if (!isRecord(patch.caps)) return refuse('Limits must be an object.', 'caps');
     for (const [key, v] of Object.entries(patch.caps)) {
-      if (!(key in CAP_BOUNDS)) return refuse(`Unknown limit "${key.slice(0, 40)}".`, `caps.${key.slice(0, 40)}`);
+      // Own names only: "constructor" or "__proto__" is no limit.
+      if (!Object.hasOwn(CAP_BOUNDS, key)) return refuse(`Unknown limit "${key.slice(0, 40)}".`, `caps.${key.slice(0, 40)}`);
       const k = key as keyof Caps;
       const b = CAP_BOUNDS[k];
       if (!capValid(k, v)) {
@@ -323,8 +336,8 @@ export function updateSettings(fn: (s: AssistantSettings) => AssistantSettings):
 
 /** True when this project, as it is now (its created_at), may go to `destination`. */
 export function hasConsent(s: AssistantSettings, projectId: string, createdAt: string | null, destination: string): boolean {
-  const c = s.consents[projectId];
-  if (!c || !c.to[destination]) return false;
+  const c = ownValue(s.consents, projectId);
+  if (!c || !isRecord(c.to) || !ownValue(c.to, destination)) return false;
   return c.created_at === createdAt;
 }
 
@@ -337,10 +350,10 @@ export function withConsent(
   at: Date = new Date(),
 ): AssistantSettings {
   const next = structuredClone(s);
-  const prev = next.consents[projectId];
-  const to = prev && prev.created_at === createdAt ? { ...prev.to } : {};
-  to[destination] = at.toISOString();
-  next.consents[projectId] = { created_at: createdAt, to };
+  const prev = ownValue(next.consents, projectId);
+  const to: Record<string, string> = prev && prev.created_at === createdAt ? { ...prev.to } : {};
+  setOwn(to, destination, at.toISOString());
+  setOwn(next.consents, projectId, { created_at: createdAt, to });
   return next;
 }
 

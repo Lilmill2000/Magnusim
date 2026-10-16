@@ -110,6 +110,11 @@ describe('defaults and bounds', () => {
     assert.equal(field({ models: {} }), 'models');
     assert.equal(S.validatePatch(d, null).ok, false);
     assert.equal(S.validatePatch(d, []).ok, false);
+    // Names every object inherits are no limit (parsed as a request body is, so __proto__ is an own key).
+    for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      assert.equal(field(JSON.parse(`{"caps":{"${name}":5}}`)), `caps.${name}`, name);
+      assert.equal(field(JSON.parse(`{"${name}":5}`)), name, name);
+    }
   });
 
   it('a model id belongs to the provider chosen (now or in the same change)', () => {
@@ -228,6 +233,34 @@ describe('consent: per project and destination', () => {
     s = S.withConsent(s, 'p3', null, 'anthropic');
     assert.equal(S.hasConsent(s, 'p3', null, 'anthropic'), true);
     assert.equal(S.hasConsent(s, 'p3', '2026-01-01T00:00:00Z', 'anthropic'), false);
+  });
+
+  it('a project id or destination named like an inherited property is just a name', async () => {
+    const odd = ['constructor', '__proto__', 'toString', 'hasOwnProperty'];
+    let s = S.defaultSettings();
+    for (const pid of odd) {
+      assert.equal(S.hasConsent(s, pid, null, 'anthropic'), false, pid);
+      assert.equal(S.hasConsent(s, 'p1', null, pid), false, pid);
+    }
+    for (const pid of odd) s = S.withConsent(s, pid, 'c1', 'anthropic');
+    s = S.withConsent(s, 'p1', null, '__proto__');
+    assert.equal(Object.getPrototypeOf(s.consents), Object.prototype, 'the map keeps its prototype');
+    assert.deepEqual(Object.keys(s.consents).sort(), [...odd, 'p1'].sort());
+    assert.equal(S.consentCount(s), odd.length + 1);
+    for (const pid of odd) {
+      assert.equal(S.hasConsent(s, pid, 'c1', 'anthropic'), true, pid);
+      assert.equal(S.hasConsent(s, pid, 'c1', 'openai'), false, pid);
+    }
+    assert.equal(S.hasConsent(s, 'p1', null, '__proto__'), true);
+    assert.equal(S.hasConsent(s, 'p1', null, 'constructor'), false);
+    // Written and read back from the file the same way.
+    for (const pid of odd) await S.rememberConsent(pid, 'c1', 'anthropic');
+    assert.deepEqual(Object.keys(onDisk().consents).sort(), [...odd].sort());
+    resetAssistantState();
+    const read = await S.loadSettings();
+    assert.deepEqual(Object.keys(read.consents).sort(), [...odd].sort());
+    for (const pid of odd) assert.equal(S.hasConsent(read, pid, 'c1', 'anthropic'), true, pid);
+    assert.equal(S.consentCount(read), odd.length);
   });
 
   it('remembered on disk, and forgotten all at once', async () => {
