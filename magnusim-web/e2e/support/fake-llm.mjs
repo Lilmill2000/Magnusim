@@ -12,7 +12,8 @@
 // dialect's server-sent events. A step:
 //   { text?, chunkMs?, thinking?, tools?: [{name, input} | {name, raw}], rawToolText?,
 //     usage?: {input, output, cacheRead, cacheWrite}, stop?: 'end_turn'|'tool_use'|'max_tokens'|'refusal',
-//     category?, fallback?: '<model id>', hold?: '<name>', error?: 'overloaded', drop?, end?, delayMs? }
+//     category?, fallback?: '<model id>', fallbackBlock?: false, hold?: '<name>', error?: 'overloaded',
+//     drop?, end?, delayMs? }
 // `hold` stops after the first chunk until release(name); `error` sends an overload error
 // event there; `drop` destroys the socket there; `end` ends the answer there, cleanly but
 // unfinished; `delayMs` waits before the answer's head.
@@ -34,7 +35,9 @@
 //   cache breakpoints; a key in x-api-key.
 // A `fallback` step answers as the fallback model: a `fallback` block first, the
 // top-level model set to it, and usage.iterations with the refused primary attempt and a
-// `fallback_message` attempt.
+// `fallback_message` attempt. With `fallbackBlock: false` it sends no block (a turn the
+// primary never ran and declined in): only usage.iterations says a fallback served it.
+// holdModels(name, dialect?) makes the next model list wait until release(name).
 import http from 'node:http';
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -99,6 +102,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   const log = [];
   const failures = [];
   const holds = new Map();
+  const modelHolds = [];
   const modelLists = { anthropic: [...DEFAULT_MODELS.anthropic], openai: [...DEFAULT_MODELS.openai], compat: [...DEFAULT_MODELS.compat] };
   const emitted = { thinking: new Map(), fallback: new Set(), reasoning: new Map() };
   let disconnects = 0;
@@ -293,7 +297,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         id,
         type: 'message',
         role: 'assistant',
-        model: body.model,
+        model: step.fallback || body.model,
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -309,7 +313,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       checked = true;
       return checkpoint(step, res, closed, () => write('error', { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }));
     };
-    if (step.fallback) {
+    if (step.fallback && step.fallbackBlock !== false) {
       const block = { type: 'fallback', from: { model: body.model }, to: { model: step.fallback }, trigger: { type: 'refusal', category: step.category ?? 'cyber' } };
       emitted.fallback.add(canonical(block));
       write('content_block_start', { type: 'content_block_start', index, content_block: block });
@@ -490,6 +494,12 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       entry.body = await readBody(req);
       if (req.method === 'GET' && /\/v1\/models$/.test(url.pathname) && dialect) {
         if (dialect === 'anthropic' && !req.headers['x-api-key']) throw new Refusal('x-api-key header is required', 401, 'authentication_error');
+        const held = modelHolds.findIndex((m) => !m.dialect || m.dialect === dialect);
+        if (held >= 0) {
+          const h = hold(modelHolds.splice(held, 1)[0].name);
+          if (!h.released) await Promise.race([new Promise((r) => h.waiters.push(r)), new Promise((r) => res.on('close', r))]);
+          if (res.destroyed) return;
+        }
         const fail = takeFailure(dialect);
         if (fail) return json(fail.status, fail.body ?? errorBody(dialect, fail.status, `fake failure ${fail.status}`), fail.headers);
         const ids = modelLists[dialect];
@@ -559,6 +569,10 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     /** The model ids the models routes list (every dialect, or one: 'anthropic' | 'openai' | 'compat'). */
     models(list, dialect) {
       for (const d of dialect ? [dialect] : Object.keys(modelLists)) modelLists[d] = [...list];
+    },
+    /** The next model list (of a dialect, or any) waits until release(name), or until the client closes. */
+    holdModels(name, dialect) {
+      modelHolds.push({ name, dialect });
     },
     /** The next request (of a dialect, or any) gets this answer instead; `times` requests in a row. */
     failNext({ status = 500, body, headers = {}, times = 1, dialect } = {}) {

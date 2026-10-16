@@ -42,7 +42,9 @@ import { isKeySlot, KeyError, secretStore, type Store } from './assistant/secret
 import { assistantState, beginAssistantLifetime, onAssistantShutdown, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
 import { curatedModels, FALLBACK_TARGETS, PRICES_AS_OF, priceInfo } from './assistant/prices.ts';
 import { createAdapter, destinationOf, isCloud, PROVIDER_LABELS } from './assistant/providers/index.ts';
+import { CLOUD_WATCHDOG, LOCAL_WATCHDOG } from './assistant/providers/common.ts';
 import { testProviderUrl } from './assistant/providers/endpoints.ts';
+import { LOCAL_SLOW_HINT } from './assistant/providers/errors.ts';
 import { DEPS_MISSING_TEXT, depsStatus } from './assistant/providers/load-sdk.ts';
 import { runConnectionTest } from './assistant/provider-test.ts';
 import { ProviderError, type ModelInfo, type ProviderId } from './assistant/types.ts';
@@ -201,14 +203,41 @@ function isProviderId(v: unknown): v is ProviderId {
 }
 
 const MODELS_TIMEOUT_MS = 20_000;
-const TEST_TIMEOUT_MS = 180_000;
+/** Time each Test request is given to answer once its first byte came. */
+const TEST_ANSWER_MS = 300_000;
+
+/**
+ * The Test's own limit, a backstop only: two requests, each allowed its provider's whole
+ * first-byte wait (a local model may be loading) and then time to answer. The watchdog
+ * ends a stalled request long before.
+ */
+export function testBoundMs(provider: ProviderId): number {
+  const wd = provider === 'openai_compatible' ? LOCAL_WATCHDOG : CLOUD_WATCHDOG;
+  return 2 * (wd.firstByteMs + TEST_ANSWER_MS);
+}
+
+const seconds = (ms: number) => `${Math.round(ms / 100) / 10} s`;
+
+/** What the Test reports when its limit runs out (not "Stopped.": nobody pressed Stop). */
+export function testTimeoutError(provider: ProviderId, ms: number): ProviderError {
+  const span = ms >= 120_000 ? `${Math.round(ms / 60_000)} minutes` : seconds(ms);
+  return new ProviderError('timeout', `The test took longer than ${span}.${provider === 'openai_compatible' ? ` ${LOCAL_SLOW_HINT}` : ''}`);
+}
+
+/** What the model list reports when its limit runs out. */
+export function modelsTimeoutError(ms: number): ProviderError {
+  return new ProviderError('timeout', `No answer for ${seconds(ms)}.`);
+}
 
 type Answer = { status: number; body: Record<string, unknown> };
 
-/** A signal that aborts after `ms`, or when the server shuts the Assistant down. */
-function boundedSignal(ms: number): { signal: AbortSignal; abort: AbortController; done(): void } {
+/**
+ * A signal that aborts after `ms` with `expired()` as its reason (the adapters report that
+ * error), or plainly (a Stop) when the server shuts the Assistant down.
+ */
+export function boundedSignal(ms: number, expired: () => ProviderError): { signal: AbortSignal; abort: AbortController; done(): void } {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), ms);
+  const timer = setTimeout(() => abort.abort(expired()), ms);
   timer.unref?.();
   const off = onAssistantShutdown(() => abort.abort());
   return {
@@ -232,7 +261,7 @@ async function listModels(provider: ProviderId, settings: AssistantSettings): Pr
   const store = secretStore();
   await store.load();
   if (provider !== 'openai_compatible' && !store.status()[provider].set) return { status: 200, body: { ok: true, models: curated, source: 'curated' } };
-  const bound = boundedSignal(MODELS_TIMEOUT_MS);
+  const bound = boundedSignal(MODELS_TIMEOUT_MS, () => modelsTimeoutError(MODELS_TIMEOUT_MS));
   try {
     const listed = await createAdapter({ ...settings, provider }, store).listModels(bound.signal);
     if (provider === 'openai_compatible') return { status: 200, body: { ok: true, models: listed, source: 'server' } };
@@ -267,7 +296,8 @@ async function connectionTest(): Promise<Answer> {
   if (key.set && key.state === 'unreadable') return refuse('no_key', "The saved key can't be decrypted on this account. Enter it again.");
   const st = assistantState();
   if (st.test) return refuse('busy', 'A test is already running.', 409);
-  const bound = boundedSignal(TEST_TIMEOUT_MS);
+  const testMs = testBoundMs(provider);
+  const bound = boundedSignal(testMs, () => testTimeoutError(provider, testMs));
   st.test = { abort: bound.abort };
   try {
     const ledger = await spendLedger();

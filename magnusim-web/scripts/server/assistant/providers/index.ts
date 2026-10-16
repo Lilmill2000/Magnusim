@@ -9,7 +9,7 @@
  */
 import { isLoopbackUrl, type AssistantSettings } from '../settings.ts';
 import { ProviderError, type ProviderAdapter, type ProviderId, type ProviderRequest, type ProviderResult, type StreamEvent } from '../types.ts';
-import type { KeySlot, KeyStatus } from '../secrets/store.ts';
+import { KeyError, type KeySlot, type KeyStatus } from '../secrets/store.ts';
 import { anthropicAdapter } from './anthropic.ts';
 import type { AdapterOptions } from './common.ts';
 import { cloudBaseUrl } from './endpoints.ts';
@@ -60,6 +60,15 @@ export interface CreateOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+/**
+ * The store's refusal to lend a key, as the adapters report it. The first unlock after a
+ * start can fail (Windows blocked the helper, or it timed out) before storage() knows it.
+ */
+function lendError(err: KeyError): ProviderError {
+  if (err.code === 'storage_unavailable') return new ProviderError('storage_unavailable', err.message);
+  return new ProviderError('no_key', err.message);
+}
+
 /** The adapter for the settings' provider (a snapshot: later settings changes don't reach it). */
 export function createAdapter(settings: ProviderSettings, secrets: KeyLender, o: CreateOptions = {}): ProviderAdapter {
   const provider = settings.provider;
@@ -68,7 +77,12 @@ export function createAdapter(settings: ProviderSettings, secrets: KeyLender, o:
     async <T>(use: (key: string | null) => Promise<T>): Promise<T> => {
       await secrets.load?.();
       if (optional && !secrets.status()[slot]?.set) return use(null);
-      return secrets.withKey(slot, (key) => use(key));
+      try {
+        return await secrets.withKey(slot, (key) => use(key));
+      } catch (err) {
+        // Only the store throws KeyError (the adapters map their own failures).
+        throw err instanceof KeyError ? lendError(err) : err;
+      }
     };
   const common = { watchdog: o.watchdog, env: o.env };
   if (provider === 'anthropic') return anthropicAdapter({ ...common, baseURL: cloudBaseUrl('anthropic'), borrowKey: lend('anthropic', false) });
@@ -109,7 +123,7 @@ export async function sendWithOneResend(
       }, o.delayMs ?? OVERLOAD_RESEND_MS);
       const onAbort = () => {
         clearTimeout(timer);
-        reject(new ProviderError('aborted', 'Stopped.'));
+        reject(signal.reason instanceof ProviderError ? signal.reason : new ProviderError('aborted', 'Stopped.'));
       };
       signal.addEventListener('abort', onAbort, { once: true });
     });

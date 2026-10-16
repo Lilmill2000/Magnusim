@@ -15,7 +15,9 @@
  *   of the last message.
  * - Claude Opus 5.5 and Sonnet 5.5 ask for the server-side refusal fallback
  *   (`fallbacks: "default"` with its beta); every attempt is reported with its own model
- *   from `usage.iterations`, so each is priced at its own row.
+ *   from `usage.iterations`, so each is priced at its own row. The model that served the
+ *   answer is the last `fallback_message` attempt there (a turn the primary never ran in
+ *   has no fallback block), else the block's target, else the top-level model.
  * - Effort other than the provider's default goes in `output_config`.
  * - Headers: only the allowlist leaves, the key only as x-api-key, never Authorization.
  */
@@ -71,6 +73,7 @@ export function anthropicClientOptions(key: string, baseURL: string, fetch: type
   return {
     apiKey: key,
     authToken: null,
+    webhookKey: null,
     baseURL,
     maxRetries: 2,
     timeout: SDK_TIMEOUT_MS,
@@ -179,6 +182,8 @@ export class MessageAccumulator {
   model = '';
   started = false;
   done = false;
+  /** A fallback block announced the switch (the event went out with it). */
+  private announced = false;
   private blocks: Json[] = [];
   private json = new Map<number, string>();
   private inputErrors = new Map<number, string>();
@@ -211,6 +216,7 @@ export class MessageAccumulator {
           const from = String(((block.from as Json) ?? {}).model ?? '');
           const to = String(((block.to as Json) ?? {}).model ?? '');
           if (to) this.model = to;
+          this.announced = true;
           this.onEvent({ kind: 'fallback', from, to });
         }
         break;
@@ -275,8 +281,15 @@ export class MessageAccumulator {
       }
     });
     const usage = toUsage(this.usage, true);
-    const servedBy = this.model || requested;
     const iterations = Array.isArray(this.usage.iterations) ? (this.usage.iterations as Json[]) : [];
+    // Who served it: the last fallback attempt in usage.iterations when there is one (a
+    // turn the primary never ran in carries no fallback block), else the block or the top level.
+    const lastFallback = iterations.filter((it) => it && it.type === 'fallback_message' && typeof it.model === 'string' && it.model).at(-1);
+    const servedBy = (lastFallback?.model as string | undefined) || this.model || requested;
+    if (lastFallback && !this.announced && servedBy !== requested) {
+      this.announced = true;
+      this.onEvent({ kind: 'fallback', from: requested, to: servedBy });
+    }
     const billed = iterations.filter((it) => it && (it.type === 'message' || it.type === 'fallback_message'));
     const attempts: Attempt[] = billed.length
       ? billed.map((it, i) => ({

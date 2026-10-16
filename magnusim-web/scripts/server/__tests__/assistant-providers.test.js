@@ -31,7 +31,10 @@ const { guardedFetch, filterHeaders, Watchdog } = await import('../assistant/pro
 const { mapProviderError } = await import('../assistant/providers/errors.ts');
 const { resolveTestProviderUrl, cloudBaseUrl } = await import('../assistant/providers/endpoints.ts');
 const { sdkInstalled, depsStatus, setSdkSpecifierForTests, loadSdkClass, DEPS_MISSING_TEXT } = await import('../assistant/providers/load-sdk.ts');
-const { anthropicClientOptions } = await import('../assistant/providers/anthropic.ts');
+const { anthropicClientOptions, MessageAccumulator } = await import('../assistant/providers/anthropic.ts');
+const { CLOUD_WATCHDOG, LOCAL_WATCHDOG } = await import('../assistant/providers/common.ts');
+const { runConnectionTest } = await import('../assistant/provider-test.ts');
+const { STORAGE_NOTES, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
 const prices = await import('../assistant/prices.ts');
 const { ProviderError } = await import('../assistant/types.ts');
@@ -81,6 +84,32 @@ async function until(fn, ms = 5000, what = 'condition') {
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
     await sleep(15);
   }
+}
+
+/** `p`, or a failure after `ms` (for a call that, broken, would never settle). */
+async function within(p, ms, what) {
+  let timer;
+  const ceiling = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what}: still pending after ${ms} ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, ceiling]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A server that takes every request and never answers (a local server stuck loading). */
+async function silentServer() {
+  const server = http.createServer(() => {});
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    url: `http://127.0.0.1:${server.address().port}/v1`,
+    async stop() {
+      server.closeAllConnections?.();
+      await new Promise((r) => server.close(r));
+    },
+  };
 }
 
 const chat = (dialect) => fake.requests().filter((r) => r.kind === 'chat' && (!dialect || r.dialect === dialect));
@@ -362,6 +391,42 @@ describe('the refusal fallback (first cloud dialect)', () => {
     await assert.rejects(send('anthropic', request('anthropic', [...first, changed, userText('x')])), (e) => e.code === 'bad_request');
   });
 
+  it('a fallback with no block: usage.iterations alone says who served it, and the event still comes', async () => {
+    fake.reply({ fallback: 'claude-opus-5', fallbackBlock: false, text: 'Answered by the fallback.', usage: { input: 900, output: 100 } });
+    const events = [];
+    const r = await send('anthropic', request('anthropic', [userText('please')]), { onEvent: (e) => events.push(e) });
+    assert.ok(!r.message.raw.payload.some((b) => b.type === 'fallback'), 'the fake sent no block');
+    assert.deepEqual(events.filter((e) => e.kind === 'fallback'), [{ kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-5' }]);
+    assert.deepEqual([r.servedBy, r.message.raw.model], ['claude-opus-5', 'claude-opus-5']);
+    assert.deepEqual(r.attempts.map((a) => [a.model, a.fallback]), [
+      ['claude-opus-5-5', false],
+      ['claude-opus-5', true],
+    ]);
+    // The top-level model may still name the requested one: the iterations decide.
+    const seen = [];
+    const acc = new MessageAccumulator((e) => seen.push(e));
+    acc.add({ type: 'message_start', message: { model: 'claude-sonnet-5-5', usage: { input_tokens: 10, output_tokens: 1 } } });
+    acc.add({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    acc.add({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } });
+    acc.add({ type: 'content_block_stop', index: 0 });
+    acc.add({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn' },
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        iterations: [
+          { type: 'message', model: 'claude-sonnet-5-5', input_tokens: 10, output_tokens: 0 },
+          { type: 'fallback_message', model: 'claude-sonnet-5', input_tokens: 10, output_tokens: 5 },
+        ],
+      },
+    });
+    acc.add({ type: 'message_stop' });
+    const res = acc.result('claude-sonnet-5-5');
+    assert.deepEqual([res.servedBy, res.message.raw.model], ['claude-sonnet-5', 'claude-sonnet-5']);
+    assert.deepEqual(seen.filter((e) => e.kind === 'fallback'), [{ kind: 'fallback', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5' }]);
+  });
+
   it('`fallbacks` and its beta only for Opus 5.5 and Sonnet 5.5, never Haiku 5.5 or an unknown id', async () => {
     for (const [model, on] of [
       ['claude-opus-5-5', true],
@@ -391,7 +456,7 @@ describe('stop, overload, watchdog', () => {
     await until(() => events.some((e) => e.kind === 'text'), 5000, 'the first text');
     const t0 = Date.now();
     ctl.abort();
-    await assert.rejects(p, (e) => e instanceof ProviderError && e.code === 'aborted');
+    await assert.rejects(p, (e) => e instanceof ProviderError && e.code === 'aborted' && e.message === 'Stopped.' && e.streamed === true);
     await until(() => fake.disconnects() === drops + 1, 5000, 'the fake to see the socket close');
     assert.ok(Date.now() - t0 < 5000);
     await sleep(300);
@@ -416,6 +481,16 @@ describe('stop, overload, watchdog', () => {
         provider,
       );
     }
+    // A limit that runs out during the wait before the resend is reported as that limit, not as a Stop.
+    fake.reply({ text: 'partial', error: 'overloaded' });
+    const limit = new AbortController();
+    await assert.rejects(
+      sendWithOneResend(adapterFor('anthropic'), request('anthropic', [userText('x')]), limit.signal, () => {}, {
+        delayMs: 30_000,
+        onResend: () => setTimeout(() => limit.abort(new ProviderError('timeout', 'Out of time.')), 20),
+      }),
+      (e) => e.code === 'timeout' && e.message === 'Out of time.',
+    );
   });
 
   it('the watchdog: no first byte, or a stream gone quiet, ends with timeout', async () => {
@@ -427,6 +502,14 @@ describe('stop, overload, watchdog', () => {
     fake.reply({ text: 'then silence for a long while', hold: 'quiet' });
     await assert.rejects(send('openai_compatible', request('openai_compatible', [userText('x')]), { watchdog }), (e) => e.code === 'timeout' && /No answer for 1 s\. A local model/.test(e.message));
     fake.release('quiet');
+  });
+
+  it('the watchdog: every chunk restarts the idle wait, so a long, steady answer is never cut off', async () => {
+    // 16 chunks 150 ms apart: about 2.4 s in all, three times the 800 ms idle wait.
+    const text = 'steady words '.repeat(13).slice(0, 160);
+    fake.reply({ text, chunkMs: 150 });
+    const r = await send('anthropic', request('anthropic', [userText('x')]), { watchdog: { firstByteMs: 2000, idleMs: 800 } });
+    assert.equal(r.message.parts[0].text, text);
   });
 
   it('an answer that just stops before its end: ended early, nothing partial kept', async () => {
@@ -502,6 +585,20 @@ describe('error mapping', () => {
     assert.equal(chat().length, before);
   });
 
+  it('a key the secret store can’t unlock right now: storage_unavailable with the store’s words, before any request', async () => {
+    const before = fake.requests().length;
+    const stuck = { status: lender.status, withKey: async () => Promise.reject(new KeyError(409, 'storage_unavailable', STORAGE_NOTES.timeout)) };
+    for (const provider of ['anthropic', 'openai']) {
+      await assert.rejects(
+        send(provider, request(provider, [userText('x')]), { lender: stuck }),
+        (e) => e instanceof ProviderError && e.code === 'storage_unavailable' && e.message === STORAGE_NOTES.timeout,
+        provider,
+      );
+      await assert.rejects(adapterFor(provider, { lender: stuck }).listModels(new AbortController().signal), (e) => e instanceof ProviderError && e.code === 'storage_unavailable', provider);
+    }
+    assert.equal(fake.requests().length, before);
+  });
+
   it('mapProviderError: connection codes, timeouts, aborts and our own errors', () => {
     const ctx = { provider: 'openai_compatible', label: 'The local server', model: 'm', baseUrl: 'http://127.0.0.1:1234/v1', local: true };
     const conn = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
@@ -516,6 +613,15 @@ describe('error mapping', () => {
     assert.equal(mapProviderError(Object.assign(new Error('Connection error.'), { cause: ours }), ctx), ours);
     const redirect = Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
     assert.equal(mapProviderError(redirect, ctx).code, 'blocked_origin');
+    // A caller that aborts with a reason of its own (a time limit) is reported with it; a plain abort is a Stop.
+    const limit = new AbortController();
+    limit.abort(new ProviderError('timeout', 'The test took longer than 20 minutes.'));
+    const byLimit = mapProviderError(new ProviderError('aborted', 'Stopped.'), { ...ctx, signal: limit.signal, streamed: true });
+    assert.deepEqual([byLimit.code, byLimit.message, byLimit.streamed], ['timeout', 'The test took longer than 20 minutes.', true]);
+    const stop = new AbortController();
+    stop.abort();
+    const byStop = mapProviderError(Object.assign(new Error('x'), { name: 'APIUserAbortError' }), { ...ctx, signal: stop.signal, streamed: true });
+    assert.deepEqual([byStop.code, byStop.message, byStop.streamed], ['aborted', 'Stopped.', true]);
   });
 });
 
@@ -602,6 +708,7 @@ describe('the environment and the profiles are never read', () => {
       OPENAI_CUSTOM_HEADERS: 'x-trap: 1\nauthorization: Bearer TRAP\nopenai-organization: org-trap\nx-stainless-trap: 2',
       OPENAI_LOG: 'debug',
       OPENAI_WEBHOOK_SECRET: 'whsec_trap',
+      ANTHROPIC_WEBHOOK_SIGNING_KEY: 'whsec_trap_anthropic',
       HOME: home,
       USERPROFILE: home,
       APPDATA: join(home, 'AppData', 'Roaming'),
@@ -617,7 +724,7 @@ describe('the environment and the profiles are never read', () => {
       // The SDK clients as the adapters build them: every credential and address explicit.
       const Anthropic = await loadSdkClass('@anthropic-ai/sdk', 'Anthropic');
       const a = new Anthropic(anthropicClientOptions(KEYS.anthropic, `${fake.base}/anthropic`, fetch, process.env));
-      assert.deepEqual([a.apiKey, a.authToken, a.baseURL, a.logLevel], [KEYS.anthropic, null, `${fake.base}/anthropic`, 'off']);
+      assert.deepEqual([a.apiKey, a.authToken, a.webhookKey, a.baseURL, a.logLevel], [KEYS.anthropic, null, null, `${fake.base}/anthropic`, 'off']);
       const OpenAI = await loadSdkClass('openai', 'OpenAI');
       const o = new OpenAI(openAiClientOptions(KEYS.openai, `${fake.base}/openai/v1`, fetch, process.env, 2));
       assert.deepEqual(
@@ -725,6 +832,32 @@ describe('model lists', () => {
     assert.deepEqual(o.map((m) => m.id), ['gpt-6-astra', 'gpt-6-luna', 'gpt-6.1-sol']);
     const c = await adapterFor('openai_compatible').listModels(new AbortController().signal);
     assert.deepEqual(c.map((m) => m.id), ['qwen3.8-27b', 'gemma-4-31b']);
+  });
+
+  it('a list that never comes: the watchdog ends it with timeout, and Stop ends it at once', async () => {
+    const lists = () => fake.requests().filter((r) => r.path.endsWith('/v1/models')).length;
+    for (const provider of PROVIDERS) {
+      fake.holdModels(`list-quiet-${provider}`, DIALECT[provider]);
+      let t0 = Date.now();
+      const quiet = adapterFor(provider, { watchdog: { firstByteMs: 1000, idleMs: 1000 } }).listModels(new AbortController().signal);
+      await within(
+        assert.rejects(quiet, (e) => e.code === 'timeout' && e.message.startsWith('No answer for 1 s.'), provider),
+        8000,
+        `${provider}: the watchdog`,
+      );
+      assert.ok(Date.now() - t0 < 8000);
+      fake.release(`list-quiet-${provider}`);
+      fake.holdModels(`list-stop-${provider}`, DIALECT[provider]);
+      const n = lists();
+      const ctl = new AbortController();
+      const stopped = adapterFor(provider).listModels(ctl.signal);
+      await until(() => lists() > n, 5000, 'the list request');
+      t0 = Date.now();
+      ctl.abort();
+      await within(assert.rejects(stopped, (e) => e.code === 'aborted', provider), 5000, `${provider}: Stop`);
+      assert.ok(Date.now() - t0 < 5000, `${provider}: Stop ends it at once`);
+      fake.release(`list-stop-${provider}`);
+    }
   });
 });
 
@@ -947,6 +1080,62 @@ describe('the routes: status, models and the connection test', () => {
     fake.reply({ rawToolText: '<tool_call>{"name": "connection_check", "arguments": {"word": "ok"}}</tool_call>' });
     r = await api('POST', '/api/assistant/test', {});
     assert.deepEqual([r.json.ok, r.json.tools, r.json.cost_usd], [true, 'as_text', 0]);
+  });
+
+  it('the routes’ time limits: above what the watchdog allows, and running out reads timeout, not Stopped', async () => {
+    for (const provider of PROVIDERS) {
+      const wd = provider === 'openai_compatible' ? LOCAL_WATCHDOG : CLOUD_WATCHDOG;
+      // Two requests, each allowed its whole first-byte wait and then time to answer.
+      assert.ok(routes.testBoundMs(provider) >= 2 * (wd.firstByteMs + 60_000), provider);
+    }
+    const silent = await silentServer();
+    try {
+      const adapter = createAdapter({ provider: 'openai_compatible', base_url: silent.url }, lender, { watchdog: { firstByteMs: 30_000, idleMs: 30_000 } });
+      const bound = routes.boundedSignal(300, () => routes.testTimeoutError('openai_compatible', 300));
+      const t0 = Date.now();
+      let r;
+      try {
+        r = await within(
+          runConnectionTest({ adapter, provider: 'openai_compatible', model: 'qwen3.8-27b', effort: 'default', ledger: await spendLedger(), dayCapUsd: null, signal: bound.signal }),
+          8000,
+          'the test',
+        );
+      } finally {
+        bound.done();
+      }
+      assert.ok(Date.now() - t0 < 8000);
+      assert.deepEqual([r.ok, r.code], [false, 'timeout'], JSON.stringify(r));
+      assert.match(r.error, /^The test took longer than .*A local model can take a while to load/);
+      // The model list's limit, the same way.
+      const lb = routes.boundedSignal(300, () => routes.modelsTimeoutError(300));
+      try {
+        await within(assert.rejects(adapter.listModels(lb.signal), (e) => e.code === 'timeout' && e.message === 'No answer for 0.3 s.'), 8000, 'the list');
+      } finally {
+        lb.done();
+      }
+    } finally {
+      await silent.stop();
+    }
+  });
+
+  it('the test right after a restart, when the key helper fails: storage_unavailable, never an unexpected error', async () => {
+    await api('POST', '/api/assistant/settings', { provider: 'anthropic', model: 'claude-opus-5-5', caps: { turn_usd: 3, day_usd: 15 } });
+    assert.equal((await api('GET', '/api/assistant/status')).json.keys.anthropic.set, true);
+    // A restart: nothing cached, and the helper that unlocks the saved key times out.
+    resetAssistantState();
+    process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'timeout';
+    const before = chat().length;
+    try {
+      let r = await api('POST', '/api/assistant/test', {});
+      assert.deepEqual([r.status, r.json.ok, r.json.code, r.json.error], [200, false, 'storage_unavailable', STORAGE_NOTES.timeout]);
+      assert.equal((await spendLedger()).openCount(), 0, 'the reservation was settled');
+      r = await api('GET', '/api/assistant/models?provider=anthropic');
+      assert.deepEqual([r.status, r.json.code, r.json.error], [502, 'storage_unavailable', STORAGE_NOTES.timeout]);
+      assert.equal(chat().length, before, 'nothing was sent');
+    } finally {
+      process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
+      resetAssistantState();
+    }
   });
 
   it('the test can’t start: off, no key, one already running (409), today’s limit', async () => {

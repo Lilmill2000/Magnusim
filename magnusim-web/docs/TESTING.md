@@ -214,7 +214,8 @@ No test reaches a real model provider or this PC's real Assistant files.
     every field).
   - `fake.failNext({status, body, headers, times})` answers the next request(s) with
     an error; add `'x-should-retry': 'false'` to stop the client's own retries.
-  - `fake.models(list)` sets what the model lists answer.
+  - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
+    the next list wait until `fake.release(name)` (a server that never answers).
   - `fake.requests()` lists every request with its headers and body;
     `fake.disconnects()` counts answers the client closed early.
   - Like the real services, it answers 400 when a request breaks a rule: a tool call

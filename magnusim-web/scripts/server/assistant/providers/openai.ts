@@ -51,7 +51,8 @@ type RawEvent = Json & { type?: string };
 
 interface Client {
   responses: { create(body: Json, opts: { signal: AbortSignal }): Promise<AsyncIterable<RawEvent>> };
-  models: { list(params: Json, opts: { signal: AbortSignal }): Promise<{ data?: Array<{ id?: unknown }> }> };
+  /** This SDK takes only the request options here (no params first): `list({signal})`. */
+  models: { list(opts: { signal: AbortSignal }): Promise<{ data?: Array<{ id?: unknown }> }> };
 }
 export type OpenAiCtor = new (opts: Json) => Client;
 
@@ -263,7 +264,7 @@ export function openAiAdapter(o: AdapterOptions): ProviderAdapter {
         const sig = AbortSignal.any([signal, wd.signal]);
         try {
           const c = await client(String(key), wd);
-          const page = await c.models.list({}, { signal: sig });
+          const page = await c.models.list({ signal: sig });
           return (page.data ?? [])
             .map((m) => String(m.id ?? ''))
             .filter((id) => CHAT_MODEL.test(id) && !NOT_CHAT.test(id))

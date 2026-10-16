@@ -45,7 +45,8 @@ export interface ProviderResult {
   /** A local model wrote a tool call as text instead of calling the tool (its chat template doesn't do tools). */
   toolCallAsText?: boolean;
 }
-export type ProviderErrorCode = 'no_key' | 'deps_missing' | 'auth' | 'model' | 'rate_limit' | 'overloaded' | 'server'
+/** `storage_unavailable`: the secret store can't unlock the saved key right now (its helper was blocked or timed out). */
+export type ProviderErrorCode = 'no_key' | 'storage_unavailable' | 'deps_missing' | 'auth' | 'model' | 'rate_limit' | 'overloaded' | 'server'
   | 'bad_request' | 'context' | 'unreachable' | 'timeout' | 'aborted' | 'blocked_origin' | 'other';
 export class ProviderError extends Error {
   code: ProviderErrorCode; status: number | null; retryAfterS: number | null; streamed: boolean;

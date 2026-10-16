@@ -18,14 +18,14 @@ export interface ErrorContext {
   local: boolean;
   /** The request's watchdog, if it fired the error is a timeout. */
   watchdog?: { fired: string | null; waitedS: number } | null;
-  /** The caller's signal (Stop). */
+  /** The caller's signal: Stop, or a limit that aborted with a ProviderError as its reason (reported as that error). */
   signal?: AbortSignal | null;
   /** Some of the answer had streamed before it failed. */
   streamed?: boolean;
 }
 
 export const LOCAL_START_HINT = 'Start the server (LM Studio: Developer → Start server; Ollama: `ollama serve`) and test again.';
-const LOCAL_SLOW_HINT = 'A local model can take a while to load; try again, or choose a smaller model.';
+export const LOCAL_SLOW_HINT = 'A local model can take a while to load; try again, or choose a smaller model.';
 
 function causes(err: unknown): unknown[] {
   const out: unknown[] = [];
@@ -97,10 +97,19 @@ function classify(err: unknown, ctx: ErrorContext): ProviderError {
   const o = (code: ProviderErrorCode, message: string, extra: { status?: number | null; retryAfterS?: number | null } = {}) =>
     new ProviderError(code, message, { ...extra, streamed: !!ctx.streamed });
 
+  // The caller ended it: with its own reason when it gave one (a route's time limit), else
+  // a Stop. Either way it says whether part of the answer had streamed (and was billed).
+  const stopped = (): ProviderError => {
+    const why = ctx.signal?.aborted ? (ctx.signal.reason as unknown) : null;
+    if (why instanceof ProviderError) return new ProviderError(why.code, why.message, { status: why.status, retryAfterS: why.retryAfterS, streamed: !!ctx.streamed });
+    return o('aborted', 'Stopped.');
+  };
+
   // Our own errors (the origin lock, deps, a missing key) pass through, wherever the SDK wrapped them.
   for (const e of causes(err)) {
     if (e instanceof ProviderError) {
       if (ctx.watchdog?.fired && (e.code === 'timeout' || e.code === 'aborted')) break;
+      if (e.code === 'aborted') return stopped();
       return e;
     }
   }
@@ -108,7 +117,7 @@ function classify(err: unknown, ctx: ErrorContext): ProviderError {
     return o('timeout', `No answer for ${ctx.watchdog.waitedS} s.${ctx.local ? ` ${LOCAL_SLOW_HINT}` : ''}`);
   }
   const name = String(field(err, 'name') || (err as object | null)?.constructor?.name || '');
-  if (ctx.signal?.aborted || name === 'APIUserAbortError' || name === 'AbortError') return o('aborted', 'Stopped.');
+  if (ctx.signal?.aborted || name === 'APIUserAbortError' || name === 'AbortError') return stopped();
 
   const status = typeof field(err, 'status') === 'number' ? (field(err, 'status') as number) : null;
   const types = errorTypes(err);

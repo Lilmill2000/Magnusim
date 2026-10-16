@@ -43,7 +43,8 @@ type Chunk = Json & { choices?: Json[]; usage?: Json | null; model?: unknown };
 
 interface Client {
   chat: { completions: { create(body: Json, opts: { signal: AbortSignal }): Promise<AsyncIterable<Chunk>> } };
-  models: { list(params: Json, opts: { signal: AbortSignal }): Promise<{ data?: Array<{ id?: unknown }> }> };
+  /** This SDK takes only the request options here (no params first): `list({signal})`. */
+  models: { list(opts: { signal: AbortSignal }): Promise<{ data?: Array<{ id?: unknown }> }> };
 }
 
 function toMessages(req: ProviderRequest): Json[] {
@@ -231,7 +232,7 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
         const sig = AbortSignal.any([signal, wd.signal]);
         try {
           const c = await client(token, wd);
-          const page = await c.models.list({}, { signal: sig });
+          const page = await c.models.list({ signal: sig });
           return (page.data ?? [])
             .map((m) => String(m.id ?? ''))
             .filter(Boolean)
