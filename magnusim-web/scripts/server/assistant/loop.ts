@@ -1,0 +1,506 @@
+/**
+ * One turn of the Assistant (Foundation spec 6.1, 6.2, 6.6): the steps between the
+ * person's prompt and the model's last answer.
+ *
+ *   starting ─ privacy (cloud turns with a project: allowed, remembered, or a question)
+ *   for each step:
+ *     the caps (minutes, tokens; then the spend estimate and the day's reservation)
+ *     model: one request with this step's tools (computed by the host, every step)
+ *       refusal → failed · context → failed · max_tokens → capped · no calls → done
+ *     tools: each call in order, through the runner (only this step's tools resolve)
+ *       a cap reached → this and every later call is answered `capped`
+ *       a call declined → every later call `skipped`
+ *       Stop → every later call `stopped`
+ *     one user message with every result, in call order
+ *     steps cap: one more request (same tools, so the cached prefix holds) to sum up
+ *
+ * Two invariants hold whatever happens (a property test drives random scripts):
+ * 1. Stored messages are append-only (conversations.ts).
+ * 2. Every tool call of an appended answer has exactly one result in the next user
+ *    message: stopped, skipped and capped calls included, even when the turn ends right
+ *    after (the next turn's first request carries them).
+ *
+ * Caps are min(the turn's snapshot, the live settings); privacy is read live.
+ */
+import { contextBlock, guideBlock, SYSTEM_PROMPT } from './prompt.ts';
+import { destinationOf, sendWithOneResend } from './providers/index.ts';
+import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
+import { destinationHost, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
+import { providerTools, type ToolCtx, type ToolDef, type WorkspaceRegistration } from './registry.ts';
+import { errorResult, STOPPED_BEFORE, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
+import type { Caps, AssistantSettings } from './settings.ts';
+import type { SpendLedger } from './ledger.ts';
+import type { Clock, GateBroker } from './gates.ts';
+import type { Conversation } from './conversations.ts';
+import { FULL_TEXT } from './conversations.ts';
+import {
+  ProviderError,
+  type Effort,
+  type Message,
+  type ProviderAdapter,
+  type ProviderId,
+  type ProviderRequest,
+  type ProviderResult,
+  type StreamEvent,
+  type ToolCallPart,
+  type ToolResultPart,
+  type Usage,
+} from './types.ts';
+
+export type TurnState = 'starting' | 'awaiting_consent' | 'model' | 'tools' | 'awaiting_confirmation' | 'done' | 'stopped' | 'failed' | 'capped';
+export type EndState = 'done' | 'stopped' | 'failed' | 'capped';
+
+/** What a turn fixed when it started (provider, model, address and effort don't follow later changes). */
+export interface TurnSettings {
+  provider: ProviderId;
+  model: string;
+  base_url: string;
+  effort: Effort;
+  caps: Caps;
+}
+
+export type CapReason = 'steps' | 'turn_tokens' | 'turn_minutes' | 'turn_usd' | 'day_usd';
+export interface CapHit {
+  reason: CapReason;
+  text: string;
+}
+
+/** The turn as the loop drives it (turns.ts). */
+export interface LoopTurn extends RunnerTurn {
+  readonly prompt: string;
+  readonly tab: string | null;
+  readonly projectId: string | null;
+  readonly simulationId: string | null;
+  readonly settings: TurnSettings;
+  readonly conv: Conversation;
+  readonly signal: AbortSignal;
+  readonly ended: boolean;
+  step: number;
+  calls: number;
+  tokens: number;
+  usd: number;
+  estimated: boolean;
+  servedBy: string | null;
+  setState(s: TurnState): void;
+  end(state: EndState, reason: string, message: string | null): void;
+  note(text: string): void;
+  onStream(step: number, e: StreamEvent): void;
+  discard(step: number): void;
+  usage(u: { usd: number; estimated: boolean; dayUsd: number }): void;
+  /** A signal for one tool call: Stop and the minutes cap abort it. */
+  callSignal(): AbortSignal;
+  callDone(): void;
+  /** (Re)arms the minutes timer for this limit of active time. */
+  armMinutes(limitMs: number, text: string): void;
+  activeMs(): number;
+  /** How a Stop ends this turn (Stop, a key change, the server stopping). */
+  stopEnd(): { state: EndState; reason: string; message: string | null };
+}
+
+export interface LoopRegistry {
+  selectTools(ctx: ToolCtx): { tools: ToolDef[]; dropped: string[] };
+  workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string } | null;
+}
+
+export interface LoopDeps {
+  createAdapter(s: TurnSettings): ProviderAdapter | Promise<ProviderAdapter>;
+  /** The live settings (caps are min'd with the turn's, privacy is read from them). */
+  settings(): Promise<AssistantSettings>;
+  ledger(): Promise<SpendLedger>;
+  registry: LoopRegistry;
+  runner: ToolRunner;
+  gates: GateBroker;
+  /** The project's row (title, created_at), or null when it is not in the projects list. */
+  projects(id: string, o: { signal: AbortSignal; turn: string }): Promise<ProjectInfo | null>;
+  /** Remembers "Send" for a project and destination. */
+  remember(projectId: string, createdAt: string | null, destination: string): Promise<void>;
+  clock: Clock;
+  /** The wait before the one resend after an overload (tests shorten it). */
+  resendDelayMs?: number;
+}
+
+const money = (n: number) => `$${n.toFixed(2)}`;
+
+export function capText(reason: CapReason, caps: Caps): string {
+  switch (reason) {
+    case 'steps':
+      return `This turn reached its ${caps.steps}-step limit (Settings → Assistant).`;
+    case 'turn_tokens':
+      return 'This turn used its token limit.';
+    case 'turn_minutes':
+      return `Stopped after ${caps.turn_minutes} minute${caps.turn_minutes === 1 ? '' : 's'} of work.`;
+    case 'turn_usd':
+      return `The next step could go over this turn's ${money(caps.turn_usd)} limit.`;
+    case 'day_usd':
+      return `Today's ${money(caps.day_usd)} limit is reached; it resets at midnight.`;
+  }
+}
+
+/** The caps in force: the lower of the turn's snapshot and the live settings. */
+export function effectiveCaps(snapshot: Caps, live: Caps): Caps {
+  return {
+    turn_usd: Math.min(snapshot.turn_usd, live.turn_usd),
+    day_usd: Math.min(snapshot.day_usd, live.day_usd),
+    steps: Math.min(snapshot.steps, live.steps),
+    turn_minutes: Math.min(snapshot.turn_minutes, live.turn_minutes),
+    turn_tokens: Math.min(snapshot.turn_tokens, live.turn_tokens),
+  };
+}
+
+/** Minutes and tokens, before a step. */
+function stepCap(t: LoopTurn, caps: Caps): CapHit | null {
+  if (t.activeMs() >= caps.turn_minutes * 60_000) return { reason: 'turn_minutes', text: capText('turn_minutes', caps) };
+  if (t.tokens >= caps.turn_tokens) return { reason: 'turn_tokens', text: capText('turn_tokens', caps) };
+  return null;
+}
+
+/** Steps, minutes and tokens, before a call. */
+function callCap(t: LoopTurn, caps: Caps): CapHit | null {
+  if (t.calls >= caps.steps) return { reason: 'steps', text: capText('steps', caps) };
+  return stepCap(t, caps);
+}
+
+/** The request for this step (maxOutputTokens is set from the estimate). */
+export function buildRequest(conv: Conversation, tools: readonly ToolDef[], s: TurnSettings): ProviderRequest {
+  const system = [{ text: SYSTEM_PROMPT, cache: true }];
+  if (conv.guide) system.push({ text: guideBlock(conv.guide.text, conv.guide.pluginName), cache: true });
+  return { model: s.model, system, messages: [...conv.messages], tools: providerTools(tools), maxOutputTokens: 0, effort: s.effort };
+}
+
+/** Characters and images of messages a request adds (for the estimate). */
+function freshOf(messages: readonly Message[]): { chars: number; images: Array<{ width: number; height: number }> } {
+  let chars = 0;
+  const images: Array<{ width: number; height: number }> = [];
+  for (const m of messages) {
+    if (m.role === 'assistant') {
+      try {
+        chars += JSON.stringify(m.raw.payload ?? m.parts).length;
+      } catch {
+        chars += 1000;
+      }
+      continue;
+    }
+    for (const p of m.parts) {
+      if (p.type === 'text') chars += p.text.length;
+      else if (p.type === 'image') images.push({ width: p.width, height: p.height });
+      else if (p.type === 'tool_result') {
+        chars += p.text.length;
+        for (const im of p.images) images.push({ width: im.width, height: im.height });
+      }
+    }
+  }
+  return { chars, images };
+}
+
+const isCall = (p: { type: string }): p is ToolCallPart => p.type === 'tool_call';
+
+/** Runs the turn to its end. Errors other than the provider's reach the caller (TurnManager: t.crash). */
+export async function runTurn(t: LoopTurn, d: LoopDeps): Promise<void> {
+  try {
+    await steps(t, d);
+  } catch (err) {
+    if (t.ended) return;
+    if (t.signal.aborted) {
+      const s = t.stopEnd();
+      t.end(s.state, s.reason, s.message);
+      return;
+    }
+    if (err instanceof ProviderError) {
+      t.end('failed', err.code, err.message);
+      return;
+    }
+    throw err;
+  }
+}
+
+/** Ends the turn as its Stop says, when it was stopped; true then. */
+function stoppedNow(t: LoopTurn): boolean {
+  if (t.ended) return true;
+  if (!t.signal.aborted) return false;
+  const s = t.stopEnd();
+  t.end(s.state, s.reason, s.message);
+  return true;
+}
+
+async function requirePrivacy(t: LoopTurn, d: LoopDeps, adapter: ProviderAdapter, project: ProjectInfo): Promise<boolean> {
+  const live = await d.settings();
+  const destination = destinationOf(t.settings);
+  const verdict = privacyDecision(live, { cloud: adapter.cloud, destination, projectId: project.id, createdAt: project.created_at });
+  if (verdict === 'allow') return true;
+  if (verdict === 'deny') {
+    t.end('stopped', 'privacy', NOTHING_SENT);
+    return false;
+  }
+  t.setState('awaiting_consent');
+  t.pause();
+  let answer: 'allow' | 'deny';
+  try {
+    answer = await d.gates.ask(
+      privacyGate({ turn: t.id, project, provider: t.settings.provider, host: destinationHost(t.settings.provider, t.settings.base_url) }),
+      { kind: 'turn', id: t.id, tab: t.tab },
+      t.signal,
+    );
+  } finally {
+    t.resume();
+  }
+  if (answer !== 'allow' || t.signal.aborted) {
+    t.end('stopped', 'privacy', NOTHING_SENT);
+    return false;
+  }
+  await d.remember(project.id, project.created_at, destination);
+  t.setState('starting');
+  return true;
+}
+
+export const GUIDE_CHANGED_NOTE = "The workspace's notes changed; start a new conversation to use them.";
+
+/** Freezes the tab's guide into a conversation that has sent nothing yet; later changes only get a note. */
+function syncGuide(t: LoopTurn, ws: { reg: WorkspaceRegistration; guide: string } | null, fixed: boolean): void {
+  const conv = t.conv;
+  const guide = ws?.guide ?? '';
+  if (!fixed && !conv.guide && guide) {
+    conv.guide = { text: guide, pluginName: ws?.reg.pluginName || ws?.reg.plugin || '' };
+    return;
+  }
+  if (!guide || guide === conv.guide?.text || conv.guidesNoted.has(guide)) return;
+  conv.guidesNoted.add(guide);
+  t.note(GUIDE_CHANGED_NOTE);
+}
+
+async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
+  if (stoppedNow(t)) return;
+  const adapter = await d.createAdapter(t.settings);
+  if (stoppedNow(t)) return;
+  const conv = t.conv;
+  // A turn that crashed or was cut off left calls open: they are answered before anything else.
+  conv.repair();
+  const workspaceNow = () => (t.tab ? d.registry.workspaceOf(t.tab) : null);
+
+  let project: ProjectInfo | null = null;
+  if (t.projectId) {
+    try {
+      project = await d.projects(t.projectId, { signal: t.signal, turn: t.id });
+    } catch (err) {
+      if (stoppedNow(t)) return;
+      t.end('failed', 'project_unreadable', `The project could not be read: ${err instanceof Error ? err.message : 'no answer'}`);
+      return;
+    }
+    if (stoppedNow(t)) return;
+    if (!project) {
+      t.end('failed', 'bad_project', 'That project is not in the projects list.');
+      return;
+    }
+  }
+  if (adapter.cloud && t.projectId && project) {
+    if (!(await requirePrivacy(t, d, adapter, project))) return;
+    if (stoppedNow(t)) return;
+  }
+
+  const ws = workspaceNow();
+  // The conversation's system blocks are fixed by its first request.
+  const fixed = conv.messages.length > 0;
+  syncGuide(t, ws, fixed);
+  conv.append({
+    role: 'user',
+    parts: [
+      { type: 'text', text: t.prompt },
+      {
+        type: 'text',
+        text: contextBlock({
+          projectId: t.projectId,
+          projectTitle: project?.title ?? null,
+          simulationId: t.simulationId,
+          workspace: ws ? { plugin: ws.reg.plugin, pluginName: ws.reg.pluginName, workspace: ws.reg.workspace } : null,
+        }),
+      },
+    ],
+  });
+
+  const priced = adapter.id !== 'openai_compatible';
+  const model = t.settings.model;
+  let finalStep = false;
+  let lastTools: ToolDef[] | null = null;
+  let prev: EstimateInput['prev'] = null;
+  let counted = 0;
+  const notedDrops = new Set<string>();
+
+  for (let step = 1; ; step += 1) {
+    if (stoppedNow(t)) return;
+    t.step = step;
+    const caps = effectiveCaps(t.settings.caps, (await d.settings()).caps);
+    t.armMinutes(caps.turn_minutes * 60_000, capText('turn_minutes', caps));
+    const hit = stepCap(t, caps);
+    if (hit) return t.end('capped', hit.reason, hit.text);
+    const full = conv.fullReason();
+    if (full && full !== 'context') return t.end('failed', 'conversation_full', FULL_TEXT);
+    if (step > 1) syncGuide(t, workspaceNow(), true);
+
+    const ctx: ToolCtx = { tab: t.tab, projectId: t.projectId, simulationId: t.simulationId, cloud: adapter.cloud, local: adapter.id === 'openai_compatible' };
+    let tools: ToolDef[];
+    if (finalStep && lastTools) {
+      // The summing-up request keeps the tool list, so the cached prefix holds.
+      tools = lastTools;
+    } else {
+      const sel = d.registry.selectTools(ctx);
+      tools = sel.tools;
+      const key = sel.dropped.join(',');
+      if (key && !notedDrops.has(key)) {
+        notedDrops.add(key);
+        t.note(`More tools than one request may carry; left out: ${sel.dropped.join(', ')}.`);
+      }
+    }
+    lastTools = tools;
+    const offered = new Map(tools.map((x) => [x.name, x] as const));
+    const req = buildRequest(conv, tools, t.settings);
+
+    // The spend estimate and the day's reservation (cloud only; a local server costs nothing).
+    const fresh = freshOf(conv.messages.slice(counted));
+    counted = conv.messages.length;
+    const systemChars = step === 1 ? req.system.reduce((n, s) => n + s.text.length, 0) : 0;
+    const ledger = priced ? await d.ledger() : null;
+    const turnRoom = caps.turn_usd - t.usd;
+    const dayRoom = ledger ? caps.day_usd - (ledger.spentToday() + ledger.reservedToday()) : Number.POSITIVE_INFINITY;
+    const est = estimateStep({
+      provider: adapter.id,
+      model,
+      cloud: adapter.cloud,
+      fallbackTargets: adapter.fallbackTargets(model),
+      newChars: fresh.chars + systemChars,
+      newImages: fresh.images,
+      toolCount: tools.length,
+      firstStep: step === 1,
+      prev,
+      now: d.clock.now(),
+      remainingUsd: priced ? Math.min(turnRoom, dayRoom) : Number.POSITIVE_INFINITY,
+    });
+    if (priced && est.capped) {
+      const reason: CapReason = turnRoom <= dayRoom ? 'turn_usd' : 'day_usd';
+      return t.end('capped', reason, capText(reason, caps));
+    }
+    const reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
+    if (ledger && !reservation) return t.end('capped', 'day_usd', capText('day_usd', caps));
+    if (t.signal.aborted) {
+      if (ledger && reservation) await ledger.settle(reservation, 0);
+      stoppedNow(t);
+      return;
+    }
+
+    t.setState('model');
+    const startedAt = d.clock.now();
+    let out: ProviderResult | null = null;
+    let streamed = false;
+    let known: Usage | null = null;
+    let cost = 0;
+    let costEstimated = false;
+    try {
+      out = await sendWithOneResend(
+        adapter,
+        { ...req, maxOutputTokens: est.maxOut },
+        t.signal,
+        (e) => {
+          streamed = true;
+          if (e.kind === 'usage') known = e.usage;
+          t.onStream(step, e);
+        },
+        {
+          onResend: () => {
+            streamed = false;
+            t.discard(step);
+          },
+          ...(d.resendDelayMs !== undefined ? { delayMs: d.resendDelayMs } : {}),
+        },
+      );
+      if (priced) {
+        const c = requestCost(adapter.id, out.attempts);
+        cost = c.usd;
+        costEstimated = c.estimated;
+      }
+    } catch (err) {
+      const aborted = t.signal.aborted || (err instanceof ProviderError && err.code === 'aborted');
+      if (priced && (aborted || streamed || (err instanceof ProviderError && err.streamed))) {
+        // Billed for what was sent: the input known so far (else the estimate) and the output reserved.
+        const k = known as Usage | null;
+        const input = k ? costOf(est.rates, { ...k, output: 0 }) : est.inputUsd;
+        cost = input + (est.maxOut * est.rates.output) / 1e6;
+        costEstimated = true;
+      }
+      if (aborted || streamed) t.discard(step);
+      throw err;
+    } finally {
+      if (ledger && reservation) await ledger.settle(reservation, cost);
+      if (cost > 0 || out) {
+        t.usd += cost;
+        t.estimated ||= costEstimated;
+        t.usage({ usd: cost, estimated: costEstimated, dayUsd: ledger ? ledger.spentToday() : 0 });
+      }
+    }
+
+    t.servedBy = out.servedBy || t.servedBy;
+    const used = promptTokens(out.usage);
+    conv.promptTokens = used;
+    t.tokens += used + out.usage.output;
+    prev = { promptTokens: used, startedAt, cacheUsed: out.usage.cacheRead + out.usage.cacheWrite5m + out.usage.cacheWrite1h > 0 };
+
+    if (out.stop === 'refusal') {
+      t.discard(step);
+      return t.end('failed', `refusal:${out.refusal?.category ?? 'none'}`, 'The model declined this request.');
+    }
+    if (out.stop === 'context') return t.end('failed', 'context', 'This conversation is too long for the model. Start a new one.');
+    if (out.stop === 'max_tokens') return t.end('capped', 'max_tokens', 'The model ran out of room mid-answer.');
+
+    const calls = out.message.parts.filter(isCall);
+    conv.append(out.message);
+    if (!calls.length) {
+      if (finalStep) return t.end('capped', 'steps', capText('steps', caps));
+      return t.end('done', 'end_turn', null);
+    }
+
+    t.setState('tools');
+    const results: ToolResultPart[] = [];
+    let declined = false;
+    let capped: CapHit | null = finalStep ? { reason: 'steps', text: capText('steps', caps) } : null;
+    const notRun = (call: ToolCallPart, code: string, message: string) => {
+      t.emit(toolCallEvent(call, offered.get(call.name) ?? null, step));
+      const r = errorResult(call, code, message);
+      t.emit({ type: 'tool_result', call: call.callId, ok: false, code, summary: r.summary, ms: 0 });
+      results.push(r.part);
+    };
+    for (const call of calls) {
+      if (t.signal.aborted) {
+        notRun(call, 'stopped', STOPPED_BEFORE);
+        continue;
+      }
+      if (!capped) capped = callCap(t, caps);
+      if (capped) {
+        notRun(call, 'capped', `Not run: ${capped.text}`);
+        continue;
+      }
+      if (declined) {
+        notRun(call, 'skipped', 'Skipped: an earlier call in this step was declined.');
+        continue;
+      }
+      t.calls += 1;
+      const signal = t.callSignal();
+      let r;
+      try {
+        r = await d.runner.run(call, { owner: { kind: 'turn', id: t.id, tab: t.tab }, ctx, signal, turn: t, offered });
+      } finally {
+        t.callDone();
+      }
+      if (r.code === 'declined') declined = true;
+      if (r.code === 'capped') capped = callCap(t, caps) ?? { reason: 'turn_minutes', text: capText('turn_minutes', caps) };
+      results.push(r.part);
+    }
+    // Every call answered exactly once, in call order: capped, skipped and stopped ones too.
+    conv.append({ role: 'user', parts: results });
+    if (stoppedNow(t)) return;
+    if (capped) {
+      if (capped.reason === 'steps' && !finalStep) {
+        finalStep = true;
+        t.note('Tool limit reached; asking the model to sum up.');
+        continue;
+      }
+      return t.end('capped', capped.reason, capped.text);
+    }
+  }
+}

@@ -20,6 +20,10 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 // The test routes, and the file protector (no helper runs; the switch shows in status).
 process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
+// Turns run the real adapters against the fake provider (never a real one).
+const { startFakeLlm } = await import('../../../e2e/support/fake-llm.mjs');
+const fake = await startFakeLlm();
+process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const { Router, dispatch } = await import('../router.ts');
@@ -73,6 +77,7 @@ before(async () => {
 after(async () => {
   handle?.shutdown();
   agent.destroy();
+  await fake.stop();
   await new Promise((r) => server.close(r));
   resetAssistantState();
   try {
@@ -146,7 +151,22 @@ const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH'];
 describe('only on this PC: the remote census', () => {
   it('every Assistant route, every method, every forwarding variant and the tunnel host: 403 remote, nothing read or written', async () => {
     const paths = [...new Set(router.list().map((r) => r.path))].filter((p) => p.startsWith('/api/assistant') || p.startsWith('/api/test/assistant'));
-    assert.deepEqual(paths.sort(), ['/api/assistant/key', '/api/assistant/key/remove', '/api/assistant/models', '/api/assistant/settings', '/api/assistant/status', '/api/assistant/test', '/api/test/assistant/reset', '/api/test/assistant/state']);
+    assert.deepEqual(paths.sort(), [
+      '/api/assistant/conversations/:id/forget',
+      '/api/assistant/gates/:id',
+      '/api/assistant/key',
+      '/api/assistant/key/remove',
+      '/api/assistant/models',
+      '/api/assistant/settings',
+      '/api/assistant/status',
+      '/api/assistant/tabs',
+      '/api/assistant/test',
+      '/api/assistant/turns',
+      '/api/assistant/turns/:id',
+      '/api/assistant/turns/:id/stop',
+      '/api/test/assistant/reset',
+      '/api/test/assistant/state',
+    ]);
     let n = 0;
     for (const route of paths) {
       const path = route.replace(/:[A-Za-z]+/g, 'x').replace(/\*\*[A-Za-z]*/g, 'x');
@@ -163,6 +183,8 @@ describe('only on this PC: the remote census', () => {
     assert.equal(n, paths.length * METHODS.length * REMOTE_VARIANTS.length);
     assert.deepEqual(homeFiles(), [], 'nothing written');
     assert.equal(assistantState().secrets.store, null, 'the key store was never even opened');
+    assert.equal(assistantState().turns.size, 0, 'no turn started');
+    assert.equal(fake.requests().length, 0, 'no provider request');
     assert.ok(!logged.some((l) => l.includes(CANARY)));
   });
 
@@ -452,6 +474,203 @@ describe('status, settings and keys', () => {
     assert.notEqual(r.json.boot, boot);
     const s = await get('/api/assistant/status');
     assert.equal(s.json.keys.openai.set, true, 'a reset without files keeps them');
+  });
+});
+
+// The turn routes over HTTP, with the real adapters against the fake provider.
+describe('turns', () => {
+  const PROJECTS = { ok: true, projects: [{ id: 'p1', title: 'Wing', created_at: '2026-10-01T10:00:00Z' }], projects_root: 'C:\\x' };
+  const TURN_KEY = 'sk-ant-api03-ROUTES-turn-key-0123456789-Ab1';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function until(fn, ms, what) {
+    const end = Date.now() + ms;
+    for (;;) {
+      if (await fn()) return;
+      if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+      await sleep(5);
+    }
+  }
+
+  before(() => {
+    // What the host tools and the project lookup read, over loopback (the app's own routes in the app).
+    router.get('/api/projects', (ctx) => ctx.sendJson(200, PROJECTS));
+    router.get('/api/compute-queue', (ctx) => ctx.sendJson(200, { ok: true, busy: false, items: [] }));
+  });
+
+  /** Polls a turn until it ended; returns every event and the last summary. */
+  async function follow(turn, onEvent = async () => {}) {
+    const events = [];
+    let since = 0;
+    for (let i = 0; i < 200; i += 1) {
+      const r = await get(`/api/assistant/turns/${turn}?since=${since}&wait_ms=2000`);
+      assert.equal(r.status, 200, r.text);
+      for (const e of r.json.events) {
+        events.push(e);
+        await onEvent(e);
+      }
+      since = r.json.next;
+      if (r.json.ended) return { events, turn: r.json.turn };
+    }
+    throw new Error('the turn never ended');
+  }
+
+  const localServer = () => post('/api/assistant/settings', { provider: 'openai_compatible', base_url: fake.compatBase, model: 'qwen3.8-27b', privacy: 'ask' });
+
+  it('a local-server turn: 202, the long-poll, a host tool through the app, then done; 404 for an unknown turn', async () => {
+    assert.equal((await localServer()).status, 200);
+    const before = fake.requests().length;
+    fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+    const r = await post('/api/assistant/turns', { text: 'How is the app?' });
+    assert.equal(r.status, 202, r.text);
+    assert.match(r.json.turn, /^t-[0-9a-z]+-[0-9a-f]{8}$/);
+    assert.match(r.json.conversation, /^c-[0-9a-z]+-[0-9a-f]{8}$/);
+    const { events, turn } = await follow(r.json.turn);
+    assert.equal(turn.state, 'done', JSON.stringify(events.slice(-3)));
+    assert.equal(turn.text_so_far, 'Checking.\n\nAll good.');
+    const results = events.filter((e) => e.type === 'tool_result');
+    assert.equal(results.length, 1);
+    assert.equal(results[0].ok, true, JSON.stringify(results[0]));
+    assert.match(results[0].summary, /^Magnusim .*, \d+ plugins, compute idle, 0 queued$/);
+    const sent = fake.requests().slice(before).filter((x) => x.dialect === 'compat');
+    assert.equal(sent.length, 2);
+    assert.ok(sent[0].body.tools.some((t) => t.function.name === 'app_status'));
+    assert.ok(!sent[0].body.tools.some((t) => t.function.name === 'connection_check'));
+    assert.deepEqual(Object.keys(turn).sort(), [
+      'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'message', 'open_gates', 'project_id', 'served_by', 'started_at', 'state', 'step', 'tab', 'text_so_far', 'usd',
+    ]);
+    assert.equal((await get('/api/assistant/turns/t-nope')).status, 404);
+    assert.equal((await post('/api/assistant/turns/t-nope/stop', {})).status, 404);
+    const tabs = await get('/api/assistant/tabs');
+    assert.deepEqual(tabs.json, { ok: true, tabs: [] }, 'no page registers tools before the relay');
+    const state = await get('/api/test/assistant/state');
+    assert.deepEqual([state.json.running, state.json.gates], [0, 0]);
+  });
+
+  it('Stop while the provider streams: the socket closes, no further request, the turn ends stopped', async () => {
+    assert.equal((await localServer()).status, 200);
+    fake.reply({ text: 'partial answer', hold: 'stop-1' });
+    const before = fake.requests().length;
+    const disconnects = fake.disconnects();
+    const r = await post('/api/assistant/turns', { text: 'Go slowly.' });
+    assert.equal(r.status, 202);
+    await until(async () => (await get(`/api/assistant/turns/${r.json.turn}`)).json.turn.text_so_far.length > 0, 5000, 'the first chunk');
+    const busy = await post(`/api/assistant/conversations/${r.json.conversation}/forget`, {});
+    assert.deepEqual([busy.status, busy.json.code], [409, 'conversation_busy']);
+    const stopped = await post(`/api/assistant/turns/${r.json.turn}/stop`, {});
+    assert.equal(stopped.status, 200);
+    assert.equal(stopped.json.turn.state, 'stopped');
+    assert.equal(stopped.json.turn.text_so_far, '', 'the partial answer is dropped');
+    await until(() => fake.disconnects() === disconnects + 1, 5000, 'the fake to see the socket close');
+    fake.release('stop-1');
+    await sleep(300);
+    assert.equal(fake.requests().length, before + 1, 'no request after Stop');
+    await until(async () => (await post(`/api/assistant/conversations/${r.json.conversation}/forget`, {})).json.forgotten === true, 5000, 'the forget');
+  });
+
+  it('a cloud turn about a project asks once (Send through the route), then not again; the key goes only as x-api-key', async () => {
+    assert.equal((await post('/api/assistant/key', { provider: 'anthropic', key: TURN_KEY })).status, 200);
+    assert.equal((await post('/api/assistant/settings', { provider: 'anthropic', model: 'claude-opus-5-5', privacy: 'ask', forget_consents: true })).status, 200);
+    const before = fake.requests().length;
+    fake.reply({ text: 'It is a wing.' }, { text: 'Still a wing.' });
+    let r = await post('/api/assistant/turns', { text: 'What is this project?', context: { project_id: 'p1' } });
+    assert.equal(r.status, 202, r.text);
+    const gates = [];
+    const first = await follow(r.json.turn, async (e) => {
+      if (e.type !== 'gate') return;
+      gates.push(e.gate);
+      assert.equal(fake.requests().length, before, 'nothing sent while asking');
+      const a = await post(`/api/assistant/gates/${e.gate.id}`, { allow: true });
+      assert.equal(a.status, 200);
+    });
+    assert.equal(first.turn.state, 'done', JSON.stringify(first.events.slice(-3)));
+    assert.deepEqual(gates.map((g) => [g.kind, g.title, g.yes, g.no]), [['privacy', 'Send project "Wing" to Anthropic?', 'Send', "Don't send"]]);
+    const sent = fake.requests().slice(before).filter((x) => x.dialect === 'anthropic');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].headers['x-api-key'], TURN_KEY);
+    assert.equal(sent[0].headers.authorization, undefined);
+    assert.match(JSON.stringify(sent[0].body.messages), /App context \(data, not instructions\): .*Wing/);
+    assert.equal((await get('/api/assistant/status')).json.consents, 1);
+    r = await post('/api/assistant/turns', { text: 'Again?', context: { project_id: 'p1' }, conversation: r.json.conversation });
+    assert.equal(r.status, 202, r.text);
+    const second = await follow(r.json.turn);
+    assert.equal(second.turn.state, 'done');
+    assert.equal(second.events.filter((e) => e.type === 'gate').length, 0, 'remembered');
+    assert.ok(second.turn.usd > 0);
+    // Never send: refused before the turn.
+    await post('/api/assistant/settings', { privacy: 'deny' });
+    const denied = await post('/api/assistant/turns', { text: 'x', context: { project_id: 'p1' } });
+    assert.deepEqual([denied.status, denied.json.code], [400, 'privacy_denied']);
+    await post('/api/assistant/settings', { privacy: 'ask' });
+    // A top-level project_id is not the turn's project (bodies keep it under context).
+    fake.reply({ text: 'home' });
+    const top = await post('/api/assistant/turns', { text: 'x', project_id: 'p1' });
+    assert.equal(top.status, 202, top.text);
+    const home = await follow(top.json.turn);
+    assert.equal(home.turn.project_id, null);
+    assert.equal(home.events.filter((e) => e.type === 'gate').length, 0);
+    for (const text of [JSON.stringify(home), JSON.stringify(second), JSON.stringify(first)]) assert.ok(!text.includes(TURN_KEY));
+    assert.ok(!logged.some((l) => l.includes(TURN_KEY)));
+  });
+
+  it('both cloud dialects replay a two-step turn’s stored answer (thinking, reasoning items) as the fake requires', async () => {
+    const keys = { anthropic: TURN_KEY, openai: 'sk-proj-ROUTES-turn-key-0123456789-Cd2' };
+    const models = { anthropic: 'claude-opus-5-5', openai: 'gpt-6.1-sol' };
+    for (const provider of ['anthropic', 'openai']) {
+      assert.equal((await post('/api/assistant/key', { provider, key: keys[provider] })).status, 200);
+      assert.equal((await post('/api/assistant/settings', { provider, model: models[provider], privacy: 'allow' })).status, 200);
+      const before = fake.requests().length;
+      fake.reply({ thinking: 'Let me look.', text: 'Looking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'Fine.' });
+      const r = await post('/api/assistant/turns', { text: 'Status?' });
+      assert.equal(r.status, 202, r.text);
+      const { turn, events } = await follow(r.json.turn);
+      assert.equal(turn.state, 'done', `${provider}: ${JSON.stringify(events.slice(-3))}`);
+      const sent = fake.requests().slice(before).filter((x) => x.dialect === provider);
+      assert.equal(sent.length, 2, provider);
+      assert.ok(sent.every((x) => !x.refused), `${provider}: ${sent.map((x) => x.refused).join()}`);
+      const replay = JSON.stringify(provider === 'openai' ? sent[1].body.input : sent[1].body.messages);
+      assert.match(replay, provider === 'openai' ? /"encrypted_content":"enc-\d+"/ : /"signature":"sig-\d+"/, `${provider}: the opaque part went back`);
+    }
+  });
+
+  it('an error thrown inside a detached turn reaches only the log, redacted; the turn ends failed', async () => {
+    assert.equal((await localServer()).status, 200);
+    const r2 = new Router();
+    const h2 = routes.registerAssistantRoutes(r2, {
+      port: () => port,
+      turns: {
+        createAdapter: () => {
+          throw new Error(`the adapter exploded holding ${CANARY}`);
+        },
+      },
+    });
+    const s2 = await serve(r2);
+    try {
+      const at = logged.length;
+      const errors = [];
+      const orig = console.error;
+      console.error = (...args) => {
+        errors.push(args.map(String).join(' '));
+        orig(...args);
+      };
+      try {
+        const base = `http://127.0.0.1:${s2.address().port}`;
+        const started = await fetch(`${base}/api/assistant/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'x' }) }).then((x) => x.json());
+        const t = h2.turns.get(started.turn);
+        await until(() => t.settled, 5000, 'the turn to end');
+        assert.deepEqual([t.state, t.endReason], ['failed', 'internal']);
+        const polled = await fetch(`${base}/api/assistant/turns/${t.id}`).then((x) => x.json());
+        assert.ok(!JSON.stringify(polled).includes(CANARY));
+        assert.ok(!JSON.stringify(polled).includes('exploded'), 'the error text stays in the log');
+      } finally {
+        console.error = orig;
+      }
+      assert.ok(errors.some((l) => l.includes('[assistant] a turn failed unexpectedly') && l.includes('[redacted]')), errors.join('\n'));
+      assert.ok(!errors.some((l) => l.includes(CANARY)));
+      assert.ok(!logged.slice(at).some((l) => l.includes(CANARY)));
+    } finally {
+      h2.shutdown();
+      await new Promise((done) => s2.close(done));
+    }
   });
 });
 

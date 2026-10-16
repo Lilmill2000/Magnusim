@@ -1,0 +1,746 @@
+/**
+ * The Assistant's turns (Foundation spec 6.1, 6.7, 9.2): starting them, their event log,
+ * the long-poll, Stop, the questions they ask, and how many may run.
+ *
+ * - A turn runs detached from the request that started it (`runTurn(t, d)` in loop.ts),
+ *   and a crash inside it ends it `failed` through t.crash(), logged redacted, never
+ *   rethrown. It keeps a log of events numbered by `seq` (≤ 4000; notes go first when
+ *   it is full, and text_so_far keeps the text), read with GET …/turns/:id?since=N.
+ *   Ended turns are kept for an hour.
+ * - At most one turn runs in a conversation (409) and three in all (429), checked and
+ *   set in one synchronous step.
+ * - Stop (and a changed or removed key, and the server stopping) aborts the provider
+ *   request and the running tool, withdraws open questions, drops a partial answer and
+ *   answers the remaining calls; the turn ends `stopped` (`failed` "server stopped" when
+ *   the server goes).
+ * - The minutes cap counts active time only: questions waiting for an answer don't count.
+ *
+ * Turns, conversations and questions live in the Assistant's state on globalThis.
+ */
+import { randomBytes } from 'node:crypto';
+import { alog } from './log.ts';
+import { redact } from './redact.ts';
+import { runTurn, type EndState, type LoopDeps, type LoopTurn, type TurnSettings, type TurnState } from './loop.ts';
+import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
+import { GateBroker, realClock, type Clock, type GateEvent, type GatePresenter, type GateView } from './gates.ts';
+import { PRIVACY_DENIED_TEXT, type ProjectInfo } from './privacy.ts';
+import type { Registry } from './registry.ts';
+import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
+import { cleanText } from './sanitize.ts';
+import type { AssistantSettings } from './settings.ts';
+import type { SpendLedger } from './ledger.ts';
+import { onAssistantShutdown, assistantState } from './state.ts';
+import { isCloud } from './providers/index.ts';
+import { ProviderError, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
+import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
+
+export type { TurnState } from './loop.ts';
+
+export type TurnEvent = { seq: number; at: number } & (
+  | { type: 'state'; state: TurnState }
+  | { type: 'text'; step: number; text: string }
+  | { type: 'discard'; step: number }
+  | { type: 'note'; text: string }
+  | { type: 'fallback'; step: number; from: string; to: string }
+  | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
+  | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number }
+  | { type: 'gate'; gate: GateView }
+  | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
+  | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
+  | { type: 'end'; state: EndState; reason: string; message: string | null }
+);
+// Reserved for later phases (never emitted in Foundation): 'job', 'ui_sync'.
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+export type TurnEventBody = DistributiveOmit<TurnEvent, 'seq' | 'at'>;
+
+export interface TurnSummary {
+  id: string;
+  conversation: string;
+  state: TurnState;
+  step: number;
+  started_at: string;
+  ended_at: string | null;
+  usd: number;
+  estimated: boolean;
+  end_reason: string | null;
+  message: string | null;
+  open_gates: GateView[];
+  text_so_far: string;
+  tab: string | null;
+  project_id: string | null;
+  served_by: string | null;
+}
+
+export const TURN_LIMITS = Object.freeze({
+  /** Running turns in all (429 past it). */
+  running: 3,
+  events: 4000,
+  /** Ended turns are kept this long. */
+  keepMs: 60 * 60_000,
+  /** The longest long-poll wait. */
+  waitMs: 25_000,
+  /** Stop answers once the turn ended, or after this long with {stopping:true}. */
+  stopMs: 5_000,
+  /** The person's prompt, in characters. */
+  textMax: 20_000,
+});
+
+const STOPPED_TEXT = 'Stopped.';
+const TERMINAL: ReadonlySet<TurnState> = new Set(['done', 'stopped', 'failed', 'capped']);
+
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+export function newTurnId(now: number): string {
+  return `t-${Math.max(0, Math.floor(now)).toString(36)}-${randomBytes(4).toString('hex')}`;
+}
+
+interface TurnInit {
+  id: string;
+  prompt: string;
+  conv: Conversation;
+  tab: string | null;
+  projectId: string | null;
+  simulationId: string | null;
+  settings: TurnSettings;
+  clock: Clock;
+  gates: GateBroker;
+  onEnded?: (t: Turn) => void;
+}
+
+export class Turn implements LoopTurn {
+  readonly id: string;
+  readonly prompt: string;
+  readonly conv: Conversation;
+  readonly tab: string | null;
+  readonly projectId: string | null;
+  readonly simulationId: string | null;
+  readonly settings: TurnSettings;
+  readonly startedAt: number;
+  state: TurnState = 'starting';
+  step = 0;
+  calls = 0;
+  tokens = 0;
+  usd = 0;
+  estimated = false;
+  servedBy: string | null = null;
+  endedAt: number | null = null;
+  endReason: string | null = null;
+  message: string | null = null;
+  /** The loop (and its last appends) has finished: the conversation is free again. */
+  settled = false;
+
+  private readonly clock: Clock;
+  private readonly gates: GateBroker;
+  private readonly onEnded?: (t: Turn) => void;
+  private readonly abort = new AbortController();
+  private stopAs: { state: EndState; reason: string; message: string | null } | null = null;
+  private readonly log: TurnEvent[] = [];
+  private seq = 0;
+  /** The highest seq a reader has been given: text is merged only into events no one read yet. */
+  private delivered = 0;
+  private readonly stepText = new Map<number, string>();
+  private readonly waiters = new Set<() => void>();
+  private readonly listeners = new Set<(e: TurnEvent) => void>();
+  private call: AbortController | null = null;
+  private minutes: { limitMs: number; text: string; timer: unknown; up: boolean } = { limitMs: Number.POSITIVE_INFINITY, text: '', timer: null, up: false };
+  private pausedAt: number | null = null;
+  private pausedMs = 0;
+  private pauseDepth = 0;
+  private offShutdown: (() => void) | null = null;
+
+  constructor(o: TurnInit) {
+    this.id = o.id;
+    this.prompt = o.prompt;
+    this.conv = o.conv;
+    this.tab = o.tab;
+    this.projectId = o.projectId;
+    this.simulationId = o.simulationId;
+    this.settings = o.settings;
+    this.clock = o.clock;
+    this.gates = o.gates;
+    this.onEnded = o.onEnded;
+    this.startedAt = o.clock.now();
+    this.abort.signal.addEventListener('abort', () => this.call?.abort({ code: 'stopped' } satisfies CallAbort), { once: true });
+    this.offShutdown = onAssistantShutdown(() => this.shutdown());
+    this.push({ type: 'state', state: 'starting' });
+  }
+
+  get signal(): AbortSignal {
+    return this.abort.signal;
+  }
+
+  get ended(): boolean {
+    return TERMINAL.has(this.state);
+  }
+
+  // ------------------------------------------------------------ the log
+
+  private push(body: TurnEventBody): TurnEvent {
+    const e = { ...body, seq: ++this.seq, at: this.clock.now() } as TurnEvent;
+    this.log.push(e);
+    if (this.log.length > TURN_LIMITS.events) this.dropOne();
+    this.wake(e);
+    return e;
+  }
+
+  /** The log is full: a note goes first, then the oldest text or progress (text_so_far keeps the text). */
+  private dropOne(): void {
+    for (const type of ['note', 'text', 'tool_progress', 'usage', 'state'] as const) {
+      const i = this.log.findIndex((e) => e.type === type);
+      if (i >= 0) {
+        this.log.splice(i, 1);
+        return;
+      }
+    }
+    this.log.splice(0, 1);
+  }
+
+  private wake(e: TurnEvent | null): void {
+    for (const w of [...this.waiters]) w();
+    if (e) for (const fn of [...this.listeners]) {
+      try {
+        fn(e);
+      } catch {
+        /* a listener never breaks the turn */
+      }
+    }
+  }
+
+  /** Every event as it is logged (tests and, later, the dock's channel). */
+  subscribe(fn: (e: TurnEvent) => void): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+
+  emit(e: RunnerEvent | TurnEventBody): void {
+    this.push(e as TurnEventBody);
+  }
+
+  note(text: string): void {
+    this.push({ type: 'note', text: cleanText(text, 500) });
+  }
+
+  setState(s: TurnState): void {
+    if (this.ended || this.state === s) return;
+    this.state = s;
+    this.push({ type: 'state', state: s });
+  }
+
+  onStream(step: number, e: StreamEvent): void {
+    if (this.ended) return;
+    if (e.kind === 'text') {
+      if (!e.text) return;
+      this.stepText.set(step, (this.stepText.get(step) ?? '') + e.text);
+      const last = this.log[this.log.length - 1];
+      if (last && last.type === 'text' && last.step === step && last.seq > this.delivered) {
+        last.text += e.text;
+        this.wake(null);
+      } else {
+        this.push({ type: 'text', step, text: e.text });
+      }
+    } else if (e.kind === 'fallback') {
+      this.push({ type: 'fallback', step, from: cleanText(e.from, 128), to: cleanText(e.to, 128) });
+    }
+  }
+
+  discard(step: number): void {
+    if (!this.stepText.has(step)) return;
+    this.stepText.delete(step);
+    this.push({ type: 'discard', step });
+  }
+
+  usage(u: { usd: number; estimated: boolean; dayUsd: number }): void {
+    this.push({ type: 'usage', usd: round6(u.usd), estimated: u.estimated, turn_usd: round6(this.usd), day_usd: round6(u.dayUsd), tokens: this.tokens });
+  }
+
+  textSoFar(): string {
+    return [...this.stepText.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, text]) => text.trim())
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  /** Events after `since` (marks them read). */
+  eventsSince(since: number): TurnEvent[] {
+    const out = this.log.filter((e) => e.seq > since);
+    if (out.length) this.delivered = Math.max(this.delivered, out[out.length - 1].seq);
+    return out.map((e) => ({ ...e }));
+  }
+
+  lastSeq(): number {
+    return this.seq;
+  }
+
+  /** Waits until an event after `since` is logged, the turn ends, `ms` passes or `signal` aborts. */
+  waitFor(since: number, ms: number, signal?: AbortSignal): Promise<void> {
+    if (this.seq > since || this.ended || ms <= 0 || signal?.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.waiters.delete(done);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.waiters.add(done);
+      signal?.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  // ------------------------------------------------------------ time and calls
+
+  activeMs(): number {
+    const now = this.clock.now();
+    const paused = this.pausedMs + (this.pausedAt !== null ? now - this.pausedAt : 0);
+    return Math.max(0, now - this.startedAt - paused);
+  }
+
+  pause(): void {
+    this.pauseDepth += 1;
+    if (this.pauseDepth > 1) return;
+    this.pausedAt = this.clock.now();
+    this.clock.clearTimeout(this.minutes.timer);
+    this.minutes.timer = null;
+  }
+
+  resume(): void {
+    if (this.pauseDepth === 0) return;
+    this.pauseDepth -= 1;
+    if (this.pauseDepth > 0) return;
+    if (this.pausedAt !== null) this.pausedMs += this.clock.now() - this.pausedAt;
+    this.pausedAt = null;
+    this.scheduleMinutes();
+  }
+
+  armMinutes(limitMs: number, text: string): void {
+    this.minutes.limitMs = limitMs;
+    this.minutes.text = text;
+    this.scheduleMinutes();
+  }
+
+  private scheduleMinutes(): void {
+    this.clock.clearTimeout(this.minutes.timer);
+    this.minutes.timer = null;
+    if (this.ended || this.pausedAt !== null || !Number.isFinite(this.minutes.limitMs)) return;
+    const left = this.minutes.limitMs - this.activeMs();
+    this.minutes.timer = this.clock.setTimeout(() => {
+      this.minutes.timer = null;
+      if (this.ended || this.pausedAt !== null) return;
+      if (this.activeMs() < this.minutes.limitMs) {
+        this.scheduleMinutes();
+        return;
+      }
+      this.minutes.up = true;
+      this.call?.abort({ code: 'capped', text: this.minutes.text } satisfies CallAbort);
+    }, Math.max(0, left));
+  }
+
+  callSignal(): AbortSignal {
+    const c = new AbortController();
+    this.call = c;
+    if (this.abort.signal.aborted) c.abort({ code: 'stopped' } satisfies CallAbort);
+    else if (this.minutes.up || this.activeMs() >= this.minutes.limitMs) c.abort({ code: 'capped', text: this.minutes.text } satisfies CallAbort);
+    return c.signal;
+  }
+
+  callDone(): void {
+    this.call = null;
+  }
+
+  // ------------------------------------------------------------ ending
+
+  stopEnd(): { state: EndState; reason: string; message: string | null } {
+    return this.stopAs ?? { state: 'stopped', reason: 'user', message: STOPPED_TEXT };
+  }
+
+  /** Stop: the provider request and the running tool are aborted, questions withdrawn. */
+  stop(reason = 'user', message: string | null = STOPPED_TEXT, state: EndState = 'stopped'): void {
+    if (this.ended || this.abort.signal.aborted) return;
+    this.stopAs = { state, reason, message };
+    this.abort.abort(new ProviderError('aborted', 'Stopped.'));
+  }
+
+  /** The server is stopping: the turn ends now (failed), and its loop unwinds after. */
+  shutdown(): void {
+    if (this.ended) return;
+    this.stop('shutdown', 'The server stopped.', 'failed');
+    this.end('failed', 'shutdown', 'The server stopped.');
+  }
+
+  end(state: EndState, reason: string, message: string | null): void {
+    if (this.ended) return;
+    this.state = state;
+    this.endedAt = this.clock.now();
+    this.endReason = cleanText(reason, 80) || state;
+    this.message = message === null ? null : cleanText(message, 2000);
+    this.clock.clearTimeout(this.minutes.timer);
+    this.minutes.timer = null;
+    this.offShutdown?.();
+    this.offShutdown = null;
+    // Nothing of this turn runs on: questions still open are withdrawn.
+    if (!this.abort.signal.aborted) {
+      this.stopAs = { state, reason, message };
+      this.abort.abort(new ProviderError('aborted', 'The turn ended.'));
+    }
+    this.push({ type: 'state', state });
+    this.push({ type: 'end', state, reason: this.endReason, message: this.message });
+    alog('info', 'turn ended', {
+      id: this.id,
+      provider: this.settings.provider,
+      model: this.settings.model,
+      served_by: this.servedBy,
+      steps: this.calls,
+      usd: round6(this.usd),
+      state,
+      reason: this.endReason,
+    });
+    this.onEnded?.(this);
+  }
+
+  /** An error inside runTurn: logged (redacted), the turn ends failed. Never rethrown. */
+  crash(err: unknown): void {
+    const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    alog('error', 'a turn failed unexpectedly', { id: this.id, error: redact(text).slice(0, 500) });
+    this.end('failed', 'internal', 'The Assistant hit an unexpected error, so this turn stopped.');
+  }
+
+  summary(): TurnSummary {
+    return {
+      id: this.id,
+      conversation: this.conv.id,
+      state: this.state,
+      step: this.step,
+      started_at: new Date(this.startedAt).toISOString(),
+      ended_at: this.endedAt === null ? null : new Date(this.endedAt).toISOString(),
+      usd: round6(this.usd),
+      estimated: this.estimated,
+      end_reason: this.endReason,
+      message: this.message,
+      open_gates: this.gates.forTurn(this.id),
+      text_so_far: this.textSoFar(),
+      tab: this.tab,
+      project_id: this.projectId,
+      served_by: this.servedBy,
+    };
+  }
+}
+
+// ---------------------------------------------------------------- the manager
+
+/** What the manager needs of the secret store. */
+export interface TurnSecrets {
+  load?(): Promise<void>;
+  storage(): StorageStatus;
+  status(): Record<KeySlot, KeyStatus>;
+  onKeyChanged?(fn: (slot: KeySlot) => void): () => void;
+}
+
+export interface TurnManagerDeps {
+  settings(): Promise<AssistantSettings>;
+  secrets(): TurnSecrets;
+  deps(): Promise<'ok' | 'missing'>;
+  ledger(): Promise<SpendLedger>;
+  createAdapter(s: TurnSettings, secrets: TurnSecrets): ProviderAdapter | Promise<ProviderAdapter>;
+  registry: Registry;
+  projects(id: string, o: { signal: AbortSignal; turn: string }): Promise<ProjectInfo | null>;
+  remember(projectId: string, createdAt: string | null, destination: string): Promise<void>;
+  presenter?: GatePresenter;
+  clock?: Clock;
+  gateTimeoutMs?: number;
+  gateUnseenMs?: number;
+  abortGraceMs?: number;
+  resendDelayMs?: number;
+}
+
+export type Answer = { status: number; body: Record<string, unknown> };
+
+const refuse = (status: number, code: string, error: string, extra: Record<string, unknown> = {}): Answer => ({
+  status,
+  body: { ok: false, code, error, ...extra },
+});
+
+export const TAB_HIDDEN_TEXT =
+  "That tab isn't connected to the Assistant: its window is in the background or covered, or it was closed. Show the Magnusim window and try again.";
+export const BAD_TAB_TEXT = 'That app tab offers no tools to the Assistant (it is unknown, or no workspace in it registered any).';
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const optionalId = (v: unknown): string | null | false => {
+  if (v === undefined || v === null || v === '') return null;
+  return typeof v === 'string' && ID_RE.test(v) ? v : false;
+};
+
+export class TurnManager {
+  readonly gates: GateBroker;
+  readonly runner: ToolRunner;
+  readonly conversations: Conversations;
+  readonly registry: Registry;
+  private readonly d: TurnManagerDeps;
+  private readonly clock: Clock;
+  private readonly watched = new WeakSet<object>();
+
+  constructor(d: TurnManagerDeps) {
+    this.d = d;
+    this.registry = d.registry;
+    this.clock = d.clock ?? realClock;
+    this.gates = new GateBroker({ presenter: d.presenter, clock: this.clock, timeoutMs: d.gateTimeoutMs, unseenMs: d.gateUnseenMs });
+    this.runner = new ToolRunner({ gates: this.gates, fenced: (s) => d.registry.fenced(s), clock: this.clock, abortGraceMs: d.abortGraceMs });
+    this.conversations = new Conversations({ now: () => this.clock.now() });
+    this.gates.subscribe((e) => this.onGate(e));
+  }
+
+  private turns(): Map<string, Turn> {
+    return assistantState().turns as Map<string, Turn>;
+  }
+
+  private onGate(e: GateEvent): void {
+    if (e.owner.kind !== 'turn') return;
+    const t = this.turns().get(e.owner.id);
+    if (!t) return;
+    if (e.type === 'open') t.emit({ type: 'gate', gate: e.view });
+    else if (e.type === 'closed') t.emit({ type: 'gate_closed', gate: e.view.id, answer: e.answer, by: e.by });
+    else t.note(e.text);
+  }
+
+  get(id: string): Turn | null {
+    this.sweep();
+    return this.turns().get(String(id)) ?? null;
+  }
+
+  /** Turns whose loop is still running. */
+  running(): Turn[] {
+    return [...this.turns().values()].filter((t) => !t.settled);
+  }
+
+  private sweep(): void {
+    const now = this.clock.now();
+    for (const [id, t] of this.turns()) {
+      if (t.settled && t.endedAt !== null && now - t.endedAt > TURN_LIMITS.keepMs) this.turns().delete(id);
+    }
+  }
+
+  /** Running turns bound to a tab. */
+  activeForTab(tab: string): number {
+    return this.running().filter((t) => t.tab === tab && !t.ended).length;
+  }
+
+  /** POST /api/assistant/turns: checked, then started detached (202). */
+  async start(body: Record<string, unknown>): Promise<Answer> {
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!text) return refuse(400, 'bad_text', 'Write what the Assistant should do.');
+    if (text.length > TURN_LIMITS.textMax) return refuse(400, 'bad_text', `A prompt is at most ${TURN_LIMITS.textMax.toLocaleString('en-US')} characters.`);
+    const convId = optionalId(body.conversation);
+    const tab = optionalId(body.tab);
+    if (convId === false) return refuse(400, 'bad_conversation', 'That is not a conversation id.');
+    if (tab === false) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
+    if (body.context !== undefined && body.context !== null && !isRecord(body.context)) return refuse(400, 'bad_context', 'context must be an object.');
+    const context = isRecord(body.context) ? body.context : {};
+    const ctxProject = optionalId(context.project_id);
+    const ctxStudy = optionalId(context.simulation_id);
+    if (ctxProject === false || ctxStudy === false) return refuse(400, 'bad_context', 'context.project_id and context.simulation_id are ids.');
+
+    const settings = await this.d.settings();
+    const provider = settings.provider;
+    if (provider === 'off') return refuse(400, 'provider_off', 'The Assistant is off. Choose a provider in Settings → Assistant.');
+    if ((await this.d.deps()) === 'missing') return refuse(400, 'deps_missing', "The Assistant's packages aren't installed. Run Setup.bat again.");
+    const model = settings.models[provider];
+    if (!model) return refuse(400, 'no_model', 'Choose a model in Settings → Assistant first.');
+    const secrets = this.d.secrets();
+    await secrets.load?.();
+    this.watch(secrets);
+    const key = secrets.status()[provider];
+    if (provider !== 'openai_compatible') {
+      const storage = secrets.storage();
+      if (storage.kind === 'unavailable') return refuse(400, 'storage_unavailable', storage.note);
+      if (!key?.set) return refuse(400, 'no_key', 'No key is saved for this provider. Add one in Settings → Assistant.');
+    }
+    if (key?.set && key.state === 'unreadable') return refuse(400, 'no_key', "The saved key can't be decrypted on this account. Enter it again in Settings → Assistant.");
+
+    // The tab: only a registered, connected one; its project is the turn's.
+    let projectId = ctxProject;
+    let simulationId = ctxStudy;
+    if (tab) {
+      const ws = this.d.registry.workspaceOf(tab);
+      if (!ws) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
+      if (!ws.connected) return refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT);
+      // Workspace tools are project data: a registration names its project, or it offers nothing.
+      if (!ws.reg.projectId) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
+      if (ctxProject && ctxProject !== ws.reg.projectId) return refuse(400, 'project_mismatch', "The context's project is not the tab's project.");
+      projectId = ws.reg.projectId || null;
+      simulationId = ctxStudy ?? (ws.reg.studyId || null);
+    }
+
+    const cloud = isCloud(settings);
+    if (cloud && projectId && settings.privacy === 'deny') return refuse(400, 'privacy_denied', PRIVACY_DENIED_TEXT);
+    if (provider !== 'openai_compatible') {
+      const ledger = await this.d.ledger();
+      if (ledger.spentToday() + ledger.reservedToday() >= settings.caps.day_usd - 1e-9) {
+        return refuse(400, 'cap_day', `Today's $${settings.caps.day_usd.toFixed(2)} limit is reached; it resets at midnight.`);
+      }
+    }
+
+    // From here to the turn's start nothing awaits: the checks and the start are one step.
+    const binding = { provider: provider as ProviderId, model, projectId };
+    let conv: Conversation | null = null;
+    if (convId) {
+      conv = this.conversations.get(convId);
+      if (!conv) return refuse(404, 'unknown_conversation', 'That conversation has ended (2 hours idle, or forgotten). Start a new one.');
+      const field = conv.mismatch(binding);
+      if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
+      if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
+      if (conv.fullReason()) return refuse(409, 'conversation_full', FULL_TEXT);
+    }
+    if (this.running().length >= TURN_LIMITS.running) {
+      return refuse(429, 'too_many', `At most ${TURN_LIMITS.running} turns run at once. Wait for one to end.`);
+    }
+    if (!conv) conv = this.conversations.create(binding);
+    const turnSettings: TurnSettings = {
+      provider: provider as ProviderId,
+      model,
+      base_url: settings.base_url,
+      effort: settings.effort,
+      caps: { ...settings.caps },
+    };
+    const id = newTurnId(this.clock.now());
+    const t = new Turn({
+      id,
+      prompt: text,
+      conv,
+      tab: tab || null,
+      projectId: projectId || null,
+      simulationId: simulationId || null,
+      settings: turnSettings,
+      clock: this.clock,
+      gates: this.gates,
+    });
+    conv.running = id;
+    conv.lastUsed = this.clock.now();
+    this.turns().set(id, t);
+    this.launch(t, secrets);
+    return { status: 202, body: { ok: true, conversation: conv.id, turn: id } };
+  }
+
+  private loopDeps(secrets: TurnSecrets): LoopDeps {
+    const d = this.d;
+    return {
+      createAdapter: (s) => d.createAdapter(s, secrets),
+      settings: d.settings,
+      ledger: d.ledger,
+      registry: d.registry,
+      runner: this.runner,
+      gates: this.gates,
+      projects: d.projects,
+      remember: d.remember,
+      clock: this.clock,
+      resendDelayMs: d.resendDelayMs,
+    };
+  }
+
+  private launch(t: Turn, secrets: TurnSecrets): void {
+    const deps = this.loopDeps(secrets);
+    void runTurn(t, deps)
+      .catch((err: unknown) => t.crash(err))
+      .catch(() => {})
+      .finally(() => {
+        if (!t.ended) t.end('failed', 'internal', 'The turn ended without an answer.');
+        // Any call it left open is answered before the conversation takes another turn.
+        try {
+          t.conv.repair();
+        } catch {
+          /* a frozen conversation that can't be repaired still frees */
+        }
+        t.settled = true;
+        if (t.conv.running === t.id) t.conv.running = null;
+        t.conv.lastUsed = this.clock.now();
+      });
+  }
+
+  /** Key saved or removed: the turns using that provider stop. */
+  private watch(secrets: TurnSecrets): void {
+    if (!secrets.onKeyChanged || this.watched.has(secrets)) return;
+    this.watched.add(secrets);
+    secrets.onKeyChanged((slot) => this.stopForSlot(slot));
+  }
+
+  stopForSlot(slot: KeySlot): void {
+    for (const t of this.running()) {
+      if (t.settings.provider === slot) t.stop('key_changed', 'The provider key was changed or removed, so this turn stopped.');
+    }
+  }
+
+  /** GET /api/assistant/turns/:id?since&wait_ms (long-poll). */
+  async poll(id: string, since: number, waitMs: number, closed?: AbortSignal): Promise<Answer> {
+    const t = this.get(id);
+    if (!t) return refuse(404, 'unknown_turn', 'No such turn (ended turns are kept for an hour).');
+    const from = Number.isFinite(since) && since > 0 ? Math.floor(since) : 0;
+    const wait = Number.isFinite(waitMs) ? Math.min(TURN_LIMITS.waitMs, Math.max(0, Math.floor(waitMs))) : 0;
+    await t.waitFor(from, wait, closed);
+    const events = t.eventsSince(from);
+    const next = events.length ? events[events.length - 1].seq : from;
+    return { status: 200, body: { ok: true, turn: t.summary(), events, next, ended: t.ended && next >= t.lastSeq() } };
+  }
+
+  /** POST …/turns/:id/stop: answers once the turn ended (≤ 5 s), else {stopping:true}. */
+  async stop(id: string, boundMs: number = TURN_LIMITS.stopMs): Promise<Answer> {
+    const t = this.get(id);
+    if (!t) return refuse(404, 'unknown_turn', 'No such turn.');
+    t.stop();
+    const until = Date.now() + boundMs;
+    while (!t.ended && Date.now() < until) await t.waitFor(t.lastSeq(), Math.max(1, until - Date.now()));
+    if (t.ended) return { status: 200, body: { ok: true, turn: t.summary() } };
+    return { status: 200, body: { ok: true, stopping: true, turn: t.summary() } };
+  }
+
+  /** POST /api/assistant/gates/:id {allow}. */
+  answerGate(id: string, allow: unknown): Answer {
+    if (typeof allow !== 'boolean') return refuse(400, 'bad_answer', 'allow must be true or false.');
+    const r = this.gates.answer(id, allow);
+    if (r === 'unknown') return refuse(404, 'unknown_gate', 'No such question.');
+    if (r === 'already') return refuse(409, 'already', 'That question was already answered.', { already: true, ...(this.gates.closedAs(id) ?? {}) });
+    return { status: 200, body: { ok: true } };
+  }
+
+  /** POST /api/assistant/conversations/:id/forget. */
+  forget(id: string): Answer {
+    const r = this.conversations.forget(id);
+    if (r === 'busy') return refuse(409, 'conversation_busy', 'A turn is running in this conversation. Stop it first.');
+    return { status: 200, body: { ok: true, forgotten: r === 'ok' } };
+  }
+
+  /** GET /api/assistant/tabs: what each app tab registered. */
+  tabs(): Answer {
+    const reg = this.d.registry;
+    const tabs = reg.tabIds().map((tab) => {
+      const w = reg.workspaceOf(tab);
+      return {
+        tab,
+        connected: !!w?.connected,
+        workspace: w
+          ? { project_id: w.reg.projectId, plugin: w.reg.plugin, plugin_name: w.reg.pluginName, workspace: w.reg.workspace, study_id: w.reg.studyId }
+          : null,
+        tools: w?.tools ?? [],
+        refused: w?.refused ?? [],
+        active_turns: this.activeForTab(tab),
+        hold_until: null,
+      };
+    });
+    return { status: 200, body: { ok: true, tabs } };
+  }
+
+  /** The server is stopping: every running turn ends failed now. */
+  shutdown(): void {
+    for (const t of this.running()) t.shutdown();
+  }
+}
+
+export function createTurnManager(d: TurnManagerDeps): TurnManager {
+  return new TurnManager(d);
+}

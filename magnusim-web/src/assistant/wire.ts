@@ -130,3 +130,60 @@ export interface RefusalBody {
   reason?: string;
   storage?: StorageStatus;
 }
+
+/** A turn's state (spec 6.1). */
+export type TurnState = 'starting' | 'awaiting_consent' | 'model' | 'tools' | 'awaiting_confirmation' | 'done' | 'stopped' | 'failed' | 'capped';
+
+/** A question the Assistant asks (a compute or destructive tool, or sending a project to a cloud provider). */
+export interface GateView {
+  id: string;
+  kind: 'confirm' | 'privacy';
+  turn: string | null;
+  title: string;
+  copy: string;
+  yes: string;
+  no: string;
+  /** ≤ 6 rows, each ≤ 80 characters. */
+  detail?: Array<{ label: string; value: string }>;
+  risk?: 'compute' | 'destructive';
+  tool?: string;
+  source?: string;
+  project?: { id: string; title: string };
+  opened_at: string;
+  expires_at: string;
+}
+
+/** One entry of a turn's log (GET /api/assistant/turns/:id), numbered by `seq`. */
+export type TurnEvent = { seq: number; at: number } & (
+  | { type: 'state'; state: TurnState }
+  | { type: 'text'; step: number; text: string }
+  | { type: 'discard'; step: number }
+  | { type: 'note'; text: string }
+  | { type: 'fallback'; step: number; from: string; to: string }
+  | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: 'read' | 'edit' | 'compute' | 'destructive'; source: string; input_preview: string }
+  | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number }
+  | { type: 'gate'; gate: GateView }
+  | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
+  | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
+  | { type: 'end'; state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string; message: string | null }
+);
+
+/** A turn as GET /api/assistant/turns/:id and its Stop answer it. */
+export interface TurnSummary {
+  id: string;
+  conversation: string;
+  state: TurnState;
+  step: number;
+  started_at: string;
+  ended_at: string | null;
+  usd: number;
+  estimated: boolean;
+  end_reason: string | null;
+  message: string | null;
+  open_gates: GateView[];
+  text_so_far: string;
+  tab: string | null;
+  project_id: string | null;
+  served_by: string | null;
+}

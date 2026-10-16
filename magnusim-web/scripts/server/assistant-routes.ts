@@ -23,6 +23,15 @@
  *   POST /api/assistant/test            {} → Settings' connection test: {ok:true, model, served_by,
  *                                        ms, tools, cost_usd} or {ok:false, code, error}; 400 when
  *                                        it can't start; 409 while one runs
+ *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}}
+ *                                        → 202 {ok, conversation, turn}: the turn runs detached
+ *                                        (assistant/turns.ts); 400/404/409/429 with a code
+ *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
+ *                                        (a long-poll: waits for an event after `since`)
+ *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
+ *   POST /api/assistant/gates/:id       {allow} → {ok}; 409 {already} (the first answer wins); 404
+ *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
+ *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools)
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -48,6 +57,11 @@ import { LOCAL_SLOW_HINT } from './assistant/providers/errors.ts';
 import { DEPS_MISSING_TEXT, depsStatus } from './assistant/providers/load-sdk.ts';
 import { runConnectionTest } from './assistant/provider-test.ts';
 import { ProviderError, type ModelInfo, type ProviderId } from './assistant/types.ts';
+import { createToolRegistry, type Registry } from './assistant/registry.ts';
+import { defaultHostTools } from './assistant/host-tools.ts';
+import { createHostCaller } from './assistant/host-call.ts';
+import { projectLookup, remember } from './assistant/privacy.ts';
+import { createTurnManager, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 
 export { TURN_HEADER };
 
@@ -56,10 +70,15 @@ export interface AssistantDeps {
   services?: unknown;
   /** The port this server listens on (the host tools call the app over loopback). */
   port?: () => number;
+  /** Tests: parts of the turn machinery replaced (the clock, the gate waits, the registry). */
+  turns?: Partial<TurnManagerDeps>;
 }
 
 export interface AssistantHandle {
   readonly deps: AssistantDeps;
+  /** The tools the turns are offered (the page relay registers workspaces here). */
+  readonly registry: Registry;
+  readonly turns: TurnManager;
   /** The server is closing: stop what the Assistant runs and drop the master key (nothing once a newer server registered). */
   shutdown(): void;
 }
@@ -329,7 +348,7 @@ function keyRefusal(ctx: RequestContext, err: unknown, store: Store): boolean {
   return true;
 }
 
-function registerTestRoutes(router: Router): void {
+function registerTestRoutes(router: Router, turns: TurnManager): void {
   router.get(
     '/api/test/assistant/state',
     local(async (ctx) => {
@@ -339,10 +358,10 @@ function registerTestRoutes(router: Router): void {
       ctx.sendJson(200, {
         ok: true,
         boot: st.bootId,
-        running: 0,
+        running: turns.running().length,
         turns: st.turns.size,
         links: {},
-        gates: st.gates.size,
+        gates: turns.gates.openCount(),
         reservations: ledger.openCount(),
         protector: store.testProtector ?? store.protector.kind,
         hold_ms: null,
@@ -373,7 +392,88 @@ function registerTestRoutes(router: Router): void {
   );
 }
 
+/** The turn machinery as the server runs it: the app's settings, keys, ledger and projects. */
+function turnManager(deps: AssistantDeps): TurnManager {
+  const port = () => deps.port?.() ?? null;
+  const registry = deps.turns?.registry ?? createToolRegistry({ hostTools: defaultHostTools(port) });
+  return createTurnManager({
+    settings: loadSettings,
+    secrets: () => secretStore(),
+    deps: async () => (await depsStatus()).state,
+    ledger: spendLedger,
+    createAdapter: (s) => createAdapter(s, secretStore()),
+    projects: projectLookup(createHostCaller({ port })),
+    remember,
+    ...deps.turns,
+    registry,
+  });
+}
+
+/** The turn routes (assistant/turns.ts does the work). */
+function registerTurnRoutes(router: Router, turns: TurnManager): void {
+  router.post(
+    '/api/assistant/turns',
+    local(async (ctx) => {
+      const r = await turns.start(await ctx.readJsonBody());
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.get(
+    '/api/assistant/turns/:id',
+    local(async (ctx) => {
+      // A client that goes away ends its wait.
+      const gone = new AbortController();
+      const onClose = () => gone.abort();
+      ctx.res.on('close', onClose);
+      try {
+        const q = ctx.url.searchParams;
+        const r = await turns.poll(ctx.params.id, Number(q.get('since') ?? 0), Number(q.get('wait_ms') ?? 0), gone.signal);
+        if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.sendJson(r.status, r.body);
+      } finally {
+        ctx.res.off('close', onClose);
+      }
+    }),
+  );
+
+  router.post(
+    '/api/assistant/turns/:id/stop',
+    local(async (ctx) => {
+      await ctx.readJsonBody();
+      const r = await turns.stop(ctx.params.id);
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/gates/:id',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      const r = turns.answerGate(ctx.params.id, body.allow);
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/conversations/:id/forget',
+    local(async (ctx) => {
+      await ctx.readJsonBody();
+      const r = turns.forget(ctx.params.id);
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.get(
+    '/api/assistant/tabs',
+    local(async (ctx) => {
+      const r = turns.tabs();
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+}
+
 export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}): AssistantHandle {
+  const turns = turnManager(deps);
   router.get(
     '/api/assistant/status',
     local(async (ctx) => {
@@ -465,12 +565,16 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     }),
   );
 
-  if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router);
+  registerTurnRoutes(router, turns);
+
+  if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns);
 
   // This server's lifetime: after a Vite restart the old server's close ends nothing of the new one's.
   const lifetime = beginAssistantLifetime();
   return {
     deps,
+    registry: turns.registry,
+    turns,
     shutdown() {
       shutdownAssistant(lifetime);
     },
