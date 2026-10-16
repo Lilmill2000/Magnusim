@@ -17,13 +17,14 @@ import { ProbeFeed } from './ui/probeFeed';
 import type { Palette } from './render/renderer';
 import { Engine } from './sim/engine';
 import { shaderErrors } from './sim/shaders';
+import { gpuHelp, webglRenderer } from './app/gpuHelp';
 
 const rootEl = document.getElementById('t2d-root') as HTMLElement;
 const root = createRoot(rootEl);
 
-function fatal(title: string, message: string) {
+function fatal(title: string, message: string, cause = '') {
   root.render(
-    createElement('div', { className: 't2d-fatal', role: 'alert', 'data-t2d-fatal': '1' }, createElement(EmptyState, null, createElement('strong', null, title), createElement('p', null, message))),
+    createElement('div', { className: 't2d-fatal', role: 'alert', 'data-t2d-fatal': cause || '1' }, createElement(EmptyState, null, createElement('strong', null, title), createElement('p', null, message))),
   );
 }
 
@@ -57,7 +58,9 @@ async function main() {
   }
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null);
   if (!adapter) {
-    fatal('This wind tunnel needs WebGPU', 'The browser offers WebGPU but found no GPU it can use (requestAdapter gave none). Check that hardware acceleration is on in the browser’s settings and that the graphics driver is up to date.');
+    // Say what is off and where to turn it on (usually the browser's graphics acceleration).
+    const help = gpuHelp(navigator.userAgent, webglRenderer());
+    fatal(help.title, help.body, help.cause);
     return;
   }
   let device: GPUDevice;

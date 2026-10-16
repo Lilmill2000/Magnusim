@@ -18,7 +18,7 @@
 //    artefacts); the rheoscopic view keeps a sound flake field.
 // 7. Without WebGPU (no navigator.gpu, or no adapter), the page says why it cannot run.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
+import { chromium, expect, test } from '@playwright/test';
 import { join } from 'node:path';
 import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '../../../e2e/support/plugin-suite.js';
 
@@ -464,28 +464,53 @@ test('the rheoscopic view: flakes carried and turned by the flow, dull where it 
   expect((await stats(frame)).state).toBe('running');
 });
 
-test('without WebGPU the page says why it cannot run', async ({ browser, request }) => {
+test('without WebGPU the page says why it cannot run, and what to turn on where', async ({ browser, request }) => {
   const study = await newTunnel(request, 'No GPU tunnel');
-  // Two browsers without WebGPU, made so in every frame before any script runs: one with no
-  // navigator.gpu at all, one whose GPU offers no adapter.
+  // Browsers without WebGPU, made so in every frame before any script runs: one with no
+  // navigator.gpu at all; two whose WebGPU offers no adapter, one drawing WebGL on a GPU (the
+  // GPU is blocked for WebGPU), one on the software renderer (graphics acceleration is off).
+  const noAdapterRenderer = (renderer) => {
+    if (globalThis.GPU) GPU.prototype.requestAdapter = async () => null;
+    for (const C of [globalThis.WebGLRenderingContext, globalThis.WebGL2RenderingContext]) {
+      if (!C) continue;
+      const get = C.prototype.getParameter;
+      C.prototype.getParameter = function (p) {
+        return p === 0x9246 || p === 0x1f01 ? renderer : get.call(this, p);
+      };
+    }
+  };
   const cases = [
-    { init: () => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined, configurable: true }), says: 'navigator.gpu is missing' },
-    { init: () => { if (globalThis.GPU) GPU.prototype.requestAdapter = async () => null; }, says: 'found no GPU it can use' },
+    { init: () => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined, configurable: true }), title: 'This wind tunnel needs WebGPU', says: 'navigator.gpu is missing' },
+    { init: noAdapterRenderer, arg: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 5090 Direct3D11 vs_5_0 ps_5_0, D3D11)', title: 'This wind tunnel needs WebGPU', says: 'chrome://gpu' },
+    { init: noAdapterRenderer, arg: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)', title: 'Graphics acceleration is turned off in this browser', says: 'chrome://settings/system' },
   ];
   for (const c of cases) {
     const ctx = await browser.newContext();
     try {
-      await ctx.addInitScript(c.init);
+      await ctx.addInitScript(c.init, c.arg);
       const page = await ctx.newPage();
       await page.goto(`${host.base}/#/p/${PROJECT}/ws/${KEY}/${KIND}/${study.id}`);
       const text = () => {
         const f = page.frames().find((x) => x.url().includes(`/plugins/${KEY}/`));
         return f ? f.evaluate(() => document.querySelector('[data-t2d-fatal]')?.textContent ?? '').catch(() => '') : '';
       };
-      await expect.poll(text, { timeout: 90_000 }).toContain('This wind tunnel needs WebGPU');
+      await expect.poll(text, { timeout: 90_000 }).toContain(c.title);
       expect(await text()).toContain(c.says);
     } finally {
       await ctx.close();
     }
+  }
+  // And for real: Chrome with its GPU turned off (as the "graphics acceleration" setting does).
+  const off = await chromium.launch({ channel: 'chrome', headless: true, args: ['--disable-gpu'] });
+  try {
+    const page = await off.newPage();
+    await page.goto(`${host.base}/#/p/${PROJECT}/ws/${KEY}/${KIND}/${study.id}`);
+    const fatal = () => {
+      const f = page.frames().find((x) => x.url().includes(`/plugins/${KEY}/`));
+      return f ? f.evaluate(() => document.querySelector('[data-t2d-fatal]')?.getAttribute('data-t2d-fatal') ?? '').catch(() => '') : '';
+    };
+    await expect.poll(fatal, { timeout: 90_000 }).toBe('acceleration-off');
+  } finally {
+    await off.close();
   }
 });

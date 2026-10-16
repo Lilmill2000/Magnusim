@@ -61,7 +61,9 @@ if "%MAGNUSIM_STEADY%"=="1" (
 )
 echo.
 
-start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i=0; $i -lt 60; $i++) { try { if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:%MAGNUSIM_PORT%/).StatusCode -eq 200) { Start-Process 'http://127.0.0.1:%MAGNUSIM_PORT%/'; exit 0 } } catch {} Start-Sleep -Seconds 1 }; exit 1"
+REM Opens the app in its own window once the server answers (open-app.ps1: Edge or Chrome with a
+REM Magnusim profile of its own, graphics acceleration on; else the default browser).
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0open-app.ps1" -Port %MAGNUSIM_PORT%
 
 call npm run dev
 if errorlevel 1 pause

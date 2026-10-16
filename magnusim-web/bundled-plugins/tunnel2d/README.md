@@ -109,7 +109,9 @@ The mouse wheel zooms; the middle button (or dragging empty space) pans.
 
 ## Requirements
 
-WebGPU: a current Chrome or Edge with hardware acceleration. The status line names the GPU in use. On a laptop with two GPUs, Chrome on Windows may pick the integrated one; Windows' per-app graphics setting for the browser changes it.
+WebGPU: a current Chrome or Edge with graphics acceleration on. `run.bat` opens Magnusim in its own window (Edge, else Chrome, with a Magnusim profile of its own in `.cache/app-window`), where it is on whatever your own browser is set to. Opened in your own browser instead (its address and port), the tunnel says if graphics acceleration is off there and exactly where to turn it on.
+
+The status line names the GPU in use. On a laptop with two GPUs, Chrome on Windows may pick the integrated one; Windows' per-app graphics setting for the browser changes it.
 
 ## How it works
 
