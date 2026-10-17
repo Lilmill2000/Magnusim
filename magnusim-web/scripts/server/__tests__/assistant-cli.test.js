@@ -306,7 +306,7 @@ describe('assistant-run.mjs', () => {
     }
   });
 
-  it('a question for the Magnusim window only: shown, "Answer it in the Magnusim window.", no prompt and nothing sent; its answer there is printed', async () => {
+  it('a question for the Magnusim window only: shown, "Answer it in the Magnusim window.", no prompt and nothing sent; its answer there is printed', { timeout: 20_000 }, async () => {
     const ONLY = { id: 'g-only', title: 'Let the agent use its own tool (execute)?', copy: 'Nothing runs until you choose.', yes: 'Allow once', no: "Don't", link_only: true };
     const posted = [];
     let polls = 0;
@@ -326,8 +326,11 @@ describe('assistant-run.mjs', () => {
         }
         polls += 1;
         if (polls === 1) return send(200, { ok: true, next: 1, ended: false, events: [{ type: 'gate', gate: ONLY }] });
-        // Answered in the window once the line was printed here.
-        await printed;
+        // Answered in the window once the line was printed here. Bounded: a CLI that never prints
+        // it fails the checks below instead of holding the run.
+        let bound;
+        await Promise.race([printed, new Promise((r) => (bound = setTimeout(r, 10_000)))]);
+        clearTimeout(bound);
         return send(200, {
           ok: true,
           next: 3,
