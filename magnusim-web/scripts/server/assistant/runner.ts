@@ -21,6 +21,8 @@
  *    `released` signal (the relay frees the tab before the next call can start).
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
  *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
+ *    A failed call's hint and detail go with its error, and the hint to the log's tool_result
+ *    too; a result's summary is the log's line only.
  */
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
@@ -33,7 +35,7 @@ import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
 export type RunnerEvent =
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number };
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number };
 
 /** What a turn lends the runner (absent for MCP). */
 export interface RunnerTurn {
@@ -69,6 +71,8 @@ export interface RunResult {
   ok: boolean;
   /** null when it ran and succeeded; else the error code. */
   code: string | null;
+  /** A failed call's hint, as the model has it (for the log). */
+  hint?: string;
   summary: string;
 }
 
@@ -135,13 +139,18 @@ export function toolCallEvent(call: ToolCallPart, def: ToolDef | null, step: num
   };
 }
 
-/** A call answered without running it (or after it failed): `{tool, ok:false, error}`. */
-export function errorResult(call: ToolCallPart, code: string, message: string, hint?: string): RunResult {
+/**
+ * A call answered without running it (or after it failed): `{tool, ok:false, error}`, with the
+ * tool's hint (how to fix it) and detail (plain JSON about it) when it gave them.
+ */
+export function errorResult(call: ToolCallPart, code: string, message: string, hint?: string, detail?: unknown): RunResult {
   const msg = cleanText(message, TEXT_CAPS.other);
+  const h = hint ? cleanText(hint, TEXT_CAPS.other) : '';
   return {
-    part: capResult(call.callId, call.name, { ok: false, error: { code, message: msg, ...(hint ? { hint } : {}) } }),
+    part: capResult(call.callId, call.name, { ok: false, error: { code, message: msg, ...(h ? { hint: h } : {}), ...(detail !== undefined ? { detail } : {}) } }),
     ok: false,
     code,
+    ...(h ? { hint: h } : {}),
     summary: cleanText(msg, PREVIEW),
   };
 }
@@ -270,6 +279,7 @@ export class ToolRunner {
       call: call.callId,
       ok: r.ok,
       ...(r.code ? { code: r.code } : {}),
+      ...(r.hint ? { hint: r.hint } : {}),
       summary: r.summary,
       ms: Math.max(0, this.clock.now() - started),
     });
@@ -391,7 +401,7 @@ export class ToolRunner {
     if (!outcome.ok) {
       const e = outcome.error ?? { code: 'failed', message: 'The tool failed.' };
       const code = cleanText(e.code, 64) || 'failed';
-      const r = errorResult(call, code, e.message || 'The tool failed.', e.hint ? cleanText(e.hint, TEXT_CAPS.other) : undefined);
+      const r = errorResult(call, code, e.message || 'The tool failed.', e.hint, e.detail);
       return { ...r, summary };
     }
     // An image the model can't be sent fails the call with why, as the bridge's caps do: dropped

@@ -580,7 +580,15 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
 }
 
 async function postResult(link: string, call: string, out: AssistantCallOutcome): Promise<void> {
-  const body: RelayResultBody = out.ok ? { link, call, ok: true, result: out.result } : { link, call, ok: false, error: { code: out.code, message: out.message } };
+  // A page error's hint and detail go on as the bridge kept them (cleaned and capped there).
+  const body: RelayResultBody = out.ok
+    ? { link, call, ok: true, result: out.result }
+    : {
+        link,
+        call,
+        ok: false,
+        error: { code: out.code, message: out.message, ...(out.hint ? { hint: out.hint } : {}), ...(out.detail !== undefined ? { detail: out.detail } : {}) },
+      };
   const a = await post(RESULT_PATH, body);
   if (a && a.status === 413) {
     await post(RESULT_PATH, { link, call, ok: false, error: { code: 'too_large', message: "The tool's result is too large for the app to take." } } satisfies RelayResultBody);

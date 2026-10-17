@@ -312,10 +312,15 @@ export interface AssistantCallResult {
   text?: string;
   data?: unknown;
   images?: Array<{ mediaType: string; data: string }>;
+  /** One line for the turn's log, never for the model (at most 160 characters). */
+  summary?: string;
 }
 
-/** How a tool call ended (1.9, unreleased): the page's result, or a code with its message. */
-export type AssistantCallOutcome = { ok: true; result: AssistantCallResult } | { ok: false; code: string; message: string };
+/**
+ * How a tool call ended (1.9, unreleased): the page's result, or a code with its message, and
+ * from the page's own error how to fix it (`hint`) and plain JSON about it (`detail`).
+ */
+export type AssistantCallOutcome = { ok: true; result: AssistantCallResult } | { ok: false; code: string; message: string; hint?: string; detail?: unknown };
 
 /** One call of a page's tool (WorkspaceBridge.invokeTool). */
 export interface AssistantInvoke {
@@ -372,6 +377,12 @@ export const ASSISTANT_TEXT_BYTES = 64 * 1024;
 export const ASSISTANT_DATA_BYTES = 256 * 1024;
 export const ASSISTANT_IMAGES_MAX = 4;
 export const ASSISTANT_IMAGE_BYTES = 1.5 * 1024 * 1024;
+/** A page error's hint (characters) and detail (as JSON, UTF-8 bytes), and a result's summary (characters). */
+export const ASSISTANT_HINT_MAX = 500;
+export const ASSISTANT_DETAIL_BYTES = 4 * 1024;
+export const ASSISTANT_SUMMARY_MAX = 160;
+/** A page error's message, at most this many characters (a note on a dropped detail included). */
+const ASSISTANT_MESSAGE_MAX = 2000;
 const ASSISTANT_GUIDE_MAX = 4000;
 const ASSISTANT_RISKS = new Set<string>(['read', 'edit', 'compute', 'destructive']);
 const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -479,20 +490,38 @@ async function blobBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * The page's assistant.result as the call's outcome (1.9, unreleased): its error with a code from
- * the page's list, or the SDK's own `no_tool` (else `failed`); its result checked (`bad_result`:
- * not `{text?, data?, images?}` with text, plain JSON data and PNG, JPEG or WebP Blobs) and capped
- * (`too_large`: text over 64 KB, data over 256 KB as JSON, more than 4 images or one over 1.5 MB),
- * its images read to base64.
+ * A page error as the call's outcome (1.9, unreleased): its code from the page's list, or the
+ * SDK's own `no_tool` (else `failed`); its message cleaned (at most 2000 characters); its hint
+ * cleaned (at most 500); its detail when it is plain JSON of at most 4 KB. A detail it can't
+ * keep is dropped, and the message says so: " (detail too large)", " (detail not plain JSON)".
+ */
+function assistantPageError(raw: unknown): AssistantCallOutcome {
+  const e = isPlainObject(raw) ? raw : {};
+  const code = typeof e.code === 'string' && ASSISTANT_PAGE_CODES.has(e.code) ? e.code : 'failed';
+  let note = '';
+  let detail: unknown;
+  if (e.detail !== undefined && e.detail !== null) {
+    const json = isJsonData(e.detail) ? JSON.stringify(e.detail) : undefined;
+    if (json === undefined) note = ' (detail not plain JSON)';
+    else if (utf8Bytes(json) > ASSISTANT_DETAIL_BYTES) note = ' (detail too large)';
+    else detail = JSON.parse(json);
+  }
+  const message = `${cleanLine(e.message, ASSISTANT_MESSAGE_MAX - note.length) || 'The tool failed.'}${note}`;
+  const hint = typeof e.hint === 'string' ? cleanLine(e.hint, ASSISTANT_HINT_MAX) : '';
+  return { ok: false, code, message, ...(hint ? { hint } : {}), ...(detail !== undefined ? { detail } : {}) };
+}
+
+/**
+ * The page's assistant.result as the call's outcome (1.9, unreleased): its error (above); its
+ * result checked (`bad_result`: not `{text?, data?, images?, summary?}` with text, plain JSON
+ * data, PNG, JPEG or WebP Blobs and a text summary) and capped (`too_large`: text over 64 KB,
+ * data over 256 KB as JSON, more than 4 images or one over 1.5 MB), its images read to base64,
+ * its summary cleaned and cut to 160 characters.
  */
 export async function assistantCallOutcome(params: Record<string, unknown>): Promise<AssistantCallOutcome> {
   const bad = (why: string): AssistantCallOutcome => ({ ok: false, code: 'bad_result', message: `The tool's result was refused: ${why}.` });
   const big = (why: string): AssistantCallOutcome => ({ ok: false, code: 'too_large', message: `The tool's result is too large: ${why}.` });
-  if (params.ok === false) {
-    const e = isPlainObject(params.error) ? params.error : {};
-    const code = typeof e.code === 'string' && ASSISTANT_PAGE_CODES.has(e.code) ? e.code : 'failed';
-    return { ok: false, code, message: cleanLine(e.message, 2000) || 'The tool failed.' };
-  }
+  if (params.ok === false) return assistantPageError(params.error);
   if (params.ok !== true) return bad('it says neither ok nor not ok');
   const raw = params.result;
   if (raw === undefined || raw === null) return { ok: true, result: {} };
@@ -502,6 +531,11 @@ export async function assistantCallOutcome(params: Record<string, unknown>): Pro
     if (typeof raw.text !== 'string') return bad('its text is not text');
     if (utf8Bytes(raw.text) > ASSISTANT_TEXT_BYTES) return big('its text is over 64 KB');
     result.text = raw.text;
+  }
+  if (raw.summary !== undefined && raw.summary !== null) {
+    if (typeof raw.summary !== 'string') return bad('its summary is not text');
+    const summary = cleanLine(raw.summary, ASSISTANT_SUMMARY_MAX);
+    if (summary) result.summary = summary;
   }
   if (raw.data !== undefined) {
     if (!isJsonData(raw.data)) return bad('its data is not plain JSON');

@@ -520,18 +520,26 @@ declare module '@magnusim/workspace' {
       data: Blob;
   }
   /**
-   * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most
-   * 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with
-   * code "too_large". Everything in it reaches the model as data, never as instructions.
+   * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text`
+   * at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call
+   * with code "too_large". Everything in it but `summary` reaches the model as data, never as
+   * instructions. `summary` is one line for the turn's log that names what the call did ("Added 2:
+   * the counter is 2"), at most 160 characters: the person reads it, the model never gets it.
+   * Without one the log says "Done".
    */
   export type AssistantResult = string | {
       text?: string;
       data?: unknown;
       images?: AssistantImage[];
+      summary?: string;
   } | void;
   /**
    * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
-   * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+   * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says
+   * what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its
+   * `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the
+   * candidates, the allowed range), at most 4 KB as JSON: a larger one is dropped, and the message
+   * says so. All three reach the model with the code.
    */
   export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
   /** The app's answer to ws.assistant.register (unreleased, 1.9). */

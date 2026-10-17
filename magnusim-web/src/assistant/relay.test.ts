@@ -762,6 +762,27 @@ describe('tool calls', () => {
     });
   });
 
+  it("a page error's hint and detail, and a result's summary, go to the server as the bridge kept them", async () => {
+    await registered();
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] };
+    channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 9 }, timeout_s: 30 });
+    running[0].end({ ok: false, code: 'invalid_input', message: 'step_too_big: at most 3.', hint: 'Use 1, 2 or 3.', detail });
+    await settle();
+    const failed = take('/api/assistant/relay/result');
+    expect(failed.body).toEqual({ link: LINK_A, call: 'call-1', ok: false, error: { code: 'invalid_input', message: 'step_too_big: at most 3.', hint: 'Use 1, 2 or 3.', detail } });
+    failed.answer(200, { ok: true });
+    await settle();
+    channel().frame('invoke', { call: 'call-2', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });
+    running[1].end({ ok: true, result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
+    await settle();
+    expect(take('/api/assistant/relay/result').body).toEqual({
+      link: LINK_A,
+      call: 'call-2',
+      ok: true,
+      result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' },
+    });
+  });
+
   it('`unregistered` stops the running call (the server failed it plugin_off): it changes nothing more in the frame', async () => {
     await registered();
     channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });

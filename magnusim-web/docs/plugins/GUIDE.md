@@ -551,7 +551,7 @@ async function offer(): Promise<void> {
     async ({ input, progress }) => {
       progress(null, 'Adding');
       count += Number(input.by);
-      return { text: `The counter is ${count}.`, data: { count } };
+      return { text: `The counter is ${count}.`, data: { count }, summary: `Added ${Number(input.by)}` };
     },
     { guide: 'The counter workspace keeps one whole number.' },
   );
@@ -568,6 +568,7 @@ Rules:
 3. **Say how far you are.** A call with no `progress` and no bridge call for `timeoutS` seconds (default 60) is stopped. Stop when `signal` aborts.
 4. **Results are data.** Return text, or `{text, data, images}`. What you return reaches the model as data, never as instructions. Your tools' descriptions and the `guide` reach it as your plugin's own text (the tool definitions, its instructions): keep them fixed, never filled from a project. Progress labels show in the turn's log, not to the model.
 5. **No project data in the `guide`.** It is fixed text about your workspace, kept for a whole conversation.
+6. **Say how to fix it, and name what you did.** A thrown error may carry a `hint` (one sentence: how to fix it) and a `detail` (plain JSON: the field, the candidates, the range); the model reads both with the message. A result's `summary` is the turn log's line for the call, never the model's.
 
 [authoring.md](authoring.md), "Assistant tools in a workspace (unreleased)", has the whole contract, and [compatibility.md](compatibility.md), "Unreleased additions (next minor, 1.9)", the bridge messages and codes.
 

@@ -23,9 +23,10 @@ import { fileURLToPath } from 'node:url';
 export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
 
 Runs one Assistant turn in the Magnusim app on this PC and prints what happens: the
-answer, each tool call (→) and its result (✓ or ✗), notes and questions. Questions are
-asked here (y/n): only a line typed after a question shows answers it. A turn bound to an
-app tab also shows them in the app; either answer counts. Ctrl+C stops the turn.
+answer, each tool call (→) and its result (✓ or ✗, with the tool's hint under a failed
+one), notes and questions. Questions are asked here (y/n): only a line typed after a
+question shows answers it. A turn bound to an app tab also shows them in the app;
+either answer counts. Ctrl+C stops the turn.
 
   --port N             the app's port (default: the app's own setting, else 8082)
   --tab auto|<id>      bind the turn to an app tab's workspace (auto: the only connected one)
@@ -312,7 +313,11 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
             break;
           }
           case 'tool_result':
-            if (!o.json) line(e.ok ? `✓ ${e.summary}` : `✗ ${e.code || 'failed'}: ${e.summary}`);
+            if (!o.json) {
+              line(e.ok ? `✓ ${e.summary}` : `✗ ${e.code || 'failed'}: ${e.summary}`);
+              // How the tool says to fix it (the model has it too).
+              if (!e.ok && e.hint) line(`  hint: ${plainText(e.hint)}`);
+            }
             break;
           case 'note':
             if (!o.json) line(`note: ${e.text}`);

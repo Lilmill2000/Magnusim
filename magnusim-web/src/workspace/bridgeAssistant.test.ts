@@ -10,8 +10,11 @@ import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_ALIVE_MS,
   ASSISTANT_DATA_BYTES,
+  ASSISTANT_DETAIL_BYTES,
+  ASSISTANT_HINT_MAX,
   ASSISTANT_IMAGE_BYTES,
   ASSISTANT_REGISTER_MS,
+  ASSISTANT_SUMMARY_MAX,
   ASSISTANT_TEXT_BYTES,
   BridgeError,
   HOST_API_VERSION,
@@ -498,6 +501,56 @@ describe('invokeTool (1.9, unreleased)', () => {
     t.end();
   });
 
+  it("the page's error keeps its hint (cleaned, 500 characters) and its detail (plain JSON, 4 KB), else drops the detail and says so in the message", async () => {
+    const error = (e: Record<string, unknown>) => assistantCallOutcome({ call: 'ai-1', ok: false, error: e });
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3], nested: { ok: true, none: null } };
+    expect(await error({ code: 'invalid_input', message: 'Too big.', hint: `Use 1,${RLO} 2${LS}or 3.`, detail })).toEqual({
+      ok: false,
+      code: 'invalid_input',
+      message: 'Too big.',
+      hint: 'Use 1, 2 or 3.',
+      detail,
+    });
+    expect(await error({ message: 'No.', hint: 'h'.repeat(600) })).toEqual({ ok: false, code: 'failed', message: 'No.', hint: 'h'.repeat(ASSISTANT_HINT_MAX) });
+    // A hint that is not text, or is only spaces, and a null detail: left out.
+    for (const hint of [5, '   ', null, { text: 'x' }]) expect(await error({ message: 'No.', hint, detail: null })).toEqual({ ok: false, code: 'failed', message: 'No.' });
+    // At 4 KB as JSON (UTF-8 bytes) the detail is kept; past it, dropped, and the message says so.
+    const at = { s: 'x'.repeat(ASSISTANT_DETAIL_BYTES - 8) };
+    expect(new TextEncoder().encode(JSON.stringify(at)).length).toBe(ASSISTANT_DETAIL_BYTES);
+    expect(await error({ message: 'No.', detail: at })).toMatchObject({ detail: at });
+    expect(await error({ code: 'busy', message: 'No.', hint: 'Wait.', detail: { s: 'é'.repeat(ASSISTANT_DETAIL_BYTES / 2) } })).toEqual({
+      ok: false,
+      code: 'busy',
+      message: 'No. (detail too large)',
+      hint: 'Wait.',
+    });
+    // Not plain JSON (a Date, a Map, a function, NaN): dropped, and said.
+    for (const bad of [new Date(0), new Map(), { f: () => 1 }, { n: Number.NaN }]) {
+      expect(await error({ message: 'No.', detail: bad })).toEqual({ ok: false, code: 'failed', message: 'No. (detail not plain JSON)' });
+    }
+    // The note fits inside the message's 2000 characters; with no message, the default's.
+    const long = await error({ message: 'm'.repeat(2500), detail: { s: 'x'.repeat(5000) } });
+    expect(!long.ok && long.message.length).toBe(2000);
+    expect(!long.ok && long.message.endsWith('m (detail too large)')).toBe(true);
+    expect(await error({ detail: { s: 'x'.repeat(5000) } })).toEqual({ ok: false, code: 'failed', message: 'The tool failed. (detail too large)' });
+    // A copy: the page's object is not the outcome's.
+    const kept = await error({ message: 'No.', detail });
+    expect(!kept.ok && kept.detail).not.toBe(detail);
+  });
+
+  it("a result's summary is cleaned and cut to 160 characters; one that is not text fails the call bad_result", async () => {
+    const result = (r: unknown) => assistantCallOutcome({ call: 'ai-1', ok: true, result: r });
+    expect(await result({ text: 'Now 2', data: { count: 2 }, summary: `Added 2:${BEL} the counter is 2` })).toEqual({
+      ok: true,
+      result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' },
+    });
+    expect(await result({ summary: 's'.repeat(300) })).toEqual({ ok: true, result: { summary: 's'.repeat(ASSISTANT_SUMMARY_MAX) } });
+    // Empty or null: none.
+    expect(await result({ text: 'x', summary: '  ' })).toEqual({ ok: true, result: { text: 'x' } });
+    expect(await result({ text: 'x', summary: null })).toEqual({ ok: true, result: { text: 'x' } });
+    expect(await result({ summary: 42 })).toEqual({ ok: false, code: 'bad_result', message: "The tool's result was refused: its summary is not text." });
+  });
+
   it('stalls after timeoutS with no progress: assistantAbort, then stalled (with the hint when the tab is hidden)', async () => {
     const t = await connected();
     await t.call('assistant.register', { tools: [ADD, SLOW] });
@@ -936,6 +989,23 @@ describe('the SDK and the bridge together (1.9, unreleased)', () => {
     expect(t.calls.assistantTool('add')).not.toBeNull();
     expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Counter is 2' } });
     expect(handler).toHaveBeenCalledTimes(1);
+    t.end();
+  });
+
+  it("a handler's thrown hint and detail, and its result's summary, reach the call's outcome through the real SDK", async () => {
+    const t = await sdkConnected();
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] };
+    let n = 0;
+    await t.ws.assistant!.register([TOOL], async () => {
+      n += 1;
+      if (n === 1) throw Object.assign(new Error('step_too_big: at most 3 at a time.'), { code: 'invalid_input', hint: 'Call add with by 1, 2 or 3.', detail });
+      // A detail JSON can't hold all of: the SDK sends what JSON makes of it.
+      if (n === 2) throw Object.assign(new Error('No.'), { hint: 'Wait.', detail: { at: new Date(0), skip: () => 1 } });
+      return { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' };
+    });
+    expect(await call(t.bridge)).toEqual({ ok: false, code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Call add with by 1, 2 or 3.', detail });
+    expect(await call(t.bridge)).toEqual({ ok: false, code: 'failed', message: 'No.', hint: 'Wait.', detail: { at: '1970-01-01T00:00:00.000Z' } });
+    expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
     t.end();
   });
 });

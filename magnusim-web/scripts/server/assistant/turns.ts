@@ -47,7 +47,7 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number }
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }

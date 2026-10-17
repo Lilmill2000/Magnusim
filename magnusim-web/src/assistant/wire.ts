@@ -162,7 +162,8 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: 'read' | 'edit' | 'compute' | 'destructive'; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number }
+  /** `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's line. */
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
@@ -267,7 +268,11 @@ export interface RelayProgressBody {
   label?: string;
 }
 
-/** POST /api/assistant/relay/result: the call's end (images as base64). */
+/**
+ * POST /api/assistant/relay/result: the call's end (images as base64). A result's `summary` is the
+ * turn log's line, never the model's; an error's `hint` (how to fix it) and `detail` (plain JSON,
+ * at most 4 KB) reach the model with its message.
+ */
 export type RelayResultBody =
-  | { link: string; call: string; ok: true; result: { text?: string; data?: unknown; images?: Array<{ mediaType: string; data: string }> } }
-  | { link: string; call: string; ok: false; error: { code: string; message: string } };
+  | { link: string; call: string; ok: true; result: { text?: string; data?: unknown; images?: Array<{ mediaType: string; data: string }>; summary?: string } }
+  | { link: string; call: string; ok: false; error: { code: string; message: string; hint?: string; detail?: unknown } };

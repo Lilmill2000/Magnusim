@@ -879,6 +879,48 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     ]);
   });
 
+  it("a throw's hint (text, cut to 500) and detail (as JSON makes it) go with its error; a result's summary goes with the result", async () => {
+    const { ws, posts, push } = await open(accepting, { clone: true });
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] };
+    const cycle: Record<string, unknown> = { a: 1 };
+    cycle.self = cycle;
+    const getterThrows = Object.defineProperty(new Error('Odd'), 'hint', {
+      get() {
+        throw new Error('no hint');
+      },
+    });
+    const thrown: unknown[] = [
+      Object.assign(new Error('step_too_big: at most 3.'), { code: 'invalid_input', hint: 'Use 1, 2 or 3.', detail }),
+      Object.assign(new Error('Long'), { hint: 'h'.repeat(600) }),
+      // Only text is a hint; a detail with no JSON form (a cycle, a function), or null, goes without.
+      Object.assign(new Error('Not text'), { hint: 42, detail: cycle }),
+      Object.assign(new Error('No form'), { hint: '', detail: () => 1 }),
+      Object.assign(new Error('Null'), { detail: null }),
+      // What JSON makes of it: a Date as its text, a function and undefined left out, NaN as null.
+      Object.assign(new Error('Copied'), { detail: { at: new Date(0), f: () => 1, u: undefined, n: Number.NaN } }),
+      getterThrows,
+    ];
+    let i = 0;
+    await ws.assistant!.register([ADD, RESET], (c) => {
+      if (c.tool === 'reset') return { text: 'Counter is 0', summary: 'Reset: the counter is 0' };
+      throw thrown[i++];
+    });
+    for (let n = 1; n <= thrown.length; n++) invoke(push, `ai-${n}`);
+    invoke(push, 'ai-ok', 'reset', {});
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(thrown.length + 1));
+    expect(Array.from({ length: thrown.length }, (_, k) => byCall(posts)[`ai-${k + 1}`].error)).toEqual([
+      { code: 'invalid_input', message: 'step_too_big: at most 3.', hint: 'Use 1, 2 or 3.', detail },
+      { code: 'failed', message: 'Long', hint: 'h'.repeat(500) },
+      { code: 'failed', message: 'Not text' },
+      { code: 'failed', message: 'No form' },
+      { code: 'failed', message: 'Null' },
+      { code: 'failed', message: 'Copied', detail: { at: '1970-01-01T00:00:00.000Z', n: null } },
+      { code: 'failed', message: 'Odd' },
+    ]);
+    // Every error reached the host as a copy (none failed to clone).
+    expect(byCall(posts)['ai-ok']).toEqual({ call: 'ai-ok', ok: true, result: { text: 'Counter is 0', summary: 'Reset: the counter is 0' } });
+  });
+
   it('a result that cannot be copied to the host (DataCloneError) fails the call instead of never ending, and leaves no call waiting', async () => {
     const { ws, posts, push } = await open(accepting, { clone: true });
     // The SDK's calls waiting for the host's answer: the map that register's call goes into (the

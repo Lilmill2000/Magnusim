@@ -207,6 +207,44 @@ describe('each call of a step', () => {
     checkInvariants(assert, t.conv, m.provider.requests);
   });
 
+  it("a failed call's hint and detail reach the next request and its hint the log's tool_result; a result's summary reaches the log only", async () => {
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3], nested: { a: [{ b: 1 }] } };
+    const tools = [
+      hostTool('step', {
+        risk: 'edit',
+        schema: BY,
+        run: async (i) =>
+          i.by > 3
+            ? { ok: false, error: { code: 'invalid_input', message: `${i.by} is too big a step.`, hint: 'Step by 1,‮ 2 or 3.', detail }, summary: 'Refused a big step' }
+            : { ok: true, data: { by: i.by }, text: `Stepped ${i.by}.`, summary: `Stepped ${i.by}: now 2` },
+      }),
+      // An error with neither: no hint in the log, none for the model.
+      hostTool('plain', { run: async () => ({ ok: false, error: { code: 'failed', message: 'It broke.' }, summary: 'Broke' }) }),
+    ];
+    const m = mk({ hostTools: tools });
+    m.provider.script({ tools: [{ name: 'step', input: { by: 9 } }, { name: 'plain' }] }, { tools: [{ name: 'step', input: { by: 2 } }] }, { text: 'Stepped 2.' });
+    const { turn: t } = await startTurn(m, 'Step 9.');
+    await settled(t);
+    assert.equal(t.state, 'done');
+    const withoutIds = (results) => results.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'id')));
+    assert.deepEqual(withoutIds(resultsIn(m.provider.requests[1].req.messages[2])), [
+      { tool: 'step', ok: false, error: { code: 'invalid_input', message: '9 is too big a step.', hint: 'Step by 1, 2 or 3.', detail } },
+      { tool: 'plain', ok: false, error: { code: 'failed', message: 'It broke.' } },
+    ]);
+    // The summary never reaches the model: only data and text.
+    assert.deepEqual(withoutIds(resultsIn(m.provider.requests[2].req.messages[4])), [{ tool: 'step', ok: true, data: { by: 2 }, text: 'Stepped 2.' }]);
+    assert.ok(!JSON.stringify(m.provider.requests[2].req).includes('now 2'), 'no summary anywhere in the request');
+    assert.deepEqual(
+      ofType(t, 'tool_result').map((e) => [e.ok, e.code ?? null, e.hint ?? null, e.summary]),
+      [
+        [false, 'invalid_input', 'Step by 1, 2 or 3.', 'Refused a big step'],
+        [false, 'failed', null, 'Broke'],
+        [true, null, null, 'Stepped 2: now 2'],
+      ],
+    );
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
   it('read and edit run at once; compute and destructive ask first (focus on no is the page’s; here: the gate)', async () => {
     let zapped = 0;
     let crunched = 0;

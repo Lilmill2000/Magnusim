@@ -3,14 +3,15 @@
 // 1.8, so the page checks that ws.assistant exists). The counter lives in the page only:
 // it starts at 0 on every load.
 //
-// Tools: get_count (read), add {by} (edit), slow_add {by, steps?} (edit: progress every
-// 200 ms, then adds after `steps` ticks, or, with no steps, once the test calls
-// window.__release(); Stop, a closed page or a lost link aborts it and #aborted reads
-// "aborted"), reset (destructive), mystery (a risk the host does not know, so it counts as
-// destructive), snap (read: a 64x64 PNG of the counter) and read_study (read, a 1 s stall
-// window: it waits on the app's answer to ws.study.get(), which keeps it alive however long
-// that takes). A registration the app could not take yet (not_connected) is made again when
-// the page is shown.
+// Tools: get_count (read), add {by} (edit; its result's summary names what it did, for the
+// turn's log), slow_add {by, steps?} (edit: progress every 200 ms, then adds after `steps`
+// ticks, or, with no steps, once the test calls window.__release(); Stop, a closed page or a
+// lost link aborts it and #aborted reads "aborted"), reset (destructive), mystery (a risk the
+// host does not know, so it counts as destructive), snap (read: a 64x64 PNG of the counter),
+// read_study (read, a 1 s stall window: it waits on the app's answer to ws.study.get(), which
+// keeps it alive however long that takes) and fail_hint (read: it always fails, with a hint
+// that says how to fix it and a detail the model can act on). A registration the app could
+// not take yet (not_connected) is made again when the page is shown.
 //
 // What the e2e reads: #counter, #slow, #aborted, #ai-available ("yes" or "no") with
 // #ai-reason, #calls (the tools run, in order), and window.__aiCalls; window.__register()
@@ -62,7 +63,22 @@ const TOOLS = [
     // Its own window is short: only its call to the app in flight keeps it alive.
     timeoutS: 1,
   },
+  {
+    name: 'fail_hint',
+    title: 'Try a big step',
+    description: 'Tries to add 10 to the counter; it always fails, and says how to add instead.',
+    inputSchema: obj({}),
+    risk: 'read',
+  },
 ];
+
+/** What fail_hint throws: its message, how to fix it, and plain JSON the model can act on. */
+const FAIL_HINT = {
+  code: 'invalid_input',
+  message: 'step_too_big: the counter takes at most 3 at a time.',
+  hint: 'Call add with by set to 1, 2 or 3.',
+  detail: { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] },
+};
 
 const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it with get_count; add or slow_add change it; reset sets it to 0.';
 
@@ -135,7 +151,7 @@ async function handle(call) {
     case 'add':
       count += Number(call.input.by);
       show();
-      return { text: `The counter is ${count}.`, data: { count } };
+      return { text: `The counter is ${count}.`, data: { count }, summary: `Added ${Number(call.input.by)}: the counter is ${count}` };
     case 'slow_add':
       return slowAdd(call);
     case 'reset':
@@ -150,6 +166,8 @@ async function handle(call) {
       const study = await ws.study.get();
       return { text: `The study is ${study.title}.`, data: { title: study.title } };
     }
+    case 'fail_hint':
+      throw Object.assign(new Error(FAIL_HINT.message), { code: FAIL_HINT.code, hint: FAIL_HINT.hint, detail: FAIL_HINT.detail });
     default:
       throw Object.assign(new Error(`No tool named ${call.tool}.`), { code: 'invalid_input' });
   }

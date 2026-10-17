@@ -79,7 +79,7 @@ import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
 import type { Registry, ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
-import { cleanText, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
+import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
 import type { TurnManager } from './turns.ts';
 import type { ImagePart } from './types.ts';
@@ -97,8 +97,19 @@ export const UNREGISTER_GRACE_MS = 2_000;
  * copy in place decides.
  */
 export const REGISTRY_REFRESH_WAIT_MS = 2 * 60_000;
-/** What a page's tool result may hold (as the bridge checks it in the page). */
-export const RESULT_CAPS = Object.freeze({ text: 64 * 1024, data: 256 * 1024, images: IMAGE_CAPS.perResult, imageBytes: IMAGE_CAPS.bytes });
+/**
+ * What a page's tool result may hold (as the bridge checks it in the page): its text and data
+ * (bytes), images, a summary (characters), and an error's hint (characters) and detail (bytes).
+ */
+export const RESULT_CAPS = Object.freeze({
+  text: 64 * 1024,
+  data: 256 * 1024,
+  images: IMAGE_CAPS.perResult,
+  imageBytes: IMAGE_CAPS.bytes,
+  summary: 160,
+  hint: 500,
+  detail: ERROR_DETAIL_BYTES,
+});
 /** The codes a page's error may carry (the page's own and the host bridge's); anything else is `failed`. */
 export const PAGE_RESULT_CODES: ReadonlySet<string> = new Set([
   'invalid_input',
@@ -898,18 +909,43 @@ function parseWorkspace(raw: unknown): { plugin: string; workspace: string; titl
 }
 
 /**
- * The page's answer as the call's outcome: an error with a code from the page's and the
- * bridge's lists (else `failed`), or its result shape-checked and capped as the bridge does
- * (`bad_result`, `too_large`); images go on as base64 for the runner's own checks.
+ * A page's error as the call's outcome: a code from the page's and the bridge's lists (else
+ * `failed`), its message, its hint (≤ 500 characters) and its detail (≤ 4 KB as JSON, else
+ * dropped with " (detail too large)", or " (detail not plain JSON)", on the message), as the
+ * bridge keeps them.
+ */
+function pageError(raw: unknown): ToolOutcome {
+  const e = isRecord(raw) ? raw : {};
+  const code = typeof e.code === 'string' && PAGE_RESULT_CODES.has(e.code) ? e.code : 'failed';
+  let note = '';
+  let detail: unknown;
+  if (e.detail !== undefined && e.detail !== null) {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(e.detail);
+    } catch {
+      json = undefined;
+    }
+    if (json === undefined) note = ' (detail not plain JSON)';
+    else if (Buffer.byteLength(json, 'utf8') > RESULT_CAPS.detail) note = ' (detail too large)';
+    else detail = JSON.parse(json);
+  }
+  const out = fail(code, `${cleanText(e.message, TEXT_CAPS.other - note.length) || 'The tool failed.'}${note}`);
+  const hint = typeof e.hint === 'string' ? cleanText(e.hint, RESULT_CAPS.hint) : '';
+  if (out.error && hint) out.error.hint = hint;
+  if (out.error && detail !== undefined) out.error.detail = detail;
+  return out;
+}
+
+/**
+ * The page's answer as the call's outcome: its error (above), or its result shape-checked and
+ * capped as the bridge does (`bad_result`, `too_large`); images go on as base64 for the
+ * runner's own checks. The page's summary (≤ 160 characters) is the log's line, else "Done".
  */
 export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
   const bad = (why: string) => fail('bad_result', `The tool's result was refused: ${why}.`);
   const big = (why: string) => fail('too_large', `The tool's result is too large: ${why}.`);
-  if (body.ok === false) {
-    const e = isRecord(body.error) ? body.error : {};
-    const code = typeof e.code === 'string' && PAGE_RESULT_CODES.has(e.code) ? e.code : 'failed';
-    return fail(code, cleanText(e.message, TEXT_CAPS.other) || 'The tool failed.');
-  }
+  if (body.ok === false) return pageError(body.error);
   if (body.ok !== true) return bad('it says neither ok nor not ok');
   const raw = body.result;
   if (raw === undefined || raw === null) return { ok: true, summary: 'Done' };
@@ -923,6 +959,11 @@ export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
     if (typeof raw.text !== 'string') return bad('its text is not text');
     if (Buffer.byteLength(raw.text, 'utf8') > RESULT_CAPS.text) return big('its text is over 64 KB');
     out.text = raw.text;
+  }
+  let summary = '';
+  if (raw.summary !== undefined && raw.summary !== null) {
+    if (typeof raw.summary !== 'string') return bad('its summary is not text');
+    summary = cleanText(raw.summary, RESULT_CAPS.summary);
   }
   if (raw.data !== undefined) {
     let json: string | undefined;
@@ -950,7 +991,8 @@ export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
     }
     if (images.length) out.images = images;
   }
-  if (out.images?.length) out.summary = `Done (${out.images.length} image${out.images.length === 1 ? '' : 's'})`;
+  if (summary) out.summary = summary;
+  else if (out.images?.length) out.summary = `Done (${out.images.length} image${out.images.length === 1 ? '' : 's'})`;
   return out;
 }
 

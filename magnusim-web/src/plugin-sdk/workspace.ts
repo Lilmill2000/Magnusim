@@ -512,15 +512,22 @@ export interface AssistantImage {
 }
 
 /**
- * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most
- * 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with
- * code "too_large". Everything in it reaches the model as data, never as instructions.
+ * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text`
+ * at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call
+ * with code "too_large". Everything in it but `summary` reaches the model as data, never as
+ * instructions. `summary` is one line for the turn's log that names what the call did ("Added 2:
+ * the counter is 2"), at most 160 characters: the person reads it, the model never gets it.
+ * Without one the log says "Done".
  */
-export type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[] } | void;
+export type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[]; summary?: string } | void;
 
 /**
  * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
- * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+ * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says
+ * what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its
+ * `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the
+ * candidates, the allowed range), at most 4 KB as JSON: a larger one is dropped, and the message
+ * says so. All three reach the model with the code.
  */
 export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
 
@@ -846,23 +853,40 @@ function newInstance(): string {
 
 /** The codes a tool's error keeps (unreleased, 1.9); any other reads "failed". */
 const ASSISTANT_PAGE_CODES = new Set(['invalid_input', 'busy', 'not_ready', 'failed']);
+/** The most of a tool error's hint the SDK sends (the host caps it again). */
+const ASSISTANT_HINT_MAX = 500;
 
-/** A handler's result as the host takes it: text alone becomes `{text}`, nothing `{}`; only text, data and images go. */
+/** A handler's result as the host takes it: text alone becomes `{text}`, nothing `{}`; only text, data, images and summary go. */
 function assistantResultOf(out: unknown): unknown {
   if (out === undefined || out === null) return {};
   if (typeof out === 'string') return { text: out };
   if (typeof out !== 'object' || Array.isArray(out)) return out;
-  const r = out as { text?: unknown; data?: unknown; images?: unknown };
+  const r = out as { text?: unknown; data?: unknown; images?: unknown; summary?: unknown };
   const result: Record<string, unknown> = {};
   if (r.text !== undefined) result.text = r.text;
   if (r.data !== undefined) result.data = r.data;
   if (r.images !== undefined) result.images = r.images;
+  if (r.summary !== undefined) result.summary = r.summary;
   return result;
 }
 
-/** A handler's throw as the call's error: its message, and its code only when the page may give it. */
-function assistantErrorOf(e: unknown): { code: string; message: string } {
-  const fields = (e && typeof e === 'object' ? e : {}) as { code?: unknown; message?: unknown };
+/** `v` as JSON makes it (a copy the host can always take), or undefined when it has no JSON form. */
+function jsonCopy(v: unknown): unknown {
+  try {
+    const text = JSON.stringify(v);
+    return text === undefined ? undefined : JSON.parse(text);
+  } catch {
+    // A cycle, a BigInt, a getter that throws: no detail.
+    return undefined;
+  }
+}
+
+/**
+ * A handler's throw as the call's error: its message, its code only when the page may give it,
+ * its hint (text, cut to 500 characters) and its detail (as JSON makes it).
+ */
+function assistantErrorOf(e: unknown): { code: string; message: string; hint?: string; detail?: unknown } {
+  const fields = (e && typeof e === 'object' ? e : {}) as { code?: unknown; message?: unknown; hint?: unknown; detail?: unknown };
   const code = fields.code;
   let message = '';
   try {
@@ -871,7 +895,19 @@ function assistantErrorOf(e: unknown): { code: string; message: string } {
   } catch {
     // Not text at all: no message.
   }
-  return { code: typeof code === 'string' && ASSISTANT_PAGE_CODES.has(code) ? code : 'failed', message: message || 'The tool failed.' };
+  const out: { code: string; message: string; hint?: string; detail?: unknown } = {
+    code: typeof code === 'string' && ASSISTANT_PAGE_CODES.has(code) ? code : 'failed',
+    message: message || 'The tool failed.',
+  };
+  try {
+    const hint = fields.hint;
+    if (typeof hint === 'string' && hint) out.hint = hint.slice(0, ASSISTANT_HINT_MAX);
+    const detail = fields.detail === undefined || fields.detail === null ? undefined : jsonCopy(fields.detail);
+    if (detail !== undefined && detail !== null) out.detail = detail;
+  } catch {
+    // A getter that throws: the error goes without them.
+  }
+  return out;
 }
 
 /**

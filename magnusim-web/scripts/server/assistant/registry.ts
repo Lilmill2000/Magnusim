@@ -50,8 +50,9 @@ export interface ToolOutcome {
   data?: unknown;
   text?: string;
   images?: ImagePart[];
-  error?: { code: string; message: string; hint?: string };
-  /** One line for the turn log. */
+  /** `hint`: how to fix it; `detail`: plain JSON about it (both reach the model with the message). */
+  error?: { code: string; message: string; hint?: string; detail?: unknown };
+  /** One line for the turn log (never sent to the model). */
   summary: string;
 }
 

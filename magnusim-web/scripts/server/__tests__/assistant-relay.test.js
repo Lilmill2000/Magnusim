@@ -303,6 +303,71 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(pageOutcome({ ok: true }), { ok: true, summary: 'Done' });
   });
 
+  it("the page's error keeps its hint (≤ 500) and detail (≤ 4 KB as JSON, else dropped and the message says so); its result's summary (≤ 160) is the log's line", () => {
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] };
+    assert.deepEqual(pageOutcome({ ok: false, error: { code: 'invalid_input', message: 'Too big.', hint: 'Use 1,\u0007 2 or 3.', detail } }), {
+      ok: false,
+      error: { code: 'invalid_input', message: 'Too big.', hint: 'Use 1, 2 or 3.', detail },
+      summary: 'Too big.',
+    });
+    // The hint cut to 500 characters; one that is not text, or empty, is left out; a null detail too.
+    assert.equal(pageOutcome({ ok: false, error: { message: 'No.', hint: 'h'.repeat(600) } }).error.hint, 'h'.repeat(500));
+    for (const hint of [5, '', '  ', null]) assert.deepEqual(pageOutcome({ ok: false, error: { message: 'No.', hint, detail: null } }).error, { code: 'failed', message: 'No.' });
+    // At 4 KB as JSON (UTF-8 bytes) the detail is kept; past it, dropped and said.
+    const at = { s: 'x'.repeat(4 * 1024 - 8) };
+    assert.equal(Buffer.byteLength(JSON.stringify(at)), 4 * 1024);
+    assert.deepEqual(pageOutcome({ ok: false, error: { message: 'No.', detail: at } }).error.detail, at);
+    const over = pageOutcome({ ok: false, error: { code: 'busy', message: 'No.', hint: 'Wait.', detail: { s: 'é'.repeat(2 * 1024) } } });
+    assert.deepEqual(over.error, { code: 'busy', message: 'No. (detail too large)', hint: 'Wait.' });
+    assert.equal(over.summary, 'No. (detail too large)');
+    // The note fits inside the message's 2000 characters.
+    const long = pageOutcome({ ok: false, error: { message: 'm'.repeat(2500), detail: { s: 'x'.repeat(5000) } } }).error.message;
+    assert.equal(long.length, 2000);
+    assert.ok(long.endsWith('m (detail too large)'));
+    // A summary: cleaned and cut to 160, over "Done" and "Done (1 image)"; one that is not text is refused.
+    const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+    assert.deepEqual(pageOutcome({ ok: true, result: { text: 'Now 2', summary: 'Added 2:‮ the counter is 2' } }), { ok: true, text: 'Now 2', summary: 'Added 2: the counter is 2' });
+    assert.equal(pageOutcome({ ok: true, result: { summary: 's'.repeat(300) } }).summary, 's'.repeat(160));
+    assert.equal(pageOutcome({ ok: true, result: { summary: 'A view', images: [{ mediaType: 'image/png', data: png }] } }).summary, 'A view');
+    assert.equal(pageOutcome({ ok: true, result: { summary: '', images: [{ mediaType: 'image/png', data: png }] } }).summary, 'Done (1 image)');
+    assert.deepEqual(pageOutcome({ ok: true, result: { summary: 7 } }).error, { code: 'bad_result', message: "The tool's result was refused: its summary is not text." });
+  });
+
+  it("a page error's hint and detail reach the model's next request and the hint the log; a result's summary reaches the log only", async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    m.provider.script({ tools: [{ name: 'ai-demo__add', input: { by: 9 } }] }, { tools: [{ name: 'ai-demo__add', input: { by: 2 } }] }, { text: 'Added 2.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Add 9', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] };
+    const first = await page.frame('invoke', 0);
+    await s.progress(link, first.call, { ack: true });
+    await s.result(link, first.call, { ok: false, error: { code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Call add with by 1, 2 or 3.', detail } });
+    const second = await page.frame('invoke', 1);
+    await s.progress(link, second.call, { ack: true });
+    await s.result(link, second.call, { ok: true, result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
+    await settled(t);
+    assert.equal(t.state, 'done');
+    const partOf = (n) => m.provider.requests[n].req.messages.at(-1).parts.find((p) => p.type === 'tool_result');
+    assert.deepEqual(JSON.parse(partOf(1).text), {
+      tool: 'ai-demo__add',
+      ok: false,
+      error: { code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Call add with by 1, 2 or 3.', detail },
+    });
+    // The summary is not the model's.
+    assert.deepEqual(JSON.parse(partOf(2).text), { tool: 'ai-demo__add', ok: true, data: { count: 2 }, text: 'Now 2' });
+    assert.deepEqual(
+      eventsOf(t)
+        .filter((e) => e.type === 'tool_result')
+        .map((e) => [e.ok, e.code ?? null, e.hint ?? null, e.summary]),
+      [
+        [false, 'invalid_input', 'Call add with by 1, 2 or 3.', 'step_too_big: at most 3 at a time.'],
+        [true, null, null, 'Added 2: the counter is 2'],
+      ],
+    );
+  });
+
   it('an image the model can’t take (over 2000 px a side) fails the call too_large, with why, in the log and for the model; one it can goes with its size', async () => {
     const { m, s } = await setup();
     const { page, link } = await linkedPage(s);

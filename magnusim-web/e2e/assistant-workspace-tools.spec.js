@@ -1,10 +1,11 @@
 // Workspace tools for the Assistant, end to end (Foundation spec 8.4, 10.3): a scripted model
 // (support/fake-llm.mjs, the first cloud dialect) → the server's turn loop → the page relay on
 // the tab's event stream → the bridge → the plugin's frame → back. The test plugin ai-demo
-// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers seven tools:
-// get_count, add, slow_add (progress every 200 ms until window.__release() in the frame),
-// reset (destructive), mystery (a risk the host does not know), snap (a 64x64 PNG) and
-// read_study (a 1 s window, waiting on the app's answer to its read of the study).
+// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers eight tools:
+// get_count, add (its result names what it did in a summary), slow_add (progress every 200 ms
+// until window.__release() in the frame), reset (destructive), mystery (a risk the host does not
+// know), snap (a 64x64 PNG), read_study (a 1 s window, waiting on the app's answer to its read of
+// the study) and fail_hint (it always fails, with a hint and a detail).
 //
 // Covered (spec 10.3's thirteen, then three more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
@@ -17,7 +18,8 @@
 // result; a remote viewer; a tab hidden at load; the terminal client
 // (scripts/assistant-run.mjs) on the only connected tab. And the shared helpers
 // (support/assistant.js, CAD tools spec H1): the scripted model on the local server, its steps
-// answering from the request, and questions answered through their route.
+// answering from the request, and questions answered through their route. And a failed call's
+// hint and detail reaching the model and the terminal, a result's summary only the log (H2).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -37,7 +39,14 @@ import { expect, test } from './support/stress.js';
 
 const PLUGIN = 'ai-demo';
 const PLUGIN_NAME = 'Workspace demo';
-const TOOLS = ['add', 'get_count', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+const TOOLS = ['add', 'fail_hint', 'get_count', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+/** What fail_hint throws (the fixture's FAIL_HINT). */
+const FAIL = {
+  code: 'invalid_input',
+  message: 'step_too_big: the counter takes at most 3 at a time.',
+  hint: 'Call add with by set to 1, 2 or 3.',
+  detail: { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] },
+};
 const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it with get_count; add or slow_add change it; reset sets it to 0.';
 const PROJECT_TITLE = 'Counter project';
 const HOLD_MS = 2000;
@@ -304,7 +313,8 @@ test('an edit tool runs without asking: the counter reads 2 and the model gets i
   // The person reads the workspace's title, the model its key.
   expect(ofType(events, 'tool_call')[0]).toMatchObject({ tool: `${PLUGIN}__add`, risk: 'edit', source: `${PLUGIN_NAME} (Counter)` });
   expect(chats()[before].body.messages[0].content.map((b) => b.text).join(' ')).toContain('"workspace":"counter"');
-  expect(ofType(events, 'tool_result')[0]).toMatchObject({ ok: true });
+  // The log names what it did; the model gets the text and data, never that line.
+  expect(ofType(events, 'tool_result')[0]).toMatchObject({ ok: true, summary: 'Added 2: the counter is 2' });
   expect(resultsIn(chats()[before + 1])).toEqual([{ tool: `${PLUGIN}__add`, ok: true, text: 'The counter is 2.', data: { count: 2 }, images: [] }]);
   // The page got the turn's id with the call.
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => [c.tool, c.turn]))).toEqual([['add', t.id]]);
@@ -807,7 +817,8 @@ test('the terminal client binds a turn to the only connected tab (--tab auto); i
     cli.kill();
   }
   await expect(w.frame.locator('#counter')).toHaveText('0');
-  expect(out).toContain('→ ai-demo__add {"by":7}');
+  // The terminal shows the line the page's summary gave the log.
+  expect(out).toContain('→ ai-demo__add {"by":7}\n✓ Added 7: the counter is 7\n');
   expect(out).toContain('(answered: allowed)');
   expect(out).toContain('Added 7, then reset.');
 });
@@ -866,4 +877,44 @@ test("the scripted model on the local server answers from the request: each step
   await expect(w.frame.locator('#counter')).toHaveText('0');
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add', 'add', 'reset']);
   expect(chats().at(-1).step).toEqual({ text: `${PLUGIN}__reset: ok; ${PLUGIN}__mystery: declined` });
+});
+
+test("a failed call says how to fix it: its hint and detail reach the model's next request and the terminal shows the hint; a result's summary is the log's line, never the model's", async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const before = chats().length;
+  // The model reads the failed call's detail and adds the largest step it allows.
+  fake.reply(
+    { tools: [{ name: `${PLUGIN}__fail_hint`, input: {} }] },
+    (body) => ({ tools: [{ name: `${PLUGIN}__add`, input: { by: Math.max(...resultsIn(body)[0].error.detail.allowed) } }] }),
+    { text: 'Added 3 instead.' },
+  );
+  const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', w.tab, 'Add 10 to the counter.'], {
+    cwd: WEB_ROOT,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let out = '';
+  cli.stdout.on('data', (b) => (out += b));
+  cli.stderr.on('data', (b) => (out += b));
+  const exited = new Promise((done) => cli.once('exit', done));
+  try {
+    expect(await exited, out).toBe(0);
+  } finally {
+    cli.kill();
+  }
+  await expect(w.frame.locator('#counter')).toHaveText('3');
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['fail_hint', 'add']);
+  // What the model read after the failed call: the error, with how to fix it and what it refers to.
+  expect(resultsIn(chats()[before + 1])).toEqual([{ tool: `${PLUGIN}__fail_hint`, ok: false, error: FAIL, images: [] }]);
+  expect(chats()[before + 1].step).toEqual({ tools: [{ name: `${PLUGIN}__add`, input: { by: 3 } }] });
+  // After add: its text and data; the summary is not the model's.
+  expect(resultsIn(chats()[before + 2])).toEqual([{ tool: `${PLUGIN}__add`, ok: true, text: 'The counter is 3.', data: { count: 3 }, images: [] }]);
+  expect(JSON.stringify(chats()[before + 2].body)).not.toContain('Added 3: the counter is 3');
+  // What the person reads in the terminal: the failed call with its hint under it, then the summary's line.
+  expect(out).toContain(`→ ${PLUGIN}__fail_hint {}\n✗ invalid_input: ${FAIL.message}\n  hint: ${FAIL.hint}\n`);
+  expect(out).toContain(`→ ${PLUGIN}__add {"by":3}\n✓ Added 3: the counter is 3\n`);
+  expect(out).toContain('Added 3 instead.');
 });
