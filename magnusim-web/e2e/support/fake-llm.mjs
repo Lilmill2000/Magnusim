@@ -17,6 +17,11 @@
 // `hold` stops after the first chunk until release(name); `error` sends an overload error
 // event there; `drop` destroys the socket there; `end` ends the answer there, cleanly but
 // unfinished; `delayMs` waits before the answer's head.
+// A queued step may also be a function `(body) => step` (or a promise of one): the request
+// that takes it calls it with a copy of its parsed body, so a step can answer from what the
+// request carries (an earlier tool result). The log keeps the step it returned. One that
+// throws, or returns no step, is answered 400 "fake-llm: …" (refused, so no client retries
+// it into the next step).
 //
 // Like the real services it answers 400 (naming the rule) when a request breaks a rule:
 // - every tool call of an answer is answered in the next request, tool results first
@@ -596,8 +601,9 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       if (dialect === 'anthropic') checkAnthropic(entry.body, req.headers);
       else if (dialect === 'openai') checkResponses(entry.body, req.headers);
       else checkCompat(entry.body);
-      const step = queue.shift();
-      if (!step) return json(500, errorBody(dialect, 500, 'fake-llm: no reply queued', 'api_error'));
+      const queued = queue.shift();
+      if (!queued) return json(500, errorBody(dialect, 500, 'fake-llm: no reply queued', 'api_error'));
+      const step = typeof queued === 'function' ? await stepFrom(queued, entry.body) : queued;
       entry.step = step;
       let closedResolve;
       const closed = new Promise((r) => (closedResolve = r));
@@ -620,6 +626,18 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     }
   });
 
+  /** What a function step answers to `body`: the step it returns; a refusal when it throws or returns none. */
+  async function stepFrom(fn, body) {
+    let step;
+    try {
+      step = await fn(structuredClone(body));
+    } catch (err) {
+      throw new Refusal(`fake-llm: a scripted step failed: ${err && err.message}`);
+    }
+    if (!step || typeof step !== 'object' || Array.isArray(step)) throw new Refusal('fake-llm: a scripted step returned no step');
+    return step;
+  }
+
   function takeFailure(dialect) {
     const i = failures.findIndex((f) => !f.dialect || f.dialect === dialect);
     if (i < 0) return null;
@@ -638,7 +656,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   return {
     base,
     compatBase: `${base}/compat/v1`,
-    /** Queues the answers the next chat requests get, in order. */
+    /** Queues the answers the next chat requests get, in order: steps, or functions `(body) => step`. */
     reply(...steps) {
       queue.push(...steps);
     },

@@ -211,7 +211,10 @@ No test reaches a real model provider or this PC's real Assistant files.
     stream text, thinking and tool calls, set usage and the stop reason, refuse,
     answer as a fallback model, `hold` until `fake.release(name)`, send an overload
     error, drop the connection, or wait before it answers (the file's header lists
-    every field).
+    every field). A step may also be a function `(body) => step` (or a promise of
+    one): the request that takes it passes a copy of its body, so a scripted step can
+    answer from an earlier tool result. The log keeps the step it returned; one that
+    throws or returns nothing is answered 400 and shows in the request's `refused`.
   - `fake.failNext({status, body, headers, times})` answers the next request(s) with
     an error; add `'x-should-retry': 'false'` to stop the client's own retries.
   - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
@@ -293,7 +296,18 @@ No test reaches a real model provider or this PC's real Assistant files.
   - Turns start with `request.post('/api/assistant/turns', {text, tab})`, the tab
     being the page's own (its `/api/events?tab=` request) as `/api/assistant/tabs`
     lists it. The Assistant's questions are the app's own confirm dialog with its
-    No button focused. `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
+    No button focused.
+  - The turn helpers are shared in `e2e/support/assistant.js`, for the core's specs
+    and the bundled plugins' suites alike, so a plugin's spec names no provider:
+    `useScriptedModel(request, base, fake, 'cloud' | 'local')` points the server at
+    the fake (the first cloud dialect with a test key, or the local-server dialect at
+    `fake.compatBase`) with project data allowed; `trackTab(page)`;
+    `startTurn(request, base, body)` and `followTurn(request, base, id)` (`waitFor`,
+    `latest`, `ended`); `answerGate(request, base, turn, allow, {kind, tool})`
+    answers the turn's next question through its route, as a click would;
+    `offeredTools(req)` lists a request's tools as `{name, strict}`; and
+    `resultsIn(req)` the tool results it carries (a fake request or a function step's
+    body). `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
     it is hidden or shown, as the browser does.
   - A remote viewer: add the proxy header to the page's `/api/` requests with
     `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes

@@ -15,7 +15,9 @@
 // keeping a tool call alive past the server's stall window; a hidden tab kept for the call and
 // the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an image
 // result; a remote viewer; a tab hidden at load; the terminal client
-// (scripts/assistant-run.mjs) on the only connected tab.
+// (scripts/assistant-run.mjs) on the only connected tab. And the shared helpers
+// (support/assistant.js, CAD tools spec H1): the scripted model on the local server, its steps
+// answering from the request, and questions answered through their route.
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -27,6 +29,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { answerGate, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
@@ -37,7 +40,6 @@ const PLUGIN_NAME = 'Workspace demo';
 const TOOLS = ['add', 'get_count', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
 const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it with get_count; add or slow_add change it; reset sets it to 0.';
 const PROJECT_TITLE = 'Counter project';
-const KEY = 'sk-ant-e2e-workspace-tools-0123456789abcdef';
 const HOLD_MS = 2000;
 /** The page's own grace before a hidden tab lets its stream go (src/api/eventHub.ts HIDDEN_GRACE_MS). */
 const HIDDEN_GRACE_MS = 3000;
@@ -91,8 +93,7 @@ test.beforeAll(async ({ request }) => {
   const pj = await postOk(request, '/api/project', { title: PROJECT_TITLE, folder: 'My Projects', units: 'Metric', category: 'Other' });
   project = pj.id;
   study = (await postOk(request, '/api/plugin-studies/create', { project_id: project, plugin: PLUGIN, kind: 'counter_case', title: 'Counter 1' })).study.id;
-  await postOk(request, '/api/assistant/settings', { provider: 'anthropic' });
-  await postOk(request, '/api/assistant/key', { provider: 'anthropic', key: KEY });
+  await useScriptedModel(request, host.base, fake, 'cloud');
 });
 
 test.afterAll(async () => {
@@ -101,10 +102,12 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ request }) => {
-  // No turn, question or conversation of an earlier test; consent asked afresh, then allowed
-  // (the privacy test asks for itself).
+  // No turn, question or conversation of an earlier test; the scripted cloud model (a test
+  // may switch to the local one); consent asked afresh, then allowed (the privacy test asks
+  // for itself).
   await postOk(request, '/api/test/assistant/reset', {});
-  await postOk(request, '/api/assistant/settings', { provider: 'anthropic', privacy: 'allow', forget_consents: true });
+  await useScriptedModel(request, host.base, fake, 'cloud');
+  await postOk(request, '/api/assistant/settings', { forget_consents: true });
 });
 
 test.afterEach(() => {
@@ -115,16 +118,6 @@ test.afterEach(() => {
 });
 
 // ---------------------------------------------------------------- the page
-
-/** The id of `page`'s event stream's tab, from its /api/events?tab= request ('' before one). */
-function trackTab(page) {
-  let tab = '';
-  page.on('request', (r) => {
-    const u = new URL(r.url());
-    if (u.pathname === '/api/events' && u.searchParams.get('tab')) tab = u.searchParams.get('tab');
-  });
-  return () => tab;
-}
 
 /** The counter workspace's frame (Playwright Frame, for evaluate), once it connected. */
 async function counterFrame(page) {
@@ -184,69 +177,9 @@ async function relayState(request) {
 }
 
 // ---------------------------------------------------------------- turns
-
-/** Starts a turn (202) and follows its event log through the long-poll. */
-async function startTurn(request, body) {
-  const r = await request.post(api('/api/assistant/turns'), { data: body });
-  const j = await r.json();
-  expect(r.status(), JSON.stringify(j)).toBe(202);
-  return followTurn(request, j.turn);
-}
-
-function followTurn(request, id) {
-  const events = [];
-  let next = 0;
-  let summary = null;
-  let ended = false;
-  const pull = async (waitMs) => {
-    const r = await request.get(api(`/api/assistant/turns/${id}?since=${next}&wait_ms=${Math.max(0, Math.floor(waitMs))}`), { timeout: 40_000 });
-    expect(r.status()).toBe(200);
-    const j = await r.json();
-    events.push(...j.events);
-    next = j.next;
-    summary = j.turn;
-    ended = j.ended;
-  };
-  return {
-    id,
-    events,
-    /** The first event `pred` takes, within `ms`. */
-    async waitFor(pred, what, ms = 30_000) {
-      const until = Date.now() + ms;
-      for (;;) {
-        const hit = events.find(pred);
-        if (hit) return hit;
-        if (ended) throw new Error(`the turn ended before ${what}: ${JSON.stringify(events.slice(-8))}`);
-        if (Date.now() > until) throw new Error(`no ${what} within ${ms} ms: ${JSON.stringify(events.slice(-8))}`);
-        await pull(Math.min(5000, until - Date.now()));
-      }
-    },
-    /** The events so far (asked now, without waiting for more). */
-    async latest() {
-      if (!ended) await pull(0);
-      return events;
-    },
-    /** The turn's summary and events once it ended, within `ms`. */
-    async ended(ms = 30_000) {
-      const until = Date.now() + ms;
-      while (!ended) {
-        if (Date.now() > until) throw new Error(`the turn did not end within ${ms} ms: ${JSON.stringify(events.slice(-8))}`);
-        await pull(Math.min(5000, until - Date.now()));
-      }
-      return { turn: summary, events };
-    },
-  };
-}
+// (startTurn, followTurn, resultsIn, offeredTools and answerGate: support/assistant.js)
 
 const ofType = (events, type) => events.filter((e) => e.type === type);
-
-/** The tool results the request carries in its last user message: [{tool, ok, data?, text?, error?, images}]. */
-function resultsIn(req) {
-  const user = [...req.body.messages].reverse().find((m) => m.role === 'user');
-  return (Array.isArray(user.content) ? user.content : [])
-    .filter((b) => b.type === 'tool_result')
-    .map((b) => ({ ...JSON.parse(b.content[0].text), images: b.content.slice(1) }));
-}
 
 /** Schema keywords a strict tool may not use, anywhere in `schema`. */
 function refusedKeywords(schema, path = '') {
@@ -287,7 +220,7 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
 
   const before = chats().length;
   fake.reply({ text: 'Hello.' });
-  const t = await startTurn(request, { text: 'Say hello.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Say hello.', tab: w.tab });
   const { turn } = await t.ended();
   expect(turn).toMatchObject({ state: 'done', tab: w.tab, project_id: project });
   const sent = chats()[before].body;
@@ -295,10 +228,9 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
   const hostTools = names.filter((n) => !n.includes('__'));
   // The host's own tools first, then the workspace's, each by name.
   expect(names).toEqual([...[...hostTools].sort(), ...TOOLS]);
-  for (const tool of sent.tools) {
-    expect(tool.strict, tool.name).toBe(true);
-    expect(refusedKeywords(tool.input_schema), tool.name).toEqual([]);
-  }
+  // Every one strict, with no keyword a strict tool may not use.
+  expect(offeredTools(chats()[before])).toEqual(names.map((name) => ({ name, strict: true })));
+  for (const tool of sent.tools) expect(refusedKeywords(tool.input_schema), tool.name).toEqual([]);
   // A limit reaches the model as words.
   const add = sent.tools.find((x) => x.name === `${PLUGIN}__add`);
   expect(add.input_schema.properties.by.description).toMatch(/-100.*100/);
@@ -319,7 +251,7 @@ test('cloud privacy is asked once per project: Enter sends nothing, Send runs an
   const before = chats().length;
 
   // Enter on the question: Don't send.
-  const t1 = await startTurn(request, { text: 'Read the counter.', tab: w.tab });
+  const t1 = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await expect(page.locator('#cf-heading')).toHaveText(`Send project "${PROJECT_TITLE}" to Anthropic?`);
   await expect(page.locator('#cf-confirm')).toHaveText('Send');
@@ -335,7 +267,7 @@ test('cloud privacy is asked once per project: Enter sends nothing, Send runs an
 
   // Send, by a click: the turn runs.
   fake.reply({ text: 'The counter is 0.' });
-  const t2 = await startTurn(request, { text: 'Read the counter.', tab: w.tab });
+  const t2 = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await page.locator('#cf-confirm').click();
   await expect(dialog).toBeHidden();
@@ -344,7 +276,7 @@ test('cloud privacy is asked once per project: Enter sends nothing, Send runs an
 
   // Remembered for this project: no question.
   fake.reply({ text: 'Still 0.' });
-  const t3 = await startTurn(request, { text: 'Read the counter again.', tab: w.tab });
+  const t3 = await startTurn(request, host.base, { text: 'Read the counter again.', tab: w.tab });
   const e3 = await t3.ended();
   expect(e3.turn.state).toBe('done');
   expect(ofType(e3.events, 'gate')).toEqual([]);
@@ -363,7 +295,7 @@ test('an edit tool runs without asking: the counter reads 2 and the model gets i
   const w = await openCounter(page, request);
   const before = chats().length;
   fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'The counter is 2.' });
-  const t = await startTurn(request, { text: 'Add 2 to the counter.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 2 to the counter.', tab: w.tab });
   const { turn, events } = await t.ended();
   expect(turn.state).toBe('done');
   await expect(w.frame.locator('#counter')).toHaveText('2');
@@ -384,7 +316,7 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
   const before = chats().length;
 
   fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'I left it at 2.' });
-  const t1 = await startTurn(request, { text: 'Add 2, then reset the counter.', tab: w.tab });
+  const t1 = await startTurn(request, host.base, { text: 'Add 2, then reset the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await expect(w.frame.locator('#counter')).toHaveText('2');
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
@@ -403,7 +335,7 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add']);
 
   fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset.' });
-  const t2 = await startTurn(request, { text: 'Reset the counter.', tab: w.tab });
+  const t2 = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.locator('#cf-confirm').click();
@@ -412,7 +344,7 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
 
   // A risk the host does not know counts as destructive: it asks too.
   fake.reply({ tools: [{ name: `${PLUGIN}__mystery`, input: {} }] }, { text: 'Nothing happened.' });
-  const t3 = await startTurn(request, { text: 'Do the mystery thing.', tab: w.tab });
+  const t3 = await startTurn(request, host.base, { text: 'Do the mystery thing.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?');
   await expect(page.locator('#cf-cancel')).toBeFocused();
@@ -425,7 +357,7 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
 
   // Stop while the question is open: it closes unanswered, and nothing runs.
   fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] });
-  const t4 = await startTurn(request, { text: 'Reset the counter.', tab: w.tab });
+  const t4 = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await postOk(request, `/api/assistant/turns/${t4.id}/stop`, {});
   await expect(dialog).toBeHidden();
@@ -441,7 +373,7 @@ test('a double-click on Allow answers one question only: the one asked right beh
   const dialog = modal(page);
   const before = chats().length;
   fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }, { name: `${PLUGIN}__mystery`, input: {} }] }, { text: 'Reset; the mystery thing is not done.' });
-  const t = await startTurn(request, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
   // Allow is off for its first moment on screen.
   await expect(page.locator('#cf-confirm')).toBeEnabled();
@@ -478,7 +410,7 @@ test('a double-click on Allow answers one question only: the one asked right beh
 test('Stop during a slow tool: its progress shows, the page aborts it, the counter is unchanged, the turn ends stopped', async ({ page, request }) => {
   const w = await openCounter(page, request);
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] });
-  const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 1 });
   const stopAt = Date.now();
@@ -519,7 +451,7 @@ test("a call to the app in flight keeps a tool call alive past the server's stal
   });
   try {
     fake.reply({ tools: [{ name: `${PLUGIN}__read_study`, input: {} }] }, { text: 'It is Counter 1.' });
-    const t = await startTurn(request, { text: "Read the study's title.", tab: w.tab });
+    const t = await startTurn(request, host.base, { text: "Read the study's title.", tab: w.tab });
     const call = await t.waitFor((e) => e.type === 'tool_call' && e.tool === `${PLUGIN}__read_study`, 'the call');
     await expect.poll(() => heldAt, { message: 'the page reads the study' }).toBeGreaterThan(0);
     // The tool's own window is 1 s; the server's is 11 s (+10 s), and a stall there then waits
@@ -549,7 +481,7 @@ test('Back during a tool call: the call ends "its page closed", the workspace cl
   const w = await openCounter(page, request);
   const before = chats().length;
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'Its page closed.' });
-  const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
@@ -569,7 +501,7 @@ test('Back during a tool call: the call ends "its page closed", the workspace cl
 test('a reload during a tool call fails it as disconnected at once; the reloaded page registers again', async ({ page, request }) => {
   const w = await openCounter(page, request);
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'It disconnected.' });
-  const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   const tabOf = trackTab(page);
   // The clock runs from the reload to the failed call, with the wait started at the same time:
@@ -597,7 +529,7 @@ test('a reload during a tool call fails it as disconnected at once; the reloaded
 test('a lost event stream during a tool call fails it as disconnected; the registration is back after the reconnect, on a new link', async ({ page, request }) => {
   const w = await openCounter(page, request);
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'It disconnected.' });
-  const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   const revBefore = (await relayState(request)).links[w.tab].rev;
   const dropped = await postOk(request, '/api/test/event-hub/drop', { tab: w.tab });
@@ -632,14 +564,14 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
   });
   const w = await openCounter(page, request);
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] });
-  const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   // A question of another turn on this tab (a destructive tool's) stays open across the plugin
   // going off: the page keeps its assistant channel for it, so the stream drop below is a real
   // reconnect, with a new link. (Not a privacy question: privacy is read live, so asking for one
   // by changing the setting would make the running turn ask again too.)
   fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] });
-  const asking = await startTurn(request, { text: 'Reset the counter.', tab: w.tab });
+  const asking = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w.tab });
   await expect(modal(page)).toBeVisible();
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
   // The next requests: the slow turn's once its call failed, then the asking one's after its No.
@@ -713,7 +645,7 @@ test('a hidden tab keeps its stream for a running call and for the hold after th
 }) => {
   const w = await openCounter(page, request);
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 4 } }] }, { text: 'Added 4.' });
-  const t = await startTurn(request, { text: 'Add 4 slowly.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Add 4 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 4);
   const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
 
@@ -753,16 +685,16 @@ test('two tabs: a turn bound to one changes only that one', async ({ page, reque
     const b = await openCounter(other, request);
     expect(b.tab).not.toBe(a.tab);
     fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 3 } }] }, { text: 'Added 3.' });
-    expect((await (await startTurn(request, { text: 'Add 3.', tab: a.tab })).ended()).turn.state).toBe('done');
+    expect((await (await startTurn(request, host.base, { text: 'Add 3.', tab: a.tab })).ended()).turn.state).toBe('done');
     await expect(a.frame.locator('#counter')).toHaveText('3');
     await expect(b.frame.locator('#counter')).toHaveText('0');
     fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: -1 } }] }, { text: 'Took 1 away.' });
-    expect((await (await startTurn(request, { text: 'Take 1 away.', tab: b.tab })).ended()).turn.state).toBe('done');
+    expect((await (await startTurn(request, host.base, { text: 'Take 1 away.', tab: b.tab })).ended()).turn.state).toBe('done');
     await expect(b.frame.locator('#counter')).toHaveText('-1');
     await expect(a.frame.locator('#counter')).toHaveText('3');
     // A question of a turn bound to B shows in B only.
     fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset.' });
-    const t = await startTurn(request, { text: 'Reset the counter.', tab: b.tab });
+    const t = await startTurn(request, host.base, { text: 'Reset the counter.', tab: b.tab });
     await expect(modal(other)).toBeVisible();
     await expect(other.locator('#cf-cancel')).toBeFocused();
     await expect(modal(page)).toBeHidden();
@@ -782,7 +714,7 @@ test('an image result: snap puts a 64x64 PNG block in the next request', async (
   const w = await openCounter(page, request);
   const before = chats().length;
   fake.reply({ tools: [{ name: `${PLUGIN}__snap`, input: {} }] }, { text: 'A picture of 0.' });
-  const t = await startTurn(request, { text: 'Show me the counter.', tab: w.tab });
+  const t = await startTurn(request, host.base, { text: 'Show me the counter.', tab: w.tab });
   const { turn, events } = await t.ended();
   expect(turn.state).toBe('done');
   expect(ofType(events, 'tool_result')[0]).toMatchObject({ ok: true, summary: 'Done (1 image)' });
@@ -878,4 +810,60 @@ test('the terminal client binds a turn to the only connected tab (--tab auto); i
   expect(out).toContain('→ ai-demo__add {"by":7}');
   expect(out).toContain('(answered: allowed)');
   expect(out).toContain('Added 7, then reset.');
+});
+
+test("the scripted model on the local server answers from the request: each step reads the counter's last result; questions answered through their route close in the app too", async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const model = await useScriptedModel(request, host.base, fake, 'local');
+  const before = chats().length;
+  // Add 3, then twice what the counter then reads, then say what it reads: the later steps
+  // are functions of the request they answer.
+  fake.reply(
+    { tools: [{ name: `${PLUGIN}__add`, input: { by: 3 } }] },
+    (body) => ({ tools: [{ name: `${PLUGIN}__add`, input: { by: resultsIn(body)[0].data.count * 2 } }] }),
+    (body) => ({ text: `The counter is ${resultsIn(body)[0].data.count}.` }),
+  );
+  const t1 = await startTurn(request, host.base, { text: 'Add 3, then twice what the counter reads.', tab: w.tab });
+  const e1 = await t1.ended();
+  expect(e1.turn.state).toBe('done');
+  await expect(w.frame.locator('#counter')).toHaveText('9');
+  expect(e1.turn.text_so_far).toBe('The counter is 9.');
+  const sent = chats().slice(before);
+  expect(sent.map((r) => r.dialect)).toEqual([model.dialect, model.dialect, model.dialect]);
+  // The local server is offered the same tools, none strict.
+  const offered = offeredTools(sent[0]);
+  expect(offered.filter((o) => o.name.startsWith(`${PLUGIN}__`))).toEqual(TOOLS.map((name) => ({ name, strict: false })));
+  expect(offered.filter((o) => o.strict)).toEqual([]);
+  // The fake's log keeps the step each function returned, and what it read.
+  expect(sent[1].step).toEqual({ tools: [{ name: `${PLUGIN}__add`, input: { by: 6 } }] });
+  expect(sent[2].step).toEqual({ text: 'The counter is 9.' });
+  expect(resultsIn(sent[2])).toEqual([{ tool: `${PLUGIN}__add`, ok: true, text: 'The counter is 9.', data: { count: 9 }, images: [] }]);
+
+  // Two questions in one answer, each answered through the route: the app's dialog shows
+  // each and closes after the second; the next answerGate takes the question after the one it
+  // answered, even before the log shows that one closed.
+  fake.reply(
+    { tools: [{ name: `${PLUGIN}__reset`, input: {} }, { name: `${PLUGIN}__mystery`, input: {} }] },
+    (body) => ({ text: resultsIn(body).map((r) => `${r.tool}: ${r.ok ? 'ok' : r.error.code}`).join('; ') }),
+  );
+  const t2 = await startTurn(request, host.base, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
+  await expect(modal(page)).toBeVisible();
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  const first = await answerGate(request, host.base, t2, true, { kind: 'confirm', tool: `${PLUGIN}__reset` });
+  expect(first).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__reset`, yes: 'Allow', no: "Don't" });
+  const second = await answerGate(request, host.base, t2, false);
+  expect(second).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__mystery` });
+  await expect(modal(page)).toBeHidden();
+  const e2 = await t2.ended();
+  expect(e2.turn.state).toBe('done');
+  expect(ofType(e2.events, 'gate_closed').map((e) => [e.gate, e.answer, e.by])).toEqual([
+    [first.id, 'allow', 'user'],
+    [second.id, 'deny', 'user'],
+  ]);
+  await expect(w.frame.locator('#counter')).toHaveText('0');
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add', 'add', 'reset']);
+  expect(chats().at(-1).step).toEqual({ text: `${PLUGIN}__reset: ok; ${PLUGIN}__mystery: declined` });
 });

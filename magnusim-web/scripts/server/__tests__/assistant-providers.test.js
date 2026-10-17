@@ -271,6 +271,49 @@ describe('the adapters against the fake, in every dialect', () => {
     }
   });
 
+  it('fake self-test: a scripted step may be a function of the request, so it answers from an earlier result; one that fails is refused, never retried into the next step', async () => {
+    for (const provider of PROVIDERS) {
+      const seen = [];
+      fake.reply({ tools: [{ name: 'get_count', input: {} }] }, (body) => {
+        seen.push(body);
+        const count = Number(JSON.stringify(body).match(/The count is (\d+)\./)?.[1]);
+        return { tools: [{ name: 'add', input: { by: count * 2 } }] };
+      });
+      const first = [userText('double the counter')];
+      const r1 = await send(provider, request(provider, first));
+      const r2 = await send(provider, request(provider, [...first, r1.message, resultFor(r1, 'The count is 21.')]));
+      assert.deepEqual(r2.message.parts.filter((p) => p.type === 'tool_call').map((c) => [c.name, c.input]), [['add', { by: 42 }]], provider);
+      const req = lastChat(DIALECT[provider]);
+      assert.deepEqual(seen, [req.body], `${provider}: called once, with the request's body`);
+      assert.deepEqual(req.step, { tools: [{ name: 'add', input: { by: 42 } }] }, `${provider}: the log keeps the step it returned`);
+      assert.equal(req.refused, undefined, provider);
+    }
+    // A promise of a step is awaited.
+    fake.reply(async (body) => ({ text: `Asked: ${body.messages.at(-1).content}` }));
+    const r = await send('openai_compatible', request('openai_compatible', [userText('count them')]));
+    assert.equal(r.message.parts.map((p) => p.text).join(''), 'Asked: count them');
+    // A function that throws, rejects or returns no step: 400, refused by name; the next step
+    // stays queued for the next request.
+    const failing = [
+      [
+        'throws',
+        () => {
+          throw new Error('no count in the request');
+        },
+        /a scripted step failed: no count in the request/,
+      ],
+      ['rejects', async () => Promise.reject(new Error('nothing to read')), /a scripted step failed: nothing to read/],
+      ['returns nothing', () => undefined, /a scripted step returned no step/],
+    ];
+    for (const [what, fn, refusal] of failing) {
+      fake.reply(fn, { text: 'The next step.' });
+      await assert.rejects(send('anthropic', request('anthropic', [userText('x')])), (e) => e.code === 'bad_request', what);
+      assert.match(lastChat('anthropic').refused, refusal, what);
+      assert.equal(fake.pending(), 1, `${what}: only the failing step was taken`);
+      assert.equal((await send('anthropic', request('anthropic', [userText('y')]))).message.parts[0].text, 'The next step.', what);
+    }
+  });
+
   it('tool results with images reach each dialect as images', async () => {
     const img = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 1, height: 1 };
     for (const provider of PROVIDERS) {

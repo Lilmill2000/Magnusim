@@ -1,6 +1,10 @@
-// Helpers for the Assistant's browser tests: Settings → Assistant, its status, and a test
-// home's files. The specs run their own server (startHost) with the Assistant's test
-// switches they choose; nothing here touches this PC's real keys.
+// Helpers for the Assistant's browser tests: Settings → Assistant, its status, a test
+// home's files, and turns against the scripted model (support/fake-llm.mjs): pointing the
+// app at it, starting and following turns, the tab a page links as, what a request offered
+// and carried back, and answering the turn's questions. The core's specs and the bundled
+// plugins' suites share them, so a plugin's spec never names a provider. The specs run
+// their own server (startHost) with the Assistant's test switches they choose; nothing here
+// touches this PC's real keys.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -156,4 +160,183 @@ export function filesHolding(dir, needle, { skip = [] } = {}) {
   };
   walk(dir);
   return hits;
+}
+
+// ---------------------------------------------------------------- the scripted model and turns
+
+/** The scripted model's two settings: the first cloud dialect (with a test key) and the local server's. */
+const SCRIPTED = {
+  cloud: { provider: 'anthropic', model: 'claude-opus-5-5', dialect: 'anthropic', key: 'sk-ant-e2e-scripted-model-0123456789abcdef' },
+  local: { provider: 'openai_compatible', model: 'qwen3.8-27b', dialect: 'compat', key: null },
+};
+
+async function postOk(request, url, data) {
+  const r = await request.post(url, { data });
+  const j = await r.json().catch(() => ({}));
+  expect(r.status(), `${new URL(url).pathname}: ${JSON.stringify(j)}`).toBe(200);
+  return j;
+}
+
+/**
+ * Sets the Assistant of the server at `base` to the scripted model `fake`
+ * (support/fake-llm.mjs), with project data allowed to go to it, so a spec names no provider:
+ * - 'cloud': the first cloud dialect, with a test key. The server must run with
+ *   MAGNUSIM_TEST_ASSISTANT=1 and MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL=<fake.base> (checked
+ *   before any key is saved);
+ * - 'local': the local-server dialect at fake.compatBase (no key; nothing asks about privacy).
+ * The key is saved only when the status doesn't show it already (a spec may call this before
+ * every test). Resolves to {kind, model, dialect} once the Assistant is ready: `dialect` is
+ * what the fake's request log calls it (fake.requests()[i].dialect).
+ */
+export async function useScriptedModel(request, base, fake, kind = 'cloud') {
+  const m = SCRIPTED[kind];
+  if (!m) throw new Error(`useScriptedModel: 'cloud' or 'local', not ${JSON.stringify(kind)}`);
+  let status = await assistantStatus(request, base);
+  if (kind === 'cloud') {
+    expect(status.test_provider, 'the cloud providers go to the fake: start the server with MAGNUSIM_TEST_ASSISTANT=1 and MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL=<fake.base>').toBe(true);
+    status = await postOk(request, `${base}/api/assistant/settings`, { provider: m.provider, model: m.model, privacy: 'allow' });
+    const key = status.keys?.[m.provider];
+    if (!key?.set || key.last4 !== m.key.slice(-4)) status = await postOk(request, `${base}/api/assistant/key`, { provider: m.provider, key: m.key });
+  } else {
+    status = await postOk(request, `${base}/api/assistant/settings`, { provider: m.provider, base_url: fake.compatBase, model: m.model, privacy: 'allow' });
+  }
+  expect(status.ready, `the Assistant is ready for the scripted ${kind} model (${status.ready_reason})`).toBe(true);
+  return { kind, model: m.model, dialect: m.dialect };
+}
+
+/** The id of `page`'s event stream's tab, from its /api/events?tab= request ('' before one). */
+export function trackTab(page) {
+  let tab = '';
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === '/api/events' && u.searchParams.get('tab')) tab = u.searchParams.get('tab');
+  });
+  return () => tab;
+}
+
+/**
+ * Starts a turn on the server at `base` (POST /api/assistant/turns `body`: {text, tab?,
+ * conversation?, context?}; expects 202) and follows it (followTurn), with its
+ * `conversation` and, when the server gives one, the `answerKey` its questions take.
+ */
+export async function startTurn(request, base, body) {
+  const r = await request.post(`${base}/api/assistant/turns`, { data: body });
+  const j = await r.json();
+  expect(r.status(), JSON.stringify(j)).toBe(202);
+  const t = followTurn(request, base, j.turn);
+  t.conversation = j.conversation ?? null;
+  t.answerKey = j.answer_key ?? null;
+  return t;
+}
+
+/** Follows turn `id`'s event log through the long-poll (GET /api/assistant/turns/:id). */
+export function followTurn(request, base, id) {
+  const events = [];
+  let next = 0;
+  let summary = null;
+  let ended = false;
+  const pull = async (waitMs) => {
+    const r = await request.get(`${base}/api/assistant/turns/${id}?since=${next}&wait_ms=${Math.max(0, Math.floor(waitMs))}`, { timeout: 40_000 });
+    expect(r.status()).toBe(200);
+    const j = await r.json();
+    events.push(...j.events);
+    next = j.next;
+    summary = j.turn;
+    ended = j.ended;
+  };
+  return {
+    id,
+    events,
+    conversation: null,
+    answerKey: null,
+    /** The first event `pred` takes, within `ms`. */
+    async waitFor(pred, what, ms = 30_000) {
+      const until = Date.now() + ms;
+      for (;;) {
+        const hit = events.find(pred);
+        if (hit) return hit;
+        if (ended) throw new Error(`the turn ended before ${what}: ${JSON.stringify(events.slice(-8))}`);
+        if (Date.now() > until) throw new Error(`no ${what} within ${ms} ms: ${JSON.stringify(events.slice(-8))}`);
+        await pull(Math.min(5000, until - Date.now()));
+      }
+    },
+    /** The events so far (asked now, without waiting for more). */
+    async latest() {
+      if (!ended) await pull(0);
+      return events;
+    },
+    /** The turn's summary and events once it ended, within `ms`. */
+    async ended(ms = 30_000) {
+      const until = Date.now() + ms;
+      while (!ended) {
+        if (Date.now() > until) throw new Error(`the turn did not end within ${ms} ms: ${JSON.stringify(events.slice(-8))}`);
+        await pull(Math.min(5000, until - Date.now()));
+      }
+      return { turn: summary, events };
+    },
+  };
+}
+
+/** The questions answerGate answered, per followed turn (a later call never takes one again). */
+const answeredGates = new WeakMap();
+
+/**
+ * Answers the next question of turn `t` (from startTurn or followTurn) that nobody answered
+ * yet, as a click on its Allow (Send) or Don't would: POST /api/assistant/gates/:id
+ * {allow} (with the turn's answer key when the server gave one). `kind` ('confirm' |
+ * 'privacy') and `tool` (the tool's full name) narrow which question; waits up to `ms` for
+ * it. Resolves to the question as the turn's `gate` event shows it ({id, kind, tool?, title,
+ * copy, yes, no, ...}).
+ */
+export async function answerGate(request, base, t, allow, { kind, tool, ms = 30_000 } = {}) {
+  let mine = answeredGates.get(t);
+  if (!mine) answeredGates.set(t, (mine = new Set()));
+  const open = (e) =>
+    e.type === 'gate' &&
+    !mine.has(e.gate.id) &&
+    (!kind || e.gate.kind === kind) &&
+    (!tool || e.gate.tool === tool) &&
+    !t.events.some((c) => c.type === 'gate_closed' && c.gate === e.gate.id);
+  const { gate } = await t.waitFor(open, `a question to answer${kind ? ` (${kind})` : ''}${tool ? ` for ${tool}` : ''}`, ms);
+  mine.add(gate.id);
+  await postOk(request, `${base}/api/assistant/gates/${gate.id}`, { allow, ...(t.answerKey ? { answer_key: t.answerKey } : {}) });
+  return gate;
+}
+
+/** A fake.requests() entry's body, or `req` itself when it is a body (what a function step gets). */
+const bodyOf = (req) => (req && typeof req === 'object' && 'headers' in req && 'body' in req ? req.body : req);
+
+/**
+ * The tools a request to the fake offered, in order: [{name, strict}] (strict: sent as a
+ * strict tool). `req` is one of fake.requests() or a request body, in any dialect.
+ */
+export function offeredTools(req) {
+  const body = bodyOf(req);
+  return (Array.isArray(body?.tools) ? body.tools : []).map((t) => {
+    // The local server's dialect nests each tool in `function`.
+    const fn = t.function && typeof t.function === 'object' ? t.function : t;
+    return { name: fn.name, strict: fn.strict === true };
+  });
+}
+
+/**
+ * The tool results a request carries for the answer before it, in order: [{tool, ok, data?,
+ * text?, error?, images}] (each result's JSON, and the images sent with it). `req` is one of
+ * fake.requests() or a request body (what a function step gets), in the first cloud dialect
+ * or the local server's; the local dialect sends images apart from their results (one user
+ * message after them all), so `images` is [] there.
+ */
+export function resultsIn(req) {
+  const body = bodyOf(req);
+  if (!Array.isArray(body?.messages)) throw new Error('resultsIn reads the first cloud dialect and the local server dialect');
+  const messages = body.messages;
+  const lastAnswer = messages.map((m) => m.role).lastIndexOf('assistant');
+  const tools = messages.slice(lastAnswer + 1).filter((m) => m.role === 'tool');
+  if (tools.length) {
+    return tools.map((m) => ({ ...JSON.parse(typeof m.content === 'string' ? m.content : m.content.map((c) => c.text).join('')), images: [] }));
+  }
+  const user = [...messages].reverse().find((m) => m.role === 'user');
+  return (Array.isArray(user?.content) ? user.content : [])
+    .filter((b) => b.type === 'tool_result')
+    .map((b) => ({ ...JSON.parse(b.content[0].text), images: b.content.slice(1) }));
 }
