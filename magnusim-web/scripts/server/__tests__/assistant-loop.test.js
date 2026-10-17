@@ -652,6 +652,45 @@ describe('Stop', () => {
     checkInvariants(assert, t.conv, m.provider.requests);
   });
 
+  it('a tool that finishes within the 2 s grace after Stop: its result is the truth (the model is not told it may not have run); a finish after the grace is stopped', async () => {
+    for (const [ms, expected] of [
+      [100, { ok: true, text: 'The counter is 7 (finished).' }],
+      [1999, { ok: true, text: 'The counter is 7 (finished).' }],
+      [2001, { ok: false, error: { code: 'stopped', message: 'Stopped by the user while it ran; it may or may not have finished.' } }],
+    ]) {
+      const m = mk();
+      // It hears Stop as it finishes its work: its last answer comes `ms` later, done.
+      const finishing = hostTool('add', {
+        risk: 'edit',
+        stallMs: 60 * 60_000,
+        run: (_input, rt) =>
+          new Promise((resolve) => {
+            rt.signal.addEventListener('abort', () => m.clock.setTimeout(() => resolve({ ok: true, text: 'The counter is 7 (finished).', summary: 'Added 2' }), ms), { once: true });
+          }),
+      });
+      m.registry.addHostTool(finishing);
+      m.registry.addHostTool(hostTool('peek'));
+      m.provider.script({ tools: [{ name: 'add' }, { name: 'peek' }] }, { text: 'never' });
+      const { turn: t } = await startTurn(m, 'x');
+      await until(() => ofType(t, 'tool_call').length === 1);
+      const stopped = m.manager.stop(t.id);
+      await m.clock.advanceAsync(ms);
+      await stopped;
+      await settled(t);
+      assert.equal(t.state, 'stopped', `${ms} ms`);
+      const res = lastResults(t.conv);
+      assert.deepEqual({ ...res[0], id: null }, { id: null, tool: 'add', ...expected }, `${ms} ms`);
+      assert.deepEqual(codes(res).slice(1), ['stopped'], 'the later call never ran');
+      assert.deepEqual(
+        ofType(t, 'tool_result').map((e) => [e.ok, e.code ?? null]),
+        [expected.ok ? [true, null] : [false, 'stopped'], [false, 'stopped']],
+        `${ms} ms: the log says the same`,
+      );
+      assert.equal(m.provider.requests.length, 1);
+      checkInvariants(assert, t.conv, m.provider.requests);
+    }
+  });
+
   it('while a question is open: withdrawn (by stop), the call never runs, stopped', async () => {
     let ran = 0;
     const m = mk({ hostTools: [hostTool('zap', { risk: 'destructive', run: async () => ((ran += 1), { ok: true, summary: 'z' }) })] });
@@ -1087,6 +1126,22 @@ describe('untrusted text', () => {
     assert.equal(JSON.stringify(m.provider.requests[2].req.system), JSON.stringify(sys1));
     assert.deepEqual(ofType(b.turn, 'note').map((n) => n.text), [GUIDE_CHANGED_NOTE]);
     assert.deepEqual(ofType(c.turn, 'note').map((n) => n.text), [], 'noted once');
+  });
+
+  it('a workspace guide keeps its lines and tabs in the system block (as the bridge keeps them); other controls go', async () => {
+    const m = mk({ provider: 'openai_compatible', projects: { p1: WING } });
+    const bidi = String.fromCharCode(0x202e);
+    const bell = String.fromCharCode(7);
+    const guide = `Sketch rules:\r\n1. Pick a face first.\n2. Then call sketch_on_face${bidi}.\r\n\r\n| unit |\tmm |${bell}`;
+    m.registry.setWorkspace('T1', 'L1', { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [], guide });
+    assert.equal(m.registry.workspaceOf('T1').guide, 'Sketch rules:\n1. Pick a face first.\n2. Then call sketch_on_face .\n\n| unit |\tmm |');
+    m.provider.script({ text: 'a' });
+    const a = await startTurn(m, { text: 'x', tab: 'T1' });
+    await settled(a.turn);
+    assert.equal(
+      m.provider.requests[0].req.system[1].text,
+      'Notes from the Workspace demo workspace (installed plugin):\nSketch rules:\n1. Pick a face first.\n2. Then call sketch_on_face .\n\n| unit |\tmm |',
+    );
   });
 });
 

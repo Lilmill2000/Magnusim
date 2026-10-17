@@ -25,7 +25,7 @@
 import { createHash } from 'node:crypto';
 import { pluginEpoch as foamPluginEpoch } from '../../foam-runner.js';
 import { checkSchema } from './schema.ts';
-import { cleanText, hasControls, TEXT_CAPS } from './sanitize.ts';
+import { cleanGuide, cleanText, hasControls, TEXT_CAPS } from './sanitize.ts';
 import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts';
 
 export type ToolSource =
@@ -284,7 +284,7 @@ export class Registry implements ToolRegistry {
       }
     }
     tools.sort(byName);
-    this.tabs.set(tab, { tab, link, source, reg, epoch, tools, refused, guide: cleanText(reg.guide ?? '', GUIDE_MAX), connected: true });
+    this.tabs.set(tab, { tab, link, source, reg, epoch, tools, refused, guide: cleanGuide(reg.guide ?? '', GUIDE_MAX), connected: true });
     return { accepted: tools.map((t) => t.localName), refused };
   }
 

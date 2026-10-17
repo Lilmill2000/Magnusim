@@ -303,6 +303,49 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(pageOutcome({ ok: true }), { ok: true, summary: 'Done' });
   });
 
+  it('an image the model can’t take (over 2000 px a side) fails the call too_large, with why, in the log and for the model; one it can goes with its size', async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    /** A PNG's signature and IHDR: all checkImage reads. */
+    const png = (w, h) => {
+      const b = Buffer.alloc(33);
+      Buffer.from('89504e470d0a1a0a', 'hex').copy(b, 0);
+      b.writeUInt32BE(13, 8);
+      b.write('IHDR', 12, 'ascii');
+      b.writeUInt32BE(w, 16);
+      b.writeUInt32BE(h, 20);
+      return b.toString('base64');
+    };
+    m.provider.script({ tools: [{ name: 'ai-demo__get_count', input: {} }] }, { tools: [{ name: 'ai-demo__get_count', input: {} }] }, { text: 'Done.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Picture the counter', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    // A 1920-px canvas at 125 %: well under 1.5 MB, but too wide to send.
+    const wide = await page.frame('invoke', 0);
+    await s.progress(link, wide.call, { ack: true });
+    await s.result(link, wide.call, { ok: true, result: { text: 'Here is the view.', images: [{ mediaType: 'image/png', data: png(2400, 1350) }] } });
+    const fine = await page.frame('invoke', 1);
+    await s.progress(link, fine.call, { ack: true });
+    await s.result(link, fine.call, { ok: true, result: { text: 'Here is the view.', images: [{ mediaType: 'image/png', data: png(64, 48) }] } });
+    await settled(t);
+    assert.equal(t.state, 'done');
+    const WHY = "The tool's result is too large (image 1 of 1): The image is 2400×1350 px; at most 2000 px a side can be sent.";
+    assert.deepEqual(
+      eventsOf(t)
+        .filter((e) => e.type === 'tool_result')
+        .map((e) => [e.ok, e.code ?? null, e.summary]),
+      [
+        [false, 'too_large', WHY],
+        [true, null, 'Done (1 image)'],
+      ],
+    );
+    const partOf = (n) => m.provider.requests[n].req.messages.at(-1).parts.find((p) => p.type === 'tool_result');
+    assert.deepEqual(JSON.parse(partOf(1).text), { tool: 'ai-demo__get_count', ok: false, error: { code: 'too_large', message: WHY } });
+    assert.deepEqual(partOf(1).images, []);
+    assert.deepEqual(JSON.parse(partOf(2).text), { tool: 'ai-demo__get_count', ok: true, text: 'Here is the view.' });
+    assert.deepEqual(partOf(2).images, [{ type: 'image', mediaType: 'image/png', base64: png(64, 48), width: 64, height: 48 }]);
+  });
+
   it('a stream dropped mid-call fails it at once (tab_disconnected), before any later event; the registration goes dormant', async () => {
     const { m, s } = await setup();
     const { page, link } = await linkedPage(s);

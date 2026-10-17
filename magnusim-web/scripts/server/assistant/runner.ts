@@ -15,17 +15,20 @@
  *    shows every field the call sent, in the schema's order, each cut on its own and marked.
  * 6. The tool runs with its stall window (reset by progress); Stop and the turn's
  *    minutes cap abort it through the call's signal (`stopped`, `capped`). An aborted tool
- *    has ABORT_GRACE_MS for its last answer; then the runner stops waiting and says so on
- *    the call's `released` signal (the relay frees the tab before the next call can start).
- * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts).
+ *    has ABORT_GRACE_MS for its last answer: a result that finished (ok) is its result, as
+ *    the page's bridge keeps it (the tool did its work); anything else is the abort, "may or
+ *    may not have finished". Then the runner stops waiting and says so on the call's
+ *    `released` signal (the relay frees the tab before the next call can start).
+ * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
+ *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
  */
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import type { ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
-import { capResult, checkImage, cleanText, TEXT_CAPS } from './sanitize.ts';
+import { capResult, checkImages, cleanText, TEXT_CAPS } from './sanitize.ts';
 import { stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
-import type { ImagePart, Risk, ToolCallPart, ToolResultPart } from './types.ts';
+import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
 
 export type RunnerEvent =
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
@@ -236,17 +239,6 @@ export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: 
   };
 }
 
-function checkedImages(list: ImagePart[] | undefined): ImagePart[] {
-  const out: ImagePart[] = [];
-  for (const img of Array.isArray(list) ? list : []) {
-    if (out.length >= 4) break;
-    if (!img || typeof img.base64 !== 'string') continue;
-    const c = checkImage(Buffer.from(img.base64, 'base64'));
-    if (c.ok) out.push({ type: 'image', mediaType: c.mediaType, base64: img.base64, width: c.width, height: c.height });
-  }
-  return out;
-}
-
 export interface ToolRunnerOptions {
   gates: GateBroker;
   /** The plugin-epoch fence (Registry.fenced). */
@@ -357,7 +349,6 @@ export class ToolRunner {
     };
 
     let outcome: ToolOutcome | null = null;
-    let lateOrNone = false;
     let graceTimer: unknown = null;
     let onAbort: (() => void) | null = null;
     const released = new AbortController();
@@ -365,11 +356,9 @@ export class ToolRunner {
       .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? null, progress, released: released.signal }))
       .then(
         (out): ToolOutcome | null => {
-          if (signal.aborted) lateOrNone = true;
           return out && typeof out === 'object' ? out : { ok: false, error: { code: 'bad_result', message: 'The tool gave no result.' }, summary: 'No result' };
         },
         (err: unknown): ToolOutcome => {
-          if (signal.aborted) lateOrNone = true;
           alog('warn', 'a tool threw', { tool: def.name, error: redact(err instanceof Error ? err.message : String(err)).slice(0, 300) });
           return { ok: false, error: { code: 'failed', message: 'The tool failed with an unexpected error.' }, summary: 'Failed' };
         },
@@ -392,7 +381,10 @@ export class ToolRunner {
       clock.clearTimeout(graceTimer);
       if (onAbort) signal.removeEventListener('abort', onAbort);
     }
-    if (!outcome || lateOrNone || signal.aborted) {
+    // Aborted: only a result that finished counts (its last answer within the grace, as the
+    // page's bridge keeps it: the tool did its work, and the model must not do it again);
+    // no answer, or any other one, is the abort ("may or may not have finished").
+    if (!outcome || (signal.aborted && !outcome.ok)) {
       return this.abortedResult(call, stall.signal.aborted && !o.signal.aborted ? stall.signal : o.signal, true);
     }
     const summary = cleanText(outcome.summary || (outcome.ok ? 'Done' : outcome.error?.message || 'Failed'), PREVIEW);
@@ -402,7 +394,11 @@ export class ToolRunner {
       const r = errorResult(call, code, e.message || 'The tool failed.', e.hint ? cleanText(e.hint, TEXT_CAPS.other) : undefined);
       return { ...r, summary };
     }
-    const part = capResult(call.callId, call.name, { ok: true, data: outcome.data, text: outcome.text }, checkedImages(outcome.images));
+    // An image the model can't be sent fails the call with why, as the bridge's caps do: dropped
+    // quietly, the model would get the result without it while the log counts it.
+    const images = checkImages(outcome.images);
+    if (!images.ok) return errorResult(call, images.code, images.message);
+    const part = capResult(call.callId, call.name, { ok: true, data: outcome.data, text: outcome.text }, images.images);
     return { part, ok: true, code: null, summary };
   }
 }

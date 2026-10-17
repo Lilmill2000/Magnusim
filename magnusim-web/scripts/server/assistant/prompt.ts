@@ -4,14 +4,15 @@
  * - SYSTEM_PROMPT: fixed, vendor-neutral, the first system block (cached).
  * - guideBlock: the open workspace's fixed notes, frozen into a conversation the first
  *   time it meets them, as the second system block. A plugin is installed code the user
- *   trusts; its guide is fixed text (no project data), cleaned and capped, and a guide
- *   that changes later never reaches a conversation that froze another one.
+ *   trusts; its guide is fixed text (no project data), cleaned and capped with its lines
+ *   kept (sanitize.ts cleanGuide), and a guide that changes later never reaches a
+ *   conversation that froze another one.
  * - contextBlock: where the person is (Home or a project, the study, the workspace), as
  *   the second text part of the turn's user message, marked as data. It is built only
  *   once privacy allows the turn, and every name in it is cleaned (it may come from the
  *   user's files).
  */
-import { cleanText, sanitizeJson, TEXT_CAPS } from './sanitize.ts';
+import { cleanGuide, cleanText, sanitizeJson, TEXT_CAPS } from './sanitize.ts';
 
 export const SYSTEM_PROMPT = [
   'You are the Magnusim Assistant, working inside Magnusim, a CFD and CAD app, for the person at this PC. You act only through the tools you are given; never claim an action no tool result confirms.',
@@ -28,7 +29,7 @@ export const GUIDE_MAX = 4000;
 /** The second system block: a workspace's fixed notes. */
 export function guideBlock(text: string, pluginName: string): string {
   const name = cleanText(pluginName, TEXT_CAPS.name) || 'open';
-  return `Notes from the ${name} workspace (installed plugin):\n${cleanText(text, GUIDE_MAX)}`;
+  return `Notes from the ${name} workspace (installed plugin):\n${cleanGuide(text, GUIDE_MAX)}`;
 }
 
 export interface TurnContext {

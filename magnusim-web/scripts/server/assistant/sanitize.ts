@@ -1,16 +1,21 @@
 /**
  * Untrusted text and data on their way to the model (Foundation spec 6.8).
  *
- * Tool results, workspace descriptions and anything a plugin or a project file supplies
- * are data, never instructions: they reach the model only inside a tool result, as JSON
- * text, cleaned and capped here.
+ * Tool results, and anything a plugin or a project file supplies in them, are data, never
+ * instructions: they reach the model only inside a tool result, as JSON text, cleaned and
+ * capped here. A workspace's tool descriptions and its guide are the plugin's own text
+ * (the tool definitions, the model's instructions), cleaned here too.
  *
  * - cleanText: no C0/C1 controls, DEL, line or paragraph separators, or bidi controls
  *   (the same set as the bridge's DIRTY_MESSAGE_CONTROLS, src/workspace/bridge.ts), one
  *   space between words, capped (names 200, descriptions 1024, other text 2000).
+ * - cleanGuide: a workspace's guide keeps its lines and tabs, as the bridge keeps them
+ *   (src/workspace/bridge.ts checkAssistantTools); every other such character is a space.
  * - sanitizeJson: plain JSON only, depth ≤ 8, ≤ 200 keys per object, ≤ 200 items per
  *   list, ≤ 32 KB in all; anything cut is marked `truncated`.
- * - checkImage: PNG, JPEG or WebP by their first bytes, ≤ 1.5 MB, ≤ 2000 px a side.
+ * - checkImage: PNG, JPEG or WebP by their first bytes, ≤ 1.5 MB, ≤ 2000 px a side;
+ *   checkImages: a result's images, ≤ 4: one that fails makes the call fail with why
+ *   (`too_large` or `bad_result`), never dropped quietly.
  */
 import type { ImagePart, ToolResultPart } from './types.ts';
 
@@ -37,6 +42,22 @@ function cut(s: string, max: number): string {
 export function cleanText(raw: unknown, max: number = TEXT_CAPS.other): string {
   const text = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);
   return cut(text.replace(CONTROLS, ' ').replace(/\s+/g, ' ').trim(), max);
+}
+
+/**
+ * A workspace's guide as the model gets it: its line breaks (CR LF and CR as LF) and tabs
+ * kept, as the page's bridge keeps them, so a numbered procedure or a table stays one; every
+ * other control, separator or bidi mark a space; at most `max` characters.
+ */
+export function cleanGuide(raw: unknown, max: number): string {
+  const text = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);
+  return cut(
+    text
+      .replace(/\r\n?/g, '\n')
+      .replace(CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ' '))
+      .trim(),
+    max,
+  );
 }
 
 interface Budget {
@@ -191,7 +212,7 @@ export function resultText(tool: string, r: ResultBody): string {
 
 export type ImageCheck =
   | { ok: true; mediaType: ImagePart['mediaType']; width: number; height: number }
-  | { ok: false; error: string };
+  | { ok: false; code: 'too_large' | 'bad_result'; error: string };
 
 function pngSize(b: Buffer): { width: number; height: number } | null {
   if (b.length < 24 || b.readUInt32BE(12) !== 0x49484452) return null; // IHDR
@@ -233,7 +254,7 @@ function webpSize(b: Buffer): { width: number; height: number } | null {
 /** Whether `bytes` are an image the model may be sent, and what kind and size. */
 export function checkImage(bytes: Buffer | Uint8Array): ImageCheck {
   const b = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (b.length > IMAGE_CAPS.bytes) return { ok: false, error: `The image is larger than ${IMAGE_CAPS.bytes / (1024 * 1024)} MB.` };
+  if (b.length > IMAGE_CAPS.bytes) return { ok: false, code: 'too_large', error: `The image is larger than ${IMAGE_CAPS.bytes / (1024 * 1024)} MB.` };
   let mediaType: ImagePart['mediaType'] | null = null;
   let size: { width: number; height: number } | null = null;
   if (b.length >= 8 && b.readUInt32BE(0) === 0x89504e47 && b.readUInt32BE(4) === 0x0d0a1a0a) {
@@ -246,12 +267,40 @@ export function checkImage(bytes: Buffer | Uint8Array): ImageCheck {
     mediaType = 'image/webp';
     size = webpSize(b);
   }
-  if (!mediaType) return { ok: false, error: 'Only PNG, JPEG and WebP images can be sent.' };
-  if (!size || !size.width || !size.height) return { ok: false, error: 'The image could not be read.' };
+  if (!mediaType) return { ok: false, code: 'bad_result', error: 'Only PNG, JPEG and WebP images can be sent.' };
+  if (!size || !size.width || !size.height) return { ok: false, code: 'bad_result', error: 'The image could not be read.' };
   if (size.width > IMAGE_CAPS.side || size.height > IMAGE_CAPS.side) {
-    return { ok: false, error: `The image is ${size.width}×${size.height} px; at most ${IMAGE_CAPS.side} px a side can be sent.` };
+    return { ok: false, code: 'too_large', error: `The image is ${size.width}×${size.height} px; at most ${IMAGE_CAPS.side} px a side can be sent.` };
   }
   return { ok: true, mediaType, ...size };
+}
+
+/**
+ * A tool result's images as the model gets them, each checked (checkImage) and given its true
+ * type and size; or why the call fails instead: `too_large` (more than 4, or one over 1.5 MB or
+ * 2000 px a side) or `bad_result` (not a PNG, JPEG or WebP the app can read). An image is never
+ * dropped quietly: the model would get a result without it, and the turn's log would still
+ * count it.
+ */
+export function checkImages(
+  list: readonly unknown[] | undefined,
+): { ok: true; images: ImagePart[] } | { ok: false; code: 'too_large' | 'bad_result'; message: string } {
+  const all = Array.isArray(list) ? list : [];
+  if (all.length > IMAGE_CAPS.perResult) {
+    return { ok: false, code: 'too_large', message: `The tool's result is too large: it has more than ${IMAGE_CAPS.perResult} images.` };
+  }
+  const images: ImagePart[] = [];
+  for (const [i, img] of all.entries()) {
+    const raw = img && typeof img === 'object' ? (img as { base64?: unknown }).base64 : undefined;
+    const base64 = typeof raw === 'string' ? raw : '';
+    const c: ImageCheck = typeof raw === 'string' ? checkImage(Buffer.from(base64, 'base64')) : { ok: false, code: 'bad_result', error: 'It is not an image.' };
+    if (!c.ok) {
+      const what = c.code === 'too_large' ? "The tool's result is too large" : "The tool's result was refused";
+      return { ok: false, code: c.code, message: `${what} (image ${i + 1} of ${all.length}): ${c.error}` };
+    }
+    images.push({ type: 'image', mediaType: c.mediaType, base64, width: c.width, height: c.height });
+  }
+  return { ok: true, images };
 }
 
 /** A tool result part for the next user message (text as resultText, images already checked). */

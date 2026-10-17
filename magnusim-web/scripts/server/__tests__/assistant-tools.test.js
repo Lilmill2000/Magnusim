@@ -18,7 +18,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 
 const { createHostCaller, HOST_GET_ALLOWLIST, HostCallError } = await import('../assistant/host-call.ts');
 const { createHostTools, defaultHostTools, appVersion } = await import('../assistant/host-tools.ts');
-const { cleanText, sanitizeJson, resultText, checkImage, capResult, JSON_CAPS } = await import('../assistant/sanitize.ts');
+const { cleanText, sanitizeJson, resultText, checkImage, checkImages, capResult, JSON_CAPS } = await import('../assistant/sanitize.ts');
 const { TURN_HEADER } = await import('../assistant/access.ts');
 const { Router, dispatch } = await import('../router.ts');
 const { sendJson } = await import('../http.ts');
@@ -417,5 +417,23 @@ describe('untrusted text, data and images', () => {
     assert.match(checkImage(Buffer.from('GIF89a......')).error, /Only PNG, JPEG and WebP/);
     assert.match(checkImage(Buffer.concat([png(10, 10), Buffer.alloc(1.6 * 1024 * 1024)])).error, /larger than 1.5 MB/);
     assert.match(checkImage(png(0, 10)).error, /could not be read/);
+  });
+
+  it('checkImages: each image checked and given its true type and size; one that fails fails the call with why, never dropped', () => {
+    const part = (b) => ({ type: 'image', mediaType: 'image/jpeg', base64: b.toString('base64'), width: 0, height: 0 });
+    assert.deepEqual(checkImages([part(png(64, 48))]), { ok: true, images: [{ type: 'image', mediaType: 'image/png', base64: png(64, 48).toString('base64'), width: 64, height: 48 }] });
+    assert.deepEqual(checkImages(undefined), { ok: true, images: [] });
+    assert.deepEqual(checkImages([part(png(8, 8)), part(png(2001, 8))]), {
+      ok: false,
+      code: 'too_large',
+      message: "The tool's result is too large (image 2 of 2): The image is 2001×8 px; at most 2000 px a side can be sent.",
+    });
+    assert.deepEqual(checkImages(Array.from({ length: 5 }, () => part(png(8, 8)))), { ok: false, code: 'too_large', message: "The tool's result is too large: it has more than 4 images." });
+    assert.deepEqual(checkImages([part(Buffer.from('GIF89a......'))]), {
+      ok: false,
+      code: 'bad_result',
+      message: "The tool's result was refused (image 1 of 1): Only PNG, JPEG and WebP images can be sent.",
+    });
+    assert.deepEqual(checkImages([{ type: 'image' }]), { ok: false, code: 'bad_result', message: "The tool's result was refused (image 1 of 1): It is not an image." });
   });
 });
