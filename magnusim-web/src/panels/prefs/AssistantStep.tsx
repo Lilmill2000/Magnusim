@@ -3,7 +3,8 @@
  * effort, a connection Test, privacy, limits and today's spend. Every change saves at once,
  * and every save answers with the whole status (src/assistant/status.ts). Leaving the step
  * saves a key pasted but not saved, and waits for the changes on their way (stepChange):
- * a refused one keeps the step on screen with its reason.
+ * a refused one keeps the step on screen with its reason, and a key saved with a warning
+ * keeps it with the warning.
  *
  * The key is write-only. Its field is uncontrolled, outside any form, with no name or id
  * hint and the password managers' ignore attributes; its value is read through a ref and
@@ -487,7 +488,10 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
   const what = token ? 'token' : 'key';
   const label = token ? 'Server token' : `${CLOUD_LABEL[slot as 'anthropic' | 'openai']} API key`;
 
-  /** Saves what the field holds: false when there is nothing or it was refused. */
+  /**
+   * Saves what the field holds: false when there is nothing, it was refused, or it was saved
+   * with a warning (a leave waiting for it keeps the step, so the warning is read).
+   */
   const save = async (): Promise<boolean> => {
     const el = input.current;
     if (!el || busy) return true;
@@ -503,9 +507,13 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
     setBusy('save');
     const r = await writeStatus('/api/assistant/key', { provider: slot, key: value });
     setBusy('');
-    if (!r.ok) setError(r.error.message);
-    else if (typeof r.body.warning === 'string') setWarning(r.body.warning);
-    return r.ok;
+    if (!r.ok) {
+      setError(r.error.message);
+      return false;
+    }
+    if (typeof r.body.warning !== 'string') return true;
+    setWarning(r.body.warning);
+    return false;
   };
   // A key pasted but not saved is saved when the step is left (as Save would), not dropped.
   const latestSave = useRef(save);

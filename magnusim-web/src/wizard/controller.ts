@@ -97,8 +97,9 @@ function mountAssistant(on) {
 /**
  * Runs `go` (another step, or closing the wizard) once the shown step may be left. The
  * Assistant step first sends what its fields hold (a pasted key) and waits for its changes
- * on their way (assistant/status.ts settleStep): a refused one keeps the step on screen with
- * its reason, and the next press leaves. Any other step is left at once.
+ * on their way (assistant/status.ts settleStep): a refused one, or a key saved with a warning,
+ * keeps the step on screen with what it said, and the next press leaves. Any other step is
+ * left at once.
  */
 function leave(go) {
   if (wizard.step !== WIZ_ASSISTANT_STEP || !assistantMounted) return go();

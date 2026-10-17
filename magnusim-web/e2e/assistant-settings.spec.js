@@ -3,7 +3,8 @@
 // reaches the provider only in its own header, a cloud Test and the spend it adds, an
 // endpoint outside this PC that asks first, privacy and limits that save at once, the
 // remote view, a key save that outlives the step that sent it, leaving the step (a pasted
-// key saved, a change on its way waited for, a Test nobody waits for stopped), and an
+// key saved, its warning kept on screen, a change on its way waited for, a Test nobody
+// waits for stopped), and an
 // address on another computer worded as such. Its own server with
 // the Assistant's test switches (a test home, never this PC's keys): both cloud providers
 // go to a scripted fake provider in this process (support/fake-llm.mjs), and the local
@@ -599,6 +600,35 @@ test('Next saves a key pasted but not saved, and waits for a change on its way: 
   await expect(plugins).toBeVisible();
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
   expect((await assistantStatus(request, host.base)).caps.steps).toBe(50);
+});
+
+test("Next with a key that isn't the provider's kind: saved, the step stays with the warning, and Next again goes on", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  // Another provider's kind of key under Anthropic: the server saves it and says so.
+  const key = `sk-proj-e2e${randomBytes(8).toString('hex')}9999`;
+  await page.goto(`${host.base}/#/`);
+  const pane = await openAssistantStep(page);
+  await chooseProvider(page, 'anthropic');
+  const plugins = page.locator('#setup-wizard .wiz-pane[data-wiz-key="plugins"]');
+
+  await pane.locator('[data-assistant-key-input]').fill(key);
+  const saved = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/key');
+  await page.locator('#wiz-next').click();
+  expect((await saved).status()).toBe(200);
+  // The step stays, the warning under the key field, and the key is saved.
+  await expect(pane.locator('[data-assistant-key-warning]')).toHaveText(
+    "This doesn't look like an Anthropic key (they start with sk-ant-). It was saved anyway.",
+  );
+  await expect(pane.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …9999');
+  await expect(pane).toBeVisible();
+  await expect(plugins).toBeHidden();
+  expect((await assistantStatus(request, host.base)).keys.anthropic).toMatchObject({ set: true, last4: '9999' });
+  expect(await page.content()).not.toContain(key);
+
+  // Read, and Next pressed again: the wizard goes on.
+  await page.locator('#wiz-next').click();
+  await expect(plugins).toBeVisible();
+  await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
 });
 
 test('a Test nobody waits for stops: left during a slow Test, the step can test again at once', async ({ page, request }) => {

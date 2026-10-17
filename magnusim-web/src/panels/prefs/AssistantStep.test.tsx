@@ -801,6 +801,36 @@ describe('AssistantStep leaving the step', () => {
     expect(settleStep()).toBe(true);
   });
 
+  it('a key saved with a warning keeps the step with the warning (sent by the leave, or a Save on its way), and the next leave goes', async () => {
+    await ready({ provider: 'anthropic' });
+    const input = q<HTMLInputElement>('[data-assistant-key-input]')!;
+    // Pasted, not saved: the leave sends it, the server saves it and warns.
+    input.value = 'sk-proj-thisisanopenaikey00009999';
+    const settled = settleStep();
+    expect(settled).not.toBe(true);
+    expect(await settled).toBe(false);
+    await waitFor(() => expect(q('[data-assistant-key-warning]')).toHaveTextContent("This doesn't look like an Anthropic key."));
+    expect(q('[data-assistant-key-status]')).toHaveTextContent('Key set, ends in …9999');
+    expect(posts('/api/assistant/key')).toHaveLength(1);
+    // Pressed again: the warning is on screen and nothing is on its way.
+    expect(settleStep()).toBe(true);
+    expect(q('[data-assistant-key-warning]')).toHaveTextContent("This doesn't look like an Anthropic key.");
+
+    // Save pressed, and the leave asks while it is on its way.
+    holdKey = {};
+    input.value = 'sk-proj-anotheropenaikey00008888';
+    fireEvent.click(q('[data-assistant-key-save]')!);
+    const again = settleStep();
+    expect(again).not.toBe(true);
+    await waitFor(() => expect(holdKey!.release).toBeTypeOf('function'));
+    act(() => holdKey!.release!());
+    expect(await again).toBe(false);
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('Key set, ends in …8888'));
+    expect(q('[data-assistant-key-warning]')).toHaveTextContent("This doesn't look like an Anthropic key.");
+    expect(posts('/api/assistant/key')).toHaveLength(2);
+    expect(settleStep()).toBe(true);
+  });
+
   it('a server on another computer: the leave waits for the question and the save its answer makes', async () => {
     await ready({ provider: 'openai_compatible' });
     let answer!: (yes: boolean) => void;

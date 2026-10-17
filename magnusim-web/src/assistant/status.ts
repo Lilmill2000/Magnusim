@@ -142,10 +142,11 @@ export async function writeStatus(path: string, body: unknown): Promise<WriteRes
 // ---------------------------------------------------------------- leaving the step
 
 /**
- * The step's changes on their way (each true once saved, false when refused) and the fields
- * holding what they haven't sent (a pasted key). The wizard settles the step before it
- * leaves it (src/wizard/controller.ts): what a field holds is sent and every change waited
- * for, so a refusal shows under its field instead of reaching a step that is gone.
+ * The step's changes on their way (each true once saved, false when refused or saved with a
+ * warning) and the fields holding what they haven't sent (a pasted key). The wizard settles
+ * the step before it leaves it (src/wizard/controller.ts): what a field holds is sent and
+ * every change waited for, so a refusal or a warning shows under its field instead of
+ * reaching a step that is gone.
  */
 const changes = new Set<Promise<boolean>>();
 const holders = new Set<() => void>();
