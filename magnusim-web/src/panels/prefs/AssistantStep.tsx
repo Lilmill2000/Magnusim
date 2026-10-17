@@ -1,7 +1,9 @@
 /**
  * Settings → Assistant (Foundation spec 4.3): the provider, its endpoint, key and model,
  * effort, a connection Test, privacy, limits and today's spend. Every change saves at once,
- * and every save answers with the whole status (src/assistant/status.ts).
+ * and every save answers with the whole status (src/assistant/status.ts). Leaving the step
+ * saves a key pasted but not saved, and waits for the changes on their way (stepChange):
+ * a refused one keeps the step on screen with its reason.
  *
  * The key is write-only. Its field is uncontrolled, outside any form, with no name or id
  * hint and the password managers' ignore attributes; its value is read through a ref and
@@ -15,7 +17,7 @@
  */
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { AssistantApiError, assistantGet, assistantPost, REMOTE_TEXT } from '../../assistant/api';
-import { refreshStatus, retryStatus, useAssistantStatus, writeStatus } from '../../assistant/status';
+import { refreshStatus, retryStatus, stepChange, stepHolder, useAssistantStatus, writeStatus } from '../../assistant/status';
 import type {
   AssistantStatus,
   Caps,
@@ -65,13 +67,15 @@ const PRIVACY: ReadonlyArray<{ id: PrivacyMode; label: string }> = [
 export const DEPS_TEXT = "The Assistant's packages aren't installed. Run Setup.bat again.";
 export const UNKNOWN_PRICE_TEXT = "Magnusim doesn't know this model's price; the spend meter counts it at this provider's highest.";
 export const LOCAL_PRICE_TEXT = 'No cost (runs on this PC).';
-const OWN_SERVER_PRICE_TEXT = 'No cost (runs on your own server).';
+/** A local-server address that isn't on this PC: it may be a paid service Magnusim can't price. */
+export const SERVER_PRICE_TEXT = "Magnusim doesn't know what this server charges, and today's spend doesn't count it.";
 export const FALLBACK_TEXT =
   "If the model declines a request, the provider may retry it on an older model of its own, at that model's price.";
 export const LIMITS_TEXT = 'Limits are checked before each step; one step can go a little over.';
 export const SHARED_PC_TEXT =
   "Anyone signed in to this PC can use the Assistant through Magnusim (they can't see your key); these limits apply to them too.";
 export const LOCAL_LIMITS_TEXT = 'Local servers cost nothing; the step and time limits still apply.';
+export const SERVER_LIMITS_TEXT = "Magnusim can't price a server that isn't on this PC, so the $ limits don't apply to it; the step and time limits do.";
 export const LOCAL_PRIVACY_TEXT = 'On this PC: project data stays here.';
 const OLLAMA_HINT_TEXT =
   "Ollama gives a model a 4K context unless told otherwise, which can silently cut off the tools Magnusim sends. Give the model a larger context (num_ctx in its Modelfile).";
@@ -104,6 +108,24 @@ function testKey(status: AssistantStatus, provider: ProviderId): string {
   const k = status.keys?.[provider];
   const key = k?.set ? `set:${k.set_at ?? ''}` : 'none';
   return `test:${provider}:${status.models?.[provider] ?? ''}:${where}:${key}`;
+}
+
+/** The local-server choice's line when its saved address is on another computer. */
+function offPcServerCopy(baseUrl: string): string {
+  return `Your server at ${hostOf(baseUrl)}, not on this PC. Project data you ask about goes there.`;
+}
+
+/** A provider choice's line; the local server's says where its saved address is. */
+function providerCopy(p: (typeof PROVIDERS)[number], status: AssistantStatus): string | undefined {
+  if (p.id === 'openai_compatible' && status.base_url_is_local === false) return offPcServerCopy(status.base_url);
+  return p.copy;
+}
+
+/** A $ limit as saved: dollars and cents, or every digit when cents don't hold it (0.125). */
+function capText(saved: number, isMoney: boolean): string {
+  if (!isMoney) return String(saved);
+  const cents = saved.toFixed(2);
+  return Number(cents) === saved ? cents : String(saved);
 }
 
 /** A price: $0.42, or $0.125 when cents are not enough. */
@@ -150,7 +172,7 @@ export function keyLine(k: KeyStatus, storage: StorageStatus | undefined, token:
 /** The model's price line, or null when there is nothing honest to say. */
 export function priceLine(s: AssistantStatus): string | null {
   if (s.provider === 'off') return null;
-  if (s.provider === 'openai_compatible') return s.base_url_is_local ? LOCAL_PRICE_TEXT : OWN_SERVER_PRICE_TEXT;
+  if (s.provider === 'openai_compatible') return s.base_url_is_local ? LOCAL_PRICE_TEXT : SERVER_PRICE_TEXT;
   const p = s.price;
   if (!p) return null;
   if (p.known === false || p.estimated === true) return UNKNOWN_PRICE_TEXT;
@@ -222,6 +244,22 @@ function blurOnEnter(e: KeyboardEvent<HTMLInputElement>): void {
   }
 }
 
+/**
+ * Focus after one of the app's questions (its dialog doesn't give focus back): where it was
+ * when the question opened, else the first of `fallbacks` still shown, so a keyboard user
+ * stays in the step.
+ */
+function refocus(before: Element | null, ...fallbacks: Array<HTMLElement | null | undefined>): void {
+  const shown = (el: Element | null | undefined): el is HTMLElement =>
+    el instanceof HTMLElement && el !== document.body && el.isConnected && !el.closest('[hidden]') && !(el as HTMLButtonElement).disabled;
+  [before, ...fallbacks].find(shown)?.focus();
+}
+
+/** A field's error line, for its aria-describedby. */
+function described(error: string, id: string): { 'aria-invalid'?: true; 'aria-describedby'?: string } {
+  return error ? { 'aria-invalid': true, 'aria-describedby': id } : {};
+}
+
 export function AssistantStep(_props: Partial<IslandProps>) {
   const snap = useAssistantStatus();
   useEffect(() => {
@@ -282,10 +320,10 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
   );
 }
 
-function ErrorLine({ text, hook }: { text: string; hook: Record<string, string> }) {
+function ErrorLine({ text, hook, id }: { text: string; hook: Record<string, string>; id?: string }) {
   if (!text) return null;
   return (
-    <p className="wiz-assistant-error" role="alert" {...hook}>
+    <p id={id} className="wiz-assistant-error" role="alert" {...hook}>
       {text}
     </p>
   );
@@ -298,12 +336,13 @@ function ProviderBlock({ status }: { status: AssistantStatus }) {
   const [error, setError] = useState('');
   // The choice shows at once; the saved one (data-assistant-provider) once the server has it.
   const [pending, setPending] = useState<ProviderChoice | null>(null);
-  const choose = async (id: ProviderChoice) => {
+  const choose = async (id: ProviderChoice): Promise<boolean> => {
     setError('');
     setPending(id);
     const r = await writeStatus(SETTINGS, { provider: id });
     setPending(null);
     if (!r.ok) setError(r.error.message);
+    return r.ok;
   };
   const shown = pending ?? status.provider;
   return (
@@ -311,12 +350,13 @@ function ProviderBlock({ status }: { status: AssistantStatus }) {
       <div className="wiz-assistant-options" role="radiogroup" aria-label="Assistant provider" data-assistant-provider={status.provider}>
         {PROVIDERS.map((p) => {
           const on = p.id === shown;
+          const copy = providerCopy(p, status);
           return (
             <label key={p.id} className={`wiz-assistant-option${on ? ' is-selected' : ''}`} data-assistant-provider-option={p.id}>
-              <input type="radio" name={name} value={p.id} checked={on} onChange={() => void choose(p.id)} />
+              <input type="radio" name={name} value={p.id} checked={on} onChange={() => void stepChange(choose(p.id))} />
               <span className="wiz-assistant-option-copy">
                 <strong>{p.title}</strong>
-                {p.copy ? <span>{p.copy}</span> : null}
+                {copy ? <span>{copy}</span> : null}
               </span>
             </label>
           );
@@ -347,28 +387,34 @@ function EndpointBlock({ status }: { status: AssistantStatus }) {
 function EndpointField({ saved }: { saved: string }) {
   const [draft, setDraft] = useState(saved);
   const [error, setError] = useState('');
+  const errorId = useId();
+  const field = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
-  const commit = async (value: string) => {
+  /** Saves the address (asking first for one on another computer): false when refused. */
+  const commit = async (value: string): Promise<boolean> => {
     const next = value.trim();
-    if (busy.current || next === saved) return;
+    if (busy.current || next === saved) return true;
     busy.current = true;
     try {
       setError('');
       let r = await writeStatus(SETTINGS, { base_url: next });
       if (!r.ok && r.error.status === 409 && (r.error.body as RefusalBody).needs_confirm === 'base_url') {
+        const before = document.activeElement;
         const yes = await confirmAction({
           title: 'Use a server on another computer?',
           copy: `${next} is not on this PC. Project data you ask the Assistant about would go to that server.`,
           yes: 'Use this server',
           safe: true,
         });
+        refocus(before, field.current);
         if (!yes) {
           setDraft(saved);
-          return;
+          return true;
         }
         r = await writeStatus(SETTINGS, { base_url: next, confirm_remote: true });
       }
       if (!r.ok) setError(r.error.message);
+      return r.ok;
     } finally {
       busy.current = false;
     }
@@ -377,6 +423,7 @@ function EndpointField({ saved }: { saved: string }) {
     <>
       <div className="wiz-assistant-row">
         <input
+          ref={field}
           className="wiz-assistant-input wiz-assistant-wide"
           type="text"
           aria-label="Server address"
@@ -384,8 +431,9 @@ function EndpointField({ saved }: { saved: string }) {
           autoComplete="off"
           value={draft}
           data-assistant-endpoint="1"
+          {...described(error, errorId)}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={(e) => void commit(e.currentTarget.value)}
+          onBlur={(e) => void stepChange(commit(e.currentTarget.value))}
           onKeyDown={blurOnEnter}
         />
         {PRESETS.map((p) => (
@@ -397,14 +445,14 @@ function EndpointField({ saved }: { saved: string }) {
             title={p.url}
             onClick={() => {
               setDraft(p.url);
-              void commit(p.url);
+              void stepChange(commit(p.url));
             }}
           >
             {p.label}
           </button>
         ))}
       </div>
-      <ErrorLine text={error} hook={{ 'data-assistant-endpoint-error': '1' }} />
+      <ErrorLine id={errorId} text={error} hook={{ 'data-assistant-endpoint-error': '1' }} />
     </>
   );
 }
@@ -430,16 +478,19 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
   const storage = status.storage;
   const blocked = storage?.kind === 'unavailable' && storage.reason === 'blocked';
   const input = useRef<HTMLInputElement>(null);
+  const block = useRef<HTMLDivElement>(null);
   const [masked] = useState(supportsTextSecurity);
   const [warning, setWarning] = useState('');
   const [error, setError] = useState('');
+  const errorId = useId();
   const [busy, setBusy] = useState<'' | 'save' | 'remove'>('');
   const what = token ? 'token' : 'key';
   const label = token ? 'Server token' : `${CLOUD_LABEL[slot as 'anthropic' | 'openai']} API key`;
 
-  const save = async () => {
+  /** Saves what the field holds: false when there is nothing or it was refused. */
+  const save = async (): Promise<boolean> => {
     const el = input.current;
-    if (!el || busy) return;
+    if (!el || busy) return true;
     // Read and clear before anything is awaited: the field never holds it past this line.
     const value = el.value;
     el.value = '';
@@ -447,16 +498,28 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
     setError('');
     if (!value.trim()) {
       setError(`Paste the ${what} first.`);
-      return;
+      return false;
     }
     setBusy('save');
     const r = await writeStatus('/api/assistant/key', { provider: slot, key: value });
     setBusy('');
     if (!r.ok) setError(r.error.message);
     else if (typeof r.body.warning === 'string') setWarning(r.body.warning);
+    return r.ok;
   };
+  // A key pasted but not saved is saved when the step is left (as Save would), not dropped.
+  const latestSave = useRef(save);
+  latestSave.current = save;
+  useEffect(
+    () =>
+      stepHolder(() => {
+        if (input.current?.value.trim()) void stepChange(latestSave.current());
+      }),
+    [],
+  );
 
-  const remove = async () => {
+  const remove = async (): Promise<boolean> => {
+    const before = document.activeElement;
     const yes = await confirmAction({
       title: token ? 'Remove the server token?' : `Remove the ${CLOUD_LABEL[slot as 'anthropic' | 'openai']} key?`,
       copy: token
@@ -465,17 +528,23 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
       yes: 'Remove',
       safe: true,
     });
-    if (!yes) return;
+    if (!yes) {
+      refocus(before, input.current, block.current);
+      return true;
+    }
+    // Remove goes with the key: the key field (or the block) keeps the place.
+    refocus(input.current, block.current);
     setWarning('');
     setError('');
     setBusy('remove');
     const r = await writeStatus('/api/assistant/key/remove', { provider: slot });
     setBusy('');
     if (!r.ok) setError(r.error.message);
+    return r.ok;
   };
 
   return (
-    <div className="wiz-assistant-block" data-assistant-key={slot}>
+    <div className="wiz-assistant-block" data-assistant-key={slot} ref={block} tabIndex={-1}>
       <h3 className="wiz-assistant-h">{token ? 'Server token (optional)' : 'API key'}</h3>
       <p className="wiz-assistant-status" data-assistant-key-status={key.state}>
         {keyLine(key, storage, token)}
@@ -498,20 +567,21 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
                 data-assistant-key-input="1"
                 {...IGNORED_BY_PASSWORD_MANAGERS}
                 {...(masked ? { type: 'text', style: TEXT_SECURITY } : { type: 'password' })}
+                {...described(error, errorId)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    void save();
+                    void stepChange(save());
                   }
                 }}
               />
-              <button type="button" className="home-btn" data-assistant-key-save="1" disabled={!!busy} onClick={() => void save()}>
+              <button type="button" className="home-btn" data-assistant-key-save="1" disabled={!!busy} onClick={() => void stepChange(save())}>
                 {busy === 'save' ? 'Saving…' : token ? 'Save token' : 'Save key'}
               </button>
             </>
           )}
           {key.set ? (
-            <button type="button" className="home-btn" data-assistant-key-remove="1" disabled={!!busy} onClick={() => void remove()}>
+            <button type="button" className="home-btn" data-assistant-key-remove="1" disabled={!!busy} onClick={() => void stepChange(remove())}>
               {busy === 'remove' ? 'Removing…' : token ? 'Remove token' : 'Remove key'}
             </button>
           ) : null}
@@ -522,7 +592,7 @@ function KeyBlock({ status, slot }: { status: AssistantStatus; slot: ProviderId 
           {storage.note}
         </p>
       ) : null}
-      <ErrorLine text={error} hook={{ 'data-assistant-key-error': '1' }} />
+      <ErrorLine id={errorId} text={error} hook={{ 'data-assistant-key-error': '1' }} />
     </div>
   );
 }
@@ -540,6 +610,7 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
   const [tick, setTick] = useState(0);
   const [other, setOther] = useState(false);
   const [error, setError] = useState('');
+  const errorId = useId();
   // A local server's list depends on where it is; a provider's on the key (without one the
   // server lists only the models Magnusim knows).
   const where = provider === 'openai_compatible' ? status.base_url : '';
@@ -566,16 +637,17 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
     return () => ac.abort();
   }, [provider, where, key, tick]);
 
-  const choose = async (id: string) => {
+  const choose = async (id: string): Promise<boolean> => {
     setError('');
     if (id === OTHER) {
       setOther(true);
-      return;
+      return true;
     }
     setOther(false);
-    if (id === current) return;
+    if (id === current) return true;
     const r = await writeStatus(SETTINGS, { model: id });
     if (!r.ok) setError(r.error.message);
+    return r.ok;
   };
 
   const listed = list.models.some((m) => m.id === current);
@@ -589,7 +661,8 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
           aria-label="Model"
           data-assistant-model={current}
           value={other ? OTHER : current}
-          onChange={(e) => void choose(e.target.value)}
+          {...described(other ? '' : error, errorId)}
+          onChange={(e) => void stepChange(choose(e.target.value))}
         >
           {current ? null : (
             <option value="" disabled>
@@ -614,7 +687,9 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
           {list.state === 'loading' ? 'Listing…' : 'Refresh list'}
         </button>
       </div>
-      {other ? <ModelIdField key={current} saved={current} onSaved={() => setOther(false)} onError={setError} /> : null}
+      {other ? (
+        <ModelIdField key={current} saved={current} onSaved={() => setOther(false)} onError={setError} aria={described(error, errorId)} />
+      ) : null}
       {list.state === 'error' ? (
         <p className="wiz-assistant-error" data-assistant-models-error="1">
           Couldn't list the models: {withCode(list.error ?? '')}
@@ -625,23 +700,34 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
           {price}
         </p>
       ) : null}
-      <ErrorLine text={error} hook={{ 'data-assistant-model-error': '1' }} />
+      <ErrorLine id={errorId} text={error} hook={{ 'data-assistant-model-error': '1' }} />
     </div>
   );
 }
 
-function ModelIdField({ saved, onSaved, onError }: { saved: string; onSaved: () => void; onError: (text: string) => void }) {
+function ModelIdField({
+  saved,
+  onSaved,
+  onError,
+  aria,
+}: {
+  saved: string;
+  onSaved: () => void;
+  onError: (text: string) => void;
+  aria: ReturnType<typeof described>;
+}) {
   const [draft, setDraft] = useState(saved);
   const busy = useRef(false);
-  const commit = async (value: string) => {
+  const commit = async (value: string): Promise<boolean> => {
     const next = value.trim();
-    if (busy.current || !next || next === saved) return;
+    if (busy.current || !next || next === saved) return true;
     busy.current = true;
     onError('');
     const r = await writeStatus(SETTINGS, { model: next });
     busy.current = false;
     if (r.ok) onSaved();
     else onError(r.error.message);
+    return r.ok;
   };
   return (
     <div className="wiz-assistant-row">
@@ -654,8 +740,9 @@ function ModelIdField({ saved, onSaved, onError }: { saved: string; onSaved: () 
         autoComplete="off"
         value={draft}
         data-assistant-model-other="1"
+        {...aria}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={(e) => void commit(e.currentTarget.value)}
+        onBlur={(e) => void stepChange(commit(e.currentTarget.value))}
         onKeyDown={blurOnEnter}
       />
     </div>
@@ -666,6 +753,7 @@ function ModelIdField({ saved, onSaved, onError }: { saved: string; onSaved: () 
 
 function EffortBlock({ status }: { status: AssistantStatus }) {
   const [error, setError] = useState('');
+  const errorId = useId();
   return (
     <div className="wiz-assistant-block">
       <label className="wiz-assistant-row">
@@ -674,11 +762,15 @@ function EffortBlock({ status }: { status: AssistantStatus }) {
           className="wiz-assistant-input"
           data-assistant-effort={status.effort}
           value={status.effort}
+          {...described(error, errorId)}
           onChange={(e) => {
             setError('');
-            void writeStatus(SETTINGS, { effort: e.target.value }).then((r) => {
-              if (!r.ok) setError(r.error.message);
-            });
+            void stepChange(
+              writeStatus(SETTINGS, { effort: e.target.value }).then((r) => {
+                if (!r.ok) setError(r.error.message);
+                return r.ok;
+              }),
+            );
           }}
         >
           {EFFORTS.map((x) => (
@@ -688,7 +780,7 @@ function EffortBlock({ status }: { status: AssistantStatus }) {
           ))}
         </select>
       </label>
-      <ErrorLine text={error} hook={{ 'data-assistant-effort-error': '1' }} />
+      <ErrorLine id={errorId} text={error} hook={{ 'data-assistant-effort-error': '1' }} />
     </div>
   );
 }
@@ -699,14 +791,23 @@ type TestView = { state: 'idle' } | { state: 'running' } | { state: 'done'; ok: 
 
 function TestBlock({ provider }: { provider: ProviderId }) {
   const [view, setView] = useState<TestView>({ state: 'idle' });
+  // A Test nobody waits for any more (the block started afresh, the step was left, the page
+  // went) is let go: the server stops it when its request closes, and the next one can run.
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => pending.current?.abort(), []);
   const run = async () => {
+    const ac = new AbortController();
+    pending.current = ac;
     setView({ state: 'running' });
     try {
-      const answer = await assistantPost<TestAnswer>('/api/assistant/test', {});
+      const answer = await assistantPost<TestAnswer>('/api/assistant/test', {}, ac.signal);
       setView({ state: 'done', ...testLine(answer, provider) });
     } catch (e) {
+      if (ac.signal.aborted) return;
       const text = e instanceof AssistantApiError && e.status === 404 ? NO_TEST_TEXT : e instanceof Error ? e.message : String(e);
       setView({ state: 'done', ok: false, text });
+    } finally {
+      if (pending.current === ac) pending.current = null;
     }
     // A cloud test is spent too.
     void refreshStatus();
@@ -745,12 +846,13 @@ function PrivacyBlock({ status, provider }: { status: AssistantStatus; provider:
     );
   }
   const destination = provider === 'openai_compatible' ? `the server at ${hostOf(status.base_url)}` : CLOUD_LABEL[provider];
-  const save = async (patch: Record<string, unknown>) => {
+  const save = async (patch: Record<string, unknown>): Promise<boolean> => {
     setError('');
     if (typeof patch.privacy === 'string') setPending(patch.privacy as PrivacyMode);
     const r = await writeStatus(SETTINGS, patch);
     setPending(null);
     if (!r.ok) setError(r.error.message);
+    return r.ok;
   };
   const shown = pending ?? status.privacy;
   const remembered = Number(status.consents) || 0;
@@ -760,7 +862,7 @@ function PrivacyBlock({ status, provider }: { status: AssistantStatus; provider:
       <div className="wiz-assistant-inline-options" role="radiogroup" aria-label="Project data" data-assistant-privacy={status.privacy}>
         {PRIVACY.map((p) => (
           <label key={p.id} className="wiz-assistant-inline-option" data-assistant-privacy-option={p.id}>
-            <input type="radio" name={name} value={p.id} checked={shown === p.id} onChange={() => void save({ privacy: p.id })} />
+            <input type="radio" name={name} value={p.id} checked={shown === p.id} onChange={() => void stepChange(save({ privacy: p.id }))} />
             <span>{p.label}</span>
           </label>
         ))}
@@ -775,7 +877,7 @@ function PrivacyBlock({ status, provider }: { status: AssistantStatus; provider:
           className="home-btn"
           data-assistant-forget="1"
           disabled={!remembered}
-          onClick={() => void save({ forget_consents: true })}
+          onClick={() => void stepChange(save({ forget_consents: true }))}
         >
           Forget project answers ({remembered})
         </button>
@@ -820,13 +922,17 @@ function LimitsBlock({ status }: { status: AssistantStatus }) {
       {cloud ? (
         <>
           <p className="wiz-assistant-status" data-assistant-spent="1">
-            Spent today: {cents(Number(status.spent_today_usd))} of {cents(caps.day_usd)}
+            Spent today: {cents(Number(status.spent_today_usd))} of ${capText(caps.day_usd, true)}
           </p>
           <p className="wiz-assistant-meta">{LIMITS_TEXT}</p>
           <p className="wiz-assistant-meta" data-assistant-shared-pc="1">
             {SHARED_PC_TEXT}
           </p>
         </>
+      ) : status.base_url_is_local === false ? (
+        <p className="wiz-assistant-meta" data-assistant-server-limits="1">
+          {SERVER_LIMITS_TEXT}
+        </p>
       ) : (
         <p className="wiz-assistant-meta" data-assistant-local-limits="1">
           {LOCAL_LIMITS_TEXT}
@@ -837,24 +943,28 @@ function LimitsBlock({ status }: { status: AssistantStatus }) {
 }
 
 function CapField({ cap, label, saved, isMoney }: { cap: CapKey; label: string; saved: number; isMoney: boolean }) {
-  const shown = isMoney ? saved.toFixed(2) : String(saved);
+  // The limit as it is enforced: a $ limit with a third decimal is not shown rounded.
+  const shown = capText(saved, isMoney);
   const [draft, setDraft] = useState(shown);
   const [error, setError] = useState('');
-  const commit = async () => {
+  const errorId = useId();
+  /** Saves what was typed (nothing when it is the saved limit): false when refused. */
+  const commit = async (): Promise<boolean> => {
     const text = draft.trim().replace(/^\$/, '');
     const n = Number(text);
     if (!text || !Number.isFinite(n)) {
       setError('Enter a number.');
-      return;
+      return false;
     }
     if (n === saved) {
       setError('');
       setDraft(shown);
-      return;
+      return true;
     }
     const r = await writeStatus(SETTINGS, { caps: { [cap]: n } });
     if (r.ok) setError('');
     else setError(r.error.message);
+    return r.ok;
   };
   return (
     <label className="wiz-assistant-cap">
@@ -865,14 +975,14 @@ function CapField({ cap, label, saved, isMoney }: { cap: CapKey; label: string; 
         step={isMoney ? '0.01' : '1'}
         inputMode={isMoney ? 'decimal' : 'numeric'}
         value={draft}
-        aria-invalid={error ? true : undefined}
+        {...described(error, errorId)}
         {...{ [CAP_HOOK[cap]]: '1' }}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => void commit()}
+        onBlur={() => void stepChange(commit())}
         onKeyDown={blurOnEnter}
       />
       {error ? (
-        <span className="wiz-assistant-error" role="alert" data-assistant-cap-error={cap}>
+        <span id={errorId} className="wiz-assistant-error" role="alert" data-assistant-cap-error={cap}>
           {error}
         </span>
       ) : null}

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_TEXT } from '../../assistant/api';
-import { resetStatusStore, statusSnapshot } from '../../assistant/status';
+import { resetStatusStore, settleStep, statusSnapshot } from '../../assistant/status';
 import {
   AS_TEXT_TEXT,
   AssistantStep,
@@ -11,6 +11,8 @@ import {
   LOCAL_PRICE_TEXT,
   LOCAL_PRIVACY_TEXT,
   NOT_USED_TEXT,
+  SERVER_LIMITS_TEXT,
+  SERVER_PRICE_TEXT,
   SHARED_PC_TEXT,
   TEMPLATE_TEXT,
   testLine,
@@ -39,6 +41,11 @@ let requests: Request[];
 let holdKey: { release?: () => void } | null;
 /** What the server learns while it runs a Test (say, that the saved key can't be opened). */
 let onTest: (() => void) | null;
+/** Set to hold the next settings change until released. */
+let holdSettings: { release?: () => void } | null;
+/** Set: a Test never answers (until its request is aborted); each Test request's signal. */
+let holdTest: boolean;
+let testSignals: Array<AbortSignal | null | undefined>;
 
 function baseStatus(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -84,6 +91,9 @@ function applySettings(patch: Record<string, unknown>): Answer {
     if (caps.day_usd < 0.1 || caps.day_usd > 1000) {
       return { status: 400, body: { ok: false, code: 'invalid', error: 'This limit must be from $0.10 to $1000.00.', field: 'caps.day_usd' } };
     }
+    if (caps.steps < 1 || caps.steps > 200) {
+      return { status: 400, body: { ok: false, code: 'invalid', error: 'This limit must be a whole number from 1 to 200.', field: 'caps.steps' } };
+    }
     next.caps = caps;
   }
   status = next;
@@ -92,7 +102,10 @@ function applySettings(patch: Record<string, unknown>): Answer {
 
 async function route(method: string, path: string, body: Record<string, unknown>): Promise<Answer> {
   if (path === '/api/assistant/status') return statusAnswer || { status: 200, body: status };
-  if (path === '/api/assistant/settings') return applySettings(body);
+  if (path === '/api/assistant/settings') {
+    if (holdSettings) await new Promise<void>((r) => (holdSettings!.release = r));
+    return applySettings(body);
+  }
   if (path === '/api/assistant/key') {
     if (holdKey) await new Promise<void>((r) => (holdKey!.release = r));
     const key = String(body.key);
@@ -122,6 +135,9 @@ beforeEach(() => {
   requests = [];
   holdKey = null;
   onTest = null;
+  holdSettings = null;
+  holdTest = false;
+  testSignals = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -129,6 +145,14 @@ beforeEach(() => {
       const method = init?.method || 'GET';
       const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
       requests.push({ method, path: url, body });
+      if (url === '/api/assistant/test') {
+        testSignals.push(init?.signal);
+        if (holdTest) {
+          return new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+          });
+        }
+      }
       const a = await route(method, url.split('?')[0] === '/api/assistant/models' ? url : url.split('?')[0], body);
       return json(a.status, a.body);
     }),
@@ -730,5 +754,230 @@ describe('AssistantStep models and Test', () => {
     await ready({ provider: 'anthropic' });
     fireEvent.click(q('[data-assistant-test]')!);
     await waitFor(() => expect(q('[data-assistant-test-result]')).toHaveTextContent("This copy of Magnusim can't test the connection yet."));
+  });
+});
+
+describe('AssistantStep leaving the step', () => {
+  it('a key pasted but not saved is saved when the step is left, and the leave waits for it', async () => {
+    await ready({ provider: 'anthropic' });
+    // Nothing held, nothing on its way: the step may go at once.
+    expect(settleStep()).toBe(true);
+    holdKey = {};
+    const input = q<HTMLInputElement>('[data-assistant-key-input]')!;
+    input.value = CANARY;
+    const settled = settleStep();
+    expect(settled).not.toBe(true);
+    // Sent as Save sends it: read and cleared before the save is on its way.
+    expect(input.value).toBe('');
+    await waitFor(() => expect(posts('/api/assistant/key')).toHaveLength(1));
+    expect(posts('/api/assistant/key')[0].body).toEqual({ provider: 'anthropic', key: CANARY });
+    let left: boolean | null = null;
+    void (settled as Promise<boolean>).then((ok) => (left = ok));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(left).toBeNull();
+    act(() => holdKey!.release!());
+    expect(await settled).toBe(true);
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('Key set, ends in …1234'));
+    expect(document.body.innerHTML).not.toContain(CANARY);
+  });
+
+  it('a change on its way is waited for; refused, it keeps the step with its reason, and the next leave goes', async () => {
+    await ready({ provider: 'anthropic' });
+    holdSettings = {};
+    const steps = q<HTMLInputElement>('[data-assistant-cap-steps]')!;
+    fireEvent.change(steps, { target: { value: '500' } });
+    // Pressing Next blurs the field first: its save starts, then the leave asks.
+    fireEvent.blur(steps);
+    const settled = settleStep();
+    expect(settled).not.toBe(true);
+    await waitFor(() => expect(holdSettings!.release).toBeTypeOf('function'));
+    act(() => holdSettings!.release!());
+    expect(await settled).toBe(false);
+    await waitFor(() => expect(q('[data-assistant-cap-error="steps"]')).toHaveTextContent('This limit must be a whole number from 1 to 200.'));
+    expect(q<HTMLInputElement>('[data-assistant-cap-steps]')!.value).toBe('500');
+    // Pressed again: the refusal is on screen and nothing is on its way.
+    expect(settleStep()).toBe(true);
+  });
+
+  it('a server on another computer: the leave waits for the question and the save its answer makes', async () => {
+    await ready({ provider: 'openai_compatible' });
+    let answer!: (yes: boolean) => void;
+    confirmAction.mockImplementationOnce(() => new Promise<boolean>((r) => (answer = r)));
+    const field = q<HTMLInputElement>('[data-assistant-endpoint]')!;
+    fireEvent.change(field, { target: { value: 'http://192.168.1.50:1234/v1' } });
+    fireEvent.blur(field);
+    const settled = settleStep();
+    expect(settled).not.toBe(true);
+    await waitFor(() => expect(confirmAction).toHaveBeenCalledTimes(1));
+    answer(true);
+    expect(await settled).toBe(true);
+    expect(posts('/api/assistant/settings').at(-1)!.body).toEqual({ base_url: 'http://192.168.1.50:1234/v1', confirm_remote: true });
+    expect(status.base_url).toBe('http://192.168.1.50:1234/v1');
+  });
+});
+
+describe('AssistantStep keyboard and screen readers', () => {
+  /** The app's dialog: it takes focus, and closing it leaves focus nowhere. */
+  const dialog = (yes: boolean) => async () => {
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    await Promise.resolve();
+    button.remove();
+    return yes;
+  };
+
+  it('after the question about a server on another computer, focus is back on the address', async () => {
+    await ready({ provider: 'openai_compatible' });
+    confirmAction.mockImplementationOnce(dialog(false));
+    const field = q<HTMLInputElement>('[data-assistant-endpoint]')!;
+    field.focus();
+    fireEvent.change(field, { target: { value: 'http://192.168.1.50:1234/v1' } });
+    // Enter saves (the field blurs, and its save asks).
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(confirmAction).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(q<HTMLInputElement>('[data-assistant-endpoint]')!.value).toBe('http://127.0.0.1:1234/v1'));
+    expect(document.activeElement).toBe(q('[data-assistant-endpoint]'));
+  });
+
+  it('after Remove key, focus is on the key field (the Remove button went with the key)', async () => {
+    await ready({ provider: 'anthropic', keys: { anthropic: { set: true, last4: 'abcd', set_at: 'x', state: 'ok' }, openai: NO_KEY, openai_compatible: NO_KEY } });
+    confirmAction.mockImplementationOnce(dialog(true));
+    const remove = q<HTMLButtonElement>('[data-assistant-key-remove]')!;
+    remove.focus();
+    fireEvent.click(remove);
+    await waitFor(() => expect(q('[data-assistant-key-status]')).toHaveTextContent('No key'));
+    expect(q('[data-assistant-key-remove]')).toBeNull();
+    expect(document.activeElement).toBe(q('[data-assistant-key-input]'));
+  });
+
+  it('Cancel on Remove key puts focus back on Remove', async () => {
+    await ready({ provider: 'anthropic', keys: { anthropic: { set: true, last4: 'abcd', set_at: 'x', state: 'ok' }, openai: NO_KEY, openai_compatible: NO_KEY } });
+    confirmAction.mockImplementationOnce(dialog(false));
+    const remove = q<HTMLButtonElement>('[data-assistant-key-remove]')!;
+    remove.focus();
+    fireEvent.click(remove);
+    await waitFor(() => expect(confirmAction).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(document.activeElement).toBe(remove));
+  });
+
+  it("each field with a refusal is invalid and described by the refusal's line", async () => {
+    await ready({ provider: 'anthropic' });
+    const key = q<HTMLInputElement>('[data-assistant-key-input]')!;
+    expect(key).not.toHaveAttribute('aria-invalid');
+    fireEvent.click(q('[data-assistant-key-save]')!);
+    await waitFor(() => expect(q('[data-assistant-key-error]')).toHaveTextContent('Paste the key first.'));
+    expect(key).toHaveAttribute('aria-invalid', 'true');
+    expect(document.getElementById(key.getAttribute('aria-describedby')!)).toBe(q('[data-assistant-key-error]'));
+
+    const day = q<HTMLInputElement>('[data-assistant-cap-day-usd]')!;
+    fireEvent.change(day, { target: { value: '0.01' } });
+    fireEvent.blur(day);
+    await waitFor(() => expect(q('[data-assistant-cap-error="day_usd"]')).toBeTruthy());
+    const dayNow = q<HTMLInputElement>('[data-assistant-cap-day-usd]')!;
+    expect(dayNow).toHaveAttribute('aria-invalid', 'true');
+    expect(document.getElementById(dayNow.getAttribute('aria-describedby')!)).toBe(q('[data-assistant-cap-error="day_usd"]'));
+
+    cleanup();
+    await ready({ provider: 'openai_compatible' });
+    const field = q<HTMLInputElement>('[data-assistant-endpoint]')!;
+    // The server refuses the address outright.
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const inner = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/assistant/settings'
+        ? json(400, { ok: false, code: 'invalid', error: 'The address must start with http:// or https://.', field: 'base_url' })
+        : inner(input, init),
+    );
+    fireEvent.change(field, { target: { value: 'ftp://127.0.0.1/v1' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(q('[data-assistant-endpoint-error]')).toHaveTextContent('The address must start with http:// or https://.'));
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(document.getElementById(field.getAttribute('aria-describedby')!)).toBe(q('[data-assistant-endpoint-error]'));
+  });
+});
+
+describe('AssistantStep limits as saved', () => {
+  const caps = { turn_usd: 0.125, day_usd: 0.125, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 };
+
+  it('a $ limit with a third decimal shows as it is enforced, and tabbing through the limits saves nothing', async () => {
+    await ready({ provider: 'anthropic', caps, spent_today_usd: 0.1 });
+    const turn = q<HTMLInputElement>('[data-assistant-cap-turn-usd]')!;
+    const day = q<HTMLInputElement>('[data-assistant-cap-day-usd]')!;
+    expect(turn.value).toBe('0.125');
+    expect(day.value).toBe('0.125');
+    expect(q('[data-assistant-spent]')!.textContent).toBe('Spent today: $0.10 of $0.125');
+    for (const el of [turn, day, q<HTMLInputElement>('[data-assistant-cap-steps]')!, q<HTMLInputElement>('[data-assistant-cap-minutes]')!]) {
+      fireEvent.focus(el);
+      fireEvent.blur(el);
+    }
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(posts('/api/assistant/settings')).toEqual([]);
+    expect(document.querySelector('[data-assistant-cap-error]')).toBeNull();
+    expect((status.caps as typeof caps).turn_usd).toBe(0.125);
+  });
+});
+
+describe('AssistantStep a local-server address on another computer', () => {
+  it("says where the server is, claims no cost, and says the $ limits don't apply to it", async () => {
+    await ready({ provider: 'openai_compatible', base_url: 'https://llm.example.net/v1', base_url_is_local: false });
+    const option = q('[data-assistant-provider-option="openai_compatible"]')!;
+    expect(option).toHaveTextContent('Local server');
+    expect(option).toHaveTextContent('Your server at llm.example.net, not on this PC. Project data you ask about goes there.');
+    expect(option).not.toHaveTextContent('Project data stays here');
+    expect(q('[data-assistant-price]')!.textContent).toBe(SERVER_PRICE_TEXT);
+    expect(q('[data-assistant-server-limits]')!.textContent).toBe(SERVER_LIMITS_TEXT);
+    expect(q('[data-assistant-local-limits]')).toBeNull();
+    expect(step()).not.toHaveTextContent(/No cost|cost nothing/);
+    // Project data is asked about, and the line says all of what goes there.
+    expect(q('[data-assistant-privacy]')).toBeTruthy();
+    expect(step()).toHaveTextContent(
+      'When you ask about a project, your messages and what the Assistant reads from it (names, settings, results and pictures of the open workspace) go to the server at llm.example.net.',
+    );
+    // On this PC again: the plain lines.
+    cleanup();
+    await ready({ provider: 'openai_compatible' });
+    expect(q('[data-assistant-provider-option="openai_compatible"]')).toHaveTextContent('LM Studio or Ollama on this PC. Project data stays here.');
+    expect(q('[data-assistant-price]')!.textContent).toBe(LOCAL_PRICE_TEXT);
+    expect(q('[data-assistant-local-limits]')!.textContent).toBe(LOCAL_LIMITS_TEXT);
+    expect(q('[data-assistant-server-limits]')).toBeNull();
+  });
+});
+
+describe('AssistantStep a Test nobody waits for', () => {
+  it('is let go when the Test block starts afresh for another model, and when the step goes', async () => {
+    modelsAnswer = {
+      status: 200,
+      body: {
+        ok: true,
+        source: 'curated',
+        models: [
+          { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', priced: true },
+          { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', priced: true },
+        ],
+      },
+    };
+    await ready({ provider: 'anthropic' });
+    holdTest = true;
+    fireEvent.click(q('[data-assistant-test]')!);
+    await waitFor(() => expect(testSignals).toHaveLength(1));
+    expect(q('[data-assistant-test-result]')).toHaveAttribute('data-assistant-test-result', 'running');
+    expect(testSignals[0]?.aborted).toBe(false);
+    // Another model: the block starts afresh, and the old Test is let go.
+    await waitFor(() => expect(within(q('[data-assistant-model]')!).getByRole('option', { name: 'Claude Sonnet 5.5' })).toBeTruthy());
+    fireEvent.change(q('[data-assistant-model]')!, { target: { value: 'claude-sonnet-5-5' } });
+    await waitFor(() => expect(q('[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'claude-sonnet-5-5'));
+    expect(testSignals[0]?.aborted).toBe(true);
+    expect(q('[data-assistant-test-result]')).toHaveAttribute('data-assistant-test-result', 'idle');
+    // The step goes (Next, Back, Close, a reload).
+    fireEvent.click(q('[data-assistant-test]')!);
+    await waitFor(() => expect(testSignals).toHaveLength(2));
+    expect(testSignals[1]?.aborted).toBe(false);
+    cleanup();
+    expect(testSignals[1]?.aborted).toBe(true);
   });
 });

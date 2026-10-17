@@ -311,8 +311,13 @@ async function listModels(provider: ProviderId, settings: AssistantSettings): Pr
   }
 }
 
-/** POST /api/assistant/test: refused (400) when it can't start, 409 while one runs; else the result. */
-async function connectionTest(): Promise<Answer> {
+/**
+ * POST /api/assistant/test: refused (400) when it can't start, 409 while one runs; else the
+ * result. `gone` aborts when the request that asked closed (a reload, Settings left or the
+ * Test block started afresh): nobody waits for the result, so the test stops and the next
+ * one may start at once.
+ */
+async function connectionTest(gone?: AbortSignal): Promise<Answer> {
   const settings = await loadSettings();
   const refuse = (code: string, error: string, status = 400): Answer => ({ status, body: { ok: false, code, error } });
   const provider = settings.provider;
@@ -333,7 +338,15 @@ async function connectionTest(): Promise<Answer> {
   if (st.test) return refuse('busy', 'A test is already running.', 409);
   const testMs = testBoundMs(provider);
   const bound = boundedSignal(testMs, () => testTimeoutError(provider, testMs));
-  st.test = { abort: bound.abort };
+  const running = { abort: bound.abort };
+  st.test = running;
+  const stop = () => {
+    // Free at once: the stopped test winds down on its own.
+    if (assistantState().test === running) assistantState().test = null;
+    bound.abort.abort();
+  };
+  if (gone?.aborted) stop();
+  else gone?.addEventListener('abort', stop, { once: true });
   try {
     const ledger = await spendLedger();
     const adapter = createAdapter(settings, store);
@@ -349,8 +362,9 @@ async function connectionTest(): Promise<Answer> {
     alog('info', 'connection test', { provider, model, ok: result.ok, code: result.ok ? null : result.code, usd: result.cost_usd });
     return { status: 200, body: { ...result, spent_today_usd: round4(ledger.spentToday()) } };
   } finally {
+    gone?.removeEventListener('abort', stop);
     bound.done();
-    if (assistantState().test?.abort === bound.abort) assistantState().test = null;
+    if (assistantState().test === running) assistantState().test = null;
   }
 }
 
@@ -632,8 +646,18 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     '/api/assistant/test',
     local(async (ctx) => {
       await ctx.readJsonBody();
-      const r = await connectionTest();
-      ctx.sendJson(r.status, r.body);
+      // A client that goes away stops its test.
+      const gone = new AbortController();
+      const onClose = () => {
+        if (!ctx.res.writableEnded) gone.abort();
+      };
+      ctx.res.on('close', onClose);
+      try {
+        const r = await connectionTest(gone.signal);
+        if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.sendJson(r.status, r.body);
+      } finally {
+        ctx.res.off('close', onClose);
+      }
     }),
   );
 

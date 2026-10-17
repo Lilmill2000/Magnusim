@@ -7,6 +7,7 @@
  * walked in. Plugins stays id 5 and last (plugin guides and suites name it); the Assistant
  * is id 6, shown before it.
  */
+import { settleStep } from '../assistant/status';
 import { mountIsland, unmountIsland } from '../islands';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
@@ -78,15 +79,45 @@ const wizard = {
 
 // The Assistant step is mounted only while it is shown: it holds a key field.
 let assistantMounted = false;
+// Each showing of it, and the one a leave waiting for its changes belongs to.
+let assistantVisit = 0;
+let leavingVisit = 0;
 
 function mountAssistant(on) {
   if (on && !assistantMounted) {
     assistantMounted = true;
+    assistantVisit += 1;
     mountIsland('wiz-assistant', { scope: '' });
   } else if (!on && assistantMounted) {
     assistantMounted = false;
     unmountIsland('wiz-assistant');
   }
+}
+
+/**
+ * Runs `go` (another step, or closing the wizard) once the shown step may be left. The
+ * Assistant step first sends what its fields hold (a pasted key) and waits for its changes
+ * on their way (assistant/status.ts settleStep): a refused one keeps the step on screen with
+ * its reason, and the next press leaves. Any other step is left at once.
+ */
+function leave(go) {
+  if (wizard.step !== WIZ_ASSISTANT_STEP || !assistantMounted) return go();
+  const visit = assistantVisit;
+  // A press while the step's changes are waited for: the first one leaves.
+  if (leavingVisit === visit) return;
+  const settled = settleStep();
+  if (settled === true) return go();
+  leavingVisit = visit;
+  settled.then(
+    (ok) => {
+      if (leavingVisit === visit) leavingVisit = 0;
+      // Still this showing of the step (nothing else moved the wizard meanwhile).
+      if (ok && wizard.open && assistantMounted && assistantVisit === visit) go();
+    },
+    () => {
+      if (leavingVisit === visit) leavingVisit = 0;
+    },
+  );
 }
 
 /** Shows step `id` (a known step id, else the first). */
@@ -349,17 +380,19 @@ let wizardWired = false;
 function wireWizard() {
   if (wizardWired) return;
   wizardWired = true;
-  $('wiz-back')?.addEventListener('click', () => setStep(stepBy(-1)));
+  $('wiz-back')?.addEventListener('click', () => leave(() => setStep(stepBy(-1))));
   $('wiz-next')?.addEventListener('click', () => {
-    onNext().catch((e) => console.warn('[CFD] wizard', e));
+    leave(() => onNext().catch((e) => console.warn('[CFD] wizard', e)));
   });
   $('wiz-skip')?.addEventListener('click', () => {
-    if (!wizard.required) hideWizard();
+    if (!wizard.required) leave(hideWizard);
   });
   document.querySelectorAll('#wiz-rail li').forEach((el) => {
     const go = () => {
       const n = Number(el.getAttribute('data-wiz-dot'));
-      if (Number.isFinite(n)) setStep(n);
+      if (!Number.isFinite(n)) return;
+      if (n === wizard.step) setStep(n);
+      else leave(() => setStep(n));
     };
     el.addEventListener('click', go);
     el.addEventListener('keydown', (e) => {

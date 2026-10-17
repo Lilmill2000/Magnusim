@@ -139,6 +139,54 @@ export async function writeStatus(path: string, body: unknown): Promise<WriteRes
   }
 }
 
+// ---------------------------------------------------------------- leaving the step
+
+/**
+ * The step's changes on their way (each true once saved, false when refused) and the fields
+ * holding what they haven't sent (a pasted key). The wizard settles the step before it
+ * leaves it (src/wizard/controller.ts): what a field holds is sent and every change waited
+ * for, so a refusal shows under its field instead of reaching a step that is gone.
+ */
+const changes = new Set<Promise<boolean>>();
+const holders = new Set<() => void>();
+
+/** Counts `change` (true once saved) among the step's changes on their way. */
+export function stepChange(change: Promise<boolean>): Promise<boolean> {
+  const tracked = change.then(
+    (ok) => ok,
+    () => false,
+  );
+  changes.add(tracked);
+  void tracked.then(() => changes.delete(tracked));
+  return tracked;
+}
+
+/** A field that holds what it hasn't sent: `send` sends it when the step is left. */
+export function stepHolder(send: () => void): () => void {
+  holders.add(send);
+  return () => {
+    holders.delete(send);
+  };
+}
+
+/**
+ * Before the step is left: sends what its fields hold, then waits for every change on its
+ * way. `true` at once when there is none (the wizard moves on in the same click), else
+ * whether every one was saved.
+ */
+export function settleStep(): true | Promise<boolean> {
+  for (const send of [...holders]) send();
+  if (!changes.size) return true;
+  return (async () => {
+    let ok = true;
+    // A change can start while another is waited for (a question's answer saves again).
+    while (changes.size) {
+      if ((await Promise.all([...changes])).includes(false)) ok = false;
+    }
+    return ok;
+  })();
+}
+
 /** Tests only: forget everything (a fresh page). */
 export function resetStatusStore(): void {
   snap = { state: 'loading' };
@@ -146,4 +194,6 @@ export function resetStatusStore(): void {
   applied = 0;
   writesInFlight = 0;
   refetchAfterWrites = false;
+  changes.clear();
+  holders.clear();
 }

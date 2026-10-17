@@ -7,6 +7,14 @@ vi.mock('../islands', () => ({
   mountIsland: (id: string) => islands.calls.push(`mount ${id}`),
   unmountIsland: (id: string) => islands.calls.push(`unmount ${id}`),
 }));
+// What the Assistant step answers when it is left (assistant/status.ts settleStep).
+const leaving = vi.hoisted(() => ({ settle: (): true | Promise<boolean> => true, asked: 0 }));
+vi.mock('../assistant/status', () => ({
+  settleStep: () => {
+    leaving.asked += 1;
+    return leaving.settle();
+  },
+}));
 
 type Controller = typeof import('./controller');
 
@@ -37,6 +45,8 @@ async function load(p: Record<string, unknown>): Promise<Controller> {
 
 beforeEach(() => {
   islands.calls = [];
+  leaving.settle = () => true;
+  leaving.asked = 0;
   saved = [];
   document.body.innerHTML = wizardMarkup();
   vi.stubGlobal(
@@ -147,5 +157,94 @@ describe('setup wizard steps', () => {
     expect(shownPane()).toBe('assistant');
     $('#wiz-next').click();
     expect(shownPane()).toBe('plugins');
+  });
+});
+
+describe('leaving the Assistant step', () => {
+  /** A settle the test answers: the step's changes on their way. */
+  function pendingSettle() {
+    let answer!: (ok: boolean) => void;
+    leaving.settle = () => new Promise<boolean>((r) => (answer = r));
+    return (ok: boolean) => answer(ok);
+  }
+
+  async function onAssistant(c: Controller) {
+    c.openSetupWizard({ required: false, step: 'assistant' });
+    expect(shownPane()).toBe('assistant');
+  }
+
+  it('any other step is left without asking it', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ required: false });
+    $('#wiz-back').click();
+    $('#wiz-next').click();
+    ($('#wiz-rail li[data-wiz-key="plugins"]') as HTMLElement).click();
+    expect(shownPane()).toBe('plugins');
+    expect(leaving.asked).toBe(0);
+  });
+
+  it('Next waits for the step to settle, a second press meanwhile does nothing more, and it goes on once saved', async () => {
+    const c = await load({ wizard_completed: true });
+    await onAssistant(c);
+    const answer = pendingSettle();
+    islands.calls = [];
+    $('#wiz-next').click();
+    $('#wiz-next').click();
+    expect(leaving.asked).toBe(1);
+    expect(shownPane()).toBe('assistant');
+    expect(islands.calls).toEqual([]);
+    answer(true);
+    await flush();
+    expect(shownPane()).toBe('plugins');
+    expect(islands.calls).toEqual(['unmount wiz-assistant', 'mount wiz-plugins']);
+  });
+
+  it('a refused change keeps the step on screen; the next press, with nothing on its way, leaves', async () => {
+    const c = await load({ wizard_completed: true });
+    await onAssistant(c);
+    const answer = pendingSettle();
+    $('#wiz-back').click();
+    answer(false);
+    await flush();
+    expect(shownPane()).toBe('assistant');
+    leaving.settle = () => true;
+    $('#wiz-back').click();
+    expect(shownPane()).toBe('workspace');
+  });
+
+  it('Close and a rail entry wait the same way; the Assistant entry itself leaves nothing', async () => {
+    const c = await load({ wizard_completed: true });
+    await onAssistant(c);
+    let answer = pendingSettle();
+    ($('#wiz-rail li[data-wiz-key="assistant"]') as HTMLElement).click();
+    expect(leaving.asked).toBe(0);
+    ($('#wiz-rail li[data-wiz-key="units"]') as HTMLElement).click();
+    expect(shownPane()).toBe('assistant');
+    answer(true);
+    await flush();
+    expect(shownPane()).toBe('units');
+    await onAssistant(c);
+    answer = pendingSettle();
+    $('#wiz-skip').click();
+    expect($('#setup-wizard').hidden).toBe(false);
+    answer(true);
+    await flush();
+    expect($('#setup-wizard').hidden).toBe(true);
+    expect(islands.calls[islands.calls.length - 1]).toBe('unmount wiz-assistant');
+  });
+
+  it('a leave that settles after the step was shown again moves nothing', async () => {
+    const c = await load({ wizard_completed: true });
+    await onAssistant(c);
+    const answer = pendingSettle();
+    $('#wiz-next').click();
+    // A link about plugins, then back on the Assistant: another showing of the step.
+    c.openSetupWizard({ required: false, step: 'plugins' });
+    leaving.settle = () => true;
+    ($('#wiz-rail li[data-wiz-key="assistant"]') as HTMLElement).click();
+    expect(shownPane()).toBe('assistant');
+    answer(true);
+    await flush();
+    expect(shownPane()).toBe('assistant');
   });
 });

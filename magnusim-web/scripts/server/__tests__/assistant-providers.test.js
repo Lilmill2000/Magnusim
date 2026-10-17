@@ -41,7 +41,7 @@ const { ProviderError } = await import('../assistant/types.ts');
 const { Router, dispatch } = await import('../router.ts');
 const { sendJson } = await import('../http.ts');
 const routes = await import('../assistant-routes.ts');
-const { resetAssistantState } = await import('../assistant/state.ts');
+const { assistantState, resetAssistantState } = await import('../assistant/state.ts');
 const { spendLedger } = await import('../assistant/ledger.ts');
 
 const KEYS = {
@@ -1289,6 +1289,46 @@ describe('the routes: status, models and the connection test', () => {
     } finally {
       process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
       resetAssistantState();
+    }
+  });
+
+  it('a test nobody waits for stops when its request closes, and the next one runs at once (no 409)', async () => {
+    await api('POST', '/api/assistant/settings', { provider: 'anthropic', model: 'claude-opus-5-5', caps: { turn_usd: 3, day_usd: 15 } });
+    await api('POST', '/api/assistant/key', { provider: 'anthropic', key: KEYS.anthropic });
+    fake.reply({ text: 'slow', hold: 'test-gone' });
+    const before = { chats: chat('anthropic').length, closed: fake.disconnects() };
+    // The page's request, which the page lets go (a reload, Settings left) while the model answers.
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/assistant/test', headers: { 'content-type': 'application/json' } });
+    req.on('error', () => {});
+    req.end('{}');
+    // The stopped test winds down only once its spend is settled: held here, so the next
+    // test can't be let in by the old one having finished.
+    const ledger = await spendLedger();
+    let releaseSettle = () => {};
+    const settled = new Promise((r) => (releaseSettle = r));
+    ledger.settle = async (...args) => {
+      delete ledger.settle;
+      await settled;
+      return ledger.settle(...args);
+    };
+    try {
+      await until(() => chat('anthropic').length > before.chats && chat('anthropic').at(-1)?.step?.hold === 'test-gone', 5000, 'the test reaching the provider');
+      assert.ok(assistantState().test, 'a test runs');
+      req.destroy();
+      // The server lets the provider's request go: the test stopped ...
+      await until(() => fake.disconnects() > before.closed, 5000, 'the provider request closing');
+      // ... and the next test may start at once, while the stopped one still winds down.
+      assert.equal(assistantState().test, null);
+      fake.reply({ tools: [{ name: 'connection_check', input: { word: 'ok' } }] }, { text: 'Connected.' });
+      const r = await api('POST', '/api/assistant/test', {});
+      assert.deepEqual([r.status, r.json.ok, r.json.tools], [200, true, 'works'], JSON.stringify(r.json));
+      releaseSettle();
+      await until(() => ledger.openCount() === 0, 5000, 'every reservation settled');
+    } finally {
+      releaseSettle();
+      delete ledger.settle;
+      req.destroy();
+      fake.release('test-gone');
     }
   });
 

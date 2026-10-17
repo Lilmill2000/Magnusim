@@ -925,6 +925,9 @@ describe('privacy (cloud turns)', () => {
     answerGates(m, t, (g) => (seen.push(g), true));
     await settled(t);
     assert.equal(seen[0].title, 'Send project "Wing" to the server at 192.168.1.20?');
+    // The person chose a local server: theirs on another computer, not "a cloud provider".
+    assert.match(seen[0].copy, / to 192\.168\.1\.20, a server that isn't on this PC\. A server on this PC keeps them here\. Settings → Assistant can change this\.$/);
+    assert.doesNotMatch(seen[0].copy, /cloud provider|A local server keeps/);
     assert.deepEqual(m.consents[0].destination, 'host:192.168.1.20');
   });
 

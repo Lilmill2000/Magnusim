@@ -2,7 +2,9 @@
 // local server's address, models and connection Test, a cloud key that is write-only and
 // reaches the provider only in its own header, a cloud Test and the spend it adds, an
 // endpoint outside this PC that asks first, privacy and limits that save at once, the
-// remote view, and a key save that outlives the step that sent it. Its own server with
+// remote view, a key save that outlives the step that sent it, leaving the step (a pasted
+// key saved, a change on its way waited for, a Test nobody waits for stopped), and an
+// address on another computer worded as such. Its own server with
 // the Assistant's test switches (a test home, never this PC's keys): both cloud providers
 // go to a scripted fake provider in this process (support/fake-llm.mjs), and the local
 // server is another fake of its own. On Windows the real DPAPI helper keeps the key,
@@ -252,6 +254,8 @@ test('a cloud key is write-only: shown by its last 4, never in the page, an answ
   await page.locator('#cf-confirm').click();
   await expect(pane.locator('[data-assistant-key-status]')).toHaveText('No key');
   await expect(pane.locator('[data-assistant-key-remove]')).toHaveCount(0);
+  // Remove went with the key: focus is on the key field, not left on the closed dialog.
+  await expect(pane.locator('[data-assistant-key-input]')).toBeFocused();
   expect((await assistantStatus(request, host.base)).keys.anthropic.set).toBe(false);
 
   const texts = await answers.all();
@@ -373,10 +377,11 @@ test('a server outside this PC asks first; Cancel keeps the old address', async 
   await expect(page.locator('#cf-heading')).toHaveText('Use a server on another computer?');
   await expect(page.locator('#cf-copy')).toContainText('http://192.0.2.10:1234/v1 is not on this PC.');
   await expect(page.locator('#cf-cancel')).toBeFocused();
-  // Enter answers Cancel here.
+  // Enter answers Cancel here, and focus is back on the address (not on the closed dialog).
   await page.keyboard.press('Enter');
   await expect(dialog).toBeHidden();
   await expect(field).toHaveValue('http://127.0.0.1:1234/v1');
+  await expect(field).toBeFocused();
   const kept = await assistantStatus(request, host.base);
   expect(kept.base_url).toBe('http://127.0.0.1:1234/v1');
   expect(kept.base_url_is_local).toBe(true);
@@ -390,6 +395,15 @@ test('a server outside this PC asks first; Cancel keeps the old address', async 
   await expect(field).toHaveValue('http://192.0.2.10:1234/v1');
   await expect(pane.locator('[data-assistant-privacy]')).toBeVisible();
   await expect(pane.locator('[data-assistant-privacy-local]')).toHaveCount(0);
+  // Said as it is: not on this PC, no price Magnusim could know, no $ limits that would apply.
+  const choice = pane.locator('[data-assistant-provider-option="openai_compatible"]');
+  await expect(choice).toContainText('Your server at 192.0.2.10:1234, not on this PC. Project data you ask about goes there.');
+  await expect(choice).not.toContainText('stays here');
+  await expect(pane.locator('[data-assistant-price]')).toHaveText("Magnusim doesn't know what this server charges, and today's spend doesn't count it.");
+  await expect(pane.locator('[data-assistant-server-limits]')).toHaveText(
+    "Magnusim can't price a server that isn't on this PC, so the $ limits don't apply to it; the step and time limits do.",
+  );
+  await expect(pane.locator('[data-assistant-local-limits]')).toHaveCount(0);
 
   // A server on this PC needs no question; Ollama's port gets its context hint.
   await pane.locator('[data-assistant-endpoint-preset="ollama"]').click();
@@ -397,6 +411,8 @@ test('a server outside this PC asks first; Cancel keeps the old address', async 
   await expect(dialog).toBeHidden();
   await expect(pane.locator('[data-assistant-ollama-hint]')).toBeVisible();
   expect((await assistantStatus(request, host.base)).base_url).toBe('http://127.0.0.1:11434/v1');
+  await expect(choice).toContainText('LM Studio or Ollama on this PC. Project data stays here.');
+  await expect(pane.locator('[data-assistant-price]')).toHaveText('No cost (runs on this PC).');
 });
 
 test('privacy and limits save at once and survive reopening and a reload; an invalid limit says why', async ({ page, request }) => {
@@ -511,7 +527,13 @@ test('a key save that answers after the step was opened again still shows', asyn
   page.on('response', (r) => {
     if (new URL(r.url()).pathname === '/api/assistant/status') statusAnswers += 1;
   });
+  // Pressing Plugins waits for the save on its way: the step stays.
   await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
+  await expect(pane).toBeVisible();
+  await expect(pane.locator('[data-assistant-step]')).toHaveCount(1);
+  // A link about plugins moves the wizard at once (it waits for nothing), and the Assistant's
+  // entry shows the step again: another showing, which the waiting press no longer moves.
+  await page.evaluate(() => window.__CFD_OPEN_WIZARD__({ step: 'plugins' }));
   await expect(pane.locator('[data-assistant-step]')).toHaveCount(0);
   await page.locator('#wiz-rail li[data-wiz-key="assistant"]').click();
   await staleRead;
@@ -525,4 +547,92 @@ test('a key save that answers after the step was opened again still shows', asyn
   await expect.poll(() => statusAnswers).toBeGreaterThanOrEqual(2);
   await expect(pane.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …1234');
   expect((await assistantStatus(request, host.base)).keys.anthropic).toMatchObject({ set: true, last4: '1234' });
+  await expect(pane).toBeVisible();
+});
+
+test('Next saves a key pasted but not saved, and waits for a change on its way: refused, the step stays with its reason', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const key = `sk-ant-next${randomBytes(8).toString('hex')}4321`;
+  await page.goto(`${host.base}/#/`);
+  const pane = await openAssistantStep(page);
+  await chooseProvider(page, 'anthropic');
+  const plugins = page.locator('#setup-wizard .wiz-pane[data-wiz-key="plugins"]');
+
+  // Pasted, never saved, and Next pressed: the key is saved, then the wizard goes on.
+  await pane.locator('[data-assistant-key-input]').fill(key);
+  await page.locator('#wiz-next').click();
+  await expect(plugins).toBeVisible();
+  expect((await assistantStatus(request, host.base)).keys.anthropic).toMatchObject({ set: true, last4: '4321' });
+  await page.locator('#wiz-back').click();
+  await expect(pane.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …4321');
+  await expect(pane.locator('[data-assistant-key-input]')).toHaveValue('');
+
+  // A limit typed and Next pressed: the field's save (sent as it lost focus) is held on its way.
+  let sent;
+  let release;
+  const saveSent = new Promise((r) => (sent = r));
+  const released = new Promise((r) => (release = r));
+  await page.route(
+    '**/api/assistant/settings',
+    async (route) => {
+      sent();
+      await released;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  const steps = pane.locator('[data-assistant-cap-steps]');
+  await steps.fill('500');
+  await page.locator('#wiz-next').click();
+  await saveSent;
+  // The wizard waits for it.
+  await expect(pane.locator('[data-assistant-step]')).toHaveCount(1);
+  await expect(plugins).toBeHidden();
+  release();
+  // Refused: the step stays, the reason under the field and what was typed kept.
+  await expect(pane.locator('[data-assistant-cap-error="steps"]')).toHaveText('This limit must be a whole number from 1 to 200.');
+  await expect(steps).toHaveValue('500');
+  await expect(pane).toBeVisible();
+  expect((await assistantStatus(request, host.base)).caps.steps).toBe(50);
+  // Pressed again with nothing on its way: the wizard goes on.
+  await page.locator('#wiz-next').click();
+  await expect(plugins).toBeVisible();
+  await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
+  expect((await assistantStatus(request, host.base)).caps.steps).toBe(50);
+});
+
+test('a Test nobody waits for stops: left during a slow Test, the step can test again at once', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const local = await startFakeLlm();
+  try {
+    local.models(['qwen3.8-27b'], 'compat');
+    for (const data of [{ provider: 'openai_compatible' }, { base_url: local.compatBase }, { model: 'qwen3.8-27b' }]) {
+      expect((await request.post(`${host.base}/api/assistant/settings`, { data })).status()).toBe(200);
+    }
+    await page.goto(`${host.base}/#/`);
+    const pane = await openAssistantStep(page);
+    await expect(pane.locator('select[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'qwen3.8-27b');
+    const chats = () => local.requests().filter((r) => r.kind === 'chat').length;
+
+    // A model still loading: its answer stops after the first chunk.
+    local.reply({ text: 'Loading', hold: 'slow-test' });
+    await pane.locator('[data-assistant-test]').click();
+    await expect(pane.locator('[data-assistant-test-result]')).toHaveAttribute('data-assistant-test-result', 'running');
+    await expect.poll(chats).toBe(1);
+
+    // Left: nobody waits for that Test, so the server stops it and lets the model's request go.
+    await page.locator('#wiz-next').click();
+    await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
+    await expect.poll(() => local.disconnects()).toBe(1);
+
+    // Back on the step, a Test runs at once (not "A test is already running.").
+    await page.locator('#wiz-back').click();
+    local.reply(...callsTheTool());
+    const result = await pressTest(page);
+    await expect(result).toHaveText(/^Connected to qwen3\.8-27b in \d+\.\d s\. Tool calling works\.$/);
+    expect(chats()).toBe(3);
+  } finally {
+    local.release('slow-test');
+    await local.stop();
+  }
 });

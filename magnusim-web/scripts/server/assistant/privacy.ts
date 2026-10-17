@@ -88,11 +88,16 @@ export function quotedTitle(raw: unknown, fallback: string): string {
 export function privacyGate(o: { turn: string; project: ProjectInfo; provider: ProviderId; host: string }): GateRequest {
   const title = quotedTitle(o.project.title, o.project.id);
   const provider = o.provider === 'openai_compatible' ? 'the server at ' + o.host : PROVIDER_LABELS[o.provider];
+  // The person chose a local server: one at an address on another computer is not "a cloud provider".
+  const where =
+    o.provider === 'openai_compatible'
+      ? `${o.host}, a server that isn't on this PC. A server on this PC keeps them here.`
+      : `${o.host}, a cloud provider. A local server keeps them on this PC.`;
   return {
     kind: 'privacy',
     turn: o.turn,
     title: `Send project "${title}" to ${provider}?`,
-    copy: `The Assistant is about to send this project's names, settings, results and pictures of the open workspace to ${o.host}, a cloud provider. A local server keeps them on this PC. Settings → Assistant can change this.`,
+    copy: `The Assistant is about to send this project's names, settings, results and pictures of the open workspace to ${where} Settings → Assistant can change this.`,
     yes: 'Send',
     no: "Don't send",
     project: { id: o.project.id, title },
