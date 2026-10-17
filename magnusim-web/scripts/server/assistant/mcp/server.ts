@@ -18,10 +18,12 @@
  *   gets, plus its images; `isError` for an error.
  * - Project data: external apps are offered workspace and other plugin tools without
  *   their registration text (a generic description, schemas without enums, descriptions,
- *   titles, consts, defaults or examples), and no tool that reads project data runs for
- *   them yet: they are refused `project_data_off` until the privacy rules (the per-project
- *   question for "other apps") cover them. Nor does a tool that asks first (compute,
- *   destructive): no app tab shows an app's questions yet (`questions_off`).
+ *   titles, consts, defaults or examples), whatever their projectData flag, and their
+ *   instructions carry no workspace guide: a registration's text can hold project names.
+ *   No tool that reads project data runs for them yet: they are refused `project_data_off`
+ *   until the privacy rules (the per-project question for "other apps") cover them. Nor
+ *   does a tool that asks first (compute, destructive): no app tab shows an app's
+ *   questions yet (`questions_off`).
  * - External apps share process-wide rates (a reconnect doesn't reset them): 120 change
  *   calls and 1200 calls per rolling hour (`rate_limited`, with the time to wait).
  * - Other apps turned off: the settings save closes external apps' connections
@@ -286,7 +288,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return { ctx: { tab: t.tab, projectId: t.projectId || null, simulationId: t.studyId || null, cloud: true, local: false }, why: null };
   }
 
-  const withheld = (session: McpSession, def: ToolDef) => session.kind === 'external' && def.projectData && def.source.kind !== 'host';
+  /** An external app sees no workspace or plugin tool's registration text (it can hold project names). */
+  const withheld = (session: McpSession, def: ToolDef) => session.kind === 'external' && def.source.kind !== 'host';
 
   function listFor(session: McpSession, ctx: ToolCtx, log: boolean): Map<string, ToolDef> {
     return servedMap(
@@ -296,7 +299,9 @@ export function createMcpService(d: McpServiceDeps): McpService {
   }
 
   function instructions(session: McpSession): string {
-    if (session.binding?.test) return MCP_INSTRUCTIONS;
+    // A Test binding gets the rules alone. So does an external app: the workspace guide is
+    // registration text, which waits for the privacy rules as the tools' own text does.
+    if (session.binding?.test || session.kind === 'external') return MCP_INSTRUCTIONS;
     const { ctx } = contextOf(session);
     const ws = ctx.tab ? d.registry.workspaceOf(ctx.tab) : null;
     if (!ws?.guide) return MCP_INSTRUCTIONS;

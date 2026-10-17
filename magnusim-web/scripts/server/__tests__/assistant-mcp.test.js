@@ -465,8 +465,19 @@ describe('tools/list', () => {
   const TAKER = N.mcpName(full2).slice(SLUG.length + 2);
 
   for (const era of ['legacy', 'modern']) {
-    it(`${era}: toolsFor's list under names of at most 46 characters (a collision dropped), with hints and instructions; registration text withheld from external apps`, async () => {
+    it(`${era}: toolsFor's list under names of at most 46 characters (a collision dropped), with hints and instructions; registration text (the guide too) withheld from external apps, not from agents`, async () => {
       const w = await world({ hostTools: [H.hostTool('app_info'), H.hostTool('wipe_all', { risk: 'destructive' }), H.hostTool('project_read', { projectData: true, available: (ctx) => (ctx.projectId ? true : 'No project.') })] });
+      // Another plugin's tool that reads no project data: its registration text is withheld all the same.
+      const sourced = {
+        ...H.hostTool('src_pick', {
+          title: 'Pick on Secret Wing',
+          schema: { type: 'object', properties: { face: { type: 'string', enum: ['Secret Wing root'], description: 'A Secret Wing face.' } }, additionalProperties: false },
+        }),
+        description: 'Picks a face of Secret Wing.',
+        projectData: false,
+        source: { kind: 'plugin', plugin: 'demo', method: 'pick', epoch: '1' },
+      };
+      const off = w.m.registry.registerToolSource(() => [sourced]);
       try {
         const tab = H.newTabId();
         const tools = [
@@ -491,7 +502,7 @@ describe('tools/list', () => {
         assert.equal(`${SLUG}__${LONG1}`.length, 58);
         assert.equal(mapped1.length, 46);
         assert.equal(mapped1.slice(0, 41), `${SLUG}__${LONG1}`.slice(0, 41));
-        assert.deepEqual(names, ['app_info', 'project_read', 'wipe_all', `${SLUG}__${TAKER}`, mapped1, `${SLUG}__pick`]);
+        assert.deepEqual(names, ['app_info', 'project_read', 'wipe_all', `${SLUG}__${TAKER}`, mapped1, `${SLUG}__pick`, 'src_pick']);
         assert.ok(!names.includes('connection_check'));
         assert.ok(logged.some((l) => l.includes('mcp tool name taken') && l.includes(full2.slice(0, 40))), 'the collision is logged');
         const byName = Object.fromEntries(listed.map((t) => [t.name, t]));
@@ -506,14 +517,33 @@ describe('tools/list', () => {
         assert.equal(pick.title, undefined);
         assert.deepEqual(pick.inputSchema, { type: 'object', properties: { face: { type: 'string' } }, required: ['face'], additionalProperties: false });
         assert.equal(pick.annotations.destructiveHint, true);
+        assert.deepEqual(byName.src_pick, {
+          name: 'src_pick',
+          description: "A tool of the demo workspace; its details show once you allow this project's data.",
+          inputSchema: { type: 'object', properties: { face: { type: 'string' } }, additionalProperties: false },
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        });
         assert.ok(!JSON.stringify(listed).includes('Secret Wing'));
-        // The instructions: rule 1 first, then the workspace's guide, marked as the installed plugin's.
+        // The instructions: rule 1, and no workspace guide (registration text) for an external app.
         const text = c.client.getInstructions();
         assert.ok(text.includes(RULE_1), 'rule 1');
-        assert.ok(text.indexOf(RULE_1) < text.indexOf('Guide line one.'));
-        assert.ok(text.includes('Notes from the Workspace demo workspace (installed plugin):\nGuide line one.\nGuide line two.'));
+        assert.ok(!text.includes('Guide line'), 'no guide before the privacy rules allow the project');
         assert.ok(!text.includes('You are the Magnusim Assistant'));
+        // A coding agent's session (its privacy is settled before it starts): the guide after
+        // rule 1, marked as the installed plugin's, and every tool in full.
+        const ctx = { tab, projectId: 'p1', simulationId: 's1', cloud: true, local: false };
+        const b = B.mintBinding({ conversation: `c-guide-${era}`, agent: 'fake', dispatch: { ctx: () => ctx, run: async () => assert.fail('no call here') } });
+        const a = await w.client({ era, binding: b.id });
+        const agentText = a.client.getInstructions();
+        assert.ok(agentText.indexOf(RULE_1) >= 0 && agentText.indexOf(RULE_1) < agentText.indexOf('Guide line one.'));
+        assert.ok(agentText.includes('Notes from the Workspace demo workspace (installed plugin):\nGuide line one.\nGuide line two.'));
+        const agentListed = Object.fromEntries((await a.client.listTools()).tools.map((t) => [t.name, t]));
+        assert.equal(agentListed[`${SLUG}__pick`].description, 'Picks a face of Secret Wing.');
+        assert.equal(agentListed.src_pick.description, 'Picks a face of Secret Wing.');
+        assert.deepEqual(agentListed.src_pick.inputSchema.properties.face.enum, ['Secret Wing root']);
+        B.dropBinding(b.id);
       } finally {
+        off();
         await w.close();
       }
     });
