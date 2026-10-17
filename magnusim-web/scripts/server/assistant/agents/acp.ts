@@ -242,6 +242,13 @@ export function permissionReply(optionId: string | null): RequestPermissionRespo
 
 // ---------------------------------------------------------------------------------------------
 // Readers (tolerant: anything malformed reads as absent)
+//
+// Names, descriptions, labels and plan entries are cleaned here (cleanText). Ids and values
+// (modes, models, config options and their values, sign-in methods, a tool call's title and
+// kind) are RAW, as the agent sent them, so they compare and go back to the agent exactly; they
+// are only capped. Raw text may hold control characters, terminal escapes and bidi marks:
+// cleanText() it before it is shown anywhere (a log line, the CLI, the page). The fields are
+// marked "Raw" below.
 // ---------------------------------------------------------------------------------------------
 
 type Obj = Record<string, unknown>;
@@ -252,6 +259,21 @@ const arr = (v: unknown, max: number): unknown[] => (Array.isArray(v) ? v.slice(
 
 const NAME_MAX = 64;
 const TITLE_MAX = 200;
+/** The longest raw id or value kept. */
+export const ID_MAX = 128;
+/** A raw id in a list of choices: dropped when longer than ID_MAX (it could not be chosen). */
+function choiceId(v: unknown): string | null {
+  const s = str(v);
+  return s && s.length <= ID_MAX ? s : null;
+}
+/**
+ * A raw id or current value that must never go unseen (a mode outside the allowed ones):
+ * cut to `max`, so a longer one still equals no shorter id.
+ */
+function rawId(v: unknown, max = ID_MAX): string | null {
+  const s = str(v);
+  return s == null ? null : s.slice(0, max);
+}
 /** A variable name an agent may suggest the person set. */
 const VAR_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -290,6 +312,7 @@ export function loadsSessions(init: unknown): boolean {
 export type AuthMethodType = 'agent' | 'terminal' | 'env_var';
 
 export interface AuthMethodView {
+  /** Raw (at most ID_MAX; a longer one drops the method): cleanText() before display. */
   id: string;
   name: string;
   description: string;
@@ -337,8 +360,8 @@ export function authMethods(init: unknown): AuthMethodView[] {
   for (const raw of arr(obj(init)?.authMethods, 32)) {
     const m = obj(raw);
     if (!m) continue;
-    const id = str(m.id);
-    if (!id || id.length > 128) continue;
+    const id = choiceId(m.id);
+    if (!id) continue;
     const meta = obj(m._meta);
     const view: AuthMethodView = {
       id,
@@ -380,12 +403,15 @@ export function authMethods(init: unknown): AuthMethodView[] {
 }
 
 export interface ModeView {
+  /** Raw (at most ID_MAX; a longer one drops the mode): cleanText() before display. */
   id: string;
+  /** Cleaned (a missing name is the id, cleaned). */
   name: string;
   description: string;
 }
 
 export interface ModesView {
+  /** Raw, cut to ID_MAX (a longer id is still seen, and equals no allowed one). */
   current: string;
   available: ModeView[];
 }
@@ -397,20 +423,24 @@ export function modes(session: unknown): ModesView | null {
   const available: ModeView[] = [];
   for (const raw of arr(m.availableModes, 32)) {
     const x = obj(raw);
-    const id = str(x?.id);
+    const id = choiceId(x?.id);
     if (!x || !id) continue;
-    available.push({ id, name: cleanText(str(x.name) ?? id, NAME_MAX) || id, description: cleanText(str(x.description) ?? '', TITLE_MAX) });
+    available.push({ id, name: cleanText(str(x.name) ?? id, NAME_MAX) || cleanText(id, NAME_MAX), description: cleanText(str(x.description) ?? '', TITLE_MAX) });
   }
-  return { current: str(m.currentModeId) ?? '', available };
+  return { current: rawId(m.currentModeId) ?? '', available };
 }
 
 export interface ConfigOptionView {
+  /** Raw, cut to ID_MAX (the option stays, so a mode it holds is still seen). */
   id: string;
+  /** Cleaned. */
   name: string;
-  /** 'mode' | 'model' | 'model_config' | 'thought_level' | another category, or null. */
+  /** Raw, cut to 64: 'mode' | 'model' | 'model_config' | 'thought_level' | another category, or null. */
   category: string | null;
   type: 'select' | 'boolean' | 'other';
+  /** Raw, cut to ID_MAX when a string. */
   current: string | boolean | null;
+  /** `value` raw (at most ID_MAX; a longer one drops the choice); `name` cleaned. */
   options: Array<{ value: string; name: string }>;
 }
 
@@ -420,7 +450,7 @@ export function configOptions(v: unknown): ConfigOptionView[] {
   const out: ConfigOptionView[] = [];
   for (const raw of arr(list, 32)) {
     const o = obj(raw);
-    const id = str(o?.id);
+    const id = rawId(o?.id);
     if (!o || !id) continue;
     const type = o.type === 'select' ? 'select' : o.type === 'boolean' ? 'boolean' : 'other';
     const options: Array<{ value: string; name: string }> = [];
@@ -431,17 +461,17 @@ export function configOptions(v: unknown): ConfigOptionView[] {
       const inner = Array.isArray(it.options) ? arr(it.options, 200) : [it];
       for (const opt of inner) {
         const p = obj(opt);
-        const value = str(p?.value);
-        if (p && value && options.length < 200) options.push({ value, name: cleanText(str(p.name) ?? value, NAME_MAX) || value });
+        const value = choiceId(p?.value);
+        if (p && value && options.length < 200) options.push({ value, name: cleanText(str(p.name) ?? value, NAME_MAX) || cleanText(value, NAME_MAX) });
       }
     }
     const cur = o.currentValue;
     out.push({
       id,
-      name: cleanText(str(o.name) ?? id, NAME_MAX) || id,
-      category: str(o.category),
+      name: cleanText(str(o.name) ?? id, NAME_MAX) || cleanText(id, NAME_MAX),
+      category: rawId(o.category, NAME_MAX),
       type,
-      current: typeof cur === 'string' || typeof cur === 'boolean' ? cur : null,
+      current: typeof cur === 'string' ? rawId(cur) : typeof cur === 'boolean' ? cur : null,
       options,
     });
   }
@@ -455,12 +485,15 @@ export function configCurrent(options: ConfigOptionView[], category: string): { 
 }
 
 export interface ModelView {
+  /** Raw (at most ID_MAX; a longer one drops the model): cleanText() before display. */
   id: string;
+  /** Cleaned. */
   name: string;
   description: string;
 }
 
 export interface ModelsView {
+  /** Raw, cut to ID_MAX. */
   current: string;
   available: ModelView[];
 }
@@ -472,12 +505,12 @@ export function models(session: unknown): ModelsView | null {
   const available: ModelView[] = [];
   for (const raw of arr(m.availableModels, 200)) {
     const x = obj(raw);
-    const id = str(x?.modelId) ?? str(x?.id);
+    const id = choiceId(x?.modelId) ?? choiceId(x?.id);
     if (!x || !id) continue;
-    available.push({ id, name: cleanText(str(x.name) ?? id, NAME_MAX) || id, description: cleanText(str(x.description) ?? '', TITLE_MAX) });
+    available.push({ id, name: cleanText(str(x.name) ?? id, NAME_MAX) || cleanText(id, NAME_MAX), description: cleanText(str(x.description) ?? '', TITLE_MAX) });
   }
   if (!available.length) return null;
-  return { current: str(m.currentModelId) ?? '', available };
+  return { current: rawId(m.currentModelId) ?? '', available };
 }
 
 export function sessionIdOf(session: unknown): string | null {
@@ -501,8 +534,11 @@ export interface ToolUpdateView {
   kind: 'tool';
   /** tool_call (true) or tool_call_update (false). */
   isNew: boolean;
+  /** Raw (at most 256; a longer one drops the update). */
   id: string;
+  /** Raw, cut to 4000: model-written text (a shell tool's command); redact() and cleanText() before display. */
   title: string | null;
+  /** Raw, cut to 64. */
   toolKind: string | null;
   status: ToolStatus | null;
   /** The update's `_meta` as sent: only the adapter fields OursMatcher reads matter. */
@@ -522,8 +558,11 @@ export type AgentUpdate =
   | { kind: 'thought'; text: string }
   | ToolUpdateView
   | { kind: 'plan'; entries: PlanEntryView[] }
+  /** `mode` raw, cut to ID_MAX (never dropped: a mode outside the allowed ones must be seen). */
   | { kind: 'mode'; mode: string }
+  /** `model` raw, cut to ID_MAX. */
   | { kind: 'model'; model: string }
+  /** `mode` and `model` raw (the current values of the mode and model options). */
   | { kind: 'config'; options: ConfigOptionView[]; mode: string | null; model: string | null }
   | { kind: 'usage'; used: number; size: number };
 
@@ -555,7 +594,7 @@ export function update(u: unknown): AgentUpdate | null {
         isNew: o.sessionUpdate === 'tool_call',
         id,
         title: typeof o.title === 'string' ? o.title.slice(0, 4000) : null,
-        toolKind: str(o.kind),
+        toolKind: rawId(o.kind, NAME_MAX),
         status: status && TOOL_STATUSES.has(status) ? (status as ToolStatus) : null,
         meta: obj(o._meta),
       };
@@ -576,12 +615,12 @@ export function update(u: unknown): AgentUpdate | null {
       return { kind: 'plan', entries };
     }
     case 'current_mode_update': {
-      const mode = str(o.currentModeId) ?? str(o.modeId);
+      const mode = rawId(o.currentModeId) ?? rawId(o.modeId);
       return mode ? { kind: 'mode', mode } : null;
     }
     case 'current_model_update': {
       // Pre-v1.
-      const model = str(o.currentModelId) ?? str(o.modelId);
+      const model = rawId(o.currentModelId) ?? rawId(o.modelId);
       return model ? { kind: 'model', model } : null;
     }
     case 'config_option_update': {
@@ -608,7 +647,9 @@ export type PermissionKind = 'allow_once' | 'allow_always' | 'reject_once' | 're
 const PERMISSION_KINDS = new Set<string>(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
 
 export interface PermissionOptionView {
+  /** Raw (at most ID_MAX; a longer one drops the option). */
   optionId: string;
+  /** Cleaned. */
   name: string;
   kind: PermissionKind | 'other';
 }
@@ -616,8 +657,9 @@ export interface PermissionOptionView {
 export interface PermissionView {
   sessionId: string | null;
   toolCallId: string | null;
-  /** As sent (not cleaned or redacted: a title is model-written text). */
+  /** Raw, cut to 4000 (not cleaned or redacted: a title is model-written text). */
   title: string;
+  /** Raw, cut to 64. */
   kind: string | null;
   rawInput: unknown;
   /** The tool name an adapter put in the tool call's `_meta` (`claudeCode.toolName`), if any. */
@@ -637,7 +679,7 @@ export function permission(params: unknown): PermissionView {
   const options: PermissionOptionView[] = [];
   for (const raw of arr(p.options, 8)) {
     const o = obj(raw);
-    const optionId = str(o?.optionId);
+    const optionId = choiceId(o?.optionId);
     if (!o || !optionId) continue;
     const kind = str(o.kind);
     options.push({ optionId, name: cleanText(str(o.name) ?? '', NAME_MAX), kind: kind && PERMISSION_KINDS.has(kind) ? (kind as PermissionKind) : 'other' });
@@ -647,7 +689,7 @@ export function permission(params: unknown): PermissionView {
     sessionId: str(p.sessionId),
     toolCallId: str(call.toolCallId),
     title: typeof call.title === 'string' ? call.title.slice(0, 4000) : '',
-    kind: str(call.kind),
+    kind: rawId(call.kind, NAME_MAX),
     rawInput: call.rawInput,
     metaToolName: metaName ? metaName.slice(0, 256) : null,
     toolMeta,
@@ -678,12 +720,13 @@ export const REJECT_KINDS: PermissionKind[] = ['reject_once', 'reject_always'];
  * Which adapter-set fields mark one of Magnusim's tools (the catalogue's `ours`, per agent):
  * - 'tool_name_meta' (the Claude Code adapter): `_meta.claudeCode.toolName` is
  *   `mcp__magnusim__<tool>`, and `_meta.claudeCode.mcpServer.name`, when present, is `magnusim`;
- *   its permission requests carry the same field.
+ *   its permission requests carry the same field, and one without it is never ours.
  * - 'mcp_call_flag' (the Codex adapter): a tool call flagged `_meta.is_mcp_tool_call` with the
  *   adapter-built title `mcp.magnusim.<tool>`; a permission request flagged
  *   `_meta.is_mcp_tool_approval` counts only when its `toolCall.toolCallId` is a tool call
  *   already classed ours (the approval's own title is fixed text).
- * A title alone never counts: a shell tool's title is the command the model wrote.
+ * A title alone never counts: a shell tool's title is the command the model wrote. An id
+ * classed ours stops being ours when a later update for it names something else.
  */
 export type OursRule = 'tool_name_meta' | 'mcp_call_flag';
 
@@ -706,7 +749,12 @@ export class OursMatcher {
   tool(u: ToolUpdateView): string | null {
     if (!this.rule) return null;
     const fromFields = this.fromFields(u.meta, u.title);
-    if (fromFields === false) return null;
+    if (fromFields === false) {
+      // The adapter now names something else for this id: not ours any more, for its later
+      // updates and permission requests too.
+      this.ours.delete(u.id);
+      return null;
+    }
     if (typeof fromFields === 'string') {
       this.ours.set(u.id, fromFields);
       return fromFields;
@@ -718,12 +766,14 @@ export class OursMatcher {
   permission(p: PermissionView): string | null {
     if (!this.rule || !p.toolCallId) return null;
     if (this.rule === 'tool_name_meta') {
+      // That adapter names the tool on its permission requests too: only that field counts
+      // (an id remembered from an earlier update never auto-allows a request by itself).
       const fromFields = this.fromFields(p.toolMeta, null);
-      if (fromFields === false) return null;
-      if (typeof fromFields === 'string') return fromFields;
-      return this.ours.get(p.toolCallId) ?? null;
+      if (fromFields === false) this.ours.delete(p.toolCallId);
+      return typeof fromFields === 'string' ? fromFields : null;
     }
-    // mcp_call_flag: the approval flag plus a tool call already classed ours.
+    // mcp_call_flag: the approval flag plus a tool call already classed ours (and not since
+    // contradicted).
     if (p.meta?.is_mcp_tool_approval !== true) return null;
     return this.ours.get(p.toolCallId) ?? null;
   }

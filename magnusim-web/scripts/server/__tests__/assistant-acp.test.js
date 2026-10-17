@@ -6,10 +6,10 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-assistant-acp-'));
@@ -281,8 +281,10 @@ describe('acp.ts builders', () => {
   });
 
   it('session/new hands over the bridge with --binding and --info, no environment, no type key, no token', () => {
+    // The token lives in the owner-only file the bridge reads (--info): only its path goes.
     const token = 'tok_' + 'Z'.repeat(40);
-    process.env.MAGNUSIM_MCP_TOKEN_FOR_TEST = token;
+    mkdirSync(dirname(BRIDGE.info), { recursive: true });
+    writeFileSync(BRIDGE.info, JSON.stringify({ version: 1, port: 1, token }));
     try {
       const p = acp.sessionNewParams(join(ROOT, 'work'), BRIDGE, {});
       assert.deepEqual(p.mcpServers, [{ name: 'magnusim', command: process.execPath, args: [BRIDGE.script, '--binding', BRIDGE.binding, '--info', BRIDGE.info], env: [] }]);
@@ -298,7 +300,7 @@ describe('acp.ts builders', () => {
       assert.ok(!t2.includes('MAGNUSIM_') && !t2.includes(token));
       conforms('NewSessionRequest', withMeta);
     } finally {
-      delete process.env.MAGNUSIM_MCP_TOKEN_FOR_TEST;
+      rmSync(BRIDGE.info, { force: true });
     }
   });
 
@@ -436,6 +438,48 @@ describe('acp.ts readers', () => {
     assert.equal(acp.modes({}), null);
   });
 
+  it('ids and values are raw but capped: a long choice is dropped, a long current value is cut and still seen', () => {
+    const long = (c) => c.repeat(200);
+    const ESC = String.fromCharCode(27);
+    const m = acp.modes({ modes: { currentModeId: `default${long('x')}`, availableModes: [{ id: long('y'), name: 'Too long' }, { id: `plan${ESC}[2J`, name: `Plan${ESC}[2J` }, { id: 'default', name: 'Default' }] } });
+    assert.deepEqual(
+      m.available.map((x) => x.id),
+      [`plan${ESC}[2J`, 'default'],
+      'ids raw, a long one dropped',
+    );
+    assert.equal(m.available[0].name, 'Plan [2J', 'names cleaned');
+    assert.equal(m.current.length, acp.ID_MAX);
+    assert.notEqual(m.current, 'default');
+    assert.deepEqual(acp.update({ sessionUpdate: 'current_mode_update', currentModeId: long('b') }), { kind: 'mode', mode: 'b'.repeat(acp.ID_MAX) }, 'a long mode is still reported');
+    assert.equal(acp.update({ sessionUpdate: 'current_model_update', currentModelId: long('m') }).model.length, acp.ID_MAX);
+    const cfg = acp.update({
+      sessionUpdate: 'config_option_update',
+      configOptions: [{ id: long('i'), name: 'Mode', category: 'mode', type: 'select', currentValue: long('v'), options: [{ value: long('o'), name: 'Long' }, { value: 'plan', name: 'Plan' }] }],
+    });
+    assert.equal(cfg.options[0].id.length, acp.ID_MAX, 'an option with a long id stays, so its mode is seen');
+    assert.equal(cfg.mode, 'v'.repeat(acp.ID_MAX));
+    assert.deepEqual(cfg.options[0].options, [{ value: 'plan', name: 'Plan' }]);
+    assert.equal(acp.configOptions([{ id: 'x', category: long('k'), type: 'select' }])[0].category.length, 64);
+    const models = acp.models({ models: { currentModelId: long('c'), availableModels: [{ modelId: long('d') }, { modelId: 'm1' }] } });
+    assert.deepEqual(
+      models.available.map((x) => x.id),
+      ['m1'],
+    );
+    assert.equal(models.current.length, acp.ID_MAX);
+    assert.deepEqual(
+      acp.authMethods({ authMethods: [{ id: long('a'), name: 'A' }, { id: 'ok', name: 'OK' }] }).map((x) => x.id),
+      ['ok'],
+    );
+    const p = acp.permission({ toolCall: { toolCallId: 't', kind: long('k') }, options: [{ optionId: long('o'), name: 'Allow', kind: 'allow_once' }, { optionId: 'r', name: 'Reject', kind: 'reject_once' }] });
+    assert.equal(p.kind.length, 64);
+    assert.deepEqual(
+      p.options.map((o) => o.optionId),
+      ['r'],
+      'an option with a long id is dropped (so never auto-allowed)',
+    );
+    assert.equal(acp.update({ sessionUpdate: 'tool_call', toolCallId: 't', kind: long('k') }).toolKind.length, 64);
+  });
+
   it('maps each session update (spec 4.7), ignoring the rest', () => {
     const u = acp.update;
     assert.deepEqual(u({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi' } }), { kind: 'text', text: 'Hi' });
@@ -514,7 +558,8 @@ describe('which tool calls are Magnusim tools: only adapter-set fields count', (
     const m = new acp.OursMatcher('tool_name_meta', served);
     assert.equal(m.tool(tool({ toolCallId: 'a', title: 'anything', _meta: META('mcp__magnusim__add') })), 'add');
     assert.equal(m.tool(toolUpd({ toolCallId: 'a', status: 'completed' })), 'add', 'its later updates');
-    assert.equal(m.permission(perm({ toolCallId: 'a' })), 'add', 'a permission that refers to it');
+    assert.equal(m.permission(perm({ toolCallId: 'a', _meta: META('mcp__magnusim__add') })), 'add', 'a permission that names it');
+    assert.equal(m.permission(perm({ toolCallId: 'a', title: 'rm -rf ~', kind: 'execute' })), null, 'never by a remembered id alone');
     assert.equal(m.permission(perm({ toolCallId: 'b', title: 'x', _meta: META('mcp__magnusim__app_status') })), 'app_status');
     assert.equal(m.tool(tool({ toolCallId: 'c', _meta: META('mcp__magnusim__ai-demo__add', null) })), 'ai-demo__add', 'no mcpServer field: the name decides');
     // Refused:
@@ -543,6 +588,22 @@ describe('which tool calls are Magnusim tools: only adapter-set fields count', (
     assert.equal(m.tool(tool({ toolCallId: 'd', title: 'mcp.magnusim.rm_rf', _meta: { is_mcp_tool_call: true } })), null, 'not served');
     assert.equal(m.tool(tool({ toolCallId: 'e', title: 'mcp.other.add', _meta: { is_mcp_tool_call: true } })), null);
     assert.equal(m.permission(perm({ toolCallId: 'c' }, { is_mcp_tool_approval: true })), null);
+  });
+
+  it('an id stops being ours once an update or request for it names something else', () => {
+    const m = new acp.OursMatcher('tool_name_meta', served);
+    assert.equal(m.tool(tool({ toolCallId: 'x', _meta: META('mcp__magnusim__add') })), 'add');
+    assert.equal(m.tool(toolUpd({ toolCallId: 'x', _meta: META('Bash', null) })), null);
+    assert.equal(m.tool(toolUpd({ toolCallId: 'x', status: 'completed' })), null, 'its later updates without fields are not ours either');
+    assert.equal(m.has('x'), false);
+    assert.equal(m.tool(tool({ toolCallId: 'y', _meta: META('mcp__magnusim__add') })), 'add');
+    assert.equal(m.permission(perm({ toolCallId: 'y', _meta: META('Bash', null) })), null);
+    assert.equal(m.tool(toolUpd({ toolCallId: 'y', status: 'completed' })), null);
+
+    const f = new acp.OursMatcher('mcp_call_flag', served);
+    assert.equal(f.tool(tool({ toolCallId: 'z', title: 'mcp.magnusim.add', _meta: { is_mcp_tool_call: true } })), 'add');
+    assert.equal(f.tool(toolUpd({ toolCallId: 'z', title: 'mcp.other.exec', _meta: { is_mcp_tool_call: true } })), null);
+    assert.equal(f.permission(perm({ toolCallId: 'z', kind: 'execute' }, { is_mcp_tool_approval: true })), null, 'its approval is a question for the person');
   });
 
   it('an agent with no known field (a custom command) never has a tool of ours', () => {

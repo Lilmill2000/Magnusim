@@ -27,7 +27,8 @@
  *     waits on fd 3; the trampoline goes in the job first, then gets `go`, so the agent and all
  *     it starts are born inside the job. If the keeper is blocked or fails, the agent starts
  *     without a job and its tree kill is best effort (agentsTreeKill() says so).
- * - stderr is kept as a ring of its last 40 lines of 400 characters, redacted (tail()).
+ * - stderr is kept as a ring of its last 40 lines of 400 characters, redacted and cleaned of
+ *   control characters, terminal escapes' ESC and bidi marks (tail()).
  *
  * Stop (stop(), idempotent; the tree kill):
  * - POSIX: stdin closed, up to 1.2 s for the agent to end, SIGTERM to the group, up to 1.2 s
@@ -57,6 +58,7 @@ import { ensurePrivateDir, readJsonFile, writeFileAtomic } from '../files.ts';
 import { assistantDataDir, assistantHome } from '../home.ts';
 import { alog } from '../log.ts';
 import { redact } from '../redact.ts';
+import { cleanText } from '../sanitize.ts';
 import { keeperLooksBlocked, noteKeeperOutcome, takeKeeper, type JobKeeper } from './job-win.ts';
 import type { ExitInfo } from './rpc.ts';
 
@@ -614,10 +616,11 @@ export class AgentProcess {
     }
   }
 
-  /** The agent's last stderr lines (at most 40 of 400 characters), redacted. */
+  /** The agent's last stderr lines (at most 40 of 400 characters), redacted and cleaned. */
   tail(): string[] {
     const out = [...this.ring];
-    if (this.partial.trim()) out.push(redact(this.partial).slice(0, STDERR_LINE_CHARS));
+    const last = stderrLine(this.partial);
+    if (last) out.push(last);
     return out.slice(-STDERR_LINES);
   }
 
@@ -723,10 +726,10 @@ export class AgentProcess {
     this.partial += d;
     let nl: number;
     while ((nl = this.partial.indexOf('\n')) >= 0) {
-      const line = this.partial.slice(0, nl).replace(/\r$/, '');
+      const line = stderrLine(this.partial.slice(0, nl));
       this.partial = this.partial.slice(nl + 1);
-      if (!line.trim()) continue;
-      this.ring.push(redact(line).slice(0, STDERR_LINE_CHARS));
+      if (!line) continue;
+      this.ring.push(line);
       if (this.ring.length > STDERR_LINES) this.ring.shift();
     }
     // A line that never ends is kept to its cap only.
@@ -734,12 +737,21 @@ export class AgentProcess {
   }
 
   private flushStderr(): void {
-    if (this.partial.trim()) {
-      this.ring.push(redact(this.partial).slice(0, STDERR_LINE_CHARS));
+    const line = stderrLine(this.partial);
+    if (line) {
+      this.ring.push(line);
       if (this.ring.length > STDERR_LINES) this.ring.shift();
     }
     this.partial = '';
   }
+}
+
+/**
+ * One stderr line as kept: redacted, then cleaned (no control characters, terminal escapes'
+ * ESC or bidi marks, single spaces), at most 400 characters ('' for nothing left).
+ */
+function stderrLine(raw: string): string {
+  return cleanText(redact(raw), STDERR_LINE_CHARS);
 }
 
 interface ExitWatch {

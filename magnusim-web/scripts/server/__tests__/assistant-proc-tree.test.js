@@ -347,10 +347,13 @@ describe('killProcessTreeAsync', LIMIT, () => {
 
 // --------------------------------------------------------------------------------------------
 describe('the agent process', LIMIT, () => {
-  it('runs in its working folder with only the allowlisted environment, and keeps a redacted stderr ring', async () => {
+  it('runs in its working folder with only the allowlisted environment, and keeps a redacted, cleaned stderr ring', async () => {
     const secret = 'sekret-for-the-ring-0123456789';
     registerSecretForRedaction(secret);
-    const fake = await fakeAgent({ envReport: ['HOME', 'USERPROFILE', 'ACME_API_KEY', 'OTHER_API_KEY', 'MAGNUSIM_ASSISTANT_HOME', 'NODE_OPTIONS'], stderrAtStart: `starting with ${secret}` });
+    // A terminal escape and a bidi mark: the ring keeps neither (the CLI or page may show a line).
+    const ESC = String.fromCharCode(27);
+    const RLO = String.fromCharCode(0x202e);
+    const fake = await fakeAgent({ envReport: ['HOME', 'USERPROFILE', 'ACME_API_KEY', 'OTHER_API_KEY', 'MAGNUSIM_ASSISTANT_HOME', 'NODE_OPTIONS'], stderrAtStart: `starting with ${secret} ${ESC}[31mred${ESC}[0m ${RLO}end` });
     const { proc } = await startFake(fake, {
       start: { env: { keyVars: ['ACME_API_KEY'] }, baseEnv: { ...process.env, ACME_API_KEY: 'a', OTHER_API_KEY: 'o', NODE_OPTIONS: '--no-warnings' } },
     });
@@ -364,7 +367,8 @@ describe('the agent process', LIMIT, () => {
     await until(() => proc.tail().some((l) => l.includes('starting')));
     const tail = proc.tail().join('\n');
     assert.ok(!tail.includes(secret), tail);
-    assert.match(tail, /starting with \[redacted\]/);
+    assert.match(tail, /starting with \[redacted\] \[31mred \[0m end/);
+    assert.ok(!tail.includes(ESC) && !tail.includes(RLO), JSON.stringify(tail));
     await proc.stop();
     assert.ok(!existsSync(proc.cwd), 'the working folder is removed');
   });
