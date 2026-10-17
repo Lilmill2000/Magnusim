@@ -7,7 +7,7 @@
  * explicit, so no SDK reads a key, token, profile, organization or address from the
  * environment or from a profile file.
  */
-import { isLoopbackUrl, type AssistantSettings } from '../settings.ts';
+import { isLoopbackUrl, serverOrigin, type AssistantSettings } from '../settings.ts';
 import { ProviderError, type ProviderAdapter, type ProviderId, type ProviderRequest, type ProviderResult, type StreamEvent } from '../types.ts';
 import { KeyError, type KeySlot, type KeyStatus } from '../secrets/store.ts';
 import { anthropicAdapter } from './anthropic.ts';
@@ -69,6 +69,11 @@ function lendError(err: KeyError): ProviderError {
   return new ProviderError('no_key', err.message);
 }
 
+/** Why a saved server token is not sent: it was saved for another server address. */
+export function tokenElsewhereText(origin: string | null): string {
+  return `The saved server token is for ${origin ?? 'another server address'}. Save it again for this server, or remove it, in Settings → Assistant.`;
+}
+
 /** The adapter for the settings' provider (a snapshot: later settings changes don't reach it). */
 export function createAdapter(settings: ProviderSettings, secrets: KeyLender, o: CreateOptions = {}): ProviderAdapter {
   const provider = settings.provider;
@@ -76,7 +81,12 @@ export function createAdapter(settings: ProviderSettings, secrets: KeyLender, o:
   const lend = (slot: KeySlot, optional: boolean): AdapterOptions['borrowKey'] =>
     async <T>(use: (key: string | null) => Promise<T>): Promise<T> => {
       await secrets.load?.();
-      if (optional && !secrets.status()[slot]?.set) return use(null);
+      if (optional) {
+        const saved = secrets.status()[slot];
+        if (!saved?.set) return use(null);
+        // A server token goes only to the server it was saved for (never to an address set later).
+        if (!saved.origin || saved.origin !== serverOrigin(settings.base_url)) throw new ProviderError('no_key', tokenElsewhereText(saved.origin ?? null));
+      }
       try {
         return await secrets.withKey(slot, (key) => use(key));
       } catch (err) {

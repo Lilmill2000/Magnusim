@@ -52,7 +52,7 @@ import { assistantDataDir, assistantHomeIsOverridden, secretsDir } from './assis
 import { spendLedger, type SpendLedger } from './assistant/ledger.ts';
 import { alog } from './assistant/log.ts';
 import { redact } from './assistant/redact.ts';
-import { consentCount, isLoopbackUrl, loadSettings, PROVIDER_IDS, saveSettings, type AssistantSettings } from './assistant/settings.ts';
+import { consentCount, isLoopbackUrl, loadSettings, PROVIDER_IDS, saveSettings, serverOrigin, type AssistantSettings } from './assistant/settings.ts';
 import { isKeySlot, KeyError, secretStore, type Store } from './assistant/secrets/store.ts';
 import { assistantState, beginAssistantLifetime, onAssistantShutdown, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
 import { curatedModels, FALLBACK_TARGETS, PRICES_AS_OF, priceInfo } from './assistant/prices.ts';
@@ -211,6 +211,10 @@ function readiness({ settings: s, store, deps }: StatusSources): { ready: boolea
   if (s.provider !== 'openai_compatible') {
     if (store.storage().kind === 'unavailable') return no('storage_unavailable');
     if (!key.set) return no('no_key');
+  } else if (key.set) {
+    // A saved server token is sent with every request: one that can't be unlocked, or is for another address, stops them.
+    if (store.storage().reason === 'blocked') return no('token_locked');
+    if (!key.origin || key.origin !== serverOrigin(s.base_url)) return no('token_other_server');
   }
   if (key.set && key.state === 'unreadable') return no('key_unreadable');
   return { ready: true, ready_reason: null };
@@ -584,7 +588,9 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       }
       let warning: string | undefined;
       try {
-        ({ warning } = await store.setKey(provider, typeof key === 'string' ? key : ''));
+        // A server token is saved for the server address set now.
+        const server = provider === 'openai_compatible' ? (await loadSettings()).base_url : undefined;
+        ({ warning } = await store.setKey(provider, typeof key === 'string' ? key : '', { server }));
       } catch (err) {
         if (keyRefusal(ctx, err, store)) return;
         throw err;

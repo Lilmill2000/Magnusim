@@ -123,12 +123,22 @@ under a master key:
   standard input, never on a command line. It protects keys from other accounts
   and other PCs, not from other programs running as the same account. If Windows
   blocks that helper (Constrained Language Mode, application control or an
-  antivirus), keys can't be saved on that PC; there is no unencrypted fallback,
-  and a local server still works.
+  antivirus), keys can't be saved or unlocked on that PC; there is no
+  unencrypted fallback. A local server still works without a token: a saved
+  server token can't be unlocked either, and Settings says to remove it.
 - On other systems the master key is kept in a file only the user's account can
   read (mode 0600, in a 0700 folder). The operating system does not encrypt it,
   and Settings says so.
 
+A local server's token is tied to the server address it was saved for, and is
+sent nowhere else: once the address changes, it is not sent until it is saved
+again for the new one. Saved for a server outside this PC whose address starts
+with `http://`, it travels there unencrypted, and Settings warns when it is
+saved.
+
+Every copy of Magnusim run by one Windows account shares
+`%APPDATA%\Magnusim`, and reads the key files again before each use, save or
+removal of a key, so a key removed in one copy is removed in all of them.
 Removing Magnusim's folder does not remove `%APPDATA%\Magnusim`; remove keys in
 Settings before handing the PC to someone else.
 

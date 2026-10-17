@@ -26,7 +26,7 @@ const fake = await startFakeLlm();
 // Read once, at the first cloud request: both cloud adapters talk to the fake.
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
 
-const { createAdapter, sendWithOneResend, isCloud, destinationOf } = await import('../assistant/providers/index.ts');
+const { createAdapter, sendWithOneResend, isCloud, destinationOf, tokenElsewhereText } = await import('../assistant/providers/index.ts');
 const { guardedFetch, filterHeaders, Watchdog } = await import('../assistant/providers/guarded-fetch.ts');
 const { mapProviderError } = await import('../assistant/providers/errors.ts');
 const { resolveTestProviderUrl, cloudBaseUrl } = await import('../assistant/providers/endpoints.ts');
@@ -34,7 +34,7 @@ const { sdkInstalled, depsStatus, setSdkSpecifierForTests, loadSdkClass, DEPS_MI
 const { anthropicClientOptions, MessageAccumulator } = await import('../assistant/providers/anthropic.ts');
 const { CLOUD_WATCHDOG, LOCAL_WATCHDOG } = await import('../assistant/providers/common.ts');
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
-const { STORAGE_NOTES, KeyError } = await import('../assistant/secrets/store.ts');
+const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
 const prices = await import('../assistant/prices.ts');
 const { ProviderError } = await import('../assistant/types.ts');
@@ -599,6 +599,19 @@ describe('error mapping', () => {
     assert.equal(fake.requests().length, before);
   });
 
+  it('a server token with no address recorded, or for another address, is sent nowhere', async () => {
+    const before = fake.requests().length;
+    for (const origin of [null, undefined, 'http://127.0.0.1:1']) {
+      const tokenFor = { status: () => ({ ...lender.status(), openai_compatible: { set: true, state: 'ok', origin } }), withKey: async (slot, use) => use('token-0001') };
+      await assert.rejects(
+        adapterFor('openai_compatible', { lender: tokenFor }).listModels(new AbortController().signal),
+        (e) => e instanceof ProviderError && e.code === 'no_key' && e.message === tokenElsewhereText(origin ?? null),
+        String(origin),
+      );
+    }
+    assert.equal(fake.requests().length, before);
+  });
+
   it('mapProviderError: connection codes, timeouts, aborts and our own errors', () => {
     const ctx = { provider: 'openai_compatible', label: 'The local server', model: 'm', baseUrl: 'http://127.0.0.1:1234/v1', local: true };
     const conn = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
@@ -1127,10 +1140,14 @@ describe('the routes: status, models and the connection test', () => {
     const before = chat().length;
     try {
       let r = await api('POST', '/api/assistant/test', {});
-      assert.deepEqual([r.status, r.json.ok, r.json.code, r.json.error], [200, false, 'storage_unavailable', STORAGE_NOTES.timeout]);
+      assert.deepEqual([r.status, r.json.ok, r.json.code, r.json.error], [200, false, 'storage_unavailable', UNLOCK_NOTES.timeout]);
       assert.equal((await spendLedger()).openCount(), 0, 'the reservation was settled');
+      // Nothing to wait for: the status is not held back, and a Test at once tries the helper again.
+      assert.equal((await api('GET', '/api/assistant/status')).json.storage.reason, null);
+      r = await api('POST', '/api/assistant/test', {});
+      assert.deepEqual([r.status, r.json.ok, r.json.code, r.json.error], [200, false, 'storage_unavailable', UNLOCK_NOTES.timeout]);
       r = await api('GET', '/api/assistant/models?provider=anthropic');
-      assert.deepEqual([r.status, r.json.code, r.json.error], [502, 'storage_unavailable', STORAGE_NOTES.timeout]);
+      assert.deepEqual([r.status, r.json.code, r.json.error], [502, 'storage_unavailable', UNLOCK_NOTES.timeout]);
       assert.equal(chat().length, before, 'nothing was sent');
     } finally {
       process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
@@ -1163,5 +1180,81 @@ describe('the routes: status, models and the connection test', () => {
     assert.match(r.json.error, /Today's \$0\.10 limit is reached/);
     assert.equal(chat().length, before, 'nothing was sent');
     await ledger.settle(held, 0);
+  });
+
+  it('a saved server token goes only to the server it was saved for; the status says when it is for another or can’t be unlocked', async () => {
+    const TOKEN = 'local-server-token-0123456789';
+    // Two local servers that list one model and note the token each request carries.
+    const seen = [];
+    const servers = [];
+    for (const n of [0, 1]) {
+      const srv = http.createServer((req, res) => {
+        seen.push({ server: n, path: req.url, auth: req.headers.authorization ?? null });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', data: [{ id: 'local-model', object: 'model', created: 0, owned_by: 'me' }] }));
+      });
+      await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+      servers.push(srv);
+    }
+    const origin = (n) => `http://127.0.0.1:${servers[n].address().port}`;
+    const base = (n) => `${origin(n)}/v1`;
+    try {
+      await api('POST', '/api/assistant/settings', { provider: 'openai_compatible', base_url: base(0), model: 'local-model' });
+      let r = await api('POST', '/api/assistant/key', { provider: 'openai_compatible', key: TOKEN });
+      assert.equal(r.status, 200);
+      assert.equal(r.json.warning, undefined);
+      assert.equal(r.json.keys.openai_compatible.origin, origin(0));
+      assert.deepEqual([r.json.ready, r.json.ready_reason], [true, null]);
+      r = await api('GET', '/api/assistant/models?provider=openai_compatible');
+      assert.deepEqual([r.status, r.json.source], [200, 'server']);
+      assert.deepEqual(seen.splice(0), [{ server: 0, path: '/v1/models', auth: `Bearer ${TOKEN}` }]);
+
+      // Another address: the token is not sent there, and the status and each use say why.
+      let s = (await api('POST', '/api/assistant/settings', { base_url: base(1) })).json;
+      assert.deepEqual([s.ready, s.ready_reason], [false, 'token_other_server']);
+      r = await api('GET', '/api/assistant/models?provider=openai_compatible');
+      assert.deepEqual([r.status, r.json.code, r.json.error], [502, 'no_key', tokenElsewhereText(origin(0))]);
+      r = await api('POST', '/api/assistant/test', {});
+      assert.deepEqual([r.json.ok, r.json.code, r.json.error], [false, 'no_key', tokenElsewhereText(origin(0))]);
+      assert.deepEqual(seen, [], 'nothing reached the other server');
+
+      // Saved for a server off this PC on plain http: kept, with a warning (nothing is sent).
+      await api('POST', '/api/assistant/settings', { base_url: 'http://192.168.1.20:1234/v1', confirm_remote: true });
+      r = await api('POST', '/api/assistant/key', { provider: 'openai_compatible', key: TOKEN });
+      assert.equal(r.status, 200);
+      assert.equal(r.json.warning, 'http://192.168.1.20:1234 is not on this PC and its address starts with http://, so the token travels to it unencrypted.');
+
+      // Saved again for the second server, it goes there.
+      await api('POST', '/api/assistant/settings', { base_url: base(1) });
+      r = await api('POST', '/api/assistant/key', { provider: 'openai_compatible', key: TOKEN });
+      assert.deepEqual([r.json.ready, r.json.keys.openai_compatible.origin, r.json.warning], [true, origin(1), undefined]);
+      r = await api('GET', '/api/assistant/models?provider=openai_compatible');
+      assert.equal(r.status, 200);
+      assert.deepEqual(seen.splice(0), [{ server: 1, path: '/v1/models', auth: `Bearer ${TOKEN}` }]);
+
+      // After a restart Windows blocks the key helper: the token can't be unlocked, and Settings says so before any use.
+      process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'blocked';
+      resetAssistantState();
+      s = (await api('GET', '/api/assistant/status')).json;
+      assert.deepEqual([s.ready, s.ready_reason, s.keys.openai_compatible.set], [false, 'token_locked', true]);
+      assert.deepEqual(s.storage, { kind: 'unavailable', reason: 'blocked', note: TOKEN_BLOCKED_NOTE });
+      r = await api('GET', '/api/assistant/models?provider=openai_compatible');
+      assert.deepEqual([r.status, r.json.code, r.json.error], [502, 'storage_unavailable', TOKEN_BLOCKED_TEXT]);
+      assert.deepEqual(seen, []);
+      // Removing it is the way out: the server is used without a token.
+      r = await api('POST', '/api/assistant/key/remove', { provider: 'openai_compatible' });
+      assert.deepEqual([r.json.ready, r.json.ready_reason, r.json.storage.note], [true, null, STORAGE_NOTES.blocked]);
+      r = await api('GET', '/api/assistant/models?provider=openai_compatible');
+      assert.equal(r.status, 200);
+      assert.deepEqual(seen.splice(0), [{ server: 1, path: '/v1/models', auth: 'Bearer local' }]);
+    } finally {
+      process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
+      resetAssistantState();
+      await api('POST', '/api/assistant/key/remove', { provider: 'openai_compatible' });
+      for (const srv of servers) {
+        srv.closeAllConnections?.();
+        await new Promise((r) => srv.close(r));
+      }
+    }
   });
 });

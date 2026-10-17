@@ -2,7 +2,7 @@
  * The provider keys, write-only (Foundation spec 3.5–3.7).
  *
  *   <home>/secrets/master.json  the master key as its protector keeps it (protector.ts)
- *   <home>/secrets/keys.json    { version, master_id, keys: { <slot>: {iv, tag, ct, last4, set_at} } }
+ *   <home>/secrets/keys.json    { version, master_id, keys: { <slot>: {iv, tag, ct, last4, set_at, origin?} } }
  *
  * A page can save a key, remove it, and see whether one is set (with its last 4 characters
  * when it is at least 16 long). No route reads a key: only the provider adapters borrow
@@ -11,16 +11,25 @@
  * and never kept decrypted: the master key is cached in memory, each provider key is
  * opened per use and dropped.
  *
+ * The files are the truth. Two copies of Magnusim run by one account share them, so the
+ * store reads them again for every status, use, save and removal, and a save or removal
+ * starts from what is on disk: a key removed in one copy is gone in the other, and is
+ * never written back. A master key is created only where none exists (a hard link to a
+ * finished file, which fails when another copy made one first; that one is then used),
+ * and the cached master is dropped when master.json changes.
+ *
  * Helper runs per server lifetime: none at boot, at import or for status(); one protect
- * on the first key save; at most one unwrap of the master (single-flight).
+ * on the first key save; one unwrap of the master (single-flight), again only after an
+ * unwrap failed or another copy made a new master.
  */
 import { randomBytes } from 'node:crypto';
-import { rename } from 'node:fs/promises';
-import { join } from 'node:path';
-import { readJsonFile, writeFileAtomic } from '../files.ts';
+import { chmod, link, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { ensurePrivateDir, readJsonFile, writeFileAtomic, type JsonRead } from '../files.ts';
 import { secretsDir } from '../home.ts';
 import { alog } from '../log.ts';
 import { registerSecretForRedaction } from '../redact.ts';
+import { isLoopbackHost, serverOrigin } from '../settings.ts';
 import { assistantState } from '../state.ts';
 import { ProviderError, type ProviderId } from '../types.ts';
 import { masterId, open, seal, type Sealed } from './envelope.ts';
@@ -29,15 +38,27 @@ import { pickProtector, ProtectorError, type MasterDoc, type PickedProtector, ty
 export type KeySlot = ProviderId;
 export const KEY_SLOTS: readonly KeySlot[] = Object.freeze(['anthropic', 'openai', 'openai_compatible']);
 
-export interface KeyStatus { set: boolean; last4: string | null; set_at: string | null; state: 'none' | 'ok' | 'unreadable' }
+export interface KeyStatus {
+  set: boolean;
+  last4: string | null;
+  set_at: string | null;
+  state: 'none' | 'ok' | 'unreadable';
+  /** A saved server token (openai_compatible) only: the server it is for (null: none recorded). */
+  origin?: string | null;
+}
 export interface StorageStatus { kind: 'dpapi' | 'file' | 'unavailable'; reason: 'blocked' | 'timeout' | 'failed' | null; note: string }
 export interface SecretStore {
   storage(): StorageStatus;
   status(): Record<KeySlot, KeyStatus>;
-  setKey(slot: KeySlot, key: string): Promise<{ warning?: string }>;
+  setKey(slot: KeySlot, key: string, o?: SetKeyOptions): Promise<{ warning?: string }>;
   removeKey(slot: KeySlot): Promise<void>;
   /** providers/index.ts only. Registers the plaintext for redaction on every decrypt, then lends it to `use`. */
   withKey<T>(slot: KeySlot, use: (key: string) => Promise<T>): Promise<T>;
+}
+
+export interface SetKeyOptions {
+  /** openai_compatible: the server address the token is saved for (the adapters send it nowhere else). */
+  server?: string;
 }
 
 export type KeyErrorCode = 'bad_provider' | 'invalid_key' | 'storage_unavailable' | 'write_failed';
@@ -56,6 +77,8 @@ export class KeyError extends Error {
 interface KeyEntry extends Sealed {
   last4: string | null;
   set_at: string;
+  /** openai_compatible: the server (URL origin) the token was saved for. */
+  origin?: string | null;
 }
 interface KeysDoc {
   version: 1;
@@ -67,13 +90,28 @@ export const STORAGE_NOTES = Object.freeze({
   dpapi: 'Encrypted for your Windows account.',
   file: 'Kept in a file only your user account can read; it is not encrypted by the operating system.',
   blocked: "Windows blocked the helper Magnusim uses to encrypt keys, so keys can't be saved on this PC. A local server still works.",
-  timeout: 'Encrypting the key took too long. Try again.',
-  failed: "Magnusim couldn't encrypt the key on this PC. Try again.",
+  // A save is tried again only after RETRY_AFTER_MS.
+  timeout: 'Encrypting the key took too long. Try again in a minute.',
+  failed: "Magnusim couldn't encrypt the key on this PC. Try again in a minute.",
+});
+
+/** The storage note while the helper is blocked and a server token is saved (it can't be unlocked either). */
+export const TOKEN_BLOCKED_NOTE =
+  "Windows blocked the helper Magnusim uses to encrypt keys, so keys can't be saved or unlocked on this PC. A local server works only without a token: remove the saved one.";
+
+/** What a use of the saved server token answers while the helper is blocked. */
+export const TOKEN_BLOCKED_TEXT =
+  "Windows blocked the helper Magnusim uses to encrypt keys, so the saved server token can't be unlocked. Remove the token in Settings → Assistant to use the server without one.";
+
+/** Unlocking the saved master key failed (not blocked): the next use or save tries again at once. */
+export const UNLOCK_NOTES = Object.freeze({
+  timeout: 'Unlocking the saved key took too long. Try again.',
+  failed: "Magnusim couldn't unlock the saved key on this PC. Try again.",
 });
 
 export const SET_ASIDE_NOTICE = 'Your saved keys could not be read and were set aside. Enter them again.';
 
-/** After a helper timeout or failure, the next save tries again after this long. */
+/** After a helper timeout or failure while saving, the next save tries again after this long. */
 export const RETRY_AFTER_MS = 60_000;
 
 const CLOUD_KEY = /^[!-~]{8,512}$/;
@@ -102,6 +140,14 @@ export function checkKey(slot: KeySlot, key: unknown): { key: string; warning?: 
   return { key: k };
 }
 
+/** The warning for a token saved for a server off this PC whose address is plain http. */
+function plainHttpWarning(origin: string | null): string | undefined {
+  if (!origin) return undefined;
+  const u = new URL(origin);
+  if (u.protocol !== 'http:' || isLoopbackHost(u.hostname)) return undefined;
+  return `${origin} is not on this PC and its address starts with http://, so the token travels to it unencrypted.`;
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
@@ -114,28 +160,68 @@ function normalizeKeys(raw: unknown): KeysDoc {
   for (const slot of KEY_SLOTS) {
     const e = raw.keys[slot];
     if (!isRecord(e) || typeof e.iv !== 'string' || typeof e.tag !== 'string' || typeof e.ct !== 'string') continue;
-    doc.keys[slot] = {
+    const entry: KeyEntry = {
       iv: e.iv,
       tag: e.tag,
       ct: e.ct,
       last4: typeof e.last4 === 'string' ? e.last4 : null,
       set_at: typeof e.set_at === 'string' ? e.set_at : '',
     };
+    if (slot === 'openai_compatible') entry.origin = typeof e.origin === 'string' ? e.origin : null;
+    doc.keys[slot] = entry;
   }
   return doc;
+}
+
+function sameEntry(a: KeyEntry | undefined, b: KeyEntry | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.iv === b.iv && a.tag === b.tag && a.ct === b.ct && (a.origin ?? null) === (b.origin ?? null);
 }
 
 function isMasterDoc(v: unknown): v is MasterDoc {
   return isRecord(v) && (v.protector === 'dpapi' || v.protector === 'file');
 }
 
+/** master.json as read, as comparable text (null: none, or not a master). */
+function masterText(r: JsonRead): string | null {
+  return r.state === 'ok' && isMasterDoc(r.value) ? JSON.stringify(r.value) : null;
+}
+
+const codeOf = (err: unknown) => String((err as { code?: unknown } | null)?.code || '');
+
 function writeReason(err: unknown): string {
-  const code = String((err as { code?: unknown } | null)?.code || '');
+  const code = codeOf(err);
   if (code === 'ENOSPC') return 'the disk is full.';
   if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') return 'the file is in use or not writable. Try again.';
   if (code === 'EROFS') return 'the folder is read-only.';
   return code ? `${code}.` : 'an unexpected error.';
 }
+
+/**
+ * Writes `text` to `path` only if no file is there (true; false when one is), and whole:
+ * a hard link to a finished temp file, which fails if the file exists. Where hard links
+ * don't work, a check and then the atomic replace.
+ */
+async function createExclusive(path: string, text: string): Promise<boolean> {
+  await ensurePrivateDir(dirname(path));
+  const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  await writeFile(tmp, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  try {
+    if (process.platform !== 'win32') await chmod(tmp, 0o600);
+    await link(tmp, path);
+    return true;
+  } catch (err) {
+    if (codeOf(err) === 'EEXIST') return false;
+    if ((await readJsonFile(path)).state !== 'missing') return false;
+    await writeFileAtomic(path, text, { mode: 0o600 });
+    return true;
+  } finally {
+    await unlink(tmp).catch(() => {});
+  }
+}
+
+/** The one unwrap in flight, with the master.json text it unwraps. */
+type Unwrap = Promise<Buffer> & { doc?: string };
 
 export interface StoreOptions {
   dir: string;
@@ -154,12 +240,22 @@ class Store implements SecretStore {
   private readonly keysPath: string;
   private keys: KeysDoc = { version: 1, master_id: null, keys: {} };
   private masterDoc: MasterDoc | null = null;
-  private loading: Promise<void> | null = null;
+  /** master.json as last read or written (masterText()), to see another copy replace it. */
+  private masterJson: string | null = null;
+  private loaded = false;
+  /** Reads started, and the newest one applied: an older read never undoes a newer one. */
+  private reads = 0;
+  private applied = 0;
+  /** This store's own writes: a read that began before one is dropped. */
+  private writes = 0;
   private queue: Promise<unknown> = Promise.resolve();
   /** Slots whose sealed key failed to open with the right master. */
   private unreadable = new Set<KeySlot>();
-  /** The master can't be unlocked, or the keys were sealed under another master: every slot is unreadable. */
-  private allUnreadable = false;
+  /** This account can't unlock master.json as it is. */
+  private locked = false;
+  /** keys.json was sealed under another master than master.json's. */
+  private mismatch = false;
+  /** A blocked helper (until restart), or a failed save (for RETRY_AFTER_MS). */
   private failure: { reason: 'blocked' | 'timeout' | 'failed'; at: number } | null = null;
   private setAside = false;
   private listeners = new Set<(slot: KeySlot) => void>();
@@ -173,44 +269,93 @@ class Store implements SecretStore {
     this.keysPath = join(o.dir, 'keys.json');
   }
 
-  /** Reads master.json and keys.json once (no decrypting, no helper). */
-  load(): Promise<void> {
-    if (!this.loading) {
-      this.loading = this.readFiles().catch((err) => {
-        this.loading = null;
-        throw err;
-      });
+  /**
+   * Reads master.json and keys.json again (no decrypting, no helper): another copy of
+   * Magnusim may have saved or removed a key. Once read, a read that fails keeps what was
+   * read before.
+   */
+  async load(): Promise<void> {
+    try {
+      await this.read();
+    } catch (err) {
+      if (!this.loaded) throw err;
+      alog('warn', 'the key files could not be read again; using what was read before', { error: codeOf(err) || String(err) });
     }
-    return this.loading;
+  }
+
+  /** The read a save or removal starts from: one that fails refuses it. */
+  private async reread(what: 'saved' | 'removed'): Promise<void> {
+    try {
+      await this.read();
+    } catch (err) {
+      throw new KeyError(500, 'write_failed', `The key could not be ${what}: ${writeReason(err)}`);
+    }
   }
 
   private async setAsideFile(path: string): Promise<void> {
     await rename(path, `${path}.bad-${Date.now()}`).catch(() => {});
   }
 
-  private async readFiles(): Promise<void> {
+  private async read(): Promise<void> {
+    const seq = ++this.reads;
+    const writes = this.writes;
     const k = await readJsonFile(this.keysPath);
     if (k.state === 'bad') {
       alog('warn', 'keys.json could not be read; set aside');
       await this.setAsideFile(this.keysPath);
       this.setAside = true;
     }
-    this.keys = normalizeKeys(k.state === 'ok' ? k.value : null);
     const m = await readJsonFile(this.masterPath);
     if (m.state === 'bad' || (m.state === 'ok' && !isMasterDoc(m.value))) {
       alog('warn', 'master.json could not be read; set aside');
       await this.setAsideFile(this.masterPath);
     }
-    this.masterDoc = m.state === 'ok' && isMasterDoc(m.value) ? m.value : null;
-    if (!this.masterDoc && Object.keys(this.keys.keys).length) this.allUnreadable = true;
+    // A newer read, or a write of this store's since this read began, holds newer files.
+    if (seq < this.applied || writes !== this.writes) return;
+    this.applied = seq;
+    this.apply(normalizeKeys(k.state === 'ok' ? k.value : null), m.state === 'ok' && isMasterDoc(m.value) ? m.value : null, masterText(m));
+  }
+
+  private apply(keys: KeysDoc, doc: MasterDoc | null, json: string | null): void {
+    const first = !this.loaded;
+    this.loaded = true;
+    if (json !== this.masterJson) {
+      // Another copy made or replaced the master: the one cached here is not it.
+      if (!first) {
+        const s = assistantState().secrets;
+        s.master = null;
+        s.masterId = null;
+      }
+      this.masterDoc = doc;
+      this.masterJson = json;
+      this.locked = false;
+      this.mismatch = false;
+    }
+    const before = this.keys;
+    this.keys = keys;
+    if (first) return;
+    if (keys.master_id !== before.master_id) this.mismatch = false;
+    // Another copy saved or removed these: they are new here too (running turns on them stop).
+    const changed = KEY_SLOTS.filter((slot) => !sameEntry(before.keys[slot], keys.keys[slot]));
+    for (const slot of changed) this.unreadable.delete(slot);
+    for (const slot of changed) this.changed(slot);
+  }
+
+  /** Every slot is unreadable: no master for the saved keys, one this account can't unlock, or keys of another master. */
+  private get allUnreadable(): boolean {
+    return !this.masterDoc || this.locked || this.mismatch;
   }
 
   storage(): StorageStatus {
-    if (this.protector.knownUnavailable) return { kind: 'unavailable', reason: 'blocked', note: STORAGE_NOTES.blocked };
+    const blocked = (): StorageStatus => ({
+      kind: 'unavailable',
+      reason: 'blocked',
+      note: this.keys.keys.openai_compatible ? TOKEN_BLOCKED_NOTE : STORAGE_NOTES.blocked,
+    });
+    if (this.protector.knownUnavailable) return blocked();
     const f = this.failure;
-    if (f && (f.reason === 'blocked' || this.now() - f.at < RETRY_AFTER_MS)) {
-      return { kind: 'unavailable', reason: f.reason, note: STORAGE_NOTES[f.reason] };
-    }
+    if (f?.reason === 'blocked') return blocked();
+    if (f && this.now() - f.at < RETRY_AFTER_MS) return { kind: 'unavailable', reason: f.reason, note: STORAGE_NOTES[f.reason] };
     return { kind: this.protector.kind, reason: null, note: STORAGE_NOTES[this.protector.kind] };
   }
 
@@ -219,7 +364,13 @@ class Store implements SecretStore {
     for (const slot of KEY_SLOTS) {
       const e = this.keys.keys[slot];
       out[slot] = e
-        ? { set: true, last4: e.last4, set_at: e.set_at || null, state: this.allUnreadable || this.unreadable.has(slot) ? 'unreadable' : 'ok' }
+        ? {
+            set: true,
+            last4: e.last4,
+            set_at: e.set_at || null,
+            state: this.allUnreadable || this.unreadable.has(slot) ? 'unreadable' : 'ok',
+            ...(slot === 'openai_compatible' ? { origin: e.origin ?? null } : {}),
+          }
         : { set: false, last4: null, set_at: null, state: 'none' };
     }
     return out;
@@ -254,34 +405,60 @@ class Store implements SecretStore {
     return run;
   }
 
-  private unavailable(): KeyError {
-    return new KeyError(409, 'storage_unavailable', this.storage().note);
+  /** The storage refusal; a use of the server token while the helper is blocked says what to do about it. */
+  private unavailable(slot?: KeySlot): KeyError {
+    const st = this.storage();
+    return new KeyError(409, 'storage_unavailable', slot === 'openai_compatible' && st.reason === 'blocked' ? TOKEN_BLOCKED_TEXT : st.note);
   }
 
-  private recordFailure(err: unknown): void {
+  /** Logs a helper failure; a blocked helper is kept until restart, a failed save (protect) for RETRY_AFTER_MS. */
+  private recordFailure(err: unknown, op: 'protect' | 'unprotect'): 'blocked' | 'timeout' | 'failed' {
     const code = err instanceof ProtectorError ? err.code : 'failed';
     const reason = code === 'blocked' || code === 'timeout' ? code : 'failed';
-    this.failure = { reason, at: this.now() };
-    alog('warn', 'the key protector failed', { code: reason, detail: err instanceof ProtectorError ? err.detail : String(err) });
+    if (reason === 'blocked' || op === 'protect') this.failure = { reason, at: this.now() };
+    alog('warn', 'the key protector failed', { op, code: reason, detail: err instanceof ProtectorError ? err.detail : String(err) });
+    return reason;
   }
 
-  /** A new master key, protected and written (one helper run). */
-  private async createMaster(): Promise<{ master: Buffer; id: string }> {
+  /**
+   * A new master key, protected and written (one helper run). With none on disk
+   * (`replace` null) it is created only if there is still none: another copy of Magnusim
+   * may have made one meanwhile, and that one is then used. One this account can't
+   * unlock (`replace`: its text) is replaced only if it is still there.
+   */
+  private async createMaster(replace: string | null, depth: number): Promise<{ master: Buffer; id: string }> {
+    if (depth > 2) throw new KeyError(500, 'write_failed', 'The key could not be saved: another copy of Magnusim kept changing the key files. Try again.');
     const master = randomBytes(32);
     let doc: MasterDoc;
     try {
       doc = await this.protector.protect(master);
     } catch (err) {
-      this.recordFailure(err);
+      this.recordFailure(err, 'protect');
       throw this.unavailable();
     }
     this.failure = null;
+    const text = `${JSON.stringify(doc, null, 2)}\n`;
+    let written: boolean;
     try {
-      await writeFileAtomic(this.masterPath, `${JSON.stringify(doc, null, 2)}\n`, { mode: 0o600 });
+      if (replace === null) written = await createExclusive(this.masterPath, text);
+      else {
+        written = masterText(await readJsonFile(this.masterPath)) === replace;
+        if (written) await writeFileAtomic(this.masterPath, text, { mode: 0o600 });
+      }
     } catch (err) {
       throw new KeyError(500, 'write_failed', `The key could not be saved: ${writeReason(err)}`);
     }
+    if (!written) {
+      // Another copy wrote a master first: that one is used.
+      master.fill(0);
+      await this.reread('saved');
+      return this.master(true, depth + 1) as Promise<{ master: Buffer; id: string }>;
+    }
+    this.writes += 1;
     this.masterDoc = doc;
+    this.masterJson = JSON.stringify(doc);
+    this.locked = false;
+    this.mismatch = false;
     const s = assistantState().secrets;
     s.master = master;
     s.masterId = masterId(master);
@@ -289,39 +466,42 @@ class Store implements SecretStore {
   }
 
   /**
-   * The master key: cached, else unwrapped once (however many callers wait), else, for a
-   * save, a new one. Null when it can't be had for a use (no master, or not on this account).
+   * The master key of master.json as last read: cached, else unwrapped once (however many
+   * callers wait), else, for a save, a new one. Null when it can't be had for a use (no
+   * master, or not on this account).
    */
-  private async master(forSave: boolean): Promise<{ master: Buffer; id: string } | null> {
+  private async master(forSave: boolean, depth = 0): Promise<{ master: Buffer; id: string } | null> {
     const s = assistantState().secrets;
     if (s.master && s.masterId) return { master: s.master, id: s.masterId };
     const doc = this.masterDoc;
-    if (!doc || this.allUnreadable) return forSave ? this.createMaster() : null;
-    if (!s.unwrap) {
-      const p = this.protector.unprotect(doc);
-      s.unwrap = p;
-      void p.then(
-        () => {
-          if (s.unwrap === p) s.unwrap = null;
-        },
-        () => {
-          if (s.unwrap === p) s.unwrap = null;
-        },
-      );
+    const json = this.masterJson;
+    if (!doc || !json) return forSave ? this.createMaster(null, depth) : null;
+    if (this.locked) return forSave ? this.createMaster(json, depth) : null;
+    let p = s.unwrap as Unwrap | null;
+    if (!p || p.doc !== json) {
+      const started: Unwrap = Object.assign(this.protector.unprotect(doc), { doc: json });
+      s.unwrap = started;
+      const done = () => {
+        if (s.unwrap === started) s.unwrap = null;
+      };
+      void started.then(done, done);
+      p = started;
     }
     let master: Buffer;
     try {
-      master = await s.unwrap;
+      master = await p;
     } catch (err) {
       if (err instanceof ProtectorError && err.code === 'cant_unlock') {
         alog('warn', "the saved master key can't be unlocked on this account; saved keys are unreadable", { detail: err.detail });
-        this.allUnreadable = true;
-        return forSave ? this.createMaster() : null;
+        if (this.masterJson === json) this.locked = true;
+        return forSave ? this.createMaster(json, depth) : null;
       }
-      this.recordFailure(err);
-      throw this.unavailable();
+      const reason = this.recordFailure(err, 'unprotect');
+      throw reason === 'blocked' ? this.unavailable() : new KeyError(409, 'storage_unavailable', UNLOCK_NOTES[reason]);
     }
     this.failure = null;
+    // master.json changed while it was unwrapped: this master is for this call only.
+    if (this.masterJson !== json) return { master, id: masterId(master) };
     if (!s.master) {
       s.master = master;
       s.masterId = masterId(master);
@@ -329,7 +509,7 @@ class Store implements SecretStore {
     return { master: s.master, id: s.masterId as string };
   }
 
-  setKey(slot: KeySlot, key: string): Promise<{ warning?: string }> {
+  setKey(slot: KeySlot, key: string, o: SetKeyOptions = {}): Promise<{ warning?: string }> {
     if (!isKeySlot(slot)) return Promise.reject(new KeyError(400, 'bad_provider', 'Unknown provider.'));
     let checked: { key: string; warning?: string };
     try {
@@ -339,8 +519,11 @@ class Store implements SecretStore {
     }
     // From here on any text that holds it is scrubbed (logs, error answers).
     registerSecretForRedaction(checked.key);
+    // A server token is for the server it is saved for, and goes nowhere else.
+    const origin = slot === 'openai_compatible' ? serverOrigin(o.server) : null;
+    const warning = checked.warning ?? plainHttpWarning(origin);
     return this.enqueue(async () => {
-      await this.load();
+      await this.reread('saved');
       if (this.storage().kind === 'unavailable') throw this.unavailable();
       const m = await this.master(true);
       if (!m) throw this.unavailable();
@@ -350,6 +533,7 @@ class Store implements SecretStore {
         ...seal(m.master, slot, checked.key),
         last4: checked.key.length >= 16 ? checked.key.slice(-4) : null,
         set_at: new Date(this.now()).toISOString(),
+        ...(slot === 'openai_compatible' ? { origin } : {}),
       };
       const next: KeysDoc = { version: 1, master_id: m.id, keys: { ...kept, [slot]: entry } };
       try {
@@ -357,22 +541,21 @@ class Store implements SecretStore {
       } catch (err) {
         throw new KeyError(500, 'write_failed', `The key could not be saved: ${writeReason(err)}`);
       }
-      if (this.keys.master_id !== m.id) {
-        this.unreadable.clear();
-        this.allUnreadable = false;
-      }
+      this.writes += 1;
+      if (this.keys.master_id !== m.id) this.unreadable.clear();
+      this.mismatch = false;
       this.keys = next;
       this.unreadable.delete(slot);
       this.setAside = false;
       this.changed(slot);
-      return checked.warning ? { warning: checked.warning } : {};
+      return warning ? { warning } : {};
     });
   }
 
   removeKey(slot: KeySlot): Promise<void> {
     if (!isKeySlot(slot)) return Promise.reject(new KeyError(400, 'bad_provider', 'Unknown provider.'));
     return this.enqueue(async () => {
-      await this.load();
+      await this.reread('removed');
       if (this.keys.keys[slot]) {
         const keys = { ...this.keys.keys };
         delete keys[slot];
@@ -382,6 +565,7 @@ class Store implements SecretStore {
         } catch (err) {
           throw new KeyError(500, 'write_failed', `The key could not be removed: ${writeReason(err)}`);
         }
+        this.writes += 1;
         this.keys = next;
       }
       this.unreadable.delete(slot);
@@ -392,23 +576,30 @@ class Store implements SecretStore {
   async withKey<T>(slot: KeySlot, use: (key: string) => Promise<T>): Promise<T> {
     if (!isKeySlot(slot)) throw new ProviderError('no_key', 'Unknown provider.');
     await this.load();
-    const entry = this.keys.keys[slot];
+    const keys = this.keys;
+    const entry = keys.keys[slot];
     if (!entry) throw new ProviderError('no_key', 'No key is saved for this provider. Add one in Settings → Assistant.');
     const f = this.failure;
-    if (this.protector.knownUnavailable || (f && f.reason === 'blocked')) throw this.unavailable();
+    if (this.protector.knownUnavailable || (f && f.reason === 'blocked')) throw this.unavailable(slot);
     const unreadable = () =>
       new ProviderError('no_key', "The saved key can't be decrypted on this account. Enter it again in Settings → Assistant.");
-    const m = await this.master(false);
+    let m: { master: Buffer; id: string } | null;
+    try {
+      m = await this.master(false);
+    } catch (err) {
+      throw err instanceof KeyError && this.storage().reason === 'blocked' ? this.unavailable(slot) : err;
+    }
     if (!m) throw unreadable();
-    if (this.keys.master_id !== m.id) {
-      this.allUnreadable = true;
+    if (keys.master_id !== m.id) {
+      // The files were read just now, and this is master.json's master: the keys are another's.
+      if (this.keys.master_id === keys.master_id) this.mismatch = true;
       throw unreadable();
     }
     let key: string;
     try {
       key = open(m.master, slot, entry);
     } catch {
-      this.unreadable.add(slot);
+      if (sameEntry(this.keys.keys[slot], entry)) this.unreadable.add(slot);
       alog('warn', "a saved key can't be decrypted", { slot });
       throw unreadable();
     }

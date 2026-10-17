@@ -2,10 +2,12 @@
 // every OS, sealed keys bound to their slot and master, a damaged keys file set aside, a
 // blocked or slow helper leaving nothing written, saves serialized, one unwrap however many
 // callers wait, status() never decrypting, the key in no other file and never in
-// process.env, and the test switch honoured only with MAGNUSIM_TEST_ASSISTANT=1.
+// process.env, the test switch honoured only with MAGNUSIM_TEST_ASSISTANT=1, and two copies
+// of Magnusim (separate processes) sharing one key store.
 import { after, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -364,6 +366,7 @@ describe('what goes wrong', () => {
     assert.equal(s.storage().reason, null, 'not known before trying');
     await assert.rejects(s.setKey('anthropic', CANARY), (e) => e.code === 'storage_unavailable' && e.message === store.STORAGE_NOTES.timeout);
     assert.deepEqual(s.storage(), { kind: 'unavailable', reason: 'timeout', note: store.STORAGE_NOTES.timeout });
+    assert.equal(store.STORAGE_NOTES.timeout, 'Encrypting the key took too long. Try again in a minute.', 'a save waits 60 s, and says so');
     await assert.rejects(s.setKey('anthropic', CANARY), (e) => e.code === 'storage_unavailable');
     assert.equal(tries, 1, 'no retry within 60 s');
     now += store.RETRY_AFTER_MS;
@@ -371,6 +374,71 @@ describe('what goes wrong', () => {
     await assert.rejects(s.setKey('anthropic', CANARY), (e) => e.code === 'storage_unavailable');
     assert.equal(tries, 2, 'tried again after 60 s');
     assert.equal(existsSync(dir), false, 'nothing written');
+  });
+
+  it('an unlock that times out says unlocking, and the next use or save tries the helper again at once', async () => {
+    await make(spy()).setKey('anthropic', CANARY);
+    resetAssistantState();
+    const inner = fileProtector();
+    let tries = 0;
+    const slowOnce = {
+      kind: 'dpapi',
+      knownUnavailable: null,
+      protect: (m) => inner.protect(m),
+      async unprotect(doc) {
+        tries += 1;
+        if (tries === 1) throw new ProtectorError('timeout', 'antivirus scan');
+        return inner.unprotect(doc);
+      },
+    };
+    // The clock stands still: nothing may wait for it.
+    const s = make(slowOnce, { now: () => 1_000_000 });
+    await assert.rejects(s.withKey('anthropic', async (k) => k), (e) => {
+      assert.ok(e instanceof store.KeyError);
+      assert.deepEqual([e.code, e.message], ['storage_unavailable', store.UNLOCK_NOTES.timeout]);
+      return true;
+    });
+    assert.equal(store.UNLOCK_NOTES.timeout, 'Unlocking the saved key took too long. Try again.');
+    assert.deepEqual(s.storage(), { kind: 'dpapi', reason: null, note: store.STORAGE_NOTES.dpapi }, 'Test, turns and Save are not held back');
+    assert.deepEqual(await s.setKey('openai', OTHER), {}, 'a save at once tries the helper again');
+    assert.equal(tries, 2);
+    assert.equal(await s.withKey('anthropic', async (k) => k), CANARY);
+    assert.equal(tries, 2, 'then the master is cached');
+  });
+
+  it('a saved server token while the helper is blocked: its use and the storage note say to remove it; removing it works', async () => {
+    await make(spy()).setKey('openai_compatible', 'local-token-0001', { server: 'http://127.0.0.1:1234/v1' });
+    await make(spy()).setKey('anthropic', CANARY);
+    resetAssistantState();
+    const blockedNow = {
+      kind: 'dpapi',
+      knownUnavailable: null,
+      calls: 0,
+      async protect() {
+        throw new ProtectorError('blocked', 'language mode');
+      },
+      async unprotect() {
+        this.calls += 1;
+        throw new ProtectorError('blocked', 'language mode');
+      },
+    };
+    const s = make(blockedNow);
+    await s.load();
+    assert.equal(s.storage().reason, null, 'not known before trying');
+    const tokenRefused = (e) => {
+      assert.deepEqual([e.code, e.message], ['storage_unavailable', store.TOKEN_BLOCKED_TEXT]);
+      assert.doesNotMatch(e.message, /still works/);
+      return true;
+    };
+    await assert.rejects(s.withKey('openai_compatible', async (k) => k), tokenRefused);
+    assert.deepEqual(s.storage(), { kind: 'unavailable', reason: 'blocked', note: store.TOKEN_BLOCKED_NOTE });
+    await assert.rejects(s.withKey('openai_compatible', async (k) => k), tokenRefused);
+    // A cloud key is refused as before.
+    await assert.rejects(s.withKey('anthropic', async (k) => k), (e) => e.code === 'storage_unavailable' && e.message === store.TOKEN_BLOCKED_NOTE);
+    assert.equal(blockedNow.calls, 1, 'not tried again');
+    await s.removeKey('openai_compatible');
+    assert.equal(s.status().openai_compatible.set, false);
+    assert.deepEqual(s.storage(), { kind: 'unavailable', reason: 'blocked', note: store.STORAGE_NOTES.blocked }, 'no token left: a local server still works');
   });
 
   it('a write that fails leaves the files as they were, with a plain 500', async () => {
@@ -446,6 +514,167 @@ describe('at the same time', () => {
     const doc = await picked.protector.protect(Buffer.alloc(32, 1));
     assert.ok(Date.now() - t0 >= 50);
     assert.deepEqual(await picked.protector.unprotect(doc), Buffer.alloc(32, 1));
+  });
+});
+
+// One copy of Magnusim: its own process with the real store and file protector on `dir`,
+// doing what the parent asks over IPC (and answering with the status as it holds it).
+const COPY = `
+const { createSecretStore } = await import(process.env.COPY_STORE_URL);
+const { fileProtector } = await import(process.env.COPY_FILE_URL);
+const s = createSecretStore({ dir: process.env.COPY_DIR, picked: { protector: fileProtector(), test: null } });
+process.on('message', async (m) => {
+  try {
+    let out = null;
+    if (m.op === 'load') await s.load();
+    else if (m.op === 'set') out = await s.setKey(m.slot, m.key);
+    else if (m.op === 'remove') await s.removeKey(m.slot);
+    else if (m.op === 'use') out = await s.withKey(m.slot, async (k) => k);
+    process.send({ ok: true, out, status: s.status() });
+  } catch (e) {
+    process.send({ ok: false, code: e.code, message: e.message, status: s.status() });
+  }
+});
+process.send({ ready: true });
+`;
+
+function copyOf(d) {
+  const child = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', COPY], {
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    env: {
+      ...process.env,
+      COPY_DIR: d,
+      COPY_STORE_URL: new URL('../assistant/secrets/store.ts', import.meta.url).href,
+      COPY_FILE_URL: new URL('../assistant/secrets/file.ts', import.meta.url).href,
+    },
+  });
+  // Each answer settles the oldest call; a copy that ends fails what waits.
+  // Each answer settles the oldest call; a copy that ends fails what still waits.
+  const waiting = [];
+  child.on('message', (m) => waiting.shift()?.resolve(m));
+  child.on('exit', (code) => {
+    for (const w of waiting.splice(0)) w.reject(new Error(`the copy ended (exit ${code})`));
+  });
+  const ready = new Promise((resolve, reject) => waiting.push({ resolve, reject }));
+  return {
+    async call(op, o = {}) {
+      await ready;
+      return new Promise((resolve, reject) => {
+        waiting.push({ resolve, reject });
+        child.send({ op, ...o });
+      });
+    },
+    stop() {
+      child.kill();
+    },
+  };
+}
+
+describe('two copies of Magnusim on one account share the key store', () => {
+  it('a key removed in one copy is gone in the other: its use says so, and its next save never writes the key back', async () => {
+    const a = copyOf(dir);
+    const b = copyOf(dir);
+    try {
+      assert.equal((await a.call('set', { slot: 'anthropic', key: CANARY })).ok, true);
+      assert.equal((await b.call('load')).status.anthropic.state, 'ok');
+      assert.equal((await a.call('remove', { slot: 'anthropic' })).ok, true);
+      assert.equal((await b.call('set', { slot: 'openai', key: OTHER })).ok, true);
+      assert.deepEqual(Object.keys(keysFile().keys), ['openai']);
+      const use = await b.call('use', { slot: 'anthropic' });
+      assert.deepEqual([use.ok, use.code, use.out], [false, 'no_key', undefined]);
+      assert.equal(use.status.anthropic.set, false);
+      // The other way round: removed there, then used here.
+      assert.equal((await b.call('remove', { slot: 'openai' })).ok, true);
+      const gone = await a.call('use', { slot: 'openai' });
+      assert.deepEqual([gone.ok, gone.code], [false, 'no_key']);
+      assert.equal((await b.call('set', { slot: 'openai', key: OTHER })).ok, true);
+      // The next start of either copy.
+      const fresh = make(spy());
+      await fresh.load();
+      assert.equal(fresh.status().anthropic.set, false);
+      assert.equal(await fresh.withKey('openai', async (k) => k), OTHER);
+      assert.equal((await a.call('load')).status.openai.state, 'ok', "the first copy sees the other copy's key");
+    } finally {
+      a.stop();
+      b.stop();
+    }
+  });
+
+  it('both copies start with no key: the second save uses the master the first one made, so every key stays readable', async () => {
+    const a = copyOf(dir);
+    const b = copyOf(dir);
+    try {
+      await a.call('load');
+      await b.call('load');
+      assert.equal((await a.call('set', { slot: 'anthropic', key: CANARY })).ok, true);
+      const master = readFileSync(join(dir, 'master.json'), 'utf8');
+      assert.equal((await b.call('set', { slot: 'openai', key: OTHER })).ok, true);
+      assert.equal(readFileSync(join(dir, 'master.json'), 'utf8'), master, 'one master');
+      assert.equal((await a.call('set', { slot: 'openai_compatible', key: 'local-token' })).ok, true);
+      assert.deepEqual(Object.keys(keysFile().keys).sort(), ['anthropic', 'openai', 'openai_compatible']);
+      assert.equal((await a.call('use', { slot: 'openai' })).out, OTHER);
+      assert.equal((await b.call('use', { slot: 'anthropic' })).out, CANARY);
+      // The next start.
+      const fresh = make(spy());
+      assert.equal(await fresh.withKey('anthropic', async (k) => k), CANARY);
+      assert.equal(await fresh.withKey('openai', async (k) => k), OTHER);
+      assert.equal(await fresh.withKey('openai_compatible', async (k) => k), 'local-token');
+    } finally {
+      a.stop();
+      b.stop();
+    }
+  });
+
+  it('a master made by another copy while this one was making its own: written once, and this save uses it', async () => {
+    // Two stores in this process stand for two copies: B's protect is held until A has
+    // made its master and saved its key, then B finds master.json there.
+    const inner = fileProtector();
+    let release;
+    const held = new Promise((r) => (release = r));
+    let entered;
+    const protecting = new Promise((r) => (entered = r));
+    const slowB = {
+      kind: 'file',
+      knownUnavailable: null,
+      async protect(m) {
+        entered();
+        await held;
+        return inner.protect(m);
+      },
+      unprotect: (d) => inner.unprotect(d),
+    };
+    const a = make(spy());
+    const b = make(slowB);
+    await a.load();
+    await b.load();
+    const bSave = b.setKey('openai', OTHER);
+    await protecting;
+    await a.setKey('anthropic', CANARY);
+    const master = readFileSync(join(dir, 'master.json'), 'utf8');
+    release();
+    assert.deepEqual(await bSave, {});
+    assert.equal(readFileSync(join(dir, 'master.json'), 'utf8'), master, 'the first master stays');
+    assert.deepEqual(Object.keys(keysFile().keys).sort(), ['anthropic', 'openai']);
+    assert.deepEqual(files().filter((f) => f.endsWith('.tmp')), []);
+    resetAssistantState();
+    const fresh = make(spy());
+    assert.equal(await fresh.withKey('anthropic', async (k) => k), CANARY);
+    assert.equal(await fresh.withKey('openai', async (k) => k), OTHER);
+  });
+
+  it("a change another copy made is heard here at the next read (this copy's turns on that slot stop)", async () => {
+    const a = make(spy());
+    const b = make(spy());
+    await a.setKey('anthropic', CANARY);
+    await b.load();
+    const heard = [];
+    b.onKeyChanged((slot) => heard.push(slot));
+    await a.removeKey('anthropic');
+    await a.setKey('openai', OTHER);
+    await b.load();
+    assert.deepEqual(heard.sort(), ['anthropic', 'openai']);
+    await b.load();
+    assert.equal(heard.length, 2, 'once');
   });
 });
 

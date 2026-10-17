@@ -104,6 +104,17 @@ export function isLoopbackUrl(url: string): boolean {
   }
 }
 
+/** A server address's origin (`http://127.0.0.1:1234`), or null when it is not an http(s) URL. */
+export function serverOrigin(url: unknown): string | null {
+  if (typeof url !== 'string') return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 type UrlCheck = { ok: true; url: string; loopback: boolean } | { ok: false; error: string };
 
 /** http/https, no user info, query or fragment, at most 300 characters, no trailing slash (removed). */
