@@ -1130,7 +1130,9 @@ describe('the workspace overlay', () => {
       pluginStatus = 'disabled';
       window.dispatchEvent(new CustomEvent('cfd:tree-sync', { detail: { plugins: true } }));
       await waitFor(() => expect($('[data-ws-error] h2')).toHaveTextContent('Workspace demo is off.'));
-      expect(workspaceToolsSnapshot().current).toBeNull();
+      // The card is in the page as soon as React commits it; the frame's effect cleanup, which
+      // withdraws the list, runs after that (a passive effect): waited for, not read at once.
+      await waitFor(() => expect(workspaceToolsSnapshot().current).toBeNull());
       pluginStatus = 'enabled';
       $('[data-ws-retry]').click();
       const fresh = await waitFor(() => {
