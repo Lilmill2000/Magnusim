@@ -7,8 +7,8 @@
  *   rethrown. It keeps a log of events numbered by `seq` (≤ 4000; notes go first when
  *   it is full, and text_so_far keeps the text), read with GET …/turns/:id?since=N.
  *   Ended turns are kept for an hour.
- * - At most one turn runs in a conversation (409) and three in all (429), checked and
- *   set in one synchronous step.
+ * - At most one turn runs in a conversation (409), one in an app tab (409 tab_busy) and
+ *   three in all (429), checked and set in one synchronous step.
  * - Stop (and a changed or removed key, and the server stopping) aborts the provider
  *   request and the running tool, withdraws open questions, drops a partial answer and
  *   answers the remaining calls; the turn ends `stopped` (`failed` "server stopped" when
@@ -592,6 +592,8 @@ export const TAB_HIDDEN_TEXT =
   "That tab isn't connected to the Assistant: its window is in the background or covered, or it was closed. Show the Magnusim window and try again.";
 export const BAD_TAB_TEXT = 'That app tab offers no tools to the Assistant (it is unknown, or no workspace in it registered any).';
 export const NO_TAB_TEXT = 'No app tab offers tools to the Assistant. Open a workspace in Magnusim, or start the turn without a tab.';
+/** A second turn bound to a tab while one works there: one watched build and one undo group per page. */
+export const TAB_BUSY_TEXT = 'A turn is already working in that tab: wait for it or stop it.';
 const ambiguousTabText = (tabs: string[]) => `More than one app tab offers tools to the Assistant: ${tabs.join(', ')}. Name one of them.`;
 
 /** The app tab a turn binds to (resolveTab), with the project and study its workspace registered. */
@@ -815,6 +817,7 @@ export class TurnManager {
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
       if (conv.fullReason()) return refuse(409, 'conversation_full', FULL_TEXT);
     }
+    if (boundTab && this.activeForTab(boundTab) > 0) return refuse(409, 'tab_busy', TAB_BUSY_TEXT);
     if (this.running().length >= TURN_LIMITS.running) {
       return refuse(429, 'too_many', `At most ${TURN_LIMITS.running} turns run at once. Wait for one to end.`);
     }

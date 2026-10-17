@@ -3,6 +3,7 @@
 // folds, refused before anything is read or written), JSON only, never from the
 // Assistant's own tool calls, errors redacted, no answer ever holding a key; status,
 // settings and keys; per-path body limits; and the test routes only behind their switch.
+// One turn per app tab (CAD tools spec H4): two starts held together, then let go.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -33,6 +34,7 @@ const routes = await import('../assistant-routes.ts');
 const { assistantState, onAssistantShutdown, resetAssistantState } = await import('../assistant/state.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const home = await import('../assistant/home.ts');
+const { TAB_BUSY_TEXT } = await import('../assistant/turns.ts');
 
 const CANARY = 'sk-ant-api03-CANARY-route-canary-0123456789-XyZ9';
 
@@ -632,6 +634,80 @@ describe('turns', () => {
       assert.ok(sent.every((x) => !x.refused), `${provider}: ${sent.map((x) => x.refused).join()}`);
       const replay = JSON.stringify(provider === 'openai' ? sent[1].body.input : sent[1].body.messages);
       assert.match(replay, provider === 'openai' ? /"encrypted_content":"enc-\d+"/ : /"signature":"sig-\d+"/, `${provider}: the opaque part went back`);
+    }
+  });
+
+  it('one turn per app tab: two POSTs that both passed the checks before either started give one 202 and one 409 tab_busy; another tab still starts, and the tab is free once its turn ended', async () => {
+    assert.equal((await localServer()).status, 200);
+    // A server whose package check waits until the test lets it go: both POSTs wait there,
+    // past the settings read, then race through the checks left to the start.
+    let reached = 0;
+    let letGo = () => undefined;
+    const gate = new Promise((done) => (letGo = done));
+    const r2 = new Router();
+    const h2 = routes.registerAssistantRoutes(r2, {
+      port: () => port,
+      turns: {
+        deps: async () => {
+          reached += 1;
+          await gate;
+          return 'ok';
+        },
+      },
+    });
+    const s2 = await serve(r2);
+    const base = `http://127.0.0.1:${s2.address().port}`;
+    const start = async (body) => {
+      const r = await fetch(`${base}/api/assistant/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: r.status, json: await r.json() };
+    };
+    const ws = { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [] };
+    const turnsNow = [];
+    try {
+      h2.registry.setWorkspace('tab-one', 'L1', ws);
+      fake.reply({ text: 'Working on it.', hold: 'tab-busy' });
+      const both = Promise.all([start({ text: 'First.', tab: 'tab-one' }), start({ text: 'Second.', tab: 'tab-one' })]);
+      await until(() => reached === 2, 5000, 'both POSTs held at the package check');
+      letGo();
+      const answers = await both;
+      assert.deepEqual(answers.map((a) => a.status).sort(), [202, 409], JSON.stringify(answers));
+      const refused = answers.find((a) => a.status === 409);
+      assert.deepEqual(refused.json, { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT });
+      const first = h2.turns.get(answers.find((a) => a.status === 202).json.turn);
+      turnsNow.push(first);
+      assert.equal(first.tab, 'tab-one');
+      await until(() => first.textSoFar().length > 0, 5000, 'the first chunk');
+      assert.equal(h2.turns.running().length, 1, 'the refused one never started');
+      // 'auto' resolves to the same tab; the running turn's own conversation is named as that.
+      assert.deepEqual(await start({ text: 'Third.', tab: 'auto' }), { status: 409, json: { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT } });
+      const same = await start({ text: 'Again.', tab: 'tab-one', conversation: first.conv.id });
+      assert.deepEqual([same.status, same.json.code], [409, 'conversation_busy']);
+      // Another tab is not this one's: it starts and ends while the first still works.
+      h2.registry.setWorkspace('tab-two', 'L2', ws);
+      fake.reply({ text: 'Other tab.' });
+      const other = await start({ text: 'Other.', tab: 'tab-two' });
+      assert.equal(other.status, 202, JSON.stringify(other.json));
+      const t2 = h2.turns.get(other.json.turn);
+      turnsNow.push(t2);
+      await until(() => t2.settled, 5000, 'the other tab’s turn');
+      assert.deepEqual([t2.state, first.ended], ['done', false]);
+      // Stopped, the first turn frees its tab at once: the next one starts.
+      const stopped = await fetch(`${base}/api/assistant/turns/${first.id}/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then((r) => r.json());
+      assert.equal(stopped.turn.state, 'stopped');
+      fake.release('tab-busy');
+      fake.reply({ text: 'Free again.' });
+      const next = await start({ text: 'Next.', tab: 'tab-one' });
+      assert.equal(next.status, 202, JSON.stringify(next.json));
+      const t3 = h2.turns.get(next.json.turn);
+      turnsNow.push(t3);
+      await until(() => t3.settled, 5000, 'the next turn');
+      assert.equal(t3.state, 'done');
+    } finally {
+      letGo();
+      fake.release('tab-busy');
+      for (const t of turnsNow) await until(() => t.settled, 5000, `turn ${t.id} to settle`);
+      h2.shutdown();
+      await new Promise((done) => s2.close(done));
     }
   });
 

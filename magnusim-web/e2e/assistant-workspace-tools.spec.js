@@ -11,8 +11,9 @@
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
 // (and mystery) asks with Don't focused, Enter answering it, and Stop closes the question; the
 // second click of a double-click on Allow never answers the question asked right behind it; Stop,
-// Back, a reload, a lost event stream and the plugin turned off (then a reconnect: a new link
-// that sends nothing of the dead frame), each during a slow call; a call to the app in flight
+// Back, a reload, a lost event stream and the plugin turned off, each during a slow call (and the
+// plugin turned off with a question open, then a reconnect: a new link that sends nothing of the
+// dead frame); a call to the app in flight
 // keeping a tool call alive past the server's stall window; a hidden tab kept for the call and
 // the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an image
 // result; a remote viewer; a tab hidden at load; the terminal client
@@ -24,6 +25,7 @@
 // Stop ends it, and the frame's page loaded again during the turn hearing it run (H3). And a
 // destructive tool's confirm note as its question's text, mystery's question saying "can't be
 // undone" without one (H10).
+// And one turn per tab: a second one while it works is refused 409 tab_busy (H4).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -66,6 +68,7 @@ const TAB_HIDDEN_TEXT =
   "That tab isn't connected to the Assistant: its window is in the background or covered, or it was closed. Show the Magnusim window and try again.";
 const PRIVACY_DENIED_TEXT =
   'Settings → Assistant is set to never send project data to a cloud provider. Ask from Home, use a local server, or change the setting.';
+const TAB_BUSY_TEXT = 'A turn is already working in that tab: wait for it or stop it.';
 
 let host;
 let fake;
@@ -587,80 +590,99 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     };
   });
   const w = await openCounter(page, request);
-  fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] });
-  const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
-  const { call } = await slowRunning(t, w, 5);
-  // A question of another turn on this tab (a destructive tool's) stays open across the plugin
-  // going off: the page keeps its assistant channel for it, so the stream drop below is a real
-  // reconnect, with a new link. (Not a privacy question: privacy is read live, so asking for one
-  // by changing the setting would make the running turn ask again too.)
-  fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] });
-  const asking = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w.tab });
-  await expect(modal(page)).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
-  // The next requests: the slow turn's once its call failed, then the asking one's after its No.
-  fake.reply({ text: 'It was turned off.' }, { text: 'I left it.' });
-  const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
-  const registerAgain = () => w.handle.evaluate(() => window.__register());
-  // Every list this page sends from here on: none may be, until a new page.
-  const listsSent = [];
+  const assistantChannels = async (tab) => ((await serverStream(request, host, tab)) || { kinds: {} }).kinds.assistant || 0;
+  const registerAgain = (x) => x.handle.evaluate(() => window.__register());
+  // Every list a page sends after its plugin went off: none may be, until a new page.
+  let listsSent = [];
   const onRequest = (r) => {
     if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/assistant/relay/tools') listsSent.push(r.postDataJSON());
   };
-  page.on('request', onRequest);
   let off = false;
-  try {
+  const turnOff = async () => {
+    listsSent = [];
+    page.on('request', onRequest);
     await postOk(request, `/api/plugins/${PLUGIN}/disable`, {});
     off = true;
+  };
+  const turnOn = async () => {
+    await postOk(request, `/api/plugins/${PLUGIN}/enable`, {});
+    await postOk(request, '/api/worker', { method: 'registry.reload', params: {} });
+    off = false;
+  };
+  try {
+    // During a slow call of the tab's turn: the call fails at once, and the page stops it too.
+    fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'It was turned off.' });
+    const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
+    const { call } = await slowRunning(t, w, 5);
+    await turnOff();
     const result = await t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the call fails', 10_000);
     expect(result).toMatchObject({ ok: false, code: 'plugin_off' });
     expect(result.summary).toBe(`${PLUGIN_NAME} was turned off or replaced while the tool ran; it may or may not have finished.`);
     expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 0, tools: 0 });
-    // The page stopped its call too.
     await expect(w.frame.locator('#aborted')).toHaveText('aborted');
     await expect(w.frame.locator('#counter')).toHaveText('0');
     expect((await t.ended()).turn.state).toBe('done');
     expect(await tabRow(request, w.tab)).toBeNull();
-    expect(await assistantChannels(), 'kept for the open question').toBe(1);
+    // Nothing of the dead frame on the server and no question open: its channel goes, and the
+    // frame registering again is refused in the page, before and after the plugin is back.
+    await expect.poll(() => assistantChannels(w.tab), { timeout: 15_000 }).toBe(0);
+    expect(await registerAgain(w)).toMatchObject({ available: false, reason: 'plugin_off' });
+    await expect(w.frame.locator('#ai-available')).toHaveText('no');
+    await turnOn();
+    expect(await registerAgain(w)).toMatchObject({ available: false, reason: 'plugin_off' });
+    expect(await tabRow(request, w.tab)).toBeNull();
+    expect(listsSent, 'nothing of the dead frame was ever sent again').toEqual([]);
+    page.off('request', onRequest);
+
+    // A new page's tools do come back.
+    const tabOf = trackTab(page);
+    await page.reload();
+    await expect(page.frameLocator('#workspace-frame').locator('#ai-available')).toHaveText('yes', { timeout: 60_000 });
+    await expect.poll(tabOf).not.toBe('');
+    await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
+    const w2 = { frame: page.frameLocator('#workspace-frame'), handle: await counterFrame(page), tab: tabOf() };
+
+    // A question of the new page's turn (a destructive tool's; one turn per tab, and nothing runs
+    // while it asks) stays open across the plugin going off: the page keeps its assistant channel
+    // for it, so the stream drop below is a real reconnect, with a new link. (A running turn alone
+    // keeps no channel for a page with nothing to offer.)
+    fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'I left it.' });
+    const asking = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w2.tab });
+    await expect(modal(page)).toBeVisible();
+    await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+    await turnOff();
+    await expect.poll(() => tabRow(request, w2.tab), { message: 'its tools go' }).toBeNull();
+    expect((await relayState(request)).links[w2.tab]).toMatchObject({ pending: 0, tools: 0 });
+    expect(await assistantChannels(w2.tab), 'kept for the open question').toBe(1);
+    await expect(modal(page)).toBeVisible();
 
     // The stream drops and comes back: on the new link the page sends nothing of the dead frame,
     // and the server lists nothing of it.
     const linked = await page.evaluate(() => window.__linked);
     expect(linked, 'the page counted its first link').toBeGreaterThanOrEqual(1);
-    expect((await postOk(request, '/api/test/event-hub/drop', { tab: w.tab })).dropped).toBe(1);
+    expect((await postOk(request, '/api/test/event-hub/drop', { tab: w2.tab })).dropped).toBe(1);
     await page.waitForFunction((n) => window.__linked > n, linked, { polling: 100, timeout: 30_000 });
-    expect((await relayState(request)).links[w.tab]).toMatchObject({ connected: true, pending: 0, tools: 0 });
-    expect(await tabRow(request, w.tab)).toBeNull();
+    expect((await relayState(request)).links[w2.tab]).toMatchObject({ connected: true, pending: 0, tools: 0 });
+    expect(await tabRow(request, w2.tab)).toBeNull();
     expect(listsSent, 'no list sent on the new link').toEqual([]);
     // The question came back on the new link: still one dialog, answered there.
     await expect(modal(page)).toBeVisible();
     await page.locator('#cf-cancel').click();
     await expect(modal(page)).toBeHidden();
     expect((await asking.ended()).turn.state).toBe('done');
-    await expect(w.frame.locator('#counter')).toHaveText('0');
+    await expect(w2.frame.locator('#counter')).toHaveText('0');
     // With nothing of this page left on the server, its channel goes; the frame registering
     // again is refused in the page.
-    await expect.poll(assistantChannels, { timeout: 15_000 }).toBe(0);
-    expect(await registerAgain()).toMatchObject({ available: false, reason: 'plugin_off' });
-    await expect(w.frame.locator('#ai-available')).toHaveText('no');
-    expect(await tabRow(request, w.tab)).toBeNull();
-    expect(await assistantChannels()).toBe(0);
+    await expect.poll(() => assistantChannels(w2.tab), { timeout: 15_000 }).toBe(0);
+    expect(await registerAgain(w2)).toMatchObject({ available: false, reason: 'plugin_off' });
+    await expect(w2.frame.locator('#ai-available')).toHaveText('no');
+    expect(await tabRow(request, w2.tab)).toBeNull();
+    expect(await assistantChannels(w2.tab)).toBe(0);
+    expect(listsSent, 'nothing of the dead frame was ever sent again').toEqual([]);
   } finally {
-    if (off) {
-      await postOk(request, `/api/plugins/${PLUGIN}/enable`, {});
-      await postOk(request, '/api/worker', { method: 'registry.reload', params: {} });
-    }
+    page.off('request', onRequest);
+    if (off) await turnOn();
   }
-  // Turned on again: that frame's tools still don't come back; a new page's do.
-  expect(await registerAgain()).toMatchObject({ available: false, reason: 'plugin_off' });
-  expect(await tabRow(request, w.tab)).toBeNull();
-  expect(listsSent, 'nothing of the dead frame was ever sent again').toEqual([]);
-  page.off('request', onRequest);
-  const tabOf = trackTab(page);
-  await page.reload();
-  await expect(page.frameLocator('#workspace-frame').locator('#ai-available')).toHaveText('yes', { timeout: 60_000 });
-  await expect.poll(tabOf).not.toBe('');
-  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
 });
 
 test('a hidden tab keeps its stream for a running call and for the hold after the turn, then lets it go: dormant, 409 tab_hidden; shown again, its tools are back', async ({
@@ -732,6 +754,56 @@ test('two tabs: a turn bound to one changes only that one', async ({ page, reque
   } finally {
     await other.close();
   }
+});
+
+test('one turn per app tab: a second one while it works is refused (409 tab_busy, and the terminal says so); the tab takes the next once the first ended', async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const before = chats().length;
+  fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 2 } }] }, { text: 'Added 2.' });
+  const t = await startTurn(request, host.base, { text: 'Add 2 slowly.', tab: w.tab });
+  await slowRunning(t, w, 2);
+  expect((await tabRow(request, w.tab)).active_turns).toBe(1);
+  // By the tab's id, through the route: refused before anything starts.
+  const r = await request.post(api('/api/assistant/turns'), { data: { text: 'Read the counter.', tab: w.tab } });
+  expect(r.status()).toBe(409);
+  expect(await r.json()).toEqual({ ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT });
+  // From the terminal, on the only connected tab: the person reads why, and it exits 1.
+  const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', 'auto', 'Read the counter.'], {
+    cwd: WEB_ROOT,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let out = '';
+  cli.stdout.on('data', (b) => (out += b));
+  cli.stderr.on('data', (b) => (out += b));
+  try {
+    expect(await new Promise((done) => cli.once('exit', done)), out).toBe(1);
+  } finally {
+    cli.kill();
+  }
+  expect(out.trim()).toBe(TAB_BUSY_TEXT);
+  // Neither reached the model or the page: the first turn's call still runs, and no question shows.
+  expect(chats().length).toBe(before + 1);
+  expect((await relayState(request)).running).toBe(1);
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => [c.tool, c.turn]))).toEqual([['slow_add', t.id]]);
+  await expect(w.frame.locator('#slow')).toHaveText('running');
+  await expect(modal(page)).toBeHidden();
+  // Let go, the first turn ends as its own.
+  expect(await w.handle.evaluate(() => window.__release())).toBe(true);
+  expect((await t.ended()).turn.state).toBe('done');
+  await expect(w.frame.locator('#counter')).toHaveText('2');
+  // The tab is free again: the next turn starts and runs there.
+  fake.reply({ tools: [{ name: `${PLUGIN}__get_count`, input: {} }] }, { text: 'It reads 2.' });
+  const t2 = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });
+  expect((await t2.ended()).turn.state).toBe('done');
+  expect(resultsIn(chats().at(-1))).toEqual([{ tool: `${PLUGIN}__get_count`, ok: true, text: 'The counter is 2.', data: { count: 2 }, images: [] }]);
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => [c.tool, c.turn]))).toEqual([
+    ['slow_add', t.id],
+    ['get_count', t2.id],
+  ]);
 });
 
 test('an image result: snap puts a 64x64 PNG block in the next request', async ({ page, request }) => {

@@ -32,6 +32,8 @@ Not released yet: `API_VERSION` stays 1.8 until these ship. Each only adds. The 
 
 **Codes:** a page's error keeps `invalid_input`, `busy`, `not_ready` or `failed`, or the SDK's `no_tool` for a tool it holds no handler for (any other code reads `failed`); the host's are `no_tool`, `busy` (another call runs, or the page is covered), `aborted`, `closed`, `stalled`, `leaving`, `too_large` and `bad_result`. `assistant.register` refuses a list that is not one with `bad_request`, and one over 512 KB with `too_large`; `assistant.stop` refuses a `turn` that is not an id with `bad_request`.
 
+**One turn per app tab.** At most one assistant turn runs bound to an app tab at a time: a second one is refused before it starts (409 `tab_busy`, "A turn is already working in that tab: wait for it or stop it."), and the tab takes the next one as soon as the first has ended. A workspace page never hears two turns' calls interleaved, so it can keep one undo group per turn.
+
 ## 1.8
 
 Host API 1.8 (`API_VERSION`, and `hostVersion` in a workspace's context), `magnusim_sdk` 1.5.0 (1.4.0 was the first 1.8 build; 1.5.0 adds the `failed_reason` event kind), plugin UI kit 1.1.0; the workspace SDK stays 1.4.0. A 1.7 plugin loads unchanged. For Magnusim v0.4.0 (the pieces the Heat Transfer plugin builds on).

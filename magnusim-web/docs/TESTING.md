@@ -301,6 +301,11 @@ No test reaches a real model provider or this PC's real Assistant files.
     being the page's own (its `/api/events?tab=` request) as `/api/assistant/tabs`
     lists it. The Assistant's questions are the app's own confirm dialog with its
     No button focused.
+  - One turn runs in a tab at a time: another turn on it is refused 409 `tab_busy`
+    until the first has ended, so a test waits for `ended()` before its next turn
+    there. A question open across a change (the plugin turned off) belongs to the
+    tab's only turn: a running turn alone keeps no channel for a page with nothing
+    left to offer.
   - The turn helpers are shared in `e2e/support/assistant.js`, for the core's specs
     and the bundled plugins' suites alike, so a plugin's spec names no provider:
     `useScriptedModel(request, base, fake, 'cloud' | 'local')` points the server at
