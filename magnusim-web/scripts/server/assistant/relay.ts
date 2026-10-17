@@ -845,8 +845,11 @@ export class Relay {
     if (typeof allow !== 'boolean') return refuse(400, 'bad_answer', 'allow must be true or false.');
     const rec = this.closed ? null : this.liveLink(link);
     if (!rec) return refuse(409, 'no_channel', NO_CHANNEL_TEXT);
+    // Read before the POST is heard: on a silent link, being heard sends its questions again,
+    // and one sent only now was never on the page this answer came from.
+    const sent = rec.gatesSent.has(gate);
     this.heard(rec);
-    if (!rec.gatesSent.has(gate)) return refuse(403, 'not_shown', NOT_SHOWN_TEXT);
+    if (!sent) return refuse(403, 'not_shown', NOT_SHOWN_TEXT);
     return this.turns.answerGate(gate, allow, { kind: 'link', tab: rec.tab });
   }
 

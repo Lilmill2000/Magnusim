@@ -17,7 +17,8 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete process.env[k];
 
-const { FakeClock, makeManager, settled, eventsOf, hostTool, until, tick, relayServer } = await import('./assistant-harness.js');
+const { FakeClock, makeManager, settled, eventsOf, hostTool, until, tick, relayServer, runTool, settledNow } = await import('./assistant-harness.js');
+const { RELAY_ACK_MS } = await import('../assistant/relay.ts');
 const { GateBroker, GATE_UNSEEN_NOTE, GATE_TIMEOUT_MS, GATE_UNSEEN_MS, NO_PRESENTER } = await import('../assistant/gates.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -376,6 +377,39 @@ describe('who may answer a question (P2): the program that started the turn, or 
     assert.equal(r.status, 200);
     await settled(t);
     assert.deepEqual(eventsOf(t).filter((e) => e.type === 'gate_closed').map((e) => [e.answer, e.by]), [['deny', 'user']]);
+  });
+
+  it('a silent link answers only a question it was sent: one opened while it was silent is refused (not_shown) and stays open, though the POST shows the page is there and sends it; then that link answers it', async () => {
+    const { m, s, page, link, t, shown } = await openQuestion();
+    // The tab goes silent: a workspace call its page never acknowledges.
+    const ctx = { tab: page.tab, projectId: 'p1', simulationId: 's1', cloud: false, local: true };
+    const call = runTool(m.registry.toolsFor(ctx).find((d) => d.localName === 'add'), { by: 1 }, ctx);
+    await page.frame('invoke');
+    m.clock.advance(RELAY_ACK_MS);
+    assert.equal((await call.promise).error.code, 'tab_disconnected');
+    assert.equal(s.relay.snapshot()[page.tab].connected, false, 'silent');
+    // A second question of the turn, opened now: not sent on the silent link.
+    const gates = s.handle.turns.gates;
+    const opened = [];
+    const off = gates.subscribe((e) => e.type === 'open' && opened.push(e.view));
+    const ac = new AbortController();
+    const asked = gates.ask({ ...REQ, turn: t.id }, { kind: 'turn', id: t.id, tab: page.tab }, ac.signal);
+    const unseen = await until(() => opened[0]);
+    off();
+    assert.deepEqual(page.of('gate').map((d) => d.gate.id), [shown.id], 'only the first question was sent');
+    // Its id posted on that link: refused, and still open.
+    let r = await s.post('/api/assistant/relay/gate', { link, gate: unseen.id, allow: true });
+    assert.deepEqual([r.status, r.json.code], [403, 'not_shown']);
+    assert.equal(await settledNow(asked), false, 'still open');
+    assert.equal(t.state, 'awaiting_confirmation');
+    // The POST was heard: the link is connected again and the question is sent on it; now it answers.
+    assert.equal(s.relay.snapshot()[page.tab].connected, true, 'heard');
+    await until(() => page.of('gate').some((d) => d.gate.id === unseen.id), 5000, 'the question sent');
+    r = await s.post('/api/assistant/relay/gate', { link, gate: unseen.id, allow: true });
+    assert.deepEqual([r.status, r.json], [200, { ok: true }]);
+    assert.equal(await asked, 'allow');
+    await s.post(`/api/assistant/gates/${shown.id}`, { allow: false, answer_key: t.answerKey });
+    await settled(t);
   });
 
   it('a link_only question takes only the tab’s link, never the answer key; an MCP client’s question takes no answer key', async () => {
