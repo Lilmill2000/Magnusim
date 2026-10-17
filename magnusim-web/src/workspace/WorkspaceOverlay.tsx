@@ -569,9 +569,17 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       drop: () => dropLaunch(route.projectId, route.plugin, route.studyId),
     };
     // The page's tools for the app's Assistant (1.9, unreleased) go to the page relay under this
-    // bridge's own frame id, for the workspace this route names (never what the frame says).
+    // bridge's own frame id, for the workspace this route names (never what the frame says), with
+    // its title from the plugin's row for the texts the person reads.
     const frameId = newWorkspaceFrameId();
-    const toolsScope = { project_id: route.projectId, plugin: route.plugin, workspace: route.workspace, study_id: route.studyId };
+    const wsTitle = (row?.workspaces || []).find((w) => w.key === route.workspace)?.title || '';
+    const toolsScope = {
+      project_id: route.projectId,
+      plugin: route.plugin,
+      workspace: route.workspace,
+      ...(wsTitle ? { title: wsTitle } : {}),
+      study_id: route.studyId,
+    };
     const invoke: ToolInvoke = (req) => bridge.invokeTool(req);
     const bridgeHooks: BridgeHooks = { ...hooks, assistantTools: (reg) => publishWorkspaceTools(toolsScope, frameId, reg, invoke) };
     const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);

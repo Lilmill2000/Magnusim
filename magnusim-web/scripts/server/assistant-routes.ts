@@ -174,7 +174,7 @@ const STATUS_PARTS: StatusPart[] = [
   () => {
     // The relay's test switches in use (null when not).
     const sw = relaySwitches();
-    return { test_hold_ms: sw.holdMs, test_ack_ms: sw.ackMs };
+    return { test_hold_ms: sw.holdMs, test_ack_ms: sw.ackMs, test_dormant_ms: sw.dormantMs };
   },
   ({ settings: s, deps }) => {
     const provider = s.provider;
@@ -382,6 +382,7 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         protector: store.testProtector ?? store.protector.kind,
         hold_ms: relay.holdMs,
         ack_ms: relay.ackMs,
+        dormant_ms: relay.dormantMs,
       });
     }),
   );

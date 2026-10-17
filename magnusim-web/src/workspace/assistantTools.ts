@@ -23,11 +23,14 @@ import { useSyncExternalStore } from 'react';
 import type { AssistantRegistration } from '../plugin-sdk/workspace';
 import type { AssistantCallOutcome, AssistantInvoke, AssistantPublication, CheckedTool } from './bridge';
 
-/** The workspace a list belongs to, from the host's route. */
+/** The workspace a list belongs to, from the host's route (and its title from the host's plugin row). */
 export interface WorkspaceToolsScope {
   project_id: string;
   plugin: string;
+  /** Its key, as the route names it. */
   workspace: string;
+  /** Its title, for the texts the person reads (the server names it by its key without one). */
+  title?: string;
   study_id: string;
 }
 
@@ -164,7 +167,13 @@ export function publishWorkspaceTools(
     view: Object.freeze({
       rev: ++s.rev,
       frameId,
-      scope: Object.freeze({ project_id: scope.project_id, plugin: scope.plugin, workspace: scope.workspace, study_id: scope.study_id }),
+      scope: Object.freeze({
+        project_id: scope.project_id,
+        plugin: scope.plugin,
+        workspace: scope.workspace,
+        ...(scope.title ? { title: scope.title } : {}),
+        study_id: scope.study_id,
+      }),
       tools: Object.freeze([...reg.tools]),
       guide: typeof reg.guide === 'string' ? reg.guide : '',
       invoke,

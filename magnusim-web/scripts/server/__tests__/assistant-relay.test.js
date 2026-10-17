@@ -24,6 +24,7 @@ const { resetAssistantState } = await import('../assistant/state.ts');
 const { TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
 const { ABORT_GRACE_MS } = await import('../assistant/runner.ts');
 const { ASSISTANT_HOLD_MS, RELAY_ACK_MS, UNREGISTER_GRACE_MS, pageOutcome, resolveRelaySwitches } = await import('../assistant/relay.ts');
+const { sourceLabel } = await import('../assistant/runner.ts');
 
 const servers = [];
 afterEach(async () => {
@@ -151,7 +152,7 @@ describe('registrations', { timeout: 30_000 }, () => {
       tab: page.tab,
       connected: true,
       since: m.clock.now(),
-      workspace: { project_id: 'p1', plugin: 'ai-demo', plugin_name: 'Workspace demo', workspace: 'Counter', study_id: 's1' },
+      workspace: { project_id: 'p1', plugin: 'ai-demo', plugin_name: 'Workspace demo', workspace: 'counter', study_id: 's1' },
       tools: ['ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset', 'ai-demo__slow_add'],
       refused: r.json.refused,
       active_turns: 0,
@@ -162,6 +163,34 @@ describe('registrations', { timeout: 30_000 }, () => {
     assert.deepEqual([off.status, off.json.accepted, off.json.refused], [200, [], []]);
     assert.deepEqual(await s.tabs(), []);
     assert.equal(m.registry.toolsFor(ctx(page.tab)).length, 0);
+  });
+
+  it('a registration names its workspace by its key (the route) and its title: the texts the person reads say the title, data keeps the key', async () => {
+    const { m, s } = await setup();
+    const page = await s.page();
+    const link = await page.open();
+    const scope = DEMO_WORKSPACE;
+    const r = await s.post('/api/assistant/relay/tools', { link, rev: 1, workspace: scope, tools: demoTools() });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    // Data keeps the key: /tabs and the model's context.
+    assert.equal((await s.tabs())[0].workspace.workspace, 'counter');
+    assert.equal(m.registry.workspaceOf(page.tab).reg.workspace, 'counter');
+    // The person reads the title: the tool's source (the question's copy) and the relay's own texts.
+    const add = toolOf(m, page.tab, 'add');
+    assert.equal(add.source.workspace, 'Counter');
+    assert.equal(sourceLabel(add.source), 'Workspace demo (Counter)');
+    hubTab(page.tab).res.destroy();
+    const out = await runTool(add, { by: 1 }, ctx(page.tab)).promise;
+    assert.deepEqual([out.error.code, out.error.message], ['tab_disconnected', "The page hosting Counter isn't connected, so the tool did not run."]);
+    // No title: the key; a title is cleaned like any text; one that is not text is refused.
+    const other = await s.page();
+    const otherLink = await other.open();
+    assert.equal((await s.post('/api/assistant/relay/tools', { link: otherLink, rev: 1, workspace: { ...scope, title: undefined }, tools: demoTools() })).status, 200);
+    assert.equal(toolOf(m, other.tab, 'add').source.workspace, 'counter');
+    assert.equal((await s.post('/api/assistant/relay/tools', { link: otherLink, rev: 2, workspace: { ...scope, title: 'Count\u0007er\n' }, tools: demoTools() })).status, 200);
+    assert.equal(toolOf(m, other.tab, 'add').source.workspace, 'Count er');
+    const bad = await s.post('/api/assistant/relay/tools', { link: otherLink, rev: 3, workspace: { ...scope, title: 5 }, tools: demoTools() });
+    assert.deepEqual([bad.status, bad.json.code], [400, 'bad_request']);
   });
 
   it('revs only go up: rev 2, then rev 1 is 409 stale_rev and rev 2 is kept; the same rev again (a re-POST) is taken', async () => {
@@ -416,6 +445,10 @@ describe('a call', { timeout: 30_000 }, () => {
     await s.progress(link, inv.call, { fraction: 0.1, label: 'Step 1' });
     m.clock.advance(39_999);
     assert.deepEqual(page.of('abort'), [], 'progress restarted the window');
+    // A bare sign of life (the page's progress(null), no label) restarts it too.
+    await s.progress(link, inv.call, { fraction: null });
+    m.clock.advance(39_999);
+    assert.deepEqual(page.of('abort'), [], 'a bare progress restarted the window');
     m.clock.advance(1);
     assert.deepEqual(await page.frame('abort'), { call: inv.call });
     assert.deepEqual((await s.result(link, inv.call, { ok: false, error: { code: 'aborted', message: 'stopped' } })).json, { ok: true });
@@ -560,18 +593,36 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
     assert.deepEqual(page.of('active'), [{ turns: 0, hold_until: null }], 'none run, no hold: the page lets its channel go');
   });
 
-  it('the hold and ack test switches: honoured only with MAGNUSIM_TEST_ASSISTANT=1 in a test home, as whole milliseconds', () => {
+  it('the hold, ack and dormant test switches: honoured only with MAGNUSIM_TEST_ASSISTANT=1 in a test home, as whole milliseconds', () => {
     const home = { MAGNUSIM_ASSISTANT_HOME: join(ROOT, 'h') };
-    const sw = { MAGNUSIM_TEST_ASSISTANT_HOLD_MS: '2000', MAGNUSIM_TEST_ASSISTANT_ACK_MS: '500' };
-    assert.deepEqual(resolveRelaySwitches({ ...home, ...sw, MAGNUSIM_TEST_ASSISTANT: '1' }), { holdMs: 2000, ackMs: 500, ignored: [] });
+    const sw = { MAGNUSIM_TEST_ASSISTANT_HOLD_MS: '2000', MAGNUSIM_TEST_ASSISTANT_ACK_MS: '500', MAGNUSIM_TEST_ASSISTANT_DORMANT_MS: '60000' };
+    assert.deepEqual(resolveRelaySwitches({ ...home, ...sw, MAGNUSIM_TEST_ASSISTANT: '1' }), { holdMs: 2000, ackMs: 500, dormantMs: 60_000, ignored: [] });
     const off = resolveRelaySwitches({ ...home, ...sw });
-    assert.deepEqual([off.holdMs, off.ackMs, off.ignored.length], [null, null, 2]);
+    assert.deepEqual([off.holdMs, off.ackMs, off.dormantMs, off.ignored.length], [null, null, null, 3]);
     const real = resolveRelaySwitches({ ...sw, MAGNUSIM_TEST_ASSISTANT: '1' });
-    assert.deepEqual([real.holdMs, real.ackMs], [null, null], 'not in this PC’s real home');
+    assert.deepEqual([real.holdMs, real.ackMs, real.dormantMs], [null, null, null], 'not in this PC’s real home');
     for (const v of ['0', '1.5', 'abc', '3600001', '-5']) {
       assert.equal(resolveRelaySwitches({ ...home, MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_HOLD_MS: v }).holdMs, null, v);
+      assert.equal(resolveRelaySwitches({ ...home, MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_DORMANT_MS: v }).dormantMs, null, v);
     }
-    assert.deepEqual(resolveRelaySwitches({ ...home, MAGNUSIM_TEST_ASSISTANT: '1' }), { holdMs: null, ackMs: null, ignored: [] });
+    assert.deepEqual(resolveRelaySwitches({ ...home, MAGNUSIM_TEST_ASSISTANT: '1' }), { holdMs: null, ackMs: null, dormantMs: null, ignored: [] });
+  });
+
+  it('a dormant time apart from the hold (its test switch): a dropped link’s registration stays that long, however short the hold', async () => {
+    const dormantMs = 5 * ASSISTANT_HOLD_MS;
+    const { m, s } = await setup({ relay: { dormantMs } });
+    assert.deepEqual([s.relay.holdMs, s.relay.dormantMs], [ASSISTANT_HOLD_MS, dormantMs]);
+    const { page } = await linkedPage(s);
+    const tab = page.tab;
+    page.serverDrop();
+    await until(async () => (await s.tabs())[0]?.connected === false, 5000, 'the dormant registration');
+    m.clock.advance(ASSISTANT_HOLD_MS + 1);
+    const hidden = await s.post('/api/assistant/turns', { text: 'Again', tab });
+    assert.deepEqual([hidden.status, hidden.json.code], [409, 'tab_hidden'], 'still dormant past the hold');
+    m.clock.advance(dormantMs - ASSISTANT_HOLD_MS - 2);
+    assert.equal((await s.tabs()).length, 1);
+    m.clock.advance(1);
+    assert.deepEqual(await s.tabs(), []);
   });
 
   it('the server stopping: a call still out fails, and no channel opens any more', async () => {

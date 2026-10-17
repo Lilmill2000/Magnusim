@@ -384,8 +384,8 @@ export function demoTools() {
   ];
 }
 
-/** The scope the host gives a demo frame. */
-export const DEMO_WORKSPACE = Object.freeze({ project_id: 'p1', plugin: 'ai-demo', workspace: 'Counter', study_id: 's1' });
+/** The scope the host gives a demo frame: its route's key, and its title from the plugin's row. */
+export const DEMO_WORKSPACE = Object.freeze({ project_id: 'p1', plugin: 'ai-demo', workspace: 'counter', title: 'Counter', study_id: 's1' });
 
 /**
  * pluginLoaded for the relay: the demo plugin is on while `state.on`. Its row is one object

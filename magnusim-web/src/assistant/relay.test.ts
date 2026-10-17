@@ -650,12 +650,18 @@ describe('tool calls', () => {
       { link: LINK_A, call: 'call-1', fraction: 0.1, label: 'step 1' },
       { link: LINK_A, call: 'call-1', fraction: 1, label: 'step 10' },
     ]);
+    // A bare progress (no fraction, no label) is a sign of life too: it goes, fraction null (the
+    // server counts a POST as progress only when it carries a fraction or a label).
+    await settle(PROGRESS_INTERVAL_MS);
+    run.req.onProgress(null, '');
+    await settle();
+    expect(progress().at(-1)).toEqual({ link: LINK_A, call: 'call-1', fraction: null });
     run.req.onProgress(null, '');
     run.end({ ok: true, result: { text: 'Counter is 3.', data: { count: 3 } } });
     await settle(PROGRESS_INTERVAL_MS * 4);
     expect(take('/api/assistant/relay/result').body).toEqual({ link: LINK_A, call: 'call-1', ok: true, result: { text: 'Counter is 3.', data: { count: 3 } } });
     // Nothing after the result.
-    expect(progress()).toHaveLength(2);
+    expect(progress()).toHaveLength(3);
     take('/api/assistant/relay/result').answer(200, { ok: true });
     await settle();
     expect(channel().pinned).toBe(false);
@@ -678,6 +684,25 @@ describe('tool calls', () => {
       ok: false,
       error: { code: 'aborted', message: 'it was stopped before its page said it finished' },
     });
+  });
+
+  it('`unregistered` stops the running call (the server failed it plugin_off): it changes nothing more in the frame', async () => {
+    await registered();
+    channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });
+    const run = running[0];
+    expect(run.req.signal.aborted).toBe(false);
+    channel().frame('unregistered', { reason: 'plugin_off' });
+    expect(run.req.signal.aborted).toBe(true);
+    run.end({ ok: false, code: 'aborted', message: 'it was stopped before its page said it finished' });
+    await settle();
+    // Its end still goes back (the server answers it stale); nothing is withdrawn (the server dropped the
+    // list), and with nothing of this page left on the server the channel went at once.
+    const result = take('/api/assistant/relay/result');
+    expect(result.body).toMatchObject({ link: LINK_A, call: 'call-1', ok: false, error: { code: 'aborted' } });
+    result.answer(200, { ok: true, stale: true });
+    await settle();
+    expect(toolPosts()).toHaveLength(1);
+    expect(log.slice(log.indexOf('invoke add'))).toEqual(['invoke add', 'channel closed', 'result sent', 'result answered']);
   });
 
   it('a dropped stream stops the running call (the server failed it at once)', async () => {

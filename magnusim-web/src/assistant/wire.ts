@@ -219,7 +219,10 @@ export type RelayFrame = { [K in RelayFrameType]: { type: K } & RelayFrameData[K
 export interface RelayWorkspace {
   project_id: string;
   plugin: string;
+  /** Its key, as the route names it. */
   workspace: string;
+  /** Its title from the host's plugin row: the texts the person reads name it so (the key without one). */
+  title?: string;
   study_id: string;
 }
 
@@ -259,7 +262,8 @@ export interface RelayProgressBody {
   link: string;
   call: string;
   ack?: true;
-  fraction?: number;
+  /** 0 to 1, or null when the page said none; absent only on the ack. */
+  fraction?: number | null;
   label?: string;
 }
 

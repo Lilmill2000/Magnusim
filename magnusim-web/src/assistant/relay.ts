@@ -312,6 +312,8 @@ function channelGone(r: Relay, cur: PublishedTools | null): void {
 function onUnregistered(r: Relay, d: RelayFrameData['unregistered']): void {
   const reason = typeof d.reason === 'string' && d.reason ? d.reason.slice(0, 64) : 'plugin_off';
   const frame = r.held ? r.held.frameId : workspaceToolsSnapshot().current?.frameId;
+  // The server failed the call running here (plugin_off) when it dropped the tools: it stops here too.
+  for (const inv of r.invokes.values()) inv.ctl.abort();
   // The server dropped it: nothing to withdraw, and that frame never registers again.
   r.maybeHeld = false;
   r.heldStale = false;
@@ -488,7 +490,9 @@ function progressSender(link: string, call: string): { push(fraction: number | n
     const p = pending;
     pending = null;
     last = Date.now();
-    const body: RelayProgressBody = { link, call, ...(p.fraction !== null ? { fraction: p.fraction } : {}), ...(p.label ? { label: p.label } : {}) };
+    // `fraction` always goes, null when the page gave none: a bare progress() is a sign of life
+    // too, and the server counts as progress only a POST that carries a fraction or a label.
+    const body: RelayProgressBody = { link, call, fraction: p.fraction, ...(p.label ? { label: p.label } : {}) };
     void post(PROGRESS_PATH, body);
   };
   return {

@@ -22,7 +22,7 @@
  *   unregistered {reason}          'plugin_off': the tab's tools are gone; that publication
  *                                  must not register again (a new frame may)
  * POSTs from the page (assistant-routes.ts; each 409 no_channel without a live link):
- *   /relay/tools    {link, rev, epoch?, workspace:{project_id, plugin, workspace, study_id},
+ *   /relay/tools    {link, rev, epoch?, workspace:{project_id, plugin, workspace, title?, study_id},
  *                   tools, guide?} → {ok, available:true, accepted, refused, epoch}; tools []
  *                   withdraws them. 409 stale_rev (a lower rev than the tab's last; the same
  *                   rev is taken again, e.g. on a new link), plugin_changed (the frame's pinned
@@ -43,7 +43,8 @@
  *   nobody; once the registry is read it is offered, or goes as on a bump (`unregistered`)
  *   when its plugin is not loaded.
  * - A link that goes leaves its tab's registration dormant (connected:false, offered to
- *   nobody) for the hold time; the same tab's next link and re-POST bring it back.
+ *   nobody) for the hold time (the dormant time under its test switch); the same tab's next
+ *   link and re-POST bring it back.
  * - One call at a time per tab (`busy`). An invoke whose frame can't be sent fails at once
  *   (`tab_disconnected`); one the page doesn't acknowledge in 10 s too (a half-open
  *   connection), and its link then counts as silent: not connected (offered to nobody, a
@@ -119,16 +120,26 @@ export const NO_CHANNEL_TEXT = "This page's assistant channel is not open (it cl
 
 // ---------------------------------------------------------------- test switches
 
+/** The relay's test switches (null: not in use). */
+export interface RelaySwitches {
+  holdMs: number | null;
+  ackMs: number | null;
+  dormantMs: number | null;
+}
+
 /**
- * MAGNUSIM_TEST_ASSISTANT_HOLD_MS and MAGNUSIM_TEST_ASSISTANT_ACK_MS (whole milliseconds,
- * 1 to 3600000): the hold and the ack window for browser tests. Honoured only with
- * MAGNUSIM_TEST_ASSISTANT=1 in a test home, like every Assistant test switch.
+ * MAGNUSIM_TEST_ASSISTANT_HOLD_MS, MAGNUSIM_TEST_ASSISTANT_ACK_MS and
+ * MAGNUSIM_TEST_ASSISTANT_DORMANT_MS (whole milliseconds, 1 to 3600000): the hold, the ack
+ * window, and how long a dropped link's registration is kept (the hold otherwise), for browser
+ * tests. A test with a short hold keeps a dropped tab dormant long enough to look at it.
+ * Honoured only with MAGNUSIM_TEST_ASSISTANT=1 in a test home, like every Assistant test switch.
  */
-export function resolveRelaySwitches(env: NodeJS.ProcessEnv): { holdMs: number | null; ackMs: number | null; ignored: string[] } {
-  const out: { holdMs: number | null; ackMs: number | null; ignored: string[] } = { holdMs: null, ackMs: null, ignored: [] };
+export function resolveRelaySwitches(env: NodeJS.ProcessEnv): RelaySwitches & { ignored: string[] } {
+  const out: RelaySwitches & { ignored: string[] } = { holdMs: null, ackMs: null, dormantMs: null, ignored: [] };
   const names = [
     ['MAGNUSIM_TEST_ASSISTANT_HOLD_MS', 'holdMs'],
     ['MAGNUSIM_TEST_ASSISTANT_ACK_MS', 'ackMs'],
+    ['MAGNUSIM_TEST_ASSISTANT_DORMANT_MS', 'dormantMs'],
   ] as const;
   for (const [name, field] of names) {
     const raw = String(env[name] ?? '').trim();
@@ -151,14 +162,14 @@ export function resolveRelaySwitches(env: NodeJS.ProcessEnv): { holdMs: number |
   return out;
 }
 
-let switches: { holdMs: number | null; ackMs: number | null } | null = null;
+let switches: RelaySwitches | null = null;
 
 /** The relay's test switches, read once (null when not in use). */
-export function relaySwitches(): { holdMs: number | null; ackMs: number | null } {
+export function relaySwitches(): RelaySwitches {
   if (!switches) {
     const r = resolveRelaySwitches(process.env);
     for (const why of r.ignored) alog('warn', why);
-    switches = { holdMs: r.holdMs, ackMs: r.ackMs };
+    switches = { holdMs: r.holdMs, ackMs: r.ackMs, dormantMs: r.dormantMs };
   }
   return switches;
 }
@@ -243,8 +254,9 @@ interface TabRec {
   /** The highest rev taken. */
   rev: number;
   /**
-   * The registration in the registry: its id, the link it came on and what it is.
-   * unverified: made while the live registry could not say whether its plugin is loaded.
+   * The registration in the registry: its id, the link it came on and what it is (`workspace`:
+   * its title, for the texts). unverified: made while the live registry could not say whether
+   * its plugin is loaded.
    */
   reg: { id: number; link: string; plugin: string; pluginName: string; workspace: string; epoch: string; unverified: boolean } | null;
   /** Its link went: kept, offered to nobody, until dormantTimer. */
@@ -277,6 +289,8 @@ export interface RelayOptions {
   clock?: Clock;
   holdMs?: number;
   ackMs?: number;
+  /** How long a dropped link's registration is kept (the hold when left out). */
+  dormantMs?: number;
   unregisterGraceMs?: number;
   abortGraceMs?: number;
   pluginLoaded?: PluginLoaded;
@@ -293,6 +307,7 @@ export interface RelayOptions {
 export class Relay {
   readonly holdMs: number;
   readonly ackMs: number;
+  readonly dormantMs: number;
   readonly presenter: GatePresenter;
   private readonly registry: Registry;
   private readonly turns: TurnManager;
@@ -319,6 +334,7 @@ export class Relay {
     this.clock = o.clock ?? realClock;
     this.holdMs = o.holdMs ?? sw.holdMs ?? ASSISTANT_HOLD_MS;
     this.ackMs = o.ackMs ?? sw.ackMs ?? RELAY_ACK_MS;
+    this.dormantMs = o.dormantMs ?? sw.dormantMs ?? this.holdMs;
     this.graceMs = o.unregisterGraceMs ?? UNREGISTER_GRACE_MS;
     this.abortGraceMs = o.abortGraceMs ?? ABORT_GRACE_MS;
     this.pluginLoaded = o.pluginLoaded ?? ((key: string) => livePluginLoaded(key));
@@ -400,7 +416,7 @@ export class Relay {
         t.dormant = true;
         t.since = this.clock.now();
       }
-      t.dormantTimer = this.clock.setTimeout(() => this.expireDormant(t), this.holdMs);
+      t.dormantTimer = this.clock.setTimeout(() => this.expireDormant(t), this.dormantMs);
     }
     if (t.link === rec) {
       t.link = null;
@@ -584,6 +600,7 @@ export class Relay {
       plugin: ws.plugin,
       pluginName,
       workspace: ws.workspace,
+      workspaceName: ws.title,
       projectId: ws.projectId,
       studyId: ws.studyId,
       epoch: current,
@@ -597,7 +614,7 @@ export class Relay {
     });
     const wasLive = !!t.reg && t.reg.link === link && !t.dormant;
     this.clearDormant(t);
-    t.reg = { id, link, plugin: ws.plugin, pluginName, workspace: cleanText(ws.workspace, TEXT_CAPS.name) || 'the workspace', epoch: current, unverified: unsure };
+    t.reg = { id, link, plugin: ws.plugin, pluginName, workspace: ws.title, epoch: current, unverified: unsure };
     if (!wasLive) t.since = this.clock.now();
     return ok({ available: true, accepted: verdict.accepted, refused: verdict.refused, epoch: `${boot}:${current}:${pluginHash(ws.plugin)}` });
   }
@@ -852,18 +869,24 @@ export class Relay {
   }
 }
 
-/** The workspace a registration names (the host's own scope for the frame). */
-function parseWorkspace(raw: unknown): { plugin: string; workspace: string; projectId: string; studyId: string } | string {
-  if (!isRecord(raw)) return 'workspace is {project_id, plugin, workspace, study_id}.';
+/**
+ * The workspace a registration names (the host's own scope for the frame): `workspace` is its
+ * key, as the page's route names it; `title`, when the page gives it (from the host's plugin
+ * row), is how the person reads it in the texts, else the key.
+ */
+function parseWorkspace(raw: unknown): { plugin: string; workspace: string; title: string; projectId: string; studyId: string } | string {
+  if (!isRecord(raw)) return 'workspace is {project_id, plugin, workspace, title?, study_id}.';
   const plugin = raw.plugin;
   if (typeof plugin !== 'string' || !PLUGIN_KEY.test(plugin)) return 'workspace.plugin is a plugin key.';
   const workspace = raw.workspace;
-  if (typeof workspace !== 'string' || !workspace || workspace.length > TEXT_CAPS.name) return "workspace.workspace is the workspace's name.";
+  if (typeof workspace !== 'string' || !workspace || workspace.length > TEXT_CAPS.name) return "workspace.workspace is the workspace's key.";
+  if (raw.title !== undefined && raw.title !== null && typeof raw.title !== 'string') return "workspace.title is the workspace's title.";
   const id = (v: unknown) => (v === undefined || v === null || v === '' ? '' : typeof v === 'string' && ID.test(v) ? v : null);
   const projectId = id(raw.project_id);
   const studyId = id(raw.study_id);
   if (projectId === null || studyId === null) return 'workspace.project_id and workspace.study_id are ids.';
-  return { plugin, workspace, projectId, studyId };
+  const title = cleanText(raw.title, TEXT_CAPS.name) || cleanText(workspace, TEXT_CAPS.name) || 'the workspace';
+  return { plugin, workspace, title, projectId, studyId };
 }
 
 /**

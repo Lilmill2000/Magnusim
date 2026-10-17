@@ -1069,8 +1069,9 @@ describe('the workspace overlay', () => {
       timeoutS: 30,
       inputSchema: { type: 'object', properties: { by: { type: 'integer' } }, required: ['by'], additionalProperties: false },
     };
-    // The workspace as the host's route names it (#/p/proj/ws/ws-demo/bench/st-1), never as the frame says.
-    const ROUTE_SCOPE = { project_id: 'proj', plugin: 'ws-demo', workspace: 'bench', study_id: 'st-1' };
+    // The workspace as the host's route names it (#/p/proj/ws/ws-demo/bench/st-1), never as the frame says,
+    // with its title from the plugin's row (the texts the person reads name it so).
+    const ROUTE_SCOPE = { project_id: 'proj', plugin: 'ws-demo', workspace: 'bench', title: 'Bench', study_id: 'st-1' };
 
     beforeEach(() => {
       resetWorkspaceToolsForTests();

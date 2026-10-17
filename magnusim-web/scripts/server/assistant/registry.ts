@@ -30,6 +30,7 @@ import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts
 
 export type ToolSource =
   | { kind: 'host' }
+  /** `workspace`: as the person reads it (the workspace's title). */
   | { kind: 'workspace'; plugin: string; pluginName: string; workspace: string; tab: string; link: string; projectId: string; studyId: string; epoch: string }
   /** Reserved for a later phase (other plugins' tools). */
   | { kind: 'plugin'; plugin: string; method: string; epoch: string };
@@ -91,7 +92,10 @@ export interface ToolDef {
 export interface WorkspaceRegistration {
   plugin: string;
   pluginName: string;
+  /** The workspace's key, as the page's route names it. */
   workspace: string;
+  /** How the person reads it (its title); the key when left out. */
+  workspaceName?: string;
   projectId: string;
   studyId: string;
   /** The plugin's epoch the registration belongs to; pluginEpoch(plugin) now when left out. */
@@ -248,7 +252,7 @@ export class Registry implements ToolRegistry {
     }
     const epoch = reg.epoch ?? this.epochOf(reg.plugin);
     const pluginName = cleanText(reg.pluginName || reg.plugin, TEXT_CAPS.name);
-    const workspace = cleanText(reg.workspace, TEXT_CAPS.name);
+    const workspace = cleanText(reg.workspaceName || reg.workspace, TEXT_CAPS.name);
     const source: ToolSource = {
       kind: 'workspace',
       plugin: reg.plugin,
