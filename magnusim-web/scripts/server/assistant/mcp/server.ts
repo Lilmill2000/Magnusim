@@ -24,6 +24,9 @@
  *   destructive): no app tab shows an app's questions yet (`questions_off`).
  * - External apps share process-wide rates (a reconnect doesn't reset them): 120 change
  *   calls and 1200 calls per rolling hour (`rate_limited`, with the time to wait).
+ * - Other apps turned off: the settings save closes external apps' connections
+ *   (listener.ts), and each external list and call reads the switch again, so nothing
+ *   waiting runs after it (`clients_off`).
  * - A Settings Test binding (sessions.ts) is served only connection_check, by its own
  *   path: the canned answer, without ToolRunner. Another agent binding's calls run in its
  *   turn (AgentDispatch); with no turn on it, nothing runs (`stopped`).
@@ -300,7 +303,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return `${MCP_INSTRUCTIONS}\n\n${guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin)}`;
   }
 
-  function listTools(session: McpSession): Array<Record<string, unknown>> {
+  async function listTools(session: McpSession): Promise<Array<Record<string, unknown>>> {
     if (session.binding?.test) {
       return [
         {
@@ -311,6 +314,10 @@ export function createMcpService(d: McpServiceDeps): McpService {
           annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         },
       ];
+    }
+    if (session.kind === 'external' && !(await d.settings()).mcp.clients) {
+      // A JSON-RPC error with the Settings text (the SDK answers a thrown error's message).
+      throw Object.assign(new Error(CLIENTS_OFF_TEXT), { data: { code: 'clients_off' } });
     }
     const { ctx } = contextOf(session);
     const served = listFor(session, ctx, true);
@@ -338,6 +345,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
   async function runOne(session: McpSession, call: ToolCallPart, signal: AbortSignal): Promise<{ r: RunResult; def: ToolDef | null }> {
     if (session.binding?.test) return { r: testCall(session, call), def: null };
     if (signal.aborted) return { r: errorResult(call, 'stopped', STOPPED_BEFORE), def: null };
+    // Other apps turned off since this app connected (or since this call was queued).
+    if (session.kind === 'external' && !(await d.settings()).mcp.clients) return { r: errorResult(call, 'clients_off', CLIENTS_OFF_TEXT), def: null };
     const { ctx, why } = contextOf(session);
     const served = session.served ?? listFor(session, ctx, false);
     const def = served.get(call.name) ?? null;
@@ -466,7 +475,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
         );
         server.setRequestHandler('tools/list', async (_request, ctx) => {
           noteClient(session, conn, server, ctx);
-          return { tools: listTools(session) };
+          return { tools: await listTools(session) };
         });
         server.setRequestHandler('tools/call', async (request, ctx) => {
           noteClient(session, conn, server, ctx);

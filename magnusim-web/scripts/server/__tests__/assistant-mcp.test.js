@@ -362,6 +362,61 @@ describe('who may connect', () => {
     }
   });
 
+  it('Other apps turned off with an app connected (even outside Settings): its waiting call never runs, and its next list and call are refused clients_off', async () => {
+    const hold = holdTool('hold');
+    const ran = [];
+    const look = H.hostTool('look', { run: async () => (ran.push('look'), { ok: true, data: {}, summary: 'looked' }) });
+    const w = await world({ hostTools: [hold.def, look] });
+    try {
+      const c = await w.client();
+      const first = c.client.callTool({ name: 'hold', arguments: { n: 1 } });
+      const second = c.client.callTool({ name: 'look', arguments: {} });
+      await H.until(() => hold.calls.length === 1 && w.svc.sessions()[0]?.queue.pending === 2, 5000, 'one call running, one waiting');
+      w.m.state.settings.mcp.clients = false;
+      hold.calls[0].release();
+      assert.ok(!(await first).isError, 'the call already running ends as it would');
+      assert.deepEqual(M.resultJson(await second).error, { code: 'clients_off', message: L.CLIENTS_OFF_TEXT });
+      assert.deepEqual(ran, [], 'the waiting call never ran');
+      await assert.rejects(c.client.listTools(), (err) => String(err.message).includes(L.CLIENTS_OFF_TEXT));
+      assert.equal(M.resultJson(await c.client.callTool({ name: 'look', arguments: {} })).error.code, 'clients_off');
+      assert.deepEqual(ran, []);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it('a handshake admitted while Other apps is being turned off is refused clients_off, never served', async () => {
+    const w = await world();
+    let reached;
+    const atAdmit = new Promise((r) => (reached = r));
+    let release;
+    const held = new Promise((r) => (release = r));
+    const seen = { served: 0, abandoned: 0 };
+    // The switch was on when this handshake was admitted; it goes off before the answer.
+    const disposeHeld = L.setMcpHandler({
+      async admit() {
+        reached();
+        await held;
+        return { ok: true, serve: (conn) => ((seen.served += 1), conn.close()), abandon: () => (seen.abandoned += 1) };
+      },
+    });
+    try {
+      const pending = M.handshake(w.port, w.token);
+      await atAdmit;
+      assert.equal(L.closeExternalMcpConnections(), 0);
+      release();
+      const hs = await pending;
+      assert.deepEqual(hs.answer, { ok: false, code: 'clients_off', error: L.CLIENTS_OFF_TEXT });
+      assert.deepEqual(seen, { served: 0, abandoned: 1 });
+      await closed(hs.sock);
+      assert.equal(L.mcpListenerStatus().connected, 0);
+    } finally {
+      release();
+      disposeHeld();
+      await w.close();
+    }
+  });
+
   it('bindings: an unknown one is refused, a live one is in use, and the binding takes a new connection once it closes', async () => {
     const w = await world({ clients: false });
     try {
@@ -868,6 +923,48 @@ describe('the server', () => {
       for (const answer of [r, status, test, on]) assert.ok(!answer.text.includes(info.token), 'never the token');
       await c.close();
     } finally {
+      handle.shutdown();
+      await app.close();
+    }
+  });
+
+  it('Other apps turned off in Settings cuts off the apps connected now (their running call ends "server stopped", a waiting one never runs); coding agents stay connected', async () => {
+    await L.resetMcpListenerForTests();
+    resetAssistantState();
+    const router = new Router();
+    const hold = holdTool('hold');
+    const m = H.makeManager({ dir: ROOT, hostTools: [hold.def] });
+    // The real settings file decides the switch here.
+    const turnDeps = { ...m.deps };
+    delete turnDeps.settings;
+    const handle = routes.registerAssistantRoutes(router, { turns: turnDeps });
+    const app = await serve(router);
+    const open = [];
+    try {
+      await handle.mcpStart;
+      assert.equal((await app.post('/api/assistant/settings', { mcp: { clients: true } })).json.mcp.running, true);
+      const info = M.readInfo(L.mcpInfoPath());
+      const agent = await M.socketClient(info.port, info.token, { binding: B.mintBinding({ conversation: 'c-stays', agent: 'fake' }).id });
+      const c = await M.socketClient(info.port, info.token, { name: 'Desk App' });
+      open.push(agent, c);
+      const calls = [1, 2].map((n) => c.client.callTool({ name: 'hold', arguments: { n } }).catch((e) => e));
+      await H.until(() => hold.calls.length === 1 && L.mcpConnections().find((x) => x.kind === 'external')?.calls === 2, 5000, 'one call running, one waiting');
+      const off = await app.post('/api/assistant/settings', { mcp: { clients: false } });
+      assert.equal(off.status, 200);
+      assert.equal(off.json.mcp.clients, false);
+      assert.equal(off.json.mcp.connected, 1, 'only the coding agent');
+      await closed(c.sock);
+      await H.until(() => hold.calls[0].aborted, 5000, 'the running call aborted');
+      assert.deepEqual(hold.calls[0].aborted, { code: 'stopped', server: true });
+      await Promise.all(calls);
+      assert.equal(hold.calls.length, 1, 'the waiting call never ran');
+      const r = await app.get('/api/assistant/mcp');
+      assert.equal(r.json.running, true, 'the listener runs on (coding agents use it)');
+      assert.deepEqual(r.json.connections.map((x) => x.kind), ['agent']);
+      assert.equal(agent.sock.destroyed, false);
+      assert.equal((await M.handshake(info.port, info.token)).answer.code, 'clients_off');
+    } finally {
+      for (const x of open) await x.close();
       handle.shutdown();
       await app.close();
     }

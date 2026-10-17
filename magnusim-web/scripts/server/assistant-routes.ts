@@ -85,7 +85,7 @@ import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
-import { mcpClientConfig, mcpConnections, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
+import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
 import { createMcpService } from './assistant/mcp/server.ts';
 
 export { TURN_HEADER };
@@ -716,6 +716,8 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       }
       // Other apps turned on: the connection starts now (it then runs until the process exits).
       if (r.settings.mcp.clients && !mcpListenerStatus().running) await startMcpListener();
+      // Off: the apps connected now are cut off too (coding agents' connections stay).
+      if (!r.settings.mcp.clients) closeExternalMcpConnections();
       ctx.sendJson(200, await assistantStatus());
     }),
   );

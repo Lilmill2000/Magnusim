@@ -27,6 +27,8 @@
  *   port learns nothing and can't pose as Magnusim.
  * - Limits: 16 sockets in their handshake (more are destroyed at once); 8 connections, of
  *   which 4 external (busy past that), so 4 stay for coding agents' bindings.
+ * - Other apps turned off closes every external app's connection at once
+ *   (closeExternalMcpConnections, from the settings save); coding agents' stay.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, unlinkSync } from 'node:fs';
@@ -140,6 +142,8 @@ interface ListenerState {
   refusedAt: Map<string, number>;
   exitHook: boolean;
   handshakeMs: number;
+  /** Bumped each time Other apps is turned off: an external handshake admitted before it is refused. */
+  externalCut: number;
 }
 
 const KEY = Symbol.for('magnusim.assistant.mcp');
@@ -164,9 +168,12 @@ function state(): ListenerState {
       refusedAt: new Map(),
       exitHook: false,
       handshakeMs: MCP_LIMITS.handshakeMs,
+      externalCut: 0,
     };
     g[KEY] = s;
   }
+  // A state an earlier copy of this module made (a Vite restart) may lack it.
+  if (typeof s.externalCut !== 'number') s.externalCut = 0;
   return s;
 }
 
@@ -215,6 +222,23 @@ export function setMcpHandler(h: McpHandler): () => void {
     if (st.handler === h) st.handler = null;
     for (const c of [...st.conns]) if (c.handler === h) c.close({ server: true });
   };
+}
+
+/**
+ * Other apps was turned off: every external app's connection closes now (its calls end "The
+ * server stopped…"), and a handshake admitted before this is refused `clients_off`. Coding
+ * agents' connections stay. Returns how many closed.
+ */
+export function closeExternalMcpConnections(): number {
+  const st = state();
+  st.externalCut += 1;
+  let n = 0;
+  for (const c of [...st.conns]) {
+    if (c.kind !== 'external') continue;
+    c.close({ server: true });
+    n += 1;
+  }
+  return n;
 }
 
 function logRefused(code: string): void {
@@ -444,6 +468,7 @@ async function greeting(sock: Socket, n1: string, text: string, rest: Buffer): P
     return;
   }
   const session = newSessionId(Date.now());
+  const cut = st.externalCut;
   let admission: McpAdmission;
   try {
     admission = await handler.admit({ session, kind, binding: binding as string | null, client });
@@ -460,6 +485,13 @@ async function greeting(sock: Socket, n1: string, text: string, rest: Buffer): P
     freeSlot();
     if (sock.destroyed) return;
     refuse(sock, 'not_ready', NOT_READY_TEXT);
+    return;
+  }
+  // Other apps went off while it was admitted (on when the handler read it).
+  if (kind === 'external' && st.externalCut !== cut) {
+    admission.abandon();
+    freeSlot();
+    refuse(sock, 'clients_off', CLIENTS_OFF_TEXT);
     return;
   }
   sock.write(line({ ok: true, proof: hmac(token, `s${n2}`) }));
