@@ -15,9 +15,14 @@
  *   the catalogue's additions). Everything else, other vendors' keys and every MAGNUSIM_,
  *   CFDDESK_ and npm_ variable, NODE_OPTIONS and ELECTRON_RUN_AS_NODE included, is dropped.
  * - Containment, before the agent reads anything:
- *   - POSIX: the agent leads its own process group (detached). The group's id and its leader's
- *     start time go in <assistant data>/agents/pids.json until it ends, because nothing kills
- *     the group when Magnusim crashes: the next start signals the groups Magnusim left behind.
+ *   - POSIX: the agent leads its own process group (detached). The group's id, its leader's
+ *     start time, the boot and the working folder go in <assistant data>/agents/pids.json until
+ *     it ends (a normal exit takes the records with the groups), because nothing kills the
+ *     group when Magnusim crashes: the next start signals the groups a crashed Magnusim left
+ *     behind, on proof only (sweepAgentGroups): a record of another boot is dropped; a group
+ *     whose leader lives must have the recorded start time (spec 4.11); a group whose leader
+ *     ended is signalled only on Linux, when a live member works in the agent's own private
+ *     folder and none started before the leader. Anything else is left alone.
  *   - Windows: a job object (job-win.ts). The agent starts as launch.mjs (the trampoline), which
  *     waits on fd 3; the trampoline goes in the job first, then gets `go`, so the agent and all
  *     it starts are born inside the job. If the keeper is blocked or fails, the agent starts
@@ -25,8 +30,9 @@
  * - stderr is kept as a ring of its last 40 lines of 400 characters, redacted (tail()).
  *
  * Stop (stop(), idempotent; the tree kill):
- * - POSIX: stdin closed, up to 1.2 s to end, SIGTERM to the group, up to 1.2 s more, SIGKILL to
- *   the group. The group is signalled even when the leader already ended: its helpers outlive it.
+ * - POSIX: stdin closed, up to 1.2 s for the agent to end, SIGTERM to the group, up to 1.2 s
+ *   for the group to empty (its helpers get that grace too), then SIGKILL to what is left. The
+ *   group is signalled even when the leader already ended: its helpers outlive it.
  * - Windows with a job: stdin closed, up to 1.2 s to end, TerminateJobObject, then the keeper's
  *   stdin closes (KILL_ON_JOB_CLOSE ends anything left).
  * - Windows best effort: `taskkill /T /F` first, while the tree is still linked to its root
@@ -38,7 +44,8 @@
  * SolidCraft's agent chat (process.rs, MIT/Apache-2.0); the code is our own.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { lstat, mkdtemp, readdir, readFile, realpath } from 'node:fs/promises';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { lstat, mkdtemp, readdir, readFile, readlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
@@ -64,6 +71,8 @@ export const STDERR_LINES = 40;
 export const STDERR_LINE_CHARS = 400;
 export const WORKDIR_PREFIX = 'magnusim-agent-';
 export const WORKDIR_MAX_AGE_MS = 24 * 3600_000;
+/** How often a stop looks whether the agent's process group has emptied (POSIX). */
+const GROUP_POLL_MS = 25;
 
 const WIN = process.platform === 'win32';
 
@@ -244,6 +253,10 @@ interface GroupRecord {
   pgid: number;
   /** The leader's start time ('linux:<ticks since boot>' or 'ps:<lstart>'), or null if unknown. */
   start: string | null;
+  /** The boot it started in (bootId()), or null if unknown. */
+  boot?: string | null;
+  /** The agent's private working folder (its real path), or null. */
+  cwd?: string | null;
   /** The Magnusim process that started it, and its start time. */
   owner: { pid: number; start: string | null };
   label: string;
@@ -254,25 +267,37 @@ export function pidsFile(): string {
   return join(assistantDataDir(), 'agents', 'pids.json');
 }
 
-/** A process's start time as this OS can tell it (null: unknown or gone). Never spawnSync. */
-export async function processStart(pid: number): Promise<string | null> {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform === 'linux') {
-    try {
-      const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
-      const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-      // Field 3 (the state) is rest[0]; field 22 (the start time) rest[19].
-      return rest[0] === 'Z' ? null : `linux:${rest[19]}`;
-    } catch {
-      return null;
-    }
+interface LinuxStat {
+  state: string;
+  pgrp: number;
+  /** Clock ticks since boot. */
+  start: number;
+}
+
+/** Linux: a process's state, process group and start time from /proc/<pid>/stat (null: gone). */
+async function linuxStat(pid: number | string): Promise<LinuxStat | null> {
+  let stat: string;
+  try {
+    stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    return null;
   }
-  if (process.platform === 'win32') return null;
+  // After the name (which may hold spaces and parentheses): field 3 (the state) is rest[0],
+  // field 5 (the process group) rest[2], field 22 (the start time) rest[19].
+  const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  const pgrp = Number(rest[2]);
+  const start = Number(rest[19]);
+  if (!rest[0] || !Number.isInteger(pgrp) || !Number.isFinite(start)) return null;
+  return { state: rest[0], pgrp, start };
+}
+
+/** A program's output (null: it failed or took over 2 s). An async process: never spawnSync. */
+function outputOf(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((done) => {
     let out = '';
     let child: ChildProcess;
     try {
-      child = spawn('ps', ['-o', 'lstart=', '-p', String(pid)], { stdio: ['ignore', 'pipe', 'ignore'] });
+      child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch {
       done(null);
       return;
@@ -289,9 +314,102 @@ export async function processStart(pid: number): Promise<string | null> {
     });
     child.on('close', () => {
       clearTimeout(timer);
-      done(out.trim() ? `ps:${out.trim()}` : null);
+      done(out);
     });
   });
+}
+
+/** A process's start time as this OS can tell it (null: unknown or gone). Never spawnSync. */
+export async function processStart(pid: number): Promise<string | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === 'linux') {
+    const s = await linuxStat(pid);
+    return s && s.state !== 'Z' ? `linux:${s.start}` : null;
+  }
+  if (process.platform === 'win32') return null;
+  const out = (await outputOf('ps', ['-o', 'lstart=', '-p', String(pid)]))?.trim();
+  return out ? `ps:${out}` : null;
+}
+
+let bootPromise: Promise<string | null> | null = null;
+
+/**
+ * This boot (null: unknown): Linux's boot_id, macOS's boot time. Start times count from the
+ * boot, and nothing a record of another boot names still runs.
+ */
+export function bootId(): Promise<string | null> {
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      if (process.platform === 'linux') {
+        const id = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8').catch(() => '')).trim();
+        return id ? `linux:${id}` : null;
+      }
+      if (process.platform === 'darwin') {
+        const m = /\bsec\s*=\s*(\d+)/.exec((await outputOf('/usr/sbin/sysctl', ['-n', 'kern.boottime'])) ?? '');
+        return m ? `darwin:${m[1]}` : null;
+      }
+      return null;
+    })();
+  }
+  return bootPromise;
+}
+
+interface GroupMember {
+  pid: number;
+  /** Clock ticks since boot. */
+  start: number;
+  /** Its working folder (null: unreadable). */
+  cwd: string | null;
+}
+
+/** Linux: the live members of process group `pgid` this account can see. */
+async function groupMembers(pgid: number): Promise<GroupMember[]> {
+  let names: string[];
+  try {
+    names = (await readdir('/proc')).filter((n) => /^\d+$/.test(n));
+  } catch {
+    return [];
+  }
+  const out: GroupMember[] = [];
+  for (let i = 0; i < names.length; i += 64) {
+    const batch = await Promise.all(
+      names.slice(i, i + 64).map(async (name): Promise<GroupMember | null> => {
+        const s = await linuxStat(name);
+        if (!s || s.pgrp !== pgid || s.state === 'Z') return null;
+        // A folder removed since reads as '<path> (deleted)'.
+        const cwd = await readlink(`/proc/${name}/cwd`).then(
+          (p) => p.replace(/ \(deleted\)$/, ''),
+          () => null,
+        );
+        return { pid: Number(name), start: s.start, cwd };
+      }),
+    );
+    for (const m of batch) if (m) out.push(m);
+  }
+  return out;
+}
+
+/**
+ * Whether the group a record names is still that agent's group, on proof only:
+ * - its leader lives and has the recorded start time (spec 4.11; a reused leader id has
+ *   another);
+ * - Linux, the same boot, the leader ended (its helpers outlive it): a live member works in the
+ *   agent's own private working folder, and none started before the recorded leader. A group
+ *   id can't be taken while a member of the old group lives, but a stale record may name an
+ *   unrelated group that took the id later; nothing of that group works in the agent's folder.
+ * Everything else is left alone: elsewhere a group whose leader ended can't be told apart.
+ * The caller has dropped records of another boot.
+ */
+async function provablyOurs(g: GroupRecord, boot: string | null): Promise<boolean> {
+  if (g.start == null) return false;
+  const leader = await processStart(g.pgid);
+  if (leader != null) return leader === g.start;
+  if (process.platform !== 'linux' || boot == null || !g.cwd || !g.start.startsWith('linux:')) return false;
+  const since = Number(g.start.slice('linux:'.length));
+  if (!Number.isFinite(since)) return false;
+  const members = await groupMembers(g.pgid);
+  const folder = g.cwd;
+  return members.length > 0 && members.every((m) => m.start >= since) && members.some((m) => m.cwd != null && inside(folder, m.cwd));
 }
 
 let pidsChain: Promise<unknown> = Promise.resolve();
@@ -325,13 +443,16 @@ const groupExists = (pgid: number): boolean => {
 };
 
 /**
- * POSIX: SIGKILL every agent group a Magnusim that is no longer running left behind, when its
- * leader still has the recorded start time, or its leader is gone but the group lives on (a
- * group id can't be taken by a new group while any member of the old one lives). Records of a
- * Magnusim still running (another copy on this account) are kept. Returns the groups signalled.
+ * POSIX: SIGKILL every agent group a Magnusim that is no longer running left behind, when it is
+ * provably still that agent's group (provablyOurs). Records of this Magnusim (the same pid and
+ * start time) and of another one still running on this account are kept; every other record
+ * goes, signalled or not. Returns the groups signalled.
  */
 export async function sweepAgentGroups(): Promise<number[]> {
   if (WIN) return [];
+  const groups = await readGroups();
+  if (!groups.length) return [];
+  const [boot, ownStart] = await Promise.all([bootId(), processStart(process.pid)]);
   const signalled: number[] = [];
   const owners = new Map<string, boolean>();
   const ownerAlive = async (o: GroupRecord['owner']): Promise<boolean> => {
@@ -340,16 +461,15 @@ export async function sweepAgentGroups(): Promise<number[]> {
     return owners.get(key) as boolean;
   };
   const keep: GroupRecord[] = [];
-  const groups = await readGroups();
-  if (!groups.length) return [];
   for (const g of groups) {
-    if (g.owner?.pid === process.pid || (await ownerAlive(g.owner))) {
+    // Of another boot (or not saying, where the boot is known): every process it names is gone.
+    if (boot != null && g.boot !== boot) continue;
+    // This Magnusim's own only with its start time too: a crashed run may have had this pid.
+    if ((g.owner?.pid === process.pid && g.owner.start === ownStart) || (await ownerAlive(g.owner))) {
       keep.push(g);
       continue;
     }
-    const leaderStart = await processStart(g.pgid);
-    const ours = leaderStart != null ? g.start != null && leaderStart === g.start : groupExists(g.pgid);
-    if (!ours) continue;
+    if (!(await provablyOurs(g, boot))) continue;
     try {
       process.kill(-g.pgid, 'SIGKILL');
       signalled.push(g.pgid);
@@ -357,24 +477,28 @@ export async function sweepAgentGroups(): Promise<number[]> {
       /* gone meanwhile */
     }
   }
-  // Every record of a Magnusim that has ended goes, signalled or not (a group that is gone, or a
-  // leader id now used by another program).
-  const id = (g: GroupRecord) => `${g.pgid}|${g.owner?.pid}|${g.start}`;
+  const id = (g: GroupRecord) => `${g.pgid}|${g.owner?.pid}|${g.owner?.start}|${g.start}`;
   const handled = new Set(groups.filter((g) => !keep.includes(g)).map(id));
   await changeGroups((now) => now.filter((g) => !handled.has(id(g))));
   if (signalled.length) alog('info', 'agent groups left by an earlier run were stopped', { groups: signalled.length });
   return signalled;
 }
 
-let startSweep: Promise<unknown> | null = null;
+let groupSweep: Promise<unknown> | null = null;
+const sweptTmp = new Set<string>();
 
-/** Once per process, before the first agent starts: the old working folders and (POSIX) groups. */
-function sweepOnce(): Promise<unknown> {
-  if (!startSweep) {
-    void sweepAgentWorkdirs().catch(() => 0);
-    startSweep = sweepAgentGroups().catch((err) => alog('warn', 'the agent group sweep failed', { error: String((err as Error)?.message || err).slice(0, 200) }));
+/**
+ * Before an agent starts: once per process the groups an earlier run left (POSIX), and once
+ * per temp folder its old working folders, after the groups (a crashed run's folder is the
+ * proof that its group is an agent's).
+ */
+function sweepBeforeStart(tmp: string): Promise<unknown> {
+  if (!groupSweep) groupSweep = sweepAgentGroups().catch((err) => alog('warn', 'the agent group sweep failed', { error: String((err as Error)?.message || err).slice(0, 200) }));
+  if (!sweptTmp.has(tmp)) {
+    sweptTmp.add(tmp);
+    void groupSweep.then(() => sweepAgentWorkdirs({ tmp })).catch(() => 0);
   }
-  return startSweep;
+  return groupSweep;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -406,7 +530,7 @@ export interface StartAgentOptions {
   signal?: AbortSignal;
   /** Tests: the environment the allowlist reads (process.env otherwise). */
   baseEnv?: NodeJS.ProcessEnv;
-  /** Tests: where the working folder goes (os.tmpdir() otherwise). */
+  /** Tests: where the working folder goes, and where old ones are swept (os.tmpdir() otherwise). */
   tmp?: string;
   /** Tests: shorter grace periods. */
   graceMs?: number;
@@ -418,7 +542,31 @@ const live = new Set<AgentProcess>();
 let exitHook = false;
 
 function onProcessExit(): void {
-  for (const a of live) a.dropAtExit();
+  const ended = new Set<number>();
+  for (const a of live) {
+    a.dropAtExit();
+    ended.add(a.pid);
+  }
+  if (!WIN && ended.size) dropRecordsAtExit(ended);
+}
+
+/**
+ * At this process's exit (synchronous only): its records of the groups it has just ended go
+ * too, so only a crash leaves records for the next start's sweep.
+ */
+function dropRecordsAtExit(pgids: Set<number>): void {
+  const file = pidsFile();
+  try {
+    const groups = (JSON.parse(readFileSync(file, 'utf8')) as { groups?: unknown })?.groups;
+    if (!Array.isArray(groups)) return;
+    const left = groups.filter((g: GroupRecord) => !(g && g.owner?.pid === process.pid && pgids.has(g.pgid)));
+    if (left.length === groups.length) return;
+    const tmp = `${file}.${process.pid}.exit.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, groups: left }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    renameSync(tmp, file);
+  } catch {
+    /* the next start's sweep sees the groups gone */
+  }
 }
 
 export class AgentProcess {
@@ -516,10 +664,10 @@ export class AgentProcess {
         await this.waitExit(this.graceMs);
       } else {
         this.closeStdin();
-        const ended = await this.waitExit(this.graceMs);
+        await this.waitExit(this.graceMs);
+        // The group, helpers included, gets its grace after SIGTERM even when the leader ended.
         this.signalGroup('SIGTERM');
-        if (!ended) await this.waitExit(this.graceMs);
-        this.signalGroup('SIGKILL');
+        if (!(await this.waitGroupGone(this.graceMs))) this.signalGroup('SIGKILL');
         await this.waitExit(this.graceMs);
         await changeGroups((groups) => groups.filter((g) => g.pgid !== this.pid));
       }
@@ -549,6 +697,16 @@ export class AgentProcess {
         done(true);
       });
     });
+  }
+
+  /** POSIX: whether the agent's process group emptied within `ms` (looked at every 25 ms). */
+  private async waitGroupGone(ms: number): Promise<boolean> {
+    const end = Date.now() + ms;
+    while (groupExists(this.pid)) {
+      if (Date.now() >= end) return false;
+      await new Promise((done) => setTimeout(done, GROUP_POLL_MS));
+    }
+    return true;
   }
 
   private signalGroup(signal: NodeJS.Signals): void {
@@ -627,7 +785,7 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
   if (!argv.length || !argv[0]) throw new AgentStartError('bad_command', 'no agent command');
   const label = o.label ?? 'agent';
   const graceMs = o.graceMs ?? AGENT_GRACE_MS;
-  await sweepOnce();
+  await sweepBeforeStart(o.tmp ?? tmpdir());
   if (o.signal?.aborted) throw o.signal.reason ?? new Error('aborted');
   const cwd = await makeAgentWorkdir({ tmp: o.tmp });
   const env = agentEnv(o.env, o.baseEnv ?? process.env);
@@ -679,10 +837,10 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
       exit = watchExit(child);
       await spawned(child);
       const pid = child.pid as number;
-      const [start, ownerStart] = await Promise.all([processStart(pid), processStart(process.pid)]);
+      const [start, ownerStart, boot, folder] = await Promise.all([processStart(pid), processStart(process.pid), bootId(), real(cwd)]);
       await changeGroups((groups) => [
         ...groups.filter((g) => g.pgid !== pid),
-        { pgid: pid, start, owner: { pid: process.pid, start: ownerStart }, label, at: new Date().toISOString() },
+        { pgid: pid, start, boot, cwd: folder, owner: { pid: process.pid, start: ownerStart }, label, at: new Date().toISOString() },
       ]);
     }
   } catch (err) {

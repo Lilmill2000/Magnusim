@@ -330,11 +330,15 @@ No test reaches a real model provider or this PC's real Assistant files.
     starts the fake as a real agent process (`agents/process.ts`) with helper processes
     that outlive it on purpose, and checks by pid that none is left after a stop: on
     Windows through the job object (the trampoline `agents/launch.mjs` holds the agent
-    until it is in the job), on POSIX through the process group and the `pids.json`
-    sweep. `MAGNUSIM_TEST_ASSISTANT_JOB=blocked` (with `MAGNUSIM_TEST_ASSISTANT=1`, in a
+    until it is in the job), on POSIX through the process group (helpers that clean up
+    on SIGTERM, `{spawnHelpers: {count, onTerm}}`, get their grace) and the `pids.json`
+    sweep, which must end a crashed run's group and leave an unrelated group alone.
+    `MAGNUSIM_TEST_ASSISTANT_JOB=blocked` (with `MAGNUSIM_TEST_ASSISTANT=1`, in a
     test home) makes the Windows job keeper count as blocked, so the stop takes the
     best-effort path (`taskkill /T` as an async process) and `agentsTreeKill()` (the
-    status field `agents_tree_kill`) says `best_effort`.
+    status field `agents_tree_kill`) says `best_effort`. Every agent the test starts
+    passes `tmp` (its own temp folder), so its working folders, and the start's sweep of
+    old ones, never touch the system temp folder.
 
 ## A bundled plugin's own suite
 

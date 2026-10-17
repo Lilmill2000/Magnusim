@@ -45,6 +45,9 @@
 //   'ignoreCancel'                           session/cancel no longer ends this prompt
 //   {spawnHelpers: n}                        n helpers that outlive it on purpose (detached on
 //                                            Windows; on POSIX they stay in its process group)
+//   {spawnHelpers: {count, onTerm: file}}    helpers that end on SIGTERM after a short cleanup,
+//                                            which writes <file>.<i>; reported once each listens
+//                                            for SIGTERM (POSIX: the stop's grace)
 //   {switchMode: id}                         current_mode_update (and the mode config option)
 //   {stop: reason}                           ends the prompt (end_turn, ..., 'error')
 //   {error: {code, message}}                 session/prompt answers with this error
@@ -66,6 +69,10 @@ const argOf = (name) => {
 const CONTROL = argOf('--control');
 const HELPER_CODE =
   "process.on('SIGTERM',()=>{});process.on('SIGHUP',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1<<30);";
+// A helper that ends on SIGTERM after a short cleanup, which writes the file it was given. It
+// says so on stdout once it listens for SIGTERM.
+const TIDY_HELPER_CODE =
+  "process.on('SIGTERM',()=>setTimeout(()=>{require('fs').writeFileSync(process.argv[1],'cleaned up');process.exit(0);},100));process.on('SIGHUP',()=>{});process.stdout.write('ready');setInterval(()=>{},1<<30);";
 const WIN = process.platform === 'win32';
 
 /** Helpers that outlive their parent on purpose. */
@@ -73,6 +80,23 @@ function spawnHelpers(n) {
   const pids = [];
   for (let i = 0; i < n; i += 1) {
     const child = spawn(process.execPath, ['-e', HELPER_CODE], { stdio: 'ignore', detached: WIN, windowsHide: true });
+    child.unref();
+    if (child.pid) pids.push(child.pid);
+  }
+  return pids;
+}
+
+/** Tidy helpers (they end on SIGTERM, writing <onTerm>.<i>), each once it listens for SIGTERM. */
+async function spawnTidyHelpers(n, onTerm) {
+  const pids = [];
+  for (let i = 0; i < n; i += 1) {
+    const child = spawn(process.execPath, ['-e', TIDY_HELPER_CODE, `${onTerm}.${i}`], { stdio: ['ignore', 'pipe', 'ignore'], detached: WIN, windowsHide: true });
+    await new Promise((resolve) => {
+      child.stdout.once('data', resolve);
+      child.once('error', resolve);
+      child.once('exit', resolve);
+    });
+    child.stdout.destroy();
     child.unref();
     if (child.pid) pids.push(child.pid);
   }
@@ -414,7 +438,9 @@ async function runStep(p, raw) {
       p.ignoreCancel = true;
       return;
     case 'spawnHelpers': {
-      const pids = spawnHelpers(Number(v) || 1);
+      const o = v && typeof v === 'object' ? v : { count: v };
+      const n = Number(o.count) || 1;
+      const pids = typeof o.onTerm === 'string' ? await spawnTidyHelpers(n, o.onTerm) : spawnHelpers(n);
       await post('/pids', { role: 'helper', pids });
       return;
     }

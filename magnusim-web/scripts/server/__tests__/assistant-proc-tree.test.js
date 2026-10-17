@@ -5,8 +5,11 @@
 // program that starts helpers at its first instruction leaves none, thanks to the trampoline;
 // Magnusim killed outright takes the tree with it through the keeper's pipe) and the
 // best-effort taskkill fallback when PowerShell is blocked. On POSIX: the process group (polite
-// and stubborn agents, a leader that already ended), and the pids.json sweep of groups a
-// crashed Magnusim left behind. No process is left: every pid is checked.
+// and stubborn agents, a leader that already ended, helpers given their SIGTERM grace), and the
+// pids.json sweep of groups a crashed Magnusim left behind, on proof only (never an unrelated
+// group, a record of another boot, or a crashed run's record that carries this pid). No process
+// is left: every pid is checked. Every agent starts with tmp: ROOT, so nothing here reads or
+// removes the system temp folder's working folders.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -29,6 +32,7 @@ const rpc = await import('../assistant/agents/rpc.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
+const { removeTree } = await import('../../remove-tree.js');
 
 const WIN = process.platform === 'win32';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -61,7 +65,8 @@ after(async () => {
   }
   resetAssistantState();
   try {
-    rmSync(ROOT, { recursive: true, force: true });
+    // Every agent's working folder is in here (tmp: ROOT), even those of a Magnusim killed outright.
+    await removeTree(ROOT);
   } catch {
     /* the OS temp cleaner takes it */
   }
@@ -156,7 +161,7 @@ async function fakeAgent(options = {}) {
 
 /** Starts the fake as an agent, contained, with a client of ours on rpc.ts. */
 async function startFake(fake, o = {}) {
-  const proc = await agentProc.startAgentProcess({ argv: o.argv ?? fake.argv, label: 'fake', ...o.start });
+  const proc = await agentProc.startAgentProcess({ argv: o.argv ?? fake.argv, label: 'fake', tmp: ROOT, ...o.start });
   made.add(proc.pid);
   cleanups.push(() => proc.stop('test cleanup'));
   const peer = new rpc.RpcPeer({ input: proc.stdout, output: proc.stdin, exited: proc.exited, tail: () => proc.tail() });
@@ -302,6 +307,20 @@ describe('the working folder', LIMIT, () => {
     assert.ok(!existsSync(old));
     assert.ok(existsSync(fresh) && existsSync(other) && existsSync(join(tmp, 'magnusim-agent-file')));
   });
+
+  it("a start sweeps the temp folder its working folder goes in (so a test never touches the system's)", async () => {
+    const tmp = mkdtempSync(join(ROOT, 'tmp-start-'));
+    const old = join(tmp, 'magnusim-agent-old');
+    mkdirSync(old);
+    const dayAgo = (Date.now() - 25 * 3600_000) / 1000;
+    utimesSync(old, dayAgo, dayAgo);
+    const proc = await agentProc.startAgentProcess({ argv: [process.execPath, '-e', 'process.stdin.resume()'], label: 'sweep', tmp });
+    made.add(proc.pid);
+    cleanups.push(() => proc.stop());
+    assert.ok(proc.cwd.startsWith(join(tmp, 'magnusim-agent-')), proc.cwd);
+    await until(() => !existsSync(old));
+    await proc.stop();
+  });
 });
 
 // --------------------------------------------------------------------------------------------
@@ -353,7 +372,7 @@ describe('the agent process', LIMIT, () => {
   it('an agent that ends at once still reports its exit code (watched from the spawn on)', async () => {
     // On POSIX a shell that exits at once ends before the start has recorded its group.
     const argv = WIN ? [process.execPath, '-e', 'process.exit(5)'] : ['/bin/sh', '-c', 'exit 5'];
-    const proc = await agentProc.startAgentProcess({ argv, label: 'quick' });
+    const proc = await agentProc.startAgentProcess({ argv, label: 'quick', tmp: ROOT });
     made.add(proc.pid);
     cleanups.push(() => proc.stop());
     assert.equal((await proc.exited).code, 5);
@@ -362,7 +381,7 @@ describe('the agent process', LIMIT, () => {
 
   it('keeps only the last 40 stderr lines of 400 characters', async () => {
     const code = "for(let i=0;i<50;i++)process.stderr.write('line '+i+' '+'x'.repeat(500)+'\\n');process.stdin.resume();";
-    const proc = await agentProc.startAgentProcess({ argv: [process.execPath, '-e', code], label: 'ring' });
+    const proc = await agentProc.startAgentProcess({ argv: [process.execPath, '-e', code], label: 'ring', tmp: ROOT });
     made.add(proc.pid);
     cleanups.push(() => proc.stop());
     await until(() => proc.tail().some((l) => l.startsWith('line 49 ')));
@@ -376,10 +395,10 @@ describe('the agent process', LIMIT, () => {
   it('a program that is not there: refused on POSIX; on Windows the trampoline ends with its reason', async () => {
     const missing = join(ROOT, 'no-such-agent');
     if (!WIN) {
-      await assert.rejects(agentProc.startAgentProcess({ argv: [missing], label: 'missing' }), (e) => e.code === 'agent_missing');
+      await assert.rejects(agentProc.startAgentProcess({ argv: [missing], label: 'missing', tmp: ROOT }), (e) => e.code === 'agent_missing');
       return;
     }
-    const proc = await agentProc.startAgentProcess({ argv: [missing], label: 'missing' });
+    const proc = await agentProc.startAgentProcess({ argv: [missing], label: 'missing', tmp: ROOT });
     made.add(proc.pid);
     const info = await proc.exited;
     assert.equal(info.code, 127);
@@ -510,7 +529,7 @@ describe('Windows: the job object', { ...LIMIT, skip: WIN ? false : 'Windows onl
       driver,
       [
         `const { startAgentProcess } = await import(${JSON.stringify(pathToFileURL(PROCESS_TS).href)});`,
-        `const proc = await startAgentProcess({ argv: JSON.parse(process.argv[2]), label: 'driver' });`,
+        `const proc = await startAgentProcess({ argv: JSON.parse(process.argv[2]), label: 'driver', tmp: ${JSON.stringify(ROOT)} });`,
         `console.log(JSON.stringify({ pid: proc.pid, keeper: proc.keeper ? proc.keeper.pid : null, tree: proc.treeKill }));`,
         `setInterval(() => {}, 1 << 30);`,
       ].join('\n'),
@@ -602,6 +621,7 @@ describe('POSIX: the process group', { ...LIMIT, skip: WIN ? 'POSIX only (proces
       return [];
     }
   };
+  const writeGroups = async (groups) => (await import('../assistant/files.ts')).writeFileAtomic(agentProc.pidsFile(), JSON.stringify({ version: 1, groups }));
 
   it('the group is recorded in pids.json while it runs, and the record goes with the stop', async () => {
     const fake = await fakeAgent();
@@ -621,7 +641,7 @@ describe('POSIX: the process group', { ...LIMIT, skip: WIN ? 'POSIX only (proces
       driver,
       [
         `const { startAgentProcess } = await import(${JSON.stringify(pathToFileURL(PROCESS_TS).href)});`,
-        `const proc = await startAgentProcess({ argv: JSON.parse(process.argv[2]), label: 'driver' });`,
+        `const proc = await startAgentProcess({ argv: JSON.parse(process.argv[2]), label: 'driver', tmp: ${JSON.stringify(ROOT)} });`,
         `console.log(JSON.stringify({ pid: proc.pid }));`,
         `process.stdin.on('data', () => process.exit(0));`,
         `setInterval(() => {}, 1 << 30);`,
@@ -636,15 +656,17 @@ describe('POSIX: the process group', { ...LIMIT, skip: WIN ? 'POSIX only (proces
       const helpers = (await helperPids(fake, before + 2)).slice(before);
       return { d, group: [info.pid, ...helpers], pgid: info.pid };
     };
-    // A clean exit: the exit hook ends the group.
+    // A clean exit: the exit hook ends the group, and takes its record.
     const a = await run();
+    assert.ok(pidsJson().some((g) => g.pgid === a.pgid));
     a.d.stdin.write('quit\n');
     assert.deepEqual(await stillAlive([a.d.pid, ...a.group]), []);
-    // A crash: nothing runs, the group lives on, recorded. (The agent may end at the end of its
-    // input; its helpers don't.)
+    assert.ok(!pidsJson().some((g) => g.pgid === a.pgid), 'a clean exit leaves no record');
+    // A crash: nothing runs, the group lives on, recorded. The agent ends at the end of its
+    // input; its helpers don't, so the group has no leader and the sweep needs its proof.
     const b = await run();
     process.kill(b.d.pid, 'SIGKILL');
-    assert.deepEqual(await stillAlive([b.d.pid]), []);
+    assert.deepEqual(await stillAlive([b.d.pid, b.pgid]), []);
     const helpers = b.group.slice(1);
     assert.deepEqual(helpers.filter(alive), helpers, 'left behind');
     assert.ok(pidsJson().some((g) => g.pgid === b.pgid));
@@ -662,20 +684,79 @@ describe('POSIX: the process group', { ...LIMIT, skip: WIN ? 'POSIX only (proces
     made.add(child);
     const start = await agentProc.processStart(g.pid);
     const ownerStart = await agentProc.processStart(process.pid);
-    const files = await import('../assistant/files.ts');
-    await files.writeFileAtomic(
-      agentProc.pidsFile(),
-      JSON.stringify({
-        version: 1,
-        groups: [
-          { pgid: g.pid, start: 'linux:1', owner: { pid: 999999, start: 'x' }, label: 'reused', at: '' },
-          { pgid: g.pid, start, owner: { pid: process.pid + 0, start: ownerStart }, label: 'mine', at: '' },
-        ],
-      }),
-    );
-    assert.deepEqual(await agentProc.sweepAgentGroups(), [], 'start time differs; the other record is a running Magnusim (this one)');
+    const boot = await agentProc.bootId();
+    await writeGroups([
+      { pgid: g.pid, start: 'linux:1', boot, cwd: process.cwd(), owner: { pid: 999999, start: 'x' }, label: 'reused', at: '' },
+      // The same start time counted from another boot: another process.
+      { pgid: g.pid, start, boot: 'linux:another-boot', cwd: process.cwd(), owner: { pid: 999999, start: 'x' }, label: 'another boot', at: '' },
+      { pgid: g.pid, start, boot, cwd: null, owner: { pid: process.pid + 0, start: ownerStart }, label: 'mine', at: '' },
+    ]);
+    assert.deepEqual(await agentProc.sweepAgentGroups(), [], 'start time or boot differs; the other record is a running Magnusim (this one)');
     assert.deepEqual([g.pid, child].filter(alive), [g.pid, child]);
+    assert.deepEqual(
+      pidsJson().map((r) => r.label),
+      ['mine'],
+      "this run's record is kept",
+    );
+    await writeGroups([]);
     process.kill(-g.pid, 'SIGKILL');
     assert.deepEqual(await stillAlive([g.pid, child]), []);
+  });
+
+  it('never signals an unrelated group whose leader ended, whatever a stale record says', async () => {
+    // An unrelated program: its group's leader starts a member and ends.
+    const code = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1<<30)'],{stdio:'ignore'});c.unref();console.log(c.pid);";
+    const g = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+    made.add(g.pid);
+    const member = Number(await new Promise((r) => g.stdout.once('data', (d) => r(String(d).trim()))));
+    made.add(member);
+    assert.deepEqual(await stillAlive([g.pid]), [], 'the leader has ended');
+    assert.ok(alive(member), 'its member lives on in its group');
+    const boot = await agentProc.bootId();
+    const elsewhere = mkdtempSync(join(ROOT, 'not-its-folder-'));
+    const gone = { pid: 999999, start: 'linux:2' };
+    await writeGroups([
+      // This boot, but nothing of the group works in the recorded folder.
+      { pgid: g.pid, start: 'linux:1', boot, cwd: elsewhere, owner: gone, label: 'stale', at: '' },
+      // The member's own folder, but from another boot.
+      { pgid: g.pid, start: 'linux:1', boot: 'linux:another-boot', cwd: process.cwd(), owner: gone, label: 'another boot', at: '' },
+      // A record that says neither.
+      { pgid: g.pid, start: 'linux:1', owner: gone, label: 'old', at: '' },
+    ]);
+    assert.deepEqual(await agentProc.sweepAgentGroups(), []);
+    assert.ok(alive(member), 'the unrelated member is left alone');
+    assert.ok(!pidsJson().some((r) => r.pgid === g.pid), 'the stale records go');
+    process.kill(-g.pid, 'SIGKILL');
+    assert.deepEqual(await stillAlive([member]), []);
+  });
+
+  it("a crashed run's record that carries this process's pid (pids are reused) is swept, not kept as this run's", async () => {
+    const g = spawn(process.execPath, ['-e', 'setInterval(()=>{},1<<30)'], { stdio: 'ignore', detached: true });
+    made.add(g.pid);
+    await new Promise((r) => g.once('spawn', r));
+    const [start, boot] = await Promise.all([agentProc.processStart(g.pid), agentProc.bootId()]);
+    await writeGroups([{ pgid: g.pid, start, boot, cwd: null, owner: { pid: process.pid, start: 'linux:1' }, label: 'crashed run', at: '' }]);
+    assert.deepEqual(await agentProc.sweepAgentGroups(), [g.pid]);
+    assert.deepEqual(await stillAlive([g.pid]), []);
+    assert.ok(!pidsJson().some((r) => r.pgid === g.pid), 'its record goes');
+  });
+
+  it('a stop gives the group its grace after SIGTERM, also when the agent itself ended at once', async () => {
+    const fake = await fakeAgent();
+    // A long grace: a polite group ends well within it, so it costs nothing unless broken.
+    const { proc, peer } = await startFake(fake, { start: { graceMs: 5_000 } });
+    const marker = join(ROOT, `tidy-${proc.pid}`);
+    void promptFake(fake, peer, proc.cwd, { spawnHelpers: { count: 2, onTerm: marker } }, { hold: 'never' }).catch(() => {});
+    const helpers = await helperPids(fake, 2);
+    const agent = await agentPid(fake);
+    const t0 = Date.now();
+    await proc.stop();
+    assert.deepEqual(await stillAlive([proc.pid, agent, ...helpers]), []);
+    assert.deepEqual(
+      [0, 1].filter((i) => !existsSync(`${marker}.${i}`)),
+      [],
+      'each helper finished its cleanup after SIGTERM, before any SIGKILL',
+    );
+    assert.ok(Date.now() - t0 < CEILING, `stopped in ${Date.now() - t0} ms`);
   });
 });
