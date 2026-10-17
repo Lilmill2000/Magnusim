@@ -326,6 +326,15 @@ No test reaches a real model provider or this PC's real Assistant files.
   - `scripts/server/__tests__/assistant-acp.test.js` checks every message it sends, and
     every message Magnusim's builders make, against the agent protocol's own JSON Schema
     (the `@agentclientprotocol/sdk` development dependency, with Ajv 2020).
+  - **Stopping an agent's whole tree.** `scripts/server/__tests__/assistant-proc-tree.test.js`
+    starts the fake as a real agent process (`agents/process.ts`) with helper processes
+    that outlive it on purpose, and checks by pid that none is left after a stop: on
+    Windows through the job object (the trampoline `agents/launch.mjs` holds the agent
+    until it is in the job), on POSIX through the process group and the `pids.json`
+    sweep. `MAGNUSIM_TEST_ASSISTANT_JOB=blocked` (with `MAGNUSIM_TEST_ASSISTANT=1`, in a
+    test home) makes the Windows job keeper count as blocked, so the stop takes the
+    best-effort path (`taskkill /T` as an async process) and `agentsTreeKill()` (the
+    status field `agents_tree_kill`) says `best_effort`.
 
 ## A bundled plugin's own suite
 

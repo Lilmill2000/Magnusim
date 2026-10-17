@@ -7,7 +7,8 @@
  * goes through `taskkill /T /F`. Elsewhere a process started with
  * `ownProcessGroup()` leads its own group, and the whole group is killed.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 
 /** @param {number | null | undefined} pid */
 export function killProcessTree(pid) {
@@ -35,6 +36,49 @@ export function killProcessTree(pid) {
   } catch {
     /* already gone */
   }
+}
+
+/**
+ * killProcessTree without blocking the server: on Windows `taskkill /T /F` runs as an async
+ * process (never spawnSync, which would hold the whole server until it ends), by its absolute
+ * path; elsewhere the group (else the process alone) gets SIGKILL. Resolves once taskkill has
+ * ended, or after `timeoutMs` (it is then left to finish on its own).
+ * @param {number | null | undefined} pid
+ * @param {{ timeoutMs?: number }} [o]
+ * @returns {Promise<void>}
+ */
+export function killProcessTreeAsync(pid, { timeoutMs = 8000 } = {}) {
+  if (!pid) return Promise.resolve();
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const exe = join(process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows', 'System32', 'taskkill.exe');
+    /** @type {import('node:child_process').ChildProcess} */
+    let child;
+    try {
+      child = spawn(exe, ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } catch {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, timeoutMs);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    child.on('error', done);
+    child.on('close', done);
+  });
 }
 
 /** Spawn options that let killProcessTree reach what a process starts (POSIX: its own group). */
