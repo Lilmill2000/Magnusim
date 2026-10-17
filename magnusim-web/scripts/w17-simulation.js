@@ -1191,7 +1191,11 @@ export function dropGeometryStudies(projectId, proj, geomId) {
   return pruneOrphanStudies(projectId, proj);
 }
 
-/** Its row goes, project.json is saved (through the worker), then its folder goes. */
+/**
+ * Its row and its folder go, then project.json is saved (through the worker). The folder
+ * goes first: reads list studies from their folders, so one still there while the save
+ * waited was listed again (GET /api/simulation, a tree read queued behind the save).
+ */
 async function deleteSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
@@ -1205,6 +1209,7 @@ async function deleteSimulation(body) {
     return { ok: false, status: 404, body: { error: 'simulation not found', simulation_id: simId } };
   }
   const next = deleteSimulationFromCatalog(projectId, proj, simId);
+  purgeRemovedStudies(projectId, { simIds: [simId] });
   const active = (next.simulations || []).find((s) => s.id === next.active_id) || next.simulations[0] || null;
   if (active) touchProjectSimRef(proj, active);
   else {
@@ -1213,7 +1218,6 @@ async function deleteSimulation(body) {
   }
   proj.updated_at = new Date().toISOString();
   if (!(await saveUnlessDeleted(proj))) return deletedWhileSaved(projectId);
-  purgeRemovedStudies(projectId, { simIds: [simId] });
   return {
     ok: true,
     status: 200,

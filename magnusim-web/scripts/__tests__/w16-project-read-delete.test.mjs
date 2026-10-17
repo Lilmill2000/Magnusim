@@ -498,8 +498,12 @@ describe("a study's create, reorder and delete", () => {
       assert.equal(meanwhile.statusCode, 200, JSON.stringify(meanwhile.body));
       if (what === 'create') assert.equal(ids(meanwhile.body).length, 3, JSON.stringify(ids(meanwhile.body)));
       if (what === 'reorder') assert.deepEqual(ids(meanwhile.body), ['sim-b', 'sim-a']);
-      // project.json is saved first, then the study's folder goes.
-      if (what === 'delete') assert.ok(existsSync(folderA), 'the folder went before project.json was saved');
+      // The deleted study's folder goes before the save: reads list studies from their
+      // folders, and one left there while the save waited was listed again.
+      if (what === 'delete') {
+        assert.deepEqual(ids(meanwhile.body), ['sim-b'], 'the deleted study is listed while the save waits');
+        assert.equal(existsSync(folderA), false, `its folder is still there while the save waits: ${listing(join(dir, 'geometry'))}`);
+      }
       held.release();
       const saved = await saving;
       assert.equal(saved.statusCode, route.status, JSON.stringify(saved.body));
