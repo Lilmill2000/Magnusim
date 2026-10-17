@@ -122,7 +122,8 @@ test.describe('CAD ships on: its start action in every place', () => {
     await button.click();
     await expect(page.locator('#modal-new-project')).toBeVisible();
     await expect(page.locator('#np-start input[value="cad:part"]')).toBeChecked();
-    await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', 'Design a part']);
+    // CAD's choices, in order; other plugins that ship on may add theirs after (2D Wind Tunnel does).
+    await expect(page.locator('#np-start .np-start-label')).toContainText(['Import geometry', 'Design a part']);
     // "Untitled Part N": the first N no project of the folder has yet (the app's own rule).
     await expect(page.locator('#np-title')).toHaveValue(/^Untitled Part \d+$/);
     const title = await page.locator('#np-title').inputValue();
@@ -145,7 +146,9 @@ test.describe('CAD ships on: its start action in every place', () => {
     await page.locator('#home-new-project').click();
     await expect(page.locator('#modal-new-project')).toBeVisible();
     await expect(page.locator('#np-start')).toBeVisible();
-    await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', 'Design a part']);
+    // CAD's choices, in order; other plugins that ship on may add theirs after (2D Wind Tunnel does).
+    await expect(page.locator('#np-start .np-start-label')).toContainText(['Import geometry', 'Design a part']);
+    await expect(page.locator('#np-start .np-start-label').first()).toHaveText('Import geometry');
     await expect(page.locator('#np-start-import')).toBeChecked();
     await page.locator('#np-start label', { has: page.locator('input[value="cad:part"]') }).click();
     await expect(page.locator('#np-start input[value="cad:part"]')).toBeChecked();
