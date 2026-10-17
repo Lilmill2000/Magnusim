@@ -2,7 +2,8 @@
 // - The page (src/**, bundled-plugins/*/ui/**) never imports a provider SDK or the
 //   server's assistant code (scripts/server/assistant/**, assistant-routes.ts), not
 //   even for types.
-// - Only scripts/server/assistant/providers/load-sdk.ts loads the SDKs, and by a
+// - Only scripts/server/assistant/providers/load-sdk.ts loads the SDKs (the provider
+//   packages and the MCP server package), and by a
 //   variable specifier: Vite's config bundler resolves a literal one when it bundles
 //   the server, so a copy without the packages would not start at all. A whole-
 //   statement `import type` loads nothing and is allowed; `import { type X }` still
@@ -31,8 +32,12 @@ after(() => rmSync(ROOT, { recursive: true, force: true }));
 
 const { default: ts } = await import('typescript');
 
-const SDKS = ['@anthropic-ai/sdk', 'openai'];
+const SDKS = ['@anthropic-ai/sdk', 'openai', '@modelcontextprotocol/server'];
 const isSdk = (spec) => SDKS.some((name) => spec === name || spec.startsWith(`${name}/`));
+/** What the page may not load at all: the SDKs and every MCP package (the test client included). */
+const pageRefused = (spec) => isSdk(spec) || spec.startsWith('@modelcontextprotocol/');
+/** A file worth parsing for SDK loads (the parse is the check; this only skips the rest). */
+const MENTIONS_SDK = /openai|@anthropic-ai|@modelcontextprotocol/;
 const SKIP_DIRS = new Set(['node_modules', '__pycache__', 'build', 'dist', 'test-results', 'playwright-report']);
 const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 
@@ -114,9 +119,9 @@ export function boundaryProblems(web) {
   const pageFiles = [...codeFiles(join(web, 'src')), ...pluginDirs.flatMap((e) => codeFiles(join(plugins, e.name, 'ui')))];
   for (const f of pageFiles) {
     const text = read(f);
-    if (!/assistant|openai|@anthropic-ai/.test(text)) continue;
+    if (!/assistant/.test(text) && !MENTIONS_SDK.test(text)) continue;
     for (const r of moduleRefs(f, text)) {
-      if (r.spec && (isSdk(r.spec) || intoServerAssistant(web, f, r.spec))) problems.page.push(`${rel(f)}:${r.line} ${r.spec}`);
+      if (r.spec && (pageRefused(r.spec) || intoServerAssistant(web, f, r.spec))) problems.page.push(`${rel(f)}:${r.line} ${r.spec}`);
     }
   }
 
@@ -128,7 +133,7 @@ export function boundaryProblems(web) {
   for (const f of everyFile) {
     if (f === loadSdk || f === SELF) continue;
     const text = read(f);
-    if (!/openai|@anthropic-ai/.test(text)) continue;
+    if (!MENTIONS_SDK.test(text)) continue;
     for (const r of moduleRefs(f, text)) {
       if (r.spec && isSdk(r.spec) && !r.typeOnly) problems.sdkLoads.push(`${rel(f)}:${r.line} ${r.spec}`);
     }
@@ -256,6 +261,23 @@ describe('assistant boundaries: self-test', () => {
       'scripts/server/assistant/providers/load-sdk.ts loads no module by a variable specifier',
     ]);
     assert.deepEqual(p.assistantLoaders.sort(), ['scripts/server/assistant-routes.ts createRequire', 'scripts/server/assistant/registry.ts:1 a variable specifier']);
+  });
+
+  it('the MCP server package is an SDK too, and the page loads no MCP package at all', () => {
+    const web = tree({
+      'src/m.ts': "import { Client } from '@modelcontextprotocol/client';\n",
+      'src/n.ts': "import type { Tool } from '@modelcontextprotocol/server';\n",
+      'scripts/server/assistant/mcp/server.ts': "import type { Server } from '@modelcontextprotocol/server';\nimport { serveStdio } from '@modelcontextprotocol/server/stdio';\n",
+      'scripts/server/__tests__/spike.test.js': "const sdk = await import('@modelcontextprotocol/server');\nconst client = await import('@modelcontextprotocol/client');\n",
+      'scripts/server/assistant/providers/load-sdk.ts': 'export async function loadMcpSdk(spec: string) {\n  return await import(spec);\n}\n',
+    });
+    const p = boundaryProblems(web);
+    assert.deepEqual(p.page.sort(), ['src/m.ts:1 @modelcontextprotocol/client', 'src/n.ts:1 @modelcontextprotocol/server']);
+    assert.deepEqual(p.sdkLoads.sort(), [
+      'scripts/server/__tests__/spike.test.js:1 @modelcontextprotocol/server',
+      'scripts/server/assistant/mcp/server.ts:2 @modelcontextprotocol/server/stdio',
+    ]);
+    assert.deepEqual(p.loadSdk, []);
   });
 
   it('passes the intended shape: types by import type, the SDK by name through loadSdk', () => {

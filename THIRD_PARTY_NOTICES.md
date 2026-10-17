@@ -136,6 +136,23 @@ package's license text is in its folder under `node_modules`, except
 `standardwebhooks`, whose `package.json` declares MIT and which ships no license
 file.
 
+## The Assistant's tool-connection package (MCP)
+
+Other apps on this PC and coding agents reach Magnusim's tools through the Model
+Context Protocol (MCP). Magnusim serves it with the official MCP TypeScript SDK's
+server package, pinned in `magnusim-web/package.json` and `package-lock.json` and
+installed by Setup (`npm ci`) or `run.bat` into `magnusim-web/node_modules`; none
+is shipped in the repository:
+
+- `@modelcontextprotocol/server` 2.3.0 (Apache-2.0), with
+  `@modelcontextprotocol/core` 2.3.0 (Apache-2.0) and `zod` 4.6.5 (MIT).
+
+The tests also use the SDK's client package, `@modelcontextprotocol/client` 2.3.0
+(Apache-2.0), a development dependency the app never runs.
+
+These licenses are compatible with Magnusim's GPL-3.0-or-later license. Each
+package's license text is in its folder under `node_modules`.
+
 ## Other dependencies
 
 The JavaScript dependency inventory is recorded in `magnusim-web/package-lock.json`;
