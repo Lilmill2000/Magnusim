@@ -15,6 +15,7 @@ import type { FaceNames } from './naming';
 import type { SketchOutput, SketchSolverClient } from './sketch';
 import type { ConstructOutput } from './references';
 import type { ReadonlyStateStore } from './state';
+import type { UndoSnapshot } from './undo';
 import type { Expr, UnitsService } from './units';
 
 /** Autosave state for the status chip: "Saved" / "Saving…" / "Not saved: <why>". */
@@ -192,10 +193,103 @@ export interface EditSession {
   discard(): void;
   /** Whether the part differs from before the session: what Done would keep as one undo step. */
   readonly changed?: boolean;
+  /** The Assistant step that opened it ('assistant:<call id>', AssistantStep.owner); absent on the person's own sessions. */
+  readonly owner?: string;
 }
 
 /** Result of a refused edit, in words for the UI ("Box 2 uses Box 1: move it after …"). */
 export type EditResult = { ok: true } | { ok: false; reason: string };
+
+/** How the person took over an Assistant step (AssistantStep.takenOver, the 'assistant:taken-over' event). */
+export type TakeOverWhy = 'escape' | 'enter' | 'undo' | 'command' | 'edit' | 'draft';
+
+/** A point to go back to: the model, the rollback bar and both undo lists, in the load they were taken in. */
+export interface DocMark {
+  readonly doc: CadDoc;
+  readonly rollback: number | null;
+  readonly history: UndoSnapshot<CadDoc>;
+  readonly loadSeq: number;
+}
+
+/**
+ * One Assistant edit call, all or nothing (doc.assistant.begin). While it is open and only it
+ * changed the model, the stored model stays the mark (the save hold): a reload, crash or Back
+ * mid-call never stores a half step. The person always comes first: a step never commits the
+ * person's open session, and the person's own edits, undo and panels take it over.
+ */
+export interface AssistantStep {
+  /** 'assistant:<call id>'. */
+  readonly owner: string;
+  readonly mark: DocMark;
+  /**
+   * Synchronous: sessions opened, undo steps pushed and other changes made inside fn are this
+   * step's (sessions carry `owner`). Inside fn, an edit that would commit a session this step does
+   * not own throws PersonEditing instead (the person's session stays open, uncommitted). Throws after end().
+   */
+  run<T>(fn: () => T): T;
+  /**
+   * Only this step changed the model since begin, and the person did not take it over: the undo
+   * history moved by exactly this step's own changes, no load, the bar where this step left it, and
+   * the model the one this step's own changes left.
+   */
+  readonly clean: boolean;
+  /** How the person took this step over, or null. */
+  readonly takenOver: TakeOverWhy | null;
+  readonly ended: boolean;
+  /**
+   * Merge this step's own undo steps into one {tag, label}. It joins the group below when that has
+   * the same tag and ends where this step began. After an undo, redo or restore made inside the step
+   * (the undo tool), the history that left stands and only steps pushed after it are merged; with
+   * none, seal changes nothing. Throws unless clean, while this step's own session is still open, or
+   * after end().
+   */
+  seal(tag: string, label: string): void;
+  /**
+   * Back to the mark (model, bar, both undo lists) when only this step changed the model; a take-over
+   * by itself does not prevent it (it completes the person's discard). {ok:false, reason} otherwise,
+   * and nothing changes. Idempotent: later calls, and calls after end(), return the first result.
+   */
+  revert(): EditResult;
+  /** Release the save hold (idempotent): a write follows when the model differs from what is stored. */
+  end(): void;
+}
+
+export interface AssistantDoc {
+  /**
+   * Open a step. Throws when a step is open or the Part is not editable, and PersonEditing while a
+   * panel session is open (the person's).
+   */
+  begin(owner: string): AssistantStep;
+  /** The open step, or null. */
+  current(): AssistantStep | null;
+  mark(): DocMark;
+  /**
+   * Put a mark back: model, bar and both undo lists; one rebuild; no new undo step. A session the
+   * Assistant owns is closed with it; the person's open session must not have changed the model yet
+   * (it is then kept open on the restored model). Refused after a load, or while not editable.
+   */
+  restore(mark: DocMark): EditResult;
+  /** The newest undo step when it carries a tag, or null. */
+  topGroup(): { tag: string; label: string; after: CadDoc } | null;
+  /** doc.undo() when the newest undo step carries `tag`; refused otherwise, or while a panel session is open. */
+  undoGroup(tag: string): EditResult;
+  /**
+   * The person took over the Assistant's open session (its panel's Escape or Enter, a command, a draft
+   * change): it is discarded, the open step is marked `takenOver`, and 'assistant:taken-over' is emitted.
+   * False (nothing done) when no session the Assistant owns is open.
+   */
+  takeOver(why: TakeOverWhy): boolean;
+}
+
+/** Rows for DocService.editParams: all applied in one undo step. */
+export interface ParamRows {
+  add: Array<Omit<Param, 'id'>>;
+  change: Array<{ id: ParamId; patch: Partial<Omit<Param, 'id'>> }>;
+  remove: ParamId[];
+}
+
+/** What editParams did: the new parameters' ids by name, or the refusal and the row at fault ("add[0]", "change[1]", "remove[0]"). */
+export type ParamsResult = EditResult & { ids?: Record<string, ParamId>; row?: string };
 
 /** Exact properties of a body (mm, mm², mm³). */
 export interface BodyProps {
@@ -267,6 +361,13 @@ export interface DocService {
   updateParam(id: ParamId, patch: Partial<Omit<Param, 'id'>>): EditResult;
   /** Refused while an expression uses it. */
   removeParam(id: ParamId): EditResult;
+  /**
+   * Add, change and remove parameters in one undo step ("Parameters: 3 changed", or `label`). The
+   * final set is checked once, so any row order works (a parameter may use one added after it, and
+   * two may swap which uses which); a rename rewrites every use; a removed name still used in the
+   * final model refuses the whole edit. A refusal names the row at fault.
+   */
+  editParams(rows: ParamRows, label?: string): ParamsResult;
   undo(): void;
   redo(): void;
   /** "Try repair" on a feature whose result was not a valid solid (one undo step). */
@@ -345,6 +446,8 @@ export interface DocService {
   committed(): CadDoc;
   /** LINK: the newest save counter the study record holds or is about to (waits for its write). */
   recordSettled(): Promise<void>;
+  /** Assistant steps: all-or-nothing edits, the save hold, take-over, seal and restore. */
+  readonly assistant: AssistantDoc;
   /**
    * Model writes wait until the returned release() (an arrow being dragged applies live; one write
    * follows the release). Leaving still writes.

@@ -1,6 +1,8 @@
 // The document service: the one owner of the model. Loading (DocStore),
 // edits (each one undo step), panel sessions (live apply, one undo step per
-// session), rebuild (RebuildEngine), autosave, conflicts, view state.
+// session), rebuild (RebuildEngine), autosave, conflicts, view state, and
+// Assistant steps (doc.assistant: one edit call all or nothing, with the save
+// hold, take-over, seal and restore; the person always comes first).
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Bridge } from '../lib/bridge';
@@ -9,11 +11,12 @@ import { newId, nextName } from '../lib/ids';
 import { commitPendingEdits, pendingEditLabel, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { createStateStore } from '../lib/store';
 import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera, type ScaleModelPlace, type ScaleModels, type Vec2 } from '../types/doc';
-import type { BodyProps, DocService, DocState, EditResult, EditSession, EndBodies, FeatureFiles, RebuildState, SaveState } from '../types/doc-service';
+import type { AssistantDoc, AssistantStep, BodyProps, DocMark, DocService, DocState, EditResult, EditSession, EndBodies, FeatureFiles, ParamRows, ParamsResult, RebuildState, SaveState, TakeOverWhy } from '../types/doc-service';
 import type { DocStore } from '../types/docstore';
 import type { CadEvents } from '../types/events';
 import type { BodyInfo, KernelAdapter } from '../types/kernel';
 import type { SketchSolverClient } from '../types/sketch';
+import type { UndoSnapshot } from '../types/undo';
 import type { Quantity } from '../types/units';
 import { Autosave } from './autosave';
 import { renameInExpr } from './expr';
@@ -22,6 +25,8 @@ import { storedBodyName } from './features/body-ids';
 import { dependencies as featureDependencies, featureUses, gcBodies as gcFeatureBodies, isBodyMaking, ownsBody, renameParamInFeature, withNewBodies } from './features/hooks';
 import { createBuiltinRegistry } from './features/registry';
 import { createParamScope, featureExprs, paramNameProblem, usersOfParam } from './params';
+import { planParams, stillUsed } from './params-bulk';
+import { PersonEditing } from './person-editing';
 import { RebuildEngine, type RebuildInput, type RebuildOutput } from './rebuild';
 import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readScaleModelPlace, readView } from './schema';
 import { openDocStore } from './store/open';
@@ -132,6 +137,12 @@ export function createDocService(opts: DocServiceOptions): DocService {
   let loadSeq = 0;
   let disposed = false;
   let open: SessionImpl | null = null;
+  /** The open Assistant step (doc.assistant.begin, until its end()), or null. */
+  let step: StepImpl | null = null;
+  /** Inside AssistantStep.run: the owner of the step whose synchronous code runs; null otherwise. */
+  let currentOwner: string | null = null;
+  /** Inside a session's own apply, commit or discard: that session's owner (null: the person's); undefined otherwise. */
+  let sessionActor: string | null | undefined = undefined;
   /** The document and view the shown rebuild result was built from (settled compares them with now). */
   let built: RebuildInput | null = null;
   /**
@@ -304,7 +315,13 @@ export function createDocService(opts: DocServiceOptions): DocService {
     const prev = before ?? state.get().doc;
     if (next === state.get().doc && !label) return;
     const doc = deepFreeze(stamp(next));
-    if (label && doc !== prev) undo.push({ label, before: prev, after: doc });
+    // An Assistant step's own change: its undo step carries the step's owner, and the step
+    // records the change before anyone hears of it (the save hold reads that record).
+    const by = changeBy();
+    const mine = ownStep();
+    const was = snap();
+    if (label && doc !== prev) undo.push(by ? { label, before: prev, after: doc, tag: by } : { label, before: prev, after: doc });
+    mine?.advance(was, { doc, rollback: clampView(state.get().view, doc).rollback ?? null, version: undo.version });
     state.set((s) => ({ ...s, doc, view: clampView(s.view, doc), history: historyState() }));
     autosave?.modelChanged();
     rebuild();
@@ -313,6 +330,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
   function setView(next: CadView, opts2: { rebuild?: boolean } = {}) {
     const s = state.get();
     if (next === s.view) return;
+    ownStep()?.advance(snap(), { doc: s.doc, rollback: next.rollback ?? null, version: undo.version });
     state.set((st) => {
       let rb = st.rebuild;
       const hidden = new Set(next.hiddenBodies);
@@ -343,20 +361,265 @@ export function createDocService(opts: DocServiceOptions): DocService {
     return state.get().doc.features.find((f) => f.id === id);
   }
 
-  /** Close an open session (Done) before any other edit, so undo steps stay in order. */
+  /**
+   * Close an open session (Done) before any other edit, so undo steps stay in order. The person
+   * always comes first: inside an Assistant step's run, a session the step does not own (the
+   * person's) is never committed (PersonEditing is thrown, and it stays open as it is); outside
+   * one, the person's edit takes over a session the Assistant is filling (it is discarded, never
+   * committed half-filled).
+   */
   function settle() {
-    if (open) open.commit();
+    if (!open) return;
+    if (currentOwner !== null) {
+      if (open.owner !== currentOwner) throw personEditing(open);
+      open.commit();
+      return;
+    }
+    if (open.owner) takeOver('edit');
+    else open.commit();
   }
+
+  function personEditing(s: SessionImpl): PersonEditing {
+    const name = featureById(s.feature)?.name ?? s.draft.name ?? 'a feature';
+    return new PersonEditing(`The person is editing ${name}`, s.feature);
+  }
+
+  // ------------------------------------------------------------------ Assistant steps
+
+  /** Who makes the change being applied: an Assistant step's owner, or null for the person. */
+  function changeBy(): string | null {
+    return sessionActor !== undefined ? sessionActor : currentOwner;
+  }
+
+  /** The open step, when the change being applied is its own. */
+  function ownStep(): StepImpl | null {
+    const by = changeBy();
+    return step && by !== null && by === step.owner ? step : null;
+  }
+
+  interface Snap {
+    doc: CadDoc;
+    rollback: number | null;
+    version: number;
+  }
+
+  function snap(): Snap {
+    const s = state.get();
+    return { doc: s.doc, rollback: s.view.rollback ?? null, version: undo.version };
+  }
+
+  /** Run fn as the Assistant step `owner` (sessions it opens and changes it makes are that step's). */
+  function asOwner<T>(owner: string, fn: () => T): T {
+    const was = currentOwner;
+    currentOwner = owner;
+    try {
+      return fn();
+    } finally {
+      currentOwner = was;
+    }
+  }
+
+  function markNow(): DocMark {
+    const s = state.get();
+    return Object.freeze({ doc: s.doc, rollback: s.view.rollback ?? null, history: undo.snapshot(), loadSeq });
+  }
+
+  /**
+   * The person took over the Assistant's open session: it is discarded (never committed), the
+   * open step is marked, and the bus hears why. False when no Assistant session is open.
+   */
+  function takeOver(why: TakeOverWhy): boolean {
+    const s = open;
+    if (!s || !s.open || !s.owner) return false;
+    s.discard();
+    if (step && step.owner === s.owner && !step.takenOver) step.takenOver = why;
+    bus.emit('assistant:taken-over', { why });
+    return true;
+  }
+
+  /**
+   * Put a mark back: model, bar and both undo lists, one rebuild, no new undo step. A session the
+   * Assistant owns goes with it; the person's open session is kept open on the restored model when
+   * it has not changed the model yet (and is not editing a feature the restore changes), else the
+   * restore is refused and nothing changes.
+   */
+  function restoreTo(mark: DocMark): EditResult {
+    if (state.get().status !== 'ready') return { ok: false, reason: String(editable()) };
+    if (mark.loadSeq !== loadSeq) return { ok: false, reason: 'The part was loaded again since then' };
+    const s = open && open.open ? open : null;
+    if (s && !s.owner) {
+      const why = s.keepsOver(mark.doc);
+      if (why) return { ok: false, reason: why };
+    }
+    const mine = ownStep();
+    const was = snap();
+    const s0 = state.get();
+    if (s && s.owner) s.close();
+    else if (s) s.rebase(mark.doc, mark.rollback ?? mark.doc.features.length);
+    undo.restore(mark.history);
+    const view = clampView((s0.view.rollback ?? null) === mark.rollback ? s0.view : { ...s0.view, rollback: mark.rollback }, mark.doc);
+    if (mine) {
+      mine.advance(was, { doc: mark.doc, rollback: view.rollback ?? null, version: undo.version });
+      mine.rebase(mark.doc);
+    }
+    state.set((st) => ({ ...st, doc: mark.doc, view, history: historyState(), session: s && s.owner ? null : st.session }));
+    if (view !== s0.view) autosave?.viewChanged();
+    autosave?.modelChanged();
+    rebuild();
+    return { ok: true };
+  }
+
+  class StepImpl implements AssistantStep {
+    takenOver: TakeOverWhy | null = null;
+    ended = false;
+    /** The model, the bar and the undo version as this step's own changes left them. */
+    doc: CadDoc;
+    rollback: number | null;
+    version: number;
+    /**
+     * What seal merges onto: the history and the model at the mark, or as the step's own undo,
+     * redo, restore or seal last left them (those keep the history they made; seal merges only the
+     * steps pushed after them).
+     */
+    private base: { history: UndoSnapshot<CadDoc>; doc: CadDoc };
+    private result: EditResult | null = null;
+
+    constructor(
+      readonly owner: string,
+      readonly mark: DocMark,
+    ) {
+      this.doc = mark.doc;
+      this.rollback = mark.rollback;
+      this.version = mark.history.version;
+      this.base = { history: mark.history, doc: mark.doc };
+    }
+
+    /** The step's own undo, redo or restore just moved the undo lists to where they are now, on `doc`. */
+    rebase(doc: CadDoc) {
+      this.base = { history: undo.snapshot(), doc };
+    }
+
+    /**
+     * A change of this step's own, from `was` to `now`. Each part of the record moves only from
+     * where the step left it: a change someone else made in between is never taken in.
+     */
+    advance(was: Snap, now: Snap) {
+      if (was.doc === this.doc) this.doc = now.doc;
+      if (was.rollback === this.rollback) this.rollback = now.rollback;
+      if (was.version === this.version) this.version = now.version;
+    }
+
+    /** Only this step changed the model, the bar and the undo lists since begin (a take-over aside). */
+    mine(): boolean {
+      const s = state.get();
+      return loadSeq === this.mark.loadSeq && undo.version === this.version && s.doc === this.doc && (s.view.rollback ?? null) === this.rollback;
+    }
+
+    get clean(): boolean {
+      return !this.takenOver && this.mine();
+    }
+
+    /** The save hold: while the step is open and only it changed the model, the stored model stays the mark. */
+    holds(): boolean {
+      return !this.ended && this.mine();
+    }
+
+    run<T>(fn: () => T): T {
+      if (this.ended) throw new Error('This Assistant step has ended');
+      return asOwner(this.owner, fn);
+    }
+
+    seal(tag: string, label: string): void {
+      if (this.ended) throw new Error('This Assistant step has ended');
+      if (this.takenOver) throw new Error('The person took this step over');
+      if (!this.mine()) throw new Error('The Part was changed during this step by someone else');
+      if (open && open.owner === this.owner) throw new Error('The Assistant has a panel open in this step');
+      const base = this.base;
+      // Only this step changed the history since its base, so every change since is a push of its own.
+      if (undo.version === base.history.version) return;
+      const doc = state.get().doc;
+      // The history as it was at the base, then this step's pushes as one entry (joined to the group
+      // below when that is the same group and ends where they began).
+      undo.restore(base.history);
+      if (doc !== base.doc) {
+        let before = base.doc;
+        const below = undo.top;
+        if (below && below.tag === tag && below.after === base.doc) {
+          before = below.before;
+          undo.dropTop();
+        }
+        undo.push({ label, before, after: doc, tag });
+      }
+      this.version = undo.version;
+      this.rebase(doc);
+      state.set((s) => ({ ...s, history: historyState() }));
+    }
+
+    revert(): EditResult {
+      if (this.result) return this.result;
+      if (this.ended) return (this.result = { ok: false, reason: 'This Assistant step has ended' });
+      if (!this.mine()) {
+        const reason = loadSeq !== this.mark.loadSeq ? 'The part was loaded again during this step' : 'The Part was changed during this step by someone else, so it was kept as it is';
+        return (this.result = { ok: false, reason });
+      }
+      const nothing = this.doc === this.mark.doc && this.version === this.mark.history.version && this.rollback === this.mark.rollback && !(open && open.owner === this.owner);
+      this.result = nothing ? { ok: true } : asOwner(this.owner, () => restoreTo(this.mark));
+      return this.result;
+    }
+
+    end(): void {
+      if (this.ended) return;
+      // A session of this step's still open (its call did not drop it): it goes, never left behind.
+      if (open && open.owner === this.owner) open.discard();
+      this.ended = true;
+      if (step === this) step = null;
+      // The hold is released: one write when the model differs from what is stored.
+      autosave?.modelChanged();
+    }
+  }
+
+  const assistant: AssistantDoc = {
+    begin(owner: string): AssistantStep {
+      if (!owner) throw new Error('An Assistant step needs its owner');
+      if (step) throw new Error('An Assistant step is already open');
+      const ok = editable();
+      if (ok !== true) throw new Error(ok);
+      if (open && open.open) throw personEditing(open);
+      step = new StepImpl(owner, markNow());
+      return step;
+    },
+    current: () => step,
+    mark: markNow,
+    restore(mark) {
+      const no = refuse();
+      return no ?? restoreTo(mark);
+    },
+    topGroup() {
+      const t = undo.top;
+      return t && t.tag ? { tag: t.tag, label: t.label, after: t.after } : null;
+    },
+    undoGroup(tag) {
+      const no = refuse();
+      if (no) return no;
+      if (undo.top?.tag !== tag) return { ok: false, reason: 'Those changes are no longer the newest step' };
+      if (open && open.open) return { ok: false, reason: 'Close the open panel first' };
+      doUndo(false);
+      return { ok: true };
+    },
+    takeOver,
+  };
 
   // ------------------------------------------------------------------ sessions
 
   class SessionImpl implements EditSession {
     readonly id = newId('s');
     readonly feature: FeatureId;
+    /** The Assistant step that opened it (inside its run), absent for the person's. */
+    readonly owner?: string;
     open = true;
     private current: Feature;
-    /** The document when the session opened (a refused Delete checks it too). */
-    readonly before: CadDoc;
+    /** The document when the session opened (a refused Delete checks it too); moved by an Assistant restore. */
+    before: CadDoc;
     private readonly viewBefore: CadView;
     private inDoc: boolean;
     private lastCreates: BodyId | null;
@@ -364,9 +627,10 @@ export function createDocService(opts: DocServiceOptions): DocService {
     constructor(
       draft: Feature,
       readonly isNew: boolean,
-      private readonly insertAt: number,
+      private insertAt: number,
     ) {
       this.feature = draft.id;
+      if (currentOwner !== null) this.owner = currentOwner;
       this.current = draft;
       this.before = state.get().doc;
       this.viewBefore = state.get().view;
@@ -375,7 +639,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       // The open session from the start: its first apply already rebuilds as this session (isolateWhileEditing).
       open = this;
       try {
-        if (isNew) this.apply();
+        if (isNew) this.act(() => this.apply());
         else if (this.def()?.isolateWhileEditing) rebuild();
       } catch (e) {
         // A draft its type cannot read (a pattern without dir1 throws in incomplete()):
@@ -383,6 +647,42 @@ export function createDocService(opts: DocServiceOptions): DocService {
         this.discard();
         throw e;
       }
+    }
+
+    /** The session's own changes are its owner's (an Assistant step's, or the person's), whoever calls. */
+    private act<T>(fn: () => T): T {
+      const was = sessionActor;
+      sessionActor = this.owner ?? null;
+      try {
+        return fn();
+      } finally {
+        sessionActor = was;
+      }
+    }
+
+    /**
+     * Why this (the person's) session cannot stay open over an Assistant restore to `target`, or
+     * null: it has not changed the model yet, and a feature it edits is in `target` as it is now.
+     */
+    keepsOver(target: CadDoc): string | null {
+      const doc = state.get().doc;
+      if (doc !== this.before) return 'The person changed the Part in an open panel';
+      if (this.isNew) return null;
+      const now = doc.features.find((f) => f.id === this.feature);
+      if (target.features.find((f) => f.id === this.feature) !== now) return `The person is editing ${now?.name ?? 'a feature'}, which this would change`;
+      return null;
+    }
+
+    /** An Assistant restore put `doc` under this (the person's, untouched) session: it now began there. */
+    rebase(doc: CadDoc, insertAt: number) {
+      this.before = doc;
+      if (!this.inDoc) this.insertAt = insertAt;
+    }
+
+    /** Ended with no change of its own (an Assistant restore replaces the model it was on). */
+    close() {
+      this.open = false;
+      if (open === this) open = null;
     }
 
     get changed(): boolean {
@@ -458,13 +758,21 @@ export function createDocService(opts: DocServiceOptions): DocService {
         if ((next as BodyFeature).op === 'new' && (next as BodyFeature).scope.length) next = { ...next, scope: [] } as Feature;
       }
       this.current = next;
-      this.apply();
+      this.act(() => this.apply());
     }
 
     commit(): void {
+      this.act(() => this.commitNow());
+    }
+
+    discard(): void {
+      this.act(() => this.discardNow());
+    }
+
+    private commitNow(): void {
       if (!this.open) return;
       if (this.isNew && (!this.inDoc || this.incomplete() !== null)) {
-        this.discard();
+        this.discardNow();
         return;
       }
       this.open = false;
@@ -484,7 +792,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       state.set((s) => ({ ...s, session: null, history: historyState() }));
     }
 
-    discard(): void {
+    private discardNow(): void {
       if (!this.open) return;
       this.open = false;
       open = null;
@@ -515,7 +823,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
   function beginEdit(id: FeatureId): EditSession {
     const ok = editable();
     if (ok !== true) throw new Error(ok);
-    if (open && open.feature === id) return open;
+    // The open session on it, when it is the caller's own (the person's, or the running step's).
+    if (open && open.feature === id && (open.owner ?? null) === currentOwner) return open;
     settle();
     const f = featureById(id);
     if (!f) throw new Error('That feature is not in the part');
@@ -617,7 +926,13 @@ export function createDocService(opts: DocServiceOptions): DocService {
     // (review P2/P3 round 1: a refused Delete threw away the edits of the open sketch).
     const block = removeBlock(id);
     if (block) return { ok: false, reason: block };
-    if (open && open.feature === id) open.discard();
+    if (open && open.feature === id) {
+      // Inside an Assistant step, never the person's session; the person deleting what the
+      // Assistant is filling takes it over.
+      if (currentOwner !== null && open.owner !== currentOwner) throw personEditing(open);
+      if (currentOwner === null && open.owner) takeOver('edit');
+      else open.discard();
+    }
     return edit((doc) => {
       const idx = doc.features.findIndex((g) => g.id === id);
       if (idx < 0) return { ok: false, reason: 'That feature is not in the part' };
@@ -766,20 +1081,56 @@ export function createDocService(opts: DocServiceOptions): DocService {
       if (!p) return { ok: false, reason: 'That parameter is not in the part' };
       const users = usersOfParam(doc, p.name, registry);
       const names = [...users.params.map((u) => u.name), ...users.features.map((u) => u.name)];
-      if (names.length) return { ok: false, reason: `${p.name} can't be deleted: ${listOfNames(names)} ${names.length === 1 ? 'uses' : 'use'} it` };
+      if (names.length) return { ok: false, reason: stillUsed(p.name, names) };
       return { doc: { ...doc, params: doc.params.filter((x) => x.id !== id) }, label: `Delete parameter ${p.name}` };
     });
   }
 
+  /**
+   * Bulk parameters (planParams): one settle, one check of the final set, one undo step. Inside an
+   * Assistant step's run, a person's open panel throws PersonEditing as every edit does.
+   */
+  function editParams(rows: ParamRows, label?: string): ParamsResult {
+    const no = refuse();
+    if (no) return no;
+    settle();
+    const doc = state.get().doc;
+    const plan = planParams(doc, rows, registry);
+    if (!plan.ok) return plan;
+    if (plan.doc !== doc) applyDoc(plan.doc, label ?? `Parameters: ${plan.count} changed`);
+    return { ok: true, ids: plan.ids };
+  }
+
   function doUndo(redo: boolean) {
     if (editable() !== true) return;
+    const person = currentOwner === null;
+    // The person's Ctrl+Z or Ctrl+Y while the Assistant fills a panel: that panel goes (a
+    // take-over), and nothing else is undone.
+    if (person && open?.owner) {
+      takeOver('undo');
+      return;
+    }
     settle();
+    const entry = redo ? (undo.snapshot().undone.slice(-1)[0] ?? null) : undo.top;
+    if (!entry) return;
+    if (person) {
+      // Heard before it applies. During an Assistant step it is a take-over: the step is never
+      // sealed over it, and the person's undo always goes ahead.
+      bus.emit('assistant:person-undo', { tag: entry.tag ?? null, label: entry.label, redo });
+      if (step && !step.takenOver) step.takenOver = 'undo';
+    }
+    const mine = ownStep();
+    const was = snap();
     const before = state.get().doc;
     const target = redo ? undo.redo() : undo.undo();
     if (!target) return;
     const doc = target;
     const view = keepBar(state.get().view, before, doc);
     const moved = view !== state.get().view;
+    if (mine) {
+      mine.advance(was, { doc, rollback: view.rollback ?? null, version: undo.version });
+      mine.rebase(doc);
+    }
     state.set((s) => ({ ...s, doc, view, history: historyState() }));
     if (moved) autosave?.viewChanged();
     autosave?.modelChanged();
@@ -944,7 +1295,11 @@ export function createDocService(opts: DocServiceOptions): DocService {
             state.set({ sourceVersion: v });
             record.saved(v);
           },
-          getDoc: () => state.get().doc,
+          // The save hold: while an Assistant step is open and only it changed the model, every
+          // write path (the budget, blur, hidden, pagehide, flush) stores the step's mark, and a
+          // write equal to what is stored is skipped. A reload, crash or Back mid-call never stores
+          // half a step; the hold lifts the moment anyone else changes the model, and end() writes.
+          getDoc: () => (step && step.holds() ? step.mark.doc : state.get().doc),
           getView: () => state.get().view,
           onState: (save) => {
             if (autosave === saver) state.set({ save });
@@ -1123,6 +1478,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     addParam,
     updateParam,
     removeParam,
+    editParams,
     undo: () => doUndo(false),
     redo: () => doUndo(true),
     repair,
@@ -1176,6 +1532,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     settled,
     committed: () => (open && open.open ? open.before : state.get().doc),
     recordSettled: () => record.settled(),
+    assistant,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -1219,12 +1576,5 @@ function pointerOverFrame(e: Event): boolean {
   if (typeof window === 'undefined' || !('clientX' in e)) return false;
   const { clientX: x, clientY: y } = e as MouseEvent;
   return x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight;
-}
-
-/** "a", "a and b", "a, b and c", "a, b, c and 2 more". */
-function listOfNames(names: string[]): string {
-  if (names.length <= 1) return names.join('');
-  if (names.length <= 3) return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-  return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
 }
 
