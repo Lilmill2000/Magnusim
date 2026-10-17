@@ -16,6 +16,11 @@
  *                                turn stopped, and nothing is sent.
  *
  * Only "Send" is remembered. Workspace tools and screenshots are project data too.
+ *
+ * The mode and the answers are read live, before every request of a turn: "Always deny"
+ * chosen mid-turn ends the turn before its next request (nothing more is sent), answers
+ * forgotten mid-turn ask again, and "Always deny" chosen while the question is open wins
+ * over its Send.
  */
 import { CLOUD_BASE_URLS } from './providers/endpoints.ts';
 import { PROVIDER_LABELS } from './providers/index.ts';
@@ -35,6 +40,8 @@ export interface ProjectInfo {
 export const PRIVACY_DENIED_TEXT =
   'Settings → Assistant is set to never send project data to a cloud provider. Ask from Home, use a local server, or change the setting.';
 export const NOTHING_SENT = 'Nothing was sent.';
+/** A turn that already sent requests, ended by privacy before its next one. */
+export const NOTHING_MORE_SENT = 'Nothing more was sent.';
 
 export interface PrivacyInput {
   /** The provider sends data off this PC. */
@@ -85,7 +92,7 @@ export function privacyGate(o: { turn: string; project: ProjectInfo; provider: P
     kind: 'privacy',
     turn: o.turn,
     title: `Send project "${title}" to ${provider}?`,
-    copy: `The Assistant is about to send this project's names, settings and results to ${o.host}, a cloud provider. A local server keeps them on this PC. Settings → Assistant can change this.`,
+    copy: `The Assistant is about to send this project's names, settings, results and pictures of the open workspace to ${o.host}, a cloud provider. A local server keeps them on this PC. Settings → Assistant can change this.`,
     yes: 'Send',
     no: "Don't send",
     project: { id: o.project.id, title },

@@ -21,7 +21,7 @@ const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
 const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText } = await import('../assistant/loop.ts');
-const { TURN_LIMITS } = await import('../assistant/turns.ts');
+const { TURN_LIMITS, TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
 const { createToolRegistry, REQUEST_MAX_TOOLS } = await import('../assistant/registry.ts');
@@ -234,6 +234,30 @@ describe('each call of a step', () => {
     assert.deepEqual([gates[1].yes, gates[1].no], ['Allow', "Don't"]);
     assert.ok(statesOf(r.turn).includes('awaiting_confirmation'));
     assert.deepEqual(ofType(r.turn, 'gate_closed').map((e) => [e.answer, e.by]), [['allow', 'user'], ['allow', 'user']]);
+  });
+
+  it('the confirm question shows every field the call sent, in the schema’s order, each cut on its own and marked: a long field can’t hide another', async () => {
+    const schema = {
+      type: 'object',
+      properties: { note: { type: 'string', maxLength: 2000 }, ids: { type: 'array', items: { type: 'string' }, maxItems: 100 } },
+      required: ['ids'],
+      additionalProperties: false,
+    };
+    const m = mk({ hostTools: [hostTool('wipe', { risk: 'destructive', title: 'Delete bodies', schema })] });
+    const note = 'Removing only the unused construction sketch you asked about; the solid bodies stay as they are. '.repeat(5);
+    const many = Array.from({ length: 40 }, (_, i) => `body-${String(i).padStart(3, '0')}-solid`);
+    // The model's own key order: the long note first.
+    m.provider.script({ tools: [{ name: 'wipe', input: { note, ids: ['ALL'] } }] }, { tools: [{ name: 'wipe', input: { ids: many } }] }, { text: 'ok' });
+    const { turn: t } = await startTurn(m, 'x');
+    const seen = [];
+    answerGates(m, t, (g) => (seen.push(g.copy), false));
+    await settled(t);
+    assert.equal(seen.length, 2);
+    assert.ok(seen[0].includes('"ids":["ALL"]'), seen[0]);
+    assert.match(seen[0], /What it sent: \{"note":"Removing only the unused construction sketch[^…]*… \(\d+ more characters\),"ids":\["ALL"\]\}\. Nothing runs until you choose\.$/);
+    const cut = /What it sent: \{"ids":(.*)… \((\d+) more characters\)\}\. Nothing runs until you choose\.$/.exec(seen[1]);
+    assert.ok(cut, seen[1]);
+    assert.equal(cut[1].length + Number(cut[2]), JSON.stringify(many).length, 'the count says how much is not shown');
   });
 
   it('deny skips the rest of the step; the model hears "declined" and the turn goes on', async () => {
@@ -748,7 +772,7 @@ describe('privacy (cloud turns)', () => {
     assert.deepEqual(statesOf(r.turn).slice(0, 2), ['starting', 'awaiting_consent']);
     assert.equal(seen.length, 1);
     assert.deepEqual([seen[0].kind, seen[0].title, seen[0].yes, seen[0].no], ['privacy', 'Send project "Wing" to Anthropic?', 'Send', "Don't send"]);
-    assert.match(seen[0].copy, /to api\.anthropic\.com, a cloud provider\. A local server keeps them on this PC\./);
+    assert.equal(seen[0].copy, "The Assistant is about to send this project's names, settings, results and pictures of the open workspace to api.anthropic.com, a cloud provider. A local server keeps them on this PC. Settings → Assistant can change this.");
     assert.deepEqual(m.consents, [{ projectId: 'p1', createdAt: WING.created_at, destination: 'anthropic' }]);
     assert.match(m.provider.requests[0].req.messages[0].parts[1].text, /"project":\{"id":"p1","title":"Wing"\}/);
 
@@ -784,6 +808,53 @@ describe('privacy (cloud turns)', () => {
       assert.equal(m.provider.requests.length, 0);
       assert.equal(m.consents.length, 0);
     }
+  });
+
+  it('privacy is read live before every request: "Always deny" mid-turn ends it with nothing more sent', async () => {
+    const m = mk({
+      projects: { p1: WING },
+      settings: { privacy: 'allow' },
+      hostTools: [hostTool('peek', { run: async () => ((m.state.settings.privacy = 'deny'), { ok: true, data: { secret: 'CONFIDENTIAL-RESULT' }, summary: 'peeked' }) })],
+    });
+    m.provider.script({ tools: [{ name: 'peek' }] }, { text: 'never asked' });
+    const { turn: t } = await startTurn(m, { text: 'x', context: { project_id: 'p1' } });
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['stopped', 'privacy', 'Nothing more was sent.']);
+    assert.equal(m.provider.requests.length, 1, 'the result never left');
+    assert.deepEqual(codes(lastResults(t.conv)), ['ok'], 'the call is still answered in the conversation');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('privacy is read live: answers forgotten mid-turn ask again before the next request (Don’t send ends it; Send goes on)', async () => {
+    for (const second of [false, true]) {
+      const m = mk({
+        projects: { p1: WING },
+        hostTools: [hostTool('peek', { run: async () => ((m.state.settings.consents = {}), { ok: true, data: { n: 1 }, summary: 'peeked' }) })],
+      });
+      m.provider.script({ tools: [{ name: 'peek' }] }, { text: 'the end' });
+      const { turn: t } = await startTurn(m, { text: 'x', context: { project_id: 'p1' } });
+      const seen = [];
+      answerGates(m, t, (g) => (seen.push(g.kind), seen.length === 1 ? true : second));
+      await settled(t);
+      assert.deepEqual(seen, ['privacy', 'privacy'], `asked again (${second})`);
+      if (second) {
+        assert.deepEqual([t.state, m.provider.requests.length, m.consents.length], ['done', 2, 2]);
+      } else {
+        assert.deepEqual([t.state, t.endReason, t.message], ['stopped', 'privacy', 'Nothing more was sent.']);
+        assert.equal(m.provider.requests.length, 1);
+      }
+      checkInvariants(assert, t.conv, m.provider.requests);
+    }
+  });
+
+  it('privacy is read live: "Always deny" chosen while the question is open wins over its Send (nothing sent, nothing remembered)', async () => {
+    const m = mk({ projects: { p1: WING } });
+    m.provider.script({ text: 'never' });
+    const { turn: t } = await startTurn(m, { text: 'x', context: { project_id: 'p1' } });
+    answerGates(m, t, () => ((m.state.settings.privacy = 'deny'), true));
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['stopped', 'privacy', 'Nothing was sent.']);
+    assert.deepEqual([m.provider.requests.length, m.consents.length], [0, 0]);
   });
 
   it('a local-server address outside this PC counts as cloud and names its host', async () => {
@@ -852,6 +923,31 @@ describe('how many turns', () => {
     assert.deepEqual(m.manager.forget(conv).body, { ok: true, forgotten: true });
     r = await startTurn(m, { text: 'z', conversation: conv });
     assert.deepEqual([r.status, r.body.code], [404, 'unknown_conversation']);
+  });
+
+  it("tab 'auto' resolves on the server (resolveTab, the CLI's and MCP's rule): the only connected tab; none, only dormant ones, or more than one is refused", async () => {
+    const m = mk({ provider: 'openai_compatible', projects: { p1: WING } });
+    const ws = (projectId = 'p1') => ({ plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId, studyId: 's1', tools: [] });
+    const expect = async (status, code) => {
+      const r = await startTurn(m, { text: 'x', tab: 'auto' });
+      assert.deepEqual([r.status, r.body.code], [status, code]);
+      return r;
+    };
+    assert.match((await expect(400, 'no_tab')).body.error, /^No app tab offers tools to the Assistant\./);
+    m.registry.setWorkspace('T1', 'L1', ws());
+    m.registry.setConnected('T1', 'L1', false);
+    assert.equal((await expect(409, 'tab_hidden')).body.error, TAB_HIDDEN_TEXT, 'only a dormant tab');
+    m.registry.setConnected('T1', 'L1', true);
+    m.registry.setWorkspace('T2', 'L2', ws());
+    assert.match((await expect(409, 'ambiguous_tab')).body.error, /^More than one app tab offers tools to the Assistant: T1, T2\./);
+    m.registry.setConnected('T2', 'L2', false);
+    assert.deepEqual(m.manager.resolveTab('auto'), { tab: 'T1', projectId: 'p1', studyId: 's1' });
+    assert.deepEqual([m.manager.resolveTab('T2').status, m.manager.resolveTab('T9').status], [409, 400], 'an id: as given');
+    m.provider.script({ text: 'bound' });
+    const r = await startTurn(m, { text: 'x', tab: 'auto' });
+    assert.equal(r.status, 202);
+    await settled(r.turn);
+    assert.deepEqual([r.turn.tab, r.turn.projectId, r.turn.state], ['T1', 'p1', 'done']);
   });
 
   it('the checks before a turn: provider off, packages, key, a bad tab, a tab not connected, a project mismatch', async () => {
@@ -929,7 +1025,7 @@ describe('untrusted text', () => {
       assert.equal(seen[0].title, `Send project "${shown}" to Anthropic?`);
       assert.equal(seen[0].title.split('"').length, 3, 'one pair of double quotes, the host’s');
       assert.equal(seen[0].project.title, shown);
-      assert.match(seen[0].copy, /^The Assistant is about to send this project's names, settings and results to api\.anthropic\.com, a cloud provider\./);
+      assert.match(seen[0].copy, /^The Assistant is about to send this project's names, settings, results and pictures of the open workspace to api\.anthropic\.com, a cloud provider\./);
       assert.deepEqual([t.state, t.endReason, m.provider.requests.length], ['stopped', 'privacy', 0]);
     }
   });
@@ -1047,6 +1143,26 @@ describe('a crash mid-batch', () => {
 });
 
 describe('the event log', () => {
+  it('a subscriber hears every chunk of streamed text (as a channel would send it), and the log still adds up to the whole answer', async () => {
+    const m = mk();
+    m.provider.script({ text: 'Hello', hold: 'h' });
+    const { turn: t } = await startTurn(m, 'x');
+    await m.provider.reached('h');
+    // As the dock's channel would (followJob's way): the log so far, then each event sent as it arrives.
+    const snapshot = (await m.manager.poll(t.id, 0, 0)).body.events;
+    const sent = [];
+    t.subscribe((e) => sent.push(JSON.parse(JSON.stringify(e))));
+    t.onStream(1, { kind: 'text', text: ', world.' });
+    t.onStream(1, { kind: 'text', text: ' Done.' });
+    m.provider.release('h');
+    await settled(t);
+    const heard = [...snapshot, ...sent].filter((e) => e.type === 'text').map((e) => e.text);
+    assert.equal(heard.join(''), 'Hello, world. Done.');
+    const poll = await m.manager.poll(t.id, 0, 0);
+    assert.equal(poll.body.events.filter((e) => e.type === 'text').map((e) => e.text).join(''), 'Hello, world. Done.');
+    assert.equal(t.summary().text_so_far, 'Hello, world. Done.');
+  });
+
   it('text is merged only into events no reader has seen; the long-poll returns what is new and waits for more', async () => {
     const m = mk();
     m.provider.script({ text: 'abc', hold: 'h' });

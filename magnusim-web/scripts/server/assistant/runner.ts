@@ -11,7 +11,8 @@
  * 4. Availability is checked again now, with the plugin-epoch fence (`unavailable`,
  *    `plugin_off`).
  * 5. compute and destructive tools ask first (a confirm gate); a no, the timeout or Stop
- *    means it doesn't run (`declined`). An unknown risk counts as destructive.
+ *    means it doesn't run (`declined`). An unknown risk counts as destructive. The question
+ *    shows every field the call sent, in the schema's order, each cut on its own and marked.
  * 6. The tool runs with its stall window (reset by progress); Stop and the turn's
  *    minutes cap abort it through the call's signal (`stopped`, `capped`). An aborted tool
  *    has ABORT_GRACE_MS for its last answer; then the runner stops waiting and says so on
@@ -74,7 +75,14 @@ export const ABORT_GRACE_MS = 2_000;
 /** A workspace tool's stall window on the server: its own plus the relay's margin. */
 export const WORKSPACE_STALL_MARGIN_MS = 10_000;
 const PREVIEW = 200;
+/** The room the confirm question gives the call's input, shared fairly among its fields. */
 const GATE_INPUT = 400;
+/** The least of a field's value the question shows, however many fields share the room. */
+const GATE_FIELD_MIN = 24;
+/** The most the input may take (the question's copy is capped at 2000): past it, fields are only counted. */
+const GATE_INPUT_MAX = 1500;
+/** Room for a cut's mark, "… (N more characters)". */
+const GATE_MARK = 28;
 
 export const STOPPED_BEFORE = 'Stopped by the user before this ran.';
 const STOPPED_DURING = 'Stopped by the user while it ran; it may or may not have finished.';
@@ -150,12 +158,60 @@ function lowerFirst(s: string): string {
   return s.charAt(0).toLowerCase() + s.slice(1);
 }
 
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** `v` with its objects' keys in the schema's order (any others after), at every depth: never the model's order. */
+function inSchemaOrder(schema: unknown, v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => inSchemaOrder(isObject(schema) ? schema.items : undefined, x));
+  if (!isObject(v)) return v;
+  const props = isObject(schema) && isObject(schema.properties) ? schema.properties : {};
+  const keys = [...Object.keys(props).filter((k) => Object.hasOwn(v, k)), ...Object.keys(v).filter((k) => !Object.hasOwn(props, k))];
+  const out: Record<string, unknown> = {};
+  // Defined, not assigned, as stripNullOptionals keeps an own "__proto__" key.
+  for (const k of keys) Object.defineProperty(out, k, { value: inSchemaOrder(props[k], v[k]), enumerable: true, writable: true, configurable: true });
+  return out;
+}
+
+/** `text` cut to `n` characters, saying how many more there are. */
+function cutMarked(text: string, n: number): string {
+  const chars = [...text];
+  return chars.length <= n ? text : `${chars.slice(0, n).join('')}… (${chars.length - n} more characters)`;
+}
+
+/**
+ * The call's input as the confirm question shows it: every field, in the schema's order,
+ * each value given a fair share of the room and cut on its own, marked with how much is not
+ * shown. A long field, or one the model put first, never pushes another out of sight.
+ */
+export function gateInputText(schema: unknown, input: Record<string, unknown>): string {
+  const ordered = inSchemaOrder(schema, input) as Record<string, unknown>;
+  const fields = Object.keys(ordered).map((k) => {
+    const value = cleanText(JSON.stringify(ordered[k]) ?? 'null', Number.MAX_SAFE_INTEGER);
+    return { key: JSON.stringify(cleanText(k, 64)), value, length: [...value].length };
+  });
+  if (!fields.length) return '{}';
+  const frame = (n: number) => 2 + fields.slice(0, n).reduce((sum, f) => sum + f.key.length + 2, 0) - 1;
+  let shown = fields.length;
+  while (shown > 1 && frame(shown) + shown * (GATE_FIELD_MIN + GATE_MARK) > GATE_INPUT_MAX) shown -= 1;
+  let room = Math.max(GATE_INPUT - frame(shown), shown * GATE_FIELD_MIN);
+  // The shortest first: what one field doesn't need goes to the others.
+  const give = new Array<number>(shown).fill(0);
+  const order = [...give.keys()].sort((a, b) => fields[a].length - fields[b].length);
+  order.forEach((i, at) => {
+    give[i] = Math.min(fields[i].length, Math.floor(room / (shown - at)));
+    room -= give[i];
+  });
+  const parts = fields.slice(0, shown).map((f, i) => `${f.key}:${cutMarked(f.value, give[i])}`);
+  if (shown < fields.length) parts.push(`… (${fields.length - shown} more fields)`);
+  return `{${parts.join(',')}}`;
+}
+
 /** The confirm question for a compute or destructive tool. */
 export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null): GateRequest {
   const risk = riskOf(def) === 'compute' ? 'compute' : 'destructive';
   let sent = '';
   try {
-    sent = cleanText(JSON.stringify(input), GATE_INPUT);
+    sent = gateInputText(def.schema, input);
   } catch {
     sent = '(unreadable)';
   }

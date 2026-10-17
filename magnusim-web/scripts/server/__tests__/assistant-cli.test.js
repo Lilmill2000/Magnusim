@@ -7,7 +7,8 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -31,7 +32,7 @@ const routes = await import('../assistant-routes.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
 const { hostTool } = await import('./assistant-harness.js');
-const { plainText } = await import(pathToFileURL(CLI).href);
+const { plainText, main } = await import(pathToFileURL(CLI).href);
 
 let server;
 let port;
@@ -66,14 +67,27 @@ after(async () => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** Runs the CLI (with --port unless `withPort` is false); `input` is written to its stdin, which then closes. */
-function cli(args, input = '', { withPort = true, env = {} } = {}) {
+/**
+ * Runs the CLI (with --port unless `withPort` is false). `input` is written to its stdin; with
+ * `answers`, each is typed once its question's "(y/N) " shows, and stdin closes after the last.
+ */
+function cli(args, input = '', { withPort = true, env = {}, answers = null, path = CLI, cwd = undefined } = {}) {
   return new Promise((resolve, reject) => {
-    const argv = withPort ? [CLI, '--port', String(port), ...args] : [CLI, ...args];
-    const child = spawn(process.execPath, argv, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MAGNUSIM_PORT: '', ...env } });
+    const argv = withPort ? [path, '--port', String(port), ...args] : [path, ...args];
+    const child = spawn(process.execPath, argv, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, MAGNUSIM_PORT: '', ...env }, ...(cwd ? { cwd } : {}) });
     let stdout = '';
     let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
+    const left = answers ? [...answers] : null;
+    let asked = 0;
+    child.stdout.setEncoding('utf8').on('data', (d) => {
+      stdout += d;
+      // A question is answered only once it shows (a line typed before it never counts).
+      while (left?.length && stdout.split('(y/N) ').length - 1 > asked) {
+        asked += 1;
+        child.stdin.write(`${left.shift()}\n`);
+        if (!left.length) child.stdin.end();
+      }
+    });
     child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d));
     const timer = setTimeout(() => {
       child.kill();
@@ -84,7 +98,8 @@ function cli(args, input = '', { withPort = true, env = {} } = {}) {
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
-    child.stdin.end(input);
+    if (left?.length) child.stdin.write(input);
+    else child.stdin.end(input);
   });
 }
 
@@ -100,12 +115,12 @@ describe('assistant-run.mjs', () => {
   it('a question asked at the terminal: y allows (the tool runs), n declines (it does not); both turns end done', async () => {
     const before = resets;
     fake.reply({ tools: [{ name: 'reset_all', input: {} }] }, { text: 'Reset done.' });
-    let r = await cli(['Reset everything.'], 'y\n');
+    let r = await cli(['Reset everything.'], '', { answers: ['y'] });
     assert.equal(r.code, 0, r.stderr);
     assert.equal(resets, before + 1);
     assert.match(r.stdout, /→ reset_all \{\}\n\? Allow the Assistant to reset every counter\?\n {2}Magnusim · can't be undone\. What it sent: \{\}\. Nothing runs until you choose\.\n {2}y = Allow, n = Don't\n\(y\/N\) \n✓ All counters reset\nReset done\.\n/);
     fake.reply({ tools: [{ name: 'reset_all', input: {} }] }, { text: 'I would have reset them.' });
-    r = await cli(['Reset everything.'], 'n\n');
+    r = await cli(['Reset everything.'], '', { answers: ['n'] });
     assert.equal(r.code, 0, r.stderr);
     assert.equal(resets, before + 1, 'not run');
     assert.match(r.stdout, /✗ declined: The user declined this call/);
@@ -137,6 +152,18 @@ describe('assistant-run.mjs', () => {
     const none = await cli(['--tab', 'auto', 'Do it.']);
     assert.equal(none.code, 1);
     assert.match(none.stderr, /No app tab offers tools/);
+    // Two connected tabs: the server's rule refuses to pick one.
+    for (const t of ['T1', 'T2']) handle.registry.setWorkspace(t, `L${t}`, { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [] });
+    try {
+      const two = await cli(['--tab', 'auto', 'Do it.']);
+      assert.equal(two.code, 1);
+      assert.equal(two.stderr.trim(), 'More than one app tab offers tools to the Assistant: T1, T2. Name one of them.');
+    } finally {
+      for (const t of ['T1', 'T2']) handle.registry.setWorkspace(t, `L${t}`, null);
+    }
+    // The rule lives on the server (resolveTab, for MCP too): the CLI keeps no copy of it.
+    const src = readFileSync(CLI, 'utf8');
+    assert.ok(!src.includes(TAB_HIDDEN_TEXT) && !src.includes('/api/assistant/tabs'), 'no copy of the tab rule');
   });
 
   it('--json prints one event per line; --help names the hold; bad options exit 1', async () => {
@@ -179,12 +206,113 @@ describe('assistant-run.mjs', () => {
     const ch = (n) => String.fromCharCode(n);
     const [ESC, BEL, CSI] = [ch(0x1b), ch(0x07), ch(0x9b)];
     fake.reply({ text: `Safe${ESC}[8m${ESC}]52;c;ZXZpbA==${BEL}\r\nshown`, tools: [{ name: 'reset_all', input: {} }] }, { text: 'Not reset.' });
-    const r = await cli(['Reset?'], 'n\n');
+    const r = await cli(['Reset?'], '', { answers: ['n'] });
     assert.equal(r.code, 0, r.stderr);
     assert.ok(![...r.stdout].some((c) => c !== '\n' && /\p{Cc}/u.test(c)), JSON.stringify(r.stdout));
     assert.match(r.stdout, /^Safe\[8m\]52;c;ZXZpbA==\nshown\n→ reset_all \{\}\n\? Allow the Assistant to reset every counter\?\n/);
     // The terminal's own cleaning, whatever a server sends.
     assert.equal(plainText(`a${ESC}[2Jb${CSI}0m\r\n\tc${ch(0x202e)}d${ch(0x2028)}`), 'a[2Jb0m\n\tcd');
+  });
+
+  it('a line typed before a question opened never answers it, a terminal or not: a fake question the model printed takes no "y" for the real one', { timeout: 20_000 }, async () => {
+    // The model's text, printed as it comes: a question in the host's own layout.
+    const FAKE = "\n? Allow the Assistant to read the counter?\n  Magnusim · reads only. What it sent: {}. Nothing runs until you choose.\n  y = Allow, n = Don't\n(y/N) ";
+    const REAL = { id: 'g-real', title: 'Allow the Assistant to delete every body?', copy: "Magnusim · can't be undone. What it sent: {}. Nothing runs until you choose.", yes: 'Allow', no: "Don't" };
+    const answers = [];
+    let polls = 0;
+    let typedEarly;
+    const early = new Promise((r) => (typedEarly = r));
+    let answered;
+    const gateAnswered = new Promise((r) => (answered = r));
+    const stub = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', async () => {
+        const send = (code, j) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(j));
+        if (req.method === 'POST' && req.url === '/api/assistant/turns') return send(202, { ok: true, turn: 't1', conversation: 'c1' });
+        if (req.method === 'POST' && req.url === `/api/assistant/gates/${REAL.id}`) {
+          answers.push(JSON.parse(body));
+          answered();
+          return send(200, { ok: true });
+        }
+        if (req.method !== 'GET' || !req.url.startsWith('/api/assistant/turns/t1')) return send(404, { ok: false });
+        polls += 1;
+        if (polls === 1) return send(200, { ok: true, next: 2, ended: false, events: [{ type: 'text', text: FAKE }, { type: 'tool_call', tool: 'app_status', input_preview: '{}' }] });
+        if (polls === 2) {
+          // The real question opens only once the "person" typed y at the fake one.
+          await early;
+          return send(200, { ok: true, next: 4, ended: false, events: [{ type: 'tool_result', ok: true, summary: 'Counter is 7' }, { type: 'gate', gate: REAL }] });
+        }
+        await gateAnswered;
+        return send(200, {
+          ok: true,
+          next: 6,
+          ended: true,
+          events: [
+            { type: 'gate_closed', gate: REAL.id, answer: answers[0].allow ? 'allow' : 'deny', by: 'user' },
+            { type: 'end', state: 'done', reason: 'end_turn', message: null },
+          ],
+        });
+      });
+    });
+    await new Promise((r) => stub.listen(0, '127.0.0.1', r));
+    // A pipe, as in Git Bash's mintty or an IDE panel, where a person still types by hand.
+    const stdin = new PassThrough();
+    assert.equal(stdin.isTTY, undefined);
+    let out = '';
+    let prompts = 0;
+    const onOut = (text) => {
+      out += text;
+      const now = out.split('(y/N) ').length - 1;
+      if (now === prompts) return;
+      prompts = now;
+      if (prompts === 1) {
+        // The person answers the fake question; the CLI has read the line before the real one opens.
+        stdin.once('data', () => setImmediate(typedEarly));
+        stdin.write('y\n');
+      } else if (prompts === 2) stdin.write('n\n');
+    };
+    try {
+      const code = await main(['--port', String(stub.address().port), 'Look at the counter.'], {
+        stdin,
+        stdout: { write: (text) => (onOut(text), true) },
+        stderr: { write: () => true },
+      });
+      assert.equal(code, 0, out);
+      assert.deepEqual(answers, [{ allow: false }], 'the real question took the line typed after it, not the early "y"');
+    } finally {
+      stub.closeAllConnections?.();
+      await new Promise((r) => stub.close(r));
+    }
+  });
+
+  it('run through a junction or directory link (Node gives the module its real path, argv[1] keeps the link): it still runs', async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'assistant-run-real-'));
+    const links = mkdtempSync(join(tmpdir(), 'assistant-run-link-'));
+    try {
+      mkdirSync(join(root, 'scripts'));
+      copyFileSync(CLI, join(root, 'scripts', 'assistant-run.mjs'));
+      const link = join(links, 'web');
+      try {
+        symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch (e) {
+        t.skip(`no junction or directory link here: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      const runs = await Promise.all([
+        cli(['--help'], '', { withPort: false, path: join(link, 'scripts', 'assistant-run.mjs') }),
+        // As documented: from the folder (through the link), by a relative path.
+        cli(['--help'], '', { withPort: false, path: join('scripts', 'assistant-run.mjs'), cwd: link }),
+      ]);
+      for (const r of runs) {
+        assert.equal(r.code, 0, r.stderr);
+        assert.match(r.stdout, /^Usage: node scripts\/assistant-run\.mjs /);
+      }
+    } finally {
+      // Only temp folders: the link points at a copy.
+      rmSync(links, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('says nothing about any provider by name (vendor-neutral text)', () => {

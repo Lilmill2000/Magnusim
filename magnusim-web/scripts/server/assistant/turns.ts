@@ -153,7 +153,7 @@ export class Turn implements LoopTurn {
   /** The `end` event is logged: the log is complete. */
   private closed = false;
   private seq = 0;
-  /** The highest seq a reader has been given: text is merged only into events no one read yet. */
+  /** The highest seq a reader (a poll or a listener) has been given: text is merged only into events no one read yet. */
   private delivered = 0;
   private readonly stepText = new Map<number, string>();
   private readonly waiters = new Set<() => void>();
@@ -215,16 +215,19 @@ export class Turn implements LoopTurn {
 
   private wake(e: TurnEvent | null): void {
     for (const w of [...this.waiters]) w();
-    if (e) for (const fn of [...this.listeners]) {
+    if (!e || !this.listeners.size) return;
+    // A listener has it now: later text starts a new event rather than changing this one.
+    this.delivered = Math.max(this.delivered, e.seq);
+    for (const fn of [...this.listeners]) {
       try {
-        fn(e);
+        fn({ ...e });
       } catch {
         /* a listener never breaks the turn */
       }
     }
   }
 
-  /** Every event as it is logged (tests and, later, the dock's channel). */
+  /** Every event as it is logged, a copy (tests and, later, the dock's channel); streamed text arrives chunk by chunk. */
   subscribe(fn: (e: TurnEvent) => void): () => void {
     this.listeners.add(fn);
     return () => {
@@ -502,6 +505,15 @@ const refuse = (status: number, code: string, error: string, extra: Record<strin
 export const TAB_HIDDEN_TEXT =
   "That tab isn't connected to the Assistant: its window is in the background or covered, or it was closed. Show the Magnusim window and try again.";
 export const BAD_TAB_TEXT = 'That app tab offers no tools to the Assistant (it is unknown, or no workspace in it registered any).';
+export const NO_TAB_TEXT = 'No app tab offers tools to the Assistant. Open a workspace in Magnusim, or start the turn without a tab.';
+const ambiguousTabText = (tabs: string[]) => `More than one app tab offers tools to the Assistant: ${tabs.join(', ')}. Name one of them.`;
+
+/** The app tab a turn binds to (resolveTab), with the project and study its workspace registered. */
+export interface TabTarget {
+  tab: string;
+  projectId: string;
+  studyId: string;
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -592,6 +604,35 @@ export class TurnManager {
     return this.running().filter((t) => t.tab === tab && !t.ended).length;
   }
 
+  /**
+   * The app tab a turn (and, later, an MCP call) binds to: `target` is a tab id, or 'auto' for
+   * the only connected one (as /tabs lists them). Refused: none (400 no_tab), only dormant ones
+   * (409 tab_hidden) or more than one connected (409 ambiguous_tab) for 'auto'; for the tab, an
+   * unknown one or one with no project (400 bad_tab), or a dormant one (409 tab_hidden).
+   */
+  resolveTab(target: string): TabTarget | Answer {
+    const reg = this.d.registry;
+    let tab = target;
+    if (target === 'auto') {
+      const listed = reg.tabIds().flatMap((id) => {
+        // The relay first, as for /tabs: a registration whose plugin went is gone before it counts.
+        this.tabInfo?.(id);
+        const w = reg.workspaceOf(id);
+        return w ? [{ id, connected: w.connected }] : [];
+      });
+      const connected = listed.filter((x) => x.connected).map((x) => x.id);
+      if (connected.length > 1) return refuse(409, 'ambiguous_tab', ambiguousTabText(connected));
+      if (!connected.length) return listed.length ? refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT) : refuse(400, 'no_tab', NO_TAB_TEXT);
+      tab = connected[0];
+    }
+    const ws = reg.workspaceOf(tab);
+    if (!ws) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
+    if (!ws.connected) return refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT);
+    // Workspace tools are project data: a registration names its project, or it offers nothing.
+    if (!ws.reg.projectId) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
+    return { tab, projectId: ws.reg.projectId, studyId: ws.reg.studyId };
+  }
+
   /** POST /api/assistant/turns: checked, then started detached (202). */
   async start(body: Record<string, unknown>): Promise<Answer> {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
@@ -624,18 +665,17 @@ export class TurnManager {
     }
     if (key?.set && key.state === 'unreadable') return refuse(400, 'no_key', "The saved key can't be decrypted on this account. Enter it again in Settings → Assistant.");
 
-    // The tab: only a registered, connected one; its project is the turn's.
+    // The tab ('auto': the only connected one): only a registered, connected one; its project is the turn's.
+    let boundTab: string | null = null;
     let projectId = ctxProject;
     let simulationId = ctxStudy;
     if (tab) {
-      const ws = this.d.registry.workspaceOf(tab);
-      if (!ws) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
-      if (!ws.connected) return refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT);
-      // Workspace tools are project data: a registration names its project, or it offers nothing.
-      if (!ws.reg.projectId) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
-      if (ctxProject && ctxProject !== ws.reg.projectId) return refuse(400, 'project_mismatch', "The context's project is not the tab's project.");
-      projectId = ws.reg.projectId || null;
-      simulationId = ctxStudy ?? (ws.reg.studyId || null);
+      const target = this.resolveTab(tab);
+      if ('status' in target) return target;
+      if (ctxProject && ctxProject !== target.projectId) return refuse(400, 'project_mismatch', "The context's project is not the tab's project.");
+      boundTab = target.tab;
+      projectId = target.projectId || null;
+      simulationId = ctxStudy ?? (target.studyId || null);
     }
 
     const cloud = isCloud(settings);
@@ -674,7 +714,7 @@ export class TurnManager {
       id,
       prompt: text,
       conv,
-      tab: tab || null,
+      tab: boundTab,
       projectId: projectId || null,
       simulationId: simulationId || null,
       settings: turnSettings,

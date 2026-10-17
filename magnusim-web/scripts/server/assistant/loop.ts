@@ -5,6 +5,8 @@
  *   starting ─ privacy (cloud turns with a project: allowed, remembered, or a question)
  *   for each step:
  *     the caps (minutes, tokens; then the spend estimate and the day's reservation)
+ *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
+ *       before this request, forgotten answers ask again
  *     model: one request with this step's tools (computed by the host, every step)
  *       refusal → failed · context → failed · max_tokens → capped · no calls → done
  *     tools: each call in order, through the runner (only this step's tools resolve)
@@ -26,7 +28,7 @@
 import { contextBlock, guideBlock, SYSTEM_PROMPT } from './prompt.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
-import { destinationHost, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
+import { destinationHost, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
 import { providerTools, type ToolCtx, type ToolDef, type WorkspaceRegistration } from './registry.ts';
 import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
 import type { Caps, AssistantSettings } from './settings.ts';
@@ -251,13 +253,18 @@ function stoppedNow(t: LoopTurn): boolean {
   return true;
 }
 
-async function requirePrivacy(t: LoopTurn, d: LoopDeps, adapter: ProviderAdapter, project: ProjectInfo): Promise<boolean> {
-  const live = await d.settings();
+/**
+ * Whether the next request may carry the project's data, under the live settings: allowed,
+ * remembered, or a question (Send is remembered). Else the turn ends stopped. `first`: no
+ * request of this turn has gone yet.
+ */
+async function requirePrivacy(t: LoopTurn, d: LoopDeps, adapter: ProviderAdapter, project: ProjectInfo, live: AssistantSettings, first: boolean): Promise<boolean> {
   const destination = destinationOf(t.settings);
+  const nothing = first ? NOTHING_SENT : NOTHING_MORE_SENT;
   const verdict = privacyDecision(live, { cloud: adapter.cloud, destination, projectId: project.id, createdAt: project.created_at });
   if (verdict === 'allow') return true;
   if (verdict === 'deny') {
-    t.end('stopped', 'privacy', NOTHING_SENT);
+    t.end('stopped', 'privacy', nothing);
     return false;
   }
   t.setState('awaiting_consent');
@@ -273,11 +280,16 @@ async function requirePrivacy(t: LoopTurn, d: LoopDeps, adapter: ProviderAdapter
     t.resume();
   }
   if (answer !== 'allow' || t.signal.aborted) {
-    t.end('stopped', 'privacy', NOTHING_SENT);
+    t.end('stopped', 'privacy', nothing);
+    return false;
+  }
+  // "Always deny" chosen while the question was open wins over its Send.
+  if ((await d.settings()).privacy === 'deny') {
+    t.end('stopped', 'privacy', nothing);
     return false;
   }
   await d.remember(project.id, project.created_at, destination);
-  t.setState('starting');
+  if (first) t.setState('starting');
   return true;
 }
 
@@ -321,7 +333,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
   }
   if (adapter.cloud && t.projectId && project) {
-    if (!(await requirePrivacy(t, d, adapter, project))) return;
+    if (!(await requirePrivacy(t, d, adapter, project, await d.settings(), true))) return;
     if (stoppedNow(t)) return;
   }
 
@@ -356,12 +368,18 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   for (let step = 1; ; step += 1) {
     if (stoppedNow(t)) return;
     t.step = step;
-    const caps = effectiveCaps(t.settings.caps, (await d.settings()).caps);
+    const live = await d.settings();
+    const caps = effectiveCaps(t.settings.caps, live.caps);
     t.armMinutes(caps.turn_minutes * 60_000, capText('turn_minutes', caps));
     const hit = stepCap(t, caps);
     if (hit) return t.end('capped', hit.reason, hit.text);
     const full = conv.fullReason();
     if (full && full !== 'context') return t.end('failed', 'conversation_full', FULL_TEXT);
+    // Privacy is read live: a change made during the turn holds from this request on.
+    if (adapter.cloud && project) {
+      if (!(await requirePrivacy(t, d, adapter, project, live, step === 1))) return;
+      if (stoppedNow(t)) return;
+    }
     if (step > 1) syncGuide(t, workspaceNow(), true);
 
     const ctx: ToolCtx = { tab: t.tab, projectId: t.projectId, simulationId: t.simulationId, cloud: adapter.cloud, local: adapter.id === 'openai_compatible' };

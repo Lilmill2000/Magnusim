@@ -9,13 +9,16 @@
  * It talks to the app's own routes over loopback (POST /api/assistant/turns, then the
  * long-poll GET /api/assistant/turns/:id). Questions are asked here (y/n): for a turn
  * with no tab they are asked only here; for a turn bound to an app tab the app shows
- * them too, and either answer counts. Ctrl+C stops the turn (twice: leave at once).
+ * them too, and either answer counts. Only a line typed after a question shows answers it.
+ * `--tab auto` is resolved by the app (the only connected tab). Ctrl+C stops the turn
+ * (twice: leave at once).
  *
  * Exit codes: 0 the turn finished (`done`), 1 anything else, 2 the tab isn't connected.
  */
 import http from 'node:http';
+import { realpathSync } from 'node:fs';
 import readline from 'node:readline';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
 
@@ -130,20 +133,22 @@ function call(port, method, path, body) {
   });
 }
 
-/** Lines typed (or piped) into the terminal, kept until a question takes one. */
+/**
+ * Lines typed into the terminal, each for the question open when it came. A line typed while
+ * no question is open answers nothing, whether stdin is a terminal or a pipe (Git Bash's
+ * mintty, an IDE panel): the model's text can look like a question, and a "y" typed at it
+ * must not answer the real one that opens next.
+ */
 class Lines {
-  constructor(input, interactive) {
-    this.queue = [];
+  constructor(input) {
     this.waiting = null;
     this.closed = false;
-    this.interactive = interactive;
     this.rl = readline.createInterface({ input, terminal: false });
     this.rl.on('line', (line) => {
-      if (this.waiting) {
-        const w = this.waiting;
-        this.waiting = null;
-        w(line);
-      } else this.queue.push(line);
+      if (!this.waiting) return;
+      const w = this.waiting;
+      this.waiting = null;
+      w(line);
     });
     this.rl.on('close', () => {
       this.closed = true;
@@ -155,10 +160,8 @@ class Lines {
     });
   }
 
-  /** The next line (null when the input ended or `signal` aborted). Keys typed before a question don't answer it. */
+  /** The next line typed from now on (null when the input ended or `signal` aborted). */
   next(signal) {
-    if (this.interactive) this.queue.length = 0;
-    if (this.queue.length) return Promise.resolve(this.queue.shift());
     if (this.closed) return Promise.resolve(null);
     return new Promise((resolve) => {
       const onAbort = () => {
@@ -195,34 +198,8 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
   const port = o.port ?? (await defaultPort());
   const api = (method, path, body) => call(port, method, path, body);
 
-  let tab = o.tab;
-  try {
-    if (tab === 'auto') {
-      const r = await api('GET', '/api/assistant/tabs');
-      if (r.status !== 200 || !r.json?.ok) {
-        err(`${r.json?.error || `The app answered HTTP ${r.status}.`}\n`);
-        return 1;
-      }
-      const connected = r.json.tabs.filter((t) => t.connected);
-      if (connected.length === 1) tab = connected[0].tab;
-      else if (connected.length > 1) {
-        err(`More than one app tab offers tools: ${connected.map((t) => t.tab).join(', ')}. Pass --tab <id>.\n`);
-        return 1;
-      } else if (r.json.tabs.length) {
-        err(
-          "That tab isn't connected to the Assistant: its window is in the background or covered, or it was closed. Show the Magnusim window and try again.\n",
-        );
-        return TAB_HIDDEN_EXIT;
-      } else {
-        err('No app tab offers tools to the Assistant. Open a workspace in Magnusim, or leave out --tab.\n');
-        return 1;
-      }
-    }
-  } catch (e) {
-    err(`Nothing answered on port ${port}. Is Magnusim running? (${e?.code || e?.message || e})\n`);
-    return 1;
-  }
-
+  // 'auto' goes as it is: the app picks the only connected tab, or says why it can't (resolveTab).
+  const tab = o.tab;
   let started;
   try {
     started = await api('POST', '/api/assistant/turns', {
@@ -245,7 +222,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
   const conversation = started.json.conversation;
   if (o.json) out(`${JSON.stringify({ type: 'started', turn, conversation })}\n`);
 
-  const lines = new Lines(io.stdin, !!io.stdin.isTTY);
+  const lines = new Lines(io.stdin);
   let atLineStart = true;
   const print = (s) => {
     if (!s) return;
@@ -283,9 +260,11 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
       say(`  ${gate.copy}\n`);
       for (const d of gate.detail || []) say(`  ${d.label}: ${d.value}\n`);
       say(`  y = ${gate.yes}, n = ${gate.no}${tab ? ' (waiting for an answer in the app; you can also answer here)' : ''}\n`);
+      // Listening before the prompt shows, so no line typed at it can be missed.
+      const answering = lines.next(ac.signal);
       if (o.json) err('(y/N) ');
       else print('(y/N) ');
-      const answer = await lines.next(ac.signal);
+      const answer = await answering;
       asking.delete(gate.id);
       if (ac.signal.aborted) return;
       if (!o.json && !atLineStart) print('\n');
@@ -383,9 +362,11 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
   return end?.state === 'done' ? 0 : 1;
 }
 
+// By real paths: through a junction or a directory link argv[1] names the link while
+// import.meta.url names the real file (the test imports this module, so a guard stays).
 const isMain = (() => {
   try {
-    return !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }
