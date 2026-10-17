@@ -193,6 +193,59 @@ describe('the listener', () => {
     }
   });
 
+  it('a socket from any address but 127.0.0.1 (or ::ffff:127.0.0.1) is destroyed before a word is said', async (t) => {
+    const w = await world();
+    try {
+      const before = L.mcpHandshakingForTests();
+      // A real connection from another loopback address reaches the 127.0.0.1 listener, and is cut off.
+      const sock = net.connect({ port: w.port, host: '127.0.0.1', localAddress: '127.0.0.2' });
+      const got = [];
+      let failed = null;
+      sock.on('data', (d) => got.push(d));
+      sock.on('error', (err) => (failed ??= err));
+      const opened = await new Promise((resolve) => {
+        sock.once('connect', () => resolve(true));
+        sock.once('close', () => resolve(false));
+      });
+      if (!opened && ['EADDRNOTAVAIL', 'EINVAL'].includes(failed?.code)) {
+        t.diagnostic(`127.0.0.2 can't be a source address here (${failed.code}); the socket pairs below still check the rule`);
+      } else {
+        assert.equal(opened, true, `connected from 127.0.0.2 (${failed?.code ?? 'no error'})`);
+        await closed(sock);
+        assert.equal(Buffer.concat(got).length, 0, 'no greeting from 127.0.0.2');
+      }
+      // The listener's own check on a socket pair whose remote address is set.
+      const pair = async (remote) => {
+        const side = net.createServer();
+        await new Promise((r) => side.listen(0, '127.0.0.1', r));
+        const accepted = new Promise((r) => side.once('connection', r));
+        const client = net.connect(side.address().port, '127.0.0.1');
+        const bytes = [];
+        client.on('error', () => {});
+        client.on('data', (d) => bytes.push(d));
+        const server = await accepted;
+        side.close();
+        Object.defineProperty(server, 'remoteAddress', { get: () => remote });
+        L.mcpServerForTests().emit('connection', server);
+        return { client, server, bytes };
+      };
+      const far = await pair('192.168.1.5');
+      assert.equal(far.server.destroyed, true, 'destroyed at once');
+      assert.equal(L.mcpHandshakingForTests(), before, 'never a handshake');
+      await closed(far.client);
+      assert.equal(Buffer.concat(far.bytes).length, 0, 'no greeting');
+      const mapped = await pair('::ffff:127.0.0.1');
+      assert.equal(mapped.server.destroyed, false);
+      assert.equal(L.mcpHandshakingForTests(), before + 1);
+      await H.until(() => Buffer.concat(mapped.bytes).includes(10), 5000, 'the greeting');
+      assert.equal(M.lines(Buffer.concat(mapped.bytes))[0].magnusim_mcp, 1);
+      mapped.client.destroy();
+      await H.until(() => L.mcpHandshakingForTests() === before, 5000, 'the waiting socket to close');
+    } finally {
+      await w.close();
+    }
+  });
+
   it('a stale mcp.json whose process is gone is removed before anything binds; the saved port is bound again; a taken one gives a new port, saved', async () => {
     const path = L.mcpInfoPath();
     const first = M.readInfo(path).port;
@@ -757,6 +810,34 @@ describe('tools/call', () => {
     }
   });
 
+  it('cancelling a call that waits in the queue removes it at once: it never runs, and the call behind it runs after the one ahead', async () => {
+    const hold = holdTool('hold');
+    const w = await world({ hostTools: [hold.def] });
+    try {
+      const c = await w.client();
+      const one = c.client.callTool({ name: 'hold', arguments: { n: 1 } });
+      const ac = new AbortController();
+      const two = c.client.callTool({ name: 'hold', arguments: { n: 2 } }, { signal: ac.signal });
+      two.catch(() => {});
+      const three = c.client.callTool({ name: 'hold', arguments: { n: 3 } });
+      const queue = () => w.svc.sessions()[0]?.queue;
+      await H.until(() => hold.calls.length === 1 && queue()?.pending === 3, 5000, 'one call running, two waiting');
+      ac.abort('not this one');
+      await assert.rejects(two);
+      await H.until(() => queue().pending === 2, 5000, 'the cancelled call to leave the queue');
+      assert.equal(hold.calls.length, 1, 'the call ahead still holds');
+      hold.calls[0].release();
+      await H.until(() => hold.calls.length === 2, 5000, 'the call behind');
+      assert.equal(hold.calls[1].input.n, 3, 'the cancelled call never ran');
+      hold.calls[1].release();
+      assert.equal(M.resultJson(await one).data.n, 1);
+      assert.equal(M.resultJson(await three).data.n, 3);
+      assert.equal(hold.calls.length, 2);
+    } finally {
+      await w.close();
+    }
+  });
+
   it('a connection that closes aborts its running call and its queued ones never run', async () => {
     const hold = holdTool('hold');
     const w = await world({ hostTools: [hold.def] });
@@ -851,6 +932,34 @@ describe('tools/call', () => {
     } finally {
       await w.close();
     }
+  });
+});
+
+describe('the call queue', () => {
+  it('a waiting call whose signal aborts leaves at once (removed before the call ahead ends); the call behind still waits its turn', async () => {
+    const q = new B.CallQueue(4);
+    const ran = [];
+    const never = new AbortController().signal;
+    let release1;
+    const p1 = q.run(never, () => new Promise((r) => (release1 = () => (ran.push(1), r(1)))), () => 'removed 1');
+    const ac = new AbortController();
+    const p2 = q.run(ac.signal, async () => (ran.push(2), 2), () => 'removed 2');
+    const p3 = q.run(never, async () => (ran.push(3), 3), () => 'removed 3');
+    assert.equal(q.pending, 3);
+    let settled2 = false;
+    void p2.then(() => (settled2 = true));
+    await H.tick();
+    ac.abort();
+    await H.tick();
+    assert.equal(settled2, true, 'removed while the call ahead still runs');
+    assert.equal(await p2, 'removed 2');
+    assert.equal(q.pending, 2);
+    assert.deepEqual(ran, [], 'nothing else ran');
+    release1();
+    assert.equal(await p1, 1);
+    assert.equal(await p3, 3);
+    assert.deepEqual(ran, [1, 3]);
+    assert.equal(q.pending, 0);
   });
 });
 
