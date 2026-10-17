@@ -1,0 +1,19 @@
+key = "ai-demo"
+name = "Workspace demo"
+version = "1.0.0"
+api_version = "1.8"
+license = "GPL-3.0-or-later"
+description = "Test plugin whose workspace offers tools to the app's assistant (bridge 1.9, unreleased)"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "counter"
+title = "Counter"
+icon = "M4 5h16v14H4z M8 12h8 M12 8v8"
+entry = "workspace/index.html"
+
+[[study_kinds]]
+key = "counter_case"
+title = "Counter case"
+icon = "M5 19V5h14v14z M9 12h6"
+workspace = "counter"

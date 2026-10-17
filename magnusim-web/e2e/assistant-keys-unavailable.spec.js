@@ -1,7 +1,8 @@
 // Settings → Assistant when keys can't be stored on this PC (Foundation spec 3.7): the
 // key protector test switch stands in for Windows blocking the helper that encrypts keys.
 // The step says so, with no key field; a local server is still offered; the test-switch
-// line names the switch; and a key sent anyway is refused with nothing written.
+// line names the switch; a key sent anyway is refused with nothing written; and a cloud
+// turn is refused (400 storage_unavailable) before it starts.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,5 +55,12 @@ test('keys that cannot be stored: no key field, the reason, the local server sti
   for (const name of ['keys.json', 'master.json']) {
     expect(existsSync(join(host.tmp, 'assistant', 'secrets', name)), name).toBe(false);
   }
-  // A cloud turn refused with storage_unavailable comes with the turns route (the agent loop's commit).
+
+  // A cloud turn can't start: no key can be read here, and the turn says why.
+  const cloud = await request.post(`${host.base}/api/assistant/settings`, { data: { provider: 'anthropic' } });
+  expect(cloud.status()).toBe(200);
+  const turn = await request.post(`${host.base}/api/assistant/turns`, { data: { text: 'What is open?' } });
+  expect(turn.status()).toBe(400);
+  expect(await turn.json()).toMatchObject({ ok: false, code: 'storage_unavailable', error: BLOCKED_TEXT });
+  expect((await request.get(`${host.base}/api/test/assistant/state`).then((r) => r.json())).turns).toBe(0);
 });

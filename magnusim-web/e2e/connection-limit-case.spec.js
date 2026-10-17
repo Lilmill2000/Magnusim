@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { e2eTemp, startHost } from './support/host-server.mjs';
-import { serverStream, stager, watchRequests } from './support/link-streams.js';
+import { serverStream, setHidden, stager, watchRequests } from './support/link-streams.js';
 
 // A plugin page in a tab the user leaves keeps hearing the case it follows. A tab lets its one
 // event stream go a few seconds after it is hidden (the browser's six connections to the app
@@ -16,15 +16,6 @@ import { serverStream, stager, watchRequests } from './support/link-streams.js';
 
 const stage = stager('connection-limit-case');
 const JOB = 'fc-mg1abc2d-0a1b2c';
-
-/** The tab is hidden (the user went to another tab or app), or shown again: it says so, as the browser does. */
-function setHidden(tab, hidden) {
-  return tab.evaluate((h) => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
-    Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
-    document.dispatchEvent(new Event('visibilitychange'));
-  }, hidden);
-}
 
 test.describe('a followed plugin case in a tab the user leaves', () => {
   /** @type {any} */

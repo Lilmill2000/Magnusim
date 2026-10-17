@@ -174,6 +174,15 @@ export async function serverChannels(request, host, tabId) {
   return s ? s.channels : 0;
 }
 
+/** The tab is hidden (the user went to another tab or app), or shown again: it says so, as the browser does. */
+export function setHidden(tab, hidden) {
+  return tab.evaluate((h) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+}
+
 /** Whether a plain request from the page gets an answer within `ms` (it is aborted after). */
 export function pageFetchAnswers(page, ms) {
   return page.evaluate(async (wait) => {
