@@ -50,8 +50,10 @@
  *   connection), and its link then counts as silent: not connected (offered to nobody, a
  *   turn on it 409 tab_hidden, its questions unseen) until any POST on it shows the page is
  *   there, or it ends (dormant for the hold). The stall window is the runner's (runner.ts),
- *   reset by progress. Stop sends `abort` and waits up to 2 s for the page's last answer;
- *   the runner giving up on the call (its `released`) frees the tab at once.
+ *   reset by progress: a bare one ({fraction: null}) is the page's sign of life while its
+ *   frame waits on a call to the app (the bridge's onAlive). Stop sends `abort` and waits up
+ *   to 2 s for the page's last answer; the runner giving up on the call (its `released`)
+ *   frees the tab at once.
  * - The page withdraws its tools (tools []) after a call's result; a withdrawal that finds a
  *   call still running gives its result 2 s (then `closed`). A channel or stream that just
  *   ends fails the call at once (`tab_disconnected`): its cleanup can't tell why it ended.

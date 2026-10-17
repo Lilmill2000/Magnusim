@@ -53,8 +53,9 @@
  * them to hooks.assistantTools, which answers the app's verdict (bounded at 5 s: past that the
  * page hears `not_connected` and that list is abandoned). invokeTool runs one call at a time: the
  * event `assistantInvoke`, then the page's assistant.progress (each resets the call's stall
- * window, as do the page's calls in flight) and its assistant.result, checked and capped here
- * (images read to base64 in this page). `assistantAbort` stops it: on Stop (the page's answer is
+ * window, as do the page's calls in flight, which the caller hears as onAlive so that its own
+ * window waits too) and its assistant.result, checked and capped here (images read to base64
+ * in this page). `assistantAbort` stops it: on Stop (the page's answer is
  * awaited for 2 s), on a stall, when a leave begins (`leaving`) and when the channel ends
  * (`closed`, after which hooks.assistantTools(null) withdraws the tools).
  */
@@ -328,6 +329,12 @@ export interface AssistantInvoke {
   timeoutS: number;
   signal: AbortSignal;
   onProgress(fraction: number | null, label: string): void;
+  /**
+   * The call is alive though its page sends no progress: a call of the page (a host read, a
+   * link, a file) started or ended, and every ASSISTANT_ALIVE_MS while one is in flight. Such a
+   * call holds this bridge's stall window open; a caller with a window of its own holds it too.
+   */
+  onAlive?(): void;
 }
 
 export class BridgeError extends Error {
@@ -349,6 +356,11 @@ const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as nu
 export const ASSISTANT_REGISTER_MS = 5000;
 /** How long a stopped tool call waits for the page's last answer. */
 export const ASSISTANT_ABORT_WAIT_MS = 2000;
+/**
+ * While a call of the page is in flight during a tool call, the caller hears the call is alive
+ * this often (onAlive): the server's own stall window (timeoutS + 10 s) waits too.
+ */
+export const ASSISTANT_ALIVE_MS = 5000;
 /** The most tools a page offers, and the most bytes they (and the guide) take as JSON. */
 export const ASSISTANT_TOOLS_MAX = 32;
 export const ASSISTANT_TOOLS_BYTES = 512 * 1024;
@@ -2260,9 +2272,10 @@ export class WorkspaceBridge {
    * `assistantInvoke`, then the page's assistant.result. Refused at once with `closed` (no page),
    * `leaving` (its exit hook runs), `busy` (the frame is covered, or a call runs: one at a time),
    * `no_tool` (no such tool accepted) or `aborted`. It fails `stalled` after `timeoutS` with no
-   * progress and no call of the page in flight (no total limit while progress comes). Aborting
-   * `signal` sends `assistantAbort` and waits ASSISTANT_ABORT_WAIT_MS for the page's result
-   * (a result that came means it finished), else ends `aborted`. A call that ran ends as
+   * progress and no call of the page in flight (no total limit while progress comes); while one
+   * is in flight the caller hears `onAlive` (as it starts and ends, and every ASSISTANT_ALIVE_MS).
+   * Aborting `signal` sends `assistantAbort` and waits ASSISTANT_ABORT_WAIT_MS for the page's
+   * result (a result that came means it finished), else ends `aborted`. A call that ran ends as
    * `stalled`, `leaving` or `closed` saying it may or may not have finished.
    */
   invokeTool(req: AssistantInvoke): Promise<AssistantCallOutcome> {
@@ -2280,6 +2293,7 @@ export class WorkspaceBridge {
       let stopping = false;
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
       let stopTimer: ReturnType<typeof setTimeout> | undefined;
+      let aliveTimer: ReturnType<typeof setTimeout> | undefined;
       const tell = (event: string, data: Record<string, unknown>): boolean => {
         try {
           ch.port.postMessage({ event, data });
@@ -2295,6 +2309,7 @@ export class WorkspaceBridge {
         settled = true;
         clearTimeout(stallTimer);
         clearTimeout(stopTimer);
+        clearTimeout(aliveTimer);
         req.signal.removeEventListener('abort', onAbort);
         this.calls.endInvoke(inv.id);
         resolve(out);
@@ -2310,10 +2325,30 @@ export class WorkspaceBridge {
           end({ ok: false, code: 'stalled', message: `it sent no progress for ${stallS} s and was stopped${hint}; it may or may not have finished` });
         }, stallS * 1000);
       };
+      // A call of the page in flight holds the window above, and the caller's own (the server's):
+      // it hears the call is alive as one starts or ends, and every ASSISTANT_ALIVE_MS meanwhile.
+      const alive = () => {
+        if (settled || stopping) return;
+        try {
+          req.onAlive?.();
+        } catch (e) {
+          this.hooks.log('assistant call: alive listener failed', e);
+        }
+      };
+      const keepAlive = () => {
+        clearTimeout(aliveTimer);
+        aliveTimer = undefined;
+        if (settled || stopping || inv.inFlight === 0) return;
+        aliveTimer = setTimeout(() => {
+          alive();
+          keepAlive();
+        }, ASSISTANT_ALIVE_MS);
+      };
       const onAbort = () => {
         if (settled || stopping) return;
         stopping = true;
         clearTimeout(stallTimer);
+        clearTimeout(aliveTimer);
         tell('assistantAbort', { call: inv.id });
         stopTimer = setTimeout(() => end(stopped()), ASSISTANT_ABORT_WAIT_MS);
       };
@@ -2326,6 +2361,10 @@ export class WorkspaceBridge {
             } catch (e) {
               this.hooks.log('assistant call: progress listener failed', e);
             }
+          }
+          if (a.kind === 'calls') {
+            alive();
+            keepAlive();
           }
           arm();
         },

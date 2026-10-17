@@ -293,7 +293,11 @@ export class ToolRunner {
       if (signal.aborted) return;
       arm();
       const f = typeof fraction === 'number' && Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : null;
-      o.turn?.emit({ type: 'tool_progress', call: call.callId, fraction: f, label: cleanText(label, 120) });
+      const text = cleanText(label, 120);
+      // A bare sign of life (a workspace page waiting on a call to the app, or its progress()
+      // with nothing) holds the window open and has nothing to show: no row in the log.
+      if (f === null && !text) return;
+      o.turn?.emit({ type: 'tool_progress', call: call.callId, fraction: f, label: text });
     };
 
     let outcome: ToolOutcome | null = null;

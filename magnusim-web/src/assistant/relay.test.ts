@@ -667,6 +667,38 @@ describe('tool calls', () => {
     expect(channel().pinned).toBe(false);
   });
 
+  it('the frame waiting on a call to the app (onAlive): a bare progress, never in place of one waiting to go, none after the end', async () => {
+    await registered();
+    channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });
+    const run = running[0];
+    const progress = () => sent.filter((s) => s.path === '/api/assistant/relay/progress' && !s.body.ack).map((s) => s.body);
+    // The server's stall window counts it: it carries the fraction, as null.
+    run.req.onAlive?.();
+    await settle();
+    expect(progress()).toEqual([{ link: LINK_A, call: 'call-1', fraction: null }]);
+    // Within the 4 a second, a labelled progress waits its turn; a sign of life meanwhile does not replace it.
+    run.req.onProgress(0.5, 'half');
+    run.req.onAlive?.();
+    await settle(PROGRESS_INTERVAL_MS);
+    expect(progress()).toEqual([
+      { link: LINK_A, call: 'call-1', fraction: null },
+      { link: LINK_A, call: 'call-1', fraction: 0.5, label: 'half' },
+    ]);
+    // Alone, it waits its turn too.
+    run.req.onAlive?.();
+    await settle(PROGRESS_INTERVAL_MS - 1);
+    expect(progress()).toHaveLength(2);
+    await settle(1);
+    expect(progress().at(-1)).toEqual({ link: LINK_A, call: 'call-1', fraction: null });
+    run.end({ ok: true, result: { text: 'Counter is 2.' } });
+    await settle();
+    run.req.onAlive?.();
+    await settle(PROGRESS_INTERVAL_MS * 2);
+    expect(progress()).toHaveLength(3);
+    take('/api/assistant/relay/result').answer(200, { ok: true });
+    await settle();
+  });
+
   it('abort stops the call in the frame; its end goes back as the result', async () => {
     await registered();
     channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connect, type AssistantTool, type StudyRecord } from '../plugin-sdk/workspace';
 import {
   ASSISTANT_ABORT_WAIT_MS,
+  ASSISTANT_ALIVE_MS,
   ASSISTANT_DATA_BYTES,
   ASSISTANT_IMAGE_BYTES,
   ASSISTANT_REGISTER_MS,
@@ -568,6 +569,62 @@ describe('invokeTool (1.9, unreleased)', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(await outcomeOf(b)).toMatchObject({ ok: false, code: 'stalled' });
     verdict({ available: true, accepted: ['slow_add'], refused: [] });
+    t.end();
+  });
+
+  it('a call of the page in flight: the caller hears onAlive as it starts, every ASSISTANT_ALIVE_MS while it waits and as it ends; never after Stop or the end', async () => {
+    const h = hooks();
+    const answers: Array<(v: boolean) => void> = [];
+    h.confirm.mockImplementation(() => new Promise<boolean>((r) => answers.push(r)));
+    const t = await connected(h);
+    await t.call('assistant.register', { tools: [SLOW] });
+    fakeTimers();
+    const alive = vi.fn();
+    const a = invoke(t, { tool: 'slow_add', timeoutS: 2, onAlive: alive });
+    await vi.advanceTimersByTimeAsync(1000);
+    // Progress is progress, not a call of the page.
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.1, label: 'step 1' });
+    expect(alive).not.toHaveBeenCalled();
+    const asked = t.send('ui.confirm', { title: 'Reset the counter?' });
+    await settle(() => h.confirm.mock.calls.length === 1, 'the question');
+    expect(alive).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(ASSISTANT_ALIVE_MS - 1);
+    expect(alive).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(alive).toHaveBeenCalledTimes(2);
+    // Far past the call's own 2 s window, and the server's (timeoutS + 10 s): alive all along.
+    await vi.advanceTimersByTimeAsync(ASSISTANT_ALIVE_MS * 4);
+    expect(alive).toHaveBeenCalledTimes(6);
+    expect(a.state.out).toBeNull();
+    answers[0](true);
+    await settle(() => !!asked(), 'its answer');
+    expect(alive).toHaveBeenCalledTimes(7);
+    await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'added' } });
+    expect(await outcomeOf(a)).toEqual({ ok: true, result: { text: 'added' } });
+    await vi.advanceTimersByTimeAsync(ASSISTANT_ALIVE_MS * 2);
+    expect(alive).toHaveBeenCalledTimes(7);
+    // Stopped while a call of the page waits: nothing more from it.
+    const later = vi.fn();
+    const b = invoke(t, { tool: 'slow_add', timeoutS: 2, onAlive: later });
+    await settle(() => of(t.events, 'assistantInvoke').length === 2, 'the second invoke');
+    t.send('ui.confirm', { title: 'Again?' });
+    await settle(() => h.confirm.mock.calls.length === 2, 'the second question');
+    expect(later).toHaveBeenCalledTimes(1);
+    b.ctl.abort();
+    await vi.advanceTimersByTimeAsync(ASSISTANT_ALIVE_MS * 2);
+    expect(await outcomeOf(b)).toMatchObject({ ok: false, code: 'aborted' });
+    expect(later).toHaveBeenCalledTimes(1);
+    answers[1](false);
+    // A listener that throws is logged; the call goes on.
+    const c = invoke(t, { tool: 'slow_add', timeoutS: 2, onAlive: () => { throw new Error('boom'); } });
+    await settle(() => of(t.events, 'assistantInvoke').length === 3, 'the third invoke');
+    const third = t.send('ui.confirm', { title: 'Once more?' });
+    await settle(() => h.confirm.mock.calls.length === 3, 'the third question');
+    expect(h.log).toHaveBeenCalledWith('assistant call: alive listener failed', expect.any(Error));
+    answers[2](true);
+    await settle(() => !!third(), 'its answer');
+    await t.call('assistant.result', { call: 'ai-3', ok: true });
+    expect(await outcomeOf(c)).toEqual({ ok: true, result: {} });
     t.end();
   });
 

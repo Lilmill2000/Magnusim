@@ -279,11 +279,14 @@ No test reaches a real model provider or this PC's real Assistant files.
   whole chain in a browser: the fake → the server's turn loop → the page relay on
   the tab's event stream → the workspace bridge → the frame of the test plugin
   `ai-demo` (`python/tests/fixtures/assistant-plugins`) → back.
-  - The plugin's page keeps a counter and offers six tools: read, add, a slow add
+  - The plugin's page keeps a counter and offers seven tools: read, add, a slow add
     (progress every 200 ms until `window.__release()` in its frame, or Stop), reset
-    (destructive), one whose risk the host doesn't know (counted as destructive)
-    and a 64×64 PNG of the counter. It shows `#counter`, `#aborted` and
-    `#ai-available`, and registers again once shown when its tab was hidden at load.
+    (destructive), one whose risk the host doesn't know (counted as destructive),
+    a 64×64 PNG of the counter, and a read of its study from the app with a 1 s
+    window (a test holds that read with `page.route`: the frame's call in flight
+    keeps the tool call alive, on the server too). It shows `#counter`, `#aborted`
+    and `#ai-available`, and registers again once shown when its tab was hidden at
+    load.
   - Its server: `startHost({pluginsFrom, env})` with `MAGNUSIM_TEST_ASSISTANT=1`,
     the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1` (to count and cut a tab's
     stream), a 2 s hold and a 60 s dormant time.

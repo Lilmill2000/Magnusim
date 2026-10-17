@@ -19,9 +19,10 @@
  *
  * Tool calls: `invoke` is acknowledged from the frame's handler before the frame is asked
  * (the server's ack window catches a connection that is only half open), its progress goes
- * on at most 4 times a second, its end as the result; `abort` stops it. When the list goes
- * while a call runs, that call's result is sent first (at most 3 s), then `tools: []`, then
- * the channel closes. A dropped stream ends this page's calls on the server at once, so
+ * on at most 4 times a second (and, while the frame waits on a call to the app, a bare
+ * progress as a sign of life: the server's stall window waits too), its end as the result;
+ * `abort` stops it. When the list goes while a call runs, that call's result is sent first
+ * (at most 3 s), then `tools: []`, then the channel closes. A dropped stream ends this page's calls on the server at once, so
  * they are stopped here too.
  *
  * Questions (`gate`): out of the workspace's full screen, then the app's own confirm dialog
@@ -478,8 +479,11 @@ function resultsFirst(r: Relay): Promise<void> {
   });
 }
 
-/** Progress of one call, at most 4 a second: the newest waits for its turn. */
-function progressSender(link: string, call: string): { push(fraction: number | null, label: string): void; stop(): void } {
+/**
+ * Progress of one call, at most 4 a second: the newest waits for its turn. `alive` is a bare
+ * one (a call of the frame in flight), sent unless a progress waits to go anyway.
+ */
+function progressSender(link: string, call: string): { push(fraction: number | null, label: string): void; alive(): void; stop(): void } {
   let last = Number.NEGATIVE_INFINITY;
   let pending: { fraction: number | null; label: string } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -495,14 +499,19 @@ function progressSender(link: string, call: string): { push(fraction: number | n
     const body: RelayProgressBody = { link, call, fraction: p.fraction, ...(p.label ? { label: p.label } : {}) };
     void post(PROGRESS_PATH, body);
   };
+  const push = (fraction: number | null, label: string) => {
+    if (ended) return;
+    pending = { fraction: typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : null, label: typeof label === 'string' ? label : '' };
+    if (timer) return;
+    const wait = last + PROGRESS_INTERVAL_MS - Date.now();
+    if (wait <= 0) send();
+    else timer = setTimeout(send, wait);
+  };
   return {
-    push(fraction, label) {
-      if (ended) return;
-      pending = { fraction: typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : null, label: typeof label === 'string' ? label : '' };
-      if (timer) return;
-      const wait = last + PROGRESS_INTERVAL_MS - Date.now();
-      if (wait <= 0) send();
-      else timer = setTimeout(send, wait);
+    push,
+    alive() {
+      // A progress that waits to go is a sign of life too, and says more.
+      if (!ended && !pending) push(null, '');
     },
     stop() {
       ended = true;
@@ -531,7 +540,16 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
     let out: AssistantCallOutcome;
     try {
       out = pub
-        ? await pub.invoke({ call, turn: typeof d.turn === 'string' ? d.turn : '', tool: String(d.tool ?? ''), input: d.input, timeoutS, signal: ctl.signal, onProgress: progress.push })
+        ? await pub.invoke({
+            call,
+            turn: typeof d.turn === 'string' ? d.turn : '',
+            tool: String(d.tool ?? ''),
+            input: d.input,
+            timeoutS,
+            signal: ctl.signal,
+            onProgress: progress.push,
+            onAlive: progress.alive,
+          })
         : { ok: false, code: 'closed', message: 'its page is not open' };
     } catch (e) {
       out = { ok: false, code: 'failed', message: e instanceof Error ? e.message : String(e) };

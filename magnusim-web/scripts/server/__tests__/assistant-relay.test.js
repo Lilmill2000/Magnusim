@@ -255,6 +255,9 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual((await s.progress(link, inv.call, { ack: true })).json, { ok: true });
     assert.deepEqual((await s.progress(link, inv.call, { fraction: 2, label: 'Adding\u0007' })).json, { ok: true });
     assert.ok(eventsOf(t).some((e) => e.type === 'tool_progress' && e.fraction === 1 && e.label === 'Adding'), 'clamped and cleaned');
+    // A bare sign of life (the frame waits on a call to the app) holds the window; no row in the log.
+    assert.deepEqual((await s.progress(link, inv.call, { fraction: null })).json, { ok: true });
+    assert.equal(eventsOf(t).filter((e) => e.type === 'tool_progress').length, 1, 'a bare progress adds no row');
     assert.deepEqual((await s.result(link, inv.call, { ok: true, result: { text: 'Now 2', data: { count: 2 } } })).json, { ok: true });
     await settled(t);
     assert.equal(t.state, 'done');

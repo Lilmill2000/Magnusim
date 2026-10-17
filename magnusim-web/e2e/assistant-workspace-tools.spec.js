@@ -1,24 +1,28 @@
 // Workspace tools for the Assistant, end to end (Foundation spec 8.4, 10.3): a scripted model
 // (support/fake-llm.mjs, the first cloud dialect) → the server's turn loop → the page relay on
 // the tab's event stream → the bridge → the plugin's frame → back. The test plugin ai-demo
-// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers six tools:
+// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers seven tools:
 // get_count, add, slow_add (progress every 200 ms until window.__release() in the frame),
-// reset (destructive), mystery (a risk the host does not know) and snap (a 64x64 PNG).
+// reset (destructive), mystery (a risk the host does not know), snap (a 64x64 PNG) and
+// read_study (a 1 s window, waiting on the app's answer to its read of the study).
 //
-// Covered (spec 10.3's thirteen, then two more): the tools come and go with the workspace; the
+// Covered (spec 10.3's thirteen, then three more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
 // (and mystery) asks with Don't focused, Enter answering it, and Stop closes the question; Stop,
 // Back, a reload, a lost event stream and the plugin turned off (then a reconnect: a new link
-// that sends nothing of the dead frame), each during a slow call; a hidden tab kept for the
-// call and the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an
-// image result; a remote viewer; a tab hidden at load; the terminal client
+// that sends nothing of the dead frame), each during a slow call; a call to the app in flight
+// keeping a tool call alive past the server's stall window; a hidden tab kept for the call and
+// the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an image
+// result; a remote viewer; a tab hidden at load; the terminal client
 // (scripts/assistant-run.mjs) on the only connected tab.
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
 // hold is 2 s (MAGNUSIM_TEST_ASSISTANT_HOLD_MS), a dropped link's tools are kept 60 s
 // (MAGNUSIM_TEST_ASSISTANT_DORMANT_MS) so the dormant check is not a race. No test sleeps but
-// the hidden tab's, which must outlast the page's own 3 s grace to show it holds.
+// the hidden tab's, which must outlast the page's own 3 s grace to show it holds, and the held
+// read's, which must outlast the server's stall window (1 s + 10 s, then a 2 s grace) to show
+// that it waits.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -29,7 +33,7 @@ import { expect, test } from './support/stress.js';
 
 const PLUGIN = 'ai-demo';
 const PLUGIN_NAME = 'Workspace demo';
-const TOOLS = ['add', 'get_count', 'mystery', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+const TOOLS = ['add', 'get_count', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
 const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it with get_count; add or slow_add change it; reset sets it to 0.';
 const PROJECT_TITLE = 'Counter project';
 const KEY = 'sk-ant-e2e-workspace-tools-0123456789abcdef';
@@ -161,7 +165,7 @@ async function openCounter(page, request, { sid = study, available = true } = {}
   if (!available) return { frame, handle, tab: tabOf() };
   await expect.poll(tabOf, { message: "the tab's event stream" }).not.toBe('');
   const tab = tabOf();
-  await expect.poll(async () => tabRow(request, tab).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe('true:6');
+  await expect.poll(async () => tabRow(request, tab).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
   return { frame, handle, tab };
 }
 
@@ -216,6 +220,11 @@ function followTurn(request, id) {
         await pull(Math.min(5000, until - Date.now()));
       }
     },
+    /** The events so far (asked now, without waiting for more). */
+    async latest() {
+      if (!ended) await pull(0);
+      return events;
+    },
     /** The turn's summary and events once it ended, within `ms`. */
     async ended(ms = 30_000) {
       const until = Date.now() + ms;
@@ -259,7 +268,7 @@ async function slowRunning(t, w, by) {
 
 // ---------------------------------------------------------------- tests
 
-test('the tools come and go with the workspace: /tabs lists the six, the first request carries them sorted with no limit keyword, Back takes them away', async ({
+test('the tools come and go with the workspace: /tabs lists them all, the first request carries them sorted with no limit keyword, Back takes them away', async ({
   page,
   request,
 }) => {
@@ -273,7 +282,7 @@ test('the tools come and go with the workspace: /tabs lists the six, the first r
     workspace: { project_id: project, plugin: PLUGIN, plugin_name: PLUGIN_NAME, workspace: 'counter', study_id: study },
   });
   expect(typeof row.since).toBe('number');
-  expect((await relayState(request)).links[w.tab]).toMatchObject({ connected: true, tools: 6, pending: 0 });
+  expect((await relayState(request)).links[w.tab]).toMatchObject({ connected: true, tools: TOOLS.length, pending: 0 });
 
   const before = chats().length;
   fake.reply({ text: 'Hello.' });
@@ -444,6 +453,58 @@ test('Stop during a slow tool: its progress shows, the page aborts it, the count
   await expect.poll(async () => (await relayState(request)).links[w.tab].pending).toBe(0);
 });
 
+test("a call to the app in flight keeps a tool call alive past the server's stall window: read_study waits on a held read of its study", async ({ page, request }) => {
+  // About 15 s of it is the wait past the server's window, on top of the usual.
+  test.setTimeout(120_000);
+  const w = await openCounter(page, request);
+  const before = chats().length;
+  // The page's read of the study waits until the test lets it go.
+  let letGo = () => undefined;
+  const held = new Promise((done) => {
+    letGo = done;
+  });
+  let heldAt = 0;
+  const STUDY_READ = /\/api\/plugin-studies\/get\?/;
+  await page.route(STUDY_READ, async (route) => {
+    heldAt ||= Date.now();
+    await held;
+    await route.continue();
+  });
+  // The page's signs of life: bare progress POSTs (no ack, no label).
+  const bare = [];
+  page.on('request', (r) => {
+    if (r.method() !== 'POST' || new URL(r.url()).pathname !== '/api/assistant/relay/progress') return;
+    const body = r.postDataJSON();
+    if (!body.ack && body.label === undefined && body.fraction === null) bare.push(Date.now());
+  });
+  try {
+    fake.reply({ tools: [{ name: `${PLUGIN}__read_study`, input: {} }] }, { text: 'It is Counter 1.' });
+    const t = await startTurn(request, { text: "Read the study's title.", tab: w.tab });
+    const call = await t.waitFor((e) => e.type === 'tool_call' && e.tool === `${PLUGIN}__read_study`, 'the call');
+    await expect.poll(() => heldAt, { message: 'the page reads the study' }).toBeGreaterThan(0);
+    // The tool's own window is 1 s; the server's is 11 s (+10 s), and a stall there then waits
+    // 2 s for the page's last answer before the call fails. Past all that, with the read held:
+    const SERVER_STALL_FAILS_MS = 1000 + 10_000 + 2000;
+    await page.waitForTimeout(Math.max(0, heldAt + SERVER_STALL_FAILS_MS + 2000 - Date.now()));
+    expect(ofType(await t.latest(), 'tool_result'), 'not stalled while its read is held').toEqual([]);
+    expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 1 });
+    expect(bare.length, 'signs of life went to the server').toBeGreaterThanOrEqual(2);
+    // They hold the window and add no row to the turn's log.
+    expect(ofType(t.events, 'tool_progress')).toEqual([]);
+    letGo();
+    const result = await t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the result', 10_000);
+    expect(result).toMatchObject({ ok: true });
+    expect((await t.ended()).turn.state).toBe('done');
+    expect(resultsIn(chats()[before + 1])).toEqual([
+      { tool: `${PLUGIN}__read_study`, ok: true, text: 'The study is Counter 1.', data: { title: 'Counter 1' }, images: [] },
+    ]);
+  } finally {
+    letGo();
+    // A read still held when the test failed may outlive the page: nothing to report then.
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  }
+});
+
 test('Back during a tool call: the call ends "its page closed", the workspace closes with no stall card, the turn goes on to done', async ({ page, request }) => {
   const w = await openCounter(page, request);
   const before = chats().length;
@@ -490,7 +551,7 @@ test('a reload during a tool call fails it as disconnected at once; the reloaded
   await expect(page.frameLocator('#workspace-frame').locator('#ai-available')).toHaveText('yes', { timeout: 60_000 });
   await expect.poll(tabOf).not.toBe('');
   expect(tabOf()).not.toBe(w.tab);
-  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe('true:6');
+  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
 });
 
 test('a lost event stream during a tool call fails it as disconnected; the registration is back after the reconnect, on a new link', async ({ page, request }) => {
@@ -506,8 +567,8 @@ test('a lost event stream during a tool call fails it as disconnected; the regis
   // The page stopped its call too.
   await expect(w.frame.locator('#aborted')).toHaveText('aborted');
   expect((await t.ended()).turn.state).toBe('done');
-  // Reconnected: a new link, the list posted again (a higher rev), connected with its six tools.
-  await expect.poll(async () => tabRow(request, w.tab).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe('true:6');
+  // Reconnected: a new link, the list posted again (a higher rev), connected with all its tools.
+  await expect.poll(async () => tabRow(request, w.tab).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
   expect((await relayState(request)).links[w.tab].rev).toBeGreaterThan(revBefore);
   await expect(w.frame.locator('#counter')).toHaveText('0');
 });
@@ -599,7 +660,7 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
   await page.reload();
   await expect(page.frameLocator('#workspace-frame').locator('#ai-available')).toHaveText('yes', { timeout: 60_000 });
   await expect.poll(tabOf).not.toBe('');
-  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe('true:6');
+  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
 });
 
 test('a hidden tab keeps its stream for a running call and for the hold after the turn, then lets it go: dormant, 409 tab_hidden; shown again, its tools are back', async ({
@@ -638,7 +699,7 @@ test('a hidden tab keeps its stream for a running call and for the hold after th
 
   // Shown again: the stream opens, the relay links and registers again.
   await setHidden(page, false);
-  await expect.poll(async () => tabRow(request, w.tab).then((x) => (x ? `${x.connected}:${x.tools.length}` : 'none')), { timeout: 30_000 }).toBe('true:6');
+  await expect.poll(async () => tabRow(request, w.tab).then((x) => (x ? `${x.connected}:${x.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
 });
 
 test('two tabs: a turn bound to one changes only that one', async ({ page, request, context }) => {
@@ -739,9 +800,9 @@ test('a tab hidden at load: its page hears not_connected and registers again onc
   await setHidden(handle, false);
   await expect(frame.locator('#ai-available')).toHaveText('yes', { timeout: 30_000 });
   await expect.poll(tabOf).not.toBe('');
-  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe('true:6');
+  await expect.poll(async () => tabRow(request, tabOf()).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), { timeout: 30_000 }).toBe(`true:${TOOLS.length}`);
   // One registration, from this page's second list (its first was abandoned at the 5 s bound).
-  expect((await relayState(request)).links[tabOf()]).toMatchObject({ connected: true, tools: 6 });
+  expect((await relayState(request)).links[tabOf()]).toMatchObject({ connected: true, tools: TOOLS.length });
 });
 
 test('the terminal client binds a turn to the only connected tab (--tab auto); its question shows in the app too, and the app\'s answer counts', async ({
