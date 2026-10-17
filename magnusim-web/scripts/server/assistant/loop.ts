@@ -137,6 +137,15 @@ export function capText(reason: CapReason, caps: Caps): string {
   }
 }
 
+/** An overload's resend that no longer fits the money left: the turn ends capped. */
+class ResendCapped extends Error {
+  readonly reason: CapReason;
+  constructor(reason: CapReason) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+
 /** The caps in force: the lower of the turn's snapshot and the live settings. */
 export function effectiveCaps(snapshot: Caps, live: Caps): Caps {
   return {
@@ -380,24 +389,26 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     const ledger = priced ? await d.ledger() : null;
     const turnRoom = caps.turn_usd - t.usd;
     const dayRoom = ledger ? caps.day_usd - (ledger.spentToday() + ledger.reservedToday()) : Number.POSITIVE_INFINITY;
-    const est = estimateStep({
-      provider: adapter.id,
-      model,
-      cloud: adapter.cloud,
-      fallbackTargets: adapter.fallbackTargets(model),
-      newChars: fresh.chars + systemChars,
-      newImages: fresh.images,
-      toolCount: tools.length,
-      firstStep: step === 1,
-      prev,
-      now: d.clock.now(),
-      remainingUsd: priced ? Math.min(turnRoom, dayRoom) : Number.POSITIVE_INFINITY,
-    });
+    const estimate = (remainingUsd: number) =>
+      estimateStep({
+        provider: adapter.id,
+        model,
+        cloud: adapter.cloud,
+        fallbackTargets: adapter.fallbackTargets(model),
+        newChars: fresh.chars + systemChars,
+        newImages: fresh.images,
+        toolCount: tools.length,
+        firstStep: step === 1,
+        prev,
+        now: d.clock.now(),
+        remainingUsd: priced ? remainingUsd : Number.POSITIVE_INFINITY,
+      });
+    let est = estimate(Math.min(turnRoom, dayRoom));
     if (priced && est.capped) {
       const reason: CapReason = turnRoom <= dayRoom ? 'turn_usd' : 'day_usd';
       return t.end('capped', reason, capText(reason, caps));
     }
-    const reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
+    let reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
     if (ledger && !reservation) return t.end('capped', 'day_usd', capText('day_usd', caps));
     if (t.signal.aborted) {
       if (ledger && reservation) await ledger.settle(reservation, 0);
@@ -410,6 +421,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     let out: ProviderResult | null = null;
     let streamed = false;
     let known: Usage | null = null;
+    // An attempt is out (not while waiting to resend after an overload).
+    let inFlight = true;
     // Billed for what was sent: the input known so far (else the estimate) and the output reserved.
     const partialCost = () => {
       const k = known as Usage | null;
@@ -417,6 +430,9 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     };
     // The attempt an overload cut short before the one resend: a streamed one was billed.
     let resentCost = 0;
+    // What of `cost` the day's ledger already has (the cut attempt, settled before the resend).
+    let settled = 0;
+    let capEnd: CapReason | null = null;
     let cost = 0;
     let costEstimated = false;
     try {
@@ -434,7 +450,25 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
             if (priced && (streamed || err.streamed)) resentCost = partialCost();
             streamed = false;
             known = null;
+            inFlight = false;
             t.discard(step);
+          },
+          // The resend is another request: the cut attempt is settled and what is left is
+          // reserved again, so the two together never pass the turn's or the day's limit.
+          resendRequest: async (r) => {
+            if (priced) {
+              if (ledger && reservation) await ledger.settle(reservation, resentCost);
+              reservation = null;
+              settled = resentCost;
+              const turnLeft = caps.turn_usd - t.usd - resentCost;
+              const dayLeft = ledger ? caps.day_usd - (ledger.spentToday() + ledger.reservedToday()) : Number.POSITIVE_INFINITY;
+              est = estimate(Math.min(turnLeft, dayLeft));
+              if (est.capped) throw new ResendCapped(turnLeft <= dayLeft ? 'turn_usd' : 'day_usd');
+              reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
+              if (ledger && !reservation) throw new ResendCapped('day_usd');
+            }
+            inFlight = true;
+            return { ...r, maxOutputTokens: est.maxOut };
           },
           ...(d.resendDelayMs !== undefined ? { delayMs: d.resendDelayMs } : {}),
         },
@@ -453,14 +487,15 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       const aborted = t.signal.aborted || (err instanceof ProviderError && err.code === 'aborted');
       cost = resentCost;
       costEstimated = resentCost > 0;
-      if (priced && (aborted || streamed || (err instanceof ProviderError && err.streamed))) {
+      if (priced && inFlight && (aborted || streamed || (err instanceof ProviderError && err.streamed))) {
         cost += partialCost();
         costEstimated = true;
       }
       if (aborted || streamed) t.discard(step);
-      throw err;
+      if (!(err instanceof ResendCapped)) throw err;
+      capEnd = err.reason;
     } finally {
-      if (ledger && reservation) await ledger.settle(reservation, cost);
+      if (ledger && reservation) await ledger.settle(reservation, cost - settled);
       if (cost > 0 || out) {
         t.usd += cost;
         t.estimated ||= costEstimated;
@@ -468,6 +503,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       }
     }
 
+    if (!out) {
+      // Only an overload whose resend no longer fits the money left gets here.
+      if (stoppedNow(t)) return;
+      const reason = capEnd ?? 'turn_usd';
+      return t.end('capped', reason, capText(reason, caps));
+    }
     t.servedBy = out.servedBy || t.servedBy;
 
     if (out.stop === 'refusal') {

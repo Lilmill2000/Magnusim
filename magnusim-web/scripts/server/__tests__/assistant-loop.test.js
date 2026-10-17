@@ -20,7 +20,7 @@ const h = await import('./assistant-harness.js');
 const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates, checkInvariants, hostTool, until, tick } = h;
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
-const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE } = await import('../assistant/loop.ts');
+const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText } = await import('../assistant/loop.ts');
 const { TURN_LIMITS } = await import('../assistant/turns.ts');
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
@@ -419,6 +419,72 @@ describe('the spend caps', () => {
     for (const u of usage.slice(0, -1)) assert.ok(u.turn_usd < 1, `a request went out after the limit: ${u.turn_usd}`);
     const over = t.usd - 1;
     assert.ok(over <= 0.5 * Math.max(...reserved) + 1e-6, `overshoot ${over} is more than one step's error`);
+  });
+
+  it('an overload resend reserves again from what is left: neither the turn nor the day limit is passed', async () => {
+    for (const caps of [
+      { turn_usd: 1, day_usd: 15 },
+      { turn_usd: 3, day_usd: 1 },
+    ]) {
+      const m = mk({ caps });
+      // The resend's answer uses all but 100 of the tokens it was allowed, as a provider may (and less input than estimated).
+      m.provider.script({ text: 'part', error: 'overloaded', streamed: true }, { text: 'Whole answer.', usage: (req) => ({ input: 100, output: req.maxOutputTokens - 100 }) });
+      const { turn: t } = await startTurn(m, 'x');
+      await settled(t);
+      const what = JSON.stringify(caps);
+      assert.deepEqual([t.state, t.endReason], ['done', 'end_turn'], what);
+      const [first, resend] = m.provider.requests.map((r) => r.req.maxOutputTokens);
+      assert.equal(first, 32_000, what);
+      assert.ok(resend < first, `${what}: the resend may write ${resend} tokens`);
+      assert.ok(t.usd <= 1 + 1e-6, `${what}: spent ${t.usd}`);
+      await m.ledger.load();
+      assert.ok(Math.abs(m.ledger.spentToday() - t.usd) < 1e-6, what);
+      assert.equal(m.ledger.openCount(), 0, what);
+    }
+  });
+
+  it('an overload with too little left for a resend ends capped: nothing more is sent', async () => {
+    for (const [caps, reason] of [
+      [{ turn_usd: 0.65, day_usd: 15 }, 'turn_usd'],
+      [{ turn_usd: 3, day_usd: 0.65 }, 'day_usd'],
+    ]) {
+      const m = mk({ caps });
+      m.provider.script({ text: 'part', error: 'overloaded', streamed: true }, { text: 'never' });
+      const { turn: t } = await startTurn(m, 'x');
+      await settled(t);
+      assert.deepEqual([t.state, t.endReason], ['capped', reason]);
+      assert.equal(t.message, capText(reason, caps));
+      assert.equal(m.provider.requests.length, 1, reason);
+      assert.equal(t.conv.messages.length, 1, 'nothing appended');
+      assert.ok(t.usd > 0 && t.usd <= 0.65 + 1e-6, `${reason}: spent ${t.usd}`);
+      await m.ledger.load();
+      assert.ok(Math.abs(m.ledger.spentToday() - t.usd) < 1e-6);
+      assert.equal(m.ledger.openCount(), 0);
+    }
+  });
+
+  it('Stop while waiting to resend after an overload: the cut attempt is billed once', async () => {
+    const usdOf = async (...steps) => {
+      const o = mk();
+      o.provider.script(...steps);
+      const { turn } = await startTurn(o, 'x');
+      await settled(turn);
+      return turn.usd;
+    };
+    const cut = await usdOf({ text: 'part', error: 'server', streamed: true });
+    const m = mk({ caps: { turn_usd: 1, day_usd: 15 } });
+    m.deps.resendDelayMs = 60_000;
+    m.provider.script({ text: 'part', error: 'overloaded', streamed: true }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => types(t).includes('discard'), 5000, 'the overloaded attempt to be discarded');
+    await m.manager.stop(t.id);
+    await settled(t);
+    assert.equal(t.state, 'stopped');
+    assert.equal(m.provider.requests.length, 1);
+    assert.ok(Math.abs(t.usd - cut) < 1e-9, `spent ${t.usd}, the cut attempt cost ${cut}`);
+    await m.ledger.load();
+    assert.ok(Math.abs(m.ledger.spentToday() - t.usd) < 1e-6);
+    assert.equal(m.ledger.openCount(), 0);
   });
 
   it('two turns at once against a day that fits one request: exactly one is sent', async () => {

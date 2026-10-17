@@ -10,14 +10,21 @@
  * whole answer, and the stored payload is exactly the blocks the API sent: thinking
  * blocks with their signatures and fallback blocks are replayed byte for byte.
  *
- * - Tools are strict, with schemas from emitSchema('anthropic'); tool_choice is auto.
+ * - Tools are strict, with schemas from emitSchema('anthropic'), while the request stays
+ *   within the provider's limits on strict tools (STRICT_LIMITS), in the order offered;
+ *   the rest go without strict (validateInput still checks every input). tool_choice is auto.
  * - Cache breakpoints: the last tool, the last cached system block, and the last block
  *   of the last message.
+ * - An answer that came back empty is never sent back: the API refuses an empty assistant
+ *   message, or an empty text block, before the last message.
  * - Claude Opus 5.5 and Sonnet 5.5 ask for the server-side refusal fallback
- *   (`fallbacks: "default"` with its beta); every attempt is reported with its own model
- *   from `usage.iterations`, so each is priced at its own row. The model that served the
- *   answer is the last `fallback_message` attempt there (a turn the primary never ran in
- *   has no fallback block), else the block's target, else the top-level model.
+ *   (`fallbacks: "default"` with its beta); every billed attempt is reported with its own
+ *   model from `usage.iterations`, so each is priced at its own row (a decline before any
+ *   output is not billed in UNBILLED_BEFORE_OUTPUT's categories). The model that served
+ *   the answer is the last `fallback_message` attempt there (a turn the primary never ran
+ *   in has no fallback block), else the block's target, else the top-level model. After a
+ *   decline mid-answer only the declined partial's text stays before the last fallback
+ *   block: its tool calls never run and, like its thinking, are not sent back.
  * - Effort other than the provider's default goes in `output_config`.
  * - Headers: only the allowlist leaves, the key only as x-api-key, never Authorization.
  */
@@ -68,6 +75,60 @@ type ClientCtor = new (opts: Json) => Client;
 
 const EPHEMERAL = Object.freeze({ type: 'ephemeral' });
 
+/**
+ * Across every strict tool of one request, at most: strict tools, optional parameters and
+ * union-type parameters (https://platform.claude.com/docs/en/build-with-claude/structured-outputs,
+ * read 2026-10-16). Over any of them the request is refused ("Schema is too complex for
+ * compilation").
+ */
+export const STRICT_LIMITS = Object.freeze({ tools: 20, optional: 24, unions: 16 });
+
+/**
+ * Refusal categories whose decline before any output the provider does not bill
+ * (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback, read
+ * 2026-10-16: only bio, frontier_llm and reasoning_extraction are). A null category is not
+ * billed either; any category not named here is, so a new one never makes the spend look
+ * lower than the bill.
+ */
+export const UNBILLED_BEFORE_OUTPUT: ReadonlySet<string> = new Set(['cyber', 'general_harms']);
+
+/** Optional and union-typed parameters of an emitted schema, at every depth. */
+function strictWeight(schema: Json): { optional: number; unions: number } {
+  let optional = 0;
+  let unions = 0;
+  const visit = (s: unknown): void => {
+    if (!s || typeof s !== 'object') return;
+    const node = s as Json;
+    const props = (node.properties && typeof node.properties === 'object' ? node.properties : {}) as Json;
+    const required = new Set(Array.isArray(node.required) ? node.required : []);
+    for (const [name, child] of Object.entries(props)) {
+      if (!required.has(name)) optional += 1;
+      const c = (child ?? {}) as Json;
+      if (Array.isArray(c.type) || Array.isArray(c.anyOf)) unions += 1;
+      visit(child);
+    }
+    visit(node.items);
+    if (Array.isArray(node.anyOf)) node.anyOf.forEach(visit);
+  };
+  visit(schema);
+  return { optional, unions };
+}
+
+/** Which of the tools go strict: in the order offered, each one that still fits STRICT_LIMITS. */
+export function strictFlags(schemas: readonly Json[]): boolean[] {
+  const used = { tools: 0, optional: 0, unions: 0 };
+  return schemas.map((s) => {
+    const w = strictWeight(s);
+    const fits = used.tools + 1 <= STRICT_LIMITS.tools && used.optional + w.optional <= STRICT_LIMITS.optional && used.unions + w.unions <= STRICT_LIMITS.unions;
+    if (fits) {
+      used.tools += 1;
+      used.optional += w.optional;
+      used.unions += w.unions;
+    }
+    return fits;
+  });
+}
+
 /** Every credential and address option, explicit, so the SDK reads none from the environment or a profile. */
 export function anthropicClientOptions(key: string, baseURL: string, fetch: typeof globalThis.fetch, env: NodeJS.ProcessEnv): Json {
   return {
@@ -101,7 +162,8 @@ function userContent(parts: readonly UserPart[]): Json[] {
 }
 
 function assistantContent(m: Extract<Message, { role: 'assistant' }>): Json[] {
-  if (m.raw.provider === 'anthropic' && Array.isArray(m.raw.payload)) return m.raw.payload as Json[];
+  // An empty text block is refused when sent back (the API documents empty end_turn answers).
+  if (m.raw.provider === 'anthropic' && Array.isArray(m.raw.payload)) return (m.raw.payload as Json[]).filter((b) => !(b && b.type === 'text' && !b.text));
   // Never in practice (a conversation keeps its provider): the visible parts, without thinking.
   const out: Json[] = [];
   for (const p of m.parts) {
@@ -120,7 +182,10 @@ export function anthropicBody(req: ProviderRequest): Json {
     if (s.cache) lastCached = i;
   });
   const system = sys.map((s, i): Json => ({ type: 'text', text: s.text, ...(i === lastCached ? { cache_control: EPHEMERAL } : {}) }));
-  const messages = requestMessages(req.messages).map((m): Json =>
+  // An answer with nothing to send back (no content, or only fallback markers) is left out;
+  // the user messages around it are then merged into one.
+  const replayed = req.messages.filter((m) => m.role === 'user' || assistantContent(m).some((b) => b && b.type !== 'fallback'));
+  const messages = requestMessages(replayed).map((m): Json =>
     m.role === 'assistant' ? { role: 'assistant', content: assistantContent(m) } : { role: 'user', content: userContent(m.parts) },
   );
   const last = messages[messages.length - 1];
@@ -131,12 +196,14 @@ export function anthropicBody(req: ProviderRequest): Json {
       messages[messages.length - 1] = { ...last, content };
     }
   }
+  const schemas = req.tools.map((t) => emitSchema('anthropic', t.schema));
+  const strict = strictFlags(schemas);
   const tools = req.tools.map(
     (t, i): Json => ({
       name: t.name,
       description: t.description,
-      input_schema: emitSchema('anthropic', t.schema),
-      strict: true,
+      input_schema: schemas[i],
+      ...(strict[i] ? { strict: true } : {}),
       ...(i === req.tools.length - 1 ? { cache_control: EPHEMERAL } : {}),
     }),
   );
@@ -269,17 +336,22 @@ export class MessageAccumulator {
 
   result(requested: string): ProviderResult {
     if (!this.done) throw new ProviderError('server', `${LABEL} ended the answer early.`, { streamed: this.started });
-    const blocks = this.blocks.filter(Boolean);
+    const all = this.blocks.flatMap((b, index) => (b ? [{ b, index }] : []));
+    // After a decline mid-answer the fallback model went on from the partial's text alone:
+    // whatever else came before the last fallback block (the declined model's tool calls and
+    // thinking) is neither run nor sent back.
+    const boundary = all.map((x) => x.b.type).lastIndexOf('fallback');
+    const kept = all.filter((x, i) => i >= boundary || x.b.type === 'text' || x.b.type === 'fallback');
+    const blocks = kept.map((x) => x.b);
     const parts: AssistantPart[] = [];
-    this.blocks.forEach((b, index) => {
-      if (!b) return;
+    for (const { b, index } of kept) {
       if (b.type === 'text' && typeof b.text === 'string' && b.text) parts.push({ type: 'text', text: b.text });
       else if (b.type === 'thinking' && typeof b.thinking === 'string') parts.push({ type: 'thinking', text: b.thinking });
       else if (b.type === 'tool_use') {
         const err = this.inputErrors.get(index);
         parts.push({ type: 'tool_call', callId: String(b.id), name: String(b.name), input: (b.input as Record<string, unknown>) ?? {}, ...(err ? { inputError: err } : {}) });
       }
-    });
+    }
     const usage = toUsage(this.usage, true);
     const iterations = Array.isArray(this.usage.iterations) ? (this.usage.iterations as Json[]) : [];
     // Who served it: the last fallback attempt in usage.iterations when there is one (a
@@ -290,16 +362,31 @@ export class MessageAccumulator {
       this.announced = true;
       this.onEvent({ kind: 'fallback', from: requested, to: servedBy });
     }
-    const billed = iterations.filter((it) => it && (it.type === 'message' || it.type === 'fallback_message'));
-    const attempts: Attempt[] = billed.length
-      ? billed.map((it, i) => ({
-          model: typeof it.model === 'string' && it.model ? it.model : i === 0 ? requested : servedBy,
-          usage: toUsage(it, true),
-          fallback: it.type === 'fallback_message',
-        }))
-      : [{ model: servedBy, usage, fallback: false }];
     const stop = STOP[String(this.stop)] ?? 'other';
     const details = this.stopDetails ?? {};
+    // The category an attempt declined in: the fallback block it handed over with, or, for
+    // the last one, the refusal's details (undefined: it did not decline, or nobody says why).
+    const declinedIn = (model: string, last: boolean): string | null | undefined => {
+      if (last) {
+        if (stop !== 'refusal' || !this.stopDetails) return undefined;
+        return typeof details.category === 'string' ? details.category : null;
+      }
+      const fb = all.find((x) => x.b.type === 'fallback' && ((x.b.from as Json) ?? {}).model === model);
+      const trigger = (fb?.b.trigger ?? null) as Json | null;
+      if (!trigger || trigger.type !== 'refusal') return undefined;
+      return typeof trigger.category === 'string' ? trigger.category : null;
+    };
+    // A decline before any output is billed only in some categories (UNBILLED_BEFORE_OUTPUT).
+    const billed = (u: Usage, category: string | null | undefined) =>
+      !(u.output === 0 && category !== undefined && (category === null || UNBILLED_BEFORE_OUTPUT.has(category)));
+    const ran = iterations.filter((it) => it && (it.type === 'message' || it.type === 'fallback_message'));
+    const attempts: Attempt[] = [];
+    ran.forEach((it, i) => {
+      const model = typeof it.model === 'string' && it.model ? it.model : i === 0 ? requested : servedBy;
+      const u = toUsage(it, true);
+      if (billed(u, declinedIn(model, i === ran.length - 1))) attempts.push({ model, usage: u, fallback: it.type === 'fallback_message' });
+    });
+    if (!ran.length && billed(usage, declinedIn(servedBy, true))) attempts.push({ model: servedBy, usage, fallback: false });
     return {
       message: { role: 'assistant', parts, raw: { provider: 'anthropic', model: servedBy, payload: blocks } },
       stop,

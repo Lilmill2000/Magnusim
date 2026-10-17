@@ -192,14 +192,16 @@ export interface EstimateInput {
 }
 
 export interface Estimate {
-  /** The reservation: input estimate plus maxOut output tokens. */
+  /** The reservation: input estimate, the fallback attempts' input, and maxOut output tokens. */
   usd: number;
   /** The request's output-token limit. */
   maxOut: number;
   /** The estimated prompt tokens (prefix + fresh). */
   promptTokens: number;
-  /** USD of the input estimate alone. */
+  /** USD of the input estimate alone (one attempt: what an answer cut off is billed for). */
   inputUsd: number;
+  /** USD of the input a refusal fallback may add: one more attempt per fallback target. */
+  fallbackInputUsd: number;
   /** maxOut < MIN_OUT: the turn ends capped before sending. */
   capped: boolean;
   /** The model has no row (priced at the provider's dearest). */
@@ -213,8 +215,11 @@ export interface Estimate {
  * dearest among the model and its refusal-fallback targets. The previous request's
  * prompt is priced as a cache read only if that request used the cache and started
  * under 4 minutes ago (an entry's 5-minute life counts from the start of the request
- * that used it); new text and images are priced as cache writes. The output limit is
- * what the remaining money buys, at most 32,000 (cloud) or 4,096 (local) tokens.
+ * that used it); new text and images are priced as cache writes. A refusal fallback runs
+ * the request again on another model within the same request, and the declined attempt
+ * can be billed too, so each fallback target adds one more input to the reservation. The
+ * output limit is what the remaining money buys, at most 32,000 (cloud) or 4,096 (local)
+ * tokens.
  */
 export function estimateStep(e: EstimateInput): Estimate {
   const fresh =
@@ -225,7 +230,7 @@ export function estimateStep(e: EstimateInput): Estimate {
   const prompt = prefix + fresh;
   const cap = e.cloud ? MAX_OUT_CLOUD : MAX_OUT_LOCAL;
   if (e.provider === 'openai_compatible') {
-    return { usd: 0, maxOut: cap, promptTokens: prompt, inputUsd: 0, capped: false, estimated: false, rates: { ...ZERO } };
+    return { usd: 0, maxOut: cap, promptTokens: prompt, inputUsd: 0, fallbackInputUsd: 0, capped: false, estimated: false, rates: { ...ZERO } };
   }
   const models = [e.model, ...e.fallbackTargets];
   const known = models.map((m) => priceRow(m));
@@ -233,10 +238,20 @@ export function estimateStep(e: EstimateInput): Estimate {
   const rates = maxRates(known.map((r) => (r ? ratesFor(r, prompt) : dearestRates(e.provider, prompt))));
   const cached = !!e.prev && e.prev.cacheUsed && e.now - e.prev.startedAt < CACHE_FRESH_MS;
   const inputUsd = (prefix * (cached ? rates.read : rates.input) + fresh * rates.write5m) / 1e6;
-  const room = e.remainingUsd - inputUsd;
+  const fallbackInputUsd = inputUsd * e.fallbackTargets.length;
+  const room = e.remainingUsd - inputUsd - fallbackInputUsd;
   const affordable = rates.output > 0 ? Math.floor((room / rates.output) * 1e6) : cap;
   const maxOut = Math.max(0, Math.min(cap, affordable));
-  return { usd: inputUsd + (maxOut * rates.output) / 1e6, maxOut, promptTokens: prompt, inputUsd, capped: maxOut < MIN_OUT, estimated, rates };
+  return {
+    usd: inputUsd + fallbackInputUsd + (maxOut * rates.output) / 1e6,
+    maxOut,
+    promptTokens: prompt,
+    inputUsd,
+    fallbackInputUsd,
+    capped: maxOut < MIN_OUT,
+    estimated,
+    rates,
+  };
 }
 
 // ---------------------------------------------------------------- what Settings shows

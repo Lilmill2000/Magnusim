@@ -112,14 +112,16 @@ export const OVERLOAD_RESEND_MS = 2_000;
 /**
  * adapter.send(), sent once more after 2 s when the provider was overloaded (often
  * mid-stream). The partial answer is never kept: `onResend` lets the caller discard
- * what it showed. Any other failure, or a second overload, is thrown.
+ * what it showed. Right before the resend, `resendRequest` may change the request (the
+ * caller reserves its spend again, so a smaller output limit) or throw to send nothing
+ * more. Any other failure, or a second overload, is thrown.
  */
 export async function sendWithOneResend(
   adapter: ProviderAdapter,
   req: ProviderRequest,
   signal: AbortSignal,
   onEvent: (e: StreamEvent) => void,
-  o: { onResend?: (err: ProviderError) => void; delayMs?: number } = {},
+  o: { onResend?: (err: ProviderError) => void; resendRequest?: (req: ProviderRequest) => ProviderRequest | Promise<ProviderRequest>; delayMs?: number } = {},
 ): Promise<ProviderResult> {
   try {
     return await adapter.send(req, signal, onEvent);
@@ -137,6 +139,6 @@ export async function sendWithOneResend(
       };
       signal.addEventListener('abort', onAbort, { once: true });
     });
-    return adapter.send(req, signal, onEvent);
+    return adapter.send(o.resendRequest ? await o.resendRequest(req) : req, signal, onEvent);
   }
 }

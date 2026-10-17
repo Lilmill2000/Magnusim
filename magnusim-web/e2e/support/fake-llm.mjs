@@ -12,8 +12,8 @@
 // dialect's server-sent events. A step:
 //   { text?, chunkMs?, thinking?, tools?: [{name, input} | {name, raw}], rawToolText?,
 //     usage?: {input, output, cacheRead, cacheWrite}, stop?: 'end_turn'|'tool_use'|'max_tokens'|'refusal',
-//     category?, fallback?: '<model id>', fallbackBlock?: false, hold?: '<name>', error?: 'overloaded',
-//     drop?, end?, delayMs? }
+//     category?, fallback?: '<model id>', fallbackBlock?: false, declined?: {thinking?, text?, tools?, output?},
+//     emptyText?, hold?: '<name>', error?: 'overloaded', drop?, end?, delayMs? }
 // `hold` stops after the first chunk until release(name); `error` sends an overload error
 // event there; `drop` destroys the socket there; `end` ends the answer there, cleanly but
 // unfinished; `delayMs` waits before the answer's head.
@@ -27,16 +27,23 @@
 // - strict tools use no `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`,
 //   `maxItems`, `pattern`, `format` or `title`; every object has additionalProperties:
 //   false, and in the Responses dialect every property is required;
+// - Messages: at most 20 strict tools, 24 optional and 16 union-type parameters across all
+//   strict tools of a request ("Schema is too complex for compilation."); no message with
+//   empty content but a final assistant one, and no empty text block;
 // - Responses: a reasoning item carries `encrypted_content` only when `include` asks for
 //   `reasoning.encrypted_content`, and with `store: false` a replayed one without it is
 //   "not found";
 // - Messages: `fallbacks` only with the `server-side-fallback-2026-07-01` beta and only for
 //   claude-opus-5-5 and claude-sonnet-5-5; no forced tool_choice on those; at most 4
 //   cache breakpoints; a key in x-api-key.
-// A `fallback` step answers as the fallback model: a `fallback` block first, the
+// A `fallback` step answers as the fallback model: a `fallback` block first (its trigger
+// names `category`, cyber when the step has none; null is kept), the
 // top-level model set to it, and usage.iterations with the refused primary attempt and a
 // `fallback_message` attempt. With `fallbackBlock: false` it sends no block (a turn the
 // primary never ran and declined in): only usage.iterations says a fallback served it.
+// With `declined` the primary declines mid-answer: its partial (thinking, text, tool calls;
+// `output` tokens, 40 by default) comes first, then the fallback block, then the answer.
+// `emptyText` adds a text block that stays empty (an empty answer, with no other step field).
 // holdModels(name, dialect?) makes the next model list wait until release(name).
 import http from 'node:http';
 
@@ -95,6 +102,29 @@ function strictProblems(schema, path, { allRequired }) {
   }
   if (schema.items) out.push(...strictProblems(schema.items, `${path}.items`, { allRequired }));
   return out;
+}
+
+/** The Messages dialect's limits across every strict tool of one request. */
+const STRICT_LIMITS = { tools: 20, optional: 24, unions: 16 };
+
+/** Optional and union-typed (a list of types, or anyOf) parameters of a schema, at every depth. */
+function strictWeight(schema) {
+  let optional = 0;
+  let unions = 0;
+  const visit = (s) => {
+    if (!s || typeof s !== 'object') return;
+    const props = s.properties && typeof s.properties === 'object' ? s.properties : {};
+    const req = new Set(Array.isArray(s.required) ? s.required : []);
+    for (const [name, sub] of Object.entries(props)) {
+      if (!req.has(name)) optional += 1;
+      if (sub && typeof sub === 'object' && (Array.isArray(sub.type) || Array.isArray(sub.anyOf))) unions += 1;
+      visit(sub);
+    }
+    if (s.items) visit(s.items);
+    if (Array.isArray(s.anyOf)) s.anyOf.forEach(visit);
+  };
+  visit(schema);
+  return { optional, unions };
 }
 
 export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
@@ -164,14 +194,29 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     if (Array.isArray(body.system)) body.system.forEach(countCache);
     for (const m of body.messages) if (Array.isArray(m.content)) m.content.forEach(countCache);
     if (breakpoints > 4) throw new Refusal(`A maximum of 4 blocks with cache_control may be provided. Found ${breakpoints}.`);
+    const strict = { tools: 0, optional: 0, unions: 0 };
     (body.tools || []).forEach((t, i) => {
       if (t.strict) {
         const p = strictProblems(t.input_schema, `tools.${i}.input_schema`, { allRequired: false });
         if (p.length) throw new Refusal(p[0]);
+        const w = strictWeight(t.input_schema);
+        strict.tools += 1;
+        strict.optional += w.optional;
+        strict.unions += w.unions;
       }
     });
+    if (Object.keys(STRICT_LIMITS).some((k) => strict[k] > STRICT_LIMITS[k])) {
+      throw new Refusal(
+        `Schema is too complex for compilation. (${strict.tools} strict tools, ${strict.optional} optional and ${strict.unions} union-type parameters; at most ${STRICT_LIMITS.tools}, ${STRICT_LIMITS.optional} and ${STRICT_LIMITS.unions})`,
+      );
+    }
     body.messages.forEach((m, i) => {
       const content = Array.isArray(m.content) ? m.content : [];
+      const empty = typeof m.content === 'string' ? !m.content : !content.length;
+      if (empty && !(m.role === 'assistant' && i === body.messages.length - 1)) {
+        throw new Refusal(`messages.${i}: all messages must have non-empty content except for the optional final assistant message`);
+      }
+      if (content.some((b) => b && b.type === 'text' && !b.text)) throw new Refusal(`messages.${i}: text content blocks must be non-empty`);
       if (m.role === 'assistant') {
         for (const b of content) {
           if (b.type === 'thinking') {
@@ -291,13 +336,15 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       if (!res.destroyed && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     const id = `msg_fake_${next()}`;
+    const declined = step.fallback && step.declined ? step.declined : null;
     write('message_start', {
       type: 'message_start',
       message: {
         id,
         type: 'message',
         role: 'assistant',
-        model: step.fallback || body.model,
+        // A decline mid-answer comes after the start, which named the requested model.
+        model: declined ? body.model : step.fallback || body.model,
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -313,8 +360,37 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       checked = true;
       return checkpoint(step, res, closed, () => write('error', { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }));
     };
+    if (declined) {
+      // The requested model's partial answer, before it declined.
+      if (typeof declined.thinking === 'string') {
+        const signature = `sig-${next()}`;
+        emitted.thinking.set(signature, canonical({ type: 'thinking', thinking: declined.thinking, signature }));
+        write('content_block_start', { type: 'content_block_start', index, content_block: { type: 'thinking', thinking: '', signature: '' } });
+        write('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking: declined.thinking } });
+        write('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'signature_delta', signature } });
+        write('content_block_stop', { type: 'content_block_stop', index });
+        index += 1;
+      }
+      if (declined.text) {
+        write('content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
+        write('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: declined.text } });
+        write('content_block_stop', { type: 'content_block_stop', index });
+        index += 1;
+      }
+      for (const t of declined.tools || []) {
+        write('content_block_start', { type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_fake_${next()}`, name: t.name, input: {} } });
+        write('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(t.input ?? {}) } });
+        write('content_block_stop', { type: 'content_block_stop', index });
+        index += 1;
+      }
+    }
+    if (step.emptyText) {
+      write('content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
+      write('content_block_stop', { type: 'content_block_stop', index });
+      index += 1;
+    }
     if (step.fallback && step.fallbackBlock !== false) {
-      const block = { type: 'fallback', from: { model: body.model }, to: { model: step.fallback }, trigger: { type: 'refusal', category: step.category ?? 'cyber' } };
+      const block = { type: 'fallback', from: { model: body.model }, to: { model: step.fallback }, trigger: { type: 'refusal', category: 'category' in step ? step.category : 'cyber' } };
       emitted.fallback.add(canonical(block));
       write('content_block_start', { type: 'content_block_start', index, content_block: block });
       write('content_block_stop', { type: 'content_block_stop', index });
@@ -356,7 +432,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     const usage = { input_tokens: u.input, output_tokens: u.output, cache_read_input_tokens: u.cacheRead, cache_creation_input_tokens: u.cacheWrite };
     if (step.fallback) {
       usage.iterations = [
-        { type: 'message', model: body.model, input_tokens: u.input, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+        { type: 'message', model: body.model, input_tokens: u.input, output_tokens: declined ? (declined.output ?? 40) : 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
         { type: 'fallback_message', model: step.fallback, ...usage, cache_creation: null },
       ];
     }

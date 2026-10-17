@@ -232,6 +232,34 @@ describe('the adapters against the fake, in every dialect', () => {
     }
   });
 
+  it('first dialect: an empty answer (no content, or one empty text block) is kept but never sent back, so the conversation goes on', async () => {
+    for (const empty of [{}, { emptyText: true }, { fallback: 'claude-opus-5' }]) {
+      const what = JSON.stringify(empty);
+      fake.reply({ tools: [{ name: 'add', input: { by: 1 } }] }, empty, { text: 'Next answer.' });
+      const first = [userText('add one')];
+      const r1 = await send('anthropic', request('anthropic', first));
+      const history = [...first, r1.message, resultFor(r1)];
+      const r2 = await send('anthropic', request('anthropic', history));
+      assert.deepEqual([r2.stop, r2.message.parts], ['end_turn', []], what);
+      assert.equal(r2.message.raw.payload.length, empty.emptyText || empty.fallback ? 1 : 0, `${what}: stored as it came`);
+      const r3 = await send('anthropic', request('anthropic', [...history, r2.message, userText('and now?')]));
+      assert.equal(r3.stop, 'end_turn', what);
+      const sent = lastChat('anthropic').body.messages;
+      assert.deepEqual(sent.map((m) => m.role), ['user', 'assistant', 'user'], what);
+      assert.deepEqual(sent[2].content.map((b) => b.type), ['tool_result', 'text'], what);
+    }
+    // Self-test: the fake refuses both shapes mid-conversation, as the provider does.
+    for (const content of [[], [{ type: 'text', text: '' }]]) {
+      const res = await fetch(`${fake.base}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'k' },
+        body: JSON.stringify({ model: 'claude-opus-5-5', max_tokens: 10, messages: [{ role: 'user', content: 'x' }, { role: 'assistant', content }, { role: 'user', content: 'y' }] }),
+      });
+      assert.equal(res.status, 400);
+      assert.match((await res.json()).error.message, /non-empty/);
+    }
+  });
+
   it('a tool call with unreadable JSON is kept, with inputError, not lost', async () => {
     for (const provider of PROVIDERS) {
       fake.reply({ tools: [{ name: 'add', raw: '{"by": 2' }] });
@@ -313,6 +341,35 @@ describe('strict schemas', () => {
     }
   });
 
+  it('the first dialect: at most 20 strict tools and 24 optional parameters per request, in the order offered; the rest go without strict', async () => {
+    const tool = (name, schema) => ({ name, description: 'A tool.', schema });
+    const twoOptional = obj({ id: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } }, ['id']);
+    // 25 tools with nothing optional: the first 20 are strict.
+    fake.reply({ text: 'ok' });
+    const r = await send('anthropic', request('anthropic', [userText('x')], { tools: Array.from({ length: 25 }, (_, i) => tool(`t${i}`, obj({}))) }));
+    assert.equal(r.stop, 'end_turn');
+    let body = lastChat('anthropic').body;
+    assert.deepEqual(body.tools.map((t) => t.strict === true), [...Array(20).fill(true), ...Array(5).fill(false)]);
+    assert.deepEqual(body.tools.at(-1).cache_control, { type: 'ephemeral' });
+    // Two optional each: 12 tools use the 24; the 13th goes without, and a later one with none optional still fits.
+    fake.reply({ text: 'ok' });
+    await send('anthropic', request('anthropic', [userText('x')], { tools: [...Array.from({ length: 13 }, (_, i) => tool(`h${i}`, twoOptional)), tool('last', obj({}))] }));
+    body = lastChat('anthropic').body;
+    assert.deepEqual(body.tools.map((t) => t.strict === true), [...Array(12).fill(true), false, true]);
+    // A tool sent without strict has the same schema (validateInput checks its input before it runs).
+    assert.deepEqual(body.tools[12].input_schema, body.tools[0].input_schema);
+    // Self-test: over either limit the fake refuses, as the provider does.
+    for (const tools of [Array.from({ length: 21 }, (_, i) => ({ name: `t${i}`, input_schema: obj({}), strict: true })), Array.from({ length: 13 }, (_, i) => ({ name: `h${i}`, input_schema: twoOptional, strict: true }))]) {
+      const res = await fetch(`${fake.base}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'k' },
+        body: JSON.stringify({ model: 'claude-opus-5-5', max_tokens: 10, messages: [{ role: 'user', content: 'x' }], tools }),
+      });
+      assert.equal(res.status, 400);
+      assert.match((await res.json()).error.message, /^Schema is too complex for compilation\./);
+    }
+  });
+
   it('self-test: a strict tool that leaks a limit keyword gets the fake 400 naming it', async () => {
     const leaked = { type: 'object', properties: { by: { type: 'integer', minimum: 1 } }, required: ['by'], additionalProperties: false };
     const a = await fetch(`${fake.base}/anthropic/v1/messages`, {
@@ -365,7 +422,8 @@ describe('the Responses replay', () => {
 
 describe('the refusal fallback (first cloud dialect)', () => {
   it('a fallback step: the event, each attempt at its own model and price, the block replayed byte for byte', async () => {
-    fake.reply({ fallback: 'claude-opus-5', text: 'Answered by the fallback.', usage: { input: 1000, output: 200 } }, { text: 'Next.' });
+    // bio: a category whose decline before any output is billed.
+    fake.reply({ fallback: 'claude-opus-5', category: 'bio', text: 'Answered by the fallback.', usage: { input: 1000, output: 200 } }, { text: 'Next.' });
     const events = [];
     const first = [userText('please')];
     const r1 = await send('anthropic', request('anthropic', first), { onEvent: (e) => events.push(e) });
@@ -425,6 +483,70 @@ describe('the refusal fallback (first cloud dialect)', () => {
     const res = acc.result('claude-sonnet-5-5');
     assert.deepEqual([res.servedBy, res.message.raw.model], ['claude-sonnet-5', 'claude-sonnet-5']);
     assert.deepEqual(seen.filter((e) => e.kind === 'fallback'), [{ kind: 'fallback', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5' }]);
+  });
+
+  it('a decline before any output is billed only in the categories the provider bills (bio, frontier_llm, reasoning_extraction)', async () => {
+    const served = (1000 * 5 + 200 * 25) / 1e6;
+    const declined = (1000 * 4) / 1e6;
+    // An unknown category is billed: a new one may be, and the spend is never under-counted.
+    for (const [category, billed] of [
+      ['cyber', false],
+      ['general_harms', false],
+      [null, false],
+      ['bio', true],
+      ['frontier_llm', true],
+      ['reasoning_extraction', true],
+      ['some_new_category', true],
+    ]) {
+      fake.reply({ fallback: 'claude-opus-5', category, text: 'Served.', usage: { input: 1000, output: 200 } });
+      const r = await send('anthropic', request('anthropic', [userText('please')]));
+      assert.deepEqual(r.attempts.map((a) => [a.model, a.fallback]), [...(billed ? [['claude-opus-5-5', false]] : []), ['claude-opus-5', true]], String(category));
+      const cost = prices.requestCost('anthropic', r.attempts);
+      assert.ok(Math.abs(cost.usd - (served + (billed ? declined : 0))) < 1e-12, `${category}: ${cost.usd}`);
+      assert.equal(cost.estimated, false);
+    }
+    // The whole request declined before any output (no fallback, or the fallback declined too): the same rule.
+    for (const [category, attempts] of [
+      ['cyber', 0],
+      ['bio', 1],
+    ]) {
+      fake.reply({ stop: 'refusal', category, usage: { input: 1000, output: 0 } });
+      const r = await send('anthropic', request('anthropic', [userText('no')], { model: 'claude-haiku-5-5' }));
+      assert.equal(r.stop, 'refusal');
+      assert.equal(r.attempts.length, attempts, category);
+      fake.reply({ fallback: 'claude-opus-5', category, stop: 'refusal', usage: { input: 1000, output: 0 } });
+      const f = await send('anthropic', request('anthropic', [userText('no')]));
+      assert.equal(f.attempts.length, 2 * attempts, `${category}, fallback declined too`);
+    }
+    // A decline after the answer had begun is billed whatever its category.
+    fake.reply({ fallback: 'claude-opus-5', declined: { text: 'Partly.' }, text: 'Served.', usage: { input: 1000, output: 200 } });
+    const mid = await send('anthropic', request('anthropic', [userText('please')]));
+    assert.deepEqual(mid.attempts.map((a) => [a.model, a.usage.output]), [['claude-opus-5-5', 40], ['claude-opus-5', 200]]);
+  });
+
+  it('a decline mid-answer: the declined partial’s tool calls and thinking are neither run nor sent back; its text stays', async () => {
+    fake.reply(
+      {
+        declined: { thinking: 'Plan: reset.', text: 'Resetting first.', tools: [{ name: 'reset', input: {} }] },
+        fallback: 'claude-opus-5',
+        tools: [{ name: 'get_count', input: {} }],
+        usage: { input: 1000, output: 50 },
+      },
+      { text: 'Done.' },
+    );
+    const events = [];
+    const first = [userText('reset, then read')];
+    const r1 = await send('anthropic', request('anthropic', first), { onEvent: (e) => events.push(e) });
+    assert.equal(r1.stop, 'tool_use');
+    assert.equal(r1.servedBy, 'claude-opus-5');
+    assert.deepEqual(r1.message.parts.map((p) => (p.type === 'tool_call' ? `call:${p.name}` : p.type)), ['text', 'call:get_count']);
+    assert.deepEqual(r1.message.raw.payload.map((b) => b.type), ['text', 'fallback', 'tool_use']);
+    assert.deepEqual(events.filter((e) => e.kind === 'fallback'), [{ kind: 'fallback', from: 'claude-opus-5-5', to: 'claude-opus-5' }]);
+    const r2 = await send('anthropic', request('anthropic', [...first, r1.message, resultFor(r1)]));
+    assert.equal(r2.stop, 'end_turn');
+    const body = lastChat('anthropic').body;
+    assert.deepEqual(body.messages[1].content.map((b) => (b.type === 'tool_use' ? `tool_use:${b.name}` : b.type)), ['text', 'fallback', 'tool_use:get_count']);
+    assert.deepEqual(body.messages[2].content.map((b) => b.type), ['tool_result']);
   });
 
   it('`fallbacks` and its beta only for Opus 5.5 and Sonnet 5.5, never Haiku 5.5 or an unknown id', async () => {
@@ -966,6 +1088,21 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     const u = prices.estimateStep({ ...base, model: 'claude-mystery', remainingUsd: 1 });
     assert.equal(u.estimated, true);
     assert.equal(u.rates.output, 25);
+  });
+
+  it('estimateStep: a fallback-capable request reserves one input for each model that may run (the declined attempt is billed too)', () => {
+    const targets = ['claude-opus-5', 'claude-opus-4-8'];
+    const e = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, remainingUsd: 100 });
+    const input = (1200 * 6.25) / 1e6;
+    assert.ok(Math.abs(e.inputUsd - input) < 1e-12, 'one attempt’s input (what a cut-off answer is billed)');
+    assert.ok(Math.abs(e.fallbackInputUsd - 2 * input) < 1e-12);
+    assert.ok(Math.abs(e.usd - (3 * input + (32_000 * 25) / 1e6)) < 1e-12, String(e.usd));
+    // The output limit is what is left once every attempt's input is reserved.
+    const tight = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, remainingUsd: 0.5 });
+    assert.equal(tight.maxOut, Math.floor(((0.5 - 3 * input) / 25) * 1e6));
+    assert.ok(tight.usd <= 0.5 + 1e-12);
+    const none = prices.estimateStep({ ...base, model: 'claude-haiku-5-5', remainingUsd: 100 });
+    assert.equal(none.fallbackInputUsd, 0);
   });
 
   it('priceInfo for Settings', () => {
