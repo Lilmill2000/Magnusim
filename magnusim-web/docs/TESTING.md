@@ -299,6 +299,33 @@ No test reaches a real model provider or this PC's real Assistant files.
     `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes
     the sandboxed frame's module script a cross-origin request with a preflight that
     fails, and the workspace never starts.
+- **The fake coding agent.** `e2e/support/fake-acp-agent.mjs` is a scripted coding
+  agent: plain Node, no dependencies, speaking the agent protocol (ACP v1, newline
+  JSON-RPC) on stdin and stdout and logging only to stderr. The test process starts its
+  controller, `const fake = await startFakeAcp(options)` from `e2e/support/fake-acp.mjs`,
+  and hands the app (or a node test's own client) `fake.argv`.
+  - `fake.script(...steps)` queues one prompt's steps: say, think, plan; call a tool
+    through the MCP server the session was given (the real bridge, or a test's stand-in);
+    ask permission for one of Magnusim's tools or for its own; report its own tool;
+    `hold` until `fake.release(name)`; crash, exit during a call, ignore cancel, spawn
+    helper processes, switch mode, stop with a reason or answer with an error. The file's
+    header lists every step and option.
+  - `style` imitates how the adapters mark Magnusim's tools: `tool_name_meta` (the tool's
+    name in the tool call's `_meta`), `mcp_call_flag` (a flagged `mcp.magnusim.<tool>`
+    title, and approvals that carry the tool call's id) or `none` (a custom command).
+  - `requireSignIn` refuses `session/new` with -32000 until `fake.signIn()` writes its
+    marker (an `authenticate` writes it too). `fake.argvWith({helpersAtStart: n})` makes it
+    start n helpers before it reads anything.
+  - It records every message it receives and sends, in order: `fake.received()`,
+    `fake.sent()`, `fake.events()` (tool lists, call results, permission outcomes) and
+    `fake.pids()` (itself, its MCP server, its helpers). `fake.waitFor(pred)` waits for a
+    record without sleeping. An answer reaches the client only after the records before
+    it reached the controller.
+  - It answers -32601 to anything it doesn't serve, and asks the client to read a file
+    once per session, to check that Magnusim refuses.
+  - `scripts/server/__tests__/assistant-acp.test.js` checks every message it sends, and
+    every message Magnusim's builders make, against the agent protocol's own JSON Schema
+    (the `@agentclientprotocol/sdk` development dependency, with Ajv 2020).
 
 ## A bundled plugin's own suite
 
