@@ -591,16 +591,19 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     };
   });
   const w = await openCounter(page, request);
-  fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'It was turned off.' });
+  fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] });
   const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
-  // A question of another turn on this tab (the cloud privacy one) stays open across the plugin
+  // A question of another turn on this tab (a destructive tool's) stays open across the plugin
   // going off: the page keeps its assistant channel for it, so the stream drop below is a real
-  // reconnect, with a new link.
-  await postOk(request, '/api/assistant/settings', { privacy: 'ask', forget_consents: true });
-  const asking = await startTurn(request, { text: 'Read the counter.', tab: w.tab });
+  // reconnect, with a new link. (Not a privacy question: privacy is read live, so asking for one
+  // by changing the setting would make the running turn ask again too.)
+  fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] });
+  const asking = await startTurn(request, { text: 'Reset the counter.', tab: w.tab });
   await expect(modal(page)).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText(`Send project "${PROJECT_TITLE}" to Anthropic?`);
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  // The next requests: the slow turn's once its call failed, then the asking one's after its No.
+  fake.reply({ text: 'It was turned off.' }, { text: 'I left it.' });
   const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
   const registerAgain = () => w.handle.evaluate(() => window.__register());
   // Every list this page sends from here on: none may be, until a new page.
@@ -637,7 +640,8 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     await expect(modal(page)).toBeVisible();
     await page.locator('#cf-cancel').click();
     await expect(modal(page)).toBeHidden();
-    expect((await asking.ended()).turn).toMatchObject({ state: 'stopped', end_reason: 'privacy' });
+    expect((await asking.ended()).turn.state).toBe('done');
+    await expect(w.frame.locator('#counter')).toHaveText('0');
     // With nothing of this page left on the server, its channel goes; the frame registering
     // again is refused in the page.
     await expect.poll(assistantChannels, { timeout: 15_000 }).toBe(0);

@@ -24,8 +24,8 @@ export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--tab aut
 
 Runs one Assistant turn in the Magnusim app on this PC and prints what happens: the
 answer, each tool call (→) and its result (✓ or ✗), notes and questions. Questions are
-asked here (y/n). A turn bound to an app tab also shows them in the app; either answer
-counts. Ctrl+C stops the turn.
+asked here (y/n): only a line typed after a question shows answers it. A turn bound to an
+app tab also shows them in the app; either answer counts. Ctrl+C stops the turn.
 
   --port N             the app's port (default: the app's own setting, else 8082)
   --tab auto|<id>      bind the turn to an app tab's workspace (auto: the only connected one)
