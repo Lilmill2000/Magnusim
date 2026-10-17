@@ -8,10 +8,11 @@
 // Covered (spec 10.3's thirteen, then two more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
 // (and mystery) asks with Don't focused, Enter answering it, and Stop closes the question; Stop,
-// Back, a reload, a lost event stream and the plugin turned off, each during a slow call; a
-// hidden tab kept for the call and the hold after it, then dormant (409 tab_hidden) and back
-// when shown; two tabs; an image result; a remote viewer; a tab hidden at load; the terminal
-// client (scripts/assistant-run.mjs) on the only connected tab.
+// Back, a reload, a lost event stream and the plugin turned off (then a reconnect: a new link
+// that sends nothing of the dead frame), each during a slow call; a hidden tab kept for the
+// call and the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an
+// image result; a remote viewer; a tab hidden at load; the terminal client
+// (scripts/assistant-run.mjs) on the only connected tab.
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -102,7 +103,9 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.afterEach(() => {
-  // An answer left queued would answer the next test's request.
+  // An answer left queued: the test's turns did not go as scripted. It fails here, by name;
+  // after a failure Playwright replaces the worker, so the next test starts with a new fake
+  // and a new server, and nothing queued here can answer its requests.
   expect(fake.pending(), 'scripted answers left unused').toBe(0);
 });
 
@@ -467,10 +470,18 @@ test('a reload during a tool call fails it as disconnected at once; the reloaded
   const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   const tabOf = trackTab(page);
+  // The clock runs from the reload to the failed call, with the wait started at the same time:
+  // the old page's stream ends when the new document commits, long before the app loads again.
+  let failedAt = 0;
   const reloadAt = Date.now();
-  await page.reload();
-  const result = await t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the call fails', 10_000);
-  expect(Date.now() - reloadAt, 'within the 10 s ceiling').toBeLessThan(10_000);
+  const [result] = await Promise.all([
+    t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the call fails', 10_000).then((e) => {
+      failedAt = Date.now();
+      return e;
+    }),
+    page.reload({ waitUntil: 'commit' }),
+  ]);
+  expect(failedAt - reloadAt, 'within the 10 s ceiling').toBeLessThan(10_000);
   expect(result).toMatchObject({ ok: false, code: 'tab_disconnected' });
   expect(result.summary).toBe('The page hosting Counter disconnected while the tool ran; it may or may not have finished. Read its state again before retrying.');
   expect((await t.ended()).turn.state).toBe('done');
@@ -500,13 +511,42 @@ test('a lost event stream during a tool call fails it as disconnected; the regis
   await expect(w.frame.locator('#counter')).toHaveText('0');
 });
 
-test('the plugin turned off during a tool call ends it at once; after a reconnect its tools never come back without a new page', async ({ page, request }) => {
+test('the plugin turned off during a tool call ends it at once; its tools never come back without a new page, not on a new link either', async ({ page, request }) => {
+  // Counts the `linked` frames this page gets, a new link of its assistant channel each. The
+  // app's own listener runs in the same dispatch, right after this one: once the test sees the
+  // count move, the app has taken the new link and sent whatever it sends on one.
+  await page.addInitScript(() => {
+    window.__linked = 0;
+    const Real = window.EventSource;
+    if (!Real) return;
+    window.EventSource = class extends Real {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener('linked', () => {
+          window.__linked += 1;
+        });
+      }
+    };
+  });
   const w = await openCounter(page, request);
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'It was turned off.' });
   const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
+  // A question of another turn on this tab (the cloud privacy one) stays open across the plugin
+  // going off: the page keeps its assistant channel for it, so the stream drop below is a real
+  // reconnect, with a new link.
+  await postOk(request, '/api/assistant/settings', { privacy: 'ask', forget_consents: true });
+  const asking = await startTurn(request, { text: 'Read the counter.', tab: w.tab });
+  await expect(modal(page)).toBeVisible();
+  await expect(page.locator('#cf-heading')).toHaveText(`Send project "${PROJECT_TITLE}" to Anthropic?`);
   const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
   const registerAgain = () => w.handle.evaluate(() => window.__register());
+  // Every list this page sends from here on: none may be, until a new page.
+  const listsSent = [];
+  const onRequest = (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/assistant/relay/tools') listsSent.push(r.postDataJSON());
+  };
+  page.on('request', onRequest);
   let off = false;
   try {
     await postOk(request, `/api/plugins/${PLUGIN}/disable`, {});
@@ -515,15 +555,30 @@ test('the plugin turned off during a tool call ends it at once; after a reconnec
     expect(result).toMatchObject({ ok: false, code: 'plugin_off' });
     expect(result.summary).toBe(`${PLUGIN_NAME} was turned off or replaced while the tool ran; it may or may not have finished.`);
     expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 0, tools: 0 });
-    // The page stopped its call too, and with nothing of it left on the server its channel goes.
+    // The page stopped its call too.
     await expect(w.frame.locator('#aborted')).toHaveText('aborted');
     await expect(w.frame.locator('#counter')).toHaveText('0');
     expect((await t.ended()).turn.state).toBe('done');
-    await expect.poll(assistantChannels, { timeout: 15_000 }).toBe(0);
     expect(await tabRow(request, w.tab)).toBeNull();
+    expect(await assistantChannels(), 'kept for the open question').toBe(1);
 
-    // The stream drops and comes back, and the frame registers again: still nothing of it on the server.
-    await postOk(request, '/api/test/event-hub/drop', { tab: w.tab });
+    // The stream drops and comes back: on the new link the page sends nothing of the dead frame,
+    // and the server lists nothing of it.
+    const linked = await page.evaluate(() => window.__linked);
+    expect(linked, 'the page counted its first link').toBeGreaterThanOrEqual(1);
+    expect((await postOk(request, '/api/test/event-hub/drop', { tab: w.tab })).dropped).toBe(1);
+    await page.waitForFunction((n) => window.__linked > n, linked, { polling: 100, timeout: 30_000 });
+    expect((await relayState(request)).links[w.tab]).toMatchObject({ connected: true, pending: 0, tools: 0 });
+    expect(await tabRow(request, w.tab)).toBeNull();
+    expect(listsSent, 'no list sent on the new link').toEqual([]);
+    // The question came back on the new link: still one dialog, answered there.
+    await expect(modal(page)).toBeVisible();
+    await page.locator('#cf-cancel').click();
+    await expect(modal(page)).toBeHidden();
+    expect((await asking.ended()).turn).toMatchObject({ state: 'stopped', end_reason: 'privacy' });
+    // With nothing of this page left on the server, its channel goes; the frame registering
+    // again is refused in the page.
+    await expect.poll(assistantChannels, { timeout: 15_000 }).toBe(0);
     expect(await registerAgain()).toMatchObject({ available: false, reason: 'plugin_off' });
     await expect(w.frame.locator('#ai-available')).toHaveText('no');
     expect(await tabRow(request, w.tab)).toBeNull();
@@ -537,6 +592,8 @@ test('the plugin turned off during a tool call ends it at once; after a reconnec
   // Turned on again: that frame's tools still don't come back; a new page's do.
   expect(await registerAgain()).toMatchObject({ available: false, reason: 'plugin_off' });
   expect(await tabRow(request, w.tab)).toBeNull();
+  expect(listsSent, 'nothing of the dead frame was ever sent again').toEqual([]);
+  page.off('request', onRequest);
   const tabOf = trackTab(page);
   await page.reload();
   await expect(page.frameLocator('#workspace-frame').locator('#ai-available')).toHaveText('yes', { timeout: 60_000 });
