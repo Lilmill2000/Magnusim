@@ -133,18 +133,36 @@ Removing Magnusim's folder does not remove `%APPDATA%\Magnusim`; remove keys in
 Settings before handing the PC to someone else.
 
 Any program and any other account signed in to this PC can call the
-Assistant's requests: the local check proves a request came from this PC, not
-who sent it. Another account can't read the key, but can spend it within the
-limits. The per-turn and per-day spending limits are checked before each step
-of the Assistant's work, so one step can go a little over; two copies of
-Magnusim run by one account share the day's limit and can pass it by up to
-twice.
+Assistant's requests (start a turn, answer its questions, change its settings):
+the local check proves a request came from this PC, not who sent it. Another
+account can't read the key, but can spend it within the limits. The per-turn
+and per-day spending limits are checked before each step of the Assistant's
+work, so one step can go a little over; two copies of Magnusim run by one
+account share the day's limit and can pass it by up to twice.
 
 A plugin's page code that runs inside the app (not a sandboxed workspace frame)
 has the app's own origin. It can start the Assistant, answer its questions,
 replace a key, and read a key while it is typed into Settings. Workspace frames
 cannot reach the app's API. Plugins can't replace the Assistant's Settings
 step. Install only plugins you trust.
+
+A workspace page may offer the Assistant tools of its own while it is open. The
+frame never talks to the Assistant itself: it hands its list to the app's page,
+which passes it on over the tab's event stream, on a channel for this PC only
+whose every request carries an unguessable link. The tools belong to that tab
+and its project, and are offered only to turns started for that tab. The app
+checks each call's input against the limits the tool declared before the page
+sees it, runs one call at a time, caps what comes back, and gives the model the
+descriptions, progress and results only as data. A plugin turned off, replaced
+or reset loses its tools at once, and a call it was running ends. The frame
+never sees the Assistant's questions and can't answer them: they are the app's
+own dialog, outside the frame, with No focused, so Enter or Escape (a key typed
+for the workspace) answers No. A tool whose risk the page doesn't name as one
+the app knows is asked about like one that can't be undone. To keep a turn
+reachable while its window is covered, a tab that ran the Assistant keeps its
+connection to the app for 10 minutes after the last turn, even while hidden;
+then it lets go like any hidden tab, and the Assistant can't reach it until it
+is shown again.
 
 Project data goes to a cloud provider only when the person asks about a project
 and the privacy setting allows it: asked once per project (the default), always,

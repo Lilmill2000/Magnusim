@@ -21,7 +21,9 @@
  *   POST /api/events/unsubscribe {tab, conn, cids}: those channels end.
  *
  * A channel kind is registered by the module whose events it carries (registerChannelKind):
- * `link` (link-routes.ts), `case` (plugin-cases.ts) and `job` (routes.ts). Its open(params,
+ * `link` (link-routes.ts), `case` (plugin-cases.ts), `job` (routes.ts) and `assistant`
+ * (assistant-routes.ts: the page relay's channel {role:'relay'}, by which the Assistant
+ * reaches a tab's open workspace; for this PC only, see assistant/relay.ts). Its open(params,
  * send, done, meta) checks the params as its own route does and answers the refusal, or starts
  * sending and returns its cleanup; done() ends a channel from the server's side (a job that
  * ended), which the page hears as `_closed {c}`.

@@ -231,15 +231,22 @@ No test reaches a real model provider or this PC's real Assistant files.
 - **Other switches.** Each needs `MAGNUSIM_TEST_ASSISTANT=1` and is otherwise
   ignored with a log line: `MAGNUSIM_TEST_ASSISTANT_PROTECTOR=blocked|timeout|slow:<ms>|file`
   sets how keys are encrypted (`file` avoids the Windows helper in node tests).
-  `MAGNUSIM_TEST_ASSISTANT_HOLD_MS=<ms>` shortens how long an app tab stays linked after
-  its last turn (10 minutes otherwise), which is also how long a tab whose link dropped
-  keeps its tools as not connected; `MAGNUSIM_TEST_ASSISTANT_ACK_MS=<ms>` shortens how
-  long the server waits for a page to acknowledge a tool call (10 s otherwise). Both
-  take whole milliseconds from 1 to 3600000, and status reports them as `test_hold_ms`
-  and `test_ack_ms` while in use. The
-  switch itself also registers `GET /api/test/assistant/state` and
-  `POST /api/test/assistant/reset`. `run.bat` and the setup scripts set none of them,
-  and a test checks that.
+  The page relay's three, for browser tests, also need a test home:
+  - `MAGNUSIM_TEST_ASSISTANT_HOLD_MS=<ms>` shortens how long an app tab keeps its
+    link after its last turn (10 minutes otherwise), even while hidden;
+  - `MAGNUSIM_TEST_ASSISTANT_DORMANT_MS=<ms>` sets how long a tab whose link dropped
+    keeps its tools as not connected (the hold otherwise), so a test with a short
+    hold can still look at a dormant tab without racing its end;
+  - `MAGNUSIM_TEST_ASSISTANT_ACK_MS=<ms>` shortens how long the server waits for a
+    page to acknowledge a tool call (10 s otherwise).
+
+  They take whole milliseconds from 1 to 3600000, and status reports them as
+  `test_hold_ms`, `test_dormant_ms` and `test_ack_ms` while in use. The switch
+  itself also registers `GET /api/test/assistant/state` (turns, open questions, each
+  tab's link: connected, dormant, tools, pending call, rev) and
+  `POST /api/test/assistant/reset` (`{files: true}` also removes the test home's
+  files; a reset leaves the tabs' links, so open pages stay linked). `run.bat` and
+  the setup scripts set none of them, and a test checks that.
 - **Home isolation.** The Assistant keeps its keys, settings and spend in
   `MAGNUSIM_ASSISTANT_HOME`, else beside `MAGNUSIM_LOCAL_JSON` (`local.json` →
   `local.assistant/`). Every node test sets both to temp paths before its first app
@@ -248,6 +255,47 @@ No test reaches a real model provider or this PC's real Assistant files.
 - **Node tests** import the fake dynamically (`await import('../../../e2e/support/fake-llm.mjs')`)
   after setting those paths, start it, then set the provider address before the first
   request (the app reads it once).
+- **The node harness.** `scripts/server/__tests__/assistant-harness.js` (not a test
+  itself; imported dynamically after the temp paths are set) holds what the loop,
+  gate, terminal-client and relay tests share:
+  - `FakeClock`: time and timers that move only with `advance(ms)`;
+  - `ScriptedProvider`: a provider adapter whose answers a test scripts, for the
+    turn loop without any HTTP;
+  - `makeManager()`: a turn manager on them, with in-memory settings, a stand-in
+    key store, a real spend ledger in a temp folder and a real tool registry;
+  - `relayServer()`: a server wired as `index.ts` wires one (the event hub and the
+    Assistant's routes), with `page()`, a client that holds a tab's event stream and
+    speaks the relay (open a channel, register, ack, progress, result, a cut from
+    the server's side), and the demo workspace's tools (`demoTools()`).
+- **The terminal client.** `scripts/assistant-run.mjs` runs one turn against a running
+  app and prints it: `node scripts/assistant-run.mjs --port <port> [--tab auto|<id>]
+  [--json] "prompt"`. `--tab auto` binds the turn to the only connected app tab;
+  questions are asked at the terminal (y/n) and, for a tab-bound turn, also in the
+  app, where either answer counts. Exit codes: 0 done, 1 anything else, 2 the tab
+  isn't connected. `assistant-cli.test.js` runs it against the harness, and the
+  workspace tools spec against a browser tab. By hand, point it at a test server
+  started with the switches above, never at the app with this PC's real keys.
+- **The workspace tools spec.** `e2e/assistant-workspace-tools.spec.js` runs the
+  whole chain in a browser: the fake → the server's turn loop → the page relay on
+  the tab's event stream → the workspace bridge → the frame of the test plugin
+  `ai-demo` (`python/tests/fixtures/assistant-plugins`) → back.
+  - The plugin's page keeps a counter and offers six tools: read, add, a slow add
+    (progress every 200 ms until `window.__release()` in its frame, or Stop), reset
+    (destructive), one whose risk the host doesn't know (counted as destructive)
+    and a 64×64 PNG of the counter. It shows `#counter`, `#aborted` and
+    `#ai-available`, and registers again once shown when its tab was hidden at load.
+  - Its server: `startHost({pluginsFrom, env})` with `MAGNUSIM_TEST_ASSISTANT=1`,
+    the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1` (to count and cut a tab's
+    stream), a 2 s hold and a 60 s dormant time.
+  - Turns start with `request.post('/api/assistant/turns', {text, tab})`, the tab
+    being the page's own (its `/api/events?tab=` request) as `/api/assistant/tabs`
+    lists it. The Assistant's questions are the app's own confirm dialog with its
+    No button focused. `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
+    it is hidden or shown, as the browser does.
+  - A remote viewer: add the proxy header to the page's `/api/` requests with
+    `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes
+    the sandboxed frame's module script a cross-origin request with a preflight that
+    fails, and the workspace never starts.
 
 ## A bundled plugin's own suite
 
