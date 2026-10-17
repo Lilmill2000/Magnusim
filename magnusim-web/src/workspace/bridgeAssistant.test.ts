@@ -505,7 +505,8 @@ describe('invokeTool (1.9, unreleased)', () => {
     await vi.advanceTimersByTimeAsync(1999);
     expect(a.state.out).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
-    expect(await outcomeOf(a)).toEqual({ ok: false, code: 'stalled', message: 'it sent no progress for 2 s and was stopped' });
+    // It ran until then: the model is told it may have finished.
+    expect(await outcomeOf(a)).toEqual({ ok: false, code: 'stalled', message: 'it sent no progress for 2 s and was stopped; it may or may not have finished' });
     await settle(() => of(t.events, 'assistantAbort').length === 1, 'the abort');
     expect(of(t.events, 'assistantAbort')[0].data).toEqual({ call: 'ai-1' });
     // In a hidden tab the model is told why it may have stalled.
@@ -513,7 +514,11 @@ describe('invokeTool (1.9, unreleased)', () => {
     const b = invoke(t, { tool: 'slow_add', timeoutS: Number.NaN });
     // No timeoutS from the caller: the tool's own (2 s).
     await vi.advanceTimersByTimeAsync(2000);
-    expect(await outcomeOf(b)).toEqual({ ok: false, code: 'stalled', message: 'it sent no progress for 2 s and was stopped (its tab is in the background)' });
+    expect(await outcomeOf(b)).toEqual({
+      ok: false,
+      code: 'stalled',
+      message: 'it sent no progress for 2 s and was stopped (its tab is in the background); it may or may not have finished',
+    });
     t.end();
   });
 
@@ -658,7 +663,8 @@ describe('a leave and a closed channel end the call (1.9, unreleased)', () => {
     const a = invoke(t);
     await settle(() => of(t.events, 'assistantInvoke').length === 1, 'the invoke');
     void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: () => undefined });
-    expect(await a.p).toEqual({ ok: false, code: 'leaving', message: 'its page is closing: the user is leaving the workspace' });
+    // It ran until the leave: the model is told it may have finished.
+    expect(await a.p).toEqual({ ok: false, code: 'leaving', message: 'its page is closing (the user is leaving the workspace) and it was stopped; it may or may not have finished' });
     await settle(() => of(t.events, 'leave').length === 1, 'the leave');
     expect(t.events.map((e) => e.event)).toEqual(['assistantInvoke', 'assistantAbort', 'leave']);
     expect((await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'late' } })).result).toEqual({ ok: true });
@@ -684,7 +690,8 @@ describe('a leave and a closed channel end the call (1.9, unreleased)', () => {
       return acceptAll(null);
     });
     t.end();
-    expect(await a.p).toEqual({ ok: false, code: 'closed', message: 'its page closed before it finished' });
+    // The server's own words when the page's answer misses its grace: it may have run.
+    expect(await a.p).toEqual({ ok: false, code: 'closed', message: 'its page closed before the tool finished; it may or may not have finished' });
     expect(h.assistantTools).toHaveBeenCalledTimes(3);
     expect(h.assistantTools.mock.calls[2][0]).toBeNull();
     expect(await atNull).toBe('settled');

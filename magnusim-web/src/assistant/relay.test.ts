@@ -731,7 +731,7 @@ describe('tool calls', () => {
     ch.frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 1 }, timeout_s: 30 });
     log.length = 0;
     // The bridge's close(): the call ends `closed`, then hooks.assistantTools(null).
-    running[0].end({ ok: false, code: 'closed', message: 'its page closed before it finished' });
+    running[0].end({ ok: false, code: 'closed', message: 'its page closed before the tool finished; it may or may not have finished' });
     publishWorkspaceTools(SCOPE, 'frame-1', null, invoke);
     await settle(RESULT_BEFORE_UNREGISTER_MS - 1);
     expect(log).toEqual(['result sent']);

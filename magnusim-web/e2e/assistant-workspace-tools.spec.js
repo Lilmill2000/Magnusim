@@ -456,8 +456,9 @@ test('Back during a tool call: the call ends "its page closed", the workspace cl
   expect(turn.state).toBe('done');
   const result = ofType(events, 'tool_result').find((e) => e.call === call.call);
   expect(result).toMatchObject({ ok: false, code: 'closed' });
-  // The page's own end (the host bridge's words, as the page sent it before withdrawing its tools).
-  expect(result.summary).toBe('its page closed before it finished');
+  // The page's own end (the host bridge's words, as the page sent it before withdrawing its tools):
+  // the call ran until then, so like the server's own text it may or may not have finished.
+  expect(result.summary).toBe('its page closed before the tool finished; it may or may not have finished');
   expect(resultsIn(chats()[before + 1])[0]).toMatchObject({ ok: false, error: { code: 'closed' } });
   // No leave card and no error card: the workspace simply closed.
   await expect(page.locator('[data-ws-leave], [data-ws-error]')).toHaveCount(0);

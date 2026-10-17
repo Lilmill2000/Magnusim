@@ -807,7 +807,8 @@ export class WorkspaceCalls {
   /** A leave starts running the page's hook: what happens goes to `run.activity` until it ends. */
   beginLeave(run: { id: string; activity: (a: LeaveActivity) => void; done: (out: LeaveHookOutcome) => void; interactive: boolean }): void {
     // A tool call of the app's assistant stops first: the page is about to close (1.9, unreleased).
-    this.invoke?.cancel('leaving', 'its page is closing: the user is leaving the workspace');
+    // It ran until now, so its page may have done some or all of it.
+    this.invoke?.cancel('leaving', 'its page is closing (the user is leaving the workspace) and it was stopped; it may or may not have finished');
     this.leave = { id: run.id, activity: run.activity, done: run.done, linkError: null, inFlight: 0 };
     this.setInteractive(run.interactive);
     this.note({ kind: 'calls', inFlight: 0 });
@@ -2047,7 +2048,8 @@ export class WorkspaceCalls {
     run?.done({ ok: false, message: 'its page closed before it finished' });
     // A tool call of the app's assistant ends `closed` first, then the page's tools go (1.9, unreleased):
     // a list still waiting for its verdict is abandoned, and the app hears null.
-    this.invoke?.cancel('closed', 'its page closed before it finished');
+    // The same words as the server's when the page's answer misses its grace: it may have run.
+    this.invoke?.cancel('closed', 'its page closed before the tool finished; it may or may not have finished');
     this.invoke = null;
     this.assistantTools = null;
     for (const pub of this.assistantWaiting) {
@@ -2260,7 +2262,8 @@ export class WorkspaceBridge {
    * `no_tool` (no such tool accepted) or `aborted`. It fails `stalled` after `timeoutS` with no
    * progress and no call of the page in flight (no total limit while progress comes). Aborting
    * `signal` sends `assistantAbort` and waits ASSISTANT_ABORT_WAIT_MS for the page's result
-   * (a result that came means it finished), else ends `aborted`.
+   * (a result that came means it finished), else ends `aborted`. A call that ran ends as
+   * `stalled`, `leaving` or `closed` saying it may or may not have finished.
    */
   invokeTool(req: AssistantInvoke): Promise<AssistantCallOutcome> {
     const refuse = (code: string, message: string) => Promise.resolve<AssistantCallOutcome>({ ok: false, code, message });
@@ -2304,7 +2307,7 @@ export class WorkspaceBridge {
         stallTimer = setTimeout(() => {
           const hint = typeof document !== 'undefined' && document.hidden ? ' (its tab is in the background)' : '';
           tell('assistantAbort', { call: inv.id });
-          end({ ok: false, code: 'stalled', message: `it sent no progress for ${stallS} s and was stopped${hint}` });
+          end({ ok: false, code: 'stalled', message: `it sent no progress for ${stallS} s and was stopped${hint}; it may or may not have finished` });
         }, stallS * 1000);
       };
       const onAbort = () => {
