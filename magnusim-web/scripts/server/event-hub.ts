@@ -27,8 +27,10 @@
  * send, done, meta) checks the params as its own route does and answers the refusal, or starts
  * sending and returns its cleanup; done() ends a channel from the server's side (a job that
  * ended), which the page hears as `_closed {c}`.
- *   meta {tab, conn, cid, local}: whose channel it is, and `local` true only when both the
- *        stream and this subscribe came from this PC (a kind for this PC only refuses the rest).
+ *   meta {tab, conn, cid, local, streamReq, req}: whose channel it is, and `local` true only
+ *        when both the stream and this subscribe came from this PC (a kind for this PC only
+ *        refuses the rest); streamReq and req are those two requests, for a kind with its own
+ *        access check (the Assistant's assistantAccess).
  *   send(event, payload) answers false only when the frame can never arrive: the channel
  *        ended, the tab's stream is no longer the one it was opened on, or that stream has
  *        ended. A full socket buffer is not that (the frame waits in it), so it answers true.
@@ -45,7 +47,7 @@
  *        page's EventSource connects again.
  */
 import { randomBytes } from 'node:crypto';
-import type { ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Router } from './router.ts';
 import { isLocalOperator } from './http.ts';
 import { writeSse } from './jobs.ts';
@@ -59,6 +61,10 @@ export interface ChannelMeta {
   readonly conn: string;
   readonly cid: string;
   readonly local: boolean;
+  /** The request that opened the tab's stream (GET /api/events). */
+  readonly streamReq: IncomingMessage;
+  /** This subscribe's request. */
+  readonly req: IncomingMessage;
 }
 export type ChannelOpen = (params: Record<string, unknown>, send: ChannelSend, done: () => void, meta: ChannelMeta) => ChannelOpened;
 
@@ -120,7 +126,7 @@ function dropTab(tabId: string, tab: Tab): void {
 }
 
 /** Open one channel on a tab's stream; its result for the subscribe answer. */
-function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>, local: boolean): Record<string, unknown> {
+function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>, local: boolean, req: IncomingMessage): Record<string, unknown> {
   const s = hub();
   const cid = String(spec.cid || '');
   if (!CID_RE.test(cid)) return { cid, ok: false, status: 400, error: 'invalid channel id' };
@@ -153,7 +159,7 @@ function openChannel(tabId: string, tab: Tab, spec: Record<string, unknown>, loc
     end();
     if (live()) writeSse(tab.res, '_closed', { c: cid });
   };
-  const meta: ChannelMeta = Object.freeze({ tab: tabId, conn: tab.conn, cid, local });
+  const meta: ChannelMeta = Object.freeze({ tab: tabId, conn: tab.conn, cid, local, streamReq: tab.res.req, req });
   let out: ChannelOpened;
   try {
     out = open(params, send, done, meta);
@@ -232,7 +238,7 @@ export function registerEventHubRoutes(router: Router): void {
     if (!list || list.length > MAX_BATCH) return ctx.sendJson(400, { ok: false, error: 'channels must be a list' });
     const local = tab.local && isLocalOperator(ctx.req);
     const results = list.map((spec) =>
-      spec && typeof spec === 'object' ? openChannel(tabId, tab, spec as Record<string, unknown>, local) : { cid: '', ok: false, status: 400, error: 'invalid channel' },
+      spec && typeof spec === 'object' ? openChannel(tabId, tab, spec as Record<string, unknown>, local, ctx.req) : { cid: '', ok: false, status: 400, error: 'invalid channel' },
     );
     ctx.sendJson(200, { ok: true, results });
   });

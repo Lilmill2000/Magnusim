@@ -62,6 +62,9 @@
  *   `unregistered`, synchronously, before the worker answers.
  * - Gates of a turn bound to a tab are shown there (the GateBroker's presenter): sent to its
  *   live link, sent again when its link returns; the broker notes an unseen one after 15 s.
+ * - The relay closing (its server's close) ends the running turns its manager started that
+ *   are bound to a tab, before it lets go of their links: after a Vite restart the new
+ *   server's relay could neither hear them end nor show their questions.
  *
  * The relay's links and registrations belong to the server that made it (as the registry's
  * do); a test reset of the Assistant's state leaves them, so open pages stay linked.
@@ -70,7 +73,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { onPluginEpochBump } from '../../foam-runner.js';
 import { liveRegistryLoaded, mesherEntries, pluginLoaded as livePluginLoaded } from '../../registry-defaults.js';
 import type { ChannelMeta, ChannelOpened, ChannelSend } from '../event-hub.ts';
-import { REMOTE_MESSAGE } from './access.ts';
+import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
 import { realClock, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
@@ -358,7 +361,8 @@ export class Relay {
 
   /** Opens the `assistant` channel of a tab (event-hub.ts's open for that kind). */
   open(params: Record<string, unknown>, send: ChannelSend, done: () => void, meta: ChannelMeta): ChannelOpened {
-    if (!meta.local) return { ok: false, status: 403, error: REMOTE_MESSAGE };
+    // Both the tab's stream and this subscribe, through the Assistant's one access predicate.
+    if (!assistantAccess(meta.streamReq) || !assistantAccess(meta.req)) return { ok: false, status: 403, error: REMOTE_MESSAGE };
     if (params.role !== 'relay') return { ok: false, status: 400, error: "The assistant channel's role must be 'relay'." };
     if (this.closed) return { ok: false, status: 503, error: 'The Assistant is stopping.' };
     // A newer channel of the same tab takes over from an older one still open.
@@ -854,9 +858,11 @@ export class Relay {
     return out;
   }
 
-  /** The server is closing: its timers stop and calls still out fail. */
+  /** The server is closing: its turns bound to a tab end, its timers stop and calls still out fail. */
   shutdown(): void {
     if (this.closed) return;
+    // Their pages hear it while the links last (gate_closed, active).
+    this.turns.shutdownTabTurns();
     this.closed = true;
     this.offBump();
     this.offTurns();

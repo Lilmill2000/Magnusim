@@ -6,7 +6,11 @@
  * Each server that registers the Assistant's routes starts a lifetime, and its close ends
  * only that lifetime. Vite restarts a server inside the same process, and builds the new
  * server before it closes the old one, so the old one's close finds its lifetime
- * superseded and leaves the state (turns, hooks, the master key) to the new server.
+ * superseded and leaves the state (turns, hooks, the master key) to the new server; only
+ * its relay's close ends the turns it started that are bound to an app tab (turns.ts).
+ *
+ * A page's links and its workspace's registrations are not here: they belong to the server
+ * that made them (relay.ts, registry.ts), and a test reset leaves them.
  */
 import { randomBytes } from 'node:crypto';
 import type { SpendLedger } from './ledger.ts';
@@ -19,11 +23,9 @@ const LIFETIME = Symbol.for('magnusim.assistant.lifetime');
 export interface AssistantState {
   /** Changes at every server start (and every test reset). */
   bootId: string;
-  // Filled by the turn, relay and gate modules.
+  // Filled by the turn, conversation and gate modules.
   turns: Map<string, unknown>;
   conversations: Map<string, unknown>;
-  links: Map<string, unknown>;
-  registrations: Map<string, unknown>;
   gates: Map<string, unknown>;
   secrets: {
     /** The unwrapped 32-byte master key, once a key was saved or used. */
@@ -60,8 +62,6 @@ function fresh(): AssistantState {
     bootId: newBootId(),
     turns: new Map(),
     conversations: new Map(),
-    links: new Map(),
-    registrations: new Map(),
     gates: new Map(),
     secrets: { master: null, masterId: null, unwrap: null, store: null },
     settings: { path: null, cache: null, queue: Promise.resolve() },

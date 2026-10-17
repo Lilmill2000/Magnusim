@@ -21,7 +21,7 @@ const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
 const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText } = await import('../assistant/loop.ts');
-const { TURN_LIMITS, TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
+const { TURN_LIMITS, TAB_HIDDEN_TEXT, createTurnManager } = await import('../assistant/turns.ts');
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
 const { createToolRegistry, REQUEST_MAX_TOOLS } = await import('../assistant/registry.ts');
@@ -691,6 +691,24 @@ describe('Stop', () => {
     m.keyChanged('anthropic');
     await settled(t);
     assert.deepEqual([t.state, t.endReason], ['stopped', 'key_changed']);
+  });
+
+  it('one key listener per secret store, however many managers (each server a Vite restart makes has one); a key change still stops every running turn', async () => {
+    const m = mk();
+    const listeners = new Set();
+    const store = { ...m.deps.secrets(), onKeyChanged: (fn) => (listeners.add(fn), () => listeners.delete(fn)) };
+    const deps = { ...m.deps, secrets: () => store };
+    m.provider.script({ text: 'a', hold: 'h' }, { text: 'b', hold: 'h' });
+    const turns = [];
+    for (const manager of [createTurnManager(deps), createTurnManager(deps)]) {
+      const r = await manager.start({ text: 'x' });
+      assert.equal(r.status, 202);
+      turns.push(manager.get(r.body.turn));
+    }
+    assert.equal(listeners.size, 1, 'an old manager is not kept alive by its own listener');
+    for (const fn of listeners) fn('anthropic');
+    for (const t of turns) await settled(t);
+    assert.deepEqual(turns.map((t) => [t.state, t.endReason]), [['stopped', 'key_changed'], ['stopped', 'key_changed']]);
   });
 
   it('shutdown(): every running turn ends failed "server stopped"', async () => {

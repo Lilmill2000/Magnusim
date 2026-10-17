@@ -782,6 +782,13 @@ describe('a server restarted in the same process', () => {
     assert.equal(assistantState().secrets.master, null);
   });
 
+  it('the shared state holds no links or registrations: those are each server’s own (the relay’s and the registry’s), and nothing reads them from it', () => {
+    const st = assistantState();
+    assert.ok(st.turns instanceof Map && st.conversations instanceof Map && st.gates instanceof Map);
+    assert.deepEqual(['links', 'registrations'].filter((k) => k in st), [], 'no field that is always empty');
+    assert.equal(routes.addStatusPart, undefined, 'every status part is in the list; nothing adds one');
+  });
+
   it('a test reset forgets the state, not the running server: its close still drops the master key', async () => {
     const h = routes.registerAssistantRoutes(new Router());
     assert.equal((await post('/api/test/assistant/reset', {})).status, 200);

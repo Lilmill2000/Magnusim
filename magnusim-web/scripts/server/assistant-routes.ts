@@ -25,7 +25,8 @@
  *                                        it can't start; 409 while one runs
  *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}}
  *                                        → 202 {ok, conversation, turn}: the turn runs detached
- *                                        (assistant/turns.ts); 400/404/409/429 with a code
+ *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
+ *                                        an app tab's id, or 'auto' for the only connected one
  *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
  *                                        (a long-poll: waits for an event after `since`)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
@@ -151,7 +152,7 @@ interface StatusSources {
   deps: 'ok' | 'missing';
 }
 
-/** One part of the status. Later parts (packages, providers, models, prices, readiness) are added here. */
+/** One part of the status (STATUS_PARTS lists them all). */
 export type StatusPart = (s: StatusSources) => Record<string, unknown>;
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
@@ -218,11 +219,6 @@ function readiness({ settings: s, store, deps }: StatusSources): { ready: boolea
   }
   if (key.set && key.state === 'unreadable') return no('key_unreadable');
   return { ready: true, ready_reason: null };
-}
-
-/** Adds a part to every status answer (for the commits that bring providers, models and turns). */
-export function addStatusPart(part: StatusPart): void {
-  STATUS_PARTS.push(part);
 }
 
 /** What GET /api/assistant/status answers. Reads files; never runs a helper. */

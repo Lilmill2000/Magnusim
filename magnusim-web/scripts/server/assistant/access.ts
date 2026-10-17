@@ -6,7 +6,9 @@
  * Assistant spends the owner's keys and sends project data out.
  *
  * Every check goes through assistantAccess(req), so a later remote-access login has one
- * place to change. The prefix guard runs in index.ts right after the same-origin check,
+ * place to change: each route (local() and the prefix guard), and the page relay's channel,
+ * for both the tab's stream and the subscribe (relay.ts open). The prefix guard runs in
+ * index.ts right after the same-origin check,
  * on the path the router will match (canonicalPath), so `/api//assistant/key`,
  * `/api/./assistant/key`, `/api/x/../assistant/key` and `/api/%2e%2e/api/assistant/key`
  * are all caught.

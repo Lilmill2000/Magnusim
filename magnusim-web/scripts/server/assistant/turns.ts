@@ -15,7 +15,10 @@
  *   the server goes).
  * - The minutes cap counts active time only: questions waiting for an answer don't count.
  *
- * Turns, conversations and questions live in the Assistant's state on globalThis.
+ * Turns, conversations and questions live in the Assistant's state on globalThis. When Vite
+ * restarts the server in this process, the old server's relay ends the running turns its
+ * manager started that are bound to an app tab (they reach their tab only through that
+ * relay); turns with no tab go on, and the new server serves them.
  */
 import { randomBytes } from 'node:crypto';
 import { alog } from './log.ts';
@@ -525,6 +528,26 @@ const optionalId = (v: unknown): string | null | false => {
   return typeof v === 'string' && ID_RE.test(v) ? v : false;
 };
 
+/** Secret stores whose key changes stop turns: one listener per store in this process, however many managers. */
+const KEY_WATCH = Symbol.for('magnusim.assistant.keyWatch');
+
+function keyWatched(): WeakSet<object> {
+  const g = globalThis as unknown as Record<symbol, WeakSet<object> | undefined>;
+  let w = g[KEY_WATCH];
+  if (!w) {
+    w = new WeakSet();
+    g[KEY_WATCH] = w;
+  }
+  return w;
+}
+
+/** A key saved or removed: the running turns using that provider stop, whichever server started them. */
+function stopTurnsForSlot(slot: KeySlot): void {
+  for (const t of (assistantState().turns as Map<string, Turn>).values()) {
+    if (!t.settled && t.settings.provider === slot) t.stop('key_changed', 'The provider key was changed or removed, so this turn stopped.');
+  }
+}
+
 export class TurnManager {
   readonly gates: GateBroker;
   readonly runner: ToolRunner;
@@ -532,7 +555,8 @@ export class TurnManager {
   readonly registry: Registry;
   readonly clock: Clock;
   private readonly d: TurnManagerDeps;
-  private readonly watched = new WeakSet<object>();
+  /** The turns this manager started (its server's relay reaches their tabs). */
+  private readonly started = new WeakSet<Turn>();
   private readonly turnListeners = new Set<(t: Turn, change: TurnChange) => void>();
   private tabInfo: ((tab: string) => TabInfo | null) | null = null;
 
@@ -725,6 +749,7 @@ export class TurnManager {
     conv.running = id;
     conv.lastUsed = this.clock.now();
     this.turns().set(id, t);
+    this.started.add(t);
     this.turnChanged(t, 'started');
     this.launch(t, secrets);
     return { status: 202, body: { ok: true, conversation: conv.id, turn: id } };
@@ -765,17 +790,19 @@ export class TurnManager {
       });
   }
 
-  /** Key saved or removed: the turns using that provider stop. */
+  /**
+   * Key saved or removed: the turns using that provider stop. One listener per store for the
+   * process (it holds no manager), so a server Vite restarts leaves none behind.
+   */
   private watch(secrets: TurnSecrets): void {
-    if (!secrets.onKeyChanged || this.watched.has(secrets)) return;
-    this.watched.add(secrets);
-    secrets.onKeyChanged((slot) => this.stopForSlot(slot));
+    const watched = keyWatched();
+    if (!secrets.onKeyChanged || watched.has(secrets)) return;
+    watched.add(secrets);
+    secrets.onKeyChanged(stopTurnsForSlot);
   }
 
   stopForSlot(slot: KeySlot): void {
-    for (const t of this.running()) {
-      if (t.settings.provider === slot) t.stop('key_changed', 'The provider key was changed or removed, so this turn stopped.');
-    }
+    stopTurnsForSlot(slot);
   }
 
   /** GET /api/assistant/turns/:id?since&wait_ms (long-poll). */
@@ -848,6 +875,16 @@ export class TurnManager {
   /** The server is stopping: every running turn ends failed now. */
   shutdown(): void {
     for (const t of this.running()) t.shutdown();
+  }
+
+  /**
+   * This server's relay is closing (a Vite restart closes the old server after the new one is
+   * up): the running turns this manager started that are bound to an app tab end now, as at a
+   * server stop. Their tab, its tools and their questions are reachable only through that
+   * relay. Turns with no tab go on; the new server serves them.
+   */
+  shutdownTabTurns(): void {
+    for (const t of this.running()) if (t.tab && this.started.has(t)) t.shutdown();
   }
 }
 

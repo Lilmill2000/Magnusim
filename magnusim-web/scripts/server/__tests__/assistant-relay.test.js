@@ -103,6 +103,25 @@ describe('the channel', { timeout: 30_000 }, () => {
     assert.equal((await s.tabs()).length, 1, 'the remote withdrawal changed nothing');
   });
 
+  it('the channel asks assistantAccess(), the one access predicate (a later remote login changes only it), of both the stream and the subscribe', async () => {
+    const { s } = await setup();
+    const req = (headers = {}) => ({ headers: { host: '127.0.0.1:8082', ...headers }, socket: { remoteAddress: '127.0.0.1' } });
+    const open = (streamReq, subscribeReq) =>
+      s.relay.open({ role: 'relay' }, () => true, () => {}, Object.freeze({ tab: 'tab-access-check', conn: 'c0', cid: 'assistant:1', local: true, streamReq, req: subscribeReq }));
+    // The hub's own flag says this PC; the requests themselves came through a proxy.
+    for (const [stream, subscribe] of [
+      [req({ 'x-forwarded-for': '203.0.113.9' }), req()],
+      [req(), req({ 'x-forwarded-for': '203.0.113.9' })],
+      [req({ host: 'magnusim.example.org' }), req()],
+    ]) {
+      const r = open(stream, subscribe);
+      assert.deepEqual([r.ok, r.status], [false, 403], JSON.stringify([stream.headers, subscribe.headers]));
+    }
+    const r = open(req(), req());
+    assert.equal(r.ok, true);
+    r.cleanup();
+  });
+
   it('bodies it can’t read: 400; JSON only (415); over the body limits 413', async () => {
     const { s } = await setup();
     const page = await s.page();
@@ -626,6 +645,39 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
     assert.equal((await s.tabs()).length, 1);
     m.clock.advance(1);
     assert.deepEqual(await s.tabs(), []);
+  });
+
+  it("a server restarted in the same process (Vite: the new one first, then the old one closes): a turn bound to a tab ends with the old server's relay, its question withdrawn, and the tab's new link hears none run; a turn with no tab goes on", async () => {
+    const m = makeManager({ dir: ROOT, provider: 'anthropic', projects: PROJECTS });
+    const A = await relayServer(m);
+    servers.push(A);
+    const { page } = await linkedPage(A);
+    const tab = page.tab;
+    // Bound to the tab: it waits at its privacy question, shown in the tab.
+    const bound = await A.post('/api/assistant/turns', { text: 'Hi', tab });
+    assert.equal(bound.status, 202, JSON.stringify(bound.json));
+    assert.equal((await page.frame('gate')).gate.kind, 'privacy');
+    // With no tab: it waits in the provider.
+    m.provider.script({ text: 'Still here.', hold: 'h' });
+    const free = await A.post('/api/assistant/turns', { text: 'Status?' });
+    assert.equal(free.status, 202, JSON.stringify(free.json));
+    await m.provider.reached('h');
+    const B = await relayServer(m);
+    servers.push(B);
+    await A.close();
+    const t = B.handle.turns.get(bound.json.turn);
+    assert.deepEqual([t.state, t.endReason, t.message], ['failed', 'shutdown', 'The server stopped.']);
+    assert.deepEqual(t.summary().open_gates, [], 'its question is withdrawn, not left for 10 minutes');
+    assert.deepEqual(eventsOf(t).filter((e) => e.type === 'gate_closed').map((e) => [e.answer, e.by]), [['deny', 'stop']]);
+    const again = await B.page(tab);
+    await again.open();
+    assert.deepEqual(await again.frame('active'), { turns: 0, hold_until: null }, 'the new link: none run, so the page lets its channel go');
+    // The turn with no tab is the new server's now: its long-poll, and its end.
+    const other = B.handle.turns.get(free.json.turn);
+    assert.equal(other.ended, false);
+    m.provider.release('h');
+    await settled(other);
+    assert.equal((await B.get(`/api/assistant/turns/${free.json.turn}`)).json.turn.state, 'done');
   });
 
   it('the server stopping: a call still out fails, and no channel opens any more', async () => {

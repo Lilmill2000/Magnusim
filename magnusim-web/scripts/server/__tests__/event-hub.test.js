@@ -354,14 +354,17 @@ describe('one event stream per tab', () => {
 describe("what a channel knows: its tab, and whether it is this PC's", { timeout: 30_000 }, () => {
   const subscribe = (tab, conn, cids) => post('/api/events/subscribe', { tab, conn, channels: cids.map((cid) => ({ cid, kind: 'probe', params: { n: cid } })) });
 
-  it('open gets meta {tab, conn, cid, local}: local for a stream and a subscribe from this PC', async () => {
+  it('open gets meta {tab, conn, cid, local, streamReq, req}: local for a stream and a subscribe from this PC; the two requests', async () => {
     const tab = newTab();
     const s = openStream(tab);
     await s.ready;
     const r = await subscribe(tab, s.conn, ['probe:1', 'probe:2']);
     assert.ok(r.body.results.every((x) => x.ok), JSON.stringify(r.body));
     const p = probeOf(tab, 'probe:2');
-    assert.deepEqual({ ...p.meta }, { tab, conn: s.conn, cid: 'probe:2', local: true });
+    const { streamReq, req, ...rest } = p.meta;
+    assert.deepEqual(rest, { tab, conn: s.conn, cid: 'probe:2', local: true });
+    assert.deepEqual([streamReq.method, streamReq.url], ['GET', `/api/events?tab=${tab}`]);
+    assert.deepEqual([req.method, req.url], ['POST', '/api/events/subscribe']);
     assert.deepEqual(p.params, { n: 'probe:2' });
     assert.equal(Object.isFrozen(p.meta), true);
     assert.equal(probeOf(tab, 'probe:1').meta.cid, 'probe:1');
