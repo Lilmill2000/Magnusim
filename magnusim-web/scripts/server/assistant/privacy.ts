@@ -43,6 +43,13 @@ export const NOTHING_SENT = 'Nothing was sent.';
 /** A turn that already sent requests, ended by privacy before its next one. */
 export const NOTHING_MORE_SENT = 'Nothing more was sent.';
 
+/** The "Never send project data" refusal, worded by where the data would go (as the question is). */
+export function privacyDeniedText(provider: ProviderId, host: string): string {
+  if (provider !== 'openai_compatible') return PRIVACY_DENIED_TEXT;
+  // The person chose a local server: theirs on another computer is not "a cloud provider".
+  return `Settings → Assistant is set to never send project data off this PC, and the server at ${host} isn't on this PC. Ask from Home, use a server on this PC, or change the setting.`;
+}
+
 export interface PrivacyInput {
   /** The provider sends data off this PC. */
   cloud: boolean;

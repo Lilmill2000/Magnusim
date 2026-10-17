@@ -26,7 +26,7 @@ import { redact } from './redact.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type TurnSettings, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, type Clock, type GateEvent, type GatePresenter, type GateView } from './gates.ts';
-import { PRIVACY_DENIED_TEXT, type ProjectInfo } from './privacy.ts';
+import { destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
 import type { Registry } from './registry.ts';
 import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
 import { cleanText } from './sanitize.ts';
@@ -703,7 +703,9 @@ export class TurnManager {
     }
 
     const cloud = isCloud(settings);
-    if (cloud && projectId && settings.privacy === 'deny') return refuse(400, 'privacy_denied', PRIVACY_DENIED_TEXT);
+    if (cloud && projectId && settings.privacy === 'deny') {
+      return refuse(400, 'privacy_denied', privacyDeniedText(provider, destinationHost(provider, settings.base_url)));
+    }
     if (provider !== 'openai_compatible') {
       const ledger = await this.d.ledger();
       if (ledger.spentToday() + ledger.reservedToday() >= settings.caps.day_usd - 1e-9) {

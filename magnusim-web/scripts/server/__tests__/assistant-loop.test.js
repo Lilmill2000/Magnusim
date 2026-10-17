@@ -929,6 +929,16 @@ describe('privacy (cloud turns)', () => {
     assert.match(seen[0].copy, / to 192\.168\.1\.20, a server that isn't on this PC\. A server on this PC keeps them here\. Settings → Assistant can change this\.$/);
     assert.doesNotMatch(seen[0].copy, /cloud provider|A local server keeps/);
     assert.deepEqual(m.consents[0].destination, 'host:192.168.1.20');
+
+    // Never send: the refusal names that server too, and doesn't send the person to a local one.
+    m.state.settings.privacy = 'deny';
+    const r = await startTurn(m, { text: 'x', context: { project_id: 'p1' } });
+    assert.deepEqual([r.status, r.body.code, r.turn], [400, 'privacy_denied', null]);
+    assert.equal(
+      r.body.error,
+      "Settings → Assistant is set to never send project data off this PC, and the server at 192.168.1.20 isn't on this PC. Ask from Home, use a server on this PC, or change the setting.",
+    );
+    assert.doesNotMatch(r.body.error, /cloud provider|use a local server/);
   });
 
   it('a project not in the list fails the turn before anything is sent', async () => {
