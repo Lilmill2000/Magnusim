@@ -143,12 +143,24 @@ Removing Magnusim's folder does not remove `%APPDATA%\Magnusim`; remove keys in
 Settings before handing the PC to someone else.
 
 Any program and any other account signed in to this PC can call the
-Assistant's requests (start a turn, answer its questions, change its settings):
-the local check proves a request came from this PC, not who sent it. Another
-account can't read the key, but can spend it within the limits. The per-turn
-and per-day spending limits are checked before each step of the Assistant's
-work, so one step can go a little over; two copies of Magnusim run by one
-account share the day's limit and can pass it by up to twice.
+Assistant's requests (start a turn, change its settings): the local check
+proves a request came from this PC, not who sent it. Another account can't read
+the key, but can spend it within the limits.
+
+The Assistant's questions are answered only by the app tab that shows them,
+through that tab's own connection to the app, or by the program that started
+the turn, with a key the app gave it when the turn started. Another program, an
+app or a coding agent using Magnusim's tools, and the model itself can't answer
+them. A question meant for the Magnusim window only (such as a coding agent
+asking to use one of its own tools) is answered only in the window. This raises
+the bar against a stray request; it is not a sandbox: a program running as the
+same account can read that key from the starting program's memory, and any
+program or account on this PC can take over a tab's connection to the app and
+answer that tab's questions.
+
+The per-turn and per-day spending limits are checked before each step of the
+Assistant's work, so one step can go a little over; two copies of Magnusim run
+by one account share the day's limit and can pass it by up to twice.
 
 A plugin's page code that runs inside the app (not a sandboxed workspace frame)
 has the app's own origin. It can start the Assistant, answer its questions,

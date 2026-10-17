@@ -333,7 +333,7 @@ export function answerGates(m, turn, answer) {
     if (a === null || a === undefined) return;
     queueMicrotask(() => {
       if (a === 'timeout') m.clock.advance(10 * 60_000 + 1);
-      else m.manager.answerGate(e.gate.id, a === true);
+      else m.manager.answerGate(e.gate.id, a === true, { kind: 'key', key: turn.answerKey });
     });
   });
 }

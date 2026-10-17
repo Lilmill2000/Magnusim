@@ -157,6 +157,7 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/key',
       '/api/assistant/key/remove',
       '/api/assistant/models',
+      '/api/assistant/relay/gate',
       '/api/assistant/relay/progress',
       '/api/assistant/relay/result',
       '/api/assistant/relay/tools',
@@ -582,7 +583,7 @@ describe('turns', () => {
       if (e.type !== 'gate') return;
       gates.push(e.gate);
       assert.equal(fake.requests().length, before, 'nothing sent while asking');
-      const a = await post(`/api/assistant/gates/${e.gate.id}`, { allow: true });
+      const a = await post(`/api/assistant/gates/${e.gate.id}`, { allow: true, answer_key: r.json.answer_key });
       assert.equal(a.status, 200);
     });
     assert.equal(first.turn.state, 'done', JSON.stringify(first.events.slice(-3)));

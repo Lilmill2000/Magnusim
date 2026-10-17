@@ -176,8 +176,21 @@ export interface GateView {
   tool?: string;
   source?: string;
   project?: { id: string; title: string };
+  /** Answered only in the app tab that shows it, never with the turn's answer key. */
+  link_only?: boolean;
   opened_at: string;
   expires_at: string;
+}
+
+/**
+ * POST /api/assistant/turns' 202. `answer_key` answers the turn's questions (POST
+ * /api/assistant/gates/:id {allow, answer_key}): it goes only to whoever started the turn.
+ */
+export interface TurnStarted {
+  ok: true;
+  conversation: string;
+  turn: string;
+  answer_key: string;
 }
 
 /** One entry of a turn's log (GET /api/assistant/turns/:id), numbered by `seq`. */
@@ -298,3 +311,14 @@ export interface RelayProgressBody {
 export type RelayResultBody =
   | { link: string; call: string; ok: true; result: { text?: string; data?: unknown; images?: Array<{ mediaType: string; data: string }> } }
   | { link: string; call: string; ok: false; error: { code: string; message: string } };
+
+/**
+ * POST /api/assistant/relay/gate: the person's answer to a question this tab showed, on the
+ * link it was shown on. Refusals: 409 no_channel (the link went), 403 not_shown (never sent on
+ * this link, or another tab's), 409 {already}.
+ */
+export interface RelayGateBody {
+  link: string;
+  gate: string;
+  allow: boolean;
+}

@@ -30,6 +30,9 @@
  *                   while the live registry says the plugin is not loaded); 400.
  *   /relay/progress {link, call, ack?, fraction?, label?} → {ok} | {ok, stale:true}
  *   /relay/result   {link, call, ok, result? | error?}    → {ok} | {ok, stale:true}
+ *   /relay/gate     {link, gate, allow} → {ok}: the person's answer to a question this link
+ *                   was sent (the tab that shows it). 403 not_shown (never sent on this link,
+ *                   or not this tab's), 409 {already}, 400.
  *
  * - Registrations go into the tool registry (one per tab), so a turn bound to the tab is
  *   offered only that tab's tools. Each accepted one has its own id: a tool of an earlier
@@ -62,6 +65,8 @@
  *   `unregistered`, synchronously, before the worker answers.
  * - Gates of a turn bound to a tab are shown there (the GateBroker's presenter): sent to its
  *   live link, sent again when its link returns; the broker notes an unseen one after 15 s.
+ *   Each link remembers the gates it was sent: the page answers one only on such a link,
+ *   while it is its tab's live link (the turn's answer key is the other way, turns.ts).
  * - The relay closing (its server's close) ends the running turns its manager started that
  *   are bound to a tab, before it lets go of their links: after a Vite restart the new
  *   server's relay could neither hear them end nor show their questions.
@@ -81,7 +86,7 @@ import type { Registry, ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
-import type { TurnManager } from './turns.ts';
+import { NOT_SHOWN_TEXT, type TurnManager } from './turns.ts';
 import type { ImagePart } from './types.ts';
 
 export const LINK_RE = /^[0-9a-f]{24}$/;
@@ -230,7 +235,12 @@ interface LinkRec {
   open: boolean;
   /** An invoke on it went unacknowledged: nothing goes to it until the page is heard again. */
   silent: boolean;
+  /** The gates sent on it (oldest first, at most GATES_SENT_MAX): only these may be answered on it. */
+  gatesSent: Set<string>;
 }
+
+/** The most gate ids one link remembers having been sent. */
+const GATES_SENT_MAX = 500;
 
 interface Pending {
   call: string;
@@ -369,7 +379,7 @@ export class Relay {
     const old = this.tabs.get(meta.tab)?.link;
     if (old) this.linkGone(old);
     const t = this.tabRec(meta.tab);
-    const rec: LinkRec = { link: randomBytes(12).toString('hex'), tab: meta.tab, cid: meta.cid, send, done, open: true, silent: false };
+    const rec: LinkRec = { link: randomBytes(12).toString('hex'), tab: meta.tab, cid: meta.cid, send, done, open: true, silent: false, gatesSent: new Set() };
     this.links.set(rec.link, rec);
     t.link = rec;
     send('linked', { link: rec.link });
@@ -816,7 +826,28 @@ export class Relay {
     if (this.closed || owner.kind !== 'turn' || !owner.tab) return false;
     const l = this.tabs.get(owner.tab)?.link;
     if (!l || !l.open || l.silent) return false;
-    return l.send('gate', { gate: view });
+    const sent = l.send('gate', { gate: view });
+    if (sent) {
+      l.gatesSent.delete(view.id);
+      l.gatesSent.add(view.id);
+      if (l.gatesSent.size > GATES_SENT_MAX) l.gatesSent.delete(l.gatesSent.values().next().value as string);
+    }
+    return sent;
+  }
+
+  /**
+   * POST /api/assistant/relay/gate: the person answered a question in the tab that shows it.
+   * Taken only on its tab's live link, and only for a gate sent on that link; the manager then
+   * checks that the gate's owner is bound to this tab (turns.ts answerGate).
+   */
+  answer(link: unknown, gate: unknown, allow: unknown): Answer {
+    if (typeof link !== 'string' || typeof gate !== 'string' || !ID.test(gate)) return refuse(400, 'bad_request', 'link and gate are required.');
+    if (typeof allow !== 'boolean') return refuse(400, 'bad_answer', 'allow must be true or false.');
+    const rec = this.closed ? null : this.liveLink(link);
+    if (!rec) return refuse(409, 'no_channel', NO_CHANNEL_TEXT);
+    this.heard(rec);
+    if (!rec.gatesSent.has(gate)) return refuse(403, 'not_shown', NOT_SHOWN_TEXT);
+    return this.turns.answerGate(gate, allow, { kind: 'link', tab: rec.tab });
   }
 
   private withdrawGate(view: GateView, owner: GateOwner, closed: { answer: GateAnswer; by: GateClosedBy }): void {

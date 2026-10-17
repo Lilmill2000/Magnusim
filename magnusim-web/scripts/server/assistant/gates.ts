@@ -8,14 +8,17 @@
  *   through a presenter (the page relay; until a tab has a live link the presenter
  *   reaches nobody); a turn with no tab (the developer CLI) is read through the turn's
  *   long-poll and asked at the terminal. A later MCP server maps it to its own prompt;
- * - any caller on this PC may answer it (POST /api/assistant/gates/:id); the first
- *   answer wins, and a second one is told `already`;
+ * - only whoever can show it to the person answers it: the app tab that shows it, through
+ *   its live relay link (POST /api/assistant/relay/gate), or the program that started its
+ *   turn, with the turn's answer key (POST /api/assistant/gates/:id; turns.ts checks the
+ *   proof). A `link_only` question is answered only in the tab. The first answer wins, and
+ *   a second one is told `already`;
  * - it is never allowed by itself: after 10 minutes it is denied (`timeout`), and the
  *   owner's Stop withdraws it (denied, `stop`). Nothing else answers it, and a tool
  *   result can't: only these routes reach answer();
  * - when a tab-bound gate can't be shown (no live link), or its link goes for 15 s, the
  *   owner is told once (a `note` the CLI shows); the gate is shown again when the tab's
- *   link returns, and stays answerable through the route meanwhile.
+ *   link returns, and stays answerable with the answer key meanwhile.
  *
  * Open and answered gates live in the Assistant's state on globalThis, so a server Vite
  * restarted in this process still answers a gate an older one opened.
@@ -67,6 +70,8 @@ export interface GateView {
   tool?: string;
   source?: string;
   project?: { id: string; title: string };
+  /** Answered only in the app tab that shows it (its relay link), never with the turn's answer key. */
+  link_only?: boolean;
   opened_at: string;
   expires_at: string;
 }
@@ -118,6 +123,8 @@ interface OpenEntry {
 interface ClosedEntry {
   state: 'closed';
   view: GateView;
+  /** Kept so a late answer is checked against the same proof as an open one. */
+  owner: GateOwner;
   answer: GateAnswer;
   by: GateClosedBy;
   at: number;
@@ -129,7 +136,8 @@ function table(): Map<string, Entry> {
   return assistantState().gates as Map<string, Entry>;
 }
 
-const tabOf = (owner: GateOwner): string | null => (owner.kind === 'turn' ? owner.tab : null);
+/** The app tab that shows an owner's questions (null: none). */
+export const tabOf = (owner: GateOwner): string | null => (owner.kind === 'turn' ? owner.tab : null);
 
 function cleanDetail(rows: GateDetail[] | undefined): GateDetail[] | undefined {
   if (!Array.isArray(rows) || !rows.length) return undefined;
@@ -206,6 +214,7 @@ export class GateBroker {
       ...(g.tool ? { tool: cleanText(g.tool, 64) } : {}),
       ...(g.source ? { source: cleanText(g.source, TEXT_CAPS.name) } : {}),
       ...(g.project ? { project: { id: cleanText(g.project.id, 128), title: cleanText(g.project.title, 80) } } : {}),
+      ...(g.link_only === true ? { link_only: true } : {}),
       opened_at: new Date(now).toISOString(),
       expires_at: new Date(now + this.timeoutMs).toISOString(),
     };
@@ -228,7 +237,7 @@ export class GateBroker {
           signal.removeEventListener('abort', onAbort);
           // Kept as answered (a second answer is told `already`), unless a test reset dropped the table.
           const map = table();
-          if (map.get(id) === entry) map.set(id, { state: 'closed', view, answer, by, at: this.clock.now() });
+          if (map.get(id) === entry) map.set(id, { state: 'closed', view, owner, answer, by, at: this.clock.now() });
           try {
             this.presenter.withdraw(view, owner, { answer, by });
           } catch {
@@ -271,7 +280,13 @@ export class GateBroker {
     }, this.unseenMs);
   }
 
-  /** The person's answer (any caller on this PC). The first answer wins. */
+  /** A gate, open or still remembered as answered, with its owner (to check who may answer it); null when unknown. */
+  lookup(id: string): { open: boolean; view: GateView; owner: GateOwner } | null {
+    const e = table().get(String(id));
+    return e ? { open: e.state === 'open', view: e.view, owner: e.owner } : null;
+  }
+
+  /** The person's answer, once its proof was checked (TurnManager.answerGate). The first answer wins. */
   answer(id: string, allow: boolean): 'ok' | 'already' | 'unknown' {
     const e = table().get(String(id));
     if (!e) return 'unknown';

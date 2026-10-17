@@ -391,7 +391,7 @@ describe('the token and minute caps', () => {
     m.clock.advance(5 * 60_000);
     await tick();
     assert.equal(t.state, 'awaiting_confirmation', 'five minutes of waiting for an answer: not capped');
-    m.manager.answerGate(ofType(t, 'gate')[0].gate.id, true);
+    m.manager.answerGate(ofType(t, 'gate')[0].gate.id, true, { kind: 'key', key: t.answerKey });
     await until(() => ofType(t, 'tool_call').some((e) => e.tool === 'slow'));
     await tick();
     m.clock.advance(55_000);
@@ -704,7 +704,7 @@ describe('Stop', () => {
     assert.equal(t.state, 'stopped');
     assert.deepEqual(codes(lastResults(t.conv)), ['stopped', 'stopped']);
     assert.deepEqual(ofType(t, 'gate_closed').map((e) => [e.gate, e.by]), [[gate.id, 'stop']]);
-    assert.equal(m.manager.answerGate(gate.id, true).status, 409, 'a late Allow finds it already closed');
+    assert.equal(m.manager.answerGate(gate.id, true, { kind: 'key', key: t.answerKey }).status, 409, 'a late Allow finds it already closed');
     assert.equal(ran, 0);
     assert.equal(m.provider.requests.length, 1);
   });
@@ -1466,7 +1466,7 @@ describe('property: random scripts keep both invariants', () => {
           const a = pick([true, false, 'timeout']);
           queueMicrotask(() => {
             if (a === 'timeout') m.clock.advance(10 * 60_000 + 1);
-            else m.manager.answerGate(e.gate.id, a);
+            else m.manager.answerGate(e.gate.id, a, { kind: 'key', key: t.answerKey });
           });
         }
         // After the tool started (its timer set): the clock moves on.

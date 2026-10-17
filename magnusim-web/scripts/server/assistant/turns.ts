@@ -14,18 +14,22 @@
  *   answers the remaining calls; the turn ends `stopped` (`failed` "server stopped" when
  *   the server goes).
  * - The minutes cap counts active time only: questions waiting for an answer don't count.
+ * - A turn runs on the provider its start names, else its conversation's own, else the
+ *   default; every check of the start is about that provider.
+ * - A turn's questions are answered only by the program that started it (the answer key
+ *   of its 202) or by the app tab that shows them (its live relay link); see answerGate.
  *
  * Turns, conversations and questions live in the Assistant's state on globalThis. When Vite
  * restarts the server in this process, the old server's relay ends the running turns its
  * manager started that are bound to an app tab (they reach their tab only through that
  * relay); turns with no tab go on, and the new server serves them.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
-import { GateBroker, realClock, type Clock, type GateEvent, type GatePresenter, type GateView } from './gates.ts';
+import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
 import type { Registry } from './registry.ts';
 import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
@@ -141,6 +145,11 @@ type AnyTurn = Omit<LoopTurn, 'settings'> & { readonly settings: TurnSettings };
 
 export class Turn implements AnyTurn {
   readonly id: string;
+  /**
+   * Proves its holder started this turn: it answers the turn's questions (POST /gates/:id).
+   * Given once, in the start's 202; never in summary() or the log.
+   */
+  readonly answerKey: string = randomBytes(16).toString('hex');
   readonly prompt: string;
   readonly conv: Conversation;
   readonly tab: string | null;
@@ -565,6 +574,25 @@ const badProviderText = (v: unknown) =>
 
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 
+/**
+ * What answers a question: the turn's answer key, as its starter sent it (`key`), or the app
+ * tab whose live relay link the relay found showing it (`link`; only the relay makes one).
+ */
+export type GateProof = { kind: 'key'; key: unknown } | { kind: 'link'; tab: string };
+
+export const ANSWER_KEY_TEXT =
+  'Only the program that started this turn (with its answer key) or the Magnusim window that shows this question can answer it.';
+export const ANSWER_IN_WINDOW_TEXT = 'Answer it in the Magnusim window.';
+export const NOT_SHOWN_TEXT = "That question isn't shown in this tab.";
+
+/** The answer key sent, compared in constant time with the turn's. */
+function keyMatches(sent: unknown, key: string): boolean {
+  if (typeof sent !== 'string') return false;
+  const a = Buffer.from(sent, 'utf8');
+  const b = Buffer.from(key, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /** Secret stores whose key changes stop turns: one listener per store in this process, however many managers. */
 const KEY_WATCH = Symbol.for('magnusim.assistant.keyWatch');
 
@@ -797,7 +825,8 @@ export class TurnManager {
     this.started.add(t);
     this.turnChanged(t, 'started');
     this.launch(t, secrets);
-    return { status: 202, body: { ok: true, conversation: conv.id, turn: id } };
+    // The answer key goes only to whoever started the turn: it answers the turn's questions.
+    return { status: 202, body: { ok: true, conversation: conv.id, turn: id, answer_key: t.answerKey } };
   }
 
   private loopDeps(secrets: TurnSecrets): LoopDeps {
@@ -874,13 +903,37 @@ export class TurnManager {
     return { status: 200, body: { ok: true, stopping: true, turn: t.summary() } };
   }
 
-  /** POST /api/assistant/gates/:id {allow}. */
-  answerGate(id: string, allow: unknown): Answer {
+  /**
+   * A question's answer, from whoever may give it (P2): the program that started its turn,
+   * with the turn's answer key (POST /api/assistant/gates/:id {allow, answer_key}), or the
+   * app tab that shows it, its live relay link vouched for by the relay (POST
+   * /api/assistant/relay/gate). A `link_only` question, or one with no turn (MCP), takes only
+   * the tab. Checked in order: 400 bad_answer, 404, 403 answer_key / not_shown, 409 already.
+   */
+  answerGate(id: string, allow: unknown, proof: GateProof): Answer {
     if (typeof allow !== 'boolean') return refuse(400, 'bad_answer', 'allow must be true or false.');
+    const g = this.gates.lookup(id);
+    if (!g) return refuse(404, 'unknown_gate', 'No such question.');
+    const refused = this.proofRefusal(g.owner, g.view, proof);
+    if (refused) return refused;
     const r = this.gates.answer(id, allow);
     if (r === 'unknown') return refuse(404, 'unknown_gate', 'No such question.');
     if (r === 'already') return refuse(409, 'already', 'That question was already answered.', { already: true, ...(this.gates.closedAs(id) ?? {}) });
     return { status: 200, body: { ok: true } };
+  }
+
+  /** Why `proof` may not answer this question (null: it may). */
+  private proofRefusal(owner: GateOwner, view: GateView, proof: GateProof): Answer | null {
+    if (proof.kind === 'link') {
+      const tab = tabOf(owner);
+      return tab !== null && tab === proof.tab ? null : refuse(403, 'not_shown', NOT_SHOWN_TEXT);
+    }
+    if (view.link_only) return refuse(403, 'not_shown', ANSWER_IN_WINDOW_TEXT);
+    if (owner.kind === 'turn') {
+      const t = this.turns().get(owner.id);
+      if (t && keyMatches(proof.key, t.answerKey)) return null;
+    }
+    return refuse(403, 'answer_key', ANSWER_KEY_TEXT);
   }
 
   /** POST /api/assistant/conversations/:id/forget. */

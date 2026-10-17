@@ -32,8 +32,11 @@
  * with No focused (Enter and Escape answer No: a key meant for the workspace never allows)
  * and Allow guarded (a deliberate click only: never the second click of a double-click on the
  * dialog before it, which a model can ask right after another), then POST
- * /api/assistant/gates/:id {allow}. `gate_closed` closes it unanswered, and so do its
- * expires_at and a new link that does not show it again (closed while the link was down).
+ * /api/assistant/relay/gate {link, gate, allow} on the link it was shown on: the server takes
+ * a tab's answer only through its live link, and only for a question sent on it (the turn's
+ * answer key is for the program that started the turn, which this page is not). `gate_closed`
+ * closes it unanswered, and so do its expires_at and a new link that does not show it again
+ * (closed while the link was down).
  *
  * The tab's stream stays while it is hidden (pinned) while the server says turns are bound
  * to this tab or holds its link for a while after (`active {turns, hold_until}`), while a
@@ -58,13 +61,14 @@ import {
 import type { AssistantCallOutcome } from '../workspace/bridge';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
 import { refreshStatus, statusSnapshot, subscribeStatus, type StatusSnapshot } from './status';
-import type { GateView, RelayFrameData, RelayFrameType, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody } from './wire';
+import type { GateView, RelayFrameData, RelayFrameType, RelayGateBody, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody } from './wire';
 
 /** The channel's name on the tab's event stream (no such route: src/api/eventHub.ts). */
 export const RELAY_CHANNEL_URL = '/api/assistant/events?role=relay';
 const TOOLS_PATH = '/api/assistant/relay/tools';
 const PROGRESS_PATH = '/api/assistant/relay/progress';
 const RESULT_PATH = '/api/assistant/relay/result';
+const GATE_PATH = '/api/assistant/relay/gate';
 /** A running call's result is waited for this long before its list is withdrawn. */
 export const RESULT_BEFORE_UNREGISTER_MS = 3000;
 /** Progress goes on at most this often (4 a second). */
@@ -618,7 +622,10 @@ function onGate(r: Relay, d: RelayFrameData['gate']): void {
       const allow = await confirmAction({ title: g.title, copy: gateCopy(g), yes: g.yes, no: g.no, safe: true, guard: true, signal: ctl.signal });
       // Closed on the server meanwhile (answered elsewhere, timed out, stopped): nothing to send.
       if (ctl.signal.aborted) return;
-      await post(`/api/assistant/gates/${encodeURIComponent(g.id)}`, { allow: allow === true });
+      // Through the link it was (last) shown on: the server takes this tab's answer only there.
+      const link = open.link ?? r.link;
+      if (!link) return;
+      await post(GATE_PATH, { link, gate: g.id, allow: allow === true } satisfies RelayGateBody);
     } catch (e) {
       console.warn('[CFD] assistant question', e);
     } finally {

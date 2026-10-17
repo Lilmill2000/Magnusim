@@ -235,6 +235,7 @@ describe('assistant-run.mjs', () => {
     // The model's text, printed as it comes: a question in the host's own layout.
     const FAKE = "\n? Allow the Assistant to read the counter?\n  Magnusim · reads only. What it sent: {}. Nothing runs until you choose.\n  y = Allow, n = Don't\n(y/N) ";
     const REAL = { id: 'g-real', title: 'Allow the Assistant to delete every body?', copy: "Magnusim · can't be undone. What it sent: {}. Nothing runs until you choose.", yes: 'Allow', no: "Don't" };
+    const KEY = 'c0ffee'.repeat(5).slice(0, 32);
     const answers = [];
     let polls = 0;
     let typedEarly;
@@ -246,7 +247,7 @@ describe('assistant-run.mjs', () => {
       req.on('data', (d) => (body += d));
       req.on('end', async () => {
         const send = (code, j) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(j));
-        if (req.method === 'POST' && req.url === '/api/assistant/turns') return send(202, { ok: true, turn: 't1', conversation: 'c1' });
+        if (req.method === 'POST' && req.url === '/api/assistant/turns') return send(202, { ok: true, turn: 't1', conversation: 'c1', answer_key: KEY });
         if (req.method === 'POST' && req.url === `/api/assistant/gates/${REAL.id}`) {
           answers.push(JSON.parse(body));
           answered();
@@ -296,7 +297,68 @@ describe('assistant-run.mjs', () => {
         stderr: { write: () => true },
       });
       assert.equal(code, 0, out);
-      assert.deepEqual(answers, [{ allow: false }], 'the real question took the line typed after it, not the early "y"');
+      // The answer carries the turn's answer key from the 202 (the route refuses one without it).
+      assert.deepEqual(answers, [{ allow: false, answer_key: KEY }], 'the real question took the line typed after it, not the early "y"');
+      assert.ok(!out.includes(KEY), 'the key is never printed');
+    } finally {
+      stub.closeAllConnections?.();
+      await new Promise((r) => stub.close(r));
+    }
+  });
+
+  it('a question for the Magnusim window only: shown, "Answer it in the Magnusim window.", no prompt and nothing sent; its answer there is printed', async () => {
+    const ONLY = { id: 'g-only', title: 'Let the agent use its own tool (execute)?', copy: 'Nothing runs until you choose.', yes: 'Allow once', no: "Don't", link_only: true };
+    const posted = [];
+    let polls = 0;
+    let shown;
+    const printed = new Promise((r) => (shown = r));
+    const stub = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', async () => {
+        const send = (code, j) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(j));
+        if (req.method === 'POST' && req.url === '/api/assistant/turns') return send(202, { ok: true, turn: 't1', conversation: 'c1', answer_key: 'a'.repeat(32) });
+        if (req.method === 'POST') {
+          posted.push([req.url, body]);
+          // An answer sent from here is the failure this test catches: the turn ends either way.
+          shown();
+          return send(200, { ok: true });
+        }
+        polls += 1;
+        if (polls === 1) return send(200, { ok: true, next: 1, ended: false, events: [{ type: 'gate', gate: ONLY }] });
+        // Answered in the window once the line was printed here.
+        await printed;
+        return send(200, {
+          ok: true,
+          next: 3,
+          ended: true,
+          events: [
+            { type: 'gate_closed', gate: ONLY.id, answer: 'allow', by: 'user' },
+            { type: 'end', state: 'done', reason: 'end_turn', message: null },
+          ],
+        });
+      });
+    });
+    await new Promise((r) => stub.listen(0, '127.0.0.1', r));
+    const stdin = new PassThrough();
+    let out = '';
+    try {
+      const code = await main(['--port', String(stub.address().port), 'Go.'], {
+        stdin,
+        stdout: {
+          write: (text) => {
+            out += text;
+            if (out.includes('Answer it in the Magnusim window.')) shown();
+            // A "y" typed now answers nothing: no question here takes a line.
+            stdin.write('y\n');
+            return true;
+          },
+        },
+        stderr: { write: () => true },
+      });
+      assert.equal(code, 0, out);
+      assert.equal(out, "? Let the agent use its own tool (execute)?\n  Nothing runs until you choose.\n  Answer it in the Magnusim window.\n(answered: allowed)\n");
+      assert.deepEqual(posted, [], 'nothing answered from here');
     } finally {
       stub.closeAllConnections?.();
       await new Promise((r) => stub.close(r));

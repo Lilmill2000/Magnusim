@@ -129,9 +129,12 @@ const short = (s: Sent): string => {
 
 function defaultAuto(s: Sent): [number, unknown] | null {
   if (s.path === '/api/assistant/status') return [200, { ok: true, available: true, provider: 'off' }];
-  if (s.path === '/api/assistant/relay/progress' || s.path.startsWith('/api/assistant/gates/')) return [200, { ok: true }];
+  if (s.path === '/api/assistant/relay/progress' || s.path === '/api/assistant/relay/gate') return [200, { ok: true }];
   return null;
 }
+
+/** The answers to questions (POST /relay/gate), oldest first. */
+const gateAnswers = () => sent.filter((s) => s.path === '/api/assistant/relay/gate' || s.path.startsWith('/api/assistant/gates/'));
 
 /** The tools POSTs, oldest first. */
 const toolPosts = () => sent.filter((s) => s.path === '/api/assistant/relay/tools');
@@ -890,18 +893,18 @@ describe('questions (gates) as the app confirm dialog', () => {
     expect(($('cf-confirm') as HTMLButtonElement).disabled).toBe(true);
     $('cf-confirm').click();
     await settle();
-    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    expect(gateAnswers()).toHaveLength(0);
     await settle(YES_GUARD_MS);
     $('cf-confirm').click();
     await settle();
-    expect(last('/api/assistant/gates/g-1').body).toEqual({ allow: true });
+    expect(gateAnswers().map((a) => [a.path, a.body])).toEqual([['/api/assistant/relay/gate', { link: LINK_A, gate: 'g-1', allow: true }]]);
     channel().frame('gate', { gate: gate({ id: 'g-2', kind: 'privacy', risk: undefined, title: 'Send project "Wing" to the cloud provider?', yes: 'Send', no: "Don't send" }) });
     await settle(10);
     expect(confirmAction).toHaveBeenCalledTimes(2);
     expect(vi.mocked(confirmAction).mock.lastCall?.[0]).toMatchObject({ title: 'Send project "Wing" to the cloud provider?', yes: 'Send', no: "Don't send", safe: true, guard: true });
     $('cf-cancel').click();
     await settle();
-    expect(last('/api/assistant/gates/g-2').body).toEqual({ allow: false });
+    expect(gateAnswers().at(-1)?.body).toEqual({ link: LINK_A, gate: 'g-2', allow: false });
   });
 
   it('Enter right after a gate frame answers No (allow:false)', async () => {
@@ -910,9 +913,9 @@ describe('questions (gates) as the app confirm dialog', () => {
     await settle();
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     await settle();
-    const answer = last('/api/assistant/gates/g-1');
-    expect(answer.method).toBe('POST');
-    expect(answer.body).toEqual({ allow: false });
+    const answer = gateAnswers().at(-1) as Sent;
+    expect([answer.method, answer.path]).toEqual(['POST', '/api/assistant/relay/gate']);
+    expect(answer.body).toEqual({ link: LINK_A, gate: 'g-1', allow: false });
     expect($('modal-confirm').hidden).toBe(true);
   });
 
@@ -926,7 +929,7 @@ describe('questions (gates) as the app confirm dialog', () => {
     channel().frame('gate_closed', { gate: 'g-1', answer: 'deny', by: 'timeout' });
     await settle(100);
     expect($('modal-confirm').hidden).toBe(true);
-    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    expect(gateAnswers()).toHaveLength(0);
     expect(channel().pinned).toBe(false);
   });
 });
@@ -966,11 +969,12 @@ describe('questions the server can no longer close', () => {
     // g-1 closed with no answer sent; g-2 is the dialog now, still on screen.
     expect($('cf-heading').textContent).toBe('Second question?');
     expect($('modal-confirm').hidden).toBe(false);
-    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    expect(gateAnswers()).toHaveLength(0);
     expect(ch.pinned).toBe(true);
     $('cf-cancel').click();
     await settle();
-    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/')).map((s) => [s.path, s.body])).toEqual([['/api/assistant/gates/g-2', { allow: false }]]);
+    // Answered on the link it was shown on again, not the one it first came on.
+    expect(gateAnswers().map((s) => [s.path, s.body])).toEqual([['/api/assistant/relay/gate', { link: LINK_B, gate: 'g-2', allow: false }]]);
     expect(ch.pinned).toBe(false);
   });
 
@@ -986,7 +990,7 @@ describe('questions the server can no longer close', () => {
     expect(ch.pinned).toBe(true);
     await settle(1);
     expect($('modal-confirm').hidden).toBe(true);
-    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    expect(gateAnswers()).toHaveLength(0);
     expect(ch.pinned).toBe(false);
   });
 });

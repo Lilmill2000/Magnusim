@@ -8,9 +8,13 @@
  *
  * It talks to the app's own routes over loopback (POST /api/assistant/turns, then the
  * long-poll GET /api/assistant/turns/:id). `--provider` goes to the app as it is: the app
- * checks it, and its refusal names the providers (this file keeps no list of them). Questions are asked here (y/n): for a turn
- * with no tab they are asked only here; for a turn bound to an app tab the app shows
- * them too, and either answer counts. Only a line typed after a question shows answers it.
+ * checks it, and its refusal names the providers (this file keeps no list of them).
+ * Questions are asked here (y/n): for a turn with no tab they are asked only here; for a
+ * turn bound to an app tab the app shows them too, and either answer counts. Only a line
+ * typed after a question shows answers it.
+ * An answer carries the turn's answer key (from the start's 202): only the program that
+ * started a turn, or the app tab that shows its question, may answer it. A question for the
+ * Magnusim window only (link_only) is shown here but answered there.
  * `--tab auto` is resolved by the app (the only connected tab). Ctrl+C stops the turn
  * (twice: leave at once).
  *
@@ -26,7 +30,8 @@ export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--provide
 Runs one Assistant turn in the Magnusim app on this PC and prints what happens: the
 answer, each tool call (→) and its result (✓ or ✗), notes and questions. Questions are
 asked here (y/n): only a line typed after a question shows answers it. A turn bound to an
-app tab also shows them in the app; either answer counts. Ctrl+C stops the turn.
+app tab also shows them in the app; either answer counts. A question for the Magnusim
+window only is shown here and answered there. Ctrl+C stops the turn.
 
   --port N             the app's port (default: the app's own setting, else 8082)
   --provider <id>      a provider as Settings → Assistant names it; without it the
@@ -224,6 +229,9 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
   }
   const turn = started.json.turn;
   const conversation = started.json.conversation;
+  // Answers this turn's questions; never printed (not with --json either).
+  const answerKey = typeof started.json.answer_key === 'string' ? started.json.answer_key : '';
+  const answerGate = (id, allow) => api('POST', `/api/assistant/gates/${encodeURIComponent(id)}`, { allow, answer_key: answerKey });
   if (o.json) out(`${JSON.stringify({ type: 'started', turn, conversation })}\n`);
 
   const lines = new Lines(io.stdin);
@@ -263,6 +271,11 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
       say(`? ${gate.title}\n`);
       say(`  ${gate.copy}\n`);
       for (const d of gate.detail || []) say(`  ${d.label}: ${d.value}\n`);
+      if (gate.link_only === true) {
+        // Only the Magnusim window that shows it can answer it (its gate_closed still prints here).
+        say('  Answer it in the Magnusim window.\n');
+        return;
+      }
       say(`  y = ${gate.yes}, n = ${gate.no}${tab ? ' (waiting for an answer in the app; you can also answer here)' : ''}\n`);
       // Listening before the prompt shows, so no line typed at it can be missed.
       const answering = lines.next(ac.signal);
@@ -275,11 +288,11 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
       if (answer === null) {
         // The input ended: the question stays open for the app, or times out as a no.
         if (!o.json) line(tab ? '(waiting for an answer in the app)' : '(no answer given)');
-        if (!tab) await api('POST', `/api/assistant/gates/${encodeURIComponent(gate.id)}`, { allow: false }).catch(() => {});
+        if (!tab) await answerGate(gate.id, false).catch(() => {});
         return;
       }
       const allow = /^\s*y(es)?\s*$/i.test(answer);
-      const r = await api('POST', `/api/assistant/gates/${encodeURIComponent(gate.id)}`, { allow }).catch(() => null);
+      const r = await answerGate(gate.id, allow).catch(() => null);
       if (!o.json && r?.status === 409) line('(already answered)');
     });
   };

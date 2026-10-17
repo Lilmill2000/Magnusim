@@ -27,7 +27,7 @@
  *                                        cost_usd} or {ok:false, code, error}; 400 when it can't
  *                                        start; 409 while one runs
  *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?}
- *                                        → 202 {ok, conversation, turn}: the turn runs detached
+ *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
  *                                        an app tab's id, or 'auto' for the only connected one.
  *                                        provider: any provider, whatever the default (without
@@ -35,7 +35,10 @@
  *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
  *                                        (a long-poll: waits for an event after `since`)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
- *   POST /api/assistant/gates/:id       {allow} → {ok}; 409 {already} (the first answer wins); 404
+ *   POST /api/assistant/gates/:id       {allow, answer_key} → {ok}: the program that started the turn
+ *                                        answers its question with the 202's answer_key; 403
+ *                                        answer_key (missing or wrong), not_shown (a question for
+ *                                        the window only); 409 {already} (the first answer wins); 404
  *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
  *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools):
  *                                        {ok, tabs:[{tab, connected, since, workspace, tools, refused,
@@ -43,6 +46,9 @@
  *   POST /api/assistant/relay/tools     the page relay (assistant/relay.ts): a tab's workspace tools,
  *   POST /api/assistant/relay/progress  a call's ack and progress, and its result; and the event hub's
  *   POST /api/assistant/relay/result    channel kind `assistant` {role:'relay'}, for this PC only
+ *   POST /api/assistant/relay/gate      {link, gate, allow} → {ok}: the tab that shows a question
+ *                                        answers it through its live link; 409 no_channel; 403
+ *                                        not_shown (not sent on this link, or another tab's); 409 {already}
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -556,7 +562,8 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
     '/api/assistant/gates/:id',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
-      const r = turns.answerGate(ctx.params.id, body.allow);
+      // Only the program that started the turn holds its answer key (the page answers through /relay/gate).
+      const r = turns.answerGate(ctx.params.id, body.allow, { kind: 'key', key: body.answer_key });
       ctx.sendJson(r.status, r.body);
     }),
   );
@@ -603,6 +610,15 @@ function registerRelayRoutes(router: Router, relay: Relay): void {
     '/api/assistant/relay/result',
     local(async (ctx) => {
       const r = relay.result(await ctx.readJsonBody());
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/relay/gate',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      const r = relay.answer(body.link, body.gate, body.allow);
       ctx.sendJson(r.status, r.body);
     }),
   );

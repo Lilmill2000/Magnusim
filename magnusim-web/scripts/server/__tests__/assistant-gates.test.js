@@ -201,12 +201,13 @@ describe('a question for an app tab', { timeout: 20_000 }, () => {
       assert.ok(eventsOf(t).some((e) => e.type === 'note' && e.text === GATE_UNSEEN_NOTE), 'the note');
       const polled = await fetch(`${base}/api/assistant/turns/${t.id}?since=0`).then((r) => r.json());
       assert.deepEqual(polled.turn.open_gates.map((g) => g.id), [gate.id], 'open_gates in the summary');
-      assert.deepEqual((await post(`/api/assistant/gates/${gate.id}`, { allow: 'yes' })).status, 400);
-      const first = await post(`/api/assistant/gates/${gate.id}`, { allow: true });
+      const key = started.json.answer_key;
+      assert.deepEqual((await post(`/api/assistant/gates/${gate.id}`, { allow: 'yes', answer_key: key })).status, 400);
+      const first = await post(`/api/assistant/gates/${gate.id}`, { allow: true, answer_key: key });
       assert.deepEqual([first.status, first.json], [200, { ok: true }]);
-      const second = await post(`/api/assistant/gates/${gate.id}`, { allow: false });
+      const second = await post(`/api/assistant/gates/${gate.id}`, { allow: false, answer_key: key });
       assert.deepEqual([second.status, second.json.code, second.json.already, second.json.answer], [409, 'already', true, 'allow']);
-      assert.equal((await post('/api/assistant/gates/g-0000', { allow: true })).status, 404);
+      assert.equal((await post('/api/assistant/gates/g-0000', { allow: true, answer_key: key })).status, 404);
       await settled(t);
       assert.equal(t.state, 'done');
       assert.deepEqual(eventsOf(t).filter((e) => e.type === 'gate_closed').map((e) => [e.answer, e.by]), [['allow', 'user']]);
@@ -238,7 +239,7 @@ describe('the page relay shows a tab-bound question in its tab', { timeout: 30_0
     return { m, s, page, t, shown };
   }
 
-  it('a gate frame on the tab’s live link; the link gone 15 s: a note; sent again when the tab links again; the route still answers, and the page hears gate_closed', async () => {
+  it('a gate frame on the tab’s live link; the link gone 15 s: a note; sent again when the tab links again; the route still answers with the answer key, and the page hears gate_closed', async () => {
     const { m, s, page, t, shown } = await zapTurn();
     const logged = eventsOf(t).find((e) => e.type === 'gate').gate;
     assert.deepEqual(shown, logged, 'the turn’s own question');
@@ -256,7 +257,7 @@ describe('the page relay shows a tab-bound question in its tab', { timeout: 30_0
     assert.equal(again.id, shown.id);
     assert.equal(back.frames.find((f) => f.c === 'assistant:1').event, 'linked');
     // Still answerable through the route; the page's dialog is told to go.
-    const r = await s.post(`/api/assistant/gates/${shown.id}`, { allow: true });
+    const r = await s.post(`/api/assistant/gates/${shown.id}`, { allow: true, answer_key: t.answerKey });
     assert.equal(r.status, 200);
     assert.deepEqual(await back.frame('gate_closed'), { gate: shown.id, answer: 'allow', by: 'user' });
     await settled(t);
@@ -275,5 +276,136 @@ describe('the page relay shows a tab-bound question in its tab', { timeout: 30_0
     assert.deepEqual(await stopped.page.frame('gate_closed'), { gate: stopped.shown.id, answer: 'deny', by: 'stop' });
     await settled(stopped.t);
     assert.equal(stopped.t.state, 'stopped');
+  });
+});
+
+describe('who may answer a question (P2): the program that started the turn, or the tab that shows it', { timeout: 30_000 }, () => {
+  const servers = [];
+  afterEach(async () => {
+    for (const s of servers.splice(0)) await s.close();
+  });
+
+  /** A linked tab whose turn's model calls the destructive host tool `zap`: its question is open. */
+  async function openQuestion() {
+    const m = makeManager({ dir: ROOT, provider: 'openai_compatible', projects: { p1: { id: 'p1', title: 'Wing', created_at: null } }, hostTools: [hostTool('zap', { risk: 'destructive' })] });
+    const s = await relayServer(m);
+    servers.push(s);
+    const page = await s.page();
+    const link = await page.open();
+    assert.equal((await s.register(link, 1)).status, 200);
+    m.provider.script({ tools: [{ name: 'zap' }] }, { text: 'Done.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Zap it', tab: page.tab });
+    assert.equal(started.status, 202);
+    const t = s.handle.turns.get(started.json.turn);
+    const shown = (await page.frame('gate')).gate;
+    return { m, s, page, link, t, shown, started };
+  }
+
+  it("the 202 carries the turn's answer key (32 hex), never its summary, log, poll or the tabs", async () => {
+    const { s, t, started } = await openQuestion();
+    assert.match(started.json.answer_key, /^[0-9a-f]{32}$/);
+    assert.equal(started.json.answer_key, t.answerKey);
+    const polled = await s.get(`/api/assistant/turns/${t.id}?since=0`);
+    assert.equal(polled.status, 200);
+    assert.ok(!JSON.stringify(polled.json).includes(t.answerKey), 'not in the poll');
+    assert.ok(!JSON.stringify(t.summary()).includes(t.answerKey), 'not in the summary');
+    assert.ok(!JSON.stringify(eventsOf(t)).includes(t.answerKey), 'not in the log');
+    assert.ok(!JSON.stringify((await s.get('/api/assistant/tabs')).json).includes(t.answerKey), 'not in the tabs');
+    await s.post(`/api/assistant/turns/${t.id}/stop`, {});
+  });
+
+  it('POST /gates/:id: without the answer key, with a wrong one or another turn’s, 403 answer_key and still open; with it, ok', async () => {
+    const { s, t, shown } = await openQuestion();
+    const other = await openQuestion();
+    for (const answer_key of [undefined, '', 'x', 'f'.repeat(32), other.t.answerKey, `${t.answerKey} `, t.answerKey.toUpperCase(), 7, [t.answerKey], 'é'.repeat(32)]) {
+      const r = await s.post(`/api/assistant/gates/${shown.id}`, { allow: true, ...(answer_key === undefined ? {} : { answer_key }) });
+      assert.deepEqual([r.status, r.json.code], [403, 'answer_key'], JSON.stringify(answer_key));
+    }
+    assert.deepEqual(t.summary().open_gates.map((g) => g.id), [shown.id], 'still open');
+    assert.equal(t.state, 'awaiting_confirmation');
+    assert.equal((await s.post('/api/assistant/gates/g-0000000000000000', { allow: true })).status, 404);
+    const ok = await s.post(`/api/assistant/gates/${shown.id}`, { allow: true, answer_key: t.answerKey });
+    assert.deepEqual([ok.status, ok.json], [200, { ok: true }]);
+    // Answered: a second answer with the key is told so; without it, refused as before.
+    const again = await s.post(`/api/assistant/gates/${shown.id}`, { allow: false, answer_key: t.answerKey });
+    assert.deepEqual([again.status, again.json.code, again.json.answer], [409, 'already', 'allow']);
+    assert.equal((await s.post(`/api/assistant/gates/${shown.id}`, { allow: false })).status, 403);
+    await settled(t);
+    assert.equal(t.state, 'done');
+    await other.s.post(`/api/assistant/turns/${other.t.id}/stop`, {});
+  });
+
+  it('POST /relay/gate: the showing link answers; another tab’s link and a link that is not live are refused', async () => {
+    const { s, page, link, t, shown } = await openQuestion();
+    // Another tab of the app: its own live link, never sent this question.
+    const otherPage = await s.page();
+    const otherLink = await otherPage.open();
+    let r = await s.post('/api/assistant/relay/gate', { link: otherLink, gate: shown.id, allow: true });
+    assert.deepEqual([r.status, r.json.code], [403, 'not_shown']);
+    r = await s.post('/api/assistant/relay/gate', { link: 'f'.repeat(24), gate: shown.id, allow: true });
+    assert.deepEqual([r.status, r.json.code], [409, 'no_channel']);
+    for (const body of [{ link, gate: shown.id }, { link, gate: shown.id, allow: 'yes' }, { link, allow: true }, { gate: shown.id, allow: true }]) {
+      r = await s.post('/api/assistant/relay/gate', body);
+      assert.equal(r.status, 400, JSON.stringify(body));
+    }
+    // The manager takes a link proof only for the gate's own tab.
+    assert.equal(s.handle.turns.answerGate(shown.id, true, { kind: 'link', tab: otherPage.tab }).status, 403);
+    // A link is no proof on the answer key's route.
+    r = await s.post(`/api/assistant/gates/${shown.id}`, { allow: true, link, kind: 'link', tab: page.tab });
+    assert.deepEqual([r.status, r.json.code], [403, 'answer_key']);
+    assert.equal(t.state, 'awaiting_confirmation');
+    r = await s.post('/api/assistant/relay/gate', { link, gate: shown.id, allow: true });
+    assert.deepEqual([r.status, r.json], [200, { ok: true }]);
+    assert.deepEqual(await page.frame('gate_closed'), { gate: shown.id, answer: 'allow', by: 'user' });
+    r = await s.post('/api/assistant/relay/gate', { link, gate: shown.id, allow: false });
+    assert.deepEqual([r.status, r.json.code, r.json.answer], [409, 'already', 'allow']);
+    await settled(t);
+    assert.equal(t.state, 'done');
+  });
+
+  it('after the tab reconnects the old link answers nothing; the new one, sent the question again, does', async () => {
+    const { s, page, link, t, shown } = await openQuestion();
+    page.serverDrop();
+    await until(() => s.relay.snapshot()[page.tab]?.connected === false, 5000, 'the link to go');
+    let r = await s.post('/api/assistant/relay/gate', { link, gate: shown.id, allow: true });
+    assert.deepEqual([r.status, r.json.code], [409, 'no_channel']);
+    const back = await s.page(page.tab);
+    const newLink = await back.open();
+    assert.equal((await back.frame('gate')).gate.id, shown.id);
+    r = await s.post('/api/assistant/relay/gate', { link: newLink, gate: shown.id, allow: false });
+    assert.equal(r.status, 200);
+    await settled(t);
+    assert.deepEqual(eventsOf(t).filter((e) => e.type === 'gate_closed').map((e) => [e.answer, e.by]), [['deny', 'user']]);
+  });
+
+  it('a link_only question takes only the tab’s link, never the answer key; an MCP client’s question takes no answer key', async () => {
+    const { s, page, link, t, shown } = await openQuestion();
+    const gates = s.handle.turns.gates;
+    const opened = [];
+    const off = gates.subscribe((e) => e.type === 'open' && opened.push(e.view));
+    // A question for the window only, of the same turn and tab (as a coding agent's own tool asks).
+    const ac = new AbortController();
+    const asked = gates.ask({ ...REQ, turn: t.id, link_only: true }, { kind: 'turn', id: t.id, tab: page.tab }, ac.signal);
+    const only = (await page.frame('gate', 1)).gate;
+    assert.deepEqual([only.id, only.link_only], [opened[0].id, true]);
+    let r = await s.post(`/api/assistant/gates/${only.id}`, { allow: true, answer_key: t.answerKey });
+    assert.deepEqual([r.status, r.json.code, r.json.error], [403, 'not_shown', 'Answer it in the Magnusim window.']);
+    r = await s.post('/api/assistant/relay/gate', { link, gate: only.id, allow: true });
+    assert.equal(r.status, 200);
+    assert.equal(await asked, 'allow');
+    // An MCP client's question (no turn): no answer key answers it, nor a tab it was never sent to.
+    const mcp = gates.ask(REQ, { kind: 'mcp', session: 's-1' }, ac.signal);
+    off();
+    const mcpView = opened[1];
+    r = await s.post(`/api/assistant/gates/${mcpView.id}`, { allow: true, answer_key: t.answerKey });
+    assert.deepEqual([r.status, r.json.code], [403, 'answer_key']);
+    r = await s.post('/api/assistant/relay/gate', { link, gate: mcpView.id, allow: true });
+    assert.deepEqual([r.status, r.json.code], [403, 'not_shown']);
+    assert.equal(s.handle.turns.answerGate(mcpView.id, true, { kind: 'link', tab: page.tab }).status, 403);
+    ac.abort();
+    assert.equal(await mcp, 'deny');
+    assert.equal(shown.link_only, undefined, 'a confirm question is not link_only');
+    await s.post(`/api/assistant/gates/${shown.id}`, { allow: false, answer_key: t.answerKey });
+    await settled(t);
   });
 });
