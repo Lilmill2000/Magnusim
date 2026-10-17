@@ -26,7 +26,7 @@ import {
 } from './w17-sim-catalog.js';
 import { envGet } from './env-compat.js';
 import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-match.js';
-import { commitRpc, commitRpcSync } from './py-json.js';
+import { commitRpc } from './py-json.js';
 import { geometryFenced } from './server/link-job.js';
 import {
   collectChildRecs,
@@ -100,18 +100,9 @@ function readProject(id) {
   return JSON.parse(readFileSync(p, 'utf8'));
 }
 
-function writeProject(proj) {
-  const written = commitRpcSync('project.write_project', {
-    project_dir: projectDir(proj.id),
-    doc: proj,
-  });
-  if (written && typeof written === 'object') Object.assign(proj, written);
-  return proj;
-}
-
 /**
- * The same write through the long-lived worker. Switching study must not hold the whole
- * server while a new Python process starts (about a second each time).
+ * Saves project.json through the long-lived worker. A save must not hold the whole server
+ * while a new Python process starts (over a second each time; every tab's requests waited).
  * The worker answers one request at a time, so this save can run after the project was
  * deleted, and the worker refuses it then (it never makes the project again). False when
  * the project was deleted meanwhile.
@@ -861,7 +852,16 @@ function fencedGeometryAnswer(projectId, geometryIds) {
   return null;
 }
 
-function createSimulation(body) {
+/** The answer to a save the worker refused because the project was deleted meanwhile. */
+function deletedWhileSaved(projectId) {
+  return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
+}
+
+/**
+ * A new study (or a copy). Its folder and row are written here, and project.json through
+ * the worker (saveUnlessDeleted).
+ */
+async function createSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) {
     return { ok: false, status: 400, body: { error: 'no active project; create project first', soft_pass: false } };
@@ -931,7 +931,7 @@ function createSimulation(body) {
   if (activate) {
     touchProjectSimRef(proj, saved);
     try {
-      writeProject(proj);
+      if (!(await saveUnlessDeleted(proj))) return deletedWhileSaved(projectId);
     } catch (e) {
       console.error('[CFD] write project after create', e);
     }
@@ -1013,13 +1013,11 @@ async function updateSimulation(body) {
   const cat = upsertSimulationInCatalog(projectId, proj, sim, true, unset);
   const next = (cat.simulations || []).find((s) => s.id === sim.id) || sim;
   touchProjectSimRef(proj, next);
-  if (!(await saveUnlessDeleted(proj))) {
-    return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
-  }
+  if (!(await saveUnlessDeleted(proj))) return deletedWhileSaved(projectId);
   return { ok: true, status: 200, body: { ...catalogPayload(projectId, proj, cat), increment: 'W30' } };
 }
 
-function reorderSimulations(body) {
+async function reorderSimulations(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
@@ -1030,7 +1028,7 @@ function reorderSimulations(body) {
   const sim = (cat.simulations || []).find((s) => s.id === cat.active_id) || (cat.simulations || [])[0] || null;
   if (sim) {
     touchProjectSimRef(proj, sim);
-    writeProject(proj);
+    if (!(await saveUnlessDeleted(proj))) return deletedWhileSaved(projectId);
   }
   return { ok: true, status: 200, body: catalogPayload(projectId, proj, cat) };
 }
@@ -1046,9 +1044,7 @@ async function activateSimulation(body) {
   if (sim) {
     touchProjectSimRef(proj, sim);
     if (sim.geometry_id) proj.active_geometry_id = sim.geometry_id;
-    if (!(await saveUnlessDeleted(proj))) {
-      return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
-    }
+    if (!(await saveUnlessDeleted(proj))) return deletedWhileSaved(projectId);
   }
   return { ok: true, status: 200, body: catalogPayload(projectId, proj, cat) };
 }
@@ -1159,8 +1155,8 @@ export function purgeRemovedStudies(projectId, { simIds = [], geometryIds = [] }
  * @param {string} projectId
  * @param {{ geometryId: string, geometryName?: string, copyFrom: string }} o
  */
-export function createLinkedStudyCopy(projectId, o) {
-  const out = createSimulation({
+export async function createLinkedStudyCopy(projectId, o) {
+  const out = await createSimulation({
     project_id: projectId,
     geometry_id: o.geometryId,
     geometry_name: o.geometryName || null,
@@ -1195,7 +1191,8 @@ export function dropGeometryStudies(projectId, proj, geomId) {
   return pruneOrphanStudies(projectId, proj);
 }
 
-function deleteSimulation(body) {
+/** Its row goes, project.json is saved (through the worker), then its folder goes. */
+async function deleteSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
@@ -1215,7 +1212,7 @@ function deleteSimulation(body) {
     proj.active_simulation_id = null;
   }
   proj.updated_at = new Date().toISOString();
-  writeProject(proj);
+  if (!(await saveUnlessDeleted(proj))) return deletedWhileSaved(projectId);
   purgeRemovedStudies(projectId, { simIds: [simId] });
   return {
     ok: true,
@@ -1311,7 +1308,7 @@ export async function handleW17Api(req, res, u, parts, helpers) {
       } catch (e) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
-      const result = reorderSimulations(body || {});
+      const result = await reorderSimulations(body || {});
       return sendJson(res, result.status, result.body);
     }
     if (req.method === 'POST' && parts[2] === 'activate') {
@@ -1331,7 +1328,7 @@ export async function handleW17Api(req, res, u, parts, helpers) {
       } catch (e) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
-      const result = deleteSimulation(body || {});
+      const result = await deleteSimulation(body || {});
       return sendJson(res, result.status, result.body);
     }
     if (req.method === 'POST' && parts[2] === 'copy') {
@@ -1353,7 +1350,7 @@ export async function handleW17Api(req, res, u, parts, helpers) {
       }
       let result;
       try {
-        result = createSimulation(body);
+        result = await createSimulation(body);
       } catch (e) {
         console.error('[CFD] create simulation', e);
         return sendJson(res, 500, { error: String((e && e.message) || e) });

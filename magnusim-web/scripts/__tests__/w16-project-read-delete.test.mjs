@@ -459,6 +459,79 @@ describe("a study setting's save", () => {
   });
 });
 
+describe("a study's create, reorder and delete", () => {
+  /** A project with two studies on the teardrop (the second active), the active project; and study A's folder. */
+  function seedStudies(pid) {
+    const dir = seedProject(pid);
+    const folderA = createStudyFolder(dir, 'g-tear', { id: 'sim-a', name: 'Study A' }).dir;
+    createStudyFolder(dir, 'g-tear', { id: 'sim-b', name: 'Study B' });
+    saveCatalog(pid, {
+      simulations: [
+        { id: 'sim-a', name: 'Study A', geometry_id: 'g-tear' },
+        { id: 'sim-b', name: 'Study B', geometry_id: 'g-tear' },
+      ],
+      active_id: 'sim-b',
+    });
+    setActive(pid);
+    return { dir, folderA };
+  }
+  const studies = (pid) => call('GET', `/api/simulation?project_id=${pid}`, null, handleW17Api);
+  const ids = (body) => (body.simulations || []).map((s) => s.id);
+
+  const routes = {
+    create: { path: '/api/simulation', body: { geometry_id: 'g-tear' }, status: 201 },
+    reorder: { path: '/api/simulation/reorder', body: { ids: ['sim-b', 'sim-a'], geometry_id: 'g-tear' }, status: 200 },
+    delete: { path: '/api/simulation/delete', body: { simulation_id: 'sim-a' }, status: 200 },
+  };
+
+  // Each saved project.json through a new Python process (spawnSync): the whole server,
+  // every tab's requests, waited over a second for each one.
+  for (const [what, route] of Object.entries(routes)) {
+    it(`${what}: saves project.json through the worker, and the server answers meanwhile`, { timeout: 120_000 }, async () => {
+      const pid = `study-${what}-worker`;
+      const { dir, folderA } = seedStudies(pid);
+      const held = holdSaves(pid);
+      const saving = call('POST', route.path, { project_id: pid, ...route.body }, handleW17Api);
+      await held.saveHeld();
+
+      const meanwhile = await studies(pid);
+      assert.equal(meanwhile.statusCode, 200, JSON.stringify(meanwhile.body));
+      if (what === 'create') assert.equal(ids(meanwhile.body).length, 3, JSON.stringify(ids(meanwhile.body)));
+      if (what === 'reorder') assert.deepEqual(ids(meanwhile.body), ['sim-b', 'sim-a']);
+      // project.json is saved first, then the study's folder goes.
+      if (what === 'delete') assert.ok(existsSync(folderA), 'the folder went before project.json was saved');
+      held.release();
+      const saved = await saving;
+      assert.equal(saved.statusCode, route.status, JSON.stringify(saved.body));
+      const project = JSON.parse(readFileSync(join(dir, 'project.json'), 'utf8'));
+      assert.equal(project.active_simulation_id, saved.body.active_id, 'project.json names the active study');
+      if (what === 'create') assert.equal(project.active_simulation_id, saved.body.simulation.id, 'the new study is the active one');
+      if (what === 'delete') {
+        assert.equal(saved.body.deleted, 'sim-a');
+        assert.equal(existsSync(folderA), false, listing(join(dir, 'geometry')));
+      }
+    });
+
+    it(`${what}: answers that the project was deleted when it was deleted while the save waited`, { timeout: 120_000 }, async () => {
+      const pid = `study-${what}-delete`;
+      const { dir } = seedStudies(pid);
+      const held = holdSaves(pid);
+      const saving = call('POST', route.path, { project_id: pid, ...route.body }, handleW17Api).catch(asServerError);
+      await held.saveHeld();
+
+      const deleted = await call('POST', '/api/project/delete', { project_id: pid });
+      assert.equal(deleted.statusCode, 200, JSON.stringify(deleted.body));
+      assert.equal(existsSync(dir), false);
+      held.release();
+      const saved = await saving;
+      assert.equal(listing(dir), '', `the deleted project is back: ${dir}`);
+      assert.notEqual(activeId(), pid, 'the deleted project is the active project again');
+      assert.equal(saved.statusCode, 404, JSON.stringify(saved.body));
+      assert.equal(saved.body.error, 'project deleted while it was saved');
+    });
+  }
+});
+
 describe('the active project', () => {
   it('is never a deleted one', async () => {
     const kept = await call('POST', '/api/project', { title: 'Kept', category: 'Other', units: 'Metric' });
