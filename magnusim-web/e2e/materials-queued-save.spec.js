@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { removeTree } from '../scripts/remove-tree.js';
 import { seedElbowProject } from './prepare-projects.js';
 
 // A fluid picked in the Materials panel while the panel's first save of a new study's
@@ -15,13 +15,15 @@ import { seedElbowProject } from './prepare-projects.js';
 const PID = 'materials-queued-save-e2e';
 const PROJECTS = process.env.MAGNUSIM_PROJECTS_ROOT || resolve('e2e/.tmp-projects');
 
-test.beforeAll(() => {
-  rmSync(join(PROJECTS, PID), { recursive: true, force: true });
+// removeTree retries: on Windows the server can still hold a file in the project for a
+// moment after the test, and rmSync's maxRetries does nothing there on Node 24.
+test.beforeAll(async () => {
+  await removeTree(join(PROJECTS, PID), { maxRetries: 8, retryDelay: 200 });
   seedElbowProject(PROJECTS, PID, 'Materials queued save');
 });
 
-test.afterAll(() => {
-  rmSync(join(PROJECTS, PID), { recursive: true, force: true });
+test.afterAll(async () => {
+  await removeTree(join(PROJECTS, PID), { maxRetries: 8, retryDelay: 200 });
 });
 
 function deferred() {
