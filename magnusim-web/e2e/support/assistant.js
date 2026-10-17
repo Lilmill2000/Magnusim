@@ -40,30 +40,56 @@ export async function closeSettings(page) {
   await expect(page.locator('#setup-wizard')).toBeHidden();
 }
 
-/** Picks a provider in the step and waits until it is saved. */
+/** A provider's card in the step: every provider's is listed, whatever the default. */
+export function providerCard(page, id) {
+  return assistantPane(page).locator(`[data-assistant-card="${id}"]`);
+}
+
+/** The card of `provider`, or of the default the step shows now. */
+async function cardOf(page, provider) {
+  const id = provider ?? (await assistantPane(page).locator('[data-assistant-default]').getAttribute('data-assistant-default'));
+  return providerCard(page, id);
+}
+
+/** Picks the default provider in the step and waits until it is saved; its card opens. Returns the card (null for Off). */
 export async function chooseProvider(page, id) {
   const pane = assistantPane(page);
-  await pane.locator(`[data-assistant-provider-option="${id}"] input`).check();
-  await expect(pane.locator('[data-assistant-provider]')).toHaveAttribute('data-assistant-provider', id);
+  await pane.locator(`[data-assistant-default-option="${id}"] input`).check();
+  await expect(pane.locator('[data-assistant-default]')).toHaveAttribute('data-assistant-default', id);
+  if (id === 'off') return null;
+  const card = providerCard(page, id);
+  await expect(card).toHaveAttribute('data-open', '1');
+  return card;
 }
 
-/** Saves `key` in the step's key field and waits until the step shows it by its last 4. */
-export async function saveKey(page, key) {
-  const pane = assistantPane(page);
-  await pane.locator('[data-assistant-key-input]').fill(key);
-  await pane.locator('[data-assistant-key-save]').click();
-  await expect(pane.locator('[data-assistant-key-status]')).toHaveText(`Key set, ends in …${key.slice(-4)}`);
-  await expect(pane.locator('[data-assistant-key-input]')).toHaveValue('');
+/** Opens a provider's card (Set up) without changing the default; returns the card. */
+export async function openCard(page, id) {
+  const card = providerCard(page, id);
+  if ((await card.getAttribute('data-open')) !== '1') await card.locator(`[data-assistant-card-toggle="${id}"]`).click();
+  await expect(card).toHaveAttribute('data-open', '1');
+  return card;
 }
 
-/** Presses Test, waits for the server's answer and returns the result line (`[data-assistant-test-result]`). */
-export async function pressTest(page) {
-  const pane = assistantPane(page);
-  const result = pane.locator('[data-assistant-test-result]');
+/** Saves `key` in a provider's key field (the default's card without `provider`) and waits until the card shows it by its last 4. */
+export async function saveKey(page, key, provider) {
+  const card = await cardOf(page, provider);
+  await card.locator('[data-assistant-key-input]').fill(key);
+  await card.locator('[data-assistant-key-save]').click();
+  await expect(card.locator('[data-assistant-key-status]')).toHaveText(`Key set, ends in …${key.slice(-4)}`);
+  await expect(card.locator('[data-assistant-key-input]')).toHaveValue('');
+}
+
+/**
+ * Presses a provider card's Test (the default's without `provider`), waits for the server's
+ * answer and returns the result line (`[data-assistant-test-result]`).
+ */
+export async function pressTest(page, provider) {
+  const card = await cardOf(page, provider);
+  const result = card.locator('[data-assistant-test-result]');
   const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/test' && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  await pane.locator('[data-assistant-test]').click();
+  await card.locator('[data-assistant-test]').click();
   await answered;
   await expect(result).toHaveAttribute('data-assistant-test-result', /^(ok|failed)$/);
   return result;

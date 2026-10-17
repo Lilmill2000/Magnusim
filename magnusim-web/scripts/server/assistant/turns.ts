@@ -23,21 +23,32 @@
 import { randomBytes } from 'node:crypto';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import { runTurn, type EndState, type LoopDeps, type LoopTurn, type TurnSettings, type TurnState } from './loop.ts';
+import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, type Clock, type GateEvent, type GatePresenter, type GateView } from './gates.ts';
 import { destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
 import type { Registry } from './registry.ts';
 import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
 import { cleanText } from './sanitize.ts';
-import type { AssistantSettings } from './settings.ts';
+import { PROVIDER_IDS, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
 import { isCloud } from './providers/index.ts';
 import { ProviderError, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
 
-export type { TurnState } from './loop.ts';
+export type { TurnState, ModelTurnSettings } from './loop.ts';
+
+/**
+ * What a turn fixed when it started. Today a model provider's (loop.ts runs it); another
+ * kind of runner adds its own member to this union, with its own `kind`.
+ */
+export type TurnSettings = ModelTurnSettings;
+
+/** A model provider's settings (`kind` absent or 'model'): loop.ts runs the turn. */
+export function isModelSettings(s: TurnSettings): s is ModelTurnSettings {
+  return s.kind === undefined || s.kind === 'model';
+}
 
 export type TurnEvent = { seq: number; at: number } & (
   | { type: 'state'; state: TurnState }
@@ -125,7 +136,10 @@ interface TurnInit {
   onEnded?: (t: Turn) => void;
 }
 
-export class Turn implements LoopTurn {
+/** A Turn as any runner sees it: the loop's view, with settings of any kind. */
+type AnyTurn = Omit<LoopTurn, 'settings'> & { readonly settings: TurnSettings };
+
+export class Turn implements AnyTurn {
   readonly id: string;
   readonly prompt: string;
   readonly conv: Conversation;
@@ -462,6 +476,14 @@ export class Turn implements LoopTurn {
   }
 }
 
+/**
+ * The turn as loop.ts drives it, or null when its settings are not a model provider's. Narrowed
+ * once here: a guard inside runTurn would not narrow `t.settings` in the loop's helpers.
+ */
+export function modelTurn(t: Turn): LoopTurn | null {
+  return isModelSettings(t.settings) ? (t as LoopTurn) : null;
+}
+
 // ---------------------------------------------------------------- the manager
 
 /** What the manager needs of the secret store. */
@@ -477,7 +499,7 @@ export interface TurnManagerDeps {
   secrets(): TurnSecrets;
   deps(): Promise<'ok' | 'missing'>;
   ledger(): Promise<SpendLedger>;
-  createAdapter(s: TurnSettings, secrets: TurnSecrets): ProviderAdapter | Promise<ProviderAdapter>;
+  createAdapter(s: ModelTurnSettings, secrets: TurnSecrets): ProviderAdapter | Promise<ProviderAdapter>;
   registry: Registry;
   projects(id: string, o: { signal: AbortSignal; turn: string }): Promise<ProjectInfo | null>;
   remember(projectId: string, createdAt: string | null, destination: string): Promise<void>;
@@ -527,6 +549,21 @@ const optionalId = (v: unknown): string | null | false => {
   if (v === undefined || v === null || v === '') return null;
   return typeof v === 'string' && ID_RE.test(v) ? v : false;
 };
+
+/**
+ * The provider a turn's start names: a provider id, 'off', null when it names none (absent,
+ * null or ''), or false when it is no provider. Settings → Assistant names them.
+ */
+function namedProvider(v: unknown): ProviderId | 'off' | null | false {
+  if (v === undefined || v === null || v === '') return null;
+  if (v === 'off') return 'off';
+  return typeof v === 'string' && (PROVIDER_IDS as readonly string[]).includes(v) ? (v as ProviderId) : false;
+}
+
+const badProviderText = (v: unknown) =>
+  `${typeof v === 'string' ? `"${cleanText(v, 64)}" is not a provider` : 'provider must be text'}. Name one as Settings → Assistant does: ${PROVIDER_IDS.join(', ')}; or leave it out for the default.`;
+
+export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 
 /** Secret stores whose key changes stop turns: one listener per store in this process, however many managers. */
 const KEY_WATCH = Symbol.for('magnusim.assistant.keyWatch');
@@ -672,9 +709,14 @@ export class TurnManager {
     const ctxStudy = optionalId(context.simulation_id);
     if (ctxProject === false || ctxStudy === false) return refuse(400, 'bad_context', 'context.project_id and context.simulation_id are ids.');
 
+    const named = namedProvider(body.provider);
+    if (named === false) return refuse(400, 'bad_provider', badProviderText(body.provider));
+
     const settings = await this.d.settings();
-    const provider = settings.provider;
-    if (provider === 'off') return refuse(400, 'provider_off', 'The Assistant is off. Choose a provider in Settings → Assistant.');
+    // The turn's provider: the one its start names, else its conversation's own (a conversation
+    // stays bound to its provider), else the default. Every check below is about this one.
+    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? settings.provider;
+    if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
     if ((await this.d.deps()) === 'missing') return refuse(400, 'deps_missing', "The Assistant's packages aren't installed. Run Setup.bat again.");
     const model = settings.models[provider];
     if (!model) return refuse(400, 'no_model', 'Choose a model in Settings → Assistant first.');
@@ -702,7 +744,7 @@ export class TurnManager {
       simulationId = ctxStudy ?? (target.studyId || null);
     }
 
-    const cloud = isCloud(settings);
+    const cloud = isCloud({ provider, base_url: settings.base_url });
     if (cloud && projectId && settings.privacy === 'deny') {
       return refuse(400, 'privacy_denied', privacyDeniedText(provider, destinationHost(provider, settings.base_url)));
     }
@@ -714,7 +756,7 @@ export class TurnManager {
     }
 
     // From here to the turn's start nothing awaits: the checks and the start are one step.
-    const binding = { provider: provider as ProviderId, model, projectId };
+    const binding = { provider, model, projectId };
     let conv: Conversation | null = null;
     if (convId) {
       conv = this.conversations.get(convId);
@@ -729,7 +771,8 @@ export class TurnManager {
     }
     if (!conv) conv = this.conversations.create(binding);
     const turnSettings: TurnSettings = {
-      provider: provider as ProviderId,
+      kind: 'model',
+      provider,
       model,
       base_url: settings.base_url,
       effort: settings.effort,
@@ -774,8 +817,9 @@ export class TurnManager {
   }
 
   private launch(t: Turn, secrets: TurnSecrets): void {
-    const deps = this.loopDeps(secrets);
-    void runTurn(t, deps)
+    const loopTurn = modelTurn(t);
+    const run = loopTurn ? runTurn(loopTurn, this.loopDeps(secrets)) : Promise.reject(new Error('no runner for this kind of turn'));
+    void run
       .catch((err: unknown) => t.crash(err))
       .catch(() => {})
       .finally(() => {

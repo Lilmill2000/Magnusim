@@ -41,7 +41,9 @@ export interface Consent {
 
 export interface AssistantSettings {
   version: 1;
+  /** The default provider: a turn or a conversation may name another. */
   provider: ProviderChoice;
+  /** Each provider's own model, kept whatever the default is. */
   models: Record<ProviderId, string>;
   base_url: string;
   /** The non-loopback base_url the person confirmed (such a server counts as cloud). */
@@ -232,7 +234,9 @@ export type PatchResult =
   | { ok: true; settings: AssistantSettings }
   | { ok: false; status: 400 | 409; error: string; field?: string; needs_confirm?: 'base_url' };
 
-const PATCH_KEYS = new Set(['provider', 'model', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents']);
+const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents']);
+
+const MODEL_TEXT = 'A model id is 1–128 letters, digits and . _ : / -.';
 
 function refuse(error: string, field: string): PatchResult {
   return { ok: false, status: 400, error, field };
@@ -255,10 +259,19 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
     if (!PROVIDER_CHOICES.includes(patch.provider as ProviderChoice)) return refuse('Unknown provider.', 'provider');
     next.provider = patch.provider as ProviderChoice;
   }
-  if ('model' in patch) {
-    if (typeof patch.model !== 'string' || !MODEL_RE.test(patch.model)) {
-      return refuse('A model id is 1–128 letters, digits and . _ : / -.', 'model');
+  // Each provider keeps its own model, whatever the default: Settings' cards each save their own.
+  if ('models' in patch) {
+    if (!isRecord(patch.models)) return refuse('models must be an object of provider and model id.', 'models');
+    for (const [id, m] of Object.entries(patch.models)) {
+      // Own names only: "constructor" or "__proto__" is no provider.
+      if (!(PROVIDER_IDS as readonly string[]).includes(id)) return refuse(`Unknown provider "${id.slice(0, 40)}".`, `models.${id.slice(0, 40)}`);
+      if (typeof m !== 'string' || !MODEL_RE.test(m)) return refuse(MODEL_TEXT, `models.${id}`);
+      next.models[id as ProviderId] = m;
     }
+  }
+  // The bare `model` (older pages) is the default's: refused while the default is Off.
+  if ('model' in patch) {
+    if (typeof patch.model !== 'string' || !MODEL_RE.test(patch.model)) return refuse(MODEL_TEXT, 'model');
     if (next.provider === 'off') return refuse('Choose a provider before a model.', 'model');
     next.models[next.provider] = patch.model;
   }

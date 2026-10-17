@@ -19,7 +19,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { AssistantApiError, assistantGet, assistantPost, RemoteError, REMOTE_TEXT } from './api';
-import type { AssistantStatus } from './wire';
+import type { AssistantStatus, ProviderReady } from './wire';
 
 export type StatusSnapshot =
   | { state: 'loading' }
@@ -137,6 +137,35 @@ export async function writeStatus(path: string, body: unknown): Promise<WriteRes
       void refreshStatus();
     }
   }
+}
+
+// ---------------------------------------------------------------- each provider's readiness
+
+const KINDS: ReadonlySet<unknown> = new Set(['key', 'server', 'agent']);
+const BILLING: ReadonlySet<unknown> = new Set(['usd', 'free', 'agent_account']);
+
+/**
+ * A provider's readiness as the status says it (its row of `providers_ready`, each field
+ * checked), or null when the status has no row for it. A server older than per-provider
+ * readiness says it only for the default (`ready`, `ready_reason`), with no line to show.
+ */
+export function providerReady(status: AssistantStatus, id: string): ProviderReady | null {
+  const rows = status.providers_ready;
+  if (rows && typeof rows === 'object') {
+    const r = Object.hasOwn(rows, id) ? (rows[id] as Partial<ProviderReady> | undefined) : undefined;
+    if (!r || typeof r !== 'object') return null;
+    return {
+      label: typeof r.label === 'string' && r.label ? r.label : id,
+      kind: KINDS.has(r.kind) ? (r.kind as ProviderReady['kind']) : 'key',
+      ready: r.ready === true,
+      reason: typeof r.reason === 'string' && r.reason ? r.reason : null,
+      billing: BILLING.has(r.billing) ? (r.billing as ProviderReady['billing']) : 'usd',
+      detail: typeof r.detail === 'string' ? r.detail : '',
+    };
+  }
+  if (id !== status.provider || typeof status.ready !== 'boolean') return null;
+  const server = id === 'openai_compatible';
+  return { label: id, kind: server ? 'server' : 'key', ready: status.ready, reason: status.ready_reason ?? null, billing: server ? 'free' : 'usd', detail: '' };
 }
 
 // ---------------------------------------------------------------- leaving the step

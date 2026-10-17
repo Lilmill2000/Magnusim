@@ -635,6 +635,26 @@ describe('turns', () => {
     }
   });
 
+  it('a turn names any provider, whatever the default: that provider is asked, and app_status reports it', async () => {
+    assert.equal((await post('/api/assistant/key', { provider: 'anthropic', key: TURN_KEY })).status, 200);
+    assert.equal((await localServer()).status, 200);
+    assert.equal((await post('/api/assistant/settings', { models: { anthropic: 'claude-sonnet-5-5' }, privacy: 'allow' })).status, 200);
+    const before = fake.requests().length;
+    fake.reply({ text: 'Looking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'Fine.' });
+    const r = await post('/api/assistant/turns', { text: 'Status?', provider: 'anthropic' });
+    assert.equal(r.status, 202, r.text);
+    const { turn, events } = await follow(r.json.turn);
+    assert.equal(turn.state, 'done', JSON.stringify(events.slice(-3)));
+    const sent = fake.requests().slice(before);
+    assert.deepEqual([...new Set(sent.filter((x) => x.kind === 'chat').map((x) => x.dialect))], ['anthropic'], 'not the default local server');
+    assert.equal(sent.find((x) => x.dialect === 'anthropic').body.model, 'claude-sonnet-5-5', "the provider's own model");
+    const result = JSON.stringify(sent.at(-1).body.messages);
+    assert.match(result, /\\"assistant\\":\{\\"provider\\":\\"anthropic\\",\\"model\\":\\"claude-sonnet-5-5\\"\}/, "app_status names the turn's provider, not the default");
+    const bad = await post('/api/assistant/turns', { text: 'x', provider: 'bogus' });
+    assert.deepEqual([bad.status, bad.json.code], [400, 'bad_provider']);
+    assert.match(bad.json.error, /anthropic, openai, openai_compatible/);
+  });
+
   it('an error thrown inside a detached turn reaches only the log, redacted; the turn ends failed', async () => {
     assert.equal((await localServer()).status, 200);
     const r2 = new Router();

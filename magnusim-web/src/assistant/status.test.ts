@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_TEXT } from './api';
-import { refreshStatus, resetStatusStore, statusSnapshot, subscribeStatus, writeStatus } from './status';
+import { providerReady, refreshStatus, resetStatusStore, statusSnapshot, subscribeStatus, writeStatus } from './status';
+import type { AssistantStatus } from './wire';
 
 /** A fetch whose answers the test hands out, in any order. */
 type Pending = { url: string; method: string; body: string; answer: (status: number, body: unknown) => void };
@@ -231,5 +232,34 @@ describe('assistant status store', () => {
     take(isGet).answer(500, { ok: false, error: 'disk on fire', code: 'internal' });
     await read;
     expect(statusSnapshot()).toEqual({ state: 'error', message: 'disk on fire' });
+  });
+});
+
+describe("providers_ready: each provider's readiness, read field by field", () => {
+  const asStatus = (extra: Record<string, unknown>) => status(extra) as unknown as AssistantStatus;
+
+  it('a row as the server sends it', () => {
+    const row = { label: 'Anthropic', kind: 'key', ready: true, reason: null, billing: 'usd', detail: 'Key set, ends in …a1b2 · claude-opus-5-5' };
+    const s = asStatus({ provider: 'off', providers_ready: { anthropic: row, openai: { ...row, label: 'OpenAI', ready: false, reason: 'no_key', detail: 'No key' } } });
+    expect(providerReady(s, 'anthropic')).toEqual(row);
+    expect(providerReady(s, 'openai')).toEqual({ ...row, label: 'OpenAI', ready: false, reason: 'no_key', detail: 'No key' });
+    expect(providerReady(s, 'openai_compatible')).toBeNull();
+  });
+
+  it('odd fields fall back to safe values: not ready, no line, the id as its label, a key provider billed in $', () => {
+    const s = asStatus({ providers_ready: { x: { label: 7, kind: 'vendor', ready: 'yes', reason: '', billing: 'free money', detail: null }, y: 'ready', z: null } });
+    expect(providerReady(s, 'x')).toEqual({ label: 'x', kind: 'key', ready: false, reason: null, billing: 'usd', detail: '' });
+    expect(providerReady(s, 'y')).toBeNull();
+    expect(providerReady(s, 'z')).toBeNull();
+    // Only its own rows: no inherited name is a provider.
+    expect(providerReady(s, 'constructor')).toBeNull();
+    expect(providerReady(s, '__proto__')).toBeNull();
+  });
+
+  it('from a server without it: the default from ready and ready_reason (no line), and nothing for any other', () => {
+    const s = asStatus({ provider: 'openai_compatible', ready: false, ready_reason: 'no_model' });
+    expect(providerReady(s, 'openai_compatible')).toEqual({ label: 'openai_compatible', kind: 'server', ready: false, reason: 'no_model', billing: 'free', detail: '' });
+    expect(providerReady(s, 'anthropic')).toBeNull();
+    expect(providerReady(asStatus({ provider: 'anthropic' }), 'anthropic')).toBeNull();
   });
 });

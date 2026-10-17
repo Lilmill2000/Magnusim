@@ -182,6 +182,23 @@ describe('assistant-run.mjs', () => {
     assert.equal((await cli([])).code, 1);
   });
 
+  it('--provider goes to the app as it is: the turn runs on it, and the app refuses one it does not know naming them all', async () => {
+    let r = await cli(['--provider', 'bogus', 'Hello']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /^"bogus" is not a provider\. Name one as Settings → Assistant does: .+; or leave it out for the default\.\n$/);
+    // Another provider than the default: its own checks (no key saved for it here).
+    r = await cli(['--provider', 'anthropic', 'Hello']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /^No key is saved for this provider\./);
+    fake.reply({ text: 'Named.' });
+    r = await cli(['--json', '--provider', 'openai_compatible', 'Hello']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.includes('"text":"Named."'));
+    assert.equal((await cli(['--provider'])).code, 1, 'it needs a value');
+    const help = await cli(['--help']);
+    assert.match(help.stdout, /\n {2}--provider <id> {6}a provider as Settings → Assistant names it; without it the\n/);
+  });
+
   it('without --port it dials the port the app listens on: the saved one before MAGNUSIM_PORT, as the app picks it', async () => {
     const prefs = process.env.MAGNUSIM_LOCAL_JSON;
     const before = existsSync(prefs) ? readFileSync(prefs, 'utf8') : null;

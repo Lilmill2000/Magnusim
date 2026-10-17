@@ -13,20 +13,25 @@
  * 3. no key travels in a URL or an answer: the key routes take one in a POST body and
  *    answer the status, which shows only set/unset and the last 4 characters.
  *
- *   GET  /api/assistant/status          the status (never runs a helper)
- *   POST /api/assistant/settings        a partial change → status; 400 {error, field}; 409 {needs_confirm:'base_url'}
+ *   GET  /api/assistant/status          the status (never runs a helper): the default provider and
+ *                                        each provider's readiness (providers_ready)
+ *   POST /api/assistant/settings        a partial change → status; 400 {error, field}; 409 {needs_confirm:'base_url'}.
+ *                                        models: {<provider>: id} saves each provider's own model
  *   POST /api/assistant/key             {provider, key} → status (+ warning); 400; 409 storage_unavailable; 500
  *   POST /api/assistant/key/remove      {provider} → status; 400
  *   GET  /api/assistant/models?provider= {ok, models, source}: the curated list, merged with what
  *                                        the provider lists for this key ('provider'), or what the
  *                                        local server lists ('server'); 400; 502 {code, error, models}
- *   POST /api/assistant/test            {} → Settings' connection test: {ok:true, model, served_by,
- *                                        ms, tools, cost_usd} or {ok:false, code, error}; 400 when
- *                                        it can't start; 409 while one runs
- *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}}
+ *   POST /api/assistant/test            {provider?} → Settings' connection test of that provider (the
+ *                                        default without one): {ok:true, model, served_by, ms, tools,
+ *                                        cost_usd} or {ok:false, code, error}; 400 when it can't
+ *                                        start; 409 while one runs
+ *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?}
  *                                        → 202 {ok, conversation, turn}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
- *                                        an app tab's id, or 'auto' for the only connected one
+ *                                        an app tab's id, or 'auto' for the only connected one.
+ *                                        provider: any provider, whatever the default (without
+ *                                        one: the conversation's own, else the default)
  *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
  *                                        (a long-poll: waits for an event after `since`)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
@@ -190,26 +195,45 @@ const STATUS_PARTS: StatusPart[] = [
         key: id === 'openai_compatible' ? 'optional' : 'required',
         models: curatedModels(id),
       })),
+      /** The default's model's price (older pages); `prices` has each provider's. */
       price: provider === 'off' || !model ? null : priceInfo(provider, model),
+      prices: perProvider((id) => (s.models[id] ? priceInfo(id, s.models[id]) : null)),
       prices_as_of: PRICES_AS_OF,
-      /** The provider may retry a declined request on an older model of its own (Opus and Sonnet 5.5). */
-      fallback:
-        provider === 'anthropic' && Object.hasOwn(FALLBACK_TARGETS, model) ? { on: true, targets: [...FALLBACK_TARGETS[model]] } : { on: false, targets: [] },
+      /** The default's model may be retried on an older model of its provider's own (Opus and Sonnet 5.5); `fallbacks` per provider. */
+      fallback: fallbackOf(provider === 'off' ? null : provider, model),
+      fallbacks: perProvider((id) => fallbackOf(id, s.models[id])),
       /** MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL is in use (both cloud providers go to a fake). */
       test_provider: testProviderUrl() !== null,
     };
   },
   (src) => readiness(src),
+  (src) => ({
+    /** The provider a turn uses when it names none (= `provider`, kept for older pages). */
+    default_provider: src.settings.provider,
+    /** Each provider's readiness: a turn or the Test may name any of them, whatever the default. */
+    providers_ready: perProvider((id) => providerRow(id, src)),
+  }),
 ];
 
-/** Whether a turn or the Test could start now, and the first reason it can't. */
-function readiness({ settings: s, store, deps }: StatusSources): { ready: boolean; ready_reason: string | null } {
-  const no = (ready_reason: string) => ({ ready: false, ready_reason });
-  if (s.provider === 'off') return no('provider_off');
+function perProvider<T>(fn: (id: ProviderId) => T): Record<ProviderId, T> {
+  return Object.fromEntries(PROVIDER_IDS.map((id) => [id, fn(id)])) as Record<ProviderId, T>;
+}
+
+/** Whether the provider may retry a declined request of this model on an older model of its own. */
+function fallbackOf(provider: ProviderId | null, model: string): { on: boolean; targets: string[] } {
+  return provider === 'anthropic' && Object.hasOwn(FALLBACK_TARGETS, model) ? { on: true, targets: [...FALLBACK_TARGETS[model]] } : { on: false, targets: [] };
+}
+
+/**
+ * Whether a turn or the Test could start now on `provider`, and the first reason it can't (the
+ * codes POST /turns and the Test refuse with).
+ */
+export function providerReadiness(provider: ProviderId, { settings: s, store, deps }: StatusSources): { ready: boolean; reason: string | null } {
+  const no = (reason: string) => ({ ready: false, reason });
   if (deps === 'missing') return no('deps_missing');
-  if (!s.models[s.provider]) return no('no_model');
-  const key = store.status()[s.provider];
-  if (s.provider !== 'openai_compatible') {
+  if (!s.models[provider]) return no('no_model');
+  const key = store.status()[provider];
+  if (provider !== 'openai_compatible') {
     if (store.storage().kind === 'unavailable') return no('storage_unavailable');
     if (!key.set) return no('no_key');
   } else if (key.set) {
@@ -218,7 +242,55 @@ function readiness({ settings: s, store, deps }: StatusSources): { ready: boolea
     if (!key.origin || key.origin !== serverOrigin(s.base_url)) return no('token_other_server');
   }
   if (key.set && key.state === 'unreadable') return no('key_unreadable');
-  return { ready: true, ready_reason: null };
+  return { ready: true, reason: null };
+}
+
+/** Whether a turn naming no provider (the default's) or the Test could start now, and the first reason it can't. */
+function readiness(src: StatusSources): { ready: boolean; ready_reason: string | null } {
+  if (src.settings.provider === 'off') return { ready: false, ready_reason: 'provider_off' };
+  const r = providerReadiness(src.settings.provider, src);
+  return { ready: r.ready, ready_reason: r.reason };
+}
+
+/** Why a provider can't run, as its line in Settings says it. */
+const NOT_READY_DETAIL: Readonly<Record<string, string>> = Object.freeze({
+  deps_missing: "The Assistant's packages aren't installed",
+  no_model: 'No model chosen',
+  storage_unavailable: "Keys can't be stored on this PC",
+  no_key: 'No key',
+  token_locked: "The saved token can't be unlocked",
+  token_other_server: 'The saved token is for another server address',
+  key_unreadable: "The saved key can't be decrypted",
+});
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** One provider's row of `providers_ready`: its readiness, how it is paid for, and the line Settings shows. */
+function providerRow(id: ProviderId, src: StatusSources): Record<string, unknown> {
+  const s = src.settings;
+  const r = providerReadiness(id, src);
+  const key = src.store.status()[id];
+  const model = s.models[id];
+  const server = id === 'openai_compatible';
+  let detail: string;
+  if (!r.ready) detail = NOT_READY_DETAIL[r.reason ?? ''] ?? 'Not ready';
+  else if (server) detail = `${hostOf(s.base_url)} · ${model}${key.set ? ' · token set' : ''}`;
+  else detail = `${key.last4 ? `Key set, ends in …${key.last4}` : 'Key set'} · ${model}`;
+  return {
+    label: PROVIDER_LABELS[id],
+    kind: server ? 'server' : 'key',
+    ready: r.ready,
+    reason: r.reason,
+    // The $ meter counts cloud providers only: a local server (or one off this PC) is not priced.
+    billing: server ? 'free' : 'usd',
+    detail,
+  };
 }
 
 /** What GET /api/assistant/status answers. Reads files; never runs a helper. */
@@ -317,10 +389,13 @@ async function listModels(provider: ProviderId, settings: AssistantSettings): Pr
  * Test block started afresh): nobody waits for the result, so the test stops and the next
  * one may start at once.
  */
-async function connectionTest(gone?: AbortSignal): Promise<Answer> {
+async function connectionTest(asked: unknown, gone?: AbortSignal): Promise<Answer> {
   const settings = await loadSettings();
   const refuse = (code: string, error: string, status = 400): Answer => ({ status, body: { ok: false, code, error } });
-  const provider = settings.provider;
+  // The provider named (each Settings card tests its own), else the default.
+  const named = asked === undefined || asked === null || asked === '' ? null : asked;
+  if (named !== null && named !== 'off' && !isProviderId(named)) return refuse('bad_provider', 'Unknown provider.');
+  const provider = named === null ? settings.provider : (named as ProviderId | 'off');
   if (provider === 'off') return refuse('provider_off', 'Choose a provider first.');
   if ((await depsStatus()).state === 'missing') return refuse('deps_missing', DEPS_MISSING_TEXT);
   const model = settings.models[provider];
@@ -349,7 +424,7 @@ async function connectionTest(gone?: AbortSignal): Promise<Answer> {
   else gone?.addEventListener('abort', stop, { once: true });
   try {
     const ledger = await spendLedger();
-    const adapter = createAdapter(settings, store);
+    const adapter = createAdapter({ provider, base_url: settings.base_url }, store);
     const result = await runConnectionTest({
       adapter,
       provider,
@@ -645,7 +720,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   router.post(
     '/api/assistant/test',
     local(async (ctx) => {
-      await ctx.readJsonBody();
+      const body = await ctx.readJsonBody();
       // A client that goes away stops its test.
       const gone = new AbortController();
       const onClose = () => {
@@ -653,7 +728,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       };
       ctx.res.on('close', onClose);
       try {
-        const r = await connectionTest(gone.signal);
+        const r = await connectionTest(body.provider, gone.signal);
         if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.sendJson(r.status, r.body);
       } finally {
         ctx.res.off('close', onClose);

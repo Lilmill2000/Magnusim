@@ -1232,6 +1232,45 @@ describe('the routes: status, models and the connection test', () => {
     assert.deepEqual([r.json.ok, r.json.tools, r.json.cost_usd], [true, 'as_text', 0]);
   });
 
+  it('status per provider: the default and each provider’s readiness side by side, with its line, billing, price and fallback', async () => {
+    await api('POST', '/api/assistant/key/remove', { provider: 'openai' });
+    await api('POST', '/api/assistant/key', { provider: 'anthropic', key: KEYS.anthropic });
+    const s = (await api('POST', '/api/assistant/settings', { provider: 'openai_compatible', base_url: fake.compatBase, models: { openai_compatible: 'qwen3.8-27b', anthropic: 'claude-opus-5-5' } })).json;
+    assert.deepEqual([s.provider, s.default_provider, s.ready, s.ready_reason], ['openai_compatible', 'openai_compatible', true, null]);
+    const host = new URL(fake.compatBase).host;
+    assert.deepEqual(s.providers_ready, {
+      anthropic: { label: 'Anthropic', kind: 'key', ready: true, reason: null, billing: 'usd', detail: `Key set, ends in …${KEYS.anthropic.slice(-4)} · claude-opus-5-5` },
+      openai: { label: 'OpenAI', kind: 'key', ready: false, reason: 'no_key', billing: 'usd', detail: 'No key' },
+      openai_compatible: { label: 'Local server', kind: 'server', ready: true, reason: null, billing: 'free', detail: `${host} · qwen3.8-27b` },
+    });
+    // Each provider's model's price and fallback, whatever the default; the default's as before.
+    assert.deepEqual([s.prices.anthropic.input, s.prices.openai.known, s.prices.openai_compatible.local, s.price.local], [4, true, true, true]);
+    assert.deepEqual(s.fallbacks, { anthropic: { on: true, targets: ['claude-opus-5', 'claude-opus-4-8'] }, openai: { on: false, targets: [] }, openai_compatible: { on: false, targets: [] } });
+    assert.deepEqual(s.fallback, { on: false, targets: [] });
+    const off = (await api('POST', '/api/assistant/settings', { provider: 'off' })).json;
+    assert.deepEqual([off.default_provider, off.ready_reason, off.providers_ready.anthropic.ready], ['off', 'provider_off', true], 'Off is no default; every provider keeps its readiness');
+    await api('POST', '/api/assistant/settings', { provider: 'openai_compatible' });
+  });
+
+  it("the test names its provider (each Settings card tests its own), whatever the default; refused for one that can't run", async () => {
+    await api('POST', '/api/assistant/settings', { provider: 'openai_compatible', base_url: fake.compatBase, models: { openai_compatible: 'qwen3.8-27b', anthropic: 'claude-opus-5-5' } });
+    fake.reply({ tools: [{ name: 'connection_check', input: { word: 'ok' } }] }, { text: 'Connected.' });
+    const before = { anthropic: chat('anthropic').length, compat: chat('compat').length };
+    let r = await api('POST', '/api/assistant/test', { provider: 'anthropic' });
+    assert.deepEqual([r.status, r.json.ok, r.json.model, r.json.tools], [200, true, 'claude-opus-5-5', 'works'], JSON.stringify(r.json));
+    assert.deepEqual([chat('anthropic').length - before.anthropic, chat('compat').length - before.compat], [2, 0], 'the named provider, not the default');
+    r = await api('POST', '/api/assistant/test', { provider: 'openai' });
+    assert.deepEqual([r.status, r.json.code, r.json.error], [400, 'no_key', 'No key is saved for OpenAI. Add one first.']);
+    r = await api('POST', '/api/assistant/test', { provider: 'bogus' });
+    assert.deepEqual([r.status, r.json.code], [400, 'bad_provider']);
+    r = await api('POST', '/api/assistant/test', { provider: 'off' });
+    assert.deepEqual([r.status, r.json.code], [400, 'provider_off']);
+    // No provider: the default's, as before.
+    fake.reply({ text: 'Connected.' });
+    r = await api('POST', '/api/assistant/test', {});
+    assert.deepEqual([r.status, r.json.ok, r.json.model], [200, true, 'qwen3.8-27b']);
+  });
+
   it('the routes’ time limits: above what the watchdog allows, and running out reads timeout, not Stopped', async () => {
     for (const provider of PROVIDERS) {
       const wd = provider === 'openai_compatible' ? LOCAL_WATCHDOG : CLOUD_WATCHDOG;

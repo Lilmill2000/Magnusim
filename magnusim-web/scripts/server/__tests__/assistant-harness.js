@@ -232,7 +232,9 @@ export function hostTool(name, { risk = 'read', run, schema = EMPTY, title, proj
 
 /**
  * A TurnManager on a ScriptedProvider and a fake clock. Returns the pieces a test steers:
- * {manager, provider, clock, settings, keys, ledger, registry, projects, consents, dir}.
+ * {manager, provider, adapters, clock, settings, keys, ledger, registry, projects, consents, dir}.
+ * `provider` is the default's adapter; a turn naming another provider gets `adapters[id]`
+ * (made on first use, or given as `o.adapters`), so each provider's requests are its own.
  */
 export function makeManager(o = {}) {
   const clock = o.clock ?? new FakeClock();
@@ -261,6 +263,8 @@ export function makeManager(o = {}) {
   const ledger = new SpendLedger({ file: join(o.dir, `spend-${Math.random().toString(36).slice(2)}.json`), clock: () => clock.date() });
   const registry = o.registry ?? createToolRegistry({ hostTools: o.hostTools ?? [], ...(o.pluginEpoch ? { pluginEpoch: o.pluginEpoch } : {}) });
   const provider = o.adapter ?? new ScriptedProvider({ id: settings.provider });
+  const adapters = { ...(o.adapters ?? {}) };
+  adapters[settings.provider] ??= provider;
   const projects = new Map(Object.entries(o.projects ?? {}));
   const consents = [];
   const deps = {
@@ -271,7 +275,7 @@ export function makeManager(o = {}) {
       await ledger.load();
       return ledger;
     },
-    createAdapter: o.createAdapter ?? (async () => provider),
+    createAdapter: o.createAdapter ?? (async (s) => (adapters[s.provider] ??= new ScriptedProvider({ id: s.provider }))),
     registry,
     projects: async (id) => (projects.has(id) ? { ...projects.get(id) } : null),
     remember: async (projectId, createdAt, destination) => {
@@ -290,6 +294,7 @@ export function makeManager(o = {}) {
     /** The TurnManager's deps (registerAssistantRoutes takes them as `turns`). */
     deps,
     provider,
+    adapters,
     clock,
     state,
     keys,

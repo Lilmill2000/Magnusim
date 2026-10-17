@@ -53,8 +53,13 @@ import {
 export type TurnState = 'starting' | 'awaiting_consent' | 'model' | 'tools' | 'awaiting_confirmation' | 'done' | 'stopped' | 'failed' | 'capped';
 export type EndState = 'done' | 'stopped' | 'failed' | 'capped';
 
-/** What a turn fixed when it started (provider, model, address and effort don't follow later changes). */
-export interface TurnSettings {
+/**
+ * What a model provider's turn fixed when it started (provider, model, address and effort
+ * don't follow later changes): the turn's own provider, the default or the one its start
+ * named (turns.ts). `kind` is optional, so settings written before it existed stay valid.
+ */
+export interface ModelTurnSettings {
+  kind?: 'model';
   provider: ProviderId;
   model: string;
   base_url: string;
@@ -74,7 +79,7 @@ export interface LoopTurn extends RunnerTurn {
   readonly tab: string | null;
   readonly projectId: string | null;
   readonly simulationId: string | null;
-  readonly settings: TurnSettings;
+  readonly settings: ModelTurnSettings;
   readonly conv: Conversation;
   readonly signal: AbortSignal;
   readonly ended: boolean;
@@ -106,7 +111,7 @@ export interface LoopRegistry {
 }
 
 export interface LoopDeps {
-  createAdapter(s: TurnSettings): ProviderAdapter | Promise<ProviderAdapter>;
+  createAdapter(s: ModelTurnSettings): ProviderAdapter | Promise<ProviderAdapter>;
   /** The live settings (caps are min'd with the turn's, privacy is read from them). */
   settings(): Promise<AssistantSettings>;
   ledger(): Promise<SpendLedger>;
@@ -173,7 +178,7 @@ function callCap(t: LoopTurn, caps: Caps): CapHit | null {
 }
 
 /** The request for this step (maxOutputTokens is set from the estimate). */
-export function buildRequest(conv: Conversation, tools: readonly ToolDef[], s: TurnSettings): ProviderRequest {
+export function buildRequest(conv: Conversation, tools: readonly ToolDef[], s: ModelTurnSettings): ProviderRequest {
   const system = [{ text: SYSTEM_PROMPT, cache: true }];
   if (conv.guide) system.push({ text: guideBlock(conv.guide.text, conv.guide.pluginName), cache: true });
   return { model: s.model, system, messages: [...conv.messages], tools: providerTools(tools), maxOutputTokens: 0, effort: s.effort };
@@ -382,7 +387,15 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
     if (step > 1) syncGuide(t, workspaceNow(), true);
 
-    const ctx: ToolCtx = { tab: t.tab, projectId: t.projectId, simulationId: t.simulationId, cloud: adapter.cloud, local: adapter.id === 'openai_compatible' };
+    const ctx: ToolCtx = {
+      tab: t.tab,
+      projectId: t.projectId,
+      simulationId: t.simulationId,
+      cloud: adapter.cloud,
+      local: adapter.id === 'openai_compatible',
+      // app_status reports the turn's own provider and model, not the default's.
+      assistant: { provider: t.settings.provider, model: t.settings.model },
+    };
     let tools: ToolDef[];
     if (finalStep && lastTools) {
       // The summing-up request keeps the tool list, so the cached prefix holds.

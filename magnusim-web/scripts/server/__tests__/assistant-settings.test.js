@@ -107,17 +107,23 @@ describe('defaults and bounds', () => {
     assert.equal(field({ forget_consents: 'yes' }), 'forget_consents');
     assert.equal(field({ confirm_remote: 1 }), 'confirm_remote');
     assert.equal(field({ api_key: 'sk-not-here' }), 'api_key');
-    assert.equal(field({ models: {} }), 'models');
+    assert.equal(field({ models: [] }), 'models');
+    assert.equal(field({ models: 'gpt-6-luna' }), 'models');
+    assert.equal(field({ models: { cloud: 'x' } }), 'models.cloud');
+    assert.equal(field({ models: { off: 'x' } }), 'models.off');
+    assert.equal(field({ models: { anthropic: 'bad model' } }), 'models.anthropic');
+    assert.equal(field({ models: { openai_compatible: '' } }), 'models.openai_compatible');
     assert.equal(S.validatePatch(d, null).ok, false);
     assert.equal(S.validatePatch(d, []).ok, false);
-    // Names every object inherits are no limit (parsed as a request body is, so __proto__ is an own key).
+    // Names every object inherits are no limit or provider (parsed as a request body is, so __proto__ is an own key).
     for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
       assert.equal(field(JSON.parse(`{"caps":{"${name}":5}}`)), `caps.${name}`, name);
+      assert.equal(field(JSON.parse(`{"models":{"${name}":"x"}}`)), `models.${name}`, name);
       assert.equal(field(JSON.parse(`{"${name}":5}`)), name, name);
     }
   });
 
-  it('a model id belongs to the provider chosen (now or in the same change)', () => {
+  it('a bare model id is the default provider’s (now or in the same change); refused while the default is Off', () => {
     const d = S.defaultSettings();
     const r = S.validatePatch(d, { provider: 'openai_compatible', model: 'qwen3:32b' });
     assert.equal(r.ok, true);
@@ -125,6 +131,24 @@ describe('defaults and bounds', () => {
     assert.equal(r.settings.models.anthropic, 'claude-opus-5-5');
     const r2 = S.validatePatch(r.settings, { model: 'org/model-v1.5' });
     assert.equal(r2.settings.models.openai_compatible, 'org/model-v1.5');
+    const off = S.validatePatch(d, { model: 'claude-sonnet-5-5' });
+    assert.deepEqual([off.ok, off.status, off.field], [false, 400, 'model']);
+  });
+
+  it("each provider's card saves its own model (models), never into the default's, whatever the default (Off included)", () => {
+    const d = { ...S.defaultSettings(), provider: 'anthropic' };
+    const r = S.validatePatch(d, { models: { openai_compatible: 'x' } });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.settings.models, { anthropic: 'claude-opus-5-5', openai: 'gpt-6.1-sol', openai_compatible: 'x' });
+    assert.equal(r.settings.provider, 'anthropic', 'the default stays');
+    const two = S.validatePatch(r.settings, { models: { openai: 'gpt-6-luna', anthropic: 'claude-sonnet-5-5' } });
+    assert.deepEqual(two.settings.models, { anthropic: 'claude-sonnet-5-5', openai: 'gpt-6-luna', openai_compatible: 'x' });
+    const off = S.validatePatch(S.defaultSettings(), { models: { anthropic: 'claude-sonnet-5-5' } });
+    assert.equal(off.ok, true, 'with the default Off');
+    assert.equal(off.settings.models.anthropic, 'claude-sonnet-5-5');
+    // Changing the default changes no provider's model.
+    const moved = S.validatePatch(two.settings, { provider: 'openai_compatible' });
+    assert.deepEqual(moved.settings.models, two.settings.models);
   });
 });
 

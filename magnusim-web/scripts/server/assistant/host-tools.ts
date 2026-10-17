@@ -3,8 +3,9 @@
  * routes (host-call.ts), each answer built from a whitelist of fields (never a path, the
  * projects folder or a thumbnail address).
  *
- *   app_status       {}                 the app's version, the Assistant's provider and
- *                                       model, the loaded plugins, the compute queue
+ *   app_status       {}                 the app's version, the turn's provider and model
+ *                                       (ToolCtx.assistant; else the default's), the loaded
+ *                                       plugins, the compute queue
  *   project_summary  {}                 the turn's project: title, units, mesh and run
  *                                       state, geometries, studies (project data)
  *   explain_ready    {simulation_id?}   what blocks a run, as the Start button sees it
@@ -28,7 +29,7 @@ import type { JsonSchemaObject } from './types.ts';
 
 export interface HostToolDeps {
   hostGet: HostGet;
-  /** The Assistant's provider and model as Settings has them. */
+  /** The default provider and model as Settings has them (for a call that names no turn's own). */
   assistant(): Promise<{ provider: string; model: string }>;
   /** The app's version (package.json). */
   version(): Promise<string>;
@@ -75,7 +76,13 @@ export function createHostTools(d: HostToolDeps): ToolDef[] {
     available: () => true,
     async run(_input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       try {
-        const [version, assistant, queue] = await Promise.all([d.version(), d.assistant(), d.hostGet('/api/compute-queue', {}, { signal: rt.signal, turn: rt.turn })]);
+        // The turn's own provider and model (a turn may run on another than the default).
+        const own = rt.ctx.assistant;
+        const [version, assistant, queue] = await Promise.all([
+          d.version(),
+          own ? Promise.resolve(own) : d.assistant(),
+          d.hostGet('/api/compute-queue', {}, { signal: rt.signal, turn: rt.turn }),
+        ]);
         const plugins = d
           .plugins()
           .filter(isRecord)

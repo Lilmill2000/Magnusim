@@ -60,11 +60,34 @@ export interface PriceInfo {
   cache_read?: number;
 }
 
+/**
+ * A provider's readiness in the status (`providers_ready`): a turn or the Test may name any
+ * provider, whatever the default. `reason` is the code POST /turns refuses with; `detail` is
+ * the one line Settings shows ("Key set, ends in …a1b2 · <model>", "No key").
+ */
+export interface ProviderReady {
+  label: string;
+  kind: 'key' | 'server' | 'agent';
+  ready: boolean;
+  reason: string | null;
+  /** 'usd': counted by the $ meter and limits; 'free': not priced (a local server). */
+  billing: 'usd' | 'free' | 'agent_account';
+  detail: string;
+}
+
+/** Whether a declined request may be retried on an older model: `true`, a non-empty list, or `{on: true, targets}`. */
+export type FallbackInfo = boolean | string[] | { on: boolean; targets?: string[] } | null;
+
 /** GET /api/assistant/status. */
 export interface AssistantStatus {
   ok: true;
   available: true;
+  /** The default provider (a turn or a conversation may name another). */
   provider: ProviderChoice;
+  /** The same as `provider`, under its newer name. */
+  default_provider?: ProviderChoice;
+  /** Each provider's readiness, keyed by its id (absent from an older server). */
+  providers_ready?: Partial<Record<string, ProviderReady>>;
   /** The chosen model of each provider ('' for a local server not set yet). */
   models: Record<ProviderId, string>;
   base_url: string;
@@ -85,18 +108,22 @@ export interface AssistantStatus {
   deps?: 'ok' | 'missing';
   /** With the model adapters. */
   providers?: unknown;
-  /** With the model adapters: the chosen model's price, null for none. */
+  /** With the model adapters: the default's model's price, null for none. */
   price?: PriceInfo | null;
+  /** Each provider's model's price (null: no model chosen). */
+  prices?: Partial<Record<ProviderId, PriceInfo | null>>;
   /** With the model adapters: the date the price table was read. */
   prices_as_of?: string;
   /**
-   * With the model adapters: the provider may retry a declined request on an older model.
-   * On only as `true`, a non-empty list of models, or `{on: true, targets}`.
+   * With the model adapters: the default's provider may retry a declined request on an older
+   * model. On only as `true`, a non-empty list of models, or `{on: true, targets}`.
    */
-  fallback?: boolean | string[] | { on: boolean; targets?: string[] } | null;
+  fallback?: FallbackInfo;
+  /** The same, for each provider's own model. */
+  fallbacks?: Partial<Record<ProviderId, FallbackInfo>>;
   /** With the model adapters: the test provider address switch is in use. */
   test_provider?: boolean;
-  /** With the model adapters. */
+  /** With the model adapters: whether a turn naming no provider (the default's) could start. */
   ready?: boolean;
   ready_reason?: string | null;
 }

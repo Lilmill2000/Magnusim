@@ -1,6 +1,9 @@
 /**
- * Settings → Assistant (Foundation spec 4.3): the provider, its endpoint, key and model,
- * effort, a connection Test, privacy, limits and today's spend. Every change saves at once,
+ * Settings → Assistant (Foundation spec 4.3; phase 3 spec 5.6): the default provider, then a
+ * card for every provider, always listed whatever the default (each with its endpoint, key,
+ * model, effort and connection Test, saved for that provider only), privacy, limits and
+ * today's spend. A conversation may use any provider, so nothing is removed when the default
+ * changes. The default's card starts open; the others open with Set up. Every change saves at once,
  * and every save answers with the whole status (src/assistant/status.ts). Leaving the step
  * saves a key pasted but not saved, and waits for the changes on their way (stepChange):
  * a refused one keeps the step on screen with its reason, and a key saved with a warning
@@ -18,7 +21,7 @@
  */
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { AssistantApiError, assistantGet, assistantPost, REMOTE_TEXT } from '../../assistant/api';
-import { refreshStatus, retryStatus, stepChange, stepHolder, useAssistantStatus, writeStatus } from '../../assistant/status';
+import { providerReady, refreshStatus, retryStatus, stepChange, stepHolder, useAssistantStatus, writeStatus } from '../../assistant/status';
 import type {
   AssistantStatus,
   Caps,
@@ -38,12 +41,24 @@ import { confirmAction } from '../../workbench/dialogs';
 
 const SETTINGS = '/api/assistant/settings';
 
-const PROVIDERS: ReadonlyArray<{ id: ProviderChoice; title: string; copy?: string }> = [
+/** The Default choices, in order: Off, then each provider of a card. */
+const DEFAULTS: ReadonlyArray<{ id: ProviderChoice; title: string }> = [
   { id: 'off', title: 'Off' },
+  { id: 'openai_compatible', title: 'Local server' },
+  { id: 'anthropic', title: 'Anthropic (API key)' },
+  { id: 'openai', title: 'OpenAI (API key)' },
+];
+
+/** The provider cards, always listed (D-A): a conversation may use any of them. */
+const PROVIDERS: ReadonlyArray<{ id: ProviderId; title: string; copy: string }> = [
   { id: 'openai_compatible', title: 'Local server', copy: 'LM Studio or Ollama on this PC. Project data stays here.' },
   { id: 'anthropic', title: 'Anthropic', copy: 'Claude models with your API key. Project data you ask about goes to Anthropic.' },
   { id: 'openai', title: 'OpenAI', copy: 'GPT models with your API key. Project data you ask about goes to OpenAI.' },
 ];
+
+export const DEFAULT_COPY = 'The Assistant uses this unless a conversation picks another. Every provider below keeps its own settings.';
+export const PRIVACY_COPY =
+  "Cloud providers, and a local server that isn't on this PC, get your messages and what the Assistant reads from a project you ask about (names, settings, results and pictures of the open workspace). A local server on this PC keeps it here.";
 
 const CLOUD_LABEL: Record<'anthropic' | 'openai', string> = { anthropic: 'Anthropic', openai: 'OpenAI' };
 
@@ -116,8 +131,8 @@ function offPcServerCopy(baseUrl: string): string {
   return `Your server at ${hostOf(baseUrl)}, not on this PC. Project data you ask about goes there.`;
 }
 
-/** A provider choice's line; the local server's says where its saved address is. */
-function providerCopy(p: (typeof PROVIDERS)[number], status: AssistantStatus): string | undefined {
+/** A provider card's line; the local server's says where its saved address is. */
+function providerCopy(p: (typeof PROVIDERS)[number], status: AssistantStatus): string {
   if (p.id === 'openai_compatible' && status.base_url_is_local === false) return offPcServerCopy(status.base_url);
   return p.copy;
 }
@@ -170,11 +185,17 @@ export function keyLine(k: KeyStatus, storage: StorageStatus | undefined, token:
   return k.last4 ? `${noun} set, ends in …${k.last4}` : `${noun} set`;
 }
 
-/** The model's price line, or null when there is nothing honest to say. */
-export function priceLine(s: AssistantStatus): string | null {
-  if (s.provider === 'off') return null;
-  if (s.provider === 'openai_compatible') return s.base_url_is_local ? LOCAL_PRICE_TEXT : SERVER_PRICE_TEXT;
-  const p = s.price;
+/** A provider's model's price: its own (`prices`), or from an older server the default's. */
+function priceOf(s: AssistantStatus, provider: ProviderId): AssistantStatus['price'] {
+  if (s.prices && typeof s.prices === 'object') return s.prices[provider] ?? null;
+  return provider === s.provider ? (s.price ?? null) : null;
+}
+
+/** The price line of a provider's model (the default's without `provider`), or null when there is nothing honest to say. */
+export function priceLine(s: AssistantStatus, provider: ProviderChoice = s.provider): string | null {
+  if (provider === 'off') return null;
+  if (provider === 'openai_compatible') return s.base_url_is_local ? LOCAL_PRICE_TEXT : SERVER_PRICE_TEXT;
+  const p = priceOf(s, provider);
   if (!p) return null;
   if (p.known === false || p.estimated === true) return UNKNOWN_PRICE_TEXT;
   if (typeof p.input !== 'number' || typeof p.output !== 'number') return null;
@@ -182,9 +203,12 @@ export function priceLine(s: AssistantStatus): string | null {
   return `${money(p.input)} in · ${money(p.output)} out per million tokens${asOf}.`;
 }
 
-/** Whether the status says a declined request may be retried on another model: `true`, a non-empty list, or `{on: true}`. */
-function hasFallback(s: AssistantStatus): boolean {
-  const f = s.fallback;
+/**
+ * Whether the status says a declined request of this provider's model may be retried on
+ * another model: `true`, a non-empty list, or `{on: true}` (from an older server: the default's).
+ */
+function hasFallback(s: AssistantStatus, provider: ProviderId): boolean {
+  const f = s.fallbacks && typeof s.fallbacks === 'object' ? s.fallbacks[provider] : provider === s.provider ? s.fallback : null;
   if (f === true) return true;
   if (Array.isArray(f)) return f.length > 0;
   return typeof f === 'object' && f !== null && f.on === true;
@@ -294,7 +318,6 @@ export function AssistantStep(_props: Partial<IslandProps>) {
 }
 
 function AssistantSettings({ status }: { status: AssistantStatus }) {
-  const provider = status.provider;
   return (
     <div className="wiz-assistant" data-assistant-step="1">
       {status.deps === 'missing' ? (
@@ -307,15 +330,15 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
           {status.keys_notice}
         </p>
       ) : null}
-      <ProviderBlock status={status} />
-      {provider === 'openai_compatible' ? <EndpointBlock status={status} /> : null}
-      {provider !== 'off' ? <KeyBlock key={`key:${provider}`} status={status} slot={provider} /> : null}
-      {provider !== 'off' ? <ModelBlock key={`model:${provider}`} status={status} provider={provider} /> : null}
-      {isCloud(provider) ? <EffortBlock status={status} /> : null}
-      {/* A result is about one provider, model, address and key: a change starts the block afresh. */}
-      {provider !== 'off' ? <TestBlock key={testKey(status, provider)} provider={provider} /> : null}
-      {provider !== 'off' ? <PrivacyBlock status={status} provider={provider} /> : null}
-      {provider !== 'off' ? <LimitsBlock status={status} /> : null}
+      <DefaultBlock status={status} />
+      <div className="wiz-assistant-block wiz-assistant-cards" data-assistant-cards="1">
+        <h3 className="wiz-assistant-h">API keys and servers</h3>
+        {PROVIDERS.map((p) => (
+          <ProviderCard key={p.id} p={p} status={status} />
+        ))}
+      </div>
+      <PrivacyBlock status={status} />
+      <LimitsBlock status={status} />
       <TestSwitchLine status={status} />
     </div>
   );
@@ -330,12 +353,17 @@ function ErrorLine({ text, hook, id }: { text: string; hook: Record<string, stri
   );
 }
 
-// ---------------------------------------------------------------- provider
+// ---------------------------------------------------------------- the default provider
 
-function ProviderBlock({ status }: { status: AssistantStatus }) {
+/** A provider's ready dot (its words are the state line next to it). */
+function ReadyDot({ ready }: { ready: boolean }) {
+  return <span className={`wiz-assistant-dot${ready ? ' is-ready' : ''}`} aria-hidden="true" data-assistant-dot={ready ? 'ready' : 'not-ready'} />;
+}
+
+function DefaultBlock({ status }: { status: AssistantStatus }) {
   const name = useId();
   const [error, setError] = useState('');
-  // The choice shows at once; the saved one (data-assistant-provider) once the server has it.
+  // The choice shows at once; the saved one (data-assistant-default) once the server has it.
   const [pending, setPending] = useState<ProviderChoice | null>(null);
   const choose = async (id: ProviderChoice): Promise<boolean> => {
     setError('');
@@ -348,23 +376,118 @@ function ProviderBlock({ status }: { status: AssistantStatus }) {
   const shown = pending ?? status.provider;
   return (
     <div className="wiz-assistant-block">
-      <div className="wiz-assistant-options" role="radiogroup" aria-label="Assistant provider" data-assistant-provider={status.provider}>
-        {PROVIDERS.map((p) => {
+      <h3 className="wiz-assistant-h">Default provider</h3>
+      <div className="wiz-assistant-options" role="radiogroup" aria-label="Default provider" data-assistant-default={status.provider}>
+        {DEFAULTS.map((p) => {
           const on = p.id === shown;
-          const copy = providerCopy(p, status);
+          const ready = p.id === 'off' ? null : providerReady(status, p.id);
           return (
-            <label key={p.id} className={`wiz-assistant-option${on ? ' is-selected' : ''}`} data-assistant-provider-option={p.id}>
+            <label key={p.id} className={`wiz-assistant-option${on ? ' is-selected' : ''}`} data-assistant-default-option={p.id}>
               <input type="radio" name={name} value={p.id} checked={on} onChange={() => void stepChange(choose(p.id))} />
               <span className="wiz-assistant-option-copy">
                 <strong>{p.title}</strong>
-                {copy ? <span>{copy}</span> : null}
+                {ready?.detail ? (
+                  <span className="wiz-assistant-state" data-assistant-default-state={ready.ready ? 'ready' : 'not-ready'}>
+                    <ReadyDot ready={ready.ready} />
+                    {ready.detail}
+                  </span>
+                ) : null}
               </span>
             </label>
           );
         })}
       </div>
-      <ErrorLine text={error} hook={{ 'data-assistant-provider-error': '1' }} />
+      <p className="wiz-assistant-meta" data-assistant-default-copy="1">
+        {DEFAULT_COPY}
+      </p>
+      <ErrorLine text={error} hook={{ 'data-assistant-default-error': '1' }} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- a provider's card
+
+/**
+ * One provider's setup, always listed (D-A): its blocks save for this provider only, so a
+ * key, model or address set here stays whatever the default is. The default's card starts
+ * open, and opens when it becomes the default; Hide keeps what its fields hold (a pasted key
+ * is still saved when the step is left).
+ */
+function ProviderCard({ p, status }: { p: (typeof PROVIDERS)[number]; status: AssistantStatus }) {
+  const id = p.id;
+  const isDefault = status.provider === id;
+  const [open, setOpen] = useState(isDefault);
+  // Mounted once opened (the model list is read only then), then kept while hidden.
+  const [mounted, setMounted] = useState(isDefault);
+  const bodyId = useId();
+  useEffect(() => {
+    if (!isDefault) return;
+    setOpen(true);
+    setMounted(true);
+  }, [isDefault]);
+  const ready = providerReady(status, id);
+  const local = id === 'openai_compatible';
+  return (
+    <section
+      className={`wiz-assistant-card${open ? ' is-open' : ''}`}
+      data-assistant-card={id}
+      data-ready={ready?.ready ? '1' : '0'}
+      data-open={open ? '1' : '0'}
+      aria-label={p.title}
+    >
+      <div className="wiz-assistant-card-head">
+        <span className="wiz-assistant-card-title">
+          <strong>{p.title}</strong>
+          {isDefault ? (
+            <span className="wiz-assistant-badge" data-assistant-card-default="1">
+              Default
+            </span>
+          ) : null}
+        </span>
+        {ready?.detail ? (
+          <span className="wiz-assistant-state" data-assistant-card-state={ready.ready ? 'ready' : 'not-ready'}>
+            <ReadyDot ready={ready.ready} />
+            {ready.detail}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="home-btn"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          data-assistant-card-toggle={id}
+          onClick={() => {
+            setMounted(true);
+            setOpen((o) => !o);
+          }}
+        >
+          {open ? 'Hide' : 'Set up'}
+        </button>
+      </div>
+      {mounted ? (
+        <div id={bodyId} className="wiz-assistant-card-body" hidden={!open}>
+          <p className="wiz-assistant-meta" data-assistant-card-copy={id}>
+            {providerCopy(p, status)}
+          </p>
+          {local && status.base_url_is_local ? (
+            <p className="wiz-assistant-meta" data-assistant-privacy-local="1">
+              {LOCAL_PRIVACY_TEXT}
+            </p>
+          ) : null}
+          {local ? <EndpointBlock status={status} /> : null}
+          <KeyBlock status={status} slot={id} />
+          <ModelBlock status={status} provider={id} />
+          {isCloud(id) ? <EffortBlock status={status} /> : null}
+          {/* A result is about one provider, model, address and key: a change starts the block afresh. */}
+          <TestBlock key={testKey(status, id)} provider={id} />
+          {!local && hasFallback(status, id) ? (
+            <p className="wiz-assistant-meta" data-assistant-fallback-note="1">
+              {FALLBACK_TEXT}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -653,13 +776,14 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
     }
     setOther(false);
     if (id === current) return true;
-    const r = await writeStatus(SETTINGS, { model: id });
+    // This card's provider's own model, never the default's slot.
+    const r = await writeStatus(SETTINGS, { models: { [provider]: id } });
     if (!r.ok) setError(r.error.message);
     return r.ok;
   };
 
   const listed = list.models.some((m) => m.id === current);
-  const price = priceLine(status);
+  const price = priceLine(status, provider);
   return (
     <div className="wiz-assistant-block">
       <h3 className="wiz-assistant-h">Model</h3>
@@ -696,7 +820,7 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
         </button>
       </div>
       {other ? (
-        <ModelIdField key={current} saved={current} onSaved={() => setOther(false)} onError={setError} aria={described(error, errorId)} />
+        <ModelIdField key={current} provider={provider} saved={current} onSaved={() => setOther(false)} onError={setError} aria={described(error, errorId)} />
       ) : null}
       {list.state === 'error' ? (
         <p className="wiz-assistant-error" data-assistant-models-error="1">
@@ -714,11 +838,13 @@ function ModelBlock({ status, provider }: { status: AssistantStatus; provider: P
 }
 
 function ModelIdField({
+  provider,
   saved,
   onSaved,
   onError,
   aria,
 }: {
+  provider: ProviderId;
   saved: string;
   onSaved: () => void;
   onError: (text: string) => void;
@@ -731,7 +857,7 @@ function ModelIdField({
     if (busy.current || !next || next === saved) return true;
     busy.current = true;
     onError('');
-    const r = await writeStatus(SETTINGS, { model: next });
+    const r = await writeStatus(SETTINGS, { models: { [provider]: next } });
     busy.current = false;
     if (r.ok) onSaved();
     else onError(r.error.message);
@@ -808,7 +934,8 @@ function TestBlock({ provider }: { provider: ProviderId }) {
     pending.current = ac;
     setView({ state: 'running' });
     try {
-      const answer = await assistantPost<TestAnswer>('/api/assistant/test', {}, ac.signal);
+      // This card's provider, whatever the default.
+      const answer = await assistantPost<TestAnswer>('/api/assistant/test', { provider }, ac.signal);
       setView({ state: 'done', ...testLine(answer, provider) });
     } catch (e) {
       if (ac.signal.aborted) return;
@@ -840,20 +967,11 @@ function TestBlock({ provider }: { provider: ProviderId }) {
 
 // ---------------------------------------------------------------- privacy
 
-function PrivacyBlock({ status, provider }: { status: AssistantStatus; provider: ProviderId }) {
+/** Privacy holds for every provider that sends project data off this PC, whichever a conversation uses. */
+function PrivacyBlock({ status }: { status: AssistantStatus }) {
   const name = useId();
   const [error, setError] = useState('');
   const [pending, setPending] = useState<PrivacyMode | null>(null);
-  if (provider === 'openai_compatible' && status.base_url_is_local) {
-    return (
-      <div className="wiz-assistant-block">
-        <p className="wiz-assistant-meta" data-assistant-privacy-local="1">
-          {LOCAL_PRIVACY_TEXT}
-        </p>
-      </div>
-    );
-  }
-  const destination = provider === 'openai_compatible' ? `the server at ${hostOf(status.base_url)}` : CLOUD_LABEL[provider];
   const save = async (patch: Record<string, unknown>): Promise<boolean> => {
     setError('');
     if (typeof patch.privacy === 'string') setPending(patch.privacy as PrivacyMode);
@@ -875,9 +993,8 @@ function PrivacyBlock({ status, provider }: { status: AssistantStatus; provider:
           </label>
         ))}
       </div>
-      <p className="wiz-assistant-meta">
-        When you ask about a project, your messages and what the Assistant reads from it (names, settings, results and pictures of the
-        open workspace) go to {destination}.
+      <p className="wiz-assistant-meta" data-assistant-privacy-copy="1">
+        {PRIVACY_COPY}
       </p>
       <div className="wiz-assistant-row">
         <button
@@ -890,11 +1007,6 @@ function PrivacyBlock({ status, provider }: { status: AssistantStatus; provider:
           Forget project answers ({remembered})
         </button>
       </div>
-      {provider !== 'openai_compatible' && hasFallback(status) ? (
-        <p className="wiz-assistant-meta" data-assistant-fallback-note="1">
-          {FALLBACK_TEXT}
-        </p>
-      ) : null}
       <ErrorLine text={error} hook={{ 'data-assistant-privacy-error': '1' }} />
     </div>
   );
@@ -911,8 +1023,8 @@ const CAP_HOOK: Record<CapKey, string> = {
   turn_tokens: 'data-assistant-cap-tokens',
 };
 
+/** The limits hold for every provider a conversation may use: the $ ones for the cloud providers only. */
 function LimitsBlock({ status }: { status: AssistantStatus }) {
-  const cloud = isCloud(status.provider);
   const caps = status.caps;
   const field = (cap: CapKey, label: string, isMoney: boolean) => (
     // A new saved value starts the field afresh; a refused one keeps what was typed.
@@ -922,22 +1034,16 @@ function LimitsBlock({ status }: { status: AssistantStatus }) {
     <div className="wiz-assistant-block" data-assistant-limits="1">
       <h3 className="wiz-assistant-h">Limits</h3>
       <div className="wiz-assistant-caps">
-        {cloud ? field('turn_usd', '$ per turn', true) : null}
-        {cloud ? field('day_usd', '$ per day', true) : null}
+        {field('turn_usd', '$ per turn', true)}
+        {field('day_usd', '$ per day', true)}
         {field('steps', 'Steps per turn', false)}
         {field('turn_minutes', 'Minutes per turn', false)}
       </div>
-      {cloud ? (
-        <>
-          <p className="wiz-assistant-status" data-assistant-spent="1">
-            Spent today: {cents(Number(status.spent_today_usd))} of ${capText(caps.day_usd, true)}
-          </p>
-          <p className="wiz-assistant-meta">{LIMITS_TEXT}</p>
-          <p className="wiz-assistant-meta" data-assistant-shared-pc="1">
-            {SHARED_PC_TEXT}
-          </p>
-        </>
-      ) : status.base_url_is_local === false ? (
+      <p className="wiz-assistant-status" data-assistant-spent="1">
+        Spent today: {cents(Number(status.spent_today_usd))} of ${capText(caps.day_usd, true)}
+      </p>
+      <p className="wiz-assistant-meta">{LIMITS_TEXT}</p>
+      {status.base_url_is_local === false ? (
         <p className="wiz-assistant-meta" data-assistant-server-limits="1">
           {SERVER_LIMITS_TEXT}
         </p>
@@ -946,6 +1052,9 @@ function LimitsBlock({ status }: { status: AssistantStatus }) {
           {LOCAL_LIMITS_TEXT}
         </p>
       )}
+      <p className="wiz-assistant-meta" data-assistant-shared-pc="1">
+        {SHARED_PC_TEXT}
+      </p>
     </div>
   );
 }

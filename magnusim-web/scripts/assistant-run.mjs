@@ -3,11 +3,12 @@
  * The Assistant from a terminal (Foundation spec 9.4): a developer tool that runs one
  * turn in the Magnusim app on this PC and prints what happens.
  *
- *   node scripts/assistant-run.mjs [--port N] [--tab auto|<id>] [--project <id>]
- *                                  [--conversation <id>] [--json] "prompt"
+ *   node scripts/assistant-run.mjs [--port N] [--provider <id>] [--tab auto|<id>]
+ *                                  [--project <id>] [--conversation <id>] [--json] "prompt"
  *
  * It talks to the app's own routes over loopback (POST /api/assistant/turns, then the
- * long-poll GET /api/assistant/turns/:id). Questions are asked here (y/n): for a turn
+ * long-poll GET /api/assistant/turns/:id). `--provider` goes to the app as it is: the app
+ * checks it, and its refusal names the providers (this file keeps no list of them). Questions are asked here (y/n): for a turn
  * with no tab they are asked only here; for a turn bound to an app tab the app shows
  * them too, and either answer counts. Only a line typed after a question shows answers it.
  * `--tab auto` is resolved by the app (the only connected tab). Ctrl+C stops the turn
@@ -20,7 +21,7 @@ import { realpathSync } from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
+export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--provider <id>] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
 
 Runs one Assistant turn in the Magnusim app on this PC and prints what happens: the
 answer, each tool call (→) and its result (✓ or ✗), notes and questions. Questions are
@@ -28,6 +29,8 @@ asked here (y/n): only a line typed after a question shows answers it. A turn bo
 app tab also shows them in the app; either answer counts. Ctrl+C stops the turn.
 
   --port N             the app's port (default: the app's own setting, else 8082)
+  --provider <id>      a provider as Settings → Assistant names it; without it the
+                       conversation's own, else the default from Settings → Assistant
   --tab auto|<id>      bind the turn to an app tab's workspace (auto: the only connected one)
   --project <id>       the project the turn is about (without a tab)
   --conversation <id>  continue a conversation (its id is printed at the end)
@@ -41,7 +44,7 @@ const TAB_HIDDEN_EXIT = 2;
 const POLL_WAIT_MS = 25_000;
 
 export function parseArgs(argv) {
-  const o = { port: null, tab: null, project: null, conversation: null, json: false, help: false, words: [], error: null };
+  const o = { port: null, provider: null, tab: null, project: null, conversation: null, json: false, help: false, words: [], error: null };
   const value = (i, name) => {
     const v = argv[i + 1];
     if (v === undefined || v.startsWith('--')) {
@@ -54,7 +57,7 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--json') o.json = true;
-    else if (a === '--port' || a === '--tab' || a === '--project' || a === '--conversation') {
+    else if (a === '--port' || a === '--provider' || a === '--tab' || a === '--project' || a === '--conversation') {
       const v = value(i, a);
       if (v === null) break;
       i += 1;
@@ -205,6 +208,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
     started = await api('POST', '/api/assistant/turns', {
       text: prompt,
       ...(o.conversation ? { conversation: o.conversation } : {}),
+      ...(o.provider ? { provider: o.provider } : {}),
       ...(tab ? { tab } : {}),
       ...(o.project ? { context: { project_id: o.project } } : {}),
     });

@@ -1053,6 +1053,118 @@ describe('how many turns', () => {
   });
 });
 
+describe('a turn on any provider, not only the default', () => {
+  it("names its provider: that provider's adapter and model; its conversation stays bound to it, and goes on with it unnamed", async () => {
+    const seen = [];
+    const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.assistant), { ok: true, summary: 'who' }) })] });
+    m.state.settings.models.openai = 'gpt-6-luna';
+    const openai = (m.adapters.openai = new ScriptedProvider({ id: 'openai' }));
+    openai.script({ text: 'Looking.', tools: [{ name: 'who' }] }, { text: 'From the other one.' }, { text: 'Again.' });
+    let r = await startTurn(m, { text: 'Hi', provider: 'openai' });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual([r.turn.settings.provider, r.turn.settings.model, r.turn.conv.provider], ['openai', 'gpt-6-luna', 'openai']);
+    assert.deepEqual(
+      openai.requests.map((x) => x.req.model),
+      ['gpt-6-luna', 'gpt-6-luna'],
+    );
+    assert.equal(m.provider.requests.length, 0, "the default's provider is not asked");
+    assert.deepEqual(seen, [{ provider: 'openai', model: 'gpt-6-luna' }], "a tool hears the turn's own provider and model");
+    // Unnamed, a turn of that conversation keeps its provider, whatever the default.
+    const conversation = r.body.conversation;
+    r = await startTurn(m, { text: 'And?', conversation });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.settings.provider], ['done', 'openai']);
+    // Named otherwise for it: refused, as a changed model is.
+    const other = await startTurn(m, { text: 'x', conversation, provider: 'anthropic' });
+    assert.deepEqual([other.status, other.body.code, other.body.field], [409, 'conversation_changed', 'provider']);
+    // A new conversation naming none: the default's.
+    m.provider.script({ text: 'default' });
+    r = await startTurn(m, 'Hello');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.settings.provider, m.provider.requests.length], ['done', 'anthropic', 1]);
+  });
+
+  it('runs with the default Off; refused: none named and no default, "off", and a word that is no provider (naming the ids)', async () => {
+    const m = mk({ provider: 'off' });
+    for (const body of [{ text: 'x' }, { text: 'x', provider: 'off' }]) {
+      const r = await startTurn(m, body);
+      assert.deepEqual([r.status, r.body.code, r.turn], [400, 'provider_off', null], JSON.stringify(body));
+    }
+    for (const provider of ['cloud', 'Anthropic', 42, ['openai']]) {
+      const r = await startTurn(m, { text: 'x', provider });
+      assert.deepEqual([r.status, r.body.code, r.turn], [400, 'bad_provider', null], JSON.stringify(provider));
+      assert.match(r.body.error, /: anthropic, openai, openai_compatible; or leave it out for the default\.$/);
+    }
+    const anthropic = (m.adapters.anthropic = new ScriptedProvider({ id: 'anthropic' }));
+    anthropic.script({ text: 'Named, so it runs.' });
+    const r = await startTurn(m, { text: 'x', provider: 'anthropic' });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, anthropic.requests.length], ['done', 1]);
+  });
+
+  it("every check is the turn's provider's: its key, its model, its privacy question, Never send and today's limit", async () => {
+    const m = mk({ projects: { p1: WING }, caps: { turn_usd: 1, day_usd: 1 } });
+    // Its key: the default's is set, the one named has none.
+    m.keys.openai = { set: false, last4: null, set_at: null, state: 'none' };
+    let r = await startTurn(m, { text: 'x', provider: 'openai' });
+    assert.deepEqual([r.status, r.body.code], [400, 'no_key']);
+    // Its model: a local server with none chosen.
+    r = await startTurn(m, { text: 'x', provider: 'openai_compatible' });
+    assert.deepEqual([r.status, r.body.code], [400, 'no_model']);
+    m.state.settings.models.openai_compatible = 'qwen3.8-27b';
+    // Its privacy question names it, and Send is remembered for its destination.
+    m.keys.openai = { set: true, last4: null, set_at: null, state: 'ok' };
+    const openai = (m.adapters.openai = new ScriptedProvider({ id: 'openai' }));
+    openai.script({ text: 'sent' });
+    r = await startTurn(m, { text: 'x', provider: 'openai', context: { project_id: 'p1' } });
+    const asked = [];
+    answerGates(m, r.turn, (g) => (asked.push(g.title), true));
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, asked], ['done', ['Send project "Wing" to OpenAI?']]);
+    assert.deepEqual(m.consents.map((c) => c.destination), ['openai']);
+    // Never send: the default (a cloud provider) is refused, a local server on this PC is not.
+    m.state.settings.privacy = 'deny';
+    r = await startTurn(m, { text: 'x', context: { project_id: 'p1' } });
+    assert.deepEqual([r.status, r.body.code, r.body.error], [400, 'privacy_denied', PRIVACY_DENIED_TEXT]);
+    const local = (m.adapters.openai_compatible = new ScriptedProvider({ id: 'openai_compatible' }));
+    local.script({ text: 'kept here' }, { text: 'free' });
+    r = await startTurn(m, { text: 'x', provider: 'openai_compatible', context: { project_id: 'p1' } });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, ofType(r.turn, 'gate').length], ['done', 0]);
+    // Today's limit reached: a cloud provider is refused; a local server costs nothing and runs.
+    const res = await m.ledger.reserve(1);
+    await m.ledger.settle(res, 1);
+    r = await startTurn(m, 'x');
+    assert.deepEqual([r.status, r.body.code], [400, 'cap_day']);
+    r = await startTurn(m, { text: 'x', provider: 'openai_compatible' });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+  });
+
+  it("a changed or removed key stops only the turns on that key's provider", async () => {
+    const m = mk();
+    const openai = (m.adapters.openai = new ScriptedProvider({ id: 'openai' }));
+    openai.script({ text: 'long', hold: 'o' });
+    m.provider.script({ text: 'long', hold: 'a' });
+    const onOpenai = (await startTurn(m, { text: 'x', provider: 'openai' })).turn;
+    const onDefault = (await startTurn(m, 'y')).turn;
+    await until(() => openai.hold('o').reached && m.provider.hold('a').reached, 10_000, 'both requests at their holds');
+    m.keyChanged('openai');
+    await settled(onOpenai);
+    assert.deepEqual([onOpenai.state, onOpenai.endReason], ['stopped', 'key_changed']);
+    assert.equal(onDefault.ended, false);
+    m.provider.release('a');
+    await settled(onDefault);
+    assert.equal(onDefault.state, 'done');
+  });
+});
+
 describe('untrusted text', () => {
   it('an injection string in a project title leaves the tools and the questions unchanged', async () => {
     const run = async (title) => {

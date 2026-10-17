@@ -5,12 +5,14 @@ import { resetStatusStore, settleStep, statusSnapshot } from '../../assistant/st
 import {
   AS_TEXT_TEXT,
   AssistantStep,
+  DEFAULT_COPY,
   DEPS_TEXT,
   FALLBACK_TEXT,
   LOCAL_LIMITS_TEXT,
   LOCAL_PRICE_TEXT,
   LOCAL_PRIVACY_TEXT,
   NOT_USED_TEXT,
+  PRIVACY_COPY,
   SERVER_LIMITS_TEXT,
   SERVER_PRICE_TEXT,
   SHARED_PC_TEXT,
@@ -75,6 +77,7 @@ function applySettings(patch: Record<string, unknown>): Answer {
   const next = { ...status };
   if ('provider' in patch) next.provider = patch.provider;
   if ('model' in patch) next.models = { ...(next.models as object), [String(next.provider)]: patch.model };
+  if ('models' in patch) next.models = { ...(next.models as object), ...(patch.models as object) };
   if ('effort' in patch) next.effort = patch.effort;
   if ('privacy' in patch) next.privacy = patch.privacy;
   if ('forget_consents' in patch) next.consents = 0;
@@ -110,7 +113,8 @@ async function route(method: string, path: string, body: Record<string, unknown>
     if (holdKey) await new Promise<void>((r) => (holdKey!.release = r));
     const key = String(body.key);
     status = { ...status, keys: { ...(status.keys as object), [String(body.provider)]: { set: true, last4: key.slice(-4), set_at: 'now', state: 'ok' } } };
-    return { status: 200, body: { ...status, ...(key.startsWith('sk-ant-') ? {} : { warning: "This doesn't look like an Anthropic key." }) } };
+    const odd = body.provider === 'anthropic' && !key.startsWith('sk-ant-');
+    return { status: 200, body: { ...status, ...(odd ? { warning: "This doesn't look like an Anthropic key." } : {}) } };
   }
   if (path === '/api/assistant/key/remove') {
     status = { ...status, keys: { ...(status.keys as object), [String(body.provider)]: NO_KEY } };
@@ -175,7 +179,7 @@ async function ready(extra: Record<string, unknown> = {}) {
 }
 
 describe('AssistantStep views', () => {
-  it('says it is checking while the status is read, then shows the providers with Off chosen', async () => {
+  it('says it is checking while the status is read, then shows the Default choice with Off chosen and every provider card', async () => {
     let release!: () => void;
     statusAnswer = null;
     const gate = new Promise<void>((r) => (release = r));
@@ -189,17 +193,37 @@ describe('AssistantStep views', () => {
     expect(screen.getByText('Checking the Assistant…')).toBeInTheDocument();
     release();
     await waitFor(() => expect(step()).toBeTruthy());
-    const group = screen.getByRole('radiogroup', { name: 'Assistant provider' });
-    expect(within(group).getAllByRole('radio')).toHaveLength(4);
-    expect(q<HTMLInputElement>('[data-assistant-provider-option="off"] input')!.checked).toBe(true);
-    expect(group).toHaveTextContent('LM Studio or Ollama on this PC. Project data stays here.');
-    expect(group).toHaveTextContent('Claude models with your API key. Project data you ask about goes to Anthropic.');
-    expect(group).toHaveTextContent('GPT models with your API key. Project data you ask about goes to OpenAI.');
-    // Off: nothing else to set.
+    const group = screen.getByRole('radiogroup', { name: 'Default provider' });
+    expect(within(group).getAllByRole('radio').map((r) => (r as HTMLInputElement).value)).toEqual(['off', 'openai_compatible', 'anthropic', 'openai']);
+    expect(group).toHaveTextContent('Local server');
+    expect(group).toHaveTextContent('Anthropic (API key)');
+    expect(group).toHaveTextContent('OpenAI (API key)');
+    expect(q<HTMLInputElement>('[data-assistant-default-option="off"] input')!.checked).toBe(true);
+    expect(q('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'off');
+    expect(q('[data-assistant-default-copy]')!.textContent).toBe(DEFAULT_COPY);
+    // Every provider's card is listed, whatever the default; with none, every card starts closed.
+    const cards = [...document.querySelectorAll('[data-assistant-card]')];
+    expect(cards.map((c) => c.getAttribute('data-assistant-card'))).toEqual(['openai_compatible', 'anthropic', 'openai']);
+    for (const c of cards) {
+      expect(c).toHaveAttribute('data-open', '0');
+      expect(within(c as HTMLElement).getByRole('button', { name: 'Set up' })).toHaveAttribute('aria-expanded', 'false');
+    }
     expect(q('[data-assistant-key]')).toBeNull();
     expect(q('[data-assistant-model]')).toBeNull();
-    expect(q('[data-assistant-test]')).toBeNull();
-    expect(q('[data-assistant-limits]')).toBeNull();
+    expect(requests.some((r) => r.path.startsWith('/api/assistant/models'))).toBe(false);
+    // Privacy and the limits hold for any provider a conversation uses.
+    expect(q('[data-assistant-privacy]')).toBeTruthy();
+    expect(q('[data-assistant-limits]')).toBeTruthy();
+    // Set up opens a card with its own blocks and line.
+    fireEvent.click(q('[data-assistant-card-toggle="anthropic"]')!);
+    expect(q('[data-assistant-card="anthropic"]')).toHaveAttribute('data-open', '1');
+    expect(q('[data-assistant-card-copy="anthropic"]')).toHaveTextContent('Claude models with your API key. Project data you ask about goes to Anthropic.');
+    expect(q('[data-assistant-card="anthropic"] [data-assistant-key="anthropic"]')).toBeTruthy();
+    await waitFor(() => expect(requests.some((r) => r.path === '/api/assistant/models?provider=anthropic')).toBe(true));
+    fireEvent.click(q('[data-assistant-card-toggle="openai_compatible"]')!);
+    expect(q('[data-assistant-card-copy="openai_compatible"]')).toHaveTextContent('LM Studio or Ollama on this PC. Project data stays here.');
+    fireEvent.click(q('[data-assistant-card-toggle="openai"]')!);
+    expect(q('[data-assistant-card-copy="openai"]')).toHaveTextContent('GPT models with your API key. Project data you ask about goes to OpenAI.');
   });
 
   it('over remote access shows only the remote sentence', async () => {
@@ -232,11 +256,67 @@ describe('AssistantStep views', () => {
     await waitFor(() => expect(step()).toBeTruthy());
   });
 
-  it('choosing a provider saves it at once', async () => {
+  it('choosing the default saves it at once and opens its card, marked Default', async () => {
     await ready();
-    fireEvent.click(q('[data-assistant-provider-option="anthropic"] input')!);
-    await waitFor(() => expect(q('[data-assistant-provider]')).toHaveAttribute('data-assistant-provider', 'anthropic'));
+    fireEvent.click(q('[data-assistant-default-option="anthropic"] input')!);
+    await waitFor(() => expect(q('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'anthropic'));
     expect(posts('/api/assistant/settings').map((r) => r.body)).toEqual([{ provider: 'anthropic' }]);
+    expect(q('[data-assistant-card="anthropic"]')).toHaveAttribute('data-open', '1');
+    expect(q('[data-assistant-card="anthropic"] [data-assistant-card-default]')).toHaveTextContent('Default');
+    expect(document.querySelectorAll('[data-assistant-card-default]')).toHaveLength(1);
+  });
+
+  it('the Default radiogroup keeps every card, and switching the default never removes a key block or anything a card holds (D-A)', async () => {
+    const withKey = { set: true, last4: 'a1b2', set_at: 'x', state: 'ok' };
+    await ready({ provider: 'anthropic', keys: { anthropic: withKey, openai: NO_KEY, openai_compatible: NO_KEY } });
+    const card = (id: string) => q(`[data-assistant-card="${id}"]`)!;
+    expect(within(card('anthropic')).getByText('Key set, ends in …a1b2')).toBeTruthy();
+    // A key pasted into a non-default card stays there through the default's change.
+    fireEvent.click(q('[data-assistant-card-toggle="openai"]')!);
+    const pasted = card('openai').querySelector<HTMLInputElement>('[data-assistant-key-input]')!;
+    pasted.value = 'sk-proj-pasted-0000';
+    for (const next of ['openai_compatible', 'off', 'openai', 'anthropic']) {
+      fireEvent.click(q(`[data-assistant-default-option="${next}"] input`)!);
+      await waitFor(() => expect(q('[data-assistant-default]')).toHaveAttribute('data-assistant-default', next));
+      expect(document.querySelectorAll('[data-assistant-card]')).toHaveLength(3);
+      expect(within(card('anthropic')).getByText('Key set, ends in …a1b2')).toBeTruthy();
+      expect(card('anthropic').querySelector('[data-assistant-key-remove]')).toBeTruthy();
+      expect(card('openai').querySelector<HTMLInputElement>('[data-assistant-key-input]')).toBe(pasted);
+      expect(pasted.value).toBe('sk-proj-pasted-0000');
+    }
+    expect(posts('/api/assistant/key/remove')).toHaveLength(0);
+    expect(posts('/api/assistant/settings').map((r) => r.body)).toEqual([
+      { provider: 'openai_compatible' },
+      { provider: 'off' },
+      { provider: 'openai' },
+      { provider: 'anthropic' },
+    ]);
+    // Hide keeps what the card holds: leaving the step still saves the pasted key.
+    fireEvent.click(q('[data-assistant-card-toggle="openai"]')!);
+    expect(card('openai')).toHaveAttribute('data-open', '0');
+    expect(card('openai').querySelector('.wiz-assistant-card-body')).toHaveAttribute('hidden');
+    const left = settleStep();
+    expect(left).not.toBe(true);
+    await expect(left).resolves.toBe(true);
+    expect(posts('/api/assistant/key').map((r) => r.body)).toEqual([{ provider: 'openai', key: 'sk-proj-pasted-0000' }]);
+  });
+
+  it("each option and card shows its provider's line and ready dot from providers_ready", async () => {
+    const providers_ready = {
+      openai_compatible: { label: 'Local server', kind: 'server', ready: true, reason: null, billing: 'free', detail: '127.0.0.1:1234 · qwen3.8-27b' },
+      anthropic: { label: 'Anthropic', kind: 'key', ready: true, reason: null, billing: 'usd', detail: 'Key set, ends in …a1b2 · claude-opus-5-5' },
+      openai: { label: 'OpenAI', kind: 'key', ready: false, reason: 'no_key', billing: 'usd', detail: 'No key' },
+    };
+    await ready({ provider: 'anthropic', providers_ready });
+    for (const [id, row] of Object.entries(providers_ready)) {
+      const option = q(`[data-assistant-default-option="${id}"]`)!;
+      expect(option).toHaveTextContent(row.detail);
+      expect(option.querySelector('[data-assistant-dot]')).toHaveAttribute('data-assistant-dot', row.ready ? 'ready' : 'not-ready');
+      const card = q(`[data-assistant-card="${id}"]`)!;
+      expect(card).toHaveAttribute('data-ready', row.ready ? '1' : '0');
+      expect(card.querySelector('[data-assistant-card-state]')).toHaveTextContent(row.detail);
+    }
+    expect(q('[data-assistant-default-option="off"] [data-assistant-dot]')).toBeNull();
   });
 
   it("shows the packages line and the test switches when the status has them", async () => {
@@ -322,10 +402,11 @@ describe('AssistantStep key', () => {
       keys: { anthropic: { set: true, last4: null, set_at: 'x', state: 'ok' }, openai: { set: true, last4: 'x9Qa', set_at: 'x', state: 'unreadable' }, openai_compatible: NO_KEY },
     });
     expect(q('[data-assistant-key-status]')).toHaveTextContent(/^Key set$/);
-    fireEvent.click(q('[data-assistant-provider-option="openai"] input')!);
+    fireEvent.click(q('[data-assistant-card-toggle="openai"]')!);
     await waitFor(() => expect(q('[data-assistant-key="openai"]')).toBeTruthy());
-    expect(q('[data-assistant-key-status]')).toHaveTextContent("Your saved key can't be decrypted on this Windows account. Enter it again.");
-    expect(q('[data-assistant-storage]')).toHaveTextContent('Encrypted for your Windows account.');
+    expect(q('[data-assistant-key="openai"] [data-assistant-key-status]')).toHaveTextContent("Your saved key can't be decrypted on this Windows account. Enter it again.");
+    expect(q('[data-assistant-key="openai"] [data-assistant-storage]')).toHaveTextContent('Encrypted for your Windows account.');
+    expect(q('[data-assistant-key="anthropic"] [data-assistant-key-status]')).toHaveTextContent(/^Key set$/);
   });
 
   it('Remove asks first with the safe answer focused, and removes only on yes', async () => {
@@ -350,10 +431,11 @@ describe('AssistantStep key', () => {
     expect(q('[data-assistant-storage]')).toHaveTextContent("keys can't be saved on this PC");
     // No empty row of controls left behind (it would still take a gap).
     expect(q('[data-assistant-key="anthropic"] .wiz-assistant-row')).toBeNull();
-    const local = q<HTMLInputElement>('[data-assistant-provider-option="openai_compatible"] input')!;
+    const local = q<HTMLInputElement>('[data-assistant-default-option="openai_compatible"] input')!;
     expect(local.disabled).toBe(false);
     fireEvent.click(local);
     await waitFor(() => expect(q('[data-assistant-endpoint]')).toBeTruthy());
+    expect(q('[data-assistant-card="openai_compatible"]')).toHaveAttribute('data-open', '1');
   });
 
   it('when key storage is blocked, a key saved before can still be removed', async () => {
@@ -404,17 +486,20 @@ describe('AssistantStep local server', () => {
     expect(q('[data-assistant-ollama-hint]')).toBeTruthy();
   });
 
-  it('on this PC: no cost, data stays here, and only the step and time limits', async () => {
+  it('on this PC: no cost and data stays here, in its card; the limits say a local server costs nothing and keep the $ ones for the cloud', async () => {
     await ready({ provider: 'openai_compatible' });
-    expect(q('[data-assistant-price]')).toHaveTextContent(LOCAL_PRICE_TEXT);
-    expect(q('[data-assistant-privacy-local]')).toHaveTextContent(LOCAL_PRIVACY_TEXT);
+    const card = q('[data-assistant-card="openai_compatible"]')!;
+    expect(card.querySelector('[data-assistant-price]')).toHaveTextContent(LOCAL_PRICE_TEXT);
+    expect(card.querySelector('[data-assistant-privacy-local]')).toHaveTextContent(LOCAL_PRIVACY_TEXT);
+    expect(card.querySelector('[data-assistant-effort]')).toBeNull();
     expect(q('[data-assistant-local-limits]')).toHaveTextContent(LOCAL_LIMITS_TEXT);
-    expect(q('[data-assistant-cap-turn-usd]')).toBeNull();
+    // A conversation may still use a cloud provider: its $ limits and spend stay in reach.
+    expect(q('[data-assistant-cap-turn-usd]')).toBeTruthy();
     expect(q('[data-assistant-cap-steps]')).toBeTruthy();
     expect(q('[data-assistant-cap-minutes]')).toBeTruthy();
-    expect(q('[data-assistant-spent]')).toBeNull();
-    expect(q('[data-assistant-shared-pc]')).toBeNull();
-    expect(q('[data-assistant-effort]')).toBeNull();
+    expect(q('[data-assistant-spent]')).toBeTruthy();
+    expect(q('[data-assistant-shared-pc]')).toHaveTextContent(SHARED_PC_TEXT);
+    expect(q('[data-assistant-privacy]')).toBeTruthy();
   });
 });
 
@@ -517,7 +602,41 @@ describe('AssistantStep models and Test', () => {
     await waitFor(() => expect(q('[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'claude-custom-1'));
     expect(q('[data-assistant-model-other]')).toBeNull();
     expect(within(q('[data-assistant-model]')!).getByRole('option', { name: 'claude-custom-1' })).toBeTruthy();
-    expect(posts('/api/assistant/settings').filter((r) => 'model' in r.body)).toHaveLength(2);
+    // Each saved as the card's own provider's model, never the bare (default's) model.
+    expect(posts('/api/assistant/settings').map((r) => r.body)).toEqual([{ models: { anthropic: 'claude-sonnet-5-5' } }, { models: { anthropic: 'claude-custom-1' } }]);
+  });
+
+  it("a non-default card's model save posts its own provider's model, and the default's model is unchanged", async () => {
+    modelsAnswer = { status: 200, body: { ok: true, source: 'curated', models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', priced: true }, { id: 'gpt-6-luna', label: 'GPT-6 Luna', priced: true }] } };
+    await ready({ provider: 'anthropic' });
+    fireEvent.click(q('[data-assistant-card-toggle="openai"]')!);
+    const select = () => q<HTMLSelectElement>('[data-assistant-card="openai"] [data-assistant-model]')!;
+    await waitFor(() => expect(within(select()).getByRole('option', { name: 'GPT-6 Luna' })).toBeTruthy());
+    fireEvent.change(select(), { target: { value: 'gpt-6-luna' } });
+    await waitFor(() => expect(select()).toHaveAttribute('data-assistant-model', 'gpt-6-luna'));
+    expect(posts('/api/assistant/settings').map((r) => r.body)).toEqual([{ models: { openai: 'gpt-6-luna' } }]);
+    expect(status.models).toEqual({ anthropic: 'claude-opus-5-5', openai: 'gpt-6-luna', openai_compatible: '' });
+    expect(q('[data-assistant-card="anthropic"] [data-assistant-model]')).toHaveAttribute('data-assistant-model', 'claude-opus-5-5');
+    // Its Test is its own provider's.
+    fireEvent.click(q('[data-assistant-card="openai"] [data-assistant-test]')!);
+    await waitFor(() => expect(posts('/api/assistant/test')).toHaveLength(1));
+    expect(posts('/api/assistant/test')[0].body).toEqual({ provider: 'openai' });
+  });
+
+  it("each card's price and fallback note are its own provider's (prices, fallbacks)", async () => {
+    await ready({
+      provider: 'openai',
+      price: { model: 'gpt-6.1-sol', known: true, input: 2, output: 8 },
+      prices: { anthropic: { model: 'claude-opus-5-5', known: true, input: 4, output: 20 }, openai: { model: 'gpt-6.1-sol', known: true, input: 2, output: 8 }, openai_compatible: null },
+      prices_as_of: '2026-10-16',
+      fallback: { on: false, targets: [] },
+      fallbacks: { anthropic: { on: true, targets: ['claude-opus-5'] }, openai: { on: false, targets: [] }, openai_compatible: { on: false, targets: [] } },
+    });
+    fireEvent.click(q('[data-assistant-card-toggle="anthropic"]')!);
+    expect(q('[data-assistant-card="openai"] [data-assistant-price]')).toHaveTextContent('$2.00 in · $8.00 out per million tokens (prices of 2026-10-16).');
+    expect(q('[data-assistant-card="anthropic"] [data-assistant-price]')).toHaveTextContent('$4.00 in · $20.00 out per million tokens (prices of 2026-10-16).');
+    expect(q('[data-assistant-card="anthropic"] [data-assistant-fallback-note]')).toHaveTextContent(FALLBACK_TEXT);
+    expect(q('[data-assistant-card="openai"] [data-assistant-fallback-note]')).toBeNull();
   });
 
   it('without the models route: the chosen model stays, with no error', async () => {
@@ -955,23 +1074,24 @@ describe('AssistantStep limits as saved', () => {
 describe('AssistantStep a local-server address on another computer', () => {
   it("says where the server is, claims no cost, and says the $ limits don't apply to it", async () => {
     await ready({ provider: 'openai_compatible', base_url: 'https://llm.example.net/v1', base_url_is_local: false });
-    const option = q('[data-assistant-provider-option="openai_compatible"]')!;
-    expect(option).toHaveTextContent('Local server');
-    expect(option).toHaveTextContent('Your server at llm.example.net, not on this PC. Project data you ask about goes there.');
-    expect(option).not.toHaveTextContent('Project data stays here');
+    const card = q('[data-assistant-card="openai_compatible"]')!;
+    expect(card).toHaveTextContent('Local server');
+    expect(q('[data-assistant-card-copy="openai_compatible"]')!.textContent).toBe('Your server at llm.example.net, not on this PC. Project data you ask about goes there.');
+    expect(card).not.toHaveTextContent('Project data stays here');
+    expect(card.querySelector('[data-assistant-privacy-local]')).toBeNull();
     expect(q('[data-assistant-price]')!.textContent).toBe(SERVER_PRICE_TEXT);
     expect(q('[data-assistant-server-limits]')!.textContent).toBe(SERVER_LIMITS_TEXT);
     expect(q('[data-assistant-local-limits]')).toBeNull();
     expect(step()).not.toHaveTextContent(/No cost|cost nothing/);
-    // Project data is asked about, and the line says all of what goes there.
+    // Project data is asked about, and the line says all of what goes there and to whom.
     expect(q('[data-assistant-privacy]')).toBeTruthy();
-    expect(step()).toHaveTextContent(
-      'When you ask about a project, your messages and what the Assistant reads from it (names, settings, results and pictures of the open workspace) go to the server at llm.example.net.',
-    );
+    expect(q('[data-assistant-privacy-copy]')!.textContent).toBe(PRIVACY_COPY);
+    expect(PRIVACY_COPY).toContain("a local server that isn't on this PC");
+    expect(PRIVACY_COPY).toContain('(names, settings, results and pictures of the open workspace)');
     // On this PC again: the plain lines.
     cleanup();
     await ready({ provider: 'openai_compatible' });
-    expect(q('[data-assistant-provider-option="openai_compatible"]')).toHaveTextContent('LM Studio or Ollama on this PC. Project data stays here.');
+    expect(q('[data-assistant-card-copy="openai_compatible"]')).toHaveTextContent('LM Studio or Ollama on this PC. Project data stays here.');
     expect(q('[data-assistant-price]')!.textContent).toBe(LOCAL_PRICE_TEXT);
     expect(q('[data-assistant-local-limits]')!.textContent).toBe(LOCAL_LIMITS_TEXT);
     expect(q('[data-assistant-server-limits]')).toBeNull();

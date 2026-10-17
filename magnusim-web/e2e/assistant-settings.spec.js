@@ -4,8 +4,9 @@
 // endpoint outside this PC that asks first, privacy and limits that save at once, the
 // remote view, a key save that outlives the step that sent it, leaving the step (a pasted
 // key saved, its warning kept on screen, a change on its way waited for, a Test nobody
-// waits for stopped), and an
-// address on another computer worded as such. Its own server with
+// waits for stopped), an address on another computer worded as such, and the Default
+// choice with every provider's card listed: keys and models kept across default changes,
+// a card's Test its own provider's. Its own server with
 // the Assistant's test switches (a test home, never this PC's keys): both cloud providers
 // go to a scripted fake provider in this process (support/fake-llm.mjs), and the local
 // server is another fake of its own. On Windows the real DPAPI helper keeps the key,
@@ -25,6 +26,7 @@ import {
   collectAnswers,
   filesHolding,
   openAssistantStep,
+  openCard,
   pressTest,
   resetAssistant,
   saveKey,
@@ -87,10 +89,13 @@ test('the Assistant step sits between Workspace and Plugins and is Off; Next goe
   await expect(pane).toBeVisible();
   await expect(pane.locator('h2')).toHaveText('Assistant');
   await expect(wizard.locator('#wiz-rail li.is-on')).toHaveText('Assistant');
-  await expect(pane.locator('[data-assistant-provider]')).toHaveAttribute('data-assistant-provider', 'off');
-  await expect(pane.locator('[data-assistant-provider-option="off"] input')).toBeChecked();
-  await expect(pane.getByRole('radio')).toHaveCount(4);
-  await expect(pane.locator('[data-assistant-key], [data-assistant-model], [data-assistant-limits]')).toHaveCount(0);
+  await expect(pane.locator('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'off');
+  await expect(pane.locator('[data-assistant-default-option="off"] input')).toBeChecked();
+  await expect(pane.getByRole('radiogroup', { name: 'Default provider' }).getByRole('radio')).toHaveCount(4);
+  // Every provider's card is listed whatever the default; with none, none is open.
+  await expect(pane.locator('[data-assistant-card]')).toHaveCount(3);
+  await expect(pane.locator('[data-assistant-card][data-open="1"]')).toHaveCount(0);
+  await expect(pane.locator('[data-assistant-key], [data-assistant-model]')).toHaveCount(0);
   expect((await assistantStatus(request, host.base)).provider).toBe('off');
   await expect(page.locator('#wiz-next')).toHaveText('Next');
 
@@ -161,8 +166,8 @@ test('a local server: its address and models; Test says tool calling works, name
     expect(chats[0].body.model).toBe('qwen3.8-27b');
     expect(chats[0].body.tools.map((t) => t.function.name)).toEqual(['connection_check']);
     expect(chats[1].body.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: expect.any(String) });
-    // A local server costs nothing, and today's spend is a cloud line only.
-    await expect(pane.locator('[data-assistant-spent]')).toHaveCount(0);
+    // A local server costs nothing: today's (cloud) spend is unchanged.
+    await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today: $0.00 of $15.00');
     expect((await assistantStatus(request, host.base)).spent_today_usd).toBe(0);
 
     // A model whose chat template has no tool calls writes the call as text.
@@ -245,7 +250,7 @@ test('a cloud key is write-only: shown by its last 4, never in the page, an answ
   // A reload keeps it.
   await page.reload();
   pane = await openAssistantStep(page);
-  await expect(pane.locator('[data-assistant-provider]')).toHaveAttribute('data-assistant-provider', 'anthropic');
+  await expect(pane.locator('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'anthropic');
   await expect(pane.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …1234');
 
   // Remove asks first, with Cancel focused; Remove clears it.
@@ -397,7 +402,7 @@ test('a server outside this PC asks first; Cancel keeps the old address', async 
   await expect(pane.locator('[data-assistant-privacy]')).toBeVisible();
   await expect(pane.locator('[data-assistant-privacy-local]')).toHaveCount(0);
   // Said as it is: not on this PC, no price Magnusim could know, no $ limits that would apply.
-  const choice = pane.locator('[data-assistant-provider-option="openai_compatible"]');
+  const choice = pane.locator('[data-assistant-card-copy="openai_compatible"]');
   await expect(choice).toContainText('Your server at 192.0.2.10:1234, not on this PC. Project data you ask about goes there.');
   await expect(choice).not.toContainText('stays here');
   await expect(pane.locator('[data-assistant-price]')).toHaveText("Magnusim doesn't know what this server charges, and today's spend doesn't count it.");
@@ -448,7 +453,7 @@ test('privacy and limits save at once and survive reopening and a reload; an inv
   );
 
   const expectSaved = async (p) => {
-    await expect(p.locator('[data-assistant-provider]')).toHaveAttribute('data-assistant-provider', 'anthropic');
+    await expect(p.locator('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'anthropic');
     await expect(p.locator('[data-assistant-privacy-option="allow"] input')).toBeChecked();
     await expect(p.locator('[data-assistant-cap-turn-usd]')).toHaveValue('2.50');
     await expect(p.locator('[data-assistant-cap-steps]')).toHaveValue('20');
@@ -629,6 +634,57 @@ test("Next with a key that isn't the provider's kind: saved, the step stays with
   await page.locator('#wiz-next').click();
   await expect(plugins).toBeVisible();
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
+});
+
+test("every provider keeps its key and model across default changes and a reload; a card that isn't the default tests its own provider", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const key = `sk-ant-e2e${randomBytes(8).toString('hex')}7777`;
+  const from = fake.requests().length;
+  await page.goto(`${host.base}/#/`);
+  let pane = await openAssistantStep(page);
+  // The default's card: its key and its model.
+  const anthropic = await chooseProvider(page, 'anthropic');
+  await saveKey(page, key);
+  await anthropic.locator('select[data-assistant-model]').selectOption('claude-sonnet-5-5');
+  await expect(anthropic.locator('select[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'claude-sonnet-5-5');
+  // Another card's model is its own: the default's stays.
+  const openai = await openCard(page, 'openai');
+  await openai.locator('select[data-assistant-model]').selectOption('gpt-6-luna');
+  await expect(openai.locator('select[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'gpt-6-luna');
+  let status = await assistantStatus(request, host.base);
+  expect([status.provider, status.models.anthropic, status.models.openai]).toEqual(['anthropic', 'claude-sonnet-5-5', 'gpt-6-luna']);
+
+  // The default moves on, and is Off at last: nothing of any card is removed.
+  await chooseProvider(page, 'openai_compatible');
+  await chooseProvider(page, 'off');
+  await page.reload();
+  pane = await openAssistantStep(page);
+  await expect(pane.locator('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'off');
+  const card = pane.locator('[data-assistant-card="anthropic"]');
+  await expect(card).toHaveAttribute('data-ready', '1');
+  await expect(card.locator('[data-assistant-card-state]')).toHaveText(`Key set, ends in …7777 · claude-sonnet-5-5`);
+  await expect(pane.locator('[data-assistant-default-option="anthropic"]')).toContainText('Key set, ends in …7777 · claude-sonnet-5-5');
+  status = await assistantStatus(request, host.base);
+  expect(status.keys.anthropic).toMatchObject({ set: true, last4: '7777' });
+  expect(status.models).toMatchObject({ anthropic: 'claude-sonnet-5-5', openai: 'gpt-6-luna' });
+  expect([status.providers_ready.anthropic.ready, status.providers_ready.openai.reason]).toEqual([true, 'no_key']);
+
+  // With no default, the card's own Test reaches its own provider, with its own model.
+  await openCard(page, 'anthropic');
+  await expect(card.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …7777');
+  fake.reply(...callsTheTool());
+  const result = await pressTest(page, 'anthropic');
+  await expect(result).toHaveText(/^Connected to claude-sonnet-5-5 in \d+\.\d s \(\$0\.\d{4}\)\. Tool calling works\.$/);
+  const tested = fake.requests().slice(from).filter((r) => r.kind === 'chat');
+  expect(tested.map((r) => [r.dialect, r.body.model])).toEqual([
+    ['anthropic', 'claude-sonnet-5-5'],
+    ['anthropic', 'claude-sonnet-5-5'],
+  ]);
+
+  // Chosen again: the card as it was left.
+  await chooseProvider(page, 'anthropic');
+  await expect(card.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …7777');
+  await expect(card.locator('select[data-assistant-model]')).toHaveAttribute('data-assistant-model', 'claude-sonnet-5-5');
 });
 
 test('a Test nobody waits for stops: left during a slow Test, the step can test again at once', async ({ page, request }) => {

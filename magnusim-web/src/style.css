@@ -5187,6 +5187,26 @@ body.is-recording #viewport-gizmo {
 .wiz-assistant-error-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-md); color: var(--mg-danger); }
 /* A command in a server's sentence ("Ollama: `ollama serve`"). */
 .wiz-assistant code { padding: 0 var(--mg-space-1); border-radius: var(--mg-radius-xs); background: var(--mg-surface-muted); font-family: var(--mg-font-mono); }
+/* The provider cards, always listed whatever the default, and the ready dot of each provider. */
+.wiz-assistant-cards { gap: var(--mg-space-2); }
+.wiz-assistant-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-2);
+  padding: var(--mg-space-2) var(--mg-space-3);
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+}
+.wiz-assistant-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-1) var(--mg-space-3); }
+.wiz-assistant-card-head .home-btn { margin-left: auto; height: 28px; }
+.wiz-assistant-card-title { display: inline-flex; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-md); }
+.wiz-assistant-badge { padding: 0 6px; border-radius: var(--mg-radius-xs); background: var(--mg-surface-muted); font-size: var(--mg-text-sm); color: var(--mg-text-muted); }
+.wiz-assistant-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--mg-text-sm); color: var(--mg-text-muted); }
+.wiz-assistant-card-body { display: flex; flex-direction: column; gap: var(--mg-space-2); }
+.wiz-assistant-card-body[hidden] { display: none; }
+.wiz-assistant-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--mg-text-muted); opacity: 0.5; }
+.wiz-assistant-dot.is-ready { background: var(--mg-success); opacity: 1; }
 
 /* Plugin studies (H11): project-level studies a plugin owns, below SIMULATIONS.
    Shown in every stage (an empty project too); the simulations section's rules are untouched. */

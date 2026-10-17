@@ -43,6 +43,8 @@ export interface ToolCtx {
   cloud: boolean;
   /** The turn runs on a local server (the smaller per-request tool cap). */
   local: boolean;
+  /** The turn's provider and model (app_status reports them); absent outside a turn. */
+  assistant?: { provider: string; model: string };
 }
 
 export interface ToolOutcome {

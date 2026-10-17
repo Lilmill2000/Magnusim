@@ -272,6 +272,16 @@ describe('the host tools', () => {
     assert.equal(tools().app_status.projectData, false);
   });
 
+  it("app_status reports the turn's own provider and model (a turn may name another than the default), never the default's", async () => {
+    let asked = 0;
+    const t = tools({ assistant: async () => ((asked += 1), { provider: 'anthropic', model: 'claude-opus-5-5' }) });
+    const out = await t.app_status.run({}, rt({ ctx: ctx({ assistant: { provider: 'openai', model: 'gpt-6-luna' } }) }));
+    assert.deepEqual(out.data.assistant, { provider: 'openai', model: 'gpt-6-luna' });
+    assert.equal(asked, 0, "the default's settings are not read for a turn's call");
+    // A call outside a turn (no provider of its own): the default's.
+    assert.deepEqual((await t.app_status.run({}, rt())).data.assistant, { provider: 'anthropic', model: 'claude-opus-5-5' });
+  });
+
   it('project_summary: the whitelist, with project_id on every request and no path anywhere', async () => {
     tick();
     const from = app.seen.length;
