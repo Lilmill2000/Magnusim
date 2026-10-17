@@ -502,7 +502,7 @@ test('setup wizard: first launch walks every step to Finish; Settings reopens it
       if (keys[i] === 'units') await page.locator('[data-wiz-units="Metric"]').click();
       if (keys[i] === 'port') await page.locator('#wiz-port').fill(String(port));
       // The first run walks the Assistant step too, and Next goes on whatever it shows.
-      if (keys[i] === 'assistant') await expect(page.locator('#wiz-assistant [data-assistant-provider]')).toBeVisible();
+      if (keys[i] === 'assistant') await expect(page.locator('#wiz-assistant [data-assistant-default]')).toBeVisible();
       await page.locator('#wiz-next').click();
       await expect(page.locator(`.wiz-pane[data-wiz-key="${keys[i + 1]}"]`)).toBeVisible();
     }
