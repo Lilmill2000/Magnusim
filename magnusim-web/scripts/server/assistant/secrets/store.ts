@@ -13,8 +13,9 @@
  *
  * The files are the truth. Two copies of Magnusim run by one account share them, so the
  * store reads them again for every status, use, save and removal, and a save or removal
- * starts from what is on disk: a key removed in one copy is gone in the other, and is
- * never written back. A master key is created only where none exists (a hard link to a
+ * starts from what is on disk (a save reads them once more after the key helper runs,
+ * just before it writes): a key removed in one copy is gone in the other, and is never
+ * written back. A master key is created only where none exists (a hard link to a
  * finished file, which fails when another copy made one first; that one is then used),
  * and the cached master is dropped when master.json changes.
  *
@@ -188,6 +189,9 @@ function masterText(r: JsonRead): string | null {
 }
 
 const codeOf = (err: unknown) => String((err as { code?: unknown } | null)?.code || '');
+
+const keptChanging = () =>
+  new KeyError(500, 'write_failed', 'The key could not be saved: another copy of Magnusim kept changing the key files. Try again.');
 
 function writeReason(err: unknown): string {
   const code = codeOf(err);
@@ -427,7 +431,7 @@ class Store implements SecretStore {
    * unlock (`replace`: its text) is replaced only if it is still there.
    */
   private async createMaster(replace: string | null, depth: number): Promise<{ master: Buffer; id: string }> {
-    if (depth > 2) throw new KeyError(500, 'write_failed', 'The key could not be saved: another copy of Magnusim kept changing the key files. Try again.');
+    if (depth > 2) throw keptChanging();
     const master = randomBytes(32);
     let doc: MasterDoc;
     try {
@@ -525,8 +529,18 @@ class Store implements SecretStore {
     return this.enqueue(async () => {
       await this.reread('saved');
       if (this.storage().kind === 'unavailable') throw this.unavailable();
-      const m = await this.master(true);
-      if (!m) throw this.unavailable();
+      let m = await this.master(true);
+      // The helper may have run for seconds, and another copy saved or removed a key (or
+      // replaced master.json) meanwhile: the save starts from the files as they are now,
+      // sealed under the master of master.json as it is now.
+      for (let tries = 1; ; tries += 1) {
+        if (!m) throw this.unavailable();
+        await this.reread('saved');
+        // The cached master is dropped when master.json changes: still cached, it is this one.
+        if (assistantState().secrets.masterId === m.id) break;
+        if (tries > 2) throw keptChanging();
+        m = await this.master(true);
+      }
       // Keys sealed under another master can't be opened again: they go.
       const kept = this.keys.master_id === m.id ? this.keys.keys : {};
       const entry: KeyEntry = {

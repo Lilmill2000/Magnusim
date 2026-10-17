@@ -519,23 +519,44 @@ describe('at the same time', () => {
 
 // One copy of Magnusim: its own process with the real store and file protector on `dir`,
 // doing what the parent asks over IPC (and answering with the status as it holds it).
+// 'hold' holds its unwraps of the master (the key helper running long; it says when one
+// starts) until 'release'.
 const COPY = `
 const { createSecretStore } = await import(process.env.COPY_STORE_URL);
 const { fileProtector } = await import(process.env.COPY_FILE_URL);
-const s = createSecretStore({ dir: process.env.COPY_DIR, picked: { protector: fileProtector(), test: null } });
+const inner = fileProtector();
+let gate = null;
+let release = null;
+const protector = {
+  kind: inner.kind,
+  knownUnavailable: inner.knownUnavailable,
+  protect: (master) => inner.protect(master),
+  async unprotect(doc) {
+    if (gate) {
+      process.send({ unwrapping: true });
+      await gate;
+    }
+    return inner.unprotect(doc);
+  },
+};
+const s = createSecretStore({ dir: process.env.COPY_DIR, picked: { protector, test: null } });
 process.on('message', async (m) => {
   try {
     let out = null;
-    if (m.op === 'load') await s.load();
+    if (m.op === 'hold') gate = new Promise((r) => (release = r));
+    else if (m.op === 'release') {
+      gate = null;
+      release();
+    } else if (m.op === 'load') await s.load();
     else if (m.op === 'set') out = await s.setKey(m.slot, m.key);
     else if (m.op === 'remove') await s.removeKey(m.slot);
     else if (m.op === 'use') out = await s.withKey(m.slot, async (k) => k);
-    process.send({ ok: true, out, status: s.status() });
+    process.send({ id: m.id, ok: true, out, status: s.status() });
   } catch (e) {
-    process.send({ ok: false, code: e.code, message: e.message, status: s.status() });
+    process.send({ id: m.id, ok: false, code: e.code, message: e.message, status: s.status() });
   }
 });
-process.send({ ready: true });
+process.send({ id: 0, ready: true });
 `;
 
 function copyOf(d) {
@@ -548,21 +569,36 @@ function copyOf(d) {
       COPY_FILE_URL: new URL('../assistant/secrets/file.ts', import.meta.url).href,
     },
   });
-  // Each answer settles the oldest call; a copy that ends fails what waits.
-  // Each answer settles the oldest call; a copy that ends fails what still waits.
-  const waiting = [];
-  child.on('message', (m) => waiting.shift()?.resolve(m));
-  child.on('exit', (code) => {
-    for (const w of waiting.splice(0)) w.reject(new Error(`the copy ended (exit ${code})`));
+  // Each answer settles the call of its id; a copy that ends fails what still waits.
+  const waiting = new Map();
+  let ids = 0;
+  const unwraps = [];
+  child.on('message', (m) => {
+    if (m.unwrapping) {
+      for (const r of unwraps.splice(0)) r();
+      return;
+    }
+    const w = waiting.get(m.id);
+    waiting.delete(m.id);
+    w?.resolve(m);
   });
-  const ready = new Promise((resolve, reject) => waiting.push({ resolve, reject }));
+  child.on('exit', (code) => {
+    for (const w of waiting.values()) w.reject(new Error(`the copy ended (exit ${code})`));
+    waiting.clear();
+  });
+  const ready = new Promise((resolve, reject) => waiting.set(0, { resolve, reject }));
   return {
     async call(op, o = {}) {
       await ready;
+      const id = ++ids;
       return new Promise((resolve, reject) => {
-        waiting.push({ resolve, reject });
-        child.send({ op, ...o });
+        waiting.set(id, { resolve, reject });
+        child.send({ id, op, ...o });
       });
+    },
+    /** Resolves when this copy next starts a held unwrap of its master. */
+    unwrapping() {
+      return new Promise((r) => unwraps.push(r));
     },
     stop() {
       child.kill();
@@ -623,6 +659,88 @@ describe('two copies of Magnusim on one account share the key store', () => {
       a.stop();
       b.stop();
     }
+  });
+
+  it("a key removed or saved in one copy while the other's helper unlocks the master for its first save stays removed or saved", async () => {
+    const newer = 'sk-newer-canary-qrstuvwxyz012345';
+    const a = copyOf(dir);
+    const b = copyOf(dir);
+    try {
+      assert.equal((await a.call('set', { slot: 'anthropic', key: CANARY })).ok, true);
+      assert.equal((await a.call('set', { slot: 'openai', key: OTHER })).ok, true);
+      // b started after those were saved: its first save unwraps the master (a helper run of up to 20 s).
+      await b.call('load');
+      await b.call('hold');
+      const unwrapping = b.unwrapping();
+      const bSave = b.call('set', { slot: 'openai_compatible', key: 'local-token' });
+      await unwrapping;
+      assert.equal((await a.call('remove', { slot: 'anthropic' })).ok, true);
+      assert.equal((await a.call('set', { slot: 'openai', key: newer })).ok, true);
+      await b.call('release');
+      assert.equal((await bSave).ok, true);
+      assert.deepEqual(Object.keys(keysFile().keys).sort(), ['openai', 'openai_compatible']);
+      // The next start.
+      const fresh = make(spy());
+      await fresh.load();
+      assert.equal(fresh.status().anthropic.set, false);
+      assert.equal(await fresh.withKey('openai', async (k) => k), newer);
+      assert.equal(await fresh.withKey('openai_compatible', async (k) => k), 'local-token');
+    } finally {
+      a.stop();
+      b.stop();
+    }
+  });
+
+  it("master.json replaced in one copy while the other's helper unlocks the old one: that save is sealed under the new master, beside the keys saved with it", async () => {
+    const newer = 'sk-newer-canary-qrstuvwxyz012345';
+    const a = copyOf(dir);
+    const b = copyOf(dir);
+    try {
+      assert.equal((await a.call('set', { slot: 'anthropic', key: CANARY })).ok, true);
+      await b.call('load');
+      await b.call('hold');
+      const unwrapping = b.unwrapping();
+      const bSave = b.call('set', { slot: 'openai', key: OTHER });
+      await unwrapping;
+      // master.json gone (set aside, or removed by hand): a's next save makes a new master.
+      rmSync(join(dir, 'master.json'));
+      assert.equal((await a.call('set', { slot: 'anthropic', key: newer })).ok, true);
+      const master = readFileSync(join(dir, 'master.json'), 'utf8');
+      const masterId = keysFile().master_id;
+      await b.call('release');
+      assert.equal((await bSave).ok, true);
+      assert.equal(readFileSync(join(dir, 'master.json'), 'utf8'), master, 'the new master stays');
+      assert.equal(keysFile().master_id, masterId);
+      assert.deepEqual(Object.keys(keysFile().keys).sort(), ['anthropic', 'openai']);
+      const fresh = make(spy());
+      assert.equal(await fresh.withKey('anthropic', async (k) => k), newer);
+      assert.equal(await fresh.withKey('openai', async (k) => k), OTHER);
+    } finally {
+      a.stop();
+      b.stop();
+    }
+  });
+
+  it('a save whose master.json keeps being replaced while it is unlocked is refused after three tries and writes nothing', async () => {
+    await make(spy()).setKey('anthropic', CANARY);
+    const before = readFileSync(join(dir, 'keys.json'), 'utf8');
+    resetAssistantState();
+    const inner = fileProtector();
+    let unwraps = 0;
+    const churn = {
+      kind: 'file',
+      knownUnavailable: null,
+      protect: (m) => inner.protect(m),
+      async unprotect(doc) {
+        unwraps += 1;
+        // Another copy replaces master.json during each unwrap (the first ten: a loop ends).
+        if (unwraps <= 10) writeFileSync(join(dir, 'master.json'), JSON.stringify(await inner.protect(Buffer.alloc(32, unwraps))));
+        return inner.unprotect(doc);
+      },
+    };
+    await assert.rejects(make(churn).setKey('openai', OTHER), (e) => e.code === 'write_failed' && /kept changing/.test(e.message));
+    assert.equal(unwraps, 3);
+    assert.equal(readFileSync(join(dir, 'keys.json'), 'utf8'), before);
   });
 
   it('a master made by another copy while this one was making its own: written once, and this save uses it', async () => {
