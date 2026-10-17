@@ -467,6 +467,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
               reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
               if (ledger && !reservation) throw new ResendCapped('day_usd');
             }
+            // Stopped during the ledger writes: the resend is neither sent nor billed.
+            if (t.signal.aborted) throw new ProviderError('aborted', 'Stopped.');
             inFlight = true;
             return { ...r, maxOutputTokens: est.maxOut };
           },

@@ -463,7 +463,7 @@ describe('the spend caps', () => {
     }
   });
 
-  it('Stop while waiting to resend after an overload: the cut attempt is billed once', async () => {
+  it('Stop while waiting to resend after an overload, or while the resend is reserved: the cut attempt is billed once', async () => {
     const usdOf = async (...steps) => {
       const o = mk();
       o.provider.script(...steps);
@@ -485,6 +485,37 @@ describe('the spend caps', () => {
     await m.ledger.load();
     assert.ok(Math.abs(m.ledger.spentToday() - t.usd) < 1e-6);
     assert.equal(m.ledger.openCount(), 0);
+
+    // Stop lands after the wait, while the resend's spend is reserved again (the 2nd reserve):
+    // nothing more is sent, and only the cut attempt is billed.
+    const m2 = mk({ caps: { turn_usd: 3, day_usd: 15 } });
+    m2.provider.script({ text: 'part', error: 'overloaded', streamed: true }, { text: 'never' });
+    let started;
+    const turnOf = new Promise((resolve) => (started = resolve));
+    let stopping = null;
+    let reserves = 0;
+    const reserve = m2.ledger.reserve.bind(m2.ledger);
+    m2.ledger.reserve = async (usd, o) => {
+      const r = await reserve(usd, o);
+      reserves += 1;
+      if (reserves === 2) stopping = m2.manager.stop((await turnOf).id);
+      return r;
+    };
+    const { turn: t2 } = await startTurn(m2, 'x');
+    started(t2);
+    await settled(t2);
+    await stopping;
+    assert.equal(reserves, 2, 'the resend was reserved again');
+    assert.deepEqual([t2.state, t2.endReason], ['stopped', 'user']);
+    assert.deepEqual(
+      m2.provider.requests.map((q) => q.aborted),
+      [false],
+      'the resend is never sent',
+    );
+    assert.ok(Math.abs(t2.usd - cut) < 1e-9, `spent ${t2.usd}, the cut attempt cost ${cut}`);
+    await m2.ledger.load();
+    assert.ok(Math.abs(m2.ledger.spentToday() - t2.usd) < 1e-6, `the day has ${m2.ledger.spentToday()}`);
+    assert.equal(m2.ledger.openCount(), 0);
   });
 
   it('two turns at once against a day that fits one request: exactly one is sent', async () => {
