@@ -514,7 +514,7 @@ declare module '@magnusim/workspace' {
       /** Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. */
       progress(fraction: number | null, label?: string): void;
   }
-  /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB. */
+  /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
   export interface AssistantImage {
       mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
       data: Blob;

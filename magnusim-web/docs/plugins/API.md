@@ -224,7 +224,7 @@ One call of a tool, as the handler gets it (unreleased, 1.9).
 interface AssistantImage
 ```
 
-A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB.
+A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large").
 
 - `mediaType: "image/png" | "image/jpeg" | "image/webp"`
 - `data: Blob`

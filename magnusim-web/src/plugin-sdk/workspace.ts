@@ -505,7 +505,7 @@ export interface AssistantCall {
   progress(fraction: number | null, label?: string): void;
 }
 
-/** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB. */
+/** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
 export interface AssistantImage {
   mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
   data: Blob;
