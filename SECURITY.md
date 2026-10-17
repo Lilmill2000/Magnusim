@@ -152,25 +152,32 @@ which passes it on over the tab's event stream, on a channel for this PC only
 whose every request carries an unguessable link. The tools belong to that tab
 and its project, and are offered only to turns started for that tab. The app
 checks each call's input against the limits the tool declared before the page
-sees it, runs one call at a time, caps what comes back, and gives the model the
-descriptions, progress and results only as data. A plugin turned off, replaced
-or reset loses its tools at once, and a call it was running ends. The frame
-never sees the Assistant's questions and can't answer them: they are the app's
-own dialog, outside the frame, with No focused, so Enter or Escape (a key typed
-for the workspace) answers No. A tool whose risk the page doesn't name as one
-the app knows is asked about like one that can't be undone. To keep a turn
-reachable while its window is covered, a tab that ran the Assistant keeps its
-connection to the app for 10 minutes after the last turn, even while hidden;
-then it lets go like any hidden tab, and the Assistant can't reach it until it
-is shown again.
+sees it, runs one call at a time and caps what comes back. What a workspace says
+about itself is the plugin's own text, trusted like its code: its notes for the
+Assistant (its guide) go into the model's instructions, as notes from that
+plugin, for the whole conversation (which keeps the first notes it met), and its
+tools' names and descriptions go into the tool definitions the model is given.
+A plugin must keep that text fixed and never fill it from a project; the app
+can't check that it does. What a tool returns reaches the model only as data.
+A call's progress goes to the turn's log, which the terminal client shows; it is
+not sent to the model. A plugin turned off, replaced or reset loses its tools at
+once, and a call it was running ends. The frame never sees the Assistant's
+questions and can't answer them: they are the app's own dialog, outside the
+frame, with No focused, so Enter or Escape (a key typed for the workspace)
+answers No. A tool whose risk the page doesn't name as one the app knows is
+asked about like one that can't be undone. To keep a turn reachable while its
+window is covered, a tab that ran the Assistant keeps its connection to the app
+for 10 minutes after the last turn, even while hidden; then it lets go like any
+hidden tab, and the Assistant can't reach it until it is shown again.
 
 Project data goes to a cloud provider only when the person asks about a project
 and the privacy setting allows it: asked once per project (the default), always,
 or never. A local server keeps it on this PC; a server address outside this PC
 needs a confirmation and is then treated as a cloud provider. Text that comes
-from projects and plugins (names, logs, results) reaches the model as data,
-never as instructions, and the app asks before the Assistant starts a
-computation or does anything that can't be undone.
+from projects and from what plugins return (names, logs, results) reaches the
+model as data, never as instructions; the one exception is a workspace's own
+notes and tool descriptions, which are trusted plugin text (above). The app asks
+before the Assistant starts a computation or does anything that can't be undone.
 
 The Assistant's test switches (`MAGNUSIM_TEST_ASSISTANT_*`) work only together
 with `MAGNUSIM_TEST_ASSISTANT=1`; `run.bat` and Setup never set them. The
