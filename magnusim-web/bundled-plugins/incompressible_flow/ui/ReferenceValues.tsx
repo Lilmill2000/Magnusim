@@ -5,7 +5,7 @@
  * calculated (speed, directions) or has a fixed default (pressure, centre of
  * rotation); area and length have none.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fieldUnit, fromSi, preferredUnit, toSi, type Quantity } from '@magnusim/plugin-ui';
 import { host } from './host';
 
@@ -47,6 +47,26 @@ export function parseTyped(text: string): number | null | undefined {
   if (!raw) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : undefined;
+}
+
+type Save = (patch: Record<string, unknown>) => Promise<void> | void;
+
+/**
+ * A row's value: the one last typed until its save has answered (the study record
+ * changes only then), else the saved one. A box of a vector typed meanwhile builds on
+ * it, so X then Z typed quickly keeps X, and a box never shows its old value meanwhile.
+ */
+function usePendingValue(saved: unknown, field: string, save: Save): [unknown, (value: unknown) => void] {
+  const [pending, setPending] = useState<{ value: unknown } | null>(null);
+  const latest = useRef(0);
+  const commit = (value: unknown) => {
+    const mine = ++latest.current;
+    setPending({ value });
+    void Promise.resolve(save({ [field]: value })).finally(() => {
+      if (latest.current === mine) setPending(null);
+    });
+  };
+  return [pending ? pending.value : saved, commit];
 }
 
 function TextNumber({
@@ -105,10 +125,11 @@ function ScalarRow({
   placeholder: string;
   imperial: boolean;
   positive?: boolean;
-  save: (patch: Record<string, unknown>) => void;
+  save: Save;
 }) {
   const unit = referenceUnit(quantity, imperial);
-  const si = finite(value);
+  const [current, commit] = usePendingValue(value, field, save);
+  const si = finite(current);
   const text = si == null ? '' : shown(fromSi(quantity, si, unit));
   return (
     <div className="sim-def-row" data-ref-field={field}>
@@ -124,7 +145,7 @@ function ScalarRow({
             const n = parseTyped(typed);
             if (n === undefined || (positive && n != null && !(n > 0))) return;
             const next = n == null ? null : toSi(quantity, n, unit);
-            if (next !== si) save({ [field]: next });
+            if (next !== si) commit(next);
           }}
         />
         <span className="bc-unit-label">{unit}</span>
@@ -150,17 +171,18 @@ function VectorRow({
   value: unknown;
   placeholder: [string, string, string];
   imperial: boolean;
-  save: (patch: Record<string, unknown>) => void;
+  save: Save;
 }) {
   const unit = quantity ? referenceUnit(quantity, imperial) : '';
-  const si = savedVec(value);
+  const [current, commitValue] = usePendingValue(value, field, save);
+  const si = savedVec(current);
   const texts = si ? si.map((c) => shown(quantity ? fromSi(quantity, c, unit) : c)) : ['', '', ''];
   const commit = (i: number, typed: string) => {
     const n = parseTyped(typed);
     if (n === undefined) return;
     const parts = texts.map((t, j) => (j === i ? (n == null ? '' : String(n)) : t));
     if (parts.every((t) => !t.trim())) {
-      if (si) save({ [field]: null });
+      if (si) commitValue(null);
       return;
     }
     const next = parts.map((t) => {
@@ -168,7 +190,7 @@ function VectorRow({
       return quantity ? toSi(quantity, v, unit) : v;
     }) as Vec;
     if (quantity == null && next.every((c) => c === 0)) return;
-    if (!si || next.some((c, j) => c !== si[j])) save({ [field]: next });
+    if (!si || next.some((c, j) => c !== si[j])) commitValue(next);
   };
   return (
     <div className="sim-def-row" data-ref-field={field}>
@@ -197,10 +219,9 @@ export function ReferenceValues({
   save,
 }: {
   record: Record<string, unknown>;
-  save: (patch: Record<string, unknown>) => Promise<void> | void;
+  save: Save;
 }) {
   const imperial = host().pluginUi.unitSystem() === 'imperial';
-  const put = (patch: Record<string, unknown>) => void save(patch);
   return (
     <div className="sim-ref" data-study-reference="1">
       <div className="mat-k sim-ref-head">Reference values</div>
@@ -216,7 +237,7 @@ export function ReferenceValues({
         placeholder="Inlet speed"
         imperial={imperial}
         positive
-        save={put}
+        save={save}
       />
       <ScalarRow
         field="ref_pressure"
@@ -226,7 +247,7 @@ export function ReferenceValues({
         value={record.ref_pressure}
         placeholder="0"
         imperial={imperial}
-        save={put}
+        save={save}
       />
       <ScalarRow
         field="ref_area"
@@ -237,7 +258,7 @@ export function ReferenceValues({
         placeholder="Not set"
         imperial={imperial}
         positive
-        save={put}
+        save={save}
       />
       <ScalarRow
         field="ref_length"
@@ -248,7 +269,7 @@ export function ReferenceValues({
         placeholder="Not set"
         imperial={imperial}
         positive
-        save={put}
+        save={save}
       />
       <VectorRow
         field="ref_cofr"
@@ -258,7 +279,7 @@ export function ReferenceValues({
         value={record.ref_cofr}
         placeholder={['0', '0', '0']}
         imperial={imperial}
-        save={put}
+        save={save}
       />
       <VectorRow
         field="ref_drag_dir"
@@ -267,7 +288,7 @@ export function ReferenceValues({
         value={record.ref_drag_dir}
         placeholder={['auto', 'auto', 'auto']}
         imperial={imperial}
-        save={put}
+        save={save}
       />
       <VectorRow
         field="ref_lift_dir"
@@ -276,7 +297,7 @@ export function ReferenceValues({
         value={record.ref_lift_dir}
         placeholder={['auto', 'auto', 'auto']}
         imperial={imperial}
-        save={put}
+        save={save}
       />
       <p className="mat-assign-hint sim-def-hint" data-ref-hint="1">
         Blank speed: the inlet&apos;s speed. Blank directions: drag along the inlet&apos;s flow (else +X), lift +Z (+Y

@@ -948,7 +948,12 @@ function createSimulation(body) {
   };
 }
 
-function updateSimulation(body) {
+/**
+ * Saves study fields. The study's row is written here (simulations.json), and project.json
+ * through the worker: a new Python process per save held the whole server for over a
+ * second each time, and on a busy PC a save then took longer than the panel's next reads.
+ */
+async function updateSimulation(body) {
   const projectId = (body && body.project_id) || projectIdOrActive('', readActiveId);
   if (!projectId) return { ok: false, status: 400, body: { error: 'no active project' } };
   const proj = readProject(projectId);
@@ -1008,7 +1013,9 @@ function updateSimulation(body) {
   const cat = upsertSimulationInCatalog(projectId, proj, sim, true, unset);
   const next = (cat.simulations || []).find((s) => s.id === sim.id) || sim;
   touchProjectSimRef(proj, next);
-  writeProject(proj);
+  if (!(await saveUnlessDeleted(proj))) {
+    return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
+  }
   return { ok: true, status: 200, body: { ...catalogPayload(projectId, proj, cat), increment: 'W30' } };
 }
 
@@ -1293,7 +1300,7 @@ export async function handleW17Api(req, res, u, parts, helpers) {
       } catch (e) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
-      const result = updateSimulation(body || {});
+      const result = await updateSimulation(body || {});
       res.setHeader('X-CFD-Source', 'simulation-update');
       return sendJson(res, result.status, result.body);
     }

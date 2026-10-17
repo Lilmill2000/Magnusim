@@ -362,4 +362,31 @@ describe('Reference values', () => {
     type('Reference length', '10');
     await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ ref_length: 0.254 }));
   });
+
+  // The study record changes only when a save answers. A component typed before that
+  // was saved with the others' old values (X then Z typed quickly lost X), and a box
+  // showed its old value until the answer.
+  it('builds on and shows what was typed while its save is on its way', async () => {
+    const answers: Array<() => void> = [];
+    const update = vi.fn(() => new Promise<unknown>((resolve) => answers.push(() => resolve({}))));
+    window.__CFD_STUDY_UPDATE__ = update;
+    renderPanel();
+    type('Centre of rotation X', '250');
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ ref_cofr: [0.25, 0, 0] }));
+    expect(box('Centre of rotation X')).toHaveValue('250');
+    type('Centre of rotation Z', '-10');
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith({ ref_cofr: [0.25, 0, -0.01] }));
+    expect(box('Centre of rotation X')).toHaveValue('250');
+    expect(box('Centre of rotation Z')).toHaveValue('-10');
+    type('Reference area', '0.5');
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith({ ref_area: 0.5 }));
+    expect(box('Reference area')).toHaveValue('0.5');
+
+    // Answered: the boxes show the saved study.
+    publish(study({}, { ref_cofr: [0.25, 0, -0.01], ref_area: 0.5 }));
+    await act(async () => answers.forEach((answer) => answer()));
+    expect(box('Centre of rotation X')).toHaveValue('250');
+    expect(box('Centre of rotation Z')).toHaveValue('-10');
+    expect(box('Reference area')).toHaveValue('0.5');
+  });
 });

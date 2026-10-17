@@ -409,6 +409,56 @@ describe('a study switch of a project deleted while its save waits on the worker
   });
 });
 
+describe("a study setting's save", () => {
+  /** A project with one study on the teardrop, the active project. */
+  function seedStudy(pid) {
+    const dir = seedProject(pid);
+    createStudyFolder(dir, 'g-tear', { id: 'sim-tear', name: 'Tear study' });
+    saveCatalog(pid, { simulations: [{ id: 'sim-tear', name: 'Tear study', geometry_id: 'g-tear' }], active_id: 'sim-tear' });
+    setActive(pid);
+    return dir;
+  }
+  const study = (pid) => call('GET', `/api/simulation?project_id=${pid}&simulation_id=sim-tear`, null, handleW17Api);
+
+  // Its project.json was written by a new Python process (spawnSync), which held the whole
+  // server for over a second each save: on a busy PC the study panel's next reads waited
+  // longer than that, and the saved value was not there yet.
+  it('saves project.json through the worker, and the study has the value while that waits', { timeout: 120_000 }, async () => {
+    const pid = 'study-save-worker';
+    seedStudy(pid);
+    const held = holdSaves(pid);
+    const saving = call('POST', '/api/simulation/update', { project_id: pid, simulation_id: 'sim-tear', numerics_preset: 'accurate' }, handleW17Api);
+    await held.saveHeld();
+
+    const meanwhile = await study(pid);
+    assert.equal(meanwhile.statusCode, 200, JSON.stringify(meanwhile.body));
+    assert.equal(meanwhile.body.simulation.numerics_preset, 'accurate');
+    held.release();
+    const saved = await saving;
+    assert.equal(saved.statusCode, 200, JSON.stringify(saved.body));
+    assert.equal(saved.body.simulation.numerics_preset, 'accurate');
+    assert.equal(saved.body.project.active_simulation_id, 'sim-tear');
+  });
+
+  it('answers that the project was deleted when it was deleted while the save waited', { timeout: 120_000 }, async () => {
+    const pid = 'study-save-delete';
+    const dir = seedStudy(pid);
+    const held = holdSaves(pid);
+    const saving = call('POST', '/api/simulation/update', { project_id: pid, simulation_id: 'sim-tear', simplec: true }, handleW17Api).catch(
+      asServerError,
+    );
+    await held.saveHeld();
+
+    const deleted = await call('POST', '/api/project/delete', { project_id: pid });
+    assert.equal(deleted.statusCode, 200, JSON.stringify(deleted.body));
+    held.release();
+    const saved = await saving;
+    assert.equal(listing(dir), '', `the deleted project is back: ${dir}`);
+    assert.equal(saved.statusCode, 404, JSON.stringify(saved.body));
+    assert.equal(saved.body.error, 'project deleted while it was saved');
+  });
+});
+
 describe('the active project', () => {
   it('is never a deleted one', async () => {
     const kept = await call('POST', '/api/project', { title: 'Kept', category: 'Other', units: 'Metric' });
