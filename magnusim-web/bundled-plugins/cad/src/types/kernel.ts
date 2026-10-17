@@ -150,6 +150,8 @@ export interface BodyInfo {
    * import before knitting): it has no volume, whatever BRepGProp integrates over its faces.
    */
   solids?: number | null;
+  /** Shells in the body (over all its solids), when measured: BodyProps.shells. */
+  shells?: number | null;
   visible: boolean;
   /** Changes whenever the geometry changes; the viewport re-uploads only on a new key. */
   tessKey: string;

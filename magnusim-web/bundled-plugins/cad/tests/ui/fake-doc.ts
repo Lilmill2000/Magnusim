@@ -591,7 +591,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     async measure(id) {
       calls.push(`measure ${id}`);
       state.set((s) => ({ ...s, rebuild: { ...s.rebuild, bodies: s.rebuild.bodies.map((b) => (b.id === id ? { ...b, volume: 1000 } : b)) } }));
-      return { volume: 1000, area: 600, centroid: null, bbox: [0, 0, 0, 10, 10, 10] as never, faces: 6, edges: 12, solids: 1 };
+      return { volume: 1000, area: 600, centroid: null, bbox: [0, 0, 0, 10, 10, 10] as never, faces: 6, edges: 12, solids: 1, shells: 1 };
     },
     setPlanes(mode) {
       calls.push(`setPlanes ${mode}`);
@@ -637,6 +637,15 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     async bodiesAtEnd() {
       return { bodies: [], failed: [] };
     },
+    async bodiesBefore() {
+      return { bodies: [], failed: [] };
+    },
+    // The fake rebuilds synchronously: the shown result is always the current model's.
+    async settled(signal) {
+      if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+      return state.get().rebuild;
+    },
+    committed: () => (open && open.open ? open.before : state.get().doc),
     async recordSettled() {},
     holdSaves() {
       calls.push('holdSaves');

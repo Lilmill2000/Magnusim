@@ -206,6 +206,12 @@ export interface BodyProps {
   faces: number;
   edges: number;
   solids: number;
+  /**
+   * Shells in the whole body, counted over every solid (the kernel gives totals only):
+   * a closed solid with a sealed inner void has 2, and so do two separate solids.
+   * For a body of closed solids, shells - solids is the number of sealed voids.
+   */
+  shells: number;
 }
 
 export interface DocService {
@@ -316,6 +322,27 @@ export interface DocService {
    * built (the kernel is down).
    */
   bodiesAtEnd(): Promise<EndBodies>;
+  /**
+   * The bodies as they are just before `feature` (the features above it, whatever the
+   * rollback bar), built from the model as it is now through the rebuild's cache, with
+   * no tessellation; the page's view is not touched. Rejects when the feature is not in
+   * the part, the part is not ready, or the kernel stopped on the way.
+   */
+  bodiesBefore(feature: FeatureId): Promise<EndBodies>;
+  /**
+   * Resolves once the rebuild of the current model and view has finished (its status
+   * 'done' or 'failed'), with that rebuild: the part is ready, nothing is rebuilding
+   * or waiting to, the shown result was built from this very document at the bar the
+   * rebuild uses now (a sketch's isolated build while its session is open), and no
+   * kernel respawn is under way. Driven by state changes, never by timers. Rejects when
+   * `signal` aborts, a load starts, the part could not be read, or the service is disposed.
+   */
+  settled(signal?: AbortSignal): Promise<RebuildState>;
+  /**
+   * The model as committed: while a panel session is open, the document from before it
+   * (live drafts are not committed); otherwise state.doc.
+   */
+  committed(): CadDoc;
   /** LINK: the newest save counter the study record holds or is about to (waits for its write). */
   recordSettled(): Promise<void>;
   /**

@@ -9,7 +9,7 @@ import { newId, nextName } from '../lib/ids';
 import { commitPendingEdits, pendingEditLabel, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { createStateStore } from '../lib/store';
 import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera, type ScaleModelPlace, type ScaleModels, type Vec2 } from '../types/doc';
-import type { BodyProps, DocService, DocState, EditResult, EditSession, FeatureFiles, SaveState } from '../types/doc-service';
+import type { BodyProps, DocService, DocState, EditResult, EditSession, EndBodies, FeatureFiles, RebuildState, SaveState } from '../types/doc-service';
 import type { DocStore } from '../types/docstore';
 import type { CadEvents } from '../types/events';
 import type { BodyInfo, KernelAdapter } from '../types/kernel';
@@ -22,7 +22,7 @@ import { storedBodyName } from './features/body-ids';
 import { dependencies as featureDependencies, featureUses, gcBodies as gcFeatureBodies, isBodyMaking, ownsBody, renameParamInFeature, withNewBodies } from './features/hooks';
 import { createBuiltinRegistry } from './features/registry';
 import { createParamScope, featureExprs, paramNameProblem, usersOfParam } from './params';
-import { RebuildEngine, type RebuildOutput } from './rebuild';
+import { RebuildEngine, type RebuildInput, type RebuildOutput } from './rebuild';
 import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readScaleModelPlace, readView } from './schema';
 import { openDocStore } from './store/open';
 import { isRemovedFeature } from './features/removed';
@@ -132,6 +132,13 @@ export function createDocService(opts: DocServiceOptions): DocService {
   let loadSeq = 0;
   let disposed = false;
   let open: SessionImpl | null = null;
+  /** The document and view the shown rebuild result was built from (settled compares them with now). */
+  let built: RebuildInput | null = null;
+  /**
+   * A kernel respawn is under way: every shape id of the shown result died, and the
+   * rebuild the engine queues once the new worker is ready has not been asked for yet.
+   */
+  let respawning = kernel.status.get().state === 'restarting';
 
   // Feature builds read stored files (an import's healed BREP) through ws.files, checked against their sha256.
   const files: FeatureFiles | null = bridge.files
@@ -156,7 +163,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
     onStart() {
       state.set((s) => (s.rebuild.status === 'running' ? s : { ...s, rebuild: { ...s.rebuild, status: 'running' } }));
     },
-    onResult(out: RebuildOutput) {
+    onResult(out: RebuildOutput, input: RebuildInput) {
+      built = input;
       let seq = 0;
       state.set((s) => {
         seq = s.rebuild.seq + 1;
@@ -167,7 +175,12 @@ export function createDocService(opts: DocServiceOptions): DocService {
       bus.emit('doc:rebuilt', { seq, ms: out.ms, failed: out.failed });
     },
     onRespawn(reason) {
+      // The new worker is ready and the engine queues the rebuild right after this.
+      respawning = false;
       bus.emit('kernel:respawned', { reason, count: kernel.status.get().respawns });
+    },
+    onIdle() {
+      checkSettled();
     },
   });
 
@@ -193,6 +206,85 @@ export function createDocService(opts: DocServiceOptions): DocService {
     if (s.status !== 'ready') return;
     engine.request({ doc: s.doc, view: rebuildView(s) });
   }
+
+  // ------------------------------------------------------------------ settled
+
+  interface SettledWaiter {
+    resolve(r: RebuildState): void;
+    reject(e: unknown): void;
+    /** Stop listening to its abort signal. */
+    off(): void;
+  }
+  const waiters = new Set<SettledWaiter>();
+
+  /**
+   * The shown rebuild is the one of the current document and view: no other result
+   * on its way (an old result published just before the next request, or a bodiesAt
+   * build holding the engine with no onStart), and its shapes alive.
+   */
+  function caughtUp(): boolean {
+    const s = state.get();
+    if (s.status !== 'ready' || !built || respawning || engine.busy()) return false;
+    return built.doc === s.doc && (built.view.rollback ?? null) === (rebuildView(s).rollback ?? null);
+  }
+
+  function checkSettled() {
+    if (!waiters.size) return;
+    const s = state.get();
+    // A load that failed (one started before the wait began): nothing will be built.
+    if (s.status === 'error') return rejectSettled(s.error ?? 'the part could not be read');
+    if (!caughtUp()) return;
+    const r = s.rebuild;
+    for (const w of [...waiters]) {
+      waiters.delete(w);
+      w.off();
+      w.resolve(r);
+    }
+  }
+
+  function rejectSettled(why: string) {
+    for (const w of [...waiters]) {
+      waiters.delete(w);
+      w.off();
+      w.reject(new Error(why));
+    }
+  }
+
+  function abortReason(signal: AbortSignal): unknown {
+    return signal.reason !== undefined ? signal.reason : new Error('aborted');
+  }
+
+  function settled(signal?: AbortSignal): Promise<RebuildState> {
+    if (disposed) return Promise.reject(new Error('the part was closed'));
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
+    const s = state.get();
+    if (s.status === 'error') return Promise.reject(new Error(s.error ?? 'the part could not be read'));
+    return new Promise<RebuildState>((resolve, reject) => {
+      const onAbort = () => {
+        if (!waiters.delete(w)) return;
+        w.off();
+        reject(abortReason(signal!));
+      };
+      const w: SettledWaiter = { resolve, reject, off: () => signal?.removeEventListener('abort', onAbort) };
+      signal?.addEventListener('abort', onAbort);
+      waiters.add(w);
+      checkSettled();
+    });
+  }
+
+  // Every change of the model, view, session or rebuild result; the engine's onIdle covers the rest.
+  const offSettled = state.subscribe(() => checkSettled());
+  const offRespawning = kernel.status.subscribe((k, prev) => {
+    if (k.state === prev.state) return;
+    if (k.state === 'restarting') {
+      respawning = true;
+    } else if (respawning) {
+      // Ready again (its respawn listeners, the engine's among them, run right after this
+      // status: a rebuild is then asked for), or failed or closed: look again once they ran.
+      respawning = false;
+      queueMicrotask(checkSettled);
+    }
+  });
 
   let solverRuns = !!opts.solver?.();
   const offSolver =
@@ -282,8 +374,15 @@ export function createDocService(opts: DocServiceOptions): DocService {
       this.lastCreates = isBodyMaking(draft) ? draft.creates : null;
       // The open session from the start: its first apply already rebuilds as this session (isolateWhileEditing).
       open = this;
-      if (isNew) this.apply();
-      else if (this.def()?.isolateWhileEditing) rebuild();
+      try {
+        if (isNew) this.apply();
+        else if (this.def()?.isolateWhileEditing) rebuild();
+      } catch (e) {
+        // A draft its type cannot read (a pattern without dir1 throws in incomplete()):
+        // no dead session is left open, the part is as it was, and the caller hears why.
+        this.discard();
+        throw e;
+      }
     }
 
     get changed(): boolean {
@@ -799,8 +898,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
       const i = s.rebuild.bodies.findIndex((b) => b.id === id);
       if (i < 0) return s;
       const b = s.rebuild.bodies[i];
-      if (b.volume === p.volume && b.area === p.area && b.solids === p.solids) return s;
-      const next: BodyInfo = { ...b, volume: p.volume, area: p.area, bbox: p.bbox, faces: p.faces, edges: p.edges, solids: p.solids };
+      if (b.volume === p.volume && b.area === p.area && b.solids === p.solids && b.shells === p.shells) return s;
+      const next: BodyInfo = { ...b, volume: p.volume, area: p.area, bbox: p.bbox, faces: p.faces, edges: p.edges, solids: p.solids, shells: p.shells };
       const bodies = [...s.rebuild.bodies];
       bodies[i] = next;
       return { ...s, rebuild: { ...s.rebuild, bodies } };
@@ -812,6 +911,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
 
   async function load(): Promise<void> {
     const my = ++loadSeq;
+    // A wait for the old model's rebuild ends here: that model is being replaced.
+    rejectSettled('the part was loaded again');
     if (open) {
       open.open = false;
       open = null;
@@ -1065,10 +1166,22 @@ export function createDocService(opts: DocServiceOptions): DocService {
       if (s.status !== 'ready') throw new Error(s.status === 'loading' ? 'the part is still loading' : (s.error ?? 'the part could not be read'));
       return engine.bodiesAtEnd(s.doc, s.view);
     },
+    async bodiesBefore(feature): Promise<EndBodies> {
+      const s = state.get();
+      if (s.status !== 'ready') throw new Error(s.status === 'loading' ? 'the part is still loading' : (s.error ?? 'the part could not be read'));
+      const at = s.doc.features.findIndex((f) => f.id === feature);
+      if (at < 0) throw new Error('That feature is not in the part');
+      return engine.bodiesAt(s.doc, s.view, at);
+    },
+    settled,
+    committed: () => (open && open.open ? open.before : state.get().doc),
     recordSettled: () => record.settled(),
     dispose() {
       if (disposed) return;
       disposed = true;
+      rejectSettled('the part was closed');
+      offSettled();
+      offRespawning();
       offSolver();
       offStudy();
       offDirty();

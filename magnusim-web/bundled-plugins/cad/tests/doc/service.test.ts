@@ -1,6 +1,8 @@
 // The document service over a fake host and a fake kernel: storage outside
 // the study record, panel sessions (live apply, one undo step), edits and
-// their guards, parameters, undo/redo, autosave, conflicts, view state, G1.
+// their guards, parameters, undo/redo, autosave, conflicts, view state, G1;
+// the bodies before a feature, the committed model, shells, and no dead
+// session (settled() has its own file, settled.test.ts).
 // Solids are made as the app makes them (decision 2026-10-01, no Box or
 // Cylinder): a sketch on Top, then an Extrude (tests/doc/blocks.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -11,8 +13,9 @@ import { createBridge } from '../../src/lib/bridge';
 import { createBus } from '../../src/lib/bus';
 import { commitPendingEdits, pendingEditsChanged, registerPendingEdit } from '../../src/lib/pendingEdits';
 import type { ExtrudeFeature, Feature, SketchFeature } from '../../src/types/doc';
-import type { DocService } from '../../src/types/doc-service';
+import type { DocService, FeatureTypeDef } from '../../src/types/doc-service';
 import type { CadEvents } from '../../src/types/events';
+import { linearPatternDef } from '../../src/features/pattern/defs';
 import { createFakeWorkspace, type FakeWorkspace } from '../fakes/workspace-sdk';
 import { block, BlockKernel, blockSketch, circleSketch, cylinder, profileOf, registerSolidFeatures } from './blocks';
 
@@ -1198,5 +1201,96 @@ describe('UX review: one write per drag, a tab another tab saved over', () => {
     doc.undo();
     expect(doc.state.get().doc.features.map((f) => !!f.suppressed)).toEqual([false, false]);
     expect(doc.state.get().history.canUndo).toBe(false);
+  });
+});
+
+describe('bodies before a feature, the committed model, shells, and no dead session', () => {
+  it('bodiesBefore: the bodies just above a feature, from the cache, whatever the bar; the shown rebuild is untouched', async () => {
+    const { doc, kernel } = make();
+    await doc.load();
+    const a = block(doc);
+    const cut = block(doc, { op: 'cut', at: [10, 10, 10] });
+    const b = block(doc, { at: [50, 0, 0] });
+    await rebuilt(doc);
+    const shown = doc.state.get().rebuild;
+    expect(shown.bodies.map((x) => [x.name, x.volume])).toEqual([
+      ['Body 1', 7000],
+      ['Body 2', 8000],
+    ]);
+    kernel.calls = [];
+    const beforeCut = await doc.bodiesBefore(cut.extrude);
+    expect(beforeCut.bodies.map((x) => [x.name, x.feature])).toEqual([['Body 1', a.extrude]]);
+    expect(beforeCut.failed).toEqual([]);
+    // The block as it was before the cut: its own shape, not the cut one.
+    expect((await kernel.call('props', { id: beforeCut.bodies[0].shape, volume: true })).result.volume).toBe(8000);
+    expect((await doc.bodiesBefore(cut.sketch)).bodies.map((x) => x.name)).toEqual(['Body 1']);
+    expect((await doc.bodiesBefore(a.sketch)).bodies).toEqual([]);
+    expect((await doc.bodiesBefore(b.extrude)).bodies.map((x) => [x.name, x.feature])).toEqual([['Body 1', cut.extrude]]);
+    // All from the rebuild's cache: nothing built or drawn again, and the page's result is the same object.
+    expect(kernel.ops(['sketch_regions', 'extrude_regions', 'boolean', 'tessellate'])).toEqual([]);
+    expect(doc.state.get().rebuild).toBe(shown);
+    // The rollback bar above the cut does not change what is before Extrude 3.
+    doc.setRollback(2);
+    await rebuilt(doc);
+    expect(doc.state.get().rebuild.bodies.map((x) => x.volume)).toEqual([8000]);
+    expect((await doc.bodiesBefore(b.extrude)).bodies.map((x) => [x.name, x.feature])).toEqual([['Body 1', cut.extrude]]);
+    await expect(doc.bodiesBefore('f_missing')).rejects.toThrow('That feature is not in the part');
+  });
+
+  it('committed: the model from before an open panel session, never its live draft', async () => {
+    const { doc } = make();
+    await doc.load();
+    const a = block(doc);
+    const base = doc.state.get().doc;
+    expect(doc.committed()).toBe(base);
+    const edit = doc.beginEdit(a.extrude);
+    edit.update(blind('30 mm'));
+    // The draft applies live, but nothing is committed until Done.
+    expect(doc.state.get().doc).not.toBe(base);
+    expect(doc.committed()).toBe(base);
+    edit.commit();
+    const done = doc.state.get().doc;
+    expect(done).not.toBe(base);
+    expect(doc.committed()).toBe(done);
+    // A new feature's session likewise, and a discarded one leaves the committed model as it was.
+    const s = doc.beginNew('sketch', blockSketch(50, 0) as Partial<Feature>);
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2']);
+    expect(doc.committed()).toBe(done);
+    s.discard();
+    expect(doc.committed()).toBe(done);
+    expect(doc.state.get().doc).toBe(done);
+  });
+
+  it('a draft its type cannot read leaves no dead session open (a pattern without dir1)', async () => {
+    const { doc } = make();
+    await doc.load();
+    doc.features.register(linearPatternDef as unknown as FeatureTypeDef);
+    const a = block(doc);
+    await rebuilt(doc);
+    const before = doc.state.get();
+    // incomplete() throws on it (dir1 is read before anything else).
+    expect(() => doc.beginNew('pattern_linear', { of: 'features', features: [a.extrude], dir1: undefined } as unknown as Partial<Feature>)).toThrow(TypeError);
+    expect(doc.session()).toBeNull();
+    expect(doc.state.get().session).toBeNull();
+    expect(doc.state.get().doc).toBe(before.doc);
+    expect(doc.state.get().view).toBe(before.view);
+    expect(doc.state.get().history).toEqual(before.history);
+    expect(doc.committed()).toBe(before.doc);
+    // The part goes on: the next panel opens and is done as usual.
+    const s = doc.beginNew('sketch', blockSketch(50, 0) as Partial<Feature>);
+    expect(doc.session()).toBe(s);
+    s.commit();
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2']);
+    expect(doc.state.get().history.undoLabel).toBe('Sketch 2');
+  });
+
+  it('shells are measured with the other properties and kept on the body', async () => {
+    const { doc } = make();
+    await doc.load();
+    block(doc);
+    await rebuilt(doc);
+    const body = doc.state.get().rebuild.bodies[0];
+    expect(body).toMatchObject({ solids: 1, shells: 1 });
+    expect(await doc.measure(body.id)).toMatchObject({ volume: 8000, solids: 1, shells: 1 });
   });
 });

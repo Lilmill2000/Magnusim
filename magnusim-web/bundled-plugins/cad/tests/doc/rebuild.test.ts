@@ -1,6 +1,7 @@
 // The rebuild engine over a fake kernel: operations, cache (rebuild from the
 // first changed feature), failures as no-ops with downstream still trying,
-// validity and repair, suppression, rollback, watchdog stops, respawns.
+// validity and repair, suppression, rollback, watchdog stops, respawns,
+// busy() and onIdle, and the bodies up to an index (bodiesAt).
 // Solids come from sketches (a rectangle on Top, then Extrude: blockPair in
 // tests/doc/blocks.ts), as in the app since Box and Cylinder were removed.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -301,6 +302,38 @@ describe('rebuild engine', () => {
     expect(kernel.status.get().respawns).toBe(1);
     // It rebuilt after the recycle.
     expect(outs.at(-1)?.bodies).toHaveLength(1);
+  });
+
+  it('busy() while a rebuild or a bodiesAt build runs or waits; onIdle when both are done; bodiesAt stops at the index it is given', async () => {
+    const kernel = new BlockKernel();
+    const registry = createBuiltinRegistry();
+    registry.register(sketchDef as unknown as FeatureTypeDef);
+    registry.register(extrudeDef as unknown as FeatureTypeDef);
+    const events: string[] = [];
+    const engine = new RebuildEngine({ kernel, registry, onResult: () => events.push('result'), onIdle: () => events.push('idle') });
+    const doc = docOf([block(1, 'new', [0, 0, 0]), block(2, 'cut', [10, 10, 10]), block(3, 'new', [50, 0, 0])]);
+    expect(engine.busy()).toBe(false);
+    engine.request({ doc, view: emptyView() });
+    expect(engine.busy()).toBe(true);
+    // A request while it runs waits (still busy); one result for the newest, then idle once.
+    engine.request({ doc, view: emptyView() });
+    await engine.whenIdle();
+    expect(engine.busy()).toBe(false);
+    expect(events).toEqual(['result', 'idle']);
+    events.length = 0;
+    kernel.calls = [];
+    // Before Extrude 2 (index 3): Body 1 uncut; before Extrude 3 (index 5): Body 1 cut by Extrude 2. From the cache.
+    const p1 = engine.bodiesAt(doc, emptyView(), 3);
+    expect(engine.busy()).toBe(true);
+    const before2 = await p1;
+    expect(before2.bodies.map((b) => [b.id, b.feature])).toEqual([['b_1', 'f_ex1']]);
+    const before3 = await engine.bodiesAt(doc, { ...emptyView(), rollback: 1 }, 5);
+    expect(before3.bodies.map((b) => [b.id, b.feature])).toEqual([['b_1', 'f_ex2']]);
+    expect((await engine.bodiesAt(doc, emptyView(), 0)).bodies).toEqual([]);
+    expect(kernel.ops(['sketch_regions', 'extrude_regions', 'boolean', 'tessellate'])).toEqual([]);
+    // A bodiesAt build tells the page nothing (no result), and the engine is idle after each.
+    expect(events).toEqual(['idle', 'idle', 'idle']);
+    expect(engine.busy()).toBe(false);
   });
 
   it('a stored Box or Cylinder (removed types) is a red row that says so; the features after it still build', async () => {
