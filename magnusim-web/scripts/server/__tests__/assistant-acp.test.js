@@ -693,8 +693,9 @@ describe('the scripted fake agent', LIMIT, () => {
    * Starts the fake with a client of ours on rpc.ts that answers permissions as `answer` says
    * (an option id or null), or, when `answer` returns undefined, leaves the reply to the test.
    */
-  async function runFake(fake, answer = () => null) {
-    const child = spawn(fake.argv[0], fake.argv.slice(1), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  async function runFake(fake, answer = () => null, o = {}) {
+    const argv = o.argv ?? fake.argv;
+    const child = spawn(argv[0], argv.slice(1), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...(o.env ? { env: o.env } : {}) });
     const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
     let stderr = '';
     child.stderr.setEncoding('utf8');
@@ -941,5 +942,31 @@ describe('the scripted fake agent', LIMIT, () => {
     await f.peer.request('session/new', params);
     const skipped = await fake.waitFor((r) => r.event === 'mcp_skipped' || r.event === 'mcp_tools');
     assert.equal(skipped.event, 'mcp_skipped');
+  });
+
+  it("starts as agent discovery starts a package's bin: a launcher, no --control, none of Magnusim's variables", async () => {
+    const fake = await startFakeAcp({ style: 'tool_name_meta' });
+    cleanups.push(() => fake.stop());
+    const pkg = join(ROOT, 'prefix', 'node_modules', '@x', 'agent-acp');
+    const bin = fake.writeLauncher(join(pkg, 'dist', 'index.js'), { version: '9.8.7' });
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@x/agent-acp', version: '9.8.7', bin: { 'agent-acp': 'dist/index.js' } }));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^MAGNUSIM_/i.test(k)));
+    // The version probe: stdin ignored, no controller needed.
+    const probe = spawn(process.execPath, [bin, '--version'], { env, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    let version = '';
+    probe.stdout.setEncoding('utf8');
+    probe.stdout.on('data', (d) => (version += d));
+    assert.equal(await new Promise((r) => probe.on('close', r)), 0);
+    assert.match(version, /^fake-acp-agent 9\.8\.7\b/);
+    // A session, driven by this controller.
+    const f = await runFake(fake, () => null, { argv: [process.execPath, bin], env });
+    const { init, sessionId } = await newSession(f.peer);
+    assert.equal(acp.protocolVersionOf(init), 1);
+    fake.script({ say: 'through the launcher' });
+    assert.equal(acp.stopReasonOf(await f.peer.request('session/prompt', acp.promptParams(sessionId, [{ type: 'text', text: 'go' }]))), 'end_turn');
+    assert.ok(fake.pids('agent').some((p) => p.pid === f.child.pid), 'the launcher is the agent process itself');
+    assert.ok(fake.received(f.child.pid).some((m) => m.method === 'initialize'));
+    await f.stop();
+    assert.equal((await f.exited).code, 0);
   });
 });

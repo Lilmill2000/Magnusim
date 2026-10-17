@@ -316,6 +316,14 @@ No test reaches a real model provider or this PC's real Assistant files.
   - `requireSignIn` refuses `session/new` with -32000 until `fake.signIn()` writes its
     marker (an `authenticate` writes it too). `fake.argvWith({helpersAtStart: n})` makes it
     start n helpers before it reads anything.
+  - **Through agent discovery.** Discovery starts a package's bin as `[node, <script>,
+    ...args]`, with no `--control` and no `MAGNUSIM_` variable (the agent's environment
+    drops them). `fake.writeLauncher(file, {version})` writes a small script at `file` that
+    runs the fake with this controller: put it where the bin points (for example
+    `<prefix>/node_modules/<package>/dist/index.js`, beside that package's `package.json`).
+    Its `--version` prints `fake-acp-agent <version>` and exits without the controller, as
+    discovery's version probe expects. Started without `--control` (and without a
+    launcher), the fake exits 2.
   - It records every message it receives and sends, in order: `fake.received()`,
     `fake.sent()`, `fake.events()` (tool lists, call results, permission outcomes) and
     `fake.pids()` (itself, its MCP server, its helpers). `fake.waitFor(pred)` waits for a

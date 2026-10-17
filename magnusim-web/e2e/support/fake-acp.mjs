@@ -11,6 +11,14 @@
 // API:
 //   argv, url, agentPath, marker
 //   argvWith({helpersAtStart})    the argv with --helpers-at-start n
+//   writeLauncher(file, {version?, helpersAtStart?})
+//                                 writes a small script at `file` (folders made) that runs the
+//                                 fake with this controller, and returns `file`. For a start
+//                                 that passes no --control: agent discovery starts a package's
+//                                 bin as [node, <script>, ...args] with no MAGNUSIM_ variable,
+//                                 so a test puts the launcher where the bin points (for example
+//                                 <prefix>/node_modules/<package>/dist/index.js). It works as
+//                                 CommonJS or ESM; `--version` prints `version` (default 1.0.0).
 //   configure(patch)              settings the next started fake reads (the header of
 //                                 fake-acp-agent.mjs lists them)
 //   script(...steps)              queues one prompt's steps (one call = one prompt, in order)
@@ -26,10 +34,10 @@
 //   signIn() / signOut()          the sign-in marker file that requireSignIn checks
 //   stop()                        closes the control server and lets every hold go
 import http from 'node:http';
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const FAKE_ACP_AGENT = fileURLToPath(new URL('./fake-acp-agent.mjs', import.meta.url));
 
@@ -117,6 +125,24 @@ export async function startFakeAcp(options = {}) {
     argv,
     argvWith({ helpersAtStart = 0 } = {}) {
       return helpersAtStart > 0 ? [...argv, '--helpers-at-start', String(helpersAtStart)] : [...argv];
+    },
+    writeLauncher(file, { version = '1.0.0', helpersAtStart = 0 } = {}) {
+      const args = ['--control', url, '--fake-version', String(version), ...(helpersAtStart > 0 ? ['--helpers-at-start', String(helpersAtStart)] : [])];
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(
+        file,
+        [
+          '#!/usr/bin/env node',
+          '// Runs the scripted coding agent with its test controller (written by fake-acp.mjs).',
+          `process.argv.splice(2, 0, ${args.map((a) => JSON.stringify(a)).join(', ')});`,
+          `import(${JSON.stringify(pathToFileURL(FAKE_ACP_AGENT).href)}).catch((err) => {`,
+          "  process.stderr.write(String((err && err.stack) || err) + '\\n');",
+          '  process.exit(70);',
+          '});',
+          '',
+        ].join('\n'),
+      );
+      return file;
     },
     configure(patch) {
       config = { ...config, ...patch, marker };

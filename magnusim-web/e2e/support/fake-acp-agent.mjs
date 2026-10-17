@@ -2,10 +2,15 @@
 // names no real agent. It speaks the agent protocol (ACP v1: newline JSON-RPC 2.0) on stdin and
 // stdout and logs only to stderr. Started as:
 //
-//   node fake-acp-agent.mjs --control <url> [--helpers-at-start <n>]
+//   node fake-acp-agent.mjs --control <url> [--helpers-at-start <n>] [--fake-version <v>]
+//   node fake-acp-agent.mjs --version        prints "fake-acp-agent <v>" (default 1.0.0), exits 0
 //
 // --helpers-at-start spawns n helper processes at its very first instruction, before it reads
 // anything (a program that starts children before its parent could put it in a job).
+// Without --control (and without --version) it exits 2. A start that can't pass --control, as
+// agent discovery starts a package's bin ([node, <script>, ...args], with no MAGNUSIM_
+// variable), goes through a launcher: the controller's writeLauncher(file) writes one with
+// the controller's address in it.
 //
 // The controller (fake-acp.mjs, in the test process) serves its settings at GET <url>/config
 // and each prompt's steps at POST <url>/prompt. The fake POSTs a record of every message it
@@ -101,6 +106,12 @@ async function spawnTidyHelpers(n, onTerm) {
     if (child.pid) pids.push(child.pid);
   }
   return pids;
+}
+
+// The version probe (as agent discovery runs it: stdin ignored, no controller needed).
+if (argv.includes('--version')) {
+  process.stdout.write(`fake-acp-agent ${argOf('--fake-version') || '1.0.0'}\n`);
+  process.exit(0);
 }
 
 // First instruction: helpers before anything else (no await before this line).
