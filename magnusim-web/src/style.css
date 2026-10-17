@@ -2676,6 +2676,8 @@ select.fp-select {
   font-size: 16px;
   font-weight: 650;
 }
+/* A guarded Yes (the Assistant's questions, src/workbench/dialogs.ts): off for its first moment on screen. */
+#cf-confirm:disabled { opacity: 0.55; cursor: default; }
 .gu-note {
   margin: 0 0 12px;
   font-size: 13px;

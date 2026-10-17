@@ -15,6 +15,9 @@
  *   carries it (within a server boot the answer is the same token; after a restart the new
  *   boot's replaces it). A frame whose plugin was turned off or replaced is dead: its lists are
  *   refused here and never sent again (only a new frame registers that plugin again).
+ * - A frame keeps its last taken list (its verdict said available) while a newer one of it
+ *   is not taken (refused, abandoned, superseded): the bridge and the SDK keep that list's
+ *   tools and handler, so the relay keeps it on the server (workspaceFrameKept).
  * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays.
  *
  * The state is on globalThis, so a hot swap of this module keeps the revs going up.
@@ -75,6 +78,8 @@ interface ToolsState {
   waiting: Set<Rec>;
   /** Each frame's pinned epoch (its last accepted registration's). */
   epochs: Map<string, string>;
+  /** Each frame's last taken list (the one its bridge and SDK keep). */
+  kept: Map<string, Rec>;
   /** Frames whose plugin went, with the reason. */
   dead: Map<string, string>;
   snap: WorkspaceToolsSnapshot;
@@ -84,7 +89,7 @@ interface ToolsState {
 const KEY = Symbol.for('magnusim.workspaceTools');
 
 function fresh(): ToolsState {
-  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), dead: new Map(), snap: { current: null }, listeners: new Set() };
+  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), kept: new Map(), dead: new Map(), snap: { current: null }, listeners: new Set() };
 }
 
 function st(): ToolsState {
@@ -121,6 +126,7 @@ function settleRec(rec: Rec, verdict: AssistantRegistration): void {
   const s = st();
   if (!s.waiting.delete(rec)) return;
   update(rec, { settled: true, taken: verdict.available === true });
+  if (verdict.available === true) s.kept.set(rec.view.frameId, rec);
   rec.resolve(verdict);
 }
 
@@ -195,6 +201,7 @@ export function publishWorkspaceTools(
 /** The frame's page went away (detach, the plugin-off card): its list goes; a newer frame's stays. */
 export function withdrawWorkspaceTools(frameId: string): void {
   const s = st();
+  s.kept.delete(frameId);
   let changed = false;
   for (const rec of [...s.waiting]) {
     if (rec.view.frameId !== frameId) continue;
@@ -224,6 +231,7 @@ export function settleWorkspaceTools(rev: number, verdict: AssistantRegistration
 export function markWorkspaceFrameDead(frameId: string, reason: string): void {
   const s = st();
   if (!s.dead.has(frameId)) s.dead.set(frameId, reason || 'plugin_off');
+  s.kept.delete(frameId);
   const why = s.dead.get(frameId) as string;
   for (const rec of [...s.waiting]) if (rec.view.frameId === frameId) settleRec(rec, refusal(why));
   if (s.current && s.current.view.frameId === frameId && !s.current.view.dead) update(s.current, { dead: true });
@@ -232,6 +240,16 @@ export function markWorkspaceFrameDead(frameId: string, reason: string): void {
 
 export function workspaceFrameDead(frameId: string): boolean {
   return st().dead.has(frameId);
+}
+
+/**
+ * The frame's last taken list, which it keeps while a newer one of it is not taken (its bridge
+ * and SDK keep that list's tools and handler); null for none, an empty one, or a dead frame.
+ */
+export function workspaceFrameKept(frameId: string): PublishedTools | null {
+  const s = st();
+  const rec = s.kept.get(frameId);
+  return rec && rec.view.tools.length > 0 && !s.dead.has(frameId) ? rec.view : null;
 }
 
 /**

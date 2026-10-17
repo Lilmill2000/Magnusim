@@ -8,7 +8,8 @@
 //
 // Covered (spec 10.3's thirteen, then three more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
-// (and mystery) asks with Don't focused, Enter answering it, and Stop closes the question; Stop,
+// (and mystery) asks with Don't focused, Enter answering it, and Stop closes the question; the
+// second click of a double-click on Allow never answers the question asked right behind it; Stop,
 // Back, a reload, a lost event stream and the plugin turned off (then a reconnect: a new link
 // that sends nothing of the dead frame), each during a slow call; a call to the app in flight
 // keeping a tool call alive past the server's stall window; a hidden tab kept for the call and
@@ -433,6 +434,45 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
   expect(ofType(e4.events, 'gate_closed')[0]).toMatchObject({ answer: 'deny', by: 'stop' });
   expect(ofType(e4.events, 'tool_result')[0]).toMatchObject({ ok: false, code: 'stopped' });
   expect(await w.handle.evaluate(() => window.__aiCalls.length)).toBe(3);
+});
+
+test('a double-click on Allow answers one question only: the one asked right behind it, under the pointer, stays open until a click of its own', async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  const dialog = modal(page);
+  const before = chats().length;
+  fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }, { name: `${PLUGIN}__mystery`, input: {} }] }, { text: 'Reset; the mystery thing is not done.' });
+  const t = await startTurn(request, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  // Allow is off for its first moment on screen.
+  await expect(page.locator('#cf-confirm')).toBeEnabled();
+  const centre = async () => {
+    const box = await page.locator('#cf-confirm').boundingBox();
+    return [box.x + box.width / 2, box.y + box.height / 2];
+  };
+  // A double-click: its first click allows reset ...
+  await page.mouse.click(...(await centre()));
+  // ... the next question opens in its place, and the double-click's second click lands on its Allow.
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?');
+  await page.mouse.move(...(await centre()));
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+  await expect(dialog).toBeVisible();
+  expect(ofType(await t.latest(), 'gate_closed').map((e) => e.answer)).toEqual(['allow']);
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['reset']);
+  // Only a click of its own answers it (the press may have taken the focus from Don't; Enter answers Don't anyway).
+  await page.locator('#cf-cancel').click();
+  await expect(dialog).toBeHidden();
+  const { turn, events } = await t.ended();
+  expect(turn.state).toBe('done');
+  expect(ofType(events, 'gate_closed').map((e) => [e.answer, e.by])).toEqual([
+    ['allow', 'user'],
+    ['deny', 'user'],
+  ]);
+  expect(resultsIn(chats()[before + 1]).map((r) => [r.tool, r.ok ? 'ok' : r.error.code])).toEqual([
+    [`${PLUGIN}__reset`, 'ok'],
+    [`${PLUGIN}__mystery`, 'declined'],
+  ]);
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['reset']);
 });
 
 test('Stop during a slow tool: its progress shows, the page aborts it, the counter is unchanged, the turn ends stopped', async ({ page, request }) => {

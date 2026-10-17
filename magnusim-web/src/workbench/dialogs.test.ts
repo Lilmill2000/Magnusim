@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { confirmAction, dialogBusy, promptName } from './dialogs';
+import { confirmAction, dialogBusy, promptName, YES_GUARD_MS } from './dialogs';
 
 // The two dialogs as shell.html has them.
 const MODALS = `
@@ -243,6 +243,99 @@ describe('a question whose Yes discards work (safe)', () => {
     await later();
     expect(asked.value).toBe(false);
     expect($('cf-cancel').textContent).toBe('Cancel');
+  });
+});
+
+describe("a guarded Yes (the Assistant's questions, which come one right after another)", () => {
+  const GATE = (title: string) => ({ title, yes: 'Allow', no: "Don't", safe: true, guard: true });
+  const yes = () => $('cf-confirm') as HTMLButtonElement;
+  /** A press on `el` as the browser starts a click (pointerdown), and then its click. */
+  const press = (el: HTMLElement) => el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, detail: 1 }));
+  const click = (el: HTMLElement, detail: number) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+  const run = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('the second click of a double-click on Allow does not answer the question queued right behind it', async () => {
+    const reset = track(confirmAction(GATE('Allow the Assistant to reset the counter?')));
+    const wipe = track(confirmAction(GATE('Allow the Assistant to delete every body?')));
+    expect(yes().disabled).toBe(true);
+    await run(YES_GUARD_MS);
+    expect(yes().disabled).toBe(false);
+    // The double-click: its first click answers the first question ...
+    press(yes());
+    click(yes(), 1);
+    await run(0);
+    expect(reset.value).toBe(true);
+    // ... the next one opens under the pointer before the second click lands, 30 ms on.
+    await run(30);
+    expect(heading()).toBe('Allow the Assistant to delete every body?');
+    expect(yes().disabled).toBe(true);
+    press(yes());
+    click(yes(), 2);
+    await run(0);
+    expect(wipe.value).toBe('pending');
+    // A slow double-click (its second click after the guard) is still the second click of one.
+    await run(YES_GUARD_MS);
+    press(yes());
+    click(yes(), 2);
+    await run(0);
+    expect(wipe.value).toBe('pending');
+    expect(shown('modal-confirm')).toBe(true);
+    // A click of its own allows.
+    press(yes());
+    click(yes(), 1);
+    await run(0);
+    expect(wipe.value).toBe(true);
+    expect(yes().disabled).toBe(false);
+  });
+
+  it('a press that began before Allow was enabled is no click on it; a key on it counts once enabled; Enter still answers No', async () => {
+    const asked = track(confirmAction(GATE('Allow the Assistant to reset the counter?')));
+    press(yes());
+    await run(YES_GUARD_MS);
+    click(yes(), 1);
+    await run(0);
+    expect(asked.value).toBe('pending');
+    // A key on the focused button clicks with no press (detail 0).
+    click(yes(), 0);
+    await run(0);
+    expect(asked.value).toBe(true);
+    const entered = track(confirmAction(GATE('Allow the Assistant to delete every body?')));
+    await run(YES_GUARD_MS);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await run(0);
+    expect(entered.value).toBe(false);
+  });
+
+  it("a double-click on a notice's OK does not answer the guarded question queued behind it; plain dialogs are not guarded", async () => {
+    const seen = track(confirmAction({ title: 'Study deleted', yes: 'OK', notice: true }));
+    const gate = track(confirmAction(GATE('Send project "Wing" to the cloud provider?')));
+    expect(yes().disabled).toBe(false);
+    press(yes());
+    click(yes(), 1);
+    await run(30);
+    expect(seen.value).toBe(true);
+    expect(heading()).toBe('Send project "Wing" to the cloud provider?');
+    press(yes());
+    click(yes(), 2);
+    await run(0);
+    expect(gate.value).toBe('pending');
+    $('cf-cancel').click();
+    await run(0);
+    expect(gate.value).toBe(false);
+    // A plain question takes its click at once.
+    const plain = track(confirmAction({ title: 'Replace the mesh?', yes: 'Replace' }));
+    expect(yes().disabled).toBe(false);
+    press(yes());
+    click(yes(), 1);
+    await run(0);
+    expect(plain.value).toBe(true);
   });
 });
 

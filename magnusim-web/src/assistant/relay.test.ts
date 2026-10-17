@@ -11,11 +11,10 @@ import {
 } from '../workspace/assistantTools';
 import type { AssistantCallOutcome, AssistantInvoke, CheckedTool } from '../workspace/bridge';
 import type { AssistantRegistration } from '../plugin-sdk/workspace';
-import { confirmAction, dialogBusy } from '../workbench/dialogs';
+import { confirmAction, dialogBusy, YES_GUARD_MS } from '../workbench/dialogs';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
 import {
   GATE_RESHOWN_MS,
-  NOT_YET_RETRY_MS,
   PROGRESS_INTERVAL_MS,
   RELAY_CHANNEL_URL,
   RESULT_BEFORE_UNREGISTER_MS,
@@ -523,75 +522,120 @@ describe('registrations', () => {
     expect(channel().closed).toBe(true);
   });
 
-  it('after a restart, plugin_off for a frame the server took before is tried again until its plugins are read', async () => {
+  it('plugin_off is final, after a restart too (a server that has not read its plugins keeps a list instead): the frame is dead at once and nothing waits behind it', async () => {
     await registered();
     channel().drop();
     channel().frame('linked', { link: LINK_B });
     await settle();
-    // The new server has not read its plugins yet: the old boot's token counts as fresh there.
+    // The restarted server read its plugins, and this one is off (the old boot's token counts as fresh there).
     const again = take('/api/assistant/relay/tools');
     expect(again.body).toMatchObject({ link: LINK_B, epoch: 'boot-1:3', tools: [tool('add')] });
     again.answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
     await settle();
-    expect(workspaceToolsSnapshot().current).toMatchObject({ dead: false });
-    await settle(NOT_YET_RETRY_MS[0] - 1);
-    expect(toolPosts()).toHaveLength(2);
-    await settle(1);
-    expect(toolPosts()).toHaveLength(3);
-    expect(lastTools().body).toMatchObject({ link: LINK_B, epoch: 'boot-1:3', tools: [tool('add')] });
-    lastTools().answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
-    await settle(NOT_YET_RETRY_MS[1]);
-    expect(toolPosts()).toHaveLength(4);
-    accept(lastTools(), 'boot-2:3');
-    await settle(10 * 60_000);
-    expect(toolPosts()).toHaveLength(4);
-    // The frame registers again: not refused here, and it carries the new boot's token.
-    const later = register(['add', 'reset']);
-    await settle();
-    expect(lastTools().body).toMatchObject({ link: LINK_B, epoch: 'boot-2:3', tools: [tool('add'), tool('reset')] });
-    accept(lastTools(), 'boot-2:3');
-    expect(await later).toMatchObject({ available: true, accepted: ['add', 'reset'] });
-  });
-
-  it('a plugin still off after a restart: tried for a while, then the frame is dead; a fresh frame is dead at once', async () => {
-    await registered();
-    channel().drop();
-    channel().frame('linked', { link: LINK_B });
-    await settle();
-    for (const wait of NOT_YET_RETRY_MS) {
-      take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
-      await settle(wait);
-    }
-    expect(toolPosts()).toHaveLength(2 + NOT_YET_RETRY_MS.length);
-    take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
-    await settle(10 * 60_000);
-    expect(toolPosts()).toHaveLength(2 + NOT_YET_RETRY_MS.length);
     expect(workspaceToolsSnapshot().current).toMatchObject({ dead: true });
     expect(await register(['add'])).toMatchObject({ available: false, reason: 'plugin_off' });
-    // A frame the server never took has no token: its plugin_off is the plugin's state, dead at once.
-    const fresh = register(['add'], 'frame-2');
+    await settle(10 * 60_000);
+    expect(toolPosts()).toHaveLength(2);
+    // Another workspace's list is not held back by any wait: it goes as soon as its channel links.
+    const other = register(['ytool'], 'frame-2');
     await settle();
-    // Nothing of the page was left on the server: the channel went, a new one opens for it.
     channel().frame('linked', { link: LINK_C });
     await settle();
+    expect(toolPosts().map(short)).toEqual(['tools[add]', 'tools[add]', 'tools[ytool]']);
     expect(lastTools().body).not.toHaveProperty('epoch');
+    accept(lastTools());
+    expect(await other).toMatchObject({ available: true, accepted: ['ytool'] });
+    // A fresh frame refused plugin_off is dead at once too.
+    const fresh = register(['ztool'], 'frame-3');
+    await settle();
     take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'plugin_off', error: 'not turned on' });
     expect(await fresh).toMatchObject({ available: false, reason: 'plugin_off' });
     await settle(10 * 60_000);
-    expect(toolPosts()).toHaveLength(3 + NOT_YET_RETRY_MS.length);
+    expect(toolPosts()).toHaveLength(4);
   });
 
-  it('a 409 not_ready (the server has not read its plugins yet) is tried again, for a fresh frame too', async () => {
-    startAssistantRelay();
-    const verdict = register(['add']);
+  it('a newer list answered after its 5 s ran out, or not at all: the frame keeps its earlier list, and so does the server (it goes again, never tools: [])', async () => {
+    await registered(['add']);
+    const y = register(['add', 'reset']);
     await settle();
-    channel().frame('linked', { link: LINK_A });
+    const yPost = take('/api/assistant/relay/tools');
+    // The server is slow: the bridge's 5 s bound runs out first, and the frame keeps add.
+    await settle(5000);
+    expect(await y).toMatchObject({ available: false, reason: 'not_connected' });
+    accept(yPost);
     await settle();
-    take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'not_ready', error: 'starting' });
-    await settle(NOT_YET_RETRY_MS[0]);
+    // The server took the newer list late: the kept one goes again in its place, not tools: [].
+    expect(toolPosts().map(short)).toEqual(['tools[add]', 'tools[add,reset]', 'tools[add]']);
+    expect(lastTools().body).toMatchObject({ link: LINK_A, epoch: 'boot-1:3' });
+    accept(lastTools());
+    await settle(60_000);
+    expect(toolPosts()).toHaveLength(3);
+    expect(channel().closed).toBe(false);
+    // A newer list with no answer at all: the same.
+    const z = register(['add', 'mystery']);
+    await settle();
+    take('/api/assistant/relay/tools').fail();
+    expect(await z).toMatchObject({ available: false, reason: 'not_connected' });
+    await settle();
+    expect(toolPosts().map(short).slice(3)).toEqual(['tools[add,mystery]', 'tools[add]']);
+    // The kept list gets no answer either: it is tried again a second later.
+    lastTools().fail();
+    await settle(999);
+    expect(toolPosts()).toHaveLength(5);
+    await settle(1);
+    expect(toolPosts().map(short).slice(5)).toEqual(['tools[add]']);
+    accept(lastTools());
+    await settle(60_000);
+    expect(toolPosts()).toHaveLength(6);
+    expect(channel().closed).toBe(false);
+    expect(workspaceToolsSnapshot().current).toMatchObject({ dead: false });
+  });
+
+  it('a newer list sent while the hidden tab had no stream (409 no_channel, then its 5 s ran out): once shown, the earlier list the frame keeps goes on the new link', async () => {
+    await registered(['add']);
+    // The hub let the hidden tab's stream go (no error here): the server's link A is gone.
+    const y = register(['add', 'reset']);
+    await settle();
+    take('/api/assistant/relay/tools').answer(409, { ok: false, code: 'no_channel', error: 'gone' });
+    await settle(5000);
+    expect(await y).toMatchObject({ available: false, reason: 'not_connected' });
+    // Shown again: a new link. The server's copy of add is dormant on A; it comes back only by a POST on B.
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    expect(toolPosts().map((s) => [short(s), s.body.link])).toEqual([
+      ['tools[add]', LINK_A],
+      ['tools[add,reset]', LINK_A],
+      ['tools[add]', LINK_B],
+    ]);
+    expect(lastTools().body).toMatchObject({ epoch: 'boot-1:3', tools: [tool('add')] });
+    accept(lastTools());
+    await settle(60_000);
+    expect(toolPosts()).toHaveLength(3);
+  });
+
+  it('a newer list refused: nothing more on that link (the server kept the earlier one); after a reconnect the earlier list goes on the new link', async () => {
+    await registered(['add']);
+    const y = register(['add', 'reset']);
+    await settle();
+    take('/api/assistant/relay/tools').answer(413, { ok: false, code: 'too_large', error: 'too large' });
+    expect(await y).toMatchObject({ available: false, reason: 'too_large' });
+    await settle(60_000);
     expect(toolPosts()).toHaveLength(2);
-    accept(take('/api/assistant/relay/tools'));
-    expect(await verdict).toMatchObject({ available: true, accepted: ['add'] });
+    expect(channel().closed).toBe(false);
+    channel().drop();
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    expect(toolPosts().map((s) => [short(s), s.body.link]).slice(2)).toEqual([['tools[add]', LINK_B]]);
+    // Refused again (the server changed its mind): not sent again on that link.
+    lastTools().answer(400, { ok: false, code: 'bad_request', error: 'no' });
+    await settle(60_000);
+    expect(toolPosts()).toHaveLength(3);
+    channel().drop();
+    channel().frame('linked', { link: LINK_C });
+    await settle();
+    expect(toolPosts().map((s) => [short(s), s.body.link]).slice(3)).toEqual([['tools[add]', LINK_C]]);
+    accept(lastTools());
+    await settle();
   });
 
   it("every accepted registration's token is the frame's from then on (a restart's new one replaces the old)", async () => {
@@ -808,7 +852,7 @@ describe('questions (gates) as the app confirm dialog', () => {
   });
   const $ = (id: string) => document.getElementById(id) as HTMLElement;
 
-  it('every kind is shown safe, out of full screen first, with its detail rows; Allow is a click', async () => {
+  it('every kind is shown safe and guarded, out of full screen first, with its detail rows; Allow is a deliberate click', async () => {
     await registered();
     // Leaving full screen takes a while: the dialog waits for it.
     let outOfFullScreen: () => void = () => undefined;
@@ -836,18 +880,25 @@ describe('questions (gates) as the app confirm dialog', () => {
       yes: 'Allow',
       no: "Don't",
       safe: true,
+      guard: true,
       signal: expect.any(AbortSignal),
     });
     expect($('modal-confirm').hidden).toBe(false);
     expect(document.activeElement).toBe($('cf-cancel'));
     expect(channel().pinned).toBe(true);
+    // Allow is off for its first moment on screen: a click then is no answer.
+    expect(($('cf-confirm') as HTMLButtonElement).disabled).toBe(true);
+    $('cf-confirm').click();
+    await settle();
+    expect(sent.filter((s) => s.path.startsWith('/api/assistant/gates/'))).toHaveLength(0);
+    await settle(YES_GUARD_MS);
     $('cf-confirm').click();
     await settle();
     expect(last('/api/assistant/gates/g-1').body).toEqual({ allow: true });
     channel().frame('gate', { gate: gate({ id: 'g-2', kind: 'privacy', risk: undefined, title: 'Send project "Wing" to the cloud provider?', yes: 'Send', no: "Don't send" }) });
     await settle(10);
     expect(confirmAction).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(confirmAction).mock.lastCall?.[0]).toMatchObject({ title: 'Send project "Wing" to the cloud provider?', yes: 'Send', no: "Don't send", safe: true });
+    expect(vi.mocked(confirmAction).mock.lastCall?.[0]).toMatchObject({ title: 'Send project "Wing" to the cloud provider?', yes: 'Send', no: "Don't send", safe: true, guard: true });
     $('cf-cancel').click();
     await settle();
     expect(last('/api/assistant/gates/g-2').body).toEqual({ allow: false });

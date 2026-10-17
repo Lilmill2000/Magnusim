@@ -10,12 +10,15 @@
  *
  * Registrations: one POST in flight per tab, the newest list next (an older one is
  * superseded). Every POST takes the next page-wide rev, a re-POST and a withdrawal too. A
- * list whose 5 s bound ran out (abandoned) is never sent; if it was out already and the
- * server took it, `tools: []` follows at once (or the newer list that replaces it). A
- * refusal as plugin_off or plugin_changed, or an `unregistered` frame, makes the frame dead:
- * its lists are never sent again. Every new `linked` (a reconnect) sends the live list again.
- * A restarted server that has not read its plugins yet answers plugin_off for a frame it took
- * before (its token is of the old boot), or not_ready: tried again for about two minutes first.
+ * list whose 5 s bound ran out (abandoned) is never sent. A newer list that is not taken
+ * (refused, abandoned, superseded, or no answer) changes nothing for its frame: the bridge
+ * and the SDK keep the frame's earlier tools and handler, so the server keeps its earlier
+ * list too (wanted()). That one is never withdrawn for the newer one: it goes again in place
+ * of a newer one the server took late or did not answer, and on every new `linked` (a
+ * reconnect), as the live list does. Only a list no frame offers any more is withdrawn
+ * (`tools: []`). A refusal as plugin_off or plugin_changed, or an `unregistered` frame, makes
+ * the frame dead: its lists are never sent again. plugin_off is final after a restart too: a
+ * server that has not read its plugins yet keeps a list unverified instead of refusing it.
  *
  * Tool calls: `invoke` is acknowledged from the frame's handler before the frame is asked
  * (the server's ack window catches a connection that is only half open), its progress goes
@@ -26,9 +29,11 @@
  * they are stopped here too.
  *
  * Questions (`gate`): out of the workspace's full screen, then the app's own confirm dialog
- * with No focused (Enter and Escape answer No: a key meant for the workspace never allows),
- * then POST /api/assistant/gates/:id {allow}. `gate_closed` closes it unanswered, and so do
- * its expires_at and a new link that does not show it again (closed while the link was down).
+ * with No focused (Enter and Escape answer No: a key meant for the workspace never allows)
+ * and Allow guarded (a deliberate click only: never the second click of a double-click on the
+ * dialog before it, which a model can ask right after another), then POST
+ * /api/assistant/gates/:id {allow}. `gate_closed` closes it unanswered, and so do its
+ * expires_at and a new link that does not show it again (closed while the link was down).
  *
  * The tab's stream stays while it is hidden (pinned) while the server says turns are bound
  * to this tab or holds its link for a while after (`active {turns, hold_until}`), while a
@@ -46,6 +51,7 @@ import {
   settleWorkspaceTools,
   subscribeWorkspaceTools,
   workspaceFrameEpoch,
+  workspaceFrameKept,
   workspaceToolsSnapshot,
   type PublishedTools,
 } from '../workspace/assistantTools';
@@ -65,13 +71,8 @@ export const RESULT_BEFORE_UNREGISTER_MS = 3000;
 export const PROGRESS_INTERVAL_MS = 250;
 /** The longest hold this page keeps its stream for after the server's word (it says 10 min). */
 export const HOLD_MAX_MS = 15 * 60_000;
-/** A withdrawal that got no answer is tried again after this long. */
+/** A withdrawal, or a frame's kept list sent again, that got no answer is tried again after this long. */
 const RETRY_MS = 1000;
-/**
- * A list the server cannot take yet (just restarted, its plugins not read: plugin_off for a
- * frame it took before, or not_ready) is tried again after these waits (about 2 min in all).
- */
-export const NOT_YET_RETRY_MS: readonly number[] = [1000, 2000, 4000, 8000, 15_000, 30_000, 30_000, 30_000];
 /** A new link shows its open questions again at once: one not shown again by then was closed. */
 export const GATE_RESHOWN_MS = 5000;
 /** The longest a question stays open here when its expires_at is missing or far off. */
@@ -117,8 +118,6 @@ interface Relay {
   gates: Map<string, OpenGate>;
   /** After a new link: closes the questions it did not show again. */
   gateCheck: ReturnType<typeof setTimeout> | null;
-  /** Tries so far of a list the server could not take yet (NOT_YET_RETRY_MS). */
-  notYet: number;
   turns: number;
   holdUntil: number;
   holdTimer: ReturnType<typeof setTimeout> | null;
@@ -153,16 +152,38 @@ function live(p: PublishedTools | null): boolean {
   return !!p && p.tools.length > 0 && !p.abandoned && !p.dead && (!p.settled || p.taken);
 }
 
-/** The live list has not been answered on this link yet. */
-function pendingOn(r: Relay, cur: PublishedTools | null, link: string): boolean {
-  return !!cur && live(cur) && !(r.postedOn && r.postedOn.link === link && r.postedOn.rev === cur.rev);
+/**
+ * The list the server should hold for this page: the newest one while it may be given; else,
+ * while its frame still offers tools, the frame's last taken list (a newer one that was not
+ * taken changed nothing for the frame: its bridge and SDK keep the earlier tools and handler).
+ */
+function wanted(cur: PublishedTools | null): PublishedTools | null {
+  if (!cur) return null;
+  if (live(cur)) return cur;
+  if (cur.tools.length === 0 || cur.dead) return null;
+  const kept = workspaceFrameKept(cur.frameId);
+  return live(kept) ? kept : null;
+}
+
+/** The list wanted has not been answered on this link yet. */
+function pendingOn(r: Relay, want: PublishedTools | null, link: string): boolean {
+  return !!want && !(r.postedOn && r.postedOn.link === link && r.postedOn.rev === want.rev);
 }
 
 /** The server holds a list of this page that must go before anything else is sent. */
-function needsWithdraw(r: Relay, cur: PublishedTools | null, link: string): boolean {
+function needsWithdraw(r: Relay, want: PublishedTools | null, link: string): boolean {
   if (!r.maybeHeld) return false;
-  if (!cur || cur.tools.length === 0) return true;
-  return r.heldStale && !pendingOn(r, cur, link);
+  if (!want) return true;
+  return r.heldStale && !pendingOn(r, want, link);
+}
+
+/** Tries again in a moment what got no answer (a dropped stream gives a new link meanwhile). */
+function retryLater(r: Relay): void {
+  if (r.retryTimer) clearTimeout(r.retryTimer);
+  r.retryTimer = setTimeout(() => {
+    r.retryTimer = null;
+    kick();
+  }, RETRY_MS);
 }
 
 function kick(): void {
@@ -268,7 +289,6 @@ function onLinked(r: Relay, d: RelayFrameData['linked']): void {
   r.turns = 0;
   r.holdUntil = 0;
   // A fresh start: what waited for a retry goes now.
-  r.notYet = 0;
   if (r.retryTimer) clearTimeout(r.retryTimer);
   r.retryTimer = null;
   // The open questions are shown again right after `linked`: one that is not was closed meanwhile.
@@ -323,7 +343,7 @@ function onUnregistered(r: Relay, d: RelayFrameData['unregistered']): void {
   kick();
 }
 
-/** One registration POST at a time: a withdrawal first when one is due, then the live list. */
+/** One registration POST at a time: a withdrawal first when one is due, then the list wanted. */
 async function pump(r: Relay): Promise<void> {
   if (r.pumping) return;
   r.pumping = true;
@@ -332,15 +352,15 @@ async function pump(r: Relay): Promise<void> {
     for (;;) {
       if (R !== r || !r.ch || !r.link || r.retryTimer) break;
       const link = r.link;
-      const cur = workspaceToolsSnapshot().current;
-      if (needsWithdraw(r, cur, link)) {
+      const want = wanted(workspaceToolsSnapshot().current);
+      if (needsWithdraw(r, want, link)) {
         sent = true;
         await withdraw(r, link);
         continue;
       }
-      if (pendingOn(r, cur, link)) {
+      if (pendingOn(r, want, link)) {
         sent = true;
-        await register(r, link, cur as PublishedTools);
+        await register(r, link, want as PublishedTools);
         continue;
       }
       break;
@@ -366,29 +386,39 @@ async function register(r: Relay, link: string, pub: PublishedTools): Promise<vo
     tools: toolsOf(pub),
     ...(pub.guide ? { guide: pub.guide } : {}),
   };
+  // What the server had answered last: a refusal leaves it as it was.
+  const before = r.postedOn;
   const a = await post(TOOLS_PATH, body);
   if (R !== r) return;
-  r.postedOn = { link, rev: pub.rev };
   const code = codeOf(a);
   if (!a) {
-    // No answer: the server may have it, and the frame is told it does not (it registers again
-    // later): withdrawn in a moment.
+    // No answer: the server may have it or not. A new list's frame is told it was not taken (it
+    // registers again later), so the list the frame keeps goes again in its place (or
+    // `tools: []` when it keeps none); that list itself is tried again in a moment.
     r.maybeHeld = true;
     r.held = pub;
-    r.heldStale = true;
     settleWorkspaceTools(pub.rev, refusal('not_connected'));
+    if (wanted(workspaceToolsSnapshot().current)?.rev === pub.rev) {
+      r.postedOn = null;
+      r.heldStale = false;
+      retryLater(r);
+    } else {
+      r.postedOn = { link, rev: pub.rev };
+      r.heldStale = true;
+    }
     return;
   }
   if (a.status === 200) {
-    r.notYet = 0;
+    r.postedOn = { link, rev: pub.rev };
     if (typeof a.body.epoch === 'string') pinWorkspaceFrameEpoch(pub.frameId, a.body.epoch);
-    const cur = workspaceToolsSnapshot().current;
-    const still = !!cur && cur.rev === pub.rev && live(cur);
+    const still = wanted(workspaceToolsSnapshot().current)?.rev === pub.rev;
     r.maybeHeld = true;
     r.held = pub;
-    // Abandoned, superseded or gone meanwhile: the server must not keep it (withdrawn, or replaced next).
+    // Not wanted any more (abandoned, superseded or gone meanwhile): the server must not keep it
+    // (withdrawn, or replaced next by the list wanted).
     r.heldStale = !still;
     if (still) {
+      // A frame's kept list that went again was answered long ago: nothing to settle then.
       const accepted = Array.isArray(a.body.accepted) ? a.body.accepted.filter((n): n is string => typeof n === 'string') : [];
       const refused = Array.isArray(a.body.refused) ? (a.body.refused as AssistantRegistration['refused']) : [];
       settleWorkspaceTools(pub.rev, { available: true, accepted, refused });
@@ -396,38 +426,23 @@ async function register(r: Relay, link: string, pub: PublishedTools): Promise<vo
     return;
   }
   if (a.status === 409 && code === 'no_channel') {
-    // The link went before this arrived: the next `linked` sends it again.
+    // The link went before this arrived: the next `linked` sends the list wanted again.
     r.postedOn = null;
     if (r.link === link) r.link = null;
     return;
   }
-  // A token of this boot is never answered plugin_off (a changed plugin is plugin_changed): with
-  // one, the server restarted since and may not have read its plugins yet. Tried again first.
-  if (a.status === 409 && (code === 'not_ready' || (code === 'plugin_off' && epoch))) {
-    if (r.notYet < NOT_YET_RETRY_MS.length) {
-      const wait = NOT_YET_RETRY_MS[r.notYet];
-      r.notYet += 1;
-      r.postedOn = null;
-      r.retryTimer = setTimeout(() => {
-        r.retryTimer = null;
-        kick();
-      }, wait);
-      return;
-    }
-    r.notYet = 0;
-    if (code === 'not_ready') {
-      settleWorkspaceTools(pub.rev, refusal(code));
-      return;
-    }
-  }
   if (a.status === 409 && (code === 'plugin_off' || code === 'plugin_changed')) {
-    // Its plugin was turned off or replaced: the server dropped this tab's lists of it.
+    // Its plugin was turned off or replaced: the server dropped this tab's lists of it. Final
+    // after a restart too: one that has not read its plugins yet keeps a list unverified.
     r.maybeHeld = false;
     r.heldStale = false;
     r.held = null;
     markWorkspaceFrameDead(pub.frameId, code);
     return;
   }
+  // Refused: the server kept what it held. A new list's frame is told (it keeps its earlier
+  // list); a kept list sent again is not sent on this link again.
+  r.postedOn = pub.taken ? { link, rev: pub.rev } : before;
   settleWorkspaceTools(pub.rev, refusal(code || `http_${a.status}`));
 }
 
@@ -448,21 +463,20 @@ async function withdraw(r: Relay, link: string): Promise<void> {
   } satisfies RelayToolsBody);
   if (R !== r) return;
   if (!a) {
-    // No answer: again in a moment (a dropped stream gives a new link meanwhile).
-    r.retryTimer = setTimeout(() => {
-      r.retryTimer = null;
-      kick();
-    }, RETRY_MS);
+    // No answer: again in a moment.
+    retryLater(r);
     return;
   }
   if (a.status === 409 && codeOf(a) === 'no_channel') {
     if (r.link === link) r.link = null;
     return;
   }
-  // Gone (200), or nothing the server could keep (its plugin went, or a refusal for good).
+  // Gone (200), or nothing the server could keep (its plugin went, or a refusal for good):
+  // nothing of this page is there, so a list wanted after all goes again.
   r.maybeHeld = false;
   r.heldStale = false;
   r.held = null;
+  r.postedOn = null;
   const now = workspaceToolsSnapshot().current;
   if (now && !now.settled && now.tools.length === 0) settleWorkspaceTools(now.rev, NOTHING_HELD);
 }
@@ -599,8 +613,9 @@ function onGate(r: Relay, d: RelayFrameData['gate']): void {
   void (async () => {
     try {
       await exitFrameFullscreen();
-      // Every assistant question is safe: No has the focus, Enter and Escape answer No.
-      const allow = await confirmAction({ title: g.title, copy: gateCopy(g), yes: g.yes, no: g.no, safe: true, signal: ctl.signal });
+      // Every assistant question is safe (No has the focus, Enter and Escape answer No) and
+      // guarded: Allow takes a deliberate click only, never the second of a double-click.
+      const allow = await confirmAction({ title: g.title, copy: gateCopy(g), yes: g.yes, no: g.no, safe: true, guard: true, signal: ctl.signal });
       // Closed on the server meanwhile (answered elsewhere, timed out, stopped): nothing to send.
       if (ctl.signal.aborted) return;
       await post(`/api/assistant/gates/${encodeURIComponent(g.id)}`, { allow: allow === true });
@@ -657,7 +672,7 @@ function updatePin(r: Relay): void {
 function maybeClose(r: Relay): void {
   if (!r.ch || r.pumping || r.maybeHeld || r.gates.size) return;
   const cur = workspaceToolsSnapshot().current;
-  if (live(cur) || (cur && !cur.settled)) return;
+  if (wanted(cur) || (cur && !cur.settled)) return;
   const ch = r.ch;
   r.ch = null;
   r.link = null;
@@ -690,7 +705,6 @@ export function startAssistantRelay(): () => void {
       invokes: new Map(),
       gates: new Map(),
       gateCheck: null,
-      notYet: 0,
       turns: 0,
       holdUntil: 0,
       holdTimer: null,

@@ -29,7 +29,19 @@ export interface ConfirmOpts extends DialogOpts {
   safe?: boolean;
   /** An information dialog with one button (no Cancel). */
   notice?: boolean;
+  /**
+   * Yes takes only a deliberate click (the Assistant's questions, which a model can ask one
+   * right after another, each in the same place): it is disabled for its first
+   * YES_GUARD_MS on screen, and then counts a click only when the press began on it after
+   * that, never the second click of a double-click. So the second click of a double-click
+   * on the dialog before it, or a press that began there, never answers this one. Not on a
+   * notice.
+   */
+  guard?: boolean;
 }
+
+/** How long a guarded dialog's Yes stays disabled once it is shown. */
+export const YES_GUARD_MS = 500;
 
 export interface PromptOpts extends DialogOpts {
   title?: string;
@@ -139,6 +151,7 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
   const backdrop = document.getElementById('cf-backdrop');
   // A notice has no Cancel to fall back on.
   const safe = !!o.safe && !o.notice;
+  const guard = !!o.guard && !o.notice;
   if (heading) heading.textContent = o.title || 'Delete?';
   if (copy) copy.textContent = o.copy || '';
   if (yes) yes.textContent = o.yes || 'Delete';
@@ -149,8 +162,25 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
   }
   modal.hidden = false;
   return new Promise<boolean>((resolve) => {
+    // A guarded Yes: disabled at first; then only a press that began on it once it was enabled.
+    const yesButton = guard && yes instanceof HTMLButtonElement ? yes : null;
+    let armed = !guard;
+    let pressed = false;
+    let armTimer: ReturnType<typeof setTimeout> | null = null;
+    if (guard) {
+      if (yesButton) yesButton.disabled = true;
+      armTimer = setTimeout(() => {
+        armTimer = null;
+        armed = true;
+        if (yesButton) yesButton.disabled = false;
+      }, YES_GUARD_MS);
+    }
     const done = (ok: boolean) => {
       modal.hidden = true;
+      if (armTimer) clearTimeout(armTimer);
+      // The same button serves the next dialog.
+      if (yesButton) yesButton.disabled = false;
+      yes?.removeEventListener('pointerdown', onPress);
       if (no) {
         no.hidden = false;
         no.textContent = NO_LABEL;
@@ -162,7 +192,16 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
       o.signal?.removeEventListener('abort', onNo);
       resolve(ok);
     };
-    const onYes = () => done(true);
+    const onPress = () => {
+      pressed = armed;
+    };
+    const onYes = (e?: MouseEvent) => {
+      // Guarded: not before it is enabled, not a click whose press began before that (a key on it,
+      // detail 0, has no press; Enter has no click), and never the second click of a double-click.
+      const detail = e?.detail ?? 0;
+      if (guard && (!armed || detail > 1 || (detail > 0 && !pressed))) return;
+      done(true);
+    };
     const onNo = () => done(false);
     const onKey = (e: KeyboardEvent) => {
       // A key the dialog before this one already took is not an answer here.
@@ -174,6 +213,7 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
       if (e.key === 'Escape' || safe) onNo();
       else onYes();
     };
+    yes?.addEventListener('pointerdown', onPress);
     yes?.addEventListener('click', onYes);
     no?.addEventListener('click', onNo);
     backdrop?.addEventListener('click', onNo);
