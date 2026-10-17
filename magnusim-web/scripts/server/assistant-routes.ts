@@ -49,12 +49,16 @@
  *   POST /api/assistant/relay/gate      {link, gate, allow} → {ok}: the tab that shows a question
  *                                        answers it through its live link; 409 no_channel; 403
  *                                        not_shown (not sent on this link, or another tab's); 409 {already}
+ *   GET  /api/assistant/mcp             other apps (MCP): {ok, clients, running, reason, port,
+ *                                        bridge:{command, args}, snippet, connections:[{id, kind,
+ *                                        name, since, calls}]} (never the token; the MCP connection
+ *                                        itself is a loopback socket, assistant/mcp/listener.ts)
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
  *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files)
  */
-import { rm } from 'node:fs/promises';
+import { access, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError } from './http.ts';
 import { registerChannelKind } from './event-hub.ts';
@@ -81,6 +85,8 @@ import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
+import { mcpClientConfig, mcpConnections, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
+import { createMcpService } from './assistant/mcp/server.ts';
 
 export { TURN_HEADER };
 
@@ -102,6 +108,8 @@ export interface AssistantHandle {
   readonly turns: TurnManager;
   /** The page relay: how turns reach the workspace open in an app tab. */
   readonly relay: Relay;
+  /** The MCP listener's start with this server (when the settings file exists): settled once it is decided. */
+  readonly mcpStart: Promise<void>;
   /** The server is closing: stop what the Assistant runs and drop the master key (nothing once a newer server registered). */
   shutdown(): void;
 }
@@ -219,7 +227,14 @@ const STATUS_PARTS: StatusPart[] = [
     /** Each provider's readiness: a turn or the Test may name any of them, whatever the default. */
     providers_ready: perProvider((id) => providerRow(id, src)),
   }),
+  ({ settings: s }) => ({ mcp: mcpStatus(s) }),
 ];
+
+/** Other apps (MCP): the switch, and whether the connection runs (and why not). */
+function mcpStatus(s: AssistantSettings): { clients: boolean; running: boolean; reason: string | null; port: number | null; connected: number } {
+  const l = mcpListenerStatus();
+  return { clients: s.mcp.clients, running: l.running, reason: l.reason, port: l.port ?? s.mcp.port, connected: l.connected };
+}
 
 function perProvider<T>(fn: (id: ProviderId) => T): Record<ProviderId, T> {
   return Object.fromEntries(PROVIDER_IDS.map((id) => [id, fn(id)])) as Record<ProviderId, T>;
@@ -478,6 +493,7 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         hold_ms: relay.holdMs,
         ack_ms: relay.ackMs,
         dormant_ms: relay.dormantMs,
+        mcp: { connections: mcpConnections().length, port: mcpListenerStatus().port },
       });
     }),
   );
@@ -586,6 +602,34 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
   );
 }
 
+/** Other apps (MCP): what Settings shows and the config to paste. */
+function registerMcpRoutes(router: Router): void {
+  router.get(
+    '/api/assistant/mcp',
+    local(async (ctx) => {
+      const s = await loadSettings();
+      const { command, args, snippet } = mcpClientConfig();
+      const st = mcpStatus(s);
+      ctx.sendJson(200, { ok: true, clients: st.clients, running: st.running, reason: st.reason, port: st.port, bridge: { command, args }, snippet, connections: mcpConnections() });
+    }),
+  );
+}
+
+/**
+ * The MCP listener starts with the server when the Assistant's settings file exists (it was
+ * used here), whatever Other apps says: coding agents use it too, and an external app is
+ * then refused with the Settings text, not "not running". Never at module load, and never
+ * creating the Assistant's folder.
+ */
+async function startMcpIfUsed(): Promise<void> {
+  try {
+    await access(join(assistantDataDir(), 'settings.json'));
+  } catch {
+    return;
+  }
+  await startMcpListener();
+}
+
 /** The page relay's routes and its event-hub channel kind (assistant/relay.ts does the work). */
 function registerRelayRoutes(router: Router, relay: Relay): void {
   registerChannelKind('assistant', (params, send, done, meta) => relay.open(params, send, done, meta));
@@ -670,6 +714,8 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
         });
         return;
       }
+      // Other apps turned on: the connection starts now (it then runs until the process exits).
+      if (r.settings.mcp.clients && !mcpListenerStatus().running) await startMcpListener();
       ctx.sendJson(200, await assistantStatus());
     }),
   );
@@ -754,8 +800,22 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
 
   registerTurnRoutes(router, turns);
   registerRelayRoutes(router, relay);
+  registerMcpRoutes(router);
 
   if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay);
+
+  // Other apps and coding agents reach this server's tools through the process-wide listener.
+  const mcp = createMcpService({
+    registry: turns.registry,
+    runner: turns.runner,
+    resolveTab: (target) => turns.resolveTab(target),
+    settings: deps.turns?.settings ?? loadSettings,
+    clock: turns.clock,
+  });
+  const disposeMcp = setMcpHandler(mcp.handler);
+  const mcpStart = startMcpIfUsed().catch((err: unknown) => {
+    alog('warn', 'mcp listener start failed', { error: redact(String((err as Error)?.message ?? err)).slice(0, 200) });
+  });
 
   // This server's lifetime: after a Vite restart the old server's close ends nothing of the new one's.
   const lifetime = beginAssistantLifetime();
@@ -764,9 +824,12 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     registry: turns.registry,
     turns,
     relay,
+    mcpStart,
     shutdown() {
       shutdownAssistant(lifetime);
       relay.shutdown();
+      // Explicitly, superseded or not: the connections this lifetime's handler served close.
+      disposeMcp();
     },
   };
 }

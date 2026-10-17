@@ -9,6 +9,8 @@
 //   statement `import type` loads nothing and is allowed; `import { type X }` still
 //   loads the module and is not. Inside the server's assistant code no other file
 //   loads a module by a variable specifier, require or createRequire.
+// - The MCP bridge other apps start (scripts/assistant-mcp.mjs) loads Node's own modules
+//   only: it runs on a plain Node 22.12 outside the app.
 // - Importing vite.config.js (the whole server graph) creates no assistant folder,
 //   not even later, by fs calls or timers its modules start and leave running.
 // These hold vacuously until the files they name exist; the self-tests show they bite.
@@ -333,6 +335,16 @@ describe('assistant boundaries in this tree', () => {
 
   it('the rest of the server assistant code loads modules by literal specifiers only', () => {
     assert.deepEqual(problems.assistantLoaders, []);
+  });
+
+  it("the MCP bridge (scripts/assistant-mcp.mjs) loads Node's own modules only", () => {
+    const file = join(WEB, 'scripts', 'assistant-mcp.mjs');
+    const refs = moduleRefs(file, readFileSync(file, 'utf8'));
+    assert.ok(refs.length > 0, 'it was read');
+    assert.deepEqual(
+      refs.filter((r) => !r.spec?.startsWith('node:')).map((r) => `${r.line} ${r.spec}`),
+      [],
+    );
   });
 
   it('importing vite.config.js (the whole server graph) creates no assistant folder, then or later', () => {

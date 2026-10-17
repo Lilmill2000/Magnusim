@@ -9,6 +9,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/assistant/gates/:id' },
   { method: 'POST', path: '/api/assistant/key' },
   { method: 'POST', path: '/api/assistant/key/remove' },
+  { method: 'GET', path: '/api/assistant/mcp' },
   { method: 'GET', path: '/api/assistant/models' },
   { method: 'POST', path: '/api/assistant/relay/gate' },
   { method: 'POST', path: '/api/assistant/relay/progress' },

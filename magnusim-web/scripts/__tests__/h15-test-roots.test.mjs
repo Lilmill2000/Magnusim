@@ -30,6 +30,8 @@ export const H15_TESTS = [
   'server/__tests__/assistant-loop.test.js',
   'server/__tests__/assistant-cli.test.js',
   'server/__tests__/assistant-relay.test.js',
+  'server/__tests__/assistant-mcp.test.js',
+  'server/__tests__/assistant-mcp-bridge.test.js',
   'server/__tests__/assistant-mcp-sdk.test.js',
   '__tests__/project-delete-jobs.test.mjs',
   '__tests__/wsl-case-watch.test.mjs',

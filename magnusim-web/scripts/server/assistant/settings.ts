@@ -33,6 +33,18 @@ export interface Caps {
   turn_tokens: number;
 }
 
+/**
+ * Other apps (MCP): whether external apps may use Magnusim's tools (coding agents use the
+ * connection whatever this says), and the loopback port the connection last bound (saved
+ * the first time, so a client's bridge finds it again; not secret). ask_in_client is
+ * reserved and always false.
+ */
+export interface McpSettings {
+  clients: boolean;
+  port: number | null;
+  ask_in_client: false;
+}
+
 /** One project's answer: its created_at when asked, and each destination it may go to (with when). */
 export interface Consent {
   created_at: string | null;
@@ -52,6 +64,7 @@ export interface AssistantSettings {
   privacy: PrivacyMode;
   caps: Caps;
   consents: Record<string, Consent>;
+  mcp: McpSettings;
 }
 
 export const PROVIDER_IDS: readonly ProviderId[] = Object.freeze(['anthropic', 'openai', 'openai_compatible']);
@@ -80,6 +93,7 @@ const DEFAULTS: AssistantSettings = {
   privacy: 'ask',
   caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
   consents: {},
+  mcp: { clients: false, port: null, ask_in_client: false },
 };
 
 /** A fresh copy of the defaults. */
@@ -205,7 +219,16 @@ export function normalizeSettings(raw: unknown): AssistantSettings {
     if (caps.day_usd >= caps.turn_usd) s.caps = caps;
   }
   s.consents = normalizeConsents(raw.consents);
+  if (isRecord(raw.mcp)) {
+    if (typeof raw.mcp.clients === 'boolean') s.mcp.clients = raw.mcp.clients;
+    if (isPort(raw.mcp.port)) s.mcp.port = raw.mcp.port;
+  }
   return s;
+}
+
+/** A TCP port a listener may bind (1–65535). */
+export function isPort(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65_535;
 }
 
 function settingsPath(): string {
@@ -234,7 +257,7 @@ export type PatchResult =
   | { ok: true; settings: AssistantSettings }
   | { ok: false; status: 400 | 409; error: string; field?: string; needs_confirm?: 'base_url' };
 
-const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents']);
+const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents', 'mcp']);
 
 const MODEL_TEXT = 'A model id is 1–128 letters, digits and . _ : / -.';
 
@@ -320,6 +343,17 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
   if ('forget_consents' in patch) {
     if (typeof patch.forget_consents !== 'boolean') return refuse('forget_consents must be true or false.', 'forget_consents');
     if (patch.forget_consents) next.consents = {};
+  }
+  if ('mcp' in patch) {
+    // Only the switch: the port is the listener's own, ask_in_client is reserved.
+    if (!isRecord(patch.mcp)) return refuse('Other apps (MCP) settings must be an object.', 'mcp');
+    for (const key of Object.keys(patch.mcp)) {
+      if (key !== 'clients') return refuse(`Unknown setting "mcp.${key.slice(0, 40)}".`, `mcp.${key.slice(0, 40)}`);
+    }
+    if ('clients' in patch.mcp) {
+      if (typeof patch.mcp.clients !== 'boolean') return refuse('mcp.clients must be true or false.', 'mcp.clients');
+      next.mcp.clients = patch.mcp.clients;
+    }
   }
   return { ok: true, settings: next };
 }

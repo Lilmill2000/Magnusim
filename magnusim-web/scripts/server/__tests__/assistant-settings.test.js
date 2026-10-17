@@ -49,6 +49,7 @@ describe('defaults and bounds', () => {
       privacy: 'ask',
       caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
       consents: {},
+      mcp: { clients: false, port: null, ask_in_client: false },
     });
     assert.deepEqual(S.DEFAULT_SETTINGS, s);
     assert.equal(existsSync(join(ROOT, 'home')), false);
@@ -232,6 +233,47 @@ describe('the base URL', () => {
     assert.equal(n.caps.turn_usd, 2);
     assert.equal(n.models.openai, 'gpt-6.1-sol');
     assert.deepEqual(S.normalizeSettings({ caps: { turn_usd: 50, day_usd: 10 } }).caps, S.defaultSettings().caps);
+  });
+});
+
+describe('other apps (MCP)', () => {
+  it('a page may switch other apps on and off, and nothing else of it', () => {
+    const d = S.defaultSettings();
+    const on = S.validatePatch(d, { mcp: { clients: true } });
+    assert.equal(on.ok, true);
+    assert.deepEqual(on.settings.mcp, { clients: true, port: null, ask_in_client: false });
+    assert.deepEqual(S.validatePatch(on.settings, { mcp: {} }).settings.mcp, on.settings.mcp, 'an empty change changes nothing');
+    assert.equal(S.validatePatch(on.settings, { mcp: { clients: false } }).settings.mcp.clients, false);
+    for (const [patch, field] of [
+      [{ mcp: { clients: 'yes' } }, 'mcp.clients'],
+      [{ mcp: { port: 4000 } }, 'mcp.port'],
+      [{ mcp: { ask_in_client: true } }, 'mcp.ask_in_client'],
+      [{ mcp: { clients: true, constructor: 1 } }, 'mcp.constructor'],
+      [{ mcp: true }, 'mcp'],
+      [{ mcp: [] }, 'mcp'],
+    ]) {
+      const r = S.validatePatch(d, patch);
+      assert.equal(r.ok, false, JSON.stringify(patch));
+      assert.equal(r.status, 400);
+      assert.equal(r.field, field, JSON.stringify(patch));
+    }
+  });
+
+  it('a file keeps the switch and a valid port; anything else reads as the default, ask_in_client always false', () => {
+    assert.deepEqual(S.normalizeSettings({ mcp: { clients: true, port: 47123, ask_in_client: true } }).mcp, { clients: true, port: 47123, ask_in_client: false });
+    for (const port of [0, 65_536, 1.5, '4000', -1, null]) {
+      assert.equal(S.normalizeSettings({ mcp: { port } }).mcp.port, null, String(port));
+    }
+    assert.deepEqual(S.normalizeSettings({ mcp: 'on' }).mcp, S.defaultSettings().mcp);
+    assert.deepEqual(S.normalizeSettings({ mcp: { clients: 1 } }).mcp.clients, false);
+  });
+
+  it('the switch is saved and read back', async () => {
+    const r = await S.saveSettings({ mcp: { clients: true } });
+    assert.equal(r.ok, true);
+    assert.deepEqual(onDisk().mcp, { clients: true, port: null, ask_in_client: false });
+    resetAssistantState();
+    assert.equal((await S.loadSettings()).mcp.clients, true);
   });
 });
 

@@ -156,6 +156,7 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/gates/:id',
       '/api/assistant/key',
       '/api/assistant/key/remove',
+      '/api/assistant/mcp',
       '/api/assistant/models',
       '/api/assistant/relay/gate',
       '/api/assistant/relay/progress',
