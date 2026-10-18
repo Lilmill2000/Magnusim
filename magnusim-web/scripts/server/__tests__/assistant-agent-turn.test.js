@@ -9,6 +9,11 @@
 // server lifetime's end (a Vite restart) and the Settings Test, connect and sign-in routes; what
 // the agent does between prompts (a mode, its own tool), a crash after Stop, Stop or the switch
 // during the privacy question, and the switch going off while a start is checked.
+// Also: the served list changing under a tools-off agent (never the tripwire), its own tool
+// while it starts, a mode it reports with the set_mode answer, the prompt's wait for its MCP
+// server's list (an agent that connects it after session/new), a call queued behind a stopped
+// message's call, overlapping own-tool questions, unanswered questions in a row, the tripwire
+// after a crashed turn and the adapter's nested _auth/status_update.
 //
 // Every agent is the scripted fake (e2e/support/fake-acp-agent.mjs) through its controller,
 // found by discovery only in this test's folders and home (the test switches), started in this
@@ -1136,6 +1141,55 @@ describe('Stop and the tree kill (spec 4.11, 7.7)', LIMIT, () => {
     }
   });
 
+  it('a call the agent queued behind a running call of a message that was stopped never runs in the next message', async () => {
+    let finish;
+    const slowDone = new Promise((r) => (finish = r));
+    let started;
+    const inTool = new Promise((r) => (started = r));
+    // The slow tool ignores its abort: it holds the connection's queue until the test lets it go.
+    const w = await world({
+      invoke: (call) => {
+        if (call.tool === 'slow_add') {
+          started();
+          return slowDone;
+        }
+        return { ok: true, data: { counter: 2 }, summary: 'ran' };
+      },
+    });
+    try {
+      const r = await w.turn({ text: 'Two at once.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      // Both calls at once; it answers the cancel at once and never cancels them on the MCP server.
+      claude.script({ calls: [{ tool: 'ai-demo__slow_add', args: { by: 1 } }, { tool: 'ai-demo__add', args: { by: 5 } }] });
+      await inTool;
+      // The second call has reached the server too (it waits behind the first).
+      await H.until(() => L.mcpConnections().some((c) => c.kind === 'agent' && c.calls >= 2), CEILING, 'the queued call');
+      const pid = lastPid(claude);
+      const stop = await w.m.manager.stop(r.turn.id, CEILING);
+      assert.equal(stop.body.turn.state, 'stopped');
+      await settledTurn(r.turn);
+      // The next message starts on the same agent while the slow call still holds the queue.
+      const r2 = await w.turn({ text: 'Next.', provider: 'agent:claude', tab: 'tab-1', conversation: r.body.conversation });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      claude.script({ hold: 'f12-next' }, { say: 'next' });
+      await holding(claude, 'f12-next');
+      assert.equal(lastPid(claude), pid, 'the same agent');
+      // The slow call ends: the call queued behind it (the stopped message's) answers stopped.
+      finish({ ok: true, data: { counter: 1 }, summary: 'ran late' });
+      const queued = await claude.waitFor((x) => x.event === 'mcp_result' && x.tool === 'ai-demo__add' && claude.of(pid)(x), CEILING);
+      assert.match(queued.result.content[0].text, /"code":"stopped"/);
+      assert.deepEqual(w.invoked.map((c) => [c.tool, c.turn]), [['slow_add', r.turn.id]], 'nothing ran in the next message');
+      assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'tool_call'), 'no call in the next message');
+      claude.release('f12-next');
+      await settledTurn(r2.turn);
+      assert.equal(endOf(r2.turn).state, 'done');
+    } finally {
+      finish({ ok: false, error: { code: 'aborted', message: 'aborted' }, summary: 'aborted' });
+      claude.release('f12-next');
+      await w.close();
+    }
+  });
+
   it('Stop, then the agent crashes instead of answering the cancel: the turn ends stopped, and its whole tree goes (helpers, job, working folder)', async () => {
     const w = await world();
     try {
@@ -1364,6 +1418,173 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
     }
   });
 
+  it('the list changes under a tools-off agent (its tab’s link drops): a call of a tool that left the list, its updates and its permission request are Magnusim’s, never the tripwire; nothing is recorded and the agent stays', async () => {
+    const w = await world();
+    const ST = await import('../assistant/settings.ts');
+    const LINK = 'a'.repeat(24);
+    const ours = (tool) => ({ claudeCode: { toolName: `mcp__magnusim__${tool}`, mcpServer: { name: 'magnusim', source: 'config' } } });
+    try {
+      const r = await w.turn({ text: 'Count, then add.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script(
+        { call: { tool: 'ai-demo__get_count', args: {} } },
+        { hold: 'f4-link-drops' },
+        // It lists again (as it does on list_changed): the workspace's tools are gone.
+        { relist: true },
+        // The model's call of a tool it had: its tool_call, the call (refused), its failed update.
+        { call: { tool: 'ai-demo__add', args: { by: 1 } } },
+        // Its permission request for that tool: asked, never allowed without asking.
+        { askOurs: { tool: 'ai-demo__add' } },
+        { say: 'done' },
+        // Between messages: a late update naming that tool, then a marker.
+        { later: { hold: 'f4-later', update: { sessionUpdate: 'tool_call_update', toolCallId: 'late-1', status: 'completed', _meta: ours('ai-demo__add') } } },
+        { later: { update: { sessionUpdate: 'current_model_update', currentModelId: 'fake-small' } } },
+      );
+      await holding(claude, 'f4-link-drops');
+      const pid = lastPid(claude);
+      // The tab's relay link drops: its workspace's tools leave the list (list_changed).
+      w.m.registry.setConnected('tab-1', LINK, false);
+      claude.release('f4-link-drops');
+      const relisted = await claude.waitFor((x) => x.event === 'mcp_tools' && x.relisted === true && claude.of(pid)(x), CEILING);
+      assert.ok(!relisted.tools.includes('ai-demo__add'), JSON.stringify(relisted.tools));
+      const g = await gateOf(r.turn);
+      assert.equal(g.link_only, true);
+      // The link comes back; the person answers Don't.
+      w.m.registry.setConnected('tab-1', LINK, true);
+      byTab(w, g, false);
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason], ['done', 'end_turn'], e.message);
+      const refused = claude.events('mcp_result', pid).find((x) => x.tool === 'ai-demo__add');
+      assert.match(refused.result.content[0].text, /"code":"no_tool"/);
+      assert.deepEqual(w.invoked.map((c) => c.tool), ['get_count'], 'the tool that left the list never ran');
+      assert.deepEqual(claude.events('permission_outcome', pid).at(-1).outcome, { outcome: 'selected', optionId: 'reject' });
+      // Between messages, the late update of that tool is Magnusim's too.
+      const session = host.sessionOf(r.body.conversation);
+      claude.release('f4-later');
+      await H.until(() => session.model === 'fake-small' || !session.alive, CEILING, 'the late updates');
+      assert.equal(session.alive, true, 'no tripwire between messages either');
+      assert.ok(alive(pid));
+      // Nothing recorded: the next message runs on the same agent, still with its own tools off.
+      const doc = existsSync(join(HOME, 'assistant', 'settings.json')) ? JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8')) : {};
+      assert.equal(doc.agents?.claude?.lockdown_failed ?? null, null, 'no tripwire record');
+      const r2 = await w.turn({ text: 'Again.', provider: 'agent:claude', tab: 'tab-1', conversation: r.body.conversation });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      claude.script({ relist: true }, { call: { tool: 'ai-demo__get_count', args: {} } }, { say: 'again' });
+      await settledTurn(r2.turn);
+      assert.deepEqual([endOf(r2.turn).state, endOf(r2.turn).reason], ['done', 'end_turn']);
+      assert.equal(lastPid(claude), pid, 'the same agent');
+    } finally {
+      claude.release('f4-link-drops');
+      claude.release('f4-later');
+      await ST.setAgentLockdownFailed('claude', null);
+      await w.close();
+    }
+  });
+
+  it('a tools-off agent that uses its own tool while it starts (a tool or a permission request before its first prompt): the start fails agent_lockdown, recorded, and it is never prompted', async () => {
+    const ST = await import('../assistant/settings.ts');
+    const record = () => H.until(() => {
+      const doc = JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8'));
+      return doc.agents?.claude?.lockdown_failed ? doc : null;
+    }, CEILING, 'the tripwire record');
+    const cases = [
+      { update: { sessionUpdate: 'tool_call', toolCallId: 'own-start', title: 'Bash ls', kind: 'execute', status: 'completed' } },
+      { request: { method: 'session/request_permission', params: { toolCall: { toolCallId: 'own-start-2', title: 'Bash rm -rf ~', kind: 'execute' }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] } } },
+    ];
+    for (const step of cases) {
+      const w = await world();
+      claude.configure({ afterSessionNew: [step] });
+      try {
+        const r = await w.turn({ text: 'Start.', provider: 'agent:claude' });
+        assert.equal(r.status, 202, JSON.stringify(r.body));
+        await settledTurn(r.turn);
+        const e = endOf(r.turn);
+        assert.deepEqual([e.state, e.reason, e.message], ['failed', 'agent_lockdown', "Claude Code's own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant."], JSON.stringify(step));
+        const pid = lastPid(claude);
+        assert.ok(!methodsIn(claude, pid).includes('session/prompt'), 'never prompted');
+        await gone(pid);
+        const saved = await record();
+        const row = D.agentRow(await D.resolveAgentNow('claude', saved), { settings: saved, mcp: { available: true, reason: null }, appVersion: saved.agents.claude.lockdown_failed.version });
+        assert.deepEqual([row.lockdown, row.needs_allow], ['none', true]);
+        // The next message says nothing more about it (this turn said it).
+        await ST.setAgentLockdownFailed('claude', null);
+        claude.configure({ afterSessionNew: null });
+        const r2 = await w.turn({ text: 'Again.', provider: 'agent:claude', conversation: r.body.conversation });
+        assert.equal(r2.status, 202, JSON.stringify(r2.body));
+        claude.script({ say: 'again' });
+        await settledTurn(r2.turn);
+        assert.equal(endOf(r2.turn).state, 'done');
+        assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'note' && /own tools were not off/.test(x.text)));
+      } finally {
+        claude.configure({ afterSessionNew: null });
+        await ST.setAgentLockdownFailed('claude', null);
+        await w.close();
+      }
+    }
+    // A Settings Test of it records the tripwire as a turn does.
+    const { srv } = await serverWorld();
+    claude.configure({ afterSessionNew: [cases[0]] });
+    try {
+      const t = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
+      assert.deepEqual([t.json.ok, t.json.code], [false, 'agent_lockdown'], JSON.stringify(t.json));
+      await record();
+    } finally {
+      claude.configure({ afterSessionNew: null });
+      await ST.setAgentLockdownFailed('claude', null);
+      await srv.close();
+    }
+  });
+
+  it('a mode outside the allowed ones reported with the answer to Magnusim setting its mode at start: never overwritten; the start fails agent_mode and it is never prompted', async () => {
+    const w = await world();
+    claude.configure({ setModeReport: 'plan' });
+    try {
+      const r = await w.turn({ text: 'Plan.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason, e.message], ['failed', 'agent_mode', 'Claude Code switched itself to a mode that skips its questions, so Magnusim stopped it.']);
+      const pid = lastPid(claude);
+      const sent = claude.sent(pid);
+      assert.ok(sent.some((m) => m.params?.update?.sessionUpdate === 'current_mode_update' && m.params.update.currentModeId === 'plan'), 'it reported plan');
+      assert.ok(!methodsIn(claude, pid).includes('session/prompt'), 'never prompted');
+      await gone(pid);
+    } finally {
+      claude.configure({ setModeReport: null });
+      await w.close();
+    }
+  });
+
+  it('a turn that ended with its prompt still out (it crashed): a tools-off agent’s own tool then still trips the lockdown, recorded, and the agent ends at once', async () => {
+    const w = await world({ cancelMs: 3_000 });
+    const ST = await import('../assistant/settings.ts');
+    try {
+      const r = await w.turn({ text: 'Hold.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script('ignoreCancel', { hold: 'f23-hold' }, { ownTool: { title: 'Bash rm -rf ~', kind: 'execute', status: 'completed' } }, { hold: 'f23-after' });
+      await holding(claude, 'f23-hold');
+      const pid = lastPid(claude);
+      r.turn.crash(new Error('boom'));
+      assert.equal(r.turn.ended, true);
+      await H.until(() => methodsIn(claude, pid).includes('session/cancel'), CEILING, 'session/cancel');
+      // Its own tool after the turn ended (the prompt still out): the fake clock never reaches the
+      // cancel wait's kill, so only the tripwire ends it.
+      claude.release('f23-hold');
+      await H.until(() => {
+        const doc = JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8'));
+        return doc.agents?.claude?.lockdown_failed ?? null;
+      }, CEILING, 'the tripwire record');
+      await gone(pid);
+      assert.equal(host.sessionOf(r.body.conversation), null, 'not kept');
+    } finally {
+      claude.release('f23-hold');
+      claude.release('f23-after');
+      await ST.setAgentLockdownFailed('claude', null);
+      await w.close();
+    }
+  });
+
   it('our tool without an allow_once option becomes a question (never allow_always)', async () => {
     const w = await world();
     try {
@@ -1415,6 +1636,86 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
       );
       const perm = H.eventsOf(r.turn).find((x) => x.type === 'agent_permission');
       assert.deepEqual([perm.outcome, perm.by], ['allowed', 'user']);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it('two own-tool questions open at once: the turn awaits confirmation until the last one is answered, whichever goes first', async () => {
+    const w = await world({ custom: true, allow: [CUSTOM_ID] });
+    try {
+      const r = await w.turn({ text: 'List both.', provider: `agent:${CUSTOM_ID}`, tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      custom.script({ parallel: [{ askOwn: { title: 'ls a', kind: 'execute' } }, { askOwn: { title: 'ls b', kind: 'execute' } }] }, { hold: 'f13-after' }, { say: 'done' });
+      await H.until(() => r.turn.summary().open_gates.length === 2, CEILING, 'two questions');
+      const pid = lastPid(custom);
+      assert.equal(r.turn.state, 'awaiting_confirmation');
+      const gates = r.turn.summary().open_gates;
+      const first = gates.find((g) => g.tool === 'ls a');
+      const second = gates.find((g) => g.tool === 'ls b');
+      assert.ok(first && second, JSON.stringify(gates));
+      const outcomes = () => custom.events('permission_outcome', pid);
+      // The first one asked is answered first: the other is still open.
+      byTab(w, first, true);
+      await H.until(() => outcomes().length === 1, CEILING, 'the first answer at the agent');
+      assert.deepEqual([r.turn.summary().open_gates.length, r.turn.state], [1, 'awaiting_confirmation']);
+      byTab(w, second, false);
+      await holding(custom, 'f13-after');
+      assert.equal(outcomes().length, 2);
+      assert.deepEqual([r.turn.summary().open_gates.length, r.turn.state], [0, 'model'], 'nothing is asked: back to the model');
+      custom.release('f13-after');
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+    } finally {
+      custom.release('f13-after');
+      await w.close();
+    }
+  });
+
+  it('own-tool questions nobody answers: two in a row that time out end the turn capped/unanswered; an answer between starts the count again', async () => {
+    const w = await world({ custom: true, allow: [CUSTOM_ID] });
+    const GATE = 240_000;
+    try {
+      const r = await w.turn({ text: 'List.', provider: `agent:${CUSTOM_ID}`, tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      custom.script(
+        { askOwn: { title: 'ls 1', kind: 'execute' } },
+        { askOwn: { title: 'ls 2', kind: 'execute' } },
+        { askOwn: { title: 'ls 3', kind: 'execute' } },
+        { askOwn: { title: 'ls 4', kind: 'execute' } },
+        { askOwn: { title: 'ls 5', kind: 'execute' } },
+        { say: 'never' },
+      );
+      const open = (title) => H.until(() => r.turn.summary().open_gates.find((g) => g.tool === title), CEILING, title);
+      // 1: nobody answers (it times out).
+      await open('ls 1');
+      const at = lastPid(custom);
+      w.m.clock.advance(GATE);
+      // 2: the person answers Don't: the count starts again.
+      byTab(w, await open('ls 2'), false);
+      // 3: times out; still running (one in a row).
+      await open('ls 3');
+      w.m.clock.advance(GATE);
+      await open('ls 4');
+      assert.equal(r.turn.ended, false, 'one unanswered question in a row: it goes on');
+      // 4: times out too: two in a row end it.
+      w.m.clock.advance(GATE);
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason, e.message], ['capped', 'unanswered', "Nobody answered Scripted's last 2 questions, so Magnusim stopped this message. Send another message to carry on."]);
+      assert.ok(methodsIn(custom, at).includes('session/cancel'));
+      const perms = H.eventsOf(r.turn).filter((x) => x.type === 'agent_permission').map((x) => [x.title, x.outcome, x.by]);
+      assert.deepEqual(perms.slice(0, 4), [
+        ['ls 1', 'declined', 'timeout'],
+        ['ls 2', 'declined', 'user'],
+        ['ls 3', 'declined', 'timeout'],
+        ['ls 4', 'declined', 'timeout'],
+      ]);
+      // The agent got Don't for the last one before the cancel.
+      const got = custom.received(at);
+      const replies = got.map((m, i) => [m, i]).filter(([m]) => isPermissionReply(m));
+      assert.deepEqual(replies[3][0].result.outcome, { outcome: 'selected', optionId: 'reject' });
+      assert.ok(replies[3][1] < got.findIndex(isCancel));
     } finally {
       await w.close();
     }
@@ -1517,6 +1818,59 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
       assert.equal(H.eventsOf(r3.turn).filter((x) => x.type === 'note' && x.text === GUIDE_CHANGED_NOTE).length, 0);
     } finally {
       await w.close();
+    }
+  });
+
+  it('an agent that answers session/new before its MCP server is up: the first prompt waits until Magnusim’s tools were listed to it', async () => {
+    const w = await world();
+    claude.configure({ mcpLate: 'f5-mcp-late' });
+    try {
+      const r = await w.turn({ text: 'Count.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ call: { tool: 'ai-demo__get_count', args: {} } }, { say: 'done' });
+      // Its session is up, its MCP server isn't (held).
+      await holding(claude, 'f5-mcp-late');
+      const pid = lastPid(claude);
+      const prompted = claude
+        .waitFor((x) => x.dir === 'in' && x.msg?.method === 'session/prompt' && claude.of(pid)(x), CEILING)
+        .then(() => 'prompted', () => 'no prompt');
+      const waiting = H.until(() => host.sessionOf(r.body.conversation)?.awaitingTools === true, CEILING, 'the wait for its tools').then(() => 'waiting', () => 'no wait');
+      assert.equal(await Promise.race([prompted, waiting]), 'waiting', 'no prompt before its MCP server listed the tools');
+      claude.release('f5-mcp-late');
+      await settledTurn(r.turn);
+      assert.deepEqual([endOf(r.turn).state, endOf(r.turn).reason], ['done', 'end_turn']);
+      const tools = claude.events('prompt_tools', pid).at(-1);
+      assert.ok(tools?.tools?.includes('ai-demo__get_count'), JSON.stringify(tools));
+      assert.deepEqual(w.invoked.map((c) => c.tool), ['get_count']);
+    } finally {
+      claude.configure({ mcpLate: null });
+      claude.release('f5-mcp-late');
+      await w.close();
+    }
+  });
+
+  it('an agent whose MCP server never lists the tools: the turn ends failed/agent_no_tools after the wait (fake clock), and it is never prompted', async () => {
+    const w = await world();
+    const SESSION = await import('../assistant/agents/session.ts');
+    claude.configure({ mcpLate: 'f5-never' });
+    try {
+      const r = await w.turn({ text: 'Count.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await holding(claude, 'f5-never');
+      const pid = lastPid(claude);
+      await H.until(() => host.sessionOf(r.body.conversation)?.awaitingTools === true, CEILING, 'the wait for its tools');
+      w.m.clock.advance(SESSION.AGENT_TOOLS_MS);
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual(
+        [e.state, e.reason, e.message],
+        ['failed', 'agent_no_tools', "Claude Code didn't connect to Magnusim's tools within 15 s, so this message wasn't sent to it. Send it again; if this keeps happening, run its Test in Settings → Assistant."],
+      );
+      assert.ok(!methodsIn(claude, pid).includes('session/prompt'), 'never prompted');
+    } finally {
+      claude.configure({ mcpLate: null });
+      await w.close();
+      claude.release('f5-never');
     }
   });
 
@@ -1714,6 +2068,48 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     } finally {
       page?.close();
       await srv.post('/api/assistant/settings', { provider: 'off' });
+      await srv.close();
+    }
+  });
+
+  it('the Test of an agent whose MCP server connects after session/new: its message waits for the list, so the tool works', async () => {
+    const { srv } = await serverWorld();
+    claude.configure({ mcpLate: 'f5-test-late' });
+    try {
+      claude.script({ call: { tool: 'connection_check', args: { word: 'ok' } } }, { say: 'done' });
+      const testing = srv.post('/api/assistant/agents/test', { id: 'claude', message: true }, proof());
+      await holding(claude, 'f5-test-late');
+      const pid = lastPid(claude);
+      const prompted = claude
+        .waitFor((x) => x.dir === 'in' && x.msg?.method === 'session/prompt' && claude.of(pid)(x), CEILING)
+        .then(() => 'prompted', () => 'no prompt');
+      const waiting = H.until(() => [...host['transients']].some((tr) => tr.session?.awaitingTools === true), CEILING, 'the wait for its tools').then(() => 'waiting', () => 'no wait');
+      assert.equal(await Promise.race([prompted, waiting]), 'waiting', 'no message before its MCP server listed the tools');
+      claude.release('f5-test-late');
+      const t = await testing;
+      assert.deepEqual([t.status, t.json.ok, t.json.tools], [200, true, 'works'], JSON.stringify(t.json));
+      assert.deepEqual(claude.events('prompt_tools', pid).at(-1)?.tools, ['connection_check']);
+    } finally {
+      claude.configure({ mcpLate: null });
+      claude.release('f5-test-late');
+      await srv.close();
+    }
+  });
+
+  it('connect again to an agent that says it isn’t signed in (its _auth/status_update, nested as the adapter sends it): signed_in no', async () => {
+    const { srv } = await serverWorld();
+    claude.configure({ authStatus: { kind: 'none', label: 'Not logged in' } });
+    try {
+      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
+      assert.deepEqual([c.status, c.json.ok, c.json.signed_in], [200, true, 'no'], JSON.stringify(c.json));
+      const sent = claude.sent(lastPid(claude)).find((m) => m.method === '_auth/status_update');
+      assert.deepEqual(sent.params, { authStatus: { kind: 'none', label: 'Not logged in' } });
+      // Without it, the login file decides.
+      claude.configure({ authStatus: null });
+      const again = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
+      assert.deepEqual([again.json.ok, again.json.signed_in], [true, 'yes']);
+    } finally {
+      claude.configure({ authStatus: null });
       await srv.close();
     }
   });

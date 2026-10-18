@@ -7,14 +7,20 @@
  *              BEFORE the session starts, so the agent never lists the project's tools without
  *              consent (Ask: a question only the Magnusim window answers; Never send: stopped)
  *   the conversation's agent session (kept between messages, else started: "agent" event)
+ *   its tools listed: the prompt waits (AGENT_TOOLS_MS at most, else failed/agent_no_tools)
+ *              until the agent's Magnusim MCP server has listed them
  *   the prompt: [the agent note and the workspace notes, on a session's first prompt;
  *                the message; the app context]
  *   model ─ while it runs:
  *     the agent's updates go to the log (text, plan, its own tools, its mode and model; our
  *       own tools' updates are not logged: the runner's tool_call / tool_result are their record)
- *     its MCP calls run here (AgentTurnRun.run): the turn's owner, tab, caps, log and signal
- *     its permission requests: ours auto-allowed (allow_once only), its own a question in the
- *       Magnusim window (4 minutes), a tools-off agent's own one the lockdown tripwire
+ *     its MCP calls run here (AgentTurnRun.run): the turn's owner, tab, caps, log and signal; a
+ *       call that arrived before this prompt went out (an earlier message's) answers `stopped`
+ *     its permission requests: ours auto-allowed (allow_once only, a tool in the list served
+ *       now), its own a question in the Magnusim window (4 minutes; AGENT_UNANSWERED_MAX in a row
+ *       unanswered end the turn capped/unanswered), a tools-off agent's own one the lockdown
+ *       tripwire (a tool of Magnusim's server, served now or not, never is)
+ *     the state follows what is open (questions may overlap): syncState
  *   the stop reason gives the end (the table of spec 4.7)
  *
  * "Ours" comes only from fields the agent's adapter sets (acp.ts OursMatcher), never from a
@@ -43,14 +49,14 @@ import type { AgentCaps, AssistantSettings } from '../settings.ts';
 import type { Clock, GateBroker, GateEvent, GateOwner, GateRequest } from '../gates.ts';
 import type { Conversation } from '../conversations.ts';
 import type { ToolCtx, ToolDef, WorkspaceRegistration } from '../registry.ts';
-import { bindingServes, type AgentDispatch } from '../mcp/sessions.ts';
+import { bindingServes, notePromptSent, type AgentDispatch } from '../mcp/sessions.ts';
 import type { EndState, TurnState } from '../loop.ts';
 import type { StreamEvent, ToolCallPart } from '../types.ts';
 import { noteBlock, noteInSystemPrompt, OursMatcher, pickOption, REJECT_KINDS, type AgentUpdate, type PermissionView } from './acp.ts';
 import type { AgentProviderId, KnownAgent } from './known.ts';
 import { policyOf } from './known.ts';
 import { AGENTS_BUSY_TEXT, NOTHING_RUNS_TEXT, RESTARTED_TEXT, type AgentHost, type AgentTimings } from './host.ts';
-import { AgentRunError, agentErrorOf, exitedText, MODE_TEXT, type AgentSession, type FoundAgent } from './session.ts';
+import { AGENT_TOOLS_MS, AgentRunError, agentErrorOf, exitedText, LOCKDOWN_TEXT, MODE_TEXT, type AgentSession, type FoundAgent } from './session.ts';
 import { RpcExited } from './rpc.ts';
 
 /** What an agent turn fixed when it started (turns.ts TurnSettings). */
@@ -143,7 +149,13 @@ export function callsCapText(n: number): string {
 export const AGENT_CALLS_END_TEXT = (n: number) => `The agent went on calling tools past this message's ${n}-call limit, so Magnusim stopped it.`;
 export const PICTURE_NOTE = '(The agent showed a picture; the chat will show it.)';
 export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its own tool; answer such questions in a project's Magnusim window.`;
-export const LOCKDOWN_TEXT = (name: string) => `${name}'s own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant.`;
+/** The agent's Magnusim MCP server never listed its tools before the prompt's wait ran out. */
+export const AGENT_NO_TOOLS_TEXT = (name: string, ms: number) =>
+  `${name} didn't connect to Magnusim's tools within ${Math.round(ms / 1000)} s, so this message wasn't sent to it. Send it again; if this keeps happening, run its Test in Settings → Assistant.`;
+/** Own-tool questions in a row that nobody answered before the turn ends (the person is away). */
+export const AGENT_UNANSWERED_MAX = 2;
+export const AGENT_UNANSWERED_TEXT = (name: string, n: number) =>
+  `Nobody answered ${name}'s last ${n} questions, so Magnusim stopped this message. Send another message to carry on.`;
 export const AGENT_PRIVACY_DENIED_CALL_TEXT = 'Settings → Assistant is set to never send project data off this PC now, so this tool did not run. Nothing more was sent.';
 export const AGENT_PRIVACY_DECLINED_TEXT = "The person didn't allow this project's data to be sent, so the tool did not run. Nothing more was sent.";
 /** A turn with no app tab can't ask (only the Magnusim window answers an agent's privacy question). */
@@ -228,6 +240,15 @@ class AgentTurnRun implements AgentDispatch {
   private readonly toolStatus = new Map<string, string>();
   private lastMode: string | null = null;
   private lastModel: string | null = null;
+  /** The binding's prompt count once this turn's prompt went out (null before): its calls carry it. */
+  private promptSeq: number | null = null;
+  /** What is open now, which the turn's state follows (syncState). */
+  private prompted = false;
+  private consents = 0;
+  private questions = 0;
+  private callsOpen = 0;
+  /** Own-tool questions in a row nobody answered (they timed out). */
+  private unanswered = 0;
 
   constructor(t: AgentRunTurn, d: AgentTurnDeps, timings: AgentTimings) {
     this.t = t;
@@ -253,9 +274,15 @@ class AgentTurnRun implements AgentDispatch {
   }
 
   /** One MCP call of the agent, inside this turn (spec 4.7 "MCP calls inside the turn"). */
-  async run(call: ToolCallPart, o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal; onProgress?: (fraction: number | null, label: string) => void }): Promise<RunResult> {
+  async run(
+    call: ToolCallPart,
+    o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal; prompts?: number; onProgress?: (fraction: number | null, label: string) => void },
+  ): Promise<RunResult> {
     const t = this.t;
     if (this.closed) return errorResult(call, 'stopped', NOTHING_RUNS_TEXT);
+    // A call that arrived before this turn's prompt went out (one that waited behind a call of
+    // an earlier, stopped message) is that message's: it never runs in this one.
+    if (o.prompts !== undefined && o.prompts !== this.promptSeq) return errorResult(call, 'stopped', NOTHING_RUNS_TEXT);
     if (t.ended || t.signal.aborted || this.pendingEnd) return errorResult(call, 'stopped', STOPPED_BEFORE);
     this.callsSeen += 1;
     const caps = effectiveAgentCaps(t.settings.caps, (await this.d.settings()).agent_caps);
@@ -275,22 +302,47 @@ class AgentTurnRun implements AgentDispatch {
     }
     t.step = 1 + t.calls;
     t.calls += 1;
-    t.setState('tools');
+    this.callsOpen += 1;
+    this.syncState();
     const signal = AbortSignal.any([t.callSignal(), o.signal]);
+    // The runner's own question for this call (its confirm gate) counts with the agent's own
+    // questions, which may be open beside it.
+    let asking = false;
+    const turn: RunnerTurn = {
+      id: t.id,
+      get step() {
+        return t.step;
+      },
+      emit: (e) => t.emit(e),
+      setState: (s) => {
+        if (s === 'awaiting_confirmation' && !asking) {
+          asking = true;
+          this.questions += 1;
+        } else if (s !== 'awaiting_confirmation' && asking) {
+          asking = false;
+          this.questions -= 1;
+        }
+        this.syncState();
+      },
+      pause: () => t.pause(),
+      resume: () => t.resume(),
+    };
     let r: RunResult;
     try {
       r = await this.d.runner.run(call, {
         owner: this.owner,
         ctx: this.ctx(),
         signal,
-        turn: t,
+        turn,
         offered: o.offered,
         gateTimeoutMs: this.timings.gateMs,
         ...(o.onProgress ? { onProgress: o.onProgress } : {}),
       });
     } finally {
       t.callDone();
-      if (!t.ended && !this.pendingEnd) t.setState('model');
+      if (asking) this.questions -= 1;
+      this.callsOpen -= 1;
+      this.syncState();
     }
     if (risk !== 'read' && (r.ok || !NOT_RUN.has(String(r.code)))) this.changes += 1;
     return r;
@@ -321,8 +373,8 @@ class AgentTurnRun implements AgentDispatch {
       this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, nothing) });
       return false;
     }
-    const prev = t.state;
-    t.setState('awaiting_consent');
+    this.consents += 1;
+    this.syncState();
     t.pause();
     const ac = new AbortController();
     this.asks.add(ac);
@@ -332,7 +384,8 @@ class AgentTurnRun implements AgentDispatch {
     } finally {
       this.asks.delete(ac);
       t.resume();
-      if (!t.ended) t.setState(prev === 'awaiting_consent' ? 'starting' : prev);
+      this.consents -= 1;
+      this.syncState();
     }
     if (answer !== 'allow' || t.signal.aborted || this.pendingEnd) {
       if (!t.signal.aborted && !this.pendingEnd) this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: nothing });
@@ -497,8 +550,11 @@ class AgentTurnRun implements AgentDispatch {
   private async onPermission(view: PermissionView): Promise<string | null> {
     const t = this.t;
     const title = cleanText(redact(view.title), 200) || cleanText(view.kind ?? '', 64) || 'a tool';
+    // Magnusim's tool, served now or not, is never the tripwire (a list that changed under the
+    // agent); only one served now is allowed without asking.
+    const ourTool = this.matcher.ourRequest(view);
     const ours = this.matcher.permission(view);
-    if (!ours && t.settings.agent.lockdown === 'tools_off') {
+    if (!ourTool && t.settings.agent.lockdown === 'tools_off') {
       // The tripwire, stopping or not: answered at once (before the tree kill answers it `cancelled`).
       const reject = pickOption(view.options, ['reject_once']);
       this.session?.answerNow(view, reject);
@@ -544,8 +600,9 @@ class AgentTurnRun implements AgentDispatch {
     });
     const ac = new AbortController();
     this.asks.add(ac);
-    const prev = t.state;
-    t.setState('awaiting_confirmation');
+    // Several may be open at once (and a call's own question beside them): counted, not a saved state.
+    this.questions += 1;
+    this.syncState();
     t.pause();
     let answer: 'allow' | 'deny';
     try {
@@ -554,7 +611,8 @@ class AgentTurnRun implements AgentDispatch {
       off();
       this.asks.delete(ac);
       t.resume();
-      if (!t.ended && !this.pendingEnd) t.setState(prev);
+      this.questions -= 1;
+      this.syncState();
     }
     const by = (gateId ? this.d.gates.closedAs(gateId)?.by : null) ?? 'stop';
     if (!t.ended) {
@@ -562,8 +620,27 @@ class AgentTurnRun implements AgentDispatch {
       else if (by === 'stop') t.emit({ type: 'agent_permission', title, outcome: 'cancelled', by: 'stop' });
       else t.emit({ type: 'agent_permission', title, outcome: 'declined', by: by === 'timeout' ? 'timeout' : 'user' });
     }
+    // Questions nobody answers (the person is away) never keep the turn, and its agent slot,
+    // going for hours: their waits don't count toward the minutes, so a few in a row end it.
+    if (by === 'timeout') {
+      this.unanswered += 1;
+      if (this.unanswered >= AGENT_UNANSWERED_MAX && !t.ended) {
+        this.halt({ state: 'capped', reason: 'unanswered', message: AGENT_UNANSWERED_TEXT(this.name, this.unanswered) }, false);
+      }
+    } else if (by === 'user') this.unanswered = 0;
     if (answer === 'allow') return allowOption;
     return by === 'stop' ? null : rejectOption;
+  }
+
+  /**
+   * The turn's state from what is open now: a privacy question, else a question (several may be
+   * open at once: the agent's own, a call's confirm), else a call running, else the model
+   * (before the prompt: starting).
+   */
+  private syncState(): void {
+    const t = this.t;
+    if (t.ended || this.pendingEnd) return;
+    t.setState(this.consents > 0 ? 'awaiting_consent' : this.questions > 0 ? 'awaiting_confirmation' : !this.prompted ? 'starting' : this.callsOpen > 0 ? 'tools' : 'model');
   }
 
   // ------------------------------------------------------------ the turn
@@ -659,6 +736,15 @@ class AgentTurnRun implements AgentDispatch {
     this.lastModel = session.model;
     t.emit({ type: 'agent', name: this.name, version: session.info.version, own_tools: t.settings.agent.ownTools });
     if (this.stoppedNow()) return;
+    // An agent may answer session/new before its MCP servers are up (its bridge connects
+    // meanwhile): the prompt waits, bounded, until Magnusim's tools were listed to it, so a
+    // message is never answered without them.
+    if ((await session.waitForTools({ signal: t.signal, clock: d.clock, ms: AGENT_TOOLS_MS })) === 'timeout') {
+      if (this.stoppedNow()) return;
+      t.end('failed', 'agent_no_tools', AGENT_NO_TOOLS_TEXT(this.name, AGENT_TOOLS_MS));
+      return;
+    }
+    if (this.stoppedNow()) return;
 
     // The minutes cap counts active time (questions waiting don't count), and fires with no call open.
     const caps = effectiveAgentCaps(t.settings.caps, (await d.settings()).agent_caps);
@@ -680,7 +766,10 @@ class AgentTurnRun implements AgentDispatch {
         return;
       }
       const blocks = this.blocks(session, fresh);
-      t.setState('model');
+      this.prompted = true;
+      this.syncState();
+      // Its calls from now on are this message's (a call that arrived before is an earlier one's).
+      this.promptSeq = notePromptSent(session.binding.id);
       this.promptPending = true;
       promptP = session
         .prompt(blocks, { onUpdate: (u) => this.onUpdate(u), onPermission: (v) => this.onPermission(v) })

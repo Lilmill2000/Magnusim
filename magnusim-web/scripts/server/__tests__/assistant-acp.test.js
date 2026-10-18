@@ -565,13 +565,46 @@ describe('which tool calls are Magnusim tools: only adapter-set fields count', (
     // Refused:
     assert.equal(m.tool(tool({ toolCallId: 'd', _meta: META('magnusim_app_status') })), null, 'a bare name');
     assert.equal(m.tool(tool({ toolCallId: 'e', _meta: META('mcp__magnusim-evil__add') })), null, 'a lookalike server');
-    assert.equal(m.tool(tool({ toolCallId: 'f', _meta: META('mcp__magnusim__rm_rf') })), null, 'a name not served');
     assert.equal(m.tool(tool({ toolCallId: 'g', _meta: META('mcp__magnusim__add', 'other') })), null, 'another server');
     assert.equal(m.permission(perm({ toolCallId: 'h', title: 'magnusim_app_status', kind: 'execute' })), null, 'an own request titled like ours');
+    assert.equal(m.ourRequest(perm({ toolCallId: 'h', title: 'magnusim_app_status', kind: 'execute' })), false);
     assert.equal(m.permission(perm({ toolCallId: 'i', title: 'mcp__magnusim__app_status', kind: 'execute' })), null, 'the title is never read');
+    assert.equal(m.ourRequest(perm({ toolCallId: 'i', title: 'mcp__magnusim__app_status', kind: 'execute' })), false);
     assert.equal(m.tool(tool({ toolCallId: 'j', title: 'mcp__magnusim__add' })), null);
     assert.equal(m.tool(toolUpd({ toolCallId: 'a', _meta: META('Bash', null) })), null, 'an update naming another tool is not ours');
     assert.equal(m.permission(perm({ toolCallId: 'k', _meta: META('Bash', null) })), null);
+    assert.equal(m.ourRequest(perm({ toolCallId: 'k', _meta: META('Bash', null) })), false);
+    assert.equal(m.ourRequest(perm({ toolCallId: 'e2', _meta: META('mcp__magnusim-evil__add') })), false, 'a lookalike server asks as the agent’s own');
+  });
+
+  it('a tool of Magnusim’s server that isn’t served (the list changed under the agent): still ours, never the agent’s own, but asked, never allowed without asking', () => {
+    let list = ['app_status', 'ai-demo__add', 'ai-demo__get_count'];
+    const m = new acp.OursMatcher('tool_name_meta', (name) => list.includes(name));
+    assert.equal(m.tool(tool({ toolCallId: 'a', _meta: META('mcp__magnusim__ai-demo__add') })), 'ai-demo__add');
+    assert.equal(m.permission(perm({ toolCallId: 'a', _meta: META('mcp__magnusim__ai-demo__add') })), 'ai-demo__add', 'served: allowed without asking');
+    // The tab's link drops: its workspace's tools leave the list.
+    list = ['app_status'];
+    assert.equal(m.tool(toolUpd({ toolCallId: 'a', status: 'failed', _meta: META('mcp__magnusim__ai-demo__add') })), 'ai-demo__add', 'its result update stays ours');
+    assert.equal(m.tool(tool({ toolCallId: 'b', _meta: META('mcp__magnusim__ai-demo__get_count') })), 'ai-demo__get_count', 'a call of a dropped tool is ours');
+    const dropped = perm({ toolCallId: 'b', _meta: META('mcp__magnusim__ai-demo__get_count') });
+    assert.equal(m.permission(dropped), null, 'not served: never allowed without asking');
+    assert.equal(m.ourRequest(dropped), true, 'but never the agent’s own tool');
+    assert.equal(m.tool(tool({ toolCallId: 'f', _meta: META('mcp__magnusim__rm_rf') })), 'rm_rf', 'any name of its server');
+    // A request without the fields (an adapter that leaves them off an MCP tool's request): ours by
+    // the tool call's own fields, never allowed by that alone.
+    assert.equal(m.ourRequest(perm({ toolCallId: 'b', title: 'x' })), true);
+    assert.equal(m.permission(perm({ toolCallId: 'b', title: 'x' })), null);
+    assert.equal(m.ourRequest(perm({ toolCallId: 'zz', title: 'x' })), false, 'an id never classed ours');
+
+    let flagList = ['add'];
+    const f = new acp.OursMatcher('mcp_call_flag', (name) => flagList.includes(name));
+    assert.equal(f.tool(tool({ toolCallId: 'd', title: 'mcp.magnusim.add', _meta: { is_mcp_tool_call: true } })), 'add');
+    flagList = [];
+    assert.equal(f.tool(toolUpd({ toolCallId: 'd', status: 'completed', title: 'mcp.magnusim.add', _meta: { is_mcp_tool_call: true } })), 'add');
+    const approval = perm({ toolCallId: 'd', kind: 'execute' }, { is_mcp_tool_approval: true });
+    assert.equal(f.permission(approval), null, 'not served: asked');
+    assert.equal(f.ourRequest(approval), true);
+    assert.equal(f.ourRequest(perm({ toolCallId: 'd', kind: 'execute' })), false, 'no approval flag');
   });
 
   it('flagged MCP call: mcp.magnusim.<served tool> with the flag; an approval only for a tool call already ours', () => {
@@ -585,9 +618,12 @@ describe('which tool calls are Magnusim tools: only adapter-set fields count', (
     assert.equal(m.tool(tool({ toolCallId: 'b', kind: 'execute', title: 'mcp.magnusim.app_status' })), null, 'the title without the flag');
     assert.equal(m.permission(perm({ toolCallId: 'b', title: 'mcp.magnusim.app_status', kind: 'execute' })), null, 'an own request titled like ours');
     assert.equal(m.tool(tool({ toolCallId: 'c', title: 'mcp.magnusim-evil.add', _meta: { is_mcp_tool_call: true } })), null);
-    assert.equal(m.tool(tool({ toolCallId: 'd', title: 'mcp.magnusim.rm_rf', _meta: { is_mcp_tool_call: true } })), null, 'not served');
     assert.equal(m.tool(tool({ toolCallId: 'e', title: 'mcp.other.add', _meta: { is_mcp_tool_call: true } })), null);
     assert.equal(m.permission(perm({ toolCallId: 'c' }, { is_mcp_tool_approval: true })), null);
+    assert.equal(m.ourRequest(perm({ toolCallId: 'c' }, { is_mcp_tool_approval: true })), false, 'a lookalike server’s approval is the agent’s own');
+    // A name of its server that isn't served: ours, but its approval is asked.
+    assert.equal(m.tool(tool({ toolCallId: 'd', title: 'mcp.magnusim.rm_rf', _meta: { is_mcp_tool_call: true } })), 'rm_rf');
+    assert.equal(m.permission(perm({ toolCallId: 'd', kind: 'execute' }, { is_mcp_tool_approval: true })), null, 'not served: asked');
   });
 
   it('an id stops being ours once an update or request for it names something else', () => {

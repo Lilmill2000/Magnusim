@@ -32,11 +32,27 @@
 //   missing), authSignsIn (authenticate writes the marker; default true), modes,
 //   configOptions, models (pre-v1, off by default), stubborn (ignores the end of its input and
 //   SIGTERM), stderrAtStart, envReport (variable names whose presence it reports).
+//   mcpLate: name   answers session/new first and starts its MCP server only once release(name)
+//                   (a 'holding' record first), as an agent whose MCP servers connect in the
+//                   background does; each prompt records 'prompt_tools' (the tools its server had
+//                   listed when the prompt came, null for none yet)
+//   setModeReport: id   answers session/set_mode and, in the same write, reports current mode id
+//                   (current_mode_update), as an agent that switched itself meanwhile
+//   authStatus: {kind, label}   sends _auth/status_update {authStatus} right after its
+//                   initialize answer, as the adapter that probes its sign-in at initialize does
+//   afterSessionNew: [{update} | {request: {method, params}}]   sent right after its session/new
+//                   answer (the session id filled in), while the client still sets the session up
 //
 // Steps of a prompt (strings or one-key objects):
 //   {say: text} {think: text} {plan: [entry | {content, status, priority}]}
 //   {call: {tool, args?, title?}}            tool_call, then tools/call through the MCP server
 //                                            it was given, then tool_call_update
+//   {calls: [{tool, args?, title?}, ...]}    the same for each, all sent at once; a cancel ends
+//                                            the prompt without waiting for them (and without
+//                                            cancelling them on the MCP server)
+//   {relist: true}                           tools/list again on its MCP server (mcp_tools record)
+//   {parallel: [step, ...]}                  the steps at once (for example two permission
+//                                            requests open together)
 //   {askOurs: {tool, options?}}              a permission request for one of our tools in the
 //                                            style (options: the kinds to offer)
 //   {askOursCorrelated: {tool, toolCallId?, announce?}}  the flagged-approval shape: a tool_call
@@ -190,6 +206,15 @@ function send(msg) {
     process.stdout.write(line);
   });
 }
+/** Several messages in one write (one read on the other side), in order. */
+function sendTogether(msgs) {
+  const full = msgs.map((m) => ({ jsonrpc: '2.0', ...m }));
+  for (const m of full) record({ dir: 'out', msg: m });
+  const text = full.map((m) => `${JSON.stringify(m)}\n`).join('');
+  posting = posting.then(() => {
+    process.stdout.write(text);
+  });
+}
 const reply = (id, result) => send({ id, result });
 const replyError = (id, code, message) => send({ id, error: { code, message } });
 const notifyClient = (method, params) => send({ method, params });
@@ -240,7 +265,7 @@ function startMcp(server, session) {
     record({ event: 'mcp_error', error: String(err?.message || err) });
     return null;
   }
-  const mcp = { child, pending: new Map(), next: 1, tools: [], dead: false, onProgress: null };
+  const mcp = { child, pending: new Map(), next: 1, tools: [], listed: false, dead: false, onProgress: null };
   child.on('error', (err) => {
     mcp.dead = true;
     record({ event: 'mcp_error', error: String(err?.message || err) });
@@ -306,6 +331,7 @@ function startMcp(server, session) {
     mcp.notify('notifications/initialized');
     const list = await mcp.request('tools/list', {});
     mcp.tools = (list.result?.tools || []).map((t) => t.name);
+    mcp.listed = true;
     record({ event: 'mcp_tools', tools: mcp.tools, instructions: init.result?.instructions ?? null });
   })();
   return mcp;
@@ -398,6 +424,22 @@ async function runStep(p, raw) {
     case 'call':
       await runCall(p, v);
       return;
+    case 'calls':
+      // All at once; a cancel ends the prompt without waiting for them.
+      await orCancel(p, Promise.all(v.map((c) => runCall(p, c))));
+      return;
+    case 'parallel':
+      await Promise.all(v.map((s) => runStep(p, s)));
+      return;
+    case 'relist': {
+      const s = sessions.get(p.sessionId);
+      if (!s?.mcp) return;
+      await s.mcp.ready;
+      const list = await s.mcp.request('tools/list', {});
+      s.mcp.tools = (list.result?.tools || []).map((t) => t.name);
+      await record({ event: 'mcp_tools', tools: s.mcp.tools, relisted: true });
+      return;
+    }
     case 'askOurs': {
       if (STYLE() === 'mcp_call_flag') return runStep(p, { askOursCorrelated: { tool: v.tool } });
       const toolCall = { toolCallId: `call-${(toolSeq += 1)}`, title: v.title || v.tool, kind: 'other', status: 'pending' };
@@ -499,6 +541,13 @@ async function runPrompt(id, params) {
   if (current) return replyError(id, -32603, 'a prompt is already running');
   const p = { id, sessionId, cancelled: false, ignoreCancel: false, cancelWaiters: [], stopReason: null, error: null, ownSeen: new Set(), later: [] };
   current = p;
+  if (config.mcpLate) {
+    // The tools this prompt's turn can use: its MCP server's, once a connection it has started
+    // is up (as an agent waits for a pending server), none while it has not started one.
+    const s = sessions.get(sessionId);
+    if (s?.mcp) await s.mcp.ready;
+    record({ event: 'prompt_tools', tools: s?.mcp?.listed ? [...s.mcp.tools] : null });
+  }
   try {
     const { steps } = await postJson('/prompt', { sessionId, prompt: params.prompt });
     for (const step of steps || []) {
@@ -575,7 +624,10 @@ async function handleRequest(msg) {
         authMethods: config.authMethods || [],
         agentInfo: config.agentInfo || { name: 'fake-acp-agent', title: 'Fake agent', version: '1.2.3' },
       };
-      return reply(id, result);
+      reply(id, result);
+      // As the adapter that probes its sign-in at initialize: its status, right after.
+      if (config.authStatus) notifyClient('_auth/status_update', { authStatus: config.authStatus });
+      return undefined;
     }
     case 'authenticate': {
       if (config.authSignsIn !== false && config.marker) writeFileSync(config.marker, 'signed in');
@@ -597,7 +649,7 @@ async function handleRequest(msg) {
       const servers = Array.isArray(params?.mcpServers) ? params.mcpServers : [];
       const stdio = servers.filter((sv) => sv && typeof sv.command === 'string' && (STYLE() !== 'tool_name_meta' || !('type' in sv)));
       if (servers.length && !stdio.length) record({ event: 'mcp_skipped', reason: 'no stdio server without a type key' });
-      if (stdio[0]) {
+      if (stdio[0] && !config.mcpLate) {
         s.mcp = startMcp(stdio[0], sessionId);
         if (s.mcp) await s.mcp.ready;
       }
@@ -606,6 +658,22 @@ async function handleRequest(msg) {
       if (s.configOptions) result.configOptions = s.configOptions;
       if (config.models) result.models = config.models;
       reply(id, result);
+      for (const a of Array.isArray(config.afterSessionNew) ? config.afterSessionNew : []) {
+        if (a.update) sessionUpdate(sessionId, a.update);
+        else if (a.request) {
+          const method = a.request.method;
+          requestClient(method, { sessionId, ...(a.request.params ?? {}) }).then((answer) => record({ event: 'request_answer', method, answer }));
+        }
+      }
+      if (stdio[0] && config.mcpLate) {
+        // Its MCP server connects in the background, after the answer (once released).
+        const server = stdio[0];
+        void (async () => {
+          await record({ event: 'holding', name: config.mcpLate });
+          await getJson(`/hold?name=${encodeURIComponent(config.mcpLate)}`);
+          s.mcp = startMcp(server, sessionId);
+        })();
+      }
       // Once per session: a file read the client must refuse.
       requestClient('fs/read_text_file', { sessionId, path: join(String(params?.cwd || '.'), 'notes.txt') }).then((answer) =>
         record({ event: 'fs_answer', answer }),
@@ -619,6 +687,14 @@ async function handleRequest(msg) {
       const known = sessionModes()?.availableModes?.some((m) => m.id === params?.modeId);
       if (!s || !known) return replyError(id, -32602, `unknown mode ${params?.modeId}`);
       s.mode = params.modeId;
+      if (config.setModeReport) {
+        // It switched itself meanwhile: its answer and its report in one write.
+        s.mode = config.setModeReport;
+        return sendTogether([
+          { id, result: {} },
+          { method: 'session/update', params: { sessionId: s.id, update: { sessionUpdate: 'current_mode_update', currentModeId: config.setModeReport } } },
+        ]);
+      }
       return reply(id, {});
     }
     case 'session/set_config_option': {

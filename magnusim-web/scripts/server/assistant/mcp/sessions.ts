@@ -43,11 +43,14 @@ export interface AgentDispatch {
   /**
    * Runs one call inside the running turn (the turn's owner, caps, log and signal).
    * `onProgress` (present when the request carried a progressToken) hears the tool's own
-   * progress: pass it on as RunOptions.onProgress.
+   * progress: pass it on as RunOptions.onProgress. `prompts`: the binding's prompt count
+   * (bindingPrompts) when the call arrived, however long it then waited behind another call:
+   * a call that arrived before the running turn's prompt went out is an earlier message's, and
+   * never runs in this one.
    */
   run(
     call: ToolCallPart,
-    o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal; onProgress?: (fraction: number | null, label: string) => void },
+    o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal; prompts?: number; onProgress?: (fraction: number | null, label: string) => void },
   ): Promise<RunResult>;
   /**
    * Whether an open question is one this binding's call waits on (its turn's): while one
@@ -70,9 +73,13 @@ interface BindingEntry {
   onTestCall: (() => void) | null;
   /**
    * The MCP names last listed on its connection (server.ts notes them at each tools/list), null
-   * before any: the agent runner's permission matcher counts only those as Magnusim's (spec 4.7).
+   * before any: the agent runner allows only those without asking (spec 4.7).
    */
   served: ReadonlySet<string> | null;
+  /** Who waits for its connection's first list (onBindingListed): told then, or when it is dropped. */
+  listedWaiters: Set<() => void>;
+  /** Prompts sent to its agent so far (notePromptSent): a call carries the count it arrived at. */
+  prompts: number;
 }
 
 const KEY = Symbol.for('magnusim.assistant.mcpBindings');
@@ -98,8 +105,20 @@ export function mintBinding(o: { conversation: string; agent: string; name?: str
     ...(o.name ? { name: o.name } : {}),
     test: o.test === true,
   };
-  table().set(binding.id, { binding, live: null, closeLive: null, dispatch: o.dispatch ?? null, onTestCall: o.onTestCall ?? null, served: null });
+  table().set(binding.id, { binding, live: null, closeLive: null, dispatch: o.dispatch ?? null, onTestCall: o.onTestCall ?? null, served: null, listedWaiters: new Set(), prompts: 0 });
   return binding;
+}
+
+function tellListed(e: BindingEntry): void {
+  const waiters = [...e.listedWaiters];
+  e.listedWaiters.clear();
+  for (const fn of waiters) {
+    try {
+      fn();
+    } catch {
+      /* a waiter never breaks the list */
+    }
+  }
 }
 
 /** The binding's turn dispatch from now on (null: no turn runs on it). */
@@ -111,12 +130,46 @@ export function setBindingDispatch(id: string, dispatch: AgentDispatch | null): 
 /** The MCP names a binding's connection was last listed (server.ts, at each tools/list). */
 export function noteBindingServed(id: string, names: Iterable<string>): void {
   const e = table().get(id);
-  if (e) e.served = new Set(names);
+  if (!e) return;
+  e.served = new Set(names);
+  tellListed(e);
 }
 
 /** Whether `name` was in the list last served on the binding's connection (false before any list). */
 export function bindingServes(id: string, name: string): boolean {
   return table().get(id)?.served?.has(name) === true;
+}
+
+/** Whether the binding's connection was listed its tools at least once. */
+export function bindingListed(id: string): boolean {
+  return (table().get(id)?.served ?? null) !== null;
+}
+
+/**
+ * `fn` once the binding's connection is first listed its tools, or once the binding is dropped;
+ * returns how to stop waiting. Null when there is nothing to wait for (listed already, or no
+ * such binding): `fn` is never called then.
+ */
+export function onBindingListed(id: string, fn: () => void): (() => void) | null {
+  const e = table().get(id);
+  if (!e || e.served !== null) return null;
+  e.listedWaiters.add(fn);
+  return () => {
+    e.listedWaiters.delete(fn);
+  };
+}
+
+/** A prompt goes to the binding's agent now: the new count (the turn's calls must carry it). */
+export function notePromptSent(id: string): number {
+  const e = table().get(id);
+  if (!e) return -1;
+  e.prompts += 1;
+  return e.prompts;
+}
+
+/** The prompts sent to the binding's agent so far (-1 once it is dropped). */
+export function bindingPrompts(id: string): number {
+  return table().get(id)?.prompts ?? -1;
 }
 
 /**
@@ -129,6 +182,7 @@ export function dropBinding(id: string, why?: { cause?: string }): void {
   table().delete(id);
   const close = e.closeLive;
   e.closeLive = null;
+  tellListed(e);
   close?.(why);
 }
 

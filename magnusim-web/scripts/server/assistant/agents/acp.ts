@@ -720,13 +720,24 @@ export const REJECT_KINDS: PermissionKind[] = ['reject_once', 'reject_always'];
  * Which adapter-set fields mark one of Magnusim's tools (the catalogue's `ours`, per agent):
  * - 'tool_name_meta' (the Claude Code adapter): `_meta.claudeCode.toolName` is
  *   `mcp__magnusim__<tool>`, and `_meta.claudeCode.mcpServer.name`, when present, is `magnusim`;
- *   its permission requests carry the same field, and one without it is never ours.
+ *   its permission requests carry the same field.
  * - 'mcp_call_flag' (the Codex adapter): a tool call flagged `_meta.is_mcp_tool_call` with the
  *   adapter-built title `mcp.magnusim.<tool>`; a permission request flagged
  *   `_meta.is_mcp_tool_approval` counts only when its `toolCall.toolCallId` is a tool call
  *   already classed ours (the approval's own title is fixed text).
  * A title alone never counts: a shell tool's title is the command the model wrote. An id
  * classed ours stops being ours when a later update for it names something else.
+ *
+ * Two questions, kept apart:
+ * - Is it Magnusim's tool at all (tool(), ourRequest())? Only Magnusim's server is given to the
+ *   agent (the adapters' strict MCP config), so its server's name decides, whether or not the
+ *   tool is in the list served now: that list changes under a running agent (a tab's link
+ *   dropping, a workspace closing), and a call of a tool it no longer has is answered by the MCP
+ *   server (no_tool, unavailable). Anything else is the agent's own tool (for an agent whose own
+ *   tools are off, the lockdown tripwire).
+ * - May its permission request be allowed without asking (permission())? Only for a tool in the
+ *   list served now, named by the request's own fields (Claude Code) or by the tool call it
+ *   approves (Codex); anything else is a question for the person.
  */
 export type OursRule = 'tool_name_meta' | 'mcp_call_flag';
 
@@ -739,13 +750,13 @@ export class OursMatcher {
   private readonly served: (name: string) => boolean;
   private readonly ours = new Map<string, string>();
 
-  /** `served`: whether a tool name is in the session's served list (only those count). */
+  /** `served`: whether a tool name is in the session's served list now (only those are allowed without asking). */
   constructor(rule: OursRule | null, served: (name: string) => boolean) {
     this.rule = rule;
     this.served = served;
   }
 
-  /** A tool_call or tool_call_update: Magnusim's tool name (MCP name), or null for the agent's own tool. */
+  /** A tool_call or tool_call_update: Magnusim's tool name (MCP name), served now or not, or null for the agent's own tool. */
   tool(u: ToolUpdateView): string | null {
     if (!this.rule) return null;
     const fromFields = this.fromFields(u.meta, u.title);
@@ -762,7 +773,10 @@ export class OursMatcher {
     return this.ours.get(u.id) ?? null;
   }
 
-  /** A permission request: Magnusim's tool name, or null (a question for the person). */
+  /**
+   * A permission request to allow without asking: Magnusim's tool name when it is in the list
+   * served now, else null (a question for the person).
+   */
   permission(p: PermissionView): string | null {
     if (!this.rule || !p.toolCallId) return null;
     if (this.rule === 'tool_name_meta') {
@@ -770,12 +784,32 @@ export class OursMatcher {
       // (an id remembered from an earlier update never auto-allows a request by itself).
       const fromFields = this.fromFields(p.toolMeta, null);
       if (fromFields === false) this.ours.delete(p.toolCallId);
-      return typeof fromFields === 'string' ? fromFields : null;
+      return typeof fromFields === 'string' && this.served(fromFields) ? fromFields : null;
     }
     // mcp_call_flag: the approval flag plus a tool call already classed ours (and not since
     // contradicted).
     if (p.meta?.is_mcp_tool_approval !== true) return null;
-    return this.ours.get(p.toolCallId) ?? null;
+    const name = this.ours.get(p.toolCallId) ?? null;
+    return name !== null && this.served(name) ? name : null;
+  }
+
+  /**
+   * Whether a permission request is for one of Magnusim's tools, served now or not (false: the
+   * agent's own tool). Its own fields decide; one without them counts by a tool call the
+   * adapter's fields classed ours (an adapter may leave them off a request for an MCP tool).
+   * Never a reason to allow it: permission() decides that.
+   */
+  ourRequest(p: PermissionView): boolean {
+    if (!this.rule || !p.toolCallId) return false;
+    if (this.rule === 'tool_name_meta') {
+      const fromFields = this.fromFields(p.toolMeta, null);
+      if (fromFields === false) {
+        this.ours.delete(p.toolCallId);
+        return false;
+      }
+      return typeof fromFields === 'string' || this.ours.has(p.toolCallId);
+    }
+    return p.meta?.is_mcp_tool_approval === true && this.ours.has(p.toolCallId);
   }
 
   /** Whether a tool call id was classed ours. */
@@ -784,8 +818,9 @@ export class OursMatcher {
   }
 
   /**
-   * The adapter fields: a served tool name (ours), false (the fields name something else:
-   * not ours, whatever the id), or null (no fields: the remembered id decides).
+   * The adapter fields: a tool name of Magnusim's server (ours, served now or not), false (the
+   * fields name something else: not ours, whatever the id), or null (no fields: the remembered
+   * id decides).
    */
   private fromFields(meta: Obj | null, title: string | null): string | false | null {
     if (this.rule === 'tool_name_meta') {
@@ -796,13 +831,12 @@ export class OursMatcher {
       if (!m) return false;
       const server = obj(cc?.mcpServer);
       if (server && server.name !== MCP_SERVER_NAME) return false;
-      return this.served(m[1]) ? m[1] : false;
+      return m[1];
     }
     // An update may leave the title out: the remembered id decides then.
     if (meta?.is_mcp_tool_call !== true || title == null) return null;
     const m = OURS_FLAG_TITLE.exec(title);
-    if (!m) return false;
-    return this.served(m[1]) ? m[1] : false;
+    return m ? m[1] : false;
   }
 }
 

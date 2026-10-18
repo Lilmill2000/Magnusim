@@ -34,18 +34,19 @@
  */
 import { randomBytes } from 'node:crypto';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
+import { realClock } from '../gates.ts';
 import { appVersion } from '../host-tools.ts';
 import { alog } from '../log.ts';
 import { mcpListenerStatus, mcpUnavailableText, startMcpListener } from '../mcp/listener.ts';
 import { mintBinding } from '../mcp/sessions.ts';
 import { CONNECTION_CHECK } from '../provider-test.ts';
 import { cleanText } from '../sanitize.ts';
-import { agentPrefs, isAgentOf, loadSettings, type AssistantSettings } from '../settings.ts';
+import { agentPrefs, isAgentOf, loadSettings, setAgentLockdownFailed, type AssistantSettings } from '../settings.ts';
 import { OursMatcher, pickOption, REJECT_KINDS, terminalSignIn, type AuthMethodView, type ModelView, type ModeView } from './acp.ts';
 import { agentRow, agentStartRefusal, ensureAgents, rememberAgentLast, rememberAgentSignIn, resolveAgentNow, type AgentEntry, type AgentRow } from './discover.ts';
 import { agentHost, AGENTS_BUSY_TEXT, type Transient } from './host.ts';
 import { knownAgent, policyOf } from './known.ts';
-import { AgentRunError, AgentSession, agentErrorOf, type FoundAgent } from './session.ts';
+import { AGENT_TOOLS_MS, AgentRunError, AgentSession, agentErrorOf, type FoundAgent } from './session.ts';
 
 type Answer = { status: number; body: Record<string, unknown> };
 
@@ -308,6 +309,10 @@ async function runTest(p: Prepared, tr: Transient, message: boolean, o: RunOptio
     prefs: { model: prefs.model, mode: prefs.mode },
     version: await appVersion(),
     ...host.sessionPlacement(),
+    // The lockdown tripwire (its own tool while it starts or between prompts), recorded as a turn's is.
+    onOffence: (_s, off) => {
+      if (off.code === 'agent_lockdown') void appVersion().then((v) => setAgentLockdownFailed(found.id, v)).catch(() => {});
+    },
   });
   tr.session = session;
   try {
@@ -316,6 +321,10 @@ async function runTest(p: Prepared, tr: Transient, message: boolean, o: RunOptio
     rememberAgentLast(found.id, { ...choices, at: new Date().toISOString() });
     let tools: 'works' | 'not_used' | null = null;
     if (message) {
+      // Its MCP server may still be connecting (session/new can come first): the message waits
+      // for its list (bounded), so a working agent isn't reported as not using Magnusim's tools.
+      await session.waitForTools({ signal, clock: realClock, ms: AGENT_TOOLS_MS });
+      if (signal.aborted) throw signal.reason ?? new Error('aborted');
       const matcher = new OursMatcher(policyOf(known).ours, (name) => name === CONNECTION_CHECK.name);
       const blocks: ContentBlock[] = [{ type: 'text', text: TEST_PROMPT }];
       let timer: ReturnType<typeof setTimeout> | undefined;

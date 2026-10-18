@@ -19,14 +19,20 @@
  * 6. The mode: the saved one when Magnusim may use it, else the first allowed one (so a mode the
  *    person saved in the agent's own settings never carries in), through session/set_mode or the
  *    `mode` config option. A session whose mode isn't allowed and can't be set ends with
- *    `agent_mode`. An agent that may run only in the mode it starts in gets nothing set.
+ *    `agent_mode`, as does one that reports a mode outside the allowed ones once it was asked
+ *    (its report is never overwritten with the mode asked for). An agent that may run only in
+ *    the mode it starts in gets nothing set.
+ * An offence while it starts (below) fails the start with its own code.
  *
  * Prompting (prompt()): session/prompt with no timeout of its own (the turn's limits bound it);
- * the session's updates and permission requests go to the turn's handlers while it runs.
- * Between prompts every permission request is answered `cancelled` at once and updates are
- * dropped, but they are still checked: a mode outside the allowed ones, or (an agent whose own
- * tools are off) a tool or a permission request that isn't Magnusim's, is an offence
- * (`offence`, onOffence): the host ends the agent at once, and a turn never prompts it again.
+ * the session's updates and permission requests go to the turn's handlers while it runs. The
+ * first one waits (waitForTools, the caller's bound) until the agent's Magnusim MCP server has
+ * listed its tools: an agent may answer session/new before its MCP servers are up.
+ * Between prompts (and while it starts) every permission request is answered `cancelled` at
+ * once and updates are dropped, but they are still checked: a mode outside the allowed ones
+ * (between prompts), or (an agent whose own tools are off) a tool or a permission request that
+ * isn't Magnusim's, is an offence (`offence`, onOffence): the host ends the agent at once, and a
+ * turn never prompts it again.
  *
  * cancel(): every open permission request is answered `cancelled` first, then session/cancel
  * goes out (ACP's order). end(): the tree kill, the working folder removed, the binding
@@ -46,9 +52,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 import { ensurePrivateDir } from '../files.ts';
+import type { Clock } from '../gates.ts';
 import { alog } from '../log.ts';
 import { BRIDGE_SCRIPT, mcpInfoPath } from '../mcp/listener.ts';
-import { bindingServes, dropBinding, type AgentBinding } from '../mcp/sessions.ts';
+import { bindingListed, bindingServes, dropBinding, onBindingListed, type AgentBinding } from '../mcp/sessions.ts';
 import { redact } from '../redact.ts';
 import { cleanText } from '../sanitize.ts';
 import { removeTree } from '../../../remove-tree.js';
@@ -132,6 +139,20 @@ export class AgentRunError extends Error {
 export const SIGN_IN_TEXT = (name: string) => `${name} isn't signed in. Settings → Assistant shows how to sign in.`;
 export const STOPPED_UNEXPECTEDLY_TEXT = (name: string) => `${name} stopped unexpectedly.`;
 export const MODE_TEXT = (name: string) => `${name} switched itself to a mode that skips its questions, so Magnusim stopped it.`;
+export const LOCKDOWN_TEXT = (name: string) => `${name}'s own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant.`;
+/** How long a prompt waits for the agent's Magnusim MCP server to list its tools (waitForTools). */
+export const AGENT_TOOLS_MS = 15_000;
+
+/**
+ * The kind of an `_auth/status_update` ('none': not signed in), or ''. The adapter sends
+ * `{authStatus: {kind, label}}`; a bare `{kind}` is read too.
+ */
+export function authStatusKind(params: unknown): string {
+  const p = params && typeof params === 'object' ? (params as Record<string, unknown>) : null;
+  const nested = p?.authStatus && typeof p.authStatus === 'object' ? (p.authStatus as Record<string, unknown>) : null;
+  const kind = nested ? nested.kind : p?.kind;
+  return typeof kind === 'string' ? kind.slice(0, 64) : '';
+}
 
 /** The agent's last stderr line, as a turn's end shows it (already redacted and cleaned by process.ts). */
 export function lastWords(tail: readonly string[]): string | null {
@@ -251,6 +272,10 @@ export class AgentSession {
   private starting: Promise<AgentProcess> | null = null;
   private extraDir: string | null = null;
   private permSerial = 0;
+  /** Modes the agent reported (current_mode_update, a mode config option): applyMode's guard. */
+  private modeReports = 0;
+  /** Prompts waiting for its MCP server's list (waitForTools). */
+  private toolsWaits = 0;
   /**
    * Which tool calls are Magnusim's, over the whole session (adapter-set fields only): a trailing
    * update of one of ours between prompts is not the tripwire. The turn's own matcher decides
@@ -363,12 +388,22 @@ export class AgentSession {
       this.model = configCurrent(this.config, 'model')?.value ?? this.models?.current ?? null;
       await this.applyModel(signal);
       await this.applyMode(signal);
+      // Its own tool while it started, with its own tools off: it never gets a prompt.
+      if (this.offence) throw this.offenceError();
       if (this.state === 'starting') this.state = 'ready';
     } catch (err) {
-      const e = signal.aborted ? (signal.reason ?? err) : agentErrorOf(err, this.agent.name, this.info.auth);
+      // An offence while it started is why it failed (the host may have ended it for that already).
+      const e = signal.aborted ? (signal.reason ?? err) : this.offence ? this.offenceError() : agentErrorOf(err, this.agent.name, this.info.auth);
       void this.end('start_failed');
       throw e;
     }
+  }
+
+  /** The start's failure for its offence (the caller says it: the next turn needn't). */
+  private offenceError(): AgentRunError {
+    const code = (this.offence as AgentOffence).code;
+    this.offenceTold = true;
+    return new AgentRunError(code, code === 'agent_lockdown' ? LOCKDOWN_TEXT(this.agent.name) : MODE_TEXT(this.agent.name));
   }
 
   /**
@@ -439,21 +474,25 @@ export class AgentSession {
     const want = this.o.prefs.mode && allowed.includes(this.o.prefs.mode) ? this.o.prefs.mode : allowed[0];
     const listed = !!this.modes?.available.some((m) => m.id === want);
     const option = this.config.find((o) => o.category === 'mode' && o.type === 'select' && o.options.some((x) => x.value === want));
+    // A mode the agent reports once it was asked (before its answer, or in the same read as it,
+    // whose continuation runs after) is its own word, never overwritten with the one asked for.
+    const reports = this.modeReports;
     try {
       if (listed) {
         await this.request(ACP.setMode, setModeParams(this.sessionId as string, want), signal);
-        this.mode = want;
+        if (this.modeReports === reports) this.mode = want;
       } else if (option) {
         const r = await this.request(ACP.setConfigOption, setConfigOptionParams(this.sessionId as string, option.id, want), signal);
         const next = configOptions(r);
         if (next.length) this.config = next;
-        this.mode = want;
+        if (this.modeReports === reports) this.mode = want;
       }
     } catch (err) {
       if (signal.aborted || err instanceof RpcExited) throw err;
       /* checked below */
     }
     if (this.mode !== null && !allowed.includes(this.mode)) {
+      if (this.modeReports !== reports) throw new AgentRunError('agent_mode', MODE_TEXT(this.agent.name));
       throw new AgentRunError('agent_mode', `${this.agent.name} is in a mode Magnusim doesn't use (${cleanText(this.mode, 64)}), and it couldn't be changed.`);
     }
   }
@@ -480,6 +519,43 @@ export class AgentSession {
   }
 
   // ------------------------------------------------------------ prompting
+
+  /**
+   * Waits until the agent's Magnusim MCP server has listed its tools (its bridge connected and
+   * asked tools/list), at most `ms` on `clock`: an agent may answer session/new before its MCP
+   * servers are up, and a prompt it gets before then is answered without Magnusim's tools.
+   * 'listed' at once once it has been; 'gone' when the session ends or `signal` aborts first.
+   */
+  async waitForTools(o: { signal: AbortSignal; clock: Clock; ms: number }): Promise<'listed' | 'timeout' | 'gone'> {
+    if (!this.alive || o.signal.aborted) return 'gone';
+    if (bindingListed(this.binding.id)) return 'listed';
+    this.toolsWaits += 1;
+    try {
+      return await new Promise<'listed' | 'timeout' | 'gone'>((resolve) => {
+        let timer: unknown = null;
+        let off: (() => void) | null = null;
+        const done = (v: 'listed' | 'timeout' | 'gone') => {
+          off?.();
+          o.clock.clearTimeout(timer);
+          o.signal.removeEventListener('abort', onAbort);
+          resolve(v);
+        };
+        const onAbort = () => done('gone');
+        off = onBindingListed(this.binding.id, () => done(bindingListed(this.binding.id) ? 'listed' : 'gone'));
+        // Listed or dropped since the check above: nothing to wait for.
+        if (!off) return resolve(bindingListed(this.binding.id) ? 'listed' : 'gone');
+        o.signal.addEventListener('abort', onAbort, { once: true });
+        timer = o.clock.setTimeout(() => done('timeout'), o.ms);
+      });
+    } finally {
+      this.toolsWaits -= 1;
+    }
+  }
+
+  /** A prompt waits for the agent's MCP server's list now (waitForTools; tests). */
+  get awaitingTools(): boolean {
+    return this.toolsWaits > 0;
+  }
 
   /**
    * One prompt: resolves with its stop reason (null: one Magnusim doesn't know), rejects with
@@ -535,8 +611,10 @@ export class AgentSession {
     // being cancelled) the turn decides, and logs it.
     if (!h || (this.state !== 'prompting' && this.state !== 'cancelling') || (view.sessionId !== null && view.sessionId !== this.sessionId)) {
       this.rpc?.reply(id, permissionReply(null));
-      // Its own tool asked for between prompts, with its own tools off: the tripwire.
-      if (this.state === 'ready' && (view.sessionId === null || view.sessionId === this.sessionId) && this.agent.lockdown === 'tools_off' && this.ours.permission(view) === null) {
+      // Its own tool asked for between prompts or while it starts, with its own tools off: the
+      // tripwire (Magnusim's tool, served now or not, never is).
+      const ownSession = view.sessionId === null || this.sessionId === null || view.sessionId === this.sessionId;
+      if ((this.state === 'ready' || this.state === 'starting') && ownSession && this.agent.lockdown === 'tools_off' && !this.ours.ourRequest(view)) {
         this.offend({ code: 'agent_lockdown' });
       }
       return true;
@@ -572,7 +650,8 @@ export class AgentSession {
   private onNotification(method: string, params: unknown): void {
     if (method === ACP.update) {
       const { sessionId, update } = sessionUpdate(params);
-      if (!update || (sessionId !== null && sessionId !== this.sessionId)) return;
+      // Before session/new is answered its id isn't known yet: the update is still checked.
+      if (!update || (sessionId !== null && this.sessionId !== null && sessionId !== this.sessionId)) return;
       // The session's own record, prompt or not (a mode it switched to between prompts counts).
       let mode: string | null = null;
       if (update.kind === 'mode') mode = this.mode = update.mode;
@@ -581,6 +660,8 @@ export class AgentSession {
         if (update.mode !== null) mode = this.mode = update.mode;
         if (update.model !== null) this.model = update.model;
       } else if (update.kind === 'model') this.model = update.model;
+      // A mode it reports while its mode is being set is its own word (applyMode never overwrites it).
+      if (mode !== null) this.modeReports += 1;
       // Every tool update teaches the session's matcher (a later update may leave the fields out).
       const ours = update.kind === 'tool' ? this.ours.tool(update) : null;
       const h = this.handlers;
@@ -592,14 +673,15 @@ export class AgentSession {
         }
         return;
       }
-      // Between prompts (after its start): nobody is asked, but it is still checked.
-      if (this.state !== 'ready') return;
-      if (mode !== null && !this.modeAllowed(mode)) this.offend({ code: 'agent_mode' });
+      // Between prompts and while it starts: nobody is asked, but it is still checked (a mode
+      // while it starts is start()'s to check: Magnusim sets one then).
+      if (this.state !== 'ready' && this.state !== 'starting') return;
+      if (this.state === 'ready' && mode !== null && !this.modeAllowed(mode)) this.offend({ code: 'agent_mode' });
       else if (update.kind === 'tool' && ours === null && this.agent.lockdown === 'tools_off') this.offend({ code: 'agent_lockdown' });
       return;
     }
     if (method === '_auth/status_update') {
-      const kind = typeof (params as { kind?: unknown } | null)?.kind === 'string' ? String((params as { kind: string }).kind) : '';
+      const kind = authStatusKind(params);
       if (kind === 'none') this.authNone = true;
       try {
         this.o.onAuthStatus?.(kind);

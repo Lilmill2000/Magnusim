@@ -87,7 +87,7 @@ import { onAssistantShutdown } from '../state.ts';
 import type { Risk, ToolCallPart } from '../types.ts';
 import { CLIENTS_OFF_TEXT, type McpAdmission, type McpConnection, type McpHandler, type McpHello } from './listener.ts';
 import { servedMap } from './names.ts';
-import { bindingEntry, CallQueue, claimBinding, noteBindingServed, type BindingClaim, type McpSession } from './sessions.ts';
+import { bindingEntry, bindingPrompts, CallQueue, claimBinding, noteBindingServed, type BindingClaim, type McpSession } from './sessions.ts';
 
 /** A line longer than this closes the connection (the SDK's default is 10 MB). */
 export const MCP_LINE_MAX = 8 * 1024 * 1024;
@@ -578,6 +578,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
 
   async function listTools(session: McpSession): Promise<Array<Record<string, unknown>>> {
     if (session.binding?.test) {
+      // Listed: the Test's message waits for this (AgentSession.waitForTools).
+      noteBindingServed(session.binding.id, [CONNECTION_CHECK.name]);
       return [
         {
           name: CONNECTION_CHECK.name,
@@ -835,7 +837,14 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return withHint(call, r, TOOLS_CHANGED_HINT);
   }
 
-  async function runOne(session: McpSession, call: ToolCallPart, signal: AbortSignal, progress: ProgressSender | null, watch: Watch): Promise<{ r: RunResult; def: ToolDef | null }> {
+  async function runOne(
+    session: McpSession,
+    call: ToolCallPart,
+    signal: AbortSignal,
+    progress: ProgressSender | null,
+    watch: Watch,
+    prompts: number,
+  ): Promise<{ r: RunResult; def: ToolDef | null }> {
     if (session.binding?.test) return { r: testCall(session, call), def: null };
     if (signal.aborted) return { r: stoppedBefore(call, signal), def: null };
     // Other apps turned off since this app connected (or since this call was queued).
@@ -852,7 +861,9 @@ export function createMcpService(d: McpServiceDeps): McpService {
     if (session.kind === 'agent') {
       const dispatch = session.binding ? bindingEntry(session.binding.id)?.dispatch : null;
       if (!dispatch) return { r: errorResult(call, 'stopped', NOTHING_RUNS_TEXT), def };
-      return { r: await dispatch.run(call, { offered, signal, ...onProgress }), def };
+      // The prompt count it arrived at: one queued behind another call of an earlier message
+      // never runs in the next message (the turn checks it).
+      return { r: await dispatch.run(call, { offered, signal, prompts, ...onProgress }), def };
     }
     // A tool that can't run here now (of an earlier list, or its tab hidden or gone) is told so
     // before its input is read: no answer quotes a schema's withheld values, and its advice is
@@ -929,6 +940,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
     const signal = abort.signal;
     const progress = progressOf(ctx);
     let def: ToolDef | null = null;
+    // An agent's call belongs to the message whose prompt its agent had when the call arrived.
+    const prompts = session.binding ? bindingPrompts(session.binding.id) : -1;
     // The list may have changed since it was served (a source is a pure function).
     recheck(session);
     const queued = session.queue.run(
@@ -938,7 +951,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
         // app's are its session's; an agent binding's, those its dispatch says are its turn's.
         const watch = progress ? watchQuestions(progress, (owner) => ownsQuestion(session, owner)) : NO_WATCH;
         try {
-          const out = await runOne(session, call, signal, progress, watch);
+          const out = await runOne(session, call, signal, progress, watch, prompts);
           def = out.def;
           return out.r;
         } finally {
