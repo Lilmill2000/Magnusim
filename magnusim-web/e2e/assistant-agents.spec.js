@@ -48,8 +48,8 @@
 // token, and its refusal of an agent that is off; API-key turns beside agent turns (D-A), each
 // conversation bound to its provider, the agent billed to its own account and the API key's
 // spend counted; the workspace page hears an agent turn as any turn (its #turn-state, what it
-// used: its calls of its call cap and no $) and its own Stop ends it. Every launcher start
-// (discovery's --version probes, and each agent started)
+// used: its calls of its call cap, its changes of its change cap and no $) and its own Stop
+// ends it. Every launcher start (discovery's --version probes, and each agent started)
 // writes its pid; after each test (a reset ends every agent) and at the end, every one, and
 // every process an agent reported to its controller (itself, its MCP bridge, its helpers), has
 // ended (by its command line, as the OS reuses pids).
@@ -1196,7 +1196,7 @@ test("a turn on Claude Code (its own tools off) works in the open workspace thro
   expect(fsAnswer.answer.error.code).toBe(-32601);
 });
 
-test("the workspace page hears an agent turn as any turn: #turn-state shows the request's first line, the frame gets what it used (its calls of its call cap, no $; images not known), and the frame's own Stop ends it stopped", async ({
+test("the workspace page hears an agent turn as any turn: #turn-state shows the request's first line, the frame gets what it used (its calls of its call cap, its changes of its change cap, no $; images not known), and the frame's own Stop ends it stopped", async ({
   page,
   request,
 }) => {
@@ -1220,7 +1220,8 @@ test("the workspace page hears an agent turn as any turn: #turn-state shows the 
     local: false,
     contextTokens: null,
     images: null,
-    used: { stepsCap: caps.calls, usd: 0, usdCap: 0 },
+    // The add is a change: what a workspace tells the agent's model is left of the change limit.
+    used: { stepsCap: caps.calls, changes: 1, changesCap: caps.changes, usd: 0, usdCap: 0 },
   });
   // The frame's own Stop (ws.assistant.stop), while the slow call runs.
   await w.frame.locator('#stop').click();

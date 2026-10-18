@@ -78,6 +78,17 @@ export interface CapHit {
   text: string;
 }
 
+/**
+ * The limits a turn's tab's page hears (turns.ts TurnPageView.used), as they are in force: its
+ * steps (a coding agent's: its tool calls), its dollars (0: none counted) and a coding agent's
+ * changes (0: no such limit).
+ */
+export interface PageLimits {
+  steps: number;
+  usd: number;
+  changes: number;
+}
+
 /** The turn as the loop drives it (turns.ts). */
 export interface LoopTurn extends RunnerTurn {
   readonly prompt: string;
@@ -100,6 +111,8 @@ export interface LoopTurn extends RunnerTurn {
   images: boolean | null;
   /** Sets what the app learned of the turn's model; its tab's page hears a change. */
   setModelFacts(f: { contextTokens?: number | null; images?: boolean | null }): void;
+  /** The limits in force for this step: its tab's page hears them with the step's next result. */
+  setUsed(limits: PageLimits): void;
   setState(s: TurnState): void;
   end(state: EndState, reason: string, message: string | null): void;
   note(text: string): void;
@@ -399,6 +412,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     const live = await d.settings();
     const caps = effectiveCaps(t.settings.caps, live.caps);
     t.armMinutes(caps.turn_minutes * 60_000, capText('turn_minutes', caps));
+    t.setUsed({ steps: caps.steps, usd: caps.turn_usd, changes: 0 });
     const hit = stepCap(t, caps);
     if (hit) return t.end('capped', hit.reason, hit.text);
     const full = conv.fullReason();

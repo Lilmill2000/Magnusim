@@ -761,7 +761,7 @@ function turnOf(d: unknown): AssistantTurn | null {
     local: x.local === true,
     contextTokens: typeof x.context_tokens === 'number' && Number.isSafeInteger(x.context_tokens) && x.context_tokens > 0 ? x.context_tokens : null,
     images: typeof x.images === 'boolean' ? x.images : null,
-    used: { steps: count(used.steps), stepsCap: count(used.steps_cap), usd: count(used.usd), usdCap: count(used.usd_cap) },
+    used: { steps: count(used.steps), stepsCap: count(used.steps_cap), changes: count(used.changes), changesCap: count(used.changes_cap), usd: count(used.usd), usdCap: count(used.usd_cap) },
     ...(end ? { end: { state: end.state, reason: typeof end.reason === 'string' ? end.reason.slice(0, 80) : '' } } : {}),
   };
 }

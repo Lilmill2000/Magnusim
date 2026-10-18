@@ -896,7 +896,7 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
       local: true,
       contextTokens: 32768,
       images: false,
-      used: { steps: 1, stepsCap: 50, usd: 0, usdCap: 3 },
+      used: { steps: 1, stepsCap: 50, changes: 0, changesCap: 0, usd: 0, usdCap: 3 },
     };
     const first: unknown[] = [];
     const second: unknown[] = [];

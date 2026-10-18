@@ -307,9 +307,11 @@ A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what t
 - `local: boolean`: It runs on a local server (a smaller model, often with less room: keep results short).
 - `contextTokens: number | null`: The model's context in tokens, when the app knows it (null otherwise).
 - `images: boolean | null`: Whether the model reads images, when the app knows it (null otherwise, as for a coding agent's).
-- `used: { … }`: What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). A turn on a coding agent counts its tool calls against its own cap and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account).
+- `used: { … }`: What it used so far and its limits, as they are in force now: tool calls (`steps`) and dollars (`usd`; 0 on a local server). A turn on a coding agent counts its tool calls against its own cap, and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account). It also counts its changes (its calls of tools that are not reads) against its change limit: past `changesCap`, its changes are refused while its reads go on. `changesCap` is 0 for any other turn (no such limit).
 - `used.steps: number`
 - `used.stepsCap: number`
+- `used.changes: number`
+- `used.changesCap: number`
 - `used.usd: number`
 - `used.usdCap: number`
 - `end?: { … }`: How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then).

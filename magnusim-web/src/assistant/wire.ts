@@ -300,8 +300,10 @@ export interface RelayFrameData {
  * A turn bound to this tab, as the server tells the page (CAD tools spec H3): its title is the
  * first line of the person's request (at most 60 characters), `local` says it runs on a local
  * server, `used.steps` counts its tool calls. context_tokens and images: null while unknown. A
- * turn on a coding agent counts its tool calls against its call cap and no dollars (usd and
- * usd_cap 0: the agent bills the person's own account); its images are not known (null).
+ * turn on a coding agent counts its tool calls against its call cap, its changes against its
+ * change cap and no dollars (usd and usd_cap 0: the agent bills the person's own account); its
+ * images are not known (null). Any other turn has no change cap (changes and changes_cap 0). The
+ * caps are those in force (the lower of the turn's and the app's settings now).
  */
 export interface RelayTurnFrame {
   id: string;
@@ -310,7 +312,7 @@ export interface RelayTurnFrame {
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
-  used: { steps: number; steps_cap: number; usd: number; usd_cap: number };
+  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
   end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
 }
 

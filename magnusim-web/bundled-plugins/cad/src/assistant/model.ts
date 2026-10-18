@@ -338,12 +338,18 @@ function fitBase(base: Row, max: number, shed: boolean): Row {
 
 /**
  * What is left of the turn's limits. A turn that counts no dollars (a coding agent bills the
- * person's own account: usdCap 0) has no usd_left: 0 would read as no money left.
+ * person's own account: usdCap 0) has no usd_left: 0 would read as no money left. A coding
+ * agent's turn has changes_left too: past its change limit its edits are refused while its reads
+ * go on, so a build meets that limit long before its calls run out.
  */
 function limitsOf(turn: TurnFacts | null): Row | null {
   if (!turn || turn.state !== 'running') return null;
   const u = turn.used;
-  return { steps_left: Math.max(0, u.stepsCap - u.steps), ...(u.usdCap > 0 ? { usd_left: Math.max(0, Math.round((u.usdCap - u.usd) * 100) / 100) } : {}) };
+  return {
+    steps_left: Math.max(0, u.stepsCap - u.steps),
+    ...(u.changesCap > 0 ? { changes_left: Math.max(0, u.changesCap - u.changes) } : {}),
+    ...(u.usdCap > 0 ? { usd_left: Math.max(0, Math.round((u.usdCap - u.usd) * 100) / 100) } : {}),
+  };
 }
 
 /** The whole Part, brief: the newest features kept while the reply is too large. */

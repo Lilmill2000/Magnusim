@@ -107,7 +107,7 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
         local: false,
         contextTokens: null,
         images: true,
-        used: { steps: 0, stepsCap: 120, usd: 0, usdCap: 8 },
+        used: { steps: 0, stepsCap: 120, changes: 0, changesCap: 0, usd: 0, usdCap: 8 },
         ...t,
       } as AssistantTurn;
       for (const fn of [...listeners]) fn(turn);

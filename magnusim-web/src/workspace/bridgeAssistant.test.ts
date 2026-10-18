@@ -996,7 +996,7 @@ describe("the assistant's turns and the page's Stop (1.9, unreleased)", () => {
     local: false,
     contextTokens: null,
     images: null,
-    used: { steps: 1, stepsCap: 50, usd: 0.01, usdCap: 3 },
+    used: { steps: 1, stepsCap: 50, changes: 0, changesCap: 0, usd: 0.01, usdCap: 3 },
   };
 
   it('assistantTurn() reaches the page as the event `assistantTurn`; nothing goes on a channel not welcomed yet (a new hello waiting for its context), or once there is none (detached, or no hello)', async () => {

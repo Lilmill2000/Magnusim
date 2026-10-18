@@ -64,7 +64,7 @@ const { dropWarmKeeper } = await import('../assistant/agents/job-win.ts');
 const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
 const { GUIDE_CHANGED_NOTE } = await import('../assistant/loop.ts');
-const { TAB_BUSY_TEXT } = await import('../assistant/turns.ts');
+const { TAB_BUSY_TEXT, TURN_UPDATE_MS } = await import('../assistant/turns.ts');
 const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
 const WIN = process.platform === 'win32';
@@ -1200,7 +1200,7 @@ describe('an agent turn and its app tab: one turn per tab, the page hears it, an
     }
   });
 
-  it("its tab's page hears it as any turn: running at its start, again after its call's result, ended once with how; it counts its calls against its call cap and no dollars, and whether its model reads images is not known", async () => {
+  it("its tab's page hears it as any turn: running at its start, again after its call's result, ended once with how; it counts its calls against its call cap, its changes against its change cap and no dollars, and whether its model reads images is not known", async () => {
     const w = await world({ settings: { agent_caps: { changes: 24, calls: 50, turn_minutes: 60 } } });
     const heard = [];
     const off = w.m.manager.onTurnChange((t, change) => heard.push([change, t.pageView()]));
@@ -1213,12 +1213,12 @@ describe('an agent turn and its app tab: one turn per tab, the page hears it, an
       await H.until(() => heard.some(([change]) => change === 'updated'), CEILING, "the call's result heard");
       const base = { id: t.id, title: 'Add one.', local: false, context_tokens: null, images: null };
       assert.deepEqual(heard, [
-        ['started', { ...base, state: 'running', used: { steps: 0, steps_cap: 50, usd: 0, usd_cap: 0 } }],
-        ['updated', { ...base, state: 'running', used: { steps: 1, steps_cap: 50, usd: 0, usd_cap: 0 } }],
+        ['started', { ...base, state: 'running', used: { steps: 0, steps_cap: 50, changes: 0, changes_cap: 24, usd: 0, usd_cap: 0 } }],
+        ['updated', { ...base, state: 'running', used: { steps: 1, steps_cap: 50, changes: 1, changes_cap: 24, usd: 0, usd_cap: 0 } }],
       ]);
       claude.release('after-add');
       await settledTurn(t);
-      assert.deepEqual(heard.at(-1), ['ended', { ...base, state: 'ended', used: { steps: 1, steps_cap: 50, usd: 0, usd_cap: 0 }, end: { state: 'done', reason: 'end_turn' } }]);
+      assert.deepEqual(heard.at(-1), ['ended', { ...base, state: 'ended', used: { steps: 1, steps_cap: 50, changes: 1, changes_cap: 24, usd: 0, usd_cap: 0 }, end: { state: 'done', reason: 'end_turn' } }]);
       assert.deepEqual(
         heard.map(([change]) => change),
         ['started', 'updated', 'ended'],
@@ -1227,6 +1227,47 @@ describe('an agent turn and its app tab: one turn per tab, the page hears it, an
     } finally {
       off();
       claude.release('after-add');
+      await w.close();
+    }
+  });
+
+  it('its page hears the limits in force (what a workspace tells its model is left): its changes of the change limit and its calls of the call limit, a change refused at its limit a call all the same, each limit as lowered in Settings during the turn', async () => {
+    const w = await world({ settings: { agent_caps: { changes: 3, calls: 50, turn_minutes: 60 } } });
+    const heard = [];
+    const off = w.m.manager.onTurnChange((t, change) => heard.push([change, t.pageView().used]));
+    try {
+      const add = { call: { tool: 'ai-demo__add', args: { by: 1 } } };
+      const read = { call: { tool: 'ai-demo__get_count', args: {} } };
+      claude.script(add, read, { hold: 'lower' }, add, add, read, { hold: 'end' }, { say: 'Done.' });
+      const r = await w.turn({ text: 'Add, read, add.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      const t = r.turn;
+      const used = (steps, stepsCap, changes, changesCap) => ({ steps, steps_cap: stepsCap, changes, changes_cap: changesCap, usd: 0, usd_cap: 0 });
+      assert.deepEqual(heard[0], ['started', used(0, 50, 0, 3)]);
+      await holding(claude, 'lower');
+      assert.deepEqual(t.pageView().used, used(2, 50, 1, 3), 'a change and a read: two calls, one change');
+      // The person lowers both in Settings: they hold from the next call, and the page hears them.
+      w.m.state.settings.agent_caps = { changes: 2, calls: 4, turn_minutes: 60 };
+      claude.release('lower');
+      await holding(claude, 'end');
+      // Call 3 is change 2 of 2; call 4, a change past that limit, is refused; call 5 is past the call limit.
+      assert.deepEqual(w.invoked.map((c) => c.tool), ['add', 'get_count', 'add']);
+      const results = claude.events('mcp_result', lastPid(claude)).map((x) => (x.result.isError ? x.result.content[0].text : 'ok'));
+      assert.equal(results.length, 5, JSON.stringify(results));
+      assert.match(results[3], /"code":"capped".*2-change limit/);
+      assert.match(results[4], /"code":"capped".*4-call limit/);
+      assert.deepEqual(t.pageView().used, used(4, 4, 2, 2), 'the lowered limits, all used');
+      // The refused calls are not in the log, yet the page hears them (once a second at most).
+      w.m.clock.advance(TURN_UPDATE_MS);
+      assert.deepEqual(heard.at(-1), ['updated', used(4, 4, 2, 2)]);
+      claude.release('end');
+      await settledTurn(t);
+      assert.equal(endOf(t).state, 'done');
+      assert.deepEqual(heard.at(-1), ['ended', used(4, 4, 2, 2)]);
+    } finally {
+      off();
+      claude.release('lower');
+      claude.release('end');
       await w.close();
     }
   });

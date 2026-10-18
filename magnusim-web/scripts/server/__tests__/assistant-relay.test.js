@@ -747,7 +747,7 @@ describe('turns reach the page (CAD tools spec H3)', { timeout: 30_000 }, () => 
       local: true,
       context_tokens: null,
       images: null,
-      used: { steps, steps_cap: caps.steps, usd: 0, usd_cap: caps.turn_usd },
+      used: { steps, steps_cap: caps.steps, changes: 0, changes_cap: 0, usd: 0, usd_cap: caps.turn_usd },
     });
     assert.deepEqual(await page.frame('turn', 0), running(0));
     await page.frame('active', 1);
@@ -778,6 +778,36 @@ describe('turns reach the page (CAD tools spec H3)', { timeout: 30_000 }, () => 
     assert.deepEqual(channelEvents(page).slice(-2), ['turn', 'active'], 'its end before the count it changed');
     assert.deepEqual(changes.map(([c]) => c), ['started', 'updated', 'updated', 'ended']);
     assert.equal(page.of('turn').length, 4, 'one end, nothing after it');
+  });
+
+  it('the limits it hears are those in force: lowered in Settings during the turn, they hold from its next step and its next result tells the page; a turn on a model counts no changes', async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    const caps = { ...m.state.settings.caps };
+    m.provider.script({ tools: [{ name: 'ai-demo__add', input: { by: 1 } }], hold: 'lower' }, { tools: [{ name: 'ai-demo__add', input: { by: 2 } }] }, { text: 'It reads 3.', hold: 'answer' });
+    const started = await s.post('/api/assistant/turns', { text: 'Add one, then two.', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    const used = (steps, c) => ({ steps, steps_cap: c.steps, changes: 0, changes_cap: 0, usd: 0, usd_cap: c.turn_usd });
+    assert.deepEqual((await page.frame('turn', 0)).used, used(0, caps));
+    // Its first step read the limits; the person lowers them while it waits for the model.
+    await m.provider.reached('lower');
+    const lowered = { ...caps, steps: caps.steps - 10, turn_usd: 2 };
+    m.state.settings.caps = lowered;
+    m.provider.release('lower');
+    const first = await page.frame('invoke', 0);
+    await s.progress(link, first.call, { ack: true });
+    await s.result(link, first.call, { ok: true, result: { text: 'Now 1' } });
+    assert.deepEqual((await page.frame('turn', 1)).used, used(1, caps), 'the first step went on its own limits');
+    const second = await page.frame('invoke', 1);
+    await s.progress(link, second.call, { ack: true });
+    await s.result(link, second.call, { ok: true, result: { text: 'Now 3' } });
+    await m.provider.reached('answer');
+    m.clock.advance(1000);
+    assert.deepEqual((await page.frame('turn', 2)).used, used(2, lowered), 'the next step went on the lowered ones');
+    m.provider.release('answer');
+    await settled(t);
+    assert.deepEqual(await page.frame('turn', 3), { ...t.pageView(), state: 'ended', used: used(2, lowered), end: { state: 'done', reason: 'end_turn' } });
   });
 
   it("what the app learns of the turn's model (its context, whether it reads images) is a change of the turn too, under the same once-a-second rule; nothing after its end; a cloud turn is not local", async () => {

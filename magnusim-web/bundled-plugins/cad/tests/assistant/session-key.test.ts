@@ -125,8 +125,8 @@ describe('session keys', () => {
 describe('reply budgets', () => {
   it('a local turn gets the local budgets; cloud turns, outside calls and unknown turns the cloud ones', () => {
     const t = createTurnInfo();
-    t.take({ id: 't-local', state: 'running', title: 'Plate', local: true, contextTokens: 32768, images: false, used: { steps: 1, stepsCap: 120, usd: 0, usdCap: 8 } });
-    t.take({ id: 't-cloud', state: 'running', title: 'Plate', local: false, contextTokens: null, images: true, used: { steps: 1, stepsCap: 120, usd: 0.1, usdCap: 8 } });
+    t.take({ id: 't-local', state: 'running', title: 'Plate', local: true, contextTokens: 32768, images: false, used: { steps: 1, stepsCap: 120, changes: 0, changesCap: 0, usd: 0, usdCap: 8 } });
+    t.take({ id: 't-cloud', state: 'running', title: 'Plate', local: false, contextTokens: null, images: true, used: { steps: 1, stepsCap: 120, changes: 0, changesCap: 0, usd: 0.1, usdCap: 8 } });
     expect(t.budgets('turn:t-local')).toBe(BUDGETS.local);
     expect(t.budgets('turn:t-cloud')).toBe(BUDGETS.cloud);
     expect(t.budgets('turn:t-unknown')).toBe(BUDGETS.cloud);

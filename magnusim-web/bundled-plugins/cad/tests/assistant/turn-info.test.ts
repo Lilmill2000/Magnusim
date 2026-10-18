@@ -13,7 +13,7 @@ const turn = (over: Partial<AssistantTurn> & { id: string }): AssistantTurn => (
   local: false,
   contextTokens: null,
   images: true,
-  used: { steps: 2, stepsCap: 120, usd: 0.12, usdCap: 8 },
+  used: { steps: 2, stepsCap: 120, changes: 0, changesCap: 0, usd: 0.12, usdCap: 8 },
   ...over,
 });
 
@@ -26,7 +26,7 @@ describe('turn info', () => {
     expect(t.running().map((f) => f.id)).toEqual(['t-1']);
     expect(t.forKey('turn:t-1')).toMatchObject({ title: 'Plate with four holes', local: false, images: true, used: { steps: 2, stepsCap: 120 } });
     expect(t.forKey('ext:1')).toBeNull();
-    t.take(turn({ id: 't-1', used: { steps: 5, stepsCap: 120, usd: 0.3, usdCap: 8 } }));
+    t.take(turn({ id: 't-1', used: { steps: 5, stepsCap: 120, changes: 0, changesCap: 0, usd: 0.3, usdCap: 8 } }));
     expect(t.get('t-1')?.used.steps).toBe(5);
     t.take(turn({ id: 't-1', state: 'ended', end: { state: 'done', reason: 'done' } }));
     expect(t.running()).toEqual([]);
@@ -35,6 +35,12 @@ describe('turn info', () => {
     t.take(turn({ id: 't-1' }));
     expect(t.get('t-1')?.state).toBe('ended');
     expect(heard).toEqual(['t-1:running', 't-1:running', 't-1:ended']);
+  });
+
+  it("keeps a coding agent's turn's changes of its change limit (a workspace tells its model what is left)", () => {
+    const t = createTurnInfo();
+    t.take(turn({ id: 't-agent', images: null, used: { steps: 5, stepsCap: 400, changes: 3, changesCap: 24, usd: 0, usdCap: 0 } }));
+    expect(t.forKey('turn:t-agent')?.used).toEqual({ steps: 5, stepsCap: 400, changes: 3, changesCap: 24, usd: 0, usdCap: 0 });
   });
 
   it('keeps the newest 16 ended turns and every running one', () => {
@@ -46,7 +52,7 @@ describe('turn info', () => {
 
   it('reads odd or missing fields as unknown', () => {
     const f = factsOf({ id: 't-x', state: 'ended', title: 7, used: null, contextTokens: 'big', images: 'yes', end: { state: 'gone' } } as unknown as AssistantTurn);
-    expect(f).toEqual({ id: 't-x', state: 'ended', title: '', local: false, contextTokens: null, images: null, used: { steps: 0, stepsCap: 0, usd: 0, usdCap: 0 }, end: null });
+    expect(f).toEqual({ id: 't-x', state: 'ended', title: '', local: false, contextTokens: null, images: null, used: { steps: 0, stepsCap: 0, changes: 0, changesCap: 0, usd: 0, usdCap: 0 }, end: null });
     const t = createTurnInfo();
     t.take({} as AssistantTurn);
     expect(t.all()).toEqual([]);

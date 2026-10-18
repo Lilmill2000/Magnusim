@@ -31,7 +31,8 @@
  *   too_many: admitRefusal, as for any turn), and past 2 agents agents_busy (429). Its switch
  *   going off while these are checked makes them run again. Its conversation is bound to it and
  *   keeps no messages (the agent keeps them). Its tab's page hears it as any turn (its `turn`
- *   frames: pageView), with its tool calls against its call cap and no dollars.
+ *   frames: pageView), with its tool calls against its call cap, its changes against its change
+ *   cap, and no dollars.
  *
  * Turns, conversations and questions live in the Assistant's state on globalThis. When Vite
  * restarts the server in this process, the old server's relay ends the running turns its
@@ -41,7 +42,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type TurnState } from './loop.ts';
+import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
@@ -151,8 +152,11 @@ export const TURN_TITLE_MAX = 60;
  * A turn as the page of its tab hears it (the relay's `turn` frame, CAD tools spec H3): running
  * from its start, ended once. `steps` counts its tool calls (the steps cap's count); local: it runs
  * on a local server. context_tokens and images: null while the app doesn't know them. A turn on a
- * coding agent counts its MCP calls against its tool-call cap, and no dollars (usd and usd_cap 0:
- * its agent bills the person's own account).
+ * coding agent counts its MCP calls against its tool-call cap (a call refused at a limit too), its
+ * changes (calls that are not reads) against its change cap, and no dollars (usd and usd_cap 0:
+ * its agent bills the person's own account); any other turn has no change cap (changes and
+ * changes_cap 0). The caps are those in force, the lower of the turn's and the live settings, as
+ * its runner last read them (the loop at each step, an agent turn at each call).
  */
 export interface TurnPageView {
   id: string;
@@ -161,7 +165,7 @@ export interface TurnPageView {
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
-  used: { steps: number; steps_cap: number; usd: number; usd_cap: number };
+  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
   end?: { state: EndState; reason: string };
 }
 
@@ -270,6 +274,10 @@ export class Turn implements AnyTurn {
   private readonly endingListeners = new Set<(why: CallAbort) => void>();
   /** The agent's version once its session is ready (an agent turn's summary). */
   agentVersion: string | null = null;
+  /** The limits its tab's page hears: those in force as its runner last read them (setUsed); its start's until then. */
+  private limits: PageLimits;
+  /** A coding agent's calls and changes as its run counts them against `limits` (setUsed). */
+  private agentCounts = { calls: 0, changes: 0 };
 
   constructor(o: TurnInit) {
     this.id = o.id;
@@ -282,6 +290,9 @@ export class Turn implements AnyTurn {
     // A cloud model reads images: its tab's page hears that with the turn's start, not as a change.
     // A coding agent's model is its own: whether it reads them is not known (null).
     if (isModelSettings(o.settings) && o.settings.provider !== 'openai_compatible') this.images = true;
+    this.limits = isAgentSettings(o.settings)
+      ? { steps: o.settings.caps.calls, usd: 0, changes: o.settings.caps.changes }
+      : { steps: o.settings.caps.steps, usd: o.settings.caps.turn_usd, changes: 0 };
     this.clock = o.clock;
     this.gates = o.gates;
     this.onEnded = o.onEnded;
@@ -367,6 +378,22 @@ export class Turn implements AnyTurn {
       moved = true;
     }
     if (moved) this.changed();
+  }
+
+  /**
+   * What its tab's page hears of its limits (pageView's `used`): those in force (the lower of the
+   * turn's and the live settings) as its runner read them, the loop at each step and an agent
+   * turn at each call, and a coding agent's calls and changes as its run counts them. The next
+   * result tells the page; `tell`: now (under the once-a-second rule), for what no result logs.
+   */
+  setUsed(limits: PageLimits, agent: { calls: number; changes: number } | null = null, tell = false): void {
+    const l = this.limits;
+    const a = this.agentCounts;
+    const moved = limits.steps !== l.steps || limits.usd !== l.usd || limits.changes !== l.changes || (agent !== null && (agent.calls !== a.calls || agent.changes !== a.changes));
+    if (!moved) return;
+    this.limits = { ...limits };
+    if (agent) this.agentCounts = { calls: agent.calls, changes: agent.changes };
+    if (tell) this.changed();
   }
 
   /** Something its tab's page shows changed: onUpdated now, or once TURN_UPDATE_MS has passed since the last. */
@@ -674,6 +701,7 @@ export class Turn implements AnyTurn {
   /** The turn as its tab's page hears it (the relay's `turn` frame). */
   pageView(): TurnPageView {
     const ended = this.ended;
+    const l = this.limits;
     return {
       id: this.id,
       state: ended ? 'ended' : 'running',
@@ -682,8 +710,8 @@ export class Turn implements AnyTurn {
       context_tokens: this.contextTokens,
       images: this.images,
       used: isAgentSettings(this.settings)
-        ? { steps: this.calls, steps_cap: this.settings.caps.calls, usd: 0, usd_cap: 0 }
-        : { steps: this.calls, steps_cap: this.settings.caps.steps, usd: round6(this.usd), usd_cap: this.settings.caps.turn_usd },
+        ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
+        : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd },
       ...(ended ? { end: { state: this.state as EndState, reason: this.endReason ?? this.state } } : {}),
     };
   }

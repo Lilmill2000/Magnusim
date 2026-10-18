@@ -23,7 +23,9 @@ import type { DocState } from '../../src/types/doc-service';
 afterEach(cleanup);
 
 const base: AssistantUiState = { phase: 'idle', registration: 'on', reason: null, turn: null, call: null, note: null };
-const turn = (end: 'done' | 'stopped' | 'failed' | 'capped' | 'ended' | null = null) => ({ id: 't-1', title: 'Plate with four holes', steps: 3, stepsCap: 120, end });
+const turn = (end: 'done' | 'stopped' | 'failed' | 'capped' | 'ended' | null = null) => ({ id: 't-1', title: 'Plate with four holes', steps: 3, stepsCap: 120, changes: null, changesCap: null, end });
+/** A coding agent's turn: its changes of its change limit (its calls of 400 too). */
+const agentTurn = () => ({ ...turn(), steps: 5, stepsCap: 400, changes: 3, changesCap: 24 });
 
 describe('chipText', () => {
   it('says what the Assistant does in each phase', () => {
@@ -32,6 +34,9 @@ describe('chipText', () => {
     expect(chipText({ ...base, phase: 'thinking', turn: turn() })).toBe('Assistant · thinking · 3 of 120 steps');
     expect(chipText({ ...base, phase: 'thinking' })).toBe('Assistant · thinking');
     expect(chipText({ ...base, phase: 'working', turn: turn(), call: { tool: 'get_model', label: 'Read the Part' } })).toBe('Assistant · Read the Part · 3 of 120 steps');
+    // A coding agent's turn: the limit its edits meet first.
+    expect(chipText({ ...base, phase: 'thinking', turn: agentTurn() })).toBe('Assistant · thinking · 3 of 24 changes');
+    expect(chipText({ ...base, phase: 'working', turn: agentTurn(), call: { tool: 'extrude', label: 'Extrude Boss' } })).toBe('Assistant · Extrude Boss · 3 of 24 changes');
     expect(chipText({ ...base, phase: 'ended', turn: turn('done') })).toBe('Assistant: Plate with four holes · done');
     expect(chipText({ ...base, phase: 'ended', turn: turn('capped') })).toBe('Assistant: Plate with four holes · stopped at its limits');
     expect(chipText({ ...base, phase: 'ended', turn: turn('ended') })).toBe('Assistant: Plate with four holes · ended');

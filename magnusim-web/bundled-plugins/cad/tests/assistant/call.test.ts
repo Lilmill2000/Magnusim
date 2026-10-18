@@ -157,9 +157,9 @@ describe("the chip's phase", () => {
     h = await start();
     const rt = runtimeOf(h.services)!;
     expect(phase(h)).toBe('idle');
-    h.fake.emitTurn({ id: 't-1', title: 'Plate with four holes', used: { steps: 3, stepsCap: 120, usd: 0.2, usdCap: 8 } });
+    h.fake.emitTurn({ id: 't-1', title: 'Plate with four holes', used: { steps: 3, stepsCap: 120, changes: 0, changesCap: 0, usd: 0.2, usdCap: 8 } });
     expect(phase(h)).toBe('thinking');
-    expect(rt.store.get().turn).toEqual({ id: 't-1', title: 'Plate with four holes', steps: 3, stepsCap: 120, end: null });
+    expect(rt.store.get().turn).toEqual({ id: 't-1', title: 'Plate with four holes', steps: 3, stepsCap: 120, changes: null, changesCap: null, end: null });
     rt.holds.hold('after-settled');
     const r = h.call('get_model', { detail: 'brief', feature: '' }, { turn: 't-1' });
     await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['after-settled']));
@@ -201,11 +201,14 @@ describe("the chip's phase", () => {
 });
 
 describe("get_model's limits", () => {
-  it("what is left of the turn's steps and dollars; a turn that counts no dollars (a coding agent's: usdCap 0) says its steps only", async () => {
+  it("what is left of the turn's steps and dollars; a coding agent's turn (no dollars counted: usdCap 0) says its steps and what is left of its change limit, which its edits meet long before its call limit", async () => {
     h = await start();
-    h.fake.emitTurn({ id: 't-key', title: 'Plate', used: { steps: 3, stepsCap: 120, usd: 0.2, usdCap: 8 } });
+    h.fake.emitTurn({ id: 't-key', title: 'Plate', used: { steps: 3, stepsCap: 120, changes: 0, changesCap: 0, usd: 0.2, usdCap: 8 } });
     expect((await h.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-key' })).data.limits).toEqual({ steps_left: 117, usd_left: 7.8 });
-    h.fake.emitTurn({ id: 't-agent', title: 'Plate', images: null, used: { steps: 3, stepsCap: 400, usd: 0, usdCap: 0 } });
-    expect((await h.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-agent' })).data.limits).toEqual({ steps_left: 397 });
+    h.fake.emitTurn({ id: 't-agent', title: 'Plate', images: null, used: { steps: 5, stepsCap: 400, changes: 3, changesCap: 24, usd: 0, usdCap: 0 } });
+    expect((await h.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-agent' })).data.limits).toEqual({ steps_left: 395, changes_left: 21 });
+    // Every change made: none left (never below 0), its reads still go on.
+    h.fake.emitTurn({ id: 't-agent', title: 'Plate', images: null, used: { steps: 40, stepsCap: 400, changes: 24, changesCap: 24, usd: 0, usdCap: 0 } });
+    expect((await h.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-agent' })).data.limits).toEqual({ steps_left: 360, changes_left: 0 });
   });
 });

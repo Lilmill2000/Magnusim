@@ -132,7 +132,14 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const showTurn = (t: TurnFacts) => {
     if (endedTimer) clearTimeout(endedTimer);
     endedTimer = null;
-    const facts = { id: t.id, title: t.title, steps: t.used.stepsCap ? t.used.steps : null, stepsCap: t.used.stepsCap || null };
+    const facts = {
+      id: t.id,
+      title: t.title,
+      steps: t.used.stepsCap ? t.used.steps : null,
+      stepsCap: t.used.stepsCap || null,
+      changes: t.used.changesCap ? t.used.changes : null,
+      changesCap: t.used.changesCap || null,
+    };
     if (t.state === 'running') {
       store.set({ turn: { ...facts, end: null } });
       return;

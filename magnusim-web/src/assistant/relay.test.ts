@@ -1217,7 +1217,7 @@ describe('the hold (pinning the tab stream)', () => {
 });
 
 describe('turns bound to this tab (CAD tools spec H3)', () => {
-  const USED = { steps: 0, steps_cap: 50, usd: 0, usd_cap: 3 };
+  const USED = { steps: 0, steps_cap: 50, changes: 0, changes_cap: 0, usd: 0, usd_cap: 3 };
   const turnFrame = (id: string, over: Partial<RelayTurnFrame> = {}): RelayTurnFrame => ({
     id,
     state: 'running',
@@ -1235,7 +1235,7 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     local: true,
     contextTokens: null,
     images: null,
-    used: { steps: 0, stepsCap: 50, usd: 0, usdCap: 3 },
+    used: { steps: 0, stepsCap: 50, changes: 0, changesCap: 0, usd: 0, usdCap: 3 },
     ...over,
   });
 
@@ -1257,16 +1257,22 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     const turns = await heard();
     const ch = channel();
     ch.frame('turn', turnFrame('t-1'));
-    ch.frame('turn', turnFrame('t-1', { context_tokens: 32768, images: false, used: { steps: 1, steps_cap: 50, usd: 0.0125, usd_cap: 3 } }));
-    ch.frame('turn', turnFrame('t-1', { state: 'ended', used: { steps: 2, steps_cap: 50, usd: 0.02, usd_cap: 3 }, end: { state: 'stopped', reason: 'user' } }));
+    ch.frame('turn', turnFrame('t-1', { context_tokens: 32768, images: false, used: { steps: 1, steps_cap: 50, changes: 0, changes_cap: 0, usd: 0.0125, usd_cap: 3 } }));
+    ch.frame('turn', turnFrame('t-1', { state: 'ended', used: { steps: 2, steps_cap: 50, changes: 0, changes_cap: 0, usd: 0.02, usd_cap: 3 }, end: { state: 'stopped', reason: 'user' } }));
     // An end in words it does not know is left out; anything that is not a turn goes nowhere.
     ch.frame('turn', turnFrame('t-3', { state: 'ended', end: { state: 'paused' as never, reason: 'x' } }));
+    // A turn on a coding agent: its changes of its change limit, no dollars.
+    ch.frame('turn', turnFrame('t-4', { local: false, used: { steps: 5, steps_cap: 400, changes: 3, changes_cap: 24, usd: 0, usd_cap: 0 } }));
+    // An older server's frame, with no changes: none counted, no such limit.
+    ch.frame('turn', { ...turnFrame('t-5'), used: { steps: 1, steps_cap: 50, usd: 0, usd_cap: 3 } });
     for (const bad of [{}, { id: 't-2', state: 'paused' }, { id: '', state: 'running' }, { id: 'x'.repeat(129), state: 'running' }, 5, 'turn']) ch.frame('turn', bad);
     expect(turns).toEqual([
       told('t-1'),
-      told('t-1', { contextTokens: 32768, images: false, used: { steps: 1, stepsCap: 50, usd: 0.0125, usdCap: 3 } }),
-      told('t-1', { state: 'ended', used: { steps: 2, stepsCap: 50, usd: 0.02, usdCap: 3 }, end: { state: 'stopped', reason: 'user' } }),
+      told('t-1', { contextTokens: 32768, images: false, used: { steps: 1, stepsCap: 50, changes: 0, changesCap: 0, usd: 0.0125, usdCap: 3 } }),
+      told('t-1', { state: 'ended', used: { steps: 2, stepsCap: 50, changes: 0, changesCap: 0, usd: 0.02, usdCap: 3 }, end: { state: 'stopped', reason: 'user' } }),
       told('t-3', { state: 'ended' }),
+      told('t-4', { local: false, used: { steps: 5, stepsCap: 400, changes: 3, changesCap: 24, usd: 0, usdCap: 0 } }),
+      told('t-5', { used: { steps: 1, stepsCap: 50, changes: 0, changesCap: 0, usd: 0, usdCap: 3 } }),
     ]);
     expect(Object.hasOwn(turns[3], 'end')).toBe(false);
   });

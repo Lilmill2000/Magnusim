@@ -51,7 +51,7 @@ export function factsOf(t: AssistantTurn): TurnFacts {
     local: t.local === true,
     contextTokens: typeof t.contextTokens === 'number' && Number.isFinite(t.contextTokens) ? t.contextTokens : null,
     images: typeof t.images === 'boolean' ? t.images : null,
-    used: { steps: num(u.steps), stepsCap: num(u.stepsCap), usd: num(u.usd), usdCap: num(u.usdCap) },
+    used: { steps: num(u.steps), stepsCap: num(u.stepsCap), changes: num(u.changes), changesCap: num(u.changesCap), usd: num(u.usd), usdCap: num(u.usdCap) },
     end: end && ['done', 'stopped', 'failed', 'capped'].includes(end.state) ? { state: end.state, reason: String(end.reason ?? '') } : null,
   };
 }

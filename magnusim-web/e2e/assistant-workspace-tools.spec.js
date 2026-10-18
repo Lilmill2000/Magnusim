@@ -1288,7 +1288,8 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
     // A cloud model: no local server's context, and it reads images (H6), which the frame heard.
     contextTokens: null,
     images: true,
-    used: { stepsCap: caps.steps, usdCap: caps.turn_usd },
+    // A turn on a model has no change limit (a coding agent's has).
+    used: { stepsCap: caps.steps, changes: 0, changesCap: 0, usdCap: caps.turn_usd },
   });
   // The frame's own Stop, while the slow call runs.
   const stopAt = performance.now();

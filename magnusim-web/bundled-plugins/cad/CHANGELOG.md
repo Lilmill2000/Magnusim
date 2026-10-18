@@ -28,7 +28,8 @@ in the Part" in `README.md`.
   request>"). A change of yours in between starts a new one and is never undone
   with the Assistant's.
 - The Assistant chip in the dock says what it is doing ("Assistant · Sketch Plate
-  sketch · 12 of 120 steps") and has Pause (a step it is making stops where it
+  sketch · 12 of 120 steps"; on a coding agent, its changes: "3 of 24 changes")
+  and has Pause (a step it is making stops where it
   is until Resume), Resume, Stop, Fast / Watch and Ask each step (Keep or
   Discard each step before it is kept). When a request ends
   it shows Undo (while nothing newer was done) and the Part's health ("· Fillet 1

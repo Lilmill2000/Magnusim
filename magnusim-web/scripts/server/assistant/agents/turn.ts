@@ -33,8 +33,11 @@
  * Limits (min of the turn's snapshot and the live settings): 24 changes (later change calls are
  * answered `capped`, reads go on), 400 calls (then every call `capped`, and 5 more end the turn
  * capped/agent_calls), 60 active minutes (Turn.onMinutesUp: it fires whether or not a call is
- * open). As in a loop turn, questions and a call's waits for the person (its progress `waiting`,
- * for 20 minutes of one call's waits: runner.ts WAIT_PAUSE_MAX_MS, said in the log) are not
+ * open). Its tab's page hears its calls and changes against the first two as they are in force
+ * (Turn.setUsed, read at each call): with each call's result, or at once for a call refused
+ * before it ran (no result of it is logged), so a workspace can tell its model what is left.
+ * As in a loop turn, questions and a call's waits for the person (its progress `waiting`, for
+ * 20 minutes of one call's waits: runner.ts WAIT_PAUSE_MAX_MS, said in the log) are not
  * active. $ limits, tokens and the day's ledger don't apply: the agent bills its own account.
  *
  * Stop (and a limit, the minutes, the allow switch going off): a call still open stops as that
@@ -56,7 +59,7 @@ import type { Clock, GateBroker, GateEvent, GateOwner, GateRequest } from '../ga
 import type { Conversation } from '../conversations.ts';
 import type { ToolCtx, ToolDef, WorkspaceRegistration } from '../registry.ts';
 import { bindingServes, notePromptSent, type AgentDispatch } from '../mcp/sessions.ts';
-import type { EndState, TurnState } from '../loop.ts';
+import type { EndState, PageLimits, TurnState } from '../loop.ts';
 import type { StreamEvent, ToolCallPart } from '../types.ts';
 import { noteBlock, noteInSystemPrompt, OursMatcher, pickOption, REJECT_KINDS, type AgentUpdate, type PermissionView } from './acp.ts';
 import type { AgentProviderId, KnownAgent } from './known.ts';
@@ -115,6 +118,8 @@ export interface AgentRunTurn extends RunnerTurn {
   /** The turn is to end for `reason`: a call still open stops now, as that end reads. */
   abortCallFor(reason: string): void;
   armMinutes(limitMs: number, text: string): void;
+  /** What its tab's page hears of its limits and of its calls and changes against them (`tell`: now). */
+  setUsed(limits: PageLimits, agent: { calls: number; changes: number }, tell: boolean): void;
   /** Hears the minutes cap fire, whether or not a call is open. */
   onMinutesUp(fn: () => void): () => void;
   /** Hears the turn end, before `end` is logged, with how its calls now read (a call still open logs its result then). */
@@ -146,6 +151,11 @@ export interface AgentTurnDeps {
 /** The caps in force: the lower of the turn's snapshot and the live settings. */
 export function effectiveAgentCaps(snapshot: AgentCaps, live: AgentCaps): AgentCaps {
   return { changes: Math.min(snapshot.changes, live.changes), calls: Math.min(snapshot.calls, live.calls), turn_minutes: Math.min(snapshot.turn_minutes, live.turn_minutes) };
+}
+
+/** An agent turn's limits as its tab's page hears them: its calls are its steps, and no dollars. */
+export function agentPageLimits(caps: AgentCaps): PageLimits {
+  return { steps: caps.calls, usd: 0, changes: caps.changes };
 }
 
 export function changesCapText(n: number): string {
@@ -301,20 +311,36 @@ class AgentTurnRun implements AgentDispatch {
     if (t.ended || t.signal.aborted || this.pendingEnd) return errorResult(call, 'stopped', STOPPED_BEFORE);
     this.callsSeen += 1;
     const caps = effectiveAgentCaps(t.settings.caps, (await this.d.settings()).agent_caps);
+    // Its tab's page hears each call: with its result, or now when it is refused here (no result
+    // of it is logged).
+    const refused = (r: RunResult): RunResult => {
+      this.tellUsed(caps, true);
+      return r;
+    };
     if (this.callsSeen > caps.calls) {
       this.overCalls += 1;
+      const r = refused(errorResult(call, 'capped', callsCapText(caps.calls)));
       if (this.overCalls > 5) this.halt({ state: 'capped', reason: 'agent_calls', message: AGENT_CALLS_END_TEXT(caps.calls) }, false);
-      return errorResult(call, 'capped', callsCapText(caps.calls));
+      return r;
     }
     const def = o.offered.get(call.name) ?? null;
     const risk = riskOf(def);
-    if (risk !== 'read' && this.changes >= caps.changes) return errorResult(call, 'capped', changesCapText(caps.changes));
+    if (risk !== 'read' && this.changes >= caps.changes) return refused(errorResult(call, 'capped', changesCapText(caps.changes)));
     // A call is a request of the turn: privacy is read live before a tool that reads project data.
     if (def?.projectData && t.projectId && this.project) {
-      const refused = await this.privacyForCall(call);
-      if (refused) return refused;
-      if (t.ended || t.signal.aborted || this.pendingEnd) return errorResult(call, 'stopped', STOPPED_BEFORE);
+      const no = await this.privacyForCall(call);
+      if (no) return refused(no);
+      if (t.ended || t.signal.aborted || this.pendingEnd) return refused(errorResult(call, 'stopped', STOPPED_BEFORE));
     }
+    this.tellUsed(caps, false);
+    // A change counts once its result comes (one that ran, or may have), before the page hears it.
+    let counted = false;
+    const countChange = (ok: boolean, code: string | null | undefined) => {
+      if (counted || risk === 'read' || (!ok && NOT_RUN.has(String(code)))) return;
+      counted = true;
+      this.changes += 1;
+      this.tellUsed(caps, false);
+    };
     t.step = 1 + t.calls;
     t.calls += 1;
     this.callsOpen += 1;
@@ -332,6 +358,7 @@ class AgentTurnRun implements AgentDispatch {
       },
       emit: (e) => {
         if (e.type === 'tool_result' && e.call === call.callId) {
+          countChange(e.ok, e.code);
           if (logged) return;
           logged = true;
         }
@@ -383,8 +410,14 @@ class AgentTurnRun implements AgentDispatch {
       this.callsOpen -= 1;
       this.syncState();
     }
-    if (risk !== 'read' && (r.ok || !NOT_RUN.has(String(r.code)))) this.changes += 1;
+    countChange(r.ok, r.code);
     return r;
+  }
+
+  /** Its tab's page hears its calls and changes against `caps` (its next result tells it; `tell`: now). */
+  private tellUsed(caps: AgentCaps, tell: boolean): void {
+    const counts = { calls: Math.min(this.callsSeen, caps.calls), changes: Math.min(this.changes, caps.changes) };
+    this.t.setUsed(agentPageLimits(caps), counts, tell);
   }
 
   // ------------------------------------------------------------ privacy
@@ -799,6 +832,7 @@ class AgentTurnRun implements AgentDispatch {
 
     // The minutes cap counts active time (questions waiting don't count), and fires with no call open.
     const caps = effectiveAgentCaps(t.settings.caps, (await d.settings()).agent_caps);
+    this.tellUsed(caps, false);
     const minutesText = loopCapText('turn_minutes', { turn_usd: 0, day_usd: 0, steps: 0, turn_tokens: 0, turn_minutes: caps.turn_minutes });
     t.armMinutes(caps.turn_minutes * 60_000, minutesText);
     const offMinutes = t.onMinutesUp(() => this.halt({ state: 'capped', reason: 'turn_minutes', message: minutesText }, false));

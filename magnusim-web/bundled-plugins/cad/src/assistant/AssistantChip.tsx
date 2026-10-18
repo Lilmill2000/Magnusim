@@ -1,8 +1,9 @@
 // The Assistant's chip in the dock (CAD tools spec §8.3): `[data-chip="assistant"]` with
 // `data-assistant-state` the phase, its words in `[data-assistant-text]` ("Assistant · thinking ·
-// 12 of 120 steps", "Assistant · Sketch Plate sketch · 12 of 120 steps", "Assistant waits for you:
-// close the Fillet 2 panel", "Assistant: Extrude Boss · keep it?", "Assistant paused · you took
-// over", "Assistant: <request> · done"), and its buttons (`data-assistant-action`):
+// 12 of 120 steps", "Assistant · Sketch Plate sketch · 12 of 120 steps", a coding agent's turn
+// "... · 3 of 24 changes", "Assistant waits for you: close the Fillet 2 panel", "Assistant:
+// Extrude Boss · keep it?", "Assistant paused · you took over", "Assistant: <request> · done"),
+// and its buttons (`data-assistant-action`):
 //   thinking  Pause, Stop, Ask each step
 //   working   Pause, Stop, Fast (or Watch), Ask each step
 //   waiting   Pause, Stop
@@ -31,9 +32,19 @@ const NO_DOC = createStateStore<{ doc: DocState | null }>({ doc: null });
 
 const END_WORDS: Record<string, string> = { done: 'done', stopped: 'stopped', failed: 'failed', capped: 'stopped at its limits', ended: 'ended' };
 
-/** What the chip says, or null when it shows nothing. */
+/**
+ * What the chip says, or null when it shows nothing. A coding agent's turn shows its changes of
+ * its change limit, the one its edits meet first ("3 of 24 changes"); any other turn its steps.
+ */
 export function chipText(s: AssistantUiState): string | null {
-  const steps = s.turn && s.turn.steps !== null && s.turn.stepsCap ? ` · ${s.turn.steps} of ${s.turn.stepsCap} steps` : '';
+  const t = s.turn;
+  const steps = !t
+    ? ''
+    : t.changes !== null && t.changesCap
+      ? ` · ${t.changes} of ${t.changesCap} changes`
+      : t.steps !== null && t.stepsCap
+        ? ` · ${t.steps} of ${t.stepsCap} steps`
+        : '';
   switch (s.phase) {
     case 'thinking':
       return `Assistant · thinking${steps}`;

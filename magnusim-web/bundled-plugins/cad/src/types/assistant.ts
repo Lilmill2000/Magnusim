@@ -79,8 +79,11 @@ export interface AssistantUiState {
   registration: 'pending' | 'on' | 'off';
   /** Why the tools are not offered ("not_connected", "remote", "no_assistant", "not_allowed", ...), or null. */
   reason: string | null;
-  /** The turn the chip speaks of: the running one, or the one that just ended. */
-  turn: { id: string; title: string; steps: number | null; stepsCap: number | null; end: AssistantTurnEnd | 'ended' | null } | null;
+  /**
+   * The turn the chip speaks of: the running one, or the one that just ended. `changes` and
+   * `changesCap`: a coding agent's turn's changes of its change limit (null for any other turn).
+   */
+  turn: { id: string; title: string; steps: number | null; stepsCap: number | null; changes: number | null; changesCap: number | null; end: AssistantTurnEnd | 'ended' | null } | null;
   /** The call running now: its tool and what it does ("Read the Part"). */
   call: { tool: string; label: string } | null;
   /** What the chip says while waiting or paused ("close the Fillet 2 panel"), or null. */
@@ -103,7 +106,8 @@ export interface TurnFacts {
   local: boolean;
   contextTokens: number | null;
   images: boolean | null;
-  used: { steps: number; stepsCap: number; usd: number; usdCap: number };
+  /** Its limits as they are in force; `changesCap` 0: no change limit (only a coding agent's turn has one). */
+  used: { steps: number; stepsCap: number; changes: number; changesCap: number; usd: number; usdCap: number };
   end: { state: AssistantTurnEnd; reason: string } | null;
 }
 

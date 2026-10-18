@@ -499,6 +499,10 @@ says what it does:
 | Assistant paused · you took over | Resume, Stop |
 | Assistant: <your request> · done | Undo |
 
+A request on a coding agent counts its changes instead of its steps
+("Assistant · thinking · 3 of 24 changes"): past its change limit its edits are
+refused while it can still read the Part.
+
 - **Pause**: its edits wait until you Resume; it can still read the Part. A
   step it is making when you pause stops where it is (at its next pace) and
   goes on at Resume; nothing of it is kept or saved until then. A pause ends
