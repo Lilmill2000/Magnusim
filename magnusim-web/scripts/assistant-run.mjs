@@ -12,9 +12,12 @@
  * `--agent <id>` is `--provider agent:<id>`: a coding agent the person already uses. A turn on
  * a coding agent needs this account's proof: the app's per-launch token, read from its
  * owner-only connection file (mcp.json, found as the MCP bridge finds it) and sent in the
- * x-magnusim-launch header, never printed. When the app refuses a turn for want of it (a
- * default or a conversation that is a coding agent, or a file read before the app restarted),
- * the file is read again and the start sent once more. Such a turn prints the agent's plan,
+ * x-magnusim-launch header, never printed. It is sent only to an app that first proved it
+ * holds that token (POST /api/assistant/launch/check: an HMAC of a fresh nonce and the port it
+ * was reached on), never to whatever else answers on the port. When the app refuses a turn for
+ * want of it (a default or a conversation that is a coding agent, or a file read before the app
+ * restarted), the file is read again and, once the app proved it, the start sent once more.
+ * Such a turn prints the agent's plan,
  * its own tools, its permission requests, its mode and model, and at the end that its own
  * account pays.
  * Questions are asked here (y/n): for a turn with no tab they are asked only here; for a
@@ -28,6 +31,7 @@
  *
  * Exit codes: 0 the turn finished (`done`), 1 anything else, 2 the tab isn't connected.
  */
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { readFileSync, realpathSync } from 'node:fs';
 import readline from 'node:readline';
@@ -72,6 +76,33 @@ export async function launchToken(o = {}) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether the app answering on `port` holds `token`, before the token is sent to it: it must
+ * answer POST /api/assistant/launch/check {nonce} with HMAC-SHA256(token, "l<port>:<nonce>")
+ * for a fresh nonce. Anything else on that port (a wrong --port, a port saved in Settings that
+ * the app hasn't restarted on yet) can't, and one that passes the check on to the app's real
+ * port gets an answer bound to that other port. Never throws.
+ */
+export async function appHoldsToken(port, token) {
+  if (typeof token !== 'string' || !token) return false;
+  const nonce = randomBytes(16).toString('hex');
+  try {
+    const r = await call(port, 'POST', '/api/assistant/launch/check', { nonce });
+    const proof = r.json?.proof;
+    if (r.status !== 200 || typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof)) return false;
+    return timingSafeEqual(Buffer.from(proof, 'hex'), createHmac('sha256', token).update(`l${port}:${nonce}`).digest());
+  } catch {
+    return false;
+  }
+}
+
+/** This launch's token once the app on `port` proved it holds it: {token}, or {token: null, unproven} when a token was found but the app didn't prove it. */
+async function provenToken(port) {
+  const token = await launchToken();
+  if (!token) return { token: null, unproven: false };
+  return (await appHoldsToken(port, token)) ? { token, unproven: false } : { token: null, unproven: true };
 }
 
 export function parseArgs(argv) {
@@ -273,16 +304,23 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
     ...(tab ? { tab } : {}),
     ...(o.project ? { context: { project_id: o.project } } : {}),
   };
-  // A coding agent's turn carries this account's proof (the app's per-launch token).
+  // A coding agent's turn carries this account's proof (the app's per-launch token), only to an
+  // app that proved it holds that token (never to whatever else answers on the port).
   const withToken = (token) => (token ? { 'x-magnusim-launch': token } : {});
   const isAgent = typeof o.provider === 'string' && o.provider.startsWith('agent:');
   let started;
+  /** A token was found but the app did not prove it holds it (so none was sent). */
+  let unproven;
   try {
-    started = await call(port, 'POST', '/api/assistant/turns', startBody, withToken(isAgent ? await launchToken() : null));
-    // No token sent, or one of an earlier launch: the file once more (the app has just written it).
+    const first = isAgent ? await provenToken(port) : { token: null, unproven: false };
+    unproven = first.unproven;
+    started = await call(port, 'POST', '/api/assistant/turns', startBody, withToken(first.token));
+    // No token sent, or one of an earlier launch: the file once more (the app has just written
+    // it), sent only once the app proved it holds that one.
     if (started.status === 403 && started.json?.code === 'launch_proof') {
-      const token = await launchToken();
-      if (token) started = await call(port, 'POST', '/api/assistant/turns', startBody, withToken(token));
+      const again = await provenToken(port);
+      unproven = again.unproven;
+      if (again.token) started = await call(port, 'POST', '/api/assistant/turns', startBody, withToken(again.token));
     }
   } catch (e) {
     err(`Nothing answered on port ${port}. Is Magnusim running? (${e?.code || e?.message || e})\n`);
@@ -292,6 +330,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
     const j = started.json || {};
     if (o.json) out(`${JSON.stringify({ type: 'refused', status: started.status, code: j.code ?? null, error: j.error ?? null })}\n`);
     err(`${j.error || `The app answered HTTP ${started.status}.`}\n`);
+    if (j.code === 'launch_proof' && unproven) err(`What answers on port ${port} didn't prove it is the Magnusim that wrote the connection file, so the launch token was not sent. Check --port.\n`);
     return j.code === 'tab_hidden' ? TAB_HIDDEN_EXIT : 1;
   }
   const turn = started.json.turn;

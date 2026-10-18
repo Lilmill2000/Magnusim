@@ -17,12 +17,15 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import http from 'node:http';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-assistant-agent-turn-'));
+const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const HOME = join(ROOT, 'home');
 process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
 process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
@@ -573,7 +576,7 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
     }
   });
 
-  it('refused in order: agent_unknown (400), then launch_proof (403) without this launch’s token or the tab’s live link', async () => {
+  it('refused in order: agent_unknown (400), then launch_proof (403) without this launch’s token or an app tab’s live link', async () => {
     const w = await world();
     try {
       const unknown = await w.turn({ text: 'x', provider: 'agent:nope' }, {});
@@ -586,10 +589,10 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
       }
       // A default that is an agent needs the proof too.
       assert.equal((await w.turn({ text: 'x' }, {})).body.code, 'launch_proof');
-      // The tab's live link proves it (the page); a link of another tab, or no tab, doesn't.
-      w.m.manager.setLinkCheck((tab, link) => tab === 'tab-1' && link === 'f'.repeat(24));
-      assert.equal((await w.turn({ text: 'x', provider: 'agent:claude', link: 'f'.repeat(24) }, {})).body.code, 'launch_proof', 'no tab');
+      // An app tab's live link proves it (the page), whichever tab sends it; a link that is no tab's live one doesn't.
+      w.m.manager.setLinkCheck((link) => link === 'f'.repeat(24));
       assert.equal((await w.turn({ text: 'x', provider: 'agent:claude', tab: 'tab-1', link: 'e'.repeat(24) }, {})).body.code, 'launch_proof');
+      assert.equal((await w.turn({ text: 'x', provider: 'agent:claude', link: 42 }, {})).body.code, 'launch_proof');
       assert.equal(claude.pids('agent').length, before, 'nothing started');
       const ok = await w.turn({ text: 'x', provider: 'agent:claude', tab: 'tab-1', link: 'f'.repeat(24) }, {});
       assert.equal(ok.status, 202, JSON.stringify(ok.body));
@@ -737,7 +740,7 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
           }
           return { available: true, reason: null };
         };
-        const pending = run({ mcp });
+        const pending = run({ mcp, proven: () => true });
         await entered;
         await S.setAgentAllowed(CUSTOM_ID, null);
         await host.stopAgent(CUSTOM_ID, 'Scripted was turned off in Settings.');
@@ -1589,7 +1592,32 @@ async function serverWorld(o = {}) {
   return { m, srv, token };
 }
 
+/** The terminal client's proof of this account for the agent routes: this launch's token (the listener is process-wide). */
+const proof = () => ({ 'x-magnusim-launch': M.readInfo(L.mcpInfoPath()).token });
+
 describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4.13, 5.3, 7.7)', LIMIT, () => {
+  it('POST /launch/check: the app proves it holds this launch’s token for the port it was reached on (the terminal client sends the token only then)', async () => {
+    const { srv, token } = await serverWorld();
+    try {
+      const { appHoldsToken } = await import(pathToFileURL(join(WEB, 'scripts', 'assistant-run.mjs')).href);
+      const port = Number(new URL(srv.base).port);
+      const nonce = 'ab'.repeat(16);
+      const r = await srv.post('/api/assistant/launch/check', { nonce });
+      assert.equal(r.status, 200, JSON.stringify(r.json));
+      assert.equal(r.json.proof, createHmac('sha256', token()).update(`l${port}:${nonce}`).digest('hex'));
+      assert.ok(!JSON.stringify(r.json).includes(token()), 'never the token');
+      assert.equal(L.mcpLaunchCheck(port + 1, nonce) === r.json.proof, false, 'bound to the port');
+      assert.equal(L.mcpLaunchCheck(port, 'zz'), null);
+      for (const bad of [undefined, '', 'AB'.repeat(16), 'ab'.repeat(15), 42]) {
+        assert.deepEqual([(await srv.post('/api/assistant/launch/check', { nonce: bad })).status], [400], String(bad));
+      }
+      assert.equal(await appHoldsToken(port, token()), true);
+      assert.equal(await appHoldsToken(port, 'x'.repeat(43)), false, 'another token');
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('POST /turns takes the launch token from x-magnusim-launch (never from the body)', async () => {
     const { srv, token } = await serverWorld();
     try {
@@ -1614,7 +1642,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     const { srv } = await serverWorld();
     try {
       claude.script({ call: { tool: 'connection_check', args: { word: 'ok' } } }, { say: 'done' });
-      const t = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      const t = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true }, proof());
       assert.equal(t.status, 200, JSON.stringify(t.json));
       const pid = lastPid(claude);
       assert.deepEqual(
@@ -1633,20 +1661,59 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       const row = rows.json.agents.find((a) => a.id === 'claude');
       assert.deepEqual(row.last.modes.map((x) => x.id), ['default', 'plan']);
       // Connect: no message.
-      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([c.json.ok, c.json.tools], [true, null]);
       assert.ok(!methodsIn(claude, lastPid(claude)).includes('session/prompt'));
       // The provider Test of an agent is its Test with a message.
       claude.script({ call: { tool: 'connection_check', args: { word: 'ok' } } });
-      const p = await srv.post('/api/assistant/test', { provider: 'agent:claude' });
+      const p = await srv.post('/api/assistant/test', { provider: 'agent:claude' }, proof());
       assert.deepEqual([p.status, p.json.ok, p.json.tools], [200, true, 'works']);
       // Not calling it: not_used.
       claude.script({ say: 'done' });
-      const n = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      const n = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true }, proof());
       assert.deepEqual([n.json.ok, n.json.tools], [true, 'not_used']);
-      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'nope', message: true })).status, 404);
-      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'claude', message: 'yes' })).status, 400);
+      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'nope', message: true }, proof())).status, 404);
+      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'claude', message: 'yes' }, proof())).status, 400);
     } finally {
+      await srv.close();
+    }
+  });
+
+  it('Test, connect, sign-in and the provider Test of an agent need the proof of this account (the token or an app tab’s live link, Settings’ with no workspace): without it 403 launch_proof and nothing starts', async () => {
+    const { srv } = await serverWorld();
+    let page = null;
+    try {
+      const before = claude.pids('agent').length;
+      const runs = [
+        ['/api/assistant/agents/test', { id: 'claude', message: true }],
+        ['/api/assistant/agents/test', { id: 'claude', message: false }],
+        ['/api/assistant/agents/sign-in', { id: 'claude', method: 'browser' }],
+        ['/api/assistant/test', { provider: 'agent:claude' }],
+      ];
+      for (const [path, body] of runs) {
+        for (const [what, extra, headers] of [
+          ['nothing', {}, {}],
+          ['a wrong token', {}, { 'x-magnusim-launch': 'x'.repeat(43) }],
+          ['a link that is no tab’s', { link: 'c'.repeat(24) }, {}],
+          ['the token in the body', { token: proof()['x-magnusim-launch'] }, {}],
+        ]) {
+          const r = await srv.post(path, { ...body, ...extra }, headers);
+          assert.deepEqual([r.status, r.json.code, r.json.error], [403, 'launch_proof', "Magnusim couldn't confirm that this came from its own window. Reload the page and try again."], `${path} ${JSON.stringify(body)} with ${what}`);
+        }
+      }
+      // The provider Test with no provider named tests the default: an agent's needs the proof too.
+      assert.equal((await srv.post('/api/assistant/settings', { provider: 'agent:claude' })).status, 200);
+      assert.equal((await srv.post('/api/assistant/test', {})).json.code, 'launch_proof');
+      assert.equal(claude.pids('agent').length, before, 'nothing started');
+      // The Settings page's live link (a tab with no workspace) proves it.
+      page = await srv.page();
+      const link = await page.open();
+      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false, link });
+      assert.equal(c.json.ok, true, JSON.stringify(c.json));
+      await gone(lastPid(claude));
+    } finally {
+      page?.close();
+      await srv.post('/api/assistant/settings', { provider: 'off' });
       await srv.close();
     }
   });
@@ -1657,17 +1724,17 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     await S.addCustomAgent(customAgent());
     try {
       claude.script({ hold: 'test-hold' });
-      const first = srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      const first = srv.post('/api/assistant/agents/test', { id: 'claude', message: true }, proof());
       await holding(claude, 'test-hold');
-      const second = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const second = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([second.status, second.json.code], [409, 'busy']);
       claude.release('test-hold');
       assert.equal((await first).json.ok, true);
       const before = custom.records().length;
       for (const message of [true, false]) {
-        const r = await srv.post('/api/assistant/agents/test', { id: CUSTOM_ID, message });
+        const r = await srv.post('/api/assistant/agents/test', { id: CUSTOM_ID, message }, proof());
         assert.deepEqual([r.status, r.json.code], [409, 'agent_not_allowed'], `message ${message}`);
-        const s = await srv.post('/api/assistant/agents/sign-in', { id: CUSTOM_ID, method: 'browser' });
+        const s = await srv.post('/api/assistant/agents/sign-in', { id: CUSTOM_ID, method: 'browser' }, proof());
         assert.deepEqual([s.status, s.json.code], [409, 'agent_not_allowed']);
       }
       assert.equal(custom.records().length, before, 'nothing started');
@@ -1682,7 +1749,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     try {
       claude.script({ hold: 'test-gone' });
       const url = new URL(`${srv.base}/api/assistant/agents/test`);
-      const req = http.request({ host: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'content-type': 'application/json' }, agent: false });
+      const req = http.request({ host: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'content-type': 'application/json', ...proof() }, agent: false });
       req.on('error', () => {});
       req.end(JSON.stringify({ id: 'claude', message: true }));
       await holding(claude, 'test-gone');
@@ -1690,7 +1757,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       req.destroy();
       await gone(pid);
       const next = await H.until(async () => {
-        const r = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+        const r = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
         return r.json.code === 'busy' ? null : r;
       }, CEILING, 'the Test slot to free');
       assert.equal(next.json.ok, true, JSON.stringify(next.json));
@@ -1713,7 +1780,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       ],
     });
     try {
-      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([c.status, c.json.ok, c.json.code], [200, false, 'agent_signin']);
       assert.equal(c.json.error, "Claude Code isn't signed in. Settings → Assistant shows how to sign in.");
       const byId = Object.fromEntries(c.json.auth.map((m) => [m.id, m]));
@@ -1722,14 +1789,14 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       assert.deepEqual([byId.browser.type, byId.browser.command], ['agent', null]);
       const rows = await srv.get('/api/assistant/agents');
       assert.deepEqual(rows.json.agents.find((a) => a.id === 'claude').sign_in.methods.map((m) => m.id), ['console-login', 'unsafe', 'browser']);
-      assert.equal((await srv.post('/api/assistant/agents/sign-in', { id: 'claude', method: 'console-login' })).json.code, 'bad_method');
-      assert.equal((await srv.post('/api/assistant/agents/sign-in', { id: 'claude' })).status, 400);
-      const s = await srv.post('/api/assistant/agents/sign-in', { id: 'claude', method: 'browser' });
+      assert.equal((await srv.post('/api/assistant/agents/sign-in', { id: 'claude', method: 'console-login' }, proof())).json.code, 'bad_method');
+      assert.equal((await srv.post('/api/assistant/agents/sign-in', { id: 'claude' }, proof())).status, 400);
+      const s = await srv.post('/api/assistant/agents/sign-in', { id: 'claude', method: 'browser' }, proof());
       assert.deepEqual([s.status, s.json.ok], [200, true], JSON.stringify(s.json));
       const auth = claude.received(lastPid(claude)).find((m) => m.method === 'authenticate');
       assert.equal(auth.params.methodId, 'browser');
       await gone(lastPid(claude));
-      const again = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const again = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.equal(again.json.ok, true, JSON.stringify(again.json));
       const after = await srv.get('/api/assistant/agents');
       assert.equal(after.json.agents.find((a) => a.id === 'claude').sign_in, null, 'the block goes once it works');
@@ -1770,7 +1837,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     let srv2 = null;
     try {
       claude.script({ hold: 'test-restart' });
-      const test = srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      const test = srv.post('/api/assistant/agents/test', { id: 'claude', message: true }, proof());
       await holding(claude, 'test-restart');
       const pid = lastPid(claude);
       assert.equal(host.running('claude'), true);
@@ -1849,36 +1916,45 @@ describe('more of an agent turn’s start (spec 4.6, 5.1, 5.2, 7.1)', LIMIT, () 
     }
   });
 
-  it('the page proves it with its tab’s live relay link: that link starts it; another tab’s live link, or a link its own tab had before, doesn’t', async () => {
+  it('the page proves it with an app tab’s live relay link, whichever tab sends it: a turn on its tab, on another, or on none from Home (a tab with no workspace); a link that is no tab’s, or one its tab had before, doesn’t', async () => {
     const { srv } = await serverWorld();
     let a = null;
     let b = null;
+    let home = null;
     try {
       a = await srv.page();
       b = await srv.page();
+      home = await srv.page();
       const linkA = await a.open();
       const linkB = await b.open();
       for (const link of [linkA, linkB]) {
         const reg = await srv.register(link, 1);
         assert.equal(reg.status, 200, JSON.stringify(reg.json));
       }
+      // Home (or Settings) offers no tools: its channel is opened for the proof alone, nothing registered.
+      const linkHome = await home.open();
+      assert.equal((await srv.tabs()).some((x) => x.tab === home.tab), false, 'Home has no workspace');
       const before = claude.pids('agent').length;
       const turn = (tab, link) => srv.post('/api/assistant/turns', { text: 'x', provider: 'agent:claude', ...(tab ? { tab } : {}), link });
-      // Each tab's live link, with the other tab: refused.
-      for (const [tab, link] of [
-        [b.tab, linkA],
-        [a.tab, linkB],
-      ]) {
-        const r = await turn(tab, link);
-        assert.deepEqual([r.status, r.json.code], [403, 'launch_proof'], `tab ${tab} with another tab's live link`);
+      // A link that is no tab's live one: refused, with a tab or without.
+      for (const tab of [a.tab, null]) {
+        const r = await turn(tab, 'c'.repeat(24));
+        assert.deepEqual([r.status, r.json.code], [403, 'launch_proof'], `tab ${tab}`);
       }
-      // A link that is no tab's, and a live link with no tab.
-      assert.deepEqual([(await turn(a.tab, 'c'.repeat(24))).status, (await turn(null, linkA)).status], [403, 403]);
       assert.equal(claude.pids('agent').length, before, 'nothing started');
-      const ok = await turn(a.tab, linkA);
-      assert.equal(ok.status, 202, JSON.stringify(ok.json));
-      claude.script({ say: 'by link' });
-      await settledTurn(srv.handle.turns.get(ok.json.turn));
+      // Any tab's live link proves it: its own tab, another's, and Home's for a turn on no tab (phase 4's dock).
+      for (const [tab, link, say] of [
+        [a.tab, linkA, 'by its own link'],
+        [b.tab, linkA, 'by another tab’s link'],
+        [null, linkHome, 'from Home'],
+      ]) {
+        claude.script({ say });
+        const ok = await turn(tab, link);
+        assert.equal(ok.status, 202, `${say}: ${JSON.stringify(ok.json)}`);
+        const t = srv.handle.turns.get(ok.json.turn);
+        await settledTurn(t);
+        assert.deepEqual([endOf(t).state, t.tab], ['done', tab], say);
+      }
       // Tab A gets a new link (its tools registered again under it): the one it had before proves nothing.
       await a.unsubscribe();
       const linkA2 = await a.open('assistant:2');
@@ -1896,6 +1972,7 @@ describe('more of an agent turn’s start (spec 4.6, 5.1, 5.2, 7.1)', LIMIT, () 
     } finally {
       a?.close();
       b?.close();
+      home?.close();
       await srv.close();
     }
   });

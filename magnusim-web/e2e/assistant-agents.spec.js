@@ -23,8 +23,9 @@
 // variable to pass, a turn on it refused without the launch proof and while it is off (nothing
 // started), its allow switch (the question with Don't focused, Enter answering Don't, Allow,
 // then a turn runs; off with no question, which ends what it ran), the allow routes refused
-// without the page's Origin, the switch asked again once the program's path changed (a turn
-// then refused), Turn off and Remove.
+// without the page's Origin, and with the Origin alone (no live link of an app tab: what any
+// program can send), as are the agent's connect check, Test and sign-in without the proof, the
+// switch asked again once the program's path changed (a turn then refused), Turn off and Remove.
 //
 // Covered, turns: Claude Code (its own tools off) works in the open workspace through
 // Magnusim's tools, its permission request for them auto-allowed and logged, nothing asked, no
@@ -69,6 +70,8 @@ const OWN_TOOLS_OFF = 'Its own shell, file and web tools are off while it works 
 const OWN_TOOLS_ON = 'Its own tools stay on: it can run commands and change files on this PC by its own rules.';
 const LOGIN_YES = 'Signed in (its login file is on this PC).';
 const LOGIN_UNKNOWN = "Magnusim can't tell whether it is signed in; Test will say.";
+/** A Settings call without the window's proof (agents/test.ts WINDOW_PROOF_TEXT). */
+const WINDOW_PROOF_TEXT = "Magnusim couldn't confirm that this came from its own window. Reload the page and try again.";
 const allowWarning = (name) =>
   `${name}'s own tools can't be switched off from Magnusim. Once allowed, it can run commands and change files on this PC by its own rules, as it does in a terminal. It can also read your Magnusim projects, whatever the privacy setting says. Magnusim's questions cover only Magnusim's tools. Anyone else signed in to this PC can reach Magnusim's settings too; allow agents only on a PC whose other accounts you trust.`;
 
@@ -362,7 +365,15 @@ test.beforeAll(async ({ request }) => {
   study = (await postOk(request, '/api/plugin-studies/create', { project_id: project, plugin: PLUGIN, kind: 'counter_case', title: 'Counter 1' })).study.id;
 });
 
-test.beforeEach(async ({ request }) => {
+/**
+ * Each test's page: its event stream's tab, tracked from the test's start (a Settings call opens
+ * the stream for the window's proof before any workspace does, and moving to a project is not a
+ * new page load).
+ */
+const pageTabs = new WeakMap();
+
+test.beforeEach(async ({ page, request }) => {
+  pageTabs.set(page, trackTab(page));
   // Each test from the start: no settings, keys, custom agents, switches or agents running;
   // Claude Code not signed in; the custom program only where the npm prefix is; the scripted
   // agent as it starts by default.
@@ -644,7 +655,10 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   test.setTimeout(180_000);
   const allowPosts = [];
   page.on('request', (r) => {
-    if (new URL(r.url()).pathname === '/api/assistant/agents/allow' && r.method() === 'POST') allowPosts.push(r.postDataJSON());
+    if (new URL(r.url()).pathname !== '/api/assistant/agents/allow' || r.method() !== 'POST') return;
+    // On carries this tab's live relay link (the window's proof); off carries none.
+    const { link, ...rest } = r.postDataJSON();
+    allowPosts.push(link === undefined ? rest : { ...rest, link: /^[0-9a-f]{24}$/.test(link) ? '<link>' : link });
   });
   await page.goto(`${host.base}/#/`);
   const pane = await openAssistantStep(page);
@@ -683,6 +697,21 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   const addNoOrigin = await request.post(api('/api/assistant/agents/custom'), { data: { name: 'Sneaky', command: CUSTOM_PROGRAM } });
   expect(addNoOrigin.status()).toBe(403);
   expect(await addNoOrigin.json()).toMatchObject({ code: 'browser_only' });
+  // The Origin alone (any program on this PC can send it) is not the window: no live link of an app tab, refused.
+  const startsBefore = customFake.pids('agent').length;
+  for (const [path, data] of [
+    ['/api/assistant/agents/allow', { id, allow: true, fingerprint: listed.fingerprint }],
+    ['/api/assistant/agents/custom', { name: 'Sneaky', command: CUSTOM_PROGRAM }],
+    ['/api/assistant/agents/allow', { id, allow: true, fingerprint: listed.fingerprint, link: 'c'.repeat(24) }],
+    ['/api/assistant/agents/test', { id, message: false }],
+    ['/api/assistant/agents/sign-in', { id, method: 'browser' }],
+  ]) {
+    const r = await request.post(api(path), { data, headers: fromPage() });
+    expect(r.status(), `${path} ${JSON.stringify(data)}`).toBe(403);
+    expect(await r.json()).toMatchObject({ code: 'launch_proof', error: WINDOW_PROOF_TEXT });
+  }
+  expect((await agentsNow(request)).filter((r) => r.name === 'Sneaky'), 'nothing added').toEqual([]);
+  expect(customFake.pids('agent').length, 'nothing started').toBe(startsBefore);
   // A turn on it: without this account's proof, refused; with it, refused while it is off. Nothing starts.
   const token = await launchToken(request);
   const starts = customFake.pids('agent').length;
@@ -722,7 +751,7 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   await expect(row).toHaveAttribute('data-assistant-agent-state', 'ready');
   await expect(row.locator('[data-assistant-agent-line]')).toHaveText(`${CUSTOM_NAME} · ${LOGIN_UNKNOWN} · ${OWN_TOOLS_ON}`);
   await expect(row.getByRole('note')).toHaveText(allowWarning(CUSTOM_NAME));
-  expect(allowPosts).toEqual([{ id, allow: true, fingerprint: listed.fingerprint }]);
+  expect(allowPosts).toEqual([{ id, allow: true, fingerprint: listed.fingerprint, link: '<link>' }]);
   expect((await agentsNow(request)).find((r) => r.id === id)).toMatchObject({ allowed: true, ready: true });
   await expect(pane.locator(`[data-assistant-default-option="agent:${id}"]`)).toContainText(`${CUSTOM_NAME} (coding agent)`);
   // Allowed: the turn runs on it (from Home), its own account pays.
@@ -742,7 +771,7 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   await expect(row).toHaveAttribute('data-assistant-agent-state', 'needs_allow');
   await expect(modal(page)).toBeHidden();
   expect(allowPosts).toEqual([
-    { id, allow: true, fingerprint: listed.fingerprint },
+    { id, allow: true, fingerprint: listed.fingerprint, link: '<link>' },
     { id, allow: false },
   ]);
   // Off is the kill switch: what it still ran is gone (its bridge too).
@@ -811,7 +840,7 @@ async function getJson(request, path) {
   return r.json();
 }
 
-/** What the page sends with the browser-only routes (the app's own origin). */
+/** The app's own origin, as the page sends it with the browser-only routes (any program on this PC can send it too). */
 const fromPage = () => ({ origin: host.base });
 
 /**
@@ -921,7 +950,7 @@ async function counterFrame(page) {
 
 /** Opens the counter workspace in `page` and waits until its tools are offered: {frame (a FrameLocator), handle (the Frame), tab}. */
 async function openCounter(page, request) {
-  const tabOf = trackTab(page);
+  const tabOf = pageTabs.get(page) ?? trackTab(page);
   await page.goto(api(`/#/p/${project}`));
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
   await page.evaluate((h) => {
@@ -937,16 +966,21 @@ async function openCounter(page, request) {
   return { frame, handle, tab };
 }
 
-/** A custom agent (the scripted one, style none) added as the page adds it; allowed when asked. Its id. */
-async function addCustom(request, { allow = false } = {}) {
-  const added = await postOk(request, '/api/assistant/agents/custom', { name: CUSTOM_NAME, command: `${CUSTOM_PROGRAM} --acp` }, fromPage());
-  const id = added.agent.id;
-  if (allow) {
-    const fingerprint = added.agent.fingerprint ?? (await agentsNow(request)).find((r) => r.id === id).fingerprint;
-    const ok = await postOk(request, '/api/assistant/agents/allow', { id, allow: true, fingerprint }, fromPage());
-    expect(ok.agent).toMatchObject({ allowed: true, ready: true });
-  }
-  return id;
+/**
+ * A custom agent (the scripted one, style none) added by the page's own calls (src/assistant/api.ts:
+ * the app's origin and its tab's live relay link), allowed when asked. `page` shows the app. Its id.
+ */
+async function addCustom(page, { allow = false } = {}) {
+  const row = await page.evaluate(
+    async ({ name, command, allow }) => {
+      const a = await import('/src/assistant/api.ts');
+      const added = await a.addCustomAgent(name, command, []);
+      return allow && added ? a.allowAgent(added.id, true, added.fingerprint) : added;
+    },
+    { name: CUSTOM_NAME, command: `${CUSTOM_PROGRAM} --acp`, allow },
+  );
+  expect(row).toMatchObject(allow ? { allowed: true, ready: true } : { allowed: false });
+  return row.id;
 }
 
 /** The agent process `ctrl`'s fake reported last, and every process of its tree it reported (itself, its bridge, its helpers). */
@@ -1069,9 +1103,9 @@ test("a destructive tool asks in the app with Don't focused: Enter answers Don't
 test("the agent's own tool: a custom agent's request is a question only the app's window answers (link only): the answer key is refused, Enter answers Don't, and the agent hears reject", async ({ page, request }) => {
   test.setTimeout(180_000);
   await postOk(request, '/api/assistant/settings', { privacy: 'allow' });
-  const id = await addCustom(request, { allow: true });
-  const token = await launchToken(request);
   const w = await openCounter(page, request);
+  const id = await addCustom(page, { allow: true });
+  const token = await launchToken(request);
   const dialog = modal(page);
   customFake.script({ askOwn: { title: 'Run the build script', kind: 'execute', rawInput: { command: 'npm run build' } } }, { say: 'I did not run it.' });
   const t = await agentTurn(request, { text: 'Build it.', tab: w.tab, provider: `agent:${id}` }, token);
@@ -1182,9 +1216,9 @@ test('Stop during a tool on a stubborn agent: the page aborts the call, the turn
 test("Stop while the agent's own question is open: the question goes, the agent hears its permission cancelled before session/cancel, and a polite agent answers, so nothing is killed", async ({ page, request }) => {
   test.setTimeout(180_000);
   await postOk(request, '/api/assistant/settings', { privacy: 'allow' });
-  const id = await addCustom(request, { allow: true });
-  const token = await launchToken(request);
   const w = await openCounter(page, request);
+  const id = await addCustom(page, { allow: true });
+  const token = await launchToken(request);
   const dialog = modal(page);
   // After its question it waits (a cancel ends the wait): nothing it says comes between the cancelled answer and the cancel.
   customFake.script({ askOwn: { title: 'Delete the build folder', kind: 'delete', rawInput: { path: 'build' } } }, { hold: 'after-the-question' }, { say: 'Never said.' });

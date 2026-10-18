@@ -26,7 +26,7 @@
  *                                        default without one): {ok:true, model, served_by, ms, tools,
  *                                        cost_usd} or {ok:false, code, error}; 400 when it can't
  *                                        start; 409 while one runs. For agent:<id>: the agent Test
- *                                        with a message (as /agents/test)
+ *                                        with a message (as /agents/test, with its launch proof)
  *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?}
  *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
@@ -35,7 +35,13 @@
  *                                        one: the conversation's own, else the default), or
  *                                        agent:<id> for a coding agent, whose turn needs the
  *                                        per-launch token in x-magnusim-launch (the CLI) or `link`
- *                                        = the tab's live relay link (the page): else 403 launch_proof
+ *                                        = an app tab's live relay link, any tab's (the page): else
+ *                                        403 launch_proof (TurnManager.launchProven)
+ *   POST /api/assistant/launch/check    {nonce: 32 hex} → {ok, proof}: HMAC-SHA256(token, "l<port>:<nonce>"),
+ *                                        port = the app port the request reached, so the terminal
+ *                                        client sends this launch's token only to the Magnusim that
+ *                                        wrote its mcp.json (mcp/listener.ts mcpLaunchCheck); 400; 409
+ *                                        mcp_unavailable (no token yet)
  *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
  *                                        (a long-poll: waits for an event after `since`)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
@@ -61,26 +67,29 @@
  *                                        coding agents on this PC (assistant/agents/discover.ts; it
  *                                        runs --version of each agent's own verified package or an
  *                                        allowed program, never anything else; Refresh asks again)
- *   POST /api/assistant/agents/custom   {name, command, keep_env?} → {ok, agent}: a custom agent (off
- *                                        until allowed); browser only (403 browser_only); 400
- *                                        bad_name, bad_command, bad_keep_env, cant_start_script, too_many
- *   POST /api/assistant/agents/custom/remove  {id} → {ok} (what it still runs is stopped); 404
- *                                        agent_unknown; 409 agent_running
- *   POST /api/assistant/agents/allow    {id, allow, fingerprint?} → {ok, agent}: the allow switch;
+ *   POST /api/assistant/agents/custom   {name, command, keep_env?, link} → {ok, agent}: a custom agent (off
+ *                                        until allowed); browser only (403 browser_only) and from an app
+ *                                        window: `link` an app tab's live relay link (403 launch_proof);
+ *                                        400 bad_name, bad_command, bad_keep_env, cant_start_script, too_many
+ *   POST /api/assistant/agents/custom/remove  {id} → {ok} (what it still runs is stopped); 404 agent_unknown;
+ *                                        409 agent_running
+ *   POST /api/assistant/agents/allow    {id, allow, fingerprint?, link?} → {ok, agent}: the allow switch;
  *                                        browser only (403 browser_only). allow:false is always taken
  *                                        and stops that agent first, even when the switch can't be
- *                                        saved (then 500 save_failed); allow:true needs the row's
+ *                                        saved (then 500 save_failed); allow:true needs an app tab's
+ *                                        live relay link in `link` (403 launch_proof), the row's
  *                                        fingerprint (409 fingerprint_changed) and is refused while
  *                                        the agent runs (409 agent_running); 404 agent_unknown
- *   POST /api/assistant/agents/test     {id, message} → the agent Test (message:true sends one short
+ *   POST /api/assistant/agents/test     {id, message, link?} → the agent Test (message:true sends one short
  *                                        message) or connect check (false): {ok:true, agent, version,
  *                                        ms, signed_in, own_tools, images, modes, models, tools} or
- *                                        {ok:false, code, error, auth?}; 404 agent_unknown; 409 busy,
- *                                        agent_not_allowed (and the other start refusals); the
+ *                                        {ok:false, code, error, auth?}; 404 agent_unknown; 403
+ *                                        launch_proof (as an agent turn's: the token or `link`); 409
+ *                                        busy, agent_not_allowed (and the other start refusals); the
  *                                        request closing stops it (assistant/agents/test.ts)
- *   POST /api/assistant/agents/sign-in  {id, method} → {ok, agent?} | {ok:false, code, error}: the
+ *   POST /api/assistant/agents/sign-in  {id, method, link?} → {ok, agent?} | {ok:false, code, error}: the
  *                                        agent signs in by itself (an `agent` method it listed);
- *                                        400 bad_method; 404 agent_unknown; 409 busy, agent_not_allowed
+ *                                        400 bad_method; 403 launch_proof; 404 agent_unknown; 409 busy, agent_not_allowed
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -113,7 +122,7 @@ import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
-import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
+import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
 import { createMcpService } from './assistant/mcp/server.ts';
 import {
   addCustomAgentRequest,
@@ -127,7 +136,7 @@ import {
 } from './assistant/agents/discover.ts';
 import { agentsTreeKill } from './assistant/agents/process.ts';
 import { agentHost } from './assistant/agents/host.ts';
-import { agentProviderTest, agentSignInRequest, agentTestRequest } from './assistant/agents/test.ts';
+import { agentProviderTest, agentSignInRequest, agentTestRequest, WINDOW_PROOF_TEXT } from './assistant/agents/test.ts';
 import { agentIdOf, knownAgent } from './assistant/agents/known.ts';
 import { setAgentRunHooks } from './assistant/agents/discover.ts';
 import { appVersion } from './assistant/host-tools.ts';
@@ -484,7 +493,7 @@ async function listModels(provider: ProviderId, settings: AssistantSettings): Pr
  * Test block started afresh): nobody waits for the result, so the test stops and the next
  * one may start at once.
  */
-async function connectionTest(asked: unknown, gone: AbortSignal | undefined, manager: TurnManager): Promise<Answer> {
+async function connectionTest(asked: unknown, gone: AbortSignal | undefined, manager: TurnManager, proven: () => boolean): Promise<Answer> {
   const settings = await loadSettings();
   const refuse = (code: string, error: string, status = 400): Answer => ({ status, body: { ok: false, code, error } });
   // The provider named (each Settings card tests its own), else the default.
@@ -493,7 +502,7 @@ async function connectionTest(asked: unknown, gone: AbortSignal | undefined, man
   const chosen = named === null ? settings.provider : (named as string);
   // A coding agent: its Test with one short message (spec 5.2).
   const agent = agentIdOf(chosen);
-  if (agent !== null) return agentProviderTest(agent, { mcp: mcpAvailability, gone, manager });
+  if (agent !== null) return agentProviderTest(agent, { mcp: mcpAvailability, gone, manager, proven });
   const provider = chosen as ProviderId | 'off';
   if (provider === 'off') return refuse('provider_off', 'Choose a provider first.');
   if ((await depsStatus()).state === 'missing') return refuse('deps_missing', DEPS_MISSING_TEXT);
@@ -638,6 +647,24 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
     }),
   );
 
+  router.post(
+    '/api/assistant/launch/check',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      if (typeof body.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(body.nonce)) {
+        ctx.sendJson(400, { ok: false, code: 'bad_request', error: 'nonce must be 32 lowercase hex characters.' });
+        return;
+      }
+      // Bound to the port this request reached (its socket's, not a header): see mcpLaunchCheck.
+      const proof = mcpLaunchCheck(ctx.req.socket.localPort, body.nonce);
+      if (!proof) {
+        ctx.sendJson(409, { ok: false, code: 'mcp_unavailable', error: "Magnusim's tool connection isn't running, so it has no launch token yet." });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, proof });
+    }),
+  );
+
   router.get(
     '/api/assistant/turns/:id',
     local(async (ctx) => {
@@ -733,6 +760,14 @@ export function browserOnly(ctx: RequestContext): boolean {
  */
 function registerAgentRoutes(router: Router, turns: TurnManager): void {
   const r: AgentRouteContext = { mcp: mcpAvailability };
+  /** A Test, connect or sign-in request's proof of this account, as an agent turn's (read once the tool connection runs). */
+  const proofOf = (ctx: RequestContext, body: Record<string, unknown>) => () => turns.launchProven({ token: ctx.req.headers['x-magnusim-launch'], link: body.link });
+  /**
+   * Adding a custom agent and turning an allow switch on need, beside the app's origin (which any
+   * program on this PC can send), an app tab's live relay link: the page's own proof. Not the
+   * token: the terminal client and an agent's shell can read that.
+   */
+  const fromWindow = (body: Record<string, unknown>) => turns.launchProven({ link: body.link });
 
   router.get(
     '/api/assistant/agents',
@@ -749,7 +784,13 @@ function registerAgentRoutes(router: Router, turns: TurnManager): void {
         ctx.sendJson(403, { ok: false, code: 'browser_only', error: 'Add a custom agent from Settings → Assistant in the Magnusim window.' });
         return;
       }
-      const a = await addCustomAgentRequest(r, await ctx.readJsonBody());
+      const body = await ctx.readJsonBody();
+      if (!fromWindow(body)) {
+        ctx.sendJson(403, { ok: false, code: 'launch_proof', error: WINDOW_PROOF_TEXT });
+        return;
+      }
+      delete body.link;
+      const a = await addCustomAgentRequest(r, body);
       ctx.sendJson(a.status, a.body);
     }),
   );
@@ -769,7 +810,14 @@ function registerAgentRoutes(router: Router, turns: TurnManager): void {
         ctx.sendJson(403, { ok: false, code: 'browser_only', error: 'Allow an agent from Settings → Assistant in the Magnusim window.' });
         return;
       }
-      const a = await allowAgentRequest(r, await ctx.readJsonBody());
+      const body = await ctx.readJsonBody();
+      // On needs the window's proof; off (the kill switch) is always taken.
+      if (body.allow === true && !fromWindow(body)) {
+        ctx.sendJson(403, { ok: false, code: 'launch_proof', error: WINDOW_PROOF_TEXT });
+        return;
+      }
+      delete body.link;
+      const a = await allowAgentRequest(r, body);
       ctx.sendJson(a.status, a.body);
     }),
   );
@@ -793,7 +841,7 @@ function registerAgentRoutes(router: Router, turns: TurnManager): void {
     '/api/assistant/agents/test',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
-      await whileOpen(ctx, (gone) => agentTestRequest(body, { mcp: mcpAvailability, gone, manager: turns }));
+      await whileOpen(ctx, (gone) => agentTestRequest(body, { mcp: mcpAvailability, gone, manager: turns, proven: proofOf(ctx, body) }));
     }),
   );
 
@@ -801,7 +849,7 @@ function registerAgentRoutes(router: Router, turns: TurnManager): void {
     '/api/assistant/agents/sign-in',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
-      await whileOpen(ctx, (gone) => agentSignInRequest(body, { mcp: mcpAvailability, gone, manager: turns }));
+      await whileOpen(ctx, (gone) => agentSignInRequest(body, { mcp: mcpAvailability, gone, manager: turns, proven: proofOf(ctx, body) }));
     }),
   );
 }
@@ -884,8 +932,9 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     registry: turns.registry,
     turns,
   });
-  // An agent turn started from the page proves this account with its tab's live link.
-  turns.setLinkCheck((tab, link) => relay.isLiveLinkOf(tab, link));
+  // The page proves this account with an app tab's live link (an agent's start, Test, connect,
+  // sign-in, a custom agent added, an allow switch turned on): any tab's, the one that sends it.
+  turns.setLinkCheck((link) => relay.isLiveLink(link));
   // Discovery's allow switch and custom-agent removal stop that agent's turns and processes.
   const host = agentHost();
   setAgentRunHooks({ running: (id) => host.running(id), stop: (id, text) => host.stopAgent(id, text) });
@@ -990,7 +1039,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       };
       ctx.res.on('close', onClose);
       try {
-        const r = await connectionTest(body.provider, gone.signal, turns);
+        const r = await connectionTest(body.provider, gone.signal, turns, () => turns.launchProven({ token: ctx.req.headers['x-magnusim-launch'], link: body.link }));
         if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.sendJson(r.status, r.body);
       } finally {
         ctx.res.off('close', onClose);

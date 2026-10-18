@@ -20,8 +20,10 @@
  *   of its 202) or by the app tab that shows them (its live relay link); see answerGate.
  * - A turn on a coding agent (provider `agent:<id>`, phase 3 spec 4.7, 5.2, 6.1) runs on
  *   agents/turn.ts instead of the loop, in the same log, gates, relay and limits on how many
- *   run. Its start needs a proof of this account: the per-launch token (the CLI reads it from
- *   the owner-only mcp.json) or the tab's live relay link (the page). It is refused, in order:
+ *   run. Its start needs a proof of this account (launchProven): the per-launch token (the CLI
+ *   reads it from the owner-only mcp.json) or a live relay link of an app tab, whichever tab
+ *   sends it (the page: a workspace, Settings, or phase 4's dock on Home; src/assistant/relay.ts
+ *   opens the tab's channel for it). It is refused, in order:
  *   agent_unknown (400), its tool connection unavailable (400 mcp_unavailable: there is no
  *   launch token then), launch_proof (403), the agent missing, not allowed or changed since it
  *   was allowed, privacy (400), and past 2 agents agents_busy (429). Its switch going off while
@@ -601,9 +603,10 @@ export const REAL_AGENT_START: AgentStartDeps = Object.freeze({
   lockdownFailed: (id: string, version: string) => setAgentLockdownFailed(id, version),
 });
 
-/** What proves that an agent turn's starter is this account: the per-launch token (x-magnusim-launch). */
+/** What proves that a request comes from this account: the per-launch token (x-magnusim-launch), or an app tab's live relay link. */
 export interface LaunchProof {
   token?: unknown;
+  link?: unknown;
 }
 
 export const LAUNCH_PROOF_TEXT = 'Start a coding agent from the Magnusim window or with assistant-run on this account.';
@@ -741,7 +744,7 @@ export class TurnManager {
   private readonly started = new WeakSet<Turn>();
   private readonly turnListeners = new Set<(t: Turn, change: TurnChange) => void>();
   private tabInfo: ((tab: string) => TabInfo | null) | null = null;
-  private linkCheck: ((tab: string, link: unknown) => boolean) | null = null;
+  private linkCheck: ((link: unknown) => boolean) | null = null;
 
   constructor(d: TurnManagerDeps) {
     this.d = d;
@@ -755,9 +758,23 @@ export class TurnManager {
     this.conversations.onDrop((id) => agentHost().endConversation(id, 'conversation_dropped'));
   }
 
-  /** The relay says whether a link is a tab's live link now (an agent turn's launch proof from the page). */
-  setLinkCheck(fn: ((tab: string, link: unknown) => boolean) | null): void {
+  /** The relay says whether a link is an app tab's live link now (the page's launch proof). */
+  setLinkCheck(fn: ((link: unknown) => boolean) | null): void {
     this.linkCheck = fn;
+  }
+
+  /**
+   * Whether a request proves it comes from this account (phase 3 spec 5.2): this launch's token
+   * (x-magnusim-launch: the CLI reads it from the owner-only mcp.json) or the live relay link of an
+   * app tab, whichever tab sends it and whatever the request is for (the page that sends it:
+   * Settings, a workspace, phase 4's dock on Home). Any other account on this PC can reach the
+   * routes, and what this guards starts programs as the person: an agent turn's start, and a
+   * coding agent's Test, connect check and sign-in (assistant-routes.ts, which also takes the link
+   * alone for adding a custom agent and turning an allow switch on). A link proves less than the
+   * token: any program on this PC that opens an app tab's event stream gets one (SECURITY.md).
+   */
+  launchProven(p: LaunchProof): boolean {
+    return this.agentStart().launchToken(p.token) || this.linkCheck?.(p.link) === true;
   }
 
   private agentStart(): AgentStartDeps {
@@ -1018,9 +1035,9 @@ export class TurnManager {
       else target = r;
     }
     // A proof of this account: an allowed agent can run commands as the person, and any other
-    // account on this PC can reach this route.
-    const proven = ad.launchToken(a.launch.token) || (target !== null && this.linkCheck?.(target.tab, a.link) === true);
-    if (!proven) return refuse(403, 'launch_proof', LAUNCH_PROOF_TEXT);
+    // account on this PC can reach this route. A link proves it from any tab, a turn bound to
+    // another tab or to none (Home) too: it says who asks, not where the turn works.
+    if (!this.launchProven({ token: a.launch.token, link: a.link })) return refuse(403, 'launch_proof', LAUNCH_PROOF_TEXT);
     const found = await ad.find(id, settings, { available: listener.running, reason: listener.reason });
     if (!found) return refuse(400, 'agent_unknown', agentUnknownText(id));
     const { entry, row } = found;

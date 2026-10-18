@@ -16,11 +16,14 @@ import { exitFrameFullscreen } from '../workspace/leaveGuard';
 import {
   GATE_RESHOWN_MS,
   PROGRESS_INTERVAL_MS,
+  PROOF_KEEP_MS,
+  PROOF_WAIT_MS,
   RELAY_CHANNEL_URL,
   RESULT_BEFORE_UNREGISTER_MS,
   startAssistantRelay,
   stopAssistantRelay,
 } from './relay';
+import { allowAgent, checkAgent, RemoteError } from './api';
 import { resetStatusStore } from './status';
 import type { GateView } from './wire';
 
@@ -303,6 +306,100 @@ describe('the page relay opens nothing until a workspace offers tools', () => {
     expect(channels).toHaveLength(0);
     // The status was read once; nothing else went out.
     expect(sent.map((s) => s.path)).toEqual(['/api/assistant/status']);
+  });
+});
+
+describe("the window's proof: this tab's live link in a Settings call (a tab with no workspace opens its channel for it)", () => {
+  const ALLOW = '/api/assistant/agents/allow';
+  const TEST = '/api/assistant/agents/test';
+  const FP = 'f'.repeat(64);
+  const CHECKED = { ok: true, agent: 'Agent', version: '1.0.0', ms: 5, signed_in: 'yes', own_tools: 'off', images: false, modes: [], models: [], tools: null };
+
+  it('Allow sends the link of a channel opened for it alone (the status first; nothing registered, not pinned); off sends none; the channel goes a minute after', async () => {
+    startAssistantRelay();
+    await settle(60_000);
+    expect(channels).toHaveLength(0);
+    auto = (s) => (s.path === ALLOW ? [200, { ok: true, agent: null }] : defaultAuto(s));
+    const on = allowAgent('custom-abc123', true, FP);
+    await settle();
+    expect(sent.map((s) => s.path)).toEqual(['/api/assistant/status']);
+    expect(channels.map((c) => c.url)).toEqual([RELAY_CHANNEL_URL]);
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    await on;
+    expect(last(ALLOW).body).toEqual({ id: 'custom-abc123', allow: true, fingerprint: FP, link: LINK_A });
+    expect(toolPosts()).toEqual([]);
+    expect(channel().pinned).toBe(false);
+    // Off is the kill switch: no proof, no link.
+    await allowAgent('custom-abc123', false, null);
+    expect(last(ALLOW).body).toEqual({ id: 'custom-abc123', allow: false });
+    // Kept for the next call, then let go.
+    await settle(PROOF_KEEP_MS - 1000);
+    expect(channel().closed).toBe(false);
+    await settle(2000);
+    expect(channel().closed).toBe(true);
+    expect(channels).toHaveLength(1);
+  });
+
+  it('kept while the call is out; a link the server refused as gone is sent once more with the next one, then the answer stands', async () => {
+    startAssistantRelay();
+    const check = checkAgent('claude', false);
+    await settle();
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    // A long check: the channel stays open past the keep time while it is out.
+    await settle(PROOF_KEEP_MS * 2);
+    expect(channel().closed).toBe(false);
+    take(TEST).answer(403, { ok: false, code: 'launch_proof', error: 'gone' });
+    await settle(1000);
+    // Not the refused link again: it waits for the next.
+    expect(sent.filter((s) => s.path === TEST)).toHaveLength(1);
+    channel().drop();
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    const again = take(TEST);
+    expect(again.body).toEqual({ id: 'claude', message: false, link: LINK_B });
+    again.answer(200, CHECKED);
+    expect(await check).toMatchObject({ ok: true, agent: 'Agent' });
+    // Refused twice: that is the answer (one retry).
+    const twice = checkAgent('claude', true);
+    await settle();
+    take(TEST).answer(403, { ok: false, code: 'launch_proof', error: 'still no' });
+    await settle();
+    channel().drop();
+    channel().frame('linked', { link: LINK_C });
+    await settle();
+    take(TEST).answer(403, { ok: false, code: 'launch_proof', error: 'still no' });
+    expect(await twice).toEqual({ ok: false, code: 'launch_proof', error: 'still no' });
+    expect(sent.filter((s) => s.path === TEST).map((s) => s.body.link)).toEqual([LINK_A, LINK_B, LINK_B, LINK_C]);
+  });
+
+  it('a channel refused: the call goes without a link after the wait, and the channel is not asked again in a loop', async () => {
+    startAssistantRelay();
+    const check = checkAgent('claude', false);
+    await settle();
+    channel().refuse();
+    await settle(PROOF_WAIT_MS - 100);
+    expect(sent.filter((s) => s.path === TEST)).toHaveLength(0);
+    await settle(200);
+    const s = take(TEST);
+    expect(s.body).toEqual({ id: 'claude', message: false });
+    s.answer(403, { ok: false, code: 'launch_proof', error: 'no proof' });
+    expect(await check).toEqual({ ok: false, code: 'launch_proof', error: 'no proof' });
+    expect(channels).toHaveLength(1);
+  });
+
+  it('another PC: no channel, and the call goes at once without a link; with no relay started, too', async () => {
+    auto = (s) => (s.path === '/api/assistant/status' || s.path === TEST ? [403, { ok: false, reason: 'remote', error: 'remote' }] : defaultAuto(s));
+    startAssistantRelay();
+    await expect(checkAgent('claude', false)).rejects.toBeInstanceOf(RemoteError);
+    expect(channels).toHaveLength(0);
+    expect(last(TEST).body).toEqual({ id: 'claude', message: false });
+    stopAssistantRelay();
+    auto = (x) => (x.path === TEST ? [200, CHECKED] : defaultAuto(x));
+    expect(await checkAgent('claude', true)).toMatchObject({ ok: true });
+    expect(last(TEST).body).toEqual({ id: 'claude', message: true });
+    expect(channels).toHaveLength(0);
   });
 });
 

@@ -8,6 +8,10 @@
  *   linked {link}                  always the channel's first frame: 24 random hex, new at
  *                                  each open. Every relay POST carries it (the page never
  *                                  needs its tab id), and the page registers again on each.
+ *                                  It is also the page's proof of this account for a coding
+ *                                  agent's start, Test, connect and sign-in, a custom agent
+ *                                  added and an allow switch turned on (isLiveLink): a tab
+ *                                  with no workspace opens its channel for that alone.
  *   active {turns, hold_until}     always the second frame, and again whenever the number of
  *                                  running turns bound to the tab changes. hold_until: ms
  *                                  since 1970, 10 minutes after the tab's last bound turn
@@ -865,13 +869,21 @@ export class Relay {
     l.send('gate_closed', { gate: view.id, answer: closed?.answer ?? 'deny', by: closed?.by ?? 'stop' });
   }
 
-  /**
-   * Whether `link` is `tab`'s live relay link now (a page's proof that it may start a turn on a
-   * coding agent: the launch proof, phase 3 spec 5.2).
-   */
+  /** Whether `link` is `tab`'s live relay link now (tests: which tab a link belongs to). */
   isLiveLinkOf(tab: string, link: unknown): boolean {
     const rec = this.closed ? null : this.liveLink(link);
     return !!rec && rec.tab === tab && !rec.silent;
+  }
+
+  /**
+   * Whether `link` is a live relay link of any app tab now (its tab's newest, open, not silent):
+   * the page's proof of this account (TurnManager.launchProven, phase 3 spec 5.2), whichever tab
+   * sends it. A tab opens its channel for that alone when no workspace did
+   * (src/assistant/relay.ts withAssistantLink).
+   */
+  isLiveLink(link: unknown): boolean {
+    const rec = this.closed ? null : this.liveLink(link);
+    return !!rec && !rec.silent;
   }
 
   // ------------------------------------------------------------ views

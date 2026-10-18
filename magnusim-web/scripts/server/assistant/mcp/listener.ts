@@ -225,6 +225,21 @@ export function mcpLaunchTokenMatches(sent: unknown): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * This launch's answer to the terminal client's check (POST /api/assistant/launch/check), sent
+ * before the client sends the token: HMAC-SHA256(token, "l<port>:<nonce>"), where `port` is the
+ * app's own port the request reached (its socket's local port, which no client sets). A program
+ * on another port that passes the request on to this one gets an answer for this port, which the
+ * client refuses. The "l" label is neither of the handshake's ("c", "s"), so an answer never
+ * passes for either side of a socket. Null while the listener has no token, or for a bad nonce.
+ */
+export function mcpLaunchCheck(port: unknown, nonce: unknown): string | null {
+  const token = state().token;
+  if (!token || !state().running) return null;
+  if (typeof nonce !== 'string' || !NONCE_RE.test(nonce) || typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return hmac(token, `l${port}:${nonce}`);
+}
+
 /** The live connections, oldest first (GET /api/assistant/mcp). */
 export function mcpConnections(): Array<{ id: string; kind: 'external' | 'agent'; name: string; since: string; calls: number }> {
   return [...state().conns]

@@ -43,6 +43,13 @@
  * call runs and while a question is open; otherwise a hidden tab lets it go as usual. A new
  * link starts with no turns and no hold: its server says `active` right after `linked` when
  * it has any.
+ *
+ * The window's proof (withAssistantLink): the server takes this tab's live link, beside the
+ * app's origin, as the proof that a request comes from a Magnusim window (a coding agent's
+ * Test, connect and sign-in, a custom agent added, an allow switch turned on; phase 4's dock
+ * starts agent turns with it, from Home too). A tab no workspace offers tools in opens its
+ * channel for that alone (after the status says this PC), waits up to 5 s for `linked`, and
+ * keeps the channel while the request is out and a minute after; it is not pinned.
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import type { AssistantRegistration } from '../plugin-sdk/workspace';
@@ -60,6 +67,7 @@ import {
 } from '../workspace/assistantTools';
 import type { AssistantCallOutcome } from '../workspace/bridge';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
+import { setAssistantLinkSource } from './api';
 import { refreshStatus, statusSnapshot, subscribeStatus, type StatusSnapshot } from './status';
 import type { GateView, RelayFrameData, RelayFrameType, RelayGateBody, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody } from './wire';
 
@@ -81,6 +89,10 @@ const RETRY_MS = 1000;
 export const GATE_RESHOWN_MS = 5000;
 /** The longest a question stays open here when its expires_at is missing or far off. */
 const GATE_MAX_MS = 60 * 60_000;
+/** How long a request that needs the window's proof waits for this tab's link (the channel opening). */
+export const PROOF_WAIT_MS = 5000;
+/** A channel opened for the window's proof stays this long after its last request (Settings sends a few in a row). */
+export const PROOF_KEEP_MS = 60_000;
 
 /** What the frame hears for an empty list, or when nothing of this page is on the server. */
 const NOTHING_HELD: AssistantRegistration = { available: true, accepted: [], refused: [] };
@@ -129,6 +141,16 @@ interface Relay {
   kickQueued: boolean;
   unsubscribe: () => void;
   statusOff: (() => void) | null;
+  /** Requests waiting for, or sent with, this tab's link as the window's proof: the channel stays while any is. */
+  proofs: number;
+  /** Counts those requests; a channel is opened for the newest one at most once (a refused one isn't tried again in a loop). */
+  proofEpoch: number;
+  proofOpenedFor: number;
+  /** After the last of them the channel stays until then (ms since 1970), then goes as usual. */
+  proofUntil: number;
+  proofTimer: ReturnType<typeof setTimeout> | null;
+  /** Told whenever the link or the mode may have changed (linkFor). */
+  linkWaiters: Set<() => void>;
 }
 
 let R: Relay | null = null;
@@ -201,23 +223,40 @@ function kick(): void {
 }
 
 function run(r: Relay): void {
+  runOnce(r);
+  // A request waiting for the window's proof hears of each change (a link, the status read).
+  for (const w of [...r.linkWaiters]) w();
+}
+
+function runOnce(r: Relay): void {
   const cur = workspaceToolsSnapshot().current;
   if (r.mode === 'remote') {
     if (cur && !cur.settled) settleWorkspaceTools(cur.rev, refusal('remote'));
     return;
   }
   if (r.mode === 'idle') {
-    if (!cur || cur.settled) return;
-    // Nothing of this page was ever sent: an empty list needs no request.
-    if (cur.tools.length === 0) settleWorkspaceTools(cur.rev, NOTHING_HELD);
-    else void checkStatus(r);
+    if (cur && !cur.settled) {
+      // Nothing of this page was ever sent: an empty list needs no request.
+      if (cur.tools.length === 0) settleWorkspaceTools(cur.rev, NOTHING_HELD);
+      else {
+        void checkStatus(r);
+        return;
+      }
+    }
+    // A request needs the window's proof: the status first (a page from another PC opens nothing).
+    if (r.proofs > 0) void checkStatus(r);
     return;
   }
   if (r.mode === 'checking') return;
   // A channel the server ended (it said `_closed`): as refused.
   if (r.ch && r.ch.readyState === r.ch.CLOSED) channelGone(r, cur);
   if (cur && !cur.settled && cur.tools.length === 0 && !r.maybeHeld && !r.pumping) settleWorkspaceTools(cur.rev, NOTHING_HELD);
-  if (!r.ch && cur && live(cur) && cur.rev > r.refusedRev) openRelay(r);
+  // Opened for a list to offer, or for the window's proof (once per request: a refused channel isn't asked again in a loop).
+  const forProof = r.proofs > 0 && r.proofOpenedFor < r.proofEpoch;
+  if (!r.ch && ((cur && live(cur) && cur.rev > r.refusedRev) || forProof)) {
+    r.proofOpenedFor = r.proofEpoch;
+    openRelay(r);
+  }
   if (r.ch && r.link) void pump(r);
   updatePin(r);
   maybeClose(r);
@@ -675,9 +714,9 @@ function updatePin(r: Relay): void {
   }
 }
 
-/** Nothing offered, nothing on the server, nothing open: the channel goes (the relay is idle again). */
+/** Nothing offered, nothing on the server, nothing open, no proof wanted: the channel goes (the relay is idle again). */
 function maybeClose(r: Relay): void {
-  if (!r.ch || r.pumping || r.maybeHeld || r.gates.size) return;
+  if (!r.ch || r.pumping || r.maybeHeld || r.gates.size || r.proofs > 0 || Date.now() < r.proofUntil) return;
   const cur = workspaceToolsSnapshot().current;
   if (wanted(cur) || (cur && !cur.settled)) return;
   const ch = r.ch;
@@ -719,12 +758,72 @@ export function startAssistantRelay(): () => void {
       kickQueued: false,
       unsubscribe: () => undefined,
       statusOff: null,
+      proofs: 0,
+      proofEpoch: 0,
+      proofOpenedFor: 0,
+      proofUntil: 0,
+      proofTimer: null,
+      linkWaiters: new Set(),
     };
     R = r;
     r.unsubscribe = subscribeWorkspaceTools(kick);
+    // The page's calls that need the window's proof get this tab's link from here (api.ts windowPost).
+    setAssistantLinkSource(withAssistantLink);
     kick();
   }
   return stopAssistantRelay;
+}
+
+/** This tab's live link once there is one (not `avoid`, a link the server just refused), else null after `ms` or on another PC. */
+function linkFor(r: Relay, avoid: string | null, ms: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const check = (): void => {
+      if (R !== r || r.mode === 'remote') finish(null);
+      else if (r.ch && r.link && r.link !== avoid) finish(r.link);
+    };
+    const finish = (link: string | null): void => {
+      if (timer) clearTimeout(timer);
+      r.linkWaiters.delete(check);
+      resolve(link);
+    };
+    r.linkWaiters.add(check);
+    timer = setTimeout(() => finish(null), ms);
+    check();
+  });
+}
+
+/**
+ * Runs `use` with this tab's live relay link: the window's proof the server asks for, beside the
+ * app's origin, before it adds a custom agent, turns an allow switch on, or tests, connects or
+ * signs in a coding agent (and, in phase 4, starts an agent turn from the dock, Home included).
+ * Opens the tab's channel for it when no workspace has (once this page's status says this PC),
+ * and keeps it while `use` runs and PROOF_KEEP_MS after. `use` gets null when no link came within
+ * PROOF_WAIT_MS (another PC, the relay not started, the channel refused): the request then goes
+ * without one and the server refuses it. `avoid`: a link the server just refused (stale), never
+ * handed out again.
+ */
+export async function withAssistantLink<T>(use: (link: string | null) => Promise<T>, avoid: string | null = null): Promise<T> {
+  const r = R;
+  if (!r) return use(null);
+  r.proofs += 1;
+  r.proofEpoch += 1;
+  try {
+    kick();
+    return await use(await linkFor(r, avoid, PROOF_WAIT_MS));
+  } finally {
+    r.proofs -= 1;
+    if (r.proofs === 0) {
+      r.proofUntil = Date.now() + PROOF_KEEP_MS;
+      if (r.proofTimer) clearTimeout(r.proofTimer);
+      // Then the channel goes as usual (unless a workspace or a question keeps it).
+      r.proofTimer = setTimeout(() => {
+        r.proofTimer = null;
+        if (R === r) kick();
+      }, PROOF_KEEP_MS);
+    }
+    if (R === r) kick();
+  }
 }
 
 /** Stops the relay: its channel closes, its questions close unanswered, its calls stop. */
@@ -732,8 +831,12 @@ export function stopAssistantRelay(): void {
   const r = R;
   if (!r) return;
   R = null;
+  setAssistantLinkSource(null);
   r.unsubscribe();
   r.statusOff?.();
+  if (r.proofTimer) clearTimeout(r.proofTimer);
+  // A request waiting for the link goes without one.
+  for (const w of [...r.linkWaiters]) w();
   for (const g of r.gates.values()) {
     clearTimeout(g.timer);
     g.ctl.abort();

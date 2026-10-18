@@ -66,6 +66,42 @@ export function assistantPost<T = Record<string, unknown>>(path: string, body?: 
   return call<T>('POST', path, body, signal);
 }
 
+/** Runs `use` with this tab's live relay link (null without one); `avoid` is a link the server just refused. */
+export type AssistantLinkSource = <T>(use: (link: string | null) => Promise<T>, avoid?: string | null) => Promise<T>;
+
+let linkSource: AssistantLinkSource | null = null;
+
+/** The page relay (src/assistant/relay.ts) hands out this tab's link from here once it runs; null again when it stops. */
+export function setAssistantLinkSource(fn: AssistantLinkSource | null): void {
+  linkSource = fn;
+}
+
+/**
+ * POST from this window: the body carries this tab's live relay link (`link`), the proof the
+ * server asks for beside the app's origin before a coding agent's Test, connect and sign-in, a
+ * custom agent added and an allow switch turned on (403 launch_proof without it). Phase 4's
+ * dock sends an agent turn's start through here too, from any page. A link the channel lost
+ * between here and the server is refused: sent once more with the new one. Without the relay
+ * (a test, another PC) the request goes without a link.
+ */
+export async function windowPost<T = Record<string, unknown>>(path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  let refused: string | null = null;
+  for (let attempt = 0; ; attempt += 1) {
+    let sentWith: string | null = null;
+    const send = (link: string | null): Promise<T> => {
+      sentWith = link;
+      return assistantPost<T>(path, link ? { ...body, link } : body, signal);
+    };
+    try {
+      return await (linkSource ? linkSource(send, refused) : send(null));
+    } catch (err) {
+      const stale = err instanceof AssistantApiError && err.status === 403 && err.code === 'launch_proof' && sentWith !== null;
+      if (attempt > 0 || !stale) throw err;
+      refused = sentWith;
+    }
+  }
+}
+
 /** A route this server doesn't have (its router's 404 carries no code). */
 export function isMissingRoute(err: unknown): boolean {
   return err instanceof AssistantApiError && err.status === 404 && err.code === 'http_404';
@@ -168,9 +204,9 @@ export function rowOfAnswer(body: unknown): AgentRow | null {
   return isObj(body) ? readAgentRow(body.agent) : null;
 }
 
-/** POST /api/assistant/agents/custom {name, command, keep_env}: the new row. Throws AssistantApiError (400 with its field). */
+/** POST /api/assistant/agents/custom {name, command, keep_env, link} (windowPost): the new row. Throws AssistantApiError (400 with its field). */
 export async function addCustomAgent(name: string, command: string, keepEnv: string[]): Promise<AgentRow | null> {
-  return rowOfAnswer(await assistantPost<Obj>(`${AGENTS_PATH}/custom`, { name, command, keep_env: keepEnv }));
+  return rowOfAnswer(await windowPost<Obj>(`${AGENTS_PATH}/custom`, { name, command, keep_env: keepEnv }));
 }
 
 /** POST /api/assistant/agents/custom/remove {id}. Throws AssistantApiError. */
@@ -180,10 +216,12 @@ export async function removeCustomAgent(id: string): Promise<void> {
 
 /**
  * POST /api/assistant/agents/allow {id, allow, fingerprint}: the allow switch (from this page
- * only: the browser sends its Origin). Answers the agent's row. Throws AssistantApiError.
+ * only: the browser sends its Origin, and on carries this tab's link). Answers the agent's row.
+ * Throws AssistantApiError.
  */
 export async function allowAgent(id: string, allow: boolean, fingerprint: string | null): Promise<AgentRow | null> {
-  return rowOfAnswer(await assistantPost<Obj>(`${AGENTS_PATH}/allow`, allow ? { id, allow, fingerprint } : { id, allow }));
+  // On carries the window's proof (windowPost); off, the kill switch, needs none.
+  return rowOfAnswer(allow ? await windowPost<Obj>(`${AGENTS_PATH}/allow`, { id, allow, fingerprint }) : await assistantPost<Obj>(`${AGENTS_PATH}/allow`, { id, allow }));
 }
 
 /** A Test or connect answer, read tolerantly. */
@@ -215,7 +253,7 @@ export function readAgentTest(j: unknown): AgentTestAnswer {
  */
 export async function checkAgent(id: string, message: boolean, signal?: AbortSignal): Promise<AgentTestAnswer> {
   try {
-    return readAgentTest(await assistantPost<Obj>(`${AGENTS_PATH}/test`, { id, message }, signal));
+    return readAgentTest(await windowPost<Obj>(`${AGENTS_PATH}/test`, { id, message }, signal));
   } catch (err) {
     if (err instanceof AssistantApiError && !(err instanceof RemoteError) && err.status && !isMissingRoute(err)) return readAgentTest({ ...err.body, ok: false, error: err.message });
     throw err;
@@ -226,7 +264,7 @@ export async function checkAgent(id: string, message: boolean, signal?: AbortSig
 export async function signInAgent(id: string, method: string, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; code: string; error: string }> {
   let j: Obj;
   try {
-    j = await assistantPost<Obj>(`${AGENTS_PATH}/sign-in`, { id, method }, signal);
+    j = await windowPost<Obj>(`${AGENTS_PATH}/sign-in`, { id, method }, signal);
   } catch (err) {
     if (err instanceof AssistantApiError && !(err instanceof RemoteError) && err.status && !isMissingRoute(err)) return { ok: false, code: err.code, error: err.message };
     throw err;

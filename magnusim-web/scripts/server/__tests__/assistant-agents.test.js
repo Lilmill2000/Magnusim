@@ -52,6 +52,8 @@ const { Router, dispatch } = await import('../router.ts');
 const { sendJson } = await import('../http.ts');
 const { assistantGuard } = await import('../assistant/access.ts');
 const routes = await import('../assistant-routes.ts');
+const { registerEventHubRoutes } = await import('../event-hub.ts');
+const { relayPage } = await import('./assistant-harness.js');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { appVersion } = await import('../assistant/host-tools.ts');
 const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
@@ -1061,6 +1063,9 @@ function serve(router) {
 let server;
 let port;
 let handle;
+/** The Settings page's tab: its event stream, and the live relay link it sends with the browser-only calls. */
+let settingsTab = null;
+let LINK = null;
 const keepAlive = new http.Agent({ keepAlive: true, maxSockets: 8 });
 
 function request(method, path, { headers = {}, body } = {}) {
@@ -1102,8 +1107,10 @@ function request(method, path, { headers = {}, body } = {}) {
 }
 
 const get = (path) => request('GET', path);
-/** As the Settings page sends it: the app's own Origin. */
-const browserPost = (path, body, headers = {}) => request('POST', path, { body, headers: { origin: `http://127.0.0.1:${port}`, 'sec-fetch-site': 'same-origin', ...headers } });
+/** The app's own Origin alone: any program on this PC can send it. */
+const originPost = (path, body, headers = {}) => request('POST', path, { body, headers: { origin: `http://127.0.0.1:${port}`, 'sec-fetch-site': 'same-origin', ...headers } });
+/** As the Settings page sends it: the app's own Origin, and its tab's live relay link in the body. */
+const browserPost = (path, body, headers = {}) => originPost(path, body && typeof body === 'object' ? { ...body, link: LINK } : body, headers);
 const plainPost = (path, body, headers = {}) => request('POST', path, { body, headers });
 const SETTINGS_FILE = join(ROOT, 'home', 'assistant', 'settings.json');
 const onDisk = () => (existsSync(SETTINGS_FILE) ? JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) : null);
@@ -1153,13 +1160,18 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     mkdirSync(join(AGENT_HOME, '.claude'), { recursive: true });
     writeFileSync(join(AGENT_HOME, '.claude', '.credentials.json'), '{}');
     const router = new Router();
+    registerEventHubRoutes(router);
     handle = routes.registerAssistantRoutes(router, { port: () => port });
     server = await serve(router);
     port = server.address().port;
+    // The Settings page's tab opens its relay channel for the proof alone (no workspace).
+    settingsTab = await relayPage(`http://127.0.0.1:${port}`);
+    LINK = await settingsTab.open();
   });
 
   after(async () => {
     D.setAgentRunHooks(null);
+    settingsTab?.close();
     handle?.shutdown();
     keepAlive.destroy();
     await new Promise((r) => server.close(r));
@@ -1392,6 +1404,51 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     const after2 = await rowsOf('?refresh=1');
     assert.equal(after2.claude.fingerprint, rows.claude.fingerprint);
     assert.equal(after2.claude.lockdown, 'tools_off');
+  });
+
+  it('the app’s origin alone (any program can send it) adds, allows and runs nothing: a custom agent added, its switch on, and its Test, connect check and sign-in each need the window’s live link (the checks: or the token); the command never ran', async () => {
+    const marker = join(ROOT, 'forged-command-ran.txt');
+    const script = join(folder('forged'), 'write-marker.cjs');
+    writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+    const command = `"${process.execPath}" "${script}"`;
+    const WINDOW_PROOF = "Magnusim couldn't confirm that this came from its own window. Reload the page and try again.";
+    const proofRefused = (r, what) => assert.deepEqual([r.status, r.json?.code, r.json?.error], [403, 'launch_proof', WINDOW_PROOF], what);
+    const customs = () => onDisk()?.custom_agents ?? [];
+    const before = customs().length;
+    // Added: the origin alone, a link that is no tab's live one, or the launch token instead: refused, nothing saved.
+    proofRefused(await originPost('/api/assistant/agents/custom', { name: 'Forged', command }), 'add, no link');
+    proofRefused(await originPost('/api/assistant/agents/custom', { name: 'Forged', command, link: 'c'.repeat(24) }), 'add, a dead link');
+    assert.deepEqual([(await plainPost('/api/assistant/agents/custom', { name: 'Forged', command, link: LINK })).json.code], ['browser_only'], 'the link without the origin');
+    assert.equal(customs().length, before, 'nothing added');
+    // Through the window it is added (off), and its row shows the fingerprint; the origin alone can't switch it on.
+    const added = await browserPost('/api/assistant/agents/custom', { name: 'Forged', command });
+    assert.equal(added.status, 200, JSON.stringify(added.json));
+    const { id, fingerprint } = added.json.agent;
+    try {
+      assert.equal(onDisk().custom_agents.find((c) => c.id === id).link, undefined, 'the link is never saved');
+      proofRefused(await originPost('/api/assistant/agents/allow', { id, allow: true, fingerprint }), 'allow, no link');
+      proofRefused(await originPost('/api/assistant/agents/allow', { id, allow: true, fingerprint, link: 'c'.repeat(24) }), 'allow, a dead link');
+      assert.equal(onDisk()?.agents?.[id]?.allowed ?? null, null, 'still off');
+      // Allowed through the window: its checks still need the proof (the token or the window's link).
+      assert.equal((await browserPost('/api/assistant/agents/allow', { id, allow: true, fingerprint })).status, 200);
+      for (const [path, body] of [
+        ['/api/assistant/agents/test', { id, message: false }],
+        ['/api/assistant/agents/test', { id, message: true }],
+        ['/api/assistant/agents/sign-in', { id, method: 'browser' }],
+        ['/api/assistant/test', { provider: `agent:${id}` }],
+      ]) {
+        proofRefused(await originPost(path, body), `${path} ${JSON.stringify(body)}`);
+        proofRefused(await plainPost(path, { ...body, link: 'c'.repeat(24) }), `${path} with a dead link`);
+      }
+      assert.equal(existsSync(marker), false, 'the command never ran');
+      // Off is the kill switch: always taken, no link needed.
+      const off = await originPost('/api/assistant/agents/allow', { id, allow: false });
+      assert.equal(off.status, 200, JSON.stringify(off.json));
+      assert.equal(onDisk()?.agents?.[id]?.allowed ?? null, null);
+    } finally {
+      await plainPost('/api/assistant/agents/custom/remove', { id });
+    }
+    assert.equal(existsSync(marker), false, 'the command never ran');
   });
 
   it('custom agents: added only from the browser, off until allowed, at most 8, and removed with their choices', async () => {

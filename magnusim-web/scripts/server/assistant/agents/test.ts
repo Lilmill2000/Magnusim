@@ -18,6 +18,11 @@
  * `initialize` (it signs in by itself, for example in a browser): a short-lived process gets
  * `initialize` then `authenticate` (10 minutes), and ends. Never started by Magnusim on its own.
  *
+ * Each needs a proof of this account, as an agent turn's start does (TurnManager.launchProven:
+ * this launch's token, or an app tab's live relay link, which Settings sends): a run starts a
+ * program as the person, and any other account on this PC can reach these routes. Without it,
+ * 403 `launch_proof` before anything is looked for or started.
+ *
  * Both count toward the 2 agents at once (host.ts): a third is refused 409 `busy`. Each is
  * tagged with the server lifetime (TurnManager) whose route started it, so that lifetime's
  * shutdown stops it (host.ts endLifetime), and the checks run again when the agent's switch
@@ -161,13 +166,20 @@ interface Prepared {
   row: AgentRow;
 }
 
-/** The checks before a Test, connect or sign-in starts anything: the agent, its switch, the tool connection. */
-async function prepare(id: unknown, purpose: 'test' | 'connect' | 'sign_in', mcp: () => Promise<{ available: boolean; reason: string | null }>): Promise<Prepared | Answer> {
+/** What a Test, connect or sign-in refused for want of the proof says (the page sends its tab's live link). */
+export const WINDOW_PROOF_TEXT = "Magnusim couldn't confirm that this came from its own window. Reload the page and try again.";
+
+/** The checks before a Test, connect or sign-in starts anything: the agent, the proof, its switch, the tool connection. */
+async function prepare(id: unknown, purpose: 'test' | 'connect' | 'sign_in', o: RunOptions): Promise<Prepared | Answer> {
   const settings = await loadSettings();
   if (!isAgentOf(settings, id)) return refuse(404, 'agent_unknown', `No coding agent called ${cleanText(id, 40) || '(none)'}. Settings → Assistant lists them.`);
-  // The tool connection a session needs (the Test's own list is served there too).
+  // The tool connection a session needs (the Test's own list is served there too); its token is
+  // the CLI's proof.
   await startMcpListener().catch(() => null);
-  const found = await findAgentNow(id, settings, await mcp());
+  // A proof of this account before anything is looked for or started: the switch alone (the
+  // allow route) can be sent by any program on this PC.
+  if (!o.proven()) return refuse(403, 'launch_proof', WINDOW_PROOF_TEXT);
+  const found = await findAgentNow(id, settings, await o.mcp());
   if (!found) return refuse(404, 'agent_unknown', `No coding agent called ${cleanText(id, 40)}. Settings → Assistant lists them.`);
   const refusal = agentStartRefusal(found.row, purpose);
   if (refusal) return refuse(409, refusal.code, refusal.error, { agent: found.row });
@@ -232,7 +244,7 @@ async function prepareAndTake(id: unknown, purpose: 'test' | 'connect' | 'sign_i
   const host = agentHost();
   for (let attempt = 1; ; attempt += 1) {
     const epoch = host.offEpoch();
-    const p = await prepare(id, purpose, o.mcp);
+    const p = await prepare(id, purpose, o);
     if ('status' in p) return p;
     // From here to the slot nothing awaits.
     const off = host.offSince(p.found.id, epoch);
@@ -249,6 +261,8 @@ async function prepareAndTake(id: unknown, purpose: 'test' | 'connect' | 'sign_i
 /** What a Test, connect or sign-in run is given by its route. */
 export interface RunOptions {
   mcp: () => Promise<{ available: boolean; reason: string | null }>;
+  /** Whether the request proves it comes from this account (TurnManager.launchProven), read once the tool connection runs. */
+  proven: () => boolean;
   /** The request went away. */
   gone?: AbortSignal;
   /** The server lifetime (TurnManager) whose route started it: its shutdown stops the run. */

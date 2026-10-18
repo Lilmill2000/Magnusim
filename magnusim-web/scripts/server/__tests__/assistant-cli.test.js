@@ -3,10 +3,12 @@
 // fake provider). It prints the answer, tool calls and results; asks questions at the
 // terminal (y/n); exits 0 for done, 1 otherwise and 2 when the app tab isn't connected,
 // with the plain text; --json prints one event per line. A turn on a coding agent (--agent,
-// --provider agent:<id>) sends the launch token from the connection file, reads it again
-// once after a launch_proof refusal, and prints the agent lines and who pays.
+// --provider agent:<id>) sends the launch token from the connection file, only to an app that
+// proved it holds it (POST /api/assistant/launch/check), reads it again once after a
+// launch_proof refusal, and prints the agent lines and who pays.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -420,15 +422,25 @@ describe('assistant-run.mjs with a coding agent', () => {
 
   /**
    * A stub app: `start(req, n)` answers the n-th POST /turns ({status, json}); the poll answers
-   * `events` once, then ends with `summary`. Records each start's body and its launch header.
+   * `events` once, then ends with `summary`. Records each start's body and its launch header,
+   * and each launch check. `holds`: the token it proves it holds at POST /launch/check (as the
+   * app does: HMAC of "l<port>:<nonce>", `checkPort` in place of its own port to pass on another
+   * app's answer); without it the check is 404, as anything but Magnusim answers.
    */
-  async function stubApp({ start, events = [], summary = null }) {
+  async function stubApp({ start, events = [], summary = null, holds = null, checkPort = null }) {
     const starts = [];
+    const checks = [];
     const stub = http.createServer((req, res) => {
       let body = '';
       req.on('data', (d) => (body += d));
       req.on('end', () => {
         const send = (code, j) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(j));
+        if (req.method === 'POST' && req.url === '/api/assistant/launch/check') {
+          const { nonce } = JSON.parse(body);
+          checks.push({ nonce, launch: req.headers['x-magnusim-launch'] ?? null });
+          if (!holds) return send(404, { ok: false });
+          return send(200, { ok: true, proof: createHmac('sha256', holds).update(`l${checkPort ?? stub.address().port}:${nonce}`).digest('hex') });
+        }
         if (req.method === 'POST' && req.url === '/api/assistant/turns') {
           starts.push({ body: JSON.parse(body), launch: req.headers['x-magnusim-launch'] ?? null });
           const a = start(starts.length);
@@ -441,6 +453,7 @@ describe('assistant-run.mjs with a coding agent', () => {
     await new Promise((r) => stub.listen(0, '127.0.0.1', r));
     return {
       starts,
+      checks,
       port: stub.address().port,
       async close() {
         stub.closeAllConnections?.();
@@ -476,11 +489,14 @@ describe('assistant-run.mjs with a coding agent', () => {
       { seq: 8, type: 'text', step: 1, text: 'Done.' },
       { seq: 9, type: 'end', state: 'done', reason: 'end_turn', message: null },
     ];
-    const app = await stubApp({ start: () => STARTED, events, summary: SUMMARY });
+    const app = await stubApp({ start: () => STARTED, events, summary: SUMMARY, holds: 'tok-first' });
     try {
       const r = await run(['--agent', 'fake', 'Add two.'], app);
       assert.equal(r.code, 0, r.err);
       assert.deepEqual(app.starts, [{ body: { text: 'Add two.', provider: 'agent:fake' }, launch: 'tok-first' }]);
+      assert.equal(app.checks.length, 1, 'the app proved it holds the token first');
+      assert.match(app.checks[0].nonce, /^[0-9a-f]{32}$/);
+      assert.equal(app.checks[0].launch, null, 'the check never carries the token');
       assert.equal(
         r.out,
         [
@@ -517,6 +533,7 @@ describe('assistant-run.mjs with a coding agent', () => {
       start: (n) => (n === 1 ? { status: 403, json: { ok: false, code: 'launch_proof', error: 'Start a coding agent from the Magnusim window or with assistant-run on this account.' } } : STARTED),
       events: [{ seq: 1, type: 'end', state: 'done', reason: 'end_turn', message: null }],
       summary: SUMMARY,
+      holds: 'tok-new',
     });
     try {
       const r = await run(['Go.'], app);
@@ -538,6 +555,42 @@ describe('assistant-run.mjs with a coding agent', () => {
       assert.equal(r.err, 'Start a coding agent from the Magnusim window or with assistant-run on this account.\n');
     } finally {
       await refused.close();
+    }
+  });
+
+  it('the token goes only to an app that proved it holds it: never to another program on the port, after its launch_proof refusal either, nor to one passing on an answer for another port or another token', async () => {
+    writeInfo('tok-live');
+    const LAUNCH_PROOF = { status: 403, json: { ok: false, code: 'launch_proof', error: 'Start a coding agent from the Magnusim window or with assistant-run on this account.' } };
+    const UNPROVEN = (port) => `What answers on port ${port} didn't prove it is the Magnusim that wrote the connection file, so the launch token was not sent. Check --port.\n`;
+    // Something else on the port (a wrong --port, a saved port the app hasn't restarted on): its check is 404.
+    const squatter = await stubApp({ start: () => LAUNCH_PROOF });
+    try {
+      const agent = await run(['--agent', 'fake', 'Go.'], squatter);
+      const plain = await run(['Go.'], squatter);
+      assert.deepEqual(squatter.starts.map((s) => s.launch), [null, null], 'never the token, first or after launch_proof');
+      assert.equal(squatter.checks.length, 3, 'the agent turn checks before each start; the plain turn after its refusal');
+      assert.deepEqual([agent.code, plain.code], [1, 1]);
+      for (const r of [agent, plain]) {
+        assert.equal(r.err, `Start a coding agent from the Magnusim window or with assistant-run on this account.\n${UNPROVEN(squatter.port)}`);
+        assert.ok(!r.out.includes('tok-live') && !r.err.includes('tok-live'));
+      }
+    } finally {
+      await squatter.close();
+    }
+    // One that passes the check on to the app's real port gets an answer for that port; one with another token's answer.
+    const real = await stubApp({ start: () => STARTED, holds: 'tok-live' });
+    const relay = await stubApp({ start: () => LAUNCH_PROOF, holds: 'tok-live', checkPort: real.port });
+    const other = await stubApp({ start: () => LAUNCH_PROOF, holds: 'tok-other' });
+    try {
+      for (const app of [relay, other]) {
+        const r = await run(['--agent', 'fake', 'Go.'], app);
+        assert.equal(r.code, 1);
+        assert.deepEqual(app.starts.map((s) => s.launch), [null]);
+        assert.ok(r.err.endsWith(UNPROVEN(app.port)), r.err);
+      }
+    } finally {
+      rmSync(INFO, { force: true });
+      await Promise.all([real.close(), relay.close(), other.close()]);
     }
   });
 
