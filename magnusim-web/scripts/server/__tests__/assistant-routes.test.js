@@ -3,7 +3,8 @@
 // folds, refused before anything is read or written), JSON only, never from the
 // Assistant's own tool calls, errors redacted, no answer ever holding a key; status,
 // settings and keys; per-path body limits; and the test routes only behind their switch.
-// One turn per app tab (CAD tools spec H4): two starts held together, then let go.
+// One turn per app tab (CAD tools spec H4): two starts held together, then let go; the tab
+// free once its turn ended, while that turn's loop is still held.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -708,6 +709,68 @@ describe('turns', () => {
       for (const t of turnsNow) await until(() => t.settled, 5000, `turn ${t.id} to settle`);
       h2.shutdown();
       await new Promise((done) => s2.close(done));
+    }
+  });
+
+  it('one turn per app tab: the tab is free as soon as its turn has ended, while that turn is still unwinding (a restart: the old server’s relay closed during its project read)', async () => {
+    assert.equal((await localServer()).status, 200);
+    // The old server: its project read ignores the turn's abort until the test lets it go,
+    // so the turn's loop is still there after the turn has ended.
+    let reads = 0;
+    let letGo = () => undefined;
+    const gate = new Promise((done) => (letGo = done));
+    const rOld = new Router();
+    const hOld = routes.registerAssistantRoutes(rOld, {
+      port: () => port,
+      turns: {
+        projects: async (id) => {
+          reads += 1;
+          await gate;
+          return { id, title: 'Wing', created_at: null };
+        },
+      },
+    });
+    const sOld = await serve(rOld);
+    let hNew = null;
+    let sNew = null;
+    const start = async (s, body) => {
+      const r = await fetch(`http://127.0.0.1:${s.address().port}/api/assistant/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: r.status, json: await r.json() };
+    };
+    const ws = { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [] };
+    const turnsNow = [];
+    try {
+      hOld.registry.setWorkspace('tab-one', 'L1', ws);
+      const a = await start(sOld, { text: 'First.', tab: 'tab-one' });
+      assert.equal(a.status, 202, JSON.stringify(a.json));
+      const first = hOld.turns.get(a.json.turn);
+      turnsNow.push(first);
+      await until(() => reads === 1, 5000, 'the first turn’s project read');
+      // The new server is up and the page registered there: the tab is still busy.
+      const rNew = new Router();
+      hNew = routes.registerAssistantRoutes(rNew, { port: () => port });
+      sNew = await serve(rNew);
+      hNew.registry.setWorkspace('tab-one', 'L2', ws);
+      assert.deepEqual(await start(sNew, { text: 'Too soon.', tab: 'tab-one' }), { status: 409, json: { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT } });
+      // The old relay closes: its tab's turn ends now, and its loop still waits in the read.
+      hOld.relay.shutdown();
+      assert.deepEqual([first.ended, first.settled, first.state, first.endReason], [true, false, 'failed', 'shutdown']);
+      fake.reply({ text: 'Free again.' });
+      const b = await start(sNew, { text: 'Next.', tab: 'tab-one' });
+      assert.equal(b.status, 202, JSON.stringify(b.json));
+      assert.equal(first.settled, false, 'the first turn was still unwinding when the next one started');
+      const next = hNew.turns.get(b.json.turn);
+      turnsNow.push(next);
+      letGo();
+      await until(() => first.settled && next.settled, 5000, 'both turns');
+      assert.deepEqual([first.state, next.state, reads], ['failed', 'done', 1]);
+    } finally {
+      letGo();
+      for (const t of turnsNow) await until(() => t.settled, 5000, `turn ${t.id} to settle`);
+      hOld.shutdown();
+      hNew?.shutdown();
+      await new Promise((done) => sOld.close(done));
+      if (sNew) await new Promise((done) => sNew.close(done));
     }
   });
 

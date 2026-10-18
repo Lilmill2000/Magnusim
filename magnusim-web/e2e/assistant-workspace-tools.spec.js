@@ -612,18 +612,23 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     await postOk(request, '/api/worker', { method: 'registry.reload', params: {} });
     off = false;
   };
+  // The slow turn's next answer waits here until the checks of its failed call are done.
+  const afterOff = `after-off-${Date.now()}`;
   try {
     // During a slow call of the tab's turn: the call fails at once, and the page stops it too.
-    fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { text: 'It was turned off.' });
+    // The turn still runs (its next answer is held), so the server keeps the tab's record
+    // however long the disable route takes and whatever the page's channel does meanwhile.
+    fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] }, { hold: afterOff, text: 'It was turned off.' });
     const t = await startTurn(request, host.base, { text: 'Add 5 slowly.', tab: w.tab });
     const { call } = await slowRunning(t, w, 5);
     await turnOff();
     const result = await t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the call fails', 10_000);
     expect(result).toMatchObject({ ok: false, code: 'plugin_off' });
     expect(result.summary).toBe(`${PLUGIN_NAME} was turned off or replaced while the tool ran; it may or may not have finished.`);
-    expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 0, tools: 0 });
+    expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 0, tools: 0, turns: 1 });
     await expect(w.frame.locator('#aborted')).toHaveText('aborted');
     await expect(w.frame.locator('#counter')).toHaveText('0');
+    fake.release(afterOff);
     expect((await t.ended()).turn.state).toBe('done');
     expect(await tabRow(request, w.tab)).toBeNull();
     // Nothing of the dead frame on the server and no question open: its channel goes, and the
@@ -684,6 +689,7 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     expect(listsSent, 'nothing of the dead frame was ever sent again').toEqual([]);
   } finally {
     page.off('request', onRequest);
+    fake.release(afterOff);
     if (off) await turnOn();
   }
 });
