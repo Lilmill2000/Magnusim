@@ -105,7 +105,7 @@ describe('help', () => {
     const all = [GUIDE, ...Object.values(HELP).flatMap((rows) => rows.map((r) => r.text)), ...CAD_TOOLS.map((t) => t.description), JSON.stringify(CAD_TOOLS.map((t) => t.inputSchema))].join('\n');
     // body-op.ts: an unscoped join takes a body the tool only touches, when the two fuse into one solid.
     expect(all).not.toMatch(/join, cut,? (and )?intersect (change bodies (\(\[\] = every body it meets\) )?and )?need overlap/);
-    expect(GUIDE).toContain('BOOLEANS: cut, intersect need overlap; join also takes a body sharing a face.');
+    expect(GUIDE).toContain('BOOLEANS: cut, intersect need overlap; join also takes bodies sharing a face.');
     expect(HELP.traps.find((r) => r.about === 'overlap')!.text).toContain('A join also takes a body it shares a face with');
   });
 

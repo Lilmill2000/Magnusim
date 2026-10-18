@@ -43,7 +43,7 @@ export const GUIDE = [
   '- "Body 1 face at (0, 0, 6)"; #f3 from find; "selection".',
   '- Empty or ambiguous: an error with candidates; check with find first.',
   '',
-  'BOOLEANS: cut, intersect need overlap; join also takes a body sharing a face. Separate pieces: op new, then combine.',
+  'BOOLEANS: cut, intersect need overlap; join also takes bodies sharing a face. Separate pieces: op new, then combine.',
   '',
   'EDITING: change sizes via parameters or edit_feature; else call the tool again with edit "<name>" and all inputs (get_model detail full). undo takes back your own steps; delete asks the person. Leave the person\'s work alone unless asked; never redo steps the person undid.',
   '',
