@@ -472,11 +472,24 @@ export class Turn implements AnyTurn {
   }
 
   /**
-   * How a stopped call reads: the server stopping; the person (Stop, a key change, an agent's
-   * switch turned off); the agent that ran it exiting; or, for any other end, the turn ending.
+   * The turn is to end for `reason` once its agent answered the cancel or was killed (an agent
+   * turn's halt): a call still open stops now, as that end reads. Never as the kill closing the
+   * call's MCP connection, which reads "The server stopped…".
    */
+  abortCallFor(reason: string): void {
+    this.call?.abort(this.abortFor(reason));
+  }
+
   private stopAbort(): CallAbort {
-    const reason = this.stopAs?.reason ?? 'user';
+    return this.abortFor(this.stopAs?.reason ?? 'user');
+  }
+
+  /**
+   * How a call stopped by an end for `reason` reads: the server stopping; the person (Stop, a
+   * key change, an agent's switch turned off); the agent that ran it exiting; or, for any other
+   * end, the turn ending.
+   */
+  private abortFor(reason: string): CallAbort {
     if (reason === 'shutdown') return { code: 'stopped', server: true };
     if (BY_THE_PERSON.has(reason)) return { code: 'stopped' };
     if (reason === 'agent_exited' && isAgentSettings(this.settings)) return { code: 'stopped', cause: `${this.settings.agent.name} stopped unexpectedly` };

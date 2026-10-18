@@ -528,13 +528,14 @@ describe('a call still open as an agent turn ends: its result is logged before t
    * aborted (the server hearing the agent's exit before the bridge's socket closes, as on Linux)
    * ends before its tool answers. Nothing waits for that answer before the end.
    */
-  async function lateAnswerWorld() {
+  async function lateAnswerWorld(o = {}) {
     let letGo;
     const late = new Promise((r) => (letGo = r));
     let started;
     const inTool = new Promise((r) => (started = r));
     const tool = { answered: false };
     const w = await world({
+      ...o,
       invoke: (call) =>
         call.tool === 'slow_add'
           ? new Promise((resolve) => {
@@ -634,6 +635,91 @@ describe('a call still open as an agent turn ends: its result is logged before t
       loggedBeforeEnd(r.turn, 'The server stopped while it ran; it may or may not have finished.');
     } finally {
       letGo();
+      await w.close();
+    }
+  });
+
+  it('Magnusim ends the agent during its call (a mode it may not use, the lockdown tripwire): the call reads as the turn ending, never as the server stopping', async () => {
+    const S = await import('../assistant/settings.ts');
+    const offences = [
+      ['agent_mode', { switchMode: 'plan' }],
+      ['agent_lockdown', { ownTool: { title: 'Bash ls', kind: 'execute', status: 'pending' } }],
+    ];
+    for (const [reason, offence] of offences) {
+      const hold = `offend-${reason}`;
+      const { w, inTool, letGo, tool } = await lateAnswerWorld();
+      try {
+        const r = await w.turn({ text: 'Add.', provider: 'agent:claude', tab: 'tab-1' });
+        assert.equal(r.status, 202, JSON.stringify(r.body));
+        // The offence comes while the call runs: the kill closes the call's MCP connection too.
+        claude.script({ parallel: [{ call: { tool: 'ai-demo__slow_add', args: { by: 1 } } }, { steps: [{ hold }, offence] }] }, { say: 'never' });
+        await inTool;
+        await holding(claude, hold);
+        const pid = lastPid(claude);
+        claude.release(hold);
+        await settledTurn(r.turn);
+        assert.deepEqual([endOf(r.turn).state, endOf(r.turn).reason], ['failed', reason]);
+        assert.equal(tool.answered, false, 'its tool had not answered its abort when the turn ended');
+        loggedBeforeEnd(r.turn, 'The turn ended while it ran; it may or may not have finished.');
+        letGo();
+        await H.until(() => tool.answered, CEILING, 'the late answer');
+        await afterALittle();
+        loggedBeforeEnd(r.turn, 'The turn ended while it ran; it may or may not have finished.');
+        await gone(pid);
+        if (reason === 'agent_lockdown') {
+          await H.until(() => JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8')).agents?.claude?.lockdown_failed, CEILING, 'the tripwire record');
+        }
+      } finally {
+        letGo();
+        claude.release(hold);
+        await S.setAgentLockdownFailed('claude', null);
+        await w.close();
+      }
+    }
+  });
+
+  it("a halt of Magnusim's own (questions nobody answered) on an agent that never answers the cancel, killed after the wait: the call reads as the turn ending, never as the server stopping", async () => {
+    const GATE = 1_000;
+    const CANCEL = 3_000;
+    const { w, inTool, letGo, tool } = await lateAnswerWorld({ custom: true, allow: [CUSTOM_ID], gateMs: GATE, cancelMs: CANCEL });
+    try {
+      const r = await w.turn({ text: 'Add.', provider: `agent:${CUSTOM_ID}`, tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      // Its prompt waits for its call, whose tool holds its abort answer: it never answers the cancel.
+      custom.script(
+        {
+          parallel: [
+            { call: { tool: 'ai-demo__slow_add', args: { by: 1 } } },
+            { steps: [{ hold: 'ask-unanswered' }, { askOwn: { title: 'ls 1', kind: 'execute' } }, { askOwn: { title: 'ls 2', kind: 'execute' } }] },
+          ],
+        },
+        { say: 'never' },
+      );
+      await inTool;
+      await holding(custom, 'ask-unanswered');
+      const pid = lastPid(custom);
+      custom.release('ask-unanswered');
+      const open = (title) => H.until(() => r.turn.summary().open_gates.find((g) => g.tool === title), CEILING, title);
+      await open('ls 1');
+      w.m.clock.advance(GATE);
+      await open('ls 2');
+      w.m.clock.advance(GATE);
+      await H.until(() => methodsIn(custom, pid).includes('session/cancel'), CEILING, 'session/cancel');
+      assert.equal(r.turn.ended, false, 'it waits for the answer to its cancel');
+      // No answer in time: the tree kill, which closes the call's MCP connection too.
+      w.m.clock.advance(CANCEL);
+      await settledTurn(r.turn);
+      assert.deepEqual([endOf(r.turn).state, endOf(r.turn).reason], ['capped', 'unanswered']);
+      assert.equal(tool.answered, false, 'its tool had not answered its abort when the turn ended');
+      loggedBeforeEnd(r.turn, 'The turn ended while it ran; it may or may not have finished.');
+      letGo();
+      await H.until(() => tool.answered, CEILING, 'the late answer');
+      await afterALittle();
+      loggedBeforeEnd(r.turn, 'The turn ended while it ran; it may or may not have finished.');
+      await gone(pid);
+    } finally {
+      letGo();
+      custom.release('ask-unanswered');
       await w.close();
     }
   });

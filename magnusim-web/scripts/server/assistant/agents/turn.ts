@@ -35,11 +35,11 @@
  * capped/agent_calls), 60 active minutes (Turn.onMinutesUp: it fires whether or not a call is
  * open). $ limits, tokens and the day's ledger don't apply: the agent bills its own account.
  *
- * Stop (and a limit, the minutes, the allow switch going off): every open permission request
- * is answered `cancelled`, then session/cancel; when the agent hasn't answered in 3 s
- * (AGENT_CANCEL_MS) it is tree-killed and the turn ends anyway. A crash, a mode outside the
- * allowed ones or the tripwire ends the agent at once. Whatever ends the turn with the prompt
- * still out, the same cancel and kill follow (the finally).
+ * Stop (and a limit, the minutes, the allow switch going off): a call still open stops as that
+ * end reads, every open permission request is answered `cancelled`, then session/cancel; when
+ * the agent hasn't answered in 3 s (AGENT_CANCEL_MS) it is tree-killed and the turn ends anyway.
+ * A crash, a mode outside the allowed ones or the tripwire ends the agent at once. Whatever ends
+ * the turn with the prompt still out, the same cancel and kill follow (the finally).
  */
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 import { capText as loopCapText, GUIDE_CHANGED_NOTE } from '../loop.ts';
@@ -110,6 +110,8 @@ export interface AgentRunTurn extends RunnerTurn {
   onStream(step: number, e: StreamEvent): void;
   callSignal(): AbortSignal;
   callDone(): void;
+  /** The turn is to end for `reason`: a call still open stops now, as that end reads. */
+  abortCallFor(reason: string): void;
   armMinutes(limitMs: number, text: string): void;
   /** Hears the minutes cap fire, whether or not a call is open. */
   onMinutesUp(fn: () => void): () => void;
@@ -347,10 +349,11 @@ class AgentTurnRun implements AgentDispatch {
       resume: () => t.resume(),
     };
     // The turn may end while this call is open (its agent exited, Stop on an agent that answered
-    // the cancel without waiting for its call, the server stopping), the call aborted with it.
-    // Its result is then logged at once, before the turn's `end`: the runner's own would come once
-    // the tool answers its abort, after the end, when nothing is logged any more. It reads as the
-    // runner gives it for that abort ("before this ran" while its question was open).
+    // the cancel without waiting for its call, the server stopping, Magnusim ending its agent),
+    // the call aborted with it. Its result is then logged at once, before the turn's `end`: the
+    // runner's own would come once the tool answers its abort, after the end, when nothing is
+    // logged any more. It reads as the runner gives it for that abort ("before this ran" while
+    // its question was open).
     const started = this.d.clock.now();
     const offEnding = t.onEnding((why) => {
       if (logged) return;
@@ -456,12 +459,15 @@ class AgentTurnRun implements AgentDispatch {
   // ------------------------------------------------------------ ending early
 
   /**
-   * The turn is to end before the agent's answer (Stop, a limit, the tripwire, a mode): open
+   * The turn is to end before the agent's answer (Stop, a limit, the tripwire, a mode): a call
+   * still open stops now, as that end reads (Stop and the minutes stopped it already), open
    * permission requests are answered `cancelled`, then session/cancel; with `kill`, or when the
    * agent hasn't answered after AGENT_CANCEL_MS, it is tree-killed. The first reason wins.
    */
   halt(end: EndInfo | 'stop', kill: boolean): void {
     if (!this.pendingEnd) this.pendingEnd = end;
+    // Before the kill: its closing of the call's MCP connection would read "The server stopped…".
+    if (this.pendingEnd !== 'stop') this.t.abortCallFor(this.pendingEnd.reason);
     for (const ac of [...this.asks]) ac.abort();
     const s = this.session;
     if (s && this.promptPending) s.cancel();

@@ -62,7 +62,9 @@
 //   {relist: true}                           tools/list again on its MCP server (mcp_tools record)
 //   {parallel: [step, ...]}                  the steps at once (for example two permission
 //                                            requests open together)
-//   {askOurs: {tool, options?}}              a permission request for one of our tools in the
+//   {steps: [step, ...]}                     the steps in order (a branch of a parallel: a step
+//                                            that comes once another has started)
+//   {askOurs:{tool, options?}}              a permission request for one of our tools in the
 //                                            style (options: the kinds to offer)
 //   {askOursCorrelated: {tool, toolCallId?, announce?}}  the flagged-approval shape: a tool_call
 //                                            (unless announce: false) and an approval with its id
@@ -452,6 +454,12 @@ async function runStep(p, raw) {
       return;
     case 'parallel':
       await Promise.all(v.map((s) => runStep(p, s)));
+      return;
+    case 'steps':
+      for (const s of v) {
+        if (p.cancelled && !p.ignoreCancel) break;
+        await runStep(p, s);
+      }
       return;
     case 'relist': {
       const s = sessions.get(p.sessionId);
