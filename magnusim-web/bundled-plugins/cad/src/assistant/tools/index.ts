@@ -9,6 +9,7 @@
 // body: Name or colour a body.
 export { tool as body } from './body';
 // combine: Combine bodies.
+export { tool as combine } from './combine';
 // delete: Delete features.
 export { tool as delete } from './delete';
 // edit_feature: Change a feature.
@@ -24,7 +25,9 @@ export { tool as help } from './help';
 // measure: Measure.
 export { tool as measure } from './measure';
 // modify: Fillet, chamfer or shell.
+export { tool as modify } from './modify';
 // pattern: Pattern or mirror.
+export { tool as pattern } from './pattern';
 // revolve: Revolve.
 // set_params: Set parameters.
 export { tool as set_params } from './set_params';

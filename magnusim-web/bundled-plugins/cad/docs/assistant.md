@@ -50,8 +50,9 @@ into the message. Anything else thrown is `internal`; an aborted call is `stoppe
 2. Uncomment its line in `tools/index.ts` (each line has a comment line above it, so
    commits that add different tools merge cleanly).
 3. A tool that makes a feature type registers its reader with
-   `registerFeatureIo(type, {tool, inputsOf, values})` (`features-io.ts`) from its own
-   file, so `get_model detail full` shows those features in its fields.
+   `registerFeatureIo(type, {tool, inputsOf, values, pathOf})` (`features-io.ts`) from its own
+   file, so `get_model detail full` shows those features in its fields and `edit_feature`
+   takes its field names (`feature-tools.ts` has the shared pieces: see below).
 4. Its schema is already in `schemas.ts`; change it only with the spec (the app's host
    test `scripts/__tests__/assistant-cad-tools.test.mjs` pins the strict budget).
 
@@ -272,6 +273,55 @@ make a 2 x 2 sheet with each tile's name. The long side is 768 px (`small`) or 1
   `not_ready` `no_images` and draws nothing; no 3D view, a view without `snapshot` or a
   lost graphics context answers `not_ready` `no_viewport`.
 - Tests draw on a recording canvas (`setViewRaster`), since jsdom has none.
+
+## Fillets, chamfers, shells, patterns and combine (`modify`, `pattern`, `combine`)
+
+Each makes one feature, or with `edit: "<name>"` replaces that feature's inputs (its type must
+be the tool's kind: `wrong_feature_type` otherwise), as one edit call. What they share is in
+`feature-tools.ts`:
+
+- `editTarget` and `nameFor`: the `edit` and `name` fields (`not_found`, `wrong_feature_type`,
+  `name_taken`); a new name is passed to the panel only after the check.
+- `fillFeature(ctx, plan, {edit, type, fields, label})`: the person's own panel opens read-only
+  through `openForAssistant` with every field at once (a new feature), or `openEditForAssistant`
+  and one `session.update` with every top-level field whole (an edit); a `macrotask()`, the
+  `after-open` checkpoint (pace `open`), the rebuild, the `before-commit` checkpoint (pace
+  `commit`), then the honest Done. The feature failing before its Done is `feature_failed` with
+  CAD's own message and actions (`kernel_failed` when the kernel stopped it). It sets the plan's
+  own feature, which the judge reads.
+- `createdLabels`: the labels of the faces the feature made (`EditData.created`:
+  `Fillet 1.fillet(2)`, `Shell 1.inner(Base.side(l1))`, `Row.copy(3)`).
+- `faceText`, `edgeText`, `axisText`, `planeText`, `bodyText`: a stored reference as the
+  selector `get_model full` writes in a feature's `inputs` (a label; `<body> face at (x, y, z)`
+  for a face with none, or a split face), so the inputs can be sent back with `edit`.
+- `pathIn`: a `FeatureIo.pathOf` that takes the tool's field names (`size`, `count`,
+  `spacing`, ...) and the feature's own expression paths (`radius`) for `edit_feature`.
+
+The tools:
+
+- `modify` (`tools/modify.ts`): fillet and chamfer targets are faces or edges on one body. A
+  face, and `edges of <face>` with no filter, is kept as a face (a live set: every edge of it
+  as the part changes), an edge as an edge (a fixed set); the answer says which (`kept_as`)
+  and how many edges were rounded (`edges`, with the kernel's tangent chains). A shell's
+  targets are the faces it opens; `inward` true keeps the outer size. A size the kernel cannot
+  make answers CAD's own message ("a radius of 20 mm is too large for ...: 2.9 mm or less
+  works").
+- `pattern` (`tools/pattern.ts`): linear (`dir1`, and `dir2` with about2, always by spacing),
+  circular (`360 deg` is a full turn: evenly), mirror. Items are feature names (refused with
+  the pattern panel's own words when they cannot be repeated), body selectors, or face
+  selectors on one body. A mirror about `<plane> offset <length>` makes the construction plane
+  first in the same step (two panels, the `between-opens` checkpoint between them; an edit
+  moves the plane above the mirror), or uses one the Part has with the same base, offset and
+  flip. Spacing is a pitch above 0 (the hint says flip).
+- `combine` (`tools/combine.ts`): targets and tools are body selectors (`bodies of <pattern>`,
+  `all bodies`, `#b` handles); they are expanded and deduplicated, and the targets are taken
+  out of the tools, which must not then be empty. A join of pieces that do not touch warns
+  (the body's solids went up, and CAD's own warning).
+
+Tests: `modify.test.ts`, `pattern-combine.test.ts` (real kernel: volumes by formula, round
+trips of `get_model full` inputs, refusals), `feature-tools.test.ts` (a Stop at
+`before-commit`, Escape at `after-open`, a person's panel or change at `between-opens` of the
+offset mirror); e2e `cad:assistant-honest-fillet`.
 
 ## The person's view
 

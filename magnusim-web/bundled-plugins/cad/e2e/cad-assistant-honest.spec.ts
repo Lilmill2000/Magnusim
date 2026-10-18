@@ -304,3 +304,96 @@ test("cad:assistant-honest-delete delete asks the person first: Don't keeps the 
   await expect(rows).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
   await expect.poll(built, STEP).toEqual(['Body 1']);
 });
+
+// Honest 4 (T7): a fillet too large for its wall changes nothing. The model gets failed
+// feature_failed with CAD's own words (the edges, and the largest radius that works); the person's
+// tree, panels and Undo are as before the call. The same call with a radius that fits keeps the
+// fillet: its row in the tree, the body's volume falling by the rounded edges, and one Undo.
+const MODIFY = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'fillet', targets: [], size: '', size2: '', flip: false, inward: false, ...o });
+const treeNames = (page: Page) => cadFrame(page).evaluate(() => Array.from(document.querySelectorAll('[data-cad-tree] [data-feature-row] > .tree-row .tl'), (e) => e.textContent ?? ''));
+
+test('cad:assistant-honest-fillet a fillet too large for its wall changes nothing; one that fits is kept', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest fillet');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  // The person's plate: 40 x 30 x 6.
+  await addSolid(page, { size: [40, 30, 6] });
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  const label = () => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel);
+  const undoBefore = await label();
+  const volume = frame.locator('[data-chip="volume"] [data-volume-mm3]');
+  const mm3 = async () => Math.round(Number(await volume.getAttribute('data-volume-mm3')));
+  await expect.poll(mm3, STEP).toBe(7200);
+
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__modify', input: MODIFY({ targets: ['Extrude 1.end'], size: '20 mm' }) }] },
+    { text: 'A 20 mm round does not fit the 6 mm plate.' },
+  );
+  const t1 = await startTurn(request, host, { text: 'Round the top edges 20 mm.', tab });
+  expect((await t1.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [failed] = resultsIn(chats(host).slice(before)[1]);
+  expect(failed).toMatchObject({
+    tool: 'cad__modify',
+    ok: false,
+    error: { code: 'failed', hint: 'Read detail.message and detail.sub, change the inputs and call again.', detail: { reason: 'feature_failed', feature: 'Fillet 1' } },
+  });
+  expect(failed.error!.message).toMatch(/^feature_failed: Fillet 1 fails: Fillet 1 failed: a radius of 20 mm is too large for .+: \d+(\.\d+)? mm or less works$/);
+  // What the person sees: the tree, no panel left open, the volume and the Undo as before.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  await expect.poll(mm3, STEP).toBe(7200);
+  expect(await label()).toBe(undoBefore);
+
+  const next = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__modify', input: MODIFY({ targets: ['Extrude 1.end'], size: '2 mm' }) }] }, { text: 'The top edges are rounded 2 mm.' });
+  const t2 = await startTurn(request, host, { text: 'Round the top edges 2 mm.', tab });
+  expect((await t2.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [kept] = resultsIn(chats(host).slice(next)[1]);
+  expect(kept).toMatchObject({ tool: 'cad__modify', ok: true, data: { feature: { name: 'Fillet 1', type: 'fillet', state: 'ok' }, kept_as: '1 face (every edge of each, a live set)', body: 'Body 1', broke: [] } });
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1', 'Fillet 1']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  // Four edges rounded: the plate loses about (1 - pi/4) r^2 per mm of edge.
+  await expect.poll(mm3, STEP).toBeLessThan(7200 - 0.8 * (1 - Math.PI / 4) * 4 * 140);
+  expect(await label()).toBe('Assistant: Round the top edges 2 mm.');
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+});
+
+// T7 too: copies that miss the body they join change nothing and say so by name; the model then
+// makes them new bodies and combines them, which the person sees in the tree and the volume chip.
+const PATTERN = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'linear', of: 'bodies', items: [], about: 'X axis', count: '', spacing: '', symmetric: false, flip: false, about2: '', count2: '', spacing2: '', flip2: false, op: 'new', bodies: [], ...o });
+
+test('cad:assistant-honest-pattern copies that miss their body change nothing; new bodies and a combine are kept', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest pattern');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 6] });
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__pattern', input: PATTERN({ items: ['Body 1'], count: '3', spacing: '50 mm', op: 'join' }) }] },
+    { tools: [{ name: 'cad__pattern', input: PATTERN({ items: ['Body 1'], count: '3', spacing: '50 mm', op: 'new' }) }] },
+    { tools: [{ name: 'cad__combine', input: { edit: '', name: '', op: 'join', targets: ['Body 1'], tools: ['bodies of Linear pattern 1'], keep_tools: false } }] },
+    { text: 'Three plates in a row, as one body of three pieces.' },
+  );
+  const t = await startTurn(request, host, { text: 'Three plates in a row, one body.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterMiss, afterNew, afterCombine] = chats(host).slice(before);
+  const [miss] = resultsIn(afterMiss);
+  expect(miss).toMatchObject({ tool: 'cad__pattern', ok: false, error: { code: 'failed', detail: { reason: 'feature_failed', feature: 'Linear pattern 1' } } });
+  expect(miss.error!.message).toContain('Linear pattern 1');
+  const [made] = resultsIn(afterNew);
+  expect(made).toMatchObject({ tool: 'cad__pattern', ok: true, data: { feature: { name: 'Linear pattern 1', state: 'ok' }, copies: { made: 2 } } });
+  expect((made.data!.bodies as { created: { body: string }[] }).created.map((b) => b.body)).toEqual(['Body 1 (Instance 2)', 'Body 1 (Instance 3)']);
+  const [joined] = resultsIn(afterCombine);
+  expect(joined).toMatchObject({ tool: 'cad__combine', ok: true, data: { targets: ['Body 1'], tools: ['Body 1 (Instance 2)', 'Body 1 (Instance 3)'] } });
+  expect(joined.data!.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Body 1 now has 3 solids (it had 1)')]));
+  // The person's tree: no trace of the failed call; the pattern and the combine.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1', 'Linear pattern 1', 'Combine 1']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  // One body of three plates: the volume chip.
+  await expect.poll(async () => Math.round(Number(await frame.locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3'))), STEP).toBe(3 * 7200);
+});
