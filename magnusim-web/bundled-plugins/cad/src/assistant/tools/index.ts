@@ -14,6 +14,7 @@ export { tool as body } from './body';
 export { tool as edit_feature } from './edit_feature';
 // extrude: Extrude.
 // find: Find faces, edges or regions.
+export { tool as find } from './find';
 // get_model: Read the Part.
 export { tool as get_model } from './get_model';
 // help: CAD reference.

@@ -27,6 +27,7 @@ import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
 import { inputsOf, summaryOf, valuesOf } from './features-io';
+import { LabelIndex } from './labels';
 import { dir, jsonBytes, len, sig6, vec } from './numbers';
 import { runtimeOf } from './runtime';
 import { regionRows } from './sketch/regions';
@@ -191,14 +192,16 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
   return row;
 }
 
-/** A selected thing in words ("face End face of Plate on Body 1"). */
-export function selectionWords(s: DocState, item: SelectionItem): string {
+/** A selected thing in words ("face Plate.end on Body 1": a face by its label when it has one, else its words). */
+export function selectionWords(s: DocState, item: SelectionItem, labels?: LabelIndex): string {
   const names = featureNamer(s);
   switch (item.kind) {
     case 'face': {
-      const b = s.rebuild.bodies.find((x) => x.id === item.body);
+      const bi = s.rebuild.bodies.findIndex((x) => x.id === item.body);
+      const b = s.rebuild.bodies[bi];
       const n = b?.names?.faces?.[item.index];
-      return n ? `face ${describeFace(n, names, b?.names?.faces ?? null)} on ${bodyName(s, item.body)}` : `a face of ${bodyName(s, item.body)}`;
+      const label = bi >= 0 ? labels?.of(bi, item.index).label : null;
+      return n ? `face ${label ?? describeFace(n, names, b?.names?.faces ?? null)} on ${bodyName(s, item.body)}` : `a face of ${bodyName(s, item.body)}`;
     }
     case 'edge':
       return `an edge of ${bodyName(s, item.body)}`;
@@ -242,6 +245,8 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
   const rolled = rollback !== null && rollback < s.doc.features.length ? { after: rollback > 0 ? (s.doc.features[rollback - 1]?.name ?? null) : null, count: s.doc.features.length - rollback } : null;
   const bodies = await Promise.all(s.rebuild.bodies.slice(0, BODIES_MAX).map((b) => bodyRow(services, s, b)));
   const sel = userSelection(services.selection.get()).items;
+  // The selected faces by their labels (selectors read them back).
+  const labels = sel.some((i) => i.kind === 'face') ? new LabelIndex(s.rebuild.bodies, { featureName: featureNamer(s) }) : undefined;
   const out: Row = {
     part: rt?.title() ?? services.bridge.context.study.title,
     units: { length: s.doc.units.length, angle: s.doc.units.angle },
@@ -262,7 +267,7 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
     }),
     bodies,
     ...(s.rebuild.bodies.length > BODIES_MAX ? { bodies_more: s.rebuild.bodies.length - BODIES_MAX } : {}),
-    selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i)),
+    selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i, labels)),
   };
   if (s.rebuild.message) out.rebuild = s.rebuild.message;
   // The pointer to help guide, on the first get_model of each key (a conversation may have kept another workspace's notes).

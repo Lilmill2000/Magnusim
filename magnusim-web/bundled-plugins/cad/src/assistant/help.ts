@@ -2,7 +2,8 @@
 // topic, each topic at most 8 KB (example topics 12 KB), every string at most 2000 characters and
 // every container at most 6 deep in the reply, as the app hands them to the model.
 // This is the skeleton: `guide` (the CAD notes themselves), `errors` (every reason with its fix),
-// `features` (each tool's fields) and `parameters` are filled; the topics whose tools come later
+// `features` (each tool's fields), `parameters` and `selectors` (every form of the selector
+// language) are filled; the topics whose tools come later
 // say so, and are filled with them.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -70,11 +71,63 @@ const parameterRows = (): HelpRow[] => [
   },
 ];
 
+/** Every form of the selector language (selectors/parse.ts), with examples. */
+const selectorRows = (): HelpRow[] => [
+  {
+    about: 'made by a feature',
+    text: `FEATURE.ROLE: Base.start, Base.end, Base.side (all its sides), Base.side(l2) (the side swept from sketch entity l2; macro parts as r.top, p.3), Base.end(2) (the second profile's cap), Pipe.side(o@a2) (a sweep side: profile entity @ path entity), Fillet 1.fillet(1), Shell 1.inner(Base.end), Row.copy(2) (a pattern copy), Flip.mirror, Split 1.cut. Roles: start, end, side, cut, inner, fillet, chamfer, copy, mirror, import, heal, enclosure. A face merged by a join has every part's label.`,
+  },
+  {
+    about: '~k',
+    text: `Faces that share a label are numbered in a fixed order: Base.end~1, Base.end~2 (a face split by a cut, or two sides of one entity). The number of a split face can swap after an upstream edit: prefer a role or "at" selector when one names it.`,
+  },
+  {
+    about: 'queries',
+    text: `SCOPE faces|edges|vertices FILTER...: "Body 1 faces >Z". SCOPE: a body name, "feature Base" (what Base made), a feature name when no body has it, or "all". Filters run left to right, each narrowing the set.`,
+  },
+  {
+    about: 'filters',
+    text: `>Z farthest along Z by centre, >Z[2] the next level (levels count from [1]; ties within a millionth of the part size share a level), <Z nearest; +Z -Z flat faces facing +Z or -Z (out of the material); |Z faces whose normal (or a round face's axis) is parallel to Z, edges along Z; #Z perpendicular (circles lying across Z); axes X, Y, Z or (x, y, z); %plane %cylinder %cone %sphere %torus %bspline for faces, %line %circle %ellipse %bspline for edges; hole, boss (round faces going at least half way round); radius 3 mm; largest; smallest; nearest (x, y, z).`,
+  },
+  {
+    about: 'points',
+    text: `[BODY] face|edge|vertex at (x, y, z), model mm: "Body 1 face at (0, 0, 6)". Within max(0.05 mm, 0.002 x the body size); when two are that close the nearer wins only if it is at most half as far, else the answer lists both. None that close names the nearest and its distance.`,
+  },
+  {
+    about: 'edges',
+    text: `"edges of Base.end" (every edge of the face; a fillet or chamfer keeps the face, so the set follows later changes), "edges of Base.end %line" (with a filter: those edges, a fixed set), "Base.end & Base.side(r.top)" (the edge between two faces of one body), "Body 1 edges |Z".`,
+  },
+  {
+    about: 'bodies',
+    text: `A body name ("Body 1"), "bodies of Pattern 1" (the bodies a feature made), "all bodies" or "bodies". A name that is both a body and a feature: X.role, bodies of X and feature X read the feature; a plain name where a body goes reads the body.`,
+  },
+  {
+    about: 'planes',
+    text: `Top, Front, Right (or XY, XZ, YZ), a construction plane's name, or one flat face; then "offset <length>" moves it along its normal, "flip" the other way: "Top offset 12 mm", "Base.end offset 2 mm", "Front offset t/2 flip".`,
+  },
+  {
+    about: 'axes',
+    text: `X axis, Y axis, Z axis; a sketch line "Profile.ax" (or a macro part, Profile.r.left); a construction axis's name; one straight or round edge ("Base.end & Base.side(l1)"); "axis of Base.side(c1)" (a round face); "normal of Top".`,
+  },
+  {
+    about: 'regions',
+    text: `In the tool's sketch: all (even-odd: holes stay open), largest, r1 r2 ... (by area, largest first), at(u, v) in the sketch's mm. Another sketch: "Plate sketch r2"; "Plate sketch" alone is all of it; find "Plate sketch regions" lists every one.`,
+  },
+  {
+    about: 'handles and selection',
+    text: `find gives each face, edge, vertex and body a handle for the rest of the request: #f3, #e7, #v2, #b1. A handle follows its face through rebuilds; one that moved says "moved: check", one that is gone answers selector_stale (call find again). "selection" is what the person has selected.`,
+  },
+  {
+    about: 'names',
+    text: `Names match whole and case-insensitively, the longest first ("Body 10" before "Body 1"). Quote a name that holds the selector's own characters: "Boss.v2".end. A field that takes one thing refuses a selector naming several, with up to 8 candidates (their handles, labels, words, centres).`,
+  },
+];
+
 const later = (what: string): HelpRow[] => [{ about: 'not in this build yet', text: `${what} comes with the tools it describes. Until then each tool's own description says what its fields take.` }];
 
 export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
   sketch: later('The sketch reference (entity kinds, macros and their parts, relations and dimensions with their refs)'),
-  selectors: later('The selector reference (every form with examples)'),
+  selectors: selectorRows(),
   features: featureRows(),
   parameters: parameterRows(),
   checks: later('The list of checks'),

@@ -116,6 +116,41 @@ the Assistant's steps while its turn runs, or by the chip's Pause; it ends with 
 host's turn events) or, without them, at the next key. The chip shows `paused` ("you took
 over", "you undid its steps").
 
+## Selectors (`selectors/`, `labels.ts`, `find`)
+
+One string names faces, edges, vertices, bodies, planes, axes or sketch regions
+(`help selectors` lists every form; `selectors/parse.ts` has the grammar). The pieces:
+
+- `labels.ts`: a face's label from its stored name (`Base.end`, `Base.side(r.top)`,
+  `Pipe.side(o@a2)`, `Fillet 1.fillet(2)`, `Row.copy(3)`, ...). Faces that share one get
+  `~1`, `~2` in a fixed order (`LabelIndex`); a split face's label warns. The parser reads
+  back every label it writes (tests pin the round trip on real bodies).
+- `selectors/parse.ts`: pure; the Part's names come in as data, the longest known name
+  wins, quotes are allowed, and a body and a feature of one name are read by the grammar.
+  Errors carry the 1-based column (`bad_selector`, `detail.column`).
+- `selectors/resolve.ts`: `withScene(ctx, {before?, sketch?, self?}, fn)` reads the shown
+  bodies once the rebuild caught up (a new feature), or `doc.bodiesBefore(feature)` (an
+  edit), and runs `fn` again once when the Part rebuilt or the kernel restarted meanwhile
+  (`busy`/`changed` the second time). Inside: `selectOne(sc, text, want, field)` for a
+  single-entity field (none: `nothing_selected`; several: `selector_ambiguous` with at most
+  8 candidates, each with a handle), `selectSet` for a set field, `selectAny` for find, and
+  `echo(sc, selected)` for an edit's `resolved` line (`... live set` / `fixed set` for
+  `edges of`).
+- `selectors/refs.ts`: what a feature keeps, by the person's own rules (`pickFace`,
+  `refOfEdge`/`refOfVertex`, the CONSTRUCT kinds of `GeomRef`, `refOfRegion`): a face the
+  feature made itself is `self_reference`, one made after it `later_feature`, an unnamed
+  body's `not_named`.
+- `selectors/handles.ts`: `#f3`, `#e7`, `#v2`, `#b1`, per key (cleared when the key
+  changes, at most 2000); each keeps the stored reference and is resolved again on use
+  (`moved: check` when it moved, `selector_stale` when it is gone).
+- `selectors/topo-cache.ts`: one `topo` call per shape (the 32 newest kept, chunks with
+  progress above 2000 faces, dropped on a kernel restart); it is also a `NamingLookup`.
+- `selectors/geometry.ts`: a point on a face, hole or boss for round faces, a flat face's
+  frame in words.
+
+`find` (`tools/find.ts`) lists the matches as `FindRow`s and lights them in the person's
+view for 1.5 s (the shown bodies only, never while the window is hidden).
+
 ## The person's view
 
 The chip (`[data-chip="assistant"][data-assistant-state]`) and the frame's
@@ -128,7 +163,8 @@ changes). Without the host's turn events the chip stays 10 s after the last call
 - Vitest: `tests/assistant/` over `harness.ts` (a real DocService on the real kernel,
   every module's feature types, the real solver, the UI controller and the fake host's
   `ws.assistant`, `tests/fakes/assistant-sdk.ts`). Real-kernel tests give each test an
-  explicit timeout.
+  explicit timeout. `parts.ts` makes sketches with the ids a test names faces by,
+  extrudes of their regions, a fillet of an edge and a sketch on a face.
 - Hold points (`testing.ts`): a test holds a point (`after-settled` for reads; `after-plan`,
   `after-open`, `between-opens` and `before-commit` for edits), the call stops there until the
   test releases it. No sleeps.

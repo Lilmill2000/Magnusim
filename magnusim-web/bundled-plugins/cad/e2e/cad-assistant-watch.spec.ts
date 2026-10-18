@@ -9,7 +9,7 @@
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { GUIDE } from '../src/assistant/guide';
 import {
   cadFrame,
@@ -29,6 +29,7 @@ import {
   useScriptedModel,
   type AssistantHost,
 } from './assistant-helpers';
+import { addSolid } from './helpers';
 
 let host: AssistantHost;
 
@@ -140,4 +141,89 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
     { tool: 'get_model', ok: true, reason: null, key: `turn:${t.id}` },
     { tool: 'extrude', ok: false, reason: 'not_built', key: `turn:${t.id}` },
   ]);
+});
+
+// ---- T3: find (CAD tools spec §3.2.2, §5; §12.3 honest 6, kept here beside the other read tools)
+
+/** The view's flash calls, recorded in the frame (the viewport lights what it is handed). */
+async function recordFlashes(page: Page): Promise<void> {
+  await cadFrame(page).evaluate(() => {
+    const w = window as unknown as { __flashes: unknown[][]; __CAD__: { services: { viewport: { get(): { handle: { flash(items: unknown[]): void } } } } } };
+    const handle = w.__CAD__.services.viewport.get().handle;
+    const flash = handle.flash.bind(handle);
+    w.__flashes = [];
+    handle.flash = (items) => {
+      w.__flashes.push(items);
+      flash(items);
+    };
+  });
+}
+const flashes = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as { __flashes: unknown[][] }).__flashes);
+
+test("cad:assistant-watch-find find lists the matches with handles and lights them in the person's view; a miss names the nearest face; a handle of a face the person undid is stale", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant find');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  const made = await addSolid(page, { size: [40, 30, 10] });
+  const top = await cadFrame(page).evaluate((id) => {
+    const s = (window as unknown as { __CAD__: { services: { doc: { state: { get(): { rebuild: { bodies: { id: string; names?: { faces: string[] } | null }[] } } } } } } }).__CAD__.services.doc.state.get();
+    const b = s.rebuild.bodies[0];
+    return { body: b.id, index: b.names!.faces.indexOf(`F:${id}:end`) };
+  }, made.extrude);
+  expect(top.index).toBeGreaterThanOrEqual(0);
+  await recordFlashes(page);
+
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__find', input: { query: 'Body 1 faces >Z', limit: 10 } }] },
+    { tools: [{ name: 'cad__find', input: { query: 'Body 1 face at (5, 5, 11)', limit: 10 } }] },
+    // The model is still answering while the person undoes the extrude.
+    { hold: 'person', tools: [{ name: 'cad__find', input: { query: '#f1', limit: 10 } }] },
+    { text: 'The top face is gone now.' },
+  );
+  const t = await startTurn(request, host, { text: 'Find the top face.', tab });
+  await expect.poll(() => chats(host).length - before, { message: 'the third request is held', timeout: STEP_MS }).toBe(3);
+
+  // The match was lit in the view, for a while.
+  expect((await flashes(page))[0]).toEqual([{ kind: 'face', body: top.body, index: top.index }]);
+  await expect.poll(async () => (await flashes(page)).at(-1), { message: 'the light goes out', timeout: STEP_MS }).toEqual([]);
+
+  // The person undoes the extrude: the face the handle named is gone.
+  const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  await page.keyboard.press('Control+z');
+  await expect(frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl')).toHaveText(['Sketch 1'], STEP);
+  host.fake.release('person');
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+
+  const [, afterFind, afterMiss, afterStale] = chats(host).slice(before);
+  const [found] = resultsIn(afterFind);
+  expect(found).toMatchObject({ tool: 'cad__find', ok: true, data: { query: 'Body 1 faces >Z', kind: 'face', count: 1, more: 0 } });
+  expect((found.data!.rows as Record<string, unknown>[])[0]).toMatchObject({
+    handle: '#f1',
+    kind: 'face',
+    label: 'Extrude 1.end',
+    words: 'End face of Extrude 1',
+    body: 'Body 1',
+    feature: 'Extrude 1',
+    role: 'end',
+    type: 'plane',
+    area_mm2: 1200,
+    center_mm: [20, 15, 10],
+    normal: [0, 0, 1],
+    frame: { words: 'u runs +X, v runs +Y, origin (0, 0, 10)' },
+  });
+  const [miss] = resultsIn(afterMiss);
+  expect(miss).toMatchObject({
+    tool: 'cad__find',
+    ok: false,
+    error: { code: 'invalid_input', message: 'nothing_selected: No face of Body 1 at (5, 5, 11): nearest is Extrude 1.end, 1 mm away.', detail: { reason: 'nothing_selected' } },
+  });
+  expect((miss.error!.detail!.candidates as Record<string, unknown>[])[0]).toMatchObject({ handle: '#f1', label: 'Extrude 1.end', words: 'End face of Extrude 1' });
+  const [stale] = resultsIn(afterStale);
+  expect(stale).toMatchObject({
+    tool: 'cad__find',
+    ok: false,
+    error: { code: 'invalid_input', message: 'selector_stale: #f1 is gone: Body 1 is not there now; call find again.', hint: 'That handle is gone after a change: call find again.', detail: { reason: 'selector_stale', handle: '#f1' } },
+  });
 });
