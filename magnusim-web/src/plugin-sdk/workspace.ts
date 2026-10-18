@@ -581,9 +581,13 @@ export interface AssistantTurn {
   local: boolean;
   /** The model's context in tokens, when the app knows it (null otherwise). */
   contextTokens: number | null;
-  /** Whether the model reads images, when the app knows it (null otherwise). */
+  /** Whether the model reads images, when the app knows it (null otherwise, as for a coding agent's). */
   images: boolean | null;
-  /** What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). */
+  /**
+   * What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server).
+   * A turn on a coding agent counts its tool calls against its own cap and no dollars: `usd` and
+   * `usdCap` are 0 (the agent bills the person's own account).
+   */
   used: { steps: number; stepsCap: number; usd: number; usdCap: number };
   /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
   end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };

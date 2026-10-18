@@ -47,7 +47,9 @@
 // read-only; the terminal client (--agent, --tab auto) on the browser tab with the launch
 // token, and its refusal of an agent that is off; API-key turns beside agent turns (D-A), each
 // conversation bound to its provider, the agent billed to its own account and the API key's
-// spend counted. Every launcher start (discovery's --version probes, and each agent started)
+// spend counted; the workspace page hears an agent turn as any turn (its #turn-state, what it
+// used: its calls of its call cap and no $) and its own Stop ends it. Every launcher start
+// (discovery's --version probes, and each agent started)
 // writes its pid; after each test (a reset ends every agent) and at the end, every one, and
 // every process an agent reported to its controller (itself, its MCP bridge, its helpers), has
 // ended (by its command line, as the OS reuses pids).
@@ -1192,6 +1194,47 @@ test("a turn on Claude Code (its own tools off) works in the open workspace thro
   // It asked to read a file: Magnusim serves no file system (-32601).
   const fsAnswer = await fake.waitFor((r) => r.event === 'fs_answer' && r.pid === pid);
   expect(fsAnswer.answer.error.code).toBe(-32601);
+});
+
+test("the workspace page hears an agent turn as any turn: #turn-state shows the request's first line, the frame gets what it used (its calls of its call cap, no $; images not known), and the frame's own Stop ends it stopped", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(180_000);
+  signInClaude();
+  await postOk(request, '/api/assistant/settings', { privacy: 'allow' });
+  const token = await launchToken(request);
+  const w = await openCounter(page, request);
+  const caps = (await getJson(request, '/api/assistant/status')).agent_caps;
+  fake.script({ call: { tool: `${PLUGIN}__add`, args: { by: 1 } } }, { call: { tool: `${PLUGIN}__slow_add`, args: { by: 5 } } }, { say: 'Never said.' });
+  const t = await agentTurn(request, { text: 'Add 1, then 5 slowly.\nTake your time.', tab: w.tab, provider: 'agent:claude' }, token);
+  await expect(w.frame.locator('#turn-state')).toHaveText('running: Add 1, then 5 slowly.', { timeout: 30_000 });
+  await slowRunning(t, w);
+  await expect(w.frame.locator('#counter')).toHaveText('1');
+  const lastOf = () => w.handle.evaluate((id) => window.__turns.filter((x) => x.id === id).at(-1), t.id);
+  await expect.poll(async () => (await lastOf()).used.steps, { message: "the add's step", timeout: 15_000 }).toBe(1);
+  expect(await lastOf()).toMatchObject({
+    id: t.id,
+    state: 'running',
+    title: 'Add 1, then 5 slowly.',
+    local: false,
+    contextTokens: null,
+    images: null,
+    used: { stepsCap: caps.calls, usd: 0, usdCap: 0 },
+  });
+  // The frame's own Stop (ws.assistant.stop), while the slow call runs.
+  await w.frame.locator('#stop').click();
+  await expect(w.frame.locator('#stop-answer')).toHaveText('stopped', { timeout: 15_000 });
+  const { turn, events } = await t.ended(60_000);
+  expect(turn).toMatchObject({ state: 'stopped', end_reason: 'user', provider: 'agent:claude' });
+  await expect(w.frame.locator('#turn-state')).toHaveText('stopped: Add 1, then 5 slowly.');
+  await expect(w.frame.locator('#aborted')).toHaveText('aborted');
+  await expect(w.frame.locator('#counter')).toHaveText('1');
+  expect(ofType(events, 'tool_result').map((e) => [e.ok, e.code ?? null])).toEqual([
+    [true, null],
+    [false, 'stopped'],
+  ]);
+  expect(await lastOf()).toMatchObject({ state: 'ended', end: { state: 'stopped', reason: 'user' }, used: { steps: 2 } });
 });
 
 test("a destructive tool asks in the app with Don't focused: Enter answers Don't and the counter stays; in the same conversation (the agent kept) a click on Allow runs it", async ({ page, request }) => {

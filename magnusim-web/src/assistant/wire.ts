@@ -299,7 +299,9 @@ export interface RelayFrameData {
 /**
  * A turn bound to this tab, as the server tells the page (CAD tools spec H3): its title is the
  * first line of the person's request (at most 60 characters), `local` says it runs on a local
- * server, `used.steps` counts its tool calls. context_tokens and images: null while unknown.
+ * server, `used.steps` counts its tool calls. context_tokens and images: null while unknown. A
+ * turn on a coding agent counts its tool calls against its call cap and no dollars (usd and
+ * usd_cap 0: the agent bills the person's own account); its images are not known (null).
  */
 export interface RelayTurnFrame {
   id: string;

@@ -8,7 +8,8 @@
  *   it is full, and text_so_far keeps the text), read with GET …/turns/:id?since=N.
  *   Ended turns are kept for an hour.
  * - At most one turn runs in a conversation (409), one in an app tab (409 tab_busy) and
- *   three in all (429), checked and set in one synchronous step.
+ *   three in all (429), checked and set in one synchronous step (admitRefusal, for a turn on a
+ *   coding agent too).
  * - Stop (and a changed or removed key, and the server stopping) aborts the provider
  *   request and the running tool, withdraws open questions, drops a partial answer and
  *   answers the remaining calls; the turn ends `stopped` (`failed` "server stopped" when
@@ -26,9 +27,11 @@
  *   opens the tab's channel for it). It is refused, in order:
  *   agent_unknown (400), its tool connection unavailable (400 mcp_unavailable: there is no
  *   launch token then), launch_proof (403), the agent missing, not allowed or changed since it
- *   was allowed, privacy (400), and past 2 agents agents_busy (429). Its switch going off while
- *   these are checked makes them run again. Its conversation is bound to it and keeps no
- *   messages (the agent keeps them).
+ *   was allowed, privacy (400), a turn working in its tab or three running (409 tab_busy, 429
+ *   too_many: admitRefusal, as for any turn), and past 2 agents agents_busy (429). Its switch
+ *   going off while these are checked makes them run again. Its conversation is bound to it and
+ *   keeps no messages (the agent keeps them). Its tab's page hears it as any turn (its `turn`
+ *   frames: pageView), with its tool calls against its call cap and no dollars.
  *
  * Turns, conversations and questions live in the Assistant's state on globalThis. When Vite
  * restarts the server in this process, the old server's relay ends the running turns its
@@ -277,7 +280,8 @@ export class Turn implements AnyTurn {
     this.simulationId = o.simulationId;
     this.settings = o.settings;
     // A cloud model reads images: its tab's page hears that with the turn's start, not as a change.
-    if (o.settings.provider !== 'openai_compatible') this.images = true;
+    // A coding agent's model is its own: whether it reads them is not known (null).
+    if (isModelSettings(o.settings) && o.settings.provider !== 'openai_compatible') this.images = true;
     this.clock = o.clock;
     this.gates = o.gates;
     this.onEnded = o.onEnded;
@@ -1229,9 +1233,9 @@ export class TurnManager {
       if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
     }
-    if (this.running().length >= TURN_LIMITS.running) {
-      return refuse(429, 'too_many', `At most ${TURN_LIMITS.running} turns run at once. Wait for one to end.`);
-    }
+    // One turn per app tab, and three in all: an agent turn counts as any other.
+    const busy = this.admitRefusal(boundTab);
+    if (busy) return busy;
     const host = agentHost();
     if (!host.fits(conv?.id ?? null)) return refuse(429, 'agents_busy', AGENTS_BUSY_TEXT);
     if (!conv) conv = this.conversations.create(binding);

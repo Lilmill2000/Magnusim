@@ -64,6 +64,7 @@ const { dropWarmKeeper } = await import('../assistant/agents/job-win.ts');
 const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
 const { GUIDE_CHANGED_NOTE } = await import('../assistant/loop.ts');
+const { TAB_BUSY_TEXT } = await import('../assistant/turns.ts');
 
 const WIN = process.platform === 'win32';
 const LIMIT = { timeout: 180_000 };
@@ -1142,6 +1143,89 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
       const result = claude.events('mcp_result', lastPid(claude)).at(-1);
       assert.match(result.result.content[0].text, /"code":"privacy_denied"/);
     } finally {
+      await w.close();
+    }
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// The tab an agent turn works in (CAD tools spec H3, H4)
+// ------------------------------------------------------------------------------------------------
+
+describe('an agent turn and its app tab: one turn per tab, and the page hears it (CAD tools spec H3, H4)', LIMIT, () => {
+  it('one turn per app tab holds for agent turns: on a tab an API-key turn works in, an agent turn is 409 tab_busy and starts no agent; while an agent turn works there, an API-key turn and another agent turn are too; the tab is free once it ended', async () => {
+    const w = await world({ provider: 'anthropic' });
+    try {
+      // An API-key turn works in the tab: its model's answer is held.
+      w.m.provider.script({ text: 'Thinking.', hold: 'key-busy' });
+      const key = await w.turn({ text: 'Key first.', tab: 'tab-1', provider: 'anthropic' });
+      assert.equal(key.status, 202, JSON.stringify(key.body));
+      await w.m.provider.reached('key-busy');
+      const before = claude.pids('agent').length;
+      const refused = await w.turn({ text: 'Agent too.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.deepEqual([refused.status, refused.body], [409, { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT }]);
+      assert.equal(claude.pids('agent').length, before, 'no agent started');
+      assert.equal(w.m.manager.running().length, 1, 'the refused turn never started');
+      w.m.provider.release('key-busy');
+      await settledTurn(key.turn);
+      assert.equal(endOf(key.turn).state, 'done');
+
+      // An agent turn works in the tab now: an API-key turn there, and another agent turn, wait for it.
+      claude.script({ hold: 'agent-busy' }, { say: 'Agent done.' });
+      const agent = await w.turn({ text: 'Agent now.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.equal(agent.status, 202, JSON.stringify(agent.body));
+      await holding(claude, 'agent-busy');
+      const keyAgain = await w.turn({ text: 'Key again.', tab: 'tab-1', provider: 'anthropic' });
+      assert.deepEqual([keyAgain.status, keyAgain.body.code], [409, 'tab_busy']);
+      const agentAgain = await w.turn({ text: 'Another agent turn.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.deepEqual([agentAgain.status, agentAgain.body.code], [409, 'tab_busy']);
+      // 'auto' is the same tab.
+      const auto = await w.turn({ text: 'Auto.', tab: 'auto', provider: 'anthropic' });
+      assert.deepEqual([auto.status, auto.body.code], [409, 'tab_busy']);
+      assert.equal(w.m.manager.running().length, 1);
+      claude.release('agent-busy');
+      await settledTurn(agent.turn);
+      assert.equal(endOf(agent.turn).state, 'done');
+      // Ended: the tab takes the next turn.
+      w.m.provider.script({ text: 'Free again.' });
+      const next = await w.turn({ text: 'Key after.', tab: 'tab-1', provider: 'anthropic' });
+      assert.equal(next.status, 202, JSON.stringify(next.body));
+      await settledTurn(next.turn);
+      assert.equal(endOf(next.turn).state, 'done');
+    } finally {
+      w.m.provider.release('key-busy');
+      claude.release('agent-busy');
+      await w.close();
+    }
+  });
+
+  it("its tab's page hears it as any turn: running at its start, again after its call's result, ended once with how; it counts its calls against its call cap and no dollars, and whether its model reads images is not known", async () => {
+    const w = await world({ settings: { agent_caps: { changes: 24, calls: 50, turn_minutes: 60 } } });
+    const heard = [];
+    const off = w.m.manager.onTurnChange((t, change) => heard.push([change, t.pageView()]));
+    try {
+      claude.script({ call: { tool: 'ai-demo__add', args: { by: 1 } } }, { hold: 'after-add' }, { say: 'Added.' });
+      const r = await w.turn({ text: 'Add one.\nThen say so.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      const t = r.turn;
+      await holding(claude, 'after-add');
+      await H.until(() => heard.some(([change]) => change === 'updated'), CEILING, "the call's result heard");
+      const base = { id: t.id, title: 'Add one.', local: false, context_tokens: null, images: null };
+      assert.deepEqual(heard, [
+        ['started', { ...base, state: 'running', used: { steps: 0, steps_cap: 50, usd: 0, usd_cap: 0 } }],
+        ['updated', { ...base, state: 'running', used: { steps: 1, steps_cap: 50, usd: 0, usd_cap: 0 } }],
+      ]);
+      claude.release('after-add');
+      await settledTurn(t);
+      assert.deepEqual(heard.at(-1), ['ended', { ...base, state: 'ended', used: { steps: 1, steps_cap: 50, usd: 0, usd_cap: 0 }, end: { state: 'done', reason: 'end_turn' } }]);
+      assert.deepEqual(
+        heard.map(([change]) => change),
+        ['started', 'updated', 'ended'],
+        'nothing after its end',
+      );
+    } finally {
+      off();
+      claude.release('after-add');
       await w.close();
     }
   });

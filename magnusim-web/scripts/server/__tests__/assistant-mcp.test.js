@@ -1749,6 +1749,42 @@ describe('in the open workspace: questions, privacy, progress and list changes',
   });
 });
 
+describe('another app beside the Assistant’s turns in one tab (CAD tools spec H4)', { timeout: 60_000 }, () => {
+  it('an app’s call is no turn: while it runs in the tab a turn starts there, a second turn there is still tab_busy, and the app’s call ends as it would, told its connection as its turn', async () => {
+    const w = await appWorld();
+    try {
+      const c = await w.client({ name: 'Desk App' });
+      const call = c.client.callTool({ name: 'ai-demo__get_count', arguments: {} });
+      // The app's call reached the page, which has not answered it yet.
+      const inv = await w.page.frame('invoke', 0);
+      assert.deepEqual([inv.tool, inv.turn], ['get_count', `mcp:${L.mcpConnections().find((row) => row.name === 'Desk App').id}`]);
+      assert.equal(w.s.handle.turns.activeForTab(w.page.tab), 0, 'no turn works in the tab');
+      w.m.provider.script({ text: 'Hello.', hold: 'beside-app' });
+      const first = await w.s.post('/api/assistant/turns', { text: 'First.', tab: w.page.tab });
+      assert.equal(first.status, 202, JSON.stringify(first.json));
+      await w.m.provider.reached('beside-app');
+      const second = await w.s.post('/api/assistant/turns', { text: 'Second.', tab: w.page.tab });
+      assert.deepEqual([second.status, second.json.code], [409, 'tab_busy']);
+      // The app's call still ends as it would.
+      await w.s.progress(w.link, inv.call, { ack: true });
+      await w.s.result(w.link, inv.call, { ok: true, result: { data: { count: 3 } } });
+      assert.deepEqual(M.resultJson(await call), { tool: 'ai-demo__get_count', ok: true, data: { count: 3 } });
+      w.m.provider.release('beside-app');
+      const t = w.s.handle.turns.get(first.json.turn);
+      await H.settled(t);
+      assert.equal(t.state, 'done');
+      // Ended: the tab takes the next turn, with the app still connected.
+      w.m.provider.script({ text: 'Again.' });
+      const next = await w.s.post('/api/assistant/turns', { text: 'Next.', tab: w.page.tab });
+      assert.equal(next.status, 202, JSON.stringify(next.json));
+      await H.settled(w.s.handle.turns.get(next.json.turn));
+    } finally {
+      w.m.provider.release('beside-app');
+      await w.close();
+    }
+  });
+});
+
 describe('the call queue', () => {
   it('a waiting call whose signal aborts leaves at once (removed before the call ahead ends); the call behind still waits its turn', async () => {
     const q = new B.CallQueue(4);

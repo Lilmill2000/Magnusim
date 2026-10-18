@@ -306,8 +306,8 @@ A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what t
 - `title: string`: The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well).
 - `local: boolean`: It runs on a local server (a smaller model, often with less room: keep results short).
 - `contextTokens: number | null`: The model's context in tokens, when the app knows it (null otherwise).
-- `images: boolean | null`: Whether the model reads images, when the app knows it (null otherwise).
-- `used: { … }`: What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server).
+- `images: boolean | null`: Whether the model reads images, when the app knows it (null otherwise, as for a coding agent's).
+- `used: { … }`: What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). A turn on a coding agent counts its tool calls against its own cap and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account).
 - `used.steps: number`
 - `used.stepsCap: number`
 - `used.usd: number`

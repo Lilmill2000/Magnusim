@@ -199,3 +199,13 @@ describe("the chip's phase", () => {
     expect(phase(h)).toBe('idle');
   });
 });
+
+describe("get_model's limits", () => {
+  it("what is left of the turn's steps and dollars; a turn that counts no dollars (a coding agent's: usdCap 0) says its steps only", async () => {
+    h = await start();
+    h.fake.emitTurn({ id: 't-key', title: 'Plate', used: { steps: 3, stepsCap: 120, usd: 0.2, usdCap: 8 } });
+    expect((await h.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-key' })).data.limits).toEqual({ steps_left: 117, usd_left: 7.8 });
+    h.fake.emitTurn({ id: 't-agent', title: 'Plate', images: null, used: { steps: 3, stepsCap: 400, usd: 0, usdCap: 0 } });
+    expect((await h.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-agent' })).data.limits).toEqual({ steps_left: 397 });
+  });
+});
