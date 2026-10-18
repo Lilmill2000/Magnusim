@@ -3,7 +3,9 @@
 // the ones it leaves (a delete denied unless the task allows it, a privacy question only for a
 // project this run made), a turn followed to its end through the turn routes (a stand-in server),
 // what a run's turns used, the parameter walk putting the first value back, the summary, the
-// command line (one driver; a profile kept outside the repository; the run's limits), the
+// command line (one driver; a profile kept outside the repository; the run's limits; run as a
+// person runs it: --help, and a bad line refused before anything starts), a --tab that does not
+// show the run's project refused (tabShowing), the
 // references (each call names a Part tool and gives every field its schema lists), the records'
 // folder ignored by git, and no vendor word in any of the harness's files.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -28,6 +30,7 @@ import {
   runWalks,
   scriptedDriver,
   summaryMd,
+  tabShowing,
   taskIds,
   turnUse,
   type RunRecord,
@@ -66,6 +69,32 @@ describe('the scripted driver', () => {
     left = 2;
     expect(() => d.beforeTurn!(task, 0)).toThrow('the scripted model still holds 2 answer(s) of an earlier turn');
     expect(queued).toHaveLength(2);
+  });
+});
+
+describe('a tab named on the command line (--tab)', () => {
+  let server: Server | null = null;
+  afterEach(async () => {
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    server = null;
+  });
+
+  it("is taken only when its registration names the run's project; another Part's tab, or none, is refused with why", async () => {
+    const tabs = [
+      { tab: 'tab-run', connected: true, tools: [], workspace: { project_id: 'p-run' } },
+      { tab: 'tab-person', connected: true, tools: [], workspace: { project_id: 'p-person' } },
+      { tab: 'tab-home', connected: true, tools: [], workspace: null },
+    ];
+    server = createServer((req, res) => {
+      res.writeHead(req.url === '/api/assistant/tabs' ? 200 : 404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(req.url === '/api/assistant/tabs' ? { ok: true, tabs } : { ok: false }));
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    expect(await tabShowing(base, 'tab-run', 'p-run', 'Eval · spacer')).toBe('tab-run');
+    for (const tab of ['tab-person', 'tab-home', 'tab-gone']) {
+      await expect(tabShowing(base, tab, 'p-run', 'Eval · spacer')).rejects.toThrow(`tab ${tab} does not show the project this run made (Eval · spacer): its turns would edit another Part`);
+    }
   });
 });
 
@@ -294,6 +323,24 @@ describe('the command line', () => {
     expect(() => parseArgs(['--scripted', '--pace', 'slow'])).toThrow(/--pace is fast or watch/);
     expect(() => parseArgs(['--scripted', '--label'])).toThrow(/--label needs a value/);
     expect(() => parseArgs(['--scripted', '--nope'])).toThrow(/unknown option --nope/);
+  });
+
+  it('run as a person runs it: --help prints the usage (exit 0); a bad line says why (exit 2) before anything starts', () => {
+    const run = (...args: string[]) => spawnSync(process.execPath, [join(EVAL_DIR, 'run.mjs'), ...args], { cwd: PLUGIN_DIR, encoding: 'utf8', timeout: 60_000 });
+    const help = run('--help');
+    expect(help.status).toBe(0);
+    expect(help.stdout).toMatch(/^node eval\/run\.mjs --tasks <ids\|all\|probe>/);
+    for (const [args, why] of [
+      [['--tasks', 'spacer'], /choose one driver/],
+      [['--scripted', '--tab', 'tab-1'], /--tab goes with --attach/],
+      [['--scripted', '--clean'], /--clean goes with --attach/],
+      [['--attach', 'http://127.0.0.1:1', '--tab', 'auto'], /never bound to "auto"/],
+    ] as const) {
+      const r = run(...args);
+      expect(r.status, args.join(' ')).toBe(2);
+      expect(r.stderr, args.join(' ')).toMatch(why);
+      expect(r.stdout, args.join(' ')).not.toContain('[eval] starting');
+    }
   });
 
   it('reads a profile only from outside the repository, and posts privacy allow with the run limits under its own', () => {

@@ -12,11 +12,13 @@
 //                and saves the key read from the environment variable key_env (never printed).
 //   --attach     the person's running app at <url>: its own settings, keys and limits (printed;
 //                a warning below 120 steps). Projects "Eval · <task>" are made there and kept
-//                unless --clean, which deletes only the ones this run made, after their turns.
+//                unless --clean, which deletes only the ones this run made, after their turns
+//                (also when the run stops early).
 //                A privacy question is answered Send only for a project this run made.
 //   --scripted   the app's scripted model with each task's reference (what the e2e runs).
-//   --tab        attach: the tab to bind turns to (it must show the project the run made);
-//                by default the tab whose registration names that project, never "auto".
+//   --tab        attach: the tab to bind turns to (it must show the project the run made, the
+//                probe's too); by default the tab whose registration names that project, never
+//                "auto".
 // Each run opens its Part in a browser page of its own (--headed shows it). The records go to
 // .cache/assistant-eval/<stamp>-<label>/ (gitignored): runs.jsonl, a folder per run (events.jsonl,
 // calls.json, facts.json, final.png) and summary.md.
@@ -24,7 +26,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { api, cadFrameOf, loadTasks, newPart, PLUGIN_DIR, runFolder, runTask, runTurn, scriptedDriver, summaryMd, TURN_MS } from './lib.mjs';
+import { api, cadFrameOf, loadTasks, newPart, PLUGIN_DIR, runFolder, runTask, runTurn, scriptedDriver, summaryMd, tabShowing, TURN_MS } from './lib.mjs';
 
 const DRIVERS = ['profile', 'attach', 'scripted'];
 /** The isolated server's limits for a profile run (each under the profile's own, when it gives one). */
@@ -257,7 +259,7 @@ async function main(argv) {
     if (probe) {
       const part = await newPart(page, base, { title: 'Eval · probe', log: env.log });
       created.add(part.projectId);
-      const tab = o.tab ?? part.tab;
+      const tab = o.tab ? await tabShowing(base, o.tab, part.projectId, 'Eval · probe') : part.tab;
       const t = await runTurn(base, { text: PROBE_TEXT, tab }, { answer: () => null, ms: o.turnMs, log: env.log });
       const notes = t.events.filter((e) => e.type === 'note').map((e) => e.text);
       const end = t.events.find((e) => e.type === 'end') ?? null;
@@ -294,17 +296,22 @@ async function main(argv) {
       writeFileSync(join(out, 'summary.md'), md);
       console.log(md);
     }
-    if (o.clean && created.size) {
-      for (const id of created) {
-        const r = await api(base, '/api/project/delete', { project_id: id });
-        say(`removed project ${id}: ${r.status}`);
-      }
-    }
     return 0;
   } catch (e) {
     console.error(`[eval] ${e instanceof Error ? e.message : String(e)}`);
     return 1;
   } finally {
+    // --clean (attach): the projects this run made, and only those, also when it stopped early.
+    if (o.clean && created.size) {
+      for (const id of created) {
+        try {
+          const r = await api(base, '/api/project/delete', { project_id: id });
+          say(`removed project ${id}: ${r.status}`);
+        } catch (e) {
+          say(`could not remove project ${id}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
     for (const stop of stops) {
       try {
         await stop();

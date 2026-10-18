@@ -131,6 +131,7 @@ export function referenceCalls(reference: EvalReference, turn: number): { tool: 
 export function scriptedDriver(fake: FakeReplies): EvalDriver;
 export function gateAnswer(gate: Pick<EvalGate, 'kind' | 'tool' | 'project'>, task: Pick<EvalTask, 'gates'>, created: Set<string>): boolean | null;
 export function api(base: string, path: string, body?: unknown): Promise<{ status: number; body: any }>;
+export function tabShowing(base: string, tab: string, pid: string, title: string): Promise<string>;
 export function tabOfProject(base: string, pid: string, tools?: number): Promise<{ tab: string; tools: string[]; workspace: { project_id: string } } | null>;
 export function cadFrameOf(page: Page): Frame;
 export function newPart(page: Page, base: string, o: { title: string; units?: 'mm' | 'in'; log?: (line: string) => void }): Promise<{ projectId: string; tab: string }>;

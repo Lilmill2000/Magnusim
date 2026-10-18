@@ -30,6 +30,8 @@ export interface FakeRequest {
   kind: string;
   dialect: string;
   path: string;
+  /** The request's headers, names in lower case. */
+  headers: Record<string, string | string[] | undefined>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   body: any;
 }

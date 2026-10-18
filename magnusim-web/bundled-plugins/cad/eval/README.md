@@ -50,8 +50,9 @@ Exactly one driver:
   under the profile's own `caps`.
 - `--attach <url>`: the person's running app, with its own settings, keys and limits (printed;
   below 120 steps a warning). Projects `Eval · <task>` are made there and kept; `--clean` deletes
-  the ones this run made, after their turns. A privacy question is answered only for a project
-  this run made; any other question is left to the person.
+  the ones this run made (by id, never by title), after their turns, also when the run stops
+  early. A privacy question is answered only for a project this run made; any other question is
+  left to the person.
 - `--scripted`: the app's scripted model with each task's reference (eval/references): no key, no
   network. This is what the e2e (`e2e/cad-assistant-eval.spec.ts`) runs.
 
@@ -60,9 +61,9 @@ measure, help, set_params, sketch, extrude, hole, revolve, modify, pattern, comb
 Part registers them with a guide that names only them and a line listing the 5 not offered, and
 help features marks those 5),
 `--pace watch` (the default is fast), `--headed` (show the browser), `--tab <id>` (attach: bind
-the turns to that tab; it must show the project the run made; by default the tab whose
-registration names it, never "auto"), `--no-repair`, `--out <dir>`, `--port-from <n>`,
-`--turn-minutes <n>`.
+the turns to that tab; it must show the project the run made, else the task, or the probe,
+stops before its first turn; by default the tab whose registration names it, never "auto"),
+`--no-repair`, `--out <dir>`, `--port-from <n>`, `--turn-minutes <n>`.
 
 `--tasks probe` sends one request with the Part's full tool set (the app's 3 tools and the Part's
 18) and records whether the provider took the strict schemas (`probe.json`: `strict` is

@@ -144,6 +144,17 @@ async function apiOk(base, path, body) {
   return r.body;
 }
 
+/**
+ * `tab` when it shows the project this run made (its Part registration names `pid`), else an
+ * error: turns bound to another tab would edit another Part (the person's own, attached).
+ */
+export async function tabShowing(base, tab, pid, title) {
+  const rows = (await apiOk(base, '/api/assistant/tabs')).tabs;
+  const row = rows.find((t) => t.tab === tab);
+  if (!row || row.workspace?.project_id !== pid) throw new Error(`tab ${tab} does not show the project this run made (${title}): its turns would edit another Part`);
+  return tab;
+}
+
 /** The app tab whose Part registration names project `pid` (connected, at least `tools` tools), or null. */
 export async function tabOfProject(base, pid, tools = 1) {
   const j = await apiOk(base, '/api/assistant/tabs');
@@ -334,13 +345,7 @@ export async function runTask(env, task, o = {}) {
   const title = o.title ?? `Eval · ${task.id}`;
   const part = await newPart(env.page, env.base, { title, units: task.units, log });
   created.add(part.projectId);
-  let tab = part.tab;
-  if (o.tab) {
-    const rows = (await apiOk(env.base, '/api/assistant/tabs')).tabs;
-    const row = rows.find((t) => t.tab === o.tab);
-    if (!row || row.workspace?.project_id !== part.projectId) throw new Error(`tab ${o.tab} does not show the project this run made (${title}): its turns would edit another Part`);
-    tab = o.tab;
-  }
+  const tab = o.tab ? await tabShowing(env.base, o.tab, part.projectId, title) : part.tab;
   const frame = cadFrameOf(env.page);
   if (o.pace) await frame.evaluate((p) => window.__CAD__.assistant.setPace(p, null), o.pace);
   if (o.toolset === 'core') {

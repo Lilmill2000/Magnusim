@@ -636,7 +636,10 @@ probe columns, the walk's change); `eval-lib.test.ts` (questions, a turn through
 the turns' use, the walk, the summary, the command line, the references against the tools'
 schemas, the ignored records folder, no vendor words); e2e `cad-assistant-eval.spec.ts` (+90:
 plate-holes with its walk and the run folder, l-bracket, flange and poker-chip pass at the first
-shot through the app; a failing first shot gets one repair turn).
+shot through the app; a failing first shot gets one repair turn; and `eval/run.mjs` run as a person
+runs it: `--scripted` with its own server, `--profile` with the key reaching the model only as its
+bearer token and the temp folder gone after, `--attach --clean` removing only the run's projects,
+and a `--tab` of the person's Part stopping the task and the probe before any turn).
 
 ## Tests
 
@@ -678,6 +681,6 @@ shot through the app; a failing first shot gets one repair turn).
   (`e2e/assistant-helpers.ts`); the app's turn helpers are vendor-neutral and take this
   suite's `expect` (`setExpect`). Ports: `CAD_E2E_PORT_FROM` + 60, 70, 80, 90, 100
   (`cad-assistant-eval.spec.ts` is +90, `cad-assistant-takeover.spec.ts` +100; `eval/run.mjs`'s
-  own server starts at +95). Assert the chip's words through
+  own server starts at +95, at +110 in the eval spec's command-line tests). Assert the chip's words through
   `chipWords(frame)` (`[data-assistant-text]`): the chip's text also holds its buttons. A held
   answer of the scripted model stays released once released: give each hold its own name.
