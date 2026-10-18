@@ -1,6 +1,8 @@
 // A sketch's dimension values changed by edit_feature (CAD tools spec §6.9): set rows name the
-// sketch's driving dimensions by their ids. A headless check first (§6.4 with the new values:
-// conflicts, no solution, a collapse, and `moved`), before anything changes; then the person's
+// sketch's driving dimensions by their ids. A headless check first (§6.4 with the new values, and
+// the sketch's ties: pattern copies and offsets follow their sources there as in sketch mode, so
+// the state, dof, free and moved it answers are the sketch's: conflicts, no solution, a collapse,
+// and `moved`), before anything changes; then the person's
 // Edit panel for the sketch, one sketch-mode edit of the values (sketch mode solves the stored
 // geometry again with them and stores the solution: never trusted as it was) and its honest Done.
 // A value edit: a working feature that fails after it reverts the call (broke_downstream).
@@ -60,7 +62,7 @@ export async function planDimensions(ctx: CallCtx, f: SketchFeature, rows: { fie
   const form = describeSketch(f, s);
   const words = (c: SketchConstraint) => `${toolKindOf(c.kind) ?? c.kind} ${c.refs.map(form.refOf).join(', ')}${'expr' in c ? ` = ${c.expr}` : ''}`;
   const solved = await solveSketch(ctx, {
-    geometry: { points: f.points, entities: f.entities, constraints },
+    geometry: { points: f.points, entities: f.entities, constraints, ...(f.ties ? { ties: f.ties } : {}) },
     inferred: [],
     refOf: form.refOf,
     words,

@@ -7,6 +7,8 @@
 //   3. over-defined: the tool's own inferred relations go first, those touching the over-defined
 //      ones newest first (then any, newest first), solving again each time, also when the solver
 //      names the model's constraint rather than the inferred one; the ones not needed come back.
+//      Each one that stays out says why: it could not hold with the constraints the solver named
+//      (conflicting) or repeated them (redundant);
 //      Anything still conflicting or redundant is sketch_conflict, naming each constraint and what
 //      it fights or repeats (a redundant one's partners are found by solving without each in turn),
 //      a macro's own relation as `internal` ("r's own horizontal on r.top");
@@ -77,6 +79,8 @@ export interface Solved {
   moved: MovedRow[];
   /** The inferred relations that went (stored ids). */
   dropped: string[];
+  /** Why each went: it fought (conflicting) or repeated (redundant) these constraints (stored ids; none when the solver named only it). */
+  droppedWhy: Record<string, { fought: boolean; with: string[] }>;
 }
 
 /** Solves of the partner search, at most. */
@@ -180,6 +184,7 @@ export async function solveSketch(ctx: Pick<CallCtx, 'services' | 'progress' | '
   // The tool's own inferred relations go first, those that touch the over-defined ones newest first.
   const left = [...input.inferred];
   const dropped: string[] = [];
+  const droppedWhy: Solved['droppedWhy'] = {};
   while (overOf(st).length && left.length) {
     const set = touchSet(attempt, overOf(st));
     let k = left.length - 1;
@@ -191,6 +196,7 @@ export async function solveSketch(ctx: Pick<CallCtx, 'services' | 'progress' | '
     }
     const [id] = left.splice(k, 1);
     dropped.push(id);
+    droppedWhy[id] = { fought: st.conflicting.length > 0, with: overOf(st).filter((x) => x !== id) };
     attempt = without(attempt, id);
     r = await analyze(attempt);
     st = statusOf(r.solve, r.analysis);
@@ -285,5 +291,6 @@ export async function solveSketch(ctx: Pick<CallCtx, 'services' | 'progress' | '
     free: [...free.entries()].slice(0, 40).map(([of, moves]) => ({ of, moves })),
     moved: moved.slice(0, MOVED_MAX).map(({ d: _d, ...m }) => m),
     dropped,
+    droppedWhy: Object.fromEntries(dropped.map((id) => [id, droppedWhy[id]])),
   };
 }

@@ -12,14 +12,15 @@
 //   infer     lines and polyline sides whose ends share v (or u) within 0.05 mm get horizontal (or
 //             vertical) with the ids <line>__h / <line>__v, marked inferred
 //   refs      ids, parts (l.start, r.top, p.2, p.p2) or origin, checked against the solver's own
-//             signatures in the order written (signatures.ts); a bad one lists the forms it takes
+//             signatures in the order written (signatures.ts); a bad one lists the forms it takes;
+//             tangent of two lines needs a shared end, and tangent's third ref an end of both curves
 //   values    a dimension's expression ("w", "12 mm"; a bare number takes the Part's unit, stored
 //             with it), always driving; a relation's value is ""
 // At most 180 constraints of the model's and 200 with the inferred ones.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { danglingRefs } from '../../sketch/edit';
-import { entityEnds, refKindOf, ORIGIN } from '../../sketch/model';
+import { entityEnds, pointIdOf, refKindOf, ORIGIN } from '../../sketch/model';
 import type { SketchConstraint, SketchEntity, SketchFeature, SketchRelation, Vec2 } from '../../types/doc';
 import type { UnitsService } from '../../types/units';
 import { ToolError } from '../errors';
@@ -47,7 +48,8 @@ export interface SketchIn {
   infer: boolean;
 }
 
-export type SketchGeometry = Pick<SketchFeature, 'points' | 'entities' | 'constraints'>;
+/** A sketch's geometry; a stored sketch's ties (pattern copies, offsets) go with it to the solver (edit_feature's values). */
+export type SketchGeometry = Pick<SketchFeature, 'points' | 'entities' | 'constraints' | 'ties'>;
 
 export interface Compiled {
   draft: SketchGeometry;
@@ -413,16 +415,30 @@ export function compileSketch(input: SketchIn, o: { units: UnitsService; stored:
       return;
     }
     const kinds = refs.map((r) => refKindOf(geometry, r)) as (SigKind | 'spline' | null)[];
+    // The first two refs share an end; with three, the third is an end of both (after the joins).
     const shares = (() => {
       const a = entities.find((e) => e.id === refs[0]);
       const b = entities.find((e) => e.id === refs[1]);
       if (!a || !b) return false;
       const ea = entityEnds(a);
-      return entityEnds(b).some((p) => ea.includes(p));
+      const eb = entityEnds(b);
+      if (refs.length === 3) {
+        const p = pointIdOf(geometry, refs[2]);
+        return !!p && ea.includes(p) && eb.includes(p);
+      }
+      return eb.some((p) => ea.includes(p));
     })();
-    const sig = kinds.every((k) => k && k !== 'spline') ? matchSignature(kind, kinds as SigKind[], shares) : null;
+    const known = kinds.every((k) => k && k !== 'spline');
+    const sig = known ? matchSignature(kind, kinds as SigKind[], shares) : null;
     if (!sig) {
-      refProblems.push(`${at} (${c.id}): ${kind} does not take ${kinds.map((k) => k ?? '?').join(', ')} (${refsIn.join(', ')}); it takes ${signatureWords(kind)}`);
+      // The kinds fit a row that needs a shared end: say so.
+      const needsEnd = known && !!matchSignature(kind, kinds as SigKind[], true);
+      const problem = !needsEnd
+        ? `${kind} does not take ${kinds.map((k) => k ?? '?').join(', ')} (${refsIn.join(', ')})`
+        : refs.length === 3
+          ? `${kind} (${refsIn.join(', ')}) needs ${refsIn[2]} to be an end of both ${refsIn[0]} and ${refsIn[1]}, where they meet`
+          : `${kind} (${refsIn.join(', ')}) needs the two lines to share an end`;
+      refProblems.push(`${at} (${c.id}): ${problem}; it takes ${signatureWords(kind)}`);
       return;
     }
     const value = typeof c.value === 'string' ? c.value.trim() : '';

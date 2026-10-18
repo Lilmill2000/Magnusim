@@ -12,7 +12,9 @@
 // features?", its copy saying Ctrl+Z brings them back, Don't focused): Enter answers Don't, the
 // model gets declined and the Part never hears the call; a click on Allow deletes the feature the
 // tree shows, and one Ctrl+Z brings it back.
-// A plate with a keyhole (a circle and an overlapping slot) extruded as "all": the hole stays open
+// A sketch the model moves onto an offset plane: the tree shows the new plane above the sketch,
+// which builds on it with no warning and moves with it when the person changes its distance. A
+// plate with a keyhole (a circle and an overlapping slot) extruded as "all": the hole stays open
 // (the volume chip shows the plate less the keyhole, not a solid plate).
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
@@ -718,4 +720,66 @@ test('cad:assistant-honest-keyhole a plate with a keyhole extruded as "all" keep
   const KEYHOLE = 25 * Math.PI + 48 - inside;
   await expect.poll(() => volumeNow(page), STEP).toBe(Math.round(5 * (2400 - KEYHOLE)));
   await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+});
+
+type PlaneCad = {
+  __CAD__: {
+    services: {
+      doc: {
+        beginEdit(id: string): { update(p: unknown): void; commit(): void };
+        state: { get(): { doc: { features: { id: string; name: string; type: string }[] }; rebuild: { status: string; outputs: Record<string, { type: string; plane?: { origin: number[] } }> } } };
+      };
+    };
+    assistant: { setPace(p: string | null, scale?: number | null): void };
+  };
+};
+/** The lid's circle on `on`, fully defined (a new sketch, or `edit` resends it). */
+const LID = (edit: string, on: string) => ({
+  name: 'cad__sketch',
+  input: {
+    edit,
+    name: edit ? '' : 'Lid sk',
+    on,
+    entities: [{ id: 'c', kind: 'circle', at: [0, 0, 5], construction: false }],
+    constraints: [
+      { id: 'o', kind: 'coincident', refs: ['c.center', 'origin'], value: '' },
+      { id: 'd', kind: 'diameter', refs: ['c'], value: '10 mm' },
+    ],
+    infer: false,
+  },
+});
+
+test('cad:assistant-honest-plane a sketch the model moves onto an offset plane: the tree shows the plane above it, no warning, and the sketch follows the plane', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest plane');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as PlaneCad).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  host.fake.reply({ tools: [LID('', 'Top')] }, { tools: [LID('Lid sk', 'Top offset 20 mm')] }, { text: 'The lid sketch is 20 mm above Top.' });
+  const t = await startTurn(request, host, { text: 'Sketch the lid 20 mm above Top.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, , afterMove] = chats(host).slice(before);
+  const [moved] = resultsIn(afterMove);
+  expect(moved).toMatchObject({ tool: 'cad__sketch', ok: true, data: { plane: { origin_mm: [0, 0, 20] }, warnings: [] } });
+  // What the person sees: the plane above the sketch in the tree, the sketch built with no warning.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Lid sk plane', 'Lid sk']);
+  const sketchRow = frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]');
+  await expect(sketchRow).toHaveAttribute('data-state', 'ok', STEP);
+  // The person moves the plane to 30 mm: the sketch goes with it, still with no warning.
+  const originZ = () =>
+    cadFrame(page).evaluate(() => {
+      const s = (window as unknown as PlaneCad).__CAD__.services.doc.state.get();
+      const f = s.doc.features.find((x) => x.name === 'Lid sk');
+      return s.rebuild.status === 'done' && f ? (s.rebuild.outputs[f.id]?.plane?.origin[2] ?? null) : null;
+    });
+  expect(await originZ()).toBeCloseTo(20, 6);
+  await cadFrame(page).evaluate(() => {
+    const doc = (window as unknown as PlaneCad).__CAD__.services.doc;
+    const plane = doc.state.get().doc.features.find((x) => x.name === 'Lid sk plane')!;
+    const e = doc.beginEdit(plane.id);
+    e.update({ distance: '30 mm' });
+    e.commit();
+  });
+  await expect.poll(originZ, STEP).toBeCloseTo(30, 6);
+  await expect(sketchRow).toHaveAttribute('data-state', 'ok', STEP);
 });

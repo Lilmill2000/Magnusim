@@ -3,8 +3,9 @@
 // For each sketch whose built output changed, against the output before:
 //   - the signed area of each region's outer loop, its points in the loop's order (the tokens'
 //     "[p:a>p:b]" ends; a "-" token runs b to a), now and before;
-//   - the direction of each two-point dimension (distance_x: the sign of q.u - p.u; distance_y:
-//     of q.v - p.v; distance: whether q - p turned more than a right angle).
+//   - the direction of each signed two-point dimension (distance_x: the sign of q.u - p.u;
+//     distance_y: of q.v - p.v). A distance is unsigned (it cannot go through zero, more than 0
+//     always), so q - p turning is no flip: an angle (or a parameter of one) turns a line on purpose.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { isDimension } from '../../sketch/model';
@@ -72,7 +73,7 @@ export function sketchFlipped(f: SketchFeature, prev: SketchOutput, now: SketchO
     if (a0 !== null && a1 !== null && Math.abs(a0) > eps && Math.abs(a1) > eps && Math.sign(a0) !== Math.sign(a1)) return true;
   }
   for (const c of f.constraints) {
-    if (!isDimension(c) || !c.driving || (c.kind !== 'distance' && c.kind !== 'distance_x' && c.kind !== 'distance_y')) continue;
+    if (!isDimension(c) || !c.driving || (c.kind !== 'distance_x' && c.kind !== 'distance_y')) continue;
     const pq = twoPoints(f, c.refs);
     if (!pq) continue;
     const at = (o: SketchOutput, id: string): Vec2 | null => (id === 'origin' ? [0, 0] : (o.points[id] ?? null));
@@ -80,12 +81,8 @@ export function sketchFlipped(f: SketchFeature, prev: SketchOutput, now: SketchO
     if (!p0 || !q0 || !p1 || !q1) continue;
     const d0: Vec2 = [q0[0] - p0[0], q0[1] - p0[1]];
     const d1: Vec2 = [q1[0] - p1[0], q1[1] - p1[1]];
-    if (c.kind === 'distance') {
-      if (Math.hypot(...d0) > eps && Math.hypot(...d1) > eps && d0[0] * d1[0] + d0[1] * d1[1] < 0) return true;
-    } else {
-      const k = c.kind === 'distance_x' ? 0 : 1;
-      if (Math.abs(d0[k]) > eps && Math.abs(d1[k]) > eps && Math.sign(d0[k]) !== Math.sign(d1[k])) return true;
-    }
+    const k = c.kind === 'distance_x' ? 0 : 1;
+    if (Math.abs(d0[k]) > eps && Math.abs(d1[k]) > eps && Math.sign(d0[k]) !== Math.sign(d1[k])) return true;
   }
   return false;
 }

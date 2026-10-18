@@ -9,11 +9,15 @@
 //     the same (macros, joins, infer, a sketch the person drew with the UI's ids); a sketch the tool
 //     cannot write is unsupported (and refused), one too big to resend is too_big (and refused);
 //   - edit_feature on a sketch's dimension ids: checked headless first (no solution, a bad field),
-//     written through sketch mode; a value that breaks a feature after it changes nothing.
+//     written through sketch mode; a value that breaks a feature after it changes nothing; on a
+//     person's sketch with a sketch pattern the check keeps the pattern's ties, so its state, dof,
+//     free and moved are the sketch's (get_model's), the copies moving with their source.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { runtimeOf } from '../../src/assistant/runtime';
+import { createUnitsService } from '../../src/doc/units';
 import { refOfRegion } from '../../src/features/extrude/profiles';
+import { createPattern } from '../../src/sketch/tools/pattern';
 import type { SketchFeature } from '../../src/types/doc';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { fillet } from './parts';
@@ -243,6 +247,46 @@ describe("edit_feature on a sketch's dimensions", () => {
       const none = await fail(h, 'edit_feature', EDIT('Tri', { set: [{ field: 'c', value: '30 mm' }] }));
       expect(none).toMatchObject({ code: 'failed', message: 'sketch_unsolved: The solver found no shape that holds every constraint and dimension. Nothing changed.', detail: { reason: 'sketch_unsolved' } });
       expect((featureNamed(h, 'Tri').constraints.find((x) => x.id === 'c') as { expr: string }).expr).toBe('10 mm');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "keeps a person's sketch pattern in the check: the state, dof and free are get_model's, and the copies move with their source",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      // The person's row of three holes, 20 mm apart: the first placed from the origin, fully defined.
+      const units = createUnitsService(() => ({ length: 'mm', angle: 'deg' }));
+      const made = createPattern(
+        {
+          points: { pt_c: [10, 0] },
+          entities: [{ id: 'e_c', kind: 'circle', c: 'pt_c', r: 5 }],
+          constraints: [
+            { id: 'c_x', kind: 'distance_x', refs: ['origin', 'pt_c'], expr: '10 mm', driving: true },
+            { id: 'c_h', kind: 'horizontal', refs: ['origin', 'pt_c'] },
+            { id: 'c_d', kind: 'diameter', refs: ['e_c'], expr: '10 mm', driving: true },
+          ],
+        } as never,
+        { kind: 'linear', sources: ['e_c'], count: [3, 1], exprs: { spacing1: '20 mm', angle1: '0 deg' } } as never,
+        units,
+      );
+      if (!made.ok) throw new Error(made.reason);
+      await h.add('sketch', { name: 'Holes sk', ...made.draft });
+      const centres = () => {
+        const f = featureNamed(h!, 'Holes sk');
+        return f.entities.filter((e) => e.kind === 'circle').map((e) => f.points[(e as { c: string }).c][0]).sort((a, b) => a - b);
+      };
+      expect(centres()).toEqual([10, 30, 50].map((x) => expect.closeTo(x, 6)));
+      const model = async () => ((await ok(h!, 'get_model', { detail: 'brief', feature: 'Holes sk' })).data.feature as Row).solver as Row;
+      expect(await model()).toMatchObject({ state: 'fully', dof: 0, free: [] });
+      const r = await ok(h, 'edit_feature', EDIT('Holes sk', { set: [{ field: 'c_x', value: '15 mm' }] }));
+      expect(r.data.solver).toEqual({ state: 'fully', dof: 0, free: [] });
+      expect(r.data.solver).toEqual({ state: (await model()).state, dof: (await model()).dof, free: (await model()).free });
+      // All three centres moved 5 mm, the copies with their source.
+      expect(centres()).toEqual([15, 35, 55].map((x) => expect.closeTo(x, 6)));
+      const moved = r.data.moved as { by_mm: number }[];
+      expect(moved).toHaveLength(3);
+      for (const m of moved) expect(m.by_mm).toBeCloseTo(5, 6);
     },
     REAL_KERNEL_MS,
   );

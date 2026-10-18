@@ -4,9 +4,11 @@
 // (sketch/solve.ts): a conflict or a duplicate is refused naming the constraints, a sketch with no
 // solution or one that collapses too, and an under-defined one is kept with a warning and what
 // still moves. Then, inside the step, an offset plane when `on` asks for one and the sketch itself
-// through the person's own sketch mode (sketch/write.ts). The answer: the state, dof, free and moved
-// points, the plane in numbers and words, the regions (r1, r2, ... by area) with what bounds them,
-// open ends, joins, inferred relations and warnings.
+// through the person's own sketch mode (sketch/write.ts); an edited sketch's new plane goes above
+// it in the history (the rebuild reads a sketch's plane from the features before it). The answer:
+// the state, dof, free and moved points, the plane in numbers and words, the regions (r1, r2, ...
+// by area) with what bounds them, open ends, joins, inferred relations and warnings (an inferred
+// relation left out says what it repeated or could not hold with).
 // get_model reads a sketch back in this tool's input form (sketch/describe.ts, registered here).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -92,13 +94,21 @@ const sketchTool: EditTool<Plan> = {
 
   async apply(plan, ctx: EditCtx) {
     const sp = plan.support;
+    const edit = plan.edit;
     let support: SketchSupport | null = null;
     if (sp.kind === 'direct') support = sp.support;
     else if (sp.kind === 'offset') {
       const plane = sp.reuse ?? (await writePlane(ctx, sp.update ? { kind: 'update', id: sp.update, name: sp.planeName, distance: sp.distance, flip: sp.flip } : { kind: 'create', name: sp.planeName, plane: sp.plane, distance: sp.distance, flip: sp.flip }));
+      // A plane made for an edited sketch opens at the end: it goes above the sketch, in this step.
+      const { doc } = ctx.services;
+      const features = doc.state.get().doc.features;
+      const at = edit ? features.findIndex((f) => f.id === edit.id) : -1;
+      if (at >= 0 && features.findIndex((f) => f.id === plane) > at) {
+        const r = ctx.step.run(() => doc.move(plane, at));
+        if (!r.ok) throw new ToolError('bad_input', `on: the plane ${sp.planeName} cannot go above ${edit!.name}: ${r.reason}.`, { detail: { field: 'on' } });
+      }
       support = { kind: 'feature', feature: plane };
     }
-    const edit = plan.edit;
     // The watch path draws each entity where the model put it, and names it by its kind.
     const kinds: Record<string, string> = {};
     for (const e of (Array.isArray(ctx.input.entities) ? ctx.input.entities : []) as EntityIn[]) if (e && typeof e.id === 'string') kinds[e.id] = String(e.kind);
@@ -152,7 +162,24 @@ const sketchTool: EditTool<Plan> = {
       const free = solved.free.slice(0, 6).map((x) => `${x.of} (${x.moves.join(', ')})`);
       warnings.push(`${plan.name} is under-defined (dof ${solved.dof})${free.length ? `: ${free.join(', ')} still move` : ''}; add relations or dimensions until dof is 0`);
     }
-    if (dropped.length) warnings.push(`left out inferred ${dropped.join('; ')}: they repeated other constraints`);
+    if (dropped.length) {
+      // Why each went, in the model's words: what it fought or repeated.
+      const named = (cid: string) => {
+        const c = constraint(cid);
+        if (!c) return cid;
+        if (plan.compiled.own.has(cid)) return plan.compiled.own.get(cid)!;
+        if (plan.compiled.inferred.includes(cid)) return `inferred ${words(c)}`;
+        return `${cid} (${words(c)})`;
+      };
+      const why = solved.dropped.map((cid) => {
+        const w = solved.droppedWhy[cid] ?? { fought: false, with: [] };
+        const others = w.with.slice(0, 4).map(named);
+        const list = others.length <= 1 ? others.join('') : `${others.slice(0, -1).join(', ')} and ${others[others.length - 1]}`;
+        const what = w.fought ? `it could not hold with ${list || 'the other constraints'}` : `it repeated ${list || 'another constraint'}`;
+        return `${constraint(cid) ? words(constraint(cid)!) : cid}: ${what}`;
+      });
+      warnings.push(`left out inferred ${why.join('; ')}`);
+    }
     if (out?.type === 'sketch' && !out.regions.length && out.open.length) warnings.push(`${plan.name} is not closed: ${plural(out.open.length, 'open end')}; join them (help sketch)`);
     const row: Record<string, unknown> = {
       ...data,
