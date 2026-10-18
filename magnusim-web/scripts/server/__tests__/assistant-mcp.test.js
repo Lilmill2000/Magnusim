@@ -271,7 +271,11 @@ describe('the listener', () => {
 
   it('a stale mcp.json whose process is gone is removed before anything binds; the saved port is bound again; a taken one gives a new port, saved', async () => {
     const path = L.mcpInfoPath();
-    const first = M.readInfo(path).port;
+    // Its own start first (one an earlier test left running is kept): the port it binds is saved.
+    const started = await world();
+    const first = started.port;
+    assert.equal(M.readInfo(path).port, first);
+    await started.close();
     // A process that has ended: its pid is dead.
     const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
     const dead = child.pid;
@@ -1825,6 +1829,9 @@ describe('the server', () => {
 
   it('routes: Other apps turned on starts it; GET /mcp gives the config (key magnusim-apps, always --info) and the connections, never the token; status and the test state say it too', async () => {
     await L.resetMcpListenerForTests();
+    // Its own settings file (Other apps off, no port saved yet), whatever an earlier test saved.
+    mkdirSync(join(HOME, 'assistant'), { recursive: true });
+    writeFileSync(join(HOME, 'assistant', 'settings.json'), '{"version":1}');
     resetAssistantState();
     const router = new Router();
     const m = H.makeManager({ dir: ROOT, hostTools: [H.hostTool('app_info')] });

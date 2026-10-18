@@ -1350,6 +1350,14 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
   it('allow:false stops the agent even when the switch can’t be saved, and says so', async () => {
     const stops = [];
     D.setAgentRunHooks({ running: () => false, stop: async (id, text) => void stops.push({ id, text }) });
+    // A settings file of its own when no earlier test saved one (run alone): the one the save would
+    // replace. The server has read it by then, as any server has before Settings shows a switch
+    // (the settings stay in memory: only the save meets the folder below).
+    if (!existsSync(SETTINGS_FILE)) {
+      mkdirSync(dirname(SETTINGS_FILE), { recursive: true });
+      writeFileSync(SETTINGS_FILE, '{"version":1}\n');
+    }
+    assert.equal((await get('/api/assistant/status')).status, 200);
     const saved = readFileSync(SETTINGS_FILE);
     // settings.json is a folder: the save's rename fails (as on a locked file), whatever the platform.
     await removeTree(SETTINGS_FILE);
@@ -1389,6 +1397,9 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
   it('custom agents: added only from the browser, off until allowed, at most 8, and removed with their choices', async () => {
     const add = (body, headers) => (headers === null ? plainPost : browserPost)('/api/assistant/agents/custom', body, headers ?? {});
     const cmd = `"${process.execPath}" "${fake.agentPath}" --acp`;
+    // The agents were looked for, as Settings lists them before anyone can add one (with no look
+    // yet, every agent's readiness reads not_checked).
+    await rowsOf();
     const none = await add({ name: 'Mine', command: cmd }, null);
     assert.equal(none.status, 403);
     assert.equal(none.json.code, 'browser_only');
