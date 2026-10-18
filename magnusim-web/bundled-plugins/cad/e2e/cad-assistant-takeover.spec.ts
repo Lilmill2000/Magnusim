@@ -13,7 +13,8 @@
 //      before it is refused with the note.
 //   4. Looking is not taking over: clicks and a drag in the view at the Assistant's sketch, a click
 //      on an edge at its fillet: both steps are kept as the Assistant drew them, the chip never
-//      paused.
+//      paused. At the Assistant's extrude (the S4 integration, once extrude was built): clicks on
+//      the sketch's regions and a drag on the arrow keep the extrude as the Assistant asked.
 //   5. A person's panel opened at after-plan, and at between-opens of a sketch on an offset plane:
 //      the Assistant waits (the chip says for what), the person's panel is untouched and
 //      uncommitted; once it is closed the call finishes as one undo step.
@@ -23,13 +24,12 @@
 // The sketches are drawn at the watch pace with no delays (setPace('watch', 0)): every entity is
 // its own apply, so sketch-step:2 is a sketch half drawn.
 // Deviations from the spec's rows: sketch mode's ribbon has no Extrude, so row 2's Extrude takes
-// over the Assistant's Fillet panel; there is no Assistant extrude in this build, so row 4 looks
-// at the Assistant's sketch and fillet.
+// over the Assistant's Fillet panel; row 4 also looks at the Assistant's sketch and fillet.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
-import { addSolid, historyNames, modelOnPage, runCommand, showTreeDuringSketch } from './helpers';
+import { addSolid, historyNames, modelOnPage, runCommand, showTreeDuringSketch, singleVolume } from './helpers';
 import {
   cadFrame,
   chats,
@@ -275,6 +275,53 @@ test('cad:assistant-takeover-looking clicks and a drag in the view, and a click 
   });
   expect(fillet).toEqual({ faces: 1, edges: 0 });
   expect(await readRecord(page, 'chip')).not.toContain('paused');
+});
+
+/** The plate (PLATE, its hole beside the centre) extruded 5 mm: its even-odd region, the plate less the hole. */
+const EXTRUDE_PLATE = { name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: '5 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } };
+
+test("cad:assistant-takeover-looking-extrude clicks on the sketch's regions and a drag on the arrow, at the Assistant's extrude, take nothing over: it is kept as asked", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant takeover looking extrude');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  await recordShown(page, 'chip', '[data-chip="assistant"]', 'data-assistant-state');
+  const before = chats(host).length;
+  host.fake.reply({ tools: [sketchCall('Plate sketch')] }, { hold: 'mid-extrude', tools: [EXTRUDE_PLATE] }, { text: 'The plate is made.' });
+  const t = await startTurn(request, host, { text: 'A plate with a hole.', tab });
+  // The sketch is made; the extrude is held until its hold point is set.
+  await nthRequest(2, before);
+  await holdAt(page, 'before-commit');
+  host.fake.release('mid-extrude');
+  await reachedHold(page, 'before-commit');
+  await expect(frame.locator('[data-cad-panel="feature"]')).toHaveAttribute('data-panel-owner', 'assistant');
+  // In the person's own Extrude panel a click on a region adds or drops it: a click in the hole,
+  // a click on the plate, then a drag up from the arrow at the extrude's end.
+  for (const at of [[10, 0, 0], [-20, 10, 0]] as [number, number, number][]) {
+    const xy = await modelOnPage(page, at);
+    await page.mouse.click(xy[0], xy[1]);
+  }
+  const arrow = await modelOnPage(page, [0, 0, 5]);
+  await page.mouse.move(arrow[0], arrow[1]);
+  await page.mouse.down();
+  await page.mouse.move(arrow[0], arrow[1] - 80, { steps: 6 });
+  await page.mouse.up();
+  await expect(frame.locator('[data-cad-panel="feature"]')).toHaveAttribute('data-panel-owner', 'assistant');
+  await releaseHold(page, 'before-commit');
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [made] = resultsIn(chats(host)[before + 2]);
+  expect(made).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Plate', type: 'extrude', state: 'ok' }, broke: [] } });
+  // (The plate's hole has no dimensions: the sketch is under-defined, "(-)".)
+  await expect(historyNames(frame)).toHaveText(['(-) Plate sketch', 'Plate'], STEP);
+  // The extrude is the Assistant's: 5 mm of the plate less its hole.
+  const ext = await cadFrame(page).evaluate(() => {
+    const f = (window as unknown as W).__CAD__.services.doc.state.get().doc.features.find((x) => x.type === 'extrude') as unknown as { extent: { kind: string; distance: string }; profiles: unknown[] };
+    return { kind: f.extent.kind, distance: f.extent.distance, profiles: f.profiles.length };
+  });
+  expect(ext).toEqual({ kind: 'blind', distance: '5 mm', profiles: 1 });
+  await expect.poll(async () => Math.abs((await singleVolume(frame)) - (60 * 40 * 5 - Math.PI * 9 * 5)), STEP).toBeLessThan(0.5);
+  expect(await readRecord(page, 'chip')).not.toContain('paused');
+  expect(await undoLabel(page)).toBe('Assistant: A plate with a hole.');
 });
 
 test("cad:assistant-takeover-person-panel a person's panel opened at after-plan, and at between-opens, is waited for, untouched and uncommitted; then the call finishes as one step", async ({ page, request }) => {

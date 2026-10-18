@@ -21,6 +21,10 @@
 // to during the turn keeps the view where the person put it; with no move the sketch turns the
 // view to its plane. The chip after the turn: Undo is one Ctrl+Z of the request; the Part's health
 // says "· 1 sketch under-defined" (amber) or "· Fillet 1 fails" (red; a click selects its row).
+// The guide's plate, watched (watch 2 as the spec has it, the S4 integration once extrude and hole
+// were built): the Assistant's Parameters panel, its plate sketch going to fully defined, its
+// Extrude panel, then the holes' sketch and their cut; the tree with no "(-)", the volume chip
+// about 13,928.8; one Ctrl+Z empties the tree and Ctrl+Shift+Z brings it all back.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -605,6 +609,110 @@ test('cad:assistant-watch-build a watched build: the read-only sketch panel and 
   expect(await undoNow(page)).toBe(label0);
   await page.keyboard.press('Control+Shift+z');
   await expect(watchHistory(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Plate sketch plane', 'Plate sketch', 'Fillet 1'], STEP);
+});
+
+const PLATE_PARAM = (name: string, expr: string) => ({ name, kind: 'length', expr, comment: '', rename_to: '' });
+const PLATE_TREE = ['Plate sketch', 'Plate', 'Hole 1 sketch', 'Hole 1'];
+/** The guide's plate with its 4 holes (example 1): 60 x 40 x 6 less 4 x pi 2.5^2 x 6. */
+const PLATE_MM3 = 60 * 40 * 6 - 4 * Math.PI * 2.5 * 2.5 * 6;
+
+test("cad:assistant-watch-plate the guide's plate, watched: its sketch going to fully defined, then the Extrude panel, then the holes; one Ctrl+Z empties the tree, Ctrl+Shift+Z brings it all back", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const pid = await newProject(request, host, 'Assistant watched plate');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  // What the frame shows, frame by frame: the panels, their titles and owner, Done's reason, the chip's words, the DOF chip.
+  await recordShown(page, 'panel', '[data-cad-panel]', 'data-cad-panel');
+  await recordShown(page, 'title', '[data-cad-panel]', 'aria-label');
+  await recordShown(page, 'owner', '[data-cad-panel]', 'data-panel-owner');
+  await recordShown(page, 'done', '[data-cad-panel] [data-panel-done]', 'data-disabled-reason');
+  await recordShown(page, 'words', '[data-chip="assistant"] [data-assistant-text]');
+  await recordShown(page, 'dof', '[data-chip="sketch"]', 'data-state');
+  // The person's pace: watch, its delays at 0.3.
+  await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.setPace('watch', 0.3));
+  const ex = 'w/2 - e';
+  const ey = 'd/2 - e';
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__set_params', input: { set: [PLATE_PARAM('w', '60 mm'), PLATE_PARAM('d', '40 mm'), PLATE_PARAM('t', '6 mm'), PLATE_PARAM('hd', '5 mm'), PLATE_PARAM('e', '8 mm')], remove: [] } }] },
+    { tools: [sketchOf('Plate sketch', 'Top', [SC('c0', 'coincident', ['r.center', 'origin']), SC('dw', 'distance', ['r.bottom'], 'w'), SC('dh', 'distance', ['r.left'], 'd')])] },
+    { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: 't', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
+    {
+      tools: [
+        {
+          name: 'cad__hole',
+          input: {
+            name: '',
+            face: 'Plate.end',
+            centers: [
+              { x: ex, y: ey, z: '' },
+              { x: `-(${ex})`, y: ey, z: '' },
+              { x: `-(${ex})`, y: `-(${ey})`, z: '' },
+              { x: ex, y: `-(${ey})`, z: '' },
+            ],
+            diameter: 'hd',
+            depth: 'through',
+            distance: '',
+          },
+        },
+      ],
+    },
+    { text: 'The plate with its four holes is ready.' },
+  );
+  const t = await startTurn(request, host, { text: 'A plate with four holes.', tab });
+  expect((await t.ended(STEP_MS * 4)).turn.state).toBe('done');
+  const replies = chats(host)
+    .slice(before + 1, before + 5)
+    .map((c) => resultsIn(c)[0]);
+  expect(replies.map((r) => ({ tool: r.tool, ok: r.ok }))).toEqual(['cad__set_params', 'cad__sketch', 'cad__extrude', 'cad__hole'].map((tool) => ({ tool, ok: true })));
+  expect(replies[1]).toMatchObject({ data: { solver: { state: 'fully', dof: 0 } } });
+  expect(replies[3]).toMatchObject({
+    data: {
+      made: ['Hole 1 sketch', 'Hole 1'],
+      centers_mm: [
+        [22, 12, 6],
+        [-22, 12, 6],
+        [-22, -12, 6],
+        [22, -12, 6],
+      ],
+      broke: [],
+    },
+  });
+  // The Assistant's own panels, read-only, in order: its Parameters, the plate's sketch, the plate's
+  // Extrude panel, then the holes' sketch and their cut.
+  expect((await readRecord(page, 'panel')).filter((p) => p !== '(none)')).toEqual(['params', 'sketch', 'feature', 'sketch', 'feature']);
+  const titles = await readRecord(page, 'title');
+  expect(titles).toContain('Plate');
+  expect(titles).toContain('Hole 1');
+  const owners = (await readRecord(page, 'owner')).filter((o) => o !== '(none)');
+  expect(owners.length).toBeGreaterThan(0);
+  expect(owners.every((o) => o === 'assistant'), owners.join(' ')).toBe(true);
+  expect(await readRecord(page, 'done')).toContain('The Assistant is filling this in · Esc takes over (the Assistant pauses)');
+  const words = await readRecord(page, 'words');
+  for (const step of ['Sketch Plate sketch', 'Extrude Plate', 'Hole 1']) expect(words.some((w) => w.startsWith(`Assistant · ${step} · `) && / of 120 steps$/.test(w)), `${step}: ${words.join(' | ')}`).toBe(true);
+  // Each sketch's DOF chip went from under-defined to fully defined as its dimensions went in.
+  const dof = (await readRecord(page, 'dof')).filter((d) => d === 'under' || d === 'fully');
+  expect(dof.filter((d, i) => d === 'fully' && dof[i - 1] === 'under').length, dof.join(' ')).toBe(2);
+  expect(dof[dof.length - 1]).toBe('fully');
+  // Every edit was watched (it waited at its pace points).
+  const calls = await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, ok: c.ok, paced: c.paced ?? 0 })));
+  expect(calls.map((c) => c.tool)).toEqual(['set_params', 'sketch', 'extrude', 'hole']);
+  expect(calls.every((c) => c.ok && c.paced > 0), JSON.stringify(calls)).toBe(true);
+  // The tree, every sketch fully defined (no "(-)"); the volume chip.
+  await expect(watchHistory(frame)).toHaveText(PLATE_TREE, STEP);
+  await expect.poll(async () => Math.abs((await singleVolume(frame)) - PLATE_MM3), STEP).toBeLessThan(0.5);
+  // The Undo hint names the request; one Ctrl+Z empties the tree, Ctrl+Shift+Z brings it all back.
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').hover();
+  await expect(frame.locator('[data-cad-tip]')).toContainText('Undo Assistant: A plate with four holes.', STEP);
+  await page.mouse.move(5, 5);
+  const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  await page.keyboard.press('Control+z');
+  await expect(watchHistory(frame)).toHaveCount(0, STEP);
+  expect(await paramsNow(page)).toEqual([]);
+  await page.keyboard.press('Control+Shift+z');
+  await expect(watchHistory(frame)).toHaveText(PLATE_TREE, STEP);
+  expect(await paramsNow(page)).toEqual(['w', 'd', 't', 'hd', 'e']);
+  await expect.poll(async () => Math.abs((await singleVolume(frame)) - PLATE_MM3), STEP).toBeLessThan(0.5);
 });
 
 test("cad:assistant-watch-params-panel the person's open Parameters panel during set_params: no wait, the new values shown, the changed rows flash, the panel stays open", async ({ page, request }) => {
