@@ -162,7 +162,9 @@ describe('a panel the Assistant fills', () => {
     expect(el.getAttribute('data-panel-owner')).toBe('assistant');
     expect(el.querySelector('[data-panel-badge]')!.textContent).toBe('Assistant');
     expect(el.querySelector('[data-rename-btn]')).toBeNull();
-    expect(el.querySelector('.mgk-panel-body')!.hasAttribute('inert')).toBe(true);
+    // Its fields are inert; the body around them is not (it is the flyout's scroll container: it takes the wheel).
+    expect(el.querySelector('.mgk-panel-body > [data-panel-fields]')!.hasAttribute('inert')).toBe(true);
+    expect(el.querySelector('.mgk-panel-body')!.hasAttribute('inert')).toBe(false);
     expect(el.querySelector('[data-panel-delete]')).toBeNull();
     const done = el.querySelector('[data-panel-done]')!;
     expect(done.getAttribute('aria-disabled')).toBe('true');
@@ -188,7 +190,7 @@ describe('a panel the Assistant fills', () => {
     expect(mine.hasAttribute('data-panel-owner')).toBe(false);
     expect(mine.querySelector('[data-panel-badge]')).toBeNull();
     expect(mine.querySelector('[data-rename-btn]')).not.toBeNull();
-    expect(mine.querySelector('.mgk-panel-body')!.hasAttribute('inert')).toBe(false);
+    expect(mine.querySelector('.mgk-panel-body > [data-panel-fields]')!.hasAttribute('inert')).toBe(false);
     expect(mine.querySelector('[data-panel-delete]')).not.toBeNull();
     expect(mine.querySelector('[data-panel-done]')!.getAttribute('aria-disabled')).toBeNull();
     expect(a.services.commands.get('edit.undo')!.hint).toBe('Undo the changes made in the open panel (Redo brings them back)');
@@ -603,7 +605,9 @@ describe('the Assistant\'s Parameters panel', () => {
     const el = a.$('[data-cad-panel="params"]')!;
     expect(el.getAttribute('data-panel-owner')).toBe('assistant');
     expect(el.querySelector('[data-panel-badge]')!.textContent).toBe('Assistant');
-    expect(el.querySelector('.mgk-panel-body')!.hasAttribute('inert')).toBe(true);
+    // Its fields are inert; the body around them is not (it is the flyout's scroll container: it takes the wheel).
+    expect(el.querySelector('.mgk-panel-body > [data-panel-fields]')!.hasAttribute('inert')).toBe(true);
+    expect(el.querySelector('.mgk-panel-body')!.hasAttribute('inert')).toBe(false);
     expect(el.querySelector('[data-panel-done]')!.getAttribute('data-disabled-reason')).toBe(ASSISTANT_PANEL_DONE);
     act(() => p.ui.dropForAssistant(step));
     expect(p.ui.state.get().panel).toBeNull();

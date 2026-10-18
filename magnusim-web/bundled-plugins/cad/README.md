@@ -469,10 +469,11 @@ or delete them.
 you would: a panel opens, its values go in, the part rebuilds, and the tree and
 the volume chip follow. In a sketch the curves appear where it guessed, then
 each relation and dimension pulls them into shape until the sketch is Fully
-defined. Its panels carry an **Assistant** badge and cannot be typed in; their
-Done reads "The Assistant is filling this in · Esc takes over (the Assistant
-pauses)", and its sketch says "The Assistant is drawing this sketch · Esc takes
-over".
+defined. Its panels carry an **Assistant** badge and cannot be typed in (a tall
+one still scrolls); their Done reads "The Assistant is filling this in · Esc
+takes over (the Assistant pauses)", and its sketch says "The Assistant is
+drawing this sketch · Esc takes over". With the Sketch panel collapsed to its
+rail, the rail says **Assistant** too and its Finish sketch waits the same way.
 - **Watch or Fast** (the chip): Watch, the default, pauses a moment at each
   step (at most 6 s per call); Fast makes each step at once. Your choice is
   kept. Watching needs the Magnusim window shown: in a hidden window, or a

@@ -420,6 +420,8 @@ be the tool's kind: `wrong_feature_type` otherwise), as one edit call. What they
 - `editTarget` and `nameFor`: the `edit` and `name` fields (`not_found`, `wrong_feature_type`,
   `name_taken`); a new name is passed to the panel only after the check.
 - `fillFeature(ctx, plan, {edit, type, fields, label})`: the person's own panel opens read-only
+  (`data-panel-owner="assistant"`, its fields' wrapper inert while the body still scrolls; the
+  collapsed Sketch panel's rail is marked too, its Finish disabled with the reason)
   through `openForAssistant` with every field at once (a new feature), or `openEditForAssistant`
   and one `session.update` with every top-level field whole (an edit); a `macrotask()`, the
   `after-open` checkpoint (pace `open`), the rebuild, the `before-commit` checkpoint (pace

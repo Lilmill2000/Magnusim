@@ -293,6 +293,8 @@ describe('the smoke and serial tags', () => {
       'cad:ux010-panels-tool-card',
       // The Assistant's calls held while the person works, timed against their hold (CAD tools spec §12.3 coexist).
       'cad:assistant-coexist-busy',
+      // The Assistant's sketch on the collapsed Sketch panel's rail: the collapse is the user's pref.
+      'cad:assistant-panel-rail',
     ].sort());
   });
 });

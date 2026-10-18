@@ -5,11 +5,14 @@
 // Assistant pauses)". The body and the volume follow its draft live. A click in the view only
 // selects; Escape, Ctrl+Z or the toolbar's Extrude takes the panel over: it goes, nothing of it
 // is kept, and the step is marked. The person's open Parameters panel stays theirs and flashes
-// the rows an Assistant step changes.
+// the rows an Assistant step changes. A panel taller than its room scrolls under the wheel while
+// the Assistant fills it (its fields inert, the body around them not). With the Sketch panel
+// collapsed, the rail of the Assistant's sketch says it is the Assistant's and its Finish is
+// disabled with the reason: a click there takes nothing over.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, forgetRailPrefs, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
 
 const DONE_REASON = 'The Assistant is filling this in · Esc takes over (the Assistant pauses)';
 
@@ -93,10 +96,11 @@ test('cad:assistant-panel a panel the Assistant fills is read-only and badged, f
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
   await expect(panel.locator('[data-rename-btn]')).toHaveCount(0);
   await expect(panel.locator('[data-panel-delete]')).toHaveCount(0);
-  // Its fields show the Assistant's values and take no keyboard (the body is inert).
+  // Its fields show the Assistant's values and take no keyboard (they are inert; the body, the scroll container, is not).
   const distance = panel.locator('.nui[data-field="distance"] input');
   await expect(distance).toHaveValue('30');
-  expect(await panel.locator('.mgk-panel-body').evaluate((el) => el.hasAttribute('inert'))).toBe(true);
+  expect(await panel.locator('.mgk-panel-body > [data-panel-fields]').evaluate((el) => el.hasAttribute('inert'))).toBe(true);
+  expect(await panel.locator('.mgk-panel-body').evaluate((el) => el.hasAttribute('inert'))).toBe(false);
   expect(await distance.evaluate((el: HTMLInputElement) => (el.focus(), document.activeElement === el))).toBe(false);
   // Done stays in the foot, disabled, and says why; hovering it shows the reason.
   const done = panel.locator('[data-panel-done]');
@@ -160,6 +164,85 @@ test('cad:assistant-panel Ctrl+Z on the Assistant\'s panel takes it over and und
   await revertAndEnd(page);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
+});
+
+test("cad:assistant-panel-scroll a panel the Assistant fills that is taller than its room scrolls under the wheel; its fields stay inert", async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  const made = await addSolid(page);
+  // A short window (the browser pane's 500 px, less): the Extrude panel is taller than its room.
+  await page.setViewportSize({ width: 1280, height: 420 });
+  await assistantEdits(page, made.extrude, '30 mm', 'assistant:e2e-scroll');
+  const panel = frame.locator('[data-cad-panel="feature"]');
+  await expect(panel).toHaveAttribute('data-panel-owner', 'assistant');
+  const body = panel.locator('.mgk-panel-body');
+  const room = await body.evaluate((el) => ({ over: el.scrollHeight - el.clientHeight, top: el.scrollTop }));
+  expect(room.over, 'the body is taller than its room').toBeGreaterThan(20);
+  expect(room.top).toBe(0);
+  // The wheel over its fields scrolls the body (an inert body took no wheel: nothing moved).
+  const box = (await body.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 5; i++) await page.mouse.wheel(0, 120);
+  await expect.poll(() => body.evaluate((el) => el.scrollTop), { timeout: 10_000 }).toBeGreaterThan(0);
+  // Still read-only: the fields take no focus, and the step is the Assistant's.
+  const distance = panel.locator('.nui[data-field="distance"] input');
+  expect(await distance.evaluate((el: HTMLInputElement) => (el.focus(), document.activeElement === el))).toBe(false);
+  expect(await stepState(page)).toEqual({ takenOver: null, open: true });
+  await revertAndEnd(page);
+  await expect(panel).toHaveCount(0);
+  expect(seen.csp, 'CSP violations').toEqual([]);
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+test("cad:assistant-panel-rail the collapsed Sketch panel of the Assistant's sketch says it is the Assistant's; its Finish is disabled with the reason and takes nothing over", { tag: '@serial' }, async ({ page, request }) => {
+  await forgetRailPrefs(request);
+  try {
+    const { seen, frame } = await freshPart(page, request);
+    const sketch = await addSketch(page, { size: [30, 20] });
+    await cad(
+      page,
+      ((id: string) => {
+        const w = window as unknown as W;
+        const doc = w.__CAD__.services.doc;
+        const step = doc.assistant.begin('assistant:e2e-rail');
+        w.__step = step;
+        w.__session = step.run(() => doc.beginEdit(id));
+      }) as never,
+      sketch,
+    );
+    const panel = frame.locator('[data-cad-panel="sketch"]');
+    await expect(panel).toHaveAttribute('data-panel-owner', 'assistant');
+    // The person collapses the panel (their layout, kept for every sketch).
+    await panel.locator('[data-sketch-collapse]').click();
+    const rail = frame.locator('[data-cad-rail="sketch"]');
+    await expect(rail).toBeVisible();
+    await expect(rail).toHaveAttribute('data-panel-owner', 'assistant');
+    await expect(rail.locator('[data-panel-badge="assistant"]')).toHaveText('Assistant');
+    await expect(rail.locator('[data-rail-expand]')).toHaveAccessibleName(/^Show the Sketch 1 panel \(the Assistant is drawing it\)/);
+    const finish = rail.locator('[data-rail-done]');
+    await expect(finish).toHaveAttribute('aria-disabled', 'true');
+    await expect(finish).toHaveAttribute('data-disabled-reason', DONE_REASON);
+    await finish.hover();
+    await expect(frame.locator('[data-cad-tip]')).toContainText(DONE_REASON);
+    // A click on it takes nothing over: the Assistant's sketch stays open, the step unmarked
+    // (forced: Playwright waits for an aria-disabled button to be enabled).
+    await finish.click({ force: true });
+    await expect(rail).toBeVisible();
+    expect(await stepState(page)).toEqual({ takenOver: null, open: true });
+    await revertAndEnd(page);
+    await expect(rail).toHaveCount(0);
+    // The person's own sketch, collapsed: its Finish is theirs as always.
+    await cad(page, ((id: string) => void (window as unknown as W).__CAD__.services.doc.beginEdit(id)) as never, sketch);
+    await expect(rail).toBeVisible();
+    await expect(rail).not.toHaveAttribute('data-panel-owner', /.+/);
+    await expect(rail.locator('[data-panel-badge]')).toHaveCount(0);
+    await expect(rail.locator('[data-rail-done]')).not.toHaveAttribute('aria-disabled', /.+/);
+    await rail.locator('[data-rail-done]').click();
+    await expect(rail).toHaveCount(0);
+    expect(seen.csp, 'CSP violations').toEqual([]);
+    expect(seen.errors, 'console errors').toEqual([]);
+  } finally {
+    await forgetRailPrefs(request);
+  }
 });
 
 test('cad:assistant-panel the person\'s Parameters panel stays open and theirs, and flashes the rows an Assistant step changes', async ({ page, request }) => {

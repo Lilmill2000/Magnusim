@@ -17,8 +17,10 @@
 // changes apply live, so Done only closes.
 // A panel the Assistant fills (PanelOwnerProvider, set by LeftStack from the
 // panel's owner) is read-only: data-panel-owner="assistant", an "Assistant"
-// badge in the head, the title not renamable, the field body inert, no Delete,
-// and Done disabled with the reason (the person takes over with Escape).
+// badge in the head, the title not renamable, its fields inert (a wrapper
+// inside the body: the body itself is the flyout's scroll container and must
+// take the wheel and its scrollbar), no Delete, and Done disabled with the
+// reason (the person takes over with Escape).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {
@@ -86,10 +88,12 @@ export interface PanelChromeProps {
 
 export function PanelChrome(props: PanelChromeProps) {
   const assistant = usePanelOwner() === 'assistant';
-  // The Assistant's panel: its fields can be seen, not used (inert, set here: the host's React may not know the attribute).
-  const bodyRef = useRef<HTMLDivElement>(null);
+  // The Assistant's panel: its fields can be seen, not used (inert, set here: the host's React may
+  // not know the attribute). On the fields' wrapper, never the body: an inert body takes no wheel
+  // and no scrollbar drag, so a tall panel could not be scrolled while it is watched (review).
+  const fieldsRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    bodyRef.current?.toggleAttribute('inert', assistant);
+    fieldsRef.current?.toggleAttribute('inert', assistant);
   }, [assistant]);
   const {
     title,
@@ -143,8 +147,10 @@ export function PanelChrome(props: PanelChromeProps) {
         )}
         {headAside}
       </div>
-      <div className="mgk-panel-body" ref={bodyRef}>
-        {children}
+      <div className="mgk-panel-body">
+        <div className="cad-panel-fields" data-panel-fields="1" ref={fieldsRef}>
+          {children}
+        </div>
       </div>
       {foot || blocked ? (
         <div className="cad-panel-note">

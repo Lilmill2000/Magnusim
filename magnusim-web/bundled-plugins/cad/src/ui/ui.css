@@ -849,6 +849,11 @@ html.cad-tb-drag-refused * {
   flex: none;
 }
 
+/* The fields' wrapper (inert on a panel the Assistant fills) lays out as if it were not there. */
+.cad-panel-fields {
+  display: contents;
+}
+
 /* The body scrolls; a 3 px pad (given back by the margins) keeps the inputs' focus rings whole at its edges. */
 .tree-detail > .cad-panel > .mgk-panel-body {
   flex: 0 1 auto;
@@ -1379,6 +1384,28 @@ button.cad-rail:focus-visible,
   white-space: nowrap;
   font-weight: 600;
   color: var(--cad-tree-head);
+}
+
+/* A sketch the Assistant draws: its mark reads upward under the name, in the panel badge's colours. */
+.cad-rail-owner {
+  flex: none;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 6px 1px;
+  border: 1px solid var(--mg-selected-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-selected-bg);
+  color: var(--mg-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* Its Finish waits for the Assistant (the panel's Done does too): there, but not offered. */
+.cad-rail-done.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .cad-rail-badge {
