@@ -10,6 +10,7 @@ export { createFeatureRegistry, createBuiltinRegistry } from './features/registr
 export { removedFeatureMessage, isRemovedFeature } from './features/removed';
 export { OP_LABELS } from './features/body-op';
 export { paramNameProblem } from './params';
+export { PersonEditing, isPersonEditing } from './person-editing';
 
 /**
  * Undo and redo (Ctrl+Z; Ctrl+Y or Ctrl+Shift+Z). Keyboard commands with no

@@ -31,8 +31,11 @@ const MODULE = pathToFileURL(fileURLToPath(new URL('../../workspace/solver/plane
 
 type Api = Record<string, (...a: unknown[]) => unknown>;
 
-/** The solver client contract over solver-api in this process (calls are async like the worker's). */
-async function inProcessSolver(): Promise<SolverClient> {
+/**
+ * The solver client contract over solver-api in this process (calls are async like the worker's):
+ * an interactive instance (sketch mode's) and a scratch one (solveFeature, analyzeFeature), as the worker has.
+ */
+export async function inProcessSolver(): Promise<SolverClient> {
   const { createSolver } = (await import(/* @vite-ignore */ API)) as { createSolver(o: { moduleUrl: string }): Promise<Api> };
   const s = await createSolver({ moduleUrl: MODULE });
   const scratch = await createSolver({ moduleUrl: MODULE });
@@ -45,6 +48,12 @@ async function inProcessSolver(): Promise<SolverClient> {
         scratch.load(toSolverSketch(f, values));
         return scratch.solve() as never;
       }),
+    analyzeFeature: (f, values) =>
+      Promise.resolve().then(() => {
+        scratch.load(toSolverSketch(f, values));
+        const solve = scratch.solve();
+        return { solve, analysis: scratch.analyze() } as never;
+      }),
     load: (sk) => call('load', sk),
     solve: () => call('solve'),
     analyze: () => call('analyze'),
@@ -53,7 +62,10 @@ async function inProcessSolver(): Promise<SolverClient> {
     dragStartEntity: (e, g, o) => call('dragStartEntity', e, g, o ?? {}),
     dragMove: (u, v) => call('dragMove', u, v),
     dragEnd: () => call('dragEnd'),
-    dispose: () => s.dispose(),
+    dispose: () => {
+      s.dispose();
+      scratch.dispose();
+    },
   };
 }
 
@@ -79,6 +91,8 @@ export interface Harness {
 export interface HarnessOptions {
   handle?: Partial<ViewportHandle>;
   later?: { feature: Feature; state: 'ok' | 'rolled-back' }[];
+  /** Other areas' APIs in place before the sketch is entered (the Assistant's camera gate). */
+  apis?: Partial<AreaApis>;
 }
 
 export async function sketchHarness(start: Partial<SketchFeature> = {}, opts: HarnessOptions = {}): Promise<Harness> {
@@ -139,7 +153,7 @@ export async function sketchHarness(start: Partial<SketchFeature> = {}, opts: Ha
     mode: createStateStore<{ mode: Mode }>({ mode: 'model' }),
     viewport: createStateStore<{ handle: ViewportHandle | null }>({ handle: (opts.handle as ViewportHandle | undefined) ?? null }),
     modules: createModuleRegistry([]),
-    apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null }),
+    apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null, ...opts.apis }),
   };
   const mode = new SketchMode(services, solver, makeTool);
   const offCommands = registerSketchCommands(services, mode);

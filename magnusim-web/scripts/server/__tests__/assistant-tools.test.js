@@ -18,7 +18,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 
 const { createHostCaller, HOST_GET_ALLOWLIST, HostCallError } = await import('../assistant/host-call.ts');
 const { createHostTools, defaultHostTools, appVersion } = await import('../assistant/host-tools.ts');
-const { cleanText, sanitizeJson, resultText, checkImage, checkImages, capResult, JSON_CAPS } = await import('../assistant/sanitize.ts');
+const { cleanText, sanitizeJson, resultText, checkImage, checkImages, capResult, JSON_CAPS, ERROR_DETAIL_BYTES } = await import('../assistant/sanitize.ts');
 const { TURN_HEADER } = await import('../assistant/access.ts');
 const { Router, dispatch } = await import('../router.ts');
 const { sendJson } = await import('../http.ts');
@@ -394,6 +394,33 @@ describe('untrusted text, data and images', () => {
     assert.equal(JSON.parse(huge).truncated, true);
     const part = capResult('call-1', 'snap', { ok: true, data: {} }, Array.from({ length: 6 }, () => ({ type: 'image', mediaType: 'image/png', base64: 'AA==', width: 1, height: 1 })));
     assert.deepEqual([part.type, part.callId, part.isError, part.images.length], ['tool_result', 'call-1', false, 4]);
+  });
+
+  it("an error's hint and detail reach the model with it, cleaned; the detail is plain JSON of at most 4 KB, marked when cut", () => {
+    const error = { code: 'invalid_input', message: 'by is too big.', hint: 'Use 1, 2‮ or 3.', detail: { reason: 'step_too_big', allowed: [1, 2, 3], note: `${INJECTION}\u0007` } };
+    assert.deepEqual(JSON.parse(resultText('ai-demo__add', { ok: false, error })), {
+      tool: 'ai-demo__add',
+      ok: false,
+      error: { code: 'invalid_input', message: 'by is too big.', hint: 'Use 1, 2 or 3.', detail: { reason: 'step_too_big', allowed: [1, 2, 3], note: INJECTION } },
+    });
+    // No detail, or null: none in the error.
+    for (const detail of [undefined, null]) {
+      assert.deepEqual(JSON.parse(resultText('x', { ok: false, error: { code: 'failed', message: 'No.', detail } })), { tool: 'x', ok: false, error: { code: 'failed', message: 'No.' } });
+    }
+    // Past 4 KB, or deeper than sanitizeJson goes: cut and marked, the rest of the error whole.
+    const rows = Array.from({ length: 100 }, (_, i) => `row ${i} ${'r'.repeat(80)}`);
+    const big = JSON.parse(resultText('x', { ok: false, error: { code: 'failed', message: 'No.', hint: 'Try less.', detail: { rows } } }));
+    assert.equal(big.truncated, true);
+    assert.deepEqual([big.error.code, big.error.message, big.error.hint], ['failed', 'No.', 'Try less.']);
+    assert.ok(Buffer.byteLength(JSON.stringify(big.error.detail)) <= ERROR_DETAIL_BYTES);
+    const kept = big.error.detail.rows;
+    assert.ok(kept.length > 10 && kept.length < 100, String(kept.length));
+    // The rows in order; the last one may be cut short.
+    assert.deepEqual(kept.slice(0, -1), rows.slice(0, kept.length - 1));
+    assert.ok(rows[kept.length - 1].startsWith(kept.at(-1)));
+    let deep = 'bottom';
+    for (let i = 0; i < 10; i += 1) deep = { deeper: deep };
+    assert.equal(JSON.parse(resultText('x', { ok: false, error: { code: 'failed', message: 'No.', detail: deep } })).truncated, true);
   });
 
   function png(w, h) {

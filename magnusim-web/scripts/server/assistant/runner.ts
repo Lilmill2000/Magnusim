@@ -7,8 +7,11 @@
  *    list it last served). Anything else, a tool the per-request cap left out and the
  *    Settings test's own tool included, is `no_tool`. A tool result can never add a tool.
  * 2. Input the model wrote as broken JSON is `invalid_input`.
- * 3. Nulls the second cloud dialect sends for optional fields are removed, then the input
- *    is validated against every constraint of the tool's schema (`invalid_input`).
+ * 3. Nulls the second cloud dialect sends for optional fields are removed; a local model's
+ *    call of a workspace tool gets "", [] or false for the required fields it left out or
+ *    sent as null, when their type has that empty value (fillLocalDefaults). Then the input
+ *    is validated against every constraint of the tool's schema, every problem named at
+ *    once (`invalid_input`).
  * 4. Availability is checked again now, with the plugin-epoch fence (`unavailable`,
  *    `plugin_off`).
  * 5. compute and destructive tools ask first (a confirm gate); a no, the timeout or Stop
@@ -22,21 +25,28 @@
  *    the page's bridge keeps it (the tool did its work); anything else is the abort, "may or
  *    may not have finished". Then the runner stops waiting and says so on the call's
  *    `released` signal (the relay frees the tab before the next call can start).
+ *    A progress that says the call waits for the person (`waiting`) pauses the turn's minutes
+ *    once, until the next progress without it or the call's end, for WAIT_PAUSE_MAX_MS of the
+ *    call's waits at most: then they run again, and the turn's log says so (a page that says
+ *    it waits for ever can't hold a turn past its minutes). Every progress still resets the
+ *    stall window.
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
  *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
+ *    A failed call's hint and detail go with its error, and the hint to the log's tool_result
+ *    too; a result's summary is the log's line only.
  */
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import type { ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
-import { capResult, checkImages, cleanText, TEXT_CAPS } from './sanitize.ts';
-import { stripNullOptionals, validateInput } from './schema.ts';
+import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
+import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
+import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
 import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
 
 export type RunnerEvent =
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number };
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number };
 
 /** What a turn lends the runner (absent for MCP). */
 export interface RunnerTurn {
@@ -44,9 +54,11 @@ export interface RunnerTurn {
   readonly step: number;
   emit(e: RunnerEvent): void;
   setState(s: 'tools' | 'awaiting_confirmation'): void;
-  /** Gate waits don't count toward the turn's minutes. */
+  /** Gate waits, and a call's waits for the person, don't count toward the turn's minutes. */
   pause(): void;
   resume(): void;
+  /** A line for the turn's log. */
+  note?(text: string): void;
 }
 
 /** Why a call's signal aborted: Stop, the turn's minutes cap, or no progress for too long. */
@@ -97,12 +109,22 @@ export interface RunResult {
   ok: boolean;
   /** null when it ran and succeeded; else the error code. */
   code: string | null;
+  /** A failed call's hint, as the model has it (for the log). */
+  hint?: string;
   summary: string;
 }
 
 const RISKS: readonly Risk[] = ['read', 'edit', 'compute', 'destructive'];
 /** How long an aborted tool may take to give its last answer. */
 export const ABORT_GRACE_MS = 2_000;
+/**
+ * The most of one call's waits for the person (progress `waiting`) that the turn's minutes
+ * leave out. CAD's longest call waits twice, up to 10 minutes each (for the person, then for
+ * their Keep or Discard); past this its waiting counts toward the turn's minutes.
+ */
+export const WAIT_PAUSE_MAX_MS = 20 * 60_000;
+/** The log's line when a call's waits used WAIT_PAUSE_MAX_MS. */
+export const WAITED_TOO_LONG_NOTE = `A call has waited for you ${WAIT_PAUSE_MAX_MS / 60_000} minutes: from now on its waiting counts toward the turn's minutes.`;
 /** A workspace tool's stall window on the server: its own plus the relay's margin. */
 export const WORKSPACE_STALL_MARGIN_MS = 10_000;
 const PREVIEW = 200;
@@ -167,13 +189,18 @@ export function toolCallEvent(call: ToolCallPart, def: ToolDef | null, step: num
   };
 }
 
-/** A call answered without running it (or after it failed): `{tool, ok:false, error}`. */
-export function errorResult(call: ToolCallPart, code: string, message: string, hint?: string): RunResult {
+/**
+ * A call answered without running it (or after it failed): `{tool, ok:false, error}`, with the
+ * tool's hint (how to fix it) and detail (plain JSON about it) when it gave them.
+ */
+export function errorResult(call: ToolCallPart, code: string, message: string, hint?: string, detail?: unknown): RunResult {
   const msg = cleanText(message, TEXT_CAPS.other);
+  const h = hint ? cleanText(hint, TEXT_CAPS.other) : '';
   return {
-    part: capResult(call.callId, call.name, { ok: false, error: { code, message: msg, ...(hint ? { hint } : {}) } }),
+    part: capResult(call.callId, call.name, { ok: false, error: { code, message: msg, ...(h ? { hint: h } : {}), ...(detail !== undefined ? { detail } : {}) } }),
     ok: false,
     code,
+    ...(h ? { hint: h } : {}),
     summary: cleanText(msg, PREVIEW),
   };
 }
@@ -261,7 +288,8 @@ export function gateInputText(schema: unknown, input: Record<string, unknown>): 
 
 /**
  * The confirm question for a compute or destructive tool: the Assistant's, or (`app`, who
- * asks in its stead) another app's.
+ * asks in its stead) another app's. A destructive tool's confirm note says what the call does
+ * in place of "can't be undone"; a compute tool's always "starts a computation".
  */
 export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null, app?: string): GateRequest {
   const risk = riskOf(def) === 'compute' ? 'compute' : 'destructive';
@@ -277,13 +305,14 @@ export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: 
   } catch {
     detail = undefined;
   }
-  const what = risk === 'compute' ? 'starts a computation' : "can't be undone";
+  const note = risk === 'destructive' ? cleanText(def.confirmNote, CONFIRM_NOTE_MAX) : '';
+  const what = risk === 'compute' ? 'starts a computation' : note || "can't be undone";
   const action = lowerFirst(cleanText(def.title || def.name, TEXT_CAPS.name));
   return {
     kind: 'confirm',
     turn,
     title: app ? `Allow an app on this PC to ${action}?` : `Allow the Assistant to ${action}?`,
-    copy: `${app ? `${app} asks for this. ` : ''}${sourceLabel(def.source)} · ${what}. What it sent: ${sent}. Nothing runs until you choose.`,
+    copy: `${app ? `${app} asks for this. ` : ''}${sourceLabel(def.source)} · ${what}${/[.!?]$/.test(what) ? '' : '.'} What it sent: ${sent}. Nothing runs until you choose.`,
     yes: 'Allow',
     no: "Don't",
     ...(detail ? { detail } : {}),
@@ -324,6 +353,7 @@ export class ToolRunner {
       call: call.callId,
       ok: r.ok,
       ...(r.code ? { code: r.code } : {}),
+      ...(r.hint ? { hint: r.hint } : {}),
       summary: r.summary,
       ms: Math.max(0, this.clock.now() - started),
     });
@@ -336,7 +366,9 @@ export class ToolRunner {
     if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
     // 2-3. The input.
     if (call.inputError) return errorResult(call, 'invalid_input', call.inputError);
-    const input = stripNullOptionals(def.schema, call.input ?? {}) as Record<string, unknown>;
+    let input = stripNullOptionals(def.schema, call.input ?? {}) as Record<string, unknown>;
+    // A local model often leaves out the fields it has no use for: a workspace tool gets their empty values.
+    if (o.ctx.local && def.source.kind === 'workspace') input = fillLocalDefaults(def.schema, input) as Record<string, unknown>;
     const valid = validateInput(def.schema, input);
     if (!valid.ok) return errorResult(call, 'invalid_input', valid.error);
     // 4. Still available, and its plugin not turned off or replaced.
@@ -391,9 +423,35 @@ export class ToolRunner {
       }, stallMs);
     };
     arm();
-    const progress = (fraction: number | null, label: string) => {
-      if (signal.aborted) return;
+    // The call waits for the person (its last progress said so): the turn's minutes are paused,
+    // for WAIT_PAUSE_MAX_MS of the call's waits at most.
+    let waiting = false;
+    let waitedMs = 0;
+    let waitFrom = 0;
+    let waitTimer: unknown = null;
+    let finished = false;
+    const wait = (on: boolean) => {
+      if (on === waiting || (on && waitedMs >= WAIT_PAUSE_MAX_MS)) return;
+      waiting = on;
+      if (on) {
+        waitFrom = clock.now();
+        o.turn?.pause();
+        waitTimer = clock.setTimeout(() => {
+          waitTimer = null;
+          wait(false);
+          o.turn?.note?.(WAITED_TOO_LONG_NOTE);
+        }, WAIT_PAUSE_MAX_MS - waitedMs);
+        return;
+      }
+      clock.clearTimeout(waitTimer);
+      waitTimer = null;
+      waitedMs += Math.max(0, clock.now() - waitFrom);
+      o.turn?.resume();
+    };
+    const progress = (fraction: number | null, label: string, opts?: ProgressOptions) => {
+      if (signal.aborted || finished) return;
       arm();
+      wait(opts?.waiting === true);
       const f = typeof fraction === 'number' && Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : null;
       const text = cleanText(label, 120);
       // A bare sign of life (a workspace page waiting on a call to the app, or its progress()
@@ -436,6 +494,8 @@ export class ToolRunner {
     try {
       outcome = await Promise.race([ran, gaveUp]);
     } finally {
+      finished = true;
+      wait(false);
       clock.clearTimeout(stallTimer);
       clock.clearTimeout(graceTimer);
       if (onAbort) signal.removeEventListener('abort', onAbort);
@@ -450,7 +510,7 @@ export class ToolRunner {
     if (!outcome.ok) {
       const e = outcome.error ?? { code: 'failed', message: 'The tool failed.' };
       const code = cleanText(e.code, 64) || 'failed';
-      const r = errorResult(call, code, e.message || 'The tool failed.', e.hint ? cleanText(e.hint, TEXT_CAPS.other) : undefined);
+      const r = errorResult(call, code, e.message || 'The tool failed.', e.hint, e.detail);
       return { ...r, summary };
     }
     // An image the model can't be sent fails the call with why, as the bridge's caps do: dropped

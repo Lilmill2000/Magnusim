@@ -11,6 +11,8 @@
 // Picks are made on the bodies as shown, which is the panel's own live result: a
 // face, edge or vertex this feature made itself is refused with the reason (as the
 // P2 face fields do); every other one keeps its name through the feature.
+// In a panel the Assistant fills, no field takes clicks (no tool, no filter, no
+// tree picks): the person's clicks only select.
 // Owner: P4a SOLIDS.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
@@ -28,6 +30,7 @@ import type { BodyInfo } from '../../types/kernel';
 import type { AxisRef } from '../../types/references';
 import type { SelectionItem, SelectKind } from '../../types/selection';
 import type { ViewportHandle, ViewportPointer } from '../../types/viewport';
+import { usePanelOwner } from '../../ui/kit';
 import { formatArea } from '../extrude/ExtrudePanel';
 import { entityParents, refOfRegion, resolveRegionRef } from '../extrude/profiles';
 import { PickList, type PickRow } from '../p2/PickList';
@@ -56,9 +59,10 @@ export function useViewportTool(services: AppServices, o: { id: string; active: 
   const ref = useRef(o);
   ref.current = o;
   const kindsKey = (o.kinds ?? []).join(',');
+  const active = usePanelOwner() !== 'assistant' && o.active;
   // Attached before the browser paints: a click right after the field shows active is the field's.
   useLayoutEffect(() => {
-    if (!o.active) return;
+    if (!active) return;
     let pop: (() => void) | null = null;
     let handle: ViewportHandle | null = null;
     const attach = (h: ViewportHandle | null) => {
@@ -80,7 +84,7 @@ export function useViewportTool(services: AppServices, o: { id: string; active: 
       pop?.();
       if (mine && services.selection.get().filter.join(',') === mine.join(',')) setSelectionFilter(services.selection, before);
     };
-  }, [services, o.active, kindsKey]);
+  }, [services, active, kindsKey]);
 }
 
 /** A feature name for words ("Sketch 2"), or null when it is gone. */
@@ -359,8 +363,9 @@ export function useAxisField(services: AppServices, o: AxisFieldOptions): FieldV
     latest.current.onChange(v);
   };
   // A tree row clicked while the field is active: a CONSTRUCT axis (or plane) row, an origin plane.
+  const takesTree = usePanelOwner() !== 'assistant' && o.active;
   useEffect(() => {
-    if (!o.active) return;
+    if (!takesTree) return;
     return services.selection.subscribe((s, prev) => {
       if (s.items === prev.items || !s.items.length) return;
       const cur = latest.current;
@@ -378,7 +383,7 @@ export function useAxisField(services: AppServices, o: AxisFieldOptions): FieldV
       else set(ref);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [services, o.active]);
+  }, [services, takesTree]);
   // The origin's X, Y and Z axes are drawn while the field is active, so they can be clicked (P4a review).
   useEffect(() => {
     if (!o.active) return;

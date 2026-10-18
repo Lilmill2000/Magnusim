@@ -29,6 +29,7 @@ What is new in each version: `CHANGELOG.md`. How it is built: the
 - [Measure and inspect](#measure-and-inspect)
 - [History, parameters, undo and saving](#history-parameters-undo-and-saving)
 - [Back to the simulation](#back-to-the-simulation)
+- [The Assistant in the Part](#the-assistant-in-the-part)
 - [Mouse and keys](#mouse-and-keys)
 - [Known limitations in 0.1.0](#known-limitations-in-010)
 - [Licence](#licence)
@@ -424,6 +425,160 @@ A Part is **linked** to one geometry of its project. There is no export step:
   first ("Couldn't update the project", with the reason). A broken reference
   plane, axis or point that nothing uses does not stop the update.
 
+## The Assistant in the Part
+
+*In development: this needs Magnusim's Assistant, which comes with Magnusim
+0.5.0 and is not released yet.*
+
+Magnusim's Assistant works with a model you choose in **Settings > Assistant**:
+a cloud provider with your own key, or a local server on this PC. While a Part
+is open in an app window on this PC, the Part offers the Assistant its own
+tools, so you can ask it to build or change the part and watch it work. The
+tools run in the Part like the rest of CAD; only the model runs elsewhere. A
+page opened from another computer offers no tools.
+
+**Asking.** Until the app's chat panel arrives, a request starts from the app's
+terminal client, run in `magnusim-web` with the Part open and the Magnusim
+window shown:
+
+```
+node scripts/assistant-run.mjs --tab auto "A 100 x 60 x 8 mm plate with four 6.5 mm through holes 10 mm from the edges, its sizes as parameters"
+```
+
+`--tab auto` sends the request to the one app tab that is connected. The
+terminal shows each step and the answer, and the app shows its questions too.
+One request at a time runs in a tab.
+
+**What it can do.** Read the Part (features, sketches, parameters, bodies, and
+what you changed since its last step), find faces, edges and sketch regions by
+name or by a point on them, measure (volumes, voids, areas, distances, overlaps
+of two bodies, sections), look at pictures of the Part, set parameters, sketch
+(points, lines, centerlines, polylines, circles, arcs, rectangles, slots,
+polygons and sectors, with relations and dimensions), extrude, revolve, sweep
+and loft, drill holes into a flat face, fillet, chamfer and shell, pattern and
+mirror, combine bodies, name and colour a body, change, rename, suppress or
+move a feature, undo its own steps, and delete features. It makes the offset
+planes its sketches and mirrors need. It does not export: use Export STEP, or
+go Back to the simulation. Split, Press-pull, Delete faces, the Enclosure,
+Import STEP, CONSTRUCT's axes and points, a face extrude, Project / Intersect
+and the sketch patterns and offsets are not offered to it; it reads the
+features made with them, and can change their values, rename, suppress, move
+or delete them.
+
+**Watching it work.** It works in the Part's own panels and in sketch mode, as
+you would: a panel opens, its values go in, the part rebuilds, and the tree and
+the volume chip follow. In a sketch the curves appear where it guessed, then
+each relation and dimension pulls them into shape until the sketch is Fully
+defined. Its panels carry an **Assistant** badge and cannot be typed in (a tall
+one still scrolls); their Done reads "The Assistant is filling this in · Esc
+takes over (the Assistant pauses)", and its sketch says "The Assistant is
+drawing this sketch · Esc takes over". With the Sketch panel collapsed to its
+rail, the rail says **Assistant** too and its Finish sketch waits the same way.
+- **Watch or Fast** (the chip): Watch, the default, pauses a moment at each
+  step (at most 6 s per call); Fast makes each step at once. Your choice is
+  kept. Watching needs the Magnusim window shown: in a hidden window, or a
+  covered one (Windows reports a covered window as hidden), the steps run
+  without pauses and the Assistant is told so. A part whose rebuild takes more
+  than 1.5 s also runs without pauses.
+- **The camera.** At the watch pace the view turns for its sketches and new
+  extrudes as it does for yours (square to a new sketch, Isometric when a new
+  extrude would be seen end on), until you move the camera yourself: from then
+  on, for the rest of that request, it leaves your view alone. Its pictures are
+  drawn off screen: they never move your camera, change your section view or
+  change the Part.
+
+**The chip.** While a request runs, the Assistant chip in the dock (bottom left)
+says what it does:
+
+| The chip says | Buttons |
+|---|---|
+| Assistant · thinking · 12 of 120 steps | Pause, Stop, Ask each step |
+| Assistant · Sketch Plate sketch · 12 of 120 steps | Pause, Stop, Fast (or Watch), Ask each step |
+| Assistant waits for you: close the Fillet 2 panel | Pause, Stop |
+| Assistant: Extrude Boss · keep it? | Keep, Discard |
+| Assistant paused · you took over | Resume, Stop |
+| Assistant: <your request> · done | Undo |
+
+- **Pause**: its edits wait until you Resume; it can still read the Part. A
+  step it is making when you pause stops where it is (at its next pace) and
+  goes on at Resume; nothing of it is kept or saved until then. A pause ends
+  with the request.
+- **Stop** ends the request. The step it is on is not kept; its earlier steps
+  stay, and Undo takes them back.
+- **Ask each step** (off by default; your choice is kept): each edit waits
+  after its rebuild for **Keep** or **Discard**. Discard puts the Part back as it
+  was before that step, and the Assistant is told to ask you what to change. No
+  answer within 10 minutes counts as Discard.
+- **When the request ends** the chip says how ("done", "stopped", "failed",
+  "stopped at its limits") for two minutes, or until the Part changes, with the
+  Part's health: "· Fillet 1 fails", "· 1 sketch under-defined", "· 2 features
+  with a warning" (red for a failure, amber for the others). A click on those
+  words selects the first such feature in the tree. **Undo** shows while the
+  request's changes are the newest step.
+
+**You come first.**
+- While you have a feature or tool panel open, a value typed and not applied, a
+  rename, a menu or a dialog, or while the rollback bar is not at the end, its
+  edits wait and the chip says for what ("close the Fillet 2 panel", "move the
+  rollback bar to the end"). Its reads go on. After 10 minutes the Assistant is
+  told you are busy, and to say what it needs and end its request. A Parameters
+  panel you have open but are not typing in does not count: it stays open, shows
+  the new values and flashes the rows that changed.
+- **Taking over.** During one of its steps, Escape, Ctrl+Z, Ctrl+Y (the Undo
+  button's tip then says it takes the step over), a toolbar or tree command
+  (Parameters too), or Enter or Finish sketch in its sketch takes the step
+  over: it is discarded, nothing of it is kept, and the Assistant pauses in this
+  Part until the request ends (the chip's Resume lets it go on). A change of
+  yours to the Part during a step (a rename, a value, a Delete) stops it too,
+  and yours is kept; what the step had already made before your change (the
+  offset plane of its sketch, say) then stays as well, since taking it back
+  would undo yours. The Assistant is told what stayed, the chip names it when
+  it pauses ("you took over · Plane 1 stayed"), and Ctrl+Z takes it back.
+  Undoing its steps while the request runs pauses it the same way ("you undid
+  its steps"; a redo: "you redid its steps").
+- **Looking is not taking over**: selecting, hovering and orbiting in the view,
+  and clicks on the fields of its panel.
+- It is told to leave what you made alone unless you ask, and everything it
+  changes is an undo step of its own.
+
+**Undo.** All of one request's changes are one undo step: the Undo button's tip
+reads "Undo Assistant: <your request>" (its first line), and one Ctrl+Z, or the
+chip's Undo, takes them all back; Ctrl+Y brings them back. A change of yours
+during the request starts a new undo step, so it is never undone with the
+Assistant's. The Assistant's own undo takes back only its own steps and stops at
+any change of yours. Like every edit in CAD, undo lasts while the Part stays
+open: Back or a reload clears it.
+
+**Deleting asks you.** Before the Assistant deletes features the app asks
+"Allow the Assistant to delete features?", "Deletes features from the Part;
+one Ctrl+Z takes back the whole request, this deletion with it.", with the
+keyboard on **Don't**. A feature another one
+uses is not deleted; the Assistant is told which features use it.
+
+**Honest results.** Each call applies completely or not at all (unless you
+change the Part while it runs: see Taking over). While a call runs, the saved
+Part stays as it was before it, so a reload, a crash or Back in the middle of
+one never leaves half a step in the Part. A feature that fails (a
+fillet too large, a join that touches nothing, a cut that misses the part) is
+not kept, and its reason goes back to the model, with which way a cut missed. A
+changed size that would break a later feature is put back. A change of
+structure (a new sketch shape, a deleted feature) that breaks a later feature is
+kept, and the broken feature is named. Every sketch goes through the solver; one
+left under-defined is kept and shows in the chip's health at the end. The
+Assistant is asked to measure the Part and look at it before it says it is
+done.
+
+**Limits and local models.**
+- A watched build takes many calls: tens for a plate or a bracket, up to about
+  100 for a part of two interlocking bodies. The app's limits per request
+  (Settings > Assistant; by default 120 steps, $8 and 60 minutes) cover that,
+  and the time it waits for you does not count against the minutes.
+- A local model needs a context of at least 24,000 tokens for the Part's tools
+  (below that, the tools answer that it needs a longer one); load it with
+  48,000 or more: the tools and their notes alone take about 12,000 tokens. A
+  local model that reads no images gets no pictures; it measures and reads the
+  Part instead.
+
 ## Mouse and keys
 
 The view moves the way the simulation viewer's does, in model and sketch mode:
@@ -536,6 +691,15 @@ workspace while a change is not saved yet. (The document still falls back to
 layout uses the host's per-user plugin prefs (`ws.prefs`) when the host has them,
 else it is kept per project (ARCHITECTURE.md §7 "Toolbar").
 
+The Assistant's tools (in development) use `ws.assistant` from the app's host API
+1.9, which is not released yet: the host still reports 1.8, and the manifest
+stays at 1.7. `assistantOf` in `src/lib/bridge.ts` finds it in the SDK the host
+served, and so do the newer parts the tools use when they are there (an error's
+hint and detail, a result's summary, the turn events and Stop, a call that waits
+for the person, the delete's confirm note). On a host without `ws.assistant` the
+Part offers no tools and works as before. ARCHITECTURE.md §12 has the design,
+`docs/assistant.md` the developer reference.
+
 There is no Python backend (`plugin.py` registers nothing; `manifest.toml`
 declares the workspace, the study kind and the start actions). The description
 in `manifest.toml` (shown in Settings > Plugins) names only what ships: update it
@@ -546,7 +710,7 @@ as features land, and run `npm run gen:registry` in `magnusim-web` after.
 | Path | What |
 |---|---|
 | `manifest.toml`, `plugin.py` | What the host reads. `plugin.py` is the only Python file in the plugin. |
-| `src/` | TypeScript source of the workspace page and its workers. |
+| `src/` | TypeScript source of the workspace page and its workers. `src/assistant/` holds the Part's tools for the app's Assistant. |
 | `workspace/` | **Built output only** (what the host serves to the frame): `index.html`, `app.js`, `app.css`, `kernel/` (kernel worker + `mk32.mjs/.wasm`), `solver/` (`planegcs.mjs/.wasm`), `pick/` (the picking worker). Never edit by hand. |
 | `kernel-build/` | OCCT + facade build (pinned sources, patches, scripts). See `kernel-build/SOURCES.md`. |
 | `solver-build/` | PlaneGCS build (pinned upstream, our patch, script). See `solver-build/SOURCES.md`. |
@@ -555,7 +719,8 @@ as features land, and run `npm run gen:registry` in `magnusim-web` after.
 | `e2e/` | Playwright tests against the host app (`e2e/host-server.mjs` starts it with the app's `startHost()`). |
 | `fixtures/` | Synthetic STEP files and native reference values for the kernel tests. |
 | `scripts/` | `build.mjs` (page + workers), `e2e.mjs` (build + e2e under a lock), the shard map and the gates. |
-| `docs/` | `p2p3-plan.md`: the P2/P3 build plan (schema, kernel API 3, extension points). |
+| `eval/` | The Assistant's evaluation set: the tasks, their reference calls, the scorer and `run.mjs` (`npm run eval:assistant`). See `eval/README.md`. Its records go to the gitignored `.cache/assistant-eval/`. |
+| `docs/` | `p2p3-plan.md`: the P2/P3 build plan (schema, kernel API 3, extension points). `assistant.md`: the Assistant's tools, for developers (how a call goes, each tool's pieces, adding and testing a tool). |
 | `ARCHITECTURE.md` | Areas, contracts and rules for anyone changing the code. |
 | `CHANGELOG.md` | What changed in each version, for users. |
 
@@ -577,7 +742,9 @@ npm run build          # src/ -> workspace/ (page + worker modules)
 npm run build:check    # workspace/ must be exactly the build of src/ (run before every commit)
 npm run test:e2e       # build, start the host app on a free port, run every spec of e2e/ (bundled Chromium, parallel workers)
 npm run test:e2e:smoke # the smoke set (@smoke): one path through every area, about 2 min
-npm run test:e2e:sketch   # one area shard (shell, sketch, solids, step, link, big): see "The e2e suite" below
+npm run test:e2e:sketch   # one area shard (shell, sketch, solids, step, link, assistant, big): see "The e2e suite" below
+npm run test:e2e:assistant   # the Assistant's tools: each spec on its own app server with the app's scripted model (no provider is called)
+npm run eval:assistant -- --tasks all --scripted   # the Assistant's evaluation set with the scripted model; a real model needs --profile or --attach (eval/README.md)
 npm run test:e2e:changed  # only the shards the changed files need (git status)
 npm run test:e2e:changed -- --base origin/master   # ... and the files that differ from origin/master
 CAD_E2E_CHANNELS=chrome,msedge npm run test:e2e   # also real Chrome and Edge
@@ -666,19 +833,25 @@ suite once per phase.
 
   | Shard | `npm run` | What | Specs |
   |---|---|---|---|
-  | shell | `test:e2e:shell` | the tree, the document (P1 gate, save, reload, two tabs), panels, the toolbar, the viewport, leaving, the UI kit | `cad-p1-*`, `cad-p15-review1`, `cad-panel-done-reach`, `cad-sd-kit`, `cad-sd-review2-leave`, `cad-p4a-toolbar` |
-  | sketch | `test:e2e:sketch` | the sketcher, profiles, Extrude of them (P3 gate, P2+P3 reviews); P4b's sketch tools, selection (boxes, the mouse binding, Construction, Normal to), Project / Intersect and model snaps | `cad-p3-*`, `cad-p2p3-*`, `cad-p4b-sketch-tools`, `cad-p4b-select`, `cad-p4b-project` |
+  | shell | `test:e2e:shell` | the tree, the document (P1 gate, save, reload, two tabs), panels, the toolbar, the viewport, leaving, the UI kit; the Assistant's read-only panels and the pictures drawn off screen | `cad-p1-*`, `cad-p15-review1`, `cad-panel-done-reach`, `cad-sd-kit`, `cad-sd-review2-leave`, `cad-p4a-toolbar`, `cad-assistant-panels`, `cad-viewport-snapshot` |
+  | sketch | `test:e2e:sketch` | the sketcher, profiles, Extrude of them (P3 gate, P2+P3 reviews); P4b's sketch tools, selection (boxes, the mouse binding, Construction, Normal to), Project / Intersect and model snaps; a sketch the Assistant draws | `cad-p3-*`, `cad-p2p3-*`, `cad-p4b-sketch-tools`, `cad-p4b-select`, `cad-p4b-project`, `cad-assistant-sketch` |
   | solids | `test:e2e:solids` | P4a: the solid features, CONSTRUCT, edge names; P4b: patterns and mirror, Measure picks through a rebuild | `cad-p4a-solids`, `-construct`, `-fix1`, `-integrate`, `cad-p4b-pattern` |
   | step | `test:e2e:step` | STEP import and edit, Combine, Measure, Export, the Enclosure (P2 gate); P4b's exit gate (a sketch on an imported face with projected edges through an upstream Delete faces) | `cad-p2-step`, `cad-p2-features-step`, `cad-p2-kernel-ops`, `cad-sd-enclosure`, `cad-sd-review1`, `cad-sd-review2`, `cad-p4b-project-step` |
   | link | `test:e2e:link` | the Part as a project geometry (gate:l2-cad and gate:l3-cad's specs), the start actions | `cad-link*`, `cad-start` |
+  | assistant | `test:e2e:assistant` | the Part's tools for the app's Assistant: the tools offered, watch mode and the chip, honest errors, the person first, take-overs, the evaluation set's tasks replayed from their references. Each spec runs its own app server on `CAD_E2E_PORT_FROM` + 60 to + 100 with the Assistant's test switches and the app's scripted model (`e2e/assistant-helpers.ts`) | `cad-assistant-watch`, `-honest`, `-coexist`, `-takeover`, `-eval` |
   | big | `test:e2e:big` | opt-in: the 113 MB STEP (`CAD_E2E_BIG_STEP`; skipped without it) | `cad-large-step` |
 
   A new spec goes into the shard of the area it tests.
 - **Changed files** (`npm run test:e2e:changed [-- --base <ref>]`, or
   `-- --files a,b` where there is no git): `RULES` in `scripts/e2e-shards.mjs`
-  maps each file to shards, and only those run. `src/sketch/`,
-  `src/solver-worker/`, `solver-build/` go to sketch; `src/link/`,
-  `src/doc/source-record.ts` and the gate scripts to link; the P4a feature
+  maps each file to shards, and only those run. `src/sketch/` and
+  `src/solver-worker/` go to sketch and assistant (the Assistant's sketches
+  draw through sketch mode), `solver-build/` to sketch; `src/assistant/` and
+  `e2e/assistant-helpers.ts` to assistant, but `src/assistant/install.ts` to every
+  shard (its camera gate decides the person's own sketch entry and Extrude's turn
+  to Isometric) and `src/assistant/AssistantChip.tsx` with the Assistant's module
+  (`src/features/assistant/`, its chip in the dock) to assistant and shell;
+  `src/link/`, `src/doc/source-record.ts` and the gate scripts to link; the P4a feature
   folders to solids; the STEP and body-tool folders to step, plus the other
   shards whose specs use them; a feature's `index.ts` to shell as well (the
   toolbar). Shared code runs every shard: `src/doc`, `src/ui`, `src/app`,
@@ -753,7 +926,11 @@ suite once per phase.
 - No change in the core is needed to build or run the plugin. The host
   features it uses (plugin files with etags, unsaved-work questions, frame
   focus, off-by-default plugins, the UI kit, linked geometries, the exit hook,
-  start actions, plugin prefs) are generic host APIs, listed in
-  `ARCHITECTURE.md` §9.
+  start actions, plugin prefs, a workspace's tools for the Assistant) are
+  generic host APIs, listed in `ARCHITECTURE.md` §9.
+- The Assistant's tools reach the app only through `ws.assistant`. No test
+  calls a real model provider (the specs use the app's scripted model), and no
+  file of the plugin names a model vendor or is a coding tool's file: the app's
+  `scripts/__tests__/vendor-names.test.mjs` reads every tracked file here.
 - Dependencies must be GPL-3.0-compatible; code from AGPL projects or
   jsketcher is never copied.

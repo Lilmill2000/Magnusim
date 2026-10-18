@@ -1,0 +1,20 @@
+{
+  "id": "poker-chip",
+  "tier": "L3",
+  "units": "mm",
+  "title": "Two-colour poker chip with a steel disc",
+  "prompt": "Make a two-colour poker chip 39 mm across and 3.3 mm thick, lying on the Top plane centred on the origin, from z = 0. Inside it, sealed, a pocket for a steel disc 1.25 in across and 1 mm thick, centred in the thickness, with 0.3 mm diametral clearance around the disc. Two bodies named Red and White, one solid each, touching but never overlapping, so it prints in two materials. White: 6 edge spots around the rim, concentric with the chip, through the whole thickness and evenly spaced, joined into one body by a part buried inside Red so the two colours interlock. Red is everything else.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "bodies", "kind": "bodies", "count": 2, "names": ["Red", "White"], "solids": 1, "valid": true },
+    { "id": "overlap", "kind": "overlap", "a": "Red", "b": "White", "max": 0.01 },
+    { "id": "union", "kind": "union", "solids": 1, "voids": 1, "volume": { "expect": "pi*19.5^2*3.3 - pi*((31.75 + 0.3)/2)^2*1", "abs": "0.01*pi*((31.75 + 0.3)/2)^2*1" } },
+    { "id": "pocket", "kind": "section", "body": "*", "z": 1.65, "holes": 1, "area": { "expect": "pi*(19.5^2 - ((31.75 + 0.3)/2)^2)", "rel": 0.01 } },
+    { "id": "bbox", "kind": "bbox", "expect": [-19.5, -19.5, 0, 19.5, 19.5, 3.3], "abs": 0.01 },
+    { "id": "spots", "kind": "spots", "body": "White", "z": 3.25, "count": 6, "axis": [0, 0], "spread_mm": 0.01, "spacing_deg": 0.01 },
+    { "id": "interlock", "kind": "interlock", "inner": "White", "outer": "Red", "z": 1.65 },
+    { "id": "features_ok", "kind": "features_ok" },
+    { "id": "sketches_defined", "kind": "sketches_defined" }
+  ]
+}

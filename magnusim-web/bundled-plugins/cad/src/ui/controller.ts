@@ -2,18 +2,29 @@
 // EditSession), the context menu, inline renames, and the feature actions the
 // tree, the context menu, the keyboard and the viewport share. One controller
 // per AppServices (uiFor), created by install() or on first use.
+// The Assistant opens panels through the person's own path (openForAssistant,
+// openEditForAssistant, openParamsForAssistant, doneForAssistant,
+// dropForAssistant), always behind the person: it never commits or replaces a
+// panel the person has open (PersonEditing, thrown at once), except an idle
+// Parameters panel, which gives way and comes back after. Its panels are
+// read-only (PanelState.owner 'assistant'); the person's Escape, Ctrl+Z, a
+// command or a change of its draft takes the panel over (discarded, never
+// committed; doc.assistant.takeOver).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
-import { clearSelection, selectItem } from '../lib/selection';
+import { isPersonEditing, PersonEditing } from '../doc/person-editing';
+import { openModal } from '../lib/modal';
+import { pendingEdits } from '../lib/pendingEdits';
+import { clearSelection, selectItem, showForPanel } from '../lib/selection';
 import { targetOfItem } from '../viewport/normal';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
-import type { EditSession } from '../types/doc-service';
+import type { AssistantStep, EditSession, TakeOverWhy } from '../types/doc-service';
 import { FEATURE_ACTION_LABELS, type BodyId, type Feature, type FeatureAction, type FeatureId, type FeatureType } from '../types/doc';
 import type { SelectionItem } from '../types/selection';
 import type { StateStore } from '../types/state';
-import { hideTip, type MenuEntry, type MenuItem } from './kit';
+import { hideTip, type MenuEntry, type MenuItem, type PanelOwner } from './kit';
 import { checkItemName } from './tree/names';
 import { rollbackIndex, rollbackValue } from './tree/model';
 
@@ -27,11 +38,21 @@ export function hasPanel(services: AppServices, type: FeatureType): boolean {
   return !!services.modules?.panelFor(type);
 }
 
+/**
+ * The open flyout panel. `owner` 'assistant': the Assistant fills it, read-only for the person (a
+ * feature panel's session is the step's; the Assistant's Parameters panel names the step in `by`).
+ */
 export type PanelState =
-  | { kind: 'feature'; session: EditSession; type: FeatureType; feature: FeatureId; isNew: boolean }
-  | { kind: 'params' }
+  | { kind: 'feature'; session: EditSession; type: FeatureType; feature: FeatureId; isNew: boolean; owner: PanelOwner }
+  | { kind: 'params'; owner: PanelOwner; by?: string }
   /** A module's tool panel (Measure, Mass properties, Check, Export): not a feature, not undoable. */
-  | { kind: 'tool'; tool: string };
+  | { kind: 'tool'; tool: string; owner: PanelOwner };
+
+/** A feature panel's owner: the Assistant's when its session is an Assistant step's. */
+const ownerOf = (session: EditSession): PanelOwner => (session.owner ? 'assistant' : 'person');
+
+/** The answer of an Assistant panel call after its step ended. */
+const ENDED = 'This Assistant step has ended';
 
 export interface MenuState {
   x: number;
@@ -73,9 +94,12 @@ export interface UiController {
   openParams(): void;
   /** Open a module's tool panel (closes the open panel first, as any panel does). */
   openTool(id: string): void;
-  /** Close the open panel: keep what applied (commit), or discard a new feature whose inputs are incomplete. */
-  closePanel(): void;
-  /** Undo inside a panel: undo what the session changed (a new feature goes away; Redo brings it back) and close. */
+  /**
+   * Close the open panel: keep what applied (commit), or discard a new feature whose inputs are incomplete.
+   * On a panel the Assistant fills, the person takes it over (`why`, default 'escape'): discarded, never committed.
+   */
+  closePanel(opts?: { why?: TakeOverWhy }): void;
+  /** Undo inside a panel: undo what the session changed (a new feature goes away; Redo brings it back) and close. On the Assistant's: a take-over ('undo'). */
   cancelPanel(): void;
   /** The panel's Delete: discard a new feature, remove an existing one. */
   deletePanelFeature(): void;
@@ -102,6 +126,28 @@ export interface UiController {
   featureOfItem(item: SelectionItem): FeatureId | null;
   /** Report a failure the user must see ("Delete failed: …"). */
   fail(action: string, reason: string): void;
+  /**
+   * The Assistant's New feature, on the person's path (the panel, the tree row, the live rebuild),
+   * read-only. Throws PersonEditing at once while the person has a menu, a rename, a dialog or a
+   * panel open (an idle Parameters panel gives way and comes back after); returns the session, or
+   * why it could not open. Never toasts.
+   */
+  openForAssistant(step: AssistantStep, type: FeatureType, init?: Partial<Feature>): EditSession | string;
+  /** The Assistant's Edit of a feature: as openForAssistant, through beginEdit. */
+  openEditForAssistant(step: AssistantStep, id: FeatureId): EditSession | string;
+  /**
+   * The Assistant's read-only Parameters panel (watch pace), when no panel is open; it closes when the
+   * step ends. Null also when an idle Parameters panel is open already (it shows the new values live).
+   * Else why not; PersonEditing as openForAssistant (a value typed in that panel included).
+   */
+  openParamsForAssistant(step: AssistantStep): string | null;
+  /**
+   * Done on the Assistant's panel, honestly: an incomplete feature keeps nothing (discarded) and its
+   * reason is returned; else it is committed and null returned (or why it is not in the part). No flush.
+   */
+  doneForAssistant(step: AssistantStep): string | null;
+  /** Close this step's Assistant panel, keeping nothing of its session. A no-op once the step ended. */
+  dropForAssistant(step: AssistantStep): void;
   dispose(): void;
 }
 
@@ -173,9 +219,36 @@ export function createUiController(services: AppServices): UiController {
     offs.push(stop);
   }
 
-  function closePanel() {
+  // An idle Parameters panel of the person's that gave way to an Assistant panel comes back when that
+  // panel closes by itself (Done, dropped, its step ended) or by the person's Escape or Ctrl+Z on it;
+  // any other action of the person's (a command, a tree action) forgets it.
+  let paramsBack = false;
+  function giveBackParams() {
+    if (!paramsBack || state.get().panel) return;
+    paramsBack = false;
+    if (doc.state.get().status !== 'ready') return;
+    state.set({ panel: { kind: 'params', owner: 'person' }, panelNote: null });
+  }
+
+  /** The person took over the Assistant's panel: it goes, never committed (its session is discarded). */
+  function takeOverPanel(p: PanelState, why: TakeOverWhy) {
+    if (why === 'command' || why === 'draft') paramsBack = false;
+    state.set({ panel: null, panelNote: null });
+    try {
+      doc.assistant.takeOver(why, p.kind === 'params' && p.by ? { owner: p.by } : undefined);
+    } catch (err) {
+      fail('Take over from the Assistant', errText(err));
+    }
+    giveBackParams();
+  }
+
+  function closePanel(opts: { why?: TakeOverWhy } = {}) {
     const p = state.get().panel;
     if (!p) return;
+    if (p.owner === 'assistant') {
+      takeOverPanel(p, opts.why ?? 'escape');
+      return;
+    }
     state.set({ panel: null, panelNote: null });
     if (p.kind === 'feature') {
       try {
@@ -195,7 +268,8 @@ export function createUiController(services: AppServices): UiController {
       fail(action, block);
       return;
     }
-    closePanel();
+    paramsBack = false;
+    closePanel({ why: 'command' });
     closeMenu();
     let session: EditSession;
     try {
@@ -205,7 +279,7 @@ export function createUiController(services: AppServices): UiController {
       return;
     }
     if (!session.open) return;
-    state.set({ panel: { kind: 'feature', session, type, feature: session.feature, isNew: session.isNew }, panelNote: null, renaming: null });
+    state.set({ panel: { kind: 'feature', session, type, feature: session.feature, isNew: session.isNew, owner: ownerOf(session) }, panelNote: null, renaming: null });
     selectItem(services.selection, { kind: 'feature', feature: session.feature }, false);
   }
 
@@ -217,7 +291,94 @@ export function createUiController(services: AppServices): UiController {
   /** Before acting on a feature from the tree or a menu: close a panel that edits a different one. */
   function settleOtherPanel(id: FeatureId | null) {
     const p = state.get().panel;
-    if (p && (p.kind !== 'feature' || p.feature !== id)) closePanel();
+    if (p && (p.kind !== 'feature' || p.feature !== id)) closePanel({ why: 'command' });
+  }
+
+  // ------------------------------------------------------------------ the Assistant's panels
+
+  const panelName = (p: PanelState): string => {
+    if (p.kind === 'feature') return featureName(p.feature);
+    if (p.kind === 'params') return 'Parameters';
+    return services.modules?.tool(p.tool)?.label ?? 'tool';
+  };
+
+  /**
+   * Why the Assistant cannot open a panel now because of the person (to throw), or null: a menu, a
+   * rename, an open dialog, or a panel the Assistant does not own (an idle Parameters panel does not
+   * count: it gives way).
+   */
+  function personInTheWay(): PersonEditing | null {
+    const s = state.get();
+    if (s.menu) return new PersonEditing('The person has a menu open');
+    if (s.renaming) {
+      const r = s.renaming;
+      const name = r.kind === 'feature' ? featureName(r.id) : (doc.state.get().doc.bodies[r.id]?.name ?? 'a body');
+      return new PersonEditing(`The person is renaming ${name}`, r.kind === 'feature' ? r.id : null);
+    }
+    if (typeof document !== 'undefined' && openModal(document)) return new PersonEditing('The person has a dialog open');
+    const p = s.panel;
+    if (!p || p.owner === 'assistant') return null;
+    if (p.kind === 'params') return pendingEdits().pending ? new PersonEditing('The person is typing a value in the Parameters panel') : null;
+    if (p.kind === 'feature') return new PersonEditing(`The person is editing ${featureName(p.feature)}`, p.feature);
+    return new PersonEditing(`The person has the ${panelName(p)} panel open`);
+  }
+
+  /**
+   * Make room for an Assistant panel, or say why not. Throws PersonEditing for the person; refuses
+   * (a reason) while the Part cannot be edited or the Assistant's own feature panel is still open. An
+   * idle Parameters panel of the person's gives way (remembered, to come back after); one of the
+   * Assistant's closes.
+   */
+  function roomForAssistant(): string | null {
+    const block = editBlock();
+    if (block) return block;
+    const busy = personInTheWay();
+    if (busy) throw busy;
+    const p = state.get().panel;
+    if (p?.kind === 'feature' && p.owner === 'assistant' && p.session.open) return `The Assistant's ${featureName(p.feature)} panel is still open`;
+    if (p?.kind === 'params' && p.owner === 'person') paramsBack = true;
+    if (p) state.set({ panel: null, panelNote: null });
+    return null;
+  }
+
+  /** Open an Assistant session's panel (fn runs inside the step), or say why it could not open. */
+  function openAssistantPanel(step: AssistantStep, type: FeatureType, action: string, fn: () => EditSession): EditSession | string {
+    if (step.ended) return ENDED;
+    const room = roomForAssistant();
+    if (room) return room;
+    let session: EditSession;
+    try {
+      session = step.run(fn);
+    } catch (err) {
+      giveBackParams();
+      if (isPersonEditing(err)) throw err;
+      return `${action} failed: ${errText(err)}`;
+    }
+    if (!session.open) {
+      giveBackParams();
+      return `${action} failed: its panel closed at once`;
+    }
+    state.set({ panel: { kind: 'feature', session, type, feature: session.feature, isNew: session.isNew, owner: ownerOf(session) }, panelNote: null, renaming: null });
+    // Shown selected as the panel's highlight, not the person's choice: the person's next command
+    // never takes the Assistant's draft as its preselection (it is discarded as that command takes over).
+    showForPanel(services.selection, [{ kind: 'feature', feature: session.feature }]);
+    return session;
+  }
+
+  /** This step's open panel session, or null. */
+  function sessionOf(step: AssistantStep): EditSession | null {
+    const p = state.get().panel;
+    if (p?.kind === 'feature' && p.session.open && p.session.owner === step.owner) return p.session;
+    const s = doc.session();
+    return s && s.open && s.owner === step.owner ? s : null;
+  }
+
+  /** This step's panel goes (its session ended), and a Parameters panel that gave way to it comes back. */
+  function closeAssistantPanel(step: AssistantStep) {
+    const p = state.get().panel;
+    const mine = !!p && p.owner === 'assistant' && (p.kind === 'feature' ? p.session.owner === step.owner : p.kind === 'params' && p.by === step.owner);
+    if (mine) state.set({ panel: null, panelNote: null });
+    giveBackParams();
   }
 
   const c: UiController = {
@@ -237,13 +398,15 @@ export function createUiController(services: AppServices): UiController {
       const p = state.get().panel;
       if (p?.kind === 'tool' && p.tool === id) return;
       if (!services.modules?.tool(id)) return;
-      closePanel();
+      paramsBack = false;
+      closePanel({ why: 'command' });
       closeMenu();
-      state.set({ panel: { kind: 'tool', tool: id }, panelNote: null });
+      state.set({ panel: { kind: 'tool', tool: id, owner: 'person' }, panelNote: null });
     },
     openEdit(id) {
       const p = state.get().panel;
-      if (p?.kind === 'feature' && p.feature === id) return;
+      // (The Assistant's panel on it: the person's Edit takes it over and opens the person's own.)
+      if (p?.kind === 'feature' && p.feature === id && p.owner === 'person') return;
       const f = featureById(services, id);
       if (!f) return;
       // A removed type (Box, Cylinder): say so and what to do instead (SD pass).
@@ -261,14 +424,19 @@ export function createUiController(services: AppServices): UiController {
     },
     openParams() {
       const p = state.get().panel;
-      if (p?.kind === 'params') return;
-      closePanel();
+      if (p?.kind === 'params' && p.owner === 'person') return;
+      paramsBack = false;
+      closePanel({ why: 'command' });
       closeMenu();
-      state.set({ panel: { kind: 'params' }, panelNote: null });
+      state.set({ panel: { kind: 'params', owner: 'person' }, panelNote: null });
     },
     closePanel,
     cancelPanel() {
       const p = state.get().panel;
+      if (p?.owner === 'assistant') {
+        takeOverPanel(p, 'undo');
+        return;
+      }
       state.set({ panel: null, panelNote: null });
       if (p?.kind !== 'feature') return;
       try {
@@ -286,6 +454,10 @@ export function createUiController(services: AppServices): UiController {
     deletePanelFeature() {
       const p = state.get().panel;
       if (!p || p.kind !== 'feature') return;
+      if (p.owner === 'assistant') {
+        c.deleteFeature(p.feature);
+        return;
+      }
       const name = featureName(p.feature);
       if (p.isNew) {
         state.set({ panel: null, panelNote: null });
@@ -328,7 +500,9 @@ export function createUiController(services: AppServices): UiController {
       const block = editBlock();
       if (block) return block;
       const p = state.get().panel;
-      if (p?.kind === 'feature' && p.feature === id) {
+      // The Assistant's panel on it: the person changing its draft takes it over; the rename is then a one-shot edit.
+      if (p?.kind === 'feature' && p.feature === id && p.owner === 'assistant') closePanel({ why: 'draft' });
+      else if (p?.kind === 'feature' && p.feature === id) {
         // Part of the open panel session (one undo step with its other edits).
         try {
           p.session.update({ name: check.name });
@@ -396,8 +570,13 @@ export function createUiController(services: AppServices): UiController {
     deleteFeature(id) {
       const p = state.get().panel;
       if (p?.kind === 'feature' && p.feature === id) {
-        c.deletePanelFeature();
-        return;
+        if (p.owner === 'person') {
+          c.deletePanelFeature();
+          return;
+        }
+        // The Assistant's panel on it: taken over first; a new feature is then gone already.
+        closePanel({ why: 'command' });
+        if (p.isNew) return;
       }
       const f = featureById(services, id);
       if (!f) return;
@@ -542,6 +721,77 @@ export function createUiController(services: AppServices): UiController {
       return b?.feature ?? null;
     },
     fail,
+    openForAssistant(step, type, init) {
+      if (step.ended) return ENDED;
+      const label = doc.features.get(type)?.label ?? type;
+      if (!hasPanel(services, type)) return `This version of Magnusim CAD has no panel for ${label} features`;
+      return openAssistantPanel(step, type, `New ${label}`, () => doc.beginNew(type, init));
+    },
+    openEditForAssistant(step, id) {
+      if (step.ended) return ENDED;
+      const f = featureById(services, id);
+      if (!f) return 'That feature is not in the part';
+      const removed = removedFeatureMessage(f);
+      if (removed) return `${removed}. Solids come from sketches now: delete it, then sketch the shape and extrude it`;
+      if (!hasPanel(services, f.type)) return `This version of Magnusim CAD cannot edit ${f.name}: no panel edits ${f.type} features`;
+      const p = state.get().panel;
+      // Already open in this step (the same edit again): its session.
+      if (p?.kind === 'feature' && p.feature === id && p.session.open && p.session.owner === step.owner) return p.session;
+      return openAssistantPanel(step, f.type, `Edit ${f.name}`, () => doc.beginEdit(id));
+    },
+    openParamsForAssistant(step) {
+      if (step.ended) return ENDED;
+      const block = editBlock();
+      if (block) return block;
+      // The person first, as openForAssistant: a menu, a rename, a dialog, a value typed in Parameters, a panel of theirs.
+      const busy = personInTheWay();
+      if (busy) throw busy;
+      const p = state.get().panel;
+      // A Parameters panel already open (the person's idle one, or the Assistant's) shows the new values live.
+      if (p?.kind === 'params') return null;
+      if (p && p.owner === 'assistant') return `The Assistant's ${panelName(p)} panel is still open`;
+      state.set({ panel: { kind: 'params', owner: 'assistant', by: step.owner }, panelNote: null });
+      return null;
+    },
+    doneForAssistant(step) {
+      if (step.ended) return ENDED;
+      const session = sessionOf(step);
+      if (!session) {
+        closeAssistantPanel(step);
+        return "The Assistant's panel is no longer open";
+      }
+      const name = session.draft.name || featureName(session.feature);
+      let why: string | null;
+      try {
+        why = session.incomplete();
+      } catch (err) {
+        why = errText(err);
+      }
+      try {
+        if (why) {
+          // Nothing of an incomplete feature is kept (Done would drop a new one silently): it is said instead.
+          step.run(() => session.discard());
+          return why;
+        }
+        step.run(() => session.commit());
+      } catch (err) {
+        return `${session.isNew ? 'Create' : 'Edit'} ${name} failed: ${errText(err)}`;
+      } finally {
+        closeAssistantPanel(step);
+      }
+      if (!doc.state.get().doc.features.some((f) => f.id === session.feature)) return `${name} was not kept`;
+      return null;
+    },
+    dropForAssistant(step) {
+      if (step.ended) return;
+      const session = sessionOf(step);
+      try {
+        if (session) step.run(() => session.discard());
+      } catch (err) {
+        console.error("[cad] the Assistant's panel could not be dropped", err);
+      }
+      closeAssistantPanel(step);
+    },
     dispose() {
       for (const off of offs) off();
     },
@@ -556,14 +806,26 @@ export function createUiController(services: AppServices): UiController {
       const p = state.get().panel;
       if (p?.kind === 'feature' && (!p.session.open || s.status !== 'ready')) {
         state.set({ panel: null, panelNote: null });
+        // The Assistant's panel ended with its session (its step's end, revert or restore; the person's edit).
+        if (p.owner === 'assistant') giveBackParams();
         return;
       }
       if (s.session && (p?.kind !== 'feature' || p.session.id !== s.session.id)) {
         const open = doc.session();
         if (open && open.open && open.id === s.session.id && hasPanel(services, open.draft.type)) {
-          state.set({ panel: { kind: 'feature', session: open, type: open.draft.type, feature: open.feature, isNew: open.isNew }, panelNote: null });
+          state.set({ panel: { kind: 'feature', session: open, type: open.draft.type, feature: open.feature, isNew: open.isNew, owner: ownerOf(open) }, panelNote: null });
         }
       }
+    }),
+  );
+  // The Assistant's Parameters panel (no session) goes when its step ends, as its feature panel goes
+  // with its session: never left open, read-only, after the call (review: it stayed after a success).
+  offs.push(
+    services.bus.on('assistant:step-ended', ({ owner }) => {
+      const p = state.get().panel;
+      if (p?.kind !== 'params' || p.owner !== 'assistant' || p.by !== owner) return;
+      state.set({ panel: null, panelNote: null });
+      giveBackParams();
     }),
   );
   // A rebuild that no longer makes a selected body (deleted, suppressed, rolled

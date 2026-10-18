@@ -42,7 +42,7 @@ const loftModule: CadModule = {
       enabled: () => ui.editBlock() ?? (sketchesWithProfiles(services) >= 2 ? true : 'Draw closed profiles in two sketches first (on two planes)'),
       run: () => {
         const p = ui.state.get().panel;
-        if (p?.kind === 'feature' && p.isNew && p.type === 'loft') return;
+        if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'loft') return;
         const s = services.doc.state.get();
         const sections: RegionRef[] = [];
         for (const it of userItems(services.selection)) {

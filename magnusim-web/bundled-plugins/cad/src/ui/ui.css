@@ -733,6 +733,19 @@ html.cad-tb-drag-refused * {
   min-width: 0;
 }
 
+/* A panel the Assistant fills: its badge after the title (the panel is read-only for the person). */
+.cad-panel-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-selected-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-selected-bg);
+  color: var(--mg-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+}
+
 .mesh-rename-input {
   width: 160px;
   max-width: 70%;
@@ -834,6 +847,11 @@ html.cad-tb-drag-refused * {
 .tree-detail > .cad-panel > .mgk-panel-head,
 .tree-detail > .cad-panel > .mgk-panel-foot {
   flex: none;
+}
+
+/* The fields' wrapper (inert on a panel the Assistant fills) lays out as if it were not there. */
+.cad-panel-fields {
+  display: contents;
 }
 
 /* The body scrolls; a 3 px pad (given back by the margins) keeps the inputs' focus rings whole at its edges. */
@@ -1032,6 +1050,11 @@ input.mgk-input.cad-param-name {
 .cad-param-add td {
   padding-top: 8px;
   border-top: 1px solid var(--mg-divider);
+}
+
+/* A row an Assistant step just changed (ParametersPanel FLASH_MS). */
+.cad-params tr[data-param-changed] > td {
+  background: var(--mg-selected-bg);
 }
 
 .cad-param-add-actions td {
@@ -1235,6 +1258,28 @@ input.mgk-input.cad-param-name {
   cursor: pointer;
 }
 
+/* The Assistant's chip: its words wrap within the dock; its actions are 24 px targets, Stop set
+   apart from Pause (an irreversible action beside a reversible one). */
+.cad-assistant-chip {
+  max-width: 100%;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.cad-assistant-chip .cad-chip-v {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cad-assistant-chip .cad-chip-link {
+  min-height: 24px;
+  padding: 0 4px;
+}
+
+.cad-assistant-chip [data-assistant-action="stop"] {
+  margin-left: 8px;
+}
+
 .cad-chip-link:hover {
   background: none;
   color: var(--mg-link-strong-hover);
@@ -1361,6 +1406,28 @@ button.cad-rail:focus-visible,
   white-space: nowrap;
   font-weight: 600;
   color: var(--cad-tree-head);
+}
+
+/* A sketch the Assistant draws: its mark reads upward under the name, in the panel badge's colours. */
+.cad-rail-owner {
+  flex: none;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 6px 1px;
+  border: 1px solid var(--mg-selected-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-selected-bg);
+  color: var(--mg-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/* Its Finish waits for the Assistant (the panel's Done does too): there, but not offered. */
+.cad-rail-done.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .cad-rail-badge {

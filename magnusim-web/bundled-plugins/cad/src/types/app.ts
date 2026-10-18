@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Bridge } from '../lib/bridge';
 import type { EventBus } from '../lib/bus';
+import type { AssistantPageApi } from './assistant';
 import type { CommandRegistry, KeyboardManager, Mode } from './commands';
 import type { DocService } from './doc-service';
 import type { CadEvents } from './events';
@@ -23,6 +24,8 @@ export interface AreaApis {
   sketch: SketchModeApi | null;
   solver: SketchSolverClient | null;
   files: FileTransfer | null;
+  /** The Assistant's page API (one writer: ASSISTANT). Optional, so it is absent where nothing installs it. */
+  assistant?: AssistantPageApi | null;
 }
 
 export interface AppServices {

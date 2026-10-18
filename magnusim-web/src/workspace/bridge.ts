@@ -54,14 +54,20 @@
  * page hears `not_connected` and that list is abandoned). invokeTool runs one call at a time: the
  * event `assistantInvoke`, then the page's assistant.progress (each resets the call's stall
  * window, as do the page's calls in flight, which the caller hears as onAlive so that its own
- * window waits too) and its assistant.result, checked and capped here (images read to base64
- * in this page). `assistantAbort` stops it: on Stop (the page's answer is
+ * window waits too; `waiting: true` goes on to the caller: the call waits for the person, and
+ * the turn's minutes stop meanwhile) and its assistant.result, checked and capped here (images
+ * read to base64 in this page). `assistantAbort` stops it: on Stop (the page's answer is
  * awaited for 2 s), on a stall, when a leave begins (`leaving`) and when the channel ends
- * (`closed`, after which hooks.assistantTools(null) withdraws the tools).
+ * (`closed`, after which hooks.assistantTools(null) withdraws the tools). The assistant's turns
+ * bound to this tab reach the page as the event `assistantTurn` (assistantTurn(), from the page
+ * relay), and the page's assistant.stop {turn} goes to hooks.assistantStop, which stops only a
+ * turn told to this tab.
  */
 import type {
   AssistantRegistration,
   AssistantRisk,
+  AssistantStopAnswer,
+  AssistantTurn,
   ComputeJob,
   EditedGeometry,
   FileInfo,
@@ -203,8 +209,8 @@ interface InvokeRun {
   id: string;
   /** Calls of the page that began during this call and are not answered yet: its stall window waits for them. */
   inFlight: number;
-  /** The page said how far it is (assistant.progress), or its calls in flight changed. */
-  activity(a: { kind: 'progress'; fraction: number | null; label: string } | { kind: 'calls' }): void;
+  /** The page said how far it is (assistant.progress; `waiting`: it waits for the person), or its calls in flight changed. */
+  activity(a: { kind: 'progress'; fraction: number | null; label: string; waiting?: boolean } | { kind: 'calls' }): void;
   /** The page's answer (assistant.result), checked. */
   done(out: AssistantCallOutcome): void;
   /** End it now with this code (the page is told `assistantAbort`). */
@@ -226,6 +232,7 @@ const NOT_HOOK_WORK = new Set([
   'assistant.register',
   'assistant.progress',
   'assistant.result',
+  'assistant.stop',
 ]);
 
 /** Link refusals that are no error of the hook: "Keep editing", the Queue's remove, a newer link. */
@@ -286,6 +293,11 @@ export interface BridgeHooks {
    * and is withdrawn if its verdict comes late. No hook: the page hears `no_assistant`.
    */
   assistantTools?(reg: { tools: CheckedTool[]; guide: string } | null): AssistantPublication;
+  /**
+   * The page's assistant.stop (1.9, unreleased): stop that turn of the app's assistant, only when
+   * it was told to this tab (else `not_this_tab`). No hook: the page hears `no_assistant`.
+   */
+  assistantStop?(turn: string): Promise<AssistantStopAnswer>;
 }
 
 /** What hooks.assistantTools answers: the verdict to come, and how to drop a list it was too late for. */
@@ -305,6 +317,8 @@ export interface CheckedTool {
   risk: AssistantRisk;
   /** The call's stall window in seconds (1 to 600, default 60). */
   timeoutS: number;
+  /** What the app's question before a destructive call says it does, cleaned, at most 120 characters (absent when the page gave none). */
+  confirm?: string;
 }
 
 /** A tool call's result as it leaves the page (1.9, unreleased): images as base64. */
@@ -312,10 +326,15 @@ export interface AssistantCallResult {
   text?: string;
   data?: unknown;
   images?: Array<{ mediaType: string; data: string }>;
+  /** One line for the turn's log, never for the model (at most 160 characters). */
+  summary?: string;
 }
 
-/** How a tool call ended (1.9, unreleased): the page's result, or a code with its message. */
-export type AssistantCallOutcome = { ok: true; result: AssistantCallResult } | { ok: false; code: string; message: string };
+/**
+ * How a tool call ended (1.9, unreleased): the page's result, or a code with its message, and
+ * from the page's own error how to fix it (`hint`) and plain JSON about it (`detail`).
+ */
+export type AssistantCallOutcome = { ok: true; result: AssistantCallResult } | { ok: false; code: string; message: string; hint?: string; detail?: unknown };
 
 /** One call of a page's tool (WorkspaceBridge.invokeTool). */
 export interface AssistantInvoke {
@@ -328,7 +347,8 @@ export interface AssistantInvoke {
   /** Its stall window in seconds (1 to 600; else the tool's own). */
   timeoutS: number;
   signal: AbortSignal;
-  onProgress(fraction: number | null, label: string): void;
+  /** `opts.waiting`: the call waits for the person (the page said so; absent otherwise). */
+  onProgress(fraction: number | null, label: string, opts?: { waiting?: boolean }): void;
   /**
    * The call is alive though its page sends no progress: a call of the page (a host read, a
    * link, a file) started or ended, and every ASSISTANT_ALIVE_MS while one is in flight. Such a
@@ -372,6 +392,14 @@ export const ASSISTANT_TEXT_BYTES = 64 * 1024;
 export const ASSISTANT_DATA_BYTES = 256 * 1024;
 export const ASSISTANT_IMAGES_MAX = 4;
 export const ASSISTANT_IMAGE_BYTES = 1.5 * 1024 * 1024;
+/** A page error's hint (characters) and detail (as JSON, UTF-8 bytes), and a result's summary (characters). */
+export const ASSISTANT_HINT_MAX = 500;
+export const ASSISTANT_DETAIL_BYTES = 4 * 1024;
+export const ASSISTANT_SUMMARY_MAX = 160;
+/** A tool's confirm note (characters): what the question before a destructive call says it does. */
+export const ASSISTANT_CONFIRM_MAX = 120;
+/** A page error's message, at most this many characters (a note on a dropped detail included). */
+const ASSISTANT_MESSAGE_MAX = 2000;
 const ASSISTANT_GUIDE_MAX = 4000;
 const ASSISTANT_RISKS = new Set<string>(['read', 'edit', 'compute', 'destructive']);
 const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -418,9 +446,9 @@ function assistantTimeoutS(v: unknown, fallback = ASSISTANT_TIMEOUT_S): number {
 /**
  * assistant.register's params checked (1.9, unreleased): `bad_request` for a list that is not one,
  * more than 32 tools, a tool that is not `{name, description, inputSchema, ...}` or an input schema
- * that is not plain JSON, a guide that is not text; `too_large` past 512 KB. Texts are cleaned and
- * capped, an unknown risk is `destructive`. Names and schemas are the app's to judge (its verdict
- * refuses a tool with the reason).
+ * that is not plain JSON, a title, confirm note or guide that is not text; `too_large` past 512 KB.
+ * Texts are cleaned and capped, an unknown risk is `destructive`. Names and schemas are the app's
+ * to judge (its verdict refuses a tool with the reason).
  */
 export function checkAssistantTools(params: Record<string, unknown>): { tools: CheckedTool[]; guide: string } {
   const list = params.tools;
@@ -432,8 +460,10 @@ export function checkAssistantTools(params: Record<string, unknown>): { tools: C
     if (typeof name !== 'string' || !name || name.length > 64) throw badParam(`${what}.name (text of 1 to 64 characters)`);
     if (typeof raw.description !== 'string') throw badParam(`${what}.description (text)`);
     if (raw.title !== undefined && raw.title !== null && typeof raw.title !== 'string') throw badParam(`${what}.title (text)`);
+    if (raw.confirm !== undefined && raw.confirm !== null && typeof raw.confirm !== 'string') throw badParam(`${what}.confirm (text)`);
     if (!isPlainObject(raw.inputSchema) || !isJsonData(raw.inputSchema)) throw badParam(`${what}.inputSchema (a JSON schema object)`);
     const risk = typeof raw.risk === 'string' && ASSISTANT_RISKS.has(raw.risk) ? (raw.risk as AssistantRisk) : 'destructive';
+    const confirm = cleanLine(raw.confirm, ASSISTANT_CONFIRM_MAX);
     return {
       name,
       title: cleanLine(raw.title, 200),
@@ -441,6 +471,7 @@ export function checkAssistantTools(params: Record<string, unknown>): { tools: C
       inputSchema: raw.inputSchema,
       risk,
       timeoutS: assistantTimeoutS(raw.timeoutS),
+      ...(confirm ? { confirm } : {}),
     };
   });
   const g = params.guide;
@@ -479,20 +510,38 @@ async function blobBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * The page's assistant.result as the call's outcome (1.9, unreleased): its error with a code from
- * the page's list, or the SDK's own `no_tool` (else `failed`); its result checked (`bad_result`:
- * not `{text?, data?, images?}` with text, plain JSON data and PNG, JPEG or WebP Blobs) and capped
- * (`too_large`: text over 64 KB, data over 256 KB as JSON, more than 4 images or one over 1.5 MB),
- * its images read to base64.
+ * A page error as the call's outcome (1.9, unreleased): its code from the page's list, or the
+ * SDK's own `no_tool` (else `failed`); its message cleaned (at most 2000 characters); its hint
+ * cleaned (at most 500); its detail when it is plain JSON of at most 4 KB. A detail it can't
+ * keep is dropped, and the message says so: " (detail too large)", " (detail not plain JSON)".
+ */
+function assistantPageError(raw: unknown): AssistantCallOutcome {
+  const e = isPlainObject(raw) ? raw : {};
+  const code = typeof e.code === 'string' && ASSISTANT_PAGE_CODES.has(e.code) ? e.code : 'failed';
+  let note = '';
+  let detail: unknown;
+  if (e.detail !== undefined && e.detail !== null) {
+    const json = isJsonData(e.detail) ? JSON.stringify(e.detail) : undefined;
+    if (json === undefined) note = ' (detail not plain JSON)';
+    else if (utf8Bytes(json) > ASSISTANT_DETAIL_BYTES) note = ' (detail too large)';
+    else detail = JSON.parse(json);
+  }
+  const message = `${cleanLine(e.message, ASSISTANT_MESSAGE_MAX - note.length) || 'The tool failed.'}${note}`;
+  const hint = typeof e.hint === 'string' ? cleanLine(e.hint, ASSISTANT_HINT_MAX) : '';
+  return { ok: false, code, message, ...(hint ? { hint } : {}), ...(detail !== undefined ? { detail } : {}) };
+}
+
+/**
+ * The page's assistant.result as the call's outcome (1.9, unreleased): its error (above); its
+ * result checked (`bad_result`: not `{text?, data?, images?, summary?}` with text, plain JSON
+ * data, PNG, JPEG or WebP Blobs and a text summary) and capped (`too_large`: text over 64 KB,
+ * data over 256 KB as JSON, more than 4 images or one over 1.5 MB), its images read to base64,
+ * its summary cleaned and cut to 160 characters.
  */
 export async function assistantCallOutcome(params: Record<string, unknown>): Promise<AssistantCallOutcome> {
   const bad = (why: string): AssistantCallOutcome => ({ ok: false, code: 'bad_result', message: `The tool's result was refused: ${why}.` });
   const big = (why: string): AssistantCallOutcome => ({ ok: false, code: 'too_large', message: `The tool's result is too large: ${why}.` });
-  if (params.ok === false) {
-    const e = isPlainObject(params.error) ? params.error : {};
-    const code = typeof e.code === 'string' && ASSISTANT_PAGE_CODES.has(e.code) ? e.code : 'failed';
-    return { ok: false, code, message: cleanLine(e.message, 2000) || 'The tool failed.' };
-  }
+  if (params.ok === false) return assistantPageError(params.error);
   if (params.ok !== true) return bad('it says neither ok nor not ok');
   const raw = params.result;
   if (raw === undefined || raw === null) return { ok: true, result: {} };
@@ -502,6 +551,11 @@ export async function assistantCallOutcome(params: Record<string, unknown>): Pro
     if (typeof raw.text !== 'string') return bad('its text is not text');
     if (utf8Bytes(raw.text) > ASSISTANT_TEXT_BYTES) return big('its text is over 64 KB');
     result.text = raw.text;
+  }
+  if (raw.summary !== undefined && raw.summary !== null) {
+    if (typeof raw.summary !== 'string') return bad('its summary is not text');
+    const summary = cleanLine(raw.summary, ASSISTANT_SUMMARY_MAX);
+    if (summary) result.summary = summary;
   }
   if (raw.data !== undefined) {
     if (!isJsonData(raw.data)) return bad('its data is not plain JSON');
@@ -1268,7 +1322,7 @@ export class WorkspaceCalls {
         if (inv && params.call === inv.id) {
           const f = params.fraction;
           const fraction = typeof f === 'number' && Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : null;
-          inv.activity({ kind: 'progress', fraction, label: cleanDirtyMessage(params.label) });
+          inv.activity({ kind: 'progress', fraction, label: cleanDirtyMessage(params.label), ...(params.waiting === true ? { waiting: true } : {}) });
         }
         return { ok: true };
       }
@@ -1278,6 +1332,8 @@ export class WorkspaceCalls {
         inv.done(await assistantCallOutcome(params));
         return { ok: true };
       }
+      case 'assistant.stop':
+        return this.stopAssistantTurn(params.turn);
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
     }
@@ -1334,6 +1390,25 @@ export class WorkspaceCalls {
       this.assistantTools = accepted;
     }
     return verdict;
+  }
+
+  /**
+   * assistant.stop {turn} (1.9, unreleased): the app stops that turn of its assistant when it was
+   * told to this tab (hooks.assistantStop). `bad_request` for a turn that is not an id; the answer
+   * is always {stopped, reason?}.
+   */
+  private async stopAssistantTurn(turn: unknown): Promise<AssistantStopAnswer> {
+    if (typeof turn !== 'string' || !turn || turn.length > 128) throw badParam('turn (the id of a turn this page was told of)');
+    if (!this.hooks.assistantStop) return { stopped: false, reason: 'no_assistant' };
+    let answer: AssistantStopAnswer;
+    try {
+      answer = await this.hooks.assistantStop(turn);
+    } catch (e) {
+      this.hooks.log('assistant stop: the app did not take it', e);
+      return { stopped: false, reason: 'failed' };
+    }
+    if (answer?.stopped === true) return { stopped: true };
+    return { stopped: false, reason: cleanLine(answer?.reason, 64) || 'failed' };
   }
 
   /**
@@ -2357,7 +2432,8 @@ export class WorkspaceBridge {
           if (settled) return;
           if (a.kind === 'progress' && !stopping) {
             try {
-              req.onProgress(a.fraction, a.label);
+              if (a.waiting) req.onProgress(a.fraction, a.label, { waiting: true });
+              else req.onProgress(a.fraction, a.label);
             } catch (e) {
               this.hooks.log('assistant call: progress listener failed', e);
             }
@@ -2446,6 +2522,20 @@ export class WorkspaceBridge {
       if (this.channel === current && this.alive !== current.instance) this.closeChannel();
     }, PROBE_MS);
   };
+
+  /**
+   * A turn of the app's assistant bound to this tab started, changed or ended (1.9, unreleased):
+   * the page hears it as the event `assistantTurn` (nothing while its page is not connected).
+   */
+  assistantTurn(turn: AssistantTurn): void {
+    const ch = this.channel;
+    if (!ch || !ch.welcomed) return;
+    try {
+      ch.port.postMessage({ event: 'assistantTurn', data: turn });
+    } catch (e) {
+      this.hooks.log('assistant turn: the page could not be told', e);
+    }
+  }
 
   /**
    * The study as the host now has it (a rename in the header, a save): the frame

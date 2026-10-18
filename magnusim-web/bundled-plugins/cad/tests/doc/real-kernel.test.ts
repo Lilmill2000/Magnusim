@@ -3,7 +3,8 @@
 // KernelAdapter, in-process): solids made from sketches (a rectangle or a
 // circle on an origin plane, then Extrude: tests/doc/blocks.ts), join / cut /
 // intersect volumes against analytic values, validity, units, parameters and
-// the rebuild cache, undo/redo, and a transparent rebuild after a respawn.
+// the rebuild cache, undo/redo, a transparent rebuild after a respawn, and
+// shells (a sealed inner void).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDocService } from '../../src/doc';
@@ -95,6 +96,21 @@ describe('document on the real kernel', () => {
     doc.undo();
     r = await settle(doc);
     expect(r.bodies[0].volume).toBeCloseTo(V_CYL_IN_BLOCK, 6);
+  });
+
+  it('bodies report shells: a void sealed inside the block is a second shell of its one solid', async () => {
+    const { doc } = await open();
+    block(doc);
+    let r = await settle(doc);
+    expect(r.bodies[0]).toMatchObject({ solids: 1, shells: 1 });
+    // A 10 mm cube cut from the middle of the 20 mm block: closed inside it.
+    block(doc, { op: 'cut', at: [5, 5, 5], size: [10, 10, 10] });
+    r = await settle(doc);
+    expect(r.bodies).toHaveLength(1);
+    expect(r.bodies[0]).toMatchObject({ valid: true, solids: 1, shells: 2, faces: 12 });
+    expect(r.bodies[0].volume).toBeCloseTo(8000 - 1000, 6);
+    // measure() says the same (the kernel counts shells over the whole body).
+    expect(await doc.measure(r.bodies[0].id)).toMatchObject({ solids: 1, shells: 2 });
   });
 
   it('a cut that touches nothing is a red no-op; later features still build', async () => {

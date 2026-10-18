@@ -21,6 +21,12 @@
  * `required`, so its optional properties become nullable, and stripNullOptionals()
  * removes the nulls again before validation. The local-server dialect gets the schema
  * as validated, not strict (local grammars may use the limits).
+ *
+ * validateInput() reports every problem with an input at once (up to INPUT_MAX_PROBLEMS,
+ * in at most INPUT_ERROR_MAX characters), so a model fixes them in one round. For a local
+ * model's call of a workspace tool, the runner first gives fillLocalDefaults() the input:
+ * required fields left out or sent as null get "", [] or false when their type has such
+ * an empty value; nothing else is guessed.
  */
 import type { JsonSchemaObject, ProviderId } from './types.ts';
 
@@ -189,64 +195,183 @@ function checkNode(node: unknown, path: string, depth: number): SchemaCheck {
 
 // ---------------------------------------------------------------- validation
 
-export type InputCheck = { ok: true } | { ok: false; error: string; path: string };
+/** The most problems one input's error names; the others are counted ("and N more problems"). */
+export const INPUT_MAX_PROBLEMS = 12;
+/** The most characters (UTF-16 units) an input's error takes: the model's cap for a message (TEXT_CAPS.other). */
+export const INPUT_ERROR_MAX = 2000;
+/** Room kept at the end of a cut error for "; and N more problems.". */
+const ERROR_TAIL = 40;
+
+/** `problems`: how many there are in all (the error names up to INPUT_MAX_PROBLEMS); `path` is the first one's. */
+export type InputCheck = { ok: true } | { ok: false; error: string; path: string; problems: number };
+
+interface Found {
+  /** The first INPUT_MAX_PROBLEMS, in the order found: depth first, in the schema's order. */
+  list: { path: string; text: string }[];
+  total: number;
+}
 
 const chars = (s: string) => [...s].length;
 const show = (v: unknown) => {
   const t = JSON.stringify(v);
   return t && t.length > 40 ? `${t.slice(0, 37)}...` : String(t);
 };
+/** A schema's property name as an error shows it: bare when it is a plain word, else quoted. */
+const fieldName = (name: string) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : JSON.stringify(name));
+const typeWords = (type: string) => (type === 'integer' ? 'a whole number' : type === 'array' ? 'a list' : type === 'object' ? 'an object' : `a ${type}`);
+
+type Empty = '""' | '[]' | 'false';
+const EMPTY_ORDER: readonly Empty[] = ['""', '[]', 'false'];
+
+/**
+ * The value meaning "unused" for a field of schema `s`, as JSON: "" for a string, [] for a
+ * list, false for a boolean; null for anything else (numbers, objects, enums, consts) and
+ * when the schema refuses that empty value (a minLength or minItems above 0).
+ */
+function emptyOf(s: unknown): Empty | null {
+  if (!isRecord(s) || hasOwn(s, 'enum') || hasOwn(s, 'const')) return null;
+  if (s.type === 'string') return isCount(s.minLength) && (s.minLength as number) > 0 ? null : '""';
+  if (s.type === 'array') return isCount(s.minItems) && (s.minItems as number) > 0 ? null : '[]';
+  if (s.type === 'boolean') return 'false';
+  return null;
+}
+const emptyValue = (e: Empty): unknown => (e === '""' ? '' : e === '[]' ? [] : false);
+
+/** ' (send "", [] or false when unused)', naming only the empty values of the fields it follows. */
+function emptyNote(empties: ReadonlySet<Empty>): string {
+  const forms = EMPTY_ORDER.filter((e) => empties.has(e));
+  if (!forms.length) return '';
+  const list = forms.length === 1 ? forms[0] : `${forms.slice(0, -1).join(', ')} or ${forms[forms.length - 1]}`;
+  return ` (send ${list} when unused)`;
+}
+
+/** `s` cut to at most `max` UTF-16 units without splitting a surrogate pair. */
+function cutUnits(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const end = /[\uD800-\uDBFF]/.test(s.charAt(max - 1)) ? max - 1 : max;
+  return s.slice(0, end);
+}
 
 /**
  * Whether `input` satisfies `schema` (a schema checkSchema() accepted), every constraint
- * included. The error names the path and says what is wrong in plain words.
+ * included. The error names every problem at once, in plain words, each with its path:
+ * missing fields (a null on a required field is one, marked "(null)"), unknown fields,
+ * types, enums, consts, ranges and sizes, at every depth, for example
+ * `the input is missing to, body_name (send "" or [] when unused); entities[3].at must
+ * hold at least 2 items.` It names up to INPUT_MAX_PROBLEMS (an object's missing fields are
+ * one problem, and its unknown ones another) in at most INPUT_ERROR_MAX characters, and
+ * counts the rest.
  */
 export function validateInput(schema: JsonSchemaObject | SchemaNode, input: unknown): InputCheck {
-  return validateNode(schema as SchemaNode, input, '');
+  const found: Found = { list: [], total: 0 };
+  validateNode(schema as SchemaNode, input, '', found);
+  if (!found.total) return { ok: true };
+  return { ok: false, error: inputError(found), path: found.list[0].path, problems: found.total };
 }
 
-function validateNode(s: SchemaNode, v: unknown, path: string): InputCheck {
+/** The problems as one message, "a; b; c.", cut to INPUT_ERROR_MAX with the rest counted. */
+function inputError(found: Found): string {
+  const room = INPUT_ERROR_MAX - ERROR_TAIL;
+  let text = '';
+  let named = 0;
+  for (const p of found.list) {
+    const next = text ? `${text}; ${p.text}` : p.text;
+    if (next.length > room) {
+      if (!text) {
+        text = `${cutUnits(p.text, room - 1)}…`;
+        named = 1;
+      }
+      break;
+    }
+    text = next;
+    named += 1;
+  }
+  const more = found.total - named;
+  return more > 0 ? `${text}; and ${more} more problem${more === 1 ? '' : 's'}.` : `${text}.`;
+}
+
+function validateNode(s: SchemaNode, v: unknown, path: string, found: Found): void {
   const where = path || 'the input';
-  const bad = (error: string): InputCheck => ({ ok: false, error: `${where} ${error}`, path });
+  const note = (text: string) => {
+    found.total += 1;
+    if (found.list.length < INPUT_MAX_PROBLEMS) found.list.push({ path, text });
+  };
+  const bad = (error: string) => note(`${where} ${error}`);
   const type = String(s.type);
-  if (!matchesType(type, v)) return bad(`must be ${type === 'integer' ? 'a whole number' : type === 'array' ? 'a list' : type === 'object' ? 'an object' : `a ${type}`}.`);
-  if (hasOwn(s, 'const') && v !== s.const) return bad(`must be ${show(s.const)}.`);
-  if (Array.isArray(s.enum) && !s.enum.some((e) => e === v)) return bad(`must be one of ${s.enum.map(show).join(', ')}.`);
+  // A value of the wrong type, const or enum has nothing more to check inside it.
+  if (!matchesType(type, v)) return bad(`must be ${typeWords(type)}`);
+  if (hasOwn(s, 'const') && v !== s.const) return bad(`must be ${show(s.const)}`);
+  if (Array.isArray(s.enum) && !s.enum.some((e) => e === v)) return bad(`must be one of ${s.enum.map(show).join(', ')}`);
   if (type === 'number' || type === 'integer') {
     const n = v as number;
-    if (isFiniteNumber(s.minimum) && n < (s.minimum as number)) return bad(`must be at least ${s.minimum}.`);
-    if (isFiniteNumber(s.maximum) && n > (s.maximum as number)) return bad(`must be at most ${s.maximum}.`);
+    if (isFiniteNumber(s.minimum) && n < (s.minimum as number)) bad(`must be at least ${s.minimum}`);
+    else if (isFiniteNumber(s.maximum) && n > (s.maximum as number)) bad(`must be at most ${s.maximum}`);
   }
   if (type === 'string') {
     const len = chars(v as string);
-    if (isCount(s.minLength) && len < (s.minLength as number)) return bad(`must be at least ${s.minLength} characters.`);
-    if (isCount(s.maxLength) && len > (s.maxLength as number)) return bad(`must be at most ${s.maxLength} characters.`);
+    if (isCount(s.minLength) && len < (s.minLength as number)) bad(`must be at least ${s.minLength} characters`);
+    else if (isCount(s.maxLength) && len > (s.maxLength as number)) bad(`must be at most ${s.maxLength} characters`);
   }
   if (type === 'array') {
     const list = v as unknown[];
-    if (isCount(s.minItems) && list.length < (s.minItems as number)) return bad(`must hold at least ${s.minItems} items.`);
-    if (isCount(s.maxItems) && list.length > (s.maxItems as number)) return bad(`must hold at most ${s.maxItems} items.`);
-    for (let i = 0; i < list.length; i += 1) {
-      const r = validateNode(s.items as SchemaNode, list[i], `${path || 'input'}[${i}]`);
-      if (!r.ok) return r;
-    }
+    if (isCount(s.minItems) && list.length < (s.minItems as number)) bad(`must hold at least ${s.minItems} items`);
+    else if (isCount(s.maxItems) && list.length > (s.maxItems as number)) bad(`must hold at most ${s.maxItems} items`);
+    for (let i = 0; i < list.length; i += 1) validateNode(s.items as SchemaNode, list[i], `${path || 'input'}[${i}]`, found);
   }
   if (type === 'object') {
     const obj = v as Record<string, unknown>;
     const props = (isRecord(s.properties) ? s.properties : {}) as Record<string, SchemaNode>;
-    for (const key of Object.keys(obj)) {
-      if (!hasOwn(props, key)) return { ok: false, error: `${where} has an unknown field "${key.slice(0, 40)}".`, path };
-    }
-    const required = Array.isArray(s.required) ? (s.required as string[]) : [];
+    const required = new Set(Array.isArray(s.required) ? (s.required as string[]) : []);
+    const missing: string[] = [];
+    const empties = new Set<Empty>();
     for (const r of required) {
-      if (!hasOwn(obj, r) || obj[r] === undefined) return { ok: false, error: `${where} is missing "${r}".`, path };
+      const absent = !hasOwn(obj, r) || obj[r] === undefined;
+      if (!absent && obj[r] !== null) continue;
+      missing.push(absent ? fieldName(r) : `${fieldName(r)} (null)`);
+      const e = emptyOf(props[r]);
+      if (e) empties.add(e);
     }
-    for (const key of Object.keys(obj)) {
-      const r = validateNode(props[key], obj[key], path ? `${path}.${key}` : key);
-      if (!r.ok) return r;
+    if (missing.length) note(`${where} is missing ${missing.join(', ')}${emptyNote(empties)}`);
+    const unknown = Object.keys(obj).filter((k) => !hasOwn(props, k));
+    if (unknown.length) {
+      note(`${where} has ${unknown.length === 1 ? 'an unknown field' : 'unknown fields'} ${unknown.map((k) => `"${k.slice(0, 40)}"`).join(', ')}`);
+    }
+    for (const key of Object.keys(props)) {
+      if (!hasOwn(obj, key) || obj[key] === undefined) continue;
+      // A required field's null is named with the missing ones above.
+      if (obj[key] === null && required.has(key)) continue;
+      validateNode(props[key], obj[key], path ? `${path}.${key}` : key, found);
     }
   }
-  return { ok: true };
+}
+
+/**
+ * The input with each required field it leaves out, or sends as null, given the value that
+ * means "unused" when its type has one: "" for a string without enum or const, [] for a
+ * list, false for a boolean (not when the schema refuses that value: a minLength or
+ * minItems above 0). At every depth; numbers, enums, consts and objects are never guessed,
+ * and everything else is left for validateInput(). The runner uses it only for a local
+ * model's calls of workspace tools, whose schemas list every field as required.
+ */
+export function fillLocalDefaults(schema: JsonSchemaObject | SchemaNode, input: unknown): unknown {
+  return fillNode(schema as SchemaNode, input);
+}
+
+function fillNode(s: SchemaNode, v: unknown): unknown {
+  if (!isRecord(s)) return v;
+  if (s.type === 'array' && Array.isArray(v)) return v.map((x) => fillNode(s.items as SchemaNode, x));
+  if (s.type !== 'object' || !isRecord(v)) return v;
+  const props = (isRecord(s.properties) ? s.properties : {}) as Record<string, SchemaNode>;
+  const out: Record<string, unknown> = {};
+  // Defined, not assigned, as stripNode keeps an own "__proto__" key a key.
+  const put = (k: string, x: unknown) => Object.defineProperty(out, k, { value: x, enumerable: true, writable: true, configurable: true });
+  for (const [k, x] of Object.entries(v)) put(k, hasOwn(props, k) ? fillNode(props[k], x) : x);
+  for (const r of Array.isArray(s.required) ? (s.required as string[]) : []) {
+    if (hasOwn(out, r) && out[r] !== null && out[r] !== undefined) continue;
+    const e = emptyOf(props[r]);
+    if (e) put(r, emptyValue(e));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- emitters

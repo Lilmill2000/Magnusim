@@ -291,7 +291,7 @@ export function storedIds(solverIds: readonly string[]): string[] {
 
 /**
  * The sketch as the solver takes it: the origin as a locked point, collinear as
- * two point_on_line, each driving dimension with its value (`values[id]`, else
+ * two point_on_line (one when the lines share an end), each driving dimension with its value (`values[id]`, else
  * what it measures now), driven ones as driving:false (the solver measures them
  * and never uses them).
  */
@@ -325,7 +325,12 @@ export function toSolverSketch(f: Pick<SketchFeature, 'points' | 'entities' | 'c
     if (c.kind === 'collinear') {
       const other = entityOf(f, c.refs[1]);
       if (other?.kind !== 'line') continue;
-      constraints.push({ id: `${c.id}#a`, kind: 'point_on_line', refs: [other.p[0], c.refs[0]] }, { id: `${c.id}#b`, kind: 'point_on_line', refs: [other.p[1], c.refs[0]] });
+      // An end the two lines share lies on the first line already: its half would only repeat that
+      // (the solver calls it redundant, and the whole relation with it), so it is left out.
+      const first = entityOf(f, c.refs[0]);
+      const own: readonly string[] = first?.kind === 'line' ? first.p : [];
+      if (!own.includes(other.p[0])) constraints.push({ id: `${c.id}#a`, kind: 'point_on_line', refs: [other.p[0], c.refs[0]] });
+      if (!own.includes(other.p[1])) constraints.push({ id: `${c.id}#b`, kind: 'point_on_line', refs: [other.p[1], c.refs[0]] });
       continue;
     }
     if (c.kind === 'fix') {

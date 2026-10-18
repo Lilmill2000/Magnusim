@@ -34,7 +34,7 @@ const sweepModule: CadModule = {
       enabled: () => ui.editBlock() ?? (anyProfiles(services) ? true : NO_PROFILES),
       run: () => {
         const p = ui.state.get().panel;
-        if (p?.kind === 'feature' && p.isNew && p.type === 'sweep') return;
+        if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'sweep') return;
         const pre = preselectedProfiles(services);
         if ('refused' in pre) {
           services.bridge.toast(`Sweep: ${pre.refused}`, 'info');

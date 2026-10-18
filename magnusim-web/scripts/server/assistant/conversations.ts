@@ -11,8 +11,8 @@
  * answers any call a crashed or stopped turn left open, before anything else is added.
  *
  * Limits: 20 conversations (the oldest idle one goes first), 2 hours idle, 300 messages,
- * 100 images and 20 MB each, and "full" at 80% of the model's context (128K tokens for a
- * model Magnusim doesn't know). Nothing is written to disk.
+ * 100 images and 20 MB each, and "full" at 80% of the model's context (a local server's
+ * model: the context its server reported, else 128K tokens). Nothing is written to disk.
  *
  * A conversation on a coding agent (provider `agent:<id>`, phase 3 spec 4.7) keeps no
  * messages: the agent keeps the history, so its list stays empty and repair() has nothing to
@@ -34,7 +34,7 @@ export const CONVERSATION_LIMITS = Object.freeze({
   fullFraction: 0.8,
 });
 
-/** Context windows, in tokens: the spec names only the local default; cloud models get a safe 200K. */
+/** Context windows, in tokens: a local model's when its server reports none, and a safe 200K for cloud models. */
 export const CONTEXT_TOKENS = Object.freeze({ cloud: 200_000, local: 128_000 });
 
 export const FULL_TEXT = 'This conversation is full. Start a new one.';
@@ -65,6 +65,10 @@ export class Conversation {
   running: string | null = null;
   /** The last request's prompt tokens (for "full"). */
   promptTokens = 0;
+  /** The local server's context for this conversation's model, once its model row said (tokens). */
+  contextTokens: number | null = null;
+  /** The base URL of the server that said contextTokens (another server's model may differ). */
+  contextBaseUrl: string | null = null;
   private readonly list: Message[] = [];
   private imageCount = 0;
   private byteCount = 0;
@@ -136,13 +140,19 @@ export class Conversation {
     return open.length;
   }
 
-  /** Why no more turns fit (null while they do). */
-  fullReason(): string | null {
+  /** The context the server at `baseUrl` reported for this conversation's model (null when none did, or another server). */
+  contextAt(baseUrl: string): number | null {
+    return this.contextBaseUrl === baseUrl ? this.contextTokens : null;
+  }
+
+  /** Why no more turns fit (null while they do); with `baseUrl`, a context only that server reported counts. */
+  fullReason(baseUrl?: string): string | null {
     const L = CONVERSATION_LIMITS;
     if (this.list.length >= L.messages) return 'messages';
     if (this.imageCount >= L.images) return 'images';
     if (this.byteCount >= L.bytes) return 'bytes';
-    const window = this.provider === 'openai_compatible' ? CONTEXT_TOKENS.local : CONTEXT_TOKENS.cloud;
+    const context = baseUrl === undefined ? this.contextTokens : this.contextAt(baseUrl);
+    const window = this.provider === 'openai_compatible' ? (context ?? CONTEXT_TOKENS.local) : CONTEXT_TOKENS.cloud;
     if (this.promptTokens >= L.fullFraction * window) return 'context';
     return null;
   }

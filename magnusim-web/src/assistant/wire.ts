@@ -226,7 +226,8 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: 'read' | 'edit' | 'compute' | 'destructive'; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; summary: string; ms: number }
+  /** `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's line. */
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
@@ -279,6 +280,12 @@ export interface RelayFrameData {
    * the last one ended (ms since 1970 or an ISO date; null or absent: no hold).
    */
   active: { turns: number; hold_until?: number | string | null };
+  /**
+   * A turn bound to this tab: 'running' as it starts and after each change (at most once a
+   * second), 'ended' once with how it ended. Each running one comes again right after `active`
+   * on a new link, as many as its `turns`.
+   */
+  turn: RelayTurnFrame;
   /** Run a tool of the page (`tool` is the page's own name for it). */
   invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number };
   abort: { call: string };
@@ -287,6 +294,22 @@ export interface RelayFrameData {
   gate_closed: { gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' };
   /** The server dropped this tab's registration (its plugin was turned off or replaced). */
   unregistered: { reason: string };
+}
+
+/**
+ * A turn bound to this tab, as the server tells the page (CAD tools spec H3): its title is the
+ * first line of the person's request (at most 60 characters), `local` says it runs on a local
+ * server, `used.steps` counts its tool calls. context_tokens and images: null while unknown.
+ */
+export interface RelayTurnFrame {
+  id: string;
+  state: 'running' | 'ended';
+  title: string;
+  local: boolean;
+  context_tokens: number | null;
+  images: boolean | null;
+  used: { steps: number; steps_cap: number; usd: number; usd_cap: number };
+  end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
 }
 
 export type RelayFrameType = keyof RelayFrameData;
@@ -312,6 +335,8 @@ export interface RelayTool {
   inputSchema: Record<string, unknown>;
   risk: 'read' | 'edit' | 'compute' | 'destructive';
   timeoutS: number;
+  /** What the question before a destructive call says it does (CAD tools spec H10; absent when none). */
+  confirm?: string;
 }
 
 /** POST /api/assistant/relay/tools: `tools: []` unregisters. */
@@ -343,12 +368,18 @@ export interface RelayProgressBody {
   /** 0 to 1, or null when the page said none; absent only on the ack. */
   fraction?: number | null;
   label?: string;
+  /** The call waits for the person (only then): the turn's minutes stop until a progress without it. */
+  waiting?: true;
 }
 
-/** POST /api/assistant/relay/result: the call's end (images as base64). */
+/**
+ * POST /api/assistant/relay/result: the call's end (images as base64). A result's `summary` is the
+ * turn log's line, never the model's; an error's `hint` (how to fix it) and `detail` (plain JSON,
+ * at most 4 KB) reach the model with its message.
+ */
 export type RelayResultBody =
-  | { link: string; call: string; ok: true; result: { text?: string; data?: unknown; images?: Array<{ mediaType: string; data: string }> } }
-  | { link: string; call: string; ok: false; error: { code: string; message: string } };
+  | { link: string; call: string; ok: true; result: { text?: string; data?: unknown; images?: Array<{ mediaType: string; data: string }>; summary?: string } }
+  | { link: string; call: string; ok: false; error: { code: string; message: string; hint?: string; detail?: unknown } };
 
 /**
  * POST /api/assistant/relay/gate: the person's answer to a question this tab showed, on the

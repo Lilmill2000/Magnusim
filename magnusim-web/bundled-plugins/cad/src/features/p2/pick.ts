@@ -5,6 +5,9 @@
 // "Bodies") while it is active and goes back to what it was after, as
 // Fusion's command filters do. What the field holds is shown by mirroring it
 // into the shared selection (the viewport highlights the selection).
+// In a panel the Assistant fills (usePanelOwner), no tool is pushed, the filter
+// is left alone, and a selection made elsewhere is not taken: the person's
+// clicks only select and never change the Assistant's draft.
 // Owner: P2-FEATURES (shared by its panels; INTEGRATE may lift it into the kit).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef } from 'react';
@@ -12,6 +15,7 @@ import { setSelectionFilter, showForPanel } from '../../lib/selection';
 import type { AppServices } from '../../types/app';
 import { selectionKey, type PickResult, type SelectionItem, type SelectKind } from '../../types/selection';
 import type { ViewportHandle } from '../../types/viewport';
+import { usePanelOwner } from '../../ui/kit';
 
 export interface PickerOptions {
   /** False: no tool (the field is not active). */
@@ -29,8 +33,9 @@ export function usePicker(services: AppServices, opts: PickerOptions): void {
   const ref = useRef(opts);
   ref.current = opts;
   const kindsKey = opts.kinds.join(',');
+  const active = usePanelOwner() !== 'assistant' && opts.active;
   useEffect(() => {
-    if (!opts.active) return;
+    if (!active) return;
     let pop: (() => void) | null = null;
     let handle: ViewportHandle | null = null;
     const attach = (h: ViewportHandle | null) => {
@@ -64,7 +69,7 @@ export function usePicker(services: AppServices, opts: PickerOptions): void {
       const now = services.selection.get().filter;
       if (now.join(',') === mine.join(',')) setSelectionFilter(services.selection, before);
     };
-  }, [services, opts.active, kindsKey]);
+  }, [services, active, kindsKey]);
 }
 
 /**
@@ -79,6 +84,8 @@ export function useSelectionMirror(services: AppServices, items: SelectionItem[]
   const last = useRef<string>('');
   const outside = useRef(onOutside);
   outside.current = onOutside;
+  const assistant = useRef(false);
+  assistant.current = usePanelOwner() === 'assistant';
   useEffect(() => {
     last.current = key;
     const cur = services.selection.get().items.map(selectionKey).join('\n');
@@ -98,6 +105,8 @@ export function useSelectionMirror(services: AppServices, items: SelectionItem[]
         last.current = k;
         return;
       }
+      // The Assistant's panel takes no pick of the person's (it only selects).
+      if (assistant.current) return;
       outside.current?.(added);
     });
     return () => {

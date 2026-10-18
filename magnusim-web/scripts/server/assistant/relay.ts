@@ -19,6 +19,12 @@
  *                                  its channel while turns > 0 or until then; the one at an
  *                                  open tells a page that last heard of a turn (before a
  *                                  restart or a long drop) that none run.
+ *   turn {id, state, title, local, context_tokens, images, used, end?}   a turn bound to the tab
+ *                                  (turns.ts TurnPageView): state 'running' as it starts and after
+ *                                  each change (at most once a second), 'ended' once with `end`
+ *                                  {state, reason}; each running one again right after `active` on
+ *                                  every new link (as many as its `turns`). Sent before the
+ *                                  `active` its start or end changes.
  *   invoke {call, turn, tool, input, timeout_s}   run the page's tool `tool` (its own name)
  *   abort {call}                   Stop, a turn limit, or the call stalled
  *   gate {gate}                    a question (GateView) of a turn bound to this tab, or of
@@ -33,7 +39,7 @@
  *                   rev is taken again, e.g. on a new link), plugin_changed (the frame's pinned
  *                   epoch is no longer its plugin's), plugin_off (a fresh frame, no epoch,
  *                   while the live registry says the plugin is not loaded); 400.
- *   /relay/progress {link, call, ack?, fraction?, label?} → {ok} | {ok, stale:true}
+ *   /relay/progress {link, call, ack?, fraction?, label?, waiting?} → {ok} | {ok, stale:true}
  *   /relay/result   {link, call, ok, result? | error?}    → {ok} | {ok, stale:true}
  *   /relay/gate     {link, gate, allow} → {ok}: the person's answer to a question this link
  *                   was sent (the tab that shows it). 403 not_shown (never sent on this link,
@@ -59,8 +65,9 @@
  *   turn on it 409 tab_hidden, its questions unseen) until any POST on it shows the page is
  *   there, or it ends (dormant for the hold). The stall window is the runner's (runner.ts),
  *   reset by progress: a bare one ({fraction: null}) is the page's sign of life while its
- *   frame waits on a call to the app (the bridge's onAlive). Stop sends `abort` and waits up
- *   to 2 s for the page's last answer; the runner giving up on the call (its `released`)
+ *   frame waits on a call to the app (the bridge's onAlive); `waiting: true` says the call
+ *   waits for the person (the runner stops the turn's minutes until a progress without it).
+ *   Stop sends `abort` and waits up to 2 s for the page's last answer; the runner giving up on the call (its `released`)
  *   frees the tab at once.
  * - The page withdraws its tools (tools []) after a call's result; a withdrawal that finds a
  *   call still running gives its result 2 s (then `closed`). A channel or stream that just
@@ -88,11 +95,11 @@ import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
 import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
-import type { Registry, ToolOutcome } from './registry.ts';
+import type { ProgressOptions, Registry, ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
-import { cleanText, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
+import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
-import { NOT_SHOWN_TEXT, type TurnManager } from './turns.ts';
+import { NOT_SHOWN_TEXT, type Turn, type TurnManager } from './turns.ts';
 import type { ImagePart } from './types.ts';
 
 export const LINK_RE = /^[0-9a-f]{24}$/;
@@ -108,8 +115,19 @@ export const UNREGISTER_GRACE_MS = 2_000;
  * copy in place decides.
  */
 export const REGISTRY_REFRESH_WAIT_MS = 2 * 60_000;
-/** What a page's tool result may hold (as the bridge checks it in the page). */
-export const RESULT_CAPS = Object.freeze({ text: 64 * 1024, data: 256 * 1024, images: IMAGE_CAPS.perResult, imageBytes: IMAGE_CAPS.bytes });
+/**
+ * What a page's tool result may hold (as the bridge checks it in the page): its text and data
+ * (bytes), images, a summary (characters), and an error's hint (characters) and detail (bytes).
+ */
+export const RESULT_CAPS = Object.freeze({
+  text: 64 * 1024,
+  data: 256 * 1024,
+  images: IMAGE_CAPS.perResult,
+  imageBytes: IMAGE_CAPS.bytes,
+  summary: 160,
+  hint: 500,
+  detail: ERROR_DETAIL_BYTES,
+});
 /** The codes a page's error may carry (the page's own and the host bridge's); anything else is `failed`. */
 export const PAGE_RESULT_CODES: ReadonlySet<string> = new Set([
   'invalid_input',
@@ -256,7 +274,7 @@ interface Pending {
   pluginName: string;
   epoch: string;
   workspace: string;
-  progress(fraction: number | null, label: string): void;
+  progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   resolve(o: ToolOutcome): void;
   acked: boolean;
   aborted: boolean;
@@ -314,7 +332,7 @@ export interface InvokeCall {
   /** The runner stopped waiting for the call (runner.ts): the tab is free at once. */
   released?: AbortSignal;
   turn: string | null;
-  progress(fraction: number | null, label: string): void;
+  progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
 }
 
 export interface RelayOptions {
@@ -379,8 +397,11 @@ export class Relay {
     });
     if (!o.keepPresenter) this.turns.gates.setPresenter(this.presenter);
     this.turns.setTabInfo((tab) => this.tabInfo(tab));
-    this.offTurns = this.turns.onTurnChange((t) => {
-      if (t.tab) this.turnsChanged(t.tab);
+    this.offTurns = this.turns.onTurnChange((t, change) => {
+      if (!t.tab) return;
+      // Its page hears the turn first, then the tab's count its start or end changed.
+      this.sendTurn(t.tab, t);
+      if (change !== 'updated') this.turnsChanged(t.tab);
     });
     this.offBump = (o.onEpochBump ?? onPluginEpochBump)((key: string) => this.onEpochBump(key));
     this.offRegistry = o.onRegistryChanged ? o.onRegistryChanged(() => this.registryChanged()) : () => {};
@@ -407,6 +428,8 @@ export class Relay {
     // Always, none and no hold too: a page that last heard of a bound turn (before a server
     // restart, or a drop longer than the hold) learns that none run and lets its channel go.
     send('active', { turns: n, hold_until: this.liveHold(t) });
+    // Its running turns again, right after: one the page knew of and does not hear now ended meanwhile.
+    for (const turn of this.turns.runningForTab(meta.tab)) send('turn', turn.pageView());
     // Questions of its turns that waited for it are shown now.
     this.turns.gates.tabLinked(meta.tab);
     return { ok: true, cleanup: () => this.linkEnded(rec) };
@@ -780,7 +803,7 @@ export class Relay {
     this.heard(rec);
     const p = this.pendingFor(rec, body.call);
     if (!p) return ok({ stale: true });
-    const moved = body.fraction !== undefined || body.label !== undefined;
+    const moved = body.fraction !== undefined || body.label !== undefined || body.waiting === true;
     if (body.ack === true || moved) {
       p.acked = true;
       this.clock.clearTimeout(p.ackTimer);
@@ -789,7 +812,8 @@ export class Relay {
     if (moved && !p.aborted) {
       const f = typeof body.fraction === 'number' && Number.isFinite(body.fraction) ? Math.min(1, Math.max(0, body.fraction)) : null;
       try {
-        p.progress(f, cleanText(body.label, 120));
+        if (body.waiting === true) p.progress(f, cleanText(body.label, 120), { waiting: true });
+        else p.progress(f, cleanText(body.label, 120));
       } catch {
         /* the turn's log never breaks the page's call */
       }
@@ -815,6 +839,13 @@ export class Relay {
   }
 
   // ------------------------------------------------------------ turns and gates
+
+  /** A turn bound to the tab started, changed or ended: its page hears it on the live link. */
+  private sendTurn(tab: string, turn: Turn): void {
+    if (this.closed) return;
+    const l = this.tabs.get(tab)?.link;
+    if (l && l.open) l.send('turn', turn.pageView());
+  }
 
   private turnsChanged(tab: string): void {
     if (this.closed) return;
@@ -977,18 +1008,43 @@ function parseWorkspace(raw: unknown): { plugin: string; workspace: string; titl
 }
 
 /**
- * The page's answer as the call's outcome: an error with a code from the page's and the
- * bridge's lists (else `failed`), or its result shape-checked and capped as the bridge does
- * (`bad_result`, `too_large`); images go on as base64 for the runner's own checks.
+ * A page's error as the call's outcome: a code from the page's and the bridge's lists (else
+ * `failed`), its message, its hint (≤ 500 characters) and its detail (≤ 4 KB as JSON, else
+ * dropped with " (detail too large)", or " (detail not plain JSON)", on the message), as the
+ * bridge keeps them.
+ */
+function pageError(raw: unknown): ToolOutcome {
+  const e = isRecord(raw) ? raw : {};
+  const code = typeof e.code === 'string' && PAGE_RESULT_CODES.has(e.code) ? e.code : 'failed';
+  let note = '';
+  let detail: unknown;
+  if (e.detail !== undefined && e.detail !== null) {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(e.detail);
+    } catch {
+      json = undefined;
+    }
+    if (json === undefined) note = ' (detail not plain JSON)';
+    else if (Buffer.byteLength(json, 'utf8') > RESULT_CAPS.detail) note = ' (detail too large)';
+    else detail = JSON.parse(json);
+  }
+  const out = fail(code, `${cleanText(e.message, TEXT_CAPS.other - note.length) || 'The tool failed.'}${note}`);
+  const hint = typeof e.hint === 'string' ? cleanText(e.hint, RESULT_CAPS.hint) : '';
+  if (out.error && hint) out.error.hint = hint;
+  if (out.error && detail !== undefined) out.error.detail = detail;
+  return out;
+}
+
+/**
+ * The page's answer as the call's outcome: its error (above), or its result shape-checked and
+ * capped as the bridge does (`bad_result`, `too_large`); images go on as base64 for the
+ * runner's own checks. The page's summary (≤ 160 characters) is the log's line, else "Done".
  */
 export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
   const bad = (why: string) => fail('bad_result', `The tool's result was refused: ${why}.`);
   const big = (why: string) => fail('too_large', `The tool's result is too large: ${why}.`);
-  if (body.ok === false) {
-    const e = isRecord(body.error) ? body.error : {};
-    const code = typeof e.code === 'string' && PAGE_RESULT_CODES.has(e.code) ? e.code : 'failed';
-    return fail(code, cleanText(e.message, TEXT_CAPS.other) || 'The tool failed.');
-  }
+  if (body.ok === false) return pageError(body.error);
   if (body.ok !== true) return bad('it says neither ok nor not ok');
   const raw = body.result;
   if (raw === undefined || raw === null) return { ok: true, summary: 'Done' };
@@ -1002,6 +1058,11 @@ export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
     if (typeof raw.text !== 'string') return bad('its text is not text');
     if (Buffer.byteLength(raw.text, 'utf8') > RESULT_CAPS.text) return big('its text is over 64 KB');
     out.text = raw.text;
+  }
+  let summary = '';
+  if (raw.summary !== undefined && raw.summary !== null) {
+    if (typeof raw.summary !== 'string') return bad('its summary is not text');
+    summary = cleanText(raw.summary, RESULT_CAPS.summary);
   }
   if (raw.data !== undefined) {
     let json: string | undefined;
@@ -1029,7 +1090,8 @@ export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
     }
     if (images.length) out.images = images;
   }
-  if (out.images?.length) out.summary = `Done (${out.images.length} image${out.images.length === 1 ? '' : 's'})`;
+  if (summary) out.summary = summary;
+  else if (out.images?.length) out.summary = `Done (${out.images.length} image${out.images.length === 1 ? '' : 's'})`;
   return out;
 }
 

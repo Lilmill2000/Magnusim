@@ -13,6 +13,9 @@
  * - Tools are strict, with schemas from emitSchema('anthropic'), while the request stays
  *   within the provider's limits on strict tools (STRICT_LIMITS), in the order offered;
  *   the rest go without strict (validateInput still checks every input). tool_choice is auto.
+ *   A 400 that says the strict schemas can't be compiled (STRICT_REFUSED_WORDS) is sent once
+ *   more with the workspace's tools not strict, the host's still strict, and that tool set
+ *   goes so from then on (CAD tools spec H8, common.ts sendStrictOrLoose).
  * - Cache breakpoints: the last tool, the last cached system block, and the last block
  *   of the last message.
  * - An answer that came back empty is never sent back: the API refuses an empty assistant
@@ -39,13 +42,14 @@ import {
   type ProviderAdapter,
   type ProviderRequest,
   type ProviderResult,
+  type ProviderTool,
   type StopReason,
   type StreamEvent,
   type Usage,
   type UserPart,
 } from '../types.ts';
-import { newWatchdog, parseToolInput, requestMessages, SDK_TIMEOUT_MS, tokenCount, type AdapterOptions } from './common.ts';
-import { mapProviderError } from './errors.ts';
+import { newWatchdog, parseToolInput, requestMessages, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
+import { mapProviderError, strictSchemaRefusal } from './errors.ts';
 import { envHeaderNulls, guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
 import { loadSdkClass } from './load-sdk.ts';
 
@@ -84,6 +88,14 @@ const EPHEMERAL = Object.freeze({ type: 'ephemeral' });
 export const STRICT_LIMITS = Object.freeze({ tools: 20, optional: 24, unions: 16 });
 
 /**
+ * A 400's words when the strict tool schemas can't be compiled (CAD tools spec H8). The page
+ * above quotes only "Schema is too complex for compilation."; the others (a compile that
+ * timed out or grew too large, a strict limit or keyword named) are not quoted there and are
+ * matched loosely.
+ */
+export const STRICT_REFUSED_WORDS = /too complex for compilation|compilation timed out|grammar is too large|strict tools?\b/i;
+
+/**
  * Refusal categories whose decline before any output the provider does not bill
  * (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback, read
  * 2026-10-16: only bio, frontier_llm and reasoning_extraction are). A null category is not
@@ -112,6 +124,17 @@ function strictWeight(schema: Json): { optional: number; unions: number } {
   };
   visit(schema);
   return { optional, unions };
+}
+
+/**
+ * Which of the request's tools go strict: those strictFlags grants among the ones that may,
+ * which with `loose` leaves out the workspace's tools (CAD tools spec H8).
+ */
+export function strictOf(tools: readonly ProviderTool[], schemas: readonly Json[], loose: boolean): boolean[] {
+  const may = tools.map((t) => !(loose && t.workspace));
+  const granted = strictFlags(schemas.filter((_, i) => may[i]));
+  let k = 0;
+  return may.map((m) => (m ? granted[k++] : false));
 }
 
 /** Which of the tools go strict: in the order offered, each one that still fits STRICT_LIMITS. */
@@ -173,8 +196,8 @@ function assistantContent(m: Extract<Message, { role: 'assistant' }>): Json[] {
   return out;
 }
 
-/** The request body (without `stream`), as sent. */
-export function anthropicBody(req: ProviderRequest): Json {
+/** The request body (without `stream`), as sent; with `loose` the workspace's tools go without strict (H8). */
+export function anthropicBody(req: ProviderRequest, o: { loose?: boolean } = {}): Json {
   const fallback = usesFallback(req.model);
   const sys = req.system.filter((s) => s.text);
   let lastCached = -1;
@@ -197,7 +220,7 @@ export function anthropicBody(req: ProviderRequest): Json {
     }
   }
   const schemas = req.tools.map((t) => emitSchema('anthropic', t.schema));
-  const strict = strictFlags(schemas);
+  const strict = strictOf(req.tools, schemas, !!o.loose);
   const tools = req.tools.map(
     (t, i): Json => ({
       name: t.name,
@@ -453,29 +476,39 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
 
     async send(req, signal, onEvent) {
       await loadSdkClass('@anthropic-ai/sdk', 'Anthropic');
-      const body = anthropicBody(req);
-      return o.borrowKey(async (key) => {
-        const wd = newWatchdog(o, false);
-        const sig = AbortSignal.any([signal, wd.signal]);
-        const acc = new MessageAccumulator(onEvent);
-        try {
-          const c = await client(String(key), wd, usesFallback(req.model) ? FALLBACK_BETA : null);
-          const stream = await c.beta.messages.create({ ...body, stream: true }, { signal: sig });
-          for await (const ev of stream) {
-            acc.add(ev);
-            if (sig.aborted) break;
+      const strictBody = anthropicBody(req);
+      const sent = (strictBody.tools ?? []) as Json[];
+      // Only a workspace tool sent strict makes a loose request differ (H8).
+      const canLoosen = req.tools.some((t, i) => t.workspace && sent[i]?.strict === true);
+      const attempt = (loose: boolean) =>
+        o.borrowKey(async (key) => {
+          const body = loose ? anthropicBody(req, { loose: true }) : strictBody;
+          const wd = newWatchdog(o, false);
+          const sig = AbortSignal.any([signal, wd.signal]);
+          const acc = new MessageAccumulator(onEvent);
+          try {
+            const c = await client(String(key), wd, usesFallback(req.model) ? FALLBACK_BETA : null);
+            const stream = await c.beta.messages.create({ ...body, stream: true }, { signal: sig });
+            for await (const ev of stream) {
+              acc.add(ev);
+              if (sig.aborted) break;
+            }
+            // The SDK ends the iteration quietly on an abort: never return a partial answer.
+            if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
+            const result = acc.result(req.model);
+            onEvent({ kind: 'usage', usage: result.usage });
+            return result;
+          } catch (err) {
+            const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
+            if (!loose && canLoosen && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS)) {
+              throw new StrictRefused(mapped);
+            }
+            throw mapped;
+          } finally {
+            wd.done();
           }
-          // The SDK ends the iteration quietly on an abort: never return a partial answer.
-          if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
-          const result = acc.result(req.model);
-          onEvent({ kind: 'usage', usage: result.usage });
-          return result;
-        } catch (err) {
-          throw mapProviderError(err, ctx(req.model, wd, signal, acc.started));
-        } finally {
-          wd.done();
-        }
-      });
+        });
+      return sendStrictOrLoose('anthropic', req, canLoosen, attempt);
     },
   };
 }

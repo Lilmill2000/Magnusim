@@ -56,7 +56,7 @@ export function localCommand(services: AppServices, o: { id: string; type: Featu
     enabled: () => ui.editBlock() ?? (services.doc.state.get().rebuild.bodies.length ? true : NO_BODY),
     run: async () => {
       const p = ui.state.get().panel;
-      if (p?.kind === 'feature' && p.isNew && p.type === o.type) return;
+      if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === o.type) return;
       const pre = await preselectedEdgesFaces(services, { edges: o.edges });
       if (pre && 'refused' in pre) {
         services.bridge.toast(`${o.label}: ${pre.refused}`, 'info');

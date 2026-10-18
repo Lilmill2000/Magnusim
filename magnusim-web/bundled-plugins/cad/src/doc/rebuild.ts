@@ -81,6 +81,8 @@ export interface RebuildEngineOptions {
   onResult(out: RebuildOutput, input: RebuildInput): void;
   /** The kernel was respawned (every shape id died); a rebuild follows. */
   onRespawn?(reason: string): void;
+  /** The engine went idle: nothing runs and nothing waits (busy() is false now). DocService.settled looks again. */
+  onIdle?(): void;
   eagerPropsMaxFaces?: number;
 }
 
@@ -200,13 +202,29 @@ export class RebuildEngine {
   }
 
   /**
-   * LINK: the bodies at the END of the history (the rollback bar ignored: the
-   * project's geometry is the finished part), built from `doc` through the same
-   * cache, without tessellation and without telling the page (the view keeps what
-   * it shows). Runs when no rebuild runs, and holds the next one until it is done.
-   * Rejects when the kernel is not running or stopped on the way.
+   * A rebuild (or a bodiesAt build) is running, or a request waits for one: what the
+   * page shows may be about to change. DocService.settled waits until this is false.
    */
-  async bodiesAtEnd(doc: CadDoc, view: CadView): Promise<EndBodies> {
+  busy(): boolean {
+    return this.running || this.pending !== null;
+  }
+
+  /**
+   * LINK: the bodies at the END of the history (the rollback bar ignored: the
+   * project's geometry is the finished part). bodiesAt with no bar.
+   */
+  bodiesAtEnd(doc: CadDoc, view: CadView): Promise<EndBodies> {
+    return this.bodiesAt(doc, view, null);
+  }
+
+  /**
+   * The bodies built from `doc` up to `rollback` (the features before that index;
+   * null = the whole history), through the same cache, without tessellation and
+   * without telling the page (the view keeps what it shows). Runs when no rebuild
+   * runs, and holds the next one until it is done. Rejects when the kernel is not
+   * running or stopped on the way.
+   */
+  async bodiesAt(doc: CadDoc, view: CadView, rollback: number | null): Promise<EndBodies> {
     while (this.running) await this.idle;
     if (this.disposed) throw new Error('the part was closed');
     this.running = true;
@@ -214,7 +232,7 @@ export class RebuildEngine {
     let got: EndBodies | null = null;
     let message: string | null = null;
     try {
-      const out = await this.build({ doc, view: { ...view, rollback: null } }, (bodies, failed) => {
+      const out = await this.build({ doc, view: { ...view, rollback } }, (bodies, failed) => {
         got = {
           failed: failed.map((id) => doc.features.find((f) => f.id === id)?.name ?? id),
           bodies: bodies.map((b) => ({
@@ -235,6 +253,7 @@ export class RebuildEngine {
       this.idleResolve = null;
       r?.();
       if (this.pending && !this.disposed) void this.pump();
+      if (!this.busy() && !this.disposed) this.opts.onIdle?.();
     }
     if (!got) throw new Error(message ?? 'the kernel stopped while the part was rebuilt');
     return got;
@@ -291,6 +310,7 @@ export class RebuildEngine {
       const r = this.idleResolve;
       this.idleResolve = null;
       r?.();
+      if (!this.busy() && !this.disposed) this.opts.onIdle?.();
     }
   }
 
@@ -311,7 +331,7 @@ export class RebuildEngine {
     const r = await this.opts.kernel.call('props', { id: shape, volume: true, area: true, bbox: 'exact', bbox_mode: 'optimal' });
     const p = r.result;
     const bbox: BBox = p.bbox ?? [0, 0, 0, 0, 0, 0];
-    const props: BodyProps = { volume: p.volume ?? 0, area: p.area ?? 0, centroid: p.centroid ?? null, bbox, faces: p.faces, edges: p.edges, solids: p.solids };
+    const props: BodyProps = { volume: p.volume ?? 0, area: p.area ?? 0, centroid: p.centroid ?? null, bbox, faces: p.faces, edges: p.edges, solids: p.solids, shells: p.shells };
     if (epoch === this.epoch) {
       this.props.set(shape, props);
       if (!this.bboxes.has(shape)) this.bboxes.set(shape, { bbox, faces: p.faces });
@@ -547,6 +567,7 @@ export class RebuildEngine {
         volume: props?.volume ?? null,
         area: props?.area ?? null,
         solids: props?.solids ?? null,
+        shells: props?.shells ?? null,
         visible: !hidden.has(b.id),
         tessKey: b.key,
         tess: t ?? null,

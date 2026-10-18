@@ -3,6 +3,8 @@
 // folds, refused before anything is read or written), JSON only, never from the
 // Assistant's own tool calls, errors redacted, no answer ever holding a key; status,
 // settings and keys; per-path body limits; and the test routes only behind their switch.
+// One turn per app tab (CAD tools spec H4): two starts held together, then let go; the tab
+// free once its turn ended, while that turn's loop is still held.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -33,6 +35,7 @@ const routes = await import('../assistant-routes.ts');
 const { assistantState, onAssistantShutdown, resetAssistantState } = await import('../assistant/state.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const home = await import('../assistant/home.ts');
+const { TAB_BUSY_TEXT } = await import('../assistant/turns.ts');
 
 const CANARY = 'sk-ant-api03-CANARY-route-canary-0123456789-XyZ9';
 
@@ -365,7 +368,7 @@ describe('status, settings and keys', () => {
     assert.equal(s.effort, 'default');
     assert.equal(s.privacy, 'ask');
     assert.equal(s.consents, 0);
-    assert.deepEqual(s.caps, { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 });
+    assert.deepEqual(s.caps, { turn_usd: 8, day_usd: 15, steps: 120, turn_minutes: 60, turn_tokens: 10_000_000 });
     for (const slot of ['anthropic', 'openai', 'openai_compatible']) assert.deepEqual(s.keys[slot], { set: false, last4: null, set_at: null, state: 'none' });
     assert.equal(s.storage.kind, 'file');
     assert.equal(s.keys_notice, null);
@@ -557,7 +560,7 @@ describe('turns', () => {
     assert.equal(results.length, 1);
     assert.equal(results[0].ok, true, JSON.stringify(results[0]));
     assert.match(results[0].summary, /^Magnusim .*, \d+ plugins, compute idle, 0 queued$/);
-    const sent = fake.requests().slice(before).filter((x) => x.dialect === 'compat');
+    const sent = fake.requests().slice(before).filter((x) => x.dialect === 'compat' && x.kind === 'chat');
     assert.equal(sent.length, 2);
     assert.ok(sent[0].body.tools.some((t) => t.function.name === 'app_status'));
     assert.ok(!sent[0].body.tools.some((t) => t.function.name === 'connection_check'));
@@ -577,7 +580,8 @@ describe('turns', () => {
   it('Stop while the provider streams: the socket closes, no further request, the turn ends stopped', async () => {
     assert.equal((await localServer()).status, 200);
     fake.reply({ text: 'partial answer', hold: 'stop-1' });
-    const before = fake.requests().length;
+    const chats = () => fake.requests().filter((x) => x.kind === 'chat').length;
+    const before = chats();
     const disconnects = fake.disconnects();
     const r = await post('/api/assistant/turns', { text: 'Go slowly.' });
     assert.equal(r.status, 202);
@@ -591,8 +595,42 @@ describe('turns', () => {
     await until(() => fake.disconnects() === disconnects + 1, 5000, 'the fake to see the socket close');
     fake.release('stop-1');
     await sleep(300);
-    assert.equal(fake.requests().length, before + 1, 'no request after Stop');
+    assert.equal(chats(), before + 1, 'no request after Stop');
     await until(async () => (await post(`/api/assistant/conversations/${r.json.conversation}/forget`, {})).json.forgotten === true, 5000, 'the forget');
+  });
+
+  it("a local server that reports its model's context: too small ends the turn failed (context) with nothing sent; loaded again with room, the next turn of that conversation (within the row's 60 s) is read afresh and its answers may run to 8192 tokens (CAD tools spec H5)", async () => {
+    const chats = () => fake.requests().filter((x) => x.kind === 'chat' && x.dialect === 'compat');
+    const rowReads = () => fake.requests().filter((x) => x.kind === 'model_row');
+    // A reset forgets the rows kept from earlier tests (a row is kept 60 s).
+    assert.equal((await post('/api/test/assistant/reset', {})).status, 200);
+    assert.equal((await localServer()).status, 200);
+    fake.models([{ id: 'qwen3.8-27b', context: 2048, type: 'llm' }], 'compat');
+    try {
+      const chatsBefore = chats().length;
+      const rowsBefore = rowReads().length;
+      let r = await post('/api/assistant/turns', { text: 'Hello?' });
+      assert.equal(r.status, 202, r.text);
+      let { turn } = await follow(r.json.turn);
+      assert.deepEqual(
+        [turn.state, turn.end_reason, turn.message],
+        ['failed', 'context', "The local model's context (2,048 tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation."],
+      );
+      assert.equal(chats().length, chatsBefore, 'nothing sent');
+      assert.deepEqual(rowReads().slice(rowsBefore).map((x) => [x.method, x.path]), [['GET', '/compat/api/v0/models/qwen3.8-27b']]);
+      // The person loads the model again with a longer context and tries again at once, in the
+      // same conversation: the failed turn dropped the kept row, so the server is asked again.
+      fake.models([{ id: 'qwen3.8-27b', context: 32768, type: 'llm' }], 'compat');
+      fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+      r = await post('/api/assistant/turns', { text: 'How is the app?', conversation: r.json.conversation });
+      assert.equal(r.status, 202, r.text);
+      ({ turn } = await follow(r.json.turn));
+      assert.equal(turn.state, 'done', turn.message);
+      assert.deepEqual(chats().slice(chatsBefore).map((x) => x.body.max_tokens), [8192, 8192]);
+      assert.equal(rowReads().length, rowsBefore + 2, 'one read for the turn: its second step uses the kept row');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
   });
 
   it('a cloud turn about a project asks once (Send through the route), then not again; the key goes only as x-api-key', async () => {
@@ -678,6 +716,142 @@ describe('turns', () => {
     const bad = await post('/api/assistant/turns', { text: 'x', provider: 'bogus' });
     assert.deepEqual([bad.status, bad.json.code], [400, 'bad_provider']);
     assert.match(bad.json.error, /anthropic, openai, openai_compatible/);
+  });
+
+  it('one turn per app tab: two POSTs that both passed the checks before either started give one 202 and one 409 tab_busy; another tab still starts, and the tab is free once its turn ended', async () => {
+    assert.equal((await localServer()).status, 200);
+    // A server whose package check waits until the test lets it go: both POSTs wait there,
+    // past the settings read, then race through the checks left to the start.
+    let reached = 0;
+    let letGo = () => undefined;
+    const gate = new Promise((done) => (letGo = done));
+    const r2 = new Router();
+    const h2 = routes.registerAssistantRoutes(r2, {
+      port: () => port,
+      turns: {
+        deps: async () => {
+          reached += 1;
+          await gate;
+          return 'ok';
+        },
+      },
+    });
+    const s2 = await serve(r2);
+    const base = `http://127.0.0.1:${s2.address().port}`;
+    const start = async (body) => {
+      const r = await fetch(`${base}/api/assistant/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: r.status, json: await r.json() };
+    };
+    const ws = { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [] };
+    const turnsNow = [];
+    try {
+      h2.registry.setWorkspace('tab-one', 'L1', ws);
+      fake.reply({ text: 'Working on it.', hold: 'tab-busy' });
+      const both = Promise.all([start({ text: 'First.', tab: 'tab-one' }), start({ text: 'Second.', tab: 'tab-one' })]);
+      await until(() => reached === 2, 5000, 'both POSTs held at the package check');
+      letGo();
+      const answers = await both;
+      assert.deepEqual(answers.map((a) => a.status).sort(), [202, 409], JSON.stringify(answers));
+      const refused = answers.find((a) => a.status === 409);
+      assert.deepEqual(refused.json, { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT });
+      const first = h2.turns.get(answers.find((a) => a.status === 202).json.turn);
+      turnsNow.push(first);
+      assert.equal(first.tab, 'tab-one');
+      await until(() => first.textSoFar().length > 0, 5000, 'the first chunk');
+      assert.equal(h2.turns.running().length, 1, 'the refused one never started');
+      // 'auto' resolves to the same tab; the running turn's own conversation is named as that.
+      assert.deepEqual(await start({ text: 'Third.', tab: 'auto' }), { status: 409, json: { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT } });
+      const same = await start({ text: 'Again.', tab: 'tab-one', conversation: first.conv.id });
+      assert.deepEqual([same.status, same.json.code], [409, 'conversation_busy']);
+      // Another tab is not this one's: it starts and ends while the first still works.
+      h2.registry.setWorkspace('tab-two', 'L2', ws);
+      fake.reply({ text: 'Other tab.' });
+      const other = await start({ text: 'Other.', tab: 'tab-two' });
+      assert.equal(other.status, 202, JSON.stringify(other.json));
+      const t2 = h2.turns.get(other.json.turn);
+      turnsNow.push(t2);
+      await until(() => t2.settled, 5000, 'the other tab’s turn');
+      assert.deepEqual([t2.state, first.ended], ['done', false]);
+      // Stopped, the first turn frees its tab at once: the next one starts.
+      const stopped = await fetch(`${base}/api/assistant/turns/${first.id}/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then((r) => r.json());
+      assert.equal(stopped.turn.state, 'stopped');
+      fake.release('tab-busy');
+      fake.reply({ text: 'Free again.' });
+      const next = await start({ text: 'Next.', tab: 'tab-one' });
+      assert.equal(next.status, 202, JSON.stringify(next.json));
+      const t3 = h2.turns.get(next.json.turn);
+      turnsNow.push(t3);
+      await until(() => t3.settled, 5000, 'the next turn');
+      assert.equal(t3.state, 'done');
+    } finally {
+      letGo();
+      fake.release('tab-busy');
+      for (const t of turnsNow) await until(() => t.settled, 5000, `turn ${t.id} to settle`);
+      h2.shutdown();
+      await new Promise((done) => s2.close(done));
+    }
+  });
+
+  it('one turn per app tab: the tab is free as soon as its turn has ended, while that turn is still unwinding (a restart: the old server’s relay closed during its project read)', async () => {
+    assert.equal((await localServer()).status, 200);
+    // The old server: its project read ignores the turn's abort until the test lets it go,
+    // so the turn's loop is still there after the turn has ended.
+    let reads = 0;
+    let letGo = () => undefined;
+    const gate = new Promise((done) => (letGo = done));
+    const rOld = new Router();
+    const hOld = routes.registerAssistantRoutes(rOld, {
+      port: () => port,
+      turns: {
+        projects: async (id) => {
+          reads += 1;
+          await gate;
+          return { id, title: 'Wing', created_at: null };
+        },
+      },
+    });
+    const sOld = await serve(rOld);
+    let hNew = null;
+    let sNew = null;
+    const start = async (s, body) => {
+      const r = await fetch(`http://127.0.0.1:${s.address().port}/api/assistant/turns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: r.status, json: await r.json() };
+    };
+    const ws = { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [] };
+    const turnsNow = [];
+    try {
+      hOld.registry.setWorkspace('tab-one', 'L1', ws);
+      const a = await start(sOld, { text: 'First.', tab: 'tab-one' });
+      assert.equal(a.status, 202, JSON.stringify(a.json));
+      const first = hOld.turns.get(a.json.turn);
+      turnsNow.push(first);
+      await until(() => reads === 1, 5000, 'the first turn’s project read');
+      // The new server is up and the page registered there: the tab is still busy.
+      const rNew = new Router();
+      hNew = routes.registerAssistantRoutes(rNew, { port: () => port });
+      sNew = await serve(rNew);
+      hNew.registry.setWorkspace('tab-one', 'L2', ws);
+      assert.deepEqual(await start(sNew, { text: 'Too soon.', tab: 'tab-one' }), { status: 409, json: { ok: false, code: 'tab_busy', error: TAB_BUSY_TEXT } });
+      // The old relay closes: its tab's turn ends now, and its loop still waits in the read.
+      hOld.relay.shutdown();
+      assert.deepEqual([first.ended, first.settled, first.state, first.endReason], [true, false, 'failed', 'shutdown']);
+      fake.reply({ text: 'Free again.' });
+      const b = await start(sNew, { text: 'Next.', tab: 'tab-one' });
+      assert.equal(b.status, 202, JSON.stringify(b.json));
+      assert.equal(first.settled, false, 'the first turn was still unwinding when the next one started');
+      const next = hNew.turns.get(b.json.turn);
+      turnsNow.push(next);
+      letGo();
+      await until(() => first.settled && next.settled, 5000, 'both turns');
+      assert.deepEqual([first.state, next.state, reads], ['failed', 'done', 1]);
+    } finally {
+      letGo();
+      for (const t of turnsNow) await until(() => t.settled, 5000, `turn ${t.id} to settle`);
+      hOld.shutdown();
+      hNew?.shutdown();
+      await new Promise((done) => sOld.close(done));
+      if (sNew) await new Promise((done) => sNew.close(done));
+    }
   });
 
   it('an error thrown inside a detached turn reaches only the log, redacted; the turn ends failed', async () => {

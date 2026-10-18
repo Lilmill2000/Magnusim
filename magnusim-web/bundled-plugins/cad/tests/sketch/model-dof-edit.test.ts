@@ -32,6 +32,11 @@ describe('the solver sketch', () => {
     expect(s.constraints.find((c) => c.id === 'd1')).toEqual({ id: 'd1', kind: 'distance', refs: ['e1'], value: 41 });
     expect(s.constraints.find((c) => c.id === 'd2')).toMatchObject({ id: 'd2', driving: false });
     expect(storedIds(['#origin', 'col#a', 'col#b', 'd1'])).toEqual(['col', 'd1']);
+    // Two lines that share an end: only the far end's half (the shared end is on the first line already).
+    const joined = merge(rectangle(0, 0, 40, 20), { points: { q3: [60, 0] }, entities: [{ id: 'e6', kind: 'line', p: ['p2', 'q3'] }], constraints: [{ id: 'cj', kind: 'collinear', refs: ['e1', 'e6'] }] });
+    expect(toSolverSketch(joined).constraints.filter((c) => c.id.startsWith('cj'))).toEqual([{ id: 'cj#b', kind: 'point_on_line', refs: ['q3', 'e1'] }]);
+    const back = merge(rectangle(0, 0, 40, 20), { points: { q4: [-20, 0] }, entities: [{ id: 'e7', kind: 'line', p: ['q4', 'p1'] }], constraints: [{ id: 'ck', kind: 'collinear', refs: ['e1', 'e7'] }] });
+    expect(toSolverSketch(back).constraints.filter((c) => c.id.startsWith('ck'))).toEqual([{ id: 'ck#a', kind: 'point_on_line', refs: ['q4', 'e1'] }]);
   });
 
   it('measures driven dimensions on the geometry (never with PlaneGCS driving:false)', () => {

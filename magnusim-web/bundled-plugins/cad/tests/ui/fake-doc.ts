@@ -16,8 +16,9 @@ import { bindCommandShortcuts, createKeyboard } from '../../src/app/keyboard';
 import { createModuleRegistry } from '../../src/modules';
 import type { AppServices, AreaApis } from '../../src/types/app';
 import type { Mode } from '../../src/types/commands';
-import type { DocService, DocState, EditResult, EditSession, FeatureRegistry, FeatureTypeDef } from '../../src/types/doc-service';
-import type { BodyId, CadDoc, CadView, ExtrudeFeature, Feature, FeatureId, FeatureStatus, FeatureType, Param, SketchFeature } from '../../src/types/doc';
+import type { AssistantDoc, AssistantStep, DocMark, DocService, DocState, EditResult, EditSession, FeatureRegistry, FeatureTypeDef, TakeOverWhy } from '../../src/types/doc-service';
+import { PersonEditing } from '../../src/doc/person-editing';
+import type { BodyId, CadDoc, CadView, ExtrudeFeature, Feature, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SketchFeature } from '../../src/types/doc';
 import type { CadModule } from '../../src/types/modules';
 import { TestFeaturePanel } from './test-panel';
 import type { CadEvents } from '../../src/types/events';
@@ -272,7 +273,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
   if (types.includes('extrude')) registry.register(extrudeDef(opts.incompleteExtrude));
   if (types.includes('sketch')) registry.register(sketchDef());
 
-  const undoStack: { label: string; before: CadDoc; after: CadDoc }[] = [];
+  const undoStack: { label: string; before: CadDoc; after: CadDoc; tag?: string }[] = [];
   const redoStack: typeof undoStack = [];
   const history = () => ({
     canUndo: undoStack.length > 0,
@@ -332,7 +333,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
   function commitDoc(next: CadDoc, label: string | null, before?: CadDoc) {
     const prev = before ?? state.get().doc;
     if (label) {
-      undoStack.push({ label, before: prev, after: next });
+      undoStack.push(runOwner ? { label, before: prev, after: next, tag: runOwner } : { label, before: prev, after: next });
       redoStack.length = 0;
     }
     state.set((s) => ({ ...s, doc: next, history: history() }));
@@ -348,11 +349,123 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     if (s.save.state === 'updated') return 'Updated in another tab · Reload to keep editing';
     return true;
   };
-  const settle = () => open?.commit();
+  // Assistant steps, simply (the real rules are DocService's): run() marks the sessions it opens
+  // and the undo steps it pushes; settle() never commits the person's session inside run, and
+  // takes over the Assistant's outside it; seal merges the step's pushes; revert puts the mark back.
+  let runOwner: string | null = null;
+  let step: (AssistantStep & { takenOver: TakeOverWhy | null }) | null = null;
+  const settle = (why: TakeOverWhy = 'edit') => {
+    if (!open) return;
+    if (runOwner !== null) {
+      if (open.owner !== runOwner) throw new PersonEditing(`The person is editing ${open.current.name}`, open.feature);
+      open.commit();
+      return;
+    }
+    if (open.owner) takeOver(why);
+    else open.commit();
+  };
+  function takeOver(why: TakeOverWhy, opts: { owner?: string } = {}): boolean {
+    if (!open || !open.owner) {
+      // The Assistant's panel with no session (its Parameters panel): its step is marked.
+      if (!opts.owner || !step || step.owner !== opts.owner || step.ended) return false;
+      calls.push(`takeOver ${why}`);
+      if (!step.takenOver) step.takenOver = why;
+      return true;
+    }
+    calls.push(`takeOver ${why}`);
+    if (step && step.owner === open.owner && !step.takenOver) step.takenOver = why;
+    open.discard();
+    return true;
+  }
+  function markNow(): DocMark {
+    const s = state.get();
+    return { doc: s.doc, rollback: s.view.rollback, history: { done: [...undoStack], undone: [...redoStack], version: 0 }, loadSeq: 0 };
+  }
+  function restoreMark(mark: DocMark): EditResult {
+    if (open) {
+      open.open = false;
+      open = null;
+    }
+    undoStack.splice(0, undoStack.length, ...mark.history.done);
+    redoStack.splice(0, redoStack.length, ...mark.history.undone);
+    state.set((s) => ({ ...s, doc: mark.doc, view: { ...s.view, rollback: mark.rollback }, session: null, history: history() }));
+    rebuild();
+    return { ok: true };
+  }
+  function fakeStep(owner: string): AssistantStep & { takenOver: TakeOverWhy | null } {
+    const mark = markNow();
+    let result: EditResult | null = null;
+    const st = {
+      owner,
+      mark,
+      takenOver: null as TakeOverWhy | null,
+      ended: false,
+      get clean() {
+        return !st.takenOver;
+      },
+      run<T>(fn: () => T): T {
+        if (st.ended) throw new Error('This Assistant step has ended');
+        const was = runOwner;
+        runOwner = owner;
+        try {
+          return fn();
+        } finally {
+          runOwner = was;
+        }
+      },
+      seal(tag: string, label: string) {
+        if (st.ended || !st.clean) throw new Error('This Assistant step is not clean');
+        const own = undoStack.splice(mark.history.done.length);
+        if (!own.length) return;
+        const below = undoStack.at(-1);
+        const first = below && below.tag === tag && below.after === mark.doc ? undoStack.pop()! : own[0];
+        undoStack.push({ label, before: first.before, after: own[own.length - 1].after, tag });
+        state.set((s) => ({ ...s, history: history() }));
+      },
+      revert(): EditResult {
+        if (!result) result = st.ended ? { ok: false, reason: 'This Assistant step has ended' } : restoreMark(mark);
+        return result;
+      },
+      left: () => [],
+      end() {
+        if (st.ended) return;
+        st.ended = true;
+        if (step === st) step = null;
+      },
+    };
+    return st;
+  }
+  const assistant: AssistantDoc = {
+    begin(owner) {
+      calls.push(`assistant.begin ${owner}`);
+      if (step) throw new Error('An Assistant step is already open');
+      const e = editable();
+      if (e !== true) throw new Error(e);
+      if (open) throw new PersonEditing(`The person is editing ${open.current.name}`, open.feature);
+      step = fakeStep(owner);
+      return step;
+    },
+    current: () => step,
+    mark: markNow,
+    restore: restoreMark,
+    topGroup() {
+      const t = undoStack.at(-1);
+      return t && t.tag ? { tag: t.tag, label: t.label, after: t.after } : null;
+    },
+    undoGroup(tag) {
+      if (undoStack.at(-1)?.tag !== tag) return { ok: false, reason: 'Those changes are no longer the newest step' };
+      svc.undo();
+      return { ok: true };
+    },
+    takeOver,
+    // The fake keeps the person's undo as it was: never a whole-step take-over.
+    undoTakesOver: () => false,
+  };
 
   class SessionImpl implements EditSession {
     readonly id = newId('s');
     readonly feature: FeatureId;
+    readonly owner?: string;
     open = true;
     current: Feature;
     before: CadDoc;
@@ -364,6 +477,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       this.feature = f.id;
       this.current = f;
       this.before = state.get().doc;
+      if (runOwner !== null) this.owner = runOwner;
       this.inDoc = !isNew;
       if (isNew) this.apply();
     }
@@ -400,7 +514,8 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       open = null;
       const doc = state.get().doc;
       if (doc !== this.before) {
-        undoStack.push({ label: this.isNew ? this.current.name : `Edit ${this.current.name}`, before: this.before, after: doc });
+        const label = this.isNew ? this.current.name : `Edit ${this.current.name}`;
+        undoStack.push(this.owner ? { label, before: this.before, after: doc, tag: this.owner } : { label, before: this.before, after: doc });
         redoStack.length = 0;
       }
       state.set((s) => ({ ...s, session: null, history: history() }));
@@ -547,7 +662,12 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     },
     undo() {
       calls.push('undo');
+      if (runOwner === null && open?.owner) {
+        takeOver('undo');
+        return;
+      }
       settle();
+      if (runOwner === null && step && !step.takenOver && undoStack.length) step.takenOver = 'undo';
       const e = undoStack.pop();
       if (!e) return;
       redoStack.push(e);
@@ -556,6 +676,11 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     },
     redo() {
       calls.push('redo');
+      if (runOwner === null && open?.owner) {
+        takeOver('undo');
+        return;
+      }
+      if (runOwner === null && step && !step.takenOver && redoStack.length) step.takenOver = 'undo';
       const e = redoStack.pop();
       if (!e) return;
       undoStack.push(e);
@@ -591,7 +716,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     async measure(id) {
       calls.push(`measure ${id}`);
       state.set((s) => ({ ...s, rebuild: { ...s.rebuild, bodies: s.rebuild.bodies.map((b) => (b.id === id ? { ...b, volume: 1000 } : b)) } }));
-      return { volume: 1000, area: 600, centroid: null, bbox: [0, 0, 0, 10, 10, 10] as never, faces: 6, edges: 12, solids: 1 };
+      return { volume: 1000, area: 600, centroid: null, bbox: [0, 0, 0, 10, 10, 10] as never, faces: 6, edges: 12, solids: 1, shells: 1 };
     },
     setPlanes(mode) {
       calls.push(`setPlanes ${mode}`);
@@ -637,6 +762,37 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     async bodiesAtEnd() {
       return { bodies: [], failed: [] };
     },
+    async bodiesBefore() {
+      return { bodies: [], failed: [] };
+    },
+    // The fake rebuilds synchronously: the shown result is always the current model's.
+    async settled(signal) {
+      if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+      return state.get().rebuild;
+    },
+    committed: () => (open && open.open ? open.before : state.get().doc),
+    editParams(rows, label) {
+      calls.push(`editParams ${JSON.stringify(rows)}`);
+      const e = editable();
+      if (e !== true) return { ok: false, reason: e };
+      settle();
+      const doc = state.get().doc;
+      const ids: Record<string, ParamId> = {};
+      const params: Param[] = doc.params.filter((p) => !rows.remove.includes(p.id)).map((p) => ({ ...p, ...(rows.change.find((c) => c.id === p.id)?.patch ?? {}) }));
+      for (const a of rows.add) {
+        const p: Param = { ...a, id: newId('p') };
+        ids[p.name] = p.id;
+        params.push(p);
+      }
+      const probe = createFakeUnits(() => ({ units: doc.units, params }));
+      for (const p of params) {
+        const r = probe.evaluate(p.expr, p.quantity);
+        if (!r.ok) return { ok: false, reason: r.error };
+      }
+      commitDoc({ ...doc, params }, label ?? `Parameters: ${rows.add.length + rows.change.length + rows.remove.length} changed`);
+      return { ok: true, ids };
+    },
+    assistant,
     async recordSettled() {},
     holdSaves() {
       calls.push('holdSaves');

@@ -20,11 +20,12 @@ const h = await import('./assistant-harness.js');
 const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates, checkInvariants, hostTool, until, tick } = h;
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
-const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText } = await import('../assistant/loop.ts');
+const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText, contextText } = await import('../assistant/loop.ts');
 const { TURN_LIMITS, TAB_HIDDEN_TEXT, createTurnManager } = await import('../assistant/turns.ts');
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
 const { createToolRegistry, REQUEST_MAX_TOOLS } = await import('../assistant/registry.ts');
+const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
 after(() => {
   resetAssistantState();
@@ -56,6 +57,24 @@ function waitingTool(name, clock, { ms = null, risk = 'read' } = {}) {
         rt.signal.addEventListener('abort', () => resolve({ ok: false, error: { code: 'aborted', message: 'Stopped.' }, summary: 'aborted' }), { once: true });
       }),
   });
+}
+
+/**
+ * A tool the test steers from outside: `ctl.rt` is its run context once it runs (its progress),
+ * `ctl.end()` ends it; an abort ends it as aborted.
+ */
+function steeredTool(name, { stallMs = 60 * 60_000 } = {}) {
+  const ctl = { rt: null, end: null };
+  const def = hostTool(name, {
+    stallMs,
+    run: (_input, rt) =>
+      new Promise((resolve) => {
+        ctl.rt = rt;
+        ctl.end = () => resolve({ ok: true, data: { done: true }, summary: 'done' });
+        rt.signal.addEventListener('abort', () => resolve({ ok: false, error: { code: 'aborted', message: 'Stopped.' }, summary: 'aborted' }), { once: true });
+      }),
+  });
+  return { def, ctl };
 }
 
 describe('a turn from start to end', () => {
@@ -207,6 +226,44 @@ describe('each call of a step', () => {
     checkInvariants(assert, t.conv, m.provider.requests);
   });
 
+  it("a failed call's hint and detail reach the next request and its hint the log's tool_result; a result's summary reaches the log only", async () => {
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3], nested: { a: [{ b: 1 }] } };
+    const tools = [
+      hostTool('step', {
+        risk: 'edit',
+        schema: BY,
+        run: async (i) =>
+          i.by > 3
+            ? { ok: false, error: { code: 'invalid_input', message: `${i.by} is too big a step.`, hint: 'Step by 1,‮ 2 or 3.', detail }, summary: 'Refused a big step' }
+            : { ok: true, data: { by: i.by }, text: `Stepped ${i.by}.`, summary: `Stepped ${i.by}: now 2` },
+      }),
+      // An error with neither: no hint in the log, none for the model.
+      hostTool('plain', { run: async () => ({ ok: false, error: { code: 'failed', message: 'It broke.' }, summary: 'Broke' }) }),
+    ];
+    const m = mk({ hostTools: tools });
+    m.provider.script({ tools: [{ name: 'step', input: { by: 9 } }, { name: 'plain' }] }, { tools: [{ name: 'step', input: { by: 2 } }] }, { text: 'Stepped 2.' });
+    const { turn: t } = await startTurn(m, 'Step 9.');
+    await settled(t);
+    assert.equal(t.state, 'done');
+    const withoutIds = (results) => results.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'id')));
+    assert.deepEqual(withoutIds(resultsIn(m.provider.requests[1].req.messages[2])), [
+      { tool: 'step', ok: false, error: { code: 'invalid_input', message: '9 is too big a step.', hint: 'Step by 1, 2 or 3.', detail } },
+      { tool: 'plain', ok: false, error: { code: 'failed', message: 'It broke.' } },
+    ]);
+    // The summary never reaches the model: only data and text.
+    assert.deepEqual(withoutIds(resultsIn(m.provider.requests[2].req.messages[4])), [{ tool: 'step', ok: true, data: { by: 2 }, text: 'Stepped 2.' }]);
+    assert.ok(!JSON.stringify(m.provider.requests[2].req).includes('now 2'), 'no summary anywhere in the request');
+    assert.deepEqual(
+      ofType(t, 'tool_result').map((e) => [e.ok, e.code ?? null, e.hint ?? null, e.summary]),
+      [
+        [false, 'invalid_input', 'Step by 1, 2 or 3.', 'Refused a big step'],
+        [false, 'failed', null, 'Broke'],
+        [true, null, null, 'Stepped 2: now 2'],
+      ],
+    );
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
   it('read and edit run at once; compute and destructive ask first (focus on no is the page’s; here: the gate)', async () => {
     let zapped = 0;
     let crunched = 0;
@@ -234,6 +291,43 @@ describe('each call of a step', () => {
     assert.deepEqual([gates[1].yes, gates[1].no], ['Allow', "Don't"]);
     assert.ok(statesOf(r.turn).includes('awaiting_confirmation'));
     assert.deepEqual(ofType(r.turn, 'gate_closed').map((e) => [e.answer, e.by]), [['allow', 'user'], ['allow', 'user']]);
+  });
+
+  it("a destructive workspace tool's confirm note is what its question says the call does (CAD tools spec H10); without one it can't be undone; a compute tool keeps starts a computation", async () => {
+    const m = mk({ provider: 'openai_compatible', projects: { p1: WING } });
+    const none = { type: 'object', properties: {}, additionalProperties: false };
+    const tool = (name, title, risk, confirm) => ({ name, title, description: `Does ${name}.`, inputSchema: none, risk, ...(confirm === undefined ? {} : { confirm }) });
+    const ran = [];
+    m.registry.setWorkspace('T1', 'L1', {
+      plugin: 'ai-demo',
+      pluginName: 'Workspace demo',
+      workspace: 'Counter',
+      projectId: 'p1',
+      studyId: 's1',
+      tools: [
+        tool('delete_rows', 'Delete rows', 'destructive', 'Deletes rows from the table; Ctrl+Z brings them back.'),
+        // No full stop of its own: the copy adds one.
+        tool('wipe', 'Wipe the table', 'destructive', 'Clears the table, and Undo brings it back'),
+        tool('reset', 'Reset the counter', 'destructive'),
+        tool('crunch', 'Run the crunch', 'compute', 'Crunches numbers; nothing to undo.'),
+      ],
+      invoke: async (c) => (ran.push(c.tool), { ok: true, data: { tool: c.tool }, summary: `${c.tool} ran` }),
+    });
+    const names = ['delete_rows', 'wipe', 'reset', 'crunch'];
+    m.provider.script({ tools: names.map((n) => ({ name: `ai-demo__${n}`, input: {} })) }, { text: 'ok' });
+    const r = await startTurn(m, { text: 'x', tab: 'T1' });
+    const gates = [];
+    answerGates(m, r.turn, (g) => (gates.push(g), true));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(ran, names);
+    const sent = 'What it sent: {}. Nothing runs until you choose.';
+    assert.deepEqual(gates.map((g) => [g.risk, g.title, g.copy]), [
+      ['destructive', 'Allow the Assistant to delete rows?', `Workspace demo (Counter) · Deletes rows from the table; Ctrl+Z brings them back. ${sent}`],
+      ['destructive', 'Allow the Assistant to wipe the table?', `Workspace demo (Counter) · Clears the table, and Undo brings it back. ${sent}`],
+      ['destructive', 'Allow the Assistant to reset the counter?', `Workspace demo (Counter) · can't be undone. ${sent}`],
+      ['compute', 'Allow the Assistant to run the crunch?', `Workspace demo (Counter) · starts a computation. ${sent}`],
+    ]);
   });
 
   it('the confirm question shows every field the call sent, in the schema’s order, each cut on its own and marked: a long field can’t hide another', async () => {
@@ -407,6 +501,165 @@ describe('the token and minute caps', () => {
     assert.equal(m.provider.requests.length, 1);
     checkInvariants(assert, t.conv, m.provider.requests);
   });
+
+  it('minutes: a call waiting for the person (progress waiting) does not spend them: a 2-minute wait under a 1-minute cap is not capped; its next progress without waiting starts them again', async () => {
+    const m = mk({ caps: { turn_minutes: 1 } });
+    const ask = steeredTool('ask', { stallMs: 30_000 });
+    m.registry.addHostTool(ask.def);
+    m.provider.script({ tools: [{ name: 'ask' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    m.clock.advance(10_000);
+    assert.equal(t.activeMs(), 10_000, 'ten seconds of work');
+    // The page waits for the person and says so every 5 s (its heartbeat), for two minutes.
+    for (let i = 0; i < 24; i += 1) {
+      ask.ctl.rt.progress(null, 'Waiting for you to close the Extrude panel', { waiting: true });
+      m.clock.advance(5_000);
+    }
+    await tick();
+    assert.equal(t.state, 'tools', 'two minutes of waiting for the person: not capped, and not stalled (each progress reset the 30 s window)');
+    assert.equal(t.activeMs(), 10_000, 'the wait did not count');
+    assert.deepEqual(
+      ofType(t, 'tool_progress').map((e) => e.label),
+      Array(24).fill('Waiting for you to close the Extrude panel'),
+      'each waiting progress is a row of the log',
+    );
+    // The person closed the panel: the call goes on, and the minutes run again from here.
+    ask.ctl.rt.progress(0.5, 'Building');
+    m.clock.advance(25_000);
+    ask.ctl.rt.progress(0.8, 'Still building');
+    m.clock.advance(24_999);
+    await tick();
+    assert.equal(t.state, 'tools', 'under a minute of work so far');
+    assert.equal(t.activeMs(), 59_999);
+    m.clock.advance(1);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['capped', 'turn_minutes', 'Stopped after 1 minute of work.']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['capped']);
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('minutes: a wait for the person pauses them once however many waiting progresses come, ends with its call, and a progress after the end changes nothing', async () => {
+    const m = mk({ caps: { turn_minutes: 1 } });
+    const ask = steeredTool('ask');
+    const build = steeredTool('build');
+    m.registry.addHostTool(ask.def);
+    m.registry.addHostTool(build.def);
+    m.provider.script({ tools: [{ name: 'ask' }, { name: 'build' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    for (let i = 0; i < 3; i += 1) ask.ctl.rt.progress(null, '', { waiting: true });
+    m.clock.advance(5 * 60_000);
+    assert.equal(t.activeMs(), 0, 'five minutes of waiting: none of it counts');
+    // It ends while it waits: the minutes run again (one resume undoes the three waiting progresses).
+    const late = ask.ctl.rt;
+    ask.ctl.end();
+    await until(() => build.ctl.rt);
+    late.progress(null, 'too late', { waiting: true });
+    m.clock.advance(59_999);
+    await tick();
+    assert.equal(t.state, 'tools');
+    assert.equal(t.activeMs(), 59_999, 'a progress after its call ended paused nothing');
+    assert.ok(!ofType(t, 'tool_progress').some((e) => e.label === 'too late'), 'and is no row of the log');
+    m.clock.advance(1);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason], ['capped', 'turn_minutes']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['ok', 'capped']);
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('minutes: a waiting call that stops saying so stalls as any other, and the minutes run again', async () => {
+    const m = mk({ caps: { turn_minutes: 1 } });
+    const ask = steeredTool('ask', { stallMs: 30_000 });
+    const peek = steeredTool('peek');
+    m.registry.addHostTool(ask.def);
+    m.registry.addHostTool(peek.def);
+    m.provider.script({ tools: [{ name: 'ask' }, { name: 'peek' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    ask.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+    m.clock.advance(29_999);
+    await tick();
+    assert.equal(t.state, 'tools');
+    m.clock.advance(1);
+    await until(() => peek.ctl.rt);
+    assert.equal(ofType(t, 'tool_result')[0].code, 'stalled');
+    assert.equal(t.activeMs(), 0, 'the wait up to the stall did not count');
+    m.clock.advance(60_000);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason], ['capped', 'turn_minutes']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['stalled', 'capped']);
+  });
+
+  it('minutes: a page that says it waits for ever is left out of them for 20 minutes only; then they run, the log says so once, and the cap stops it', async () => {
+    assert.equal(WAIT_PAUSE_MAX_MS, 20 * 60_000);
+    const m = mk({ caps: { turn_minutes: 60 } });
+    const ask = steeredTool('ask', { stallMs: 30_000 });
+    m.registry.addHostTool(ask.def);
+    m.provider.script({ tools: [{ name: 'ask' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    m.clock.advance(10_000);
+    /** The page's heartbeat: a waiting progress every 5 s, for `ms`. */
+    const waitFor = (ms) => {
+      for (let i = 0; i < ms / 5_000; i += 1) {
+        ask.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+        m.clock.advance(5_000);
+      }
+    };
+    waitFor(15 * 60_000);
+    await tick();
+    assert.equal(t.activeMs(), 10_000, 'fifteen minutes of waiting: none of it counts');
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), []);
+    waitFor(5 * 60_000);
+    await tick();
+    assert.equal(t.activeMs(), 10_000, 'twenty minutes: still none');
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), [WAITED_TOO_LONG_NOTE], 'the minutes run again, and the log says why');
+    waitFor(10 * 60_000);
+    await tick();
+    assert.equal(t.state, 'tools');
+    assert.equal(t.activeMs(), 10_000 + 10 * 60_000, 'past the twenty, its waiting counts');
+    // Still waiting, as it says, until the cap: 60 minutes of the turn's time, 80 of the clock's.
+    waitFor(50 * 60_000 - 10_000 - 5_000);
+    await tick();
+    assert.equal(t.state, 'tools', 'just under the cap');
+    waitFor(5_000);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['capped', 'turn_minutes', 'Stopped after 60 minutes of work.']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['capped']);
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), [WAITED_TOO_LONG_NOTE], 'said once');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it("minutes: the 20 minutes are a call's: its waits add up (15, then 10: 5 count), and the next call's waits have 20 of their own", async () => {
+    const m = mk({ caps: { turn_minutes: 60 } });
+    const ask = steeredTool('ask');
+    const again = steeredTool('again');
+    m.registry.addHostTool(ask.def);
+    m.registry.addHostTool(again.def);
+    m.provider.script({ tools: [{ name: 'ask' }, { name: 'again' }] }, { text: 'Done.' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    ask.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+    m.clock.advance(15 * 60_000);
+    // The person closed the panel: ten seconds of work, then it waits for them again.
+    ask.ctl.rt.progress(0.5, 'Building');
+    m.clock.advance(10_000);
+    ask.ctl.rt.progress(null, 'Waiting for you again', { waiting: true });
+    m.clock.advance(10 * 60_000);
+    assert.equal(t.activeMs(), 10_000 + 5 * 60_000, 'five of its second wait counted');
+    assert.equal(ofType(t, 'note').length, 1);
+    ask.ctl.end();
+    await until(() => again.ctl.rt);
+    const before = t.activeMs();
+    again.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+    m.clock.advance(20 * 60_000 - 1);
+    assert.equal(t.activeMs(), before, 'the next call: its own twenty minutes');
+    again.ctl.end();
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason], ['done', 'end_turn']);
+    assert.equal(ofType(t, 'note').length, 1, 'the second call never used its twenty');
+  });
 });
 
 describe('the spend caps', () => {
@@ -569,6 +822,282 @@ describe('the spend caps', () => {
     assert.equal(r.body.code, 'cap_day');
     assert.equal(r.body.error, "Today's $1.00 limit is reached; it resets at midnight.");
     assert.equal(m.provider.requests.length, 0);
+  });
+});
+
+describe("a local server's context (CAD tools spec H5)", () => {
+  /** A local server whose adapter answers its model row with `row` (or `row(signal)`), recording each read. */
+  const localMk = (row, o = {}) => {
+    const m = mk({ provider: 'openai_compatible', ...o });
+    m.provider.rows = [];
+    m.provider.modelRow = async (model, signal) => {
+      m.provider.rows.push(model);
+      return typeof row === 'function' ? row(signal) : row;
+    };
+    return m;
+  };
+  /** The estimate's prompt tokens for `chars` characters and `tools` tool definitions (prices.ts). */
+  const promptOf = (chars, tools = 0) => Math.ceil((1.2 * chars) / 3) + 500 * tools;
+  const textChars = (parts) => parts.reduce((n, p) => n + (p.type === 'text' || p.type === 'tool_result' ? p.text.length : 0), 0);
+  const look = () => hostTool('look', { run: async () => ({ ok: true, data: { seen: true }, summary: 'looked' }) });
+
+  it('a context too small for the prompt: the turn ends failed (context) with its number, before any request; the turn keeps it (the conversation forgets it, below)', async () => {
+    const m = localMk({ context: 3072, type: 'llm' });
+    const r = await startTurn(m, 'Build a bracket.');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', contextText(3072)]);
+    assert.equal(
+      contextText(3072),
+      "The local model's context (3,072 tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation.",
+    );
+    assert.equal(m.provider.requests.length, 0, 'nothing sent');
+    assert.deepEqual(m.provider.rows, ['local-model']);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [3072, null]);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("each request's output limit is min(8192, context - the prompt estimate - 1024); a later step the prompt outgrew ends failed (context) with every call answered", async () => {
+    const context = 9000;
+    const m = localMk({ context, type: 'llm' }, { hostTools: [look()] });
+    m.provider.script({ tools: [{ name: 'look' }], usage: { input: 5000, output: 30 } }, { tools: [{ name: 'look' }], usage: { input: 6400, output: 30 } }, { text: 'never' });
+    const r = await startTurn(m, 'Look twice.');
+    await settled(r.turn);
+    const [first, second] = m.provider.requests.map((x) => x.req);
+    // Step 1: the system text, the prompt and its context block, and one tool definition.
+    const chars1 = first.system.reduce((n, b) => n + b.text.length, 0) + textChars(first.messages[0].parts);
+    assert.equal(first.maxOutputTokens, Math.min(8192, context - promptOf(chars1, 1) - 1024));
+    assert.ok(first.maxOutputTokens < 8192 && first.maxOutputTokens >= 2048, String(first.maxOutputTokens));
+    // Step 2: the first request's prompt (its usage) and what this one adds.
+    const conv = r.turn.conv.messages;
+    const chars2 = JSON.stringify(conv[1].raw.payload).length + textChars(conv[2].parts);
+    assert.equal(second.maxOutputTokens, Math.min(8192, context - (5000 + promptOf(chars2)) - 1024));
+    // Step 3 would start from 6400 tokens: under 2048 left, so it is never sent.
+    assert.equal(m.provider.requests.length, 2);
+    assert.equal(m.provider.steps.length, 1, 'the third answer is never asked for');
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', contextText(context)]);
+    assert.deepEqual(codes(lastResults(r.turn.conv)), ['ok'], "the second call ran and is answered");
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+    m.provider.steps.length = 0;
+  });
+
+  it("the conversation is full at 80% of the local model's context; with no row at all, 8192 out and 80% of 128K", async () => {
+    const m = localMk({ context: 10_000, type: 'llm' });
+    m.provider.script({ text: 'one', usage: { input: 7999 } }, { text: 'two', usage: { input: 8000 } });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    const conversation = r.body.conversation;
+    r = await startTurn(m, { text: 'y', conversation });
+    assert.equal(r.status, 202, 'under 80% of 10,000');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    r = await startTurn(m, { text: 'z', conversation });
+    assert.deepEqual([r.status, r.body.code], [409, 'conversation_full']);
+
+    const plain = mk({ provider: 'openai_compatible' });
+    plain.provider.script({ text: 'one', usage: { input: 100_000 } }, { text: 'two' });
+    r = await startTurn(plain, 'x');
+    await settled(r.turn);
+    assert.equal(plain.provider.requests[0].req.maxOutputTokens, 8192);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [null, null]);
+    r = await startTurn(plain, { text: 'y', conversation: r.body.conversation });
+    assert.equal(r.status, 202, '100,000 is under 80% of 128K');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+  });
+
+  it('a row read again each step (the adapter keeps it 60 s); a row without a context keeps what the conversation knew', async () => {
+    const rows = [{ context: 30_000, type: 'llm' }, { context: null, type: 'llm' }, null];
+    const m = localMk(() => rows.shift() ?? null, { hostTools: [look()] });
+    m.provider.script({ tools: [{ name: 'look' }] }, { text: 'done' });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(m.provider.rows, ['local-model', 'local-model']);
+    assert.equal(r.turn.contextTokens, 30_000, 'a row that names no context keeps the one known');
+    m.provider.script({ text: 'again' });
+    r = await startTurn(m, { text: 'y', conversation: r.body.conversation });
+    await settled(r.turn);
+    assert.equal(r.turn.contextTokens, 30_000, "the conversation's, when the server gives no row");
+  });
+
+  it("a turn that ends failed (context) forgets the row and the conversation's context: loaded again with a longer context, the next turn of that conversation goes through at once", async () => {
+    const rows = [{ context: 3072, type: 'llm' }, { context: 32768, type: 'llm' }];
+    const m = localMk(() => rows.shift() ?? null);
+    m.provider.forgot = [];
+    m.provider.forgetRow = (model) => m.provider.forgot.push(model);
+    let r = await startTurn(m, 'Build a bracket.');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', contextText(3072)]);
+    assert.deepEqual(m.provider.forgot, ['local-model'], 'the adapter drops its kept row');
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [3072, null], 'the turn says what it met; the conversation forgets it');
+    m.provider.script({ text: 'Start with a plate.' });
+    r = await startTurn(m, { text: 'Build a bracket.', conversation: r.body.conversation });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    assert.deepEqual(m.provider.rows, ['local-model', 'local-model']);
+    assert.equal(m.provider.requests[0].req.maxOutputTokens, 8192);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [32768, 32768]);
+    assert.deepEqual(m.provider.forgot, ['local-model'], 'a turn that fits forgets nothing');
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a context one server reported is not another's: after the address changes, a server that reports none gets the defaults (8192 out, full at 80% of 128K)", async () => {
+    const A = 'http://127.0.0.1:1234/v1';
+    const B = 'http://127.0.0.1:5678/v1';
+    const rows = [{ context: 30_000, type: 'llm' }];
+    const m = localMk(() => rows.shift() ?? null, { settings: { base_url: A } });
+    m.provider.script({ text: 'one', usage: { input: 25_000 } });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    const conversation = r.body.conversation;
+    assert.deepEqual([r.turn.state, r.turn.conv.contextTokens, r.turn.conv.contextBaseUrl], ['done', 30_000, A]);
+    // 25,000 is past 80% of the 30,000 server A reported.
+    r = await startTurn(m, { text: 'y', conversation });
+    assert.deepEqual([r.status, r.body.code], [409, 'conversation_full']);
+    // Server B (it reports no row) is not held to A's context.
+    m.state.settings.base_url = B;
+    m.provider.script({ text: 'two' });
+    r = await startTurn(m, { text: 'y', conversation });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    assert.equal(r.turn.contextTokens, null, "server A's context is not server B's");
+    assert.equal(m.provider.requests.at(-1).req.maxOutputTokens, 8192);
+    assert.equal(r.turn.conv.contextAt(A), 30_000, "A's word is kept for A");
+    assert.equal(r.turn.conv.contextAt(B), null);
+  });
+
+  it('Stop while the row is read: the turn ends stopped and nothing is sent', async () => {
+    const m = localMk((signal) => new Promise((resolve) => signal.addEventListener('abort', () => resolve(null), { once: true })));
+    const r = await startTurn(m, 'x');
+    await until(() => m.provider.rows.length === 1, 5000, 'the row read');
+    const stopped = await m.manager.stop(r.turn.id);
+    assert.equal(stopped.status, 200);
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'stopped');
+    assert.equal(m.provider.requests.length, 0);
+  });
+});
+
+describe('images only for models that read them (CAD tools spec H6)', () => {
+  /** A PNG header that says `side`×`side` px (the runner reads only the header). */
+  const png = (side) => {
+    const b = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+    b.writeUInt32BE(side, 16);
+    b.writeUInt32BE(side, 20);
+    return b.toString('base64');
+  };
+  const snap = (side = 1) =>
+    hostTool('snap', { run: async () => ({ ok: true, text: 'A picture.', images: [{ type: 'image', mediaType: 'image/png', base64: png(side), width: side, height: side }], summary: 'snapped' }) });
+  /** A local server's adapter whose word on images is `says(call)` (call 1, 2, …), recording each question. */
+  const localSays = (says, o = {}) => {
+    const m = mk({ provider: 'openai_compatible', ...o });
+    m.provider.asked = 0;
+    m.provider.readsImages = (model) => {
+      assert.equal(model, 'local-model');
+      m.provider.asked += 1;
+      return says(m.provider.asked);
+    };
+    return m;
+  };
+  const notes = (t) => ofType(t, 'note').map((e) => e.text);
+  const LEFT = 'Images were left out.';
+  const REFUSED = 'The server refused the images.';
+
+  it("a turn knows whether its model reads images: a cloud model does; a local one as its adapter says after the row and after each answer (null while nothing says)", async () => {
+    const cloud = mk();
+    cloud.provider.script({ text: 'ok' });
+    let r = await startTurn(cloud, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.images, true);
+
+    const unknown = localSays(() => null);
+    unknown.provider.script({ text: 'ok' });
+    r = await startTurn(unknown, 'x');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.images, unknown.provider.asked], ['done', null, 2], 'asked after the row read and after the answer');
+
+    // Unknown until the server refused this request's images (the adapter remembered it): false from then on.
+    const refused = localSays((n) => (n === 1 ? null : false), { hostTools: [snap()] });
+    refused.provider.script({ tools: [{ name: 'snap' }] }, { text: 'none seen', notes: [REFUSED] });
+    r = await startTurn(refused, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.equal(r.turn.images, false);
+    const vlm = localSays(() => true);
+    vlm.provider.script({ text: 'ok' });
+    r = await startTurn(vlm, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.images, true);
+  });
+
+  it("what a turn learns of its model reaches its tab's page: the turn's view carries it, and the manager hears it as an update while the turn runs", async () => {
+    const heardBy = (m) => {
+      const heard = [];
+      m.manager.onTurnChange((t, change) => {
+        if (change === 'updated') heard.push({ context_tokens: t.pageView().context_tokens, images: t.pageView().images });
+      });
+      return heard;
+    };
+    // A cloud model reads images: its view says so from the turn's start, so learning it is no
+    // change (a call's result stays the first change, told at once).
+    const cloud = mk();
+    const cloudHeard = heardBy(cloud);
+    cloud.provider.script({ text: 'ok' });
+    let r = await startTurn(cloud, 'x');
+    assert.deepEqual([r.turn.pageView().context_tokens, r.turn.pageView().images], [null, true], 'at its start');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(cloudHeard, []);
+    assert.deepEqual([r.turn.pageView().context_tokens, r.turn.pageView().images], [null, true]);
+
+    // A local server's row says the context first (told at once); its word on images comes
+    // within the same second, so it waits for the next update (none before the end) and the
+    // end's view carries both.
+    const local = localSays(() => true);
+    local.provider.modelRow = async () => ({ context: 32_768, type: 'vlm' });
+    const localHeard = heardBy(local);
+    local.provider.script({ text: 'ok' });
+    r = await startTurn(local, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(localHeard, [{ context_tokens: 32_768, images: null }]);
+    assert.deepEqual([r.turn.pageView().context_tokens, r.turn.pageView().images], [32_768, true]);
+  });
+
+  it("the adapter's notes on a request become note events, each once a turn (the next turn says it again), in the order given", async () => {
+    const m = localSays(() => false, { hostTools: [snap()] });
+    m.provider.script({ tools: [{ name: 'snap' }], notes: [REFUSED] }, { tools: [{ name: 'snap' }], notes: [LEFT, REFUSED] }, { text: 'done', notes: [LEFT] });
+    let r = await startTurn(m, 'Look twice.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(notes(r.turn), [REFUSED, LEFT]);
+    // Each note sits after the answer that brought it, before that step's tool calls.
+    const kinds = eventsOf(r.turn).filter((e) => e.type === 'note' || e.type === 'tool_call').map((e) => (e.type === 'note' ? e.text : 'call'));
+    assert.deepEqual(kinds, [REFUSED, 'call', LEFT, 'call']);
+    m.provider.script({ text: 'again', notes: [LEFT] });
+    r = await startTurn(m, { text: 'And now?', conversation: r.body.conversation });
+    await settled(r.turn);
+    assert.deepEqual(notes(r.turn), [LEFT]);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a model that doesn't read images: the estimate leaves its images out, so they take none of a small context's room", async () => {
+    // The second request's limit, with a 1500 px picture (3000 tokens by the estimate) in the first result.
+    const secondLimit = async (says) => {
+      const m = localSays(says, { hostTools: [snap(1500)] });
+      m.provider.modelRow = async () => ({ context: 10_000, type: null });
+      m.provider.script({ tools: [{ name: 'snap' }], usage: { input: 2000, output: 30 } }, { text: 'done' });
+      const r = await startTurn(m, 'Look.');
+      await settled(r.turn);
+      assert.equal(r.turn.state, 'done');
+      return m.provider.requests[1].req.maxOutputTokens;
+    };
+    const counted = await secondLimit(() => null);
+    const leftOut = await secondLimit(() => false);
+    assert.ok(counted >= 2048 && leftOut < 8192, `${counted} / ${leftOut}`);
+    assert.equal(leftOut - counted, 3000);
   });
 });
 

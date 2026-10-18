@@ -4,7 +4,7 @@
 //     npm run test:e2e                   every spec (the full suite), parallel workers
 //     npm run test:e2e -- e2e/x.spec.ts  one spec (any Playwright args pass through)
 //     npm run test:e2e:<shard>           one area shard (scripts/e2e-shards.mjs): shell, sketch,
-//                                        solids, step, link, big
+//                                        solids, step, link, assistant, big
 //     npm run test:e2e:smoke             the smoke set: the tests tagged @smoke
 //     npm run test:e2e:changed [-- --base <ref>]   the shards the changed files need
 // Options (the rest goes to Playwright):

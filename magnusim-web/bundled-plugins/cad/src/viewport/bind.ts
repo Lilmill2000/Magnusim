@@ -7,6 +7,9 @@
 // the camera go into the document's view state (saved, not undoable) when the
 // user changes them, and come back when the Part is opened (the camera after
 // the first rebuild, over the framing of the first bodies).
+// What an Assistant step brings (its bodies, its finished sketch) is framed only as the
+// Assistant's page API allows (autoFrame: not once the person moved the camera during the
+// request, nor while the window is hidden; review: the refits ran outside the camera latch).
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { clearSelection, isSelected, selectItem } from '../lib/selection';
@@ -55,12 +58,16 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
   const asked = new Set<string>();
   let live = new Set<string>();
 
+  /** Whether the view may frame what a change of `owner`'s (an Assistant step's, or null: the person's) brings now. */
+  const mayFrame = (owner: string | null) => !owner || (services.apis?.get().assistant?.autoFrame?.(owner) ?? true);
   const syncBodies = (s: DocState) => {
     const list = s.rebuild.bodies;
     live = new Set(list.map((b) => `${b.id}|${b.tessKey}`));
     for (const key of [...vertices.keys()]) if (!live.has(key)) vertices.delete(key);
     for (const key of [...asked]) if (!live.has(key)) asked.delete(key);
-    handle.setBodies(toViewportBodies(list, vertices, (id) => seeThroughOf(s, services, id)));
+    // Built while an Assistant step is open: its bodies.
+    const frame = mayFrame(doc.assistant?.current?.()?.owner ?? null);
+    handle.setBodies(toViewportBodies(list, vertices, (id) => seeThroughOf(s, services, id)), frame ? undefined : { frame: false });
     for (const b of list) void fetchVertices(b);
   };
 
@@ -100,7 +107,8 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
       restorePlanes = false;
     }
     if (restoreCamera && s.rebuild.seq > 0 && s.rebuild.status !== 'running') {
-      if (s.view?.camera) handle.setCamera(s.view.camera);
+      // The Part's own camera put back: not a move of the person's (auto).
+      if (s.view?.camera) handle.setCamera(s.view.camera, { auto: true });
       restoreCamera = false;
     }
   };
@@ -129,16 +137,24 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
   // Sketch mode ended (Finish sketch): a sketch drawn past the edge of an unmoved view is framed
   // (P4a review: nothing refit after the first large sketch). Once its layer shows as a sketch.
   let wasSketch = services.mode?.get().mode === 'sketch';
+  // Whose sketch is open: an Assistant step's session carries its owner.
+  let sketchOwner: string | null = wasSketch ? (doc.session?.()?.owner ?? null) : null;
   if (services.mode) {
     offs.push(
       services.mode.subscribe((m) => {
         const sketch = m.mode === 'sketch';
+        if (sketch && !wasSketch) sketchOwner = doc.session?.()?.owner ?? null;
+        // Asked as it closes (the Assistant's call is still running then).
+        if (wasSketch && !sketch && !mayFrame(sketchOwner)) {
+          wasSketch = sketch;
+          return;
+        }
         // Once the view is still (Finish sketch may start a transition; real Chrome: the check ran during it).
         if (wasSketch && !sketch) {
           let tries = 0;
           const check = () => {
             if (handle.state.get().animating && tries++ < 40) setTimeout(check, 50);
-            else handle.refitIfOffScreen?.();
+            else handle.refitIfOffScreen?.({ auto: true });
           };
           setTimeout(check, 60);
         }

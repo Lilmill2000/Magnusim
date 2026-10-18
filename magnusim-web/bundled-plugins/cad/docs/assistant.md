@@ -1,0 +1,686 @@
+# The Part's tools for the app's Assistant
+
+Developer reference for `src/assistant/` (owner: ASSISTANT). The app's Assistant
+(host API 1.9, unreleased: `ws.assistant`) calls tools a workspace page offers; the
+Part offers 18, `cad__get_model` to `cad__view`, with one fixed guide. This file says
+how the pieces fit, how to add a tool, and how to test one. What each tool takes and
+answers is in its own description (`src/assistant/schemas.ts`), which is also what the
+model reads.
+
+## How a call goes
+
+1. `src/features/assistant/index.tsx` is a module like every feature folder: its
+   `install` is `installAssistant` (`install.ts`), its chip `AssistantChip.tsx`.
+2. `installAssistant` makes the page's state (`runtime.ts`: the chip's store, the turns
+   the host told of, the call keys, the revision, the hold points, the ledger),
+   publishes `services.apis.assistant` (the camera gate other areas ask, and the store),
+   listens to the host's turns (`turn-info.ts`), then registers **once** for the page's
+   life: every tool of `schemas.ts` and `GUIDE` (`guide.ts`). After a `not_connected`
+   answer it registers again when the tab shows; after `remote`, `no_assistant` or
+   `not_allowed` never. This build answers all 18 tools. A build without one's code still
+   offers it, and the call answers `not_ready` `not_built` (`call.ts`; tests make such a
+   build with `createCallHandler(rt, tools)`): the grammar and the prompt cache stay the same
+   while tools are added.
+3. Each call runs `createCallHandler` (`call.ts`): its key (`session-key.ts`:
+   `turn:<id>`, `mcp:<session>`, or `ext:<n>` for an outside client's calls), its
+   context (`CallCtx` in `src/types/assistant.ts`), the tool's code from
+   `tools/index.ts`, and the reply.
+
+## A reply
+
+A tool returns `ToolReply` `{text, data, summary?, images?}`:
+
+- `text` is one line (at most 200 characters), `summary` the turn log's line (160; the
+  model never gets it);
+- `data` is compact JSON in mm, mm², mm³ and degrees (`numbers.ts`: lengths to 1e-4,
+  areas and volumes to 6 significant figures), every list at most 200 items, every
+  container at most 6 deep inside `data` (the app turns depth 8 into null, and cuts
+  every string at 2000 characters and newlines into spaces);
+- `call.ts` adds `rev` to every `data`, and `user_changes` when the person changed the
+  committed Part since the key's last call (`rev.ts`), worked out as the call answers: what
+  the person did while it ran (an edit waits for them up to 10 minutes) is in that answer, the
+  call's own kept step left out (`rev.own`, from its mark to the model after it), and the
+  person's undo of the Assistant's steps that came meanwhile too. Each change is told once.
+
+A refusal or failure is thrown as `ToolError(reason, message, {hint?, detail?})`
+(`errors.ts`). The reason fixes the code (`invalid_input`, `failed`, `busy`,
+`not_ready`) and the hint (`HINTS`, also in `help errors`); the message starts with
+the reason; `detail.reason` names it. On a host without the turn events the hint goes
+into the message. Anything else thrown is `internal`; an aborted call is `stopped`.
+
+## The guide and help (`guide.ts`, `help.ts`, `examples.ts`)
+
+- `GUIDE` is the CAD notes the model reads with the tools: at most 3950 characters of ASCII
+  (the app keeps 4000), LF line breaks, no project data. Its frame lines, the 0.05 mm join and
+  the parts it names are pinned against the code (`guide.test.ts`); its EXAMPLES lines are the
+  worked parts abridged (`guide-example.test.ts` checks each line against the calls). It ends a
+  build by sending the person to Export STEP: there is no export tool. More material goes into
+  `help`, not the guide.
+- `HELP` holds the help tool's 13 topics as rows `{about, text}`, each topic at most 8 KB (example
+  topics 12 KB), every string at most 2000 characters. `features` gives each tool's fields and its
+  rules (`FEATURE_NOTES`); `checks` and `traps` are the lists to verify against and the mistakes
+  to avoid; `examples` is the index of the worked parts.
+- The worked parts (`examples.ts`: the plate, the L bracket, the flange, the two-body chip) are
+  complete calls: each row of an example topic is `{about, text, tool, input, result}`, the input
+  whole as the model sends it, the result the reply's line (`text`) and key values by path into its
+  data (`"solver.dof"`, `"bodies.created[0].volume_mm3"`). The call sits in the row itself, not
+  under an `example` key, so a sketch input's `at` lists stay at depth 7 of the reply's data,
+  inside the app's 8 (a container at depth 8 reaches the model as null). Every other topic stays
+  within depth 6.
+- Changing a tool's reply line or data changes what its worked part says: `guide-example.test.ts`
+  runs every call on the real kernel and compares each result, and fails until `examples.ts` says
+  what the tool answers. `help.test.ts` sends every topic through a copy of the app's result rules
+  (`tests/assistant/sanitize-copy.ts`) and checks nothing is cut or turned null.
+
+## Adding a tool
+
+1. Write `src/assistant/tools/<name>.ts` exporting `tool: ToolImpl` (`kind: 'read'` or
+   `'edit'`, `run(ctx)`).
+2. Uncomment its line in `tools/index.ts` (each line has a comment line above it, so
+   commits that add different tools merge cleanly).
+3. A tool that makes a feature type registers its reader with
+   `registerFeatureIo(type, {tool, inputsOf, values, pathOf})` (`features-io.ts`) from its own
+   file, so `get_model detail full` shows those features in its fields and `edit_feature`
+   takes its field names (`feature-tools.ts` has the shared pieces: see below).
+4. Its schema is already in `schemas.ts`; change it only with the spec (the app's host
+   test `scripts/__tests__/assistant-cad-tools.test.mjs` pins the strict budget).
+
+## Reading the Part (`get_model`, `model.ts`)
+
+Reads wait (at most 30 s, a sign of life every 5 s) for the Part to open and the kernel
+to start (`busy.ts`), then for the rebuild to catch up (`doc.settled()`). Reply budgets
+(`turn-info.ts`): brief 8 KB (3 KB on a local turn), older features collapsing above 80
+(30); full 24 KB (12 KB); one sketch 16 KB (8 KB). The Part's facts get half a brief's room
+(`fitBase`): a long body list is halved first; then the parameters lose their comments, then
+their expressions (each keeps its name, kind and value), and only a list whose names alone do
+not fit is halved (`params_cut` says what went and that `get_model detail full` has it,
+`params_more` counts the rest). The collapsed row of older features points to `detail full`
+and `feature <name>`. A local turn whose model has less than 24,000 tokens of context answers
+`not_ready` `small_context`.
+
+## An edit call (`step.ts`, `judge.ts`, `ledger.ts`, `busy.ts`, `pace.ts`)
+
+An edit tool is `{kind: 'edit', run: (ctx) => runEdit(ctx, tool)}` with an `EditTool`
+`{plan, apply, sealed?, reply}`. `runEdit` makes one call one Assistant step
+(`doc.assistant`), all or nothing:
+
+1. **The gate** (`busy.ts` `waitForEdit`): `not_ready` while the Part cannot take edits
+   (`not_editable`; `opening_geometry` while Edit in CAD opens it), `busy`/`other_turn` for a
+   call of a turn that is not the one running here, then the **wait for the person**: the
+   rollback bar not at the end, a panel of theirs (an idle Parameters panel does not count), a
+   typed value, a rename, a menu, a dialog, a toolbar drag, or the Assistant paused. While it
+   holds, the chip is `waiting` with what it asks ("close the Fillet 2 panel"), and progress
+   carries `waiting: true` (every 5 s), so the turn's minutes stop. It is checked again on
+   every change of the stores behind those signals; after 10 minutes (`EDIT_WAIT_MS`, the
+   test handle's `setHoldS` shortens it) the call answers `busy` `person_editing`,
+   `rolled_back` or `paused`. A key or a held pointer in the frame is a soft wait (800 ms of
+   quiet, at most 10 s). Reads never wait.
+2. **Plan** against the settled Part: every refusal (`invalid_input` with the row at fault)
+   before anything changes. The hold point `after-plan` follows; a person who opened something
+   meanwhile is waited for again and the call plans anew, and so does a one-shot change of the
+   Part while it planned (the committed model, the rollback bar or the rebuild moved: the plan
+   and the judge's "before" are of the settled Part it runs on). At most three times; then
+   `busy` `person_editing` (or `paused`, `changed`).
+3. **Apply** inside the step, through the person's own paths (`openEditForAssistant`, the
+   Part's one-shot edits inside `step.run`), with `ctx.checkpoint({hold, pace, label})` at each
+   pace point: it throws on a stop, a take-over (`busy` `taken_over` with its `why`; the
+   Assistant pauses in this Part until the turn ends), a change of the Part by someone else
+   (`busy` `changed`) or a draft the call did not write. Hold points: `after-open`,
+   `between-opens`, `before-commit`. The person's Ctrl+Z or Ctrl+Y while the step has changed
+   the Part and no panel session is open (between its panels, while it waits for the rebuild,
+   judges or asks "keep it?") takes all of the step back to its mark at once and undoes nothing
+   else (`doc.assistant.undoTakesOver`; Undo's hint says so): `taken_over` `undo`.
+4. **Judge** (`judge.ts`) once the rebuild settled: a failed rebuild (also one that fails with
+   the same words as before the call: nothing is built) or a kernel stop is `kernel_failed`; the
+   call's own feature failing is `feature_failed` with its own message and actions; a value edit
+   (`set_params`, `edit_feature` with only `set`) that turns a working feature red, or leaves a
+   scoped cut or intersect that acted before it acting on nothing (a hole moved off its body
+   still builds: `scopedActing` before, `scopedLost` after, in `region-tools.ts`), is
+   `broke_downstream`; those revert. `edit_feature` with `set` and a rename, suppression or move
+   judges its values first, as a value edit (`judgeValues`), before the rest. A structural edit
+   keeps what it broke (`broke`; `get_model` marks it `broken_by_you`) and warns of a scoped cut
+   left with nothing to cut. Warnings: the own feature's, a feature newly warning, a body with
+   more solids.
+5. **Seal** the step's undo steps into the key's group (`ledger.ts` `groupLabel`: "Assistant:
+   <request>", or "Assistant (other app): <first part> +N"), and keep the call in the key's
+   ledger (its mark, the model after) for the `undo` tool and `get_model`'s
+   `undo.your_steps`. Anything that fails reverts the step to its mark exactly; a revert the
+   person's own change refuses answers with `detail.kept`. A Stop, a stall or Back (the call's
+   signal) reverts synchronously in the abort handler.
+
+The answer's `data` is `EditData` (`report()`: the feature, what was resolved, the bodies
+created, changed and removed, warnings, broke, fixed) plus the tool's own fields.
+
+**Pace** (`pace.ts`): `watch` (the default, the person's choice in `ws.prefs`
+`assistant.pace`) waits at each pace point (a panel open 450 ms, a parameter row 150 ms, before
+the commit 250 ms, ...), at most 6 s per call; never while the window is hidden, after a
+rebuild over 1.5 s, or at `fast`. Tests force the pace without writing the preference
+(`setPace(pace, scale)` on the test handle; the vitest harness runs `fast`).
+
+**The pause** (`busy.ts` `createPause`): set by a take-over, by the person's undo or redo of
+the Assistant's steps while its turn runs, or by the chip's Pause; it ends with its turn (the
+host's turn events) or, without them, at the next key. A turn the host said has ended takes no
+pause, and an outside client's key that went up only because the person changed the Part
+(`session-key.ts` `sameSession`) is no next key. The chip shows `paused` ("you took over", "you
+undid its steps", "you redid its steps"; a take-over whose revert the person's change refused
+names what stayed: "you took over · Plane 1 stayed", from `AssistantStep.left()`) whatever else runs (`state.ts` `phaseOf`): after a
+"keep it?" too. A step already running when the person pauses waits at its next pace point,
+and before it is judged (`waitWhilePaused`): open, held (the stored Part stays the mark),
+progress `waiting`; Resume lets it go on, a take-over or Stop ends it, and after the wait cap it
+answers `busy` `paused` with nothing kept.
+
+## Deleting (`delete`, `tools/delete.ts`)
+
+`delete` is the one destructive tool: the app asks the person before the call reaches the
+page ("Allow the Assistant to delete features?", with its confirm note "Deletes features from
+the Part; one Ctrl+Z takes back the whole request, this deletion with it." in place of "can't
+be undone": the delete is sealed into the request's one undo group), so a declined call never
+runs here. The plan resolves every name (any case, or its id; a name given twice or not in the
+Part is refused, every problem at once), then finds every feature outside the list that uses
+one in it: its parents, or the makers of the bodies it names (`dependencies` in
+`doc/features/hooks.ts`, the Part's own rule; `removeBlock` names only the first). Any user
+refuses the call with nothing changed: `in_use`, the message naming every user and the body it
+uses it through, `detail.users` one row per `{feature, uses, via}`. The apply checks the Part
+again as it is then (the person may have changed it while the call planned: `in_use`, or
+`changed` for a listed feature already gone), then runs the Part's own `remove` for each, newest
+first, inside the step, so the list's own users go before what they use; the hold point
+`before-commit` follows. A delete is structural: features that fail afterwards are kept and
+listed in `broke`. The deleted features leave the person's selection, as the person's own
+Delete does, and the step's selection restore never brings back a feature or body that is gone.
+The answer's `data` adds `deleted` (the names, in history order).
+
+## Selectors (`selectors/`, `labels.ts`, `find`)
+
+One string names faces, edges, vertices, bodies, planes, axes or sketch regions
+(`help selectors` lists every form; `selectors/parse.ts` has the grammar). The pieces:
+
+- `labels.ts`: a face's label from its stored name (`Base.end`, `Base.side(r.top)`,
+  `Pipe.side(o@a2)`, `Fillet 1.fillet(2)`, `Row.copy(3)`, ...; a sweep's `Pipe.side(o)` is
+  every side swept from `o`, along each curve of its path). Faces that share one get
+  `~1`, `~2` in a fixed order (`LabelIndex`); a split face's label warns. The parser reads
+  back every label it writes (tests pin the round trip on real bodies).
+- `selectors/parse.ts`: pure; the Part's names come in as data, the longest known name
+  wins, quotes are allowed, and a body and a feature of one name are read by the grammar.
+  Errors carry the 1-based column (`bad_selector`, `detail.column`); a selector that starts
+  with a filter ("+Z", "hole") is told that a filter goes after its scope, with the form
+  (`parseFor`). In `edges of`, a face query goes in brackets with its own filters, and the
+  filters after the brackets pick among the edges ("edges of (Body 1 faces >Z) >X"); written
+  bare with a filter it is refused, naming both bracket forms, since the filter could be the
+  faces' or the edges'.
+- `selectors/resolve.ts`: `withScene(ctx, {before?, sketch?, self?}, fn)` reads the shown
+  bodies once the rebuild caught up (a new feature), or `doc.bodiesBefore(feature)` (an
+  edit), and runs `fn` again once when the Part rebuilt or the kernel restarted meanwhile
+  (`busy`/`changed` the second time). Inside: `selectOne(sc, text, want, field)` for a
+  single-entity field (none: `nothing_selected`; several: `selector_ambiguous` with at most
+  8 candidates, each with a handle), `selectSet` for a set field, `selectAny` for find, and
+  `echo(sc, selected)` for an edit's `resolved` line (`... live set` / `fixed set` for
+  `edges of`).
+- `selectors/refs.ts`: what a feature keeps, by the person's own rules (`pickFace`,
+  `refOfEdge`/`refOfVertex`, the CONSTRUCT kinds of `GeomRef`, `refOfRegion`): a face the
+  feature made itself is `self_reference`, one made after it `later_feature`, an unnamed
+  body's `not_named`.
+- `selectors/handles.ts`: `#f3`, `#e7`, `#v2`, `#b1`, per key (cleared when the key
+  changes, at most 2000); each keeps the stored reference and is resolved again on use
+  (`moved: check` when it moved, `selector_stale` when it is gone). find, view and the
+  selectors share the key's one table, and the body tool takes a `#b` handle.
+- `selectors/topo-cache.ts`: one `topo` call per shape (the 32 newest kept, chunks with
+  progress above 2000 faces, dropped on a kernel restart); it is also a `NamingLookup`.
+- `selectors/geometry.ts`: a point on a face, hole or boss for round faces, a flat face's
+  frame in words.
+
+`find` (`tools/find.ts`) lists the matches as `FindRow`s and lights them in the person's
+view for 1.5 s at the watch pace (the shown bodies only; never at the fast pace or while the
+window is hidden).
+
+## Sketches (`sketch/`, the `sketch` tool, `edit_feature` on dimensions)
+
+One `sketch` call is one Assistant step. Everything is checked and solved before the step
+opens, so a refused call changes nothing and no panel opens:
+
+- `sketch/support.ts`: `on` through the plane selector (bodies before the sketch for an
+  edit): an origin plane, a construction plane, one flat face (its stored reference by the
+  person's pick rules), or `<plane or face> offset <length> [flip]`, which makes a
+  CONSTRUCT plane `<sketch> plane` in the same step, reuses an identical built one, or moves
+  the edited sketch's own plane while nothing else uses it.
+- `sketch/macros.ts`: each entity kind as points, lines, circles and arcs whose stored ids
+  are `<id>__<part>` (the model writes `<id>.<part>`: `r.top`, `p.2`, `p.p2`), with the
+  relations that keep its shape (`r__h_top`, ...). `KIND_DOF` is pinned on the real solver.
+- `sketch/compile.ts`: ids, every `at` problem at once (`bad_entity`), joins (ends within
+  0.05 mm are one point, the first entity's; near misses up to 0.5 mm warn; points the
+  edited sketch keeps apart stay apart), `infer` (`<line>__h` / `__v`, inferred), refs
+  checked against `sketch/signatures.ts` (the solver's own forms, pinned by
+  `signatures.test.ts`), values stored with units, at most 180 constraints (200 with the
+  inferred). A kept entity of an edited sketch keeps its stored points.
+- `sketch/solve.ts`: the solver apart from sketch mode (`analyzeFeature`): `expr_error`,
+  then the inferred relations that repeat yours go (newest touching first; the unneeded come
+  back), `sketch_conflict` naming each constraint and its partner (a macro's own as
+  `internal`), `sketch_unsolved`, `sketch_collapsed`, and the answer's `moved` and `free`.
+- `sketch/write.ts`: inside the step, through the person's paths: the offset plane's panel,
+  then `SketchMode.startSketch(support, {step})` (or the Edit panel), the drawing, the
+  rebuild, `finish({step})`. At the fast pace the drawing is one `apply` of the solution
+  (`sketch-step:1` after it). At the watch pace it is drawn as a person would (see Watch mode
+  below), `sketch-step:<n>` after the n-th apply. Hold points `after-open`, `between-opens`
+  (after the plane), `sketch-step:<n>`, `before-commit`.
+- `sketch/describe.ts`: a stored sketch in the tool's input form (`get_model feature`,
+  registered as the sketch type's `FeatureIo`): intact macros as macros, the rest as
+  primitives by their stored ids, `infer` for the tool's own inferred relations; `inputs:
+  null` with `unsupported` (projected edges, splines, patterns, fixed points, driven
+  dimensions, trimmed pieces) or `too_big` (150 entities, 200 constraints, or the reply's
+  room). Resent as it is, the sketch comes back the same. `refOf` names stored ids as the
+  model does (`free`, `open`, `bounded_by`, conflicts; an extrude's `open_profile` too).
+  `supportSelector`: where the sketch lies as a selector (a face by its label on the shown
+  bodies), which `get_model` (brief and one feature) and the sketch tool's reply give as `on`.
+- `sketch/solve.ts` `freeRows`: the solver's free parameters by the model's names (only a
+  point's or an entity's, an arc's `start_angle` and `end_angle`, each once), for the sketch
+  tool's reply and `get_model`'s `solver.free` alike.
+- `sketch/dims.ts`: `edit_feature` set rows naming a sketch's dimension ids: checked headless,
+  then one sketch-mode `apply` of the new values (the stored geometry solved again), a value
+  edit for the judge.
+- `sketch/flip.ts`: `flipped` in `set_params` and `edit_feature` answers: a sketch whose
+  output changed and whose region loops turned over, or whose two-point dimensions turned
+  round.
+
+## Extrude and revolve (`extrude`, `revolve`, `region-tools.ts`, `diagnose.ts`)
+
+Each makes one feature from regions of one sketch, or with `edit: "<name>"` replaces that
+feature's inputs, as one edit call through the person's own panel (`fillFeature`, see below).
+What they share is in `region-tools.ts`:
+
+- `sketchFor`: the `sketch` field, a sketch by name or id (`not_found` lists the sketches); an
+  edit's sketch must come before the feature (`later_feature`).
+- `regionsOf`: region selectors in that sketch (`all` leaves every hole open, overlapping or
+  split ones too; `r2`; `at(u, v)`; a region key; `<sketch> r2` of the same sketch), each naming at
+  least one, kept once each, as `RegionRef`s (`refOfRegion`). An open sketch answers
+  `open_profile` with its open ends, a missing region `region_not_found` with the regions.
+- `readOp`, `scopeOf`, `checkBodyName`: the op fields' rules, every problem in one `bad_input`
+  (`bodies` is `[]` with `new`; `body_name` and `color` only with `new`; `#rrggbb`); `bodies` are
+  body selectors; a `body_name` another body has is `name_taken` (a feature's name is fine).
+  `nameNewBody` names and colours the new body after the panel's Done, inside the step.
+- `fillSwept`: `fillFeature`, and when the feature fails because its operation met nothing (CAD's
+  own "Nothing to cut/join/intersect ...", or Through all finding nothing on its side), the
+  answer `feature_failed` carries the diagnosis.
+- `checkScoped`: after the Done of a cut or intersect on given bodies, a cut that cut nothing
+  away from any of them (volumes within 1e-9 relative) is `cut_removed_nothing`, an intersect
+  that would leave nothing of them `feature_failed`, each with the diagnosis; a body a cut did not
+  touch while it cut others is a warning. A kernel restart while the volumes are read is
+  `busy` `changed`.
+
+`diagnose.ts` (`diagnoseMiss`, only on failure, on copies; every shape it makes is released):
+`no_overlap` for a join; for a cut or intersect `wrong_side` when the same regions with `flip`
+the other way meet a body (`other_way`; the hint says `set flip false` when flip is already
+true, and a revolve's says to turn the other way), `too_short` when the whole sweep (through
+everything both ways, a full turn) meets one the extent does not reach (`in_line`), else
+`off_body`. A blind extrude is checked one way at a time: when only the other way (through
+everything) meets a body farther than the distance, the answer is `wrong_side` with `gap_mm`
+(how far away the body starts) and a hint to flip and go past it, never `too_short` (no
+longer distance this way would reach it). Every answer has `detail.frame` (u, v and n in model axes, the origin, and the
+words "u runs +Y, v runs -Z, origin (0, 0, 0)"), `profile_bbox_mm` and each body's box. Its
+kernel calls are refused after a worker respawn (the shape ids died): the sub-reason is then
+left out and the message says the check could not be made.
+
+The tools:
+
+- `extrude` (`tools/extrude.ts`): blind and symmetric (`distance`), two (`distance` along the
+  sketch normal, `distance2` against it), through and through_both (`through_all`, keeping the
+  last blind distance), to (`to`: one flat face or one vertex; `distance` is the offset). Bare
+  numbers are stored with the Part's unit. `resolved.extent` says the direction in model axes
+  ("blind t (6 mm) along +Z"). A face extrude or one along a chosen direction has no form in
+  this tool: `inputs: null` in `get_model`, and an edit of one is refused.
+- `revolve` (`tools/revolve.ts`): `axis` is an axis selector (`Z axis`, `Profile.ax`, an edge,
+  `axis of <round face>`); full (`360 deg`), one, symmetric, two (`angle`, `angle2`). A profile
+  across the axis fails with CAD's words.
+
+Both register their `FeatureIo`: `get_model full` writes regions as `at(u, v)` (each kept
+region's inside point now: `region-tools.ts` `regionPointNow` resolves the kept region by its key
+in the sketch's output, so a parameter that shrank or moved it since it was picked is followed),
+the Up to target as a label (or `<body> vertex at (x, y, z)`), the axis as a selector and bodies
+by name, so the inputs resent with `edit` leave the feature as it was;
+`edit_feature` takes `distance`, `distance2`, `angle`, `angle2` (and the feature's own paths).
+
+Tests: `extrude.test.ts`, `diagnose.test.ts` (each miss, and races forced by holding the
+diagnosis's own kernel call: the person's Escape, a kernel restart), `features-io.test.ts`
+(round trips of features the person made), `guide-example.test.ts` (the guide's plate, bracket
+and flange; their holes with `hole`, below); e2e `cad:assistant-honest-join`, `-miss` and
+`-offbody`.
+
+## Holes (`hole`, `tools/hole.ts`)
+
+Round holes into one flat face in one call, so the model never meets the face's frame or the
+cut's flip. The face is one face selector whose outward normal runs along X, Y or Z within 1
+degree (a curved face is `not_flat`; a tilted one `bad_input`: use `sketch` on it and `extrude`
+cut). The centres are model coordinates as expressions, `""` for the one along the face's normal
+(or that coordinate as the face lies, within 1e-4 mm). Refused before anything changes, each kind
+all at once: the fields (`bad_input`), the expressions (`expr_error`), then where the centres are
+(`bad_input`: off the face's plane, farther than half the diameter from the face, measured by the
+kernel, so a centre in an existing hole is off it too; the same centre twice). Overlapping holes
+are a warning.
+
+One step makes two features through the person's own paths:
+
+1. `<name> sketch` on the face (`writeSketch`, sketch mode): circles `h1`, `h2`, ... with `d`
+   (diameter of `h1`), `eq2`, ... (equal to `h1`) and the positions `hkx` / `hky`
+   (`distance_x` / `distance_y` from the sketch origin, the model origin projected onto the
+   face). Each is the model expression of the axis the sketch's u or v runs along, negated where
+   it runs against it (`negated`: `"12 mm"` -> `"-12 mm"`, `"b/2"` -> `"-(b/2)"`): on a -X face
+   (u +Y, v -Z) z `"b/2"` is `h1y` `"-(b/2)"`. Compiled and solved headless in plan; always
+   fully defined.
+2. `<name>` (an extrude, `fillSwept`): every circle (`all`), `flip: true` (into the material),
+   op cut, scoped to the face's body, `through_all` or blind `distance`; `checkScoped` after its
+   Done (`cut_removed_nothing`).
+
+A centre within half the diameter of the face but off it, or on it nearer one of the face's
+edges than half the diameter (the kernel's `measure` against each edge, at most
+`EDGE_MEASURES_MAX` measures in one call), cuts a notch: the hole is made and a warning names it.
+
+The hold point `between-opens` sits between the two. `name` `""` takes the next `Hole k` whose
+sketch name is free too; a given name may be at most 33 characters (its sketch's name keeps the
+Part's 40). The data adds `made`, `centers_mm`, `diameter_mm`, `depth_mm` and `dimensions` (the
+sketch's ids and expressions). There is no `edit` field: `get_model full` shows the two features
+as `sketch` and `extrude` inputs with `made_by: "hole"` (`made-with.ts`, this page's memory, as
+`by: "assistant"`), and the model changes them with those tools or `edit_feature` (the sketch's
+`d` changes every hole).
+
+Tests: `hole.test.ts` (the six axis faces, the holes' axes as `find` measures them and the signs
+of `h1x` / `h1y`; through and blind volumes, parameters, `edit_feature`, one undo entry, the
+round trip; every refusal; a person's panel at `between-opens`, forced); `guide-example.test.ts`
+(the plate's four holes, the flange's hole and its circular pattern); e2e
+`cad:assistant-honest-hole` (the bracket's -X face).
+
+## Measuring (`measure`, `measure.ts`, `measure-targets.ts`)
+
+A read like `get_model`: it waits for the Part to open and the rebuild to catch up, then
+measures the bodies built now (the rollback bar's, said in `note` when it is not at the
+end). `measure.ts` gives the raw numbers, which the tool rounds and the eval's facts can
+read as they are:
+
+- one body: `DocService.measure` (volume, area, centre of mass, bounding box, solids,
+  shells); `voids` is shells minus solids for closed solids, null for a surface body;
+- one face, edge or vertex: kernel `measure {a}` (plus `topo` for a curved face's axis
+  point), a point on a face by the selectors' rule (`selectors/geometry.ts` `pointOnFace`,
+  the same `point_mm` find gives), a round edge's circumference or arc angle;
+- two targets: kernel `measure {a, b}`; two bodies also `boolean common` then `props`
+  (the overlap; empty is 0) and `boolean fuse` then `props` (the union's solids and
+  voids), each made shape released;
+- one body with `section`: kernel `section`, its loops as sketch curves, `sketch_regions`;
+  the material is the regions at even depth.
+
+When the model, the rebuild or the kernel's worker changes while it measures, it measures
+again once; a second change is `busy`/`changed`.
+
+Targets (`measure-targets.ts`): a body's name or id (a name is the body's first), `(x, y,
+z)`, `selection` (one selected thing), Top/Front/Right (XY/XZ/YZ) with `offset <length>`
+and `flip`, X/Y/Z axis, origin, and construction planes, axes and points by name. Every
+other selector (faces, edges and vertices, handles from find or view, the selectors' planes
+and axes) goes to `measure-selectors.ts`, which the measure tool registers with
+`registerSelectorResolver`: find's selectors on the bodies built now, one thing per target
+(several are `selector_ambiguous` with handles), a selector's warning as `warning`. A text
+that is neither a body nor a selector answers `bad_selector` with the selector's column and
+the forms that work. The section takes the same planes, `selection` with a flat face, and a
+flat face by selector (`Base.end offset -5 mm`).
+
+## Pictures (`view`, `view.ts`)
+
+`view` draws the Part off screen through `ViewportHandle.snapshot`: each picture has its
+own orthographic camera, so the person's camera, saved view, section view and count of
+camera moves never change, and nothing is written. One view fills the picture; 2 to 4
+make a 2 x 2 sheet with each tile's name. The long side is 768 px (`small`) or 1280 px
+(`large`; a local turn always gets small). The page encodes a PNG on an
+`OffscreenCanvas`, or a JPEG (quality 0.85) when the PNG is over 1.4 MB.
+
+- `hide` takes body names (any case) or ids; `section` is `""` or
+  `<Top|Front|Right> [offset <length>] [flip]` (parameters allowed), and the data says
+  what the cut keeps ("z <= 4 mm").
+- `labels: 'bodies'` writes each shown body's name at its box's centre; `'faces'` puts a
+  `#fN` handle on the 30 largest faces the picture shows, where the picture really sees
+  that face (`visibleFaceAt`), at the middle of what shows, else in a roomy triangle.
+  Each handle keeps the face's stored reference (`pickFace`), never an index, with its
+  label, in the key's one table (`selectors/handles.ts`): find and every selector read a
+  picture's `#f3`, and find numbers on after it.
+- The data lists the views and their mm per px, the shown and hidden bodies (and those
+  hidden in the tree), the cut, the labels, the shown sketches' dimension values
+  (pictures carry no HTML overlays), `software_renderer`, and a `note` when the person's
+  sketch or the rollback bar rolls later features back, or the window is hidden.
+- A turn whose model reads no images (the host's turn says `images: false`) answers
+  `not_ready` `no_images` and draws nothing; no 3D view, a view without `snapshot` or a
+  lost graphics context answers `not_ready` `no_viewport`.
+- Tests draw on a recording canvas (`setViewRaster`), since jsdom has none.
+
+## Fillets, chamfers, shells, patterns and combine (`modify`, `pattern`, `combine`)
+
+Each makes one feature, or with `edit: "<name>"` replaces that feature's inputs (its type must
+be the tool's kind: `wrong_feature_type` otherwise), as one edit call. What they share is in
+`feature-tools.ts`:
+
+- `editTarget` and `nameFor`: the `edit` and `name` fields (`not_found`, `wrong_feature_type`,
+  `name_taken`); a new name is passed to the panel only after the check.
+- `fillFeature(ctx, plan, {edit, type, fields, label})`: the person's own panel opens read-only
+  (`data-panel-owner="assistant"`, its fields' wrapper inert while the body still scrolls; the
+  collapsed Sketch panel's rail is marked too, its Finish disabled with the reason)
+  through `openForAssistant` with every field at once (a new feature), or `openEditForAssistant`
+  and one `session.update` with every top-level field whole (an edit); a `macrotask()`, the
+  `after-open` checkpoint (pace `open`), the rebuild, the `before-commit` checkpoint (pace
+  `commit`), then the honest Done. The feature failing before its Done is `feature_failed` with
+  CAD's own message and actions (`kernel_failed` when the kernel stopped it). It sets the plan's
+  own feature, which the judge reads.
+- `createdLabels`: the labels of the faces the feature made (`EditData.created`:
+  `Fillet 1.fillet(2)`, `Shell 1.inner(Base.side(l1))`, `Row.copy(3)`).
+- `faceText`, `edgeText`, `axisText`, `planeText`, `bodyText`: a stored reference as the
+  selector `get_model full` writes in a feature's `inputs` (a label; `<body> face at (x, y, z)`
+  for a face with none, or a split face), so the inputs can be sent back with `edit`. The label
+  is the face's own, with its `~k`, on the bodies just before the feature (`refBodiesOf`, where a
+  resend reads its selectors; a `FeatureIo` with `refs` gets them from `get_model`), so a label
+  that several faces share (every face of a mirror copy, of a pattern copy, the pieces of a
+  trimmed side) names the one face, and a fillet face's number is counted there.
+- `pathIn`: a `FeatureIo.pathOf` that takes the tool's field names (`size`, `count`,
+  `spacing`, ...) and the feature's own expression paths (`radius`) for `edit_feature`.
+
+The tools:
+
+- `modify` (`tools/modify.ts`): fillet and chamfer targets are faces or edges on one body. A
+  face, and `edges of <face>` with no filter, is kept as a face (a live set: every edge of it
+  as the part changes), an edge as an edge (a fixed set); the answer says which (`kept_as`)
+  and how many edges were rounded (`edges`, with the kernel's tangent chains). A shell's
+  targets are the faces it opens; `inward` true keeps the outer size. A size the kernel cannot
+  make answers CAD's own message ("a radius of 20 mm is too large for ...: 2.9 mm or less
+  works").
+- `pattern` (`tools/pattern.ts`): linear (`dir1`, and `dir2` with about2, always by spacing),
+  circular (`360 deg` is a full turn: evenly), mirror. Items are feature names (refused with
+  the pattern panel's own words when they cannot be repeated), body selectors, or face
+  selectors on one body. A mirror about `<plane> offset <length>` makes the construction plane
+  first in the same step (two panels, the `between-opens` checkpoint between them; an edit
+  moves the plane above the mirror), or uses one the Part has with the same base, offset and
+  flip. The sketch tool and the mirror find such a plane by one rule
+  (`offsetPlaneLike` in `sketch/support.ts`, the distance stored with the Part's unit), so
+  either one uses the plane the other made. Spacing is a pitch above 0 (the hint says flip).
+- `combine` (`tools/combine.ts`): targets and tools are body selectors (`bodies of <pattern>`,
+  `all bodies`, `#b` handles); they are expanded and deduplicated, and the targets are taken
+  out of the tools, which must not then be empty. A join of pieces that do not touch warns
+  (the body's solids went up, and CAD's own warning).
+
+Tests: `modify.test.ts`, `pattern-combine.test.ts` (real kernel: volumes by formula, round
+trips of `get_model full` inputs, refusals), `feature-tools.test.ts` (a Stop at
+`before-commit`, Escape at `after-open`, a person's panel or change at `between-opens` of the
+offset mirror), `offset-planes.test.ts` (a sketch and a mirror share one offset plane); e2e
+`cad:assistant-honest-fillet`.
+
+## Sweeps and lofts (`sweep_loft`, `tools/sweep_loft.ts`)
+
+One feature per call, or with `edit: "<name>"` that sweep's or loft's inputs replaced (the
+kind must be its type), through `fillFeature` as the tools above do:
+
+- sweep: `profiles` are regions of one sketch, as region selectors (`"<sketch>"` is its
+  even-odd regions: a ring of two circles is one region with a hole; `"<sketch> r2"`,
+  `"<sketch> at(u, v)"`). `path` is `"<sketch>"` (every curve of it that is not construction)
+  or `"<sketch>: l1, a2"`, read here, not by the selector grammar: the longest sketch name the
+  text starts with (or a quoted one), then the curves by the model's ids (`p.1`), or a macro's
+  id for all its pieces (`p`: a polyline's sides). The path's sketch is another one than the
+  profile's, and for an edit one made before it (`later_feature`).
+- loft: two or more profiles, one region each (`"<sketch>"` that has several regions is
+  refused, naming them), one per sketch, in order; `ruled`; `path` is `""`.
+- `op`, `bodies`, `body_name`, `color` follow extrude's rules (every problem in one
+  `bad_input`; a body name another body has is `name_taken`). The body's name and colour are
+  the Part's one-shot edits after the panel's Done, in the same step (a `between-opens`
+  checkpoint before them).
+- A shape the kernel refuses (a path with a gap, a loft profile with a hole, an invalid
+  result) is the call's `feature_failed` with CAD's own words; nothing changes.
+- The answer: `EditData` with `created` (`Pipe.start`, `Pipe.end`, `Pipe.side(o@a2)`;
+  `Loft 1.side(r.top)` by the first profile's parts), `kind`, `profiles` (sketch, region id,
+  area, holes) and a sweep's `path` (its sketch and curves).
+- `get_model full` writes them as this tool's input: regions as `"<sketch> at(u, v)"` (the
+  point inside the region now), the path as `"<sketch>: l1, a2"`. They have no expression
+  fields, so `edit_feature` only renames, suppresses or moves them.
+
+Tests: `sweep-loft.test.ts` (real kernel: the pipe elbow's volume by formula and its labels
+read back by find, a named and coloured body, a cut groove, round trips, refusals, a path with
+a gap, a Stop and a person's change at `between-opens`, the loft frustum); e2e
+`cad:assistant-honest-sweep`.
+
+## The person's view
+
+The chip (`[data-chip="assistant"][data-assistant-state]`, its words in
+`[data-assistant-text]`, the live region (`role="status"`, the words alone), its buttons
+`[data-assistant-action]`, 24 px targets with Stop set apart) and the frame's
+`.cad-app[data-assistant]` follow `state.ts`: `off`, `idle`, `thinking` (a turn runs, no
+call), `working` (a call runs: the tool's title, then the step it makes: "Sketch Plate
+sketch"), `waiting` (an edit waits for the person: what it asks), `approve` (Ask each step:
+"keep it?"), `paused`, `ended` (for 120 s, or until the Part changes). Without the host's turn
+events the chip stays 10 s after the last call.
+
+## Watch mode (`pace.ts`, `sketch/write.ts`, `camera.ts`, `approval.ts`, `health.ts`, the chip)
+
+- **The watch pace** (the default; the chip's Fast / Watch, `ws.prefs` `assistant.pace`): each
+  pace point waits (a panel opening 450 ms, a sketch entity's rubber band 120 ms and its add
+  60 ms, a relation 60 ms, a dimension 150 ms, a parameter row 150 ms, before the commit
+  250 ms), at most 6 s per call. `pace.watching()` (the watch pace, the window shown, the last
+  rebuild under 1.5 s, whatever the test scale) picks the drawing path; `pace.live()` (also a
+  scale above 0) says whether a wait waits.
+- **Watched sketches** (`sketch/write.ts` `drawSteps`, `drawAt`): what goes (a replace) in one
+  apply; each entity group (a macro with its own and inferred relations, ids `<id>__<part>`)
+  shown as a rubber band (`setPreview`), then applied and selected; then each of the model's
+  relations, then each dimension. Sketch mode solves every apply, so the dimensions pull the
+  sketch into shape and the DOF chip counts down. The entities are drawn where the model put
+  them unless the solution moves a point more than max(2 mm, 10% of the diagonal); then where
+  the solution has them. Last, when what is stored is not the headless solution (a partial
+  solve that took another path, or a refused intermediate apply, which only ends the drawing
+  early), one apply writes it exactly. Never a revert for the drawing itself.
+- **set_params** at the watch pace with no panel open shows the Assistant's own read-only
+  Parameters panel (a moment per row); it closes with the step. A Parameters panel the person
+  has open stays open and flashes the changed rows.
+- **The camera latch** (`camera.ts`): each key takes a baseline of
+  `ViewportHandle.userCameraMoves()` when its turn starts running (the host's turn events), else
+  at its first call. Once it moved, the automatic camera moves of the Assistant's sessions
+  (sketch entry, a reopened sketch's reframe, a new Extrude's Isometric) are off for the rest of
+  the key; also at the fast pace, while hidden and while a pointer is held. After a kept edit,
+  `refitIfOffScreen({auto: true})` under the same rule. `autoCamera` (the page API) answers it.
+  The view's own framing of what an Assistant step brings (its first bodies and a size change,
+  `setBodies(.., {frame: false})`; its finished sketch past the view, bind.ts) asks `autoFrame`:
+  off once the key is latched or while the window is hidden, at any pace.
+- **Ask each step** (`approval.ts`, the chip's toggle, `ws.prefs` `assistant.ask_each`, off by
+  default): a judged edit waits before it is sealed (chip `approve`, progress `waiting`); Keep
+  goes on, Discard reverts (`busy` `step_declined`, `why: 'discard'`), no answer within the wait
+  is Discard (`why: 'no_answer'`), a change of the person's or a take-over (Escape on the
+  Assistant's Parameters panel too) ends the wait at once.
+- **The chip's buttons** (`AssistantActions`, `services.apis.assistant.actions`): Pause and
+  Resume (the pause of `busy.ts`, why `person`; it ends with the turn; neither Pause nor Stop
+  shows once the turn has ended while its last call finishes), Stop (only with the
+  host's turn events: the running call of the turn aborts here, its step reverts synchronously,
+  every later call of that turn answers `busy` `stopped`, and `ws.assistant.stop(turn)` asks the
+  host to end it), Keep and Discard, Fast / Watch, Ask each step, and Undo of an ended turn while
+  its group is the newest step (`doc.assistant.undoGroup`: one Ctrl+Z).
+- **The Part's health** at the end (`health.ts`): `data-assistant-health` ok, warn (amber:
+  under-defined sketches, features with a warning) or error (red: a failing feature, a failed
+  rebuild), with the words ("· Fillet 1 fails · 1 sketch under-defined"); a click selects the
+  first such tree row.
+- **A hidden or covered window**: no waits and no camera moves; an edit made at the watch pace
+  while hidden says so in its answer (`note`: "ran without animation: the window was hidden or
+  covered"). Pictures still work (no animation frame needed).
+
+## The evaluation set (`eval/`, `eval-facts.ts`)
+
+Nine tasks (`eval/tasks/*.json`: plate-holes and spacer at L1, l-bracket and flange at L2, enclosure
+and poker-chip at L3, pipe-elbow and vortex at L4, edit-plate) with checks the kernel answers, a
+reference per task (`eval/references/*.json`: the calls the scripted model makes), and the harness
+(`eval/run.mjs`, `npm run eval:assistant`; `eval/README.md` says how to run it):
+
+- `src/assistant/eval-facts.ts`: the Part's facts in raw numbers, read through
+  `window.__CAD__.assistant.evalFacts(ask)`: parameters, features with each expression field
+  evaluated, sketches with their dof analysed again by the solver (never the stored state), the
+  bodies' exact properties (solids, shells, voids), every face (round ones as hole or boss; a hole's
+  distance from the centre of each flat face it opens into), the chip's health; and what `ask`
+  names: pairs of bodies (overlap, union), the union of every body, sections (each piece with its
+  depth, area, holes, centre from its triangles, and box) and probe columns (a 0.2 mm square prism at
+  points of one body's section, `common` with each body, then the intervals each fills along it).
+  It changes nothing and releases every shape it makes; what it cannot read goes into `errors`.
+  `evalSetParam` is the parameter walk's change (the person's one-step `editParams`, then the
+  settled rebuild); `evalPicture` draws the Part from iso off screen for the run's `final.png`.
+  The types are in `eval-types.ts` (types only, so `eval/*.d.mts` and the e2e read them without
+  the page's modules).
+- `eval/score.mjs` (pure): the check kinds (bodies, volume, bbox, holes, round and flat faces,
+  features ok, sketches defined, params, walk, overlap, union, section, wall, spots, interlock, names
+  kept, feature type, driven by a parameter, units, the honest blend, the last words), formulas for
+  expected values, `factsAsk(task)` (what the facts must measure) and `score(task, facts, extra)`.
+  A heuristic check is reported, never counted.
+- `eval/lib.mjs`: one run end to end (`runTask`): a new project and its first Part in a page of its
+  own, the turns on the tab whose registration names that project (questions answered by the task's
+  policy: a delete is denied unless allowed, a privacy question only for a project the run made),
+  the facts, the walk, the score, one repair turn on a failure, the record and its files.
+  `scriptedDriver(fake)` queues each turn's reference on the app's scripted model.
+- `eval/run.mjs`: `--profile` (its own app server, settings and key from a profile outside the
+  repository), `--attach` (the running app), `--scripted` (CI); `--tasks probe` checks the provider
+  takes the strict tool schemas. Records in `.cache/assistant-eval/` (ignored by git).
+
+Tests: `eval-score.test.ts` builds every reference on the real kernel through the tool handler,
+scores it (every check passes), then changes what each check reads and sees it fail (every kind
+met); `eval-facts.test.ts` (the facts of the plate, an under-defined sketch, errors kept, sections,
+probe columns, the walk's change); `eval-lib.test.ts` (questions, a turn through stand-in routes,
+the turns' use, the walk, the summary, the command line, the references against the tools'
+schemas, the ignored records folder, no vendor words); e2e `cad-assistant-eval.spec.ts` (+90:
+plate-holes with its walk and the run folder, l-bracket, flange and poker-chip pass at the first
+shot through the app; a failing first shot gets one repair turn; and `eval/run.mjs` run as a person
+runs it: `--scripted` with its own server, `--profile` with the key reaching the model only as its
+bearer token and the temp folder gone after, `--attach --clean` removing only the run's projects,
+and a `--tab` of the person's Part stopping the task and the probe before any turn).
+
+## Tests
+
+- Vitest: `tests/assistant/` over `harness.ts` (a real DocService on the real kernel,
+  every module's feature types, the real solver, the UI controller and the fake host's
+  `ws.assistant`, `tests/fakes/assistant-sdk.ts`). Real-kernel tests give each test an
+  explicit timeout. `parts.ts` makes sketches with the ids a test names faces by,
+  extrudes of their regions, a fillet of an edge and a sketch on a face.
+- Hold points (`testing.ts`): a test holds a point (`after-settled` for reads; `after-plan`,
+  `after-open`, `between-opens`, `sketch-step:<n>` and `before-commit` for edits), the call
+  stops there until the test releases it. No sleeps.
+- `assistantHarness({sketchMode: true})` runs the real sketch mode too (the sketch tool and
+  edit_feature on dimensions draw through it). The sketch tool's files: `signatures`,
+  `sketch-compile`, `sketch-solve`, `sketch-tool`, `regions` (`sketch-tools.ts` has the
+  input builders and a block made from the tool's rectangle).
+- `window.__CAD__.assistant`: the tools, the chip's state, the calls answered (`calls`,
+  with each error's reason and, for edits, `paced`: the ms waited at pace points), the turns,
+  the hold points, `setHoldS(s)` (the edits' wait for the person), `setPace(pace, scale)`,
+  `setAskEach(on)` (neither written to the person's preferences), `approving()`, `paused()`,
+  `setToolset('core')` for the eval's A/B runs (its 13 tools with a guide naming only them,
+  `guide.ts guideWithout`; help features marks the 5 not offered), and the eval's `evalFacts(ask)`,
+  `evalSetParam(name, expr)` and `evalPicture()`.
+- Watch mode's vitest files: `sketch-write` (the watch path on the real solver: guesses then
+  the pull, the solution first when it moves far, the final exact apply on a forced other
+  branch, a forced refused apply, a replace's difference, `sketch-step:<n>`), `camera`, `watch`
+  (Ask each step, Stop, Pause, the hidden note, the Assistant's Parameters panel, Undo) and
+  `chip` (each phase's buttons, the health).
+- The edit tools' vitest files: `step`, `judge`, `busy`, `pace`, `ledger`, `tools-edit`
+  (`parts.ts` makes the plate and its fillet as the person would).
+- The guide and help: `guide` (the guide's facts against the code; every tool, field, value and
+  topic named exists; every worked input valid for its schema and every selector in it reads),
+  `help` (sizes, depth, every topic through the app's result rules, the lists), `guide-example`
+  (every worked part built call by call on the real kernel, each result as help gives it, the
+  volumes and boxes by formula). The e2e `cad:assistant-watch-help` has the scripted model read
+  help example_plate through the app and send its calls back as they read: the person's tree and
+  volume chip show the plate.
+- E2E shard `assistant` (`npm run test:e2e:assistant`): each spec runs its own app
+  server with the Assistant's test switches and the app's scripted model
+  (`e2e/assistant-helpers.ts`); the app's turn helpers are vendor-neutral and take this
+  suite's `expect` (`setExpect`). Ports: `CAD_E2E_PORT_FROM` + 60, 70, 80, 90, 100
+  (`cad-assistant-eval.spec.ts` is +90, `cad-assistant-takeover.spec.ts` +100; `eval/run.mjs`'s
+  own server starts at +95, at +110 in the eval spec's command-line tests). Assert the chip's words through
+  `chipWords(frame)` (`[data-assistant-text]`): the chip's text also holds its buttons. A held
+  answer of the scripted model stays released once released: give each hold its own name.

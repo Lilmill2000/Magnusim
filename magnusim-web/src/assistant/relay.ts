@@ -24,6 +24,9 @@
  * (the server's ack window catches a connection that is only half open), its progress goes
  * on at most 4 times a second (and, while the frame waits on a call to the app, a bare
  * progress as a sign of life: the server's stall window waits too), its end as the result;
+ * a progress that waits for the person goes `waiting: true` (CAD tools spec H7), and so
+ * does each sign of life after it until a progress that doesn't wait (the turn's minutes stop
+ * meanwhile);
  * `abort` stops it. When the list goes while a call runs, that call's result is sent first
  * (at most 3 s), then `tools: []`, then the channel closes. A dropped stream ends this page's calls on the server at once, so
  * they are stopped here too.
@@ -44,6 +47,15 @@
  * link starts with no turns and no hold: its server says `active` right after `linked` when
  * it has any.
  *
+ * Turns (`turn`, CAD tools spec H3): each start, change and end of a turn bound to this tab goes
+ * to the open workspace's frame (its publication's tellTurn), and a new page there (a new frame,
+ * or the frame's page loaded again) hears the running ones once. The running ones are
+ * remembered: a frame may stop only those (stopAnnouncedTurn, through the turn's own Stop
+ * route). A new link's server sends its running turns again right after `active`, as many as
+ * its `turns`: one this page knew of that does not come again ended while the link was down,
+ * and a page told of it hears it ended (with no `end`). A new page is told only what a link
+ * says runs: never while there is none, nor before a new one said which still run.
+ *
  * The window's proof (withAssistantLink): the server takes this tab's live link, beside the
  * app's origin, as the proof that a request comes from a Magnusim window (a coding agent's
  * Test, connect and sign-in, a custom agent added, an allow switch turned on; phase 4's dock
@@ -52,7 +64,7 @@
  * keeps the channel while the request is out and a minute after; it is not pinned.
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
-import type { AssistantRegistration } from '../plugin-sdk/workspace';
+import type { AssistantRegistration, AssistantStopAnswer, AssistantTurn } from '../plugin-sdk/workspace';
 import { confirmAction } from '../workbench/dialogs';
 import {
   markWorkspaceFrameDead,
@@ -69,7 +81,7 @@ import type { AssistantCallOutcome } from '../workspace/bridge';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
 import { setAssistantLinkSource } from './api';
 import { refreshStatus, statusSnapshot, subscribeStatus, type StatusSnapshot } from './status';
-import type { GateView, RelayFrameData, RelayFrameType, RelayGateBody, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody } from './wire';
+import type { GateView, RelayFrameData, RelayFrameType, RelayGateBody, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody, RelayTurnFrame } from './wire';
 
 /** The channel's name on the tab's event stream (no such route: src/api/eventHub.ts). */
 export const RELAY_CHANNEL_URL = '/api/assistant/events?role=relay';
@@ -93,6 +105,9 @@ const GATE_MAX_MS = 60 * 60_000;
 export const PROOF_WAIT_MS = 5000;
 /** A channel opened for the window's proof stays this long after its last request (Settings sends a few in a row). */
 export const PROOF_KEEP_MS = 60_000;
+/** How many ended turns this page remembers (a Stop of one answers `ended`). */
+const TURNS_ENDED_KEPT = 16;
+const TURN_END_STATES: ReadonlySet<string> = new Set(['done', 'stopped', 'failed', 'capped']);
 
 /** What the frame hears for an empty list, or when nothing of this page is on the server. */
 const NOTHING_HELD: AssistantRegistration = { available: true, accepted: [], refused: [] };
@@ -137,6 +152,14 @@ interface Relay {
   turns: number;
   holdUntil: number;
   holdTimer: ReturnType<typeof setTimeout> | null;
+  /** The turns bound to this tab that the server says run, by id (as the frame hears them). */
+  turnsRunning: Map<string, AssistantTurn>;
+  /** Turns this page heard end, newest last (at most TURNS_ENDED_KEPT). */
+  turnsEnded: string[];
+  /** After a new link: how many running turns its `active` says come again (null before it), and those that came. */
+  relink: { need: number | null; seen: Set<string> } | null;
+  /** The page (pageOf) told the running turns: a new one hears them once. */
+  turnsToldTo: string | null;
   pinned: boolean;
   kickQueued: boolean;
   unsubscribe: () => void;
@@ -258,6 +281,7 @@ function runOnce(r: Relay): void {
     openRelay(r);
   }
   if (r.ch && r.link) void pump(r);
+  tellNewFrame(r);
   updatePin(r);
   maybeClose(r);
 }
@@ -306,6 +330,7 @@ function openRelay(r: Relay): void {
     });
   on('linked', (d) => onLinked(r, d));
   on('active', (d) => onActive(r, d));
+  on('turn', (d) => onTurn(r, d));
   on('invoke', (d) => onInvoke(r, d));
   on('abort', (d) => {
     if (typeof d.call === 'string') r.invokes.get(d.call)?.ctl.abort();
@@ -331,6 +356,8 @@ function onLinked(r: Relay, d: RelayFrameData['linked']): void {
   // the link was down, has none, and an old count would pin the stream for good).
   r.turns = 0;
   r.holdUntil = 0;
+  // The running turns it knew of come again right after `active`: one that does not ended meanwhile.
+  r.relink = r.turnsRunning.size ? { need: null, seen: new Set() } : null;
   // A fresh start: what waited for a retry goes now.
   if (r.retryTimer) clearTimeout(r.retryTimer);
   r.retryTimer = null;
@@ -416,7 +443,7 @@ async function pump(r: Relay): Promise<void> {
 }
 
 function toolsOf(p: PublishedTools): RelayTool[] {
-  return p.tools.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, risk: t.risk, timeoutS: t.timeoutS }));
+  return p.tools.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, risk: t.risk, timeoutS: t.timeoutS, ...(t.confirm ? { confirm: t.confirm } : {}) }));
 }
 
 async function register(r: Relay, link: string, pub: PublishedTools): Promise<void> {
@@ -538,13 +565,18 @@ function resultsFirst(r: Relay): Promise<void> {
 
 /**
  * Progress of one call, at most 4 a second: the newest waits for its turn. `alive` is a bare
- * one (a call of the frame in flight), sent unless a progress waits to go anyway.
+ * one (a call of the frame in flight), sent unless a progress waits to go anyway. `waiting`
+ * is the frame's last progress's (it waits for the person): a sign of life keeps it.
  */
-function progressSender(link: string, call: string): { push(fraction: number | null, label: string): void; alive(): void; stop(): void } {
+function progressSender(
+  link: string,
+  call: string,
+): { push(fraction: number | null, label: string, opts?: { waiting?: boolean }): void; alive(): void; stop(): void } {
   let last = Number.NEGATIVE_INFINITY;
-  let pending: { fraction: number | null; label: string } | null = null;
+  let pending: { fraction: number | null; label: string; waiting: boolean } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let ended = false;
+  let waiting = false;
   const send = () => {
     timer = null;
     if (ended || !pending) return;
@@ -553,22 +585,27 @@ function progressSender(link: string, call: string): { push(fraction: number | n
     last = Date.now();
     // `fraction` always goes, null when the page gave none: a bare progress() is a sign of life
     // too, and the server counts as progress only a POST that carries a fraction or a label.
-    const body: RelayProgressBody = { link, call, fraction: p.fraction, ...(p.label ? { label: p.label } : {}) };
+    const body: RelayProgressBody = { link, call, fraction: p.fraction, ...(p.label ? { label: p.label } : {}), ...(p.waiting ? { waiting: true as const } : {}) };
     void post(PROGRESS_PATH, body);
   };
-  const push = (fraction: number | null, label: string) => {
-    if (ended) return;
-    pending = { fraction: typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : null, label: typeof label === 'string' ? label : '' };
+  const queue = (fraction: number | null, label: string) => {
+    pending = { fraction: typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : null, label: typeof label === 'string' ? label : '', waiting };
     if (timer) return;
     const wait = last + PROGRESS_INTERVAL_MS - Date.now();
     if (wait <= 0) send();
     else timer = setTimeout(send, wait);
   };
+  const push = (fraction: number | null, label: string, opts?: { waiting?: boolean }) => {
+    if (ended) return;
+    waiting = opts?.waiting === true;
+    queue(fraction, label);
+  };
   return {
     push,
     alive() {
-      // A progress that waits to go is a sign of life too, and says more.
-      if (!ended && !pending) push(null, '');
+      // A progress that waits to go is a sign of life too, and says more. One while the frame
+      // waits for the person waits too: only the frame's own progress says it stopped waiting.
+      if (!ended && !pending) queue(null, '');
     },
     stop() {
       ended = true;
@@ -623,7 +660,15 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
 }
 
 async function postResult(link: string, call: string, out: AssistantCallOutcome): Promise<void> {
-  const body: RelayResultBody = out.ok ? { link, call, ok: true, result: out.result } : { link, call, ok: false, error: { code: out.code, message: out.message } };
+  // A page error's hint and detail go on as the bridge kept them (cleaned and capped there).
+  const body: RelayResultBody = out.ok
+    ? { link, call, ok: true, result: out.result }
+    : {
+        link,
+        call,
+        ok: false,
+        error: { code: out.code, message: out.message, ...(out.hint ? { hint: out.hint } : {}), ...(out.detail !== undefined ? { detail: out.detail } : {}) },
+      };
   const a = await post(RESULT_PATH, body);
   if (a && a.status === 413) {
     await post(RESULT_PATH, { link, call, ok: false, error: { code: 'too_large', message: "The tool's result is too large for the app to take." } } satisfies RelayResultBody);
@@ -692,7 +737,122 @@ function onActive(r: Relay, d: RelayFrameData['active']): void {
   const n = Number(d.turns);
   r.turns = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
   r.holdUntil = Math.min(timeOf(d.hold_until), Date.now() + HOLD_MAX_MS);
+  // A new link's first: this many running turns come again next.
+  if (r.relink && r.relink.need === null) {
+    r.relink.need = r.turns;
+    checkRelink(r);
+  }
   updatePin(r);
+}
+
+// ---------------------------------------------------------------- turns
+
+/** A `turn` frame as the frame hears it (AssistantTurn), or null when it is not one. */
+function turnOf(d: unknown): AssistantTurn | null {
+  const x = d && typeof d === 'object' ? (d as Partial<RelayTurnFrame>) : null;
+  if (!x || typeof x.id !== 'string' || !x.id || x.id.length > 128 || (x.state !== 'running' && x.state !== 'ended')) return null;
+  const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  const used: Partial<RelayTurnFrame['used']> = x.used && typeof x.used === 'object' ? x.used : {};
+  const end = x.state === 'ended' && x.end && typeof x.end === 'object' && TURN_END_STATES.has(String(x.end.state)) ? x.end : null;
+  return {
+    id: x.id,
+    state: x.state,
+    title: typeof x.title === 'string' ? x.title.slice(0, 60) : '',
+    local: x.local === true,
+    contextTokens: typeof x.context_tokens === 'number' && Number.isSafeInteger(x.context_tokens) && x.context_tokens > 0 ? x.context_tokens : null,
+    images: typeof x.images === 'boolean' ? x.images : null,
+    used: { steps: count(used.steps), stepsCap: count(used.steps_cap), usd: count(used.usd), usdCap: count(used.usd_cap) },
+    ...(end ? { end: { state: end.state, reason: typeof end.reason === 'string' ? end.reason.slice(0, 80) : '' } } : {}),
+  };
+}
+
+function onTurn(r: Relay, d: RelayFrameData['turn']): void {
+  const turn = turnOf(d);
+  if (!turn) return;
+  if (turn.state === 'ended') {
+    turnEnded(r, turn);
+    return;
+  }
+  r.turnsRunning.set(turn.id, turn);
+  r.relink?.seen.add(turn.id);
+  // A page not told yet hears every running one now (this one too); a page told hears this one.
+  if (!tellNewFrame(r)) tellTurn(r, turn);
+  checkRelink(r);
+}
+
+function turnEnded(r: Relay, turn: AssistantTurn): void {
+  r.turnsRunning.delete(turn.id);
+  r.turnsEnded = [...r.turnsEnded.filter((id) => id !== turn.id), turn.id].slice(-TURNS_ENDED_KEPT);
+  tellTurn(r, turn);
+}
+
+/** Every running turn of a new link came again: the ones it knew of that did not ended while it was down. */
+function checkRelink(r: Relay): void {
+  const k = r.relink;
+  if (!k || k.need === null || k.seen.size < k.need) return;
+  r.relink = null;
+  for (const [id, turn] of [...r.turnsRunning]) {
+    if (!k.seen.has(id)) turnEnded(r, { id, state: 'ended', title: turn.title, local: turn.local, contextTokens: turn.contextTokens, images: turn.images, used: turn.used });
+  }
+  // What runs is known again: a page not told yet hears those that run (never the ones that ended meanwhile).
+  tellNewFrame(r);
+}
+
+/** A publication's page: its frame, and which load of that frame's page (a reload keeps the frame). */
+const pageOf = (p: PublishedTools): string => `${p.frameId}#${p.load}`;
+
+/** The open workspace's frame, when it may hear turns (a dead frame, or none, hears nothing). */
+function listening(): PublishedTools | null {
+  const cur = workspaceToolsSnapshot().current;
+  return cur && !cur.dead && cur.tellTurn ? cur : null;
+}
+
+function sendTurn(cur: PublishedTools, turn: AssistantTurn): void {
+  try {
+    cur.tellTurn?.({ ...turn, used: { ...turn.used } });
+  } catch (e) {
+    console.warn('[CFD] assistant turn', e);
+  }
+}
+
+/** The open workspace's page hears a turn once it was told the running ones (tellNewFrame). */
+function tellTurn(r: Relay, turn: AssistantTurn): void {
+  const cur = listening();
+  if (cur && pageOf(cur) === r.turnsToldTo) sendTurn(cur, turn);
+}
+
+/**
+ * A page that offers tools and was not told the running turns yet (a new frame, or the frame's
+ * page loaded again) hears them once, as soon as this page knows them: on a link that is not
+ * waiting to hear which still run. True when it was told now.
+ */
+function tellNewFrame(r: Relay): boolean {
+  const cur = listening();
+  if (!cur || pageOf(cur) === r.turnsToldTo || !r.link || r.relink) return false;
+  r.turnsToldTo = pageOf(cur);
+  for (const turn of r.turnsRunning.values()) sendTurn(cur, turn);
+  return true;
+}
+
+/**
+ * A frame's Stop of a turn (the bridge's assistant.stop): only a turn the server told this tab of
+ * is stopped, through its own Stop route, which answers once it ended (at most 5 s); one this tab
+ * heard end, or one that ended another way before the Stop reached it, answers `ended`, any other
+ * `not_this_tab`.
+ */
+export async function stopAnnouncedTurn(turn: string): Promise<AssistantStopAnswer> {
+  const r = R;
+  if (!r) return { stopped: false, reason: 'not_connected' };
+  if (!r.turnsRunning.has(turn)) return { stopped: false, reason: r.turnsEnded.includes(turn) ? 'ended' : 'not_this_tab' };
+  const a = await post(`/api/assistant/turns/${encodeURIComponent(turn)}/stop`, {});
+  if (!a) return { stopped: false, reason: 'not_connected' };
+  if (a.status === 200 && a.body.ok === true) {
+    // Stopped (by this Stop or one before it), or still stopping after the route's 5 s. A turn
+    // that ended another way first (done, failed, capped: its end still on its way here) was not.
+    const turnState = a.body.turn && typeof a.body.turn === 'object' ? (a.body.turn as { state?: unknown }).state : undefined;
+    return a.body.stopping === true || turnState === 'stopped' ? { stopped: true } : { stopped: false, reason: 'ended' };
+  }
+  return { stopped: false, reason: codeOf(a) || `http_${a.status}` };
 }
 
 /** Pinned while turns are bound here or held, a call runs or a question is open. */
@@ -754,6 +914,10 @@ export function startAssistantRelay(): () => void {
       turns: 0,
       holdUntil: 0,
       holdTimer: null,
+      turnsRunning: new Map(),
+      turnsEnded: [],
+      relink: null,
+      turnsToldTo: null,
       pinned: false,
       kickQueued: false,
       unsubscribe: () => undefined,

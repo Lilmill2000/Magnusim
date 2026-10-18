@@ -106,7 +106,7 @@ function command(services: AppServices, type: FeatureType, id: string, label: st
     enabled: () => ui.editBlock() ?? true,
     run: async () => {
       const p = ui.state.get().panel;
-      if (p?.kind === 'feature' && p.isNew && p.type === type) return;
+      if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === type) return;
       const items = userItems(services.selection);
       let start: Partial<Feature> = {};
       try {

@@ -48,6 +48,15 @@ before(async () => {
   handle = routes.registerAssistantRoutes(router, { port: () => port });
   router.get('/api/compute-queue', (ctx) => ctx.sendJson(200, { ok: true, busy: false, items: [] }));
   handle.registry.addHostTool(hostTool('reset_all', { risk: 'destructive', title: 'Reset every counter', run: async () => ((resets += 1), { ok: true, summary: 'All counters reset' }) }));
+  handle.registry.addHostTool(
+    hostTool('big_step', {
+      run: async () => ({
+        ok: false,
+        error: { code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Step by 1, 2 or 3.', detail: { allowed: [1, 2, 3] } },
+        summary: 'step_too_big: at most 3 at a time.',
+      }),
+    }),
+  );
   server = http.createServer(async (req, res) => {
     assertSameOrigin(req);
     if (assistantGuard(req, res)) return;
@@ -128,6 +137,26 @@ describe('assistant-run.mjs', () => {
     assert.equal(r.code, 0, r.stderr);
     assert.equal(resets, before + 1, 'not run');
     assert.match(r.stdout, /✗ declined: The user declined this call/);
+  });
+
+  it("a failed result's hint shows on the line under it; a result's summary is its line", async () => {
+    fake.reply({ tools: [{ name: 'big_step', input: {} }, { name: 'reset_all', input: {} }] }, { text: 'Stepped.' });
+    const r = await cli(['Take a big step, then reset.'], '', { answers: ['y'] });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /→ big_step \{\}\n✗ invalid_input: step_too_big: at most 3 at a time\.\n {2}hint: Step by 1, 2 or 3\.\n→ reset_all /);
+    // A result that succeeded has no hint line.
+    assert.match(r.stdout, /\n✓ All counters reset\nStepped\.\n$/);
+    assert.equal(r.stdout.split('hint:').length, 2);
+    // --json prints the event, hint and all.
+    fake.reply({ tools: [{ name: 'big_step', input: {} }] }, { text: 'No.' });
+    const j = await cli(['--json', 'Take a big step.']);
+    assert.equal(j.code, 0, j.stderr);
+    const result = j.stdout
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l))
+      .find((e) => e.type === 'tool_result');
+    assert.deepEqual([result.ok, result.code, result.hint, result.summary], [false, 'invalid_input', 'Step by 1, 2 or 3.', 'step_too_big: at most 3 at a time.']);
   });
 
   it('a turn that fails exits 1 with its message; a turn refused before it starts exits 1 with the reason', async () => {

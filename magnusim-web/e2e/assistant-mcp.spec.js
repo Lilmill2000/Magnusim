@@ -22,7 +22,7 @@ import { infoPathOf, resultJson, startMcpClient } from './support/mcp-client.mjs
 import { expect, test } from './support/stress.js';
 
 const PLUGIN = 'ai-demo';
-const TOOLS = ['add', 'get_count', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+const TOOLS = ['add', 'fail_hint', 'get_count', 'label', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
 const PROJECT_TITLE = 'Counter project';
 const APP_NAME = 'E2E Desk App';
 const WAITING_TEXT = 'Waiting for an answer in Magnusim';

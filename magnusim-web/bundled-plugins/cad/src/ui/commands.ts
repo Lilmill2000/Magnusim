@@ -19,6 +19,8 @@ import type { MenuEntry } from './kit';
 export const UNDO_ID = 'edit.undo';
 export const REDO_ID = 'edit.redo';
 export const PARAMS_ID = 'modify.parameters';
+/** Undo's and Redo's hint while an Assistant step that changed the Part is open with no panel session. */
+export const ASSISTANT_STEP_TAKE_OVER = "Take over from the Assistant: its step is discarded (nothing else is undone)";
 
 function historyCommands(services: AppServices, ui: UiController): CommandDef[] {
   const undo: CommandDef = {
@@ -31,16 +33,22 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     // untouched until the next Undo.
     get hint() {
       const p = ui.state.get().panel;
+      // The Assistant's panel (a feature's or its Parameters): Undo takes it over (it goes, the Assistant pauses); nothing else is undone.
+      if (p?.owner === 'assistant') return 'Take over from the Assistant: its open panel is discarded';
+      // An Assistant step that changed the Part, with no panel session open: Undo takes all of it back.
+      if (services.doc.assistant?.undoTakesOver?.()) return ASSISTANT_STEP_TAKE_OVER;
       if (p?.kind === 'feature') return p.isNew ? 'Undo the new feature (Redo brings it back)' : 'Undo the changes made in the open panel (Redo brings them back)';
       const l = services.doc.state.get().history.undoLabel;
       return l ? `Undo ${l}` : undefined;
     },
     enabled: () => {
       const h = services.doc.state.get().history;
-      return ui.editBlock() ?? (h.canUndo || ui.state.get().panel?.kind === 'feature' ? true : 'Nothing to undo');
+      const p = ui.state.get().panel;
+      return ui.editBlock() ?? (h.canUndo || p?.kind === 'feature' || p?.owner === 'assistant' ? true : 'Nothing to undo');
     },
     run: () => {
-      if (ui.state.get().panel?.kind === 'feature') ui.cancelPanel();
+      const p = ui.state.get().panel;
+      if (p?.kind === 'feature' || p?.owner === 'assistant') ui.cancelPanel();
       else services.doc.undo();
     },
   };
@@ -50,14 +58,21 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     icon: ICONS.redo,
     shortcut: 'Ctrl+Y',
     get hint() {
+      // The Assistant's panel: Redo takes it over too, as Undo does (it goes; nothing is redone).
+      if (ui.state.get().panel?.owner === 'assistant') return 'Take over from the Assistant: its open panel is discarded';
+      if (services.doc.assistant?.undoTakesOver?.()) return ASSISTANT_STEP_TAKE_OVER;
       const l = services.doc.state.get().history.redoLabel;
       return l ? `Redo ${l}` : undefined;
     },
     enabled: () => {
       const h = services.doc.state.get().history;
-      return ui.editBlock() ?? (h.canRedo ? true : 'Nothing to redo');
+      const p = ui.state.get().panel;
+      return ui.editBlock() ?? (h.canRedo || p?.owner === 'assistant' || services.doc.assistant?.undoTakesOver?.() ? true : 'Nothing to redo');
     },
-    run: () => services.doc.redo(),
+    run: () => {
+      if (ui.state.get().panel?.owner === 'assistant') ui.cancelPanel();
+      else services.doc.redo();
+    },
   };
   const params: CommandDef = {
     id: PARAMS_ID,
@@ -68,7 +83,7 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     order: 10,
     enabled: () => ui.editBlock() ?? true,
     run: () => {
-      if (ui.state.get().panel?.kind === 'params') ui.closePanel();
+      if (ui.state.get().panel?.kind === 'params') ui.closePanel({ why: 'command' });
       else ui.openParams();
     },
   };

@@ -449,6 +449,11 @@ test('privacy and limits save at once and survive reopening and a reload; an inv
   await page.goto(`${host.base}/#/`);
   let pane = await openAssistantStep(page);
   await chooseProvider(page, 'anthropic');
+  // The default limits leave room for a watched build: $8.00 a turn, $15.00 a day, 120 steps, 60 minutes.
+  await expect(pane.locator('[data-assistant-cap-turn-usd]')).toHaveValue('8.00');
+  await expect(pane.locator('[data-assistant-cap-day-usd]')).toHaveValue('15.00');
+  await expect(pane.locator('[data-assistant-cap-steps]')).toHaveValue('120');
+  await expect(pane.locator('[data-assistant-cap-minutes]')).toHaveValue('60');
   await expect(pane.locator('[data-assistant-privacy]')).toHaveAttribute('data-assistant-privacy', 'ask');
   await pane.locator('[data-assistant-privacy-option="allow"] input').check();
   await expect.poll(async () => (await assistantStatus(request, host.base)).privacy).toBe('allow');
@@ -622,12 +627,12 @@ test('Next saves a key pasted but not saved, and waits for a change on its way: 
   await expect(pane.locator('[data-assistant-cap-error="steps"]')).toHaveText('This limit must be a whole number from 1 to 200.');
   await expect(steps).toHaveValue('500');
   await expect(pane).toBeVisible();
-  expect((await assistantStatus(request, host.base)).caps.steps).toBe(50);
+  expect((await assistantStatus(request, host.base)).caps.steps).toBe(120);
   // Pressed again with nothing on its way: the wizard goes on.
   await page.locator('#wiz-next').click();
   await expect(plugins).toBeVisible();
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
-  expect((await assistantStatus(request, host.base)).caps.steps).toBe(50);
+  expect((await assistantStatus(request, host.base)).caps.steps).toBe(120);
 });
 
 test("Next with a key that isn't the provider's kind: saved, the step stays with the warning, and Next again goes on", async ({ page, request }) => {

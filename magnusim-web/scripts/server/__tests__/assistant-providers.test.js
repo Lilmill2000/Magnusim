@@ -21,7 +21,7 @@ process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const { startFakeLlm } = await import('../../../e2e/support/fake-llm.mjs');
+const { startFakeLlm, LOCAL_SERVER_ROWS, LLAMA_SERVER, TEXT_ONLY_REFUSAL } = await import('../../../e2e/support/fake-llm.mjs');
 const fake = await startFakeLlm();
 // Read once, at the first cloud request: both cloud adapters talk to the fake.
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
@@ -32,10 +32,13 @@ const { mapProviderError } = await import('../assistant/providers/errors.ts');
 const { resolveTestProviderUrl, cloudBaseUrl } = await import('../assistant/providers/endpoints.ts');
 const { sdkInstalled, depsStatus, setSdkSpecifierForTests, loadSdkClass, DEPS_MISSING_TEXT } = await import('../assistant/providers/load-sdk.ts');
 const { anthropicClientOptions, MessageAccumulator } = await import('../assistant/providers/anthropic.ts');
-const { CLOUD_WATCHDOG, LOCAL_WATCHDOG } = await import('../assistant/providers/common.ts');
+const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE } = await import('../assistant/providers/common.ts');
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
+const { lmStudioRow, lmStudioSettled, ollamaRow, serverRoot, MODEL_ROW_TTL_MS, IMAGE_LEFT_OUT, IMAGES_REFUSED_NOTE, IMAGES_LEFT_OUT_NOTE, imagesOfType } = await import(
+  '../assistant/providers/openai-compatible.ts'
+);
 const prices = await import('../assistant/prices.ts');
 const { ProviderError } = await import('../assistant/types.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -268,6 +271,49 @@ describe('the adapters against the fake, in every dialect', () => {
       assert.equal(call.name, 'add', provider);
       assert.deepEqual(call.input, {}, provider);
       assert.match(call.inputError, /not valid JSON/, provider);
+    }
+  });
+
+  it('fake self-test: a scripted step may be a function of the request, so it answers from an earlier result; one that fails is refused, never retried into the next step', async () => {
+    for (const provider of PROVIDERS) {
+      const seen = [];
+      fake.reply({ tools: [{ name: 'get_count', input: {} }] }, (body) => {
+        seen.push(body);
+        const count = Number(JSON.stringify(body).match(/The count is (\d+)\./)?.[1]);
+        return { tools: [{ name: 'add', input: { by: count * 2 } }] };
+      });
+      const first = [userText('double the counter')];
+      const r1 = await send(provider, request(provider, first));
+      const r2 = await send(provider, request(provider, [...first, r1.message, resultFor(r1, 'The count is 21.')]));
+      assert.deepEqual(r2.message.parts.filter((p) => p.type === 'tool_call').map((c) => [c.name, c.input]), [['add', { by: 42 }]], provider);
+      const req = lastChat(DIALECT[provider]);
+      assert.deepEqual(seen, [req.body], `${provider}: called once, with the request's body`);
+      assert.deepEqual(req.step, { tools: [{ name: 'add', input: { by: 42 } }] }, `${provider}: the log keeps the step it returned`);
+      assert.equal(req.refused, undefined, provider);
+    }
+    // A promise of a step is awaited.
+    fake.reply(async (body) => ({ text: `Asked: ${body.messages.at(-1).content}` }));
+    const r = await send('openai_compatible', request('openai_compatible', [userText('count them')]));
+    assert.equal(r.message.parts.map((p) => p.text).join(''), 'Asked: count them');
+    // A function that throws, rejects or returns no step: 400, refused by name; the next step
+    // stays queued for the next request.
+    const failing = [
+      [
+        'throws',
+        () => {
+          throw new Error('no count in the request');
+        },
+        /a scripted step failed: no count in the request/,
+      ],
+      ['rejects', async () => Promise.reject(new Error('nothing to read')), /a scripted step failed: nothing to read/],
+      ['returns nothing', () => undefined, /a scripted step returned no step/],
+    ];
+    for (const [what, fn, refusal] of failing) {
+      fake.reply(fn, { text: 'The next step.' });
+      await assert.rejects(send('anthropic', request('anthropic', [userText('x')])), (e) => e.code === 'bad_request', what);
+      assert.match(lastChat('anthropic').refused, refusal, what);
+      assert.equal(fake.pending(), 1, `${what}: only the failing step was taken`);
+      assert.equal((await send('anthropic', request('anthropic', [userText('y')]))).message.parts[0].text, 'The next step.', what);
     }
   });
 
@@ -688,6 +734,24 @@ describe('error mapping', () => {
     assert.ok(!lines.includes(leaked) && !lines.includes(KEYS.openai));
   });
 
+  it("a local server's context words are the context: llama.cpp's server's (both builds' words, and its error type with other words), as the OpenAI-style ones", async () => {
+    const model = 'ctx-model';
+    const bodies = [
+      ...LLAMA_SERVER.contextRefusals,
+      { error: { code: 400, message: 'the prompt does not fit', type: 'exceed_context_size_error' } },
+      { error: { message: "This model's maximum context length is 4096 tokens.", type: 'invalid_request_error' } },
+    ];
+    for (const body of bodies) {
+      fake.failNext({ status: 400, body, dialect: 'compat' });
+      await assert.rejects(adapterFor('openai_compatible').send(request('openai_compatible', [userText('a long one')], { model }), new AbortController().signal, () => {}), (e) => {
+        assert.equal(e.code, 'context', JSON.stringify(body));
+        assert.equal(e.message, `This conversation is too long for ${model}. Start a new one.`);
+        assert.equal(e.status, 400);
+        return true;
+      });
+    }
+  });
+
   it('a local server that is not running: "Nothing answered at …"', async () => {
     const closed = http.createServer();
     await new Promise((r) => closed.listen(0, '127.0.0.1', r));
@@ -996,6 +1060,506 @@ describe('model lists', () => {
   });
 });
 
+describe("a local server's model row (CAD tools spec H5)", () => {
+  const sig = () => new AbortController().signal;
+  const rowReads = () => fake.requests().filter((r) => r.kind === 'model_row');
+
+  it("the recorded rows give the context and the type: LM Studio's loaded context, else its maximum; Ollama's num_ctx, else the model's own length", () => {
+    assert.deepEqual(lmStudioRow(LOCAL_SERVER_ROWS.lmstudio), { context: 32768, type: 'vlm' }, 'the docs: not loaded, its maximum');
+    assert.deepEqual(lmStudioRow(LOCAL_SERVER_ROWS.lmstudioLoaded), { context: 4096, type: 'llm' }, 'loaded with less than its maximum');
+    assert.deepEqual(ollamaRow(LOCAL_SERVER_ROWS.ollama), { context: 32768, type: 'llm' }, 'recorded: no num_ctx, the model length');
+    const tuned = { ...LOCAL_SERVER_ROWS.ollama, parameters: 'stop                           "<|im_end|>"\nnum_ctx                        8192', capabilities: ['completion', 'tools', 'vision'] };
+    assert.deepEqual(ollamaRow(tuned), { context: 8192, type: 'vlm' });
+    // llama.cpp's server answers this route too: multimodal is a model that reads images, completion alone one that doesn't.
+    assert.deepEqual(ollamaRow(LLAMA_SERVER.multimodalShow), { context: null, type: 'vlm' }, 'llama-server with its image projector');
+    assert.deepEqual(ollamaRow({ ...LLAMA_SERVER.multimodalShow, capabilities: ['completion'] }), { context: null, type: 'llm' }, 'llama-server without one');
+    for (const j of [null, [], 'text', {}, { error: "model 'x' not found" }, { max_context_length: 12 }, { max_context_length: '32768' }, { type: 'not a type!' }]) {
+      assert.equal(lmStudioRow(j), null, JSON.stringify(j));
+    }
+    for (const j of [null, {}, { error: 'not found' }, { model_info: { 'general.architecture': 'qwen2' } }, { model_info: { 'qwen2.context_length': 4096 } }]) {
+      assert.equal(ollamaRow(j), null, JSON.stringify(j));
+    }
+    assert.deepEqual(
+      ['http://127.0.0.1:1234/v1', 'http://127.0.0.1:1234/v1/', 'http://127.0.0.1:11434', 'http://127.0.0.1:9/compat/v1'].map(serverRoot),
+      ['http://127.0.0.1:1234', 'http://127.0.0.1:1234', 'http://127.0.0.1:11434', 'http://127.0.0.1:9/compat'],
+    );
+  });
+
+  it("the adapter asks the server: LM Studio's route first, then Ollama's; an id with / and : in the path; the server token only; a server with neither gives null", async () => {
+    fake.models([{ id: 'lab/qwen3:8b', context: 16384, type: 'vlm' }, { id: 'ol-model', max: 40960, route: 'show' }, 'plain-model'], 'compat');
+    try {
+      const from = fake.requests().length;
+      const a = adapterFor('openai_compatible');
+      assert.deepEqual(await a.modelRow('lab/qwen3:8b', sig()), { context: 16384, type: 'vlm' });
+      assert.deepEqual(await a.modelRow('ol-model', sig()), { context: 40960, type: 'llm' });
+      assert.equal(await a.modelRow('plain-model', sig()), null);
+      const seen = fake.requests().slice(from);
+      assert.deepEqual(
+        seen.map((r) => [r.kind, r.method, r.path, r.body]),
+        [
+          ['model_row', 'GET', '/compat/api/v0/models/lab/qwen3:8b', null],
+          ['model_row', 'GET', '/compat/api/v0/models/ol-model', null],
+          ['model_row', 'POST', '/compat/api/show', { model: 'ol-model' }],
+          ['model_row', 'GET', '/compat/api/v0/models/plain-model', null],
+          ['model_row', 'POST', '/compat/api/show', { model: 'plain-model' }],
+        ],
+      );
+      for (const r of seen) assert.equal(r.headers.authorization, 'Bearer local');
+      for (const provider of ['anthropic', 'openai']) assert.equal(adapterFor(provider).modelRow, undefined, provider);
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it('a row (or its absence) is kept 60 s per base URL and model, for every adapter on that server; a test reset forgets it', async () => {
+    let now = 5_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'kept-model', context: 8192 }], 'compat');
+    try {
+      const a = adapterFor('openai_compatible', clock);
+      let n = rowReads().length;
+      assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 8192, type: 'llm' });
+      assert.equal(rowReads().length, n + 1);
+      fake.models([{ id: 'kept-model', context: 65536 }], 'compat');
+      now += MODEL_ROW_TTL_MS - 1;
+      // Each turn makes its own adapter: the next one still uses the kept row.
+      assert.deepEqual(await adapterFor('openai_compatible', clock).modelRow('kept-model', sig()), { context: 8192, type: 'llm' });
+      assert.equal(rowReads().length, n + 1, 'kept');
+      assert.equal(await a.modelRow('missing-model', sig()), null);
+      n = rowReads().length;
+      assert.equal(await a.modelRow('missing-model', sig()), null);
+      assert.equal(rowReads().length, n, 'a server without a row is not asked again either');
+      now += 1;
+      assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 65536, type: 'llm' }, 'read again after 60 s');
+      fake.models([{ id: 'kept-model', context: 4096 }], 'compat');
+      resetAssistantState();
+      assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 4096, type: 'llm' }, 'a reset forgets');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it("a model not loaded yet: its row gives the maximum and the type, and is read again each time (its type still says images) until the server says it is loaded; then kept", async () => {
+    assert.deepEqual(
+      [LOCAL_SERVER_ROWS.lmstudio, LOCAL_SERVER_ROWS.lmstudioLoaded, { state: 'loaded' }, { type: 'llm' }, null].map(lmStudioSettled),
+      [false, false, true, true, true],
+      'not-loaded and loading are not settled; loaded, or no state, is',
+    );
+    let now = 7_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'jit-model', max: 131072, type: 'llm' }], 'compat');
+    try {
+      const a = adapterFor('openai_compatible', clock);
+      let n = rowReads().length;
+      assert.deepEqual(await a.modelRow('jit-model', sig()), { context: 131072, type: 'llm' });
+      assert.equal(a.readsImages('jit-model'), false, 'the type counts at once');
+      now += 1000;
+      assert.deepEqual(await a.modelRow('jit-model', sig()), { context: 131072, type: 'llm' });
+      assert.equal(rowReads().length, n + 2, 'read again: not loaded yet');
+      // Its first request loaded it, with less than its maximum.
+      fake.models([{ id: 'jit-model', context: 4096, max: 131072, type: 'llm' }], 'compat');
+      assert.deepEqual(await a.modelRow('jit-model', sig()), { context: 4096, type: 'llm' });
+      n = rowReads().length;
+      now += 1000;
+      assert.deepEqual(await adapterFor('openai_compatible', clock).modelRow('jit-model', sig()), { context: 4096, type: 'llm' });
+      assert.equal(rowReads().length, n, 'loaded: kept');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it("forgetRow, and the server's own context error, drop a kept row: the next read within the 60 s asks the server (a model loaded anew with a longer context)", async () => {
+    let now = 8_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'reload-model', context: 3072, type: 'llm' }], 'compat');
+    try {
+      const a = adapterFor('openai_compatible', clock);
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 3072, type: 'llm' });
+      fake.models([{ id: 'reload-model', context: 32768, type: 'llm' }], 'compat');
+      now += 1000;
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 3072, type: 'llm' }, 'kept');
+      // Each turn makes its own adapter: what one forgets, the next one reads again.
+      adapterFor('openai_compatible', clock).forgetRow('reload-model');
+      let n = rowReads().length;
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 32768, type: 'llm' }, 'read again at once');
+      assert.equal(rowReads().length, n + 1);
+      assert.equal(adapterFor('anthropic').forgetRow, undefined);
+
+      // The server says the request is past its context: the row it kept is dropped too.
+      fake.models([{ id: 'reload-model', context: 8192, type: 'llm' }], 'compat');
+      fake.failNext({ status: 400, body: { error: { message: "This model's maximum context length is 8192 tokens.", type: 'invalid_request_error' } }, dialect: 'compat' });
+      await assert.rejects(a.send(request('openai_compatible', [userText('a long one')], { model: 'reload-model' }), sig(), () => {}), (e) => e.code === 'context');
+      n = rowReads().length;
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 8192, type: 'llm' });
+      assert.equal(rowReads().length, n + 1, 'read again after the context error');
+      // Another error keeps it.
+      fake.models([{ id: 'reload-model', context: 65536, type: 'llm' }], 'compat');
+      fake.failNext({ status: 500, dialect: 'compat' });
+      await assert.rejects(a.send(request('openai_compatible', [userText('again')], { model: 'reload-model' }), sig(), () => {}), (e) => e.code === 'server');
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 8192, type: 'llm' }, 'a server error is no news about the context');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it('no row from a page, a body over 1 MB or a server that never answers (within the row wait); a Stop mid-read gives null at once and keeps nothing', async () => {
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      hits += 1;
+      if (req.url.startsWith('/page/')) {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<!doctype html><title>Server</title>');
+      } else if (req.url.startsWith('/big/')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'llm', max_context_length: 32768, pad: 'x'.repeat(1_100_000) }));
+      }
+      // Anything else is never answered.
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const root = `http://127.0.0.1:${server.address().port}`;
+    const quick = { watchdog: { firstByteMs: 300, idleMs: 300 } };
+    try {
+      assert.equal(await adapterFor('openai_compatible', { base_url: `${root}/page/v1` }).modelRow('m', sig()), null);
+      assert.equal(hits, 2, 'both routes asked');
+      assert.equal(await adapterFor('openai_compatible', { base_url: `${root}/big/v1` }).modelRow('m', sig()), null);
+      let t0 = Date.now();
+      assert.equal(await within(adapterFor('openai_compatible', { base_url: `${root}/v1`, ...quick }).modelRow('quiet', sig()), 8000, 'the row wait'), null);
+      assert.ok(Date.now() - t0 < 8000);
+      const ctl = new AbortController();
+      const n = hits;
+      const reading = adapterFor('openai_compatible', { base_url: `${root}/v1` }).modelRow('stopped', ctl.signal);
+      await until(() => hits > n, 5000, 'the row request');
+      t0 = Date.now();
+      ctl.abort();
+      assert.equal(await within(reading, 4000, 'Stop mid-read'), null);
+      assert.ok(Date.now() - t0 < 4000, 'at once, not after the 5 s row wait');
+      const m = hits;
+      assert.equal(await adapterFor('openai_compatible', { base_url: `${root}/v1`, ...quick }).modelRow('stopped', sig()), null);
+      assert.ok(hits > m, 'the stopped read was not kept: the server is asked again');
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((r) => server.close(r));
+    }
+  });
+});
+
+describe('images only for models that read them (CAD tools spec H6)', () => {
+  const sig = () => new AbortController().signal;
+  const img = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 1, height: 1 };
+  /** A local request that carries two images: one of the person's beside their text, and one in a tool result. */
+  const withPictures = (model) =>
+    request(
+      'openai_compatible',
+      [
+        { role: 'user', parts: [{ type: 'text', text: 'look' }, img] },
+        {
+          role: 'assistant',
+          parts: [{ type: 'tool_call', callId: 'call_1', name: 'snap', input: {} }],
+          raw: { provider: 'openai_compatible', model, payload: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'snap', arguments: '{}' } }] } },
+        },
+        { role: 'user', parts: [{ type: 'tool_result', callId: 'call_1', isError: false, text: '{"tool":"snap","ok":true}', images: [img] }] },
+      ],
+      { model },
+    );
+  const local = (o) => adapterFor('openai_compatible', o);
+  const hasImage = (r) => JSON.stringify(r.body).includes('"image_url"');
+  const DEFAULT_COMPAT = ['qwen3.8-27b', 'gemma-4-31b'];
+
+  it("a 400 for a request with images: sent once more with each image as words, then the model is text-only for the process (the next turn's adapter too); a test reset forgets", async () => {
+    const model = 'text-model';
+    fake.textOnly(model);
+    try {
+      fake.reply({ text: 'No picture here.' });
+      const from = chat('compat').length;
+      const a = local();
+      assert.equal(a.readsImages(model), null, 'nothing says yet');
+      const r = await a.send(withPictures(model), sig(), () => {});
+      assert.deepEqual(r.notes, [IMAGES_REFUSED_NOTE]);
+      assert.deepEqual(r.message.parts, [{ type: 'text', text: 'No picture here.' }]);
+      const sent = chat('compat').slice(from);
+      assert.equal(sent.length, 2, 'the request, then once more');
+      assert.equal(sent[0].refused, TEXT_ONLY_REFUSAL);
+      assert.ok(hasImage(sent[0]), 'the first one carried the images');
+      assert.equal(sent[1].refused, undefined);
+      assert.ok(!hasImage(sent[1]), 'the second one carries none');
+      const [system, mine, answer, toolMsg, pictures] = sent[1].body.messages;
+      assert.equal(system.role, 'system');
+      assert.deepEqual(mine, { role: 'user', content: `look
+
+${IMAGE_LEFT_OUT}` });
+      assert.equal(answer.role, 'assistant');
+      assert.deepEqual(toolMsg, { role: 'tool', tool_call_id: 'call_1', content: '{"tool":"snap","ok":true}' });
+      assert.deepEqual(pictures, { role: 'user', content: `Images from the tool results above:
+
+${IMAGE_LEFT_OUT}` });
+      assert.equal(a.readsImages(model), false);
+
+      // The next turn's adapter leaves them out at once: one request, and the other note.
+      fake.reply({ text: 'Still none.' });
+      let n = chat('compat').length;
+      const r2 = await local().send(withPictures(model), sig(), () => {});
+      assert.deepEqual(r2.notes, [IMAGES_LEFT_OUT_NOTE]);
+      assert.equal(chat('compat').length, n + 1);
+      assert.ok(!hasImage(lastChat('compat')) && !lastChat('compat').refused);
+      // A request with no image carries no note; another model on that server still gets its images.
+      fake.reply({ text: 'plain' }, { text: 'I see it.' });
+      assert.equal((await local().send(request('openai_compatible', [userText('hi')], { model }), sig(), () => {})).notes, undefined);
+      const other = await local().send(withPictures('qwen3.8-27b'), sig(), () => {});
+      assert.equal(other.notes, undefined);
+      assert.ok(hasImage(lastChat('compat')));
+
+      // A test reset (as a server start) forgets: the images go again, and are refused again.
+      resetAssistantState();
+      assert.equal(local().readsImages(model), null);
+      fake.reply({ text: 'again' });
+      n = chat('compat').length;
+      assert.deepEqual((await local().send(withPictures(model), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE]);
+      assert.equal(chat('compat').length, n + 2);
+    } finally {
+      fake.textOnly();
+    }
+  });
+
+  it("the model's row says: vlm gets images, llm and embeddings don't (left out at once, with the note); no type, no row or a row past its 60 s says nothing; a refusal wins over vlm", async () => {
+    assert.deepEqual(['vlm', 'llm', 'embeddings', null, 'other'].map(imagesOfType), [true, false, false, null, null]);
+    let now = 9_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'eyes', context: 32768, type: 'vlm' }, { id: 'words', context: 32768, type: 'llm' }, { id: 'ol-eyes', type: 'vlm', route: 'show' }, 'no-row'], 'compat');
+    try {
+      const a = local(clock);
+      const ids = ['eyes', 'words', 'ol-eyes', 'no-row'];
+      for (const id of ids) await a.modelRow(id, sig());
+      assert.deepEqual(ids.map((id) => a.readsImages(id)), [true, false, true, null]);
+      fake.reply({ text: 'a' }, { text: 'b' }, { text: 'c' });
+      const from = chat('compat').length;
+      const words = await a.send(withPictures('words'), sig(), () => {});
+      assert.deepEqual(words.notes, [IMAGES_LEFT_OUT_NOTE]);
+      assert.equal((await a.send(withPictures('eyes'), sig(), () => {})).notes, undefined);
+      assert.equal((await a.send(withPictures('no-row'), sig(), () => {})).notes, undefined);
+      const sent = chat('compat').slice(from);
+      assert.deepEqual(sent.map(hasImage), [false, true, true]);
+      assert.deepEqual(sent.map((r) => r.refused), [undefined, undefined, undefined]);
+      // A row past its 60 s says nothing until it is read again.
+      now += MODEL_ROW_TTL_MS;
+      assert.equal(a.readsImages('words'), null);
+      await a.modelRow('words', sig());
+      assert.equal(a.readsImages('words'), false);
+      // A vision model loaded without what reads images: the server's refusal wins over the row.
+      fake.textOnly('eyes');
+      fake.reply({ text: 'd' });
+      assert.deepEqual((await a.send(withPictures('eyes'), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE]);
+      assert.equal(a.readsImages('eyes'), false);
+    } finally {
+      fake.textOnly();
+      fake.models(DEFAULT_COMPAT, 'compat');
+    }
+  });
+
+  it("which refusals are sent again: a 400 or a server error whose words name images, once; never one without images, one naming none (a bare 400, a 500), one naming the context or tokens too, the context (llama.cpp's words too), or a second refusal", async () => {
+    const model = 'retry-model';
+    const mmproj = { error: { code: 500, message: 'image input is not supported - hint: if this is unexpected, you may need to provide the mmproj', type: 'server_error' } };
+    const count = async (fn) => {
+      const n = chat('compat').length;
+      await fn();
+      return chat('compat').length - n;
+    };
+    try {
+      // A server whose model was loaded without its image projector.
+      fake.failNext({ status: 500, body: mmproj, dialect: 'compat' });
+      fake.reply({ text: 'ok' });
+      assert.equal(await count(async () => assert.deepEqual((await local().send(withPictures(model), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE])), 2);
+      resetAssistantState();
+      const imagesRefused = { error: { message: TEXT_ONLY_REFUSAL, type: 'invalid_request_error' } };
+      // A request too big with its pictures, in words the context check doesn't know.
+      const tooManyTokens = { error: { message: 'The images need 9000 tokens; 2000 are left.', type: 'invalid_request_error' } };
+      const fails = [
+        [{ status: 500 }, withPictures(model), 'server', 1],
+        [{ status: 400 }, withPictures(model), 'bad_request', 1],
+        [{ status: 400, body: imagesRefused }, request('openai_compatible', [userText('no picture')], { model }), 'bad_request', 1],
+        [{ status: 400, body: tooManyTokens }, withPictures(model), 'bad_request', 1],
+        [{ status: 400, body: { error: { message: "This model's maximum context length is 4096 tokens.", type: 'invalid_request_error' } } }, withPictures(model), 'context', 1],
+        ...LLAMA_SERVER.contextRefusals.map((body) => [{ status: 400, body }, withPictures(model), 'context', 1]),
+        [{ status: 400, body: imagesRefused, times: 2 }, withPictures(model), 'bad_request', 2],
+        [{ status: 500, body: mmproj, times: 2 }, withPictures(model), 'server', 2],
+      ];
+      for (const [fail, req, code, requests] of fails) {
+        fake.failNext({ ...fail, dialect: 'compat' });
+        const sent = await count(() =>
+          assert.rejects(local().send(req, sig(), () => {}), (e) => {
+            assert.equal(e.code, code, JSON.stringify(fail));
+            return true;
+          }),
+        );
+        assert.equal(sent, requests, JSON.stringify(fail));
+        assert.equal(local().readsImages(model), null, `nothing remembered after ${JSON.stringify(fail)}`);
+      }
+    } finally {
+      fake.textOnly();
+    }
+  });
+
+  it('the cloud adapters have no images rule (their models read images)', () => {
+    for (const provider of ['anthropic', 'openai']) assert.equal(adapterFor(provider).readsImages, undefined, provider);
+  });
+});
+
+describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () => {
+  const HOST = [
+    { name: 'app_status', description: 'The app.', schema: obj({}) },
+    { name: 'project_summary', description: 'The project.', schema: obj({ id: { type: 'string' } }) },
+  ];
+  /** Tools as a workspace page's (registry.ts providerTools marks them). */
+  const workspace = (tools, plugin = 'ai-demo') => tools.map((t) => ({ ...t, name: `${plugin}__${t.name}`, workspace: true }));
+  const WS = workspace(DEMO_TOOLS.slice(0, 4));
+  const TOOLS = [...HOST, ...WS];
+  /** Each dialect's refusal of a strict set it can't compile, as the provider words it. */
+  const REFUSED = {
+    anthropic: { type: 'error', error: { type: 'invalid_request_error', message: 'Schema is too complex for compilation.' } },
+    openai: {
+      error: {
+        message: "Invalid schema for function 'ai-demo__add': In context=('properties', 'by'), 'minimum' is not permitted.",
+        type: 'invalid_request_error',
+        param: 'tools[3].parameters',
+        code: 'invalid_function_parameters',
+      },
+    },
+  };
+  const CLOUD = ['anthropic', 'openai'];
+  /** Each tool of a request as [name, strict]. */
+  const strictness = (r) => r.body.tools.map((t) => [t.name, t.strict === true]);
+  const allStrict = (tools) => tools.map((t) => [t.name, true]);
+  const hostStrict = (tools) => tools.map((t) => [t.name, !t.workspace]);
+  /** The requests `fn` sent in `dialect`. */
+  const sentBy = async (dialect, fn) => {
+    const from = chat(dialect).length;
+    await fn();
+    return chat(dialect).slice(from);
+  };
+
+  it('a 400 that says the strict schemas cannot be compiled: sent once more with the workspace tools not strict (the host tools still strict) and a note; that tool set goes so from then on, until a test reset', async () => {
+    for (const provider of CLOUD) {
+      const dialect = DIALECT[provider];
+      fake.failNext({ status: 400, body: REFUSED[provider], dialect });
+      fake.reply({ text: 'ok' });
+      let r;
+      let sent = await sentBy(dialect, async () => {
+        r = await send(provider, request(provider, [userText('tools')], { tools: TOOLS }));
+      });
+      assert.equal(r.stop, 'end_turn', provider);
+      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(sent.map(strictness), [allStrict(TOOLS), hostStrict(TOOLS)], provider);
+      assert.equal(sent[0].step, undefined, `${provider}: the refused request took no step`);
+      // The same tools both times: only `strict` differs (the second dialect says false, the first leaves it out).
+      const bare = (req) => req.body.tools.map((t) => ({ ...t, strict: null }));
+      assert.deepEqual(bare(sent[1]), bare(sent[0]), provider);
+      if (provider === 'openai') assert.deepEqual(sent[1].body.tools.map((t) => t.strict), [true, true, false, false, false, false]);
+      else assert.ok(sent[1].body.tools.slice(HOST.length).every((t) => !('strict' in t)), provider);
+
+      // Another turn's adapter, the same tools: not strict from the start, one request, the note again.
+      fake.reply({ text: 'again' });
+      sent = await sentBy(dialect, async () => {
+        r = await send(provider, request(provider, [userText('again')], { tools: TOOLS }));
+      });
+      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(sent.map(strictness), [hostStrict(TOOLS)], provider);
+
+      // Another tool set is still tried strict.
+      const other = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 4), 'other')];
+      fake.reply({ text: 'other' });
+      sent = await sentBy(dialect, async () => {
+        r = await send(provider, request(provider, [userText('other')], { tools: other }));
+      });
+      assert.equal(r.notes, undefined, provider);
+      assert.deepEqual(sent.map(strictness), [allStrict(other)], provider);
+    }
+    // A test reset (as a server start) forgets the sets: strict again, with no note.
+    resetAssistantState();
+    for (const provider of CLOUD) {
+      fake.reply({ text: 'fresh' });
+      let r;
+      const sent = await sentBy(DIALECT[provider], async () => {
+        r = await send(provider, request(provider, [userText('fresh')], { tools: TOOLS }));
+      });
+      assert.equal(r.notes, undefined, provider);
+      assert.deepEqual(sent.map(strictness), [allStrict(TOOLS)], provider);
+    }
+  });
+
+  it("the first dialect: only a workspace tool sent strict makes the second request differ, and the CAD-sized set keeps its host tools' strict budget", async () => {
+    // 20 host tools take the whole strict budget: the workspace tool after them already goes
+    // without strict, so a refusal is not sent again.
+    const hosts = Array.from({ length: 20 }, (_, i) => ({ name: `h${String(i).padStart(2, '0')}`, description: 'A host tool.', schema: obj({}) }));
+    const full = [...hosts, ...WS.slice(0, 1)];
+    fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
+    const sent = await sentBy('anthropic', () => assert.rejects(send('anthropic', request('anthropic', [userText('x')], { tools: full })), (e) => e.code === 'bad_request'));
+    assert.deepEqual(sent.map(strictness), [[...allStrict(hosts), [WS[0].name, false]]]);
+    // 3 host tools and 18 workspace tools (a CAD turn): the first 20 strict, then, refused,
+    // the 3 host tools only.
+    const cad = [...HOST, { name: 'explain_ready', description: 'Ready?', schema: obj({}) }, ...workspace(Array.from({ length: 18 }, (_, i) => ({ name: `t${i}`, description: 'A tool.', schema: obj({}) })), 'cad')];
+    fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
+    fake.reply({ text: 'ok' });
+    let r;
+    const two = await sentBy('anthropic', async () => {
+      r = await send('anthropic', request('anthropic', [userText('cad')], { tools: cad }));
+    });
+    assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE]);
+    assert.deepEqual(two.map((q) => q.body.tools.map((t) => t.strict === true)), [
+      [...Array(20).fill(true), false],
+      [true, true, true, ...Array(18).fill(false)],
+    ]);
+  });
+
+  it('which refusals are sent again: a 400 in the words (or code) of a strict schema refused, once; never another 400, a server error, a request with no workspace tool, or a second refusal', async () => {
+    const noRetry = { 'x-should-retry': 'false' };
+    const otherWords = {
+      anthropic: { type: 'error', error: { type: 'invalid_request_error', message: 'messages.0: the content is not valid' } },
+      openai: { error: { message: "Invalid type for 'input': expected a list.", type: 'invalid_request_error', param: 'input', code: 'invalid_type' } },
+    };
+    const codeOnly = { error: { message: 'The tool parameters are not accepted.', type: 'invalid_request_error', param: 'tools[2].parameters', code: 'invalid_function_parameters' } };
+    for (const provider of CLOUD) {
+      const dialect = DIALECT[provider];
+      const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), `which-${provider}`)];
+      const fails = [
+        [{ status: 400, body: otherWords[provider] }, TOOLS, 'bad_request', 1],
+        [{ status: 500, body: REFUSED[provider], headers: noRetry }, TOOLS, 'server', 1],
+        [{ status: 400, body: REFUSED[provider] }, HOST, 'bad_request', 1],
+      ];
+      for (const [fail, list, code, requests] of fails) {
+        fake.failNext({ ...fail, dialect });
+        const sent = await sentBy(dialect, () =>
+          assert.rejects(send(provider, request(provider, [userText('x')], { tools: list })), (e) => {
+            assert.equal(e.code, code, `${provider} ${JSON.stringify(fail)}`);
+            return true;
+          }),
+        );
+        assert.equal(sent.length, requests, `${provider} ${JSON.stringify(fail)}`);
+        assert.deepEqual(sent.map(strictness), [allStrict(list)], `${provider}: nothing remembered after ${JSON.stringify(fail)}`);
+      }
+      // Refused twice: the second refusal is the error, after two requests. The provider's
+      // word on the strict set stands, so later requests with it go without strict at once.
+      fake.failNext({ status: 400, body: REFUSED[provider], times: 2, dialect });
+      const twice = await sentBy(dialect, () => assert.rejects(send(provider, request(provider, [userText('x')], { tools })), (e) => e.code === 'bad_request'));
+      assert.deepEqual(twice.map(strictness), [allStrict(tools), hostStrict(tools)], provider);
+      fake.reply({ text: 'ok' });
+      const after = await sentBy(dialect, () => send(provider, request(provider, [userText('y')], { tools })));
+      assert.deepEqual(after.map(strictness), [hostStrict(tools)], provider);
+    }
+    // The second dialect: its error code alone says so.
+    const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), 'code-only')];
+    fake.failNext({ status: 400, body: codeOnly, dialect: 'openai' });
+    fake.reply({ text: 'ok' });
+    const sent = await sentBy('openai', () => send('openai', request('openai', [userText('x')], { tools })));
+    assert.deepEqual(sent.map(strictness), [allStrict(tools), hostStrict(tools)]);
+  });
+
+  it('the local server dialect is never strict, so it has no such second request', async () => {
+    fake.failNext({ status: 400, body: { error: { message: 'Schema is too complex for compilation.', type: 'invalid_request_error' } }, dialect: 'compat' });
+    const sent = await sentBy('compat', () => assert.rejects(send('openai_compatible', request('openai_compatible', [userText('x')], { tools: TOOLS })), (e) => e.code === 'bad_request'));
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0].body.tools.every((t) => t.function.strict === undefined));
+  });
+});
+
 describe('prices (as of 2026-10-16) and the spend estimate', () => {
   // [model, input, 5 m write, 1 h write, cache read, output, long: [above, input, 5 m, 1 h, read, output] | null, picker]
   const TABLE = [
@@ -1079,7 +1643,34 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     const tight = prices.estimateStep({ ...base, model: 'claude-opus-5-5', remainingUsd: 0.04 });
     assert.equal(tight.capped, true);
     const local = prices.estimateStep({ ...base, provider: 'openai_compatible', cloud: false, remainingUsd: 0 });
-    assert.deepEqual([local.usd, local.maxOut, local.capped], [0, 4096, false]);
+    assert.deepEqual([local.usd, local.maxOut, local.capped, local.noRoom], [0, 8192, false, false]);
+  });
+
+  it("estimateStep: a local server answers up to 8192 tokens, within the room its reported context leaves (CAD tools spec H5)", () => {
+    const local = { ...base, provider: 'openai_compatible', cloud: false, remainingUsd: Number.POSITIVE_INFINITY, firstStep: true, toolCount: 21, newChars: 30_000 };
+    const prompt = Math.ceil((1.2 * 30_000) / 3) + 21 * 500;
+    assert.deepEqual([prices.MAX_OUT_LOCAL, prices.MIN_OUT, prices.CONTEXT_MARGIN], [8192, 2048, 1024]);
+    let e = prices.estimateStep(local);
+    assert.deepEqual([e.maxOut, e.noRoom, e.capped, e.usd, e.promptTokens], [8192, false, false, 0, prompt], 'no context known: the cap');
+    e = prices.estimateStep({ ...local, contextTokens: 65_536 });
+    assert.deepEqual([e.maxOut, e.noRoom], [8192, false]);
+    e = prices.estimateStep({ ...local, contextTokens: 28_000 });
+    assert.deepEqual([e.maxOut, e.noRoom], [28_000 - prompt - 1024, false]);
+    e = prices.estimateStep({ ...local, contextTokens: prompt + 1024 + 2048 });
+    assert.deepEqual([e.maxOut, e.noRoom], [2048, false], 'MIN_OUT left is enough');
+    e = prices.estimateStep({ ...local, contextTokens: prompt + 1024 + 2047 });
+    assert.deepEqual([e.maxOut, e.noRoom, e.capped], [2047, true, false]);
+    e = prices.estimateStep({ ...local, contextTokens: 16_384 });
+    assert.deepEqual([e.maxOut, e.noRoom], [0, true], 'a 16K context under a 22.5K prompt');
+    // A later step: the previous request's prompt plus what this one adds.
+    e = prices.estimateStep({ ...local, firstStep: false, newChars: 3000, prev: { promptTokens: 20_000, startedAt: base.now, cacheUsed: false }, contextTokens: 28_000 });
+    assert.equal(e.maxOut, 28_000 - (20_000 + 1200) - 1024);
+    // A local server elsewhere (project data leaves this PC) keeps the larger cap, in its room.
+    assert.equal(prices.estimateStep({ ...local, cloud: true, contextTokens: 200_000 }).maxOut, 32_000);
+    assert.equal(prices.estimateStep({ ...local, cloud: true, contextTokens: 40_000 }).maxOut, 40_000 - prompt - 1024);
+    // A cloud provider's context is not the local rule's.
+    e = prices.estimateStep({ ...base, contextTokens: 1000 });
+    assert.deepEqual([e.maxOut, e.noRoom], [32_000, false]);
   });
 
   it('estimateStep: a fallback-capable request is priced at the dearest of its rows; an unknown model at the provider’s dearest', () => {

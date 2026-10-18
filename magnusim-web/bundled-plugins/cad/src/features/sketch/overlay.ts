@@ -83,6 +83,8 @@ export class ProfileOverlay {
   private readonly lineMats;
   private readonly offs: (() => void)[] = [];
   private queued = false;
+  /** A snapshot is drawing: every region in its normal colour. */
+  private plainNow = false;
 
   constructor(
     private readonly services: AppServices,
@@ -90,7 +92,14 @@ export class ProfileOverlay {
   ) {
     // The finished sketches shown in model mode count when the view frames the part (their lines;
     // regions alone are the sketch being edited, which sketch mode frames itself).
-    this.regions = handle.addLayer(LAYER_REGIONS, { order: 20 });
+    // A snapshot draws the regions plain, without the picked and hover colours (ViewportHandle.snapshot).
+    this.regions = handle.addLayer(LAYER_REGIONS, {
+      order: 20,
+      plain: (on) => {
+        this.plainNow = on;
+        this.sync();
+      },
+    });
     this.sketches = handle.addLayer(LAYER_SKETCHES, { order: 30, frame: true });
     this.marks = handle.addLayer(LAYER_MARKERS, { order: 40 });
     const c = this.colors;
@@ -175,7 +184,7 @@ export class ProfileOverlay {
     for (const [id, d] of this.drawn) {
       for (const [key, mesh] of d.meshes) {
         const k = `${id}\n${key}`;
-        const m = picked.has(k) ? this.mats.picked : k === hover ? this.mats.hover : this.mats.region;
+        const m = this.plainNow ? this.mats.region : picked.has(k) ? this.mats.picked : k === hover ? this.mats.hover : this.mats.region;
         if (mesh.material !== m) mesh.material = m;
         mesh.userData.state = picked.has(k) ? 'picked' : k === hover ? 'hover' : 'normal';
       }

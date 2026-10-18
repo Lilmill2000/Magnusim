@@ -216,7 +216,7 @@ One call of a tool, as the handler gets it (unreleased, 1.9).
 - `tool: string`: The tool's name, as registered.
 - `input: Record<string, unknown>`: The input, already checked against the tool's inputSchema.
 - `signal: AbortSignal`: Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more.
-- `progress(fraction: number | null, label?: string | undefined): void`: Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+- `progress(fraction: number | null, label?: string | undefined, opts?: AssistantProgressOptions | undefined): void`: Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. `{waiting: true}` says the call waits for the person (a panel of theirs open, their answer): that time doesn't count toward the turn's minutes, until the next progress without it or the call's end (20 minutes of one call's waits at most). Keep calling it while you wait, every few seconds.
 
 #### AssistantImage
 
@@ -243,6 +243,16 @@ An object in a tool's input schema (unreleased, 1.9): the tool's whole input is 
 - `required?: string[] | undefined`
 - `additionalProperties: false`
 
+#### AssistantProgressOptions
+
+```ts
+interface AssistantProgressOptions
+```
+
+What else a call's progress says (unreleased, 1.9).
+
+- `waiting?: boolean | undefined`: The call waits for the person (only while it does).
+
 #### AssistantRegistration
 
 ```ts
@@ -255,6 +265,17 @@ The app's answer to ws.assistant.register (unreleased, 1.9).
 - `accepted: string[]`: The names of the tools the assistant may call.
 - `refused: { name: string; code: string; message: string; }[]`: The tools it refused, each with why.
 - `reason?: string | undefined`: Why not available: "not_connected" (try again later), "no_assistant", "remote", …
+
+#### AssistantStopAnswer
+
+```ts
+interface AssistantStopAnswer
+```
+
+ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant", "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+
+- `stopped: boolean`
+- `reason?: string | undefined`
 
 #### AssistantTool
 
@@ -270,6 +291,28 @@ A tool the app's assistant may call while this workspace is open (unreleased, 1.
 - `inputSchema: AssistantObjectSchema`
 - `risk: AssistantRisk`
 - `timeoutS?: number | undefined`: Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit.
+- `confirm?: string | undefined`: For a `destructive` tool: what the app's question before each call says the call does, in place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120 characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
+
+#### AssistantTurn
+
+```ts
+interface AssistantTurn
+```
+
+A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked, as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change (at most once a second); `ended` once, at its end.
+
+- `id: string`: The turn's id: AssistantCall.turn of each of its calls.
+- `state: "running" | "ended"`
+- `title: string`: The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well).
+- `local: boolean`: It runs on a local server (a smaller model, often with less room: keep results short).
+- `contextTokens: number | null`: The model's context in tokens, when the app knows it (null otherwise).
+- `images: boolean | null`: Whether the model reads images, when the app knows it (null otherwise).
+- `used: { … }`: What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server).
+- `used.steps: number`
+- `used.stepsCap: number`
+- `used.usd: number`
+- `used.usdCap: number`
+- `end?: { … }`: How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then).
 
 #### ClaimedTwice
 
@@ -760,6 +803,8 @@ interface WorkspaceAssistant
 Tools this page offers to the app's assistant (unreleased, next host minor 1.9).
 
 - `register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; } | undefined): Promise<AssistantRegistration>`: Set this page's tools and their handler in one step; register([], null) withdraws them. `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation). Resolves once the app has the list. available:false with reason 'not_connected' means the app could not reach the assistant from this tab yet (for example the tab opened in the background): call register again later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay. Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
+- `onTurn(fn: (turn: AssistantTurn) => void): () => void`: Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen before register: the turns already running are told to a page once it offers tools. Returns a function that stops listening.
+- `stop(turn: string): Promise<AssistantStopAnswer>`: Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
 
 #### WorkspaceContext
 
@@ -785,15 +830,15 @@ interface WorkspaceContext
 type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>
 ```
 
-Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the candidates, the allowed range), at most 4 KB as JSON: a larger one is dropped, and the message says so. All three reach the model with the code.
 
 #### AssistantResult
 
 ```ts
-type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[]; } | void
+type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[]; summary?: string; } | void
 ```
 
-What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with code "too_large". Everything in it reaches the model as data, never as instructions.
+What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text` at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with code "too_large". Everything in it but `summary` reaches the model as data, never as instructions. `summary` is one line for the turn's log that names what the call did ("Added 2: the counter is 2"), at most 160 characters: the person reads it, the model never gets it. Without one the log says "Done".
 
 #### AssistantRisk
 

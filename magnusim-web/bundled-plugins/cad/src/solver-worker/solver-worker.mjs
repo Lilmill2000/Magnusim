@@ -9,13 +9,14 @@
 //   main -> worker  {type:"call", id, op, params}
 //                   op: load(sketch) | solve() | dragStart(pointId, opts?) | dragStartEntity(id, grab, opts?)
 //                       | dragMove(u, v, opts?) | dragEnd() | setValue(constraintId, value) | analyze()
-//                       | values() | stats() | solveOnce(sketch)
+//                       | values() | stats() | solveOnce(sketch) | analyzeOnce(sketch)
 //                   params: an array of arguments for op
 //   worker -> main  {type:"result", id, ok, result | error}
 // Drag moves are coalesced: when several dragMove calls are queued, only the newest is
 // solved and the older ones are answered with {superseded:true}.
 // solveOnce(sketch) loads, solves and forgets on a second solver instance, so a rebuild's
-// re-solve never disturbs the sketch being edited in sketch mode.
+// re-solve never disturbs the sketch being edited in sketch mode. analyzeOnce(sketch) does the same
+// and then analyses the result there (dof, the free parameters, conflicts): {solve, analysis}.
 import { createSolver } from './solver-api.mjs';
 
 const OPS = new Set(['load', 'solve', 'dragStart', 'dragStartEntity', 'dragMove', 'dragEnd', 'setValue', 'analyze', 'values', 'stats']);
@@ -35,14 +36,19 @@ function solveOnce(sketch) {
   return scratch.solve();
 }
 
+function analyzeOnce(sketch) {
+  const solve = solveOnce(sketch);
+  return { solve, analysis: scratch.analyze() };
+}
+
 async function run(msg) {
   const { id, op, params } = msg;
   try {
     const args = Array.isArray(params) ? params : params === undefined ? [] : [params];
     let result;
-    if (op === 'solveOnce') {
+    if (op === 'solveOnce' || op === 'analyzeOnce') {
       if (!scratch) scratch = await createSolver({ moduleUrl });
-      result = solveOnce(args[0]);
+      result = op === 'solveOnce' ? solveOnce(args[0]) : analyzeOnce(args[0]);
     } else {
       if (!OPS.has(op)) throw new Error(`unknown op "${op}"`);
       result = solver[op](...args);

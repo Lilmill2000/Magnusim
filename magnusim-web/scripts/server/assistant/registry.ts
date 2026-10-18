@@ -25,7 +25,7 @@
 import { createHash } from 'node:crypto';
 import { pluginEpoch as foamPluginEpoch } from '../../foam-runner.js';
 import { checkSchema } from './schema.ts';
-import { cleanGuide, cleanText, hasControls, TEXT_CAPS } from './sanitize.ts';
+import { cleanGuide, cleanText, CONFIRM_NOTE_MAX, hasControls, TEXT_CAPS } from './sanitize.ts';
 import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts';
 
 export type ToolSource =
@@ -52,9 +52,15 @@ export interface ToolOutcome {
   data?: unknown;
   text?: string;
   images?: ImagePart[];
-  error?: { code: string; message: string; hint?: string };
-  /** One line for the turn log. */
+  /** `hint`: how to fix it; `detail`: plain JSON about it (both reach the model with the message). */
+  error?: { code: string; message: string; hint?: string; detail?: unknown };
+  /** One line for the turn log (never sent to the model). */
   summary: string;
+}
+
+/** What else a progress says: the call waits for the person (the turn's minutes stop meanwhile). */
+export interface ProgressOptions {
+  waiting?: boolean;
 }
 
 export interface ToolRunContext {
@@ -62,7 +68,7 @@ export interface ToolRunContext {
   ctx: ToolCtx;
   /** The turn that makes the call; another app's call (MCP) has `mcp:<connection id>` (RunOptions.callTurn). */
   turn: string | null;
-  progress(fraction: number | null, label: string): void;
+  progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   /** Aborts when the runner stops waiting for this call (it was aborted and its grace ran out). */
   released?: AbortSignal;
 }
@@ -79,13 +85,18 @@ export interface ToolDef {
   /**
    * A STALL window: the call fails `stalled` after this long with no progress and no page
    * call in flight. No absolute limit while progress keeps arriving; the turn's
-   * turn_minutes cap bounds the whole call. Host default 30 s; workspace timeoutS 1–600
-   * (default 60).
+   * turn_minutes cap bounds the whole call (its waits for the person count past
+   * WAIT_PAUSE_MAX_MS, runner.ts). Host default 30 s; workspace timeoutS 1–600 (default 60).
    */
   stallMs: number;
   workerBacked: boolean;
   /** Higher stays when a request is over the tool cap (host tools; workspace tools always go first). */
   priority?: number;
+  /**
+   * What the confirm question says a destructive call does, in place of "can't be undone"
+   * (a workspace tool's `confirm`, cleaned, at most CONFIRM_NOTE_MAX characters; CAD tools spec H10).
+   */
+  confirmNote?: string;
   available(ctx: ToolCtx): true | string;
   describe?(input: Record<string, unknown>): { line: string; detail?: Array<{ label: string; value: string }> };
   run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome>;
@@ -113,7 +124,7 @@ export interface WorkspaceRegistration {
     signal: AbortSignal;
     released?: AbortSignal;
     turn: string | null;
-    progress(f: number | null, label: string): void;
+    progress(f: number | null, label: string, opts?: ProgressOptions): void;
   }): Promise<ToolOutcome>;
   /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
   ready?(): true | string;
@@ -178,7 +189,7 @@ const definitions = new Map<string, ProviderTool>();
 /** The provider definitions of `tools`, memoized by content. */
 export function providerTools(tools: readonly ToolDef[]): ProviderTool[] {
   return tools.map((t) => {
-    const def: ProviderTool = { name: t.name, description: t.description, schema: t.schema };
+    const def: ProviderTool = { name: t.name, description: t.description, schema: t.schema, ...(t.source.kind === 'workspace' ? { workspace: true } : {}) };
     const key = createHash('sha256').update(JSON.stringify(def)).digest('hex');
     let memo = definitions.get(key);
     if (!memo) {
@@ -343,6 +354,7 @@ export class Registry implements ToolRegistry {
     const timeoutS = Number.isFinite(t) ? Math.min(WORKSPACE_TIMEOUT_S.max, Math.max(WORKSPACE_TIMEOUT_S.min, Math.round(t))) : WORKSPACE_TIMEOUT_S.default;
     const localName = raw.name;
     const fullName = workspaceToolName(source.plugin, localName);
+    const confirmNote = cleanText(typeof raw.confirm === 'string' ? raw.confirm : '', CONFIRM_NOTE_MAX);
     const registry = this;
     return {
       name: fullName,
@@ -355,6 +367,7 @@ export class Registry implements ToolRegistry {
       projectData: true,
       stallMs: timeoutS * 1000,
       workerBacked: false,
+      ...(confirmNote ? { confirmNote } : {}),
       available(ctx: ToolCtx): true | string {
         return registry.workspaceAvailable(source, ctx);
       },

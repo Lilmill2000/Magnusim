@@ -5,6 +5,7 @@
 // (src/sketch/, src/solver-worker/). docs/p2p3-plan.md §3.4, §3.5.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { FeatureId, PlaneFrame, SketchConstraintId, SketchEntityId, SketchFeature, SketchPointId, Vec2 } from './doc';
+import type { AssistantStep } from './doc-service';
 import type { KernelRegion, SketchCurve } from './kernel-protocol';
 
 // ------------------------------------------------------------ built sketch
@@ -108,9 +109,17 @@ export interface SolverAnalysis {
   dof: number;
   perEntity: Record<string, DefinitionState>;
   perPoint: Record<string, DefinitionState>;
+  /** The parameters still free, as "<point or entity id>.<u|v|r|...>" ("pt_3.u", "e_2.r"); "#<n>" for one with no owner. */
+  dependentParams: string[];
   conflicting: string[];
   redundant: string[];
   ms: number;
+}
+
+/** A sketch solved and analysed apart (analyzeFeature): the solve, then the analysis of its result. */
+export interface SolverFeatureAnalysis {
+  solve: SolverSolveResult;
+  analysis: SolverAnalysis;
 }
 
 /**
@@ -133,6 +142,12 @@ export interface SketchSolverClient {
    * (P3-PROFILES) needs nothing from src/sketch/.
    */
   solveFeature(f: SketchFeature, values: Record<SketchConstraintId, number>): Promise<SolverSolveResult>;
+  /**
+   * The same solve, apart (the worker's analyzeOnce, on the instance the rebuild's re-solve uses),
+   * then the analysis of its result: the DOF, the free parameters, what conflicts or is redundant.
+   * Never touches the sketch sketch mode is editing. The Assistant's headless check of a sketch.
+   */
+  analyzeFeature(f: SketchFeature, values: Record<SketchConstraintId, number>): Promise<SolverFeatureAnalysis>;
   load(sketch: SolverSketch): Promise<{ params: number; unknowns: number; constraints: number }>;
   solve(): Promise<SolverSolveResult>;
   analyze(): Promise<SolverAnalysis>;
@@ -203,7 +218,11 @@ export interface SketchModeApi {
   newSketch(support: SketchFeature['support']): void;
   /** Edit an existing sketch (opens its panel session). */
   edit(feature: FeatureId): void;
-  /** Finish sketch (Done): commit the session, leave sketch mode. */
-  finish(): void;
+  /**
+   * Finish sketch (Done): commit the session, leave sketch mode. The person's Finish on a sketch the
+   * Assistant draws takes it over (discarded). With the Assistant's `step`: its honest Done, null
+   * when the sketch was kept, else why not.
+   */
+  finish(opts?: { step?: AssistantStep }): Promise<string | null>;
   setTool(tool: SketchToolId): void;
 }

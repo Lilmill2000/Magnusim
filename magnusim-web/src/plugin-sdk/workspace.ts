@@ -487,6 +487,12 @@ export interface AssistantTool {
   risk: AssistantRisk;
   /** Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit. */
   timeoutS?: number;
+  /**
+   * For a `destructive` tool: what the app's question before each call says the call does, in
+   * place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120
+   * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
+   */
+  confirm?: string;
 }
 
 /** One call of a tool, as the handler gets it (unreleased, 1.9). */
@@ -506,8 +512,20 @@ export interface AssistantCall {
   input: Record<string, unknown>;
   /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
   signal: AbortSignal;
-  /** Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. */
-  progress(fraction: number | null, label?: string): void;
+  /**
+   * Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+   * `{waiting: true}` says the call waits for the person (a panel of theirs open, their
+   * answer): that time doesn't count toward the turn's minutes, until the next progress
+   * without it or the call's end (20 minutes of one call's waits at most). Keep calling it
+   * while you wait, every few seconds.
+   */
+  progress(fraction: number | null, label?: string, opts?: AssistantProgressOptions): void;
+}
+
+/** What else a call's progress says (unreleased, 1.9). */
+export interface AssistantProgressOptions {
+  /** The call waits for the person (only while it does). */
+  waiting?: boolean;
 }
 
 /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
@@ -517,15 +535,22 @@ export interface AssistantImage {
 }
 
 /**
- * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most
- * 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with
- * code "too_large". Everything in it reaches the model as data, never as instructions.
+ * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text`
+ * at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call
+ * with code "too_large". Everything in it but `summary` reaches the model as data, never as
+ * instructions. `summary` is one line for the turn's log that names what the call did ("Added 2:
+ * the counter is 2"), at most 160 characters: the person reads it, the model never gets it.
+ * Without one the log says "Done".
  */
-export type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[] } | void;
+export type AssistantResult = string | { text?: string; data?: unknown; images?: AssistantImage[]; summary?: string } | void;
 
 /**
  * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
- * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+ * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says
+ * what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its
+ * `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the
+ * candidates, the allowed range), at most 4 KB as JSON: a larger one is dropped, and the message
+ * says so. All three reach the model with the code.
  */
 export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
 
@@ -541,6 +566,39 @@ export interface AssistantRegistration {
   reason?: string;
 }
 
+/**
+ * A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked,
+ * as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change
+ * (at most once a second); `ended` once, at its end.
+ */
+export interface AssistantTurn {
+  /** The turn's id: AssistantCall.turn of each of its calls. */
+  id: string;
+  state: 'running' | 'ended';
+  /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
+  title: string;
+  /** It runs on a local server (a smaller model, often with less room: keep results short). */
+  local: boolean;
+  /** The model's context in tokens, when the app knows it (null otherwise). */
+  contextTokens: number | null;
+  /** Whether the model reads images, when the app knows it (null otherwise). */
+  images: boolean | null;
+  /** What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). */
+  used: { steps: number; stepsCap: number; usd: number; usdCap: number };
+  /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
+  end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
+}
+
+/**
+ * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
+ * that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant",
+ * "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+ */
+export interface AssistantStopAnswer {
+  stopped: boolean;
+  reason?: string;
+}
+
 /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
 export interface WorkspaceAssistant {
   /**
@@ -552,6 +610,17 @@ export interface WorkspaceAssistant {
    * Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
    */
   register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+  /**
+   * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen
+   * before register: the turns already running are told to a page once it offers tools. Returns a
+   * function that stops listening.
+   */
+  onTurn(fn: (turn: AssistantTurn) => void): () => void;
+  /**
+   * Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted
+   * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
+   */
+  stop(turn: string): Promise<AssistantStopAnswer>;
 }
 
 export interface ConfirmOptions {
@@ -851,23 +920,40 @@ function newInstance(): string {
 
 /** The codes a tool's error keeps (unreleased, 1.9); any other reads "failed". */
 const ASSISTANT_PAGE_CODES = new Set(['invalid_input', 'busy', 'not_ready', 'failed']);
+/** The most of a tool error's hint the SDK sends (the host caps it again). */
+const ASSISTANT_HINT_MAX = 500;
 
-/** A handler's result as the host takes it: text alone becomes `{text}`, nothing `{}`; only text, data and images go. */
+/** A handler's result as the host takes it: text alone becomes `{text}`, nothing `{}`; only text, data, images and summary go. */
 function assistantResultOf(out: unknown): unknown {
   if (out === undefined || out === null) return {};
   if (typeof out === 'string') return { text: out };
   if (typeof out !== 'object' || Array.isArray(out)) return out;
-  const r = out as { text?: unknown; data?: unknown; images?: unknown };
+  const r = out as { text?: unknown; data?: unknown; images?: unknown; summary?: unknown };
   const result: Record<string, unknown> = {};
   if (r.text !== undefined) result.text = r.text;
   if (r.data !== undefined) result.data = r.data;
   if (r.images !== undefined) result.images = r.images;
+  if (r.summary !== undefined) result.summary = r.summary;
   return result;
 }
 
-/** A handler's throw as the call's error: its message, and its code only when the page may give it. */
-function assistantErrorOf(e: unknown): { code: string; message: string } {
-  const fields = (e && typeof e === 'object' ? e : {}) as { code?: unknown; message?: unknown };
+/** `v` as JSON makes it (a copy the host can always take), or undefined when it has no JSON form. */
+function jsonCopy(v: unknown): unknown {
+  try {
+    const text = JSON.stringify(v);
+    return text === undefined ? undefined : JSON.parse(text);
+  } catch {
+    // A cycle, a BigInt, a getter that throws: no detail.
+    return undefined;
+  }
+}
+
+/**
+ * A handler's throw as the call's error: its message, its code only when the page may give it,
+ * its hint (text, cut to 500 characters) and its detail (as JSON makes it).
+ */
+function assistantErrorOf(e: unknown): { code: string; message: string; hint?: string; detail?: unknown } {
+  const fields = (e && typeof e === 'object' ? e : {}) as { code?: unknown; message?: unknown; hint?: unknown; detail?: unknown };
   const code = fields.code;
   let message = '';
   try {
@@ -876,7 +962,19 @@ function assistantErrorOf(e: unknown): { code: string; message: string } {
   } catch {
     // Not text at all: no message.
   }
-  return { code: typeof code === 'string' && ASSISTANT_PAGE_CODES.has(code) ? code : 'failed', message: message || 'The tool failed.' };
+  const out: { code: string; message: string; hint?: string; detail?: unknown } = {
+    code: typeof code === 'string' && ASSISTANT_PAGE_CODES.has(code) ? code : 'failed',
+    message: message || 'The tool failed.',
+  };
+  try {
+    const hint = fields.hint;
+    if (typeof hint === 'string' && hint) out.hint = hint.slice(0, ASSISTANT_HINT_MAX);
+    const detail = fields.detail === undefined || fields.detail === null ? undefined : jsonCopy(fields.detail);
+    if (detail !== undefined && detail !== null) out.detail = detail;
+  } catch {
+    // A getter that throws: the error goes without them.
+  }
+  return out;
 }
 
 /**
@@ -934,6 +1032,8 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   let assistantAccepted = new Set<string>();
   let assistantSerial = 0;
   const assistantCalls = new Map<string, AbortController>();
+  // Who hears the assistant's turns bound to this tab (ws.assistant.onTurn).
+  const turnListeners = new Set<(turn: AssistantTurn) => void>();
   let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
@@ -996,6 +1096,19 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     if (msg.event === 'assistantAbort') {
       const id = String(((msg.data || {}) as { call?: unknown }).call || '');
       assistantCalls.get(id)?.abort(new DOMException('The call was stopped', 'AbortError'));
+      return;
+    }
+    if (msg.event === 'assistantTurn') {
+      // Each listener its own copy: one that changes it changes nothing for the others.
+      for (const fn of [...turnListeners]) {
+        const turn = jsonCopy(msg.data);
+        if (!turn || typeof turn !== 'object') return;
+        try {
+          fn(turn as AssistantTurn);
+        } catch (e) {
+          console.warn('[workspace] assistant.onTurn', e);
+        }
+      }
       return;
     }
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
@@ -1084,10 +1197,11 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         tool,
         input,
         signal: ctl.signal,
-        progress: (fraction, label) => {
+        progress: (fraction, label, opts) => {
           if (ctl.signal.aborted) return;
           const f = typeof fraction === 'number' && Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : null;
-          void call('assistant.progress', { call: id, fraction: f, ...(label ? { label: String(label) } : {}) }).catch(() => undefined);
+          const waiting = opts && typeof opts === 'object' && opts.waiting === true ? { waiting: true } : {};
+          void call('assistant.progress', { call: id, fraction: f, ...(label ? { label: String(label) } : {}), ...waiting }).catch(() => undefined);
         },
       });
       answer = { ok: true, result: assistantResultOf(out) };
@@ -1327,6 +1441,7 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
           const out: Record<string, unknown> = { name: tool.name, description: tool.description, inputSchema: tool.inputSchema, risk: tool.risk };
           if (tool.title !== undefined) out.title = tool.title;
           if (tool.timeoutS !== undefined) out.timeoutS = tool.timeoutS;
+          if (tool.confirm !== undefined) out.confirm = tool.confirm;
           return out;
         });
         const params: Record<string, unknown> = { tools: wire };
@@ -1352,6 +1467,26 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
           assistantAccepted = new Set(tools.length ? reg.accepted : []);
         }
         return reg;
+      },
+      onTurn: (fn) => {
+        if (typeof fn !== 'function') throw new TypeError('assistant.onTurn takes a function');
+        turnListeners.add(fn);
+        return () => {
+          turnListeners.delete(fn);
+        };
+      },
+      stop: async (turn) => {
+        if (typeof turn !== 'string' || !turn) throw new TypeError('assistant.stop takes the id of a turn this page was told of');
+        let answer: { stopped?: unknown; reason?: unknown } | null;
+        try {
+          answer = await call<{ stopped?: unknown; reason?: unknown } | null>('assistant.stop', { turn });
+        } catch (e) {
+          // A host without the call: nothing was stopped.
+          if ((e as { code?: unknown } | null)?.code === 'not_allowed') return { stopped: false, reason: 'not_allowed' };
+          throw e;
+        }
+        if (answer?.stopped === true) return { stopped: true };
+        return { stopped: false, reason: typeof answer?.reason === 'string' && answer.reason ? answer.reason : 'failed' };
       },
     },
     on(event: string, fn: (data: never) => void) {

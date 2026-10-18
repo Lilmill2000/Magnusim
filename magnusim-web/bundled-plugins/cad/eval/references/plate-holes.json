@@ -1,0 +1,75 @@
+{
+  "id": "plate-holes",
+  "about": "The plate as the guide's loop builds it: parameters, a centred rectangle dimensioned from them, the plate extruded t up, four holes through its top face, then a measure.",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "L", "kind": "length", "expr": "100 mm", "comment": "Length along X", "rename_to": "" },
+                { "name": "W", "kind": "length", "expr": "60 mm", "comment": "Width along Y", "rename_to": "" },
+                { "name": "t", "kind": "length", "expr": "8 mm", "comment": "Thickness", "rename_to": "" },
+                { "name": "hd", "kind": "length", "expr": "6.5 mm", "comment": "Hole diameter", "rename_to": "" },
+                { "name": "e", "kind": "length", "expr": "10 mm", "comment": "Hole centre to edge", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Plate sketch",
+              "on": "Top",
+              "entities": [{ "id": "r", "kind": "center_rect", "at": [0, 0, 100, 60], "construction": false }],
+              "constraints": [
+                { "id": "c0", "kind": "coincident", "refs": ["r.center", "origin"], "value": "" },
+                { "id": "dl", "kind": "distance", "refs": ["r.bottom"], "value": "L" },
+                { "id": "dw", "kind": "distance", "refs": ["r.left"], "value": "W" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Plate", "sketch": "Plate sketch", "regions": ["all"], "extent": "blind", "distance": "t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__hole",
+            "input": {
+              "name": "",
+              "face": "Plate.end",
+              "centers": [
+                { "x": "L/2 - e", "y": "W/2 - e", "z": "" },
+                { "x": "-(L/2 - e)", "y": "W/2 - e", "z": "" },
+                { "x": "-(L/2 - e)", "y": "-(W/2 - e)", "z": "" },
+                { "x": "L/2 - e", "y": "-(W/2 - e)", "z": "" }
+              ],
+              "diameter": "hd",
+              "depth": "through",
+              "distance": ""
+            }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
+      { "text": "The plate is 100 x 60 x 8 mm with four 6.5 mm holes 10 mm from the edges: every feature is ok, every sketch fully defined, volume 46,938 mm3." }
+    ]
+  ]
+}

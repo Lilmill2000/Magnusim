@@ -5,13 +5,17 @@
 // channel ending the call, and what the allowlist does with the new messages; then the real SDK
 // against this bridge, so both sides keep the same tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connect, type AssistantTool, type StudyRecord } from '../plugin-sdk/workspace';
+import { connect, type AssistantTool, type AssistantTurn, type StudyRecord } from '../plugin-sdk/workspace';
 import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_ALIVE_MS,
+  ASSISTANT_CONFIRM_MAX,
   ASSISTANT_DATA_BYTES,
+  ASSISTANT_DETAIL_BYTES,
+  ASSISTANT_HINT_MAX,
   ASSISTANT_IMAGE_BYTES,
   ASSISTANT_REGISTER_MS,
+  ASSISTANT_SUMMARY_MAX,
   ASSISTANT_TEXT_BYTES,
   BridgeError,
   HOST_API_VERSION,
@@ -243,6 +247,8 @@ describe('assistant.register (1.9, unreleased)', () => {
       { tools: [{ ...ADD, name: 7 }] },
       { tools: [{ ...ADD, description: undefined }] },
       { tools: [{ ...ADD, title: 3 }] },
+      { tools: [{ ...ADD, confirm: 3 }] },
+      { tools: [{ ...ADD, confirm: { text: 'Undoable.' } }] },
       { tools: [{ ...ADD, inputSchema: [SCHEMA] }] },
       { tools: [{ ...ADD, inputSchema: undefined }] },
       { tools: [{ ...ADD, inputSchema: { ...SCHEMA, made: new Date(0) } }] },
@@ -286,6 +292,31 @@ describe('assistant.register (1.9, unreleased)', () => {
     expect(checked.guide).toBe('Counter notes:\n- add moves it \n- reset sets 0');
     expect(checkAssistantTools({ tools: [] })).toEqual({ tools: [], guide: '' });
     expect(checkAssistantTools({ tools: [], guide: 'g'.repeat(5000) }).guide).toHaveLength(4000);
+  });
+
+  it("a tool's confirm note (CAD tools spec H10): text, cleaned and cut to 120 characters, handed to the app; absent when the page gave none or it cleans to nothing", async () => {
+    const RESET = { name: 'reset', title: 'Reset the counter', description: 'Sets the counter to 0.', inputSchema: SCHEMA, risk: 'destructive' };
+    const checked = checkAssistantTools({
+      tools: [
+        { ...RESET, confirm: `Sets the${LS} counter to 0;${RLO} add${BEL} brings it back.` },
+        { ...RESET, name: 'long', confirm: 'c'.repeat(300) },
+        { ...RESET, name: 'blank', confirm: ` ${BEL} ` },
+        { ...RESET, name: 'nulled', confirm: null },
+        { ...RESET, name: 'none' },
+      ],
+    });
+    expect(ASSISTANT_CONFIRM_MAX).toBe(120);
+    expect(checked.tools[0].confirm).toBe('Sets the counter to 0; add brings it back.');
+    expect(checked.tools[1].confirm).toBe('c'.repeat(ASSISTANT_CONFIRM_MAX));
+    for (const t of checked.tools.slice(2)) expect(Object.hasOwn(t, 'confirm'), t.name).toBe(false);
+    // It reaches the app with the rest of the tool.
+    const h = hooks();
+    const t = await connected(h);
+    const r = await t.call('assistant.register', { tools: [{ ...RESET, confirm: 'Sets the counter to 0; add brings it back.' }] });
+    expect(r.result).toEqual({ available: true, accepted: ['reset'], refused: [] });
+    const reg = h.assistantTools.mock.calls[0][0] as { tools: CheckedTool[] };
+    expect(reg.tools).toEqual([{ ...RESET, title: 'Reset the counter', timeoutS: 60, confirm: 'Sets the counter to 0; add brings it back.' }]);
+    t.end();
   });
 
   it("hands the checked list to the app and answers its verdict: only names the page offered, texts cleaned", async () => {
@@ -498,6 +529,56 @@ describe('invokeTool (1.9, unreleased)', () => {
     t.end();
   });
 
+  it("the page's error keeps its hint (cleaned, 500 characters) and its detail (plain JSON, 4 KB), else drops the detail and says so in the message", async () => {
+    const error = (e: Record<string, unknown>) => assistantCallOutcome({ call: 'ai-1', ok: false, error: e });
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3], nested: { ok: true, none: null } };
+    expect(await error({ code: 'invalid_input', message: 'Too big.', hint: `Use 1,${RLO} 2${LS}or 3.`, detail })).toEqual({
+      ok: false,
+      code: 'invalid_input',
+      message: 'Too big.',
+      hint: 'Use 1, 2 or 3.',
+      detail,
+    });
+    expect(await error({ message: 'No.', hint: 'h'.repeat(600) })).toEqual({ ok: false, code: 'failed', message: 'No.', hint: 'h'.repeat(ASSISTANT_HINT_MAX) });
+    // A hint that is not text, or is only spaces, and a null detail: left out.
+    for (const hint of [5, '   ', null, { text: 'x' }]) expect(await error({ message: 'No.', hint, detail: null })).toEqual({ ok: false, code: 'failed', message: 'No.' });
+    // At 4 KB as JSON (UTF-8 bytes) the detail is kept; past it, dropped, and the message says so.
+    const at = { s: 'x'.repeat(ASSISTANT_DETAIL_BYTES - 8) };
+    expect(new TextEncoder().encode(JSON.stringify(at)).length).toBe(ASSISTANT_DETAIL_BYTES);
+    expect(await error({ message: 'No.', detail: at })).toMatchObject({ detail: at });
+    expect(await error({ code: 'busy', message: 'No.', hint: 'Wait.', detail: { s: 'é'.repeat(ASSISTANT_DETAIL_BYTES / 2) } })).toEqual({
+      ok: false,
+      code: 'busy',
+      message: 'No. (detail too large)',
+      hint: 'Wait.',
+    });
+    // Not plain JSON (a Date, a Map, a function, NaN): dropped, and said.
+    for (const bad of [new Date(0), new Map(), { f: () => 1 }, { n: Number.NaN }]) {
+      expect(await error({ message: 'No.', detail: bad })).toEqual({ ok: false, code: 'failed', message: 'No. (detail not plain JSON)' });
+    }
+    // The note fits inside the message's 2000 characters; with no message, the default's.
+    const long = await error({ message: 'm'.repeat(2500), detail: { s: 'x'.repeat(5000) } });
+    expect(!long.ok && long.message.length).toBe(2000);
+    expect(!long.ok && long.message.endsWith('m (detail too large)')).toBe(true);
+    expect(await error({ detail: { s: 'x'.repeat(5000) } })).toEqual({ ok: false, code: 'failed', message: 'The tool failed. (detail too large)' });
+    // A copy: the page's object is not the outcome's.
+    const kept = await error({ message: 'No.', detail });
+    expect(!kept.ok && kept.detail).not.toBe(detail);
+  });
+
+  it("a result's summary is cleaned and cut to 160 characters; one that is not text fails the call bad_result", async () => {
+    const result = (r: unknown) => assistantCallOutcome({ call: 'ai-1', ok: true, result: r });
+    expect(await result({ text: 'Now 2', data: { count: 2 }, summary: `Added 2:${BEL} the counter is 2` })).toEqual({
+      ok: true,
+      result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' },
+    });
+    expect(await result({ summary: 's'.repeat(300) })).toEqual({ ok: true, result: { summary: 's'.repeat(ASSISTANT_SUMMARY_MAX) } });
+    // Empty or null: none.
+    expect(await result({ text: 'x', summary: '  ' })).toEqual({ ok: true, result: { text: 'x' } });
+    expect(await result({ text: 'x', summary: null })).toEqual({ ok: true, result: { text: 'x' } });
+    expect(await result({ summary: 42 })).toEqual({ ok: false, code: 'bad_result', message: "The tool's result was refused: its summary is not text." });
+  });
+
   it('stalls after timeoutS with no progress: assistantAbort, then stalled (with the hint when the tab is hidden)', async () => {
     const t = await connected();
     await t.call('assistant.register', { tools: [ADD, SLOW] });
@@ -536,6 +617,33 @@ describe('invokeTool (1.9, unreleased)', () => {
     expect(a.state.out).toBeNull();
     expect(a.progress).toHaveLength(8);
     expect(of(t.events, 'assistantAbort')).toHaveLength(0);
+    await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'added' } });
+    expect(await outcomeOf(a)).toEqual({ ok: true, result: { text: 'added' } });
+    t.end();
+  });
+
+  it('a progress that waits for the person reaches the caller as onProgress(…, {waiting: true}), only for waiting true; it resets the stall window too', async () => {
+    const t = await connected();
+    await t.call('assistant.register', { tools: [SLOW] });
+    fakeTimers();
+    const heard: unknown[][] = [];
+    const a = invoke(t, { tool: 'slow_add', timeoutS: 2, onProgress: (...args: unknown[]) => void heard.push(args) });
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(1500);
+      await t.call('assistant.progress', { call: 'ai-1', fraction: null, label: 'Waiting for you', waiting: true });
+    }
+    // 9 s of waiting, four times the window: never stalled.
+    expect(a.state.out).toBeNull();
+    expect(of(t.events, 'assistantAbort')).toHaveLength(0);
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.5, label: 'Adding', waiting: 'yes' });
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.6, label: 'Adding', waiting: false });
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.7 });
+    expect(heard).toEqual([
+      ...Array.from({ length: 6 }, () => [null, 'Waiting for you', { waiting: true }]),
+      [0.5, 'Adding'],
+      [0.6, 'Adding'],
+      [0.7, ''],
+    ]);
     await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'added' } });
     expect(await outcomeOf(a)).toEqual({ ok: true, result: { text: 'added' } });
     t.end();
@@ -856,6 +964,19 @@ describe('the allowlist and the assistant (1.9, unreleased)', () => {
     t.end();
   });
 
+  it("the page's Stop of a turn is no work of a running leave's hook (NOT_HOOK_WORK) either", async () => {
+    const h = hooks();
+    h.assistantStop = vi.fn(async () => ({ stopped: true }));
+    const t = await connected(h);
+    await t.call('nav.leaveHook', { on: true });
+    const seen: LeaveActivity[] = [];
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: (x) => seen.push(x) });
+    await settle(() => of(t.events, 'leave').length === 1, 'the leave');
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: true });
+    expect(seen.filter((x) => x.kind === 'calls')).toEqual([{ kind: 'calls', inFlight: 0 }]);
+    t.end();
+  });
+
   it('a call the bridge does not have is not_allowed, as for any other', async () => {
     const t = await connected();
     for (const method of ['assistant.invoke', 'assistant.unregister', 'assistant.tools', 'assistant']) {
@@ -863,6 +984,114 @@ describe('the allowlist and the assistant (1.9, unreleased)', () => {
       expect(r.error).toEqual({ message: `not allowed: ${JSON.stringify(method)}`, code: 'not_allowed' });
     }
     expect(t.h.log).toHaveBeenCalledWith(expect.stringContaining('not allowed: "assistant.invoke"'), { tools: [] });
+    t.end();
+  });
+});
+
+describe("the assistant's turns and the page's Stop (1.9, unreleased)", () => {
+  const TURN: AssistantTurn = {
+    id: 't-1',
+    state: 'running',
+    title: 'Add 2 to the counter',
+    local: false,
+    contextTokens: null,
+    images: null,
+    used: { steps: 1, stepsCap: 50, usd: 0.01, usdCap: 3 },
+  };
+
+  it('assistantTurn() reaches the page as the event `assistantTurn`; nothing goes on a channel not welcomed yet (a new hello waiting for its context), or once there is none (detached, or no hello)', async () => {
+    // Every port the bridge handed an assistantTurn, in order (the bridge's own side of a channel).
+    const posts = vi.spyOn(FakePort.prototype, 'postMessage');
+    const turnPorts = () => posts.mock.calls.flatMap((c, i) => ((c[0] as { event?: unknown } | null)?.event === 'assistantTurn' ? [posts.mock.contexts[i]] : []));
+    try {
+      const t = await connected();
+      const first = t.port.other;
+      t.bridge.assistantTurn(TURN);
+      t.bridge.assistantTurn({ ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } });
+      await settle(() => of(t.events, 'assistantTurn').length === 2, 'the turn events');
+      expect(of(t.events, 'assistantTurn').map((e) => e.data)).toEqual([TURN, { ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } }]);
+      expect(turnPorts()).toEqual([first, first]);
+      // The page loads again: its hello replaces the channel at once, and the new one is not
+      // welcomed until the page has its context.
+      window.dispatchEvent(new MessageEvent('message', { data: { magnusim: 'hello', sdkVersion: '1.4.0', instance: 'i2' }, source: t.win }));
+      expect(t.bridge.connected()).toBe(false);
+      t.bridge.assistantTurn(TURN);
+      expect(turnPorts(), 'neither on the old channel nor on the new one before its welcome').toEqual([first, first]);
+      await vi.waitFor(() => expect(t.posted.length).toBe(2));
+      const next = (t.posted[1] as [unknown, unknown, FakePort[]])[2][0];
+      expect(t.bridge.connected()).toBe(true);
+      t.bridge.assistantTurn(TURN);
+      expect(turnPorts()).toEqual([first, first, next.other]);
+      // Detached: no channel.
+      t.end();
+      t.bridge.assistantTurn(TURN);
+      // A bridge whose page never said hello: none either.
+      const h = hooks();
+      const frame = document.createElement('iframe');
+      document.body.appendChild(frame);
+      const lone = new WorkspaceBridge(frame, new WorkspaceCalls(SCOPE, h), h);
+      lone.assistantTurn(TURN);
+      expect(turnPorts()).toHaveLength(3);
+      expect(h.log).not.toHaveBeenCalled();
+      frame.remove();
+    } finally {
+      posts.mockRestore();
+    }
+  });
+
+  it('assistant.stop {turn} asks hooks.assistantStop and answers {stopped} or {stopped:false, reason}; no hook: no_assistant; a hook that fails: failed; a turn that is no id: bad_request', async () => {
+    const h = hooks();
+    h.assistantStop = vi.fn(async (turn: string) => (turn === 't-1' ? { stopped: true } : { stopped: false, reason: 'not_this_tab' }));
+    const t = await connected(h);
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: true });
+    expect((await t.call('assistant.stop', { turn: 't-9' })).result).toEqual({ stopped: false, reason: 'not_this_tab' });
+    expect(h.assistantStop.mock.calls).toEqual([['t-1'], ['t-9']]);
+    for (const turn of [undefined, '', 5, 'x'.repeat(129)]) {
+      expect((await t.call('assistant.stop', { turn })).error, String(turn)).toMatchObject({ code: 'bad_request' });
+    }
+    expect(h.assistantStop).toHaveBeenCalledTimes(2);
+    // What the hook answers is cleaned; a failure is `failed`, and so is a refusal with no reason.
+    h.assistantStop.mockResolvedValueOnce({ stopped: false, reason: `ended${BEL}${RLO}` });
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'ended' });
+    h.assistantStop.mockResolvedValueOnce({ stopped: false });
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'failed' });
+    h.assistantStop.mockRejectedValueOnce(new Error('the relay broke'));
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'failed' });
+    expect(h.log).toHaveBeenCalledWith('assistant stop: the app did not take it', expect.any(Error));
+    t.end();
+    const bare = await connected();
+    expect((await bare.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'no_assistant' });
+    bare.end();
+  });
+
+  it("through the real SDK: onTurn hears assistantTurn (each listener its own copy, one that throws leaves the others, off stops it); stop reaches the app's hook", async () => {
+    const h = hooks();
+    h.assistantStop = vi.fn(async () => ({ stopped: true }));
+    const t = await sdkConnected(h);
+    const assistant = t.ws.assistant!;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const a: AssistantTurn[] = [];
+    const b: AssistantTurn[] = [];
+    const offA = assistant.onTurn((turn) => {
+      a.push(turn);
+      turn.title = 'changed here';
+      throw new Error('a listener broke');
+    });
+    assistant.onTurn((turn) => b.push(turn));
+    t.bridge.assistantTurn(TURN);
+    await settle(() => b.length === 1, 'the turn');
+    expect(a).toHaveLength(1);
+    expect(b).toEqual([TURN]);
+    expect(warn).toHaveBeenCalledWith('[workspace] assistant.onTurn', expect.any(Error));
+    offA();
+    const ended: AssistantTurn = { ...TURN, state: 'ended', end: { state: 'stopped', reason: 'user' } };
+    t.bridge.assistantTurn(ended);
+    await settle(() => b.length === 2, 'its end');
+    expect(a).toHaveLength(1);
+    expect(b[1]).toEqual(ended);
+    expect(await assistant.stop('t-1')).toEqual({ stopped: true });
+    expect(h.assistantStop).toHaveBeenCalledWith('t-1');
+    warn.mockRestore();
     t.end();
   });
 });
@@ -936,6 +1165,23 @@ describe('the SDK and the bridge together (1.9, unreleased)', () => {
     expect(t.calls.assistantTool('add')).not.toBeNull();
     expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Counter is 2' } });
     expect(handler).toHaveBeenCalledTimes(1);
+    t.end();
+  });
+
+  it("a handler's thrown hint and detail, and its result's summary, reach the call's outcome through the real SDK", async () => {
+    const t = await sdkConnected();
+    const detail = { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] };
+    let n = 0;
+    await t.ws.assistant!.register([TOOL], async () => {
+      n += 1;
+      if (n === 1) throw Object.assign(new Error('step_too_big: at most 3 at a time.'), { code: 'invalid_input', hint: 'Call add with by 1, 2 or 3.', detail });
+      // A detail JSON can't hold all of: the SDK sends what JSON makes of it.
+      if (n === 2) throw Object.assign(new Error('No.'), { hint: 'Wait.', detail: { at: new Date(0), skip: () => 1 } });
+      return { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' };
+    });
+    expect(await call(t.bridge)).toEqual({ ok: false, code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Call add with by 1, 2 or 3.', detail });
+    expect(await call(t.bridge)).toEqual({ ok: false, code: 'failed', message: 'No.', hint: 'Wait.', detail: { at: '1970-01-01T00:00:00.000Z' } });
+    expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
     t.end();
   });
 });

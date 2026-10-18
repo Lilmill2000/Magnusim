@@ -1,0 +1,18 @@
+{
+  "id": "l-bracket",
+  "tier": "L2",
+  "units": "mm",
+  "title": "L bracket",
+  "prompt": "Make an L bracket from 5 mm plate, 30 mm wide along Y and centred on y = 0: a base flange 50 mm long along +X lying on z = 0, and an upright flange 40 mm high along +Z standing at x = 0, both measured to the outside of the bend. Round the inside corner of the bend with R4. Drill one 6 mm through hole in each flange, centred on that flange's outside face. Use parameters for the sizes.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "bodies", "kind": "bodies", "count": 1, "solids": 1, "voids": 0, "valid": true },
+    { "id": "volume", "kind": "volume", "expect": "(50*5 + 5*35)*30 + (1 - pi/4)*4^2*30 - 2*pi*3^2*5", "rel": 0.005 },
+    { "id": "bbox", "kind": "bbox", "expect": [0, -15, 0, 50, 15, 40], "abs": 0.01 },
+    { "id": "fillet", "kind": "round_faces", "face": "cylinder", "radius": 4, "abs": 0.01, "round": "neither", "min": 1 },
+    { "id": "holes", "kind": "holes", "radius": 3, "abs": 0.01, "count": 2, "centred": 0.05 },
+    { "id": "features_ok", "kind": "features_ok" },
+    { "id": "sketches_defined", "kind": "sketches_defined" }
+  ]
+}

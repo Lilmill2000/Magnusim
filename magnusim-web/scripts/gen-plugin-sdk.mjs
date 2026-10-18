@@ -10,6 +10,8 @@
  *   docs/plugins/plugin-api.d.ts     the types of '@magnusim/plugin-api': the host object an
  *                                    in-page UI's register(host) gets (src/plugin-api/public.ts)
  *   docs/plugins/plugin-sdk.json     the bridge and kit versions, React version and import map
+ * and the copies of workspace-sdk.d.ts that plugins in this repo build against
+ * (scripts/plugin-sdk-copies.mjs: CAD's src/types/workspace-sdk.d.ts), with the same text.
  * --check: fail when any of them is out of date (CI).
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +30,7 @@ import {
   checkKitInputs,
   kitSample,
 } from './plugin-sdk-checks.mjs';
+import { copyPath, staleCopies, WORKSPACE_DTS_COPIES } from './plugin-sdk-copies.mjs';
 
 const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const check = process.argv.includes('--check');
@@ -398,6 +401,7 @@ if (check) {
   if (!same(KIT_DTS, kitTypes)) stale.push('docs/plugins/plugin-ui.d.ts');
   if (!same(API_DTS, apiTypes)) stale.push('docs/plugins/plugin-api.d.ts');
   if (!same(INFO, info)) stale.push('docs/plugins/plugin-sdk.json');
+  stale.push(...staleCopies(WEB_ROOT, WORKSPACE_DTS_COPIES, dts));
   if (stale.length) fail(`${stale.join(', ')} out of date; run npm run gen:plugin-sdk`);
   console.log('plugin SDK check ok');
 } else {
@@ -405,5 +409,7 @@ if (check) {
   writeFileSync(KIT_DTS, kitTypes);
   writeFileSync(API_DTS, apiTypes);
   writeFileSync(INFO, info);
+  for (const rel of WORKSPACE_DTS_COPIES) writeFileSync(copyPath(WEB_ROOT, rel), dts);
   console.log('wrote docs/plugins/workspace-sdk.d.ts, plugin-ui.d.ts, plugin-api.d.ts and plugin-sdk.json');
+  console.log(`wrote ${WORKSPACE_DTS_COPIES.join(', ')}`);
 }

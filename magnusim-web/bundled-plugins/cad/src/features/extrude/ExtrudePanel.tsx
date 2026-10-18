@@ -166,9 +166,10 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
     [],
   );
 
-  // The pointer tool (profile clicks, the distance arrow) for as long as the panel is open.
+  // The pointer tool (profile clicks, the distance arrow) for as long as the panel is open; none
+  // while the Assistant fills it (the person's clicks in the view only select).
   useEffect(() => {
-    if (!handle || typeof handle.pushTool !== 'function') return;
+    if (!handle || typeof handle.pushTool !== 'function' || session.owner) return;
     const t = startPanelTool(services, handle, { session, note: (text) => ui.setPanelNote(text), color: overlayColors().under });
     tool.current = t;
     return () => {
@@ -193,7 +194,8 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
     const c = handle.camera();
     const d = [c.target[0] - c.position[0], c.target[1] - c.position[1], c.target[2] - c.position[2]];
     const len = Math.hypot(d[0], d[1], d[2]) || 1;
-    if (Math.abs((d[0] * g.axis[0] + d[1] * g.axis[1] + d[2] * g.axis[2]) / len) > Math.cos((25 * Math.PI) / 180)) handle.setView('iso');
+    // The app's own turn (auto: not the person's camera move), asked first: the Assistant's extrude may keep the view.
+    if (Math.abs((d[0] * g.axis[0] + d[1] * g.axis[1] + d[2] * g.axis[2]) / len) > Math.cos((25 * Math.PI) / 180) && (services.apis.get().assistant?.autoCamera('extrude-iso', session.id) ?? true)) handle.setView('iso', { auto: true });
   });
 
   let incomplete: string | null = null;

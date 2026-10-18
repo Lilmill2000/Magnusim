@@ -538,7 +538,7 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
           selected={paramsOpen}
           attrs={{ 'data-params-row': '1' }}
           onClick={() => {
-            if (paramsOpen) return ui.closePanel();
+            if (paramsOpen) return ui.closePanel({ why: 'command' });
             // ux010 (review 11): the tree is one rail click away while sketching; opening Parameters
             // would end the sketch with no word. It is refused in the Sketch panel's note instead.
             if (services.mode.get().mode === 'sketch') {

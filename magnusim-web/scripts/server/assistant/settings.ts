@@ -157,7 +157,7 @@ const DEFAULTS: AssistantSettings = {
   base_url_confirmed_remote: null,
   effort: 'default',
   privacy: 'ask',
-  caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
+  caps: { turn_usd: 8, day_usd: 15, steps: 120, turn_minutes: 60, turn_tokens: 10_000_000 },
   consents: {},
   mcp: { clients: false, port: null, ask_in_client: false },
   agents: {},

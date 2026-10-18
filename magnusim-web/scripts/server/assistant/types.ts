@@ -23,7 +23,8 @@ export interface AssistantMessage {
 export type Message = UserMessage | AssistantMessage;
 
 export interface JsonSchemaObject { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties: false; description?: string }
-export interface ProviderTool { name: string; description: string; schema: JsonSchemaObject }
+/** `workspace`: a workspace page's tool, not the host's (a cloud provider that can't compile the strict set gets these without strict, CAD tools spec H8). */
+export interface ProviderTool { name: string; description: string; schema: JsonSchemaObject; workspace?: boolean }
 export interface ProviderRequest {
   model: string;
   system: Array<{ text: string; cache: boolean }>;   // [host prompt, frozen workspace guide?]
@@ -44,6 +45,8 @@ export interface ProviderResult {
   message: AssistantMessage; stop: StopReason; usage: Usage; attempts: Attempt[]; servedBy: string; refusal?: { category: string | null; explanation: string };
   /** A local model wrote a tool call as text instead of calling the tool (its chat template doesn't do tools). */
   toolCallAsText?: boolean;
+  /** One-line notes for the person on how the request went (its images left out); the loop logs each once per turn. */
+  notes?: string[];
 }
 /** `storage_unavailable`: the secret store can't unlock the saved key right now (its helper was blocked or timed out). */
 export type ProviderErrorCode = 'no_key' | 'storage_unavailable' | 'deps_missing' | 'auth' | 'model' | 'rate_limit' | 'overloaded' | 'server'
@@ -55,10 +58,26 @@ export class ProviderError extends Error {
   }
 }
 export interface ModelInfo { id: string; label: string; priced: boolean }
+/**
+ * What a local server says of one model, best effort (its model row): `context` in tokens
+ * (what it was loaded with, else its maximum) and `type` ('llm', 'vlm', 'embeddings'); null
+ * where the row doesn't say.
+ */
+export interface ModelRow { context: number | null; type: string | null }
 export interface ProviderAdapter {
   readonly id: ProviderId; readonly label: string; readonly cloud: boolean; readonly destination: string;
   /** Models this request may be served by besides `model` (refusal fallback); [] when none. */
   fallbackTargets(model: string): string[];
   listModels(signal: AbortSignal): Promise<ModelInfo[]>;
   send(req: ProviderRequest, signal: AbortSignal, onEvent: (e: StreamEvent) => void): Promise<ProviderResult>;
+  /** The local server's row for `model` (null when it offers none); only the local-server adapter has one. Never throws. */
+  modelRow?(model: string, signal: AbortSignal): Promise<ModelRow | null>;
+  /** Drops the kept row for `model`: the next modelRow() asks the server again (the model may have been loaded anew). */
+  forgetRow?(model: string): void;
+  /**
+   * Whether `model` reads images, as far as the adapter knows: its kept row's type, or the
+   * server's refusal of images remembered; null when nothing says. Only the local-server
+   * adapter has one (the cloud models read images).
+   */
+  readsImages?(model: string): boolean | null;
 }

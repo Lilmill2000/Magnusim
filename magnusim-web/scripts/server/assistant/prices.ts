@@ -165,9 +165,11 @@ export function requestCost(provider: ProviderId, attempts: readonly Attempt[]):
 /** A cached prefix is priced as a cache read only if the request that used it started this recently. */
 export const CACHE_FRESH_MS = 4 * 60_000;
 export const MAX_OUT_CLOUD = 32_000;
-export const MAX_OUT_LOCAL = 4_096;
-/** Below this many output tokens a step is not worth sending: the turn ends capped. */
+export const MAX_OUT_LOCAL = 8_192;
+/** Below this many output tokens a step is not worth sending: the turn ends capped (a local server's context: failed). */
 export const MIN_OUT = 2_048;
+/** Tokens a local server's context keeps free beyond the prompt estimate and the answer. */
+export const CONTEXT_MARGIN = 1_024;
 const IMAGE_TOKENS_MAX = 5_334;
 const TOOL_DEF_TOKENS = 500;
 
@@ -189,6 +191,8 @@ export interface EstimateInput {
   now: number;
   /** min(turn_usd − turn spend, day_usd − (today's spend + open reservations)). */
   remainingUsd: number;
+  /** The local server's context for the model (its model row), when it said; the answer fits in what the prompt leaves. */
+  contextTokens?: number | null;
 }
 
 export interface Estimate {
@@ -204,6 +208,8 @@ export interface Estimate {
   fallbackInputUsd: number;
   /** maxOut < MIN_OUT: the turn ends capped before sending. */
   capped: boolean;
+  /** A local server's context leaves under MIN_OUT tokens for the answer: the turn ends failed (context) before sending. */
+  noRoom: boolean;
   /** The model has no row (priced at the provider's dearest). */
   estimated: boolean;
   /** The prices used (the dearest among the model and its fallback targets). */
@@ -218,8 +224,9 @@ export interface Estimate {
  * that used it); new text and images are priced as cache writes. A refusal fallback runs
  * the request again on another model within the same request, and the declined attempt
  * can be billed too, so each fallback target adds one more input to the reservation. The
- * output limit is what the remaining money buys, at most 32,000 (cloud) or 4,096 (local)
- * tokens.
+ * output limit is what the remaining money buys, at most 32,000 (cloud) or 8,192 (local)
+ * tokens. A local server costs nothing; when it reported the model's context, the answer
+ * gets what that context leaves: min(the cap, context − prompt estimate − 1,024).
  */
 export function estimateStep(e: EstimateInput): Estimate {
   const fresh =
@@ -230,7 +237,9 @@ export function estimateStep(e: EstimateInput): Estimate {
   const prompt = prefix + fresh;
   const cap = e.cloud ? MAX_OUT_CLOUD : MAX_OUT_LOCAL;
   if (e.provider === 'openai_compatible') {
-    return { usd: 0, maxOut: cap, promptTokens: prompt, inputUsd: 0, fallbackInputUsd: 0, capped: false, estimated: false, rates: { ...ZERO } };
+    const context = e.contextTokens && e.contextTokens > 0 ? e.contextTokens : null;
+    const maxOut = context === null ? cap : Math.max(0, Math.min(cap, context - prompt - CONTEXT_MARGIN));
+    return { usd: 0, maxOut, promptTokens: prompt, inputUsd: 0, fallbackInputUsd: 0, capped: false, noRoom: maxOut < MIN_OUT, estimated: false, rates: { ...ZERO } };
   }
   const models = [e.model, ...e.fallbackTargets];
   const known = models.map((m) => priceRow(m));
@@ -249,6 +258,7 @@ export function estimateStep(e: EstimateInput): Estimate {
     inputUsd,
     fallbackInputUsd,
     capped: maxOut < MIN_OUT,
+    noRoom: false,
     estimated,
     rates,
   };

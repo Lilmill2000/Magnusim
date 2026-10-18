@@ -17,7 +17,7 @@ import type { FeatureId, OriginAxisRef, SketchFeature } from '../../types/doc';
 import type { GeomRef } from '../../types/references';
 import type { SelectionItem, SelectKind } from '../../types/selection';
 import type { ViewportHandle } from '../../types/viewport';
-import { Button } from '../../ui/kit';
+import { Button, usePanelOwner } from '../../ui/kit';
 import { PickList, type PickRow } from '../p2/PickList';
 import { shownFaces } from '../p2/refs';
 import type { ConstructKind } from './api';
@@ -98,8 +98,9 @@ export function pickableConstructs<T extends { feature: string }>(services: AppS
   });
 }
 
-/** Push the field's pick tool on the viewport while active (the newest wins), with its filter. */
-function useFieldPicker(services: AppServices, self: FeatureId, accept: Accept, active: boolean, onPick: (item: SelectionItem) => void, onMiss: (why: string) => void) {
+/** Push the field's pick tool on the viewport while active (the newest wins), with its filter; none in a panel the Assistant fills. */
+function useFieldPicker(services: AppServices, self: FeatureId, accept: Accept, activeField: boolean, onPick: (item: SelectionItem) => void, onMiss: (why: string) => void) {
+  const active = usePanelOwner() !== 'assistant' && activeField;
   const latest = useRef(onPick);
   latest.current = onPick;
   const miss = useRef(onMiss);

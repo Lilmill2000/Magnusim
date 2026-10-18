@@ -1,0 +1,72 @@
+{
+  "id": "enclosure",
+  "about": "A box extruded from a centred rectangle, its four vertical edges rounded, then shelled inward from its open top.",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "L", "kind": "length", "expr": "80 mm", "comment": "Length along X", "rename_to": "" },
+                { "name": "W", "kind": "length", "expr": "50 mm", "comment": "Width along Y", "rename_to": "" },
+                { "name": "H", "kind": "length", "expr": "30 mm", "comment": "Height", "rename_to": "" },
+                { "name": "wall", "kind": "length", "expr": "2 mm", "comment": "Wall thickness", "rename_to": "" },
+                { "name": "r", "kind": "length", "expr": "3 mm", "comment": "Outer corner radius", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Box sketch",
+              "on": "Top",
+              "entities": [{ "id": "r", "kind": "center_rect", "at": [0, 0, 80, 50], "construction": false }],
+              "constraints": [
+                { "id": "c0", "kind": "coincident", "refs": ["r.center", "origin"], "value": "" },
+                { "id": "dl", "kind": "distance", "refs": ["r.bottom"], "value": "L" },
+                { "id": "dw", "kind": "distance", "refs": ["r.left"], "value": "W" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Box", "sketch": "Box sketch", "regions": ["all"], "extent": "blind", "distance": "H", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__find", "input": { "query": "Body 1 edges |Z", "limit": 10 } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__modify",
+            "input": { "edit": "", "name": "Corners", "kind": "fillet", "targets": ["Body 1 edges |Z"], "size": "r", "size2": "", "flip": false, "inward": false }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__modify",
+            "input": { "edit": "", "name": "Walls", "kind": "shell", "targets": ["Box.end"], "size": "wall", "size2": "", "flip": false, "inward": true }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "Top offset 15 mm" } }] },
+      { "text": "The enclosure is 80 x 50 x 30 with 2 mm walls, an open top and R3 vertical outer edges: one solid, one shell." }
+    ]
+  ]
+}

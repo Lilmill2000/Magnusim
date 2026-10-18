@@ -37,6 +37,7 @@ export const H15_TESTS = [
   'server/__tests__/assistant-proc-tree.test.js',
   'server/__tests__/assistant-agents.test.js',
   'server/__tests__/assistant-agent-turn.test.js',
+  'server/__tests__/assistant-runner.test.js',
   '__tests__/project-delete-jobs.test.mjs',
   '__tests__/wsl-case-watch.test.mjs',
   '__tests__/solve-hooks.test.mjs',
@@ -50,6 +51,7 @@ export const H15_TESTS = [
   '__tests__/stop-targets.test.mjs',
   '__tests__/h15-test-roots.test.mjs',
   '__tests__/assistant-boundaries.test.mjs',
+  '__tests__/assistant-cad-tools.test.mjs',
 ];
 
 /** Code only (comments may mention imports). */

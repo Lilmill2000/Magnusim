@@ -100,7 +100,8 @@ const emptyUsage = () => ({ input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1
  * A ProviderAdapter whose answers are scripted. A step:
  *   { text?, tools?: [{name, input?, id?, inputError?}], stop?, usage?, category?,
  *     hold?: '<name>' (after the text, until release(name) or abort), error?: '<code>',
- *     streamed?: bool (with error), fallback?: '<model>', throws?: Error }
+ *     streamed?: bool (with error), fallback?: '<model>', throws?: Error,
+ *     notes?: [the adapter's notes on how the request went] }
  * or a function (req, provider) => step. Every request is recorded (a deep copy, plus the
  * objects it carried).
  */
@@ -205,6 +206,7 @@ export class ScriptedProvider {
       attempts: [{ model, usage, fallback: !!step.fallback }],
       servedBy: model,
       ...(stop === 'refusal' ? { refusal: { category: step.category ?? null, explanation: '' } } : {}),
+      ...(step.notes ? { notes: [...step.notes] } : {}),
     };
   }
 }

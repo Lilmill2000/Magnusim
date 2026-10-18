@@ -5,8 +5,9 @@
  *
  * - Each list a frame offers is a publication with the next page-wide `rev`, the frame's id (one
  *   per WorkspaceBridge instance), the workspace it belongs to as the host's route names it
- *   (never as the frame says), and the call that runs a tool in that frame (`invoke`, the
- *   bridge's invokeTool).
+ *   (never as the frame says), the call that runs a tool in that frame (`invoke`, the
+ *   bridge's invokeTool), and the one that tells it of the turns bound to this tab
+ *   (`tellTurn`, the bridge's assistantTurn).
  * - Only the newest publication counts: an older one still waiting for its verdict is answered
  *   `superseded` at once (available:false, so neither the bridge nor the page keeps it).
  * - The bridge waits 5 s for a verdict, then calls `abandon()`: that publication is never sent
@@ -18,12 +19,14 @@
  * - A frame keeps its last taken list (its verdict said available) while a newer one of it
  *   is not taken (refused, abandoned, superseded): the bridge and the SDK keep that list's
  *   tools and handler, so the relay keeps it on the server (workspaceFrameKept).
- * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays.
+ * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays. A
+ *   frame's page that loads again (a reload keeps the frame and its bridge) offers its lists
+ *   under the same frame id with the next `load`: a new page there.
  *
  * The state is on globalThis, so a hot swap of this module keeps the revs going up.
  */
 import { useSyncExternalStore } from 'react';
-import type { AssistantRegistration } from '../plugin-sdk/workspace';
+import type { AssistantRegistration, AssistantTurn } from '../plugin-sdk/workspace';
 import type { AssistantCallOutcome, AssistantInvoke, AssistantPublication, CheckedTool } from './bridge';
 
 /** The workspace a list belongs to, from the host's route (and its title from the host's plugin row). */
@@ -40,16 +43,23 @@ export interface WorkspaceToolsScope {
 /** Runs one call in the frame that offered the tools (WorkspaceBridge.invokeTool). */
 export type ToolInvoke = (req: AssistantInvoke) => Promise<AssistantCallOutcome>;
 
+/** Tells the frame that offered the tools of a turn bound to this tab (WorkspaceBridge.assistantTurn). */
+export type TurnTell = (turn: AssistantTurn) => void;
+
 /** One list of tools a frame offered. Replaced (never changed) when its state changes. */
 export interface PublishedTools {
   /** Page-wide, only ever going up. */
   readonly rev: number;
   /** The frame (WorkspaceBridge instance) that offered it. */
   readonly frameId: string;
+  /** Which load of that frame's page offered it: one more each time a page of the frame went away (its list withdrawn). */
+  readonly load: number;
   readonly scope: WorkspaceToolsScope;
   readonly tools: readonly CheckedTool[];
   readonly guide: string;
   readonly invoke: ToolInvoke;
+  /** Tells its frame of the assistant's turns bound to this tab (the page relay calls it); null: none. */
+  readonly tellTurn: TurnTell | null;
   /** Its 5 s bound ran out: never sent to the server, withdrawn if the server took it. */
   readonly abandoned: boolean;
   /** Its frame's plugin was turned off or replaced: never sent again. */
@@ -82,6 +92,8 @@ interface ToolsState {
   kept: Map<string, Rec>;
   /** Frames whose plugin went, with the reason. */
   dead: Map<string, string>;
+  /** How many times each frame's page went away (its next page's `load`). */
+  loads: Map<string, number>;
   snap: WorkspaceToolsSnapshot;
   listeners: Set<() => void>;
 }
@@ -89,7 +101,7 @@ interface ToolsState {
 const KEY = Symbol.for('magnusim.workspaceTools');
 
 function fresh(): ToolsState {
-  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), kept: new Map(), dead: new Map(), snap: { current: null }, listeners: new Set() };
+  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), kept: new Map(), dead: new Map(), loads: new Map(), snap: { current: null }, listeners: new Set() };
 }
 
 function st(): ToolsState {
@@ -99,6 +111,8 @@ function st(): ToolsState {
     s = fresh();
     g[KEY] = s;
   }
+  // A state an older copy of this module made (a hot swap) has no loads yet.
+  s.loads ??= new Map();
   return s;
 }
 
@@ -149,13 +163,15 @@ export function nextWorkspaceToolsRev(): number {
 
 /**
  * hooks.assistantTools: a frame's checked tools (null: its page went away). Answers the
- * verdict the relay gets for them, with `abandon()` for the bridge's 5 s bound.
+ * verdict the relay gets for them, with `abandon()` for the bridge's 5 s bound. `tellTurn`
+ * tells that frame of the turns bound to this tab.
  */
 export function publishWorkspaceTools(
   scope: WorkspaceToolsScope,
   frameId: string,
   reg: { tools: CheckedTool[]; guide: string } | null,
   invoke: ToolInvoke,
+  tellTurn: TurnTell | null = null,
 ): AssistantPublication {
   if (reg === null) {
     withdrawWorkspaceTools(frameId);
@@ -173,6 +189,7 @@ export function publishWorkspaceTools(
     view: Object.freeze({
       rev: ++s.rev,
       frameId,
+      load: s.loads.get(frameId) ?? 0,
       scope: Object.freeze({
         project_id: scope.project_id,
         plugin: scope.plugin,
@@ -183,6 +200,7 @@ export function publishWorkspaceTools(
       tools: Object.freeze([...reg.tools]),
       guide: typeof reg.guide === 'string' ? reg.guide : '',
       invoke,
+      tellTurn,
       abandoned: false,
       dead: deadReason !== undefined,
       settled: false,
@@ -202,6 +220,8 @@ export function publishWorkspaceTools(
 export function withdrawWorkspaceTools(frameId: string): void {
   const s = st();
   s.kept.delete(frameId);
+  // What the frame offers next comes from a new page.
+  s.loads.set(frameId, (s.loads.get(frameId) ?? 0) + 1);
   let changed = false;
   for (const rec of [...s.waiting]) {
     if (rec.view.frameId !== frameId) continue;

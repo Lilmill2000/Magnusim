@@ -1,0 +1,94 @@
+{
+  "id": "flange",
+  "about": "The flange and its hub as one closed polyline on Front revolved about the Z axis, then one hole on the flange's top face at x pcd/2 and a circular pattern of it all round.",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "od", "kind": "length", "expr": "80 mm", "comment": "Flange outside diameter", "rename_to": "" },
+                { "name": "t", "kind": "length", "expr": "8 mm", "comment": "Flange thickness", "rename_to": "" },
+                { "name": "bore", "kind": "length", "expr": "20 mm", "comment": "Bore diameter", "rename_to": "" },
+                { "name": "hub_d", "kind": "length", "expr": "30 mm", "comment": "Hub outside diameter", "rename_to": "" },
+                { "name": "hub_h", "kind": "length", "expr": "10 mm", "comment": "Hub height above the flange", "rename_to": "" },
+                { "name": "pcd", "kind": "length", "expr": "60 mm", "comment": "Bolt circle diameter", "rename_to": "" },
+                { "name": "hd", "kind": "length", "expr": "6.5 mm", "comment": "Bolt hole diameter", "rename_to": "" },
+                { "name": "n", "kind": "number", "expr": "6", "comment": "Bolt holes", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Flange sketch",
+              "on": "Front",
+              "entities": [{ "id": "p", "kind": "polyline", "at": [10, 0, 40, 0, 40, 8, 15, 8, 15, 18, 10, 18, 10, 0], "construction": false }],
+              "constraints": [
+                { "id": "base", "kind": "horizontal", "refs": ["p.p0", "origin"], "value": "" },
+                { "id": "ib", "kind": "distance_x", "refs": ["origin", "p.p0"], "value": "bore/2" },
+                { "id": "io", "kind": "distance_x", "refs": ["origin", "p.p1"], "value": "od/2" },
+                { "id": "th", "kind": "distance", "refs": ["p.2"], "value": "t" },
+                { "id": "ih", "kind": "distance_x", "refs": ["origin", "p.p3"], "value": "hub_d/2" },
+                { "id": "hh", "kind": "distance", "refs": ["p.6"], "value": "t + hub_h" }
+              ],
+              "infer": true
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__revolve",
+            "input": { "edit": "", "name": "Flange", "sketch": "Flange sketch", "regions": ["all"], "axis": "Z axis", "extent": "full", "angle": "", "angle2": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__hole",
+            "input": { "name": "", "face": "Flange.side(p.3)", "centers": [{ "x": "pcd/2", "y": "0 mm", "z": "" }], "diameter": "hd", "depth": "through", "distance": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__pattern",
+            "input": {
+              "edit": "",
+              "name": "Bolt holes",
+              "kind": "circular",
+              "of": "features",
+              "items": ["Hole 1"],
+              "about": "Z axis",
+              "count": "n",
+              "spacing": "360 deg",
+              "symmetric": false,
+              "flip": false,
+              "about2": "",
+              "count2": "",
+              "spacing2": "",
+              "flip2": false,
+              "op": "source",
+              "bodies": []
+            }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__find", "input": { "query": "Body 1 faces hole radius 3.25 mm", "limit": 10 } }] },
+      { "text": "The flange is built: 80 x 8 with a 20 mm bore, the 30 mm hub 10 mm high, and 6 holes of 6.5 mm on a 60 mm bolt circle." }
+    ]
+  ]
+}

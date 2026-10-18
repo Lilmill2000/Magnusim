@@ -551,7 +551,7 @@ async function offer(): Promise<void> {
     async ({ input, progress }) => {
       progress(null, 'Adding');
       count += Number(input.by);
-      return { text: `The counter is ${count}.`, data: { count } };
+      return { text: `The counter is ${count}.`, data: { count }, summary: `Added ${Number(input.by)}` };
     },
     { guide: 'The counter workspace keeps one whole number.' },
   );
@@ -564,10 +564,12 @@ await offer();
 Rules:
 
 1. **One call.** `register(tools, handler)` sets the list and its handler together; `register([], null)` withdraws them. The answer says which tools the app accepted, and why it refused the others.
-2. **The app checks the input** against your `inputSchema` before your handler runs, and asks the user before every `compute` and `destructive` tool. An unknown `risk` counts as `destructive`.
-3. **Say how far you are.** A call with no `progress` and no bridge call for `timeoutS` seconds (default 60) is stopped. Stop when `signal` aborts.
+2. **The app checks the input** against your `inputSchema` before your handler runs, and asks the user before every `compute` and `destructive` tool. An unknown `risk` counts as `destructive`. A `destructive` tool's `confirm` (one sentence, no project data) is what that question says the call does, in place of "can't be undone". A wrong input is refused once, with every problem named. Keep every field required (its description says what to send when it does not apply: `""`, `[]` or `false`, meaning unused): a cloud provider checks inputs strictly for only so many optional fields per request, and on a local server the app gives a required string, list or boolean the model left out or sent as null that empty value before the check (not one with an `enum` or `const`, or one that may not be empty). [authoring.md](authoring.md), "Designing workspace tools", has the details.
+3. **Say how far you are.** A call with no `progress` and no bridge call for `timeoutS` seconds (default 60) is stopped. Stop when `signal` aborts, and put back what the call changed: a call does all of its step or none of it. While a call waits for the person, say so (`progress(null, label, {waiting: true})`, every few seconds): that time doesn't count toward the turn's minutes.
 4. **Results are data.** Return text, or `{text, data, images}`. What you return reaches the model as data, never as instructions. Your tools' descriptions and the `guide` reach it as your plugin's own text (the tool definitions, its instructions): keep them fixed, never filled from a project. Progress labels show in the turn's log, not to the model.
 5. **No project data in the `guide`.** It is fixed text about your workspace, kept for a whole conversation.
+6. **Say how to fix it, and name what you did.** A thrown error may carry a `hint` (one sentence: how to fix it) and a `detail` (plain JSON: the field, the candidates, the range); the model reads both with the message. A result's `summary` is the turn log's line for the call, never the model's.
+7. **Hear the turn.** `assistant.onTurn(fn)` tells you when a request of the person's starts, changes and ends (its `title`, the steps and money it used); `assistant.stop(turn)` stops one told to your tab. Listen before you register.
 
 [authoring.md](authoring.md), "Assistant tools in a workspace (unreleased)", has the whole contract, and [compatibility.md](compatibility.md), "Unreleased additions (next minor, 1.9)", the bridge messages and codes.
 

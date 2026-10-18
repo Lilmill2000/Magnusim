@@ -498,6 +498,12 @@ declare module '@magnusim/workspace' {
       risk: AssistantRisk;
       /** Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit. */
       timeoutS?: number;
+      /**
+       * For a `destructive` tool: what the app's question before each call says the call does, in
+       * place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120
+       * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
+       */
+      confirm?: string;
   }
   /** One call of a tool, as the handler gets it (unreleased, 1.9). */
   export interface AssistantCall {
@@ -516,8 +522,19 @@ declare module '@magnusim/workspace' {
       input: Record<string, unknown>;
       /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
       signal: AbortSignal;
-      /** Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. */
-      progress(fraction: number | null, label?: string): void;
+      /**
+       * Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+       * `{waiting: true}` says the call waits for the person (a panel of theirs open, their
+       * answer): that time doesn't count toward the turn's minutes, until the next progress
+       * without it or the call's end (20 minutes of one call's waits at most). Keep calling it
+       * while you wait, every few seconds.
+       */
+      progress(fraction: number | null, label?: string, opts?: AssistantProgressOptions): void;
+  }
+  /** What else a call's progress says (unreleased, 1.9). */
+  export interface AssistantProgressOptions {
+      /** The call waits for the person (only while it does). */
+      waiting?: boolean;
   }
   /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
   export interface AssistantImage {
@@ -525,18 +542,26 @@ declare module '@magnusim/workspace' {
       data: Blob;
   }
   /**
-   * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?}` (`text` at most
-   * 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call with
-   * code "too_large". Everything in it reaches the model as data, never as instructions.
+   * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text`
+   * at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call
+   * with code "too_large". Everything in it but `summary` reaches the model as data, never as
+   * instructions. `summary` is one line for the turn's log that names what the call did ("Added 2:
+   * the counter is 2"), at most 160 characters: the person reads it, the model never gets it.
+   * Without one the log says "Done".
    */
   export type AssistantResult = string | {
       text?: string;
       data?: unknown;
       images?: AssistantImage[];
+      summary?: string;
   } | void;
   /**
    * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
-   * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise.
+   * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says
+   * what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its
+   * `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the
+   * candidates, the allowed range), at most 4 KB as JSON: a larger one is dropped, and the message
+   * says so. All three reach the model with the code.
    */
   export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
   /** The app's answer to ws.assistant.register (unreleased, 1.9). */
@@ -554,6 +579,45 @@ declare module '@magnusim/workspace' {
       /** Why not available: "not_connected" (try again later), "no_assistant", "remote", … */
       reason?: string;
   }
+  /**
+   * A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked,
+   * as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change
+   * (at most once a second); `ended` once, at its end.
+   */
+  export interface AssistantTurn {
+      /** The turn's id: AssistantCall.turn of each of its calls. */
+      id: string;
+      state: 'running' | 'ended';
+      /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
+      title: string;
+      /** It runs on a local server (a smaller model, often with less room: keep results short). */
+      local: boolean;
+      /** The model's context in tokens, when the app knows it (null otherwise). */
+      contextTokens: number | null;
+      /** Whether the model reads images, when the app knows it (null otherwise). */
+      images: boolean | null;
+      /** What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). */
+      used: {
+          steps: number;
+          stepsCap: number;
+          usd: number;
+          usdCap: number;
+      };
+      /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
+      end?: {
+          state: 'done' | 'stopped' | 'failed' | 'capped';
+          reason: string;
+      };
+  }
+  /**
+   * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
+   * that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant",
+   * "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+   */
+  export interface AssistantStopAnswer {
+      stopped: boolean;
+      reason?: string;
+  }
   /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
   export interface WorkspaceAssistant {
       /**
@@ -567,6 +631,17 @@ declare module '@magnusim/workspace' {
       register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: {
           guide?: string;
       }): Promise<AssistantRegistration>;
+      /**
+       * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen
+       * before register: the turns already running are told to a page once it offers tools. Returns a
+       * function that stops listening.
+       */
+      onTurn(fn: (turn: AssistantTurn) => void): () => void;
+      /**
+       * Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted
+       * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
+       */
+      stop(turn: string): Promise<AssistantStopAnswer>;
   }
   export interface ConfirmOptions {
       title: string;

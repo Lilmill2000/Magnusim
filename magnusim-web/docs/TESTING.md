@@ -211,18 +211,44 @@ No test reaches a real model provider or this PC's real Assistant files.
     stream text, thinking and tool calls, set usage and the stop reason, refuse,
     answer as a fallback model, `hold` until `fake.release(name)`, send an overload
     error, drop the connection, or wait before it answers (the file's header lists
-    every field).
+    every field). A step may also be a function `(body) => step` (or a promise of
+    one): the request that takes it passes a copy of its body, so a scripted step can
+    answer from an earlier tool result. The log keeps the step it returned; one that
+    throws or returns nothing is answered 400 and shows in the request's `refused`.
   - `fake.failNext({status, body, headers, times})` answers the next request(s) with
-    an error; add `'x-should-retry': 'false'` to stop the client's own retries.
+    an error; add `'x-should-retry': 'false'` to stop the client's own retries. A 400
+    whose body says the strict tool schemas can't be compiled makes a cloud adapter send
+    the request once more with the workspace's tools not strict; the workspace tools spec
+    runs a turn through that from the terminal client.
   - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
     the next list wait until `fake.release(name)` (a server that never answers).
-  - `fake.requests()` lists every request with its headers and body;
+  - An entry of `fake.models(list, 'compat')` may be a model row,
+    `{id, context, max, type, route}`: the local server then answers the app's read of
+    that model's context and type at the first row route (`GET <root>/api/v0/models/<id>`;
+    a row with `max` and no `context` is a model not loaded yet), or with `route: 'show'`
+    at the second (`POST <root>/api/show`), in the shapes of `LOCAL_SERVER_ROWS`, which
+    the file exports with where each shape came from. The app keeps a row 60 s (a not
+    loaded model's only until its next read), drops it when a turn ends failed for the
+    context, and a test reset forgets it. `e2e/assistant-local-context.spec.js` runs
+    turns from the terminal client against a small and a larger context.
+  - `fake.textOnly(...ids)` makes the local server refuse (400, `TEXT_ONLY_REFUSAL`) a
+    request for one of those models that carries an image, as a server whose model
+    can't read images does; `fake.textOnly()` clears it. The workspace tools spec runs a
+    local turn whose tool returns a picture against it: the app sends the request again
+    with words in the picture's place, and the next turn sends no picture.
+  - `fake.requests()` lists every request with its headers and body (`kind` is `chat`
+    for a model request, `model_row` for a row read);
     `fake.disconnects()` counts answers the client closed early.
   - Like the real services, it answers 400 when a request breaks a rule: a tool call
     left without its result, an echoed opaque part (thinking, fallback, encrypted
     reasoning) that changed, a strict tool schema with a limit keyword, a replayed
     reasoning item without its encrypted content. So a test that passes against it
-    has sent what the real service accepts.
+    has sent what the real service accepts, with one catch: a cloud request whose strict
+    workspace tool breaks a schema rule (a limit keyword, the strict budget) is sent
+    again by the app with the workspace's tools not strict, and the turn goes on with
+    a note. `followTurn`'s `ended()` (and so `startTurn`'s) fails a turn that got that
+    note unless the test passes `{strictFallback: true}`; a test that follows a turn
+    another way (the terminal client) checks for the note itself.
 - **Pointing the app at it.** Both cloud adapters go to the fake with
   `MAGNUSIM_TEST_ASSISTANT=1` and `MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL=<fake.base>`.
   The address is honoured only with the switch, in a test home and for plain http on
@@ -279,22 +305,47 @@ No test reaches a real model provider or this PC's real Assistant files.
   whole chain in a browser: the fake → the server's turn loop → the page relay on
   the tab's event stream → the workspace bridge → the frame of the test plugin
   `ai-demo` (`python/tests/fixtures/assistant-plugins`) → back.
-  - The plugin's page keeps a counter and offers seven tools: read, add, a slow add
-    (progress every 200 ms until `window.__release()` in its frame, or Stop), reset
-    (destructive), one whose risk the host doesn't know (counted as destructive),
-    a 64×64 PNG of the counter, and a read of its study from the app with a 1 s
-    window (a test holds that read with `page.route`: the frame's call in flight
-    keeps the tool call alive, on the server too). It shows `#counter`, `#aborted`
-    and `#ai-available`, and registers again once shown when its tab was hidden at
-    load.
+  - The plugin's page keeps a counter and offers nine tools: read, add (its result
+    carries a `summary` for the turn's log), a slow add (progress every 200 ms until
+    `window.__release()` in its frame, or Stop), reset (destructive, with a `confirm`
+    note that its question shows in place of "can't be undone"), one whose risk the
+    host doesn't know (counted as destructive), a 64×64 PNG of the counter, a
+    read of its study from the app with a 1 s window (a test holds that read with
+    `page.route`: the frame's call in flight keeps the tool call alive, on the server
+    too), and `fail_hint`, which always fails with a `hint` and a `detail` (they reach
+    the model's next request and the terminal client), and `label`, whose string, list
+    and boolean fields are all required (a local model's call that leaves them out
+    gets `""`, `[]` and `false`). It shows `#counter`, `#aborted`, `#label` and
+    `#ai-available`, and registers again once shown when its tab was hidden at load.
+    It hears the turns bound to its tab (`#turn-state` reads "running: <title>", then
+    how it ended), and its `#stop` button stops the turn through the bridge.
   - Its server: `startHost({pluginsFrom, env})` with `MAGNUSIM_TEST_ASSISTANT=1`,
     the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1` (to count and cut a tab's
     stream), a 2 s hold and a 60 s dormant time.
   - Turns start with `request.post('/api/assistant/turns', {text, tab})`, the tab
     being the page's own (its `/api/events?tab=` request) as `/api/assistant/tabs`
     lists it. The Assistant's questions are the app's own confirm dialog with its
-    No button focused. `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
-    it is hidden or shown, as the browser does.
+    No button focused.
+  - One turn runs in a tab at a time: another turn on it is refused 409 `tab_busy`
+    until the first has ended, so a test waits for `ended()` before its next turn
+    there. A question open across a change (the plugin turned off) belongs to the
+    tab's only turn: a running turn alone keeps no channel for a page with nothing
+    left to offer.
+  - The turn helpers are shared in `e2e/support/assistant.js`, for the core's specs
+    and the bundled plugins' suites alike, so a plugin's spec names no provider:
+    `useScriptedModel(request, base, fake, 'cloud' | 'local')` points the server at
+    the fake (the first cloud dialect with a test key, or the local-server dialect at
+    `fake.compatBase`) with project data allowed; `trackTab(page)`;
+    `startTurn(request, base, body, opts?)` and `followTurn(request, base, id, opts?)`
+    (`waitFor`, `latest`, `ended`; `opts.strictFallback` above);
+    `answerGate(request, base, turn, allow, {kind, tool})`
+    answers the turn's next question through its route, as a click would;
+    `offeredTools(req)` lists a request's tools as `{name, strict}`; and
+    `resultsIn(req)` the tool results it carries (a fake request or a function step's
+    body). `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
+    it is hidden or shown, as the browser does. A suite that runs its own copy of
+    Playwright (CAD's) calls `setExpect(expect)` with its own first: a process loads
+    `@playwright/test` once.
   - A remote viewer: add the proxy header to the page's `/api/` requests with
     `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes
     the sandboxed frame's module script a cross-origin request with a preflight that
@@ -431,6 +482,40 @@ No test reaches a real model provider or this PC's real Assistant files.
     `{client, changes, stderr(), close()}`. It rejects with the bridge's stderr when the
     bridge ends first (Magnusim not running, or a refusal). `resultJson(result)` reads a
     tool result's JSON. `e2e/assistant-mcp.spec.js` uses it.
+- **CAD's tools.** The Part's tools for the Assistant are tested in CAD's own suite
+  (`bundled-plugins/cad`, its own toolchain; its `ARCHITECTURE.md` §8 and §12, and
+  `docs/assistant.md` "Tests" there).
+  - The browser shard `assistant` (`npm run test:e2e:assistant` in that folder, or
+    `node scripts/e2e.mjs e2e/<spec>` for one spec): `cad-assistant-watch`, `-honest`,
+    `-coexist`, `-takeover` and `-eval` (the evaluation set's tasks replayed from their
+    references; `eval/README.md` there). Each spec starts its own app server with
+    `startAssistantHost(name, offset)` from `e2e/assistant-helpers.ts`, on
+    `CAD_E2E_PORT_FROM` + 60, 70, 80, 90 (the evaluation's) and 100, with the fake
+    provider, `MAGNUSIM_TEST_ASSISTANT=1`, the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1`,
+    a 2 s hold and no WSL. The helpers wrap the turn helpers above (`useScriptedModel`,
+    `startTurn`, `offeredTools`, `resultsIn`) and add CAD's own: a project with a Part
+    open and its tab (`openNewPart`), the chip's words (`chipWords`: the chip's own text
+    also holds its buttons), its buttons (`chipButton`), and recorders of what the frame
+    shows over time. A local turn's context and images come from the fake's model rows
+    (`fake.models([{id, context, type}], 'compat')`).
+  - Races are forced at the page's hold points: `window.__CAD__.assistant.hold(point)`
+    stops every call that reaches `point` until `release(point)` (`after-settled` for
+    reads; `after-plan`, `after-open`, `between-opens`, `sketch-step:<n>` and
+    `before-commit` for edits; `holdAt`, `reachedHold` and `releaseHold` in the
+    helpers). The same handle shortens the edits' 10-minute wait for the person
+    (`setHoldS(s)`) and forces the pace and "Ask each step" (`setPace(pace, scale)`,
+    `setAskEach(on)`) without writing the person's preferences. A fake `hold` step stays
+    released once released, so each one needs its own name within a spec.
+  - Unit tests (`npm test` there): `tests/assistant/` runs the tools on a real Part in
+    Node (the real kernel and solver, every feature type, the UI controller, the real
+    sketch mode when a test asks for it) through a fake host's `ws.assistant`, called as
+    the bridge calls them.
+  - The app's side: `scripts/__tests__/assistant-cad-tools.test.mjs` (in
+    `npm run test:server`) imports CAD's `src/assistant/schemas.ts` and `guide.ts`:
+    every schema passes the app's checks, no CAD property is optional, the first 20 of
+    the 21 tools a CAD turn offers are strict on the cloud dialects (`cad__view` is
+    not), and the local prefix (the tools, the guide and the system prompt) stays within
+    52,000 characters; it prints the size and the estimated tokens.
 
 ## A bundled plugin's own suite
 

@@ -18,7 +18,7 @@ export const COMBINE_COMMAND = 'modify.combine';
 export function runCombine(services: AppServices): void {
   const ui = uiFor(services);
   const p = ui.state.get().panel;
-  if (p?.kind === 'feature' && p.isNew && p.type === 'combine') return;
+  if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'combine') return;
   const built = new Set(services.doc.state.get().rebuild.bodies.map((b) => b.id));
   const picked = [...selectedBodies(userSelection(services.selection.get()))].filter((id) => built.has(id));
   const init: Partial<CombineFeature> | undefined = picked.length ? { targets: picked.slice(0, 1), tools: picked.slice(1) } : undefined;

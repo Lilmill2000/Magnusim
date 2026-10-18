@@ -15,7 +15,7 @@ import { useEffect } from 'react';
 import { useServices } from '../lib/services';
 import { useStateStore } from '../lib/store';
 import { uiFor } from './controller';
-import { Flyout } from './kit';
+import { Flyout, PanelOwnerProvider } from './kit';
 import { railsFor } from './left-rails';
 import { ParametersPanel } from './panels/ParametersPanel';
 import { DesignTree } from './tree/DesignTree';
@@ -67,7 +67,8 @@ export function LeftStack() {
       )}
       {body ? (
         <Flyout wide={wide} rail={panelRail}>
-          {body}
+          {/* A panel the Assistant fills is read-only and pushes no viewport tools (ui/kit/Panel.tsx). */}
+          <PanelOwnerProvider value={panel?.owner ?? 'person'}>{body}</PanelOwnerProvider>
         </Flyout>
       ) : null}
     </div>

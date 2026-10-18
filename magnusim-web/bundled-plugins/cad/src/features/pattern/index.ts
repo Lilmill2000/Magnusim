@@ -73,7 +73,7 @@ function patternCommand(services: AppServices, o: { id: string; type: PatternTyp
     enabled: () => ui.editBlock() ?? (services.doc.state.get().rebuild.bodies.length ? true : NO_BODY),
     run: async () => {
       const p = ui.state.get().panel;
-      if (p?.kind === 'feature' && p.isNew && p.type === o.type) return;
+      if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === o.type) return;
       ui.openNew(o.type, (await patternInit(services, o.type)) as Partial<Feature>);
     },
   };

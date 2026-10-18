@@ -34,6 +34,8 @@ interface Drawn {
   label: HTMLSpanElement;
   labelSize?: { w: number; h: number };
   state: ConstructState;
+  /** Drawn in the plain look for a snapshot (its state kept). */
+  plain?: boolean;
   fill?: Mesh<PlaneGeometry, MeshBasicMaterial>;
   border?: LineLoop<BufferGeometry, LineBasicMaterial>;
   line?: LineSegments2;
@@ -55,6 +57,8 @@ export class ConstructOverlay {
   private list: DrawnConstruct[] = [];
   private readonly offs: (() => void)[] = [];
   private queued = false;
+  /** A snapshot is drawing: everything in its plain look (ViewportHandle.snapshot). */
+  private plainNow = false;
   private readonly lineMats: Record<ConstructState, LineMaterial>;
   private readonly fills: Record<ConstructState, MeshBasicMaterial>;
   private readonly dots: Record<ConstructState, MeshBasicMaterial>;
@@ -67,7 +71,15 @@ export class ConstructOverlay {
   ) {
     // Points, and the middles of axes and planes, count when the view frames the part (Fit, the
     // standard views): a point off the part is brought into view; their extents (sized to the bodies) do not.
-    this.layer = handle.addLayer(LAYER_CONSTRUCT, { order: 15, frame: () => this.frameBox() });
+    // A snapshot draws them plain: no pick or hover colour, no origin axis shown for being selected or hovered.
+    this.layer = handle.addLayer(LAYER_CONSTRUCT, {
+      order: 15,
+      frame: () => this.frameBox(),
+      plain: (on) => {
+        this.plainNow = on;
+        this.sync();
+      },
+    });
     this.layer.html.dataset.constructLayer = '1';
     const line = (color: number, width: number) => {
       const m = new LineMaterial({ color, linewidth: width, worldUnits: false, dashed: true, transparent: true, opacity: 0.95 });
@@ -136,8 +148,8 @@ export class ConstructOverlay {
     const mode = this.services.mode.get().mode;
     const v = constructView(this.services).get();
     const items = this.services.selection.get().items;
-    // The origin's axes: while a field wants them, or selected / hovered (their tree rows).
-    const axes = mode === 'model' ? ORIGIN_AXIS_REFS.filter((r) => v.originAxes.length > 0 || v.hover === r || v.flash === r || items.some((it) => it.kind === 'origin' && it.ref === r)) : [];
+    // The origin's axes: while a field wants them, or selected / hovered (their tree rows; not in a snapshot).
+    const axes = mode === 'model' ? ORIGIN_AXIS_REFS.filter((r) => v.originAxes.length > 0 || (!this.plainNow && (v.hover === r || v.flash === r || items.some((it) => it.kind === 'origin' && it.ref === r)))) : [];
     this.list = [...drawnConstructs(s, mode), ...drawnOriginAxes(s, axes)];
     const keep = new Set(this.list.map((c) => c.feature));
     for (const [id, d] of this.drawn) {
@@ -168,18 +180,21 @@ export class ConstructOverlay {
     if (s.session) picked.add(s.session.feature);
     for (const [id, d] of this.drawn) {
       const st: ConstructState = picked.has(id) ? 'pick' : id === v.hover || id === v.flash ? 'hover' : 'none';
-      if (st === d.state && d.label.dataset.state === st) continue;
+      if (st === d.state && d.label.dataset.state === st && !!d.plain === this.plainNow) continue;
       d.state = st;
+      d.plain = this.plainNow;
       d.label.dataset.state = st;
-      if (d.fill) d.fill.material = this.fills[st];
+      // What it looks like: its state's colours, or the plain ones while a snapshot draws.
+      const look: ConstructState = this.plainNow ? 'none' : st;
+      if (d.fill) d.fill.material = this.fills[look];
       if (d.border) {
-        d.border.material.color.setHex(st === 'pick' ? PICK_COLOR : st === 'hover' ? HOVER_COLOR : PLANE_BORDER.color);
-        d.border.material.opacity = st === 'none' ? PLANE_BORDER.opacity : 0.9;
+        d.border.material.color.setHex(look === 'pick' ? PICK_COLOR : look === 'hover' ? HOVER_COLOR : PLANE_BORDER.color);
+        d.border.material.opacity = look === 'none' ? PLANE_BORDER.opacity : 0.9;
       }
-      if (d.line) d.line.material = this.lineMats[st];
-      if (d.dot) d.dot.material = this.dots[st];
-      if (d.xline) d.xline.material = this.xlineMats[st];
-      if (d.xdot) d.xdot.material = this.xdots[st];
+      if (d.line) d.line.material = this.lineMats[look];
+      if (d.dot) d.dot.material = this.dots[look];
+      if (d.xline) d.xline.material = this.xlineMats[look];
+      if (d.xdot) d.xdot.material = this.xdots[look];
     }
     this.place();
     this.layer.changed();

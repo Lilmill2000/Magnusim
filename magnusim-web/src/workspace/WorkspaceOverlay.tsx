@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useHashRoute } from '../app/routes';
+import { stopAnnouncedTurn } from '../assistant/relay';
 import { onTreeAction } from '../chrome/treeSession';
 import type { StudyRecord, ViewState } from '../plugin-sdk/workspace';
 import { Toast, type ToastKind } from '../plugin-ui';
@@ -581,7 +582,12 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       study_id: route.studyId,
     };
     const invoke: ToolInvoke = (req) => bridge.invokeTool(req);
-    const bridgeHooks: BridgeHooks = { ...hooks, assistantTools: (reg) => publishWorkspaceTools(toolsScope, frameId, reg, invoke) };
+    // The turns bound to this tab reach the frame; it may stop only those (the page relay checks).
+    const bridgeHooks: BridgeHooks = {
+      ...hooks,
+      assistantTools: (reg) => publishWorkspaceTools(toolsScope, frameId, reg, invoke, (turn) => bridge.assistantTurn(turn)),
+      assistantStop: (turn) => stopAnnouncedTurn(turn),
+    };
     const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);
     bridgeRef.current = bridge;
     const detach = bridge.attach();

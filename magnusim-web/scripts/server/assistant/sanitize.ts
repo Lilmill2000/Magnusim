@@ -13,6 +13,8 @@
  *   (src/workspace/bridge.ts checkAssistantTools); every other such character is a space.
  * - sanitizeJson: plain JSON only, depth ≤ 8, ≤ 200 keys per object, ≤ 200 items per
  *   list, ≤ 32 KB in all; anything cut is marked `truncated`.
+ * - resultText: a failed call's error keeps its hint and its detail (sanitizeJson, ≤ 4 KB),
+ *   so the model reads how to fix it; a result's summary is the log's, never the model's.
  * - checkImage: PNG, JPEG or WebP by their first bytes, ≤ 1.5 MB, ≤ 2000 px a side;
  *   checkImages: a result's images, ≤ 4: one that fails makes the call fail with why
  *   (`too_large` or `bad_result`), never dropped quietly.
@@ -30,6 +32,10 @@ export function hasControls(text: string): boolean {
 export const TEXT_CAPS = Object.freeze({ name: 200, description: 1024, other: 2000 });
 export const JSON_CAPS = Object.freeze({ depth: 8, keys: 200, items: 200, bytes: 32 * 1024 });
 export const IMAGE_CAPS = Object.freeze({ perResult: 4, bytes: 1.5 * 1024 * 1024, side: 2000 });
+/** The most of a tool error's detail the model gets, as JSON (sanitizeJson's rules). */
+export const ERROR_DETAIL_BYTES = 4 * 1024;
+/** A tool's confirm note (characters): what the question before a destructive call says it does. */
+export const CONFIRM_NOTE_MAX = 120;
 
 /** Cut to `max` characters without splitting a surrogate pair. */
 function cut(s: string, max: number): string {
@@ -167,7 +173,7 @@ export interface ResultBody {
   ok: boolean;
   data?: unknown;
   text?: string;
-  error?: { code: string; message: string; hint?: string };
+  error?: { code: string; message: string; hint?: string; detail?: unknown };
 }
 
 /** At most this much of a result's free text. */
@@ -175,18 +181,25 @@ const RESULT_TEXT_BYTES = 16 * 1024;
 
 /**
  * The text a tool result reaches the model as: `{"tool","ok","data","text"}` or
- * `{"tool","ok":false,"error":{…}}`, cleaned, ≤ 32 KB, `"truncated": true` when cut.
+ * `{"tool","ok":false,"error":{"code","message","hint"?,"detail"?}}`, cleaned, ≤ 32 KB,
+ * `"truncated": true` when cut (an error's detail is cut at 4 KB).
  */
 export function resultText(tool: string, r: ResultBody): string {
   const name = cleanText(tool, TEXT_CAPS.name);
   if (!r.ok) {
     const e = r.error ?? { code: 'failed', message: 'The tool failed.' };
-    const error = {
+    const error: Record<string, unknown> = {
       code: cleanText(e.code, 64) || 'failed',
       message: cleanText(e.message, TEXT_CAPS.other),
       ...(e.hint ? { hint: cleanText(e.hint, TEXT_CAPS.other) } : {}),
     };
-    return JSON.stringify({ tool: name, ok: false, error });
+    let cut = false;
+    if (e.detail !== undefined && e.detail !== null) {
+      const detail = sanitizeJson(e.detail, ERROR_DETAIL_BYTES);
+      error.detail = detail.value;
+      cut = detail.truncated;
+    }
+    return JSON.stringify({ tool: name, ok: false, error, ...(cut ? { truncated: true } : {}) });
   }
   let cutText = false;
   let text: string | undefined;

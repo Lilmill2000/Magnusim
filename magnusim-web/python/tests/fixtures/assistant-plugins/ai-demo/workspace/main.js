@@ -3,18 +3,26 @@
 // 1.8, so the page checks that ws.assistant exists). The counter lives in the page only:
 // it starts at 0 on every load.
 //
-// Tools: get_count (read), add {by} (edit), slow_add {by, steps?} (edit: progress every
-// 200 ms, then adds after `steps` ticks, or, with no steps, once the test calls
-// window.__release(); Stop, a closed page or a lost link aborts it and #aborted reads
-// "aborted"), reset (destructive), mystery (a risk the host does not know, so it counts as
-// destructive), snap (read: a 64x64 PNG of the counter) and read_study (read, a 1 s stall
-// window: it waits on the app's answer to ws.study.get(), which keeps it alive however long
-// that takes). A registration the app could not take yet (not_connected) is made again when
-// the page is shown.
+// Tools: get_count (read), add {by} (edit; its result's summary names what it did, for the
+// turn's log), slow_add {by, steps?} (edit: progress every 200 ms, then adds after `steps`
+// ticks, or, with no steps, once the test calls window.__release(); Stop, a closed page or a
+// lost link aborts it and #aborted reads "aborted"), reset (destructive: its confirm note is what
+// the app's question says it does), mystery (a risk the host does not know, so it counts as
+// destructive, and its question says "can't be undone"), snap (read: a 64x64 PNG of the counter),
+// read_study (read, a 1 s stall window: it waits on the app's answer to ws.study.get(), which
+// keeps it alive however long that takes) and fail_hint (read: it always fails, with a hint
+// that says how to fix it and a detail the model can act on). label {text, marks, loud}
+// (edit: every field required, with "", [] and false meaning unused; #label shows the input
+// it got). A registration the app could not take yet (not_connected) is made again when the
+// page is shown. The page hears the turns bound to its tab (ws.assistant.onTurn) and its Stop
+// button stops the last one (ws.assistant.stop).
 //
 // What the e2e reads: #counter, #slow, #aborted, #ai-available ("yes" or "no") with
-// #ai-reason, #calls (the tools run, in order), and window.__aiCalls; window.__register()
-// registers again.
+// #ai-reason, #calls (the tools run, in order), #label, and window.__aiCalls;
+// window.__register() registers again. #turn-state reads "<state>: <title>" for the last turn
+// heard (running, or how it ended: done, stopped, failed, capped, or "ended" when the page did
+// not hear how), window.__turns every turn event; #stop stops that turn, #stop-answer says how
+// ("stopped", or "not stopped: <reason>"), and window.__stopTurn(id) stops any id.
 import { connect } from '@magnusim/workspace';
 
 const $ = (id) => document.getElementById(id);
@@ -43,7 +51,15 @@ const TOOLS = [
     risk: 'edit',
     timeoutS: 30,
   },
-  { name: 'reset', title: 'Reset the counter', description: 'Set the counter to 0.', inputSchema: obj({}), risk: 'destructive' },
+  {
+    name: 'reset',
+    title: 'Reset the counter',
+    description: 'Set the counter to 0.',
+    inputSchema: obj({}),
+    risk: 'destructive',
+    // What the app's question says the call does, in place of "can't be undone".
+    confirm: 'Sets the counter to 0; add can bring it back.',
+  },
   {
     name: 'mystery',
     title: 'Do the mystery thing',
@@ -62,7 +78,33 @@ const TOOLS = [
     // Its own window is short: only its call to the app in flight keeps it alive.
     timeoutS: 1,
   },
+  {
+    name: 'fail_hint',
+    title: 'Try a big step',
+    description: 'Tries to add 10 to the counter; it always fails, and says how to add instead.',
+    inputSchema: obj({}),
+    risk: 'read',
+  },
+  {
+    name: 'label',
+    title: 'Label the counter',
+    description: 'Put a label on the counter. Every field is required: send "" for no text, [] for no marks and false to keep the case.',
+    inputSchema: obj({
+      text: { type: 'string', maxLength: 40, description: 'The label ("" for none).' },
+      marks: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'Short marks after the label ([] for none).' },
+      loud: { type: 'boolean', description: 'The label in capitals (false: as written).' },
+    }),
+    risk: 'edit',
+  },
 ];
+
+/** What fail_hint throws: its message, how to fix it, and plain JSON the model can act on. */
+const FAIL_HINT = {
+  code: 'invalid_input',
+  message: 'step_too_big: the counter takes at most 3 at a time.',
+  hint: 'Call add with by set to 1, 2 or 3.',
+  detail: { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] },
+};
 
 const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it with get_count; add or slow_add change it; reset sets it to 0.';
 
@@ -135,7 +177,7 @@ async function handle(call) {
     case 'add':
       count += Number(call.input.by);
       show();
-      return { text: `The counter is ${count}.`, data: { count } };
+      return { text: `The counter is ${count}.`, data: { count }, summary: `Added ${Number(call.input.by)}: the counter is ${count}` };
     case 'slow_add':
       return slowAdd(call);
     case 'reset':
@@ -149,6 +191,16 @@ async function handle(call) {
     case 'read_study': {
       const study = await ws.study.get();
       return { text: `The study is ${study.title}.`, data: { title: study.title } };
+    }
+    case 'fail_hint':
+      throw Object.assign(new Error(FAIL_HINT.message), { code: FAIL_HINT.code, hint: FAIL_HINT.hint, detail: FAIL_HINT.detail });
+    case 'label': {
+      const { text, marks, loud } = call.input;
+      $('label').textContent = JSON.stringify(call.input);
+      const shown = [loud ? text.toUpperCase() : text, ...marks].filter(Boolean).join(' ');
+      return shown
+        ? { text: `The label reads ${shown}.`, data: { label: shown }, summary: `Labelled ${shown}` }
+        : { text: 'The label is empty.', data: { label: '' }, summary: 'Cleared the label' };
     }
     default:
       throw Object.assign(new Error(`No tool named ${call.tool}.`), { code: 'invalid_input' });
@@ -181,4 +233,25 @@ window.__register = register;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && lastReason === 'not_connected') void register();
 });
+
+// The turns bound to this tab, heard before the tools are offered (the running ones are told
+// once a page offers tools), and the Stop of the last one.
+let lastTurn = null;
+window.__turns = [];
+if (ws.assistant && typeof ws.assistant.onTurn === 'function') {
+  ws.assistant.onTurn((turn) => {
+    window.__turns.push(turn);
+    lastTurn = turn;
+    const state = turn.state === 'running' ? 'running' : turn.end ? turn.end.state : 'ended';
+    $('turn-state').textContent = `${state}: ${turn.title}`;
+  });
+}
+window.__stopTurn = (id) => ws.assistant.stop(id);
+$('stop').addEventListener('click', async () => {
+  if (!lastTurn || !ws.assistant) return;
+  $('stop-answer').textContent = 'stopping';
+  const answer = await ws.assistant.stop(lastTurn.id);
+  $('stop-answer').textContent = answer.stopped ? 'stopped' : `not stopped: ${answer.reason}`;
+});
+
 await register();
