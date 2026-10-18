@@ -19,7 +19,7 @@ import type { SketchSolverClient } from '../types/sketch';
 import type { UndoSnapshot } from '../types/undo';
 import type { Quantity } from '../types/units';
 import { Autosave } from './autosave';
-import { renameInExpr } from './expr';
+import { namesIn, renameInExpr } from './expr';
 import { REPAIR_FUZZY_STEPS } from './features/body-op';
 import { storedBodyName } from './features/body-ids';
 import { dependencies as featureDependencies, featureUses, gcBodies as gcFeatureBodies, isBodyMaking, ownsBody, renameParamInFeature, withNewBodies } from './features/hooks';
@@ -330,7 +330,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
   function setView(next: CadView, opts2: { rebuild?: boolean } = {}) {
     const s = state.get();
     if (next === s.view) return;
-    ownStep()?.advance(snap(), { doc: s.doc, rollback: next.rollback ?? null, version: undo.version });
+    // (Under a person's open panel only views change, never the bar: setRollback settles first.)
+    if (!personSession()) ownStep()?.advance(snap(), { doc: s.doc, rollback: next.rollback ?? null, version: undo.version });
     state.set((st) => {
       let rb = st.rebuild;
       const hidden = new Set(next.hiddenBodies);
@@ -403,8 +404,19 @@ export function createDocService(opts: DocServiceOptions): DocService {
     version: number;
   }
 
+  /** The person's open panel session, or null. */
+  function personSession(): SessionImpl | null {
+    return open && open.open && !open.owner ? open : null;
+  }
+
+  /**
+   * The model, the bar and the undo version as they count for an Assistant step: under a person's
+   * open panel, what it began on (its live draft is not a change of the Part until its Done).
+   */
   function snap(): Snap {
     const s = state.get();
+    const p = personSession();
+    if (p) return { doc: p.before, rollback: p.barBefore, version: undo.version };
     return { doc: s.doc, rollback: s.view.rollback ?? null, version: undo.version };
   }
 
@@ -445,23 +457,26 @@ export function createDocService(opts: DocServiceOptions): DocService {
 
   /**
    * Put a mark back: model, bar and both undo lists, one rebuild, no new undo step. A session the
-   * Assistant owns goes with it; the person's open session is kept open on the restored model when
-   * it has not changed the model yet (and is not editing a feature the restore changes), else the
-   * restore is refused and nothing changes.
+   * Assistant owns goes with it. The person's open session stays open on the restored model when
+   * what its draft reads is there as it was when the panel opened (the feature it edits, the
+   * features it uses, the parameters); a draft it had applied goes back in on top, still the
+   * person's. Otherwise the restore is refused and nothing changes.
    */
   function restoreTo(mark: DocMark): EditResult {
     if (state.get().status !== 'ready') return { ok: false, reason: String(editable()) };
     if (mark.loadSeq !== loadSeq) return { ok: false, reason: 'The part was loaded again since then' };
     const s = open && open.open ? open : null;
-    if (s && !s.owner) {
-      const why = s.keepsOver(mark.doc);
+    const person = s && !s.owner ? s : null;
+    if (person) {
+      const why = person.keepsOver(mark.doc);
       if (why) return { ok: false, reason: why };
     }
     const mine = ownStep();
     const was = snap();
     const s0 = state.get();
+    // The person's live draft, as the model holds it now (it goes back in on top of the mark).
+    const live = person && s0.doc !== person.before ? s0.doc : null;
     if (s && s.owner) s.close();
-    else if (s) s.rebase(mark.doc, mark.rollback ?? mark.doc.features.length);
     undo.restore(mark.history);
     const view = clampView((s0.view.rollback ?? null) === mark.rollback ? s0.view : { ...s0.view, rollback: mark.rollback }, mark.doc);
     if (mine) {
@@ -469,6 +484,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       mine.rebase(mark.doc);
     }
     state.set((st) => ({ ...st, doc: mark.doc, view, history: historyState(), session: s && s.owner ? null : st.session }));
+    person?.rebase(mark.doc, view, live);
     if (view !== s0.view) autosave?.viewChanged();
     autosave?.modelChanged();
     rebuild();
@@ -515,10 +531,14 @@ export function createDocService(opts: DocServiceOptions): DocService {
       if (was.version === this.version) this.version = now.version;
     }
 
-    /** Only this step changed the model, the bar and the undo lists since begin (a take-over aside). */
+    /**
+     * Only this step changed the model, the bar and the undo lists since begin (a take-over aside). A
+     * person's panel opened on top is no change until its Done (review: its live draft made every
+     * between-opens revert fail).
+     */
     mine(): boolean {
-      const s = state.get();
-      return loadSeq === this.mark.loadSeq && undo.version === this.version && s.doc === this.doc && (s.view.rollback ?? null) === this.rollback;
+      const now = snap();
+      return loadSeq === this.mark.loadSeq && now.version === this.version && now.doc === this.doc && now.rollback === this.rollback;
     }
 
     get clean(): boolean {
@@ -543,7 +563,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
       const base = this.base;
       // Only this step changed the history since its base, so every change since is a push of its own.
       if (undo.version === base.history.version) return;
-      const doc = state.get().doc;
+      // The model as its own changes left it (a person's panel open on top is not part of it).
+      const doc = this.doc;
       // The history as it was at the base, then this step's pushes as one entry (joined to the group
       // below when that is the same group and ends where they began).
       undo.restore(base.history);
@@ -627,7 +648,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     private current: Feature;
     /** The document when the session opened (a refused Delete checks it too); moved by an Assistant restore. */
     before: CadDoc;
-    private readonly viewBefore: CadView;
+    private viewBefore: CadView;
     private inDoc: boolean;
     private lastCreates: BodyId | null;
 
@@ -667,23 +688,67 @@ export function createDocService(opts: DocServiceOptions): DocService {
       }
     }
 
+    /** The rollback bar when the session opened (moved by an Assistant restore). */
+    get barBefore(): number | null {
+      return this.viewBefore.rollback ?? null;
+    }
+
     /**
      * Why this (the person's) session cannot stay open over an Assistant restore to `target`, or
-     * null: it has not changed the model yet, and a feature it edits is in `target` as it is now.
+     * null: what its draft reads must be in `target` as it was when the panel opened (the feature it
+     * edits, the features it uses: its parents and the makers of the bodies it names; the parameters,
+     * when it names any).
      */
     keepsOver(target: CadDoc): string | null {
-      const doc = state.get().doc;
-      if (doc !== this.before) return 'The person changed the Part in an open panel';
-      if (this.isNew) return null;
-      const now = doc.features.find((f) => f.id === this.feature);
-      if (target.features.find((f) => f.id === this.feature) !== now) return `The person is editing ${now?.name ?? 'a feature'}, which this would change`;
+      const from = this.before;
+      const at = (doc: CadDoc, id: FeatureId) => doc.features.find((f) => f.id === id);
+      const nameOf = (id: FeatureId) => at(from, id)?.name ?? 'a feature';
+      if (!this.isNew && at(target, this.feature) !== at(from, this.feature)) return `The person is editing ${nameOf(this.feature)}, which this would change`;
+      const what = this.current.name || 'feature';
+      let used: FeatureId | undefined;
+      let named: boolean;
+      try {
+        used = dependencies(from, this.current).find((id) => at(target, id) !== at(from, id));
+        named = featureExprs(this.current, registry).some((e) => namesIn(e.expr).length > 0);
+      } catch {
+        // A draft its type cannot read yet: what it uses is unknown, so it is not moved.
+        return `The person is editing ${what}`;
+      }
+      if (used) return `The person's ${what} uses ${nameOf(used)}, which this would change`;
+      if (named && target.params !== from.params) return `The person's ${what} uses parameters, which this would change`;
       return null;
     }
 
-    /** An Assistant restore put `doc` under this (the person's, untouched) session: it now began there. */
-    rebase(doc: CadDoc, insertAt: number) {
+    /**
+     * An Assistant restore put `doc` and `view` under this (the person's) session: it now began
+     * there. A draft it had applied (as `live` held it) goes back in on top, at the bar for a new
+     * feature, in place for an edit, with the bodies it makes: still the person's change.
+     */
+    rebase(doc: CadDoc, view: CadView, live: CadDoc | null) {
       this.before = doc;
-      if (!this.inDoc) this.insertAt = insertAt;
+      this.viewBefore = view;
+      if (this.isNew) {
+        this.inDoc = false;
+        this.insertAt = view.rollback ?? doc.features.length;
+      }
+      const f = live?.features.find((g) => g.id === this.feature);
+      if (!live || !f) return;
+      this.act(() => {
+        let next = state.get().doc;
+        const made = Object.keys(live.bodies).filter((b) => !next.bodies[b] && ownsBody(registry, f, b));
+        if (made.length) next = { ...next, bodies: { ...next.bodies, ...Object.fromEntries(made.map((b) => [b, live.bodies[b]])) } };
+        if (this.inDoc) next = replaceFeature(next, f);
+        else {
+          const features = [...next.features];
+          features.splice(this.insertAt, 0, f);
+          next = { ...next, features };
+          this.inDoc = true;
+          const v = state.get().view;
+          // Inserted at the rollback bar: the bar moves below it, as when it first applied.
+          if (v.rollback != null && v.rollback >= this.insertAt) setView({ ...v, rollback: v.rollback + 1 });
+        }
+        applyDoc(next, null);
+      });
     }
 
     /** Ended with no change of its own (an Assistant restore replaces the model it was on). */

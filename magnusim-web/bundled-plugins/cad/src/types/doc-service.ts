@@ -230,7 +230,8 @@ export interface AssistantStep {
   /**
    * Only this step changed the model since begin, and the person did not take it over: the undo
    * history moved by exactly this step's own changes, no load, the bar where this step left it, and
-   * the model the one this step's own changes left.
+   * the model the one this step's own changes left. A person's panel opened on top counts by what it
+   * began on: its live draft is no change of the Part until its Done (the save hold holds it too).
    */
   readonly clean: boolean;
   /** How the person took this step over, or null. */
@@ -268,8 +269,10 @@ export interface AssistantDoc {
   mark(): DocMark;
   /**
    * Put a mark back: model, bar and both undo lists; one rebuild; no new undo step. A session the
-   * Assistant owns is closed with it; the person's open session must not have changed the model yet
-   * (it is then kept open on the restored model). Refused after a load, or while not editable.
+   * Assistant owns is closed with it. The person's open session stays open on the restored model
+   * when what its draft reads (the feature it edits, the features it uses, the parameters it names)
+   * is there as it was when the panel opened; a draft it had applied goes back in on top, still the
+   * person's. Refused otherwise (nothing changes), after a load, or while not editable.
    */
   restore(mark: DocMark): EditResult;
   /** The newest undo step when it carries a tag, or null. */

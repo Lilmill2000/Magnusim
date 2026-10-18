@@ -115,11 +115,22 @@ describe('doc.assistant: ownership', () => {
     const a = block(doc);
     const st = doc.assistant.begin('assistant:c1');
     const person = doc.beginEdit(a.extrude);
-    // Even reached from inside the step's run, the person's draft is the person's change.
+    // Even reached from inside the step's run, the person's draft is the person's change: the
+    // step's own record does not take it in (an open panel is no change of the Part until its Done).
     st.run(() => person.update({ extent: { kind: 'blind', distance: '30 mm' } } as Partial<Feature>));
-    expect(st.clean).toBe(false);
-    expect(st.revert().ok).toBe(false);
+    const live = doc.state.get().doc;
+    expect(live).not.toBe(st.mark.doc);
+    expect(doc.committed()).toBe(st.mark.doc);
+    expect(st.clean).toBe(true);
+    // The step changed nothing: its revert leaves the person's draft as it is.
+    expect(st.revert()).toEqual({ ok: true });
+    expect(doc.state.get().doc).toBe(live);
+    expect(person.open).toBe(true);
     st.end();
+    // The person's Done is the person's own step, never tagged as the step's.
+    person.commit();
+    expect(history(doc).undoLabel).toBe('Edit Extrude 1');
+    expect(doc.assistant.topGroup()).toBeNull();
   });
 
   it('begin refuses a second step, a Part that is not editable, and an open panel session', async () => {
@@ -185,12 +196,13 @@ describe('doc.assistant: the person always first', () => {
       expect(history(doc), what).toEqual(hist);
     }
     expect(doc.committed()).toBe(committed);
-    // The person changed the model in that panel: the step is no longer only its own.
-    expect(st.clean).toBe(false);
-    st.end();
-    // The person's Done is theirs as usual.
+    // The person's open draft is no change of the Part yet: the step is still only its own.
+    expect(st.clean).toBe(true);
+    // The person's Done is theirs as usual, and from then on the step is no longer only its own.
     person.commit();
     expect(history(doc).undoLabel).toBe('Edit Extrude 1');
+    expect(st.clean).toBe(false);
+    st.end();
   });
 
   it('a person\'s edit outside run takes over the Assistant\'s open session: discarded, never committed', async () => {
@@ -284,6 +296,42 @@ describe('doc.assistant: the person always first', () => {
     expect(takeOvers).toHaveLength(2);
   });
 
+  it('the person\'s Delete of the feature the Assistant is filling takes it over: discarded, then removed as the person\'s own step', async () => {
+    const { doc, takeOvers } = make();
+    await doc.load();
+    const a = block(doc);
+    const before = doc.state.get().doc;
+    const st = doc.assistant.begin('assistant:c1');
+    const s = st.run(() => doc.beginEdit(a.extrude));
+    s.update({ extent: extentFor(0, 30) } as Partial<Feature>);
+    expect(doc.remove(a.extrude)).toEqual({ ok: true });
+    expect(s.open).toBe(false);
+    expect(takeOvers).toEqual([{ why: 'edit' }]);
+    expect(st.takenOver).toBe('edit');
+    expect(names(doc)).toEqual(['Sketch 1']);
+    // One undo step of the person's, with nothing of the Assistant's draft: Undo brings back the feature as it was.
+    expect(history(doc).undoLabel).toBe('Delete Extrude 1');
+    expect(doc.assistant.topGroup()).toBeNull();
+    expect(st.revert().ok).toBe(false);
+    st.end();
+    doc.undo();
+    expect(doc.state.get().doc).toBe(before);
+    // A new feature the Assistant fills: taken over, and then there is nothing to remove.
+    takeOvers.length = 0;
+    const hist = history(doc);
+    const st2 = doc.assistant.begin('assistant:c2');
+    const n = st2.run(() => newSketch(doc));
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2']);
+    expect(doc.remove(n.feature)).toEqual({ ok: false, reason: 'That feature is not in the part' });
+    expect(n.open).toBe(false);
+    expect(takeOvers).toEqual([{ why: 'edit' }]);
+    expect(st2.takenOver).toBe('edit');
+    expect(history(doc)).toEqual(hist);
+    expect(doc.state.get().doc).toBe(before);
+    expect(st2.revert()).toEqual({ ok: true });
+    st2.end();
+  });
+
   it('a person\'s panel opened between two opens: the revert puts the mark back under it, open and untouched', async () => {
     const { doc } = make();
     await doc.load();
@@ -315,21 +363,140 @@ describe('doc.assistant: the person always first', () => {
     expect(doc.state.get().doc).toBe(mark.doc);
   });
 
-  it('a person\'s panel that changed the model: the revert is refused and keeps everything', async () => {
+  it('a person\'s panel whose draft applied at once (a new sketch) between two opens: the revert puts the mark back under it, its draft on top, still the person\'s', async () => {
     const { doc } = make();
     await doc.load();
-    block(doc);
+    const a = block(doc);
+    const hist = history(doc);
     const st = doc.assistant.begin('assistant:c1');
+    const mark = st.mark;
     st.run(() => newSketch(doc).commit());
+    // (Review: this applied draft made the step unclean, so the revert was refused and the step's half kept.)
     const person = newSketch(doc, 100);
-    const live = doc.state.get().doc;
-    expect(st.clean).toBe(false);
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Sketch 3']);
+    expect(st.clean).toBe(true);
+    // A view change of the step's under it (a body hidden) takes in nothing of the person's draft.
+    st.run(() => doc.setBodyVisible(a.body!, false));
+    expect(st.clean).toBe(true);
+    expect(() => st.run(() => newSketch(doc, 150))).toThrow(PersonEditing);
     const r = st.revert();
-    expect(r).toEqual({ ok: false, reason: 'The Part was changed during this step by someone else, so it was kept as it is' });
-    expect(doc.state.get().doc).toBe(live);
+    expect(r).toEqual({ ok: true });
+    // The step's sketch is gone; the person's is on top of the mark, open and uncommitted.
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 3']);
+    expect(doc.committed()).toBe(mark.doc);
     expect(doc.session()).toBe(person);
+    expect(person.open).toBe(true);
+    expect(history(doc)).toEqual(hist);
+    expect(st.clean).toBe(true);
     st.end();
     expect(st.revert()).toBe(r);
+    // Its Done is one step of the person's on the mark.
+    person.commit();
+    expect(history(doc).undoLabel).toBe('Sketch 3');
+    expect(doc.assistant.topGroup()).toBeNull();
+    doc.undo();
+    expect(doc.state.get().doc).toBe(mark.doc);
+  });
+
+  it('with the rollback bar set: the person\'s new feature goes back in at the bar, and its discard puts the bar back where the mark had it', async () => {
+    const { doc } = make();
+    await doc.load();
+    const a = block(doc);
+    doc.setRollback(1);
+    const st = doc.assistant.begin('assistant:c1');
+    const mark = st.mark;
+    st.run(() => newSketch(doc).commit());
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 2', 'Extrude 1']);
+    expect(doc.state.get().view.rollback).toBe(2);
+    const person = newSketch(doc, 100);
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 2', 'Sketch 3', 'Extrude 1']);
+    expect(doc.state.get().view.rollback).toBe(3);
+    expect(st.clean).toBe(true);
+    expect(st.revert()).toEqual({ ok: true });
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 3', 'Extrude 1']);
+    expect(doc.state.get().view.rollback).toBe(2);
+    expect(doc.committed()).toBe(mark.doc);
+    expect(st.clean).toBe(true);
+    st.end();
+    person.discard();
+    expect(doc.state.get().doc).toBe(mark.doc);
+    expect(doc.state.get().view.rollback).toBe(1);
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1']);
+    expect(a.extrude).toBe(doc.state.get().doc.features[1].id);
+  });
+
+  it('a person\'s Edit with a live change, of a feature the step did not touch: kept open and put on the mark', async () => {
+    const { doc } = make();
+    await doc.load();
+    const a = block(doc);
+    const st = doc.assistant.begin('assistant:c1');
+    const mark = st.mark;
+    st.run(() => newSketch(doc, 50).commit());
+    const person = doc.beginEdit(a.extrude);
+    person.update({ extent: extentFor(0, 30) } as Partial<Feature>);
+    expect(st.revert()).toEqual({ ok: true });
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1']);
+    expect(doc.committed()).toBe(mark.doc);
+    expect(person.open).toBe(true);
+    expect((doc.state.get().doc.features[1] as Feature & { extent: unknown }).extent).toEqual(extentFor(0, 30));
+    st.end();
+    person.commit();
+    expect(history(doc).undoLabel).toBe('Edit Extrude 1');
+    doc.undo();
+    expect(doc.state.get().doc).toBe(mark.doc);
+  });
+
+  it('a person\'s panel on what the step changed: the revert (or the undo tool\'s restore) is refused, and nothing changes', async () => {
+    const { doc } = make();
+    await doc.load();
+    const a = block(doc);
+    const w = String(doc.addParam({ name: 'w', expr: '20 mm', quantity: 'length' }));
+    /** Every refusal leaves the model, the person's session and the history as they were. */
+    const refused = (st: AssistantStep, person: ReturnType<DocService['beginNew']>, attempt: () => unknown, reason: string) => {
+      const live = doc.state.get().doc;
+      // (committed() is the person's session's `before`.)
+      const committed = doc.committed();
+      const hist = history(doc);
+      expect(st.clean, reason).toBe(true);
+      expect(attempt(), reason).toEqual({ ok: false, reason });
+      expect(doc.state.get().doc, reason).toBe(live);
+      expect(doc.committed(), reason).toBe(committed);
+      expect(doc.session(), reason).toBe(person);
+      expect(person.open, reason).toBe(true);
+      expect(history(doc), reason).toEqual(hist);
+      st.end();
+      person.discard();
+    };
+    // The step renamed Extrude 1; the person opened its Edit and changed nothing.
+    const st1 = doc.assistant.begin('assistant:c1');
+    st1.run(() => doc.rename(a.extrude, 'Base'));
+    refused(st1, doc.beginEdit(a.extrude), () => st1.revert(), 'The person is editing Base, which this would change');
+    // The step made Sketch 2; the person's new Extrude of it applied at once.
+    doc.rename(a.extrude, 'Extrude 1');
+    const st2 = doc.assistant.begin('assistant:c2');
+    const sk = st2.run(() => {
+      const s = newSketch(doc, 50);
+      s.commit();
+      return s.feature;
+    });
+    const ex = doc.beginNew('extrude', { profiles: [profileOf(sk, blockSketch(50, 0))], extent: extentFor(0, 10), op: 'new' } as Partial<Feature>);
+    expect(names(doc)).toEqual(['Sketch 1', 'Extrude 1', 'Sketch 2', 'Extrude 2']);
+    refused(st2, ex, () => st2.revert(), "The person's Extrude 2 uses Sketch 2, which this would change");
+    // The step changed parameter w; inside its run, the undo tool's restore under the person's live
+    // draft that names w (review: a restore under a live draft had no test).
+    doc.remove(sk);
+    const st3 = doc.assistant.begin('assistant:c3');
+    st3.run(() => doc.editParams({ add: [], change: [{ id: w as ParamId, patch: { expr: '30 mm' } }], remove: [] }));
+    const person = doc.beginEdit(a.extrude);
+    person.update({ extent: { kind: 'blind', distance: 'w' } } as Partial<Feature>);
+    refused(st3, person, () => st3.run(() => doc.assistant.restore(st3.mark)), "The person's Extrude 1 uses parameters, which this would change");
+    // A draft its type cannot read (a pattern whose direction was cleared): what it uses is unknown, so it is not moved.
+    doc.features.register(linearPatternDef as unknown as FeatureTypeDef);
+    const st4 = doc.assistant.begin('assistant:c4');
+    st4.run(() => doc.rename(a.sketch, 'Outline'));
+    const pattern = doc.beginNew('pattern_linear', { of: 'features', features: [a.extrude] } as unknown as Partial<Feature>);
+    expect(() => pattern.update({ dir1: undefined } as unknown as Partial<Feature>)).toThrow(TypeError);
+    refused(st4, pattern, () => st4.revert(), `The person is editing ${pattern.draft.name}`);
   });
 
   it('a person\'s rollback bar move, or a reload, during a step: no longer clean, no seal, the revert refused', async () => {
@@ -462,6 +629,65 @@ describe('doc.assistant: the save hold', () => {
     expect(writes(ws).slice(w0)).toHaveLength(1);
   });
 
+  it('the Assistant\'s own panel open with a live draft (a paced fill), then taken over: every write path stores the mark; nothing is written after the revert', async () => {
+    const { doc, ws } = make({ interval: 60_000, burst: 1 });
+    await doc.load();
+    const w0 = writes(ws).length;
+    // The person's change, not stored yet when the step begins.
+    newSketch(doc, 0).commit();
+    expect(saveState(doc)).toBe('pending');
+    const st = doc.assistant.begin('assistant:c1');
+    // The Assistant's sketch is open, half filled: in the model live, never committed.
+    const s = st.run(() => newSketch(doc, 50));
+    s.update({ points: { ...blockSketch(50, 0).points, pt_2: [75, 0] } } as Partial<Feature>);
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 2']);
+    expect(doc.session()).toBe(s);
+    // Reload or Back now (sketch-step:2): every write path stores the mark, never the half sketch.
+    window.dispatchEvent(new FocusEvent('blur'));
+    await vi.waitFor(() => expect(saveState(doc)).toBe('saved'));
+    expect(writes(ws).slice(w0)).toEqual([['Sketch 1']]);
+    s.update({ points: { ...blockSketch(50, 0).points, pt_2: [80, 0] } } as Partial<Feature>);
+    hide();
+    window.dispatchEvent(new Event('pagehide'));
+    window.dispatchEvent(new FocusEvent('blur'));
+    await doc.flush();
+    expect(writes(ws).slice(w0)).toEqual([['Sketch 1']]);
+    // The person's Escape takes it over: the window until the call's revert stores the mark too.
+    expect(doc.assistant.takeOver('escape')).toBe(true);
+    expect(s.open).toBe(false);
+    window.dispatchEvent(new FocusEvent('blur'));
+    hide();
+    await doc.flush();
+    expect(writes(ws).slice(w0)).toEqual([['Sketch 1']]);
+    expect(st.revert()).toEqual({ ok: true });
+    st.end();
+    await doc.flush();
+    expect(writes(ws).slice(w0)).toEqual([['Sketch 1']]);
+    expect(saveState(doc)).toBe('saved');
+  });
+
+  it('a person\'s panel open on a clean step is held with it until its Done: then both are stored', async () => {
+    const { doc, ws } = make({ interval: 60_000, burst: 1 });
+    await doc.load();
+    const w0 = writes(ws).length;
+    const st = doc.assistant.begin('assistant:c1');
+    st.run(() => newSketch(doc, 50).commit());
+    // The person's new sketch, live and uncommitted, on top of the step's.
+    const person = newSketch(doc, 100);
+    expect(names(doc)).toEqual(['Sketch 1', 'Sketch 2']);
+    window.dispatchEvent(new FocusEvent('blur'));
+    await doc.flush();
+    expect(writes(ws).slice(w0)).toEqual([]);
+    // Its Done: the person changed the Part, the hold lifts, and both are stored.
+    person.commit();
+    expect(st.clean).toBe(false);
+    window.dispatchEvent(new FocusEvent('blur'));
+    await vi.waitFor(() => expect(saveState(doc)).toBe('saved'));
+    expect(writes(ws).slice(w0)).toEqual([['Sketch 1', 'Sketch 2']]);
+    expect(st.revert().ok).toBe(false);
+    st.end();
+  });
+
   it('a reverted step writes nothing at all', async () => {
     const { doc, ws } = make({ interval: 60_000, burst: 1 });
     await doc.load();
@@ -502,6 +728,31 @@ describe('doc.assistant: seal, revert, undo groups', () => {
     while (history(doc).canRedo) doc.redo();
     expect(doc.state.get().doc).toBe(end);
     expect(names(doc)).toEqual(['Outline', 'Plate', 'Sketch 1', 'Extrude 1']);
+  });
+
+  it('a seal with a person\'s panel open on top (its draft live): the group ends at the step\'s model, and the person\'s Done is its own step after it', async () => {
+    const { doc } = make();
+    await doc.load();
+    block(doc);
+    const mark = doc.assistant.mark();
+    const st = doc.assistant.begin('assistant:c1');
+    st.run(() => newSketch(doc, 50).commit());
+    const stepDoc = doc.state.get().doc;
+    const person = newSketch(doc, 100);
+    expect(doc.state.get().doc).not.toBe(stepDoc);
+    expect(st.clean).toBe(true);
+    st.seal('turn:t1', 'Assistant: sketch');
+    st.end();
+    expect(doc.assistant.topGroup()).toEqual({ tag: 'turn:t1', label: 'Assistant: sketch', after: stepDoc });
+    expect(doc.committed()).toBe(stepDoc);
+    expect(person.open).toBe(true);
+    person.commit();
+    expect(history(doc).undoLabel).toBe('Sketch 3');
+    doc.undo();
+    expect(doc.state.get().doc).toBe(stepDoc);
+    expect(history(doc).undoLabel).toBe('Assistant: sketch');
+    doc.undo();
+    expect(doc.state.get().doc).toBe(mark.doc);
   });
 
   it('a call of another turn, or one that changed nothing, joins nothing', async () => {
