@@ -17,7 +17,8 @@
 // dead frame); a call to the app in flight
 // keeping a tool call alive past the server's stall window; a hidden tab kept for the call and
 // the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an image
-// result (for a local model that can't read it, words in its place: H6); a remote viewer; a tab
+// result (for a local model that can't read it, words in its place: H6; a context error on a
+// request with a picture is the context, never a refused picture); a remote viewer; a tab
 // hidden at load; the terminal client
 // (scripts/assistant-run.mjs) on the only connected tab. And the shared helpers
 // (support/assistant.js, CAD tools spec H1): the scripted model on the local server, its steps
@@ -44,7 +45,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { answerGate, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
-import { startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
+import { LLAMA_SERVER, startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
 import { startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { expect, test } from './support/stress.js';
@@ -905,6 +906,66 @@ test("a local model that can't read pictures: its server refuses snap's picture,
   } finally {
     fake.textOnly();
   }
+});
+
+test("a local server's context error on a request with a picture (llama.cpp's server's words): the terminal says the conversation is too long, nothing says the pictures were refused, and the next turn still sends them", async ({
+  page,
+  request,
+}) => {
+  // What the person reads (the adapters' and the loop's words, CAD tools spec H5/H6).
+  const REFUSED_NOTE = 'The local server refused the images, so the request went again without them; this model gets none from now on.';
+  const LEFT_OUT_NOTE = "The local model doesn't read images: they are left out of its requests.";
+  const hasImage = (r) => JSON.stringify(r.body).includes('"image_url"');
+  /** One turn in the terminal client on this tab: its exit code and what the person reads (stdout and stderr). */
+  const terminal = async (text) => {
+    const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', w.tab, text], {
+      cwd: WEB_ROOT,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let out = '';
+    cli.stdout.on('data', (b) => (out += b));
+    cli.stderr.on('data', (b) => (out += b));
+    let timer;
+    const ceiling = new Promise((done) => {
+      timer = setTimeout(() => done('still running after 120 s'), 120_000);
+    });
+    try {
+      return { code: await Promise.race([new Promise((done) => cli.once('exit', done)), ceiling]), out };
+    } finally {
+      clearTimeout(timer);
+      cli.kill();
+    }
+  };
+
+  const w = await openCounter(page, request);
+  const model = await useScriptedModel(request, host.base, fake, 'local');
+  let before = chats().length;
+  // The first answer calls snap; the request that carries its picture is past the server's context.
+  fake.reply(() => {
+    fake.failNext({ status: 400, body: LLAMA_SERVER.contextRefusals[1], dialect: model.dialect });
+    return { tools: [{ name: `${PLUGIN}__snap`, input: {} }] };
+  });
+  let r = await terminal('Show me the counter.');
+  expect(r.code, r.out).toBe(1);
+  expect(r.out).toContain(`[failed] This conversation is too long for ${model.model}. Start a new one.`);
+  expect(r.out).not.toContain(REFUSED_NOTE);
+  expect(r.out).not.toContain(LEFT_OUT_NOTE);
+  // Refused once, and not sent again without the picture.
+  let sent = chats().slice(before);
+  expect(sent.map(hasImage)).toEqual([false, true]);
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['snap']);
+
+  // A new conversation: the picture still goes, and the model sees it.
+  before = chats().length;
+  fake.reply({ tools: [{ name: `${PLUGIN}__snap`, input: {} }] }, (body) => ({ text: JSON.stringify(body.messages.at(-1)).includes('"image_url"') ? 'I see the counter.' : 'No picture came.' }));
+  r = await terminal('Show me the counter again.');
+  expect(r.code, r.out).toBe(0);
+  expect(r.out).toContain('I see the counter.');
+  expect(r.out).not.toContain(REFUSED_NOTE);
+  expect(r.out).not.toContain(LEFT_OUT_NOTE);
+  sent = chats().slice(before);
+  expect(sent.map(hasImage)).toEqual([false, true]);
 });
 
 test("a cloud provider that can't compile the tools strictly: the request goes again with the workspace's tools unchecked by it, the counter still changes, the terminal says so, and the next turn sends them so at once", async ({

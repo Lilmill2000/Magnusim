@@ -24,8 +24,9 @@
  *   from the server drop a kept row, so a model loaded anew is read again at once.
  * - Images only for a model that reads them (CAD tools spec H6). A row whose type is `llm`
  *   (or `embeddings`) means it doesn't: each image goes as IMAGE_LEFT_OUT instead. With no
- *   such word, images go; a refusal of a request that carries them (a 400, or a server
- *   error that names images) is sent once more without them, and when that one is
+ *   such word, images go; a refusal of a request that carries them (a 400 or a server
+ *   error whose words name images, never the context or tokens: refusedImages) is sent
+ *   once more without them, and when that one is
  *   answered the base URL and model are remembered as text-only (a test reset or a server
  *   start forgets it). Either way the result carries a note for the person.
  */
@@ -263,7 +264,9 @@ export function lmStudioSettled(j: unknown): boolean {
 /**
  * An Ollama-style row (`POST <root>/api/show {model}`): `num_ctx` from its parameters (what
  * the model runs with), else the model's own `<architecture>.context_length` (its maximum;
- * the server's default may be smaller); `vlm` when its capabilities list vision.
+ * the server's default may be smaller); `vlm` when its capabilities list vision (or
+ * multimodal: llama.cpp's server answers this route too, with ["completion", "multimodal"]
+ * for a model loaded with its image projector).
  */
 export function ollamaRow(j: unknown): ModelRow | null {
   if (!isObj(j)) return null;
@@ -272,7 +275,7 @@ export function ollamaRow(j: unknown): ModelRow | null {
   const numCtx = typeof j.parameters === 'string' ? /(?:^|\n)\s*num_ctx\s+(\d+)/.exec(j.parameters)?.[1] : undefined;
   const context = (numCtx ? contextOf(Number(numCtx)) : null) ?? (info && arch ? contextOf(info[`${arch}.context_length`]) : null);
   const caps = Array.isArray(j.capabilities) ? j.capabilities.filter((c): c is string => typeof c === 'string') : null;
-  const type = !caps ? null : caps.includes('vision') ? 'vlm' : caps.includes('completion') ? 'llm' : caps.includes('embedding') ? 'embeddings' : null;
+  const type = !caps ? null : caps.includes('vision') || caps.includes('multimodal') ? 'vlm' : caps.includes('completion') ? 'llm' : caps.includes('embedding') ? 'embeddings' : null;
   return context === null && type === null ? null : { context, type };
 }
 
@@ -323,13 +326,21 @@ export function imagesOfType(type: string | null): boolean | null {
   return type === 'vlm' ? true : type === 'llm' || type === 'embeddings' ? false : null;
 }
 
+/** A refusal's words that name images (a model that reads none, or loaded without its image projector). */
+const IMAGE_WORDS = /\b(images?|image_url|vision|mmproj|multi-?modal)\b/i;
+/** A refusal's words about the request's size: the images are not why it was refused. */
+const SIZE_WORDS = /\b(context|tokens?)\b/i;
+
 /**
- * A refusal of a request for its images: a 400, or a server error whose words name images
- * (a server whose model was loaded without its image projector).
+ * A refusal of a request for its images: a 400 or a server error whose words name images and
+ * not the context or tokens. Any other 400 is not one: a request past the context (in words
+ * the context check missed) would fit once its images were words, and the model would be
+ * taken for one that reads none.
  */
 function refusedImages(err: unknown, mapped: ProviderError): boolean {
-  if (mapped.code === 'bad_request') return mapped.status === 400;
-  return mapped.code === 'server' && mapped.status !== null && /\b(images?|vision|mmproj|multimodal)\b/i.test(err instanceof Error ? err.message : '');
+  const words = err instanceof Error ? err.message : '';
+  if (!IMAGE_WORDS.test(words) || SIZE_WORDS.test(words)) return false;
+  return (mapped.code === 'bad_request' && mapped.status === 400) || (mapped.code === 'server' && mapped.status !== null);
 }
 
 /** A request refused for its images, before anything streamed: sent once more without them. */

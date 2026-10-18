@@ -21,7 +21,7 @@ process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const { startFakeLlm, LOCAL_SERVER_ROWS, TEXT_ONLY_REFUSAL } = await import('../../../e2e/support/fake-llm.mjs');
+const { startFakeLlm, LOCAL_SERVER_ROWS, LLAMA_SERVER, TEXT_ONLY_REFUSAL } = await import('../../../e2e/support/fake-llm.mjs');
 const fake = await startFakeLlm();
 // Read once, at the first cloud request: both cloud adapters talk to the fake.
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
@@ -734,6 +734,24 @@ describe('error mapping', () => {
     assert.ok(!lines.includes(leaked) && !lines.includes(KEYS.openai));
   });
 
+  it("a local server's context words are the context: llama.cpp's server's (both builds' words, and its error type with other words), as the OpenAI-style ones", async () => {
+    const model = 'ctx-model';
+    const bodies = [
+      ...LLAMA_SERVER.contextRefusals,
+      { error: { code: 400, message: 'the prompt does not fit', type: 'exceed_context_size_error' } },
+      { error: { message: "This model's maximum context length is 4096 tokens.", type: 'invalid_request_error' } },
+    ];
+    for (const body of bodies) {
+      fake.failNext({ status: 400, body, dialect: 'compat' });
+      await assert.rejects(adapterFor('openai_compatible').send(request('openai_compatible', [userText('a long one')], { model }), new AbortController().signal, () => {}), (e) => {
+        assert.equal(e.code, 'context', JSON.stringify(body));
+        assert.equal(e.message, `This conversation is too long for ${model}. Start a new one.`);
+        assert.equal(e.status, 400);
+        return true;
+      });
+    }
+  });
+
   it('a local server that is not running: "Nothing answered at …"', async () => {
     const closed = http.createServer();
     await new Promise((r) => closed.listen(0, '127.0.0.1', r));
@@ -1052,6 +1070,9 @@ describe("a local server's model row (CAD tools spec H5)", () => {
     assert.deepEqual(ollamaRow(LOCAL_SERVER_ROWS.ollama), { context: 32768, type: 'llm' }, 'recorded: no num_ctx, the model length');
     const tuned = { ...LOCAL_SERVER_ROWS.ollama, parameters: 'stop                           "<|im_end|>"\nnum_ctx                        8192', capabilities: ['completion', 'tools', 'vision'] };
     assert.deepEqual(ollamaRow(tuned), { context: 8192, type: 'vlm' });
+    // llama.cpp's server answers this route too: multimodal is a model that reads images, completion alone one that doesn't.
+    assert.deepEqual(ollamaRow(LLAMA_SERVER.multimodalShow), { context: null, type: 'vlm' }, 'llama-server with its image projector');
+    assert.deepEqual(ollamaRow({ ...LLAMA_SERVER.multimodalShow, capabilities: ['completion'] }), { context: null, type: 'llm' }, 'llama-server without one');
     for (const j of [null, [], 'text', {}, { error: "model 'x' not found" }, { max_context_length: 12 }, { max_context_length: '32768' }, { type: 'not a type!' }]) {
       assert.equal(lmStudioRow(j), null, JSON.stringify(j));
     }
@@ -1334,7 +1355,7 @@ ${IMAGE_LEFT_OUT}` });
     }
   });
 
-  it('which refusals are sent again: a 400, or a server error that names images, once; never one without images, a 500 naming none, the context, or a second refusal', async () => {
+  it("which refusals are sent again: a 400 or a server error whose words name images, once; never one without images, one naming none (a bare 400, a 500), one naming the context or tokens too, the context (llama.cpp's words too), or a second refusal", async () => {
     const model = 'retry-model';
     const mmproj = { error: { code: 500, message: 'image input is not supported - hint: if this is unexpected, you may need to provide the mmproj', type: 'server_error' } };
     const count = async (fn) => {
@@ -1348,11 +1369,17 @@ ${IMAGE_LEFT_OUT}` });
       fake.reply({ text: 'ok' });
       assert.equal(await count(async () => assert.deepEqual((await local().send(withPictures(model), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE])), 2);
       resetAssistantState();
+      const imagesRefused = { error: { message: TEXT_ONLY_REFUSAL, type: 'invalid_request_error' } };
+      // A request too big with its pictures, in words the context check doesn't know.
+      const tooManyTokens = { error: { message: 'The images need 9000 tokens; 2000 are left.', type: 'invalid_request_error' } };
       const fails = [
         [{ status: 500 }, withPictures(model), 'server', 1],
-        [{ status: 400 }, request('openai_compatible', [userText('no picture')], { model }), 'bad_request', 1],
+        [{ status: 400 }, withPictures(model), 'bad_request', 1],
+        [{ status: 400, body: imagesRefused }, request('openai_compatible', [userText('no picture')], { model }), 'bad_request', 1],
+        [{ status: 400, body: tooManyTokens }, withPictures(model), 'bad_request', 1],
         [{ status: 400, body: { error: { message: "This model's maximum context length is 4096 tokens.", type: 'invalid_request_error' } } }, withPictures(model), 'context', 1],
-        [{ status: 400, times: 2 }, withPictures(model), 'bad_request', 2],
+        ...LLAMA_SERVER.contextRefusals.map((body) => [{ status: 400, body }, withPictures(model), 'context', 1]),
+        [{ status: 400, body: imagesRefused, times: 2 }, withPictures(model), 'bad_request', 2],
         [{ status: 500, body: mmproj, times: 2 }, withPictures(model), 'server', 2],
       ];
       for (const [fail, req, code, requests] of fails) {

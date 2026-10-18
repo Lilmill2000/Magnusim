@@ -83,6 +83,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const TEXT_ONLY_REFUSAL = 'Model does not support images. Please use a model that does.';
 
 /**
+ * llama.cpp's server (llama-server) as it answers a request past its context: HTTP 400 with
+ * the type `exceed_context_size_error`, in an older build's words and a newer one's (which
+ * name the token counts). Read from its source (tools/server), not recorded from a running
+ * server. `multimodalShow` is its answer to Ollama's show route for a model loaded with its
+ * image projector, cut to its capabilities, from the same source.
+ */
+export const LLAMA_SERVER = Object.freeze({
+  contextRefusals: [
+    { error: { code: 400, message: 'the request exceeds the available context size, try increasing it', type: 'exceed_context_size_error' } },
+    {
+      error: {
+        code: 400,
+        message: 'request (40961 tokens) exceeds the available context size (32768 tokens), try increasing it',
+        type: 'exceed_context_size_error',
+        n_prompt_tokens: 40961,
+        n_ctx: 32768,
+      },
+    },
+  ],
+  multimodalShow: { capabilities: ['completion', 'multimodal'] },
+});
+
+/**
  * What local servers answer about one model, the shapes the fake serves its rows in.
  * - `lmstudio`, `lmstudioLoaded`: LM Studio's `GET /api/v0/models/<id>`. The fields and the
  *   first row are its REST API v0 docs' (lmstudio.ai/docs/developer/rest/endpoints, read
