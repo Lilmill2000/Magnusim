@@ -164,18 +164,14 @@ export class Turn implements LoopTurn {
   usd = 0;
   estimated = false;
   servedBy: string | null = null;
-  /** The local server's context for this turn's model, once its model row said (tokens; null until then, and for cloud models). */
-  contextTokens: number | null = null;
-  /** Whether this turn's model reads images: true for cloud models; a local one's once its row or its server said (null until then). */
-  images: boolean | null = null;
   endedAt: number | null = null;
   endReason: string | null = null;
   message: string | null = null;
   /** The loop (and its last appends) has finished: the conversation is free again. */
   settled = false;
-  /** The model's context in tokens, once the app knows it (setModelFacts); null until then. */
+  /** The local server's context for this turn's model, once its model row said (tokens; set by setModelFacts; null until then, and for cloud models). */
   contextTokens: number | null = null;
-  /** Whether the model reads images, once the app knows it (setModelFacts); null until then. */
+  /** Whether this turn's model reads images: true for cloud models; a local one's once its row or its server said (set by setModelFacts; null until then). */
   images: boolean | null = null;
 
   private readonly clock: Clock;
@@ -210,6 +206,8 @@ export class Turn implements LoopTurn {
     this.projectId = o.projectId;
     this.simulationId = o.simulationId;
     this.settings = o.settings;
+    // A cloud model reads images: its tab's page hears that with the turn's start, not as a change.
+    if (o.settings.provider !== 'openai_compatible') this.images = true;
     this.clock = o.clock;
     this.gates = o.gates;
     this.onEnded = o.onEnded;

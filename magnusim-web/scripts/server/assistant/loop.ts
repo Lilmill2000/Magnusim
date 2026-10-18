@@ -93,6 +93,8 @@ export interface LoopTurn extends RunnerTurn {
   contextTokens: number | null;
   /** Whether the turn's model reads images: true for cloud models; a local one's once its row or its server said (null until then). */
   images: boolean | null;
+  /** Sets what the app learned of the turn's model; its tab's page hears a change. */
+  setModelFacts(f: { contextTokens?: number | null; images?: boolean | null }): void;
   setState(s: TurnState): void;
   end(state: EndState, reason: string, message: string | null): void;
   note(text: string): void;
@@ -383,7 +385,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   // Cloud models read images; a local server's model as its adapter knows (null: not known yet).
   const learnImages = () => {
     const known = adapter.id === 'openai_compatible' ? (adapter.readsImages?.(model) ?? null) : true;
-    if (known !== null) t.images = known;
+    if (known !== null) t.setModelFacts({ images: known });
   };
 
   for (let step = 1; ; step += 1) {
@@ -427,7 +429,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     // What the conversation knew counts only for the server that said it (the address may have changed).
     const contextTokens = row?.context ?? t.contextTokens ?? conv.contextAt(t.settings.base_url);
     if (contextTokens) {
-      t.contextTokens = conv.contextTokens = contextTokens;
+      t.setModelFacts({ contextTokens });
+      conv.contextTokens = contextTokens;
       conv.contextBaseUrl = t.settings.base_url;
     }
     learnImages();

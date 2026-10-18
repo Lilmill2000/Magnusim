@@ -1188,8 +1188,9 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
     state: 'running',
     title: 'Add 1, then 5 slowly.',
     local: false,
+    // A cloud model: no local server's context, and it reads images (H6), which the frame heard.
     contextTokens: null,
-    images: null,
+    images: true,
     used: { stepsCap: caps.steps, usdCap: caps.turn_usd },
   });
   // The frame's own Stop, while the slow call runs.

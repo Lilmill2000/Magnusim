@@ -961,6 +961,40 @@ describe('images only for models that read them (CAD tools spec H6)', () => {
     assert.equal(r.turn.images, true);
   });
 
+  it("what a turn learns of its model reaches its tab's page: the turn's view carries it, and the manager hears it as an update while the turn runs", async () => {
+    const heardBy = (m) => {
+      const heard = [];
+      m.manager.onTurnChange((t, change) => {
+        if (change === 'updated') heard.push({ context_tokens: t.pageView().context_tokens, images: t.pageView().images });
+      });
+      return heard;
+    };
+    // A cloud model reads images: its view says so from the turn's start, so learning it is no
+    // change (a call's result stays the first change, told at once).
+    const cloud = mk();
+    const cloudHeard = heardBy(cloud);
+    cloud.provider.script({ text: 'ok' });
+    let r = await startTurn(cloud, 'x');
+    assert.deepEqual([r.turn.pageView().context_tokens, r.turn.pageView().images], [null, true], 'at its start');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(cloudHeard, []);
+    assert.deepEqual([r.turn.pageView().context_tokens, r.turn.pageView().images], [null, true]);
+
+    // A local server's row says the context first (told at once); its word on images comes
+    // within the same second, so it waits for the next update (none before the end) and the
+    // end's view carries both.
+    const local = localSays(() => true);
+    local.provider.modelRow = async () => ({ context: 32_768, type: 'vlm' });
+    const localHeard = heardBy(local);
+    local.provider.script({ text: 'ok' });
+    r = await startTurn(local, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(localHeard, [{ context_tokens: 32_768, images: null }]);
+    assert.deepEqual([r.turn.pageView().context_tokens, r.turn.pageView().images], [32_768, true]);
+  });
+
   it("the adapter's notes on a request become note events, each once a turn (the next turn says it again), in the order given", async () => {
     const m = localSays(() => false, { hostTools: [snap()] });
     m.provider.script({ tools: [{ name: 'snap' }], notes: [REFUSED] }, { tools: [{ name: 'snap' }], notes: [LEFT, REFUSED] }, { text: 'done', notes: [LEFT] });
