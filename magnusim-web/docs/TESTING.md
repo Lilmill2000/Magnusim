@@ -350,6 +350,39 @@ No test reaches a real model provider or this PC's real Assistant files.
     `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes
     the sandboxed frame's module script a cross-origin request with a preflight that
     fails, and the workspace never starts.
+- **CAD's tools.** The Part's tools for the Assistant are tested in CAD's own suite
+  (`bundled-plugins/cad`, its own toolchain; its `ARCHITECTURE.md` §8 and §12, and
+  `docs/assistant.md` "Tests" there).
+  - The browser shard `assistant` (`npm run test:e2e:assistant` in that folder, or
+    `node scripts/e2e.mjs e2e/<spec>` for one spec): `cad-assistant-watch`, `-honest`,
+    `-coexist` and `-takeover`. Each spec starts its own app server with
+    `startAssistantHost(name, offset)` from `e2e/assistant-helpers.ts`, on
+    `CAD_E2E_PORT_FROM` + 60, 70, 80 and 100 (+90 is the evaluation's), with the fake
+    provider, `MAGNUSIM_TEST_ASSISTANT=1`, the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1`,
+    a 2 s hold and no WSL. The helpers wrap the turn helpers above (`useScriptedModel`,
+    `startTurn`, `offeredTools`, `resultsIn`) and add CAD's own: a project with a Part
+    open and its tab (`openNewPart`), the chip's words (`chipWords`: the chip's own text
+    also holds its buttons), its buttons (`chipButton`), and recorders of what the frame
+    shows over time. A local turn's context and images come from the fake's model rows
+    (`fake.models([{id, context, type}], 'compat')`).
+  - Races are forced at the page's hold points: `window.__CAD__.assistant.hold(point)`
+    stops every call that reaches `point` until `release(point)` (`after-settled` for
+    reads; `after-plan`, `after-open`, `between-opens`, `sketch-step:<n>` and
+    `before-commit` for edits; `holdAt`, `reachedHold` and `releaseHold` in the
+    helpers). The same handle shortens the edits' 10-minute wait for the person
+    (`setHoldS(s)`) and forces the pace and "Ask each step" (`setPace(pace, scale)`,
+    `setAskEach(on)`) without writing the person's preferences. A fake `hold` step stays
+    released once released, so each one needs its own name within a spec.
+  - Unit tests (`npm test` there): `tests/assistant/` runs the tools on a real Part in
+    Node (the real kernel and solver, every feature type, the UI controller, the real
+    sketch mode when a test asks for it) through a fake host's `ws.assistant`, called as
+    the bridge calls them.
+  - The app's side: `scripts/__tests__/assistant-cad-tools.test.mjs` (in
+    `npm run test:server`) imports CAD's `src/assistant/schemas.ts` and `guide.ts`:
+    every schema passes the app's checks, no CAD property is optional, the first 20 of
+    the 21 tools a CAD turn offers are strict on the cloud dialects (`cad__view` is
+    not), and the local prefix (the tools, the guide and the system prompt) stays within
+    52,000 characters; it prints the size and the estimated tokens.
 
 ## A bundled plugin's own suite
 

@@ -2,6 +2,49 @@
 
 What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
+## Unreleased (0.2.0-dev)
+
+**The Assistant builds in the Part.** This needs Magnusim's Assistant, which is
+still in development for Magnusim 0.5.0 (Settings > Assistant: a cloud provider
+with your own key, or a local server on this PC). How to use it: "The Assistant
+in the Part" in `README.md`.
+- In an open Part the Assistant can read the design, find faces and edges,
+  measure, look at pictures of the Part, set parameters, sketch, extrude,
+  revolve, sweep and loft, drill holes, fillet, chamfer and shell, pattern and
+  mirror, combine bodies, name and colour bodies, change, rename, suppress or
+  move features, undo its own steps and delete features.
+- You watch it work in the Part's own panels and sketch mode: a panel opens, its
+  values go in, the part rebuilds, and in a sketch the relations and dimensions
+  pull the shape into place. Its panels carry an "Assistant" badge and cannot be
+  typed in; their Done says "The Assistant is filling this in · Esc takes over
+  (the Assistant pauses)". A Parameters panel you have open stays open and
+  flashes the rows the Assistant changed.
+- Each call is all or nothing: a step that fails, is stopped or is taken over
+  leaves the Part as it was. A join, cut or hole that misses the part changes
+  nothing, and the Assistant is told why (which way it missed).
+- All of one request's changes are one undo step ("Undo Assistant: <your
+  request>"). A change of yours in between starts a new one and is never undone
+  with the Assistant's.
+- The Assistant chip in the dock says what it is doing ("Assistant · Sketch Plate
+  sketch · 12 of 120 steps") and has Pause, Resume, Stop, Fast / Watch and Ask
+  each step (Keep or Discard each step before it is kept). When a request ends
+  it shows Undo (while nothing newer was done) and the Part's health ("· Fillet 1
+  fails", "· 1 sketch under-defined"); a click on the health selects that
+  feature.
+- You come first. While you have a panel, a menu, a dialog or a rename open, or
+  the rollback bar is not at the end, its edits wait (up to 10 minutes) and the
+  chip says what it waits for. Escape, Ctrl+Z or a toolbar command (Parameters
+  too) during one of its steps takes over: that step is discarded
+  and the Assistant pauses in this Part until the request ends. Undoing its steps
+  while the request runs pauses it too. Selecting, hovering and orbiting are not
+  taking over.
+- Deleting asks you first, in the app's own question: "Allow the Assistant to
+  delete features?", "Deletes features from the Part; Ctrl+Z brings them back."
+- Its pictures and measurements never move your camera or change your view.
+  Once you move the camera during a request, the Assistant's automatic view
+  turns stop for the rest of it. Watching needs the Magnusim window shown: in a
+  hidden or covered window its steps run without pauses.
+
 ## 0.1.0 (October 2026)
 
 The first release. Magnusim CAD is a parametric part modeler built into

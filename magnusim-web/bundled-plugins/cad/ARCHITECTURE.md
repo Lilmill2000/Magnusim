@@ -4,7 +4,7 @@ This is the map for everyone changing the plugin: what runs where, which area
 owns which files, the contracts between areas (`src/types/`), and the rules
 every change follows. The maintainer's plans and decisions are kept outside
 the repository; the decisions that shape the code are restated where they apply
-(§7's UI rules, §11's link rules), and the user-facing result is `README.md`
+(§7's UI rules, §11's link rules, §12's Assistant rules), and the user-facing result is `README.md`
 (what 0.1.0 does and its known limitations) and `CHANGELOG.md`. The area names
 below (SOLIDS, REFERENCE, PATTERN, SKETCH, SELECT, ...) are the code areas of
 §2. The P2 (STEP editing) and P3 (sketcher) build follows
@@ -17,7 +17,15 @@ table, §6's schema additions and §10's "Solid features" and "CONSTRUCT". P4b
 selection, snaps on the model, Normal to) was built by PATTERN, SKETCH and
 SELECT and integrated in one step: §2's P4b rows, §5's API 5 table, §6, §7's
 "Mouse" and "Toolbar", §8 and §10's "Patterns and mirror", "Sketch tools (P4b)"
-and "Linked sketch geometry".
+and "Linked sketch geometry". The Assistant's tools (the app's Assistant, host
+API 1.9, not released yet) were built in two lanes: additions to the existing
+areas (DOC-CORE's Assistant step, UI-SHELL's Assistant panels, P3-SKETCH's
+Assistant sketches and the solver's analysis apart, VIEWPORT's pictures off
+screen and its count of the person's camera moves), then the ASSISTANT area on
+top. Their notes are the §2 rows, §3's root attribute, §4's events, §6
+"Assistant steps", §7 "Assistant panels and sketches", §8 "The Assistant's
+tests", §9's host API 1.9 and §12; the developer reference is
+`docs/assistant.md`.
 
 ## 1. Runtime topology
 
@@ -86,6 +94,8 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/features/pattern/**`, `tests/features/pattern/**`, the "P4b: patterns and mirror" block of `src/types/doc.ts` and its union members, `PatternOutput` in `src/types/doc-service.ts`, kernel API 5 (`kernel-build/`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`, `src/kernel/timeouts.ts` rows), `tests/kernel/kernel-api5-p4b.test.ts`, `e2e/cad-p4b-pattern.spec.ts`; Measure's pick carry-over block in `src/features/measure/panel.tsx` | P4b PATTERN | Linear pattern, Circular pattern, Mirror (features, bodies, faces); copy names; the kernel ops `copies`, `project`, `section`, `silhouette` and spline curves. In P4b only PATTERN edited the kernel. |
 | `src/sketch/tools/**`, `src/solver-worker/**`, `solver-build/**`, the "P4b (SKETCH)" blocks (`SketchSplineEntity`, `SketchTie`, `SketchFeature.ties`), `tests/sketch/p4b-*.test.ts` but links, `tests/solver/p4b-*`, `e2e/cad-p4b-sketch-tools.spec.ts` | P4b SKETCH | Fit-point and control-point splines, sketch Mirror, Linear and Circular pattern, Offset, Fillet, Chamfer, the pattern and offset rows (`ties`). |
 | `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
+| What the Assistant's tools stand on, each in its area's own files: `doc.assistant`, `settled`, `bodiesBefore`, `committed`, `editParams` and `BodyProps.shells` (`src/doc/service.ts`, `params-bulk.ts`, `person-editing.ts`, `rebuild.ts`), undo tags and snapshots (`src/doc/undo.ts`, `src/types/undo.ts`); `openForAssistant`, `openEditForAssistant`, `openParamsForAssistant`, `doneForAssistant`, `dropForAssistant` and the read-only chrome (`src/ui/controller.ts`, `src/ui/kit/Panel.tsx`, `src/ui/panels/ParametersPanel.tsx`); Assistant sketches (`src/sketch/mode.ts`, `commands.ts`) and `analyzeOnce` (`src/solver-worker/`, `src/sketch/solver-client.ts`); `snapshot`, `project`, `visibleFaceAt`, `userCameraMoves` and `{auto}` camera calls (`src/viewport/snapshot.ts`, `viewport.ts`); `AreaApis.assistant` (`src/types/app.ts`). Tests: `tests/doc/{assistant-step,params-bulk,settled}.test.ts`, `tests/ui/controller-assistant.test.ts`, `tests/sketch/mode-assistant.test.ts`, `tests/viewport/{camera-count,snapshot,snapshot-plain}.test.ts`, the `auto-camera` tests, e2e `cad-assistant-panels` and `cad-viewport-snapshot` (shell), `cad-assistant-sketch` (sketch) | DOC-CORE, UI-SHELL, P3-SKETCH, VIEWPORT | §6 "Assistant steps", §7 "Assistant panels and sketches". ASSISTANT calls them and changes none of them. |
+| `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 18 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
 | `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `manifest.toml`, `plugin.py`, `README.md`, `ARCHITECTURE.md`, `LICENSES/**` | frozen (INTEGRATE) | New dependency? Ask INTEGRATE: one `npm install` at a time (shared `node_modules`). |
 | `workspace/**` (except `kernel/mk32.*`, `solver/planegcs.*`) | nobody by hand | Written only by `npm run build`. |
 
@@ -119,7 +129,12 @@ areas publish state, UI-SHELL shows it) and `Overlays` (UI-SHELL: context
 menu, dialogs). An area that needs another mount point asks INTEGRATE; until
 then, render inside your own mounted component.
 
-Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restarting|failed"][data-doc="loading|ready|error"][data-viewport="ready|none"]`.
+Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restarting|failed"][data-doc="loading|ready|error"][data-viewport="ready|none"][data-assistant="off|idle|thinking|working|waiting|approve|paused|ended"]`.
+
+The Assistant's module (`src/features/assistant/index.tsx`) is found by the
+module glob like every feature folder (§10): its `install` registers the tools
+with the host once for the page's life, and its chip goes in the dock.
+`window.__CAD__.assistant` is its test handle (§12).
 
 ## 4. State and events
 
@@ -128,11 +143,15 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   `kernel.status` (DOC-CORE), `doc.state` (DOC-CORE), `viewport` handle and
   `ViewportHandle.state` (VIEWPORT), `selection` (the viewport on picks, the
   UI on row clicks, both only through `src/lib/selection.ts`), `mode`
-  (INTEGRATE; P3 sketch mode).
+  (INTEGRATE; P3 sketch mode), the Assistant's chip state
+  (`services.apis.assistant.state`, ASSISTANT).
 - **Events are one-off notifications** (`bus`, `src/types/events.ts`):
   `app:ready`, `app:escape`, `kernel:respawned`, `doc:rebuilt`,
   `viewport:contextmenu`, `viewport:dblclick`, `ui:edit-feature`. Add yours in
-  your own section.
+  your own section. The Assistant's: `assistant:taken-over` {why} (the person
+  took over an Assistant session), `assistant:person-undo` (before the person's
+  undo or redo applies), `assistant:step-ended` (DOC-CORE's), and
+  `assistant:call` (a tool call started or ended; ASSISTANT's).
 - The viewport **reads** bodies from `doc.state.rebuild.bodies` (with
   `tessKey` for change detection) and the selection from `selection`; nobody
   pushes meshes into it. Its binding (`src/viewport/bind.ts`) is the only
@@ -530,7 +549,11 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   and it must be there); not writing before a link is kept (no row needs it).
 - **Undo** (`src/types/undo.ts`): model snapshots only; one action, one drag or
   one panel session = one step; 100 steps; rollback, visibility, camera and
-  selection are not undoable.
+  selection are not undoable. An entry may carry a `tag` (the group of an
+  Assistant step; the person's own have none); `UndoStack.version` goes up on
+  every change of the history, never down; `snapshot()` / `restore()` and
+  `dropTop()` are what the Assistant step builds on. The stack lives in memory:
+  Back or a reload clears it, for the person's steps and the Assistant's alike.
 - **Rebuild**: each feature is a pure function of the bodies before it, its
   resolved parameters and references; cache by canonical feature JSON + inputs;
   rebuild from the first changed feature up to the rollback bar. A failed
@@ -552,6 +575,50 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   (never the browser's text undo); typed and not applied, Ctrl+Z first puts
   the applied value back (round 3: the field showed the old value while the
   model kept the new one, and Done then stored the old one).
+- **Assistant steps** (`doc.assistant`, `AssistantDoc` and `AssistantStep` in
+  `src/types/doc-service.ts`; DOC-CORE). One Assistant edit call is one step,
+  all or nothing, and the person always comes first:
+  - `begin(owner)` takes a `DocMark` (the model, the rollback bar, both undo
+    lists, the load); it throws `PersonEditing` while a panel session of the
+    person's is open. `step.run(fn)` makes the sessions opened (`EditSession.owner`)
+    and the undo steps pushed inside `fn` the step's own; inside it, an edit that
+    would commit a session the step does not own throws `PersonEditing` instead,
+    and that session stays open and uncommitted.
+  - Outside `run`, the person's own edit, rename, delete, undo, redo, rollback
+    move, `beginNew` or `beginEdit` discards a session the Assistant is filling
+    (never commits it half filled) and marks the step taken over
+    (`assistant:taken-over` {why}); each undo or redo of the person's emits
+    `assistant:person-undo` before it applies. `takeOver(why, {owner})` is the
+    same path for the panels and sketch mode (§7).
+  - `clean`: only this step changed the model (the history moved by its own
+    pushes, the bar where it left it, no load) and nobody took it over. A
+    person's panel opened on top counts by what it began on: its live draft is
+    no change of the Part until its Done. `seal(tag, label)` merges the step's
+    pushes into one entry, joined to the group below when that has the same tag
+    and ends where the step began, and only while clean; so a request's steps are
+    one undo entry, and a step of the person's in between starts a new one and
+    is never absorbed. `revert()` puts the mark back exactly when only this step
+    changed the model (idempotent, refused otherwise); `end()` releases the save
+    hold with one write and emits `assistant:step-ended`.
+  - **The save hold.** While a step is open and only it changed the model,
+    autosave's `getDoc` returns the mark (and a write equal to what is stored is
+    skipped), so blur, hidden, pagehide, leaving and flush never store half a
+    step; a reload, a crash or Back mid-call finds the mark.
+  - `restore(mark)` (the undo tool's way back: one rebuild, no new undo step; it
+    keeps a person's open panel when what its draft reads is as it was),
+    `topGroup()` and `undoGroup(tag)` (the chip's Undo: one `undo()` while the
+    newest entry carries the tag).
+  - Beside the step: `settled(signal?)` resolves once the rebuild has caught up
+    with the current model and view (the engine idle, the result built from this
+    very document at this bar, no kernel respawn under way; driven by state
+    changes, never timers; rejects on abort, a new load or an unreadable part).
+    `bodiesBefore(feature)` gives the bodies just above a feature whatever the
+    bar (an edit's selectors read them), `committed()` the model before an open
+    panel session, `editParams(rows)` adds, changes and removes parameters in one
+    undo step checked against the final set (any row order, swaps, a rename used
+    in the same call; the row at fault named), and `BodyProps.shells` the
+    kernel's shell count. A session whose draft throws on its first apply no
+    longer leaves a dead session open.
 
 ## 7. UI rules (Daniel's, non-negotiable)
 
@@ -563,6 +630,54 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   when something can be removed (on a new feature it discards it; an existing
   feature a later one uses shows none: `usePanelDelete`, `src/ui/panel-delete.ts`); **no tick or
   checkmark** in any header; valid field changes apply live.
+- **Assistant panels and sketches** (UI-SHELL, P3-SKETCH): the Assistant works
+  in the person's own panels and sketch mode, so the person sees what a person
+  would (the tree row editing, the live rebuild, the DOF chip), and the person
+  always comes first.
+  - It opens them inside its step: `openForAssistant(step, type, init)`,
+    `openEditForAssistant(step, id)`, `openParamsForAssistant(step)` (a
+    read-only Parameters panel) and `startSketch(support, {step})`. Each throws
+    `PersonEditing` at once while the person has a panel, a typed value, a menu,
+    a rename or a dialog open, and leaves that work as it is; an idle Parameters
+    panel gives way and comes back when the Assistant's panel closes.
+  - `PanelState.owner` is `person` or `assistant`. An Assistant panel has
+    `data-panel-owner="assistant"`, an "Assistant" badge, a title that cannot be
+    renamed, inert fields, no Delete, and Done disabled with its reason: "The
+    Assistant is filling this in · Esc takes over (the Assistant pauses)". It
+    pushes no viewport tool and leaves the selection filter alone (no profile
+    clicks, arrow or pickers), and it shows its feature as the panel's highlight
+    (`showForPanel`), which no command takes as its preselection. So a click in
+    the view only selects, and never changes the Assistant's draft.
+  - `doneForAssistant(step)` is an honest Done: an incomplete feature keeps
+    nothing and its reason is returned, and it never flushes.
+    `dropForAssistant(step)` closes the step's panel and keeps nothing.
+  - Escape, Ctrl+Z, Ctrl+Y, a command (Parameters too), the person's Edit of the
+    same feature or a rename of its row takes the panel over: discarded, never
+    committed, `assistant:taken-over` with the why (`escape`, `enter`, `undo`,
+    `command`, `edit`, `draft`). While one is open the toolbar's Undo and Redo
+    say "Take over from the Assistant: its open panel is discarded": they take
+    it over and undo or redo nothing.
+  - In an Assistant sketch only `apply(..., {by: step})` edits it. The person's
+    tools, construction drawing and drags are refused with "The Assistant is
+    drawing this sketch · Esc takes over" in the panel's foot (the tool stays
+    Select). Escape closes an open value box or question first, then takes the
+    sketch over; Ctrl+Z, Ctrl+Y, Enter and Finish sketch take it over; nothing of
+    a taken-over sketch is kept. `finish({step})` answers null (kept) or the
+    reason. A refused over-defined apply names the conflicting and redundant ids.
+  - The Parameters panel flashes the rows an Assistant step changed
+    (`data-param-changed`, 1.5 s). The Assistant's own Parameters panel closes
+    with its step (`assistant:step-ended`).
+- **Automatic camera moves pass `{auto: true}`** (VIEWPORT, D6): sketch entry, a
+  reopened sketch's reframe, a new Extrude's turn to Isometric, the banana's
+  refit, the refit after sketch mode and the Part's saved camera put back on
+  open. `ViewportHandle.userCameraMoves()` counts every other handle camera call
+  that moved the camera, each drag and each wheel step (every menu's Normal to,
+  F, 1-7 and the view buttons count). The first three ask
+  `services.apis.assistant.autoCamera(reason, session)` first, which says yes
+  for every session that is not the Assistant's, so the person's own sketches
+  and extrudes turn the view as they always did. A new automatic move passes
+  `{auto: true}`; `tests/viewport/camera-count.test.ts` and the `auto-camera`
+  tests check each site.
 - `ws.ui.confirm` (the host's, always a red button) only for destructive
   actions; other choices use an in-frame `<dialog>` (`showModal`,
   `aria-modal`). Tab and Shift+Tab go round its buttons and never leave it,
@@ -883,11 +998,15 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 - Shards, smoke and workers (`scripts/e2e.mjs`, `scripts/e2e-shards.mjs`;
   README "The e2e suite" has the commands and the phase rule):
   - **Shards.** Every spec is in exactly one area shard of `SHARDS` (`shell`,
-    `sketch`, `solids`, `step`, `link`, and the opt-in `big`);
-    `tests/e2e/shards.test.ts` fails on a spec in no shard or in two. A new
-    spec goes into the shard of the area it tests.
+    `sketch`, `solids`, `step`, `link`, `assistant`, and the opt-in `big`);
+    `tests/e2e/shards.test.ts` fails on a spec in no shard or in two, and pins
+    the `assistant` list. A new spec goes into the shard of the area it tests.
+    The smoke set covers the five areas from `shell` to `link`; `assistant`
+    and `big` have no smoke test.
   - **The map.** `RULES` maps a changed file to the shards that test it, first
-    match wins: an area folder to its shard (`src/sketch/` sketch, `src/link/`
+    match wins: an area folder to its shard (`src/sketch/` and
+    `src/solver-worker/` sketch and assistant, `src/assistant/` assistant, the
+    Assistant's module assistant and shell, `src/link/`
     link, the P4a feature folders solids, the STEP and body-tool folders step,
     plus the other shards whose specs use the feature), a feature's `index.ts`
     to shell too (the toolbar spec reaches every command), and shared code to
@@ -914,8 +1033,47 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
     times the server or the browser against a budget (contention latencies,
     frame rates, the 113 MB part). A new test that does any of these is tagged
     `@serial`; the unit test lists them.
-    Specs with a server of their own (`cad-link-plugins`, `cad-link-exit`) find
-    a free port and a private Vite cache, so they run in parallel too.
+    Specs with a server of their own (`cad-link-plugins`, `cad-link-exit`, the
+    `assistant` shard's) find a free port and a private Vite cache, so they run
+    in parallel too.
+- **The Assistant's tests** (ASSISTANT; `docs/assistant.md` "Tests" has the
+  files):
+  - No test reaches a real model provider or this PC's Assistant files. The
+    e2e specs drive the app's scripted model (`magnusim-web/e2e/support/fake-llm.mjs`)
+    through the app's vendor-neutral turn helpers (`e2e/support/assistant.js`),
+    wrapped by `e2e/assistant-helpers.ts`: `startAssistantHost(name, offset)`
+    starts the spec's own app server on `CAD_E2E_PORT_FROM` + offset (watch
+    +60, honest +70, coexist +80, takeover +100; +90 is the eval's) with the
+    Assistant's test switches, `useScriptedModel`, `startTurn`,
+    `offeredTools`, `resultsIn`, `openNewPart`, `chipWords`, the hold helpers
+    and the frame recorders. Never import a core support file that loads
+    `@playwright/test` (`stress.js`, `link-streams.js`, `two-plates.js`) from a
+    CAD spec: CAD runs its own copy, and the helpers take its `expect`
+    (`setExpect`).
+  - Races are forced, never slept through: a call stops at a hold point
+    (`window.__CAD__.assistant.hold(point)` until `release(point)`;
+    `after-settled` for reads, `after-plan`, `after-open`, `between-opens`,
+    `sketch-step:<n>` and `before-commit` for edits), the scripted model holds
+    an answer by name (each hold its own name: a released name stays
+    released), and the vitest files use fake timers and the held kernel. The
+    test handle also has `setHoldS(s)` (the 10-minute wait for the person),
+    `setPace(pace, scale)` and `setAskEach(on)` (neither written to the
+    person's preferences), `calls` (each call answered, with its error's
+    reason), `turns()`, `paused()` and `approving()`.
+  - Vitest: `tests/assistant/harness.ts` is a real DocService with every
+    module's feature types on the real kernel and solver in Node, the UI
+    controller, optionally the real sketch mode (`sketchMode: true`), and the
+    fake host's `ws.assistant` (`tests/fakes/assistant-sdk.ts`); it drives each
+    call as the bridge would. Real-kernel files give each test an explicit
+    timeout (Linux CI has two slow cores).
+  - The chip's words are asserted through `chipWords(frame)`
+    (`[data-assistant-text]`): the chip's own text also holds its buttons.
+  - The app's own check of the set: `scripts/__tests__/assistant-cad-tools.test.mjs`
+    (`npm run test:server` in `magnusim-web`) imports `src/assistant/schemas.ts`
+    and `guide.ts` and checks every schema against the app's rules, the strict
+    flags (the first 20 of the 21 tools strict on the cloud dialects,
+    `cad__view` not), and that the local prefix stays within 52,000 characters.
+    Run it after any schema or guide change.
 - Phase exit gates: `e2e/cad-p1-document.spec.js` is P1's (proposal §7, one
   test per bullet), against host API 1.2: CAD is On on a fresh install (it
   ships on since D33; `resetCadToDefault()` forgets the choice in the server's
@@ -1095,6 +1253,23 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
 - The workspace frame is `sandbox="allow-scripts allow-downloads"`
   (the host's `src/workspace/WorkspaceOverlay.tsx:478`): a blob URL on an `<a download>`
   saves a file (STEP export), and a hidden `<input type=file>` opens the picker.
+- Host API 1.9 (unreleased; the host still reports 1.8, and `manifest.toml`
+  stays at `api_version = "1.7"`): `ws.assistant`, the tools a workspace page
+  offers the app's Assistant (§12). `assistantOf(ws)` in `src/lib/bridge.ts`
+  takes it from the SDK the host served, not from `hostVersion`; with none,
+  `bridge.assistant` is null, nothing registers and the Part works as before.
+  The tools also read, each when the host has it: an error's `hint` and
+  `detail` and a result's `summary` (else the hint goes into the message);
+  `onTurn` and `stop` (the turn's title, steps and end; without them the chip
+  has no Stop and stays 10 s after the last call); a call's progress with
+  `{waiting: true}` (a wait for the person does not spend the turn's minutes);
+  a tool's `confirm` note (the delete question says Ctrl+Z brings the features
+  back); and the turn's local context and whether its model reads images.
+  Registration answers: after `not_connected` the page registers again when
+  the tab shows; after `remote` (a page opened from another PC),
+  `no_assistant` or `not_allowed` never. The app asks before a destructive
+  tool (`cad__delete`) in its own dialog, so a declined call never reaches the
+  page.
 
 ## 10. Extension points (P2/P3; `docs/p2p3-plan.md` §3)
 
@@ -1107,8 +1282,9 @@ Root attributes for tests: `[data-cad-app][data-kernel="starting|ready|restartin
   types before the Part loads, and installs the modules after the UI shell. No
   shared list is edited to add one; duplicates throw at start-up.
 - **Services.** `services.modules` (panels, tools) and `services.apis`
-  (`sketch`, `solver`, `files`: one writer each). `services.mode` is written by
-  sketch mode only.
+  (`sketch`, `solver`, `files`, and the optional `assistant` the Assistant's
+  module publishes: one writer each). `services.mode` is written by sketch
+  mode only.
 - **Panels.** Every feature panel comes from a module (the shell's own
   Box/Cylinder panel went with them in the SD pass); a feature type no module
   gives a panel for is not opened (a toast says this version cannot edit it, or,
@@ -1740,3 +1916,163 @@ changes. The host's contract is `docs/plugins/authoring.md` "Linking a geometry
   at once without the app's Python, runs the unit tests with
   `CAD_LINK_REQUIRE_PYTHON=1` (a missing Python fails them instead of skipping),
   and fails on any skipped unit or e2e test in the JSON reports (link review L3).
+
+## 12. The Assistant's tools (ASSISTANT; host API 1.9, unreleased)
+
+The app's Assistant runs a model the person chose (a cloud provider with their
+own key, or a local server) in turns on the app's server, and a workspace page
+offers it tools through the bridge (§9). The Part offers 18 with one fixed
+guide. This section is the design and the rules for changing it;
+`docs/assistant.md` is the developer reference (how a call goes, each tool's
+pieces, adding and testing a tool), and each tool's description in
+`src/assistant/schemas.ts` is what the model reads. The user's side is README
+"The Assistant in the Part".
+
+- **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `view`,
+  `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
+  `modify` (fillet, chamfer, shell), `pattern` (linear, circular, mirror),
+  `combine`, `body`, `edit_feature`, `undo`, `hole`. `delete` is the one
+  destructive tool, with its `confirm` note. With the app's three host tools a
+  CAD turn offers 21 (at most 24 go to a local server, 40 to the cloud). Every
+  property of every object is required (`""`, `[]` or `false` when unused), so
+  the set spends none of the first cloud dialect's strict budget for optional
+  fields: the first 20 tools in the app's order are strict, and `cad__view`
+  (the 21st by name) is checked by the app but not decoded strictly. The
+  schemas use only the app's subset (no `$ref`, unions, patterns, formats,
+  defaults, consts, titles or type lists), at most 6 KB each and 64 KB in all.
+  One more tool, or an optional field, would leave another tool out of strict:
+  the app's host test (§8) pins the flags.
+- **One registration** (`install.ts`) for the page's life: the tools and
+  `GUIDE`. Availability is answered per call, never by registering again, so
+  the prompt cache stays the same through a turn. Reads wait up to 30 s for the
+  Part to open and the kernel to start (a sign of life every 5 s); every tool
+  but `help` answers `not_ready` `small_context` for a local model whose context
+  is under 24,000 tokens. A build without a tool's code still offers it, and
+  the call answers `not_ready` `not_built` (tests make one with
+  `createCallHandler(rt, tools)`).
+- **Keys** (`session-key.ts`). Each call has a key: `turn:<id>` for the app's
+  turns; for an outside client's calls `mcp:<session>`, or `ext:<n>` while
+  they keep coming (a new `n` after 5 minutes without one, after a change of
+  the person's between two of them, and on a page load). The undo group, the
+  ledger of the key's calls (the `undo` tool, `get_model`'s
+  `undo.your_steps`), the handles (`#f3`), the camera latch and the baseline
+  of `user_changes` are per key.
+- **A reply** is `{text, data, summary?, images?}`: one line of text (at most
+  200 characters), the turn log's line (160; the model never gets it), and
+  compact JSON in mm, mm², mm³ and degrees (lengths to 1e-4 mm, areas and
+  volumes to 6 significant figures), every container at most 6 deep and every
+  list at most 200 items (the app turns depth 8 into null, cuts lists at 200
+  and strings at 2000 characters, and collapses whitespace). `call.ts` adds
+  `rev` (the Part's committed changes) to every reply, and `user_changes` when
+  the person changed the committed Part since the key's last call. Reply
+  budgets by turn kind (`turn-info.ts`): `get_model` brief 8 KB (3 KB on a
+  local turn), full 24 KB (12 KB), one sketch 16 KB (8 KB); a local turn's
+  pictures are small.
+- **Errors** are thrown as `ToolError(reason, message, {hint?, detail?})`
+  (`errors.ts`): the reason fixes the app's code (`invalid_input`, `failed`,
+  `busy`, `not_ready`) and the hint (`HINTS`, also in `help errors`), the
+  message starts with the reason, and `detail.reason` names it. Anything else
+  thrown is `internal`; a stopped call answers `busy` `stopped`. A new reason
+  gets its hint in the same change.
+- **Reads** never wait for the person and change nothing: not the Part, the
+  camera, the section view or the selection (`find` only lights its matches
+  for 1.5 s at the watch pace). They read the rebuild once it has caught up
+  (`doc.settled()`); the selectors and `measure` run again once when the
+  model, the rebuild or the kernel's worker changed under them, and answer
+  `busy` `changed` the second time.
+- **An edit is one Assistant step** (`step.ts` `runEdit`, over §6's
+  `doc.assistant`):
+  1. the gate: `not_ready` while the Part takes no edits, `busy` `other_turn`
+     for a call of a turn that is not the one running in this tab, then the
+     wait for the person (§7's list, the rollback bar not at the end, the chip's
+     Pause), up to 10 minutes, with the chip `waiting` and progress
+     `{waiting: true}`, then `busy` `person_editing`, `rolled_back` or `paused`;
+  2. the plan, against the settled Part: every refusal, with every problem at
+     once, before anything changes;
+  3. the apply, inside the step, through the person's own panels, sketch mode
+     and one-shot edits, with a checkpoint at each pace point (a Stop, a
+     take-over, a change by someone else or a draft the call did not write ends
+     it);
+  4. the judge, on the settled rebuild: the call's own feature failing, or a
+     value edit (`set_params`, `edit_feature` values) turning a working feature
+     red, reverts it; a structural edit keeps what it broke and lists it in
+     `broke`;
+  5. Ask each step (Keep or Discard), then the seal into the key's undo group
+     ("Assistant: <request>"), and the call in the key's ledger.
+
+  Any failure, a Stop, a stall, Back or a take-over reverts the step to its
+  mark (a Stop synchronously, in the abort handler). A tool is an `EditTool
+  {plan, apply, sealed?, reply}`; `feature-tools.ts` (the honest Done, the
+  made faces' labels, stored references written back as selectors) and
+  `region-tools.ts` (regions, the op fields, the miss diagnosis of
+  `diagnose.ts`) hold what the tools share.
+- **The person always first.** The Assistant never commits, replaces or edits
+  under a session of the person's (§6, §7). A take-over pauses its edits in
+  this Part until the turn ends (or the chip's Resume), and so does the
+  person's undo of its steps while its turn runs. It changes what the person
+  made only through its own undoable steps, and its guide tells it not to
+  unless asked.
+- **Selectors** (`selectors/`, `labels.ts`): one string language for faces,
+  edges, vertices, bodies, regions, planes and axes (role labels such as
+  `Base.end`, queries such as `Body 1 faces >Z`, `face at (x, y, z)`, handles),
+  resolved through the person's own reference makers (`pickFace`,
+  `refOfEdge`, `refOfRegion`, the CONSTRUCT kinds), so what a feature stores
+  is what a person's pick would store. The parser reads back every label the
+  code writes. No new kernel op.
+- **Sketches** (`sketch/`): compiled (macros with their own relations, ends
+  within 0.05 mm joined, references checked against the solver's own
+  signatures, `signatures.ts`) and solved headless (`analyzeOnce`) before the
+  step opens. A conflict, or a relation of the model's that repeats another,
+  is refused naming the ids (an expression error names its row); the tool's
+  own inferred relations that repeat one are dropped newest first, the
+  model's never. What is stored is always the headless solution; at the watch
+  pace sketch mode draws the model's guesses first and lets the relations and
+  dimensions pull them into place (`write.ts`).
+- **Watch mode** (`pace.ts`, `camera.ts`, `approval.ts`, `health.ts`,
+  `AssistantChip.tsx`, `state.ts`). The person's pace (`ws.prefs`
+  `assistant.pace`, watch by default) waits at each pace point, at most 6 s a
+  call; never while the window is hidden or covered, after a rebuild over
+  1.5 s, or at fast. The camera latch: once `userCameraMoves()` moved during a
+  key, the automatic camera moves of the Assistant's sessions stay off for the
+  rest of it. The Assistant never calls `setCamera`, `fit` or `setView`. The
+  chip (`data-assistant-state`, its words in `[data-assistant-text]`, its
+  buttons in `[data-assistant-action]`) has Pause, Resume, Stop, Fast / Watch,
+  Ask each step (`ws.prefs` `assistant.ask_each`, off by default), Keep,
+  Discard and Undo, and the Part's health when the turn ends.
+- **Pictures and measures** (`view.ts`, `measure.ts`). `ViewportHandle.snapshot`
+  draws off screen with its own camera in one task (no animation frame, so a
+  hidden window still gets pictures); a turn whose model reads no images gets
+  `not_ready` `no_images`. Measures use the kernel (`measure`, `props`, a
+  boolean `common` and `fuse` for overlaps and unions, `section`); every shape
+  a call makes is released, in the worker that made it.
+- **The guide and help** (`guide.ts`, `help.ts`). The guide is ASCII, at most
+  3950 characters (the app keeps 4000), vendor-neutral and free of project
+  data; the help topics hold the rest (at most 8 KB each, the examples 12 KB,
+  containers at most 6 deep). `tests/assistant/guide.test.ts`, `help.test.ts`
+  and `guide-example.test.ts` (it builds the guide's examples on the real
+  kernel) pin them.
+- **Rules for a change here:**
+  - Vendor-neutral everywhere in the plugin: code, comments, tool
+    descriptions, the guide, help, tests, test names, docs and commit messages
+    name no model vendor (`bundled-plugins/cad/**` is not on the app's
+    vendor-names allowlist). No test calls a provider or the network.
+  - Every edit goes through `runEdit`: what it changes is changed inside the
+    step, through the person's own paths (`openForAssistant`,
+    `openEditForAssistant`, `startSketch(..., {step})`, the Part's one-shot
+    edits inside `step.run`).
+  - A race gets a test that forces it at a hold point (`testing.ts`), with a
+    held kernel call or a held answer of the scripted model; never a sleep.
+  - Behaviour the person sees gets an e2e in the `assistant` shard that asserts
+    what the person sees; a new spec joins `SHARDS.assistant` and the pinned
+    list in `tests/e2e/shards.test.ts`.
+  - Shared files (`tools/index.ts`, one line per tool; `runtime.ts`; the chip;
+    the e2e helpers; `SHARDS`) change additively.
+- **Not offered.** An export tool (Daniel's decision of 2026-10-17: the person
+  exports with Export STEP; sending to a simulation comes with the app's later
+  host tools). Split, Press-pull, Delete faces, the Enclosure, Import STEP,
+  CONSTRUCT's axes and points, a face extrude, projected or linked sketch
+  geometry, sketch patterns and offsets: `get_model` reads them, and
+  `edit_feature` and `delete` work on them as features. A batch tool: each
+  call is already all or nothing, and one is added only when at least a fifth
+  of the evaluation's hardest builds end at their step limit. Undo across a
+  reload (§6 "Undo").

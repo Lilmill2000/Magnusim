@@ -23,9 +23,26 @@ September 2026 readiness audit. This list preserves the intended work.
   with their questions shown in the app, three read-only app tools, and tools a
   workspace page offers (bridge 1.9, unreleased: the host still says 1.8). A
   turn starts from the terminal client (`scripts/assistant-run.mjs`) until the
-  chat panel lands. Next, in this order: CAD's tools in its workspace, a
-  server other assistant programs can connect to (MCP), the chat panel, and
-  other plugins' tools; then the 1.9 bridge and SDK 1.5.0 release.
+  chat panel lands. CAD's tools are built too: an open Part offers 18 (read
+  the Part, find faces and edges, measure, look at pictures, help, set
+  parameters, sketch, extrude, revolve, sweep or loft, holes, fillet, chamfer
+  or shell, pattern or mirror, combine bodies, name or colour a body, change a
+  feature, undo its own steps, and delete features after asking). Each call
+  is all or nothing and one request is one undo step; the person watches it
+  work in the Part's own panels and sketch mode, with Pause, Stop, Undo,
+  Fast / Watch and "Ask each step" on the Part's chip, and takes over with
+  Escape (`bundled-plugins/cad/README.md`, "The Assistant in the Part").
+  Before it ships: a live check of the tool set against both cloud providers'
+  strict schemas, and the first evaluation runs on real models. Next, in this
+  order: a server other assistant programs can connect to (MCP), the chat
+  panel, and other plugins' tools; then the 1.9 bridge and SDK 1.5.0 release.
+  - **CAD's Assistant tools, later:** more tools (Split, Press-pull, Delete
+    faces, the Enclosure, Import STEP, CONSTRUCT's axes and points, a face
+    extrude, Project / Intersect, sketch patterns and offsets; it reads them
+    and can change or delete them today), a batch tool if the evaluation shows
+    builds running out of steps, undo that survives a reload, and kernel
+    queries the selectors could use (face wires, edge convexity, the nearest
+    point, rays). No export tool: the person exports with Export STEP.
 
 - **Plugin workspaces, later (Plugin Host H13):** a workspace opens only for a
   study in a project. To add: global workspaces that open without a project,
