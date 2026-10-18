@@ -19,7 +19,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 
 const { FakeClock, makeManager, settled, eventsOf, hostTool, until, tick, relayServer, runTool, settledNow } = await import('./assistant-harness.js');
 const { RELAY_ACK_MS } = await import('../assistant/relay.ts');
-const { GateBroker, GATE_UNSEEN_NOTE, GATE_TIMEOUT_MS, GATE_UNSEEN_MS, NO_PRESENTER } = await import('../assistant/gates.ts');
+const { GateBroker, GATE_UNSEEN_NOTE, GATE_UNSEEN_WINDOW_NOTE, GATE_TIMEOUT_MS, GATE_UNSEEN_MS, NO_PRESENTER } = await import('../assistant/gates.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { Router, dispatch } = await import('../router.ts');
 const { sendJson } = await import('../http.ts');
@@ -175,6 +175,21 @@ describe('a question for an app tab', { timeout: 20_000 }, () => {
     n.b.answer(q.view.id, false);
     n.b.answer(q2.view.id, false);
     await Promise.all([q.answer, q2.answer]);
+  });
+
+  it('a window-only question (link_only) unseen for 15 s: its note says to show the window, never to answer here (the answer key can’t)', async () => {
+    const { b, events, clock } = broker({ presenter: NO_PRESENTER });
+    const own = ask(b, events, { ...REQ, link_only: true }, TURN('T1'));
+    assert.equal(own.view.link_only, true);
+    const keyed = ask(b, events, { ...REQ, turn: 't-2' }, { kind: 'turn', id: 't-2', tab: 'T1' });
+    clock.advance(GATE_UNSEEN_MS);
+    const notes = Object.fromEntries(events.filter((e) => e.type === 'unseen').map((e) => [e.view.id, e.text]));
+    assert.deepEqual(notes, { [own.view.id]: GATE_UNSEEN_WINDOW_NOTE, [keyed.view.id]: GATE_UNSEEN_NOTE });
+    assert.equal(GATE_UNSEEN_WINDOW_NOTE, 'The Magnusim window that should show this question is in the background or closed. Show it to answer.');
+    assert.doesNotMatch(GATE_UNSEEN_WINDOW_NOTE, /answer here/i);
+    b.answer(own.view.id, false);
+    b.answer(keyed.view.id, false);
+    await Promise.all([own.answer, keyed.answer]);
   });
 
   it('through a turn and the route: the note reaches the turn’s log, and POST /api/assistant/gates/:id answers (409 for a second answer)', async () => {

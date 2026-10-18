@@ -19,8 +19,9 @@
  *   it, and a tool result can't: only these routes reach answer();
  * - when a tab-bound gate can't be shown (no live link), or its link goes for 15 s, it
  *   counts as unseen (unseen(), until it is shown again) and the owner is told once (a
- *   `note` the CLI shows); the gate is shown again when the tab's link returns, and stays
- *   answerable with the answer key meanwhile.
+ *   `note` the CLI shows: "Answer here, or show the window", or for a `link_only` question,
+ *   which the answer key never answers, "Show it to answer"); the gate is shown again when
+ *   the tab's link returns, and stays answerable with the answer key meanwhile.
  *
  * Open and answered gates live in the Assistant's state on globalThis, so a server Vite
  * restarted in this process still answers a gate an older one opened.
@@ -109,6 +110,8 @@ export const GATE_TIMEOUT_MS = 10 * 60_000;
 export const GATE_UNSEEN_MS = 15_000;
 export const GATE_UNSEEN_NOTE =
   'The app tab that should show this question is in the background or closed. Answer here, or show the Magnusim window.';
+/** The same for a question only the window answers (`link_only`): nothing can answer it where the note is read. */
+export const GATE_UNSEEN_WINDOW_NOTE = 'The Magnusim window that should show this question is in the background or closed. Show it to answer.';
 const DETAIL_ROWS = 6;
 const DETAIL_TEXT = 80;
 /** Answered gates are remembered this long (a second answer is told `already`, not `unknown`). */
@@ -298,7 +301,8 @@ export class GateBroker {
       entry.hidden = true;
       if (entry.noted) return;
       entry.noted = true;
-      this.tell({ type: 'unseen', view: entry.view, owner: entry.owner, text: GATE_UNSEEN_NOTE });
+      const text = entry.view.link_only === true ? GATE_UNSEEN_WINDOW_NOTE : GATE_UNSEEN_NOTE;
+      this.tell({ type: 'unseen', view: entry.view, owner: entry.owner, text });
     }, this.unseenMs);
   }
 
