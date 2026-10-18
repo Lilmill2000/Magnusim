@@ -3,7 +3,8 @@
 //   - extrude a sketch the tool drew: a body named and coloured in the same step, its faces as
 //     labels, the extent in words, one undo entry for the request, get_model's by: "assistant";
 //     its inputs come back as this tool's input and, resent with edit, replace it as they were;
-//     edit_feature sets distance;
+//     edit_feature sets distance; the person's Ctrl+Z while "Ask each step" asks about an extrude
+//     that named and coloured its body (three undo entries of the step's) takes all of it back;
 //   - regions in every form: "all" keeps a plate's hole open (even-odd), "r2", "at(u, v)", another
 //     sketch's region refused; join, cut through given bodies, up to a face and a vertex, two sides,
 //     symmetric, through both ways;
@@ -15,7 +16,7 @@
 //     sketch's centerline; a profile across the axis fails with CAD's words and changes nothing;
 //     its inputs come back; edit_feature sets angle.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runtimeOf } from '../../src/assistant/runtime';
 import type { ExtrudeFeature, RevolveFeature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
@@ -187,6 +188,31 @@ describe('extrude', () => {
       const same = await ok(h, 'extrude', EXTRUDE({ name: 'Lid', sketch: 'Plate sketch', extent: 'blind', distance: '2 mm', flip: true, body_name: 'Plate' }));
       expect(same.data).toMatchObject({ bodies: { created: [{ body: 'Plate' }] } });
       expect(bodies(h)).toEqual(['Body 1', 'Plate']);
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe("the person's Ctrl+Z during an extrude that names its body", () => {
+  it(
+    'while Ask each step asks "keep it?": the feature, the name and the colour all go at once, the history as before',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      h.fake.emitTurn({ id: 't-test', title: 'A plate' });
+      await ok(h, 'sketch', rectInput('Plate sketch', 60, 40));
+      const rt = runtimeOf(h.services)!;
+      const before = h.doc.state.get().doc;
+      const hist = h.doc.state.get().history;
+      rt.askEach.force(true);
+      const r = h.call('extrude', EXTRUDE({ name: 'Plate', sketch: 'Plate sketch', distance: '6 mm', body_name: 'Slab', color: '#336699' }));
+      await vi.waitFor(() => expect(rt.approvals.pending()).toMatchObject({ part: 'Extrude Plate' }), { timeout: 60_000 });
+      expect(bodies(h)).toEqual(['Slab']);
+      h.doc.undo();
+      expect(h.doc.state.get().doc).toBe(before);
+      expect(h.doc.state.get().history).toEqual(hist);
+      expect(await r).toMatchObject({ ok: false, error: { code: 'busy', message: 'taken_over: You took over (Undo): Extrude Plate was not kept.', detail: { reason: 'taken_over', why: 'undo' } } });
+      expect(names(h)).toEqual(['Plate sketch']);
+      expect(h.doc.state.get().history).toEqual(hist);
     },
     REAL_KERNEL_MS,
   );

@@ -5,7 +5,9 @@
 //     and outside it the person's edit takes over the Assistant's session;
 //   - seal merges a call into its turn's group, never over the person's steps;
 //   - a person's Ctrl+Z between a push and the seal (forced in a microtask) is a
-//     take-over, and no seal happens over it;
+//     take-over, and no seal happens over it; a person's Ctrl+Z or Ctrl+Y while a step
+//     that pushed one entry or several is open with no panel takes the whole step back
+//     to its mark (nothing else undone, nothing of it stored);
 //   - revert is exact, refused once someone else changed the Part, idempotent;
 //   - the save hold: the stored model is the mark during a clean step, on every
 //     write path, and one write follows end();
@@ -765,30 +767,107 @@ describe('doc.assistant: seal, revert, undo groups', () => {
     expect(undoLabels(doc)).toEqual(['Assistant: second', 'Assistant: plate']);
   });
 
-  it('a person\'s Ctrl+Z between a parameter push and the seal (forced in a microtask) takes the step over: no seal, the history as the person left it', async () => {
-    const { doc, undos } = make();
+  it('a person\'s Ctrl+Z between a parameter push and the seal (forced in a microtask) takes the step over: no seal, the history as before the step', async () => {
+    const { doc, undos, takeOvers } = make();
     await doc.load();
     let w: ParamId | null = null;
     call(doc, 'assistant:c1', () => {
       w = doc.editParams({ add: [{ name: 'w', expr: '20 mm', quantity: 'length' }], change: [], remove: [] }).ids!.w;
     });
+    const hist = history(doc);
     const st = doc.assistant.begin('assistant:c2');
     expect(st.run(() => doc.editParams({ add: [], change: [{ id: w!, patch: { expr: '30 mm' } }], remove: [] }))).toEqual({ ok: true, ids: {} });
     // The person's Ctrl+Z lands while the call waits for its rebuild.
     queueMicrotask(() => doc.undo());
     await doc.settled();
-    expect(undos).toEqual([{ tag: 'assistant:c2', label: 'Parameters: 1 changed', redo: false }]);
+    // A take-over of the step, not an undo of anything of the person's or the turn's.
+    expect(undos).toEqual([]);
+    expect(takeOvers).toEqual([{ why: 'undo' }]);
     expect(st.takenOver).toBe('undo');
     expect(st.clean).toBe(false);
     expect(() => st.seal('turn:t1', 'Assistant: plate')).toThrow('The person took this step over');
-    const hist = history(doc);
-    expect(hist).toEqual({ canUndo: true, canRedo: true, undoLabel: 'Assistant: plate', redoLabel: 'Parameters: 1 changed' });
-    // The call's revert is refused (the person moved the history) and changes nothing: the person keeps Redo.
-    expect(st.revert().ok).toBe(false);
+    expect(history(doc)).toEqual(hist);
+    // The call's revert, when it hears of it, changes nothing more.
+    expect(st.revert().ok).toBe(true);
     st.end();
     expect(history(doc)).toEqual(hist);
     expect(doc.assistant.topGroup()!.after).toBe(doc.committed());
     expect(doc.state.get().doc.params.map((p) => p.expr)).toEqual(['20 mm']);
+  });
+
+  it("a person's Ctrl+Z or Ctrl+Y while a step that pushed several entries is open with no panel takes all of it back: the mark exactly, nothing else undone, nothing of it stored", async () => {
+    const { doc, ws, undos, takeOvers } = make({ interval: 60_000, burst: 1 });
+    await doc.load();
+    const a = block(doc);
+    await doc.flush();
+    const hist = history(doc);
+    const stored = () => (ws.json(MODEL) as { doc: { features: { name: string }[]; params: { name: string }[] } }).doc;
+    for (const [i, redo] of [false, true].entries()) {
+      const st = doc.assistant.begin(`assistant:c${i + 1}`);
+      const mark = st.mark;
+      expect(doc.assistant.undoTakesOver()).toBe(false);
+      // A hole's two pieces (its sketch, then a change of the model), then a body's name: three entries of the step's.
+      st.run(() => newSketch(doc, 80).commit());
+      st.run(() => doc.rename(a.extrude, 'Base'));
+      st.run(() => doc.editParams({ add: [{ name: 't', expr: '8 mm', quantity: 'length' }], change: [], remove: [] }));
+      expect(history(doc).undoLabel).toBe('Parameters: 1 changed');
+      expect(doc.assistant.undoTakesOver()).toBe(true);
+      if (redo) doc.redo();
+      else doc.undo();
+      expect(st.takenOver).toBe('undo');
+      expect(doc.state.get().doc).toBe(mark.doc);
+      expect(doc.state.get().view.rollback).toBe(mark.rollback);
+      expect(history(doc)).toEqual(hist);
+      expect(doc.assistant.undoTakesOver()).toBe(false);
+      // A later push of the call (it had not heard yet) is taken back by its revert too.
+      st.run(() => doc.rename(a.sketch, 'Late'));
+      expect(st.revert()).toEqual({ ok: true });
+      st.end();
+      expect(doc.state.get().doc).toBe(mark.doc);
+      expect(history(doc)).toEqual(hist);
+      await doc.flush();
+      expect(stored().features.map((f) => f.name)).toEqual(['Sketch 1', 'Extrude 1']);
+      expect(stored().params).toEqual([]);
+    }
+    expect(undos).toEqual([]);
+    expect(takeOvers).toEqual([{ why: 'undo' }, { why: 'undo' }]);
+    // With no step open, the person's undo is theirs again.
+    doc.undo();
+    expect(names(doc)).toEqual(['Sketch 1']);
+  });
+
+  it("the person's Ctrl+Z is no whole-step take-over before the step changed anything, once someone else changed the Part, with a panel open on it, or once it is sealed", async () => {
+    const { doc, undos } = make();
+    await doc.load();
+    const a = block(doc);
+    // Nothing of the step's yet: the person's undo goes ahead (and takes the step over).
+    const st1 = doc.assistant.begin('assistant:c1');
+    expect(doc.assistant.undoTakesOver()).toBe(false);
+    doc.undo();
+    expect(names(doc)).toEqual(['Sketch 1']);
+    expect(st1.takenOver).toBe('undo');
+    st1.end();
+    doc.redo();
+    // The person changed the Part after the step's push: their undo undoes their own change.
+    const st2 = doc.assistant.begin('assistant:c2');
+    st2.run(() => doc.rename(a.extrude, 'Base'));
+    doc.rename(a.sketch, 'Mine');
+    expect(doc.assistant.undoTakesOver()).toBe(false);
+    doc.undo();
+    expect(names(doc)).toEqual(['Sketch 1', 'Base']);
+    st2.end();
+    // A person's panel open on the step: not a whole-step take-over either.
+    const st3 = doc.assistant.begin('assistant:c3');
+    st3.run(() => doc.rename(a.extrude, 'Plate'));
+    const p = newSketch(doc, 120);
+    expect(doc.assistant.undoTakesOver()).toBe(false);
+    p.discard();
+    expect(doc.assistant.undoTakesOver()).toBe(true);
+    st3.seal('turn:t1', 'Assistant: plate');
+    // Sealed: kept, so the person's undo from here undoes the group.
+    expect(doc.assistant.undoTakesOver()).toBe(false);
+    st3.end();
+    expect(undos.map((u) => u.tag)).toEqual([null, null, null]);
   });
 
   it('revert is exact, idempotent, and a no-op after end returning the first result', async () => {

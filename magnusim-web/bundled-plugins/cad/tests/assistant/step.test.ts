@@ -7,6 +7,10 @@
 //     finishes as one undo group;
 //   - a person's one-shot change at between-opens makes the step unclean: busy changed, and the
 //     revert is refused with what stayed (detail.kept);
+//   - a person's one-shot change at after-plan (a parameter that turns a fillet red) makes the
+//     call plan anew on the changed Part: the judge never puts the person's breakage on the call
+//     (no broke_downstream, no broke, nothing marked broken_by_you); a Part that changes at every
+//     plan answers busy changed after three tries, nothing made;
 //   - Escape or Ctrl+Z on the Assistant's panel is a take-over: busy taken_over with its why,
 //     nothing kept, and the Assistant pauses in this Part until the turn ends;
 //   - the calls of a turn seal into one undo group; a person's edit between two calls starts a new
@@ -151,6 +155,62 @@ describe("the person's panel during a call", () => {
       expect(out).toMatchObject({ ok: false, error: { code: 'busy', detail: { reason: 'changed', kept: ['changed Fillet 1', 'added parameter q = 1 mm'] } } });
       // The person's change stays, and so does what the step did before it (the revert would undo theirs).
       expect(h.doc.state.get().doc.params.map((x) => x.name)).toContain('q');
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe("the person's one-shot change while the call plans", () => {
+  it(
+    'makes the call plan anew: the person\'s breakage is not the call\'s (no broke_downstream, no broke), and the call is kept',
+    async () => {
+      h = await assistantHarness();
+      const p = await plate(h);
+      h.doc.addParam({ name: 'r', expr: '1 mm', quantity: 'length' });
+      const fl = await fillet(h, p, 'r');
+      const rt = runtimeOf(h.services)!;
+      const r = h.doc.state.get().doc.params.find((x) => x.name === 'r')!.id;
+      for (const tool of ['edit_feature', 'set_params'] as const) {
+        rt.holds.hold('after-plan');
+        const call = tool === 'edit_feature' ? h.call('edit_feature', EDIT('Extrude 1', { set: [{ field: 'extent.distance', value: '8 mm' }] })) : h.call('set_params', PARAM('q', '2 mm'));
+        await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['after-plan']), { timeout: 60_000 });
+        // The person types a radius the plate cannot take in their Parameters panel (Enter): Fillet 1 fails.
+        expect(h.doc.updateParam(r, { expr: tool === 'edit_feature' ? '50 mm' : '60 mm' })).toEqual({ ok: true });
+        await h.settle();
+        expect(stateOf(h, fl)).toBe('error');
+        rt.holds.release('after-plan');
+        const out = await call;
+        expect(out).toMatchObject({ ok: true, result: { data: { broke: [] } } });
+        expect(stateOf(h, fl)).toBe('error');
+        expect(rt.brokenBy.has(fl)).toBe(false);
+        const full = await h.ok('get_model', { detail: 'full', feature: 'Fillet 1' });
+        expect(JSON.stringify(full.data)).not.toContain('broken_by_you');
+        h.doc.updateParam(r, { expr: '1 mm' });
+        await h.settle();
+      }
+      expect(distanceOf(h, p.extrude)).toBe('8 mm');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a Part that changes each time the call plans: busy changed after three tries, nothing made',
+    async () => {
+      h = await assistantHarness();
+      await plate(h);
+      const rt = runtimeOf(h.services)!;
+      const before = h.doc.state.get().history.undoLabel;
+      const r = h.call('set_params', PARAM('q', '2 mm'));
+      for (let i = 1; i <= 3; i++) {
+        rt.holds.hold('after-plan');
+        await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['after-plan']), { timeout: 60_000 });
+        h.doc.addParam({ name: `mine${i}`, expr: `${i} mm`, quantity: 'length' });
+        rt.holds.release('after-plan');
+      }
+      expect(await r).toMatchObject({ ok: false, error: { code: 'busy', message: 'changed: The Part changed each time the call planned (3 times); nothing of it was made.', detail: { reason: 'changed' } } });
+      expect(h.doc.state.get().doc.params.map((x) => x.name)).toEqual(['w', 'd', 't', 'mine1', 'mine2', 'mine3']);
+      expect(h.doc.state.get().history.undoLabel).not.toBe(before);
+      expect(h.doc.state.get().history.undoLabel).toBe('Add parameter mine3');
     },
     REAL_KERNEL_MS,
   );

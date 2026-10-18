@@ -457,6 +457,8 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       return { ok: true };
     },
     takeOver,
+    // The fake keeps the person's undo as it was: never a whole-step take-over.
+    undoTakesOver: () => false,
   };
 
   class SessionImpl implements EditSession {

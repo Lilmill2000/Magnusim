@@ -287,6 +287,12 @@ export interface AssistantDoc {
    * marked and the event emitted even with no session open.
    */
   takeOver(why: TakeOverWhy, opts?: { owner?: string }): boolean;
+  /**
+   * The person's Undo or Redo now would take the open Assistant step over whole: the step changed
+   * the Part, only it did, and no panel session is open. Every piece of it goes back to its mark
+   * (nothing else is undone), the step is marked `takenOver` 'undo' and 'assistant:taken-over' is emitted.
+   */
+  undoTakesOver(): boolean;
 }
 
 /** Rows for DocService.editParams: all applied in one undo step. */

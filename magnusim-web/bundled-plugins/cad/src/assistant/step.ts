@@ -7,8 +7,11 @@
 // ledger; otherwise the step goes back to its mark exactly and the call answers why. A Stop, a
 // stall or Back (the call's signal) reverts at once, synchronously, before anything else runs.
 // A person who opens a panel while the call plans or opens is waited for again (the call plans
-// anew), at most three times; a take-over (Escape, Ctrl+Z, a command, a draft change) answers
-// busy taken_over and pauses the Assistant in this Part until the turn ends.
+// anew), at most three times; so is a one-shot change of the Part while it plans (Enter in the
+// Parameters panel, a Delete, an Undo: the plan and the judge's "before" would be of the older
+// Part). A take-over (Escape, Ctrl+Z, a command, a draft change) answers busy taken_over and
+// pauses the Assistant in this Part until the turn ends; the person's Ctrl+Z or Ctrl+Y between
+// the step's panels takes all of the step back at once (doc.assistant.undoTakesOver).
 // The person's selection comes back after the call, unless they changed it meanwhile.
 // Watch mode (§8): with "Ask each step" on, a judged step waits for the person's Keep or Discard
 // before it is sealed (approval.ts; Discard and no answer revert it: busy step_declined); a kept
@@ -22,7 +25,7 @@ import { isPanelHighlight } from '../lib/selection';
 import type { AppServices } from '../types/app';
 import type { CallCtx, EditData, ToolReply } from '../types/assistant';
 import type { AssistantStep, EditSession, TakeOverWhy } from '../types/doc-service';
-import type { Feature } from '../types/doc';
+import type { CadDoc, Feature } from '../types/doc';
 import type { Selection, SelectionItem } from '../types/selection';
 import { uiFor } from '../ui/controller';
 import { waitForApproval } from './approval';
@@ -92,6 +95,20 @@ const WHY_WORDS: Record<TakeOverWhy, string> = {
   edit: 'an edit of the Part',
   draft: 'a change in its panel',
 };
+
+/** What a plan was made on: the committed model, the rollback bar and the rebuild (a change of any is a change of the Part). */
+interface PlannedOn {
+  doc: CadDoc;
+  rollback: number | null;
+  seq: number;
+}
+
+function plannedOn(services: AppServices): PlannedOn {
+  const s = services.doc.state.get();
+  return { doc: services.doc.committed(), rollback: s.view.rollback ?? null, seq: s.rebuild.seq };
+}
+
+const samePart = (a: PlannedOn, b: PlannedOn) => a.doc === b.doc && a.rollback === b.rollback && a.seq === b.seq;
 
 /** The turn a pause ends with: the call's turn when the host told of it, else none (the next key ends it). */
 function turnOfKey(rt: AssistantRuntime, key: string): string | null {
@@ -165,6 +182,7 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
   for (let attempt = 1; ; attempt++) {
     await waitForEdit(ctx);
     await heartbeat(ctx, doc.settled(ctx.signal), 'Waiting for the rebuild');
+    const on = plannedOn(services);
     const before = snapshotStates(doc.state.get());
     const plan = await tool.plan(ctx);
     await ctx.hold('after-plan');
@@ -174,6 +192,13 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
     if (person || rt.pause.get()) {
       if (attempt < MAX_ATTEMPTS) continue;
       throw new ToolError(person?.reason ?? 'paused', `The person kept the Part busy: ${person?.words ?? 'paused'}.`, { detail: person ? { person: person.words } : { why: rt.pause.get()?.why } });
+    }
+    // The Part changed while the call planned (a one-shot change of the person's): the plan and
+    // `before` are of the older Part, so it plans anew on the settled Part (review: the judge put
+    // the person's breakage on the call, or reverted a right change as broke_downstream).
+    if (!samePart(on, plannedOn(services))) {
+      if (attempt < MAX_ATTEMPTS) continue;
+      throw new ToolError('changed', `The Part changed each time the call planned (${MAX_ATTEMPTS} times); nothing of it was made.`);
     }
     // Another call of the Assistant's is changing the Part right now (an outside client's beside a turn's).
     if (doc.assistant.current()) throw new ToolError('other_turn', 'Another call of the Assistant is changing this Part right now.');

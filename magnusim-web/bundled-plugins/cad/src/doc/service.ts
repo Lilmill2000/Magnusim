@@ -494,6 +494,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
   class StepImpl implements AssistantStep {
     takenOver: TakeOverWhy | null = null;
     ended = false;
+    /** Sealed into its group: what it did is kept (a person's undo from here undoes the group). */
+    sealed = false;
     /** The model, the bar and the undo version as this step's own changes left them. */
     doc: CadDoc;
     rollback: number | null;
@@ -545,6 +547,22 @@ export function createDocService(opts: DocServiceOptions): DocService {
       return !this.takenOver && this.mine();
     }
 
+    /** This step changed the model, the bar or the undo lists since begin (or since it went back to its mark), or has a panel session of its own open. */
+    changed(): boolean {
+      if (this.doc !== this.mark.doc || this.rollback !== this.mark.rollback || (open && open.owner === this.owner)) return true;
+      return this.version !== this.mark.history.version && this.version !== this.backAt;
+    }
+
+    /** The undo version this step's own restore of its mark left (the lists are the mark's then), or null. */
+    private backAt: number | null = null;
+
+    /** Back to the mark, as this step's own change (its revert, a take-over of the whole step). */
+    takeBack(): EditResult {
+      const r = asOwner(this.owner, () => restoreTo(this.mark));
+      if (r.ok) this.backAt = this.version;
+      return r;
+    }
+
     /** The save hold: while the step is open and only it changed the model, the stored model stays the mark. */
     holds(): boolean {
       return !this.ended && this.mine();
@@ -560,6 +578,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       if (this.takenOver) throw new Error('The person took this step over');
       if (!this.mine()) throw new Error('The Part was changed during this step by someone else');
       if (open && open.owner === this.owner) throw new Error('The Assistant has a panel open in this step');
+      this.sealed = true;
       const base = this.base;
       // Only this step changed the history since its base, so every change since is a push of its own.
       if (undo.version === base.history.version) return;
@@ -589,8 +608,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
         const reason = loadSeq !== this.mark.loadSeq ? 'The part was loaded again during this step' : 'The Part was changed during this step by someone else, so it was kept as it is';
         return (this.result = { ok: false, reason });
       }
-      const nothing = this.doc === this.mark.doc && this.version === this.mark.history.version && this.rollback === this.mark.rollback && !(open && open.owner === this.owner);
-      this.result = nothing ? { ok: true } : asOwner(this.owner, () => restoreTo(this.mark));
+      this.result = this.changed() ? this.takeBack() : { ok: true };
       return this.result;
     }
 
@@ -635,6 +653,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       return { ok: true };
     },
     takeOver,
+    undoTakesOver: () => !!undoTakesStep(),
   };
 
   // ------------------------------------------------------------------ sessions
@@ -1173,6 +1192,16 @@ export function createDocService(opts: DocServiceOptions): DocService {
     return { ok: true, ids: plan.ids };
   }
 
+  /**
+   * The open Assistant step a person's Ctrl+Z or Ctrl+Y would take over whole, or null: it changed
+   * the Part (one piece or several: a hole's sketch and cut, an extrude and its body's name), only
+   * it did, and no panel session is open (between its panels, while it waits for its rebuild,
+   * judges, paces or waits for Keep).
+   */
+  function undoTakesStep(): StepImpl | null {
+    return step && !step.ended && !step.sealed && !(open && open.open) && step.mine() && step.changed() ? step : null;
+  }
+
   function doUndo(redo: boolean) {
     if (editable() !== true) return;
     const person = currentOwner === null;
@@ -1180,6 +1209,18 @@ export function createDocService(opts: DocServiceOptions): DocService {
     // take-over), and nothing else is undone.
     if (person && open?.owner) {
       takeOver('undo');
+      return;
+    }
+    // The person's Ctrl+Z or Ctrl+Y while an Assistant step that changed the Part is open with no
+    // panel: a take-over of the whole step. Every piece of it goes back to its mark at once (the
+    // model, the bar and both undo lists as before the step), and nothing else is undone (review:
+    // only its newest piece went; the rest stayed unsealed, outside the request's group, and was saved).
+    const whole = person ? undoTakesStep() : null;
+    if (whole) {
+      if (!whole.takenOver) whole.takenOver = 'undo';
+      bus.emit('assistant:taken-over', { why: 'undo' });
+      // Not the step's revert (whose answer is kept): the call's own revert later takes back anything it still did.
+      whole.takeBack();
       return;
     }
     settle();

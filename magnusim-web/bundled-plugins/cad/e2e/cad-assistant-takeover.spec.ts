@@ -21,6 +21,9 @@
 //   6. The person's Ctrl+Z between two calls of a turn: "Assistant paused · you undid its steps", the
 //      next read tells the model, the next edit waits; Resume lets the turn go on.
 //   7. Ask each step (the chip's toggle): Keep keeps the step, Discard reverts it (step_declined).
+//      The person's Ctrl+Z while the chip asks "Hole 1 · keep it?" (no panel open; the toolbar's
+//      Undo says it takes the step over) takes the whole hole back at once: no "Hole 1 sketch"
+//      left in the tree or the stored model, the history as before, the model hears taken_over.
 // The sketches are drawn at the watch pace with no delays (setPace('watch', 0)): every entity is
 // its own apply, so sketch-step:2 is a sketch half drawn.
 // Deviations from the spec's rows: sketch mode's ribbon has no Extrude, so row 2's Extrude takes
@@ -81,6 +84,7 @@ type W = {
   __CAD__: {
     assistant: { setAskEach(on: boolean | null): void; calls: { tool: string; ok: boolean; reason?: string }[] };
     services: {
+      commands: { get(id: string): { hint?: string } | undefined };
       doc: { addParam(p: { name: string; expr: string; quantity: string }): unknown; state: { get(): { doc: { features: { id: string; name: string; type: string }[]; params: { name: string }[] }; history: { undoLabel: string | null } } } };
       apis: { get(): { assistant: { actions: { setAskEach(on: boolean): void } } } };
     };
@@ -100,6 +104,7 @@ const PLATE = (name: string, on = 'Top') => ({
 });
 const sketchCall = (name: string, on = 'Top') => ({ name: 'cad__sketch', input: PLATE(name, on) });
 const PARAM = (name: string, expr: string) => ({ name: 'cad__set_params', input: { set: [{ name, kind: 'length', expr, comment: '', rename_to: '' }], remove: [] } });
+const HOLE = (face: string, x: string, y: string) => ({ name: 'cad__hole', input: { name: '', face, centers: [{ x, y, z: '' }], diameter: '5 mm', depth: 'through', distance: '' } });
 const FILLET = (target: string) => ({ name: 'cad__modify', input: { edit: '', name: '', kind: 'fillet', targets: [target], size: '2 mm', size2: '', flip: false, inward: false } });
 
 const names = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().doc.features.map((f) => f.name));
@@ -443,5 +448,47 @@ test('cad:assistant-takeover-ask-each Ask each step: Keep keeps the step, Discar
   } finally {
     // The person's choice is kept in the app's preferences: off again for the other tests.
     await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.apis.get().assistant.actions.setAskEach(false));
+  }
+});
+
+test('cad:assistant-takeover-ask-each-undo Ctrl+Z while the chip asks to keep a hole takes all of it back: no hole sketch left in the tree or the stored model', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant ask each undo');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  const sid = studyOf(page);
+  await forcePace(page, 'fast', 0);
+  await addSolid(page, { size: [40, 30, 10] });
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  await expect.poll(async () => (await storedModel(request, host, pid, sid))?.features.map((f) => f.name), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  const label = await undoLabel(page);
+  const chip = frame.locator('[data-chip="assistant"]');
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setAskEach(true));
+  try {
+    const before = chats(host).length;
+    host.fake.reply({ tools: [HOLE('Extrude 1.end', '20 mm', '15 mm')] }, { hold: 'undone', text: 'You took it back.' });
+    const t = await startTurn(request, host, { text: 'Drill a hole in the middle.', tab });
+    // The hole is made (its sketch and its cut), and the chip asks; no panel is open.
+    await expect(chip).toHaveAttribute('data-assistant-state', 'approve', STEP);
+    await expect(chipWords(frame)).toHaveText('Assistant: Hole 1 · keep it?');
+    await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Hole 1 sketch', 'Hole 1'], STEP);
+    await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+    expect(await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.commands.get('edit.undo')?.hint)).toBe('Take over from the Assistant: its step is discarded (nothing else is undone)');
+    // One Ctrl+Z: every piece of the step goes at once.
+    await keyboardInFrame(page, frame);
+    await page.keyboard.press('Control+z');
+    await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+    await expect(chip).toHaveAttribute('data-assistant-state', 'paused', STEP);
+    await expect(chipWords(frame)).toHaveText('Assistant paused · you took over');
+    const [r] = resultsIn(await nthRequest(2, before));
+    host.fake.release('undone');
+    expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+    expect(r).toMatchObject({ tool: 'cad__hole', ok: false, error: { code: 'busy', message: 'taken_over: You took over (Undo): Hole 1 was not kept.', detail: { reason: 'taken_over', why: 'undo' } } });
+    expect((r as { error: { detail: Record<string, unknown> } }).error.detail.kept).toBeUndefined();
+    // Nothing of it stays: the tree, the history and the stored model are as before the request.
+    await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
+    expect(await undoLabel(page)).toBe(label);
+    await expect.poll(async () => (await storedModel(request, host, pid, sid))?.features.map((f) => f.name), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  } finally {
+    await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setAskEach(null));
   }
 });

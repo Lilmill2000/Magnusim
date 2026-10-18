@@ -109,13 +109,19 @@ An edit tool is `{kind: 'edit', run: (ctx) => runEdit(ctx, tool)}` with an `Edit
    quiet, at most 10 s). Reads never wait.
 2. **Plan** against the settled Part: every refusal (`invalid_input` with the row at fault)
    before anything changes. The hold point `after-plan` follows; a person who opened something
-   meanwhile is waited for again and the call plans anew (at most three times).
+   meanwhile is waited for again and the call plans anew, and so does a one-shot change of the
+   Part while it planned (the committed model, the rollback bar or the rebuild moved: the plan
+   and the judge's "before" are of the settled Part it runs on). At most three times; then
+   `busy` `person_editing` (or `paused`, `changed`).
 3. **Apply** inside the step, through the person's own paths (`openEditForAssistant`, the
    Part's one-shot edits inside `step.run`), with `ctx.checkpoint({hold, pace, label})` at each
    pace point: it throws on a stop, a take-over (`busy` `taken_over` with its `why`; the
    Assistant pauses in this Part until the turn ends), a change of the Part by someone else
    (`busy` `changed`) or a draft the call did not write. Hold points: `after-open`,
-   `between-opens`, `before-commit`.
+   `between-opens`, `before-commit`. The person's Ctrl+Z or Ctrl+Y while the step has changed
+   the Part and no panel session is open (between its panels, while it waits for the rebuild,
+   judges or asks "keep it?") takes all of the step back to its mark at once and undoes nothing
+   else (`doc.assistant.undoTakesOver`; Undo's hint says so): `taken_over` `undo`.
 4. **Judge** (`judge.ts`) once the rebuild settled: a failed rebuild or a kernel stop is
    `kernel_failed`; the call's own feature failing is `feature_failed` with its own message and
    actions; a value edit (`set_params`, `edit_feature` with only `set`) that turns a working

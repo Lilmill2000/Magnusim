@@ -12,8 +12,8 @@
 //   - the deleted features leave the person's selection, and a body that went with them does not
 //     come back into it after the call;
 //   - races forced at hold points: the person adds a user of a listed feature, or deletes a listed
-//     feature, while the call plans (in_use / changed, nothing deleted, theirs kept); a Stop after
-//     the removals reverts synchronously.
+//     feature, while the call plans: the call plans anew on the changed Part (in_use / not_found,
+//     nothing deleted, theirs kept); a Stop after the removals reverts synchronously.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HINTS } from '../../src/assistant/errors';
@@ -228,7 +228,7 @@ describe('delete races (forced at hold points)', () => {
   );
 
   it(
-    'the person deletes a listed feature while the call plans: busy changed, nothing else deleted',
+    'the person deletes a listed feature while the call plans: the call plans anew and refuses the name that is gone, nothing else deleted',
     async () => {
       h = await assistantHarness();
       const p = await plate(h);
@@ -239,7 +239,7 @@ describe('delete races (forced at hold points)', () => {
       await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['after-plan']), { timeout: 60_000 });
       expect(h.doc.remove(f)).toEqual({ ok: true });
       rt.holds.release('after-plan');
-      expect(await r).toMatchObject({ ok: false, error: { code: 'busy', message: 'changed: The Part changed while the call ran: Fillet 1 is not in it any more. Nothing was deleted.', detail: { reason: 'changed' } } });
+      expect(await r).toMatchObject({ ok: false, error: { code: 'invalid_input', message: 'not_found: features[0]: no feature is called "Fillet 1". Features: Sketch 1, Extrude 1.', detail: { reason: 'not_found' } } });
       expect(names(h)).toEqual(['Sketch 1', 'Extrude 1']);
       expect(undoLabel(h)).toBe('Delete Fillet 1');
     },

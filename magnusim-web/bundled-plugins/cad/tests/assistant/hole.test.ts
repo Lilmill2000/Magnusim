@@ -13,13 +13,17 @@
 //     (named by its row), the same centre twice, a name taken;
 //   - a person's panel opened between the sketch and the cut (between-opens, forced) is waited
 //     for: the step goes back under it, and once it closes the call plans anew and keeps both
-//     features as one undo group.
+//     features as one undo group;
+//   - the person's Ctrl+Z between the sketch and the cut (forced), or while "Ask each step" asks
+//     "keep it?", takes the whole hole back at once (no sketch left, nothing of it stored, the
+//     history as before the call; Undo's hint says so), and the call answers taken_over (undo).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { negated } from '../../src/assistant/tools/hole';
 import { runtimeOf } from '../../src/assistant/runtime';
 import type { ExtrudeFeature, SketchDimension, SketchFeature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
+import { installUi } from '../../src/ui/commands';
 import { EXTRUDE, fail, names, ok, volume } from './extrude-tools';
 import { assistantHarness, type AssistantHarness } from './harness';
 import { undoLabel } from './parts';
@@ -294,4 +298,45 @@ describe('hole', () => {
     },
     HOLE_MS,
   );
+
+  for (const when of ['between-opens', 'keep it?'] as const) {
+    it(
+      `the person's Ctrl+Z ${when === 'between-opens' ? 'between the sketch and the cut' : 'while Ask each step asks "keep it?"'} takes the whole hole back at once: no sketch left, the history as before`,
+      async () => {
+        h = await assistantHarness({ sketchMode: true });
+        await block(h);
+        const offUi = installUi(h.services);
+        const rt = runtimeOf(h.services)!;
+        h.fake.emitTurn({ id: 't-1', title: 'A hole' });
+        const before = h.doc.state.get().doc;
+        const hist = h.doc.state.get().history;
+        if (when === 'between-opens') rt.holds.hold('between-opens');
+        else rt.askEach.force(true);
+        const r = h.call('hole', HOLE({ centers: [CTR('10 mm', '5 mm', '')] }), { turn: 't-1' });
+        if (when === 'between-opens') await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['between-opens']), { timeout: 60_000 });
+        else await vi.waitFor(() => expect(rt.approvals.pending()).toMatchObject({ part: 'Hole 1' }), { timeout: 60_000 });
+        expect(names(h)).toEqual(when === 'between-opens' ? ['Base sketch', 'Base', 'Hole 1 sketch'] : ['Base sketch', 'Base', 'Hole 1 sketch', 'Hole 1']);
+        // No panel is open: Undo's hint says it takes the Assistant's step over, not its newest piece.
+        expect(uiFor(h.services).state.get().panel).toBeNull();
+        expect(h.services.commands.get('edit.undo')!.hint).toBe('Take over from the Assistant: its step is discarded (nothing else is undone)');
+        h.doc.undo();
+        // At once: every piece of the step gone, the history as before the call.
+        expect(h.doc.state.get().doc).toBe(before);
+        expect(h.doc.state.get().history).toEqual(hist);
+        if (when === 'between-opens') rt.holds.release('between-opens');
+        expect(await r).toMatchObject({ ok: false, error: { code: 'busy', message: 'taken_over: You took over (Undo): Hole 1 was not kept.', detail: { reason: 'taken_over', why: 'undo' } } });
+        expect(((await r) as { error: { detail: Record<string, unknown> } }).error.detail.kept).toBeUndefined();
+        expect(h.doc.state.get().doc).toBe(before);
+        expect(h.doc.state.get().history).toEqual(hist);
+        expect(rt.approvals.pending()).toBeNull();
+        expect(rt.pause.get()).toMatchObject({ why: 'take_over', turn: 't-1' });
+        // Nothing of it was stored, and the next Ctrl+Z is the person's own again.
+        await h.doc.flush();
+        expect(h.ws.json('studies/st-test/model.json')).toMatchObject({ doc: { features: [{ name: 'Base sketch' }, { name: 'Base' }] } });
+        expect(h.services.commands.get('edit.undo')!.hint).toBe(`Undo ${hist.undoLabel}`);
+        offUi();
+      },
+      HOLE_MS,
+    );
+  }
 });
