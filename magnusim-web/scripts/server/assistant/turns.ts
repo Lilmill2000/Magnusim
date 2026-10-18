@@ -144,8 +144,12 @@ interface TurnInit {
   clock: Clock;
   gates: GateBroker;
   onEnded?: (t: Turn) => void;
-  /** What its tab's page shows changed (at most once a TURN_UPDATE_MS; never after its end). */
-  onUpdated?: (t: Turn) => void;
+  /**
+   * What its tab's page shows changed (at most once a TURN_UPDATE_MS; never after its end).
+   * Required: every start path builds its Turn with it (and after TurnManager.admitRefusal in
+   * the same synchronous step), or its tab's page never hears its calls and facts.
+   */
+  onUpdated: (t: Turn) => void;
 }
 
 export class Turn implements LoopTurn {
@@ -177,7 +181,7 @@ export class Turn implements LoopTurn {
   private readonly clock: Clock;
   private readonly gates: GateBroker;
   private readonly onEnded?: (t: Turn) => void;
-  private readonly onUpdated?: (t: Turn) => void;
+  private readonly onUpdated: (t: Turn) => void;
   private updatedAt = Number.NEGATIVE_INFINITY;
   private updateTimer: unknown = null;
   private readonly abort = new AbortController();
@@ -296,7 +300,7 @@ export class Turn implements LoopTurn {
 
   /** Something its tab's page shows changed: onUpdated now, or once TURN_UPDATE_MS has passed since the last. */
   private changed(): void {
-    if (this.ended || !this.onUpdated || this.updateTimer !== null) return;
+    if (this.ended || this.updateTimer !== null) return;
     const wait = this.updatedAt + TURN_UPDATE_MS - this.clock.now();
     if (wait <= 0) this.updated();
     else this.updateTimer = this.clock.setTimeout(() => this.updated(), wait);
@@ -306,7 +310,7 @@ export class Turn implements LoopTurn {
     this.updateTimer = null;
     if (this.ended) return;
     this.updatedAt = this.clock.now();
-    this.onUpdated?.(this);
+    this.onUpdated(this);
   }
 
   note(text: string): void {
@@ -752,6 +756,18 @@ export class TurnManager {
     return { tab, projectId: ws.reg.projectId, studyId: ws.reg.studyId };
   }
 
+  /**
+   * The last checks before a turn starts: one turn per app tab (409 tab_busy) and three in all
+   * (429 too_many). Every start path calls it in the synchronous step that starts its turn.
+   */
+  private admitRefusal(boundTab: string | null): Answer | null {
+    if (boundTab && this.activeForTab(boundTab) > 0) return refuse(409, 'tab_busy', TAB_BUSY_TEXT);
+    if (this.running().length >= TURN_LIMITS.running) {
+      return refuse(429, 'too_many', `At most ${TURN_LIMITS.running} turns run at once. Wait for one to end.`);
+    }
+    return null;
+  }
+
   /** POST /api/assistant/turns: checked, then started detached (202). */
   async start(body: Record<string, unknown>): Promise<Answer> {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
@@ -819,10 +835,8 @@ export class TurnManager {
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
       if (conv.fullReason(settings.base_url)) return refuse(409, 'conversation_full', FULL_TEXT);
     }
-    if (boundTab && this.activeForTab(boundTab) > 0) return refuse(409, 'tab_busy', TAB_BUSY_TEXT);
-    if (this.running().length >= TURN_LIMITS.running) {
-      return refuse(429, 'too_many', `At most ${TURN_LIMITS.running} turns run at once. Wait for one to end.`);
-    }
+    const refused = this.admitRefusal(boundTab);
+    if (refused) return refused;
     if (!conv) conv = this.conversations.create(binding);
     const turnSettings: TurnSettings = {
       provider: provider as ProviderId,
