@@ -20,6 +20,7 @@ import {
   connectNote,
   CUSTOM_HELP,
   defaultBillingText,
+  holdsOldAllow,
   KEEP_ENV_MAX,
   mayShowSignInCommand,
   LOGIN_NO,
@@ -39,6 +40,8 @@ import {
   testingText,
   testNote,
   TREE_KILL_TEXT,
+  TURN_OFF_LABEL,
+  turnOffNote,
   VARS_HELP,
 } from './AssistantStepAgents';
 
@@ -74,6 +77,8 @@ let requests: Request[];
 let agentsAnswer: Answer | null;
 let holdAgents: Deferred | null;
 let allowAnswer: Answer | null;
+/** Holds the next allow POST's answer (once). */
+let holdAllow: Deferred | null;
 let customAnswer: Answer | null;
 let removeAnswer: Answer | null;
 let settingsAnswer: Answer | null;
@@ -168,6 +173,9 @@ async function route(method: string, path: string, body: Record<string, unknown>
     return agentsAnswer ?? { status: 200, body: { ok: true, checked_at: '2026-10-17T12:00:00.000Z', took_ms: 12, agents: rows } };
   }
   if (path === '/api/assistant/agents/allow') {
+    const hold = holdAllow;
+    holdAllow = null;
+    if (hold) await hold.promise;
     if (allowAnswer) return allowAnswer;
     const i = rows.findIndex((r) => r.id === body.id);
     const allowed = body.allow === true;
@@ -219,6 +227,7 @@ beforeEach(() => {
   agentsAnswer = null;
   holdAgents = null;
   allowAnswer = null;
+  holdAllow = null;
   customAnswer = null;
   removeAnswer = null;
   settingsAnswer = null;
@@ -589,6 +598,77 @@ describe('Coding agents: the allow switch (D-B)', () => {
     expect(agent('codex').querySelector('[data-assistant-agent-allow-error]')).toHaveAttribute('role', 'alert');
     expect(agent('codex').querySelector('[data-assistant-agent-program]')!.textContent).toContain('D:\\other\\codex-acp.exe');
     expect(within(agent('codex')).getByRole('switch', { name: 'Allow this agent' })).not.toBeChecked();
+  });
+
+  it('one save at a time: off asked while Allow is saving is sent once Allow has answered, and the switch ends off; on asked meanwhile is dropped', async () => {
+    rows = [codex()];
+    confirmAction.mockResolvedValue(true);
+    const hold = deferred();
+    holdAllow = hold;
+    await renderAgents();
+    const sw = () => within(agent('codex')).getByRole('switch', { name: 'Allow this agent' });
+    fireEvent.click(sw());
+    await waitFor(() => expect(posts('/api/assistant/agents/allow')).toHaveLength(1));
+    expect(sw()).toBeChecked();
+    // Off while Allow's POST is out: shown off at once, sent only once Allow has answered.
+    fireEvent.click(sw());
+    expect(sw()).not.toBeChecked();
+    // On again meanwhile: no question, nothing sent, still off.
+    fireEvent.click(sw());
+    expect(sw()).not.toBeChecked();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(confirmAction).toHaveBeenCalledTimes(1);
+    expect(posts('/api/assistant/agents/allow')).toHaveLength(1);
+    await act(async () => hold.release());
+    await waitFor(() =>
+      expect(posts('/api/assistant/agents/allow')).toEqual([
+        { id: 'codex', allow: true, fingerprint: FP2 },
+        { id: 'codex', allow: false },
+      ]),
+    );
+    await waitFor(() => expect(stateOf('codex')).toBe('needs_allow'));
+    expect(sw()).not.toBeChecked();
+    // The switch takes a new save once that one is done.
+    fireEvent.click(sw());
+    await waitFor(() => expect(stateOf('codex')).toBe('ready'));
+    expect(confirmAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('an allow the server still keeps that no longer counts (the command changed, or the agent is gone) has Turn off: no question, it POSTs allow false', async () => {
+    rows = [codex({ allow_changed: true, reason: 'agent_allow_changed' }), { ...missing('gemini', 'Gemini CLI', 'npm install -g @google/gemini-cli'), allow_changed: true }, codex({ id: 'codex2', name: 'Codex Two' })];
+    await renderAgents();
+    const off = within(agent('codex')).getByRole('button', { name: TURN_OFF_LABEL });
+    expect(TURN_OFF_LABEL).toBe('Turn off');
+    expect(off).toHaveAccessibleDescription(turnOffNote('Codex'));
+    expect(turnOffNote('Codex')).toBe('Anything Codex started while it was allowed may still be running. Turn off stops it and clears its switch.');
+    expect(within(agent('gemini')).getByRole('button', { name: TURN_OFF_LABEL })).toBeInTheDocument();
+    // An agent never allowed has none.
+    expect(within(agent('codex2')).queryByRole('button', { name: TURN_OFF_LABEL })).toBeNull();
+    // A refusal says why (an alert) and keeps the button.
+    allowAnswer = { status: 500, body: { ok: false, code: 'save_failed', error: "Codex was stopped, but Magnusim couldn't save its switch as off. Turn it off again." } };
+    fireEvent.click(off);
+    await waitFor(() => expect(agent('codex').querySelector('[data-assistant-agent-turn-off-error]')).toHaveTextContent("couldn't save its switch as off"));
+    expect(agent('codex').querySelector('[data-assistant-agent-turn-off-error]')).toHaveAttribute('role', 'alert');
+    allowAnswer = null;
+    fireEvent.click(within(agent('codex')).getByRole('button', { name: TURN_OFF_LABEL }));
+    await waitFor(() => expect(stateOf('codex')).toBe('needs_allow'));
+    expect(posts('/api/assistant/agents/allow')).toEqual([
+      { id: 'codex', allow: false },
+      { id: 'codex', allow: false },
+    ]);
+    expect(confirmAction).not.toHaveBeenCalled();
+    expect(within(agent('codex')).queryByRole('button', { name: TURN_OFF_LABEL })).toBeNull();
+    // The focus goes to the switch (to allow it again).
+    expect(document.activeElement).toBe(within(agent('codex')).getByRole('switch', { name: 'Allow this agent' }));
+    fireEvent.click(within(agent('gemini')).getByRole('button', { name: TURN_OFF_LABEL }));
+    await waitFor(() => expect(within(agent('gemini')).queryByRole('button', { name: TURN_OFF_LABEL })).toBeNull());
+    expect(posts('/api/assistant/agents/allow')[2]).toEqual({ id: 'gemini', allow: false });
+    expect(stateOf('gemini')).toBe('missing');
+    expect(document.activeElement).toBe(agent('gemini'));
+    expect(holdsOldAllow({ found: true, error: "can't start", allowed: true, allow_changed: false })).toBe(true);
+    expect(holdsOldAllow({ found: true, error: null, allowed: true, allow_changed: false })).toBe(false);
   });
 });
 

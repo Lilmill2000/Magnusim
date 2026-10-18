@@ -19,7 +19,9 @@
  * - The allow switch (D-B, spec 4.9) shows on every agent whose own tools Magnusim can't switch
  *   off, off by default, with its warning beside it always. On asks first (No focused: Enter
  *   and Escape answer Don't), then POSTs the fingerprint of the command the row shows; off
- *   needs no question. A command or program changed since it was allowed asks again.
+ *   needs no question. One save at a time: off asked while Allow saves goes right after it.
+ *   A command or program changed since it was allowed asks again; an allow the server still
+ *   keeps then (or for an agent gone or broken) has Turn off, the kill switch.
  * - Sign in (spec 4.12): Magnusim never takes an agent's key. A terminal command shows with
  *   Copy only when the server gave its line (its safety rules) and the agent's own tools are
  *   off or its switch is on; an agent method is a button; a variable is a line of text; "I've
@@ -83,6 +85,8 @@ export const allowTitle = (name: string) => `Allow ${name} to work for the Assis
 export const allowCopy = (name: string) =>
   `${name} can run commands, read your projects and change files on this PC by its own rules, and Magnusim can't stop that. Allow it only if you trust it as you do in a terminal.`;
 export const allowChangedText = (name: string) => `${name}'s command or program changed since you allowed it. Allow it again to use it.`;
+export const TURN_OFF_LABEL = 'Turn off';
+export const turnOffNote = (name: string) => `Anything ${name} started while it was allowed may still be running. Turn off stops it and clears its switch.`;
 
 export const testNote = (name: string) => `Test starts ${name} and sends it one short message.`;
 export const testingText = (name: string) => `Testing: starting ${name} and sending it one short message…`;
@@ -155,6 +159,15 @@ export function isInstallCommand(line: string): boolean {
 /** Whether a terminal sign-in command may be shown at all: never for an agent whose own tools stay on until it is allowed (spec 4.12, rule 1). */
 export function mayShowSignInCommand(row: Pick<AgentRow, 'lockdown' | 'allowed'>): boolean {
   return row.lockdown !== 'none' || row.allowed;
+}
+
+/**
+ * An allow the server still keeps that no longer counts: the command or program changed, or
+ * the agent can't be found or started now. What started under it may still run, so its row
+ * offers Turn off (spec 4.9: off is always taken, and stops the agent).
+ */
+export function holdsOldAllow(row: Pick<AgentRow, 'found' | 'error' | 'allowed' | 'allow_changed'>): boolean {
+  return row.allow_changed || ((!row.found || !!row.error) && row.allowed);
 }
 
 /** A command line the page shows and copies: one line, of a sane length. */
@@ -602,6 +615,14 @@ function AgentRowView({
           {allowChangedText(name)}
         </p>
       ) : null}
+      {holdsOldAllow(row) ? (
+        <TurnOff
+          row={row}
+          onRow={onRow}
+          onReload={onReload}
+          onDone={() => refocus(null, rowRef.current?.querySelector<HTMLElement>('[data-assistant-agent-allow]'), rowRef.current)}
+        />
+      ) : null}
       {row.found && !row.error && row.needs_allow ? <AllowSwitch row={row} onRow={onRow} /> : null}
       {showSignIn ? <SignInBlock row={row} methods={methods} busy={!!busy} onConnect={() => void check(false)} onSignIn={(m) => void signIn(m)} /> : null}
       {canCheck ? (
@@ -702,16 +723,13 @@ function AllowSwitch({ row, onRow }: { row: AgentRow; onRow: (row: AgentRow) => 
   const name = row.name;
   const shown = pending ?? row.allowed;
 
-  /** Saves the switch: on only after the question (No focused), off at once. False when refused. */
-  const toggle = async (on: boolean): Promise<boolean> => {
-    setError('');
-    if (on) {
-      const before = document.activeElement;
-      const yes = await confirmAction({ title: allowTitle(name), copy: allowCopy(name), yes: 'Allow', no: "Don't", safe: true });
-      refocus(before, input.current);
-      if (!yes) return true;
-    }
-    setPending(on);
+  /** A save runs, or its question is open: the switch starts no second save meanwhile. */
+  const saving = useRef(false);
+  /** Off asked while Allow was saving: sent as soon as Allow has answered (the kill switch is never dropped). */
+  const offAfter = useRef(false);
+
+  /** One POST of the switch, its row shown. False when refused. */
+  const send = async (on: boolean): Promise<boolean> => {
     try {
       const next = await allowAgent(row.id, on, on ? row.fingerprint : null);
       if (next) onRow(next);
@@ -722,7 +740,43 @@ function AllowSwitch({ row, onRow }: { row: AgentRow; onRow: (row: AgentRow) => 
       if (fresh) onRow(fresh);
       setError(errorText(err));
       return false;
+    }
+  };
+
+  /**
+   * Saves the switch: on only after the question (No focused), off at once. One save at a time,
+   * so the answers can't cross: off asked while Allow saves is sent once Allow has answered;
+   * on asked while a save runs is dropped (it would need its question). False when refused.
+   */
+  const toggle = async (on: boolean): Promise<boolean> => {
+    if (saving.current) {
+      if (!on) {
+        offAfter.current = true;
+        setPending(false);
+      }
+      return true;
+    }
+    saving.current = true;
+    offAfter.current = false;
+    setError('');
+    try {
+      if (on) {
+        const before = document.activeElement;
+        const yes = await confirmAction({ title: allowTitle(name), copy: allowCopy(name), yes: 'Allow', no: "Don't", safe: true });
+        refocus(before, input.current);
+        if (!yes) return true;
+      }
+      setPending(on);
+      let ok = await send(on);
+      if (on && offAfter.current) {
+        offAfter.current = false;
+        setPending(false);
+        ok = (await send(false)) && ok;
+      }
+      return ok;
     } finally {
+      saving.current = false;
+      offAfter.current = false;
       setPending(null);
     }
   };
@@ -752,6 +806,50 @@ function AllowSwitch({ row, onRow }: { row: AgentRow; onRow: (row: AgentRow) => 
         <p id={errorId} className="wiz-assistant-error" role="alert" data-assistant-agent-allow-error="1">
           {error}
         </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Turn off an allow that no longer counts (holdsOldAllow): POST {id, allow: false}, no question. */
+function TurnOff({ row, onRow, onReload, onDone }: { row: AgentRow; onRow: (row: AgentRow) => void; onReload: () => void; onDone: () => void }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const saving = useRef(false);
+  const noteId = useId();
+
+  const turnOff = async (): Promise<boolean> => {
+    if (saving.current) return true;
+    saving.current = true;
+    setPending(true);
+    setError('');
+    try {
+      const next = await allowAgent(row.id, false, null);
+      if (next) onRow(next);
+      else onReload();
+      onDone();
+      return true;
+    } catch (err) {
+      setError(errorText(err));
+      return false;
+    } finally {
+      saving.current = false;
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="wiz-assistant-row" data-assistant-agent-turn-off-block={row.id}>
+      <button type="button" className="home-btn" data-assistant-agent-turn-off={row.id} aria-describedby={noteId} aria-disabled={pending || undefined} onClick={() => void stepChange(turnOff())}>
+        {pending ? 'Turning off…' : TURN_OFF_LABEL}
+      </button>
+      <span id={noteId} className="wiz-assistant-meta">
+        {turnOffNote(row.name)}
+      </span>
+      {error ? (
+        <span className="wiz-assistant-error" role="alert" data-assistant-agent-turn-off-error="1">
+          {error}
+        </span>
       ) : null}
     </div>
   );
