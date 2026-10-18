@@ -274,7 +274,10 @@ export interface RunOptions {
 
 /**
  * POST /api/assistant/agents/test {id, message}: {ok:true, agent, version, ms, signed_in,
- * own_tools, images, modes, models, tools} or {ok:false, code, error, auth?} (spec 4.13).
+ * auth_status, own_tools, images, modes, models, tools, auth?} or {ok:false, code, error, auth?}
+ * (spec 4.13). `signed_in` is the login file's, read again now; `auth_status` is what the agent
+ * itself said in its `_auth/status_update` ('none', 'signed_in', or null when it said nothing),
+ * and a connect it says 'none' to carries its ways to sign in (`auth`).
  */
 export async function agentTestRequest(body: Record<string, unknown>, o: RunOptions): Promise<Answer> {
   if (body.message !== undefined && typeof body.message !== 'boolean') return refuse(400, 'bad_request', 'message must be true or false.');
@@ -354,20 +357,30 @@ async function runTest(p: Prepared, tr: Transient, message: boolean, o: RunOptio
       if ('e' in outcome) throw outcome.e;
       tools = called ? 'works' : 'not_used';
     }
-    rememberAgentSignIn(found.id, null);
-    const answer = {
+    // The agent's own word on its login, apart from its login file (`signed_in`). A connect that
+    // got through to an agent saying it isn't signed in keeps its ways to sign in on its row; one
+    // that answered the Test's message is signed in, whatever it said.
+    const ms = Date.now() - t0;
+    const said = session.authStatus;
+    const signIn = !message && said === 'none' ? signInView(session.info.auth, found) : null;
+    rememberAgentSignIn(found.id, signIn);
+    // The login file as it is now ("I've signed in: connect again"): the cached row may be older.
+    const now = await resolveAgentNow(found.id, settings).catch(() => null);
+    const answer: Record<string, unknown> = {
       ok: true,
       agent: found.name,
       version: session.info.version ?? found.version,
-      ms: Date.now() - t0,
-      signed_in: session.authNone ? 'no' : row.signed_in,
+      ms,
+      signed_in: now?.signedIn ?? row.signed_in,
+      auth_status: said,
       own_tools: row.own_tools,
       images: session.info.images,
       modes: choices.modes,
       models: choices.models,
       tools,
+      ...(signIn ? { auth: signIn.methods } : {}),
     };
-    alog('info', 'agent test', { agent: found.id, ok: true, message, tools, ms: answer.ms });
+    alog('info', 'agent test', { agent: found.id, ok: true, message, tools, auth_status: said, ms });
     return { status: 200, body: answer };
   } catch (err) {
     const why = signal.aborted ? signal.reason : err;

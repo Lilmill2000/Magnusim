@@ -2300,6 +2300,56 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     }
   });
 
+  it("connect: the agent's own word on its login (_auth/status_update {authStatus}) comes in its own field, apart from the login file; 'none' keeps the sign-in block with its ways, any other kind or a Test it answered clears it", async () => {
+    const { unlinkSync } = await import('node:fs');
+    const cred = join(AGENT_HOME, '.claude', '.credentials.json');
+    const script = join(PATH_DIR, 'node_modules', '@agentclientprotocol', 'claude-agent-acp', 'dist', 'index.js');
+    // No login file: the row says it isn't signed in (signed_in 'no').
+    unlinkSync(cred);
+    const { srv } = await serverWorld();
+    claude.configure({
+      authStatus: 'none',
+      authMethods: [{ id: 'console-login', name: 'Log in', type: 'terminal', args: ['--login'], _meta: { 'terminal-auth': { command: process.execPath, args: [script, '--cli', 'auth', 'login'], label: 'Log in' } } }],
+    });
+    const signInIds = async () => (await srv.get('/api/assistant/agents')).json.agents.find((a) => a.id === 'claude').sign_in?.methods.map((m) => m.id) ?? null;
+    try {
+      assert.equal((await srv.get('/api/assistant/agents?refresh=1')).json.agents.find((a) => a.id === 'claude').signed_in, 'no');
+      // The session starts (as the adapter's does), and it says it isn't signed in.
+      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      assert.equal(c.status, 200, JSON.stringify(c.json));
+      assert.deepEqual([c.json.ok, c.json.tools, c.json.signed_in, c.json.auth_status], [true, null, 'no', 'none']);
+      assert.deepEqual(c.json.auth.map((m) => [m.id, m.command]), [['console-login', 'claude-agent-acp --cli auth login']]);
+      assert.ok(!methodsIn(claude, lastPid(claude)).includes('session/prompt'), 'a connect sends no message');
+      // Its row keeps the ways to sign in, so Settings opened again shows the block.
+      assert.deepEqual(await signInIds(), ['console-login']);
+      // Signed in since (its login file there now, the cached row older): the check reads the file
+      // again, and the agent's word still comes through in its own field.
+      writeFileSync(cred, '{}');
+      const f = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      assert.deepEqual([f.json.ok, f.json.signed_in, f.json.auth_status], [true, 'yes', 'none']);
+      // Signed in by its own word (any other kind): the block goes.
+      claude.configure({ authStatus: 'account' });
+      const s = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      assert.deepEqual([s.json.ok, s.json.auth_status, s.json.auth], [true, 'signed_in', undefined]);
+      assert.equal(await signInIds(), null);
+      // Nothing said: no word.
+      claude.configure({ authStatus: null });
+      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'claude', message: false })).json.auth_status, null);
+      // A Test the agent answered: signed in, whatever it said (no block kept).
+      claude.configure({ authStatus: 'none' });
+      await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      assert.deepEqual(await signInIds(), ['console-login']);
+      claude.script({ say: 'done' });
+      const t = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      assert.deepEqual([t.json.ok, t.json.tools, t.json.auth], [true, 'not_used', undefined]);
+      assert.equal(await signInIds(), null);
+    } finally {
+      claude.configure({ authStatus: null, authMethods: [] });
+      writeFileSync(cred, '{}');
+      await srv.close();
+    }
+  });
+
   it('a Vite restart with a live agent: the old lifetime’s shutdown kills the agent and ends its turn failed/shutdown; the listener, port and token stay', async () => {
     const { m, srv, token } = await serverWorld();
     let srv2 = null;

@@ -29,7 +29,10 @@
 //     none: neither (a custom command).
 //   protocolVersion (1), agentInfo, images, loadSession, authMethods (terminal or agent only),
 //   requireSignIn (session/new answers -32000 while the controller's sign-in marker is
-//   missing), authSignsIn (authenticate writes the marker; default true), modes,
+//   missing), authSignsIn (authenticate writes the marker; default true), authStatus (a kind,
+//   for example 'none' or 'account': session/new sends _auth/status_update {authStatus: {kind,
+//   label}} before its answer, as one adapter reports its login, and the session
+//   still starts), modes,
 //   configOptions, models (pre-v1, off by default), stubborn (ignores the end of its input and
 //   SIGTERM), stderrAtStart, envReport (variable names whose presence it reports).
 //   mcpLate: name   answers session/new first and starts its MCP server only once release(name)
@@ -642,6 +645,10 @@ async function handleRequest(msg) {
       return reply(id, {});
     }
     case 'session/new': {
+      // The adapter's own word on its login (it reports it at each session it creates, refused or not).
+      if (typeof config.authStatus === 'string' && config.authStatus) {
+        notifyClient('_auth/status_update', { authStatus: { kind: config.authStatus, label: config.authStatus === 'none' ? 'Not logged in' : 'Signed in' } });
+      }
       if (config.requireSignIn && !(config.marker && existsSync(config.marker))) {
         return replyError(id, -32000, 'Authentication required');
       }

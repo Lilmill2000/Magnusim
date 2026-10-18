@@ -13,9 +13,10 @@
  *   testing, and error (the last check's error, an alert, with the Sign in block when the
  *   agent asked to sign in).
  * - Signed in or not: the login file (the row's `signed_in`), unless the agent itself said
- *   more: a check here that got through, or that it isn't signed in (its auth_required, here or
- *   the server's `sign_in` from the last one, which shows the Sign in block until a check
- *   gets through).
+ *   more: a Test it answered, its own auth status on a connect (signed in, or not: that wins over
+ *   the file), or its auth_required (here, or the server's `sign_in` from the last one, which shows
+ *   the Sign in block until a check gets through). A connect it said nothing on proves only that
+ *   it starts: with no login file the row says Magnusim can't tell, and offers Test.
  * - The allow switch (D-B, spec 4.9) shows on every agent whose own tools Magnusim can't switch
  *   off, off by default, with its warning beside it always. On asks first (No focused: Enter
  *   and Escape answer Don't), then POSTs the fingerprint of the command the row shows; off
@@ -98,6 +99,8 @@ export const NO_SIGN_IN_TEXT = "This copy of Magnusim can't sign in to coding ag
 export const signedInDoneText = (name: string) => `${name} finished signing in. Connect again to check.`;
 /** A connect that got through to an agent that says it isn't signed in (`<Name> <version>`). */
 export const connectedSignedOutText = (nameVersion: string) => `Connected to ${nameVersion}, but it says it isn't signed in.`;
+/** A connect that got through, the agent saying nothing of its login, with no login file. */
+export const connectedUnsureText = (nameVersion: string) => `Connected to ${nameVersion}. ${LOGIN_UNKNOWN}`;
 
 export const CUSTOM_HELP =
   'The program and its arguments, for example C:\\Tools\\my-agent.exe --acp. Magnusim starts it directly, never through a command shell. It must speak the agent protocol (ACP) on its input and output.';
@@ -137,21 +140,35 @@ export function ownToolsLine(ownTools: 'off' | 'on'): string {
 }
 
 /**
- * Whether the agent itself said, in a check's answer, that it isn't signed in (spec 4.3: its
- * `_auth/status_update {kind:'none'}` during a connect or Test). The answer's `signed_in` is the
- * row's login-file value unless the agent said so, so it counts only where it differs from the
- * row's 'no'; and an agent that answered the Test's message is signed in, whatever it said.
+ * Whether the agent itself said, in a connect's answer, that it isn't signed in (spec 4.3: its
+ * `_auth/status_update` with kind 'none', the answer's `auth_status`), whatever its login file
+ * says. An agent that answered the Test's message is signed in, whatever it said.
  */
-export function agentSaidSignedOut(a: AgentTestAnswer, row: Pick<AgentRow, 'signed_in'>): boolean {
-  return a.ok && a.tools === null && a.signed_in === 'no' && row.signed_in !== 'no';
+export function agentSaidSignedOut(a: AgentTestAnswer): boolean {
+  return a.ok && a.tools === null && a.auth_status === 'none';
+}
+
+/**
+ * What a check says of the row's sign-in (null: nothing). 'connected': the agent answered the
+ * Test's message, said it is signed in, or a connect got through where the login file (as the
+ * server read it for the check: the answer's `signed_in`) doesn't say no. 'signed_out': it said
+ * it isn't (its auth status, or its auth_required). 'unsure': a connect got through but the
+ * agent said nothing and its login file isn't there, so nothing shows it is signed in (the Test
+ * will say).
+ */
+export function checkLogin(a: AgentTestAnswer): AgentDone['login'] {
+  if (!a.ok) return a.code === 'agent_signin' ? 'signed_out' : null;
+  if (agentSaidSignedOut(a)) return 'signed_out';
+  if (a.tools !== null || a.auth_status === 'signed_in') return 'connected';
+  return a.signed_in === 'no' ? 'unsure' : 'connected';
 }
 
 /** A Test's or connect's result line (spec 5.7) and whether everything works. */
 export function agentTestLine(a: AgentTestAnswer, row: Pick<AgentRow, 'name' | 'version' | 'own_tools' | 'signed_in'>, message: boolean): { ok: boolean; text: string } {
   if (!a.ok) return { ok: false, text: a.error };
   const version = a.version ?? row.version;
-  if (agentSaidSignedOut(a, row)) return { ok: false, text: connectedSignedOutText(withVersion(row.name, version)) };
-  if (!message) return { ok: true, text: `Connected to ${withVersion(row.name, version)}.` };
+  if (agentSaidSignedOut(a)) return { ok: false, text: connectedSignedOutText(withVersion(row.name, version)) };
+  if (!message) return { ok: true, text: checkLogin(a) === 'unsure' ? connectedUnsureText(withVersion(row.name, version)) : `Connected to ${withVersion(row.name, version)}.` };
   if (a.tools === 'not_used') {
     return {
       ok: false,
@@ -202,22 +219,18 @@ export interface AgentDone {
   text: string;
   code: string | null;
   auth: SignInMethodView[] | null;
-  /** The check got through to a session and the agent didn't say it isn't signed in: signed in, whatever its login file says. */
-  connected: boolean;
-  /** The agent itself said it isn't signed in (its auth_required, or a connect that got through saying so). */
-  signedOut: boolean;
+  /** What it says of the sign-in, over the login file (checkLogin); null: nothing (a sign-in, or a failed check). */
+  login: 'connected' | 'signed_out' | 'unsure' | null;
 }
 
 /**
- * Whether the row is signed in as the page says it: the newest word from the agent itself (a
- * check run here; else the server's sign-in block from its last auth_required, which a
- * successful connect or Test clears), else the login file (the row's `signed_in`).
+ * Whether the row is signed in as the page says it: the newest word from a check run here
+ * (checkLogin); else the server's sign-in block from the agent's last auth_required or 'none'
+ * (a check that gets through otherwise clears it); else the login file (the row's `signed_in`).
  */
-function loginOf(row: AgentRow, done: AgentDone | null): 'connected' | 'signed_out' | 'file' {
-  if (done?.kind === 'check') {
-    if (done.signedOut) return 'signed_out';
-    if (done.connected) return 'connected';
-  }
+function loginOf(row: AgentRow, done: AgentDone | null): 'connected' | 'signed_out' | 'unsure' | 'file' {
+  // A connect it said nothing on counts only while its login file says no: once the file is there, the file decides.
+  if (done?.kind === 'check' && done.login && (done.login !== 'unsure' || row.signed_in === 'no')) return done.login;
   if (row.sign_in) return 'signed_out';
   return 'file';
 }
@@ -229,7 +242,8 @@ function baseState(row: AgentRow, done: AgentDone | null): Exclude<AgentRowState
   if (row.needs_allow && !row.allowed) return row.allow_changed ? 'allow_changed' : 'needs_allow';
   if (done && done.kind === 'check' && !done.answered) return 'error';
   const login = loginOf(row, done);
-  if (login === 'connected') return 'ready';
+  // Unsure: Test is offered, and it will say.
+  if (login === 'connected' || login === 'unsure') return 'ready';
   if (login === 'signed_out' || row.signed_in === 'no') return 'signed_out';
   return 'ready';
 }
@@ -535,16 +549,15 @@ function AgentRowView({
       try {
         const a = await checkAgent(row.id, message, signal);
         const line = agentTestLine(a, row, message);
-        const signedOut = a.ok ? agentSaidSignedOut(a, row) : a.code === 'agent_signin';
-        return { kind: 'check', answered: a.ok, good: line.ok, text: line.text, code: a.ok ? null : a.code, auth: a.auth ?? null, connected: a.ok && !signedOut, signedOut };
+        return { kind: 'check', answered: a.ok, good: line.ok, text: line.text, code: a.ok ? null : a.code, auth: a.auth ?? null, login: checkLogin(a) };
       } catch (err) {
-        return { kind: 'check', answered: false, good: false, text: isMissingRoute(err) ? NO_AGENT_TEST_TEXT : errorText(err), code: null, auth: null, connected: false, signedOut: false };
+        return { kind: 'check', answered: false, good: false, text: isMissingRoute(err) ? NO_AGENT_TEST_TEXT : errorText(err), code: null, auth: null, login: null };
       }
     });
 
   const signIn = (method: SignInMethodView) =>
     runCheck('signing_in', async (signal) => {
-      const was = { auth: null, connected: false, signedOut: false };
+      const was = { auth: null, login: null };
       try {
         const r = await signInAgent(row.id, method.id, signal);
         if (r.ok) return { kind: 'sign_in', answered: true, good: true, text: signedInDoneText(name), code: null, ...was };
@@ -576,7 +589,7 @@ function AgentRowView({
   // The ways to sign in: from the last check here, else from the server's last auth_required.
   const methods = done?.auth ?? row.sign_in?.methods ?? [];
   // A failed check shows the block when the agent asked to sign in now or at its last auth_required.
-  const showSignIn = base === 'signed_out' || (base === 'error' && !row.error && (!!done?.signedOut || !!row.sign_in));
+  const showSignIn = base === 'signed_out' || (base === 'error' && !row.error && (done?.login === 'signed_out' || !!row.sign_in));
   const canCheck = base === 'ready' || (base === 'error' && !row.error);
   // A failed check is an alert (spec 5.6); a check running or done well is announced politely.
   const failed = !busy && !!done && !done.good ? done : null;
@@ -698,9 +711,10 @@ function AgentRowView({
 function headline(row: AgentRow, state: AgentRowState, done: AgentDone | null): string {
   if (state === 'missing') return row.kind === 'known' ? notInstalledText(row.name) : `${row.name} · ${row.error ?? 'not found.'}`;
   const parts = [withVersion(row.name, row.version)];
-  // The agent's own word says more than its login file: a connect that got through, or its "sign in first".
+  // The agent's own word says more than its login file: signed in, its "sign in first", or a connect it said nothing on.
   const login = loginOf(row, done);
   if (login === 'signed_out') parts.push(LOGIN_NO);
+  else if (login === 'unsure') parts.push(LOGIN_UNKNOWN);
   else if (!(login === 'connected' && row.signed_in === 'no')) parts.push(loginLine(row));
   if ((state === 'ready' || state === 'signed_out' || (state === 'error' && !row.error)) && (row.own_tools === 'off' || row.allowed)) parts.push(ownToolsLine(row.own_tools));
   return parts.join(' · ');

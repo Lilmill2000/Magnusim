@@ -17,6 +17,7 @@ import {
   billingText,
   CONNECT_AGAIN,
   connectedSignedOutText,
+  connectedUnsureText,
   connectNote,
   MCP_UNAVAILABLE_TEXT,
   privacyDeniedText,
@@ -531,14 +532,17 @@ describe('Coding agents: each row state', () => {
     expect(agentRowState(r, 'testing')).toBe('testing');
     expect(agentRowState(readAgentRow(missing('x', 'X', 'npm install -g x'))!)).toBe('missing');
     expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!)).toBe('signed_out');
-    // A connect that got through: signed in, whatever the login file says.
-    expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!, null, { kind: 'check', answered: true, good: true, text: '', code: null, auth: null, connected: true, signedOut: false })).toBe('ready');
+    // A check that got through to an agent signed in (its answer to the Test, or its own word): ready, whatever the login file says.
+    expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!, null, { kind: 'check', answered: true, good: true, text: '', code: null, auth: null, login: 'connected' })).toBe('ready');
+    // A connect it said nothing on, with no login file: Test is offered (it will say).
+    expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!, null, { kind: 'check', answered: true, good: true, text: '', code: null, auth: null, login: 'unsure' })).toBe('ready');
     expect(agentRowState(readAgentRow(codex())!)).toBe('needs_allow');
     expect(agentRowState(readAgentRow(codex({ allow_changed: true }))!)).toBe('allow_changed');
-    expect(agentRowState(r, null, { kind: 'check', answered: false, good: false, text: 'x', code: 'agent_exited', auth: null, connected: false, signedOut: false })).toBe('error');
+    expect(agentRowState(r, null, { kind: 'check', answered: false, good: false, text: 'x', code: 'agent_exited', auth: null, login: null })).toBe('error');
     // The agent's own word over its login file: its last auth_required (the server's sign_in), or a connect that got through saying it isn't signed in.
     expect(agentRowState(readAgentRow(row({ signed_in: 'yes', sign_in: { methods: [] } }))!)).toBe('signed_out');
-    expect(agentRowState(r, null, { kind: 'check', answered: true, good: false, text: 'x', code: null, auth: null, connected: false, signedOut: true })).toBe('signed_out');
+    expect(agentRowState(r, null, { kind: 'check', answered: true, good: false, text: 'x', code: null, auth: null, login: 'signed_out' })).toBe('signed_out');
+    expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!, null, { kind: 'check', answered: true, good: false, text: 'x', code: null, auth: null, login: 'signed_out' })).toBe('signed_out');
     // A check listed its choices once (the server's `last`): the login file still says, as the server's readiness does.
     expect(agentRowState(readAgentRow(row({ signed_in: 'no', last: { modes: [], models: [], at: 'now' } }))!)).toBe('signed_out');
   });
@@ -768,10 +772,10 @@ describe('Coding agents: sign in (spec 4.12)', () => {
     await waitFor(() => expect(r.querySelector('[data-assistant-agent-result]')).toHaveTextContent('Claude Code finished signing in. Connect again to check.'));
   });
 
-  it("I've signed in: connect again sends no message; it connects, and the row is ready with focus kept in it", async () => {
+  it("I've signed in: connect again sends no message; the agent says it is signed in, and the row is ready with focus kept in it", async () => {
     rows = [row({ signed_in: 'no', ready: false, reason: 'agent_signed_out' })];
     holdTest = deferred();
-    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.2', ms: 900, signed_in: 'no', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
+    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.2', ms: 900, signed_in: 'no', auth_status: 'signed_in', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
     await renderAgents();
     const again = within(agent('claude')).getByRole('button', { name: CONNECT_AGAIN });
     again.focus();
@@ -787,6 +791,51 @@ describe('Coding agents: sign in (spec 4.12)', () => {
     expect(agent('claude').querySelector('[data-assistant-agent-signin]')).toBeNull();
     // The button that had the focus went with the block: the focus is on Test, in the row.
     expect(document.activeElement).toBe(within(agent('claude')).getByRole('button', { name: 'Test' }));
+  });
+
+  it("connect again on a row with no login file, the agent saying it isn't signed in: never Connected or ready; the Sign in block stays with the ways it listed (its word wins)", async () => {
+    rows = [row({ signed_in: 'no', ready: false, reason: 'agent_signed_out' })];
+    testAnswer = {
+      status: 200,
+      body: { ok: true, agent: 'claude-agent-acp', version: '0.85.2', ms: 900, signed_in: 'no', auth_status: 'none', own_tools: 'off', images: true, modes: [], models: [], tools: null, auth: [terminal] },
+    };
+    await renderAgents();
+    const r = agent('claude');
+    expect(within(r).queryByRole('button', { name: 'Test' })).toBeNull();
+    fireEvent.click(within(r).getByRole('button', { name: CONNECT_AGAIN }));
+    await waitFor(() => expect(r.querySelector('[data-assistant-agent-result="failed"]')).toBeTruthy());
+    expect(posts('/api/assistant/agents/test')).toEqual([{ id: 'claude', message: false }]);
+    expect(stateOf('claude')).toBe('signed_out');
+    const failed = r.querySelector('[data-assistant-agent-result="failed"]')!;
+    expect(failed.textContent).toBe(connectedSignedOutText('Claude Code 0.85.2'));
+    expect(failed).toHaveAttribute('role', 'alert');
+    expect(r.textContent).not.toContain('Connected to Claude Code 0.85.2.');
+    expect(r.querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_NO} · ${OWN_TOOLS_OFF}`);
+    // The Sign in block stays, with the ways the agent listed; no Test.
+    const block = within(r).getByRole('group', { name: signInHeading('Claude Code') });
+    expect(block.querySelector('[data-assistant-agent-signin-command="claude-login"]')!.textContent).toBe('claude-agent-acp --cli auth login');
+    expect(within(r).queryByRole('button', { name: 'Test' })).toBeNull();
+    expect(r).toHaveAttribute('data-ready', '0');
+  });
+
+  it("connect again that hears nothing from the agent on a row with no login file: connected, but whether it is signed in can't be told, and Test (which will say) is offered", async () => {
+    rows = [row({ signed_in: 'no', ready: false, reason: 'agent_signed_out' })];
+    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.2', ms: 900, signed_in: 'no', auth_status: null, own_tools: 'off', images: true, modes: [], models: [], tools: null } };
+    await renderAgents();
+    const r = agent('claude');
+    fireEvent.click(within(r).getByRole('button', { name: CONNECT_AGAIN }));
+    await waitFor(() => expect(r.querySelector('[data-assistant-agent-result="ok"]')).toBeTruthy());
+    expect(r.querySelector('[data-assistant-agent-result="ok"]')!.textContent).toBe(connectedUnsureText('Claude Code 0.85.2'));
+    expect(connectedUnsureText('Claude Code 0.85.2')).toBe("Connected to Claude Code 0.85.2. Magnusim can't tell whether it is signed in; Test will say.");
+    expect(r.querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_UNKNOWN} · ${OWN_TOOLS_OFF}`);
+    expect(stateOf('claude')).toBe('ready');
+    expect(within(r).getByRole('button', { name: 'Test' })).toBeInTheDocument();
+    expect(r.querySelector('[data-assistant-agent-signin]')).toBeNull();
+    // Signed in since (its login file there now): Refresh, and the file decides again.
+    rows = [row({ signed_in: 'yes' })];
+    fireEvent.click(q('[data-assistant-agents-refresh]')!);
+    await waitFor(() => expect(agent('claude').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_YES} · ${OWN_TOOLS_OFF}`));
+    expect(stateOf('claude')).toBe('ready');
   });
 
   it('a connect that asks to sign in is an error with the Sign in block of its ways', async () => {
@@ -836,7 +885,7 @@ describe('Coding agents: sign in (spec 4.12)', () => {
     testAnswer = { status: 200, body: { ok: false, code: 'agent_signin', error: 'Claude Code asks you to sign in first.', auth: [] } };
     fireEvent.click(within(agent('claude')).getByRole('button', { name: 'Test' }));
     await waitFor(() => expect(stateOf('claude')).toBe('error'));
-    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.1', ms: 700, signed_in: 'no', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
+    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.1', ms: 700, signed_in: 'yes', auth_status: 'none', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
     fireEvent.click(within(agent('claude')).getByRole('button', { name: CONNECT_AGAIN }));
     await waitFor(() => expect(posts('/api/assistant/agents/test')).toHaveLength(2));
     await waitFor(() => expect(stateOf('claude')).toBe('signed_out'));
@@ -846,10 +895,14 @@ describe('Coding agents: sign in (spec 4.12)', () => {
     expect(connectedSignedOutText('Claude Code 0.85.1')).toBe("Connected to Claude Code 0.85.1, but it says it isn't signed in.");
     expect(within(r).getByRole('group', { name: signInHeading('Claude Code') })).toBeInTheDocument();
     expect(within(r).queryByRole('button', { name: 'Test' })).toBeNull();
-    // The answer's 'no' that is only the row's own (no login file) says nothing more: connected.
-    expect(agentSaidSignedOut({ ok: true, agent: 'x', version: null, ms: 1, signed_in: 'no', own_tools: 'off', images: false, modes: [], models: [], tools: null }, { signed_in: 'no' })).toBe(false);
+    // Only the agent's own word counts (its auth status), whatever its login file says.
+    const said = (auth_status: 'none' | 'signed_in' | null, tools: 'works' | null = null) =>
+      ({ ok: true, agent: 'x', version: null, ms: 1, signed_in: 'no', auth_status, own_tools: 'off', images: false, modes: [], models: [], tools }) as const;
+    expect(agentSaidSignedOut(said('none'))).toBe(true);
+    expect(agentSaidSignedOut(said(null))).toBe(false);
+    expect(agentSaidSignedOut(said('signed_in'))).toBe(false);
     // An agent that answered the Test's message is signed in, whatever it said.
-    expect(agentSaidSignedOut({ ok: true, agent: 'x', version: null, ms: 1, signed_in: 'no', own_tools: 'off', images: false, modes: [], models: [], tools: 'works' }, { signed_in: 'yes' })).toBe(false);
+    expect(agentSaidSignedOut(said('none', 'works'))).toBe(false);
   });
 
   it('a terminal command the page may not show (no line, more than one line, too long) gives the documentation line, even beside a button of the agent', async () => {
@@ -1247,7 +1300,11 @@ describe('the page reads what the server sends tolerantly', () => {
 
   it('readAgentTest: an answer without ok is a failure with a plain text', () => {
     expect(readAgentTest({})).toEqual({ ok: false, code: 'failed', error: 'The check failed.' });
-    expect(readAgentTest({ ok: true, ms: 'x', tools: 'maybe' })).toMatchObject({ ok: true, ms: 0, tools: null, own_tools: 'on' });
+    expect(readAgentTest({ ok: true, ms: 'x', tools: 'maybe' })).toMatchObject({ ok: true, ms: 0, tools: null, own_tools: 'on', auth_status: null });
+    // The agent's own word on its login, apart from the login file's signed_in.
+    expect(readAgentTest({ ok: true, signed_in: 'yes', auth_status: 'none' })).toMatchObject({ signed_in: 'yes', auth_status: 'none' });
+    expect(readAgentTest({ ok: true, auth_status: 'signed_in' })).toMatchObject({ auth_status: 'signed_in' });
+    expect(readAgentTest({ ok: true, auth_status: 'account' })).toMatchObject({ auth_status: null });
   });
 
   it('the status helpers: agent providers, the Default choices, the agent limits', () => {

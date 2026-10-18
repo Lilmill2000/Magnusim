@@ -237,6 +237,7 @@ export function readAgentTest(j: unknown): AgentTestAnswer {
     version: str(o.version),
     ms: typeof o.ms === 'number' && Number.isFinite(o.ms) ? o.ms : 0,
     signed_in: oneOf(o.signed_in, ['yes', 'key', 'no', 'unknown'] as const, 'unknown'),
+    auth_status: o.auth_status === 'none' || o.auth_status === 'signed_in' ? o.auth_status : null,
     own_tools: o.own_tools === 'off' ? 'off' : 'on',
     images: o.images === true,
     modes: choices(o.modes),

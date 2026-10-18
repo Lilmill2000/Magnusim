@@ -254,8 +254,11 @@ export class AgentSession {
   model: string | null = null;
   /** What the start says to the turn (a model the agent didn't take). */
   readonly notes: string[] = [];
-  /** The agent's `_auth/status_update` said it isn't signed in (display only). */
-  authNone = false;
+  /**
+   * What the agent's own `_auth/status_update` said last (display only): 'none' (not signed in),
+   * 'signed_in' (any other kind: an account, a key, a gateway...), or null (nothing yet).
+   */
+  authStatus: 'none' | 'signed_in' | null = null;
   /** What it did between prompts that ends it (the first one), or null. */
   offence: AgentOffence | null = null;
   /** A turn ended with the offence as its own end (the next turn needn't say it again). */
@@ -689,7 +692,7 @@ export class AgentSession {
     }
     if (method === '_auth/status_update') {
       const kind = authStatusKind(params);
-      if (kind === 'none') this.authNone = true;
+      if (kind) this.authStatus = kind === 'none' ? 'none' : 'signed_in';
       try {
         this.o.onAuthStatus?.(kind);
       } catch {

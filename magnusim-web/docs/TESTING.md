@@ -321,7 +321,10 @@ No test reaches a real model provider or this PC's real Assistant files.
     name in the tool call's `_meta`), `mcp_call_flag` (a flagged `mcp.magnusim.<tool>`
     title, and approvals that carry the tool call's id) or `none` (a custom command).
   - `requireSignIn` refuses `session/new` with -32000 until `fake.signIn()` writes its
-    marker (an `authenticate` writes it too). `fake.argvWith({helpersAtStart: n})` makes it
+    marker (an `authenticate` writes it too). `authStatus: 'none'` (or another kind, such
+    as `'account'`) lets `session/new` through but first sends `_auth/status_update
+    {authStatus: {kind}}`, as an adapter that reports its own login does: the way such an
+    agent says it isn't signed in on a connect. `fake.argvWith({helpersAtStart: n})` makes it
     start n helpers before it reads anything.
   - **Through agent discovery.** Discovery starts a package's bin as `[node, <script>,
     ...args]`, with no `--control` and no `MAGNUSIM_` variable (the agent's environment

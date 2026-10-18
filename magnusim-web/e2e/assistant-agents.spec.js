@@ -17,7 +17,10 @@
 // Magnusim uses with it); signing in (connect again hears the agent ask for it: the Sign in
 // block shows the terminal command the agent sent, as its program's name, and Copy puts it on
 // the clipboard; signed in, connect again connects; the Test calls Magnusim's test tool; the
-// Model it listed saved, and no Mode select when Magnusim uses one mode); the Default choice
+// Model it listed saved, and no Mode select when Magnusim uses one mode); connect again on an
+// agent whose session starts but that says it isn't signed in (as Claude Code's adapter does):
+// never Connected or ready, the Sign in block kept with its command, also when the step opens
+// again, until it says it is signed in; the Default choice
 // offering the agents found beside a saved API key (D-A), a coding agent as the default keeping
 // every key, and the coding agents' limits shown and saved; a custom agent added with a
 // variable to pass, a turn on it refused without the launch proof and while it is off (nothing
@@ -93,7 +96,7 @@ let pidsFile;
 let launchers;
 let launcherCount = 0;
 /** What each scripted agent is when it starts (each test starts from these). */
-const BASE_FAKE = Object.freeze({ requireSignIn: false, authMethods: [], stubborn: false });
+const BASE_FAKE = Object.freeze({ requireSignIn: false, authStatus: null, authMethods: [], stubborn: false });
 /** Claude Code's adapter marks Magnusim's tools with their name in _meta; the Test's line names its version. */
 const CLAUDE_FAKE = Object.freeze({ ...BASE_FAKE, style: 'tool_name_meta', agentInfo: { name: 'claude-agent-acp', title: 'Claude Code', version: CLAUDE.version } });
 /** Codex's adapter flags its MCP calls and approvals; it lists the read-only mode Magnusim starts it in. */
@@ -589,6 +592,59 @@ test("signing in: connect again hears Claude Code ask for it, and the Sign in bl
   expect(fake.events('mcp_result', testPid)).toEqual([expect.objectContaining({ tool: 'connection_check', error: null })]);
   // Each check ended its agent (the tree kill): none runs now.
   await expect.poll(() => strays(fake.pids().map((p) => p.pid), host.tmp), { timeout: 15_000 }).toEqual([]);
+});
+
+test("connect again on Claude Code that isn't signed in, its session starting as its adapter's does: the agent's own word wins, so the row stays signed out with the Sign in block and its command (opened again too) and never says Connected; once it says it is signed in, it connects", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const listed = (await agentsNow(request)).find((r) => r.id === 'claude');
+  expect(listed.script, 'the resolved script').toBeTruthy();
+  const startedBefore = fake.pids('agent').length;
+  // session/new goes through; the agent says (_auth/status_update) that it isn't signed in. No login file here.
+  fake.configure({
+    authStatus: 'none',
+    authMethods: [
+      {
+        id: 'claude-login',
+        name: 'Log in with your account',
+        type: 'terminal',
+        args: ['--cli', 'auth', 'login'],
+        _meta: { 'terminal-auth': { command: process.execPath, args: [listed.script, '--cli', 'auth', 'login'], label: 'Log in' } },
+      },
+    ],
+  });
+  await page.goto(`${host.base}/#/`);
+  await openAssistantStep(page);
+  const claude = rowOf(page, 'claude');
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out', { timeout: 30_000 });
+  const signIn = claude.getByRole('group', { name: 'Sign in to Claude Code' });
+  await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
+  await expect(claude.locator('[data-assistant-agent-result="failed"]')).toHaveText(`Connected to Claude Code ${CLAUDE.version}, but it says it isn't signed in.`);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out');
+  await expect(claude).toHaveAttribute('data-ready', '0');
+  await expect(claude.locator('[data-assistant-agent-line]')).toHaveText(`Claude Code ${CLAUDE.version} · Not signed in. · ${OWN_TOOLS_OFF}`);
+  await expect(signIn.locator('[data-assistant-agent-signin-command="claude-login"]')).toHaveText(`${CLAUDE.program} --cli auth login`);
+  await expect(claude.getByRole('button', { name: 'Test' })).toHaveCount(0);
+  await expect(claude.locator('[data-assistant-agent-result="ok"]')).toHaveCount(0);
+  // The connect sent no message.
+  const checks = fake.pids('agent').slice(startedBefore);
+  expect(checks.length, 'the connect check started the agent').toBeGreaterThan(0);
+  expect(checks.flatMap((p) => fake.received(p.pid)).filter((m) => m.method === 'session/prompt')).toEqual([]);
+  // The server keeps its ways to sign in: the step opened again still shows the block and its command.
+  expect((await agentsNow(request)).find((r) => r.id === 'claude').sign_in.methods.map((m) => m.id)).toEqual(['claude-login']);
+  await page.reload();
+  await openAssistantStep(page);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out', { timeout: 30_000 });
+  await expect(signIn.locator('[data-assistant-agent-signin-command="claude-login"]')).toHaveText(`${CLAUDE.program} --cli auth login`);
+
+  // It says it is signed in now (its own word; still no login file): connect again connects, and Test shows.
+  fake.configure({ authStatus: 'account' });
+  await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
+  await expect(claude.locator('[data-assistant-agent-result="ok"]')).toHaveText(`Connected to Claude Code ${CLAUDE.version}.`);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'ready');
+  await expect(claude.getByRole('button', { name: 'Test' })).toBeVisible();
+  await expect(claude.locator('[data-assistant-agent-signin]')).toHaveCount(0);
+  expect((await agentsNow(request)).find((r) => r.id === 'claude').sign_in).toBeNull();
+  await expect.poll(() => fake.pids().filter((p) => isRunning(p.pid)).map((p) => p.pid), { timeout: 15_000 }).toEqual([]);
 });
 
 /** Claude Code signed in: its login file exists (discovery only checks that it does). */

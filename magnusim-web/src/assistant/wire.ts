@@ -473,7 +473,13 @@ export type AgentTestAnswer =
       agent: string;
       version: string | null;
       ms: number;
+      /** The login file's (the row's own `signed_in`). */
       signed_in: AgentRow['signed_in'];
+      /**
+       * What the agent itself said of its login during the check (its auth status): 'none' (not
+       * signed in), 'signed_in', or null when it said nothing.
+       */
+      auth_status: 'none' | 'signed_in' | null;
       own_tools: 'off' | 'on';
       images: boolean;
       modes: ModeView[];
