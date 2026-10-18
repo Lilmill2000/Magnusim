@@ -67,6 +67,7 @@ declare module '@magnusim/workspace' {
        * ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5,
        * ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the
        * refusal: an older host rejects a call it does not know with code "not_allowed".
+       * `ws.assistant` (unreleased in 1.8: check that it exists).
        */
       hostVersion: string;
       /**
@@ -298,11 +299,14 @@ declare module '@magnusim/workspace' {
       /**
        * Host 1.7, for the first link of a study that edits a project geometry (context.geometry
        * with `linked` false): a face-name sidecar of the ORIGINAL geometry, one row per face of
-       * ws.project.geometryFaces() in its order, its `shape_sha256` that call's `sourceSha256`.
-       * The host puts these names on the original's faces, so the boundary conditions follow
-       * each face to the face of the new shape with the same name (then by shape). A face with
-       * no name follows by shape only. A file that does not describe the original is refused
-       * with `bad_face_names`. Ignored by every later link.
+       * ws.project.geometryFaces() in its order, its `shape_sha256` that call's `sourceSha256`,
+       * and each named row with the fingerprint of the face it names (`centroid`, `area`,
+       * `normal`: that face's in geometryFaces(), mm). The host puts these names on the
+       * original's faces, so the boundary conditions follow each face to the face of the new
+       * shape with the same name (then by shape). A row whose fingerprint is not its host face's
+       * loses its name (counted in LinkResult.unverified); more than 20 % of such rows, or a
+       * file that does not describe the original, is refused with `bad_face_names`, at the call.
+       * A face with no name follows by shape only. Ignored by every later link.
        */
       originalNames?: LinkFile;
       /** The plugin's own version of the SAVED design: a whole number that never goes down. */
@@ -366,6 +370,14 @@ declare module '@magnusim/workspace' {
           runs: number;
       };
       seconds: number;
+      /** Host 1.7: true on the update that took over the project geometry this study edits (its first link). */
+      adopted?: boolean;
+      /**
+       * Host 1.7, with `adopted`: how many `originalNames` rows did not match their face (their
+       * fingerprint is not the host face's). Their names were dropped, so those faces followed by
+       * shape only; a face that also moved is then lost (`lost`).
+       */
+      unverified?: number;
   }
   /** The project geometry this study links, as the host has it. */
   export interface LinkedGeometry {
@@ -428,6 +440,203 @@ declare module '@magnusim/workspace' {
   } | void> | {
       view?: ViewState;
   } | void;
+  /**
+   * How much a tool of the app's assistant may change (unreleased, next host minor 1.9).
+   * `read` changes nothing; `edit` changes this page's own state; `compute` starts work that
+   * takes time or the app's compute slot; `destructive` can't be undone. The app asks the user
+   * before every `compute` and `destructive` call. An unknown risk counts as `destructive`.
+   */
+  export type AssistantRisk = 'read' | 'edit' | 'compute' | 'destructive';
+  /**
+   * A tool's input, in the subset of JSON Schema the app accepts (unreleased, 1.9): every object
+   * lists its `properties` and says `additionalProperties: false`. No `$ref`, `oneOf`, `anyOf`,
+   * `allOf`, `pattern`, `format` or `default`.
+   */
+  export type AssistantSchema = {
+      type: 'string';
+      description?: string;
+      enum?: string[];
+      minLength?: number;
+      maxLength?: number;
+  } | {
+      type: 'number' | 'integer';
+      description?: string;
+      minimum?: number;
+      maximum?: number;
+      enum?: number[];
+  } | {
+      type: 'boolean';
+      description?: string;
+  } | {
+      type: 'array';
+      description?: string;
+      items: AssistantSchema;
+      minItems?: number;
+      maxItems?: number;
+  } | AssistantObjectSchema;
+  /** An object in a tool's input schema (unreleased, 1.9): the tool's whole input is one. */
+  export interface AssistantObjectSchema {
+      type: 'object';
+      description?: string;
+      properties: Record<string, AssistantSchema>;
+      required?: string[];
+      additionalProperties: false;
+  }
+  /**
+   * A tool the app's assistant may call while this workspace is open (unreleased, 1.9). The app
+   * checks every constraint before your handler runs; the model may see the numeric and length
+   * limits only as words in the description.
+   */
+  export interface AssistantTool {
+      /** 1 to 32 of a-z, 0-9 and "_", starting with a letter, never "__". Unique in this page. */
+      name: string;
+      /** A short name for the user (the app's question names the tool by it). */
+      title?: string;
+      /** What it does, for the model: plain text, at most 1024 characters. */
+      description: string;
+      inputSchema: AssistantObjectSchema;
+      risk: AssistantRisk;
+      /** Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit. */
+      timeoutS?: number;
+      /**
+       * For a `destructive` tool: what the app's question before each call says the call does, in
+       * place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120
+       * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
+       */
+      confirm?: string;
+  }
+  /** One call of a tool, as the handler gets it (unreleased, 1.9). */
+  export interface AssistantCall {
+      /** The call's id. */
+      call: string;
+      /** The assistant's turn that made the call: calls of one turn share it (one undo step, for example). */
+      turn: string;
+      /** The tool's name, as registered. */
+      tool: string;
+      /** The input, already checked against the tool's inputSchema. */
+      input: Record<string, unknown>;
+      /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
+      signal: AbortSignal;
+      /**
+       * Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+       * `{waiting: true}` says the call waits for the person (a panel of theirs open, their
+       * answer): that time doesn't count toward the turn's minutes, until the next progress
+       * without it or the call's end. Keep calling it while you wait, every few seconds.
+       */
+      progress(fraction: number | null, label?: string, opts?: AssistantProgressOptions): void;
+  }
+  /** What else a call's progress says (unreleased, 1.9). */
+  export interface AssistantProgressOptions {
+      /** The call waits for the person (only while it does). */
+      waiting?: boolean;
+  }
+  /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
+  export interface AssistantImage {
+      mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+      data: Blob;
+  }
+  /**
+   * What a handler returns (unreleased, 1.9): text, or `{text?, data?, images?, summary?}` (`text`
+   * at most 64 KB, `data` plain JSON of at most 256 KB), or nothing. A larger result fails the call
+   * with code "too_large". Everything in it but `summary` reaches the model as data, never as
+   * instructions. `summary` is one line for the turn's log that names what the call did ("Added 2:
+   * the counter is 2"), at most 160 characters: the person reads it, the model never gets it.
+   * Without one the log says "Done".
+   */
+  export type AssistantResult = string | {
+      text?: string;
+      data?: unknown;
+      images?: AssistantImage[];
+      summary?: string;
+  } | void;
+  /**
+   * Runs a tool call (unreleased, 1.9). A throw fails the call: an error's `.code` is kept when it
+   * is "invalid_input", "busy" or "not_ready", and reads "failed" otherwise. Its `.message` says
+   * what went wrong, its `.hint` how to fix it (one sentence, at most 500 characters), and its
+   * `.detail` holds plain JSON for the model to act on (what the hint refers to: the field, the
+   * candidates, the allowed range), at most 4 KB as JSON: a larger one is dropped, and the message
+   * says so. All three reach the model with the code.
+   */
+  export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
+  /** The app's answer to ws.assistant.register (unreleased, 1.9). */
+  export interface AssistantRegistration {
+      /** False when the app's assistant could not take the tools now (`reason` says why); nothing changed then. */
+      available: boolean;
+      /** The names of the tools the assistant may call. */
+      accepted: string[];
+      /** The tools it refused, each with why. */
+      refused: Array<{
+          name: string;
+          code: string;
+          message: string;
+      }>;
+      /** Why not available: "not_connected" (try again later), "no_assistant", "remote", … */
+      reason?: string;
+  }
+  /**
+   * A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked,
+   * as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change
+   * (at most once a second); `ended` once, at its end.
+   */
+  export interface AssistantTurn {
+      /** The turn's id: AssistantCall.turn of each of its calls. */
+      id: string;
+      state: 'running' | 'ended';
+      /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
+      title: string;
+      /** It runs on a local server (a smaller model, often with less room: keep results short). */
+      local: boolean;
+      /** The model's context in tokens, when the app knows it (null otherwise). */
+      contextTokens: number | null;
+      /** Whether the model reads images, when the app knows it (null otherwise). */
+      images: boolean | null;
+      /** What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). */
+      used: {
+          steps: number;
+          stepsCap: number;
+          usd: number;
+          usdCap: number;
+      };
+      /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
+      end?: {
+          state: 'done' | 'stopped' | 'failed' | 'capped';
+          reason: string;
+      };
+  }
+  /**
+   * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
+   * that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant",
+   * "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+   */
+  export interface AssistantStopAnswer {
+      stopped: boolean;
+      reason?: string;
+  }
+  /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
+  export interface WorkspaceAssistant {
+      /**
+       * Set this page's tools and their handler in one step; register([], null) withdraws them.
+       * `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation).
+       * Resolves once the app has the list. available:false with reason 'not_connected' means the app could not
+       * reach the assistant from this tab yet (for example the tab opened in the background): call register again
+       * later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay.
+       * Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
+       */
+      register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: {
+          guide?: string;
+      }): Promise<AssistantRegistration>;
+      /**
+       * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen
+       * before register: the turns already running are told to a page once it offers tools. Returns a
+       * function that stops listening.
+       */
+      onTurn(fn: (turn: AssistantTurn) => void): () => void;
+      /**
+       * Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted
+       * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
+       */
+      stop(turn: string): Promise<AssistantStopAnswer>;
+  }
   export interface ConfirmOptions {
       title: string;
       message?: string;
@@ -569,15 +778,17 @@ declare module '@magnusim/workspace' {
            * The file of the geometry this study edits (host 1.7; context.geometry): a STEP file,
            * the import itself or the host's own STEP of an IGES import. Once an edit went back to
            * the project (`adopted`), the original the host kept. Refusals carry `.code`:
-           * "not_allowed" (this study edits no geometry), "gone" (it was removed), "no_source"
-           * (the geometry has no such file, e.g. one a link made), "not_ready" (the app is still
-           * storing an import: try again after `.retryAfter` seconds).
+           * "not_allowed" (this study edits no geometry), "gone" (it was removed), "adopted"
+           * (another study took it over), "no_source" (the geometry has no such file, e.g. one a
+           * link made, or its STEP is missing), "not_ready" (it is updating: try again after
+           * `.retryAfter` seconds).
            */
           geometrySource(o?: GeometrySourceOptions): Promise<GeometrySource>;
           /**
            * The faces of the geometry this study edits (host 1.7), in the host's order, with the
            * study setup that uses each one. Before the first edit went back, the faces of the
-           * original. Refusals as geometrySource ("not_allowed", "gone", "not_ready").
+           * original. Refusals as geometrySource; "not_ready" also when the app has not read the
+           * geometry's faces yet (it reads them when the geometry is shown).
            */
           geometryFaces(): Promise<GeometryFaces>;
       };
@@ -670,6 +881,11 @@ declare module '@magnusim/workspace' {
               opened: boolean;
           }>;
       };
+      /**
+       * Tools this page offers to the app's assistant (unreleased, next host minor 1.9; absent on an
+       * older host, so check that it exists, and catch "not_allowed" from a host without it).
+       */
+      readonly assistant?: WorkspaceAssistant;
       /**
        * Live changes the host pushes. Returns a function that stops listening.
        * `study`: the study changed (renamed in the header, or saved): save next with its `rev`.
