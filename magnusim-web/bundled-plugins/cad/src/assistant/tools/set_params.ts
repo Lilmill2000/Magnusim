@@ -5,7 +5,8 @@
 // same check runs first as a dry run, so a bad name, expression or removal answers before
 // anything changes, naming its row (set[2].expr, remove[0]). A value edit: a feature that built
 // and fails after the change reverts the call (broke_downstream). The answer gives each row's
-// value evaluated, what was removed, and how the features rebuilt.
+// value evaluated, what was removed, how the features rebuilt, and the sketches the change turned
+// over (`flipped`: a dimension driven through zero mirrors its sketch; sketch/flip.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { listOfNames, planParams } from '../../doc/params-bulk';
@@ -17,6 +18,7 @@ import type { Quantity } from '../../types/units';
 import { ToolError } from '../errors';
 import { len, sig6 } from '../numbers';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { flippedSketches, sketchOutputs } from '../sketch/flip';
 
 interface SetRow {
   name: string;
@@ -33,6 +35,8 @@ interface Plan extends EditPlan {
   /** The parameters the set rows leave, by their final names, in row order. */
   names: string[];
   removed: string[];
+  /** The sketches' outputs before (the flip check). */
+  sketches: ReturnType<typeof sketchOutputs>;
 }
 
 const KIND_OF: Record<string, Quantity> = { length: 'length', angle: 'angle', number: 'scalar' };
@@ -131,6 +135,7 @@ const setParams: EditTool<Plan> = {
       where,
       names,
       removed: removedNames,
+      sketches: sketchOutputs(doc.state.get()),
       resolved: { ...(names.length ? { set: listOfNames(names) } : {}), ...(removedNames.length ? { remove: listOfNames(removedNames) } : {}) },
     };
   },
@@ -162,7 +167,10 @@ const setParams: EditTool<Plan> = {
     const more = rows.length > 3 ? ` (+${rows.length - 3} more)` : '';
     const gone = plan.removed.length ? `${shown.length ? '; ' : ''}removed ${listOfNames(plan.removed)}` : '';
     const text = `Parameters set: ${shown.join(', ')}${more}${gone}${data.broke.length ? ` · ${data.broke.length} feature${data.broke.length === 1 ? '' : 's'} broke` : ''}`;
-    return { text, data: { ...data, params: rows, removed: plan.removed, rebuilt }, summary: text };
+    // A dimension driven through zero turns its sketch over: warned, not refused.
+    const flipped = flippedSketches(plan.sketches, s);
+    if (flipped.length) data.warnings.push(`${flipped.join(', ')} turned over: a dimension went through zero; check it with get_model or view`);
+    return { text, data: { ...data, params: rows, removed: plan.removed, rebuilt, flipped }, summary: text };
   },
 };
 

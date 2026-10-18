@@ -8,7 +8,9 @@
 //     nothing (feature_failed, broke_downstream).
 //   - rename, setSuppressed and move are the Part's own edits, with their refusal words; they are
 //     structural, so a feature they turn red is kept and listed in `broke`.
-// A sketch's dimension values come with the sketch tool.
+//   - A sketch's dimension values (set rows naming its dimension ids) are checked headless first and
+//     go through sketch mode, which solves the stored geometry with them (sketch/dims.ts); the answer
+//     says when a change turned a sketch over (`flipped`).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { EditData, ToolImpl, ToolReply } from '../../types/assistant';
@@ -22,6 +24,8 @@ import { featureByName, stateWord } from '../model';
 import { macrotask } from '../pace';
 import { bodyWords } from '../judge';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { applyDimensions, planDimensions, type DimensionEdit } from '../sketch/dims';
+import { flippedSketches } from '../sketch/flip';
 
 interface SetRow {
   field: string;
@@ -39,6 +43,8 @@ interface Plan extends EditPlan {
   /** The feature's index after the move, or null. */
   moveTo: number | null;
   moveWords: string | null;
+  /** A sketch's dimension values (sketch/dims.ts), or null. */
+  dims: DimensionEdit | null;
 }
 
 const MAX_NAME = 80;
@@ -112,28 +118,28 @@ const editFeature: EditTool<Plan> = {
     }
     const rows = (Array.isArray(ctx.input.set) ? ctx.input.set : []) as SetRow[];
     const set: Plan['set'] = [];
-    if (rows.length && f.type === 'sketch') {
-      throw new ToolError('not_built', `Changing ${f.name}'s dimension values with edit_feature is not in this build yet.`, { detail: { tool: 'edit_feature', feature: f.name } });
-    }
+    // A sketch's dimensions: checked headless now, written through sketch mode (sketch/dims.ts).
+    const dims = rows.length && f.type === 'sketch' ? await planDimensions(ctx, f, rows.map((r) => ({ field: str(r?.field), value: str(r?.value) }))) : null;
+    if (dims) for (const x of dims.set) set.push({ field: x.field, path: x.field, value: x.value });
     const problems: string[] = [];
-    rows.forEach((row, i) => {
+    for (const [i, row] of (dims ? [] : rows).entries()) {
       const field = str(row?.field);
       const value = str(row?.value);
       const path = pathOfField(f, field, services);
       if (!path) {
         const fields = valuesOf(f, services).map((v) => v.field);
         problems.push(`set[${i}].field: ${f.name} has no field "${field}" (its fields: ${fields.length ? fields.join(', ') : 'none'})`);
-        return;
+        continue;
       }
       if (!value) problems.push(`set[${i}].value: enter an expression ("12 mm", "w/2")`);
       if (set.some((x) => x.path === path)) problems.push(`set[${i}]: ${field} is set twice`);
       set.push({ field, path, value });
-    });
+    }
     if (problems.length) throw new ToolError('bad_input', `${problems.slice(0, 12).join('; ')}.`, { detail: { problems: problems.slice(0, 12) } });
     // The dry run: the feature with each new value, as its type checks it.
     let patched: Feature = f;
     const def = services.doc.features.get(f.type);
-    for (let i = 0; i < set.length; i++) {
+    for (let i = 0; i < (dims ? 0 : set.length); i++) {
       const next = withValue(patched, set[i].path, set[i].value);
       const why = def?.incomplete(next, services.doc.units) ?? null;
       if (why && !def?.incomplete(patched, services.doc.units)) {
@@ -141,7 +147,7 @@ const editFeature: EditTool<Plan> = {
       }
       patched = next;
     }
-    const patch: Partial<Feature> | null = set.length ? (Object.fromEntries([...new Set(set.map((x) => String(pathKeys(x.path)[0])))].map((k) => [k, (patched as unknown as Record<string, unknown>)[k]])) as Partial<Feature>) : null;
+    const patch: Partial<Feature> | null = set.length && !dims ? (Object.fromEntries([...new Set(set.map((x) => String(pathKeys(x.path)[0])))].map((k) => [k, (patched as unknown as Record<string, unknown>)[k]])) as Partial<Feature>) : null;
     const renameTo = str(ctx.input.rename_to);
     let rename: string | null = null;
     if (renameTo && renameTo !== f.name) {
@@ -153,15 +159,15 @@ const editFeature: EditTool<Plan> = {
     const sup = ctx.input.suppress === 'suppress' ? true : ctx.input.suppress === 'unsuppress' ? false : null;
     const suppress = sup !== null && sup !== !!f.suppressed ? sup : null;
     const move = moveIndex(s.doc.features, f, str(ctx.input.move), (n) => featureByName(s, n));
-    if (!patch && rename === null && suppress === null && !move) throw new ToolError('bad_input', `Nothing to change in ${f.name}: give set rows, rename_to, suppress or move.`);
-    const value = !!patch && rename === null && suppress === null && !move;
+    if (!patch && !dims && rename === null && suppress === null && !move) throw new ToolError('bad_input', `Nothing to change in ${f.name}: give set rows, rename_to, suppress or move.`);
+    const value = (!!patch || !!dims) && rename === null && suppress === null && !move;
     const resolved: Record<string, string> = { feature: `${f.name} (${f.type})` };
     for (const x of set) resolved[x.field] = x.path === x.field ? x.value : `${x.value} (${x.path})`;
     if (move) resolved.move = move.words;
     return {
       part: `Edit ${rename ?? f.name}`,
       value,
-      own: patch ? f.id : null,
+      own: patch || dims ? f.id : null,
       feature: f.id,
       resolved,
       id: f.id,
@@ -172,6 +178,7 @@ const editFeature: EditTool<Plan> = {
       suppress,
       moveTo: move?.to ?? null,
       moveWords: move?.words ?? null,
+      dims,
     };
   },
 
@@ -179,7 +186,10 @@ const editFeature: EditTool<Plan> = {
     const { services } = ctx;
     const { doc } = services;
     const ui = uiFor(services);
-    if (plan.patch) {
+    if (plan.dims) {
+      await applyDimensions(ctx, plan.dims);
+      if (plan.renameTo !== null || plan.suppress !== null || plan.moveTo !== null) await ctx.checkpoint({ hold: 'between-opens' });
+    } else if (plan.patch) {
       const before = stateWord(doc.state.get().rebuild.features[plan.id]);
       const s = ui.openEditForAssistant(ctx.step, plan.id);
       if (typeof s === 'string') throw new ToolError('bad_input', `${plan.name} cannot be edited here: ${s}.`);
@@ -225,7 +235,15 @@ const editFeature: EditTool<Plan> = {
     const state = data.feature?.state ?? 'ok';
     const body = bodyWords(data);
     const text = `Edit ${name} ${state}: ${bits.join('; ')}${body ? ` · ${body}` : ''}${data.broke.length ? ` · ${data.broke.length} feature${data.broke.length === 1 ? '' : 's'} broke` : ''}`;
-    return { text, data: { ...data, values: f ? valuesOf(f, ctx.services).slice(0, 40) : [] }, summary: text };
+    const extra: Record<string, unknown> = {};
+    if (plan.dims) {
+      const flipped = flippedSketches(plan.dims.before, ctx.services.doc.state.get());
+      extra.flipped = flipped;
+      extra.moved = plan.dims.solved.moved;
+      extra.solver = { state: plan.dims.solved.state, dof: plan.dims.solved.dof, free: plan.dims.solved.free };
+      if (flipped.length) data.warnings.push(`${flipped.join(', ')} turned over: a dimension went through zero; check it with get_model or view`);
+    }
+    return { text, data: { ...data, values: f ? valuesOf(f, ctx.services).slice(0, 40) : [], ...extra }, summary: text };
   },
 };
 

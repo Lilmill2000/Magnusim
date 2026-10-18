@@ -7,8 +7,9 @@
 //   - the budgets: a 20-feature Part within 8 KB, within 3 KB on a local turn with the older
 //     features collapsed (errors named), 85 features collapse above 80;
 //   - full: inputs null with a summary while no tool writes the type, expression fields;
-//   - one sketch: its plane in numbers and words, the solver's state now (free parameters),
-//     every region with its depth and model point; a name not found lists the names;
+//   - one sketch: its plane in numbers and words, the solver's state now (free parameters by the
+//     sketch tool's names), every region with its depth and model point, its input form for the
+//     sketch tool; a name not found lists the names;
 //   - rev unchanged across a live draft, +1 per commit; what the person changed told once, the
 //     person's undo of the Assistant's steps with it; the person's open panel in words.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -174,11 +175,25 @@ describe('get_model full and one feature', () => {
       const r = await h.ok('get_model', { detail: 'brief', feature: 'sketch 1' });
       const f = r.data.feature as Row;
       expect(f.plane).toEqual({ on: 'Top', origin_mm: [0, 0, 0], normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], words: 'u runs +X, v runs +Y, origin (0, 0, 0)' });
-      // A rectangle of four lines with no relation: 4 points free in u and v.
+      // A rectangle of four lines with no relation: 4 points free in u and v, by the sketch tool's names.
       expect(f.solver).toMatchObject({ state: 'under', dof: 8, source: 'solver', conflicting: [], redundant: [] });
-      expect((f.solver as { free: { of: string; moves: string[] }[] }).free.map((x) => x.of).sort()).toEqual(['pt_a', 'pt_b', 'pt_c', 'pt_d']);
+      expect((f.solver as { free: { of: string; moves: string[] }[] }).free.map((x) => x.of).sort()).toEqual(['e_1.end', 'e_1.start', 'e_2.end', 'e_3.end']);
       expect(f.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), at_mm: expect.any(Array), holes: 0, depth: 0, bbox_uv: [[-30, -20], [30, 20]], bounded_by: ['e_1', 'e_2', 'e_3', 'e_4'] }]);
-      expect(f).toMatchObject({ inputs: null, entities: 4, constraints: 0, open: [], dangling: [] });
+      // Its input form, ready to resend to the sketch tool (the person's lines by their own ids).
+      expect(f).toMatchObject({ entities: 4, constraints: 0, open: [], dangling: [] });
+      expect(f.inputs).toEqual({
+        edit: 'Sketch 1',
+        name: 'Sketch 1',
+        on: 'Top',
+        entities: [
+          { id: 'e_1', kind: 'line', at: [-30, -20, 30, -20], construction: false },
+          { id: 'e_2', kind: 'line', at: [30, -20, 30, 20], construction: false },
+          { id: 'e_3', kind: 'line', at: [30, 20, -30, 20], construction: false },
+          { id: 'e_4', kind: 'line', at: [-30, 20, -30, -20], construction: false },
+        ],
+        constraints: [],
+        infer: false,
+      });
       expect(r.text).toBe('Sketch 1 (sketch): ok');
       // One feature's reply keeps the Part's short facts, not its lists.
       expect(r.data).toMatchObject({ part: 'Part 1', editable: true, person: null });

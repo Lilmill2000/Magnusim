@@ -642,7 +642,7 @@ async function byPair(sc: Scene, sel: Extract<Sel, { t: 'pair' }>): Promise<Edge
 function originPlane(plane: 'origin:top' | 'origin:front' | 'origin:right'): PlaneHit {
   const p = ORIGIN_PLANES[plane];
   const frame: PlaneFrame = { origin: [...p.origin] as Vec3, normal: [...p.normal] as Vec3, xdir: [...p.xdir] as Vec3 };
-  return { kind: 'plane', source: { s: 'origin', plane }, base: frame, frame, offset: null, flip: false, words: `${p.label} plane`, warnings: [] };
+  return { kind: 'plane', source: { s: 'origin', plane }, base: frame, frame, offset: null, flip: false, words: p.label, warnings: [] };
 }
 
 function originAxis(axis: 'origin:x' | 'origin:y' | 'origin:z'): AxisHit {

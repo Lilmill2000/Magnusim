@@ -153,6 +153,48 @@ One string names faces, edges, vertices, bodies, planes, axes or sketch regions
 view for 1.5 s at the watch pace (the shown bodies only; never at the fast pace or while the
 window is hidden).
 
+## Sketches (`sketch/`, the `sketch` tool, `edit_feature` on dimensions)
+
+One `sketch` call is one Assistant step. Everything is checked and solved before the step
+opens, so a refused call changes nothing and no panel opens:
+
+- `sketch/support.ts`: `on` through the plane selector (bodies before the sketch for an
+  edit): an origin plane, a construction plane, one flat face (its stored reference by the
+  person's pick rules), or `<plane or face> offset <length> [flip]`, which makes a
+  CONSTRUCT plane `<sketch> plane` in the same step, reuses an identical built one, or moves
+  the edited sketch's own plane while nothing else uses it.
+- `sketch/macros.ts`: each entity kind as points, lines, circles and arcs whose stored ids
+  are `<id>__<part>` (the model writes `<id>.<part>`: `r.top`, `p.2`, `p.p2`), with the
+  relations that keep its shape (`r__h_top`, ...). `KIND_DOF` is pinned on the real solver.
+- `sketch/compile.ts`: ids, every `at` problem at once (`bad_entity`), joins (ends within
+  0.05 mm are one point, the first entity's; near misses up to 0.5 mm warn; points the
+  edited sketch keeps apart stay apart), `infer` (`<line>__h` / `__v`, inferred), refs
+  checked against `sketch/signatures.ts` (the solver's own forms, pinned by
+  `signatures.test.ts`), values stored with units, at most 180 constraints (200 with the
+  inferred). A kept entity of an edited sketch keeps its stored points.
+- `sketch/solve.ts`: the solver apart from sketch mode (`analyzeFeature`): `expr_error`,
+  then the inferred relations that repeat yours go (newest touching first; the unneeded come
+  back), `sketch_conflict` naming each constraint and its partner (a macro's own as
+  `internal`), `sketch_unsolved`, `sketch_collapsed`, and the answer's `moved` and `free`.
+- `sketch/write.ts`: inside the step, through the person's paths: the offset plane's panel,
+  then `SketchMode.startSketch(support, {step})` (or the Edit panel), one `apply` of the
+  solution, the rebuild, `finish({step})`. Hold points `after-open`, `between-opens` (after
+  the plane), `sketch-step:1` (after the apply), `before-commit`. This is the fast path; the
+  watch path (drawing entity by entity) comes with watch mode.
+- `sketch/describe.ts`: a stored sketch in the tool's input form (`get_model feature`,
+  registered as the sketch type's `FeatureIo`): intact macros as macros, the rest as
+  primitives by their stored ids, `infer` for the tool's own inferred relations; `inputs:
+  null` with `unsupported` (projected edges, splines, patterns, fixed points, driven
+  dimensions, trimmed pieces) or `too_big` (150 entities, 200 constraints, or the reply's
+  room). Resent as it is, the sketch comes back the same. `refOf` names stored ids as the
+  model does (`free`, `open`, `bounded_by`, conflicts).
+- `sketch/dims.ts`: `edit_feature` set rows naming a sketch's dimension ids: checked headless,
+  then one sketch-mode `apply` of the new values (the stored geometry solved again), a value
+  edit for the judge.
+- `sketch/flip.ts`: `flipped` in `set_params` and `edit_feature` answers: a sketch whose
+  output changed and whose region loops turned over, or whose two-point dimensions turned
+  round.
+
 ## Measuring (`measure`, `measure.ts`, `measure-targets.ts`)
 
 A read like `get_model`: it waits for the Part to open and the rebuild to catch up, then
@@ -227,8 +269,12 @@ changes). Without the host's turn events the chip stays 10 s after the last call
   explicit timeout. `parts.ts` makes sketches with the ids a test names faces by,
   extrudes of their regions, a fillet of an edge and a sketch on a face.
 - Hold points (`testing.ts`): a test holds a point (`after-settled` for reads; `after-plan`,
-  `after-open`, `between-opens` and `before-commit` for edits), the call stops there until the
-  test releases it. No sleeps.
+  `after-open`, `between-opens`, `sketch-step:<n>` and `before-commit` for edits), the call
+  stops there until the test releases it. No sleeps.
+- `assistantHarness({sketchMode: true})` runs the real sketch mode too (the sketch tool and
+  edit_feature on dimensions draw through it). The sketch tool's files: `signatures`,
+  `sketch-compile`, `sketch-solve`, `sketch-tool`, `regions` (`sketch-tools.ts` has the
+  input builders and a block made from the tool's rectangle).
 - `window.__CAD__.assistant`: the tools, the chip's state, the calls answered (`calls`,
   with each error's reason), the turns, the hold points, `setHoldS(s)` (the edits' wait for the
   person), `setPace(pace, scale)`, `paused()`, and `setToolset('core')` for the eval's A/B

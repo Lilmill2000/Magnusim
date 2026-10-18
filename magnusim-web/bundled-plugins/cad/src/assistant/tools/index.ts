@@ -28,6 +28,7 @@ export { tool as measure } from './measure';
 // set_params: Set parameters.
 export { tool as set_params } from './set_params';
 // sketch: Sketch.
+export { tool as sketch } from './sketch';
 // sweep_loft: Sweep or loft.
 // undo: Undo the Assistant's steps.
 export { tool as undo } from './undo';

@@ -7,7 +7,8 @@
 //          no tool writes yet) and its expression fields; cut at the budget, the rest brief with
 //          "more": "get_model feature <name>";
 //   one feature  in full; a sketch with its plane, the solver's state now, all its regions (60),
-//          its open ends and dangling entities.
+//          its open ends and dangling entities, by the sketch tool's names (r.top, l1.start), and
+//          its inputs in the sketch tool's form (sketch/describe.ts; null when it cannot be resent).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
@@ -30,6 +31,7 @@ import { inputsOf, summaryOf, valuesOf } from './features-io';
 import { LabelIndex } from './labels';
 import { dir, jsonBytes, len, sig6, vec } from './numbers';
 import { runtimeOf } from './runtime';
+import { describeSketch, TOO_BIG_WORDS } from './sketch/describe';
 import { regionRows } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
 
@@ -373,18 +375,22 @@ async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature): Promis
   const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
   const plane = out?.type === 'sketch' ? out.plane : f.plane;
   row.plane = { on: supportWords(s, f), origin_mm: vec(plane.origin), normal: dir(plane.normal), u: dir(plane.xdir), v: dir(ydirOf(plane)), words: frameWords(plane) };
-  row.solver = await solverNow(ctx, f);
+  // Its input form within this reply's room (sketch/describe.ts): null when the tool cannot write it, or it is too big to resend.
+  const form = describeSketch(f, s, { budget: ctx.budgets.sketch });
+  row.inputs = form.inputs;
+  delete row.summary;
+  if (!form.inputs) row.summary = summaryOf(f, services);
+  row.solver = await solverNow(ctx, f, form.refOf);
   row.entities = f.entities.length;
   row.constraints = f.constraints.length;
-  if (f.links?.length || f.ties?.length || f.entities.some((e) => e.kind === 'spline')) {
-    row.unsupported = 'projected edges, splines or sketch patterns: sketch cannot replace it; edit_feature can change its dimension values';
-  }
+  if (form.unsupported) row.unsupported = form.unsupported;
+  if (form.tooBig) row.too_big = TOO_BIG_WORDS;
   if (out?.type === 'sketch') {
     const regions = regionRows(out);
-    row.regions = regions.slice(0, SKETCH_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, at_mm: vec(toModel(plane, r.at)), holes: r.holes, depth: r.depth, bbox_uv: r.bbox_uv, bounded_by: r.entities.slice(0, 40) }));
+    row.regions = regions.slice(0, SKETCH_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, at_mm: vec(toModel(plane, r.at)), holes: r.holes, depth: r.depth, bbox_uv: r.bbox_uv, bounded_by: r.entities.slice(0, 40).map(form.refOf) }));
     if (regions.length > SKETCH_REGIONS) row.regions_more = regions.length - SKETCH_REGIONS;
-    row.open = out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: o.entity, point: o.point }));
-    row.dangling = out.dangling.slice(0, 40);
+    row.open = out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: form.refOf(o.entity), point: o.point ? form.refOf(o.point) : null }));
+    row.dangling = out.dangling.slice(0, 40).map(form.refOf);
     if (out.supportLost) row.support_lost = true;
   }
   // Within the sketch budget: the regions' boundaries go first, then regions themselves.
@@ -399,7 +405,7 @@ async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature): Promis
 }
 
 /** The sketch's definition now, from the solver apart from sketch mode; the stored state when the solver is not running. */
-async function solverNow(ctx: CallCtx, f: SketchFeature): Promise<Row> {
+async function solverNow(ctx: CallCtx, f: SketchFeature, refOf: (id: string) => string = (id) => id): Promise<Row> {
   const solver = ctx.services.apis.get().solver;
   const stored = { state: f.solved.state, dof: f.solved.dof, source: 'stored' };
   if (!solver) return stored;
@@ -416,15 +422,15 @@ async function solverNow(ctx: CallCtx, f: SketchFeature): Promise<Row> {
     for (const p of analysis.dependentParams) {
       const dot = p.lastIndexOf('.');
       if (dot <= 0 || p.startsWith('#')) continue;
-      const of = p.slice(0, dot);
+      const of = refOf(p.slice(0, dot));
       free.set(of, [...(free.get(of) ?? []), p.slice(dot + 1)]);
     }
     return {
       state: st.state,
       dof: st.dof,
       free: [...free.entries()].slice(0, 40).map(([of, moves]) => ({ of, moves })),
-      conflicting: st.conflicting,
-      redundant: st.redundant,
+      conflicting: st.conflicting.map(refOf),
+      redundant: st.redundant.map(refOf),
       source: 'solver',
     };
   } catch {

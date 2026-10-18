@@ -2,9 +2,10 @@
 // topic, each topic at most 8 KB (example topics 12 KB), every string at most 2000 characters and
 // every container at most 6 deep in the reply, as the app hands them to the model.
 // This is the skeleton: `guide` (the CAD notes themselves), `errors` (every reason with its fix),
-// `features` (each tool's fields), `parameters` and `selectors` (every form of the selector
-// language) are filled, `checks` starts with how to read measure's numbers; the topics whose
-// tools come later say so, and are filled with them.
+// `features` (each tool's fields), `parameters`, `selectors` (every form of the selector
+// language) and `sketch` (entity kinds, parts, DOF, the solver's ref signatures, joins, frames)
+// are filled, `checks` starts with how to read measure's numbers; the topics whose tools come
+// later say so, and are filled with them.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { FUNCTION_NAMES, UNIT_NAMES } from '../doc/expr';
@@ -12,6 +13,8 @@ import { MAX_PARAM_NAME } from '../doc/params';
 import { HINTS, REASONS, type ToolCode } from './errors';
 import { GUIDE } from './guide';
 import { CAD_TOOLS, HELP_TOPICS, type HelpTopic } from './schemas';
+import { AT_WORDS, expandEntity, JOIN_TOL, KIND_DOF, type EntityKind } from './sketch/macros';
+import { signatureWords, SIGNATURES, TOOL_DIMENSIONS, type ToolConstraintKind } from './sketch/signatures';
 
 export interface HelpRow {
   about: string;
@@ -145,8 +148,51 @@ const measureChecks = (): HelpRow[] => [
   },
 ];
 
+/** Each entity kind's parts (what refs name after "<id>."), from the tool's own expansion. */
+function partsWords(kind: EntityKind, at: number[]): string {
+  const r = expandEntity('x', kind, at, false);
+  if (!r.ok) return '';
+  const parts = Object.keys(r.macro.parts).filter(Boolean);
+  return parts.length ? parts.map((p) => `x.${p}`).join(' ') : '';
+}
+
+/** The sketch reference (CAD tools spec §10.2 sketch): kinds, parts, DOF, refs, joins, frames. */
+const sketchRows = (): HelpRow[] => {
+  const kinds: [EntityKind, number[], string][] = [
+    ['point', [0, 0], 'the point is x itself'],
+    ['line', [0, 0, 1, 0], 'x is the line'],
+    ['centerline', [0, 0, 1, 0], 'a construction line: a revolve or mirror axis ("Sketch.x")'],
+    ['polyline', [0, 0, 1, 0, 1, 1], 'points x.p0, x.p1, ...; side x.k runs from x.p(k-1) to x.pk; closed when the last point is the first (x.p0 again); 2 DOF per point'],
+    ['circle', [0, 0, 1], 'x is the circle'],
+    ['arc', [0, 0, 1, 0, 90], 'x is the arc, counter-clockwise from start to end'],
+    ['rect', [0, 0, 2, 1], 'keeps its 2 horizontals and 2 verticals'],
+    ['center_rect', [0, 0, 2, 1], 'a rect with a construction centre point x.center kept midway between x.bl and x.tr'],
+    ['slot', [0, 0, 2, 0, 1], 'x.a and x.b are the arc centres; sides tangent to the arcs, the arcs equal; x.axis is construction'],
+    ['polygon', [0, 0, 1, 4], 'corners x.p1... on the construction circle x.circle (x.p1 at +u), sides x.s1... (x.sk from x.pk), all equal'],
+    ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece: arcs x.inner, x.outer on x.center, radial lines x.start, x.end through the centre'],
+  ];
+  const rows: HelpRow[] = kinds.map(([kind, at, words]) => {
+    const parts = kind === 'polyline' || kind === 'polygon' ? '' : partsWords(kind, at);
+    const dof = KIND_DOF[kind];
+    return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : ''}.` };
+  });
+  const relations = (Object.keys(SIGNATURES) as ToolConstraintKind[]).filter((k) => !TOOL_DIMENSIONS.includes(k));
+  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. point_on is on a line or a circle/arc; collinear makes two lines one line.` });
+  rows.push({
+    about: 'dimensions',
+    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit). ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
+  });
+  rows.push({ about: 'ids and refs', text: 'Ids: a-z, 0-9 and _ (a letter first, at most 24, no double _, not origin), unique across entities and constraints. Refs: an id, a part (l.start, r.top, p.2, p.p2, c.center) or origin. A kept entity of an edited sketch keeps its points (and an id the sketch has, e_..., pt_..., is taken as it is).' });
+  rows.push({ about: 'joins', text: `Ends within ${JOIN_TOL} mm of another entity's point are one point (the first entity's wins; refs follow; "joined" lists them), never two points of one entity, never the origin by itself; 0.05 to 0.5 mm apart is a warning (add coincident or fix the numbers). Points an edited sketch has apart stay apart. A rect corner drawn on a line's end is joined: no coincident needed.` });
+  rows.push({ about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours is left out and said so (dropped_inferred).' });
+  rows.push({ about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." });
+  rows.push({ about: 'planes and faces', text: 'Top n+Z u+X v+Y; Front n-Y u+X v+Z; Right n+X u+Y v+Z. On a flat face (n out of the part): +Z u+X v+Y; -Z u+X v-Y; +Y u+X v-Z; -Y u+X v+Z; +X u+Y v+Z; -X u+Y v-Z; its origin is the model origin projected onto it. "<plane or face> offset <length> [flip]" makes "<sketch> plane".' });
+  rows.push({ about: 'replace', text: 'edit "<name>" and every input: get_model feature <name> gives them in this form. "" for on keeps where it lies. Keep the ids that stay: region keys and face names follow them. edit_feature changes one dimension by its id. Sketches with projected edges, splines, patterns, fixed points or driven dimensions are not replaced (edit_feature still changes their values).' });
+  return rows;
+};
+
 export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
-  sketch: later('The sketch reference (entity kinds, macros and their parts, relations and dimensions with their refs)'),
+  sketch: sketchRows(),
   selectors: selectorRows(),
   features: featureRows(),
   parameters: parameterRows(),

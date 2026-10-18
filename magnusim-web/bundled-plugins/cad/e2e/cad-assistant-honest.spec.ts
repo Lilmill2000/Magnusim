@@ -4,12 +4,16 @@
 // broke_downstream naming Fillet 1, and the person's open Parameters panel still shows r's old
 // value. Rows in any order (b uses a, set after it) apply in one step: the model gets each value,
 // the panel shows them, and one Undo ("Undo Assistant: <request>") takes both away.
+// Honest 1 (T4): a sketch whose constraint repeats a rect's own horizontal is refused before
+// anything opens: invalid_input sketch_conflict naming both (the model's h1 and "r's own horizontal
+// on r.top"); the person's tree, panels and Undo stay as they were. Resent without it, the sketch
+// is made through the person's sketch panel, fully defined, and one Undo takes it back.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
-import { addSolid, runCommand } from './helpers';
-import { cadFrame, chats, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
+import { addSolid, historyNames, runCommand } from './helpers';
+import { cadFrame, chats, newProject, openNewPart, readRecord, recordShown, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
 
 let host: AssistantHost;
 
@@ -127,4 +131,96 @@ test('cad:assistant-honest-params a set_params that would break the fillet chang
   await expect
     .poll(() => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().doc.params.map((p) => `${p.name}=${p.expr}`)), STEP)
     .toEqual(['t=6 mm', 'r=2 mm']);
+});
+
+test('cad:assistant-honest-conflict a sketch that says one thing twice is refused naming both, changing nothing; resent without it, it is made', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest conflict');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  // The person's block: its tree rows and Undo are what the refused call must leave.
+  await addSolid(page, { size: [40, 30, 6] });
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  const label = () => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel);
+  const undoBefore = await label();
+  expect(undoBefore).not.toBeNull();
+  // Every panel that shows from now on (none may: the solver refuses before anything opens).
+  await recordShown(page, 'panel', '[data-cad-panel]', 'data-cad-panel');
+
+  const before = chats(host).length;
+  host.fake.reply(
+    {
+      tools: [
+        {
+          name: 'cad__sketch',
+          input: {
+            edit: '',
+            name: 'Plate sketch',
+            on: 'Top',
+            entities: [{ id: 'r', kind: 'rect', at: [-30, -20, 30, 20], construction: false }],
+            constraints: [{ id: 'h1', kind: 'horizontal', refs: ['r.top'], value: '' }],
+            infer: false,
+          },
+        },
+      ],
+    },
+    // Resent without h1, anchored and dimensioned: made, fully defined.
+    {
+      tools: [
+        {
+          name: 'cad__sketch',
+          input: {
+            edit: '',
+            name: 'Plate sketch',
+            on: 'Top',
+            entities: [{ id: 'r', kind: 'rect', at: [-30, -20, 30, 20], construction: false }],
+            constraints: [
+              { id: 'o', kind: 'coincident', refs: ['r.bl', 'origin'], value: '' },
+              { id: 'w', kind: 'distance', refs: ['r.bottom'], value: '60 mm' },
+              { id: 'd', kind: 'distance', refs: ['r.left'], value: '40 mm' },
+            ],
+            infer: false,
+          },
+        },
+      ],
+    },
+    { text: 'The rectangle keeps its own horizontals: h1 was not needed. The plate sketch is fully defined.' },
+  );
+  const t = await startTurn(request, host, { text: 'Sketch a plate on Top.', tab });
+  const { turn } = await t.ended(STEP_MS * 3);
+  expect(turn.state).toBe('done');
+
+  const [, afterSketch, afterMade] = chats(host).slice(before);
+  const [refused] = resultsIn(afterSketch);
+  expect(refused).toMatchObject({
+    tool: 'cad__sketch',
+    ok: false,
+    error: {
+      code: 'invalid_input',
+      hint: 'Remove one of your named constraints; never add it back.',
+      detail: {
+        reason: 'sketch_conflict',
+        conflicts: [
+          { id: 'h1', kind: 'horizontal', refs: ['r.top'], label: 'horizontal r.top' },
+          { id: 'r.h_top', kind: 'horizontal', refs: ['r.top'], internal: "r's own horizontal on r.top" },
+        ],
+      },
+    },
+  });
+  expect(refused.error!.message).toBe("sketch_conflict: The sketch is over-defined: h1 (horizontal r.top) and r's own horizontal on r.top say the same thing; remove h1. Nothing changed.");
+  // The refused call opened no panel: the first panel shown is the made sketch's own.
+  const shown = await readRecord(page, 'panel');
+  expect(shown[0]).toBe('(none)');
+  expect(shown.slice(1)).toEqual(['sketch', '(none)']);
+  // The resend is made, fully defined (no "(-)"), the solver's state stored with it.
+  const [made] = resultsIn(afterMade);
+  expect(made).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Plate sketch', state: 'ok' }, solver: { state: 'fully', dof: 0 }, regions: [{ id: 'r1', area_mm2: 2400 }] } });
+  expect(made.text).toBe('Sketch "Plate sketch" on Top: fully defined, 1 region (2400 mm²)');
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Plate sketch'], STEP);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  // One Undo, named after the request, takes the sketch back; the person's block stays (the refusal left nothing).
+  expect(await label()).toBe('Assistant: Sketch a plate on Top.');
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  expect(await label()).toBe(undoBefore);
 });

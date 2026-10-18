@@ -5,6 +5,8 @@
 // installed on it. call() runs a tool as the host's bridge would (its result, or its error as the
 // SDK sends it). Real-kernel test files give each test an explicit timeout (Linux CI is slow).
 // The Assistant's pace is fast unless a test asks for watch (with its delays scaled, 0 by default).
+// With `sketchMode`, the real sketch mode runs on these services too (the sketch tool draws through
+// it), with a stand-in for its panel and no viewport.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantRegistration } from '@magnusim/workspace';
 import { expect, vi } from 'vitest';
@@ -30,6 +32,9 @@ import { createBus } from '../../src/lib/bus';
 import { createSelectionStore } from '../../src/lib/selection';
 import { createStateStore } from '../../src/lib/store';
 import { createModuleRegistry, registerModuleFeatures } from '../../src/modules';
+import { SketchMode } from '../../src/sketch/mode';
+import type { SolverClient } from '../../src/sketch/solver-client';
+import { makeTool } from '../../src/sketch/tools';
 import type { AppServices, AreaApis } from '../../src/types/app';
 import type { Mode } from '../../src/types/commands';
 import type { Feature } from '../../src/types/doc';
@@ -47,6 +52,9 @@ import { solverAnywhere } from './solver-anywhere';
 /** The feature types a tool may make (every module that makes one). */
 export const FEATURE_MODULES: CadModule[] = [sketchModule, extrudeModule, revolveModule, sweepModule, loftModule, filletModule, chamferModule, shellModule, patternModule, combineModule, refgeomModule];
 
+/** Sketch mode's panel, a stand-in (the UI controller opens a sketch through the panel its type has). */
+const SKETCH_PANEL: CadModule = { id: 'sketch-panel', panels: { sketch: (() => null) as never } };
+
 /** Real-kernel tests: each one's ceiling (Linux CI runs on 2 slow cores). */
 export const REAL_KERNEL_MS = 120_000;
 
@@ -55,6 +63,8 @@ export interface AssistantHarness {
   doc: DocService;
   ws: FakeWorkspace;
   fake: FakeAssistant;
+  /** Sketch mode (with `sketchMode`), else null. */
+  mode: SketchMode | null;
   /** Run a tool as the bridge would (turn "" is an outside client's call). */
   call(tool: string, input: Record<string, unknown>, o?: { turn?: string; signal?: AbortSignal }): Promise<FakeOutcome>;
   /** A call that must answer ok: its result. */
@@ -83,6 +93,8 @@ export interface HarnessOptions {
   /** The Assistant's pace (fast by default) and, for watch, its delays' scale (0 by default: no waits). */
   pace?: Pace;
   paceScale?: number;
+  /** Run the real sketch mode (the sketch tool needs it). */
+  sketchMode?: boolean;
 }
 
 export async function assistantHarness(o: HarnessOptions = {}): Promise<AssistantHarness> {
@@ -109,12 +121,14 @@ export async function assistantHarness(o: HarnessOptions = {}): Promise<Assistan
     selection: createSelectionStore(),
     mode: createStateStore<{ mode: Mode }>({ mode: 'model' }),
     viewport: createStateStore<{ handle: ViewportHandle | null }>({ handle: null }),
-    modules: createModuleRegistry(FEATURE_MODULES),
+    modules: createModuleRegistry(o.sketchMode ? [...FEATURE_MODULES, SKETCH_PANEL] : FEATURE_MODULES),
     apis,
   };
   // The UI controller follows the document's sessions from the start (installUi creates it in the app).
   uiFor(services);
   await doc.load();
+  const mode = o.sketchMode && solver ? new SketchMode(services, solver as unknown as SolverClient, makeTool) : null;
+  if (mode) apis.set({ sketch: mode });
   const off = installAssistant(services, { document, now: o.now });
   // The app's answer to the registration (the page's state says it).
   await vi.waitFor(() => expect(runtimeOf(services!)?.store.get().registration).not.toBe('pending'), { timeout: 5000, interval: 5 });
@@ -127,6 +141,7 @@ export async function assistantHarness(o: HarnessOptions = {}): Promise<Assistan
     doc,
     ws,
     fake,
+    mode,
     call: (tool, input, c = {}) => fake.invoke(tool, input, { turn: c.turn ?? 't-test', signal: c.signal }),
     async ok(tool, input, c = {}) {
       const r = await fake.invoke(tool, input, { turn: c.turn ?? 't-test' });
@@ -144,6 +159,7 @@ export async function assistantHarness(o: HarnessOptions = {}): Promise<Assistan
     settle,
     dispose() {
       off();
+      mode?.dispose();
       uiFor(services!).dispose();
       doc.dispose();
       kernel.dispose();

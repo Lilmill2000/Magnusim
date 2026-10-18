@@ -6,8 +6,8 @@
 //   - body: rename, colour and simulation in one step; a clash, a bad colour and nothing to change
 //     refused;
 //   - edit_feature: a value by its path, rename, suppress and move (before, after, end) with the
-//     Part's own words when refused; a field it does not have, and a sketch's dimensions (not in
-//     this build), refused;
+//     Part's own words when refused; a field it does not have, and a sketch dimension the sketch
+//     does not have, refused;
 //   - undo: the newest calls of the request back to exactly where they began, never past a change
 //     of the person's (not_own_step); the previous request as one Undo, with Redo; nothing_to_undo;
 //     get_model's undo.your_steps counts what it can take back.
@@ -145,7 +145,8 @@ describe('edit_feature', () => {
       expect(field).toMatchObject({ ok: false, error: { detail: { reason: 'bad_input' } } });
       expect((field as { error: { message: string } }).error.message).toContain('Base has no field "height" (its fields: extent.distance)');
       const sketch = await h.call('edit_feature', EDIT('Sketch 1', { set: [{ field: 'd1', value: '3 mm' }] }));
-      expect(sketch).toMatchObject({ ok: false, error: { code: 'not_ready', detail: { reason: 'not_built' } } });
+      // A sketch's fields are its dimension ids (sketch-tool.test.ts changes them); this one has none.
+      expect(sketch).toMatchObject({ ok: false, error: { code: 'invalid_input', message: 'bad_input: set[0].field: Sketch 1 has no dimension "d1" (its dimensions: none).', detail: { reason: 'bad_input' } } });
       await h.ok('edit_feature', EDIT('Base', { suppress: 'suppress' }));
       expect(ex().suppressed).toBe(true);
       expect(stateOf(h, p.extrude)).toBe('suppressed');
