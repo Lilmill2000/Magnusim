@@ -185,6 +185,12 @@ export const RULES = [
   // P4b SELECT: the dock's selection count (the box selection's specs read it).
   [/^src\/features\/selectcount\/index\.tsx?$/, ['sketch', 'shell'], 'the selection count chip, its module'],
   ['src/features/selectcount/', ['sketch'], 'the selection count chip'],
+  // What of the Assistant runs in every person's Part: install.ts's camera gate (autoCamera)
+  // decides the person's own sketch entry, its reframe and Extrude's turn to Isometric, which every
+  // shard's views and clicks rely on (as on Sketch and Extrude themselves); the chip is in every
+  // dock. The camera latch (camera.ts) is asked only for the Assistant's own sessions.
+  ['src/assistant/install.ts', ALL, "the Assistant's install: the camera gate of every sketch and Extrude"],
+  ['src/assistant/AssistantChip.tsx', ['assistant', 'shell'], 'the chip in the dock'],
   // The Assistant's tools (src/assistant), their module (its chip: the dock), the eval harness.
   ['src/assistant/', ['assistant'], 'the Assistant tools'],
   [/^src\/features\/assistant\//, ['assistant', 'shell'], 'its module'],

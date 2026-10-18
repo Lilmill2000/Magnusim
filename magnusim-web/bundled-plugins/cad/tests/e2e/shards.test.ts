@@ -100,6 +100,11 @@ describe('the file-to-shard map', () => {
     ['src/sketch/project/source.ts', ['sketch', 'assistant']],
     // The Assistant's tools, their module (its chip is in the dock), the eval harness, its specs' helpers.
     ['src/assistant/call.ts', ['assistant']],
+    // ... but its install runs in every person's Part (the camera gate of their sketches and
+    // Extrudes) and its chip in every dock; the camera latch only for the Assistant's sessions.
+    ['src/assistant/install.ts', all],
+    ['src/assistant/AssistantChip.tsx', ['assistant', 'shell']],
+    ['src/assistant/camera.ts', ['assistant']],
     ['src/assistant/tools/get_model.ts', ['assistant']],
     ['src/features/assistant/index.tsx', ['assistant', 'shell']],
     ['eval/run.mjs', ['assistant']],

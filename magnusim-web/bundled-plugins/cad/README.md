@@ -847,7 +847,9 @@ suite once per phase.
   maps each file to shards, and only those run. `src/sketch/` and
   `src/solver-worker/` go to sketch and assistant (the Assistant's sketches
   draw through sketch mode), `solver-build/` to sketch; `src/assistant/` and
-  `e2e/assistant-helpers.ts` to assistant, and the Assistant's module
+  `e2e/assistant-helpers.ts` to assistant, but `src/assistant/install.ts` to every
+  shard (its camera gate decides the person's own sketch entry and Extrude's turn
+  to Isometric) and `src/assistant/AssistantChip.tsx` with the Assistant's module
   (`src/features/assistant/`, its chip in the dock) to assistant and shell;
   `src/link/`, `src/doc/source-record.ts` and the gate scripts to link; the P4a feature
   folders to solids; the STEP and body-tool folders to step, plus the other
