@@ -25,17 +25,22 @@
 // were built): the Assistant's Parameters panel, its plate sketch going to fully defined, its
 // Extrude panel, then the holes' sketch and their cut; the tree with no "(-)", the volume chip
 // about 13,928.8; one Ctrl+Z empties the tree and Ctrl+Shift+Z brings it all back.
+// help (T13): the model reads help guide (the CAD notes) and help example_plate whole through the
+// app, sends the worked plate's calls as they read, and the person sees the plate built (the tree
+// with no "(-)", the volume chip), each reply the line help gives, one Undo for the request.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { HINTS } from '../src/assistant/errors';
+import { WORKED_PARTS } from '../src/assistant/examples';
 import { GUIDE } from '../src/assistant/guide';
 import {
   cadFrame,
   chats,
   chipButton,
   chipWords,
+  forcePace,
   newProject,
   offeredTools,
   openNewPart,
@@ -847,4 +852,49 @@ test("cad:assistant-watch-chip-end the chip after the turn: Undo is one Ctrl+Z o
   await expect(chipButton(f2, 'undo')).toHaveCount(0);
   await chip2.locator('[data-assistant-health-text]').click();
   await expect(f2.locator('[data-cad-tree] [data-feature-row]').filter({ has: f2.locator('> .tree-row .tl', { hasText: /^Fillet 1$/ }) })).toHaveAttribute('aria-selected', 'true');
+});
+
+// ---- The guide and help (T13): help's worked plate as the model reads it and sends it back
+
+test("cad:assistant-watch-help help's worked plate reaches the model whole, and its calls sent as they read build the plate: the person's tree, the volume chip, one Undo", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const pid = await newProject(request, host, 'Assistant help plate');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  const plate = WORKED_PARTS.find((p) => p.topic === 'example_plate')!;
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__help', input: { topic: 'guide' } }, { name: 'cad__help', input: { topic: 'example_plate' } }] },
+    // The model sends every call of the worked part, each input as the help reply gave it.
+    (body: unknown) => {
+      const rows = (resultsIn(body)[1].data!.rows as { tool?: string; input?: Record<string, unknown> }[]).filter((r) => r.tool);
+      return { tools: rows.map((r) => ({ name: `cad__${r.tool}`, input: r.input })) };
+    },
+    { text: 'The plate from help is built.' },
+  );
+  const t = await startTurn(request, host, { text: 'Build the plate from help.', tab });
+  expect((await t.ended(STEP_MS * 4)).turn.state).toBe('done');
+  const [, afterHelp, afterBuild] = chats(host).slice(before);
+  const [guide, example] = resultsIn(afterHelp);
+  // help guide is the CAD notes (the app sends its line breaks as spaces), nothing cut.
+  expect(guide).toMatchObject({ tool: 'cad__help', ok: true, text: 'help guide: 10 rows' });
+  expect(guide).not.toHaveProperty('truncated');
+  expect((guide.data!.rows as { text: string }[]).map((r) => r.text).join(' ')).toBe(GUIDE.replace(/\s+/g, ' '));
+  // help example_plate reached the model whole: every call's input as the worked part has it (a
+  // sketch's at lists too, 7 deep in the data), nothing cut or turned null.
+  expect(example).toMatchObject({ tool: 'cad__help', ok: true, text: `help example_plate: ${plate.calls.length + 2} rows` });
+  expect(example).not.toHaveProperty('truncated');
+  const rows = example.data!.rows as { about: string; tool?: string; input?: unknown; result?: unknown }[];
+  expect(rows.filter((r) => r.tool).map(({ tool, input, result }) => ({ tool, input, result }))).toEqual(plate.calls.map(({ tool, input, result }) => ({ tool, input, result })));
+  // Each call answered as help says it does: ok, the same line.
+  expect(resultsIn(afterBuild).map((r) => ({ tool: r.tool, ok: r.ok, text: r.text }))).toEqual(plate.calls.map((c) => ({ tool: `cad__${c.tool}`, ok: true, text: c.result.text })));
+  // What the person sees: the tree with every sketch fully defined (no "(-)"), the volume chip, the chip done.
+  await expect(watchHistory(frame)).toHaveText(PLATE_TREE, STEP);
+  await expect.poll(async () => Math.abs((await singleVolume(frame)) - PLATE_MM3), STEP).toBeLessThan(0.5);
+  await expect(chipWords(frame)).toHaveText('Assistant: Build the plate from help. · done', STEP);
+  await expect(frame.locator('[data-chip="assistant"]')).toHaveAttribute('data-assistant-health', 'ok');
+  // The whole request is one Undo.
+  await chipButton(frame, 'undo').click();
+  await expect(watchHistory(frame)).toHaveCount(0, STEP);
+  expect(await paramsNow(page)).toEqual([]);
 });

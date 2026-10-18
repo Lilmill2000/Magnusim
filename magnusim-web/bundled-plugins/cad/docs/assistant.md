@@ -45,6 +45,30 @@ A refusal or failure is thrown as `ToolError(reason, message, {hint?, detail?})`
 the reason; `detail.reason` names it. On a host without the turn events the hint goes
 into the message. Anything else thrown is `internal`; an aborted call is `stopped`.
 
+## The guide and help (`guide.ts`, `help.ts`, `examples.ts`)
+
+- `GUIDE` is the CAD notes the model reads with the tools: at most 3950 characters of ASCII
+  (the app keeps 4000), LF line breaks, no project data. Its frame lines, the 0.05 mm join and
+  the parts it names are pinned against the code (`guide.test.ts`); its EXAMPLES lines are the
+  worked parts abridged (`guide-example.test.ts` checks each line against the calls). It ends a
+  build by sending the person to Export STEP: there is no export tool. More material goes into
+  `help`, not the guide.
+- `HELP` holds the help tool's 13 topics as rows `{about, text}`, each topic at most 8 KB (example
+  topics 12 KB), every string at most 2000 characters. `features` gives each tool's fields and its
+  rules (`FEATURE_NOTES`); `checks` and `traps` are the lists to verify against and the mistakes
+  to avoid; `examples` is the index of the worked parts.
+- The worked parts (`examples.ts`: the plate, the L bracket, the flange, the two-body chip) are
+  complete calls: each row of an example topic is `{about, text, tool, input, result}`, the input
+  whole as the model sends it, the result the reply's line (`text`) and key values by path into its
+  data (`"solver.dof"`, `"bodies.created[0].volume_mm3"`). The call sits in the row itself, not
+  under an `example` key, so a sketch input's `at` lists stay at depth 7 of the reply's data,
+  inside the app's 8 (a container at depth 8 reaches the model as null). Every other topic stays
+  within depth 6.
+- Changing a tool's reply line or data changes what its worked part says: `guide-example.test.ts`
+  runs every call on the real kernel and compares each result, and fails until `examples.ts` says
+  what the tool answers. `help.test.ts` sends every topic through a copy of the app's result rules
+  (`tests/assistant/sanitize-copy.ts`) and checks nothing is cut or turned null.
+
 ## Adding a tool
 
 1. Write `src/assistant/tools/<name>.ts` exporting `tool: ToolImpl` (`kind: 'read'` or
@@ -539,6 +563,13 @@ events the chip stays 10 s after the last call.
   `chip` (each phase's buttons, the health).
 - The edit tools' vitest files: `step`, `judge`, `busy`, `pace`, `ledger`, `tools-edit`
   (`parts.ts` makes the plate and its fillet as the person would).
+- The guide and help: `guide` (the guide's facts against the code; every tool, field, value and
+  topic named exists; every worked input valid for its schema and every selector in it reads),
+  `help` (sizes, depth, every topic through the app's result rules, the lists), `guide-example`
+  (every worked part built call by call on the real kernel, each result as help gives it, the
+  volumes and boxes by formula). The e2e `cad:assistant-watch-help` has the scripted model read
+  help example_plate through the app and send its calls back as they read: the person's tree and
+  volume chip show the plate.
 - E2E shard `assistant` (`npm run test:e2e:assistant`): each spec runs its own app
   server with the Assistant's test switches and the app's scripted model
   (`e2e/assistant-helpers.ts`); the app's turn helpers are vendor-neutral and take this

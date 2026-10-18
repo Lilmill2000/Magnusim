@@ -2,7 +2,10 @@
 // Part registers with its tools (ws.assistant.register's `guide`). ASCII, LF line breaks (the
 // bridge keeps them), at most 3950 characters (the app keeps 4000), vendor-neutral, no project
 // data. The help tool's `guide` topic returns it too, for a conversation that froze another
-// workspace's notes. tests/assistant/guide.test.ts pins its facts.
+// workspace's notes. tests/assistant/guide.test.ts pins its facts against the code (the frames,
+// the join, the parts, every tool, field, value and selector it names), and
+// guide-example.test.ts builds its EXAMPLES, which are help's worked parts (examples.ts)
+// abridged, on the real kernel.
 // No runtime imports: the app's host test imports this file with Node's type stripping.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -22,7 +25,7 @@ export const GUIDE = [
   '',
   'LOOP',
   '1 get_model. 2 State the plan: parameters, features in order, expected volume and size. 3 set_params. 4 Per feature: call its tool; read state, dof, regions, changes, warnings. 5 measure against the plan; view at milestones and at the end.',
-  'Done: every feature ok, every sketch dof 0, volume, size, solids and voids as planned. Calls are limited: read only what you need.',
+  'Done: every feature ok, every sketch dof 0, volume, size, solids and voids as planned. Calls are limited: read only what you need. Files: the person uses Export STEP.',
   '',
   'SKETCHES',
   '- Coordinates are guesses; constraints and dimensions set the shape (the solver always runs). Draw roughly the right shape.',
@@ -36,16 +39,16 @@ export const GUIDE = [
   '- Geometry: "Body 1 faces >Z" (highest; >Z[2] the next), "+Z" (facing +Z), "|Z", "#Z", "%cylinder", "hole", "largest".',
   '- Edges: "edges of Base.end", "Base.end & Base.side(r.top)", "Body 1 edges |Z".',
   '- "Body 1 face at (0, 0, 6)"; #f3 from find; "selection".',
-  '- Empty or ambiguous: an error with candidates. Check with find before modify or pattern.',
+  '- Empty or ambiguous: an error with candidates; check with find first.',
   '',
   'BOOLEANS: join, cut, intersect need overlap. Separate pieces: op new, then combine.',
   '',
-  'EDITING: change sizes via parameters or edit_feature; else call the tool again with edit "<name>" and all inputs (get_model detail full). undo takes back your own steps. Leave the person\'s work alone unless asked; never redo steps the person undid.',
+  'EDITING: change sizes via parameters or edit_feature; else call the tool again with edit "<name>" and all inputs (get_model detail full). undo takes back your own steps; delete asks the person. Leave the person\'s work alone unless asked; never redo steps the person undid.',
   '',
-  'ERRORS: read code, message, hint, detail; change the call, never resend it unchanged. busy: the call already waited for the person: say what you need and end your turn. After stalled or disconnected, get_model first.',
+  'ERRORS: read code, message, hint, detail; change the call, never resend it unchanged. busy: the person comes first: follow the hint; most end your turn. After stalled or disconnected, get_model first.',
   '',
   'EXAMPLES (abridged; full calls: help examples)',
   '1 Plate, 4 holes. set_params w 60 mm, d 40 mm, t 6 mm, hd 5 mm, e 8 mm. sketch on Top: center_rect r [0,0,60,40]; coincident [r.center, origin]; distance [r.bottom] "w", [r.left] "d". extrude "Plate" ["all"] blind "t" new. hole on "Plate.end": 4 centers, x "w/2 - e" or "-(w/2 - e)", y the same with d, z ""; diameter "hd"; through.',
   '2 L bracket. sketch on Front: polyline p [0,0,50,0,50,5,5,5,5,40,0,40,0,0], infer; coincident [p.p0, origin]; distance [p.1] "a", [p.6] "b", [p.2] "t", [p.5] "t". extrude "Bracket" symmetric "wid" new. modify fillet ["Bracket.side(p.3) & Bracket.side(p.4)"] "r".',
-  '3 Flange. sketch on Front: rect r [10,0,40,8]; horizontal [r.bl, origin]; distance_x [origin, r.bl] "bore/2", [origin, r.br] "od/2"; distance [r.left] "t". revolve "Flange" axis "Z axis" full new. hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg".',
+  '3 Flange. sketch on Front: rect r [10,0,40,8]; horizontal [r.bl, origin]; distance_x [origin, r.bl] "bore/2", [origin, r.br] "od/2"; distance [r.left] "t". revolve "Flange" axis "Z axis" full new. hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "" diameter "hd", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg".',
 ].join('\n');

@@ -1,19 +1,22 @@
-// The guide's worked examples build on the REAL kernel (CAD tools spec §10.1, §12.1 guide-example),
-// called as the guide writes them: every feature ok, every sketch fully defined (dof 0), the body's
-// volume and box within 1e-6 (relative) of the formula:
-//   1  the plate: parameters, a center_rect on Top anchored and dimensioned, extrude "Plate" blind t,
-//      then hole on Plate.end: 4 centres e from the edges, diameter hd, through;
-//   2  the L bracket: a closed polyline on Front with infer, extrude symmetric, the inner fillet;
-//   3  the flange: a rect on Front dimensioned from the origin, revolve about the Z axis, full,
-//      then one hole on its top face at x pcd/2 and a circular pattern of it all round: n holes.
-// The guide text is checked to hold each call as written here, so a change of either shows.
+// The worked parts of help (example_plate, example_bracket, example_flange, example_chip;
+// src/assistant/examples.ts) build on the REAL kernel, call by call as the model would send them
+// (CAD tools spec §10.1, §10.2, §12.1 guide-example): every call answers ok with the key results the
+// help row gives (its reply line exactly, every other key a path into its data); at the end every
+// feature is ok, every sketch fully defined (dof 0), and each body's volume and box are within 1e-6
+// (relative) of the part's formula:
+//   plate    60 x 40 x 6 less 4 holes 5 mm across                         13,928.8 mm3
+//   bracket  the L (50 x 5 and 5 x 35) x 30, the inner R4, a 6 mm hole in each flange
+//   flange   a ring 80/20 x 8 less 6 holes 6.5 mm across on a 60 mm circle (6 holes found)
+//   chip     Red and White, 1 solid each, Red with its sealed pocket (voids 1), overlap 0
+// The guide's EXAMPLES lines are these parts abridged: each line is checked to hold the calls as
+// the worked part sends them, so the guide, help and the tools cannot drift apart.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { WORKED_PARTS, type ResultValue, type WorkedPart } from '../../src/assistant/examples';
 import { GUIDE } from '../../src/assistant/guide';
 import type { SketchFeature } from '../../src/types/doc';
-import { EXTRUDE, ok, REVOLVE } from './extrude-tools';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
-import { C, E, SK, type Row } from './sketch-tools';
+import type { Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -21,111 +24,163 @@ afterEach(() => {
   h = null;
 });
 
-const P = (name: string, expr: string) => ({ name, kind: 'length', expr, comment: '', rename_to: '' });
+const part = (topic: WorkedPart['topic']) => WORKED_PARTS.find((p) => p.topic === topic)!;
+const callOf = (topic: WorkedPart['topic'], tool: string, n = 0) => part(topic).calls.filter((c) => c.tool === tool)[n].input as Row;
 
-/** Every feature ok, every sketch fully defined, one body: its volume and box against the formula. */
-function check(x: AssistantHarness, v: number, box: number[]): void {
+/** The value at a path into a reply's data: "solver.dof", "bodies.created[0].volume_mm3", "centers_mm[1][0]". */
+function valueAt(data: unknown, path: string): unknown {
+  let v: unknown = data;
+  for (const [, key, index] of path.matchAll(/([^.[\]]+)|\[(\d+)\]/g)) {
+    if (v === null || typeof v !== 'object') return undefined;
+    v = key !== undefined ? (v as Row)[key] : (v as unknown[])[Number(index)];
+  }
+  return v;
+}
+
+/** A reply's value against the help row's: numbers to 1e-9 (relative), else exactly. */
+function same(got: unknown, want: ResultValue, what: string): void {
+  if (typeof want === 'number') {
+    expect(typeof got, what).toBe('number');
+    expect(Math.abs((got as number) - want), `${what}: ${String(got)} vs ${want}`).toBeLessThanOrEqual(1e-9 * Math.max(1, Math.abs(want)));
+  } else expect(got, what).toEqual(want);
+}
+
+/** Run a worked part's calls in order; each answers ok with the results its row gives. */
+async function build(x: AssistantHarness, p: WorkedPart): Promise<void> {
+  for (const c of p.calls) {
+    const what = `${p.topic} ${c.about} (${c.tool})`;
+    const r = await x.call(c.tool, c.input);
+    if (!r.ok) throw new Error(`${what} failed: ${JSON.stringify(r.error)}`);
+    const res = r.result as { text: string; data: Row };
+    expect(res.text, what).toBe(c.result.text);
+    for (const [path, want] of Object.entries(c.result)) if (path !== 'text') same(valueAt(res.data, path), want, `${what} ${path}`);
+  }
+}
+
+/** Every feature ok, every sketch fully defined; the bodies by name, their volume and box against the formula. */
+function check(x: AssistantHarness, bodies: Record<string, { volume: number; bbox: number[] }>): void {
   const s = x.doc.state.get();
   for (const f of s.doc.features) {
     expect(s.rebuild.features[f.id]?.state, f.name).toBe('ok');
     if (f.type === 'sketch') expect((f as SketchFeature).solved, f.name).toMatchObject({ state: 'fully', dof: 0 });
   }
-  expect(s.rebuild.bodies).toHaveLength(1);
-  const b = s.rebuild.bodies[0];
-  expect(Math.abs(b.volume! - v) / v, `volume ${b.volume} vs ${v}`).toBeLessThan(1e-6);
-  b.bbox.forEach((c, i) => expect(Math.abs(c - box[i]), `bbox[${i}] ${c} vs ${box[i]}`).toBeLessThan(1e-6 * Math.max(1, Math.abs(box[i]))));
+  expect(s.rebuild.bodies.map((b) => b.name).sort()).toEqual(Object.keys(bodies).sort());
+  for (const [name, want] of Object.entries(bodies)) {
+    const b = s.rebuild.bodies.find((x) => x.name === name)!;
+    expect(Math.abs(b.volume! - want.volume) / want.volume, `${name} volume ${b.volume} vs ${want.volume}`).toBeLessThan(1e-6);
+    b.bbox.forEach((c, i) => expect(Math.abs(c - want.bbox[i]), `${name} bbox[${i}] ${c} vs ${want.bbox[i]}`).toBeLessThan(1e-6 * Math.max(1, Math.abs(want.bbox[i]))));
+    expect(b.solids, `${name} solids`).toBe(1);
+  }
 }
 
 /** The guide's own line for example `n` (under its EXAMPLES heading). */
 const line = (n: number) => GUIDE.slice(GUIDE.indexOf('\nEXAMPLES')).split('\n').find((l) => l.startsWith(`${n} `)) ?? '';
 
-describe("the guide's examples", () => {
+/** A set_params call as the guide abridges it: "set_params w 60 mm, d 40 mm". */
+const paramsWords = (input: Row) => `set_params ${(input.set as Row[]).map((r) => `${r.name} ${r.expr}`).join(', ')}`;
+
+/** A sketch call as the guide abridges it: 'sketch on Top: rect r [0,0,2,1]; coincident [r.bl, origin]; distance [r.bottom] "w", [r.left] "d"'. */
+function sketchWords(input: Row): string {
+  const entities = (input.entities as Row[]).map((e) => `${e.kind} ${e.id} [${(e.at as number[]).join(',')}]`).join('; ');
+  const groups: string[] = [];
+  let last = '';
+  for (const c of input.constraints as Row[]) {
+    const one = `[${(c.refs as string[]).join(', ')}]${c.value ? ` "${c.value}"` : ''}`;
+    if (c.kind === last) groups[groups.length - 1] += `, ${one}`;
+    else groups.push(`${c.kind} ${one}`);
+    last = c.kind as string;
+  }
+  return `sketch on ${input.on}: ${entities}${input.infer ? ', infer' : ''}; ${groups.join('; ')}`;
+}
+
+const SA = Math.PI / 9; // 20 deg
+/** The chip's White: 6 spots (sa wide, r1 to r2, through t) and the ring (17 to 18 mm, dt), less the ring inside the spots. */
+const WHITE = 6 * (SA / 2) * (18.5 ** 2 - 16.5 ** 2) * 3.3 + Math.PI * (18 ** 2 - 17 ** 2) * 1 - 6 * (SA / 2) * (18 ** 2 - 17 ** 2) * 1;
+
+describe("help's worked parts on the real kernel", () => {
   it(
-    '1: the plate with its 4 holes',
+    "example_plate: the plate with its 4 holes (the guide's example 1)",
     async () => {
       const g = line(1);
-      for (const part of ['set_params w 60 mm, d 40 mm, t 6 mm, hd 5 mm, e 8 mm', 'sketch on Top: center_rect r [0,0,60,40]; coincident [r.center, origin]; distance [r.bottom] "w", [r.left] "d"', 'extrude "Plate" ["all"] blind "t" new', 'hole on "Plate.end": 4 centers, x "w/2 - e" or "-(w/2 - e)", y the same with d, z ""; diameter "hd"; through']) expect(g).toContain(part);
+      expect(g).toContain(paramsWords(callOf('example_plate', 'set_params')));
+      expect(g).toContain(sketchWords(callOf('example_plate', 'sketch')));
+      expect(g).toContain('extrude "Plate" ["all"] blind "t" new');
+      expect(callOf('example_plate', 'extrude')).toMatchObject({ name: 'Plate', regions: ['all'], extent: 'blind', distance: 't', op: 'new' });
+      expect(g).toContain('hole on "Plate.end": 4 centers, x "w/2 - e" or "-(w/2 - e)", y the same with d, z ""; diameter "hd"; through');
+      const hole = callOf('example_plate', 'hole');
+      expect(hole).toMatchObject({ face: 'Plate.end', diameter: 'hd', depth: 'through' });
+      expect((hole.centers as Row[]).map((c) => [c.x, c.y, c.z])).toEqual([
+        ['w/2 - e', 'd/2 - e', ''],
+        ['-(w/2 - e)', 'd/2 - e', ''],
+        ['-(w/2 - e)', '-(d/2 - e)', ''],
+        ['w/2 - e', '-(d/2 - e)', ''],
+      ]);
       h = await assistantHarness({ sketchMode: true });
-      await ok(h, 'set_params', { set: [P('w', '60 mm'), P('d', '40 mm'), P('t', '6 mm'), P('hd', '5 mm'), P('e', '8 mm')], remove: [] });
-      await ok(h, 'sketch', SK({ name: 'Plate sketch', on: 'Top', entities: [E('r', 'center_rect', [0, 0, 60, 40])], constraints: [C('c', 'coincident', ['r.center', 'origin']), C('dw', 'distance', ['r.bottom'], 'w'), C('dd', 'distance', ['r.left'], 'd')] }));
-      const r = await ok(h, 'extrude', EXTRUDE({ name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: 't', op: 'new' }));
-      expect(r.data.created).toEqual(expect.arrayContaining(['Plate.end', 'Plate.start']));
-      const ex = 'w/2 - e';
-      const ey = 'd/2 - e';
-      const holes = await ok(h, 'hole', {
-        name: '',
-        face: 'Plate.end',
-        centers: [
-          { x: ex, y: ey, z: '' },
-          { x: `-(${ex})`, y: ey, z: '' },
-          { x: `-(${ex})`, y: `-(${ey})`, z: '' },
-          { x: ex, y: `-(${ey})`, z: '' },
-        ],
-        diameter: 'hd',
-        depth: 'through',
-        distance: '',
-      });
-      // The positions are dimensioned from the face origin (0, 0, 6): on a +Z face u runs +X, v +Y.
-      expect(holes.data).toMatchObject({
-        made: ['Hole 1 sketch', 'Hole 1'],
-        resolved: { frame: 'u runs +X, v runs +Y, origin (0, 0, 6)' },
-        centers_mm: [
-          [22, 12, 6],
-          [-22, 12, 6],
-          [-22, -12, 6],
-          [22, -12, 6],
-        ],
-        dimensions: { d: 'hd', h1x: 'w/2 - e', h1y: 'd/2 - e', h2x: '-(w/2 - e)', h3y: '-(d/2 - e)' },
-      });
+      await build(h, part('example_plate'));
       // 60 x 40 x 6 less 4 x pi 2.5^2 x 6: 13,928.8 mm3.
-      check(h, 60 * 40 * 6 - 4 * Math.PI * 2.5 * 2.5 * 6, [-30, -20, 0, 30, 20, 6]);
+      check(h, { Plate: { volume: 60 * 40 * 6 - 4 * Math.PI * 2.5 * 2.5 * 6, bbox: [-30, -20, 0, 30, 20, 6] } });
     },
     REAL_KERNEL_MS,
   );
 
   it(
-    '2: the L bracket, with its inner fillet',
+    "example_bracket: the L bracket, its inner fillet and a hole in each flange (the guide's example 2)",
     async () => {
       const g = line(2);
-      for (const part of ['sketch on Front: polyline p [0,0,50,0,50,5,5,5,5,40,0,40,0,0], infer; coincident [p.p0, origin]; distance [p.1] "a", [p.6] "b", [p.2] "t", [p.5] "t"', 'extrude "Bracket" symmetric "wid" new', 'modify fillet ["Bracket.side(p.3) & Bracket.side(p.4)"] "r"']) expect(g).toContain(part);
+      expect(g).toContain(sketchWords(callOf('example_bracket', 'sketch')));
+      expect(g).toContain('extrude "Bracket" symmetric "wid" new');
+      expect(callOf('example_bracket', 'extrude')).toMatchObject({ name: 'Bracket', extent: 'symmetric', distance: 'wid', op: 'new' });
+      expect(g).toContain('modify fillet ["Bracket.side(p.3) & Bracket.side(p.4)"] "r"');
+      expect(callOf('example_bracket', 'modify')).toMatchObject({ kind: 'fillet', targets: ['Bracket.side(p.3) & Bracket.side(p.4)'], size: 'r' });
       h = await assistantHarness({ sketchMode: true });
-      await ok(h, 'set_params', { set: [P('a', '50 mm'), P('b', '40 mm'), P('t', '5 mm'), P('wid', '30 mm'), P('r', '4 mm')], remove: [] });
-      const L = [0, 0, 50, 0, 50, 5, 5, 5, 5, 40, 0, 40, 0, 0];
-      await ok(h, 'sketch', SK({ name: 'L profile', on: 'Front', entities: [E('p', 'polyline', L)], constraints: [C('o', 'coincident', ['p.p0', 'origin']), C('da', 'distance', ['p.1'], 'a'), C('db', 'distance', ['p.6'], 'b'), C('t1', 'distance', ['p.2'], 't'), C('t2', 'distance', ['p.5'], 't')], infer: true }));
-      await ok(h, 'extrude', EXTRUDE({ name: 'Bracket', sketch: 'L profile', extent: 'symmetric', distance: 'wid', op: 'new' }));
-      const fillet: Row = { edit: '', name: '', kind: 'fillet', targets: ['Bracket.side(p.3) & Bracket.side(p.4)'], size: 'r', size2: '', flip: false, inward: false };
-      await ok(h, 'modify', fillet);
-      // The L (50 x 5 and 5 x 35) times 30, and the inner round adds (1 - pi/4) r^2 along 30 mm.
-      check(h, (50 * 5 + 5 * 35) * 30 + (1 - Math.PI / 4) * 16 * 30, [0, -15, 0, 50, 15, 40]);
+      await build(h, part('example_bracket'));
+      // The L (50 x 5 and 5 x 35) times 30, the inner round adds (1 - pi/4) r^2 along 30 mm, less two
+      // holes of radius 3 through 5 mm.
+      check(h, { 'Body 1': { volume: (50 * 5 + 5 * 35) * 30 + (1 - Math.PI / 4) * 16 * 30 - 2 * Math.PI * 9 * 5, bbox: [0, -15, 0, 50, 15, 40] } });
     },
     REAL_KERNEL_MS,
   );
 
   it(
-    '3: the flange with its pattern of holes',
+    "example_flange: the flange with its pattern of 6 holes (the guide's example 3)",
     async () => {
       const g = line(3);
-      for (const part of [
-        'sketch on Front: rect r [10,0,40,8]; horizontal [r.bl, origin]; distance_x [origin, r.bl] "bore/2", [origin, r.br] "od/2"; distance [r.left] "t"',
-        'revolve "Flange" axis "Z axis" full new',
-        'hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg"',
-      ])
-        expect(g).toContain(part);
+      expect(g).toContain(sketchWords(callOf('example_flange', 'sketch')));
+      expect(g).toContain('revolve "Flange" axis "Z axis" full new');
+      expect(callOf('example_flange', 'revolve')).toMatchObject({ name: 'Flange', axis: 'Z axis', extent: 'full', op: 'new' });
+      expect(g).toContain('hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "" diameter "hd", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg"');
+      expect(callOf('example_flange', 'hole')).toMatchObject({ face: 'Flange.side(r.top)', centers: [{ x: 'pcd/2', y: '0', z: '' }], diameter: 'hd' });
+      expect(callOf('example_flange', 'pattern')).toMatchObject({ kind: 'circular', of: 'features', items: ['Hole 1'], about: 'Z axis', count: 'n', spacing: '360 deg' });
       h = await assistantHarness({ sketchMode: true });
-      await ok(h, 'set_params', { set: [P('od', '80 mm'), P('bore', '20 mm'), P('t', '8 mm'), P('pcd', '60 mm'), P('hd', '6.5 mm'), { name: 'n', kind: 'number', expr: '6', comment: '', rename_to: '' }], remove: [] });
-      await ok(h, 'sketch', SK({ name: 'Flange sketch', on: 'Front', entities: [E('r', 'rect', [10, 0, 40, 8])], constraints: [C('hz', 'horizontal', ['r.bl', 'origin']), C('ib', 'distance_x', ['origin', 'r.bl'], 'bore/2'), C('io', 'distance_x', ['origin', 'r.br'], 'od/2'), C('th', 'distance', ['r.left'], 't')] }));
-      await ok(h, 'revolve', REVOLVE({ name: 'Flange', sketch: 'Flange sketch', axis: 'Z axis', extent: 'full', op: 'new' }));
-      check(h, Math.PI * (40 * 40 - 10 * 10) * 8, [-40, -40, 0, 40, 40, 8]);
-      const hole = await ok(h, 'hole', { name: '', face: 'Flange.side(r.top)', centers: [{ x: 'pcd/2', y: '0', z: '' }], diameter: 'hd', depth: 'through', distance: '' });
-      // The hole lands at radius pcd/2 on the +Z face.
-      expect(hole.data).toMatchObject({ made: ['Hole 1 sketch', 'Hole 1'], centers_mm: [[30, 0, 8]], dimensions: { d: 'hd', h1x: 'pcd/2', h1y: '0 mm' } });
-      const pattern = { edit: '', name: '', kind: 'circular', of: 'features', items: ['Hole 1'], about: 'Z axis', count: 'n', spacing: '360 deg', symmetric: false, flip: false, about2: '', count2: '', spacing2: '', flip2: false, op: 'source', bodies: [] };
-      await ok(h, 'pattern', pattern);
-      // n = 6 holes of 6.5 mm through the 8 mm flange.
-      check(h, Math.PI * (40 * 40 - 10 * 10) * 8 - 6 * Math.PI * 3.25 * 3.25 * 8, [-40, -40, 0, 40, 40, 8]);
-      const found = await ok(h, 'find', { query: 'Body 1 faces hole radius 3.25 mm', limit: 50 });
-      expect(found.data.count).toBe(6);
+      await build(h, part('example_flange'));
+      // n = 6 holes of 6.5 mm through the 8 mm ring, all at 30 mm from Z (replies give points to 1e-4
+      // mm); the bore is the 7th hole.
+      check(h, { 'Body 1': { volume: Math.PI * (40 * 40 - 10 * 10) * 8 - 6 * Math.PI * 3.25 * 3.25 * 8, bbox: [-40, -40, 0, 40, 40, 8] } });
+      const rows = (await h.ok('find', { query: 'Body 1 faces hole', limit: 50 })).data.rows as { radius_mm: number; axis: { point_mm: number[] } }[];
+      const fromZ = (r: (typeof rows)[number]) => Math.hypot(r.axis.point_mm[0], r.axis.point_mm[1]);
+      expect(rows.map((r) => [r.radius_mm, Number(fromZ(r).toFixed(3))]).sort((a, b) => a[0] - b[0])).toEqual([...Array(6).fill([3.25, 30]), [10, 0]]);
     },
     REAL_KERNEL_MS,
+  );
+
+  it(
+    'example_chip: two bodies, a sealed pocket, sector spots joined by "bodies of", no overlap',
+    async () => {
+      const calls = part('example_chip').calls;
+      // What the topic shows: op new and combine with "bodies of", a pocket on an offset plane, sector spots, a voids check.
+      expect(calls.some((c) => c.tool === 'combine' && (c.input.tools as string[]).includes('bodies of Spots'))).toBe(true);
+      expect(calls.some((c) => c.tool === 'sketch' && String(c.input.on).includes(' offset '))).toBe(true);
+      expect(calls.some((c) => c.tool === 'sketch' && (c.input.entities as Row[]).some((e) => e.kind === 'sector'))).toBe(true);
+      expect(calls.some((c) => c.tool === 'measure' && c.result.voids === 1)).toBe(true);
+      h = await assistantHarness({ sketchMode: true });
+      await build(h, part('example_chip'));
+      const red = Math.PI * 19.5 ** 2 * 3.3 - Math.PI * 15.975 ** 2 * 1 - WHITE;
+      check(h, { Red: { volume: red, bbox: [-19.5, -19.5, 0, 19.5, 19.5, 3.3] }, White: { volume: WHITE, bbox: [-18.5, -18, 0, 18.5, 18, 3.3] } });
+      // At the end: Red keeps its one sealed void, White has none, and the two do not overlap.
+      expect((await h.ok('measure', { targets: ['Red'], section: '' })).data).toMatchObject({ solids: 1, voids: 1 });
+      expect((await h.ok('measure', { targets: ['White'], section: '' })).data).toMatchObject({ solids: 1, voids: 0 });
+      expect((await h.ok('measure', { targets: ['Red', 'White'], section: '' })).data).toMatchObject({ overlap_mm3: 0, union_solids: 1, union_voids: 1 });
+    },
+    2 * REAL_KERNEL_MS,
   );
 });

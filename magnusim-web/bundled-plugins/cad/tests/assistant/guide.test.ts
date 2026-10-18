@@ -1,13 +1,22 @@
 // @vitest-environment node
-// The CAD notes the Part registers with its tools (CAD tools spec §10.1, guide v0): at most 3950
-// characters (the app keeps 4000), ASCII, LF line breaks, unchanged by the bridge's cleaning;
-// the frame lines are what the code does (ORIGIN_PLANES, and faceFrame for the six axis faces);
-// every tool and help topic it names exists; no vendor names. The worked examples are built on
-// the real kernel when the tools they use are (guide-example.test.ts, with the final guide).
+// The CAD notes the Part registers with its tools, and help's text (CAD tools spec §10.1, §10.2):
+// the guide is at most 3950 characters (the app keeps 4000), ASCII, LF line breaks, unchanged by
+// the bridge's cleaning; its facts are what the code does (the planes as ORIGIN_PLANES, the six
+// axis faces as faceFrame makes them, the 0.05 mm join, the parts of each kind it names); every
+// tool, field, value and help topic the guide and help name exists in schemas.ts (and every other
+// snake_case word is a reason or a reply key the tools give); every worked part's input is valid
+// for its tool's schema (all fields, types, values, sizes) and every selector in it reads; the
+// guide says how a file is made (Export STEP) and how busy answers end a turn; no vendor names
+// and no project data. The worked parts are built on the real kernel in guide-example.test.ts.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
+import { HINTS, REASONS } from '../../src/assistant/errors';
+import { WORKED_PARTS } from '../../src/assistant/examples';
 import { GUIDE } from '../../src/assistant/guide';
-import { HELP_TOPICS, TOOL_NAMES } from '../../src/assistant/schemas';
+import { HELP } from '../../src/assistant/help';
+import { CAD_TOOLS, HELP_TOPICS, TOOL_NAMES, toolNamed } from '../../src/assistant/schemas';
+import { parseSelector, type KnownNames, type Want } from '../../src/assistant/selectors/parse';
+import { expandEntity, JOIN_TOL, type EntityKind } from '../../src/assistant/sketch/macros';
 import { faceFrame, ydirOf } from '../../src/features/sketch/plane';
 import { ORIGIN_PLANES, type PlaneFrame, type Vec3 } from '../../src/types/doc';
 import { namesVendor } from './vendor';
@@ -29,6 +38,63 @@ const axis = (v: readonly number[]) => {
   return `${v[i] > 0 ? '+' : '-'}${'XYZ'[i]}`;
 };
 const frameText = (p: PlaneFrame) => `u${axis(p.xdir)} v${axis(ydirOf(p))}`;
+
+type S = { type?: string; enum?: string[]; properties?: Record<string, S>; required?: string[]; additionalProperties?: boolean; items?: S; minLength?: number; maxLength?: number; minimum?: number; maximum?: number; minItems?: number; maxItems?: number };
+
+/** Every problem of `v` against `s`, in the subset the tools' schemas use (the app's validateInput rules). */
+function problems(s: S, v: unknown, path: string, out: string[] = []): string[] {
+  const kind = Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v;
+  if (s.type === 'integer' ? !Number.isInteger(v) : s.type === 'number' ? typeof v !== 'number' || !Number.isFinite(v) : kind !== s.type) {
+    out.push(`${path} is ${kind}, not ${s.type}`);
+    return out;
+  }
+  if (s.enum && !s.enum.includes(v as string)) out.push(`${path} "${String(v)}" is not one of ${s.enum.join(', ')}`);
+  if (typeof v === 'string') {
+    if (s.minLength !== undefined && v.length < s.minLength) out.push(`${path} is shorter than ${s.minLength}`);
+    if (s.maxLength !== undefined && v.length > s.maxLength) out.push(`${path} is longer than ${s.maxLength}`);
+  }
+  if (typeof v === 'number') {
+    if (s.minimum !== undefined && v < s.minimum) out.push(`${path} is below ${s.minimum}`);
+    if (s.maximum !== undefined && v > s.maximum) out.push(`${path} is above ${s.maximum}`);
+  }
+  if (Array.isArray(v)) {
+    if (s.minItems !== undefined && v.length < s.minItems) out.push(`${path} has fewer than ${s.minItems} items`);
+    if (s.maxItems !== undefined && v.length > s.maxItems) out.push(`${path} has more than ${s.maxItems} items`);
+    v.forEach((x, i) => problems(s.items!, x, `${path}[${i}]`, out));
+  }
+  if (kind === 'object') {
+    const o = v as Record<string, unknown>;
+    for (const k of s.required ?? []) if (!(k in o)) out.push(`${path} is missing ${k}`);
+    for (const k of Object.keys(o)) {
+      if (!s.properties?.[k]) out.push(`${path}.${k} is not a field`);
+      else problems(s.properties[k], o[k], `${path}.${k}`, out);
+    }
+  }
+  return out;
+}
+
+/** Every field name at every depth of every tool, and every value of every enum. */
+const FIELDS = new Set<string>();
+const VALUES = new Map<string, Set<string>>();
+for (const t of CAD_TOOLS) {
+  const walk = (s: S, at: string) => {
+    if (s.enum) VALUES.set(at, new Set(s.enum));
+    for (const [k, x] of Object.entries(s.properties ?? {})) {
+      FIELDS.add(k);
+      walk(x, `${at}.${k}`);
+    }
+    if (s.items) walk(s.items, `${at}[]`);
+  };
+  walk(t.inputSchema as unknown as S, t.name);
+}
+const ALL_VALUES = new Set([...VALUES.values()].flatMap((s) => [...s]));
+const value = (at: string, v: string) => expect(VALUES.get(at), at).toContain(v);
+
+/** Reply keys the guide and help name (each one a key the tools' replies carry). */
+const REPLY_KEYS = ['dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm'];
+
+/** Every text of help, and the guide. */
+const helpTexts = () => Object.values(HELP).flatMap((rows) => rows.flatMap((r) => [r.about, r.text]));
 
 describe('the CAD guide', () => {
   it('is at most 3950 characters of ASCII with LF line breaks, as the bridge keeps it', () => {
@@ -61,20 +127,126 @@ describe('the CAD guide', () => {
     expect(faceFrame([-1, 0, 0], [-5, 3, 2]).origin).toEqual([-5, 0, 0]);
   });
 
-  it('names only tools and help topics that exist', () => {
-    const tools = ['get_model', 'set_params', 'sketch', 'extrude', 'hole', 'measure', 'view', 'find', 'modify', 'pattern', 'combine', 'undo', 'edit_feature', 'revolve'];
+  it("states the sketch tool's join and the parts it names as the macros make them", () => {
+    expect(GUIDE).toContain(`- Ends within ${JOIN_TOL} mm are joined.`);
+    const parts = (kind: EntityKind, at: number[]) => {
+      const r = expandEntity('x', kind, at, false);
+      if (!r.ok) throw new Error(r.problem);
+      return Object.keys(r.macro.parts);
+    };
+    const line = GUIDE.split('\n').find((l) => l.startsWith('- Parts:'))!;
+    expect(line).toBe('- Parts: l.start l.end c.center a.end r.top r.bl r.center origin; polyline p: points p.p0, p.p1...; side p.k runs from p.p(k-1) to p.pk.');
+    expect(parts('line', [0, 0, 1, 0])).toEqual(expect.arrayContaining(['start', 'end']));
+    expect(parts('circle', [0, 0, 1])).toContain('center');
+    expect(parts('arc', [0, 0, 1, 0, 90])).toContain('end');
+    expect(parts('rect', [0, 0, 2, 1])).toEqual(expect.arrayContaining(['top', 'bl']));
+    expect(parts('center_rect', [0, 0, 2, 1])).toContain('center');
+    // A closed polyline of 3 corners: points p0..p2, side k from p(k-1) to pk (the last back to p0).
+    const tri = expandEntity('p', 'polyline', [0, 0, 4, 0, 4, 3, 0, 0], false);
+    if (!tri.ok) throw new Error(tri.problem);
+    expect(Object.keys(tri.macro.parts).sort()).toEqual(['1', '2', '3', 'p0', 'p1', 'p2']);
+    const side = (k: string) => tri.macro.entities.find((e) => e.id === tri.macro.parts[k]) as unknown as { p: string[] };
+    expect(side('1').p).toEqual([tri.macro.parts.p0, tri.macro.parts.p1]);
+    expect(side('3').p).toEqual([tri.macro.parts.p2, tri.macro.parts.p0]);
+  });
+
+  it('names only tools, fields, values and help topics that exist', () => {
+    const tools = ['get_model', 'set_params', 'sketch', 'extrude', 'hole', 'measure', 'view', 'find', 'modify', 'pattern', 'combine', 'undo', 'edit_feature', 'revolve', 'delete'];
     for (const t of tools) expect(GUIDE, t).toMatch(new RegExp(`\\b${t}\\b`));
     for (const t of tools) expect(TOOL_NAMES).toContain(t);
     for (const m of GUIDE.matchAll(/\bhelp ([a-z_]+)/g)) expect([...HELP_TOPICS], m[0]).toContain(m[1]);
-    // Every snake_case word that looks like a tool is one.
-    for (const m of GUIDE.matchAll(/\b([a-z]+_[a-z_]+)\b/g)) {
-      if (['center_rect', 'distance_x', 'distance_y'].includes(m[1])) continue;
-      expect(TOOL_NAMES, m[1]).toContain(m[1]);
-    }
+    // The fields and values the guide's text and examples use, each in its tool's schema.
+    for (const [tool, field] of [
+      ['get_model', 'detail'],
+      ['sketch', 'on'],
+      ['sketch', 'infer'],
+      ['sketch', 'edit'],
+      ['extrude', 'regions'],
+      ['extrude', 'flip'],
+      ['extrude', 'op'],
+      ['revolve', 'axis'],
+      ['hole', 'centers'],
+      ['hole', 'diameter'],
+      ['find', 'query'],
+      ['pattern', 'count'],
+      ['pattern', 'spacing'],
+    ] as const)
+      expect(Object.keys(toolNamed(tool)!.inputSchema.properties), `${tool}.${field}`).toContain(field);
+    value('get_model.detail', 'full');
+    for (const v of ['blind', 'symmetric']) value('extrude.extent', v);
+    value('extrude.op', 'new');
+    value('revolve.extent', 'full');
+    value('hole.depth', 'through');
+    value('modify.kind', 'fillet');
+    value('pattern.kind', 'circular');
+    value('pattern.of', 'features');
+    for (const k of ['center_rect', 'polyline', 'rect', 'sector']) value('sketch.entities[].kind', k);
+    for (const k of ['coincident', 'distance', 'horizontal', 'distance_x']) value('sketch.constraints[].kind', k);
+    for (const k of ['join', 'cut', 'intersect']) value('combine.op', k);
+    // Every help topic the guide and help point to exists.
+    for (const t of [GUIDE, ...helpTexts()]) for (const m of t.matchAll(/\bhelp ([a-z_]+)/g)) expect([...HELP_TOPICS], m[0]).toContain(m[1]);
+  });
+
+  it('every snake_case word in the guide and help is a tool, a field, a value, an error code or reason, or a reply key', () => {
+    const known = new Set([...TOOL_NAMES, ...FIELDS, ...ALL_VALUES, ...Object.keys(REASONS), ...Object.keys(HINTS), ...REPLY_KEYS]);
+    const unknown = new Set<string>();
+    for (const t of [GUIDE, ...helpTexts()]) for (const m of t.matchAll(/(?<![\w.#])([a-z][a-z0-9]*_[a-z0-9_]*[a-z0-9])(?!\w)/g)) if (!known.has(m[1])) unknown.add(m[1]);
+    expect([...unknown]).toEqual([]);
+  });
+
+  it('says how a file is made, how busy ends a turn, and that delete asks the person', () => {
+    expect(GUIDE).toContain('Files: the person uses Export STEP.');
+    expect(GUIDE).toContain('busy: the person comes first: follow the hint; most end your turn.');
+    expect(GUIDE).toContain('delete asks the person');
+    // The hints the busy line points to end the turn, or say what to do instead.
+    for (const r of ['person_editing', 'rolled_back', 'paused', 'taken_over', 'stopped', 'other_turn'] as const) expect(HINTS[r], r).toMatch(/end your turn/);
+    expect(HINTS.step_declined).toMatch(/ask what to change/);
+    expect(HINTS.changed).toMatch(/get_model/);
   });
 
   it('names no vendor and holds no project data', () => {
     expect(namesVendor(GUIDE)).toBe(false);
     expect(GUIDE).not.toMatch(/proj-|st-[a-z0-9]|\\Users\\|\/home\//);
+  });
+});
+
+describe("help's worked parts", () => {
+  it("every input is whole and valid for its tool's schema", () => {
+    for (const p of WORKED_PARTS) {
+      for (const c of p.calls) {
+        const t = toolNamed(c.tool);
+        expect(t, `${p.topic} ${c.about}`).not.toBeNull();
+        expect(problems(t!.inputSchema as unknown as S, c.input, `${p.topic} ${c.about} ${c.tool}`)).toEqual([]);
+      }
+    }
+  });
+
+  it('every selector in the inputs reads', () => {
+    for (const p of WORKED_PARTS) {
+      // The part's names: every feature and body its calls make (and those the tools name by default).
+      const made = p.calls.flatMap((c) => [c.input.name, ...(c.tool === 'hole' ? [`${c.input.name || 'Hole 1'} sketch`] : [])]).filter((n): n is string => typeof n === 'string' && n !== '');
+      const names: KnownNames = {
+        features: [...made, 'Hole 1', 'Hole 2', 'Hole 1 sketch', 'Fillet 1', 'Circular pattern 1'].map((n, i) => ({ id: `f_${i}`, name: n, type: n.endsWith('sketch') || n === 'L profile' ? 'sketch' : 'extrude' })),
+        bodies: ['Body 1', 'Plate', 'Red', 'White', 'Ring'].map((n, i) => ({ id: `b_${i}`, name: n })),
+      };
+      const reads = (text: string, want: Want, what: string) => expect(() => parseSelector(text, names, want), `${p.topic} ${what}: ${text}`).not.toThrow();
+      for (const c of p.calls) {
+        const i = c.input as Record<string, unknown>;
+        const what = `${c.about} ${c.tool}`;
+        if (c.tool === 'sketch' && i.on) reads(i.on as string, 'plane', what);
+        if (c.tool === 'revolve') reads(i.axis as string, 'axis', what);
+        if (c.tool === 'hole') reads(i.face as string, 'face', what);
+        if (c.tool === 'modify') for (const s of i.targets as string[]) reads(s, 'any', what);
+        if (c.tool === 'pattern') reads(i.about as string, i.kind === 'mirror' ? 'plane' : 'axis', what);
+        if (c.tool === 'pattern' && i.of === 'bodies') for (const s of i.items as string[]) reads(s, 'body', what);
+        if (c.tool === 'combine') for (const s of [...(i.targets as string[]), ...(i.tools as string[])]) reads(s, 'body', what);
+        if (c.tool === 'extrude') for (const s of i.bodies as string[]) reads(s, 'body', what);
+        if (c.tool === 'measure') {
+          for (const s of i.targets as string[]) reads(s, 'any', what);
+          if (i.section) reads(i.section as string, 'plane', what);
+        }
+        if (c.tool === 'find') reads(i.query as string, 'any', what);
+      }
+    }
   });
 });
