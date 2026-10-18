@@ -36,6 +36,8 @@ import { featureByName } from '../model';
 import { runtimeOf } from '../runtime';
 import { axisRefOf, faceRefOf, planeRefOf } from '../selectors/refs';
 import { echo, selectOne, selectSet, withScene, type AxisHit, type FaceHit, type PlaneHit } from '../selectors/resolve';
+import { storeExpr } from '../sketch/compile';
+import { offsetPlaneLike } from '../sketch/support';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 
 type Kind = 'linear' | 'circular' | 'mirror';
@@ -71,21 +73,12 @@ interface Plan extends EditPlan {
 
 const unquote = (t: string) => (/^".*"$/.test(t) ? t.slice(1, -1).replace(/\\(["\\])/g, '$1') : t);
 
-/** A plane reference's identity, to find a construction plane the Part already has. */
-function planeKey(p: PlaneRef): string {
-  return p.kind === 'origin' ? p.plane : p.kind === 'feature' ? p.feature : `${p.body}:${p.ref.name}`;
-}
-
-/** A construction plane offset from `base` as asked (built, before `before` when an edit needs it), or null. */
+/** A construction plane offset from `base` as asked (built, before `before` when an edit needs it),
+ *  or null. The sketch tool's rule (sketch/support.ts), so a sketch's offset plane serves a mirror
+ *  too, and the other way round. */
 function samePlane(s: DocState, o: Omit<OffsetPlane, 'reuse'>, before: FeatureId | null): FeatureId | null {
   const limit = before ? s.doc.features.findIndex((f) => f.id === before) : s.doc.features.length;
-  for (let i = 0; i < limit; i++) {
-    const f = s.doc.features[i];
-    if (f.type !== 'ref_plane' || f.method !== 'offset' || !f.plane || f.suppressed) continue;
-    if (planeKey(f.plane) !== planeKey(o.base) || String(f.distance).trim() !== o.distance.trim() || !!f.flip !== o.flip) continue;
-    if (s.rebuild.features[f.id]?.state === 'ok') return f.id;
-  }
-  return null;
+  return offsetPlaneLike(s, o, limit)?.id ?? null;
 }
 
 /** A value the pattern's type refuses, as the field it came from (CAD's own words). */
@@ -202,7 +195,8 @@ const pattern: EditTool<Plan> = {
       if (kind === 'mirror') {
         const { hit, selected } = await selectOne(sc, about, 'plane', 'about');
         const p = hit as PlaneHit;
-        if (p.offset) offsetPlane = { base: await planeRefOf(sc, p), distance: p.offset.expr, flip: p.flip };
+        // The distance as the sketch tool stores it ("40" in a mm Part is "40 mm").
+        if (p.offset) offsetPlane = { base: await planeRefOf(sc, p), distance: storeExpr(p.offset.expr, 'length', services.doc.units), flip: p.flip };
         else plane = await planeRefOf(sc, p);
         resolved.about = p.offset ? `${p.words} (a construction plane)` : echo(sc, selected);
         warnings.push(...p.warnings.filter((w) => !warnings.includes(w)));

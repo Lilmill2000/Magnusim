@@ -312,7 +312,9 @@ The tools:
   selectors on one body. A mirror about `<plane> offset <length>` makes the construction plane
   first in the same step (two panels, the `between-opens` checkpoint between them; an edit
   moves the plane above the mirror), or uses one the Part has with the same base, offset and
-  flip. Spacing is a pitch above 0 (the hint says flip).
+  flip. The sketch tool and the mirror find such a plane by one rule
+  (`offsetPlaneLike` in `sketch/support.ts`, the distance stored with the Part's unit), so
+  either one uses the plane the other made. Spacing is a pitch above 0 (the hint says flip).
 - `combine` (`tools/combine.ts`): targets and tools are body selectors (`bodies of <pattern>`,
   `all bodies`, `#b` handles); they are expanded and deduplicated, and the targets are taken
   out of the tools, which must not then be empty. A join of pieces that do not touch warns
@@ -321,7 +323,8 @@ The tools:
 Tests: `modify.test.ts`, `pattern-combine.test.ts` (real kernel: volumes by formula, round
 trips of `get_model full` inputs, refusals), `feature-tools.test.ts` (a Stop at
 `before-commit`, Escape at `after-open`, a person's panel or change at `between-opens` of the
-offset mirror); e2e `cad:assistant-honest-fillet`.
+offset mirror), `offset-planes.test.ts` (a sketch and a mirror share one offset plane); e2e
+`cad:assistant-honest-fillet`.
 
 ## The person's view
 

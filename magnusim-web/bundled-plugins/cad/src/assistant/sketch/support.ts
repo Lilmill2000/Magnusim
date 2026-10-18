@@ -5,7 +5,8 @@
 //                                    the one sketch mode gives (u along model X projected; v = n x u)
 //   "<plane or face> offset <length> [flip]"
 //                                    a construction plane made in the same step ("<sketch> plane"),
-//                                    or an identical one the Part has; editing a sketch whose own
+//                                    or an identical one the Part has (a mirror's too: both tools
+//                                    use offsetPlaneLike); editing a sketch whose own
 //                                    plane only it uses moves that plane instead
 //   "" with edit                     where it lies now
 // The selectors read the shown bodies for a new sketch, and the bodies before the sketch for an edit.
@@ -13,7 +14,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { dependencies } from '../../doc/features/hooks';
 import type { CallCtx } from '../../types/assistant';
-import type { FeatureId, PlaneFrame, RefPlaneFeature, SketchFeature, SketchSupport } from '../../types/doc';
+import type { Feature, FeatureId, PlaneFrame, RefPlaneFeature, SketchFeature, SketchSupport } from '../../types/doc';
+import type { DocState } from '../../types/doc-service';
 import type { PlaneRef } from '../../types/references';
 import { ToolError } from '../errors';
 import { runtimeOf } from '../runtime';
@@ -51,6 +53,19 @@ const samePlaneRef = (a: PlaneRef | null, b: PlaneRef): boolean => {
 
 const sameExpr = (a: string, b: string) => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase();
 
+const isOffsetPlane = (f: Feature): f is RefPlaneFeature => f.type === 'ref_plane' && (f as RefPlaneFeature).method === 'offset';
+
+/** A built construction plane `distance` (as storeExpr stores it) from `base`, flipped as asked,
+ *  among the Part's first `limit` features, or null. The sketch tool and a mirror both look here,
+ *  so one "<plane> offset <length>" is one plane whichever tool made it. */
+export function offsetPlaneLike(s: DocState, o: { base: PlaneRef; distance: string; flip: boolean }, limit: number): RefPlaneFeature | null {
+  for (const f of s.doc.features.slice(0, Math.max(0, limit))) {
+    if (!isOffsetPlane(f) || f.suppressed || !!f.flip !== o.flip) continue;
+    if (samePlaneRef(f.plane, o.base) && sameExpr(f.distance, o.distance) && s.rebuild.outputs[f.id]?.type === 'plane') return f;
+  }
+  return null;
+}
+
 /** A name not taken by a feature (any case): `want`, else "<want> 2", ... */
 function freeName(names: readonly string[], want: string): string {
   const taken = new Set(names.map((n) => n.toLowerCase()));
@@ -87,20 +102,18 @@ export async function planSupport(ctx: CallCtx, on: string, o: { edit: SketchFea
     const flip = hit.flip;
     const features = s.doc.features;
     const at = edit ? features.findIndex((f) => f.id === edit.id) : features.length;
-    const isOffset = (f: (typeof features)[number]): f is RefPlaneFeature => f.type === 'ref_plane' && (f as RefPlaneFeature).method === 'offset';
-    const built = (id: FeatureId) => s.rebuild.outputs[id]?.type === 'plane';
     // The edited sketch's own plane (made by the Assistant for it, used by nothing else) moves.
     let update: FeatureId | null = null;
     if (edit && edit.support.kind === 'feature') {
       const own = features.find((f) => f.id === (edit.support as { feature: FeatureId }).feature);
       const others = features.filter((g) => g.id !== edit.id && g.id !== own?.id && dependencies(services.doc.features, s.doc, g).includes(own?.id ?? ''));
-      if (own && isOffset(own) && runtimeOf(services)?.madeBy.has(own.id) && samePlaneRef(own.plane, plane) && !others.length) {
+      if (own && isOffsetPlane(own) && runtimeOf(services)?.madeBy.has(own.id) && samePlaneRef(own.plane, plane) && !others.length) {
         if (sameExpr(own.distance, distance) && !!own.flip === flip) return { kind: 'offset', plane, distance, flip, frame: hit.frame, words: hit.words, warnings, reuse: own.id, update: null, planeName: own.name };
         update = own.id;
       }
     }
     if (!update) {
-      const same = features.find((f, i) => i < at && isOffset(f) && samePlaneRef(f.plane, plane) && sameExpr(f.distance, distance) && !!f.flip === flip && !f.suppressed && built(f.id));
+      const same = offsetPlaneLike(s, { base: plane, distance, flip }, at);
       if (same) return { kind: 'offset', plane, distance, flip, frame: hit.frame, words: hit.words, warnings, reuse: same.id, update: null, planeName: same.name };
     }
     const planeName = update ? (features.find((f) => f.id === update)?.name ?? `${o.sketchName} plane`) : freeName(features.map((f) => f.name), `${o.sketchName} plane`);
