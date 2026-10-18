@@ -162,6 +162,9 @@ export function changesCapText(n: number): string {
   return `This message reached its ${n}-change limit. Stop and tell the person what is left; they can send another message to carry on.`;
 }
 
+/** The change limit's refusal says reads go on, so the agent can still look before it stops. */
+export const CHANGES_CAP_HINT = 'Your change limit for this message is used: tools that only read still work. Tell the person what is left; they can send another message to carry on.';
+
 export function callsCapText(n: number): string {
   return `This message reached its ${n}-call limit. Stop and tell the person what is left; they can send another message to carry on.`;
 }
@@ -325,7 +328,7 @@ class AgentTurnRun implements AgentDispatch {
     }
     const def = o.offered.get(call.name) ?? null;
     const risk = riskOf(def);
-    if (risk !== 'read' && this.changes >= caps.changes) return refused(errorResult(call, 'capped', changesCapText(caps.changes)));
+    if (risk !== 'read' && this.changes >= caps.changes) return refused(errorResult(call, 'capped', changesCapText(caps.changes), CHANGES_CAP_HINT));
     // A call is a request of the turn: privacy is read live before a tool that reads project data.
     if (def?.projectData && t.projectId && this.project) {
       const no = await this.privacyForCall(call);

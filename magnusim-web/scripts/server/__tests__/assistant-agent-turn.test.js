@@ -1327,6 +1327,7 @@ describe('limits for agent turns (spec 4.10)', LIMIT, () => {
       const third = claude.events('mcp_result', lastPid(claude)).filter((x) => x.tool === 'ai-demo__add')[2];
       assert.equal(third.result.isError, true);
       assert.match(third.result.content[0].text, /"code":"capped".*This message reached its 2-change limit\. Stop and tell the person what is left/);
+      assert.match(third.result.content[0].text, /"hint":"Your change limit for this message is used: tools that only read still work\./);
     } finally {
       await w.close();
     }
