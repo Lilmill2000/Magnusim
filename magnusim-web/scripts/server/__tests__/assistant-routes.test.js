@@ -537,7 +537,7 @@ describe('turns', () => {
     assert.equal(results.length, 1);
     assert.equal(results[0].ok, true, JSON.stringify(results[0]));
     assert.match(results[0].summary, /^Magnusim .*, \d+ plugins, compute idle, 0 queued$/);
-    const sent = fake.requests().slice(before).filter((x) => x.dialect === 'compat');
+    const sent = fake.requests().slice(before).filter((x) => x.dialect === 'compat' && x.kind === 'chat');
     assert.equal(sent.length, 2);
     assert.ok(sent[0].body.tools.some((t) => t.function.name === 'app_status'));
     assert.ok(!sent[0].body.tools.some((t) => t.function.name === 'connection_check'));
@@ -555,7 +555,8 @@ describe('turns', () => {
   it('Stop while the provider streams: the socket closes, no further request, the turn ends stopped', async () => {
     assert.equal((await localServer()).status, 200);
     fake.reply({ text: 'partial answer', hold: 'stop-1' });
-    const before = fake.requests().length;
+    const chats = () => fake.requests().filter((x) => x.kind === 'chat').length;
+    const before = chats();
     const disconnects = fake.disconnects();
     const r = await post('/api/assistant/turns', { text: 'Go slowly.' });
     assert.equal(r.status, 202);
@@ -569,8 +570,43 @@ describe('turns', () => {
     await until(() => fake.disconnects() === disconnects + 1, 5000, 'the fake to see the socket close');
     fake.release('stop-1');
     await sleep(300);
-    assert.equal(fake.requests().length, before + 1, 'no request after Stop');
+    assert.equal(chats(), before + 1, 'no request after Stop');
     await until(async () => (await post(`/api/assistant/conversations/${r.json.conversation}/forget`, {})).json.forgotten === true, 5000, 'the forget');
+  });
+
+  it("a local server that reports its model's context: too small ends the turn failed (context) with nothing sent; with room the answer may run to 8192 tokens (CAD tools spec H5)", async () => {
+    const chats = () => fake.requests().filter((x) => x.kind === 'chat' && x.dialect === 'compat');
+    const rowReads = () => fake.requests().filter((x) => x.kind === 'model_row');
+    // A reset forgets the rows kept from earlier tests (a row is kept 60 s).
+    assert.equal((await post('/api/test/assistant/reset', {})).status, 200);
+    assert.equal((await localServer()).status, 200);
+    fake.models([{ id: 'qwen3.8-27b', context: 2048, type: 'llm' }], 'compat');
+    try {
+      const chatsBefore = chats().length;
+      const rowsBefore = rowReads().length;
+      let r = await post('/api/assistant/turns', { text: 'Hello?' });
+      assert.equal(r.status, 202, r.text);
+      let { turn } = await follow(r.json.turn);
+      assert.deepEqual(
+        [turn.state, turn.end_reason, turn.message],
+        ['failed', 'context', "The local model's context (2,048 tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation."],
+      );
+      assert.equal(chats().length, chatsBefore, 'nothing sent');
+      assert.deepEqual(rowReads().slice(rowsBefore).map((x) => [x.method, x.path]), [['GET', '/compat/api/v0/models/qwen3.8-27b']]);
+      // Loaded again with a longer context (and the kept row forgotten): each answer may run to 8192 tokens.
+      await post('/api/test/assistant/reset', {});
+      assert.equal((await localServer()).status, 200);
+      fake.models([{ id: 'qwen3.8-27b', context: 32768, type: 'llm' }], 'compat');
+      fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+      r = await post('/api/assistant/turns', { text: 'How is the app?' });
+      assert.equal(r.status, 202, r.text);
+      ({ turn } = await follow(r.json.turn));
+      assert.equal(turn.state, 'done', turn.message);
+      assert.deepEqual(chats().slice(chatsBefore).map((x) => x.body.max_tokens), [8192, 8192]);
+      assert.equal(rowReads().length, rowsBefore + 2, 'one read for the turn: its second step uses the kept row');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
   });
 
   it('a cloud turn about a project asks once (Send through the route), then not again; the key goes only as x-api-key', async () => {

@@ -7,6 +7,8 @@
  *     the caps (minutes, tokens; then the spend estimate and the day's reservation)
  *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
  *       before this request, forgotten answers ask again
+ *     a local server's model row (its context, kept 60 s): the answer gets the room the
+ *       prompt leaves; too little → failed (context) before this request
  *     model: one request with this step's tools (computed by the host, every step)
  *       refusal → failed · context → failed · max_tokens → capped · no calls → done
  *     tools: each call in order, through the runner (only this step's tools resolve)
@@ -84,6 +86,8 @@ export interface LoopTurn extends RunnerTurn {
   usd: number;
   estimated: boolean;
   servedBy: string | null;
+  /** The local server's context for the turn's model, once its model row said (tokens). */
+  contextTokens: number | null;
   setState(s: TurnState): void;
   end(state: EndState, reason: string, message: string | null): void;
   note(text: string): void;
@@ -137,6 +141,12 @@ export function capText(reason: CapReason, caps: Caps): string {
     case 'day_usd':
       return `Today's ${money(caps.day_usd)} limit is reached; it resets at midnight.`;
   }
+}
+
+/** A local model's context leaves too little room for an answer (the turn ends failed, `context`). */
+export function contextText(tokens: number): string {
+  const n = String(Math.round(tokens)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `The local model's context (${n} tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation.`;
 }
 
 /** An overload's resend that no longer fits the money left: the turn ends capped. */
@@ -400,6 +410,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     const offered = new Map(tools.map((x) => [x.name, x] as const));
     const req = buildRequest(conv, tools, t.settings);
 
+    // A local server's word on the model's context (cached 60 s): the turn knows it from now on.
+    const row = adapter.modelRow ? await adapter.modelRow(model, t.signal) : null;
+    if (stoppedNow(t)) return;
+    const contextTokens = row?.context ?? t.contextTokens ?? conv.contextTokens;
+    if (contextTokens) t.contextTokens = conv.contextTokens = contextTokens;
+
     // The spend estimate and the day's reservation (cloud only; a local server costs nothing).
     const fresh = freshOf(conv.messages.slice(counted));
     counted = conv.messages.length;
@@ -420,8 +436,10 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         prev,
         now: d.clock.now(),
         remainingUsd: priced ? remainingUsd : Number.POSITIVE_INFINITY,
+        contextTokens: t.contextTokens,
       });
     let est = estimate(Math.min(turnRoom, dayRoom));
+    if (est.noRoom && t.contextTokens) return t.end('failed', 'context', contextText(t.contextTokens));
     if (priced && est.capped) {
       const reason: CapReason = turnRoom <= dayRoom ? 'turn_usd' : 'day_usd';
       return t.end('capped', reason, capText(reason, caps));

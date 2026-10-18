@@ -20,7 +20,7 @@ const h = await import('./assistant-harness.js');
 const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates, checkInvariants, hostTool, until, tick } = h;
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
-const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText } = await import('../assistant/loop.ts');
+const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText, contextText } = await import('../assistant/loop.ts');
 const { TURN_LIMITS, TAB_HIDDEN_TEXT, createTurnManager } = await import('../assistant/turns.ts');
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
@@ -750,6 +750,113 @@ describe('the spend caps', () => {
     assert.equal(r.status, 400);
     assert.equal(r.body.code, 'cap_day');
     assert.equal(r.body.error, "Today's $1.00 limit is reached; it resets at midnight.");
+    assert.equal(m.provider.requests.length, 0);
+  });
+});
+
+describe("a local server's context (CAD tools spec H5)", () => {
+  /** A local server whose adapter answers its model row with `row` (or `row(signal)`), recording each read. */
+  const localMk = (row, o = {}) => {
+    const m = mk({ provider: 'openai_compatible', ...o });
+    m.provider.rows = [];
+    m.provider.modelRow = async (model, signal) => {
+      m.provider.rows.push(model);
+      return typeof row === 'function' ? row(signal) : row;
+    };
+    return m;
+  };
+  /** The estimate's prompt tokens for `chars` characters and `tools` tool definitions (prices.ts). */
+  const promptOf = (chars, tools = 0) => Math.ceil((1.2 * chars) / 3) + 500 * tools;
+  const textChars = (parts) => parts.reduce((n, p) => n + (p.type === 'text' || p.type === 'tool_result' ? p.text.length : 0), 0);
+  const look = () => hostTool('look', { run: async () => ({ ok: true, data: { seen: true }, summary: 'looked' }) });
+
+  it('a context too small for the prompt: the turn ends failed (context) with its number, before any request; the turn and the conversation keep it', async () => {
+    const m = localMk({ context: 3072, type: 'llm' });
+    const r = await startTurn(m, 'Build a bracket.');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', contextText(3072)]);
+    assert.equal(
+      contextText(3072),
+      "The local model's context (3,072 tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation.",
+    );
+    assert.equal(m.provider.requests.length, 0, 'nothing sent');
+    assert.deepEqual(m.provider.rows, ['local-model']);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [3072, 3072]);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("each request's output limit is min(8192, context - the prompt estimate - 1024); a later step the prompt outgrew ends failed (context) with every call answered", async () => {
+    const context = 9000;
+    const m = localMk({ context, type: 'llm' }, { hostTools: [look()] });
+    m.provider.script({ tools: [{ name: 'look' }], usage: { input: 5000, output: 30 } }, { tools: [{ name: 'look' }], usage: { input: 6400, output: 30 } }, { text: 'never' });
+    const r = await startTurn(m, 'Look twice.');
+    await settled(r.turn);
+    const [first, second] = m.provider.requests.map((x) => x.req);
+    // Step 1: the system text, the prompt and its context block, and one tool definition.
+    const chars1 = first.system.reduce((n, b) => n + b.text.length, 0) + textChars(first.messages[0].parts);
+    assert.equal(first.maxOutputTokens, Math.min(8192, context - promptOf(chars1, 1) - 1024));
+    assert.ok(first.maxOutputTokens < 8192 && first.maxOutputTokens >= 2048, String(first.maxOutputTokens));
+    // Step 2: the first request's prompt (its usage) and what this one adds.
+    const conv = r.turn.conv.messages;
+    const chars2 = JSON.stringify(conv[1].raw.payload).length + textChars(conv[2].parts);
+    assert.equal(second.maxOutputTokens, Math.min(8192, context - (5000 + promptOf(chars2)) - 1024));
+    // Step 3 would start from 6400 tokens: under 2048 left, so it is never sent.
+    assert.equal(m.provider.requests.length, 2);
+    assert.equal(m.provider.steps.length, 1, 'the third answer is never asked for');
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', contextText(context)]);
+    assert.deepEqual(codes(lastResults(r.turn.conv)), ['ok'], "the second call ran and is answered");
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+    m.provider.steps.length = 0;
+  });
+
+  it("the conversation is full at 80% of the local model's context; with no row at all, 8192 out and 80% of 128K", async () => {
+    const m = localMk({ context: 10_000, type: 'llm' });
+    m.provider.script({ text: 'one', usage: { input: 7999 } }, { text: 'two', usage: { input: 8000 } });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    const conversation = r.body.conversation;
+    r = await startTurn(m, { text: 'y', conversation });
+    assert.equal(r.status, 202, 'under 80% of 10,000');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    r = await startTurn(m, { text: 'z', conversation });
+    assert.deepEqual([r.status, r.body.code], [409, 'conversation_full']);
+
+    const plain = mk({ provider: 'openai_compatible' });
+    plain.provider.script({ text: 'one', usage: { input: 100_000 } }, { text: 'two' });
+    r = await startTurn(plain, 'x');
+    await settled(r.turn);
+    assert.equal(plain.provider.requests[0].req.maxOutputTokens, 8192);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [null, null]);
+    r = await startTurn(plain, { text: 'y', conversation: r.body.conversation });
+    assert.equal(r.status, 202, '100,000 is under 80% of 128K');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+  });
+
+  it('a row read again each step (the adapter keeps it 60 s); a row without a context keeps what the conversation knew', async () => {
+    const rows = [{ context: 30_000, type: 'llm' }, { context: null, type: 'llm' }, null];
+    const m = localMk(() => rows.shift() ?? null, { hostTools: [look()] });
+    m.provider.script({ tools: [{ name: 'look' }] }, { text: 'done' });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(m.provider.rows, ['local-model', 'local-model']);
+    assert.equal(r.turn.contextTokens, 30_000, 'a row that names no context keeps the one known');
+    m.provider.script({ text: 'again' });
+    r = await startTurn(m, { text: 'y', conversation: r.body.conversation });
+    await settled(r.turn);
+    assert.equal(r.turn.contextTokens, 30_000, "the conversation's, when the server gives no row");
+  });
+
+  it('Stop while the row is read: the turn ends stopped and nothing is sent', async () => {
+    const m = localMk((signal) => new Promise((resolve) => signal.addEventListener('abort', () => resolve(null), { once: true })));
+    const r = await startTurn(m, 'x');
+    await until(() => m.provider.rows.length === 1, 5000, 'the row read');
+    const stopped = await m.manager.stop(r.turn.id);
+    assert.equal(stopped.status, 200);
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'stopped');
     assert.equal(m.provider.requests.length, 0);
   });
 });

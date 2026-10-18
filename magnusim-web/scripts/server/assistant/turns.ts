@@ -164,6 +164,8 @@ export class Turn implements LoopTurn {
   usd = 0;
   estimated = false;
   servedBy: string | null = null;
+  /** The local server's context for this turn's model, once its model row said (tokens; null until then, and for cloud models). */
+  contextTokens: number | null = null;
   endedAt: number | null = null;
   endReason: string | null = null;
   message: string | null = null;

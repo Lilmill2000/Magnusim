@@ -219,7 +219,15 @@ No test reaches a real model provider or this PC's real Assistant files.
     an error; add `'x-should-retry': 'false'` to stop the client's own retries.
   - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
     the next list wait until `fake.release(name)` (a server that never answers).
-  - `fake.requests()` lists every request with its headers and body;
+  - An entry of `fake.models(list, 'compat')` may be a model row,
+    `{id, context, max, type, server}`: the local server then answers the app's read of
+    that model's context and type (`GET <root>/api/v0/models/<id>`, or with
+    `server: 'ollama'` `POST <root>/api/show`) in the shapes of `LOCAL_SERVER_ROWS`,
+    which the file exports with where each shape came from. The app keeps a row 60 s;
+    a test reset forgets it. `e2e/assistant-local-context.spec.js` runs turns from the
+    terminal client against a small and a larger context.
+  - `fake.requests()` lists every request with its headers and body (`kind` is `chat`
+    for a model request, `model_row` for a row read);
     `fake.disconnects()` counts answers the client closed early.
   - Like the real services, it answers 400 when a request breaks a rule: a tool call
     left without its result, an echoed opaque part (thinking, fallback, encrypted

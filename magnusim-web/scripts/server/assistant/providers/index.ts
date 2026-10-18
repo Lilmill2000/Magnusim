@@ -58,6 +58,8 @@ export interface CreateOptions {
   /** Tests: shorter watchdog waits. */
   watchdog?: WatchdogOptions;
   env?: NodeJS.ProcessEnv;
+  /** Tests: the clock the local server's model rows are kept by. */
+  now?: () => number;
 }
 
 /**
@@ -103,6 +105,7 @@ export function createAdapter(settings: ProviderSettings, secrets: KeyLender, o:
     borrowKey: lend('openai_compatible', true),
     cloud: isCloud(settings),
     destination: destinationOf(settings),
+    ...(o.now ? { now: o.now } : {}),
   });
 }
 

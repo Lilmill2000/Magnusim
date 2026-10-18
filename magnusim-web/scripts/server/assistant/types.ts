@@ -55,10 +55,18 @@ export class ProviderError extends Error {
   }
 }
 export interface ModelInfo { id: string; label: string; priced: boolean }
+/**
+ * What a local server says of one model, best effort (its model row): `context` in tokens
+ * (what it was loaded with, else its maximum) and `type` ('llm', 'vlm', 'embeddings'); null
+ * where the row doesn't say.
+ */
+export interface ModelRow { context: number | null; type: string | null }
 export interface ProviderAdapter {
   readonly id: ProviderId; readonly label: string; readonly cloud: boolean; readonly destination: string;
   /** Models this request may be served by besides `model` (refusal fallback); [] when none. */
   fallbackTargets(model: string): string[];
   listModels(signal: AbortSignal): Promise<ModelInfo[]>;
   send(req: ProviderRequest, signal: AbortSignal, onEvent: (e: StreamEvent) => void): Promise<ProviderResult>;
+  /** The local server's row for `model` (null when it offers none); only the local-server adapter has one. Never throws. */
+  modelRow?(model: string, signal: AbortSignal): Promise<ModelRow | null>;
 }

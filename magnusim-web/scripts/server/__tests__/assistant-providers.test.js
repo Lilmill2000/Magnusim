@@ -21,7 +21,7 @@ process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const { startFakeLlm } = await import('../../../e2e/support/fake-llm.mjs');
+const { startFakeLlm, LOCAL_SERVER_ROWS } = await import('../../../e2e/support/fake-llm.mjs');
 const fake = await startFakeLlm();
 // Read once, at the first cloud request: both cloud adapters talk to the fake.
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
@@ -36,6 +36,7 @@ const { CLOUD_WATCHDOG, LOCAL_WATCHDOG } = await import('../assistant/providers/
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
+const { lmStudioRow, ollamaRow, serverRoot, MODEL_ROW_TTL_MS } = await import('../assistant/providers/openai-compatible.ts');
 const prices = await import('../assistant/prices.ts');
 const { ProviderError } = await import('../assistant/types.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -1039,6 +1040,123 @@ describe('model lists', () => {
   });
 });
 
+describe("a local server's model row (CAD tools spec H5)", () => {
+  const sig = () => new AbortController().signal;
+  const rowReads = () => fake.requests().filter((r) => r.kind === 'model_row');
+
+  it("the recorded rows give the context and the type: LM Studio's loaded context, else its maximum; Ollama's num_ctx, else the model's own length", () => {
+    assert.deepEqual(lmStudioRow(LOCAL_SERVER_ROWS.lmstudio), { context: 32768, type: 'vlm' }, 'the docs: not loaded, its maximum');
+    assert.deepEqual(lmStudioRow(LOCAL_SERVER_ROWS.lmstudioLoaded), { context: 4096, type: 'llm' }, 'loaded with less than its maximum');
+    assert.deepEqual(ollamaRow(LOCAL_SERVER_ROWS.ollama), { context: 32768, type: 'llm' }, 'recorded: no num_ctx, the model length');
+    const tuned = { ...LOCAL_SERVER_ROWS.ollama, parameters: 'stop                           "<|im_end|>"\nnum_ctx                        8192', capabilities: ['completion', 'tools', 'vision'] };
+    assert.deepEqual(ollamaRow(tuned), { context: 8192, type: 'vlm' });
+    for (const j of [null, [], 'text', {}, { error: "model 'x' not found" }, { max_context_length: 12 }, { max_context_length: '32768' }, { type: 'not a type!' }]) {
+      assert.equal(lmStudioRow(j), null, JSON.stringify(j));
+    }
+    for (const j of [null, {}, { error: 'not found' }, { model_info: { 'general.architecture': 'qwen2' } }, { model_info: { 'qwen2.context_length': 4096 } }]) {
+      assert.equal(ollamaRow(j), null, JSON.stringify(j));
+    }
+    assert.deepEqual(
+      ['http://127.0.0.1:1234/v1', 'http://127.0.0.1:1234/v1/', 'http://127.0.0.1:11434', 'http://127.0.0.1:9/compat/v1'].map(serverRoot),
+      ['http://127.0.0.1:1234', 'http://127.0.0.1:1234', 'http://127.0.0.1:11434', 'http://127.0.0.1:9/compat'],
+    );
+  });
+
+  it("the adapter asks the server: LM Studio's route first, then Ollama's; an id with / and : in the path; the server token only; a server with neither gives null", async () => {
+    fake.models([{ id: 'lab/qwen3:8b', context: 16384, type: 'vlm' }, { id: 'ol-model', max: 40960, server: 'ollama' }, 'plain-model'], 'compat');
+    try {
+      const from = fake.requests().length;
+      const a = adapterFor('openai_compatible');
+      assert.deepEqual(await a.modelRow('lab/qwen3:8b', sig()), { context: 16384, type: 'vlm' });
+      assert.deepEqual(await a.modelRow('ol-model', sig()), { context: 40960, type: 'llm' });
+      assert.equal(await a.modelRow('plain-model', sig()), null);
+      const seen = fake.requests().slice(from);
+      assert.deepEqual(
+        seen.map((r) => [r.kind, r.method, r.path, r.body]),
+        [
+          ['model_row', 'GET', '/compat/api/v0/models/lab/qwen3:8b', null],
+          ['model_row', 'GET', '/compat/api/v0/models/ol-model', null],
+          ['model_row', 'POST', '/compat/api/show', { model: 'ol-model' }],
+          ['model_row', 'GET', '/compat/api/v0/models/plain-model', null],
+          ['model_row', 'POST', '/compat/api/show', { model: 'plain-model' }],
+        ],
+      );
+      for (const r of seen) assert.equal(r.headers.authorization, 'Bearer local');
+      for (const provider of ['anthropic', 'openai']) assert.equal(adapterFor(provider).modelRow, undefined, provider);
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it('a row (or its absence) is kept 60 s per base URL and model, for every adapter on that server; a test reset forgets it', async () => {
+    let now = 5_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'kept-model', context: 8192 }], 'compat');
+    try {
+      const a = adapterFor('openai_compatible', clock);
+      let n = rowReads().length;
+      assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 8192, type: 'llm' });
+      assert.equal(rowReads().length, n + 1);
+      fake.models([{ id: 'kept-model', context: 65536 }], 'compat');
+      now += MODEL_ROW_TTL_MS - 1;
+      // Each turn makes its own adapter: the next one still uses the kept row.
+      assert.deepEqual(await adapterFor('openai_compatible', clock).modelRow('kept-model', sig()), { context: 8192, type: 'llm' });
+      assert.equal(rowReads().length, n + 1, 'kept');
+      assert.equal(await a.modelRow('missing-model', sig()), null);
+      n = rowReads().length;
+      assert.equal(await a.modelRow('missing-model', sig()), null);
+      assert.equal(rowReads().length, n, 'a server without a row is not asked again either');
+      now += 1;
+      assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 65536, type: 'llm' }, 'read again after 60 s');
+      fake.models([{ id: 'kept-model', context: 4096 }], 'compat');
+      resetAssistantState();
+      assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 4096, type: 'llm' }, 'a reset forgets');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it('no row from a page, a body over 1 MB or a server that never answers (within the row wait); a Stop mid-read gives null at once and keeps nothing', async () => {
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      hits += 1;
+      if (req.url.startsWith('/page/')) {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<!doctype html><title>Server</title>');
+      } else if (req.url.startsWith('/big/')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'llm', max_context_length: 32768, pad: 'x'.repeat(1_100_000) }));
+      }
+      // Anything else is never answered.
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const root = `http://127.0.0.1:${server.address().port}`;
+    const quick = { watchdog: { firstByteMs: 300, idleMs: 300 } };
+    try {
+      assert.equal(await adapterFor('openai_compatible', { base_url: `${root}/page/v1` }).modelRow('m', sig()), null);
+      assert.equal(hits, 2, 'both routes asked');
+      assert.equal(await adapterFor('openai_compatible', { base_url: `${root}/big/v1` }).modelRow('m', sig()), null);
+      let t0 = Date.now();
+      assert.equal(await within(adapterFor('openai_compatible', { base_url: `${root}/v1`, ...quick }).modelRow('quiet', sig()), 8000, 'the row wait'), null);
+      assert.ok(Date.now() - t0 < 8000);
+      const ctl = new AbortController();
+      const n = hits;
+      const reading = adapterFor('openai_compatible', { base_url: `${root}/v1` }).modelRow('stopped', ctl.signal);
+      await until(() => hits > n, 5000, 'the row request');
+      t0 = Date.now();
+      ctl.abort();
+      assert.equal(await within(reading, 4000, 'Stop mid-read'), null);
+      assert.ok(Date.now() - t0 < 4000, 'at once, not after the 5 s row wait');
+      const m = hits;
+      assert.equal(await adapterFor('openai_compatible', { base_url: `${root}/v1`, ...quick }).modelRow('stopped', sig()), null);
+      assert.ok(hits > m, 'the stopped read was not kept: the server is asked again');
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((r) => server.close(r));
+    }
+  });
+});
+
 describe('prices (as of 2026-10-16) and the spend estimate', () => {
   // [model, input, 5 m write, 1 h write, cache read, output, long: [above, input, 5 m, 1 h, read, output] | null, picker]
   const TABLE = [
@@ -1122,7 +1240,34 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     const tight = prices.estimateStep({ ...base, model: 'claude-opus-5-5', remainingUsd: 0.04 });
     assert.equal(tight.capped, true);
     const local = prices.estimateStep({ ...base, provider: 'openai_compatible', cloud: false, remainingUsd: 0 });
-    assert.deepEqual([local.usd, local.maxOut, local.capped], [0, 4096, false]);
+    assert.deepEqual([local.usd, local.maxOut, local.capped, local.noRoom], [0, 8192, false, false]);
+  });
+
+  it("estimateStep: a local server answers up to 8192 tokens, within the room its reported context leaves (CAD tools spec H5)", () => {
+    const local = { ...base, provider: 'openai_compatible', cloud: false, remainingUsd: Number.POSITIVE_INFINITY, firstStep: true, toolCount: 21, newChars: 30_000 };
+    const prompt = Math.ceil((1.2 * 30_000) / 3) + 21 * 500;
+    assert.deepEqual([prices.MAX_OUT_LOCAL, prices.MIN_OUT, prices.CONTEXT_MARGIN], [8192, 2048, 1024]);
+    let e = prices.estimateStep(local);
+    assert.deepEqual([e.maxOut, e.noRoom, e.capped, e.usd, e.promptTokens], [8192, false, false, 0, prompt], 'no context known: the cap');
+    e = prices.estimateStep({ ...local, contextTokens: 65_536 });
+    assert.deepEqual([e.maxOut, e.noRoom], [8192, false]);
+    e = prices.estimateStep({ ...local, contextTokens: 28_000 });
+    assert.deepEqual([e.maxOut, e.noRoom], [28_000 - prompt - 1024, false]);
+    e = prices.estimateStep({ ...local, contextTokens: prompt + 1024 + 2048 });
+    assert.deepEqual([e.maxOut, e.noRoom], [2048, false], 'MIN_OUT left is enough');
+    e = prices.estimateStep({ ...local, contextTokens: prompt + 1024 + 2047 });
+    assert.deepEqual([e.maxOut, e.noRoom, e.capped], [2047, true, false]);
+    e = prices.estimateStep({ ...local, contextTokens: 16_384 });
+    assert.deepEqual([e.maxOut, e.noRoom], [0, true], 'a 16K context under a 22.5K prompt');
+    // A later step: the previous request's prompt plus what this one adds.
+    e = prices.estimateStep({ ...local, firstStep: false, newChars: 3000, prev: { promptTokens: 20_000, startedAt: base.now, cacheUsed: false }, contextTokens: 28_000 });
+    assert.equal(e.maxOut, 28_000 - (20_000 + 1200) - 1024);
+    // A local server elsewhere (project data leaves this PC) keeps the larger cap, in its room.
+    assert.equal(prices.estimateStep({ ...local, cloud: true, contextTokens: 200_000 }).maxOut, 32_000);
+    assert.equal(prices.estimateStep({ ...local, cloud: true, contextTokens: 40_000 }).maxOut, 40_000 - prompt - 1024);
+    // A cloud provider's context is not the local rule's.
+    e = prices.estimateStep({ ...base, contextTokens: 1000 });
+    assert.deepEqual([e.maxOut, e.noRoom], [32_000, false]);
   });
 
   it('estimateStep: a fallback-capable request is priced at the dearest of its rows; an unknown model at the provider’s dearest', () => {

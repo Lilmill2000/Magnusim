@@ -7,6 +7,14 @@
 //   POST /anthropic/v1/messages        GET /anthropic/v1/models   (the Messages dialect)
 //   POST /openai/v1/responses          GET /openai/v1/models      (the Responses dialect)
 //   POST /compat/v1/chat/completions   GET /compat/v1/models      (the local-server dialect)
+//   GET /compat/api/v0/models/<id>     POST /compat/api/show      (a local server's model row)
+//
+// The model rows (CAD tools spec H5) are served for models(list) entries that are rows,
+// `{id, context?, max?, type?, server?: 'lmstudio' | 'ollama'}`, in the shapes of
+// LOCAL_SERVER_ROWS: an LM Studio row (`context` loaded, `max` its maximum, `type` llm |
+// vlm | embeddings) at the first route, an Ollama one (`context` as num_ctx, `max` as the
+// model's context length, vision for vlm) at the second; anything else is 404. They take
+// no failNext and no hold, and the log calls them `kind: 'model_row'`.
 //
 // Each chat request takes the next scripted step (reply()) and streams it in that
 // dialect's server-sent events. A step:
@@ -62,6 +70,91 @@ const DEFAULT_MODELS = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * What local servers answer about one model, the shapes the fake serves its rows in.
+ * - `lmstudio`, `lmstudioLoaded`: LM Studio's `GET /api/v0/models/<id>`. The fields and the
+ *   first row are its REST API v0 docs' (lmstudio.ai/docs/developer/rest/endpoints, read
+ *   2026-10-17), whose example model is not loaded. `loaded_context_length` is not in those
+ *   docs: the second row is a loaded model's as an LM Studio 0.3.17 user reported it. Both
+ *   come from documents, not from a live server: still to be checked against one.
+ * - `ollama`: Ollama's `POST /api/show {"model": "qwen2.5:7b"}`, recorded from Ollama 0.34.4
+ *   on 2026-10-17, cut to the fields around the ones read (license, modelfile, template,
+ *   system and most of model_info left out). That model sets no num_ctx, so there is no
+ *   `parameters`.
+ */
+export const LOCAL_SERVER_ROWS = Object.freeze({
+  lmstudio: {
+    id: 'qwen2-vl-7b-instruct',
+    object: 'model',
+    type: 'vlm',
+    publisher: 'mlx-community',
+    arch: 'qwen2_vl',
+    compatibility_type: 'mlx',
+    quantization: '4bit',
+    state: 'not-loaded',
+    max_context_length: 32768,
+  },
+  lmstudioLoaded: {
+    id: 'devstral-small-2505-mlx',
+    object: 'model',
+    type: 'llm',
+    publisher: 'lmstudio-community',
+    arch: 'mistral',
+    compatibility_type: 'mlx',
+    quantization: '6bit',
+    state: 'loading',
+    max_context_length: 131072,
+    loaded_context_length: 4096,
+  },
+  ollama: {
+    details: { parent_model: '', format: 'gguf', family: 'qwen2', families: ['qwen2'], parameter_size: '7.6B', quantization_level: 'Q4_K_M' },
+    model_info: {
+      'general.architecture': 'qwen2',
+      'general.basename': 'Qwen2.5',
+      'general.finetune': 'Instruct',
+      'general.parameter_count': 7615616512,
+      'general.size_label': '7B',
+      'general.type': 'model',
+      'qwen2.attention.head_count': 28,
+      'qwen2.block_count': 28,
+      'qwen2.context_length': 32768,
+      'qwen2.embedding_length': 3584,
+    },
+    capabilities: ['completion', 'tools'],
+    modified_at: '2026-08-27T20:34:33.7397493-05:00',
+  },
+});
+
+/** A models(list) row as LM Studio's model route answers it. */
+function lmStudioRowOf(r) {
+  const max = r.max ?? r.context;
+  return {
+    id: r.id,
+    object: 'model',
+    type: r.type ?? 'llm',
+    publisher: 'fake',
+    arch: 'fake',
+    compatibility_type: 'gguf',
+    quantization: 'Q4_K_M',
+    state: r.context ? 'loaded' : 'not-loaded',
+    ...(max ? { max_context_length: max } : {}),
+    ...(r.context ? { loaded_context_length: r.context } : {}),
+  };
+}
+
+/** A models(list) row as Ollama's show route answers it. */
+function ollamaShowOf(r) {
+  const rec = structuredClone(LOCAL_SERVER_ROWS.ollama);
+  const max = r.max ?? r.context;
+  delete rec.model_info['qwen2.context_length'];
+  return {
+    ...rec,
+    ...(r.context ? { parameters: `num_ctx                        ${r.context}\nstop                           "<|im_end|>"` } : {}),
+    model_info: { ...rec.model_info, ...(max ? { 'qwen2.context_length': max } : {}) },
+    capabilities: r.type === 'vlm' ? ['completion', 'tools', 'vision'] : r.type === 'embeddings' ? ['embedding'] : ['completion', 'tools'],
+  };
+}
 
 /** JSON with sorted keys: two blocks are "the same" when these match. */
 function canonical(v) {
@@ -139,6 +232,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   const holds = new Map();
   const modelHolds = [];
   const modelLists = { anthropic: [...DEFAULT_MODELS.anthropic], openai: [...DEFAULT_MODELS.openai], compat: [...DEFAULT_MODELS.compat] };
+  /** The local server's model rows, by id (models() entries that are rows). */
+  const modelRows = new Map();
   const emitted = { thinking: new Map(), fallback: new Set(), reasoning: new Map() };
   let disconnects = 0;
   let n = 0;
@@ -573,6 +668,19 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     };
     try {
       entry.body = await readBody(req);
+      const lmRoute = url.pathname.startsWith('/compat/api/v0/models/');
+      if ((lmRoute && req.method === 'GET') || (url.pathname === '/compat/api/show' && req.method === 'POST')) {
+        entry.kind = 'model_row';
+        let id = '';
+        try {
+          id = lmRoute ? decodeURIComponent(url.pathname.slice('/compat/api/v0/models/'.length)) : String(entry.body?.model ?? '');
+        } catch {
+          /* not an id */
+        }
+        const row = modelRows.get(id);
+        if (!row || (row.server ?? 'lmstudio') !== (lmRoute ? 'lmstudio' : 'ollama')) return json(404, { error: `model '${id}' not found` });
+        return json(200, lmRoute ? lmStudioRowOf(row) : ollamaShowOf(row));
+      }
       if (req.method === 'GET' && /\/v1\/models$/.test(url.pathname) && dialect) {
         if (dialect === 'anthropic' && !req.headers['x-api-key']) throw new Refusal('x-api-key header is required', 401, 'authentication_error');
         const held = modelHolds.findIndex((m) => !m.dialect || m.dialect === dialect);
@@ -660,9 +768,18 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     reply(...steps) {
       queue.push(...steps);
     },
-    /** The model ids the models routes list (every dialect, or one: 'anthropic' | 'openai' | 'compat'). */
+    /**
+     * The model ids the models routes list (every dialect, or one: 'anthropic' | 'openai' |
+     * 'compat'). An entry may be a row, `{id, context?, max?, type?, server?}`: the local
+     * server's model routes answer for it (see the top), and a later list replaces the rows.
+     */
     models(list, dialect) {
-      for (const d of dialect ? [dialect] : Object.keys(modelLists)) modelLists[d] = [...list];
+      const ids = list.map((m) => (m && typeof m === 'object' ? m.id : m));
+      for (const d of dialect ? [dialect] : Object.keys(modelLists)) modelLists[d] = [...ids];
+      if (!dialect || dialect === 'compat') {
+        modelRows.clear();
+        for (const m of list) if (m && typeof m === 'object') modelRows.set(m.id, { ...m });
+      }
     },
     /** The next model list (of a dialect, or any) waits until release(name), or until the client closes. */
     holdModels(name, dialect) {
@@ -678,7 +795,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       h.released = true;
       for (const w of h.waiters.splice(0)) w();
     },
-    /** Every request so far: {dialect, kind?, method, path, headers, body, step?, refused?, at}. */
+    /** Every request so far: {dialect, kind? ('chat' | 'model_row'), method, path, headers, body, step?, refused?, at}. */
     requests() {
       return log.map((e) => ({ ...e }));
     },

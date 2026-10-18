@@ -15,12 +15,18 @@
  * - Tool results go back as `tool` messages; images from them follow in one user message
  *   as data: URLs (a tool message holds text only).
  * - It costs nothing.
+ * - The model's row, best effort (modelRow): LM Studio's `GET <root>/api/v0/models/<id>`
+ *   (`<root>` is the base URL without `/v1`), else Ollama's `POST <root>/api/show {model}`.
+ *   It gives the context the model was loaded with (else its maximum) and its type; kept
+ *   60 s per base URL and model, a miss too (a test reset or a server start forgets it).
  */
+import { assistantState } from '../state.ts';
 import { emitSchema } from '../schema.ts';
 import {
   ProviderError,
   type AssistantPart,
   type ModelInfo,
+  type ModelRow,
   type ProviderAdapter,
   type ProviderRequest,
   type ProviderResult,
@@ -198,8 +204,86 @@ class ChunkAccumulator {
   }
 }
 
-export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; destination: string }): ProviderAdapter {
+// ---------------------------------------------------------------- the model's row
+
+/** How long a model row (or a server's lack of one) is kept, per base URL and model. */
+export const MODEL_ROW_TTL_MS = 60_000;
+/** The longest a row read may take (the adapter's first-byte wait when that is shorter). */
+export const MODEL_ROW_TIMEOUT_MS = 5_000;
+const MODEL_ROW_MAX_BYTES = 1024 * 1024;
+
+const isObj = (v: unknown): v is Json => !!v && typeof v === 'object' && !Array.isArray(v);
+/** A context length worth believing, in tokens. */
+const contextOf = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 256 && v <= 100_000_000 ? v : null);
+
+/** The server's root: the base URL without its `/v1` (`http://127.0.0.1:1234/v1` → `http://127.0.0.1:1234`). */
+export function serverRoot(baseURL: string): string {
+  return String(baseURL).replace(/\/+$/, '').replace(/\/v1$/i, '');
+}
+
+/** An LM Studio-style row (`GET <root>/api/v0/models/<id>`): `loaded_context_length`, else `max_context_length`, and `type`. */
+export function lmStudioRow(j: unknown): ModelRow | null {
+  if (!isObj(j)) return null;
+  const context = contextOf(j.loaded_context_length) ?? contextOf(j.max_context_length);
+  const type = typeof j.type === 'string' && /^[a-z0-9_-]{1,32}$/i.test(j.type) ? j.type.toLowerCase() : null;
+  return context === null && type === null ? null : { context, type };
+}
+
+/**
+ * An Ollama-style row (`POST <root>/api/show {model}`): `num_ctx` from its parameters (what
+ * the model runs with), else the model's own `<architecture>.context_length` (its maximum;
+ * the server's default may be smaller); `vlm` when its capabilities list vision.
+ */
+export function ollamaRow(j: unknown): ModelRow | null {
+  if (!isObj(j)) return null;
+  const info = isObj(j.model_info) ? j.model_info : null;
+  const arch = info && typeof info['general.architecture'] === 'string' ? info['general.architecture'] : '';
+  const numCtx = typeof j.parameters === 'string' ? /(?:^|\n)\s*num_ctx\s+(\d+)/.exec(j.parameters)?.[1] : undefined;
+  const context = (numCtx ? contextOf(Number(numCtx)) : null) ?? (info && arch ? contextOf(info[`${arch}.context_length`]) : null);
+  const caps = Array.isArray(j.capabilities) ? j.capabilities.filter((c): c is string => typeof c === 'string') : null;
+  const type = !caps ? null : caps.includes('vision') ? 'vlm' : caps.includes('completion') ? 'llm' : caps.includes('embedding') ? 'embeddings' : null;
+  return context === null && type === null ? null : { context, type };
+}
+
+/** A model id as a URL path (its `/` kept; `:` and `@` are allowed in a path); null for an id no path can carry. */
+function idPath(model: string): string | null {
+  const segments = model.split('/');
+  if (segments.some((s) => !s || s === '.' || s === '..')) return null;
+  return segments.map((s) => encodeURIComponent(s).replace(/%3A/gi, ':').replace(/%40/g, '@')).join('/');
+}
+
+/** A response's JSON, or null (not 2xx, too big, not JSON). */
+async function jsonOf(res: Response): Promise<unknown> {
+  if (!res.ok || !res.body) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > MODEL_ROW_MAX_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    parts.push(value);
+  }
+  try {
+    return JSON.parse(Buffer.concat(parts).toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Rows read, by boot id, base URL and model (a test reset or a server start begins afresh). */
+const ROWS = new Map<string, { at: number; row: ModelRow | null }>();
+
+export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; destination: string; now?: () => number }): ProviderAdapter {
   const env = o.env ?? process.env;
+  const now = o.now ?? Date.now;
   const ctx = (model: string, wd: Watchdog | null, signal: AbortSignal | null, streamed = false) => ({
     provider: 'openai_compatible' as const,
     label: LABEL,
@@ -216,6 +300,24 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
     const key = token || 'local';
     const fetch = guardedFetch({ origin: o.baseURL, allowHeaders: COMPAT_HEADERS, pin: { authorization: `Bearer ${key}` }, watchdog: wd, label: LABEL });
     return new Ctor(openAiClientOptions(key, o.baseURL, fetch, env, 0)) as unknown as Client;
+  }
+
+  /** The row from the server: LM Studio's route first, then Ollama's; null when neither answers with one. */
+  async function readRow(token: string | null, model: string, signal: AbortSignal): Promise<ModelRow | null> {
+    const fetch = guardedFetch({ origin: o.baseURL, allowHeaders: COMPAT_HEADERS, pin: { authorization: `Bearer ${token || 'local'}` }, label: LABEL });
+    const root = serverRoot(o.baseURL);
+    const path = idPath(model);
+    if (path) {
+      const row = lmStudioRow(await jsonOf(await fetch(`${root}/api/v0/models/${path}`, { headers: { accept: 'application/json' }, signal })));
+      if (row) return row;
+    }
+    const show = await fetch(`${root}/api/show`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal,
+    });
+    return ollamaRow(await jsonOf(show));
   }
 
   return {
@@ -270,6 +372,25 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
           wd.done();
         }
       });
+    },
+
+    async modelRow(model, signal) {
+      const t = now();
+      for (const [k, v] of ROWS) if (t - v.at >= MODEL_ROW_TTL_MS || t < v.at) ROWS.delete(k);
+      const key = `${assistantState().bootId}\n${o.baseURL}\n${model}`;
+      const kept = ROWS.get(key);
+      if (kept) return kept.row;
+      const timeoutMs = Math.min(MODEL_ROW_TIMEOUT_MS, o.watchdog?.firstByteMs ?? MODEL_ROW_TIMEOUT_MS);
+      let row: ModelRow | null = null;
+      try {
+        row = await o.borrowKey((token) => readRow(token, model, AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])));
+      } catch {
+        // Unreachable, refused, too slow, a token kept for another address: no row.
+        row = null;
+      }
+      // A turn stopped mid-read learns nothing about the server.
+      if (!signal.aborted) ROWS.set(key, { at: now(), row });
+      return row;
     },
   };
 }
