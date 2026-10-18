@@ -18,7 +18,7 @@
  *   - POSIX: the agent leads its own process group (detached). The group's id, its leader's
  *     start time, the boot and the working folder go in <assistant data>/agents/pids.json until
  *     it ends (a normal exit takes the records with the groups), because nothing kills the
- *     group when Magnusim crashes: the next start signals the groups a crashed Magnusim left
+ *     group when Magnusim crashes: its next agent start signals the groups a crashed Magnusim left
  *     behind, on proof only (sweepAgentGroups): a record of another boot is dropped; a group
  *     whose leader lives must have the recorded start time (spec 4.11); a group whose leader
  *     ended is signalled only on Linux, when a live member works in the agent's own private

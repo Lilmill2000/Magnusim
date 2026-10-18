@@ -277,10 +277,14 @@ with "Don't" focused. The warning beside the switch says what it means: once
 allowed, the agent can run commands, change files and read Magnusim's projects
 on this PC by its own rules, whatever the privacy setting says, and Magnusim's
 questions cover only Magnusim's tools. The switch is kept per agent with a
-fingerprint of the program, script and arguments it was allowed for; when any
-of them changes it counts as off and is asked again. Only the Settings page in
-the Magnusim window can turn it on (the request must carry the app's own
-origin): never a tool, a turn, the settings request or the terminal client.
+fingerprint of the program's path, the resolved script's path and the
+arguments it was allowed for: a new path or new arguments count as off and
+ask again, but an update of the program in place keeps it on. Turning it on
+takes a request carrying the app's own origin, which the Settings page sends
+after its question; a tool, a turn, the settings request, the terminal client
+and an agent whose own tools are off never send one. That keeps out commands
+slipped into an agent's or a model's work, not programs the owner runs: any
+program on this PC can send that origin (see "This PC, not this account").
 Turning it off is always taken, with no question, and ends what the agent
 still runs. A custom agent is added the same way and needs its switch, even to
 connect.
@@ -309,16 +313,17 @@ Windows PowerShell helper, so its whole process tree ends with it, even if
 Magnusim itself is killed; if Windows blocks that helper, stopping is a
 best-effort process-tree kill, and Settings says to check Task Manager. On
 other systems the agent leads its own process group, which is ended as a
-whole; groups a crashed Magnusim left behind are ended at its next start, so
-until then they may outlive it. An agent is also ended when its conversation
+whole; groups a crashed Magnusim left behind are ended the next time it starts
+a coding agent, so until then they may outlive it. An agent is also ended when its conversation
 ends, after 15 minutes idle, when its switch goes off, when it crashes and when
 Magnusim stops; at most two run at once. Each message allows 24 changes, 400
 tool calls and 60 active minutes (Settings → Assistant → Limits).
 
 **This PC, not this account.** The local check proves a request came from this
 PC, not which account sent it. Any program the owner runs, an allowed agent's
-own shell included, can read `mcp.json`, call the Assistant's requests and
-take over a tab's connection to the app. Another account signed in to this PC
+own shell included, can read `mcp.json`, call the Assistant's requests, send
+the page's origin (add a custom agent, turn an allow switch on) and take over a
+tab's connection to the app. Another account signed in to this PC
 (one that isn't an administrator) can't read `mcp.json`, but it can forge the
 page's origin: it can add a custom agent or turn an allow switch on, and with
 effort take over a tab's connection to use an agent that is allowed.
