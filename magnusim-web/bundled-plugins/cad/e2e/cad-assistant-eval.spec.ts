@@ -200,8 +200,20 @@ async function evalCli(args: string[], o: { env?: Record<string, string>; ms?: n
   return { code, out, err, tmp, hostTemps: [...hostTemps] };
 }
 
-/** The records of a run folder (runs.jsonl). */
-const recordsIn = (out: string): RunRecord[] => readFileSync(join(out, 'runs.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+/**
+ * The records of a run folder (runs.jsonl). A run whose tasks all stopped writes none and still
+ * exits 0 (the stop is in <task>-<run>.error.txt): then this fails with those files and the command
+ * line's output, so a run that left no record says why (a bare ENOENT did not).
+ */
+const recordsIn = (out: string, r: { out: string; err: string }): RunRecord[] => {
+  const file = join(out, 'runs.jsonl');
+  if (!existsSync(file)) {
+    const stops = existsSync(out) ? readdirSync(out).filter((n) => n.endsWith('.error.txt')) : [];
+    const why = stops.map((n) => `${n}:\n${readFileSync(join(out, n), 'utf8')}`).join('\n');
+    throw new Error(`the run left no runs.jsonl in ${out}\n${why || '(no task error file)'}\n--- its output\n${r.out}\n--- its errors\n${r.err}`);
+  }
+  return readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+};
 /** Every file under `dir`. */
 const filesUnder = (dir: string): string[] =>
   readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -217,7 +229,7 @@ test('cad:assistant-eval-cli-scripted the command line with --scripted: its own 
   try {
     expect(r.code, `${r.out}\n${r.err}`).toBe(0);
     expect(r.out).toContain('[eval] starting an app server of its own');
-    const [rec, ...more] = recordsIn(out);
+    const [rec, ...more] = recordsIn(out, r);
     expect(more).toEqual([]);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'scripted', label: 'cli', first_shot: { pass: true }, final: { pass: true }, repaired: false, end: [{ state: 'done' }] });
     for (const f of ['events.jsonl', 'calls.json', 'facts.json', 'final.png']) expect(existsSync(join(out, 'spacer-1', f)), f).toBe(true);
@@ -251,7 +263,7 @@ test("cad:assistant-eval-cli-profile --profile: the key named by key_env reaches
   try {
     expect(r.code, `${r.out}\n${r.err}`).toBe(0);
     expect(r.out).toContain('[eval] limits: 150 steps, $8 a turn, 60 minutes, $50 a day');
-    const [rec] = recordsIn(out);
+    const [rec] = recordsIn(out, r);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'profile', label: 'cli-profile', final: { pass: true }, model: { provider, model: local.model } });
     // The model got the key as its bearer token, on every request of the run...
     const asked = host.fake.requests().slice(seen).filter((q) => q.kind === 'chat');
@@ -287,7 +299,7 @@ test("cad:assistant-eval-cli-attach --attach --clean removes only the projects t
     const r1 = await evalCli(['--attach', host.base, '--tasks', 'spacer', '--clean', '--out', out1]);
     temps.push(r1.tmp);
     expect(r1.code, `${r1.out}\n${r1.err}`).toBe(0);
-    const [rec] = recordsIn(out1);
+    const [rec] = recordsIn(out1, r1);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'attach', final: { pass: true } });
     expect(rec.project).not.toBe(mine);
     expect(removedIn(r1.out)).toEqual([{ id: rec.project, status: 200 }]);
