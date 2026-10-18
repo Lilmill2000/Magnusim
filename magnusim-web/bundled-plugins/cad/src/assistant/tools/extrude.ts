@@ -23,7 +23,7 @@ import type { BodyRef, ExtrudeExtentDef, ExtrudeFeature, Feature, FeatureId, Ske
 import type { SketchOutput } from '../../types/sketch';
 import { axisWords } from '../diagnose';
 import { ToolError } from '../errors';
-import { bodyText, createdLabels, editTarget, faceText, nameFor, partOf, pathIn, str, strings } from '../feature-tools';
+import { bodyText, createdLabels, editTarget, faceText, nameFor, partOf, pathIn, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo } from '../features-io';
 import { bodyWords } from '../judge';
 import { len } from '../numbers';
@@ -234,16 +234,17 @@ export const tool: ToolImpl = {
 // ------------------------------------------------------------------ get_model full and edit_feature
 
 /** An Up to target as a selector: a face's label, or a point on the body. */
-function targetText(services: AppServices, t: BodyRef | null): string {
+function targetText(services: AppServices, t: BodyRef | null, at: RefBodies | null): string {
   if (!t) return '';
   const s = services.doc.state.get();
   if (t.ref.signature.kind === 'vertex') return `${bodyText(s, t.body)} vertex at (${[...t.ref.signature.at].map((v) => len(v)).join(', ')})`;
-  return faceText(s, t.body, t.ref);
+  return faceText(s, t.body, t.ref, at);
 }
 
 registerFeatureIo('extrude', {
   tool: 'extrude',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as ExtrudeFeature;
     // A face extruded with no sketch, or one along a chosen direction, has no form in this tool.
     if (g.face || g.direction || !g.profiles.length || g.profiles.length > REGIONS_MAX) return null;
@@ -259,12 +260,12 @@ registerFeatureIo('extrude', {
           ? { extent: 'two', ...base, distance: e.distance, distance2: e.distance2 }
           : e.kind === 'through_all'
             ? { extent: e.both ? 'through_both' : 'through', ...base }
-            : { extent: 'to', ...base, distance: e.offset, to: targetText(services, e.target) };
+            : { extent: 'to', ...base, distance: e.offset, to: targetText(services, e.target, at) };
     return {
       edit: g.name,
       name: '',
       sketch: sketch.name,
-      regions: regionTexts(g.profiles),
+      regions: regionTexts(s, g.profiles),
       ...extent,
       flip: !!g.flip,
       op: g.op,

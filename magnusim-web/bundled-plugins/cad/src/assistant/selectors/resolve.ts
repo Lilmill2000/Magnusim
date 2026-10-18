@@ -35,6 +35,7 @@ import type { AxisOutput, PlaneOutput } from '../../types/references';
 import { heartbeat } from '../busy';
 import { ToolError } from '../errors';
 import { edgeWordsOf, faceWords, LABEL_ROLES, LabelIndex, parsePart, vertexWordsOf, type LabelNames } from '../labels';
+import { describeSketch } from '../sketch/describe';
 import { len, vec } from '../numbers';
 import { regionRows, type RegionRow } from '../sketch/regions';
 import { boxDiagonal, boxDistance, distance, dot, holeOrBoss, unionBox, unit } from './geometry';
@@ -777,8 +778,10 @@ function byRegion(sc: Scene, sel: Extract<Sel, { t: 'region' }>): RegionHit[] {
   const list = () => rows.slice(0, 30).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, holes: r.holes, depth: r.depth }));
   if (!rows.length) {
     if (out.open.length) {
-      throw new ToolError('open_profile', `${f.name} has no closed region: ${out.open.length} open ${out.open.length === 1 ? 'end' : 'ends'} (${out.open.slice(0, 6).map((o) => `${o.entity} at (${o.at.map((v) => len(v)).join(', ')})`).join(', ')}).`, {
-        detail: { open: out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: o.entity })) },
+      // By the model's names (p.3, not the stored p__3), as the sketch tool and get_model give them.
+      const { refOf } = describeSketch(f, sc.state);
+      throw new ToolError('open_profile', `${f.name} has no closed region: ${out.open.length} open ${out.open.length === 1 ? 'end' : 'ends'} (${out.open.slice(0, 6).map((o) => `${refOf(o.entity)} at (${o.at.map((v) => len(v)).join(', ')})`).join(', ')}).`, {
+        detail: { open: out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: refOf(o.entity) })) },
       });
     }
     throw new ToolError('region_not_found', `${f.name} has no closed region.`, { detail: { regions: [] } });

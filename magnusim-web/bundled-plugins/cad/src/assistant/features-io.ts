@@ -9,6 +9,7 @@ import { featureExprFields } from '../doc/features/hooks';
 import { isDimension } from '../sketch/model';
 import type { AppServices } from '../types/app';
 import type { Feature, FeatureType, SketchDimension } from '../types/doc';
+import type { RefBodies } from './feature-tools';
 
 /** One expression field: its name in the tool's input (or its path in the feature), and its text. */
 export interface FeatureValue {
@@ -19,8 +20,14 @@ export interface FeatureValue {
 export interface FeatureIo {
   /** The tool whose input these features are written in ("extrude"). */
   tool: string;
-  /** The feature as that tool's input, `edit` set to its name; null when it cannot be resent (with why in `notes`). */
-  inputsOf(f: Feature, services: AppServices): Record<string, unknown> | null;
+  /**
+   * The feature as that tool's input, `edit` set to its name; null when it cannot be resent (with
+   * why in `notes`). `at`: the bodies just before it, which its stored face and edge references
+   * are written against (feature-tools.ts refBodiesOf; null: the shown bodies).
+   */
+  inputsOf(f: Feature, services: AppServices, at?: RefBodies | null): Record<string, unknown> | null;
+  /** Its inputs name faces, edges or axes of bodies (get_model builds the bodies before it first). */
+  refs?: boolean;
   /** Its expression fields by the tool's field names (edit_feature's `set[].field`). */
   values?(f: Feature, services: AppServices): FeatureValue[];
   /** The path in the feature of one of those field names ("distance" → "extent.distance"), or null. */
@@ -39,9 +46,14 @@ export function featureIoOf(type: FeatureType): FeatureIo | null {
 }
 
 /** The feature as its tool's input, or null (no tool writes this type yet, or it cannot be resent). */
-export function inputsOf(f: Feature, services: AppServices): Record<string, unknown> | null {
+export function inputsOf(f: Feature, services: AppServices, at: RefBodies | null = null): Record<string, unknown> | null {
   const io = IO.get(f.type);
-  return io ? io.inputsOf(f, services) : null;
+  return io ? io.inputsOf(f, services, at) : null;
+}
+
+/** Whether the feature's inputs name faces, edges or axes (written against the bodies just before it). */
+export function inputsNameRefs(f: Feature): boolean {
+  return !!IO.get(f.type)?.refs;
 }
 
 /**

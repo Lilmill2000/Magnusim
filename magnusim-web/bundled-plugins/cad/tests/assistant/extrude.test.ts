@@ -3,8 +3,11 @@
 //   - extrude a sketch the tool drew: a body named and coloured in the same step, its faces as
 //     labels, the extent in words, one undo entry for the request, get_model's by: "assistant";
 //     its inputs come back as this tool's input and, resent with edit, replace it as they were;
-//     edit_feature sets distance; the person's Ctrl+Z while "Ask each step" asks about an extrude
-//     that named and coloured its body (three undo entries of the step's) takes all of it back;
+//     edit_feature sets distance; each region comes back by its point inside it now, so after a
+//     parameter shrank the profile, or moved a hole over the point it was picked at, the resend
+//     still keeps the same regions; the person's Ctrl+Z while "Ask each step" asks about an
+//     extrude that named and coloured its body (three undo entries of the step's) takes all of it
+//     back;
 //   - regions in every form: "all" keeps a plate's hole open (even-odd), "r2", "at(u, v)", another
 //     sketch's region refused; join, cut through given bodies, up to a face and a vertex, two sides,
 //     symmetric, through both ways;
@@ -90,6 +93,69 @@ describe('extrude', () => {
       h.doc.undo();
       expect(names(h)).toEqual([]);
       expect(undoLabel(h)).toBe(before);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "an open polyline's ends are named as the model names its parts (p.2, not the stored p__2)",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await ok(h, 'sketch', SK({ name: 'Open L', entities: [E('p', 'polyline', [0, 0, 40, 0, 40, 20])] }));
+      const open = await fail(h, 'extrude', EXTRUDE({ sketch: 'Open L', distance: '1 mm' }));
+      expect(open).toMatchObject({ detail: { reason: 'open_profile' } });
+      const ends = (open.detail.open as { entity: string }[]).map((o) => o.entity).sort();
+      expect(ends).toEqual(['p.1', 'p.2']);
+      expect(open.message).not.toContain('__');
+      expect(open.message).toMatch(/p\.1 at \(0, 0\)/);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'writes each region by its point inside it now: resent after a parameter shrank the profile or moved a hole over its old point, it keeps the same regions',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      const P = (name: string, expr: string) => ({ name, kind: 'length', expr, comment: '', rename_to: '' });
+      await ok(h, 'set_params', { set: [P('w', '60 mm'), P('hx', '15 mm')], remove: [] });
+      // A w x 40 plate with a 6 mm hole hx from the origin: "all" is the plate with its hole.
+      await ok(
+        h,
+        'sketch',
+        SK({
+          name: 'Plate sketch',
+          entities: [E('r', 'center_rect', [0, 0, 60, 40]), E('c', 'circle', [15, 0, 3])],
+          constraints: [
+            C('o', 'coincident', ['r.center', 'origin']),
+            C('dw', 'distance', ['r.bottom'], 'w'),
+            C('dh', 'distance', ['r.left'], '40 mm'),
+            C('cx', 'distance_x', ['origin', 'c.center'], 'hx'),
+            C('cy', 'distance_y', ['origin', 'c.center'], '0 mm'),
+            C('cd', 'diameter', ['c'], '6 mm'),
+          ],
+        }),
+      );
+      await ok(h, 'extrude', EXTRUDE({ name: 'Plate', sketch: 'Plate sketch', distance: '6 mm' }));
+      const plateWithHole = (w: number) => (w * 40 - PI * 9) * 6;
+      expect(volume(h)).toBeCloseTo(plateWithHole(60), 3);
+      const was = () => {
+        const { id: _i, name: _n, profiles, ...rest } = featureNamed<ExtrudeFeature>(h!, 'Plate');
+        return { ...rest, profiles: profiles.map(({ sample: _s, ...p }) => p) };
+      };
+      const kept = was();
+      // The hole moves to x -16 mm, over the point inside the plate the region was picked at.
+      await ok(h, 'set_params', { set: [P('hx', '-16 mm')], remove: [] });
+      const moved = await fullOf(h, 'Plate');
+      const again = await ok(h, 'extrude', moved.inputs as Row);
+      expect(again.text).toBe('Extrude Plate ok (replaced)');
+      expect(was()).toEqual(kept);
+      expect(volume(h)).toBeCloseTo(plateWithHole(60), 3);
+      // The plate shrinks to 40 mm wide: its old point is outside it now.
+      await ok(h, 'set_params', { set: [P('w', '40 mm'), P('hx', '5 mm')], remove: [] });
+      const shrunk = await fullOf(h, 'Plate');
+      await ok(h, 'extrude', shrunk.inputs as Row);
+      expect(was()).toEqual(kept);
+      expect(volume(h)).toBeCloseTo(plateWithHole(40), 3);
     },
     REAL_KERNEL_MS,
   );

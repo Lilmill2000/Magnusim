@@ -256,7 +256,12 @@ opens, so a refused call changes nothing and no panel opens:
   null` with `unsupported` (projected edges, splines, patterns, fixed points, driven
   dimensions, trimmed pieces) or `too_big` (150 entities, 200 constraints, or the reply's
   room). Resent as it is, the sketch comes back the same. `refOf` names stored ids as the
-  model does (`free`, `open`, `bounded_by`, conflicts).
+  model does (`free`, `open`, `bounded_by`, conflicts; an extrude's `open_profile` too).
+  `supportSelector`: where the sketch lies as a selector (a face by its label on the shown
+  bodies), which `get_model` (brief and one feature) and the sketch tool's reply give as `on`.
+- `sketch/solve.ts` `freeRows`: the solver's free parameters by the model's names (only a
+  point's or an entity's, an arc's `start_angle` and `end_angle`, each once), for the sketch
+  tool's reply and `get_model`'s `solver.free` alike.
 - `sketch/dims.ts`: `edit_feature` set rows naming a sketch's dimension ids: checked headless,
   then one sketch-mode `apply` of the new values (the stored geometry solved again), a value
   edit for the judge.
@@ -312,8 +317,10 @@ The tools:
   across the axis fails with CAD's words.
 
 Both register their `FeatureIo`: `get_model full` writes regions as `at(u, v)` (each kept
-region's inside point), the Up to target as a label (or `<body> vertex at (x, y, z)`), the axis as
-a selector and bodies by name, so the inputs resent with `edit` leave the feature as it was;
+region's inside point now: `region-tools.ts` `regionPointNow` resolves the kept region by its key
+in the sketch's output, so a parameter that shrank or moved it since it was picked is followed),
+the Up to target as a label (or `<body> vertex at (x, y, z)`), the axis as a selector and bodies
+by name, so the inputs resent with `edit` leave the feature as it was;
 `edit_feature` takes `distance`, `distance2`, `angle`, `angle2` (and the feature's own paths).
 
 Tests: `extrude.test.ts`, `diagnose.test.ts` (each miss, and races forced by holding the
@@ -445,7 +452,11 @@ be the tool's kind: `wrong_feature_type` otherwise), as one edit call. What they
   `Fillet 1.fillet(2)`, `Shell 1.inner(Base.side(l1))`, `Row.copy(3)`).
 - `faceText`, `edgeText`, `axisText`, `planeText`, `bodyText`: a stored reference as the
   selector `get_model full` writes in a feature's `inputs` (a label; `<body> face at (x, y, z)`
-  for a face with none, or a split face), so the inputs can be sent back with `edit`.
+  for a face with none, or a split face), so the inputs can be sent back with `edit`. The label
+  is the face's own, with its `~k`, on the bodies just before the feature (`refBodiesOf`, where a
+  resend reads its selectors; a `FeatureIo` with `refs` gets them from `get_model`), so a label
+  that several faces share (every face of a mirror copy, of a pattern copy, the pieces of a
+  trimmed side) names the one face, and a fillet face's number is counted there.
 - `pathIn`: a `FeatureIo.pathOf` that takes the tool's field names (`size`, `count`,
   `spacing`, ...) and the feature's own expression paths (`radius`) for `edit_feature`.
 

@@ -29,7 +29,7 @@ import type { BodyId, CircularPatternFeature, Feature, FeatureId, LinearPatternF
 import type { DocState, PatternOutput } from '../../types/doc-service';
 import type { AxisRef, PlaneRef } from '../../types/references';
 import { ToolError, type Reason } from '../errors';
-import { andList, axisText, bodyText, createdLabels, editTarget, faceText, fillFeature, nameFor, partOf, pathIn, planeText, str, strings } from '../feature-tools';
+import { andList, axisText, bodyText, createdLabels, editTarget, faceText, fillFeature, nameFor, partOf, pathIn, planeText, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo, type FeatureValue } from '../features-io';
 import { bodyWords, type JudgedPlan } from '../judge';
 import { featureByName } from '../model';
@@ -341,7 +341,7 @@ export const tool: ToolImpl = {
 // ------------------------------------------------------------------ get_model full and edit_feature
 
 /** What every kind writes back: of, items, op and bodies (null when there are more items than one call takes). */
-function sourcesOf(services: AppServices, f: PatternCommon & { type: string }): { of: PatternOf; items: string[]; op: PatternOp; bodies: string[] } | null {
+function sourcesOf(services: AppServices, f: PatternCommon & { type: string }, at: RefBodies | null): { of: PatternOf; items: string[]; op: PatternOp; bodies: string[] } | null {
   const s = services.doc.state.get();
   const items =
     f.of === 'features'
@@ -349,7 +349,7 @@ function sourcesOf(services: AppServices, f: PatternCommon & { type: string }): 
       : f.of === 'bodies'
         ? f.bodies.map((id) => bodyText(s, id))
         : f.faceBody
-          ? f.faces.map((r) => faceText(s, f.faceBody as BodyId, r))
+          ? f.faces.map((r) => faceText(s, f.faceBody as BodyId, r, at))
           : [];
   if (items.length > ITEMS_MAX) return null;
   return { of: f.of, items, op: f.of === 'faces' ? 'source' : f.op, bodies: f.op === 'new' || f.op === 'source' ? [] : f.scope.map((id) => bodyText(s, id)) };
@@ -359,9 +359,10 @@ const noSecond = { about2: '', count2: '', spacing2: '', flip2: false };
 
 registerFeatureIo('pattern_linear', {
   tool: 'pattern',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as LinearPatternFeature;
-    const src = sourcesOf(services, g);
+    const src = sourcesOf(services, g, at);
     // A direction by its extent, or two directions symmetric differently, has no field here.
     if (!src || g.dir1.mode !== 'spacing' || (g.dir2 && (g.dir2.mode !== 'spacing' || !!g.dir2.symmetric !== !!g.dir1.symmetric))) return null;
     const s = services.doc.state.get();
@@ -371,12 +372,12 @@ registerFeatureIo('pattern_linear', {
       kind: 'linear',
       of: src.of,
       items: src.items,
-      about: axisText(s, g.dir1.axis),
+      about: axisText(s, g.dir1.axis, at),
       count: g.dir1.count,
       spacing: g.dir1.distance,
       symmetric: !!g.dir1.symmetric,
       flip: !!g.dir1.flip,
-      ...(g.dir2 ? { about2: axisText(s, g.dir2.axis), count2: g.dir2.count, spacing2: g.dir2.distance, flip2: !!g.dir2.flip } : noSecond),
+      ...(g.dir2 ? { about2: axisText(s, g.dir2.axis, at), count2: g.dir2.count, spacing2: g.dir2.distance, flip2: !!g.dir2.flip } : noSecond),
       op: src.op,
       bodies: src.bodies,
     };
@@ -403,12 +404,13 @@ registerFeatureIo('pattern_linear', {
 
 registerFeatureIo('pattern_circular', {
   tool: 'pattern',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as CircularPatternFeature;
-    const src = sourcesOf(services, g);
+    const src = sourcesOf(services, g, at);
     if (!src) return null;
     const s = services.doc.state.get();
-    return { edit: g.name, name: '', kind: 'circular', of: src.of, items: src.items, about: axisText(s, g.axis), count: g.count, spacing: g.mode === 'full' ? '360 deg' : g.angle, symmetric: g.mode === 'angle' && !!g.symmetric, flip: !!g.flip, ...noSecond, op: src.op, bodies: src.bodies };
+    return { edit: g.name, name: '', kind: 'circular', of: src.of, items: src.items, about: axisText(s, g.axis, at), count: g.count, spacing: g.mode === 'full' ? '360 deg' : g.angle, symmetric: g.mode === 'angle' && !!g.symmetric, flip: !!g.flip, ...noSecond, op: src.op, bodies: src.bodies };
   },
   // A full turn has no angle to change: send the pattern again with another spacing.
   values: (f) => {
@@ -420,11 +422,12 @@ registerFeatureIo('pattern_circular', {
 
 registerFeatureIo('mirror', {
   tool: 'pattern',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as MirrorFeature;
-    const src = sourcesOf(services, g);
+    const src = sourcesOf(services, g, at);
     if (!src) return null;
-    return { edit: g.name, name: '', kind: 'mirror', of: src.of, items: src.items, about: planeText(services.doc.state.get(), g.plane), count: '', spacing: '', symmetric: false, flip: false, ...noSecond, op: src.op, bodies: src.bodies };
+    return { edit: g.name, name: '', kind: 'mirror', of: src.of, items: src.items, about: planeText(services.doc.state.get(), g.plane, at), count: '', spacing: '', symmetric: false, flip: false, ...noSecond, op: src.op, bodies: src.bodies };
   },
   values: () => [],
   pathOf: () => null,

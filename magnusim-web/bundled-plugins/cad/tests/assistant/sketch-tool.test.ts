@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { runtimeOf } from '../../src/assistant/runtime';
+import { freeRows } from '../../src/assistant/sketch/solve';
 import { createUnitsService } from '../../src/doc/units';
 import { refOfRegion } from '../../src/features/extrude/profiles';
 import { createPattern } from '../../src/sketch/tools/pattern';
@@ -105,6 +106,59 @@ describe('a new sketch, and its replace', () => {
       expect(partNow(h)).toEqual(before);
       // A new sketch with an empty `on` is refused; with edit, "" keeps where it lies.
       expect((await fail(h, 'sketch', SK({ on: '', entities: [E('c', 'circle', [0, 0, 2])] }))).detail).toMatchObject({ reason: 'bad_input', field: 'on' });
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe('where a sketch lies', () => {
+  it(
+    "a sketch on a face says its face by the label the tools read back (brief, one feature, the sketch's reply), and that label makes the next sketch",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      const made = await ok(h, 'sketch', SK({ name: 'Pads', on: 'Base.end', entities: [E('c', 'circle', [0, 0, 3])] }));
+      expect((made.data.plane as Row).on).toBe('Base.end');
+      const brief = await ok(h, 'get_model', { detail: 'brief', feature: '' });
+      const row = (brief.data.features as Row[]).find((f) => f.name === 'Pads')!;
+      expect(row.on).toBe('Base.end');
+      const one = await ok(h, 'get_model', { detail: 'brief', feature: 'Pads' });
+      expect(((one.data.feature as Row).plane as Row).on).toBe('Base.end');
+      // Copied as it is into the next sketch's on.
+      await ok(h, 'sketch', SK({ name: 'More pads', on: String(row.on), entities: [E('c', 'circle', [10, 0, 3])] }));
+      expect(featureNamed<SketchFeature>(h, 'More pads').support).toMatchObject({ kind: 'face' });
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe('free parameters', () => {
+  it('freeRows keeps a point\'s or an entity\'s, by the model\'s names, each once; a constraint\'s own helpers are left out', () => {
+    const owns = (id: string) => ['k', 'p__1', 'pt'].includes(id);
+    const refOf = (id: string) => (id === 'p__1' ? 'p.1' : id);
+    expect(freeRows(['k.a1', 'k.a0', 'k.r', 'k.r', 'pat.hx', 'pat.hy', 'on.u', 'p__1.x', 'pt.u', 'pt.u', '#3', 'nodot'], owns, refOf)).toEqual([
+      { of: 'k', moves: ['end_angle', 'start_angle', 'r'] },
+      { of: 'p.1', moves: ['x'] },
+      { of: 'pt', moves: ['u'] },
+    ]);
+  });
+
+  it(
+    "get_model names a sketch's freedoms as the sketch tool's reply does: an arc's angles, each once",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      const r = await ok(h, 'sketch', SK({ name: 'Arc sk', entities: [E('k', 'arc', [0, 0, 10, 20, 160])] }));
+      const fromTool = (r.data.solver as { free: { of: string; moves: string[] }[] }).free;
+      const read = await ok(h, 'get_model', { detail: 'brief', feature: 'Arc sk' });
+      const fromModel = ((read.data.feature as Row).solver as { free: { of: string; moves: string[] }[] }).free;
+      const sorted = (rows: { of: string; moves: string[] }[]) => rows.map((x) => ({ of: x.of, moves: [...x.moves].sort() })).sort((a, b) => a.of.localeCompare(b.of));
+      expect(sorted(fromModel)).toEqual(sorted(fromTool));
+      const arc = fromModel.find((x) => x.of === 'k');
+      expect(arc?.moves).toEqual(expect.arrayContaining(['start_angle', 'end_angle']));
+      for (const x of fromModel) {
+        expect(x.moves.some((m) => m === 'a0' || m === 'a1'), x.of).toBe(false);
+        expect(new Set(x.moves).size, x.of).toBe(x.moves.length);
+      }
     },
     REAL_KERNEL_MS,
   );

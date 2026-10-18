@@ -186,7 +186,8 @@ export const tool: ToolImpl = {
 
 registerFeatureIo('revolve', {
   tool: 'revolve',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as RevolveFeature;
     if (!g.axis || !g.profiles.length || g.profiles.length > REGIONS_MAX) return null;
     const s = services.doc.state.get();
@@ -198,8 +199,8 @@ registerFeatureIo('revolve', {
       edit: g.name,
       name: '',
       sketch: sketch.name,
-      regions: regionTexts(g.profiles),
-      axis: axisText(s, g.axis),
+      regions: regionTexts(s, g.profiles),
+      axis: axisText(s, g.axis, at),
       ...extent,
       flip: !!g.flip,
       op: g.op,

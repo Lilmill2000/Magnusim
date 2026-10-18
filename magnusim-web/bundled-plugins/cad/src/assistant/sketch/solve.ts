@@ -91,6 +91,30 @@ const asFeature = (g: SketchGeometry) => g as unknown as SketchFeature;
 const without = (g: SketchGeometry, id: string): SketchGeometry => ({ ...g, constraints: g.constraints.filter((c) => c.id !== id) });
 const overOf = (st: { conflicting: string[]; redundant: string[] }) => [...st.conflicting, ...st.redundant];
 const PARAM_WORDS: Record<string, string> = { a0: 'start_angle', a1: 'end_angle' };
+/** Free rows a reply lists, at most. */
+export const FREE_MAX = 40;
+
+/**
+ * The solver's free parameters ("<owner>.<param>") by the model's names, as the sketch tool and
+ * get_model both give them: only those of a point or an entity (`owns`; a constraint's own helper
+ * parameters, a spline's glue or a pattern's, are left out), an arc's angles as start_angle and
+ * end_angle, each name once.
+ */
+export function freeRows(params: readonly string[], owns: (id: string) => boolean, refOf: (id: string) => string): { of: string; moves: string[] }[] {
+  const free = new Map<string, string[]>();
+  for (const p of params) {
+    const dot = p.lastIndexOf('.');
+    if (dot <= 0 || p.startsWith('#')) continue;
+    const owner = p.slice(0, dot);
+    if (!owns(owner)) continue;
+    const of = refOf(owner);
+    const name = PARAM_WORDS[p.slice(dot + 1)] ?? p.slice(dot + 1);
+    const list = free.get(of) ?? [];
+    if (!list.includes(name)) list.push(name);
+    free.set(of, list);
+  }
+  return [...free.entries()].slice(0, FREE_MAX).map(([of, moves]) => ({ of, moves }));
+}
 
 /** The sketch solver of this Part, ready, or not_ready solver_starting. */
 export async function solverReady(ctx: Pick<CallCtx, 'services' | 'progress'>): Promise<SketchSolverClient> {
@@ -270,25 +294,14 @@ export async function solveSketch(ctx: Pick<CallCtx, 'services' | 'progress' | '
   }
   moved.sort((a, b) => b.d - a.d);
   // Free: the solver's free parameters, by the model's names.
-  const free = new Map<string, string[]>();
   const entityIds = new Set(solved.entities.map((e) => e.id));
-  for (const p of r.analysis.dependentParams ?? []) {
-    const dot = p.lastIndexOf('.');
-    if (dot <= 0 || p.startsWith('#')) continue;
-    const owner = p.slice(0, dot);
-    if (!solved.points[owner] && !entityIds.has(owner)) continue;
-    const of = refOf(owner);
-    const name = PARAM_WORDS[p.slice(dot + 1)] ?? p.slice(dot + 1);
-    const list = free.get(of) ?? [];
-    if (!list.includes(name)) list.push(name);
-    free.set(of, list);
-  }
+  const free = freeRows(r.analysis.dependentParams ?? [], (owner) => !!solved.points[owner] || entityIds.has(owner), refOf);
   return {
     geometry: { points: solved.points, entities: solved.entities, constraints: attempt.constraints },
     values: ev.values,
     state: st.state === 'fully' ? 'fully' : 'under',
     dof: st.dof,
-    free: [...free.entries()].slice(0, 40).map(([of, moves]) => ({ of, moves })),
+    free,
     moved: moved.slice(0, MOVED_MAX).map(({ d: _d, ...m }) => m),
     dropped,
     droppedWhy: Object.fromEntries(dropped.map((id) => [id, droppedWhy[id]])),

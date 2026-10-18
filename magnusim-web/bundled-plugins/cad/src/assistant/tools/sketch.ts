@@ -20,7 +20,7 @@ import type { FeatureId, SketchDimension, SketchFeature, SketchSupport } from '.
 import type { SketchOutput } from '../../types/sketch';
 import { ToolError } from '../errors';
 import { registerFeatureIo } from '../features-io';
-import { featureByName, frameWords, supportWords } from '../model';
+import { featureByName, frameWords, supportText } from '../model';
 import { dir, jsonBytes, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
 import { compileSketch, type Compiled, type ConstraintIn, type EntityIn } from '../sketch/compile';
@@ -140,7 +140,7 @@ const sketchTool: EditTool<Plan> = {
     const { refOf, words } = plan.compiled;
     const solved = plan.solved;
     const plane = out?.type === 'sketch' ? out.plane : (f?.plane ?? null);
-    const on = f ? supportWords(s, f) : plan.support.words;
+    const on = f ? supportText(s, f) : plan.support.words;
     const regions =
       out?.type === 'sketch'
         ? regionRows(out).map((r) => ({

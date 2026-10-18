@@ -17,9 +17,11 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
-import type { BodyId, Feature, FeatureId, RegionRef, SketchFeature } from '../types/doc';
+import { entityParents, resolveRegionRef } from '../features/extrude/profiles';
+import type { BodyId, Feature, FeatureId, RegionRef, SketchFeature, Vec2 } from '../types/doc';
 import type { DocState, EndBody } from '../types/doc-service';
 import type { ShapeId } from '../types/kernel-protocol';
+import type { SketchOutput } from '../types/sketch';
 import { heartbeat } from './busy';
 import { diagnoseMiss, isMiss, type Miss, type SweptFeature } from './diagnose';
 import { HINTS, isToolError, ToolError } from './errors';
@@ -341,9 +343,27 @@ export async function nameNewBody(ctx: EditCtx, id: FeatureId, name: string, col
   }
 }
 
-/** A feature's regions as get_model full writes them: each kept region's inside point, "at(u, v)". */
-export function regionTexts(profiles: readonly RegionRef[]): string[] {
-  return profiles.map((p) => `at(${len(p.sample[0])}, ${len(p.sample[1])})`);
+/**
+ * A kept region's inside point now: the region it resolves to in its sketch's output (by key, as
+ * the feature builds it), so a parameter that moved or shrank it since it was picked is followed;
+ * the stored point only when it resolves to none.
+ */
+export function regionPointNow(s: DocState, r: RegionRef): Vec2 {
+  const sketch = s.doc.features.find((f) => f.id === r.sketch) as SketchFeature | undefined;
+  const out = s.rebuild.outputs[r.sketch] as SketchOutput | undefined;
+  if (out?.type === 'sketch') {
+    const found = resolveRegionRef(r, out.regions, entityParents(sketch?.entities));
+    if (found.ok) return found.region.sample;
+  }
+  return r.sample;
+}
+
+/** A feature's regions as get_model full writes them: each kept region's inside point now, "at(u, v)". */
+export function regionTexts(s: DocState, profiles: readonly RegionRef[]): string[] {
+  return profiles.map((p) => {
+    const at = regionPointNow(s, p);
+    return `at(${len(at[0])}, ${len(at[1])})`;
+  });
 }
 
 /** A feature's bodies (its scope) by name, as a body list writes them. */

@@ -19,7 +19,7 @@ import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assista
 import type { BodyId, ChamferFeature, Feature, FeatureId, FilletFeature, PersistentRef, ShellFeature } from '../../types/doc';
 import type { EdgeChainOutput } from '../../types/doc-service';
 import { ToolError } from '../errors';
-import { andList, createdLabels, edgeText, editTarget, faceText, fillFeature, nameFor, partOf, pathIn, str, strings } from '../feature-tools';
+import { andList, createdLabels, edgeText, editTarget, faceText, fillFeature, nameFor, partOf, pathIn, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo } from '../features-io';
 import { bodyWords } from '../judge';
 import { runtimeOf } from '../runtime';
@@ -209,19 +209,20 @@ export const tool: ToolImpl = {
 // ------------------------------------------------------------------ get_model full and edit_feature
 
 /** A fillet's, chamfer's or shell's targets as selectors (null when there are more than one call takes). */
-function targetsOf(services: AppServices, f: FilletFeature | ChamferFeature | ShellFeature): string[] | null {
+function targetsOf(services: AppServices, f: FilletFeature | ChamferFeature | ShellFeature, at: RefBodies | null): string[] | null {
   const s = services.doc.state.get();
-  const faces = f.faces.map((r) => (f.type === 'shell' ? faceText(s, f.body, r) : `edges of ${faceText(s, f.body, r)}`));
-  const edges = f.type === 'shell' ? [] : f.edges.map((r) => edgeText(s, f.body, r));
+  const faces = f.faces.map((r) => (f.type === 'shell' ? faceText(s, f.body, r, at) : `edges of ${faceText(s, f.body, r, at)}`));
+  const edges = f.type === 'shell' ? [] : f.edges.map((r) => edgeText(s, f.body, r, at));
   const all = [...faces, ...edges];
   return all.length && all.length <= TARGETS_MAX ? all : null;
 }
 
 registerFeatureIo('fillet', {
   tool: 'modify',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as FilletFeature;
-    const targets = targetsOf(services, g);
+    const targets = targetsOf(services, g, at);
     return targets ? { edit: g.name, name: '', kind: 'fillet', targets, size: g.radius, size2: '', flip: false, inward: false } : null;
   },
   values: (f) => [{ field: 'size', expr: (f as FilletFeature).radius }],
@@ -230,9 +231,10 @@ registerFeatureIo('fillet', {
 
 registerFeatureIo('chamfer', {
   tool: 'modify',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as ChamferFeature;
-    const targets = targetsOf(services, g);
+    const targets = targetsOf(services, g, at);
     return targets ? { edit: g.name, name: '', kind: 'chamfer', targets, size: g.distance, size2: g.mode === 'two' ? g.distance2 : '', flip: g.mode === 'two' && !!g.flip, inward: false } : null;
   },
   values(f) {
@@ -244,9 +246,10 @@ registerFeatureIo('chamfer', {
 
 registerFeatureIo('shell', {
   tool: 'modify',
-  inputsOf(f, services) {
+  refs: true,
+  inputsOf(f, services, at = null) {
     const g = f as ShellFeature;
-    const targets = targetsOf(services, g);
+    const targets = targetsOf(services, g, at);
     return targets ? { edit: g.name, name: '', kind: 'shell', targets, size: g.thickness, size2: '', flip: false, inward: g.direction !== 'outside' } : null;
   },
   values: (f) => [{ field: 'size', expr: (f as ShellFeature).thickness }],

@@ -27,12 +27,14 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
-import { inputsOf, summaryOf, valuesOf } from './features-io';
+import { refBodiesOf, type RefBodies } from './feature-tools';
+import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { LabelIndex } from './labels';
 import { madeWith } from './made-with';
 import { dir, jsonBytes, len, sig6, vec } from './numbers';
 import { runtimeOf } from './runtime';
-import { describeSketch, TOO_BIG_WORDS } from './sketch/describe';
+import { describeSketch, supportSelector, TOO_BIG_WORDS } from './sketch/describe';
+import { freeRows } from './sketch/solve';
 import { regionRows } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
 
@@ -75,6 +77,11 @@ const featureNamer = (s: DocState) => {
 };
 
 const bodyName = (s: DocState, id: string) => s.rebuild.bodies.find((b) => b.id === id)?.name ?? s.doc.bodies[id]?.name ?? 'a removed body';
+
+/** Where a sketch lies as a selector the tools read back (a face by its label), else in words. */
+export function supportText(s: DocState, f: SketchFeature): string {
+  return supportSelector(f, s) || supportWords(s, f);
+}
 
 /** Where a sketch lies, in words: Top, Front, Right, a construction plane's name, or a face. */
 export function supportWords(s: DocState, f: SketchFeature): string {
@@ -129,7 +136,7 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   if (st?.state === 'error' && runtimeOf(services)?.brokenBy.has(f.id)) row.broken_by_you = true;
   if (f.type === 'sketch') {
     const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
-    row.on = supportWords(s, f);
+    row.on = supportText(s, f);
     row.sketch = out?.source === 'stored-unsolved' ? 'unsolved' : f.solved.state;
     row.dof = f.solved.dof;
     if (out?.type === 'sketch') {
@@ -148,18 +155,26 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   return row;
 }
 
-/** One feature, full: brief plus its inputs (or a summary) and its expression fields. */
-export function fullFeature(services: AppServices, s: DocState, f: Feature): Row {
+/**
+ * One feature, full: brief plus its inputs (or a summary) and its expression fields. `at`: the
+ * bodies just before it, which its face and edge references are written against.
+ */
+export function fullFeature(services: AppServices, s: DocState, f: Feature, at: RefBodies | null = null): Row {
   const row = briefFeature(services, s, f);
   // A feature another tool made as part of its work (a hole's sketch and cut): edited as its own type.
   const by = madeWith(services, f.id);
   if (by) row.made_by = by;
-  const inputs = inputsOf(f, services);
+  const inputs = inputsOf(f, services, at);
   row.inputs = inputs;
   if (!inputs) row.summary = summaryOf(f, services);
   const values = valuesOf(f, services);
   if (values.length) row.values = values.slice(0, 200);
   return row;
+}
+
+/** One feature, full, its references written against the bodies just before it (where a resend with edit reads them). */
+async function fullFeatureNow(services: AppServices, s: DocState, f: Feature): Promise<Row> {
+  return fullFeature(services, s, f, inputsNameRefs(f) ? await refBodiesOf(services, f.id) : null);
 }
 
 /** A body: what it is, how big, where; null properties above EAGER_FACES (measure gives them). */
@@ -339,14 +354,14 @@ function fitBrief(facts: Row, rows: Row[], budgets: ReplyBudgets): Row {
 }
 
 /** The whole Part, full: features in full while they fit, then brief with a pointer, then counted. */
-function fitFull(facts: Row, services: AppServices, s: DocState, budgets: ReplyBudgets): Row {
+async function fitFull(facts: Row, services: AppServices, s: DocState, budgets: ReplyBudgets): Promise<Row> {
   const features: Row[] = [];
   const data: Row = { ...fitBase(facts, budgets.full / 3), features };
   let size = jsonBytes(data);
   const list = s.doc.features;
   for (let i = 0; i < list.length; i++) {
     const f = list[i];
-    const full = fullFeature(services, s, f);
+    const full = await fullFeatureNow(services, s, f);
     const fullBytes = jsonBytes(full) + 1;
     if (size + fullBytes <= budgets.full) {
       features.push(full);
@@ -378,7 +393,7 @@ async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature): Promis
   const row = fullFeature(services, s, f);
   const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
   const plane = out?.type === 'sketch' ? out.plane : f.plane;
-  row.plane = { on: supportWords(s, f), origin_mm: vec(plane.origin), normal: dir(plane.normal), u: dir(plane.xdir), v: dir(ydirOf(plane)), words: frameWords(plane) };
+  row.plane = { on: supportText(s, f), origin_mm: vec(plane.origin), normal: dir(plane.normal), u: dir(plane.xdir), v: dir(ydirOf(plane)), words: frameWords(plane) };
   // Its input form within this reply's room (sketch/describe.ts): null when the tool cannot write it, or it is too big to resend.
   const form = describeSketch(f, s, { budget: ctx.budgets.sketch });
   row.inputs = form.inputs;
@@ -422,17 +437,13 @@ async function solverNow(ctx: CallCtx, f: SketchFeature, refOf: (id: string) => 
       `Checking ${f.name}`,
     );
     const st = statusOf(solve, analysis);
-    const free = new Map<string, string[]>();
-    for (const p of analysis.dependentParams) {
-      const dot = p.lastIndexOf('.');
-      if (dot <= 0 || p.startsWith('#')) continue;
-      const of = refOf(p.slice(0, dot));
-      free.set(of, [...(free.get(of) ?? []), p.slice(dot + 1)]);
-    }
+    // By the sketch tool's own rule and names (sketch/solve.ts freeRows).
+    const entityIds = new Set(f.entities.map((e) => e.id));
+    const free = freeRows(analysis.dependentParams, (owner) => owner in f.points || entityIds.has(owner), refOf);
     return {
       state: st.state,
       dof: st.dof,
-      free: [...free.entries()].slice(0, 40).map(([of, moves]) => ({ of, moves })),
+      free,
       conflicting: st.conflicting.map(refOf),
       redundant: st.redundant.map(refOf),
       source: 'solver',
@@ -473,7 +484,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
       });
     }
     const facts = await partFacts(ctx, s);
-    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f) : fullFeature(services, s, f);
+    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f) : await fullFeatureNow(services, s, f);
     const data = { ...Object.fromEntries(FEATURE_BASE.filter((k) => k in facts).map((k) => [k, facts[k]])), feature: row };
     const state = String(row.state);
     return {
@@ -483,7 +494,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     };
   }
   const base = await partFacts(ctx, s);
-  const data = input.detail === 'full' ? fitFull(base, services, s, ctx.budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), ctx.budgets);
+  const data = input.detail === 'full' ? await fitFull(base, services, s, ctx.budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), ctx.budgets);
   const states = counts(s.doc.features);
   const bad = (states.error ?? 0) + (states.warning ?? 0);
   const nBodies = rebuild.bodies.length;

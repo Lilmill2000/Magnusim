@@ -10,9 +10,12 @@
 //     kernel_failed when the kernel stopped it); a Done that keeps nothing says why (incomplete);
 //   - the faces the feature made, as labels (EditData.created);
 //   - the words get_model full writes a stored reference in, so a feature's inputs can be sent
-//     back with edit: a face's label (or "<body> face at (x, y, z)" when it has none, or is a
-//     split face), an edge as "<label A> & <label B>" (or "<body> edge at (x, y, z)"), axes and
-//     planes as selectors, bodies by their names.
+//     back with edit: a face's label with its ~k as the bodies just before the feature number it
+//     (where a resend reads it: refBodiesOf; the shown bodies when those cannot be built), so a
+//     label that several faces share (a mirror copy's, a pattern copy's, a trimmed side) names the
+//     one face, and a fillet face's number counts there; "<body> face at (x, y, z)" when it has
+//     none, or is a split face; an edge as "<label A> & <label B>" (or "<body> edge at (x, y, z)"),
+//     axes and planes as selectors, bodies by their names.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { splitEdgeName } from '../naming/edges';
@@ -26,7 +29,7 @@ import { heartbeat } from './busy';
 import { ToolError } from './errors';
 import { featureIoOf } from './features-io';
 import type { JudgedPlan } from './judge';
-import { baseLabel, firstLabel, modelId, parsePart, quoteName, type LabelNames } from './labels';
+import { baseLabel, LabelIndex, modelId, parsePart, quoteName, type LabelBody, type LabelNames } from './labels';
 import { featureByName, stateWord } from './model';
 import { len } from './numbers';
 import { macrotask } from './pace';
@@ -161,7 +164,7 @@ export function createdLabels(services: AppServices, feature: FeatureId, max = 5
 
 // ------------------------------------------------------------------ stored references as selectors
 
-const at = (p: Vec3 | readonly number[]) => `(${[...p].map((v) => len(v)).join(', ')})`;
+const point = (p: Vec3 | readonly number[]) => `(${[...p].map((v) => len(v)).join(', ')})`;
 
 function bodyName(s: DocState, id: BodyId): string {
   return s.doc.bodies[id]?.name ?? s.rebuild.bodies.find((b) => b.id === id)?.name ?? id;
@@ -172,45 +175,92 @@ export function bodyText(s: DocState, id: BodyId): string {
   return quoteName(bodyName(s, id));
 }
 
-const faceNamesOf = (s: DocState, body: BodyId) => s.rebuild.bodies.find((b) => b.id === body)?.names?.faces ?? [];
 const isSplit = (name: string) => splitMerged(name).some((p) => splitSuffix(p).k !== null);
 
-/** A stored face reference as a face selector: its label, else a point on the body (its signature's centre). */
-export function faceText(s: DocState, body: BodyId, ref: PersistentRef): string {
-  const lb = isSplit(ref.name) ? null : firstLabel(ref.name, labelNames(s), faceNamesOf(s, body));
-  return lb ? lb.text : `${bodyText(s, body)} face at ${at(ref.signature.at)}`;
+/**
+ * The bodies a feature's stored references are written against: those just before it (a resend
+ * with edit reads its selectors there), with their labels.
+ */
+export interface RefBodies {
+  bodies: readonly LabelBody[];
+  labels: LabelIndex;
 }
 
-/** A stored edge reference as an edge selector: "<label A> & <label B>", else a point on the body. */
-export function edgeText(s: DocState, body: BodyId, ref: PersistentRef): string {
-  const pair = splitEdgeName(ref.name);
-  if (pair && !isSplit(pair[0]) && !isSplit(pair[1])) {
-    const names = labelNames(s);
-    const faces = faceNamesOf(s, body);
-    const a = firstLabel(pair[0], names, faces);
-    const b = firstLabel(pair[1], names, faces);
-    if (a && b && a.key !== b.key) return `${a.text} & ${b.text}`;
+/** The bodies just before feature `id` with their labels, or null when they cannot be built now. */
+export async function refBodiesOf(services: AppServices, id: FeatureId): Promise<RefBodies | null> {
+  try {
+    const eb = await services.doc.bodiesBefore(id);
+    const bodies = eb.bodies.map((b) => ({ id: b.id, names: b.names }));
+    return { bodies, labels: new LabelIndex(bodies, labelNames(services.doc.state.get())) };
+  } catch {
+    return null;
   }
-  return `${bodyText(s, body)} edge at ${at(ref.signature.at)}`;
+}
+
+const SHOWN = new WeakMap<object, RefBodies>();
+/** The shown bodies with their labels (when the bodies before a feature are not at hand). */
+function shownBodies(s: DocState): RefBodies {
+  let r = SHOWN.get(s.rebuild);
+  if (!r) {
+    r = { bodies: s.rebuild.bodies, labels: new LabelIndex(s.rebuild.bodies, labelNames(s)) };
+    SHOWN.set(s.rebuild, r);
+  }
+  return r;
+}
+
+/** The label (with its ~k) of the face a stored name names on `at`'s bodies, or null (no label, a split face, not found). */
+function labelOn(at: RefBodies, body: BodyId, name: string): string | null {
+  if (isSplit(name)) return null;
+  const bi = at.bodies.findIndex((b) => b.id === body);
+  if (bi < 0) return null;
+  const faces = at.bodies[bi].names?.faces ?? [];
+  let fi = faces.indexOf(name);
+  if (fi < 0) {
+    // A face merged since the pick carries the stored name among its parts.
+    const parts = splitMerged(name);
+    const hits = faces.flatMap((n, i) => (parts.every((p) => splitMerged(n).includes(p)) ? [i] : []));
+    if (hits.length !== 1) return null;
+    fi = hits[0];
+  }
+  const fl = at.labels.of(bi, fi);
+  return fl.label && !fl.warning ? fl.label : null;
+}
+
+/** A stored face reference as a face selector: its label on `at`'s bodies (the shown ones by default), else a point on the body (its signature's centre). */
+export function faceText(s: DocState, body: BodyId, ref: PersistentRef, at: RefBodies | null = null): string {
+  const lb = labelOn(at ?? shownBodies(s), body, ref.name);
+  return lb ?? `${bodyText(s, body)} face at ${point(ref.signature.at)}`;
+}
+
+/** A stored edge reference as an edge selector: "<label A> & <label B>" on `at`'s bodies, else a point on the body. */
+export function edgeText(s: DocState, body: BodyId, ref: PersistentRef, at: RefBodies | null = null): string {
+  const pair = splitEdgeName(ref.name);
+  if (pair) {
+    const where = at ?? shownBodies(s);
+    const a = labelOn(where, body, pair[0]);
+    const b = labelOn(where, body, pair[1]);
+    if (a && b && a !== b) return `${a} & ${b}`;
+  }
+  return `${bodyText(s, body)} edge at ${point(ref.signature.at)}`;
 }
 
 const featureName = (s: DocState, id: FeatureId) => quoteName(s.doc.features.find((f) => f.id === id)?.name ?? id);
 
 /** A plane reference as a plane selector ("" for none). */
-export function planeText(s: DocState, p: PlaneRef | null): string {
+export function planeText(s: DocState, p: PlaneRef | null, at: RefBodies | null = null): string {
   if (!p) return '';
   switch (p.kind) {
     case 'origin':
       return p.plane === 'origin:top' ? 'Top' : p.plane === 'origin:front' ? 'Front' : 'Right';
     case 'face':
-      return faceText(s, p.body, p.ref);
+      return faceText(s, p.body, p.ref, at);
     case 'feature':
       return featureName(s, p.feature);
   }
 }
 
 /** An axis reference as an axis selector ("" for none). */
-export function axisText(s: DocState, a: AxisRef | null): string {
+export function axisText(s: DocState, a: AxisRef | null, at: RefBodies | null = null): string {
   if (!a) return '';
   switch (a.kind) {
     case 'origin':
@@ -218,13 +268,13 @@ export function axisText(s: DocState, a: AxisRef | null): string {
     case 'sketch-line':
       return `${featureName(s, a.sketch)}.${modelId(a.entity)}`;
     case 'edge':
-      return edgeText(s, a.body, a.ref);
+      return edgeText(s, a.body, a.ref, at);
     case 'face-axis':
-      return `axis of ${faceText(s, a.body, a.ref)}`;
+      return `axis of ${faceText(s, a.body, a.ref, at)}`;
     case 'feature':
       return featureName(s, a.feature);
     case 'normal':
-      return `normal of ${planeText(s, a.plane)}`;
+      return `normal of ${planeText(s, a.plane, at)}`;
   }
 }
 

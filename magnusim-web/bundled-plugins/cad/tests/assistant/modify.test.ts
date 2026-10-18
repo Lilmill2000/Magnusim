@@ -12,12 +12,16 @@
 //   - one undo entry per call; get_model shows the feature as made by the Assistant and its
 //     inputs as this tool's input, which sent back with edit replaces it; edit_feature sets size;
 //     an edit of another kind is wrong_feature_type, and an edit's targets are read on the bodies
-//     before the feature.
+//     before the feature;
+//   - the round trip names the same faces and edges: a face of a mirror copy (a label every face
+//     of the copy shares) by its ~k, and a fillet face numbered on the bodies before the feature
+//     that uses it (a later cut that removes another fillet face does not shift it).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { uiFor } from '../../src/ui/controller';
-import type { ChamferFeature, FilletFeature, ShellFeature } from '../../src/types/doc';
-import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
+import type { ChamferFeature, FilletFeature, RegionRef, ShellFeature } from '../../src/types/doc';
+import type { SketchOutput } from '../../src/types/sketch';
+import { assistantHarness, REAL_KERNEL_MS, rectangle, type AssistantHarness } from './harness';
 import { extrude, plate, regions, Shapes, sketchOn, undoLabel } from './parts';
 
 let h: AssistantHarness | null = null;
@@ -168,7 +172,67 @@ describe('modify chamfer and shell', () => {
   );
 });
 
+/** What find gives for a selector: each row's label and centre. */
+async function found(x: AssistantHarness, query: string): Promise<{ label: string | null; center_mm: number[] }[]> {
+  const r = await x.ok('find', { query, limit: 20 });
+  return (r.data.rows as { label?: string; center_mm: number[] }[]).map((w) => ({ label: w.label ?? null, center_mm: w.center_mm }));
+}
+
 describe('modify edits and the round trip', () => {
+  it(
+    'a face of a mirror copy comes back by its ~k, and resent it is still that one face',
+    async () => {
+      h = await assistantHarness();
+      await plate(h);
+      const PATTERN = { edit: '', name: '', kind: 'mirror', of: 'bodies', items: ['Body 1'], about: 'Right offset 40 mm', count: '', spacing: '', symmetric: false, flip: false, about2: '', count2: '', spacing2: '', flip2: false, op: 'new', bodies: [] };
+      await h.ok('pattern', PATTERN);
+      const [top] = await found(h, '"Body 1 (Mirror copy)" faces >Z');
+      expect(top.label).toMatch(/^Mirror 1\.mirror~\d+$/);
+      const one = await h.ok('modify', MODIFY({ targets: [`edges of ${top.label}`], size: '1 mm' }));
+      expect(one.text).toMatch(/^Fillet 1 ok: 1 face \(every edge of each, a live set\)/);
+      const v = volume(h, 'Body 1 (Mirror copy)');
+      const full = await h.ok('get_model', { detail: 'full', feature: 'Fillet 1' });
+      const inputs = (full.data.feature as Record<string, unknown>).inputs as Record<string, unknown>;
+      expect(inputs.targets).toEqual([`edges of ${top.label}`]);
+      const again = await h.ok('modify', inputs);
+      expect(again.text).toMatch(/^Fillet 1 ok \(replaced\): 1 face /);
+      expect(volume(h, 'Body 1 (Mirror copy)')).toBeCloseTo(v, 6);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a fillet face is numbered on the bodies before the feature that uses it: a later cut that removes another does not move the chamfer',
+    async () => {
+      h = await assistantHarness();
+      await plate(h);
+      await h.ok('modify', MODIFY({ targets: ['Body 1 edges |Z'], size: '1 mm' }));
+      const before = await found(h, 'Fillet 1.fillet');
+      expect(before).toHaveLength(4);
+      await h.ok('modify', MODIFY({ kind: 'chamfer', targets: ['Fillet 1.fillet(3) & Extrude 1.end'], size: '0.5 mm' }));
+      const edgeAt = () => featureNamed<ChamferFeature>(h!, 'Chamfer 1').edges.map((e) => e.signature.at.map((c) => Math.round(c * 100) / 100));
+      const was = edgeAt();
+      // A cut through the corner of Fillet 1.fillet(1): that face is gone at the end of the history.
+      const [first] = await found(h, 'Fillet 1.fillet(1)');
+      const [cx, cy] = first.center_mm;
+      const rect = rectangle(6, 6, cx - 3, cy - 3);
+      const sk = await h.add('sketch', { points: rect.points, entities: rect.entities });
+      const out = h.doc.state.get().rebuild.outputs[sk] as SketchOutput;
+      const r = out.regions[0];
+      const profile: RegionRef = { sketch: sk, region: r.key, entities: [...r.entities].sort(), sample: r.sample };
+      await h.add('extrude', { profiles: [profile], extent: { kind: 'through_all', both: true, distance: '10 mm' }, op: 'cut', creates: null, scope: [] });
+      expect(await found(h, 'Fillet 1.fillet')).toHaveLength(3);
+      const full = await h.ok('get_model', { detail: 'full', feature: 'Chamfer 1' });
+      const inputs = (full.data.feature as Record<string, unknown>).inputs as Record<string, unknown>;
+      // The pair's order follows the stored names (their feature ids).
+      expect((inputs.targets as string[]).map((t) => t.split(' & ').sort())).toEqual([['Extrude 1.end', 'Fillet 1.fillet(3)']]);
+      const again = await h.ok('modify', inputs);
+      expect(again.text).toMatch(/^Chamfer 1 ok \(replaced\): 1 edge/);
+      expect(edgeAt()).toEqual(was);
+    },
+    REAL_KERNEL_MS,
+  );
+
   it(
     'get_model full writes the inputs as modify input; sent back with edit they replace it; edit_feature sets size',
     async () => {

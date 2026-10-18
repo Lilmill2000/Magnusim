@@ -199,8 +199,14 @@ export function unsupportedWhy(f: SketchFeature): string | null {
   return null;
 }
 
-/** Where the sketch lies, as the tool's `on` takes it ("" keeps it when no selector names its face). */
-function onOf(f: SketchFeature, s: DocState): string {
+const SHOWN_LABELS = new WeakMap<object, LabelIndex>();
+
+/**
+ * Where the sketch lies as a plane selector (the sketch tool's `on`, a hole's `face`): Top, a
+ * construction plane's name, or its face's label on the shown bodies; "" when no selector names
+ * its face (the tool's `on` "" keeps it).
+ */
+export function supportSelector(f: SketchFeature, s: DocState): string {
   const sup = f.support;
   if (sup.kind === 'plane') return (ORIGIN_PLANES[sup.plane]?.label ?? '').replace(/ plane$/, '');
   if (sup.kind === 'feature') {
@@ -211,8 +217,12 @@ function onOf(f: SketchFeature, s: DocState): string {
   const bi = bodies.findIndex((b) => b.id === sup.body);
   const fi = bi >= 0 ? (bodies[bi].names?.faces.indexOf(sup.face.name) ?? -1) : -1;
   if (fi < 0) return '';
-  const names = new Map(s.doc.features.map((g) => [g.id, g.name] as const));
-  const labels = new LabelIndex(bodies, { featureName: (id) => names.get(id) ?? null });
+  let labels = SHOWN_LABELS.get(s.rebuild);
+  if (!labels) {
+    const names = new Map(s.doc.features.map((g) => [g.id, g.name] as const));
+    labels = new LabelIndex(bodies, { featureName: (id) => names.get(id) ?? null });
+    SHOWN_LABELS.set(s.rebuild, labels);
+  }
   return labels.of(bi, fi).label ?? '';
 }
 
@@ -325,7 +335,7 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
     const kind = toolKindOf(c.kind) ?? c.kind;
     constraints.push({ id: c.id, kind, refs: c.refs.map(refOf), value: 'expr' in c && typeof c.expr === 'string' ? c.expr : '' });
   }
-  const inputs = { edit: f.name, name: f.name, on: onOf(f, s), entities, constraints, infer: inferred > 0 };
+  const inputs = { edit: f.name, name: f.name, on: supportSelector(f, s), entities, constraints, infer: inferred > 0 };
   const budget = o.budget ?? FORM_BUDGET;
   const tooBig = entities.length > FORM_ENTITIES_MAX || constraints.length + inferred > FORM_CONSTRAINTS_MAX || jsonBytes(inputs) > budget * FORM_ROOM;
   return { inputs: tooBig ? null : inputs, unsupported: null, tooBig, refOf };

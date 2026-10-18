@@ -20,7 +20,6 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { isBodyMaking } from '../../doc/features/hooks';
-import { entityParents, resolveRegionRef } from '../../features/extrude/profiles';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
 import type { BodyId, BodyOp, Feature, FeatureId, LoftFeature, RegionRef, SketchFeature, SweepFeature } from '../../types/doc';
@@ -34,6 +33,7 @@ import { bodyWords } from '../judge';
 import { modelId, quoteName, storedId } from '../labels';
 import { stateWord } from '../model';
 import { len } from '../numbers';
+import { regionPointNow } from '../region-tools';
 import { runtimeOf } from '../runtime';
 import { regionRefOf } from '../selectors/refs';
 import { echo, selectSet, withScene, type RegionHit } from '../selectors/resolve';
@@ -360,15 +360,10 @@ export const tool: ToolImpl = {
 
 // ------------------------------------------------------------------ get_model full
 
-/** A region a feature keeps as a profile selector: "<sketch> at(u, v)", at the point inside it now (its stored one when it is not found). */
+/** A region a feature keeps as a profile selector: "<sketch> at(u, v)", at the point inside it now (region-tools.ts regionPointNow). */
 function regionText(s: DocState, r: RegionRef): string {
-  const sketch = s.doc.features.find((f) => f.id === r.sketch) as SketchFeature | undefined;
-  const out = s.rebuild.outputs[r.sketch] as SketchOutput | undefined;
-  let at = r.sample;
-  if (out?.type === 'sketch') {
-    const found = resolveRegionRef(r, out.regions, entityParents(sketch?.entities));
-    if (found.ok) at = found.region.sample;
-  }
+  const sketch = s.doc.features.find((f) => f.id === r.sketch);
+  const at = regionPointNow(s, r);
   return `${quoteName(sketch?.name ?? r.sketch)} at(${len(at[0])}, ${len(at[1])})`;
 }
 
