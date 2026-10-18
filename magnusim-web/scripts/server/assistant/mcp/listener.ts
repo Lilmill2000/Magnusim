@@ -202,6 +202,19 @@ export function mcpListenerStatus(): McpListenerStatus {
   return { running: st.running, reason: st.running ? null : st.reason, port: st.running ? st.port : null, connected: st.conns.size };
 }
 
+/**
+ * Whether `sent` is this launch's token (the CLI's x-magnusim-launch header: the proof that an
+ * agent turn's starter is this account, phase 3 spec 5.2). Constant time; false while the
+ * listener has no token. The token is never logged or answered.
+ */
+export function mcpLaunchTokenMatches(sent: unknown): boolean {
+  const token = state().token;
+  if (!token || !state().running || typeof sent !== 'string' || !sent) return false;
+  const a = Buffer.from(sent, 'utf8');
+  const b = Buffer.from(token, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /** The live connections, oldest first (GET /api/assistant/mcp). */
 export function mcpConnections(): Array<{ id: string; kind: 'external' | 'agent'; name: string; since: string; calls: number }> {
   return [...state().conns]

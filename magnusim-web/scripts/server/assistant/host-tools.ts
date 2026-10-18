@@ -22,10 +22,11 @@ import { fileURLToPath } from 'node:url';
 import { loadedPlugins } from '../../registry-defaults.js';
 import { CONNECTION_CHECK } from './provider-test.ts';
 import { createHostCaller, HostCallError, type HostGet } from './host-call.ts';
-import { loadSettings } from './settings.ts';
+import { agentPrefs, loadSettings } from './settings.ts';
+import { agentIdOf } from './agents/known.ts';
 import { HOST_STALL_MS, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext } from './registry.ts';
 import { cleanText, TEXT_CAPS } from './sanitize.ts';
-import type { JsonSchemaObject } from './types.ts';
+import type { JsonSchemaObject, ProviderId } from './types.ts';
 
 export interface HostToolDeps {
   hostGet: HostGet;
@@ -228,7 +229,9 @@ export function defaultHostTools(port: () => number | null | undefined): ToolDef
     hostGet: createHostCaller({ port }),
     assistant: async () => {
       const s = await loadSettings();
-      return { provider: s.provider, model: s.provider === 'off' ? '' : s.models[s.provider] };
+      // The default's (a turn passes its own through ToolCtx.assistant): a coding agent's model is its saved choice.
+      const agent = agentIdOf(s.provider);
+      return { provider: s.provider, model: s.provider === 'off' ? '' : agent ? (agentPrefs(s, agent).model ?? '') : s.models[s.provider as ProviderId] };
     },
     version: appVersion,
     plugins: () => loadedPlugins(),

@@ -9,7 +9,7 @@
  * project data goes, so only the Assistant's own local-only routes change it.
  */
 import { join } from 'node:path';
-import { AGENT_ID_RE, CUSTOM_ID_RE, knownAgent, modeAllowed } from './agents/known.ts';
+import { AGENT_ID_RE, agentIdOf, CUSTOM_ID_RE, knownAgent, modeAllowed, type AgentProviderId } from './agents/known.ts';
 import { readJsonFile, writeFileAtomic } from './files.ts';
 import { assistantDataDir } from './home.ts';
 import { alog } from './log.ts';
@@ -17,8 +17,15 @@ import { assistantState } from './state.ts';
 import type { Effort, ProviderId } from './types.ts';
 
 export type { Effort, ProviderId } from './types.ts';
+export type { AgentProviderId } from './agents/known.ts';
 
-export type ProviderChoice = 'off' | ProviderId;
+/** The default provider: off, an API-key provider or local server, or a coding agent (`agent:<id>`). */
+export type ProviderChoice = 'off' | ProviderId | AgentProviderId;
+
+/** Whether a provider choice is a coding agent (`agent:<id>`, any well-formed id). */
+export function isAgentProvider(p: unknown): p is AgentProviderId {
+  return agentIdOf(p) !== null;
+}
 export type PrivacyMode = 'ask' | 'allow' | 'deny';
 
 export interface Caps {
@@ -107,6 +114,13 @@ export interface AssistantSettings {
 
 export const PROVIDER_IDS: readonly ProviderId[] = Object.freeze(['anthropic', 'openai', 'openai_compatible']);
 const PROVIDER_CHOICES: readonly ProviderChoice[] = Object.freeze(['off', ...PROVIDER_IDS]);
+
+/** `v` as a provider choice these settings know: off, an API-key provider, or one of their coding agents (known or custom). */
+export function providerChoiceOf(s: Pick<AssistantSettings, 'custom_agents'>, v: unknown): ProviderChoice | null {
+  if (PROVIDER_CHOICES.includes(v as ProviderChoice)) return v as ProviderChoice;
+  const id = agentIdOf(v);
+  return id && isAgentOf(s, id) ? (v as AgentProviderId) : null;
+}
 const EFFORTS: readonly Effort[] = Object.freeze(['default', 'low', 'medium', 'high']);
 const PRIVACY: readonly PrivacyMode[] = Object.freeze(['ask', 'allow', 'deny']);
 
@@ -299,7 +313,6 @@ export function agentPrefs(s: Pick<AssistantSettings, 'agents'>, id: string): Ag
 export function normalizeSettings(raw: unknown): AssistantSettings {
   const s = defaultSettings();
   if (!isRecord(raw)) return s;
-  if (PROVIDER_CHOICES.includes(raw.provider as ProviderChoice)) s.provider = raw.provider as ProviderChoice;
   if (isRecord(raw.models)) {
     for (const id of PROVIDER_IDS) {
       const m = raw.models[id];
@@ -337,6 +350,8 @@ export function normalizeSettings(raw: unknown): AssistantSettings {
       if (agent && s.custom_agents.length < CUSTOM_AGENTS_MAX && !s.custom_agents.some((x) => x.id === agent.id)) s.custom_agents.push(agent);
     }
   }
+  // After the custom agents: a default that is one of them must still be one.
+  s.provider = providerChoiceOf(s, raw.provider) ?? s.provider;
   // Agent ids come from the file: own properties only, and only agents these settings know.
   if (isRecord(raw.agents)) {
     for (const [id, p] of Object.entries(raw.agents)) if (isAgentOf(s, id)) setOwn(s.agents, id, normalizeAgentPrefs(id, p));
@@ -408,8 +423,10 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
   }
   const next = structuredClone(current);
   if ('provider' in patch) {
-    if (!PROVIDER_CHOICES.includes(patch.provider as ProviderChoice)) return refuse('Unknown provider.', 'provider');
-    next.provider = patch.provider as ProviderChoice;
+    // A coding agent may be the default whether or not it is installed or allowed: readiness says why it can't run.
+    const choice = providerChoiceOf(next, patch.provider);
+    if (!choice) return refuse('Unknown provider.', 'provider');
+    next.provider = choice;
   }
   // Each provider keeps its own model, whatever the default: Settings' cards each save their own.
   if ('models' in patch) {
@@ -425,6 +442,7 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
   if ('model' in patch) {
     if (typeof patch.model !== 'string' || !MODEL_RE.test(patch.model)) return refuse(MODEL_TEXT, 'model');
     if (next.provider === 'off') return refuse('Choose a provider before a model.', 'model');
+    if (isAgentProvider(next.provider)) return refuse("A coding agent's model is saved with its own choices (agents.<id>.model).", 'model');
     next.models[next.provider] = patch.model;
   }
   if ('confirm_remote' in patch && typeof patch.confirm_remote !== 'boolean') return refuse('confirm_remote must be true or false.', 'confirm_remote');

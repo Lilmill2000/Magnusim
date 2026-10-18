@@ -25,13 +25,17 @@
  *   POST /api/assistant/test            {provider?} → Settings' connection test of that provider (the
  *                                        default without one): {ok:true, model, served_by, ms, tools,
  *                                        cost_usd} or {ok:false, code, error}; 400 when it can't
- *                                        start; 409 while one runs
- *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?}
+ *                                        start; 409 while one runs. For agent:<id>: the agent Test
+ *                                        with a message (as /agents/test)
+ *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?}
  *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
  *                                        an app tab's id, or 'auto' for the only connected one.
  *                                        provider: any provider, whatever the default (without
- *                                        one: the conversation's own, else the default)
+ *                                        one: the conversation's own, else the default), or
+ *                                        agent:<id> for a coding agent, whose turn needs the
+ *                                        per-launch token in x-magnusim-launch (the CLI) or `link`
+ *                                        = the tab's live relay link (the page): else 403 launch_proof
  *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
  *                                        (a long-poll: waits for an event after `since`)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
@@ -68,6 +72,15 @@
  *                                        saved (then 500 save_failed); allow:true needs the row's
  *                                        fingerprint (409 fingerprint_changed) and is refused while
  *                                        the agent runs (409 agent_running); 404 agent_unknown
+ *   POST /api/assistant/agents/test     {id, message} → the agent Test (message:true sends one short
+ *                                        message) or connect check (false): {ok:true, agent, version,
+ *                                        ms, signed_in, own_tools, images, modes, models, tools} or
+ *                                        {ok:false, code, error, auth?}; 404 agent_unknown; 409 busy,
+ *                                        agent_not_allowed (and the other start refusals); the
+ *                                        request closing stops it (assistant/agents/test.ts)
+ *   POST /api/assistant/agents/sign-in  {id, method} → {ok, agent?} | {ok:false, code, error}: the
+ *                                        agent signs in by itself (an `agent` method it listed);
+ *                                        400 bad_method; 409 busy, agent_not_allowed
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -83,7 +96,7 @@ import { assistantDataDir, assistantHomeIsOverridden, secretsDir } from './assis
 import { spendLedger, type SpendLedger } from './assistant/ledger.ts';
 import { alog } from './assistant/log.ts';
 import { redact } from './assistant/redact.ts';
-import { consentCount, isLoopbackUrl, loadSettings, PROVIDER_IDS, saveSettings, serverOrigin, type AssistantSettings } from './assistant/settings.ts';
+import { consentCount, isAgentProvider, isLoopbackUrl, loadSettings, PROVIDER_IDS, saveSettings, serverOrigin, type AssistantSettings } from './assistant/settings.ts';
 import { isKeySlot, KeyError, secretStore, type Store } from './assistant/secrets/store.ts';
 import { assistantState, beginAssistantLifetime, onAssistantShutdown, resetAssistantState, shutdownAssistant } from './assistant/state.ts';
 import { curatedModels, FALLBACK_TARGETS, PRICES_AS_OF, priceInfo } from './assistant/prices.ts';
@@ -113,6 +126,10 @@ import {
   type RowContext,
 } from './assistant/agents/discover.ts';
 import { agentsTreeKill } from './assistant/agents/process.ts';
+import { agentHost } from './assistant/agents/host.ts';
+import { agentProviderTest, agentSignInRequest, agentTestRequest } from './assistant/agents/test.ts';
+import { agentIdOf } from './assistant/agents/known.ts';
+import { setAgentRunHooks } from './assistant/agents/discover.ts';
 import { appVersion } from './assistant/host-tools.ts';
 import { mcpSdkInstalled } from './assistant/providers/load-sdk.ts';
 
@@ -227,7 +244,8 @@ const STATUS_PARTS: StatusPart[] = [
     return { test_hold_ms: sw.holdMs, test_ack_ms: sw.ackMs, test_dormant_ms: sw.dormantMs };
   },
   ({ settings: s, deps }) => {
-    const provider = s.provider;
+    // A coding agent has no price or fallback here: its own account pays.
+    const provider = isAgentProvider(s.provider) ? 'off' : s.provider;
     const model = provider === 'off' ? '' : s.models[provider];
     return {
       deps,
@@ -312,8 +330,14 @@ export function providerReadiness(provider: ProviderId, { settings: s, store, de
 
 /** Whether a turn naming no provider (the default's) or the Test could start now, and the first reason it can't. */
 function readiness(src: StatusSources): { ready: boolean; ready_reason: string | null } {
-  if (src.settings.provider === 'off') return { ready: false, ready_reason: 'provider_off' };
-  const r = providerReadiness(src.settings.provider, src);
+  const p = src.settings.provider;
+  if (p === 'off') return { ready: false, ready_reason: 'provider_off' };
+  if (isAgentProvider(p)) {
+    // The coding agent's own row (from the discovery cache; not looked for yet: not_checked).
+    const row = agentReadyRows(src.agents)[p] as { ready?: boolean; reason?: string | null } | undefined;
+    return { ready: row?.ready === true, ready_reason: row ? (row.reason ?? null) : 'not_checked' };
+  }
+  const r = providerReadiness(p, src);
   return { ready: r.ready, ready_reason: r.reason };
 }
 
@@ -459,8 +483,12 @@ async function connectionTest(asked: unknown, gone?: AbortSignal): Promise<Answe
   const refuse = (code: string, error: string, status = 400): Answer => ({ status, body: { ok: false, code, error } });
   // The provider named (each Settings card tests its own), else the default.
   const named = asked === undefined || asked === null || asked === '' ? null : asked;
-  if (named !== null && named !== 'off' && !isProviderId(named)) return refuse('bad_provider', 'Unknown provider.');
-  const provider = named === null ? settings.provider : (named as ProviderId | 'off');
+  if (named !== null && named !== 'off' && !isProviderId(named) && agentIdOf(named) === null) return refuse('bad_provider', 'Unknown provider.');
+  const chosen = named === null ? settings.provider : (named as string);
+  // A coding agent: its Test with one short message (spec 5.2).
+  const agent = agentIdOf(chosen);
+  if (agent !== null) return agentProviderTest(agent, { mcp: mcpAvailability, gone });
+  const provider = chosen as ProviderId | 'off';
   if (provider === 'off') return refuse('provider_off', 'Choose a provider first.');
   if ((await depsStatus()).state === 'missing') return refuse('deps_missing', DEPS_MISSING_TEXT);
   const model = settings.models[provider];
@@ -538,6 +566,7 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         ack_ms: relay.ackMs,
         dormant_ms: relay.dormantMs,
         mcp: { connections: mcpConnections().length, port: mcpListenerStatus().port },
+        agents: agentHost().snapshot(),
       });
     }),
   );
@@ -587,7 +616,8 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
   router.post(
     '/api/assistant/turns',
     local(async (ctx) => {
-      const r = await turns.start(await ctx.readJsonBody());
+      // An agent turn's proof of this account (the CLI's per-launch token); never logged.
+      const r = await turns.start(await ctx.readJsonBody(), { token: ctx.req.headers['x-magnusim-launch'] });
       ctx.sendJson(r.status, r.body);
     }),
   );
@@ -724,6 +754,37 @@ function registerAgentRoutes(router: Router): void {
       ctx.sendJson(a.status, a.body);
     }),
   );
+
+  /** A request that goes away (a reload, Settings left) stops its run. */
+  const whileOpen = async (ctx: RequestContext, run: (gone: AbortSignal) => Promise<Answer>): Promise<void> => {
+    const gone = new AbortController();
+    const onClose = () => {
+      if (!ctx.res.writableEnded) gone.abort();
+    };
+    ctx.res.on('close', onClose);
+    try {
+      const a = await run(gone.signal);
+      if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.sendJson(a.status, a.body);
+    } finally {
+      ctx.res.off('close', onClose);
+    }
+  };
+
+  router.post(
+    '/api/assistant/agents/test',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      await whileOpen(ctx, (gone) => agentTestRequest(body, { mcp: mcpAvailability, gone }));
+    }),
+  );
+
+  router.post(
+    '/api/assistant/agents/sign-in',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      await whileOpen(ctx, (gone) => agentSignInRequest(body, { mcp: mcpAvailability, gone }));
+    }),
+  );
 }
 
 /**
@@ -804,6 +865,13 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     registry: turns.registry,
     turns,
   });
+  // An agent turn started from the page proves this account with its tab's live link.
+  turns.setLinkCheck((tab, link) => relay.isLiveLinkOf(tab, link));
+  // Discovery's allow switch and custom-agent removal stop that agent's turns and processes.
+  const host = agentHost();
+  setAgentRunHooks({ running: (id) => host.running(id), stop: (id, text) => host.stopAgent(id, text) });
+  // A real stop of the process (or a test reset): every agent ends.
+  onAssistantShutdown(() => host.endAll('shutdown'));
   router.get(
     '/api/assistant/status',
     local(async (ctx) => {
@@ -947,8 +1015,10 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     shutdown() {
       shutdownAssistant(lifetime);
       relay.shutdown();
-      // Explicitly, superseded or not: the connections this lifetime's handler served close.
+      // Explicitly, superseded or not: the connections this lifetime's handler served close,
+      // and the coding agents its turns started end (their turns failed/shutdown).
       disposeMcp();
+      agentHost().endLifetime(turns);
     },
   };
 }

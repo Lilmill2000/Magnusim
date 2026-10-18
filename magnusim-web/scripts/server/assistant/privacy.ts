@@ -111,6 +111,49 @@ export function privacyGate(o: { turn: string; project: ProjectInfo; provider: P
   };
 }
 
+// ---------------------------------------------------------------- coding agents
+
+/**
+ * A coding agent counts as off this PC: it sends what it reads to its own service under the
+ * person's account (phase 3 spec 4.14). Its destination is `agent:<id>` (providers/index.ts
+ * destinationOf), so a consent for one agent never covers another.
+ */
+export function agentDestinationLabel(name: string): string {
+  return `${cleanText(name, 64) || 'The coding agent'} (your account)`;
+}
+
+/** "Never send" with a project in the turn: refused at the start. */
+export function agentPrivacyDeniedText(name: string): string {
+  const who = cleanText(name, 64) || 'The coding agent';
+  return `Settings → Assistant is set to never send project data off this PC, and ${who} sends what it reads to its own service. Ask from Home, use a local server, or change the setting.`;
+}
+
+/** "Never send" and an agent whose own tools are on: refused at the start, even from Home. */
+export function agentOwnToolsDeniedText(name: string): string {
+  const who = cleanText(name, 64) || 'The coding agent';
+  return `${who} can read your project files with its own tools, and Settings → Assistant is set to never send project data off this PC.`;
+}
+
+/**
+ * The question before a coding agent reads a project's data (spec 5.7). Answered only in the
+ * Magnusim window that shows it (link_only): the agent, or a program on this PC, could
+ * otherwise answer it with the turn's answer key.
+ */
+export function agentPrivacyGate(o: { turn: string; project: ProjectInfo; name: string }): GateRequest {
+  const title = quotedTitle(o.project.title, o.project.id);
+  const name = cleanText(o.name, 64).replace(QUOTES, "'") || 'the coding agent';
+  return {
+    kind: 'privacy',
+    turn: o.turn,
+    title: `Send project "${title}" to ${name}?`,
+    copy: `The Assistant's coding agent, ${name}, is about to read this project's names, settings, results and pictures of the open workspace and send them to its own service under your account. Settings → Assistant can change this.`,
+    yes: 'Send',
+    no: "Don't send",
+    project: { id: o.project.id, title },
+    link_only: true,
+  };
+}
+
 // ---------------------------------------------------------------- other apps (MCP)
 
 /**

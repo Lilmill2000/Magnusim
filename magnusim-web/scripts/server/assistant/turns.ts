@@ -18,6 +18,13 @@
  *   default; every check of the start is about that provider.
  * - A turn's questions are answered only by the program that started it (the answer key
  *   of its 202) or by the app tab that shows them (its live relay link); see answerGate.
+ * - A turn on a coding agent (provider `agent:<id>`, phase 3 spec 4.7, 5.2, 6.1) runs on
+ *   agents/turn.ts instead of the loop, in the same log, gates, relay and limits on how many
+ *   run. Its start needs a proof of this account: the per-launch token (the CLI reads it from
+ *   the owner-only mcp.json) or the tab's live relay link (the page). It is refused, in order:
+ *   agent_unknown (400), launch_proof (403), the agent missing, not allowed or changed since it
+ *   was allowed, its tool connection unavailable, privacy (400), and past 2 agents agents_busy
+ *   (429). Its conversation is bound to it and keeps no messages (the agent keeps them).
  *
  * Turns, conversations and questions live in the Assistant's state on globalThis. When Vite
  * restarts the server in this process, the old server's relay ends the running turns its
@@ -30,28 +37,42 @@ import { redact } from './redact.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
-import { destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
+import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
 import type { Registry } from './registry.ts';
 import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
 import { cleanText } from './sanitize.ts';
-import { PROVIDER_IDS, type AssistantSettings } from './settings.ts';
+import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
 import { isCloud } from './providers/index.ts';
 import { ProviderError, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
+import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agents/known.ts';
+import { runAgentTurn, type AgentEvent, type AgentRunTurn, type AgentTurnDeps, type AgentTurnSettings } from './agents/turn.ts';
+import { agentHost, AGENTS_BUSY_TEXT } from './agents/host.ts';
+import type { FoundAgent } from './agents/session.ts';
+import { agentStartRefusal, rememberAgentSignIn, type AgentEntry, type AgentRow } from './agents/discover.ts';
+import { findAgentNow, foundAgentOf, signInView } from './agents/test.ts';
+import { appVersion } from './host-tools.ts';
+import { mcpLaunchTokenMatches, startMcpListener } from './mcp/listener.ts';
 
 export type { TurnState, ModelTurnSettings } from './loop.ts';
 
 /**
- * What a turn fixed when it started. Today a model provider's (loop.ts runs it); another
- * kind of runner adds its own member to this union, with its own `kind`.
+ * What a turn fixed when it started: a model provider's (loop.ts runs it) or a coding agent's
+ * (`kind: 'agent'`, agents/turn.ts runs it).
  */
-export type TurnSettings = ModelTurnSettings;
+export type TurnSettings = ModelTurnSettings | AgentTurnSettings;
+export type { AgentTurnSettings } from './agents/turn.ts';
 
 /** A model provider's settings (`kind` absent or 'model'): loop.ts runs the turn. */
 export function isModelSettings(s: TurnSettings): s is ModelTurnSettings {
   return s.kind === undefined || s.kind === 'model';
+}
+
+/** A coding agent's settings: agents/turn.ts runs the turn. */
+export function isAgentSettings(s: TurnSettings): s is AgentTurnSettings {
+  return s.kind === 'agent';
 }
 
 export type TurnEvent = { seq: number; at: number } & (
@@ -67,6 +88,9 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
   | { type: 'end'; state: EndState; reason: string; message: string | null }
+  // A coding agent's turn (phase 3 spec 5.5): the agent once ready, its plan, its own tools,
+  // its permission requests, its mode and model.
+  | AgentEvent
 );
 // Reserved for later phases (never emitted in Foundation): 'job', 'ui_sync'.
 
@@ -89,6 +113,12 @@ export interface TurnSummary {
   tab: string | null;
   project_id: string | null;
   served_by: string | null;
+  /** The turn's provider: an API-key provider's id, or `agent:<id>`. */
+  provider: string;
+  /** How it is paid for: counted by the $ meter, not priced (a local server), or billed to the person's own agent account. */
+  billing: 'usd' | 'free' | 'agent_account';
+  /** The coding agent it runs on (null for an API-key provider). */
+  agent: { id: string; name: string; version: string | null } | null;
 }
 
 export const TURN_LIMITS = Object.freeze({
@@ -190,6 +220,9 @@ export class Turn implements AnyTurn {
   private pausedMs = 0;
   private pauseDepth = 0;
   private offShutdown: (() => void) | null = null;
+  private readonly minutesListeners = new Set<() => void>();
+  /** The agent's version once its session is ready (an agent turn's summary). */
+  agentVersion: string | null = null;
 
   constructor(o: TurnInit) {
     this.id = o.id;
@@ -262,6 +295,7 @@ export class Turn implements AnyTurn {
   }
 
   emit(e: RunnerEvent | TurnEventBody): void {
+    if (e.type === 'agent') this.agentVersion = e.version;
     this.push(e as TurnEventBody);
   }
 
@@ -381,9 +415,28 @@ export class Turn implements AnyTurn {
         this.scheduleMinutes();
         return;
       }
+      const first = !this.minutes.up;
       this.minutes.up = true;
       this.call?.abort({ code: 'capped', text: this.minutes.text } satisfies CallAbort);
+      // Whether or not a call is open (an agent turn is one long prompt with no timeout of its own).
+      if (first) {
+        for (const fn of [...this.minutesListeners]) {
+          try {
+            fn();
+          } catch {
+            /* a listener never breaks the timer */
+          }
+        }
+      }
     }, Math.max(0, left));
+  }
+
+  /** Hears the minutes cap fire, whether or not a call is open (spec 6.1: agent turns stop on it). */
+  onMinutesUp(fn: () => void): () => void {
+    this.minutesListeners.add(fn);
+    return () => {
+      this.minutesListeners.delete(fn);
+    };
   }
 
   callSignal(): AbortSignal {
@@ -481,6 +534,9 @@ export class Turn implements AnyTurn {
       tab: this.tab,
       project_id: this.projectId,
       served_by: this.servedBy,
+      provider: this.settings.provider,
+      billing: isAgentSettings(this.settings) ? 'agent_account' : this.settings.provider === 'openai_compatible' ? 'free' : 'usd',
+      agent: isAgentSettings(this.settings) ? { id: this.settings.agent.id, name: this.settings.agent.name, version: this.agentVersion ?? this.settings.agent.version } : null,
     };
   }
 }
@@ -493,6 +549,11 @@ export function modelTurn(t: Turn): LoopTurn | null {
   return isModelSettings(t.settings) ? (t as LoopTurn) : null;
 }
 
+/** The turn as agents/turn.ts drives it, or null when its settings are not a coding agent's. */
+export function agentTurn(t: Turn): AgentRunTurn | null {
+  return isAgentSettings(t.settings) ? (t as unknown as AgentRunTurn) : null;
+}
+
 // ---------------------------------------------------------------- the manager
 
 /** What the manager needs of the secret store. */
@@ -501,6 +562,45 @@ export interface TurnSecrets {
   storage(): StorageStatus;
   status(): Record<KeySlot, KeyStatus>;
   onKeyChanged?(fn: (slot: KeySlot) => void): () => void;
+}
+
+/** What an agent turn's start and run need besides the manager's own (tests replace parts). */
+export interface AgentStartDeps {
+  /** Starts the tool connection agents use (the MCP listener) and says whether it runs. */
+  listener(): Promise<{ running: boolean; reason: string | null; port: number | null }>;
+  /** Whether `sent` is this launch's token (x-magnusim-launch), compared in constant time. */
+  launchToken(sent: unknown): boolean;
+  /** The agent's discovery entry and row now (discovery is run again when older than 5 minutes). */
+  find(id: string, settings: AssistantSettings, mcp: { available: boolean; reason: string | null }): Promise<{ entry: AgentEntry; row: AgentRow } | null>;
+  /** Magnusim's version. */
+  version(): Promise<string>;
+  /** The lockdown tripwire fired: that agent needs its switch until Magnusim's next update. */
+  lockdownFailed(id: string, version: string): Promise<unknown>;
+}
+
+/** The default AgentStartDeps: the real listener, discovery and settings. */
+export const REAL_AGENT_START: AgentStartDeps = Object.freeze({
+  async listener() {
+    const l = await startMcpListener();
+    return { running: l.running, reason: l.reason, port: l.port };
+  },
+  launchToken: (sent: unknown) => mcpLaunchTokenMatches(sent),
+  find: findAgentNow,
+  version: appVersion,
+  lockdownFailed: (id: string, version: string) => setAgentLockdownFailed(id, version),
+});
+
+/** What proves that an agent turn's starter is this account: the per-launch token (x-magnusim-launch). */
+export interface LaunchProof {
+  token?: unknown;
+}
+
+export const LAUNCH_PROOF_TEXT = 'Start a coding agent from the Magnusim window or with assistant-run on this account.';
+
+/** Why the agents' tool connection can't run, as a turn's refusal says it. */
+export function mcpUnavailableText(reason: string | null, port: number | null): string {
+  if (reason === 'deps_missing') return "Magnusim's tool-connection package isn't installed. Run Setup.bat again.";
+  return `Magnusim couldn't open the connection its tools use (${reason ?? 'not running'}). Restart Magnusim; if it keeps happening, another program may hold port ${port ?? 'it uses'}.`;
 }
 
 export interface TurnManagerDeps {
@@ -518,6 +618,8 @@ export interface TurnManagerDeps {
   gateUnseenMs?: number;
   abortGraceMs?: number;
   resendDelayMs?: number;
+  /** Tests: parts of an agent turn's start replaced (the real listener, discovery and settings otherwise). */
+  agents?: Partial<AgentStartDeps>;
 }
 
 export type Answer = { status: number; body: Record<string, unknown> };
@@ -560,17 +662,24 @@ const optionalId = (v: unknown): string | null | false => {
 };
 
 /**
- * The provider a turn's start names: a provider id, 'off', null when it names none (absent,
- * null or ''), or false when it is no provider. Settings → Assistant names them.
+ * The provider a turn's start names: a provider id, `agent:<id>` (a well-formed agent id: whether
+ * it is one is checked against the settings), 'off', null when it names none (absent, null or
+ * ''), or false when it is no provider. Settings → Assistant names them.
  */
-function namedProvider(v: unknown): ProviderId | 'off' | null | false {
+function namedProvider(v: unknown): ProviderId | AgentProviderId | 'off' | null | false {
   if (v === undefined || v === null || v === '') return null;
   if (v === 'off') return 'off';
+  if (typeof v === 'string' && v.startsWith('agent:')) return AGENT_ID_RE.test(v.slice('agent:'.length)) ? (v as AgentProviderId) : false;
   return typeof v === 'string' && (PROVIDER_IDS as readonly string[]).includes(v) ? (v as ProviderId) : false;
 }
 
 const badProviderText = (v: unknown) =>
   `${typeof v === 'string' ? `"${cleanText(v, 64)}" is not a provider` : 'provider must be text'}. Name one as Settings → Assistant does: ${PROVIDER_IDS.join(', ')}; or leave it out for the default.`;
+
+/** A provider choice that names a coding agent (`agent:…`; whether it is one is checked after). */
+const isAgentChoice = (p: unknown): p is AgentProviderId => typeof p === 'string' && p.startsWith('agent:');
+
+export const agentUnknownText = (id: string) => `No coding agent called ${cleanText(id, 40) || '(none)'}. Settings → Assistant lists them.`;
 
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 
@@ -624,6 +733,7 @@ export class TurnManager {
   private readonly started = new WeakSet<Turn>();
   private readonly turnListeners = new Set<(t: Turn, change: TurnChange) => void>();
   private tabInfo: ((tab: string) => TabInfo | null) | null = null;
+  private linkCheck: ((tab: string, link: unknown) => boolean) | null = null;
 
   constructor(d: TurnManagerDeps) {
     this.d = d;
@@ -633,6 +743,17 @@ export class TurnManager {
     this.runner = new ToolRunner({ gates: this.gates, fenced: (s) => d.registry.fenced(s), clock: this.clock, abortGraceMs: d.abortGraceMs });
     this.conversations = new Conversations({ now: () => this.clock.now() });
     this.gates.subscribe((e) => this.onGate(e));
+    // A conversation dropped (forgotten, expired, evicted): the coding agent working for it ends.
+    this.conversations.onDrop((id) => agentHost().endConversation(id, 'conversation_dropped'));
+  }
+
+  /** The relay says whether a link is a tab's live link now (an agent turn's launch proof from the page). */
+  setLinkCheck(fn: ((tab: string, link: unknown) => boolean) | null): void {
+    this.linkCheck = fn;
+  }
+
+  private agentStart(): AgentStartDeps {
+    return { ...REAL_AGENT_START, ...(this.d.agents ?? {}) };
   }
 
   private turns(): Map<string, Turn> {
@@ -722,8 +843,8 @@ export class TurnManager {
     return { tab, projectId: ws.reg.projectId, studyId: ws.reg.studyId };
   }
 
-  /** POST /api/assistant/turns: checked, then started detached (202). */
-  async start(body: Record<string, unknown>): Promise<Answer> {
+  /** POST /api/assistant/turns: checked, then started detached (202). `launch`: the request's proof of this account (agent turns). */
+  async start(body: Record<string, unknown>, launch: LaunchProof = {}): Promise<Answer> {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) return refuse(400, 'bad_text', 'Write what the Assistant should do.');
     if (text.length > TURN_LIMITS.textMax) return refuse(400, 'bad_text', `A prompt is at most ${TURN_LIMITS.textMax.toLocaleString('en-US')} characters.`);
@@ -745,6 +866,11 @@ export class TurnManager {
     // stays bound to its provider), else the default. Every check below is about this one.
     const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? settings.provider;
     if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
+    if (isAgentChoice(provider)) {
+      const agentId = agentIdOf(provider);
+      if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
+      return this.startAgent({ text, convId, tab, ctxProject, ctxStudy, link: body.link, provider, agentId, settings, launch });
+    }
     if ((await this.d.deps()) === 'missing') return refuse(400, 'deps_missing', "The Assistant's packages aren't installed. Run Setup.bat again.");
     const model = settings.models[provider];
     if (!model) return refuse(400, 'no_model', 'Choose a model in Settings → Assistant first.');
@@ -829,6 +955,123 @@ export class TurnManager {
     return { status: 202, body: { ok: true, conversation: conv.id, turn: id, answer_key: t.answerKey } };
   }
 
+  /** An agent turn's start (spec 5.2, 5.3, 6.1): its checks in order, then started detached (202). */
+  private async startAgent(a: {
+    text: string;
+    convId: string | null;
+    tab: string | null;
+    ctxProject: string | null;
+    ctxStudy: string | null;
+    link: unknown;
+    provider: AgentProviderId;
+    agentId: string;
+    settings: AssistantSettings;
+    launch: LaunchProof;
+  }): Promise<Answer> {
+    const { settings, agentId: id, provider } = a;
+    if (!isAgentOf(settings, id)) return refuse(400, 'agent_unknown', agentUnknownText(id));
+    const ad = this.agentStart();
+    // The tool connection first: a CLI that found no connection file (or a stale one) reads it
+    // again after this refusal.
+    const listener = await ad.listener();
+    let target: TabTarget | null = null;
+    let tabRefusal: Answer | null = null;
+    if (a.tab) {
+      const r = this.resolveTab(a.tab);
+      if ('status' in r) tabRefusal = r;
+      else target = r;
+    }
+    // A proof of this account: an allowed agent can run commands as the person, and any other
+    // account on this PC can reach this route.
+    const proven = ad.launchToken(a.launch.token) || (target !== null && this.linkCheck?.(target.tab, a.link) === true);
+    if (!proven) return refuse(403, 'launch_proof', LAUNCH_PROOF_TEXT);
+    const found = await ad.find(id, settings, { available: listener.running, reason: listener.reason });
+    if (!found) return refuse(400, 'agent_unknown', agentUnknownText(id));
+    const { entry, row } = found;
+    const refused = agentStartRefusal(row, 'turn');
+    if (refused) return refuse(400, refused.code, refused.error);
+    if (!listener.running) return refuse(400, 'mcp_unavailable', mcpUnavailableText(listener.reason, listener.port ?? settings.mcp.port));
+    if (tabRefusal) return tabRefusal;
+    let boundTab: string | null = null;
+    let projectId = a.ctxProject;
+    let simulationId = a.ctxStudy;
+    if (target) {
+      if (a.ctxProject && a.ctxProject !== target.projectId) return refuse(400, 'project_mismatch', "The context's project is not the tab's project.");
+      boundTab = target.tab;
+      projectId = target.projectId || null;
+      simulationId = a.ctxStudy ?? (target.studyId || null);
+    }
+    const name = cleanText(row.name, 64) || id;
+    if (settings.privacy === 'deny') {
+      if (projectId) return refuse(400, 'privacy_denied', agentPrivacyDeniedText(name));
+      // Its own tools could read the projects folder whatever Magnusim sends: "never" wouldn't hold.
+      if (row.own_tools === 'on') return refuse(400, 'privacy_denied', agentOwnToolsDeniedText(name));
+    }
+
+    // From here to the turn's start nothing awaits: the checks and the start are one step.
+    const model = agentPrefs(settings, id).model ?? '';
+    const binding = { provider, model, projectId };
+    let conv: Conversation | null = null;
+    if (a.convId) {
+      conv = this.conversations.get(a.convId);
+      if (!conv) return refuse(404, 'unknown_conversation', 'That conversation has ended (2 hours idle, or forgotten). Start a new one.');
+      const field = conv.mismatch(binding);
+      if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
+      if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
+    }
+    if (this.running().length >= TURN_LIMITS.running) {
+      return refuse(429, 'too_many', `At most ${TURN_LIMITS.running} turns run at once. Wait for one to end.`);
+    }
+    const host = agentHost();
+    if (!host.fits(conv?.id ?? null)) return refuse(429, 'agents_busy', AGENTS_BUSY_TEXT);
+    if (!conv) conv = this.conversations.create(binding);
+    host.reserve(conv.id, id, this, this.clock);
+    const agent: FoundAgent = { ...foundAgentOf(entry, row), name };
+    const turnSettings: AgentTurnSettings = { kind: 'agent', provider, agent, caps: { ...settings.agent_caps }, model, gateTimeoutMs: host.timings().gateMs };
+    const tid = newTurnId(this.clock.now());
+    const t = new Turn({
+      id: tid,
+      prompt: a.text,
+      conv,
+      tab: boundTab,
+      projectId: projectId || null,
+      simulationId: simulationId || null,
+      settings: turnSettings,
+      clock: this.clock,
+      gates: this.gates,
+      onEnded: (ended) => this.turnChanged(ended, 'ended'),
+    });
+    conv.running = tid;
+    conv.lastUsed = this.clock.now();
+    this.turns().set(tid, t);
+    this.started.add(t);
+    this.turnChanged(t, 'started');
+    this.launch(t, this.d.secrets());
+    return { status: 202, body: { ok: true, conversation: conv.id, turn: tid, answer_key: t.answerKey } };
+  }
+
+  /** What an agent turn's runner needs. */
+  private agentTurnDeps(t: Turn): AgentTurnDeps {
+    const d = this.d;
+    const ad = this.agentStart();
+    const agent = isAgentSettings(t.settings) ? t.settings.agent : null;
+    return {
+      host: agentHost(),
+      manager: this,
+      known: knownAgent(agent?.id ?? ''),
+      registry: d.registry,
+      runner: this.runner,
+      gates: this.gates,
+      settings: d.settings,
+      projects: d.projects,
+      remember: d.remember,
+      clock: this.clock,
+      version: ad.version,
+      lockdownFailed: ad.lockdownFailed,
+      rememberSignIn: (agentId, session, err) => rememberAgentSignIn(agentId, signInView(err.auth ?? session?.info.auth ?? [], agent)),
+    };
+  }
+
   private loopDeps(secrets: TurnSecrets): LoopDeps {
     const d = this.d;
     return {
@@ -847,7 +1090,12 @@ export class TurnManager {
 
   private launch(t: Turn, secrets: TurnSecrets): void {
     const loopTurn = modelTurn(t);
-    const run = loopTurn ? runTurn(loopTurn, this.loopDeps(secrets)) : Promise.reject(new Error('no runner for this kind of turn'));
+    const agent = loopTurn ? null : agentTurn(t);
+    const run = loopTurn
+      ? runTurn(loopTurn, this.loopDeps(secrets))
+      : agent
+        ? runAgentTurn(agent, this.agentTurnDeps(t))
+        : Promise.reject(new Error('no runner for this kind of turn'));
     void run
       .catch((err: unknown) => t.crash(err))
       .catch(() => {})

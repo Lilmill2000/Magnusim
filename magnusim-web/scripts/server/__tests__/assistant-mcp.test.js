@@ -744,6 +744,58 @@ describe('the Settings Test binding', () => {
   });
 });
 
+describe('an agent session’s binding (A4)', () => {
+  it('its dispatch is the turn running now: between turns nothing runs and the last list stays; each list served is noted for the turn’s permission matcher', async () => {
+    const { SessionDispatch } = await import('../assistant/agents/host.ts');
+    const hold = holdTool('app_info');
+    const w = await world({ clients: false, hostTools: [hold.def, H.hostTool('app_more')] });
+    try {
+      const sd = new SessionDispatch();
+      const b = B.mintBinding({ conversation: 'c-session', agent: 'fake', dispatch: sd });
+      const c = await w.client({ binding: b.id });
+      assert.equal(B.bindingServes(b.id, 'app_info'), false, 'nothing listed yet');
+      const listed = (await c.client.listTools()).tools.map((t) => t.name).sort();
+      assert.deepEqual(listed, ['app_info', 'app_more']);
+      assert.equal(B.bindingServes(b.id, 'app_info'), true);
+      assert.equal(B.bindingServes(b.id, 'app_unknown'), false);
+      // Between turns: nothing runs.
+      let r = await c.client.callTool({ name: 'app_info', arguments: {} });
+      assert.deepEqual([M.resultJson(r).error.code, M.resultJson(r).error.message], ['stopped', S.NOTHING_RUNS_TEXT]);
+      assert.equal(hold.calls.length, 0);
+      // A turn on it: its calls run in the turn's context.
+      const ctx = { tab: null, projectId: null, simulationId: null, cloud: true, local: false, assistant: { provider: 'agent:fake', model: '' } };
+      const seen = [];
+      const turn = {
+        ctx: () => ctx,
+        run: (call, o) => {
+          seen.push(call.name);
+          return w.m.manager.runner.run(call, { owner: { kind: 'turn', id: 't-session', tab: null }, ctx, signal: o.signal, offered: o.offered });
+        },
+        owns: (owner) => owner.kind === 'turn' && owner.id === 't-session',
+      };
+      sd.setCurrent(turn);
+      const running = c.client.callTool({ name: 'app_info', arguments: {} });
+      await H.until(() => hold.calls.length === 1, 5000, 'the call to run');
+      assert.deepEqual(hold.calls[0].rt.ctx.assistant, { provider: 'agent:fake', model: '' });
+      hold.calls[0].release();
+      assert.ok(!(await running).isError);
+      assert.deepEqual(seen, ['app_info']);
+      assert.equal(sd.owns({ kind: 'turn', id: 't-session', tab: null }), true);
+      // The turn ended: nothing runs again, and the context stays the last turn's.
+      sd.setCurrent(null);
+      assert.equal(sd.owns({ kind: 'turn', id: 't-session', tab: null }), false);
+      assert.deepEqual(sd.ctx(), ctx);
+      r = await c.client.callTool({ name: 'app_info', arguments: {} });
+      assert.equal(M.resultJson(r).error.code, 'stopped');
+      assert.equal(hold.calls.length, 1);
+      B.dropBinding(b.id);
+      assert.equal(B.bindingServes(b.id, 'app_info'), false, 'a dropped binding serves nothing');
+    } finally {
+      await w.close();
+    }
+  });
+});
+
 describe('tools/call', () => {
   it('runs through ToolRunner and answers the cleaned JSON text plus images; an image over the caps fails the call', async () => {
     const pics = H.hostTool('pics', { run: async () => ({ ok: true, data: { a: 1 }, images: [{ type: 'image', mediaType: 'image/png', base64: PNG }], summary: 'pics' }) });

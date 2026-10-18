@@ -13,10 +13,16 @@
  * Limits: 20 conversations (the oldest idle one goes first), 2 hours idle, 300 messages,
  * 100 images and 20 MB each, and "full" at 80% of the model's context (128K tokens for a
  * model Magnusim doesn't know). Nothing is written to disk.
+ *
+ * A conversation on a coding agent (provider `agent:<id>`, phase 3 spec 4.7) keeps no
+ * messages: the agent keeps the history, so its list stays empty and repair() has nothing to
+ * do. Whatever drops a conversation (forget, the 2-hour expiry, the eviction past 20) tells
+ * onDrop's listeners, so the agent working for it ends with it.
  */
 import { randomBytes } from 'node:crypto';
 import { capResult } from './sanitize.ts';
 import { assistantState } from './state.ts';
+import type { AgentProviderId } from './agents/known.ts';
 import type { Message, ProviderId, ToolCallPart, ToolResultPart } from './types.ts';
 
 export const CONVERSATION_LIMITS = Object.freeze({
@@ -39,14 +45,14 @@ export interface FrozenGuide {
 }
 
 export interface Binding {
-  provider: ProviderId;
+  provider: ProviderId | AgentProviderId;
   model: string;
   projectId: string | null;
 }
 
 export class Conversation {
   readonly id: string;
-  readonly provider: ProviderId;
+  readonly provider: ProviderId | AgentProviderId;
   readonly model: string;
   readonly projectId: string | null;
   readonly createdAt: number;
@@ -165,9 +171,28 @@ export function newConversationId(now: number): string {
 /** The conversations of this server (on the Assistant's state). */
 export class Conversations {
   private readonly now: () => number;
+  private readonly dropListeners = new Set<(id: string) => void>();
 
   constructor(o: { now?: () => number } = {}) {
     this.now = o.now ?? Date.now;
+  }
+
+  /** Hears each conversation dropped (forgotten, expired or evicted), by id. */
+  onDrop(fn: (id: string) => void): () => void {
+    this.dropListeners.add(fn);
+    return () => {
+      this.dropListeners.delete(fn);
+    };
+  }
+
+  private dropped(id: string): void {
+    for (const fn of [...this.dropListeners]) {
+      try {
+        fn(id);
+      } catch {
+        /* a listener never stops a drop */
+      }
+    }
   }
 
   private map(): Map<string, Conversation> {
@@ -187,6 +212,7 @@ export class Conversations {
       const idle = [...map.values()].filter((c) => !c.running).sort((a, b2) => a.lastUsed - b2.lastUsed)[0];
       if (!idle) break;
       map.delete(idle.id);
+      this.dropped(idle.id);
     }
     const now = this.now();
     let id = newConversationId(now);
@@ -203,6 +229,7 @@ export class Conversations {
     if (!c) return 'unknown';
     if (c.running) return 'busy';
     map.delete(c.id);
+    this.dropped(c.id);
     return 'ok';
   }
 
@@ -210,7 +237,10 @@ export class Conversations {
   sweep(): void {
     const now = this.now();
     for (const [id, c] of this.map()) {
-      if (!c.running && now - c.lastUsed > CONVERSATION_LIMITS.idleMs) this.map().delete(id);
+      if (!c.running && now - c.lastUsed > CONVERSATION_LIMITS.idleMs) {
+        this.map().delete(id);
+        this.dropped(id);
+      }
     }
   }
 

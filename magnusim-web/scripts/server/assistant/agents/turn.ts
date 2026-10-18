@@ -1,0 +1,754 @@
+/**
+ * An Assistant turn on a coding agent (phase 3 spec 4.7, 4.8, 4.10, 4.11, 4.14): the agent
+ * gets the person's message, works with Magnusim's tools through the MCP connection its
+ * session was given, and the turn's log, questions, limits and Stop are Magnusim's own.
+ *
+ *   starting ─ the project's row (with a project), then privacy for destination agent:<id>
+ *              BEFORE the session starts, so the agent never lists the project's tools without
+ *              consent (Ask: a question only the Magnusim window answers; Never send: stopped)
+ *   the conversation's agent session (kept between messages, else started: "agent" event)
+ *   the prompt: [the agent note and the workspace notes, on a session's first prompt;
+ *                the message; the app context]
+ *   model ─ while it runs:
+ *     the agent's updates go to the log (text, plan, its own tools, its mode and model; our
+ *       own tools' updates are not logged: the runner's tool_call / tool_result are their record)
+ *     its MCP calls run here (AgentTurnRun.run): the turn's owner, tab, caps, log and signal
+ *     its permission requests: ours auto-allowed (allow_once only), its own a question in the
+ *       Magnusim window (4 minutes), a tools-off agent's own one the lockdown tripwire
+ *   the stop reason gives the end (the table of spec 4.7)
+ *
+ * "Ours" comes only from fields the agent's adapter sets (acp.ts OursMatcher), never from a
+ * title the model writes.
+ *
+ * Limits (min of the turn's snapshot and the live settings): 24 changes (later change calls are
+ * answered `capped`, reads go on), 400 calls (then every call `capped`, and 5 more end the turn
+ * capped/agent_calls), 60 active minutes (Turn.onMinutesUp: it fires whether or not a call is
+ * open). $ limits, tokens and the day's ledger don't apply: the agent bills its own account.
+ *
+ * Stop (and a limit, the minutes, the allow switch going off): every open permission request
+ * is answered `cancelled`, then session/cancel; when the agent hasn't answered in 3 s
+ * (AGENT_CANCEL_MS) it is tree-killed and the turn ends anyway. A crash, a mode outside the
+ * allowed ones or the tripwire ends the agent at once. Whatever ends the turn with the prompt
+ * still out, the same cancel and kill follow (the finally).
+ */
+import type { ContentBlock } from '@agentclientprotocol/sdk';
+import { capText as loopCapText, GUIDE_CHANGED_NOTE } from '../loop.ts';
+import { contextBlock, guideBlock } from '../prompt.ts';
+import { destinationOf } from '../providers/index.ts';
+import { agentPrivacyGate, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, type ProjectInfo } from '../privacy.ts';
+import { redact } from '../redact.ts';
+import { errorResult, gateInputText, riskOf, STOPPED_BEFORE, type RunnerEvent, type RunnerTurn, type RunResult, type ToolRunner } from '../runner.ts';
+import { cleanText } from '../sanitize.ts';
+import type { AgentCaps, AssistantSettings } from '../settings.ts';
+import type { Clock, GateBroker, GateEvent, GateOwner, GateRequest } from '../gates.ts';
+import type { Conversation } from '../conversations.ts';
+import type { ToolCtx, ToolDef, WorkspaceRegistration } from '../registry.ts';
+import { bindingServes, type AgentDispatch } from '../mcp/sessions.ts';
+import type { EndState, TurnState } from '../loop.ts';
+import type { StreamEvent, ToolCallPart } from '../types.ts';
+import { noteBlock, noteInSystemPrompt, OursMatcher, pickOption, REJECT_KINDS, type AgentUpdate, type PermissionView } from './acp.ts';
+import type { AgentProviderId, KnownAgent } from './known.ts';
+import { policyOf } from './known.ts';
+import { AGENTS_BUSY_TEXT, NOTHING_RUNS_TEXT, RESTARTED_TEXT, type AgentHost, type AgentTimings } from './host.ts';
+import { AgentRunError, agentErrorOf, exitedText, MODE_TEXT, type AgentSession, type FoundAgent } from './session.ts';
+import { RpcExited } from './rpc.ts';
+
+/** What an agent turn fixed when it started (turns.ts TurnSettings). */
+export interface AgentTurnSettings {
+  kind: 'agent';
+  provider: AgentProviderId;
+  agent: FoundAgent;
+  caps: AgentCaps;
+  /** The agent's saved model id ('' for its own default). */
+  model: string;
+  /** How long its questions wait. */
+  gateTimeoutMs: number;
+}
+
+/** An agent turn's log events (turns.ts TurnEvent gains them; the CLI and the later dock read them). */
+export type AgentEvent =
+  | { type: 'agent'; name: string; version: string | null; own_tools: 'off' | 'on' }
+  | { type: 'plan'; entries: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; priority: 'high' | 'medium' | 'low' }> }
+  | { type: 'agent_tool'; call: string; title: string; kind: string; status: 'pending' | 'in_progress' | 'completed' | 'failed' }
+  | { type: 'agent_permission'; title: string; outcome: 'auto_allowed' | 'allowed' | 'declined' | 'cancelled'; by: 'magnusim' | 'user' | 'timeout' | 'stop' }
+  | { type: 'agent_mode'; mode: string; label: string }
+  | { type: 'agent_model'; model: string; label: string };
+
+interface EndInfo {
+  state: EndState;
+  reason: string;
+  message: string | null;
+}
+
+/** The turn as the agent runner drives it (turns.ts Turn, narrowed by agentTurn()). */
+export interface AgentRunTurn extends RunnerTurn {
+  readonly prompt: string;
+  readonly tab: string | null;
+  readonly projectId: string | null;
+  readonly simulationId: string | null;
+  readonly settings: AgentTurnSettings;
+  readonly conv: Conversation;
+  readonly signal: AbortSignal;
+  readonly ended: boolean;
+  readonly state: TurnState;
+  step: number;
+  calls: number;
+  emit(e: RunnerEvent | AgentEvent): void;
+  setState(s: TurnState): void;
+  end(state: EndState, reason: string, message: string | null): void;
+  note(text: string): void;
+  onStream(step: number, e: StreamEvent): void;
+  callSignal(): AbortSignal;
+  callDone(): void;
+  armMinutes(limitMs: number, text: string): void;
+  /** Hears the minutes cap fire, whether or not a call is open. */
+  onMinutesUp(fn: () => void): () => void;
+  stopEnd(): EndInfo;
+}
+
+export interface AgentTurnDeps {
+  host: AgentHost;
+  /** The TurnManager (server lifetime) the session is tagged with. */
+  manager: object;
+  known: KnownAgent | null;
+  registry: { workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string } | null };
+  runner: ToolRunner;
+  gates: GateBroker;
+  /** The live settings (caps are min'd with the turn's, privacy is read from them). */
+  settings(): Promise<AssistantSettings>;
+  projects(id: string, o: { signal: AbortSignal; turn: string }): Promise<ProjectInfo | null>;
+  remember(projectId: string, createdAt: string | null, destination: string): Promise<void>;
+  clock: Clock;
+  /** Magnusim's version (clientInfo; the tripwire's record). */
+  version(): Promise<string>;
+  /** The lockdown tripwire fired for this agent: it needs its switch until Magnusim's next update (settings.ts setAgentLockdownFailed). */
+  lockdownFailed(id: string, version: string): Promise<unknown>;
+  /** The sign-in block from an auth_required (discover.ts rememberAgentSignIn). */
+  rememberSignIn?(id: string, session: AgentSession | null, err: AgentRunError): void;
+}
+
+/** The caps in force: the lower of the turn's snapshot and the live settings. */
+export function effectiveAgentCaps(snapshot: AgentCaps, live: AgentCaps): AgentCaps {
+  return { changes: Math.min(snapshot.changes, live.changes), calls: Math.min(snapshot.calls, live.calls), turn_minutes: Math.min(snapshot.turn_minutes, live.turn_minutes) };
+}
+
+export function changesCapText(n: number): string {
+  return `This message reached its ${n}-change limit. Stop and tell the person what is left; they can send another message to carry on.`;
+}
+
+export function callsCapText(n: number): string {
+  return `This message reached its ${n}-call limit. Stop and tell the person what is left; they can send another message to carry on.`;
+}
+
+export const AGENT_CALLS_END_TEXT = (n: number) => `The agent went on calling tools past this message's ${n}-call limit, so Magnusim stopped it.`;
+export const PICTURE_NOTE = '(The agent showed a picture; the chat will show it.)';
+export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its own tool; answer such questions in a project's Magnusim window.`;
+export const LOCKDOWN_TEXT = (name: string) => `${name}'s own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant.`;
+export const AGENT_PRIVACY_DENIED_CALL_TEXT = 'Settings → Assistant is set to never send project data off this PC now, so this tool did not run. Nothing more was sent.';
+export const AGENT_PRIVACY_DECLINED_TEXT = "The person didn't allow this project's data to be sent, so the tool did not run. Nothing more was sent.";
+
+/** The stop reason's end (spec 4.7). */
+export function stopReasonEnd(reason: string | null, name: string): EndInfo {
+  switch (reason) {
+    case 'end_turn':
+      return { state: 'done', reason: 'end_turn', message: null };
+    case 'max_tokens':
+      return { state: 'capped', reason: 'max_tokens', message: 'The agent ran out of room mid-answer.' };
+    case 'max_turn_requests':
+      return { state: 'capped', reason: 'agent_limit', message: 'The agent reached its own limit of requests for one message.' };
+    case 'refusal':
+      return { state: 'failed', reason: 'refusal', message: 'The agent declined this request.' };
+    case 'cancelled':
+      return { state: 'stopped', reason: 'agent', message: 'The agent stopped this message.' };
+    case 'error':
+      return { state: 'failed', reason: 'agent_error', message: `${name} stopped with an error.` };
+    default:
+      return { state: 'failed', reason: 'agent_error', message: `${name} ended this message in a way Magnusim doesn't know.` };
+  }
+}
+
+/** The agent's own-tool question (spec 5.7): only the Magnusim window answers it. */
+export function ownToolGate(o: { turn: string; name: string; view: PermissionView }): GateRequest {
+  const name = cleanText(o.name, 64) || 'The coding agent';
+  const kind = cleanText(o.view.kind ?? '', 40) || 'other';
+  const title = cleanText(redact(o.view.title), 80) || '(no description)';
+  let sent: string;
+  try {
+    const raw = o.view.rawInput;
+    sent = raw && typeof raw === 'object' && !Array.isArray(raw) ? gateInputText(undefined, raw as Record<string, unknown>) : cleanText(JSON.stringify(raw ?? null) ?? 'null', 400);
+  } catch {
+    sent = '(unreadable)';
+  }
+  return {
+    kind: 'confirm',
+    turn: o.turn,
+    title: `Let ${name} use its own tool (${kind})?`,
+    copy: `${name} asks to use one of its own tools. Magnusim can't see or check what it does on this PC. As the agent describes it: ${title}. What it sent: ${cleanText(redact(sent), 1500)}. Nothing runs until you choose.`,
+    yes: 'Allow once',
+    no: "Don't",
+    risk: 'destructive',
+    tool: cleanText(redact(o.view.title), 64) || kind,
+    source: `${name} (its own tool)`,
+    link_only: true,
+  };
+}
+
+const TOOL_STATUS = new Set(['pending', 'in_progress', 'completed', 'failed']);
+/** Codes of a call the runner answered without running its tool (it doesn't count toward the change limit). */
+const NOT_RUN = new Set(['no_tool', 'invalid_input', 'unavailable', 'plugin_off', 'declined', 'capped']);
+
+/** The frozen guide of each session (its first prompt carried it). */
+const sessionGuides = new WeakMap<AgentSession, string>();
+
+class AgentTurnRun implements AgentDispatch {
+  private readonly t: AgentRunTurn;
+  private readonly d: AgentTurnDeps;
+  private readonly timings: AgentTimings;
+  private readonly name: string;
+  private readonly owner: GateOwner;
+  private session: AgentSession | null = null;
+  private matcher: OursMatcher;
+  private project: ProjectInfo | null = null;
+  private promptPending = false;
+  /** How the turn ends once the prompt is over or given up ('stop': as its Stop says). */
+  private pendingEnd: EndInfo | 'stop' | null = null;
+  private wake: (() => void) | null = null;
+  private readonly halted: Promise<'halted'>;
+  private cancelTimer: unknown = null;
+  private readonly asks = new Set<AbortController>();
+  private changes = 0;
+  private callsSeen = 0;
+  private overCalls = 0;
+  private closed = false;
+  private pictureNoted = false;
+  private tripped = false;
+  private readonly toolStatus = new Map<string, string>();
+  private lastMode: string | null = null;
+  private lastModel: string | null = null;
+
+  constructor(t: AgentRunTurn, d: AgentTurnDeps, timings: AgentTimings) {
+    this.t = t;
+    this.d = d;
+    this.timings = timings;
+    this.name = t.settings.agent.name;
+    this.owner = { kind: 'turn', id: t.id, tab: t.tab };
+    this.matcher = new OursMatcher(policyOf(d.known).ours, () => false);
+    this.halted = new Promise((resolve) => {
+      this.wake = () => resolve('halted');
+    });
+  }
+
+  // ------------------------------------------------------------ the binding's dispatch
+
+  ctx(): ToolCtx {
+    const t = this.t;
+    return { tab: t.tab, projectId: t.projectId, simulationId: t.simulationId, cloud: true, local: false, assistant: { provider: t.settings.provider, model: t.settings.model } };
+  }
+
+  owns(owner: GateOwner): boolean {
+    return owner.kind === 'turn' && owner.id === this.t.id;
+  }
+
+  /** One MCP call of the agent, inside this turn (spec 4.7 "MCP calls inside the turn"). */
+  async run(call: ToolCallPart, o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal; onProgress?: (fraction: number | null, label: string) => void }): Promise<RunResult> {
+    const t = this.t;
+    if (this.closed) return errorResult(call, 'stopped', NOTHING_RUNS_TEXT);
+    if (t.ended || t.signal.aborted || this.pendingEnd) return errorResult(call, 'stopped', STOPPED_BEFORE);
+    this.callsSeen += 1;
+    const caps = effectiveAgentCaps(t.settings.caps, (await this.d.settings()).agent_caps);
+    if (this.callsSeen > caps.calls) {
+      this.overCalls += 1;
+      if (this.overCalls > 5) this.halt({ state: 'capped', reason: 'agent_calls', message: AGENT_CALLS_END_TEXT(caps.calls) }, false);
+      return errorResult(call, 'capped', callsCapText(caps.calls));
+    }
+    const def = o.offered.get(call.name) ?? null;
+    const risk = riskOf(def);
+    if (risk !== 'read' && this.changes >= caps.changes) return errorResult(call, 'capped', changesCapText(caps.changes));
+    // A call is a request of the turn: privacy is read live before a tool that reads project data.
+    if (def?.projectData && t.projectId && this.project) {
+      const refused = await this.privacyForCall(call);
+      if (refused) return refused;
+      if (t.ended || t.signal.aborted || this.pendingEnd) return errorResult(call, 'stopped', STOPPED_BEFORE);
+    }
+    t.step = 1 + t.calls;
+    t.calls += 1;
+    t.setState('tools');
+    const signal = AbortSignal.any([t.callSignal(), o.signal]);
+    let r: RunResult;
+    try {
+      r = await this.d.runner.run(call, {
+        owner: this.owner,
+        ctx: this.ctx(),
+        signal,
+        turn: t,
+        offered: o.offered,
+        gateTimeoutMs: this.timings.gateMs,
+        ...(o.onProgress ? { onProgress: o.onProgress } : {}),
+      });
+    } finally {
+      t.callDone();
+      if (!t.ended && !this.pendingEnd) t.setState('model');
+    }
+    if (risk !== 'read' && (r.ok || !NOT_RUN.has(String(r.code)))) this.changes += 1;
+    return r;
+  }
+
+  // ------------------------------------------------------------ privacy
+
+  /**
+   * Whether the agent may read the project now (spec 4.14), read live: allowed or remembered; a
+   * question only the Magnusim window answers; Never send ends the turn. `first`: before the
+   * session (nothing went to the agent yet).
+   */
+  private async requirePrivacy(first: boolean): Promise<boolean> {
+    const t = this.t;
+    const project = this.project as ProjectInfo;
+    const destination = destinationOf({ provider: t.settings.provider, base_url: '' });
+    const nothing = first ? NOTHING_SENT : NOTHING_MORE_SENT;
+    const live = await this.d.settings();
+    const verdict = privacyDecision(live, { cloud: true, destination, projectId: project.id, createdAt: project.created_at });
+    if (verdict === 'allow') return true;
+    if (verdict === 'deny') {
+      this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: nothing });
+      return false;
+    }
+    const prev = t.state;
+    t.setState('awaiting_consent');
+    t.pause();
+    const ac = new AbortController();
+    this.asks.add(ac);
+    let answer: 'allow' | 'deny';
+    try {
+      answer = await this.d.gates.ask(agentPrivacyGate({ turn: t.id, project, name: this.name }), this.owner, AbortSignal.any([t.signal, ac.signal]), { timeoutMs: this.timings.gateMs });
+    } finally {
+      this.asks.delete(ac);
+      t.resume();
+      if (!t.ended) t.setState(prev === 'awaiting_consent' ? 'starting' : prev);
+    }
+    if (answer !== 'allow' || t.signal.aborted || this.pendingEnd) {
+      if (!t.signal.aborted && !this.pendingEnd) this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: nothing });
+      return false;
+    }
+    // "Always deny" chosen while the question was open wins over its Send.
+    if ((await this.d.settings()).privacy === 'deny') {
+      this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: nothing });
+      return false;
+    }
+    await this.d.remember(project.id, project.created_at, destination);
+    return true;
+  }
+
+  private endOrHalt(first: boolean, end: EndInfo): void {
+    if (first && !this.promptPending) this.t.end(end.state, end.reason, end.message);
+    else this.halt(end, false);
+  }
+
+  /** A project-data call mid-turn: null when it may run, else its answer (and the turn ends after it). */
+  private async privacyForCall(call: ToolCallPart): Promise<RunResult | null> {
+    const live = await this.d.settings();
+    const project = this.project as ProjectInfo;
+    const destination = destinationOf({ provider: this.t.settings.provider, base_url: '' });
+    const verdict = privacyDecision(live, { cloud: true, destination, projectId: project.id, createdAt: project.created_at });
+    if (verdict === 'allow') return null;
+    if (verdict === 'deny') {
+      this.halt({ state: 'stopped', reason: 'privacy', message: NOTHING_MORE_SENT }, false);
+      return errorResult(call, 'privacy_denied', AGENT_PRIVACY_DENIED_CALL_TEXT);
+    }
+    // An answer forgotten mid-turn asks again.
+    if (await this.requirePrivacy(false)) return null;
+    return errorResult(call, 'declined', AGENT_PRIVACY_DECLINED_TEXT);
+  }
+
+  // ------------------------------------------------------------ ending early
+
+  /**
+   * The turn is to end before the agent's answer (Stop, a limit, the tripwire, a mode): open
+   * permission requests are answered `cancelled`, then session/cancel; with `kill`, or when the
+   * agent hasn't answered after AGENT_CANCEL_MS, it is tree-killed. The first reason wins.
+   */
+  halt(end: EndInfo | 'stop', kill: boolean): void {
+    if (!this.pendingEnd) this.pendingEnd = end;
+    for (const ac of [...this.asks]) ac.abort();
+    const s = this.session;
+    if (s && this.promptPending) s.cancel();
+    if (kill) {
+      if (s) void this.d.host.endSession(this.t.conv.id, s, 'halted');
+      this.wake?.();
+      return;
+    }
+    if (!this.promptPending) {
+      this.wake?.();
+      return;
+    }
+    if (this.cancelTimer === null) {
+      this.cancelTimer = this.d.clock.setTimeout(() => {
+        this.cancelTimer = null;
+        if (!this.promptPending) return;
+        // It didn't answer the cancel in time: the tree kill, and the turn ends anyway.
+        if (this.session) void this.d.host.endSession(this.t.conv.id, this.session, 'cancel_timeout');
+        this.wake?.();
+      }, this.timings.cancelMs);
+    }
+  }
+
+  private tripwire(): void {
+    if (this.tripped) return;
+    this.tripped = true;
+    const id = this.t.settings.agent.id;
+    void this.d
+      .version()
+      .then((v) => this.d.lockdownFailed(id, v))
+      .catch(() => {});
+    this.halt({ state: 'failed', reason: 'agent_lockdown', message: LOCKDOWN_TEXT(this.name) }, true);
+  }
+
+  // ------------------------------------------------------------ what the agent sends
+
+  private onUpdate(u: AgentUpdate): void {
+    const t = this.t;
+    if (t.ended) return;
+    switch (u.kind) {
+      case 'text':
+        t.onStream(1 + t.calls, { kind: 'text', text: u.text });
+        return;
+      case 'content':
+        if (!this.pictureNoted) {
+          this.pictureNoted = true;
+          t.note(PICTURE_NOTE);
+        }
+        return;
+      case 'thought':
+      case 'usage':
+        return;
+      case 'tool': {
+        if (this.matcher.tool(u) !== null) return;
+        if (this.t.settings.agent.lockdown === 'tools_off') {
+          this.tripwire();
+          return;
+        }
+        const status = u.status ?? (u.isNew ? 'pending' : null);
+        if (!status || !TOOL_STATUS.has(status) || this.toolStatus.get(u.id) === status) return;
+        this.toolStatus.set(u.id, status);
+        t.emit({
+          type: 'agent_tool',
+          call: cleanText(u.id, 128),
+          title: cleanText(redact(u.title ?? ''), 200),
+          kind: cleanText(u.toolKind ?? '', 64) || 'other',
+          status: status as 'pending' | 'in_progress' | 'completed' | 'failed',
+        });
+        return;
+      }
+      case 'plan':
+        t.emit({ type: 'plan', entries: u.entries.map((e) => ({ content: e.content, status: e.status, priority: e.priority })) });
+        return;
+      case 'mode':
+        this.modeSeen(u.mode);
+        return;
+      case 'model':
+        this.modelSeen(u.model);
+        return;
+      case 'config':
+        if (u.mode !== null) this.modeSeen(u.mode);
+        if (u.model !== null) this.modelSeen(u.model);
+        return;
+    }
+  }
+
+  /** A mode the agent reports: one outside the allowed ones stops the turn and ends the agent. */
+  private modeSeen(mode: string): void {
+    const s = this.session;
+    if (!s) return;
+    if (!s.modeAllowed(mode)) {
+      this.halt({ state: 'failed', reason: 'agent_mode', message: MODE_TEXT(this.name) }, true);
+      return;
+    }
+    if (mode === this.lastMode) return;
+    this.lastMode = mode;
+    const label = s.modes?.available.find((m) => m.id === mode)?.name ?? s.config.find((o) => o.category === 'mode')?.options.find((x) => x.value === mode)?.name ?? cleanText(mode, 64);
+    this.t.emit({ type: 'agent_mode', mode: cleanText(mode, 64), label: cleanText(label, 64) });
+  }
+
+  private modelSeen(model: string): void {
+    const s = this.session;
+    if (!s || model === this.lastModel) return;
+    this.lastModel = model;
+    const label = s.config.find((o) => o.category === 'model')?.options.find((x) => x.value === model)?.name ?? s.models?.available.find((m) => m.id === model)?.name ?? cleanText(model, 64);
+    this.t.emit({ type: 'agent_model', model: cleanText(model, 128), label: cleanText(label, 64) });
+  }
+
+  /** A permission request (spec 4.8): the option to pick, or null (cancelled). */
+  private async onPermission(view: PermissionView): Promise<string | null> {
+    const t = this.t;
+    const title = cleanText(redact(view.title), 200) || cleanText(view.kind ?? '', 64) || 'a tool';
+    if (t.ended || t.signal.aborted || this.pendingEnd) {
+      if (!t.ended) t.emit({ type: 'agent_permission', title, outcome: 'cancelled', by: 'stop' });
+      return null;
+    }
+    const ours = this.matcher.permission(view);
+    if (ours) {
+      const allow = pickOption(view.options, ['allow_once']);
+      if (allow) {
+        t.emit({ type: 'agent_permission', title: cleanText(ours, 64), outcome: 'auto_allowed', by: 'magnusim' });
+        return allow;
+      }
+      // No allow_once: never allow_always (it would allow the tool for good inside the agent). A question.
+    } else if (t.settings.agent.lockdown === 'tools_off') {
+      // The tripwire: answered at once (before the tree kill answers it `cancelled`).
+      const reject = pickOption(view.options, ['reject_once']);
+      this.session?.answerNow(view, reject);
+      this.tripwire();
+      return reject;
+    }
+    if (!t.tab) {
+      t.note(HOME_OWN_TOOL_NOTE(this.name));
+      t.emit({ type: 'agent_permission', title, outcome: 'declined', by: 'magnusim' });
+      return pickOption(view.options, REJECT_KINDS);
+    }
+    return this.askPerson(view, title);
+  }
+
+  /** The agent's own tool (or ours without allow_once): a question only the Magnusim window answers, 4 minutes. */
+  private async askPerson(view: PermissionView, title: string): Promise<string | null> {
+    const t = this.t;
+    const s = this.session as AgentSession;
+    const allowOption = pickOption(view.options, ['allow_once']);
+    const rejectOption = pickOption(view.options, REJECT_KINDS);
+    const owner: GateOwner = { kind: 'turn', id: t.id, tab: t.tab };
+    let gateId: string | null = null;
+    // The answer goes to the agent the moment the question closes (before a session/cancel that
+    // follows in the same tick: the first answer wins).
+    const off = this.d.gates.subscribe((e: GateEvent) => {
+      if (e.type === 'open' && e.owner === owner) gateId = e.view.id;
+      else if (e.type === 'closed' && e.view.id === gateId) {
+        if (e.answer === 'allow') s.answerNow(view, allowOption);
+        else if (e.by !== 'stop') s.answerNow(view, rejectOption);
+      }
+    });
+    const ac = new AbortController();
+    this.asks.add(ac);
+    const prev = t.state;
+    t.setState('awaiting_confirmation');
+    t.pause();
+    let answer: 'allow' | 'deny';
+    try {
+      answer = await this.d.gates.ask(ownToolGate({ turn: t.id, name: this.name, view }), owner, AbortSignal.any([t.signal, ac.signal]), { timeoutMs: this.timings.gateMs });
+    } finally {
+      off();
+      this.asks.delete(ac);
+      t.resume();
+      if (!t.ended && !this.pendingEnd) t.setState(prev);
+    }
+    const by = (gateId ? this.d.gates.closedAs(gateId)?.by : null) ?? 'stop';
+    if (!t.ended) {
+      if (answer === 'allow') t.emit({ type: 'agent_permission', title, outcome: 'allowed', by: 'user' });
+      else if (by === 'stop') t.emit({ type: 'agent_permission', title, outcome: 'cancelled', by: 'stop' });
+      else t.emit({ type: 'agent_permission', title, outcome: 'declined', by: by === 'timeout' ? 'timeout' : 'user' });
+    }
+    if (answer === 'allow') return allowOption;
+    return by === 'stop' ? null : rejectOption;
+  }
+
+  // ------------------------------------------------------------ the turn
+
+  private stoppedNow(): boolean {
+    const t = this.t;
+    if (t.ended) return true;
+    if (!t.signal.aborted) return false;
+    const s = t.stopEnd();
+    t.end(s.state, s.reason, s.message);
+    return true;
+  }
+
+  private endWith(e: EndInfo | 'stop'): void {
+    const t = this.t;
+    if (t.ended) return;
+    const end = e === 'stop' ? t.stopEnd() : e;
+    t.end(end.state, end.reason, end.message);
+  }
+
+  async main(): Promise<void> {
+    const t = this.t;
+    const d = this.d;
+    t.setState('starting');
+    if (this.stoppedNow()) return;
+    // The project's row, as the loop reads it.
+    if (t.projectId) {
+      try {
+        this.project = await d.projects(t.projectId, { signal: t.signal, turn: t.id });
+      } catch (err) {
+        if (this.stoppedNow()) return;
+        t.end('failed', 'project_unreadable', `The project could not be read: ${err instanceof Error ? err.message : 'no answer'}`);
+        return;
+      }
+      if (this.stoppedNow()) return;
+      if (!this.project) {
+        t.end('failed', 'bad_project', 'That project is not in the projects list.');
+        return;
+      }
+      // Before the session: the agent never lists the project's tools without consent.
+      if (!(await this.requirePrivacy(true))) return;
+      if (this.stoppedNow()) return;
+    }
+
+    let fresh: boolean;
+    try {
+      const got = await d.host.acquire({
+        conversation: t.conv.id,
+        agent: t.settings.agent,
+        known: d.known,
+        prefs: { model: t.settings.model || null, mode: (await d.settings()).agents[t.settings.agent.id]?.mode ?? null },
+        version: await d.version(),
+        manager: d.manager,
+        clock: d.clock,
+        dispatch: this,
+        signal: t.signal,
+      });
+      this.session = got.session;
+      fresh = got.fresh;
+      if (got.fresh) for (const n of got.session.notes) t.note(n);
+      if (got.restarted) t.note(RESTARTED_TEXT(this.name));
+    } catch (err) {
+      if (this.stoppedNow()) return;
+      if ((err as { code?: unknown } | null)?.code === 'agents_busy') {
+        t.end('failed', 'agents_busy', AGENTS_BUSY_TEXT);
+        return;
+      }
+      const e = agentErrorOf(err, this.name, null);
+      if (e instanceof AgentRunError) {
+        if (e.code === 'agent_signin') d.rememberSignIn?.(t.settings.agent.id, null, e);
+        t.end('failed', e.code, e.message);
+        return;
+      }
+      throw e;
+    }
+    const session = this.session as AgentSession;
+    this.matcher = new OursMatcher(policyOf(d.known).ours, (name) => this.served(name));
+    this.lastMode = session.mode;
+    this.lastModel = session.model;
+    t.emit({ type: 'agent', name: this.name, version: session.info.version, own_tools: t.settings.agent.ownTools });
+    if (this.stoppedNow()) return;
+
+    // The minutes cap counts active time (questions waiting don't count), and fires with no call open.
+    const caps = effectiveAgentCaps(t.settings.caps, (await d.settings()).agent_caps);
+    const minutesText = loopCapText('turn_minutes', { turn_usd: 0, day_usd: 0, steps: 0, turn_tokens: 0, turn_minutes: caps.turn_minutes });
+    t.armMinutes(caps.turn_minutes * 60_000, minutesText);
+    const offMinutes = t.onMinutesUp(() => this.halt({ state: 'capped', reason: 'turn_minutes', message: minutesText }, false));
+    const onStop = () => this.halt('stop', false);
+    t.signal.addEventListener('abort', onStop, { once: true });
+    let promptP: Promise<{ r: string | null } | { e: unknown }> | null = null;
+    try {
+      if (this.stoppedNow()) return;
+      const blocks = this.blocks(session, fresh);
+      t.setState('model');
+      this.promptPending = true;
+      promptP = session
+        .prompt(blocks, { onUpdate: (u) => this.onUpdate(u), onPermission: (v) => this.onPermission(v) })
+        .then(
+          (r) => ({ r }),
+          (e: unknown) => ({ e }),
+        )
+        .finally(() => {
+          this.promptPending = false;
+        });
+      const outcome = await Promise.race([promptP, this.halted]);
+      if (outcome === 'halted') {
+        // Given up on (killed, or no answer to the cancel in time).
+        this.endWith(this.pendingEnd ?? 'stop');
+        return;
+      }
+      if (this.pendingEnd) {
+        this.endWith(this.pendingEnd);
+        return;
+      }
+      if (t.signal.aborted) {
+        this.endWith('stop');
+        return;
+      }
+      if ('e' in outcome) {
+        const e = agentErrorOf(outcome.e, this.name, session.info.auth);
+        if (outcome.e instanceof RpcExited) {
+          // Crashed: the session ends (its tree kill), and the next message starts it again.
+          void d.host.endSession(t.conv.id, session, 'exited');
+          t.end('failed', 'agent_exited', exitedText(this.name, outcome.e.tail));
+          return;
+        }
+        if (e instanceof AgentRunError) {
+          if (e.code === 'agent_signin') d.rememberSignIn?.(t.settings.agent.id, session, e);
+          t.end('failed', e.code, e.message);
+          return;
+        }
+        throw e;
+      }
+      const end = stopReasonEnd(outcome.r, this.name);
+      t.end(end.state, end.reason, end.message);
+    } finally {
+      offMinutes();
+      t.signal.removeEventListener('abort', onStop);
+      if (this.promptPending) {
+        // The turn ends with the prompt still out (a throw): cancel, and the tree kill unless it answers in time.
+        session.cancel();
+        const timer = d.clock.setTimeout(() => {
+          if (this.promptPending) void d.host.endSession(t.conv.id, session, 'cancel_timeout');
+        }, this.timings.cancelMs);
+        void promptP?.finally(() => d.clock.clearTimeout(timer));
+      }
+      if (this.cancelTimer !== null && !this.promptPending) {
+        d.clock.clearTimeout(this.cancelTimer);
+        this.cancelTimer = null;
+      }
+    }
+  }
+
+  /** Whether `name` (an MCP name) was in the list last served to this session's agent. */
+  private served(name: string): boolean {
+    const s = this.session;
+    return !!s && bindingServes(s.binding.id, name);
+  }
+
+  /** The prompt's blocks (spec 4.7 step 5). */
+  private blocks(session: AgentSession, fresh: boolean): ContentBlock[] {
+    const t = this.t;
+    const ws = t.tab ? this.d.registry.workspaceOf(t.tab) : null;
+    const out: ContentBlock[] = [];
+    if (fresh) {
+      if (!noteInSystemPrompt({ sessionMeta: policyOf(this.d.known).sessionMeta })) out.push(noteBlock());
+      if (ws?.guide) {
+        sessionGuides.set(session, ws.guide);
+        out.push({ type: 'text', text: guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin) });
+      }
+    } else {
+      const frozen = sessionGuides.get(session);
+      if (ws?.guide && ws.guide !== frozen && !t.conv.guidesNoted.has(ws.guide)) {
+        t.conv.guidesNoted.add(ws.guide);
+        t.note(GUIDE_CHANGED_NOTE);
+      }
+    }
+    out.push({ type: 'text', text: t.prompt });
+    out.push({
+      type: 'text',
+      text: contextBlock({
+        projectId: t.projectId,
+        projectTitle: this.project?.title ?? null,
+        simulationId: t.simulationId,
+        workspace: ws ? { plugin: ws.reg.plugin, pluginName: ws.reg.pluginName, workspace: ws.reg.workspace } : null,
+      }),
+    });
+    return out;
+  }
+
+  close(): void {
+    this.closed = true;
+    for (const ac of [...this.asks]) ac.abort();
+  }
+}
+
+/** Runs an agent turn to its end. Errors other than the agent's reach the caller (TurnManager: t.crash). */
+export async function runAgentTurn(t: AgentRunTurn, d: AgentTurnDeps): Promise<void> {
+  const run = new AgentTurnRun(t, d, d.host.timings());
+  try {
+    await run.main();
+  } finally {
+    run.close();
+    d.host.release(t.conv.id, run);
+  }
+}

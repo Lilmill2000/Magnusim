@@ -3,12 +3,20 @@
  * The Assistant from a terminal (Foundation spec 9.4): a developer tool that runs one
  * turn in the Magnusim app on this PC and prints what happens.
  *
- *   node scripts/assistant-run.mjs [--port N] [--provider <id>] [--tab auto|<id>]
+ *   node scripts/assistant-run.mjs [--port N] [--provider <id> | --agent <id>] [--tab auto|<id>]
  *                                  [--project <id>] [--conversation <id>] [--json] "prompt"
  *
  * It talks to the app's own routes over loopback (POST /api/assistant/turns, then the
  * long-poll GET /api/assistant/turns/:id). `--provider` goes to the app as it is: the app
  * checks it, and its refusal names the providers (this file keeps no list of them).
+ * `--agent <id>` is `--provider agent:<id>`: a coding agent the person already uses. A turn on
+ * a coding agent needs this account's proof: the app's per-launch token, read from its
+ * owner-only connection file (mcp.json, found as the MCP bridge finds it) and sent in the
+ * x-magnusim-launch header, never printed. When the app refuses a turn for want of it (a
+ * default or a conversation that is a coding agent, or a file read before the app restarted),
+ * the file is read again and the start sent once more. Such a turn prints the agent's plan,
+ * its own tools, its permission requests, its mode and model, and at the end that its own
+ * account pays.
  * Questions are asked here (y/n): for a turn with no tab they are asked only here; for a
  * turn bound to an app tab the app shows them too, and either answer counts. Only a line
  * typed after a question shows answers it.
@@ -21,11 +29,11 @@
  * Exit codes: 0 the turn finished (`done`), 1 anything else, 2 the tab isn't connected.
  */
 import http from 'node:http';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--provider <id>] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
+export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--provider <id> | --agent <id>] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
 
 Runs one Assistant turn in the Magnusim app on this PC and prints what happens: the
 answer, each tool call (→) and its result (✓ or ✗), notes and questions. Questions are
@@ -34,8 +42,9 @@ app tab also shows them in the app; either answer counts. A question for the Mag
 window only is shown here and answered there. Ctrl+C stops the turn.
 
   --port N             the app's port (default: the app's own setting, else 8082)
-  --provider <id>      a provider as Settings → Assistant names it; without it the
-                       conversation's own, else the default from Settings → Assistant
+  --provider <id>      a provider as Settings → Assistant names it, or agent:<id>; without
+                       it the conversation's own, else the default from Settings → Assistant
+  --agent <id>         a coding agent Settings → Assistant lists (= --provider agent:<id>)
   --tab auto|<id>      bind the turn to an app tab's workspace (auto: the only connected one)
   --project <id>       the project the turn is about (without a tab)
   --conversation <id>  continue a conversation (its id is printed at the end)
@@ -47,6 +56,23 @@ Exit codes: 0 the turn finished, 1 it did not, 2 the app tab isn't connected.`;
 
 const TAB_HIDDEN_EXIT = 2;
 const POLL_WAIT_MS = 25_000;
+export const SIGN_IN_LINE = 'Sign in, then run the same command again.';
+
+/**
+ * This launch's token from the app's connection file (mcp.json, found by the MCP bridge's own
+ * rules: the same home as the app's), or null. Read fresh each time: the app writes a new one at
+ * each start. Never printed.
+ */
+export async function launchToken(o = {}) {
+  try {
+    const { bridgeInfoPath } = await import('./assistant-mcp.mjs');
+    const raw = readFileSync(bridgeInfoPath(o.info ?? null, o), 'utf8');
+    const doc = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+    return doc && typeof doc.token === 'string' && doc.token ? doc.token : null;
+  } catch {
+    return null;
+  }
+}
 
 export function parseArgs(argv) {
   const o = { port: null, provider: null, tab: null, project: null, conversation: null, json: false, help: false, words: [], error: null };
@@ -62,7 +88,7 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--json') o.json = true;
-    else if (a === '--port' || a === '--provider' || a === '--tab' || a === '--project' || a === '--conversation') {
+    else if (a === '--port' || a === '--provider' || a === '--agent' || a === '--tab' || a === '--project' || a === '--conversation') {
       const v = value(i, a);
       if (v === null) break;
       i += 1;
@@ -73,7 +99,8 @@ export function parseArgs(argv) {
           break;
         }
         o.port = n;
-      } else o[a.slice(2)] = v;
+      } else if (a === '--agent') o.provider = `agent:${v}`;
+      else o[a.slice(2)] = v;
     } else if (a === '--') {
       o.words.push(...argv.slice(i + 1));
       break;
@@ -103,7 +130,7 @@ export function plainText(text) {
   return String(text ?? '').replace(CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ''));
 }
 
-function call(port, method, path, body) {
+function call(port, method, path, body, extraHeaders = {}) {
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -116,6 +143,7 @@ function call(port, method, path, body) {
         headers: {
           host: `127.0.0.1:${port}`,
           accept: 'application/json',
+          ...extraHeaders,
           ...(payload !== undefined ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}),
         },
       },
@@ -190,6 +218,36 @@ class Lines {
   }
 }
 
+/** One agent event as a line (null: nothing to print). Titles and labels are the app's cleaned text. */
+export function agentLine(e) {
+  switch (e.type) {
+    case 'agent':
+      return `${plainText(e.name)}${e.version ? ` ${plainText(e.version)}` : ''} is working (its own tools are ${e.own_tools === 'off' ? 'off' : 'on'}).`;
+    case 'plan': {
+      const mark = { pending: '[ ]', in_progress: '[~]', completed: '[x]' };
+      return ['plan:', ...(e.entries || []).map((x) => `  ${mark[x.status] ?? '[ ]'} ${plainText(x.content)}`)].join('\n');
+    }
+    case 'agent_tool':
+      return `agent: ${plainText(e.title) || plainText(e.kind)} (${e.status})`;
+    case 'agent_permission':
+      if (e.outcome === 'auto_allowed') return `auto-allowed: ${plainText(e.title)}`;
+      return `agent asked: ${plainText(e.title)} (${e.outcome === 'allowed' ? 'allowed' : e.outcome === 'declined' ? `not allowed${e.by === 'timeout' ? ', no answer in time' : ''}` : 'cancelled'})`;
+    case 'agent_mode':
+      return `mode: ${plainText(e.label || e.mode)}`;
+    case 'agent_model':
+      return `model: ${plainText(e.label || e.model)}`;
+    default:
+      return null;
+  }
+}
+
+/** The end's billing line for a turn its coding agent's own account pays. */
+export function billingLine(summary) {
+  if (summary?.billing !== 'agent_account') return null;
+  const name = plainText(summary.agent?.name || 'coding agent');
+  return `Billed to your ${name} account (Magnusim can't see the cost).`;
+}
+
 export async function main(argv = process.argv.slice(2), io = { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }) {
   const o = parseArgs(argv);
   const out = (s) => io.stdout.write(s);
@@ -208,15 +266,24 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
 
   // 'auto' goes as it is: the app picks the only connected tab, or says why it can't (resolveTab).
   const tab = o.tab;
+  const startBody = {
+    text: prompt,
+    ...(o.conversation ? { conversation: o.conversation } : {}),
+    ...(o.provider ? { provider: o.provider } : {}),
+    ...(tab ? { tab } : {}),
+    ...(o.project ? { context: { project_id: o.project } } : {}),
+  };
+  // A coding agent's turn carries this account's proof (the app's per-launch token).
+  const withToken = (token) => (token ? { 'x-magnusim-launch': token } : {});
+  const isAgent = typeof o.provider === 'string' && o.provider.startsWith('agent:');
   let started;
   try {
-    started = await api('POST', '/api/assistant/turns', {
-      text: prompt,
-      ...(o.conversation ? { conversation: o.conversation } : {}),
-      ...(o.provider ? { provider: o.provider } : {}),
-      ...(tab ? { tab } : {}),
-      ...(o.project ? { context: { project_id: o.project } } : {}),
-    });
+    started = await call(port, 'POST', '/api/assistant/turns', startBody, withToken(isAgent ? await launchToken() : null));
+    // No token sent, or one of an earlier launch: the file once more (the app has just written it).
+    if (started.status === 403 && started.json?.code === 'launch_proof') {
+      const token = await launchToken();
+      if (token) started = await call(port, 'POST', '/api/assistant/turns', startBody, withToken(token));
+    }
   } catch (e) {
     err(`Nothing answered on port ${port}. Is Magnusim running? (${e?.code || e?.message || e})\n`);
     return 1;
@@ -300,6 +367,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
   let since = 0;
   let end = null;
   let usd = 0;
+  let summary = null;
   const progressShown = new Map();
   try {
     for (;;) {
@@ -308,6 +376,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
         err(`${r.json?.error || `The app answered HTTP ${r.status}.`}\n`);
         return 1;
       }
+      summary = r.json.turn ?? summary;
       for (const e of r.json.events) {
         if (o.json) out(`${JSON.stringify(e)}\n`);
         switch (e.type) {
@@ -355,6 +424,16 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
           case 'end':
             end = e;
             break;
+          case 'agent':
+          case 'plan':
+          case 'agent_tool':
+          case 'agent_permission':
+          case 'agent_mode':
+          case 'agent_model': {
+            const shown = o.json ? null : agentLine(e);
+            if (shown) line(shown);
+            break;
+          }
           default:
             break;
         }
@@ -374,6 +453,9 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
     if (end?.message) line(end.state === 'done' ? end.message : `[${end.state}] ${end.message}`);
     else if (end && end.state !== 'done') line(`[${end.state}] ${end.reason}`);
     else if (!atLineStart) print('\n');
+    if (end?.reason === 'agent_signin') line(SIGN_IN_LINE);
+    const billed = billingLine(summary);
+    if (billed) line(billed);
     err(`(conversation ${conversation}${usd > 0 ? `, $${usd.toFixed(4)} this turn` : ''}; continue it with --conversation ${conversation})\n`);
   }
   return end?.state === 'done' ? 0 : 1;

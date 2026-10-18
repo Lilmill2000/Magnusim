@@ -2,7 +2,9 @@
 // spawned against a test server (the real routes, the real local-server adapter, the
 // fake provider). It prints the answer, tool calls and results; asks questions at the
 // terminal (y/n); exits 0 for done, 1 otherwise and 2 when the app tab isn't connected,
-// with the plain text; --json prints one event per line.
+// with the plain text; --json prints one event per line. A turn on a coding agent (--agent,
+// --provider agent:<id>) sends the launch token from the connection file, reads it again
+// once after a launch_proof refusal, and prints the agent lines and who pays.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -196,7 +198,7 @@ describe('assistant-run.mjs', () => {
     assert.ok(r.stdout.includes('"text":"Named."'));
     assert.equal((await cli(['--provider'])).code, 1, 'it needs a value');
     const help = await cli(['--help']);
-    assert.match(help.stdout, /\n {2}--provider <id> {6}a provider as Settings → Assistant names it; without it the\n/);
+    assert.match(help.stdout, /\n {2}--provider <id> {6}a provider as Settings → Assistant names it, or agent:<id>; without\n/);
   });
 
   it('without --port it dials the port the app listens on: the saved one before MAGNUSIM_PORT, as the app picks it', async () => {
@@ -401,5 +403,174 @@ describe('assistant-run.mjs', () => {
     const src = readFileSync(CLI, 'utf8');
     assert.doesNotMatch(src, /(?<![a-z])(claude|anthropic|openai|chatgpt|copilot)(?![a-z])/i);
     assert.doesNotMatch(src, /(?<![a-z0-9])gpt(?![a-z])/i);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// Coding agents (phase 3 spec 4.15, 5.2, 5.5, 6.4)
+// ------------------------------------------------------------------------------------------------
+
+describe('assistant-run.mjs with a coding agent', () => {
+  const INFO = join(process.env.MAGNUSIM_ASSISTANT_HOME, 'assistant', 'mcp.json');
+  /** The app's connection file as the app writes it (the bridge's home rules find it). */
+  const writeInfo = (token) => {
+    mkdirSync(dirname(INFO), { recursive: true });
+    writeFileSync(INFO, JSON.stringify({ version: 1, port: 1, token, pid: process.pid, started_at: new Date().toISOString() }));
+  };
+
+  /**
+   * A stub app: `start(req, n)` answers the n-th POST /turns ({status, json}); the poll answers
+   * `events` once, then ends with `summary`. Records each start's body and its launch header.
+   */
+  async function stubApp({ start, events = [], summary = null }) {
+    const starts = [];
+    const stub = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        const send = (code, j) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(j));
+        if (req.method === 'POST' && req.url === '/api/assistant/turns') {
+          starts.push({ body: JSON.parse(body), launch: req.headers['x-magnusim-launch'] ?? null });
+          const a = start(starts.length);
+          return send(a.status, a.json);
+        }
+        if (req.method === 'GET') return send(200, { ok: true, turn: summary, next: events.length, ended: true, events });
+        return send(404, { ok: false });
+      });
+    });
+    await new Promise((r) => stub.listen(0, '127.0.0.1', r));
+    return {
+      starts,
+      port: stub.address().port,
+      async close() {
+        stub.closeAllConnections?.();
+        await new Promise((r) => stub.close(r));
+      },
+    };
+  }
+
+  async function run(args, app) {
+    let out = '';
+    let errText = '';
+    const code = await main(['--port', String(app.port), ...args], {
+      stdin: new PassThrough(),
+      stdout: { write: (t) => ((out += t), true) },
+      stderr: { write: (t) => ((errText += t), true) },
+    });
+    return { code, out, err: errText };
+  }
+
+  const STARTED = { status: 202, json: { ok: true, turn: 't1', conversation: 'c1', answer_key: 'a'.repeat(32) } };
+  const SUMMARY = { id: 't1', provider: 'agent:fake', billing: 'agent_account', agent: { id: 'fake', name: 'Fake Agent', version: '1.2.3' } };
+
+  it('--agent <id> starts agent:<id> with the launch token from the connection file; prints the agent lines and who pays', async () => {
+    writeInfo('tok-first');
+    const events = [
+      { seq: 1, type: 'agent', name: 'Fake Agent', version: '1.2.3', own_tools: 'off' },
+      { seq: 2, type: 'plan', entries: [{ content: 'Read it', status: 'completed', priority: 'medium' }, { content: 'Add two', status: 'in_progress', priority: 'high' }, { content: 'Report', status: 'pending', priority: 'low' }] },
+      { seq: 3, type: 'agent_mode', mode: 'default', label: 'Default' },
+      { seq: 4, type: 'agent_model', model: 'm1', label: 'Model one' },
+      { seq: 5, type: 'agent_permission', title: 'ai-demo__add', outcome: 'auto_allowed', by: 'magnusim' },
+      { seq: 6, type: 'agent_tool', call: 'own-1', title: 'cat notes.txt', kind: 'read', status: 'completed' },
+      { seq: 7, type: 'agent_permission', title: 'rm -rf build', outcome: 'declined', by: 'timeout' },
+      { seq: 8, type: 'text', step: 1, text: 'Done.' },
+      { seq: 9, type: 'end', state: 'done', reason: 'end_turn', message: null },
+    ];
+    const app = await stubApp({ start: () => STARTED, events, summary: SUMMARY });
+    try {
+      const r = await run(['--agent', 'fake', 'Add two.'], app);
+      assert.equal(r.code, 0, r.err);
+      assert.deepEqual(app.starts, [{ body: { text: 'Add two.', provider: 'agent:fake' }, launch: 'tok-first' }]);
+      assert.equal(
+        r.out,
+        [
+          'Fake Agent 1.2.3 is working (its own tools are off).',
+          'plan:',
+          '  [x] Read it',
+          '  [~] Add two',
+          '  [ ] Report',
+          'mode: Default',
+          'model: Model one',
+          'auto-allowed: ai-demo__add',
+          'agent: cat notes.txt (completed)',
+          'agent asked: rm -rf build (not allowed, no answer in time)',
+          'Done.',
+          "Billed to your Fake Agent account (Magnusim can't see the cost).",
+          '',
+        ].join('\n'),
+      );
+      assert.ok(!r.out.includes('tok-first') && !r.err.includes('tok-first'), 'the token is never printed');
+      // --provider agent:<id> is the same; an API-key provider sends no token.
+      await run(['--provider', 'agent:fake', 'Again.'], app);
+      assert.equal(app.starts[1].launch, 'tok-first');
+      await run(['--provider', 'some_provider', 'Key.'], app);
+      assert.equal(app.starts[2].launch, null);
+    } finally {
+      rmSync(INFO, { force: true });
+      await app.close();
+    }
+  });
+
+  it('refused for want of the proof (a default or conversation that is an agent, or an old token): the file is read again and the start sent once more', async () => {
+    writeInfo('tok-new');
+    const app = await stubApp({
+      start: (n) => (n === 1 ? { status: 403, json: { ok: false, code: 'launch_proof', error: 'Start a coding agent from the Magnusim window or with assistant-run on this account.' } } : STARTED),
+      events: [{ seq: 1, type: 'end', state: 'done', reason: 'end_turn', message: null }],
+      summary: SUMMARY,
+    });
+    try {
+      const r = await run(['Go.'], app);
+      assert.equal(r.code, 0, r.err);
+      assert.deepEqual(
+        app.starts.map((s) => s.launch),
+        [null, 'tok-new'],
+      );
+    } finally {
+      rmSync(INFO, { force: true });
+      await app.close();
+    }
+    // No connection file: the refusal stands, exit 1 with its text (one retry at most).
+    const refused = await stubApp({ start: () => ({ status: 403, json: { ok: false, code: 'launch_proof', error: 'Start a coding agent from the Magnusim window or with assistant-run on this account.' } }) });
+    try {
+      const r = await run(['--agent', 'fake', 'Go.'], refused);
+      assert.equal(r.code, 1);
+      assert.equal(refused.starts.length, 1);
+      assert.equal(r.err, 'Start a coding agent from the Magnusim window or with assistant-run on this account.\n');
+    } finally {
+      await refused.close();
+    }
+  });
+
+  it('an agent that is off: exit 1 with its text; a turn that needs a sign-in says how to go on', async () => {
+    writeInfo('tok');
+    const off = await stubApp({ start: () => ({ status: 400, json: { ok: false, code: 'agent_not_allowed', error: 'Fake Agent is off until you allow it in Settings → Assistant: its own tools can run commands and change files on this PC.' } }) });
+    try {
+      const r = await run(['--agent', 'fake', 'Go.'], off);
+      assert.equal(r.code, 1);
+      assert.equal(r.err, 'Fake Agent is off until you allow it in Settings → Assistant: its own tools can run commands and change files on this PC.\n');
+    } finally {
+      await off.close();
+    }
+    const signIn = await stubApp({
+      start: () => STARTED,
+      events: [{ seq: 1, type: 'end', state: 'failed', reason: 'agent_signin', message: "Fake Agent isn't signed in. Settings → Assistant shows how to sign in." }],
+      summary: SUMMARY,
+    });
+    try {
+      const r = await run(['--agent', 'fake', 'Go.'], signIn);
+      assert.equal(r.code, 1);
+      assert.equal(r.out, "[failed] Fake Agent isn't signed in. Settings → Assistant shows how to sign in.\nSign in, then run the same command again.\nBilled to your Fake Agent account (Magnusim can't see the cost).\n");
+    } finally {
+      rmSync(INFO, { force: true });
+      await signIn.close();
+    }
+  });
+
+  it('--help names --agent and agent:<id>, and no provider by name', async () => {
+    const r = await cli(['--help'], '', { withPort: false });
+    assert.equal(r.code, 0);
+    assert.match(r.stdout, /--agent <id> {9}a coding agent Settings → Assistant lists \(= --provider agent:<id>\)/);
+    assert.match(r.stdout, /--provider <id> {6}a provider as Settings → Assistant names it, or agent:<id>/);
+    assert.deepEqual((await import(pathToFileURL(CLI).href)).parseArgs(['--agent', 'x', 'hi']).provider, 'agent:x');
   });
 });

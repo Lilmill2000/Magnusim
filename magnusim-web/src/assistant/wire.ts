@@ -207,6 +207,14 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
   | { type: 'end'; state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string; message: string | null }
+  // A turn on a coding agent (phase 3): the agent once it is ready, its plan, its own tools, its
+  // permission requests (ours auto-allowed; its own asked in the window), its mode and model.
+  | { type: 'agent'; name: string; version: string | null; own_tools: 'off' | 'on' }
+  | { type: 'plan'; entries: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; priority: 'high' | 'medium' | 'low' }> }
+  | { type: 'agent_tool'; call: string; title: string; kind: string; status: 'pending' | 'in_progress' | 'completed' | 'failed' }
+  | { type: 'agent_permission'; title: string; outcome: 'auto_allowed' | 'allowed' | 'declined' | 'cancelled'; by: 'magnusim' | 'user' | 'timeout' | 'stop' }
+  | { type: 'agent_mode'; mode: string; label: string }
+  | { type: 'agent_model'; model: string; label: string }
 );
 
 /** A turn as GET /api/assistant/turns/:id and its Stop answer it. */
@@ -226,6 +234,12 @@ export interface TurnSummary {
   tab: string | null;
   project_id: string | null;
   served_by: string | null;
+  /** The turn's provider (an API-key provider's id, or agent:<id>); absent from an older server. */
+  provider?: string;
+  /** 'agent_account': billed to the person's own coding-agent account (no usage events; Magnusim's $ limits don't apply). */
+  billing?: 'usd' | 'free' | 'agent_account';
+  /** The coding agent the turn runs on (null for an API-key provider). */
+  agent?: { id: string; name: string; version: string | null } | null;
 }
 
 /**

@@ -865,6 +865,15 @@ export class Relay {
     l.send('gate_closed', { gate: view.id, answer: closed?.answer ?? 'deny', by: closed?.by ?? 'stop' });
   }
 
+  /**
+   * Whether `link` is `tab`'s live relay link now (a page's proof that it may start a turn on a
+   * coding agent: the launch proof, phase 3 spec 5.2).
+   */
+  isLiveLinkOf(tab: string, link: unknown): boolean {
+    const rec = this.closed ? null : this.liveLink(link);
+    return !!rec && rec.tab === tab && !rec.silent;
+  }
+
   // ------------------------------------------------------------ views
 
   /**

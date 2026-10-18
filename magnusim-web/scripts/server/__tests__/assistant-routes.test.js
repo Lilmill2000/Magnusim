@@ -156,6 +156,10 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/agents/allow',
       '/api/assistant/agents/custom',
       '/api/assistant/agents/custom/remove',
+      '/api/assistant/agents/sign-in',
+      // The router's underscore alias of a hyphenated path (router.ts underscoreAlias).
+      '/api/assistant/agents/sign_in',
+      '/api/assistant/agents/test',
       '/api/assistant/conversations/:id/forget',
       '/api/assistant/gates/:id',
       '/api/assistant/key',
@@ -545,8 +549,10 @@ describe('turns', () => {
     assert.ok(sent[0].body.tools.some((t) => t.function.name === 'app_status'));
     assert.ok(!sent[0].body.tools.some((t) => t.function.name === 'connection_check'));
     assert.deepEqual(Object.keys(turn).sort(), [
-      'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'message', 'open_gates', 'project_id', 'served_by', 'started_at', 'state', 'step', 'tab', 'text_so_far', 'usd',
+      'agent', 'billing', 'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'message', 'open_gates', 'project_id', 'provider', 'served_by', 'started_at', 'state', 'step', 'tab', 'text_so_far', 'usd',
     ]);
+    // Who pays (phase 3 spec 4.15): a local server is not priced, and no coding agent runs it.
+    assert.deepEqual([turn.provider, turn.billing, turn.agent], ['openai_compatible', 'free', null]);
     assert.equal((await get('/api/assistant/turns/t-nope')).status, 404);
     assert.equal((await post('/api/assistant/turns/t-nope/stop', {})).status, 404);
     const tabs = await get('/api/assistant/tabs');

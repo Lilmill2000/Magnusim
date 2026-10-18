@@ -63,6 +63,11 @@ interface BindingEntry {
   dispatch: AgentDispatch | null;
   /** A Test binding's call of connection_check (the Test records "called"). */
   onTestCall: (() => void) | null;
+  /**
+   * The MCP names last listed on its connection (server.ts notes them at each tools/list), null
+   * before any: the agent runner's permission matcher counts only those as Magnusim's (spec 4.7).
+   */
+  served: ReadonlySet<string> | null;
 }
 
 const KEY = Symbol.for('magnusim.assistant.mcpBindings');
@@ -82,7 +87,7 @@ export const BINDING_RE = /^b-[0-9a-f]{24}$/;
 /** A new binding for an agent session (or a Settings Test). */
 export function mintBinding(o: { conversation: string; agent: string; test?: boolean; dispatch?: AgentDispatch | null; onTestCall?: () => void }): AgentBinding {
   const binding: AgentBinding = { id: `b-${randomBytes(12).toString('hex')}`, conversation: o.conversation, agent: o.agent, test: o.test === true };
-  table().set(binding.id, { binding, live: null, closeLive: null, dispatch: o.dispatch ?? null, onTestCall: o.onTestCall ?? null });
+  table().set(binding.id, { binding, live: null, closeLive: null, dispatch: o.dispatch ?? null, onTestCall: o.onTestCall ?? null, served: null });
   return binding;
 }
 
@@ -90,6 +95,17 @@ export function mintBinding(o: { conversation: string; agent: string; test?: boo
 export function setBindingDispatch(id: string, dispatch: AgentDispatch | null): void {
   const e = table().get(id);
   if (e) e.dispatch = dispatch;
+}
+
+/** The MCP names a binding's connection was last listed (server.ts, at each tools/list). */
+export function noteBindingServed(id: string, names: Iterable<string>): void {
+  const e = table().get(id);
+  if (e) e.served = new Set(names);
+}
+
+/** Whether `name` was in the list last served on the binding's connection (false before any list). */
+export function bindingServes(id: string, name: string): boolean {
+  return table().get(id)?.served?.has(name) === true;
 }
 
 /** The session ended: its binding is refused from now on, and its live connection closes. */

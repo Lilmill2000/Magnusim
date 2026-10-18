@@ -7,7 +7,7 @@
  * explicit, so no SDK reads a key, token, profile, organization or address from the
  * environment or from a profile file.
  */
-import { isLoopbackUrl, serverOrigin, type AssistantSettings } from '../settings.ts';
+import { isAgentProvider, isLoopbackUrl, serverOrigin, type AssistantSettings } from '../settings.ts';
 import { ProviderError, type ProviderAdapter, type ProviderId, type ProviderRequest, type ProviderResult, type StreamEvent } from '../types.ts';
 import { KeyError, type KeySlot, type KeyStatus } from '../secrets/store.ts';
 import { anthropicAdapter } from './anthropic.ts';
@@ -34,16 +34,24 @@ export const PROVIDER_LABELS: Readonly<Record<ProviderId, string>> = Object.free
   openai_compatible: 'Local server',
 });
 
-/** Project data would leave this PC: a cloud provider, or a local-server address that isn't on this PC. */
+/**
+ * Project data would leave this PC: a cloud provider, a local-server address that isn't on this
+ * PC, or a coding agent (it sends what it reads to its own service).
+ */
 export function isCloud(s: ProviderSettings): boolean {
   if (s.provider === 'anthropic' || s.provider === 'openai') return true;
+  if (isAgentProvider(s.provider)) return true;
   if (s.provider === 'openai_compatible') return !isLoopbackUrl(s.base_url);
   return false;
 }
 
-/** Where project data goes: `anthropic`, `openai`, or `host:<hostname>` for a local server ('' when off). */
+/**
+ * Where project data goes: `anthropic`, `openai`, `host:<hostname>` for a local server, or
+ * `agent:<id>` for a coding agent (a consent for one agent doesn't cover another); '' when off.
+ */
 export function destinationOf(s: ProviderSettings): string {
   if (s.provider === 'anthropic' || s.provider === 'openai') return s.provider;
+  if (isAgentProvider(s.provider)) return s.provider;
   if (s.provider === 'openai_compatible') {
     try {
       return `host:${new URL(s.base_url).hostname.toLowerCase()}`;
@@ -78,6 +86,8 @@ export function tokenElsewhereText(origin: string | null): string {
 export function createAdapter(settings: ProviderSettings, secrets: KeyLender, o: CreateOptions = {}): ProviderAdapter {
   const provider = settings.provider;
   if (provider === 'off') throw new ProviderError('other', 'The Assistant is off. Choose a provider in Settings → Assistant.');
+  // A coding agent has no model adapter: its turns run on agents/turn.ts.
+  if (isAgentProvider(provider)) throw new ProviderError('other', 'A coding agent has no model adapter.');
   const lend = (slot: KeySlot, optional: boolean): AdapterOptions['borrowKey'] =>
     async <T>(use: (key: string | null) => Promise<T>): Promise<T> => {
       await secrets.load?.();

@@ -85,7 +85,7 @@ import { onAssistantShutdown } from '../state.ts';
 import type { Risk, ToolCallPart } from '../types.ts';
 import { CLIENTS_OFF_TEXT, type McpAdmission, type McpConnection, type McpHandler, type McpHello } from './listener.ts';
 import { servedMap } from './names.ts';
-import { bindingEntry, CallQueue, claimBinding, type BindingClaim, type McpSession } from './sessions.ts';
+import { bindingEntry, CallQueue, claimBinding, noteBindingServed, type BindingClaim, type McpSession } from './sessions.ts';
 
 /** A line longer than this closes the connection (the SDK's default is 10 MB). */
 export const MCP_LINE_MAX = 8 * 1024 * 1024;
@@ -587,6 +587,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
     }
     const view = await viewOf(session, true);
     session.served = view.served;
+    // An agent turn's permission matcher counts only the tools listed to its agent.
+    if (session.binding) noteBindingServed(session.binding.id, view.served.keys());
     const live = lives.get(session);
     if (live) {
       live.servedSig = view.sig;
