@@ -77,6 +77,16 @@ const TIMEOUT_CODES = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'
 
 const CONTEXT_RE = /context[ _-]?(length|window)|too long|prompt is too long|maximum context|context_length_exceeded|model_context_window_exceeded/i;
 
+/**
+ * Whether a provider's refusal is an HTTP 400 whose words (or error code) say the request's
+ * strict tool schemas can't be compiled (CAD tools spec H8); each cloud adapter gives its
+ * own dialect's words and codes.
+ */
+export function strictSchemaRefusal(err: unknown, words: RegExp, codes: readonly string[] = []): boolean {
+  if (field(err, 'status') !== 400) return false;
+  return words.test(providerText(err)) || errorTypes(err).some((t) => codes.includes(t));
+}
+
 /** The ProviderError for anything a provider call threw; logs the provider's own text, redacted. */
 export function mapProviderError(err: unknown, ctx: ErrorContext): ProviderError {
   const mapped = classify(err, ctx);

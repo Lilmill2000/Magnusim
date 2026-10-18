@@ -307,6 +307,22 @@ describe('toolsFor', () => {
     assert.ok(tools.every((t) => t.risk === 'read' && t.source.kind === 'host'));
     assert.equal(connectionCheckTool().name, 'connection_check');
   });
+
+  it('provider definitions mark the workspace’s tools, never the host’s (a cloud provider that cannot compile them strictly gets them without strict, CAD tools spec H8)', () => {
+    const r = createToolRegistry({ hostTools: [hostTool('alpha')] });
+    r.setWorkspace('T1', 'L1', registration());
+    const defs = providerTools(r.toolsFor(ctx()));
+    assert.deepEqual(
+      defs.map((d) => [d.name, d.workspace ?? null]),
+      [
+        ['alpha', null],
+        ['ai-demo__add', true],
+        ['ai-demo__get_count', true],
+        ['ai-demo__reset', true],
+      ],
+    );
+    assert.ok(!('workspace' in defs[0]), 'a host tool carries no flag at all');
+  });
 });
 
 describe('running a workspace tool', () => {

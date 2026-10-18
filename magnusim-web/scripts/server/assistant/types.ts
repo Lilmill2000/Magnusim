@@ -23,7 +23,8 @@ export interface AssistantMessage {
 export type Message = UserMessage | AssistantMessage;
 
 export interface JsonSchemaObject { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties: false; description?: string }
-export interface ProviderTool { name: string; description: string; schema: JsonSchemaObject }
+/** `workspace`: a workspace page's tool, not the host's (a cloud provider that can't compile the strict set gets these without strict, CAD tools spec H8). */
+export interface ProviderTool { name: string; description: string; schema: JsonSchemaObject; workspace?: boolean }
 export interface ProviderRequest {
   model: string;
   system: Array<{ text: string; cache: boolean }>;   // [host prompt, frozen workspace guide?]

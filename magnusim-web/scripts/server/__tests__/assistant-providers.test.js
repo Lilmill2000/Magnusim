@@ -32,7 +32,7 @@ const { mapProviderError } = await import('../assistant/providers/errors.ts');
 const { resolveTestProviderUrl, cloudBaseUrl } = await import('../assistant/providers/endpoints.ts');
 const { sdkInstalled, depsStatus, setSdkSpecifierForTests, loadSdkClass, DEPS_MISSING_TEXT } = await import('../assistant/providers/load-sdk.ts');
 const { anthropicClientOptions, MessageAccumulator } = await import('../assistant/providers/anthropic.ts');
-const { CLOUD_WATCHDOG, LOCAL_WATCHDOG } = await import('../assistant/providers/common.ts');
+const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE } = await import('../assistant/providers/common.ts');
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
@@ -1310,6 +1310,163 @@ ${IMAGE_LEFT_OUT}` });
 
   it('the cloud adapters have no images rule (their models read images)', () => {
     for (const provider of ['anthropic', 'openai']) assert.equal(adapterFor(provider).readsImages, undefined, provider);
+  });
+});
+
+describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () => {
+  const HOST = [
+    { name: 'app_status', description: 'The app.', schema: obj({}) },
+    { name: 'project_summary', description: 'The project.', schema: obj({ id: { type: 'string' } }) },
+  ];
+  /** Tools as a workspace page's (registry.ts providerTools marks them). */
+  const workspace = (tools, plugin = 'ai-demo') => tools.map((t) => ({ ...t, name: `${plugin}__${t.name}`, workspace: true }));
+  const WS = workspace(DEMO_TOOLS.slice(0, 4));
+  const TOOLS = [...HOST, ...WS];
+  /** Each dialect's refusal of a strict set it can't compile, as the provider words it. */
+  const REFUSED = {
+    anthropic: { type: 'error', error: { type: 'invalid_request_error', message: 'Schema is too complex for compilation.' } },
+    openai: {
+      error: {
+        message: "Invalid schema for function 'ai-demo__add': In context=('properties', 'by'), 'minimum' is not permitted.",
+        type: 'invalid_request_error',
+        param: 'tools[3].parameters',
+        code: 'invalid_function_parameters',
+      },
+    },
+  };
+  const CLOUD = ['anthropic', 'openai'];
+  /** Each tool of a request as [name, strict]. */
+  const strictness = (r) => r.body.tools.map((t) => [t.name, t.strict === true]);
+  const allStrict = (tools) => tools.map((t) => [t.name, true]);
+  const hostStrict = (tools) => tools.map((t) => [t.name, !t.workspace]);
+  /** The requests `fn` sent in `dialect`. */
+  const sentBy = async (dialect, fn) => {
+    const from = chat(dialect).length;
+    await fn();
+    return chat(dialect).slice(from);
+  };
+
+  it('a 400 that says the strict schemas cannot be compiled: sent once more with the workspace tools not strict (the host tools still strict) and a note; that tool set goes so from then on, until a test reset', async () => {
+    for (const provider of CLOUD) {
+      const dialect = DIALECT[provider];
+      fake.failNext({ status: 400, body: REFUSED[provider], dialect });
+      fake.reply({ text: 'ok' });
+      let r;
+      let sent = await sentBy(dialect, async () => {
+        r = await send(provider, request(provider, [userText('tools')], { tools: TOOLS }));
+      });
+      assert.equal(r.stop, 'end_turn', provider);
+      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(sent.map(strictness), [allStrict(TOOLS), hostStrict(TOOLS)], provider);
+      assert.equal(sent[0].step, undefined, `${provider}: the refused request took no step`);
+      // The same tools both times: only `strict` differs (the second dialect says false, the first leaves it out).
+      const bare = (req) => req.body.tools.map((t) => ({ ...t, strict: null }));
+      assert.deepEqual(bare(sent[1]), bare(sent[0]), provider);
+      if (provider === 'openai') assert.deepEqual(sent[1].body.tools.map((t) => t.strict), [true, true, false, false, false, false]);
+      else assert.ok(sent[1].body.tools.slice(HOST.length).every((t) => !('strict' in t)), provider);
+
+      // Another turn's adapter, the same tools: not strict from the start, one request, the note again.
+      fake.reply({ text: 'again' });
+      sent = await sentBy(dialect, async () => {
+        r = await send(provider, request(provider, [userText('again')], { tools: TOOLS }));
+      });
+      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(sent.map(strictness), [hostStrict(TOOLS)], provider);
+
+      // Another tool set is still tried strict.
+      const other = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 4), 'other')];
+      fake.reply({ text: 'other' });
+      sent = await sentBy(dialect, async () => {
+        r = await send(provider, request(provider, [userText('other')], { tools: other }));
+      });
+      assert.equal(r.notes, undefined, provider);
+      assert.deepEqual(sent.map(strictness), [allStrict(other)], provider);
+    }
+    // A test reset (as a server start) forgets the sets: strict again, with no note.
+    resetAssistantState();
+    for (const provider of CLOUD) {
+      fake.reply({ text: 'fresh' });
+      let r;
+      const sent = await sentBy(DIALECT[provider], async () => {
+        r = await send(provider, request(provider, [userText('fresh')], { tools: TOOLS }));
+      });
+      assert.equal(r.notes, undefined, provider);
+      assert.deepEqual(sent.map(strictness), [allStrict(TOOLS)], provider);
+    }
+  });
+
+  it("the first dialect: only a workspace tool sent strict makes the second request differ, and the CAD-sized set keeps its host tools' strict budget", async () => {
+    // 20 host tools take the whole strict budget: the workspace tool after them already goes
+    // without strict, so a refusal is not sent again.
+    const hosts = Array.from({ length: 20 }, (_, i) => ({ name: `h${String(i).padStart(2, '0')}`, description: 'A host tool.', schema: obj({}) }));
+    const full = [...hosts, ...WS.slice(0, 1)];
+    fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
+    const sent = await sentBy('anthropic', () => assert.rejects(send('anthropic', request('anthropic', [userText('x')], { tools: full })), (e) => e.code === 'bad_request'));
+    assert.deepEqual(sent.map(strictness), [[...allStrict(hosts), [WS[0].name, false]]]);
+    // 3 host tools and 18 workspace tools (a CAD turn): the first 20 strict, then, refused,
+    // the 3 host tools only.
+    const cad = [...HOST, { name: 'explain_ready', description: 'Ready?', schema: obj({}) }, ...workspace(Array.from({ length: 18 }, (_, i) => ({ name: `t${i}`, description: 'A tool.', schema: obj({}) })), 'cad')];
+    fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
+    fake.reply({ text: 'ok' });
+    let r;
+    const two = await sentBy('anthropic', async () => {
+      r = await send('anthropic', request('anthropic', [userText('cad')], { tools: cad }));
+    });
+    assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE]);
+    assert.deepEqual(two.map((q) => q.body.tools.map((t) => t.strict === true)), [
+      [...Array(20).fill(true), false],
+      [true, true, true, ...Array(18).fill(false)],
+    ]);
+  });
+
+  it('which refusals are sent again: a 400 in the words (or code) of a strict schema refused, once; never another 400, a server error, a request with no workspace tool, or a second refusal', async () => {
+    const noRetry = { 'x-should-retry': 'false' };
+    const otherWords = {
+      anthropic: { type: 'error', error: { type: 'invalid_request_error', message: 'messages.0: the content is not valid' } },
+      openai: { error: { message: "Invalid type for 'input': expected a list.", type: 'invalid_request_error', param: 'input', code: 'invalid_type' } },
+    };
+    const codeOnly = { error: { message: 'The tool parameters are not accepted.', type: 'invalid_request_error', param: 'tools[2].parameters', code: 'invalid_function_parameters' } };
+    for (const provider of CLOUD) {
+      const dialect = DIALECT[provider];
+      const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), `which-${provider}`)];
+      const fails = [
+        [{ status: 400, body: otherWords[provider] }, TOOLS, 'bad_request', 1],
+        [{ status: 500, body: REFUSED[provider], headers: noRetry }, TOOLS, 'server', 1],
+        [{ status: 400, body: REFUSED[provider] }, HOST, 'bad_request', 1],
+      ];
+      for (const [fail, list, code, requests] of fails) {
+        fake.failNext({ ...fail, dialect });
+        const sent = await sentBy(dialect, () =>
+          assert.rejects(send(provider, request(provider, [userText('x')], { tools: list })), (e) => {
+            assert.equal(e.code, code, `${provider} ${JSON.stringify(fail)}`);
+            return true;
+          }),
+        );
+        assert.equal(sent.length, requests, `${provider} ${JSON.stringify(fail)}`);
+        assert.deepEqual(sent.map(strictness), [allStrict(list)], `${provider}: nothing remembered after ${JSON.stringify(fail)}`);
+      }
+      // Refused twice: the second refusal is the error, after two requests. The provider's
+      // word on the strict set stands, so later requests with it go without strict at once.
+      fake.failNext({ status: 400, body: REFUSED[provider], times: 2, dialect });
+      const twice = await sentBy(dialect, () => assert.rejects(send(provider, request(provider, [userText('x')], { tools })), (e) => e.code === 'bad_request'));
+      assert.deepEqual(twice.map(strictness), [allStrict(tools), hostStrict(tools)], provider);
+      fake.reply({ text: 'ok' });
+      const after = await sentBy(dialect, () => send(provider, request(provider, [userText('y')], { tools })));
+      assert.deepEqual(after.map(strictness), [hostStrict(tools)], provider);
+    }
+    // The second dialect: its error code alone says so.
+    const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), 'code-only')];
+    fake.failNext({ status: 400, body: codeOnly, dialect: 'openai' });
+    fake.reply({ text: 'ok' });
+    const sent = await sentBy('openai', () => send('openai', request('openai', [userText('x')], { tools })));
+    assert.deepEqual(sent.map(strictness), [allStrict(tools), hostStrict(tools)]);
+  });
+
+  it('the local server dialect is never strict, so it has no such second request', async () => {
+    fake.failNext({ status: 400, body: { error: { message: 'Schema is too complex for compilation.', type: 'invalid_request_error' } }, dialect: 'compat' });
+    const sent = await sentBy('compat', () => assert.rejects(send('openai_compatible', request('openai_compatible', [userText('x')], { tools: TOOLS })), (e) => e.code === 'bad_request'));
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0].body.tools.every((t) => t.function.strict === undefined));
   });
 });
 

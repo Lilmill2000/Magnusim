@@ -30,6 +30,7 @@
 // And one turn per tab: a second one while it works is refused 409 tab_busy (H4). And every
 // problem with a call's input in one result, the terminal showing them all (H9); a local
 // model's string, list and boolean fields left out filled with "", [] and false (H9).
+// And a cloud provider that can't compile the tools strictly: sent again unchecked by it (H8).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -903,6 +904,74 @@ test("a local model that can't read pictures: its server refuses snap's picture,
   } finally {
     fake.textOnly();
   }
+});
+
+test("a cloud provider that can't compile the tools strictly: the request goes again with the workspace's tools unchecked by it, the counter still changes, the terminal says so, and the next turn sends them so at once", async ({
+  page,
+  request,
+}) => {
+  // What the person reads (the cloud adapters' note, CAD tools spec H8), and the provider's
+  // refusal (the first cloud dialect's words and error shape).
+  const NOTE = 'The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.';
+  const COMPILE_REFUSAL = { type: 'error', error: { type: 'invalid_request_error', message: 'Schema is too complex for compilation.' } };
+  /** One turn in the terminal client on this tab: what the person reads (stdout and stderr), once it exits 0. */
+  const terminal = async (text) => {
+    const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', w.tab, text], {
+      cwd: WEB_ROOT,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let out = '';
+    cli.stdout.on('data', (b) => (out += b));
+    cli.stderr.on('data', (b) => (out += b));
+    let timer;
+    const ceiling = new Promise((done) => {
+      timer = setTimeout(() => done('still running after 120 s'), 120_000);
+    });
+    try {
+      expect(await Promise.race([new Promise((done) => cli.once('exit', done)), ceiling]), out).toBe(0);
+    } finally {
+      clearTimeout(timer);
+      cli.kill();
+    }
+    return out;
+  };
+  /** A request's tools, strict or not: the host's own, then the workspace's. */
+  const strictness = (r) => {
+    const tools = offeredTools(r);
+    return { host: tools.filter((t) => !t.name.includes('__')).map((t) => t.strict), workspace: tools.filter((t) => t.name.includes('__')).map((t) => t.strict) };
+  };
+
+  const w = await openCounter(page, request);
+  const model = await useScriptedModel(request, host.base, fake, 'cloud');
+  let before = chats().length;
+  fake.failNext({ status: 400, body: COMPILE_REFUSAL, dialect: model.dialect });
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'Added 2.' });
+  let out = await terminal('Add 2 to the counter.');
+  // The turn went on: the counter reads 2, and the person reads the note once.
+  await expect(w.frame.locator('#counter')).toHaveText('2');
+  expect(out.split(`note: ${NOTE}\n`).length - 1, out).toBe(1);
+  expect(out).toContain('Added 2.');
+  let sent = chats().slice(before);
+  const hosts = strictness(sent[0]).host.length;
+  expect(hosts).toBeGreaterThan(0);
+  const strict = { host: Array(hosts).fill(true), workspace: TOOLS.map(() => true) };
+  const unchecked = { host: Array(hosts).fill(true), workspace: TOOLS.map(() => false) };
+  // Refused strict (it took no step), sent again with the workspace's tools unchecked by the
+  // provider, and the turn's next request the same way.
+  expect(sent.map(strictness)).toEqual([strict, unchecked, unchecked]);
+  expect(sent[0].step).toBeUndefined();
+  expect(offeredTools(sent[1]).map((t) => t.name)).toEqual(offeredTools(sent[0]).map((t) => t.name));
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add']);
+
+  // The next turn: unchecked by the provider from its first request, and the terminal says so again.
+  before = chats().length;
+  fake.reply({ text: 'The counter is 2.' });
+  out = await terminal('What is the counter?');
+  expect(out).toContain(`note: ${NOTE}\n`);
+  expect(out).toContain('The counter is 2.');
+  sent = chats().slice(before);
+  expect(sent.map(strictness)).toEqual([unchecked]);
 });
 
 test('a remote viewer: the page hears its tools are not available, and nothing registers', async ({ browser, request }) => {

@@ -1,8 +1,11 @@
 /**
  * What the three adapters share: how a conversation is cut into requests, the watchdog
- * defaults, and the options every adapter is built with (providers/index.ts builds them).
+ * defaults, the options every adapter is built with (providers/index.ts builds them), and
+ * the cloud adapters' fallback for strict tools their provider can't compile.
  */
-import type { ImagePart, Message, ToolResultPart, Usage, UserMessage, UserPart } from '../types.ts';
+import { createHash } from 'node:crypto';
+import { assistantState } from '../state.ts';
+import type { ImagePart, Message, ProviderError, ProviderId, ProviderRequest, ProviderResult, ProviderTool, ToolResultPart, Usage, UserMessage, UserPart } from '../types.ts';
 import { Watchdog, type WatchdogOptions } from './guarded-fetch.ts';
 
 /** The SDK's whole-request limit; the watchdog ends a stalled one long before. */
@@ -82,4 +85,61 @@ export function parseToolInput(raw: string): { input: Record<string, unknown>; e
   } catch {
     return { input: {}, error: 'The tool input was not valid JSON.' };
   }
+}
+
+/** The note when a cloud request went with the workspace's tools not strict (CAD tools spec H8). */
+export const STRICT_FALLBACK_NOTE = 'The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.';
+
+/**
+ * Tool sets a cloud provider could not compile strictly, by boot id, dialect and the
+ * tools' hash: for the process (a test reset or a server start forgets them).
+ */
+const LOOSE = new Set<string>();
+const LOOSE_MAX = 200;
+
+function looseKey(dialect: ProviderId, tools: readonly ProviderTool[]): string {
+  const hash = createHash('sha256')
+    .update(JSON.stringify(tools.map((t) => [t.name, t.description, t.schema, !!t.workspace])))
+    .digest('hex');
+  return [assistantState().bootId, dialect, hash].join(' ');
+}
+
+/** A cloud provider refused the request's strict tool schemas, before anything streamed. */
+export class StrictRefused extends Error {
+  readonly mapped: ProviderError;
+  constructor(mapped: ProviderError) {
+    super(mapped.message);
+    this.mapped = mapped;
+  }
+}
+
+/**
+ * One cloud request whose strict tools the provider may refuse to compile (CAD tools spec
+ * H8). `attempt(loose)` sends it, with the workspace's tools not strict when `loose`, and
+ * throws StrictRefused for that refusal. Refused, the tool set is remembered and the
+ * request goes once more loose; a set remembered goes loose from the start. An answer to a
+ * loose request carries STRICT_FALLBACK_NOTE. `canLoosen`: some workspace tool would go
+ * strict (else loose is the same request, and nothing is sent again).
+ */
+export async function sendStrictOrLoose(
+  dialect: ProviderId,
+  req: ProviderRequest,
+  canLoosen: boolean,
+  attempt: (loose: boolean) => Promise<ProviderResult>,
+): Promise<ProviderResult> {
+  const noted = (r: ProviderResult): ProviderResult => ({ ...r, notes: [...(r.notes ?? []), STRICT_FALLBACK_NOTE] });
+  const key = canLoosen ? looseKey(dialect, req.tools) : '';
+  const loose = canLoosen && LOOSE.has(key);
+  try {
+    const r = await attempt(loose);
+    return loose ? noted(r) : r;
+  } catch (err) {
+    if (!(err instanceof StrictRefused)) throw err;
+    if (loose || !canLoosen) throw err.mapped;
+  }
+  const boot = `${assistantState().bootId} `;
+  for (const k of LOOSE) if (!k.startsWith(boot)) LOOSE.delete(k);
+  if (LOOSE.size >= LOOSE_MAX) LOOSE.clear();
+  LOOSE.add(key);
+  return noted(await attempt(true));
 }

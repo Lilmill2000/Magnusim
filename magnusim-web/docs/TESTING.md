@@ -216,7 +216,10 @@ No test reaches a real model provider or this PC's real Assistant files.
     answer from an earlier tool result. The log keeps the step it returned; one that
     throws or returns nothing is answered 400 and shows in the request's `refused`.
   - `fake.failNext({status, body, headers, times})` answers the next request(s) with
-    an error; add `'x-should-retry': 'false'` to stop the client's own retries.
+    an error; add `'x-should-retry': 'false'` to stop the client's own retries. A 400
+    whose body says the strict tool schemas can't be compiled makes a cloud adapter send
+    the request once more with the workspace's tools not strict; the workspace tools spec
+    runs a turn through that from the terminal client.
   - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
     the next list wait until `fake.release(name)` (a server that never answers).
   - An entry of `fake.models(list, 'compat')` may be a model row,
