@@ -4,13 +4,19 @@
 // guide for the page's life (the grammar and the prompt cache stay stable; availability is
 // answered per call). It registers again on visibilitychange after "not_connected" (a tab opened
 // in the background), and stops for good on "remote", "no_assistant" or "not_allowed".
+// The edits' state lives here too: the undo ledger, the person's pace, the person's input (the
+// soft wait), and the pause, which a take-over or the person's undo of the Assistant's steps
+// during a running turn starts, and the turn's end (or the next key) ends; the chip shows it.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantRegistration } from '@magnusim/workspace';
 import type { AppServices } from '../types/app';
 import type { AssistantPageApi, TurnFacts } from '../types/assistant';
+import { createPause, createSoftInput, EDIT_WAIT_MS, pauseNote } from './busy';
 import { createCallHandler, isBuilt } from './call';
 import { GUIDE } from './guide';
+import { createLedger } from './ledger';
+import { createPace } from './pace';
 import { createRevTracker } from './rev';
 import { setRuntime, type AssistantRuntime } from './runtime';
 import { CAD_TOOLS, CORE_TOOLSET } from './schemas';
@@ -43,6 +49,9 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const keys = createSessionKeys({ committed: () => services.doc.committed(), now: o.now });
   const rev = createRevTracker({ doc: services.doc, bus: services.bus });
   const holds = createHoldPoints();
+  const pause = createPause();
+  const pace = createPace({ doc: services.doc, prefs: services.bridge.prefs, document: doc });
+  const soft = createSoftInput(doc, o.now);
   let title = services.bridge.context.study?.title ?? '';
   const offs: (() => void)[] = [];
   offs.push(services.bridge.onStudy((s) => void (title = s.title ?? title)));
@@ -56,6 +65,12 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     holds,
     calls: [],
     madeBy: new Set(),
+    brokenBy: new Set(),
+    ledger: createLedger(),
+    pause,
+    pace,
+    soft,
+    waitCapMs: EDIT_WAIT_MS,
     seenKeys: new Set(),
     guideNoted: new Set(),
     title: () => title,
@@ -108,6 +123,33 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     if (store.get().turn?.end) store.set({ turn: null });
   };
   offs.push(turns.subscribe(showTurn));
+
+  // ---- the pause: the chip shows it; it ends with its turn, or at the next key (busy.ts createPause)
+  offs.push(
+    pause.subscribe((p) => {
+      if (p) store.set({ phase: 'paused', note: pauseNote(p) });
+      else if (store.get().phase === 'paused') store.set({ phase: 'idle', note: null });
+    }),
+    turns.subscribe((t) => {
+      if (t.state === 'ended') pause.turnEnded(t.id);
+    }),
+    // The person's undo or redo of the Assistant's steps while its turn runs: it waits for them.
+    services.bus.on('assistant:person-undo', (e) => {
+      if (!e.tag) return;
+      const id = e.tag.startsWith('turn:') ? e.tag.slice('turn:'.length) : null;
+      const facts = id ? turns.get(id) : null;
+      if (facts) {
+        if (facts.state === 'running') pause.set('undo', e.tag, facts.id);
+        return;
+      }
+      // Without the host's turn events: while its calls still come (the chip's linger).
+      if (!assistant?.onTurn && lastCallEnd > 0 && now() - lastCallEnd < LINGER_MS) pause.set('undo', e.tag, null);
+    }),
+    () => {
+      pace.dispose();
+      soft.dispose();
+    },
+  );
   // An ended turn's chip goes with the next change of the Part.
   let revSeen = rev.current();
   offs.push(
@@ -195,6 +237,14 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     release: (p) => holds.release(p),
     held: () => holds.held(),
     waiting: () => holds.waiting(),
+    setHoldS(s) {
+      rt.waitCapMs = s === null || !Number.isFinite(s) || s <= 0 ? EDIT_WAIT_MS : Math.round(s * 1000);
+    },
+    setPace(p, scale) {
+      pace.force(p);
+      pace.setScale(scale ?? null);
+    },
+    paused: () => pause.get(),
     async setToolset(set) {
       offered = set === 'core' ? [...CORE_TOOLSET] : CAD_TOOLS.map((t) => t.name);
       const v = await register();

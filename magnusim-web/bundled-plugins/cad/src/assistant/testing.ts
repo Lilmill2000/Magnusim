@@ -6,6 +6,8 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantUiState, TurnFacts } from '../types/assistant';
+import type { Pause } from './busy';
+import type { Pace } from './pace';
 
 /** One call as the page answered it (the test ledger; the eval harness counts errors by reason). */
 export interface CallRecord {
@@ -90,6 +92,12 @@ export interface AssistantTestHandle {
   release(point: string): void;
   held(): string[];
   waiting(): string[];
+  /** How long an edit waits for the person before it answers busy, in seconds (null: the 10 minutes). */
+  setHoldS(s: number | null): void;
+  /** The pace whatever the person chose (never written to their preferences; null: theirs), and a scale for its delays (0: no waits; null: as they are). */
+  setPace(pace: Pace | null, scale?: number | null): void;
+  /** The pause in this Part, or null. */
+  paused(): Pause | null;
   /** The eval's A/B runs: offer every tool, or the 13-tool core set (registers again). */
   setToolset(set: 'all' | 'core'): Promise<{ available: boolean; accepted: string[]; reason?: string }>;
 }

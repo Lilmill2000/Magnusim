@@ -1,0 +1,240 @@
+// One edit call, all or nothing (CAD tools spec §7.3): the call waits until the Part takes an edit
+// (busy.ts: not ready, another turn, the person, the rollback bar, a pause), plans against the
+// settled Part (selectors, names, a dry run: every refusal before anything changes), opens ONE
+// Assistant step (doc.assistant.begin: the save hold, the person first), applies through the
+// person's own paths, waits for the rebuild, and judges it (judge.ts). Kept, its undo steps are
+// sealed into the key's undo group ("Assistant: <request>") and the call goes into the key's
+// ledger; otherwise the step goes back to its mark exactly and the call answers why. A Stop, a
+// stall or Back (the call's signal) reverts at once, synchronously, before anything else runs.
+// A person who opens a panel while the call plans or opens is waited for again (the call plans
+// anew), at most three times; a take-over (Escape, Ctrl+Z, a command, a draft change) answers
+// busy taken_over and pauses the Assistant in this Part until the turn ends.
+// The person's selection comes back after the call, unless they changed it meanwhile.
+// Owner: ASSISTANT.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { isPersonEditing } from '../doc/person-editing';
+import { isPanelHighlight } from '../lib/selection';
+import type { AppServices } from '../types/app';
+import type { CallCtx, EditData, ToolReply } from '../types/assistant';
+import type { AssistantStep, EditSession, TakeOverWhy } from '../types/doc-service';
+import type { Feature } from '../types/doc';
+import type { Selection } from '../types/selection';
+import { uiFor } from '../ui/controller';
+import { heartbeat, personBlock, waitForEdit } from './busy';
+import { asToolError, isToolError, ToolError } from './errors';
+import { report, snapshotStates, verdict, type JudgedPlan } from './judge';
+import { groupLabel } from './ledger';
+import type { CallPacer, PacePoint } from './pace';
+import { describeChanges } from './rev';
+import { runtimeOf, type AssistantRuntime } from './runtime';
+
+/** An edit tool's plan: what the judge needs, and the call's name in the undo label and the ledger. */
+export interface EditPlan extends JudgedPlan {
+  /** "Parameters", "Edit Boss", "Body Plate": the call's part in the undo label and the undo tool's answer. */
+  part: string;
+  /** The call goes into no ledger (the undo tool itself). */
+  noLedger?: boolean;
+}
+
+export interface CheckpointOptions {
+  /** A test hold point to stop at ('after-open', 'between-opens', 'before-commit', ...). */
+  hold?: string;
+  /** The pace point to wait at (watch pace only). */
+  pace?: PacePoint;
+  /** The progress line ("Edit Boss · distance"). */
+  label?: string;
+  fraction?: number | null;
+}
+
+/** An edit call's context inside its step. */
+export interface EditCtx extends CallCtx {
+  /** 'assistant:<call id>': the step's owner. */
+  readonly owner: string;
+  readonly step: AssistantStep;
+  readonly pacer: CallPacer;
+  /**
+   * Throws on a stop, a take-over (busy taken_over; the Assistant pauses), a change of the Part by
+   * someone else (busy changed) or a draft the Assistant did not write (taken over: draft); then waits
+   * at the pace point and the hold point and sends progress.
+   */
+  checkpoint(o?: CheckpointOptions): Promise<void>;
+  /** The draft the call just wrote into `session` (a checkpoint finds any other one a take-over). */
+  wrote(session: EditSession): void;
+}
+
+export interface EditTool<P extends EditPlan> {
+  /** Resolve and check the input against the settled Part; refuse (ToolError) before anything changes. Never edits. */
+  plan(ctx: CallCtx): Promise<P>;
+  /** Make the change inside the step, through the person's paths; checkpoint at every pace point. */
+  apply(plan: P, ctx: EditCtx): Promise<void>;
+  /** After the step is sealed: the tool's own bookkeeping (the undo tool trims the ledger). */
+  sealed?(plan: P, ctx: EditCtx): void;
+  /** The answer: one line and the data (EditData plus the tool's own). */
+  reply(plan: P, data: EditData, ctx: EditCtx): ToolReply;
+}
+
+/** A person who keeps opening panels while the call plans: at most this many tries. */
+export const MAX_ATTEMPTS = 3;
+
+const WHY_WORDS: Record<TakeOverWhy, string> = {
+  escape: 'Escape',
+  enter: 'Enter',
+  undo: 'Undo',
+  command: 'a command',
+  edit: 'an edit of the Part',
+  draft: 'a change in its panel',
+};
+
+/** The turn a pause ends with: the call's turn when the host told of it, else none (the next key ends it). */
+function turnOfKey(rt: AssistantRuntime, key: string): string | null {
+  return rt.turns.forKey(key)?.id ?? null;
+}
+
+/** The person's selection now, to put back after the call unless they changed it meanwhile. */
+function rememberSelection(services: AppServices): { restore(): void } {
+  const store = services.selection;
+  const start: Selection = store.get();
+  let theirs = false;
+  // A change that is not a panel's highlight (the Assistant's panel shows its feature that way) is the person's.
+  const off = store.subscribe((s) => {
+    if (!isPanelHighlight(s) && s.items.length) theirs = true;
+  });
+  return {
+    restore() {
+      off();
+      if (theirs) return;
+      const now = store.get();
+      if (now !== start && (isPanelHighlight(now) || !now.items.length)) store.set(() => start);
+    },
+  };
+}
+
+/** What stayed after a refused revert, in words (detail.kept). */
+function keptWords(step: AssistantStep, services: AppServices): string[] {
+  return describeChanges(step.mark.doc, services.doc.committed()).slice(0, 20);
+}
+
+/** The answer of a call the person took over (it pauses the Assistant in this Part). */
+function takenOver(rt: AssistantRuntime, ctx: CallCtx, why: TakeOverWhy, part: string): ToolError {
+  rt.pause.set('take_over', ctx.key, turnOfKey(rt, ctx.key));
+  return new ToolError('taken_over', `You took over (${WHY_WORDS[why]}): ${part} was not kept.`, { detail: { why } });
+}
+
+/**
+ * Run one edit call as one Assistant step (§7.3). Waits for the person (busy.ts), plans, applies,
+ * judges, seals or reverts; answers the tool's reply, or throws the honest error.
+ */
+export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P>): Promise<ToolReply> {
+  const { services } = ctx;
+  const { doc } = services;
+  const rt = runtimeOf(services);
+  if (!rt) throw new ToolError('internal', 'The Assistant is not installed in this Part.');
+  const ui = uiFor(services);
+  const owner = `assistant:${ctx.call.call}`;
+  for (let attempt = 1; ; attempt++) {
+    await waitForEdit(ctx);
+    await heartbeat(ctx, doc.settled(ctx.signal), 'Waiting for the rebuild');
+    const before = snapshotStates(doc.state.get());
+    const plan = await tool.plan(ctx);
+    await ctx.hold('after-plan');
+    ctx.checkAbort();
+    // The person opened something while the call planned: wait for them again, then plan anew.
+    const person = personBlock(services);
+    if (person || rt.pause.get()) {
+      if (attempt < MAX_ATTEMPTS) continue;
+      throw new ToolError(person?.reason ?? 'paused', `The person kept the Part busy: ${person?.words ?? 'paused'}.`, { detail: person ? { person: person.words } : { why: rt.pause.get()?.why } });
+    }
+    // Another call of the Assistant's is changing the Part right now (an outside client's beside a turn's).
+    if (doc.assistant.current()) throw new ToolError('other_turn', 'Another call of the Assistant is changing this Part right now.');
+    let step: AssistantStep;
+    try {
+      step = doc.assistant.begin(owner);
+    } catch (e) {
+      if (isPersonEditing(e) && attempt < MAX_ATTEMPTS) continue;
+      if (isPersonEditing(e)) throw new ToolError('person_editing', `${e.message}.`, { detail: { person: e.message } });
+      throw asToolError(e);
+    }
+    const st = step;
+    const pacer = rt.pace.forCall(ctx.signal);
+    const sel = rememberSelection(services);
+    // A Stop, a stall or Back: back to the mark at once, before the rest of the call runs.
+    const onAbort = () => {
+      ui.dropForAssistant(st);
+      st.revert();
+      st.end();
+    };
+    ctx.signal.addEventListener('abort', onAbort, { once: true });
+    const drafts = new Map<EditSession, Feature>();
+    const check = () => {
+      if (ctx.signal.aborted) throw new ToolError('stopped', 'The call was stopped; nothing of it was kept.');
+      if (st.takenOver) throw takenOver(rt, ctx, st.takenOver, plan.part);
+      for (const [s, draft] of drafts) {
+        if (s.open && s.draft !== draft) {
+          doc.assistant.takeOver('draft');
+          throw takenOver(rt, ctx, 'draft', plan.part);
+        }
+      }
+      if (!st.clean) throw new ToolError('changed', `The Part changed while the call ran: ${keptWords(st, services).join('; ') || 'by someone else'}.`);
+    };
+    const ectx: EditCtx = {
+      ...ctx,
+      owner,
+      step: st,
+      pacer,
+      wrote(s) {
+        drafts.set(s, s.draft);
+      },
+      async checkpoint(o = {}) {
+        check();
+        if (o.pace) await pacer.wait(o.pace);
+        if (o.hold) await ctx.hold(o.hold);
+        check();
+        ctx.progress(o.fraction ?? null, o.label);
+      },
+    };
+    try {
+      await tool.apply(plan, ectx);
+      await heartbeat(ctx, doc.settled(ctx.signal), 'Waiting for the rebuild');
+      check();
+      const after = snapshotStates(doc.state.get());
+      const v = verdict(before, after, plan);
+      if (v.error) throw v.error;
+      // ("Ask each step" waits here for the person's Keep or Discard, with watch mode.)
+      check();
+      const parts = [...rt.ledger.entries(ctx.key).map((e) => e.part), plan.part];
+      st.seal(ctx.key, groupLabel(ctx.key, ctx.turn, parts));
+      const committed = doc.committed();
+      const n = plan.noLedger || committed === st.mark.doc ? 0 : rt.ledger.add(ctx.key, { call: ctx.call.call, part: plan.part, mark: st.mark, after: committed });
+      // get_model marks what this kept edit turned red, while it fails.
+      for (const [id, f] of after.features) {
+        if (f.state === 'error' && v.broke.some((b) => b.feature === f.name)) rt.brokenBy.add(id);
+        else if (v.fixed.includes(f.name)) rt.brokenBy.delete(id);
+      }
+      tool.sealed?.(plan, ectx);
+      return tool.reply(plan, report({ before, after, plan, verdict: v, step: n, rev: rt.rev.current() }), ectx);
+    } catch (e) {
+      ui.dropForAssistant(st);
+      const rv = st.revert();
+      if (isPersonEditing(e) && rv.ok && attempt < MAX_ATTEMPTS && !ctx.signal.aborted && !st.takenOver) continue;
+      throw failure(e, rv, st, rt, ctx, plan.part, services);
+    } finally {
+      ctx.signal.removeEventListener('abort', onAbort);
+      st.end();
+      sel.restore();
+    }
+  }
+}
+
+/** The error a failed call answers: a stop, a take-over, the person, or the tool's own; with what stayed when the revert was refused. */
+function failure(e: unknown, rv: { ok: true } | { ok: false; reason: string }, step: AssistantStep, rt: AssistantRuntime, ctx: CallCtx, part: string, services: AppServices): ToolError {
+  let err: ToolError;
+  if (ctx.signal.aborted) err = isToolError(e) && e.reason === 'stopped' ? e : new ToolError('stopped', 'The call was stopped; nothing of it was kept.');
+  else if (step.takenOver && !(isToolError(e) && e.reason === 'taken_over')) err = takenOver(rt, ctx, step.takenOver, part);
+  else if (isPersonEditing(e)) err = new ToolError('person_editing', `${e.message}.`, { detail: { person: e.message } });
+  else err = asToolError(e);
+  if (!rv.ok) {
+    const kept = keptWords(step, services);
+    err.detail.kept = kept.length ? kept : [rv.reason];
+  }
+  return err;
+}

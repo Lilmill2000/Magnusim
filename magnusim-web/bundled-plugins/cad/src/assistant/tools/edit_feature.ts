@@ -1,0 +1,235 @@
+// edit_feature: change one feature without resending everything (CAD tools spec §3.2.15, §7.7):
+// its expression fields (by its tool's field names once that tool reads its features, else by
+// their paths as get_model lists them, "extent.distance"), its name, its suppression, or its
+// place in the history ("end", "before X", "after X"), in one step.
+//   - Values go through the person's own Edit panel (openEditForAssistant, read-only for the
+//     person): one update with every changed top-level field whole, the live rebuild, then an
+//     honest Done. A value that makes the feature fail, or a working feature after it, changes
+//     nothing (feature_failed, broke_downstream).
+//   - rename, setSuppressed and move are the Part's own edits, with their refusal words; they are
+//     structural, so a feature they turn red is kept and listed in `broke`.
+// A sketch's dimension values come with the sketch tool.
+// Owner: ASSISTANT.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import type { EditData, ToolImpl, ToolReply } from '../../types/assistant';
+import type { Feature, FeatureId } from '../../types/doc';
+import type { EditResult } from '../../types/doc-service';
+import { uiFor } from '../../ui/controller';
+import { heartbeat } from '../busy';
+import { ToolError } from '../errors';
+import { pathOfField, valuesOf } from '../features-io';
+import { featureByName, stateWord } from '../model';
+import { macrotask } from '../pace';
+import { bodyWords } from '../judge';
+import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+
+interface SetRow {
+  field: string;
+  value: string;
+}
+
+interface Plan extends EditPlan {
+  id: FeatureId;
+  name: string;
+  /** The top-level fields the values change, each whole (session.update merges only the top level). */
+  patch: Partial<Feature> | null;
+  set: { field: string; path: string; value: string }[];
+  renameTo: string | null;
+  suppress: boolean | null;
+  /** The feature's index after the move, or null. */
+  moveTo: number | null;
+  moveWords: string | null;
+}
+
+const MAX_NAME = 80;
+const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** A path ("extent.distance", "dir1.count", "ties[0].exprs.d1") as keys and indices. */
+function pathKeys(path: string): (string | number)[] {
+  const out: (string | number)[] = [];
+  for (const part of path.split('.')) {
+    const m = /^([^[\]]+)((?:\[\d+\])*)$/.exec(part);
+    if (!m) throw new ToolError('bad_input', `"${path}" is not a field path.`);
+    out.push(m[1]);
+    for (const i of m[2].matchAll(/\[(\d+)\]/g)) out.push(Number(i[1]));
+  }
+  return out;
+}
+
+/** `f` with `value` at `path` (copies along the path; the rest shared). */
+function withValue<T>(f: T, path: string, value: string): T {
+  const keys = pathKeys(path);
+  const put = (node: unknown, i: number): unknown => {
+    const k = keys[i];
+    if (i === keys.length - 1) {
+      if (Array.isArray(node)) return node.map((x, j) => (j === k ? value : x));
+      return { ...(node as Record<string, unknown>), [k]: value };
+    }
+    const child = Array.isArray(node) ? node[k as number] : (node as Record<string, unknown> | null)?.[k as string];
+    if (child === null || typeof child !== 'object') throw new ToolError('bad_input', `"${path}" is not a field of this feature now.`);
+    const next = put(child, i + 1);
+    if (Array.isArray(node)) return node.map((x, j) => (j === k ? next : x));
+    return { ...(node as Record<string, unknown>), [k]: next };
+  };
+  return put(f, 0) as T;
+}
+
+/** Where `move` puts the feature: its final index, or a refusal. */
+function moveIndex(features: readonly Feature[], f: Feature, move: string, findName: (n: string) => Feature | null): { to: number; words: string } | null {
+  const m = move.trim();
+  if (!m) return null;
+  const from = features.indexOf(f);
+  if (/^end$/i.test(m)) return from === features.length - 1 ? null : { to: features.length - 1, words: 'to the end' };
+  const r = /^(before|after)\s+(.+)$/i.exec(m);
+  if (!r) throw new ToolError('bad_input', `move: "", "end", "before <feature>" or "after <feature>", not "${m}".`, { detail: { field: 'move' } });
+  const other = findName(r[2]);
+  if (!other) throw new ToolError('not_found', `move: no feature is called "${r[2].trim()}". Features: ${features.map((g) => g.name).slice(0, 30).join(', ')}.`, { detail: { field: 'move' } });
+  if (other.id === f.id) throw new ToolError('bad_input', `move: ${f.name} cannot move ${r[1].toLowerCase()} itself.`, { detail: { field: 'move' } });
+  const at = features.indexOf(other);
+  const before = r[1].toLowerCase() === 'before';
+  // The final index: the list without the feature, then the feature put in.
+  const to = before ? (from < at ? at - 1 : at) : from < at ? at : at + 1;
+  return to === from ? null : { to, words: `${before ? 'before' : 'after'} ${other.name}` };
+}
+
+/** A refusal of the Part's own edit as the tool's error. */
+function refused(field: string, r: EditResult): ToolError {
+  const reason = r.ok ? '' : r.reason;
+  if (/already called/.test(reason)) return new ToolError('name_taken', `${field}: ${reason}.`, { detail: { field } });
+  return new ToolError('bad_input', `${field}: ${reason}.`, { detail: { field } });
+}
+
+const editFeature: EditTool<Plan> = {
+  async plan(ctx) {
+    const { services } = ctx;
+    const s = services.doc.state.get();
+    const f = featureByName(s, str(ctx.input.feature));
+    if (!f) {
+      const names = s.doc.features.map((g) => g.name);
+      throw new ToolError('not_found', `No feature is called "${str(ctx.input.feature)}". Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, {
+        detail: { field: 'feature', names: names.slice(0, 30) },
+      });
+    }
+    const rows = (Array.isArray(ctx.input.set) ? ctx.input.set : []) as SetRow[];
+    const set: Plan['set'] = [];
+    if (rows.length && f.type === 'sketch') {
+      throw new ToolError('not_built', `Changing ${f.name}'s dimension values with edit_feature is not in this build yet.`, { detail: { tool: 'edit_feature', feature: f.name } });
+    }
+    const problems: string[] = [];
+    rows.forEach((row, i) => {
+      const field = str(row?.field);
+      const value = str(row?.value);
+      const path = pathOfField(f, field, services);
+      if (!path) {
+        const fields = valuesOf(f, services).map((v) => v.field);
+        problems.push(`set[${i}].field: ${f.name} has no field "${field}" (its fields: ${fields.length ? fields.join(', ') : 'none'})`);
+        return;
+      }
+      if (!value) problems.push(`set[${i}].value: enter an expression ("12 mm", "w/2")`);
+      if (set.some((x) => x.path === path)) problems.push(`set[${i}]: ${field} is set twice`);
+      set.push({ field, path, value });
+    });
+    if (problems.length) throw new ToolError('bad_input', `${problems.slice(0, 12).join('; ')}.`, { detail: { problems: problems.slice(0, 12) } });
+    // The dry run: the feature with each new value, as its type checks it.
+    let patched: Feature = f;
+    const def = services.doc.features.get(f.type);
+    for (let i = 0; i < set.length; i++) {
+      const next = withValue(patched, set[i].path, set[i].value);
+      const why = def?.incomplete(next, services.doc.units) ?? null;
+      if (why && !def?.incomplete(patched, services.doc.units)) {
+        throw new ToolError('expr_error', `set[${i}].value (${set[i].field}): ${why}.`, { detail: { field: `set[${i}].value` } });
+      }
+      patched = next;
+    }
+    const patch: Partial<Feature> | null = set.length ? (Object.fromEntries([...new Set(set.map((x) => String(pathKeys(x.path)[0])))].map((k) => [k, (patched as unknown as Record<string, unknown>)[k]])) as Partial<Feature>) : null;
+    const renameTo = str(ctx.input.rename_to);
+    let rename: string | null = null;
+    if (renameTo && renameTo !== f.name) {
+      if (renameTo.length > MAX_NAME) throw new ToolError('bad_input', `rename_to: at most ${MAX_NAME} characters.`, { detail: { field: 'rename_to' } });
+      const clash = s.doc.features.find((g) => g.id !== f.id && g.name.toLowerCase() === renameTo.toLowerCase());
+      if (clash) throw new ToolError('name_taken', `rename_to: another feature is already called ${clash.name}.`, { detail: { field: 'rename_to' } });
+      rename = renameTo;
+    }
+    const sup = ctx.input.suppress === 'suppress' ? true : ctx.input.suppress === 'unsuppress' ? false : null;
+    const suppress = sup !== null && sup !== !!f.suppressed ? sup : null;
+    const move = moveIndex(s.doc.features, f, str(ctx.input.move), (n) => featureByName(s, n));
+    if (!patch && rename === null && suppress === null && !move) throw new ToolError('bad_input', `Nothing to change in ${f.name}: give set rows, rename_to, suppress or move.`);
+    const value = !!patch && rename === null && suppress === null && !move;
+    const resolved: Record<string, string> = { feature: `${f.name} (${f.type})` };
+    for (const x of set) resolved[x.field] = x.path === x.field ? x.value : `${x.value} (${x.path})`;
+    if (move) resolved.move = move.words;
+    return {
+      part: `Edit ${rename ?? f.name}`,
+      value,
+      own: patch ? f.id : null,
+      feature: f.id,
+      resolved,
+      id: f.id,
+      name: f.name,
+      patch,
+      set,
+      renameTo: rename,
+      suppress,
+      moveTo: move?.to ?? null,
+      moveWords: move?.words ?? null,
+    };
+  },
+
+  async apply(plan, ctx: EditCtx) {
+    const { services } = ctx;
+    const { doc } = services;
+    const ui = uiFor(services);
+    if (plan.patch) {
+      const before = stateWord(doc.state.get().rebuild.features[plan.id]);
+      const s = ui.openEditForAssistant(ctx.step, plan.id);
+      if (typeof s === 'string') throw new ToolError('bad_input', `${plan.name} cannot be edited here: ${s}.`);
+      await macrotask();
+      await ctx.checkpoint({ hold: 'after-open', pace: 'open', label: `Edit ${plan.name}` });
+      s.update(plan.patch);
+      ctx.wrote(s);
+      await heartbeat(ctx, doc.settled(ctx.signal), `Edit ${plan.name}`);
+      await ctx.checkpoint({ pace: 'commit', hold: 'before-commit', label: `Edit ${plan.name}` });
+      // The feature's own state before its Done: a value that makes it fail is the call's failure.
+      const st = doc.state.get().rebuild.features[plan.id];
+      if (st?.state === 'error' && before !== 'error') {
+        throw new ToolError('feature_failed', `${plan.name} fails: ${st.message ?? 'it did not build'}`, { detail: { feature: plan.name, message: st.message ?? null, actions: [...(st.actions ?? [])] } });
+      }
+      const why = ui.doneForAssistant(ctx.step);
+      if (why) throw new ToolError('incomplete', `${plan.name}: ${why}.`);
+      // Between the panel and the one-shot edits: a change of the person's here makes the step unclean.
+      if (plan.renameTo !== null || plan.suppress !== null || plan.moveTo !== null) await ctx.checkpoint({ hold: 'between-opens' });
+    }
+    if (plan.renameTo !== null) {
+      const r = ctx.step.run(() => doc.rename(plan.id, plan.renameTo!));
+      if (!r.ok) throw refused('rename_to', r);
+    }
+    if (plan.suppress !== null) {
+      const r = ctx.step.run(() => doc.setSuppressed(plan.id, plan.suppress!));
+      if (!r.ok) throw refused('suppress', r);
+    }
+    if (plan.moveTo !== null) {
+      const r = ctx.step.run(() => doc.move(plan.id, plan.moveTo!));
+      if (!r.ok) throw refused('move', r);
+    }
+    await ctx.checkpoint({ pace: plan.patch ? undefined : 'commit' });
+  },
+
+  reply(plan, data: EditData, ctx): ToolReply {
+    const f = ctx.services.doc.state.get().doc.features.find((g) => g.id === plan.id);
+    const name = f?.name ?? plan.renameTo ?? plan.name;
+    const bits: string[] = [];
+    if (plan.set.length) bits.push(plan.set.map((x) => `${x.field} ${x.value}`).join(', '));
+    if (plan.renameTo !== null) bits.push(`renamed from ${plan.name}`);
+    if (plan.suppress !== null) bits.push(plan.suppress ? 'suppressed' : 'unsuppressed');
+    if (plan.moveWords) bits.push(`moved ${plan.moveWords}`);
+    const state = data.feature?.state ?? 'ok';
+    const body = bodyWords(data);
+    const text = `Edit ${name} ${state}: ${bits.join('; ')}${body ? ` · ${body}` : ''}${data.broke.length ? ` · ${data.broke.length} feature${data.broke.length === 1 ? '' : 's'} broke` : ''}`;
+    return { text, data: { ...data, values: f ? valuesOf(f, ctx.services).slice(0, 40) : [] }, summary: text };
+  },
+};
+
+export const tool: ToolImpl = {
+  kind: 'edit',
+  run: (ctx) => runEdit(ctx, editFeature),
+};

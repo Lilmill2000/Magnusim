@@ -63,6 +63,59 @@ to start (`busy.ts`), then for the rebuild to catch up (`doc.settled()`). Reply 
 (30); full 24 KB (12 KB); one sketch 16 KB (8 KB). A local turn whose model has less than
 24,000 tokens of context answers `not_ready` `small_context`.
 
+## An edit call (`step.ts`, `judge.ts`, `ledger.ts`, `busy.ts`, `pace.ts`)
+
+An edit tool is `{kind: 'edit', run: (ctx) => runEdit(ctx, tool)}` with an `EditTool`
+`{plan, apply, sealed?, reply}`. `runEdit` makes one call one Assistant step
+(`doc.assistant`), all or nothing:
+
+1. **The gate** (`busy.ts` `waitForEdit`): `not_ready` while the Part cannot take edits
+   (`not_editable`; `opening_geometry` while Edit in CAD opens it), `busy`/`other_turn` for a
+   call of a turn that is not the one running here, then the **wait for the person**: the
+   rollback bar not at the end, a panel of theirs (an idle Parameters panel does not count), a
+   typed value, a rename, a menu, a dialog, a toolbar drag, or the Assistant paused. While it
+   holds, the chip is `waiting` with what it asks ("close the Fillet 2 panel"), and progress
+   carries `waiting: true` (every 5 s), so the turn's minutes stop. It is checked again on
+   every change of the stores behind those signals; after 10 minutes (`EDIT_WAIT_MS`, the
+   test handle's `setHoldS` shortens it) the call answers `busy` `person_editing`,
+   `rolled_back` or `paused`. A key or a held pointer in the frame is a soft wait (800 ms of
+   quiet, at most 10 s). Reads never wait.
+2. **Plan** against the settled Part: every refusal (`invalid_input` with the row at fault)
+   before anything changes. The hold point `after-plan` follows; a person who opened something
+   meanwhile is waited for again and the call plans anew (at most three times).
+3. **Apply** inside the step, through the person's own paths (`openEditForAssistant`, the
+   Part's one-shot edits inside `step.run`), with `ctx.checkpoint({hold, pace, label})` at each
+   pace point: it throws on a stop, a take-over (`busy` `taken_over` with its `why`; the
+   Assistant pauses in this Part until the turn ends), a change of the Part by someone else
+   (`busy` `changed`) or a draft the call did not write. Hold points: `after-open`,
+   `between-opens`, `before-commit`.
+4. **Judge** (`judge.ts`) once the rebuild settled: a failed rebuild or a kernel stop is
+   `kernel_failed`; the call's own feature failing is `feature_failed` with its own message and
+   actions; a value edit (`set_params`, `edit_feature` with only `set`) that turns a working
+   feature red is `broke_downstream`; those revert. A structural edit keeps what it broke
+   (`broke`; `get_model` marks it `broken_by_you`). Warnings: the own feature's, a feature newly
+   warning, a body with more solids.
+5. **Seal** the step's undo steps into the key's group (`ledger.ts` `groupLabel`: "Assistant:
+   <request>", or "Assistant (other app): <first part> +N"), and keep the call in the key's
+   ledger (its mark, the model after) for the `undo` tool and `get_model`'s
+   `undo.your_steps`. Anything that fails reverts the step to its mark exactly; a revert the
+   person's own change refuses answers with `detail.kept`. A Stop, a stall or Back (the call's
+   signal) reverts synchronously in the abort handler.
+
+The answer's `data` is `EditData` (`report()`: the feature, what was resolved, the bodies
+created, changed and removed, warnings, broke, fixed) plus the tool's own fields.
+
+**Pace** (`pace.ts`): `watch` (the default, the person's choice in `ws.prefs`
+`assistant.pace`) waits at each pace point (a panel open 450 ms, a parameter row 150 ms, before
+the commit 250 ms, ...), at most 6 s per call; never while the window is hidden, after a
+rebuild over 1.5 s, or at `fast`. Tests force the pace without writing the preference
+(`setPace(pace, scale)` on the test handle; the vitest harness runs `fast`).
+
+**The pause** (`busy.ts` `createPause`): set by a take-over, by the person's undo or redo of
+the Assistant's steps while its turn runs, or by the chip's Pause; it ends with its turn (the
+host's turn events) or, without them, at the next key. The chip shows `paused` ("you took
+over", "you undid its steps").
+
 ## The person's view
 
 The chip (`[data-chip="assistant"][data-assistant-state]`) and the frame's
@@ -76,11 +129,15 @@ changes). Without the host's turn events the chip stays 10 s after the last call
   every module's feature types, the real solver, the UI controller and the fake host's
   `ws.assistant`, `tests/fakes/assistant-sdk.ts`). Real-kernel tests give each test an
   explicit timeout.
-- Hold points (`testing.ts`): a test holds a point (`after-settled` now; the edit tools
-  add theirs), the call stops there until the test releases it. No sleeps.
+- Hold points (`testing.ts`): a test holds a point (`after-settled` for reads; `after-plan`,
+  `after-open`, `between-opens` and `before-commit` for edits), the call stops there until the
+  test releases it. No sleeps.
 - `window.__CAD__.assistant`: the tools, the chip's state, the calls answered (`calls`,
-  with each error's reason), the turns, the hold points, and `setToolset('core')` for the
-  eval's A/B runs.
+  with each error's reason), the turns, the hold points, `setHoldS(s)` (the edits' wait for the
+  person), `setPace(pace, scale)`, `paused()`, and `setToolset('core')` for the eval's A/B
+  runs.
+- The edit tools' vitest files: `step`, `judge`, `busy`, `pace`, `ledger`, `tools-edit`
+  (`parts.ts` makes the plate and its fillet as the person would).
 - E2E shard `assistant` (`npm run test:e2e:assistant`): each spec runs its own app
   server with the Assistant's test switches and the app's scripted model
   (`e2e/assistant-helpers.ts`); the app's turn helpers are vendor-neutral and take this

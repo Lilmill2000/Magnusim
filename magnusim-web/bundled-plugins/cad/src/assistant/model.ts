@@ -121,6 +121,8 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   if (st?.message) row.message = st.message;
   if (st?.actions?.length) row.actions = [...st.actions];
   if (runtimeOf(services)?.madeBy.has(f.id)) row.by = 'assistant';
+  // A kept structural edit of the Assistant's turned it red, and it still fails.
+  if (st?.state === 'error' && runtimeOf(services)?.brokenBy.has(f.id)) row.broken_by_you = true;
   if (f.type === 'sketch') {
     const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
     row.on = supportWords(s, f);
@@ -247,7 +249,7 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
     ...(block ? { why: block } : {}),
     rolled_back: rolled,
     person: personBusy(services),
-    undo: { label: s.history.undoLabel, your_steps: 0 },
+    undo: { label: s.history.undoLabel, your_steps: rt ? rt.ledger.undoable(ctx.key, services.doc) : 0 },
     params: s.doc.params.slice(0, 200).map((p) => {
       const r = services.doc.units.evaluate(p.expr, p.quantity);
       return {

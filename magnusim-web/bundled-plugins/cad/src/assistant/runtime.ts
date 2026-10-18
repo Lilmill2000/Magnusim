@@ -1,12 +1,16 @@
 // The Assistant's state in this page, one per Part (made by installAssistant): the chip's store,
 // the turns the host told of, the call keys, the revision, the hold points, the call ledger and
-// what the tools remember between calls. Tools reach it through runtimeOf(ctx.services).
+// what the tools remember between calls (the edits' undo ledger, pause, pace and the person's
+// input). Tools reach it through runtimeOf(ctx.services).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { AssistantUiState } from '../types/assistant';
 import type { FeatureId } from '../types/doc';
 import type { StateStore } from '../types/state';
+import type { PauseState, SoftInput } from './busy';
+import type { Ledger } from './ledger';
+import type { PaceControl } from './pace';
 import type { RevTracker } from './rev';
 import type { SessionKeys } from './session-key';
 import type { CallRecord, HoldPoints } from './testing';
@@ -23,6 +27,18 @@ export interface AssistantRuntime {
   readonly calls: CallRecord[];
   /** Features this page's Assistant made (get_model's `by: "assistant"`); the edit tools add to it. */
   readonly madeBy: Set<FeatureId>;
+  /** Features a kept structural edit of the Assistant's turned red (get_model's `broken_by_you` while they fail). */
+  readonly brokenBy: Set<FeatureId>;
+  /** Each key's edit calls with the point before each (the undo tool, get_model's undo.your_steps). */
+  readonly ledger: Ledger;
+  /** Paused in this Part (the chip, a take-over, the person's undo): edits wait. */
+  readonly pause: PauseState;
+  /** The person's pace (watch or fast) and each call's waits. */
+  readonly pace: PaceControl;
+  /** The person's pointer and keys in the frame (the soft wait). */
+  readonly soft: SoftInput;
+  /** The longest an edit waits for the person (EDIT_WAIT_MS; tests shorten it). */
+  waitCapMs: number;
   /** Keys that had a call already (CallCtx.firstOfKey). */
   readonly seenKeys: Set<string>;
   /** Keys whose get_model gave the pointer to `help guide` already (it goes once per key). */

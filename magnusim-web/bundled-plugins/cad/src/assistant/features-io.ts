@@ -23,6 +23,8 @@ export interface FeatureIo {
   inputsOf(f: Feature, services: AppServices): Record<string, unknown> | null;
   /** Its expression fields by the tool's field names (edit_feature's `set[].field`). */
   values?(f: Feature, services: AppServices): FeatureValue[];
+  /** The path in the feature of one of those field names ("distance" → "extent.distance"), or null. */
+  pathOf?(f: Feature, field: string, services: AppServices): string | null;
 }
 
 const IO = new Map<FeatureType, FeatureIo>();
@@ -60,4 +62,17 @@ export function summaryOf(f: Feature, services: AppServices): string {
   const bits = [label];
   for (const k of ['method', 'kind', 'op', 'of', 'mode', 'shape']) if (typeof r[k] === 'string' && r[k]) bits.push(`${k} ${String(r[k])}`);
   return bits.join(' · ');
+}
+
+/**
+ * The path in the feature of an expression field as edit_feature names it (its tool's field name
+ * when the tool registered one, else its path as valuesOf lists it), or null.
+ */
+export function pathOfField(f: Feature, field: string, services: AppServices): string | null {
+  const io = IO.get(f.type);
+  const mapped = io?.pathOf?.(f, field, services);
+  if (mapped) return mapped;
+  // Without a map the names valuesOf gives are the paths themselves (a sketch's are its dimension ids).
+  if (io?.values || f.type === 'sketch') return null;
+  return valuesOf(f, services).some((v) => v.field === field) ? field : null;
 }

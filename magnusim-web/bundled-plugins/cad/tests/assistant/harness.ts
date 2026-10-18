@@ -4,12 +4,14 @@
 // controller, and the fake host's ws.assistant (tests/fakes/assistant-sdk.ts) with the Assistant
 // installed on it. call() runs a tool as the host's bridge would (its result, or its error as the
 // SDK sends it). Real-kernel test files give each test an explicit timeout (Linux CI is slow).
+// The Assistant's pace is fast unless a test asks for watch (with its delays scaled, 0 by default).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantRegistration } from '@magnusim/workspace';
 import { expect, vi } from 'vitest';
 import { createCommandRegistry } from '../../src/app/commands';
 import { createKeyboard } from '../../src/app/keyboard';
 import { installAssistant } from '../../src/assistant/install';
+import type { Pace } from '../../src/assistant/pace';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { createDocService } from '../../src/doc';
 import chamferModule from '../../src/features/chamfer';
@@ -78,6 +80,9 @@ export interface HarnessOptions {
   now?: () => number;
   /** The fake host's answers to the first registrations (else available, every tool accepted). */
   verdicts?: AssistantRegistration[];
+  /** The Assistant's pace (fast by default) and, for watch, its delays' scale (0 by default: no waits). */
+  pace?: Pace;
+  paceScale?: number;
 }
 
 export async function assistantHarness(o: HarnessOptions = {}): Promise<AssistantHarness> {
@@ -113,6 +118,9 @@ export async function assistantHarness(o: HarnessOptions = {}): Promise<Assistan
   const off = installAssistant(services, { document, now: o.now });
   // The app's answer to the registration (the page's state says it).
   await vi.waitFor(() => expect(runtimeOf(services!)?.store.get().registration).not.toBe('pending'), { timeout: 5000, interval: 5 });
+  const rt = runtimeOf(services);
+  rt?.pace.force(o.pace ?? 'fast');
+  rt?.pace.setScale(o.pace === 'watch' ? (o.paceScale ?? 0) : null);
   const settle = () => doc.settled();
   const h: AssistantHarness = {
     services,
