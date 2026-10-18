@@ -130,7 +130,7 @@ export interface CallCtx {
   readonly input: Record<string, unknown>;
   /** Aborted when the turn is stopped, the call stalls, or the Part closes. */
   readonly signal: AbortSignal;
-  /** The undo group, handle table and ledger key: "turn:<id>", "ext:<n>" or "mcp:<session>". */
+  /** The undo group, handle table and ledger key: "turn:<id>", "ext:<n>", or "mcp:<session>" (then "mcp:<session>#<n>"). */
   readonly key: string;
   /** The turn's facts from the host, when it told them (null on a host without turn events, and for external calls). */
   readonly turn: TurnFacts | null;

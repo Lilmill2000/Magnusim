@@ -1,13 +1,16 @@
 // Which group a call belongs to (CAD tools spec §1.2, §7.9): the key of its undo group, handle
 // table, ledger, camera latch and "what the person changed" baseline.
 //   turn:<id>     a call of one of the app's turns (AssistantCall.turn);
-//   mcp:<session> an outside client's call that names its session (turn "mcp:<session>");
 //   ext:<n>       an outside client's call with no turn (turn ""): one session while its calls
 //                 keep coming. n goes up after 5 minutes without such a call, when the person
 //                 changed the committed Part between two of them, and on every page load (the
 //                 counter lives in this page). A key that went up only because the person
 //                 changed the Part is the same session for the pause (sameSession): the
 //                 person's own change never lifts their Pause, or a take-over's.
+//   mcp:<session> another app's call over MCP: the app tells it the turn "mcp:<connection id>",
+//                 the same for every call on that connection, which may stay open as long as
+//                 the app runs. Its calls are grouped by the same rules as ext:<n>, per
+//                 connection: mcp:<session> first, then mcp:<session>#2, #3, ...
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { CadDoc } from '../types/doc';
@@ -24,8 +27,16 @@ export interface SessionKeys {
   sameSession(a: string, b: string): boolean;
 }
 
-/** Sessions remembered for sameSession (the newest). */
+/** Sessions remembered for sameSession (the newest), per outside source. */
 const ROOTS_KEPT = 64;
+
+/** One outside source: the calls with no turn (''), or one app's connection ('mcp:<session>'). */
+interface Source {
+  n: number;
+  last: { at: number; doc: CadDoc } | null;
+  /** Each of its keys' first key of its session (a new one after 5 minutes without a call). */
+  roots: Map<number, number>;
+}
 
 /**
  * `now` is the clock; `committed` the committed Part (DocService.committed): a person's change
@@ -34,36 +45,52 @@ const ROOTS_KEPT = 64;
  */
 export function createSessionKeys(o: { now?: () => number; committed: () => CadDoc }): SessionKeys {
   const now = o.now ?? (() => Date.now());
-  let n = 1;
-  let last: { at: number; doc: CadDoc } | null = null;
-  // Each outside key's first key of its session (a new one after 5 minutes without a call).
-  const roots = new Map<number, number>([[1, 1]]);
-  const rootOf = (key: string): number | null => {
-    const m = /^ext:(\d+)$/.exec(key);
-    return m ? (roots.get(Number(m[1])) ?? null) : null;
+  // Every source this page heard (never forgotten: a source seen again must not reuse a key).
+  const sources = new Map<string, Source>();
+  /** The keys given out lately: their source and number (sameSession reads them). */
+  const given = new Map<string, { source: string; n: number }>();
+  const sourceOf = (id: string): Source => {
+    let s = sources.get(id);
+    if (!s) {
+      s = { n: 1, last: null, roots: new Map([[1, 1]]) };
+      sources.set(id, s);
+    }
+    return s;
+  };
+  const keyFor = (id: string, n: number) => (id === '' ? `ext:${n}` : n === 1 ? id : `${id}#${n}`);
+  const rootOf = (key: string): { source: string; root: number } | null => {
+    const g = given.get(key);
+    const root = g ? sources.get(g.source)?.roots.get(g.n) : undefined;
+    return g && root !== undefined ? { source: g.source, root } : null;
   };
   return {
     keyOf(turn) {
       const t = typeof turn === 'string' ? turn : '';
-      if (t.startsWith('mcp:') && t.length > 'mcp:'.length) return t;
-      if (t) return `turn:${t}`;
-      if (last) {
-        const idle = now() - last.at > EXTERNAL_IDLE_MS;
-        if (idle || o.committed() !== last.doc) {
-          const root = idle ? n + 1 : (roots.get(n) ?? n);
-          n += 1;
-          roots.set(n, root);
-          if (roots.size > ROOTS_KEPT) roots.delete(roots.keys().next().value as number);
+      if (t && !(t.startsWith('mcp:') && t.length > 'mcp:'.length)) return `turn:${t}`;
+      const s = sourceOf(t);
+      if (s.last) {
+        const idle = now() - s.last.at > EXTERNAL_IDLE_MS;
+        if (idle || o.committed() !== s.last.doc) {
+          const root = idle ? s.n + 1 : (s.roots.get(s.n) ?? s.n);
+          s.n += 1;
+          s.roots.set(s.n, root);
+          if (s.roots.size > ROOTS_KEPT) s.roots.delete(s.roots.keys().next().value as number);
         }
       }
-      return `ext:${n}`;
+      const key = keyFor(t, s.n);
+      given.delete(key);
+      given.set(key, { source: t, n: s.n });
+      if (given.size > ROOTS_KEPT * 4) given.delete(given.keys().next().value as string);
+      return key;
     },
     ended(key) {
-      if (key.startsWith('ext:')) last = { at: now(), doc: o.committed() };
+      const g = given.get(key);
+      if (g) sourceOf(g.source).last = { at: now(), doc: o.committed() };
     },
     sameSession(a, b) {
       const ra = rootOf(a);
-      return ra !== null && ra === rootOf(b);
+      const rb = rootOf(b);
+      return ra !== null && rb !== null && ra.source === rb.source && ra.root === rb.root;
     },
   };
 }

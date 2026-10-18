@@ -22,7 +22,8 @@ model reads.
    build with `createCallHandler(rt, tools)`): the grammar and the prompt cache stay the same
    while tools are added.
 3. Each call runs `createCallHandler` (`call.ts`): its key (`session-key.ts`:
-   `turn:<id>`, `mcp:<session>`, or `ext:<n>` for an outside client's calls), its
+   `turn:<id>`, `mcp:<session>` (then `#2`, `#3`, ... as for `ext:<n>`), or `ext:<n>` for an
+   outside client's calls), its
    context (`CallCtx` in `src/types/assistant.ts`), the tool's code from
    `tools/index.ts`, and the reply.
 

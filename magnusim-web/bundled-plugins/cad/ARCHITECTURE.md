@@ -1951,9 +1951,11 @@ pieces, adding and testing a tool), and each tool's description in
   the call answers `not_ready` `not_built` (tests make one with
   `createCallHandler(rt, tools)`).
 - **Keys** (`session-key.ts`). Each call has a key: `turn:<id>` for the app's
-  turns; for an outside client's calls `mcp:<session>`, or `ext:<n>` while
-  they keep coming (a new `n` after 5 minutes without one, after a change of
-  the person's between two of them, and on a page load). The undo group, the
+  turns; for an outside client's calls `ext:<n>` while they keep coming (a new
+  `n` after 5 minutes without one, after a change of the person's between two
+  of them, and on a page load), and for another app's connection (the turn
+  `mcp:<connection>`, open as long as the app runs) `mcp:<session>`, then
+  `mcp:<session>#2`, `#3`, ... by the same rules. The undo group, the
   ledger of the key's calls (the `undo` tool, `get_model`'s
   `undo.your_steps`), the handles (`#f3`), the camera latch and the baseline
   of `user_changes` are per key.

@@ -2,10 +2,10 @@
 // Which group a call belongs to (CAD tools spec §1.2, §7.9; session-key.ts), on a fake clock: a
 // turn's calls key by the turn; an outside client's calls with no turn share ext:<n> while they
 // keep coming within 5 minutes and the person changed nothing between them; a change by the person
-// or 5 idle minutes starts a new one; "mcp:<session>" turns key by their session; a new page starts
-// again; keys that went up only because the person changed the Part are one session for the pause
-// (sameSession), 5 idle minutes are not. And the reply budgets by key (turn-info.ts): local turns
-// get the smaller ones.
+// or 5 idle minutes starts a new one; "mcp:<session>" turns key by their session, by the same
+// rules (#2, #3, …); a new page starts again; keys that went up only because the person changed
+// the Part are one session for the pause (sameSession), 5 idle minutes are not. And the reply
+// budgets by key (turn-info.ts): local turns get the smaller ones.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { createSessionKeys, EXTERNAL_IDLE_MS, keyKind } from '../../src/assistant/session-key';
@@ -100,6 +100,25 @@ describe('session keys', () => {
     expect(call('mcp:')).toBe('turn:mcp:');
     expect(keyKind('mcp:abc')).toBe('external');
     expect(keys().call('')).toBe('ext:1');
+  });
+
+  it("another app's connection (turn \"mcp:<connection>\", open as long as the app runs) is grouped as outside calls are: mcp:<session> while its calls keep coming, then #2 after 5 idle minutes and #3 after the person's change, one session for the pause with #2; another connection and calls with no turn keep their own", () => {
+    const { k, call, change, later } = keys();
+    expect(call('mcp:m-1')).toBe('mcp:m-1');
+    later(EXTERNAL_IDLE_MS - 1);
+    expect(call('mcp:m-1')).toBe('mcp:m-1');
+    later(EXTERNAL_IDLE_MS + 1);
+    expect(call('mcp:m-1')).toBe('mcp:m-1#2');
+    expect(call('mcp:m-2')).toBe('mcp:m-2');
+    expect(call('mcp:m-1')).toBe('mcp:m-1#2');
+    change();
+    expect(call('mcp:m-1')).toBe('mcp:m-1#3');
+    expect(k.sameSession('mcp:m-1#2', 'mcp:m-1#3')).toBe(true);
+    expect(k.sameSession('mcp:m-1', 'mcp:m-1#2')).toBe(false);
+    expect(k.sameSession('mcp:m-1#3', 'mcp:m-2')).toBe(false);
+    expect(k.sameSession('mcp:m-1#3', 'ext:1')).toBe(false);
+    expect(call('')).toBe('ext:1');
+    expect(keyKind('mcp:m-1#3')).toBe('external');
   });
 });
 
