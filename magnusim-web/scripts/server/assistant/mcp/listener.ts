@@ -42,6 +42,7 @@ import { assistantDataDir } from '../home.ts';
 import { alog } from '../log.ts';
 import { loadMcpSdk } from '../providers/load-sdk.ts';
 import { isPort, loadSettings, updateSettings } from '../settings.ts';
+import { MCP_SERVER_KEY } from './names.ts';
 import { BINDING_RE, newSessionId } from './sessions.ts';
 
 export const MCP_LIMITS = Object.freeze({
@@ -57,8 +58,6 @@ export const MCP_LIMITS = Object.freeze({
   handshakeMs: 5_000,
 });
 
-/** The key the Settings snippet gives Magnusim's entry (never `magnusim`: the agents' own server is named that). */
-export const MCP_SERVER_KEY = 'magnusim-apps';
 /** The bridge an MCP client starts. */
 export const BRIDGE_SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'assistant-mcp.mjs');
 

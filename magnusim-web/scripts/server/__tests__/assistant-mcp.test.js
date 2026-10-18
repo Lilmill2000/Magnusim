@@ -2,7 +2,7 @@
 // M2): the loopback listener (127.0.0.1 only, the per-launch token in a 0600 mcp.json, the
 // saved port, the challenge handshake both ways, connection limits), MCP sessions (external
 // apps with host tools, agent bindings, the Settings Test binding), the list (names of at
-// most 46 characters, hints, instructions, registration text withheld), calls (only what was
+// most 44 characters, hints, instructions, registration text withheld), calls (only what was
 // served, one at a time per connection, rates, project data under the privacy rules), the
 // open workspace (questions, privacy, progress, list changes), logging, and the server's
 // lifetime (the start rule, a Vite restart, the MCP package missing).
@@ -532,6 +532,29 @@ describe('who may connect', () => {
   });
 });
 
+describe('names', () => {
+  it("every served name fits the providers' 64 characters under either server name a client puts before it: the agents' magnusim and the snippet's magnusim-apps", async () => {
+    const A = await import('../assistant/agents/acp.ts');
+    const servers = [A.MCP_SERVER_NAME, ...Object.keys(JSON.parse(L.mcpClientConfig().snippet).mcpServers)];
+    assert.deepEqual(servers, ['magnusim', 'magnusim-apps']);
+    assert.equal(N.MCP_SERVER_KEY, 'magnusim-apps');
+    // 64 less the longer prefix: `mcp__magnusim-apps__`, 20 characters.
+    assert.equal(N.clientPrefix('magnusim-apps'), 'mcp__magnusim-apps__');
+    assert.equal(N.MCP_NAME_MAX, N.PROVIDER_NAME_MAX - 'mcp__magnusim-apps__'.length);
+    assert.equal(N.MCP_NAME_MAX, 44);
+    // Every length a tool name can have (registry.ts: up to 58).
+    for (let n = 1; n <= 58; n += 1) {
+      const name = `k${'a'.repeat(n - 1)}`;
+      const served = N.mcpName(name);
+      assert.equal(served === name, n <= N.MCP_NAME_MAX, `${n}: kept only up to the cap`);
+      for (const s of servers) assert.match(`${N.clientPrefix(s)}${served}`, /^[A-Za-z0-9_-]{1,64}$/, `${s}, a ${n}-character name`);
+    }
+    // A longer name: its first 39 characters, `_` and 4 hex of its SHA-256.
+    const long = `abcdefghijklmnopqrstuvwx__k${'a'.repeat(31)}`;
+    assert.match(N.mcpName(long), new RegExp(`^${long.slice(0, 39)}_[0-9a-f]{4}$`));
+  });
+});
+
 describe('tools/list', () => {
   const SLUG = 'abcdefghijklmnopqrstuvwx'; // 24 characters: kept as the slug
   const LONG1 = `k${'a'.repeat(31)}`; // 32 characters: a 58-character tool name
@@ -541,7 +564,7 @@ describe('tools/list', () => {
   const TAKER = N.mcpName(full2).slice(SLUG.length + 2);
 
   for (const era of ['legacy', 'modern']) {
-    it(`${era}: toolsFor's list under names of at most 46 characters (a collision dropped), with hints and instructions; registration text (the guide too) withheld from external apps, not from agents`, async () => {
+    it(`${era}: toolsFor's list under names of at most 44 characters (a collision dropped), with hints and instructions; registration text (the guide too) withheld from external apps, not from agents`, async () => {
       const w = await world({ hostTools: [H.hostTool('app_info'), H.hostTool('wipe_all', { risk: 'destructive' }), H.hostTool('project_read', { projectData: true, available: (ctx) => (ctx.projectId ? true : 'No project.') })] });
       // Another plugin's tool that reads no project data: its registration text is withheld all the same.
       const sourced = {
@@ -576,8 +599,8 @@ describe('tools/list', () => {
         assert.ok(names.every((n) => n.length <= N.MCP_NAME_MAX && /^[A-Za-z0-9_-]{1,64}$/.test(n)), names.join(','));
         const mapped1 = N.mcpName(`${SLUG}__${LONG1}`);
         assert.equal(`${SLUG}__${LONG1}`.length, 58);
-        assert.equal(mapped1.length, 46);
-        assert.equal(mapped1.slice(0, 41), `${SLUG}__${LONG1}`.slice(0, 41));
+        assert.equal(mapped1.length, 44);
+        assert.equal(mapped1.slice(0, 39), `${SLUG}__${LONG1}`.slice(0, 39));
         assert.deepEqual(names, ['app_info', 'project_read', 'wipe_all', `${SLUG}__${TAKER}`, mapped1, `${SLUG}__pick`, 'src_pick']);
         assert.ok(!names.includes('connection_check'));
         assert.ok(logged.some((l) => l.includes('mcp tool name taken') && l.includes(full2.slice(0, 40))), 'the collision is logged');
