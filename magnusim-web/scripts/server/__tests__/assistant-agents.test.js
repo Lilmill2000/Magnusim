@@ -60,6 +60,7 @@ const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
 const { stopAllAgentProcesses } = await import('../assistant/agents/process.ts');
 const { dropWarmKeeper } = await import('../assistant/agents/job-win.ts');
+const { killOwn } = await import('./assistant-own-pids.js');
 
 const WIN = process.platform === 'win32';
 const LIMIT = { timeout: 120_000 };
@@ -69,19 +70,16 @@ const TMP = join(ROOT, 'tmp');
 mkdirSync(TMP, { recursive: true });
 
 const fake = await startFakeAcp();
+/** Pids a test saw: at the end, each one still running as one of this file's processes is killed. */
 const made = new Set();
 
 after(async () => {
   // Any agent process still running (a failed check's), with its tree and its job keeper.
   await stopAllAgentProcesses('test end');
   dropWarmKeeper();
-  for (const pid of made) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      /* gone */
-    }
-  }
+  // Only this file's own (its scripts under ROOT, their helpers): a pid the OS has given to
+  // another program since is left alone.
+  killOwn([...made], [ROOT, fake.url, 'setInterval(()=>{},1<<30)']);
   await fake.stop();
   resetAssistantState();
   try {

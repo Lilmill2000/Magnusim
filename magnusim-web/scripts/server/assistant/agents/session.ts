@@ -30,7 +30,10 @@
  *
  * cancel(): every open permission request is answered `cancelled` first, then session/cancel
  * goes out (ACP's order). end(): the tree kill, the working folder removed, the binding
- * dropped (its MCP connection closes, and a bridge with it is refused from then on).
+ * dropped (its MCP connection closes, and a bridge with it is refused from then on). An end
+ * while the process starts stops that start (nothing more is spawned; one already spawned is
+ * stopped) and resolves only once it has settled, so no process of the agent can appear after
+ * end() has resolved (the allow switch's kill switch answers only then).
  *
  * Every request the agent sends that Magnusim doesn't serve (the file system, the terminal,
  * elicitation, anything else) gets -32601 (rpc.ts).
@@ -242,6 +245,10 @@ export class AgentSession {
   private handlers: PromptHandlers | null = null;
   private readonly open = new Map<string, OpenPermission>();
   private ending: Promise<void> | null = null;
+  /** Aborted by end(): a start still on its way stops (startAgentProcess's signal). */
+  private readonly endStart = new AbortController();
+  /** The process start on its way (startAgentProcess), which end() waits for. */
+  private starting: Promise<AgentProcess> | null = null;
   private extraDir: string | null = null;
   private permSerial = 0;
   /**
@@ -276,9 +283,17 @@ export class AgentSession {
     // A test home's own temp folder may not be there yet.
     if (this.o.tmp) await mkdir(this.o.tmp, { recursive: true }).catch(() => {});
     const env = await this.envSpec();
+    if (this.endStart.signal.aborted) {
+      // Ended while its settings file was written: that goes too, and nothing starts.
+      await this.cleanExtra();
+      throw new AgentRunError('agent_exited', STOPPED_UNEXPECTEDLY_TEXT(this.agent.name));
+    }
     let proc: AgentProcess;
     try {
-      proc = await startAgentProcess({ argv: this.agent.argv, label: this.agent.id, env, baseEnv: this.o.baseEnv, tmp: this.o.tmp, graceMs: this.o.graceMs, signal });
+      // Ended meanwhile: end() aborts endStart, and the start stops too.
+      const starting = startAgentProcess({ argv: this.agent.argv, label: this.agent.id, env, baseEnv: this.o.baseEnv, tmp: this.o.tmp, graceMs: this.o.graceMs, signal: AbortSignal.any([signal, this.endStart.signal]) });
+      this.starting = starting;
+      proc = await starting;
     } catch (err) {
       throw agentErrorOf(err, this.agent.name, null);
     }
@@ -627,11 +642,16 @@ export class AgentSession {
   end(why: string): Promise<void> {
     if (!this.ending) {
       this.state = 'ended';
+      this.endStart.abort(new AgentRunError('agent_exited', STOPPED_UNEXPECTEDLY_TEXT(this.agent.name)));
       this.cancelOpen();
       dropBinding(this.binding.id);
-      const proc = this.proc;
+      const starting = this.starting;
       this.ending = (async () => {
+        let proc = this.proc;
         try {
+          // A start on its way: it sees the abort, and stops whatever it spawned before it
+          // settles (a start that had already finished gives its process, stopped here).
+          if (!proc && starting) proc = await starting.catch(() => null);
           if (proc) await proc.stop(why);
         } finally {
           this.rpc?.exit(proc?.exitInfo ?? { code: null, signal: null });

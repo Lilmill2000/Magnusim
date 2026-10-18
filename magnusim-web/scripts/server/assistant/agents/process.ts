@@ -39,7 +39,14 @@
  * - Windows best effort: `taskkill /T /F` first, while the tree is still linked to its root
  *   (killProcessTreeAsync: an async process, never spawnSync), then stdin closed.
  * When this Node process exits, the live agents' groups get SIGKILL and their keepers' pipes
- * close (the job then ends them).
+ * close (the job then ends them). On POSIX a signal that would end it without its 'exit' event
+ * (Ctrl+C, the terminal closing, SIGTERM that nothing else handles) ends the groups first, then
+ * takes its default action (installExitHooks). On Windows the keepers' pipes close however
+ * Magnusim ends, so the jobs end their trees.
+ *
+ * A start that is stopped (its signal) while it makes the working folder or (Windows) waits for
+ * the keeper starts nothing; on Windows the trampoline gets no `go` once it is stopped, so the
+ * agent never runs.
  *
  * The polite-then-forceful order and the group signalled after its leader ended come from
  * SolidCraft's agent chat (process.rs, MIT/Apache-2.0); the code is our own.
@@ -59,7 +66,7 @@ import { assistantDataDir, assistantHome } from '../home.ts';
 import { alog } from '../log.ts';
 import { redact } from '../redact.ts';
 import { cleanText } from '../sanitize.ts';
-import { keeperLooksBlocked, noteKeeperOutcome, takeKeeper, type JobKeeper } from './job-win.ts';
+import { keeperLooksBlocked, noteKeeperOutcome, takeKeeper, warmKeeper, type JobKeeper } from './job-win.ts';
 import type { ExitInfo } from './rpc.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -541,7 +548,51 @@ export interface StartAgentOptions {
 }
 
 const live = new Set<AgentProcess>();
-let exitHook = false;
+/** POSIX: groups spawned whose start hasn't finished (no AgentProcess yet): they go at exit too. */
+const spawning = new Set<number>();
+let exitHooks = false;
+
+/** POSIX: the signals that end Magnusim from a terminal or a service manager. */
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP', 'SIGTERM'];
+/**
+ * Marks the stop-signal listener of each copy of this module (a Vite restart loads the server's
+ * modules again, and each copy ends its own agents), so no copy takes another's listener for a
+ * handler that decides what the signal does.
+ */
+const STOP_HOOK = Symbol.for('magnusim.assistant.agentStopSignal');
+
+/**
+ * Once per process, before its first agent is spawned: the agents go with this process. A
+ * normal exit runs the 'exit' hook. On POSIX Node emits no 'exit' when a signal ends it, and
+ * each agent leads its own session (the terminal's signals never reach it), so Ctrl+C (SIGINT),
+ * the terminal closing (SIGHUP) and SIGTERM end the groups first, then take their default
+ * action (onStopSignal). On Windows nothing more is needed: the keepers' pipes close however
+ * this process ends, and each job then ends its tree.
+ */
+function installExitHooks(): void {
+  if (exitHooks) return;
+  exitHooks = true;
+  process.once('exit', onProcessExit);
+  if (WIN) return;
+  // First in line, so it still sees the other handlers of the signal (Vite's SIGTERM handler
+  // is a `once`: it is gone by the time a later listener runs).
+  for (const sig of STOP_SIGNALS) process.prependListener(sig, onStopSignal);
+}
+
+/**
+ * A stop signal (POSIX). When another handler has it too, that one decides (Vite's SIGTERM
+ * closes the server and exits; the 'exit' hook then ends the groups). Otherwise the signal would
+ * end Node without its 'exit' event: the groups go now, synchronously, and the signal is raised
+ * again, which ends this process as it would have (the shell sees the same status) once no copy
+ * of this listener is left.
+ */
+function onStopSignal(sig: NodeJS.Signals): void {
+  if (process.listeners(sig).some((l) => !(l as { [STOP_HOOK]?: boolean })[STOP_HOOK])) return;
+  onProcessExit();
+  for (const s of STOP_SIGNALS) process.removeListener(s, onStopSignal);
+  process.kill(process.pid, sig);
+}
+(onStopSignal as unknown as { [STOP_HOOK]: boolean })[STOP_HOOK] = true;
 
 function onProcessExit(): void {
   const ended = new Set<number>();
@@ -549,7 +600,20 @@ function onProcessExit(): void {
     a.dropAtExit();
     ended.add(a.pid);
   }
+  for (const pgid of spawning) {
+    killGroup(pgid, 'SIGKILL');
+    ended.add(pgid);
+  }
   if (!WIN && ended.size) dropRecordsAtExit(ended);
+}
+
+/** POSIX: signals process group `pgid` (gone: nothing). */
+function killGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    /* the group is gone */
+  }
 }
 
 /**
@@ -609,11 +673,8 @@ export class AgentProcess {
     o.child.stderr?.setEncoding('utf8');
     o.child.stderr?.on('data', (d: string) => this.feedStderr(d));
     o.child.stderr?.on('end', () => this.flushStderr());
+    installExitHooks();
     live.add(this);
-    if (!exitHook) {
-      exitHook = true;
-      process.once('exit', onProcessExit);
-    }
   }
 
   /** The agent's last stderr lines (at most 40 of 400 characters), redacted and cleaned. */
@@ -636,13 +697,7 @@ export class AgentProcess {
 
   /** At this process's exit: synchronous only. */
   dropAtExit(): void {
-    if (!WIN) {
-      try {
-        process.kill(-this.pid, 'SIGKILL');
-      } catch {
-        /* gone */
-      }
-    }
+    if (!WIN) killGroup(this.pid, 'SIGKILL');
     this.keeper?.close();
   }
 
@@ -715,11 +770,7 @@ export class AgentProcess {
   private signalGroup(signal: NodeJS.Signals): void {
     // Even when the leader ended: its helpers outlive it, and the group id stays theirs while
     // any of them lives.
-    try {
-      process.kill(-this.pid, signal);
-    } catch {
-      /* the group is gone */
-    }
+    killGroup(this.pid, signal);
   }
 
   private feedStderr(d: string): void {
@@ -788,25 +839,45 @@ export class AgentStartError extends Error {
   }
 }
 
+/** Waits for the child's exit, at most `ms` (at once when it was never spawned or has exited). */
+function waitChild(exit: ExitWatch | null, ms: number): Promise<void> {
+  if (!exit || exit.info()) return Promise.resolve();
+  return new Promise<void>((done) => {
+    const timer = setTimeout(done, ms);
+    void exit.promise.then(() => {
+      clearTimeout(timer);
+      done();
+    });
+  });
+}
+
 /**
  * Starts the agent, contained (spec 4.4, 4.11). On Windows the job assignment completes before
  * this resolves, so nothing the agent starts can escape it; `initialize` may be sent at once.
+ * `signal` stops the start: before the spawn nothing is started (the working folder goes, and
+ * the keeper); on Windows the trampoline then gets no `go`; after it the agent is stopped
+ * before this rejects. Either way nothing of it runs once this has rejected.
  */
 export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProcess> {
   const argv = [...o.argv];
   if (!argv.length || !argv[0]) throw new AgentStartError('bad_command', 'no agent command');
   const label = o.label ?? 'agent';
   const graceMs = o.graceMs ?? AGENT_GRACE_MS;
+  /** Stopped meanwhile (Stop, the switch going off, a lifetime's end): nothing more starts. */
+  const halt = (): void => {
+    if (o.signal?.aborted) throw o.signal.reason ?? new Error('aborted');
+  };
+  installExitHooks();
   await sweepBeforeStart(o.tmp ?? tmpdir());
-  if (o.signal?.aborted) throw o.signal.reason ?? new Error('aborted');
+  halt();
   const cwd = await makeAgentWorkdir({ tmp: o.tmp });
-  const env = agentEnv(o.env, o.baseEnv ?? process.env);
-  const base = { cwd, env, windowsHide: true, shell: false } as const;
   let child: ChildProcess | null = null;
   let exit: ExitWatch | null = null;
   let keeper: JobKeeper | null = null;
   let treeKill: TreeKill = WIN ? 'job' : 'group';
   try {
+    const env = agentEnv(o.env, o.baseEnv ?? process.env);
+    const base = { cwd, env, windowsHide: true, shell: false } as const;
     if (WIN) {
       keeper = o.keeper ?? takeKeeper();
       try {
@@ -817,6 +888,8 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
         keeper.close();
         keeper = null;
       }
+      // Stopped while the folder was made or the keeper got ready: nothing is spawned.
+      halt();
       if (keeper) {
         const before = Date.now();
         child = spawn(process.execPath, [LAUNCH_SCRIPT, ...argv], { ...base, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
@@ -827,6 +900,9 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
           await o.beforeAssign?.(child.pid as number);
           await keeper.assign(child.pid as number, before, after);
           noteKeeperOutcome(true);
+          // The job works here: the next start (a turn's, a Test's, a probe's) finds a keeper
+          // warmed ahead (spec 4.11, step 1). One that fails says so in the status at once.
+          if (!o.keeper) warmKeeper();
         } catch (err) {
           // The trampoline has started nothing yet: it still starts, linked, and the tree kill
           // is taskkill /T.
@@ -838,6 +914,10 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
         }
         const control = child.stdio[3] as Writable;
         control.on('error', () => {});
+        // Stopped while it was put in the job: no `go`, so the trampoline ends without ever
+        // starting the agent.
+        if (o.signal?.aborted) control.end();
+        halt();
         control.end('go\n');
       } else {
         child = spawn(argv[0], argv.slice(1), { ...base, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -845,7 +925,10 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
         await spawned(child);
       }
     } else {
+      // Stopped while the folder was made: nothing is spawned.
+      halt();
       child = spawn(argv[0], argv.slice(1), { ...base, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+      if (child.pid) spawning.add(child.pid);
       exit = watchExit(child);
       await spawned(child);
       const pid = child.pid as number;
@@ -864,6 +947,9 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
       } catch {
         /* gone */
       }
+      // Ended before the start says so: nothing of it runs once it has failed.
+      await waitChild(exit, graceMs);
+      spawning.delete(child.pid);
     }
     await removeTree(cwd).catch(() => {});
     const code = String((err as NodeJS.ErrnoException)?.code || '');
@@ -872,12 +958,12 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
     throw err;
   }
   const proc = new AgentProcess({ label, child, exit: exit as ExitWatch, cwd, treeKill, keeper, graceMs });
+  spawning.delete(proc.pid);
   alog('info', 'agent started', { agent: label, pid: proc.pid, tree_kill: treeKill });
-  if (o.signal) {
-    if (o.signal.aborted) {
-      await proc.stop('aborted');
-      throw o.signal.reason ?? new Error('aborted');
-    }
+  if (o.signal?.aborted) {
+    // Stopped once it ran: it is stopped (the tree kill) before the start says so.
+    await proc.stop('aborted');
+    throw o.signal.reason ?? new Error('aborted');
   }
   return proc;
 }

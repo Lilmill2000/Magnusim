@@ -347,6 +347,16 @@ describe('assistant boundaries in this tree', () => {
     );
   });
 
+  it("the agents' trampoline (agents/launch.mjs) loads Node's own modules only: nothing of Magnusim's runs before the job holds it", () => {
+    const file = join(WEB, 'scripts', 'server', 'assistant', 'agents', 'launch.mjs');
+    const refs = moduleRefs(file, readFileSync(file, 'utf8'));
+    assert.ok(refs.length > 0, 'it was read');
+    assert.deepEqual(
+      refs.filter((r) => !r.spec?.startsWith('node:')).map((r) => `${r.line} ${r.spec}`),
+      [],
+    );
+  });
+
   it('importing vite.config.js (the whole server graph) creates no assistant folder, then or later', () => {
     assert.deepEqual(foldersAfterImport(join(WEB, 'vite.config.js')), { home: false, derived: false });
   });

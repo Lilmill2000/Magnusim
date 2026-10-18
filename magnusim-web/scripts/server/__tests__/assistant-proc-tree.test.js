@@ -4,16 +4,20 @@
 // helper processes. On Windows: the job object (a helper whose parent already exited dies; a
 // program that starts helpers at its first instruction leaves none, thanks to the trampoline;
 // Magnusim killed outright takes the tree with it through the keeper's pipe) and the
-// best-effort taskkill fallback when PowerShell is blocked. On POSIX: the process group (polite
-// and stubborn agents, a leader that already ended, helpers given their SIGTERM grace), and the
-// pids.json sweep of groups a crashed Magnusim left behind, on proof only (never an unrelated
-// group, a record of another boot, or a crashed run's record that carries this pid). No process
-// is left: every pid is checked. Every agent starts with tmp: ROOT, so nothing here reads or
-// removes the system temp folder's working folders.
+// best-effort taskkill fallback when PowerShell is blocked, and the keeper warmed ahead. On
+// POSIX: the process group (polite and stubborn agents, a leader that already ended, helpers
+// given their SIGTERM grace), Magnusim stopped by Ctrl+C, its terminal closing or SIGTERM taking
+// every group with it, and the pids.json sweep of groups a crashed Magnusim left behind, on
+// proof only (never an unrelated group, a group with a member older than its recorded leader, a
+// record of another boot, or a crashed run's record that carries this pid). A start stopped
+// midway (Stop, the switch going off, the session ended) starts nothing, or nothing that is
+// still running once it has said so. No process is left: every pid is checked. Every agent
+// starts with tmp: ROOT, so nothing here reads or removes the system temp folder's working
+// folders.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -31,8 +35,11 @@ const jobWin = await import('../assistant/agents/job-win.ts');
 const rpc = await import('../assistant/agents/rpc.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
-const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
+const { startFakeAcp, FAKE_ACP_AGENT } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
+const { AgentSession } = await import('../assistant/agents/session.ts');
+const { mintBinding, resetBindingsForTests } = await import('../assistant/mcp/sessions.ts');
+const { killOwn } = await import('./assistant-own-pids.js');
 
 const WIN = process.platform === 'win32';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -43,7 +50,10 @@ const LAUNCH = join(HERE, '..', 'assistant', 'agents', 'launch.mjs');
 const LIMIT = { timeout: 90_000 };
 const CEILING = 10_000;
 
-/** Every pid a test made, killed at the end whatever happened. */
+/**
+ * Every pid a test made: at the end, each one still running as one of this file's processes is
+ * killed, whatever happened (a pid the OS has given to another program since is left alone).
+ */
 const made = new Set();
 const cleanups = [];
 after(async () => {
@@ -54,15 +64,14 @@ after(async () => {
       /* cleaned up as far as it goes */
     }
   }
+  jobWin.dropWarmKeeper();
   // Every pid a fake reported too, whether or not its test got to look at it.
   for (const fake of FAKES) for (const p of fake.pids()) made.add(p.pid);
-  for (const pid of made) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      /* gone */
-    }
-  }
+  // This file's processes: its drivers and agents' folders under ROOT, the fakes (by their
+  // controller), their helpers and the test's own one-liners, the trampoline, the job keepers.
+  const marks = [ROOT, FAKE_ACP_AGENT, LAUNCH, ...FAKES.map((f) => f.url), 'setInterval(()=>{},1<<30)', 'process.stdin.resume()', 'process.stderr.write(', jobWin.JOB_KEEPER_B64.slice(0, 64)];
+  killOwn([...made], marks);
+  resetBindingsForTests();
   resetAssistantState();
   try {
     // Every agent's working folder is in here (tmp: ROOT), even those of a Magnusim killed outright.
@@ -101,6 +110,20 @@ async function stillAlive(pids, ms = CEILING) {
   }
 }
 
+/** Whether POSIX process group `pgid` has emptied within `ms` (polling for it; nothing is slept for). */
+async function groupGone(pgid, ms = CEILING) {
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(-pgid, 0);
+    } catch (err) {
+      if (err.code === 'ESRCH') return true;
+    }
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 /** The first line of `stream` that is a JSON object (log lines come first). */
 function firstJson(stream) {
   return new Promise((resolve, reject) => {
@@ -129,18 +152,28 @@ async function until(cond, ms = CEILING) {
   }
 }
 
-/** A spy on child_process: spawnSync calls and spawn's programs, for the ESM importers too. */
-function spyChildProcess() {
+/**
+ * A spy on child_process: spawnSync calls and spawn's programs (and processes), for the ESM
+ * importers too. `before(program, args)` may throw instead of the spawn; `after(program, args,
+ * child)` runs once it is spawned, before the caller gets it.
+ */
+function spyChildProcess({ before, after: afterSpawn } = {}) {
   const cp = createRequire(import.meta.url)('node:child_process');
   const real = { spawn: cp.spawn, spawnSync: cp.spawnSync };
-  const spy = { sync: [], spawned: [] };
+  const spy = { sync: [], spawned: [], children: [] };
   cp.spawnSync = (...a) => {
     spy.sync.push(a[0]);
     return real.spawnSync(...a);
   };
   cp.spawn = (...a) => {
-    spy.spawned.push(String(a[0]));
-    return real.spawn(...a);
+    const program = String(a[0]);
+    const args = Array.isArray(a[1]) ? a[1].map(String) : [];
+    spy.spawned.push(program);
+    before?.(program, args);
+    const child = real.spawn(...a);
+    spy.children.push({ program, args, child });
+    afterSpawn?.(program, args, child);
+    return child;
   };
   syncBuiltinESMExports();
   spy.restore = () => {
@@ -428,6 +461,81 @@ describe('the agent process', LIMIT, () => {
     });
   }
 
+  it('a start stopped once its working folder is made spawns nothing (Windows: nor once its keeper is ready); its folder and keeper go', async () => {
+    const tmp = mkdtempSync(join(ROOT, 'tmp-halt-'));
+    const marker = join(ROOT, 'halted-agent-ran');
+    const ac = new AbortController();
+    // The stop lands past the start's first check, while it reads the environment the agent gets.
+    const baseEnv = { ...process.env };
+    Object.defineProperty(baseEnv, 'ZZ_STOP_LANDS_HERE', {
+      enumerable: true,
+      get: () => {
+        ac.abort(new Error('stopped while it started'));
+        return undefined;
+      },
+    });
+    const keeper = WIN ? jobWin.JobKeeper.start() : undefined;
+    if (keeper) cleanups.push(async () => keeper.close());
+    // Its first act writes the marker; a long grace, so one that did run gets to write it.
+    const argv = [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran'); process.stdin.resume();`];
+    const spy = spyChildProcess();
+    try {
+      await assert.rejects(agentProc.startAgentProcess({ argv, label: 'halted', tmp, baseEnv, keeper, signal: ac.signal, graceMs: CEILING }), /stopped while it started/);
+    } finally {
+      spy.restore();
+    }
+    assert.deepEqual(
+      spy.children.filter((c) => c.args.some((x) => x.includes('halted-agent-ran'))).map((c) => c.program),
+      [],
+      'nothing was spawned (on Windows not even the trampoline)',
+    );
+    assert.equal(existsSync(marker), false, 'the agent never ran');
+    assert.deepEqual(readdirSync(tmp), [], 'its working folder is gone');
+    if (keeper) {
+      made.add(keeper.pid);
+      await keeper.ended;
+      assert.equal(keeper.state, 'closed', 'its keeper is closed');
+    }
+  });
+
+  it('a session ended while its agent starts: end() resolves only once nothing of the agent runs, and the start fails', async () => {
+    const fake = await fakeAgent();
+    const conversation = 'ended-while-starting';
+    const session = new AgentSession({
+      conversation,
+      agent: { id: 'fake', name: 'Fake', kind: 'custom', argv: fake.argv, program: process.execPath, programName: 'node', script: null, version: null, fingerprint: null, lockdown: 'none', ownTools: 'on', allowed: true, signedIn: 'unknown', env: {}, defaultAgent: null },
+      known: null,
+      binding: mintBinding({ conversation, agent: 'fake', name: 'Fake' }),
+      prefs: { model: null, mode: null },
+      version: '0.0.0',
+      tmp: ROOT,
+    });
+    // The end comes the moment the agent (Windows: its trampoline) is spawned, before its start
+    // has finished (the allow switch going off, the conversation dropped, the server stopping).
+    let spawned = 0;
+    let ending = null;
+    const spy = spyChildProcess({
+      after: (program, args, child) => {
+        if (ending || !args.includes(FAKE_ACP_AGENT)) return;
+        spawned = child.pid;
+        made.add(spawned);
+        ending = session.end('agent_off');
+      },
+    });
+    let start;
+    try {
+      start = session.start(new AbortController().signal);
+      start.catch(() => {});
+      await until(() => ending);
+    } finally {
+      spy.restore();
+    }
+    await ending;
+    assert.equal(alive(spawned), false, 'nothing of the agent runs once end() has resolved');
+    await assert.rejects(start);
+    if (WIN) assert.deepEqual(fake.pids('agent'), [], 'on Windows the agent itself never ran (the trampoline got no go)');
+  });
+
   it("helpers whose parent already exited die with the tree", async () => {
     const fake = await fakeAgent();
     const { proc, peer } = await startFake(fake);
@@ -444,17 +552,9 @@ describe('the agent process', LIMIT, () => {
 });
 
 // --------------------------------------------------------------------------------------------
+// launch.mjs importing nothing but node: modules is checked on every platform, in
+// scripts/__tests__/assistant-boundaries.test.mjs.
 describe('Windows: the job object', { ...LIMIT, skip: WIN ? false : 'Windows only (job objects)' }, () => {
-  it('launch.mjs imports nothing but node: modules', () => {
-    const src = readFileSync(LAUNCH, 'utf8');
-    const specs = [...src.matchAll(/^\s*import\s[^;]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-    assert.ok(specs.length > 0);
-    assert.deepEqual(
-      specs.filter((s) => !s.startsWith('node:')),
-      [],
-    );
-  });
-
   it('a program that starts helpers at its first instruction leaves none (the trampoline holds it until the job is set)', async () => {
     const fake = await fakeAgent();
     // The assignment waits for the agent to say it started (a ceiling of 2 s): with the
@@ -473,22 +573,75 @@ describe('Windows: the job object', { ...LIMIT, skip: WIN ? false : 'Windows onl
     assert.deepEqual(await stillAlive([proc.pid, agent, ...helpers]), []);
   });
 
-  it('a warmed keeper that fails (PowerShell blocked) makes status best effort before any agent starts; a working one puts it back', async () => {
+  it('a start stopped while its trampoline is put in the job: no go, so the agent never runs, and the trampoline is gone when the start says so', async () => {
+    const ac = new AbortController();
+    const marker = join(ROOT, 'stopped-in-job-agent-ran');
+    let trampoline = 0;
+    const beforeAssign = async (pid) => {
+      trampoline = pid;
+      made.add(pid);
+      ac.abort(new Error('stopped while it was put in the job'));
+    };
+    const argv = [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran'); process.stdin.resume();`];
+    await assert.rejects(agentProc.startAgentProcess({ argv, label: 'stopped-in-job', tmp: ROOT, signal: ac.signal, graceMs: CEILING, beforeAssign }), /stopped while it was put in the job/);
+    assert.ok(trampoline > 0, 'the trampoline was spawned');
+    assert.equal(alive(trampoline), false, 'the trampoline is gone');
+    assert.equal(existsSync(marker), false, 'the agent never ran');
+  });
+
+  it('each start warms the keeper the next start takes; a warmed keeper that fails (PowerShell blocked) makes status best effort before the next agent starts; a working one puts it back', async () => {
     jobWin.dropWarmKeeper();
-    jobWin.warmKeeper({
-      spawnImpl: () => {
-        throw Object.assign(new Error('blocked by group policy'), { code: 'EACCES' });
+    const argv = [process.execPath, '-e', 'process.stdin.resume()'];
+    const start = async (label) => {
+      const proc = await agentProc.startAgentProcess({ argv, label, tmp: ROOT });
+      made.add(proc.pid);
+      cleanups.push(() => proc.stop());
+      return proc;
+    };
+    const isKeeper = (program) => /powershell\.exe$/i.test(program);
+    // PowerShell keepers spawned so far, and how many may be (later ones are blocked).
+    let keepersSpawned = 0;
+    let allowed = Infinity;
+    const spy = spyChildProcess({
+      before: (program) => {
+        if (!isKeeper(program)) return;
+        keepersSpawned += 1;
+        if (keepersSpawned > allowed) throw Object.assign(new Error('blocked by group policy'), { code: 'EACCES' });
       },
     });
-    await new Promise((r) => setImmediate(r));
-    assert.equal(agentProc.agentsTreeKill(), 'best_effort');
-    jobWin.dropWarmKeeper();
-    const keeper = jobWin.JobKeeper.start();
-    cleanups.push(async () => keeper.close());
-    await keeper.ready;
-    made.add(keeper.pid);
-    assert.equal(agentProc.agentsTreeKill(), 'job');
-    keeper.close();
+    const keepers = () => spy.children.filter((c) => isKeeper(c.program)).map((c) => c.child.pid);
+    try {
+      const a = await start('first');
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(a.keeper.pid, keepers()[0], 'the first start has a keeper of its own');
+      assert.equal(keepers().length, 2, 'and warms the next one');
+      const b = await start('second');
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(b.keeper.pid, keepers()[1], 'the next start takes the warmed keeper');
+      assert.equal(keepers().length, 3, 'and warms another');
+      assert.equal(agentProc.agentsTreeKill(), 'job');
+      await Promise.all([a.stop(), b.stop()]);
+      // A new keeper for the next start, and PowerShell blocked for the one it warms.
+      jobWin.dropWarmKeeper();
+      allowed = keepersSpawned + 1;
+      const c = await start('third');
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(c.treeKill, 'job', 'its own keeper worked');
+      await new Promise((r) => setImmediate(r));
+      assert.equal(agentProc.agentsTreeKill(), 'best_effort', 'the warmed keeper failed: best effort before the next agent starts');
+      await c.stop();
+      // PowerShell works again: the next start drops the failed keeper, and its own puts the status back.
+      allowed = Infinity;
+      const d = await start('fourth');
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(d.treeKill, 'job');
+      assert.equal(agentProc.agentsTreeKill(), 'job', 'a working keeper puts it back');
+      await d.stop();
+      jobWin.dropWarmKeeper();
+      assert.deepEqual(await stillAlive(keepers()), [], 'every keeper has ended');
+    } finally {
+      spy.restore();
+    }
   });
 
   it('the keeper puts a process in the job only when its creation time matches, and kill ends the job', async () => {
@@ -680,6 +833,125 @@ describe('POSIX: the process group', { ...LIMIT, skip: WIN ? 'POSIX only (proces
     assert.ok(!pidsJson().some((g) => g.pgid === b.pgid), 'the record goes');
   });
 
+  it('Magnusim stopped by Ctrl+C, its terminal closing or SIGTERM: every agent group goes with it, and it ends as that signal ends it', async () => {
+    // Stubborn: the agent ignores the end of its input; its helpers ignore SIGINT, SIGHUP and
+    // SIGTERM. Each leads its own session, so a terminal's signals never reach them.
+    const fake = await fakeAgent({ stubborn: true });
+    const driver = join(ROOT, 'driver-signals.mjs');
+    writeFileSync(
+      driver,
+      [
+        // A host that handles SIGTERM itself: as Vite does (it closes the server, then exits),
+        // or by staying up.
+        `if (process.argv[3] === 'host-sigterm') process.once('SIGTERM', () => setTimeout(() => process.exit(143), 50));`,
+        `if (process.argv[3] === 'host-stays') process.once('SIGTERM', () => console.log(JSON.stringify({ host: 'handled' })));`,
+        `const url = ${JSON.stringify(pathToFileURL(PROCESS_TS).href)};`,
+        `const start = async (url, label) => (await import(url)).startAgentProcess({ argv: JSON.parse(process.argv[2]), label, tmp: ${JSON.stringify(ROOT)} });`,
+        `const pids = [(await start(url, 'driver')).pid];`,
+        // A second copy of the module (as a Vite restart loads the server's modules again), with an agent of its own.
+        `if (process.argv[3] === 'two-copies') pids.push((await start(url + '?copy=2', 'driver-2')).pid);`,
+        `console.log(JSON.stringify({ pids }));`,
+        `setInterval(() => {}, 1 << 30);`,
+      ].join('\n'),
+    );
+    const cases = [
+      // A terminal signals its foreground process group: Ctrl+C, and the terminal closing.
+      { name: 'Ctrl+C', signal: 'SIGINT', toGroup: true, ends: { code: null, signal: 'SIGINT' } },
+      { name: 'the terminal closing', signal: 'SIGHUP', toGroup: true, ends: { code: null, signal: 'SIGHUP' } },
+      { name: 'SIGTERM', signal: 'SIGTERM', toGroup: false, ends: { code: null, signal: 'SIGTERM' } },
+      { name: 'SIGTERM its host handles', signal: 'SIGTERM', toGroup: false, mode: 'host-sigterm', ends: { code: 143, signal: null } },
+      // The host decides: nothing of the agents' is touched while it stays up; then Ctrl+C.
+      { name: 'SIGTERM its host handles by staying up', signal: 'SIGTERM', toGroup: false, mode: 'host-stays', stays: true, ends: { code: null, signal: 'SIGINT' } },
+      // Two copies of the module, each with its own agent: neither leaves the signal to the other.
+      { name: 'Ctrl+C with two copies of the module', signal: 'SIGINT', toGroup: true, mode: 'two-copies', ends: { code: null, signal: 'SIGINT' } },
+    ];
+    for (const c of cases) {
+      const before = fake.pids('helper').length;
+      // Its own process group, as a terminal's foreground job.
+      const d = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', driver, JSON.stringify(fake.argvWith({ helpersAtStart: 2 })), c.mode ?? ''], { stdio: ['ignore', 'pipe', 'inherit'], detached: true });
+      made.add(d.pid);
+      const ended = new Promise((r) => d.once('exit', (code, signal) => r({ code, signal })));
+      const { pids } = await firstJson(d.stdout);
+      for (const pid of pids) made.add(pid);
+      const helpers = (await helperPids(fake, before + 2 * pids.length)).slice(before);
+      const group = [...pids, ...helpers];
+      const recorded = () => pids.filter((pid) => pidsJson().some((g) => g.pgid === pid));
+      assert.deepEqual(group.filter(alive), group, `${c.name}: the agents and their helpers run`);
+      assert.deepEqual(recorded(), pids, `${c.name}: recorded`);
+      process.kill(c.toGroup ? -d.pid : d.pid, c.signal);
+      if (c.stays) {
+        // Its handler ran after the hook (first in line), which left the signal to it.
+        assert.deepEqual(await firstJson(d.stdout), { host: 'handled' });
+        assert.deepEqual(recorded(), pids, `${c.name}: the records stay`);
+        assert.deepEqual(group.filter(alive), group, `${c.name}: the agent and its helpers still run`);
+        process.kill(-d.pid, 'SIGINT');
+      }
+      assert.deepEqual(await ended, c.ends, `${c.name}: Magnusim ends as that signal ends it`);
+      assert.deepEqual(await stillAlive(group), [], `${c.name}: nothing of the agents is left`);
+      assert.deepEqual(recorded(), [], `${c.name}: their records go with them`);
+    }
+  });
+
+  it('Ctrl+C while an agent is being started: its group, spawned but not yet recorded as running, goes too', async () => {
+    const fake = await fakeAgent({ stubborn: true });
+    const driver = join(ROOT, 'driver-mid-start.mjs');
+    writeFileSync(
+      driver,
+      [
+        `import { writeSync } from 'node:fs';`,
+        `import { createRequire, syncBuiltinESMExports } from 'node:module';`,
+        `const cp = createRequire(import.meta.url)('node:child_process');`,
+        `const real = cp.spawn;`,
+        // Ctrl+C the moment the agent is spawned, while its start still records its group.
+        `cp.spawn = (...a) => {`,
+        `  const child = real(...a);`,
+        `  if ((a[1] || []).some((x) => String(x) === '--control')) child.once('spawn', () => { writeSync(1, JSON.stringify({ pid: child.pid }) + '\\n'); process.emit('SIGINT', 'SIGINT'); });`,
+        `  return child;`,
+        `};`,
+        `syncBuiltinESMExports();`,
+        `const { startAgentProcess } = await import(${JSON.stringify(pathToFileURL(PROCESS_TS).href)});`,
+        `await startAgentProcess({ argv: JSON.parse(process.argv[2]), label: 'driver', tmp: ${JSON.stringify(ROOT)} });`,
+        `writeSync(1, JSON.stringify({ started: true }) + '\\n');`,
+        `setInterval(() => {}, 1 << 30);`,
+      ].join('\n'),
+    );
+    // Helpers at its first instruction: an agent left running keeps its group alive through them.
+    const d = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', driver, JSON.stringify(fake.argvWith({ helpersAtStart: 2 }))], { stdio: ['ignore', 'pipe', 'inherit'], detached: true });
+    made.add(d.pid);
+    const ended = new Promise((r) => d.once('exit', (code, signal) => r({ code, signal })));
+    const info = await firstJson(d.stdout);
+    assert.ok(info.pid, JSON.stringify(info));
+    made.add(info.pid);
+    assert.deepEqual(await ended, { code: null, signal: 'SIGINT' }, 'Magnusim ends as Ctrl+C ends it');
+    assert.equal(await groupGone(info.pid), true, 'the agent it was starting, and its group, are gone');
+    for (const p of fake.pids()) made.add(p.pid);
+  });
+
+  it('never signals a leaderless group with a member that started before its recorded leader', { skip: process.platform === 'linux' ? false : 'Linux only (a group whose leader ended is ended only there)' }, async () => {
+    // A group whose leader starts a member in a folder, then ends; a stale record names that folder.
+    const folder = mkdtempSync(join(ROOT, 'agent-folder-'));
+    const code = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1<<30)'],{stdio:'ignore',cwd:process.argv[1]});c.unref();console.log(c.pid);";
+    const g = spawn(process.execPath, ['-e', code, folder], { stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+    made.add(g.pid);
+    const member = Number(await new Promise((r) => g.stdout.once('data', (d) => r(String(d).trim()))));
+    made.add(member);
+    assert.deepEqual(await stillAlive([g.pid]), [], 'the leader has ended');
+    const [memberStart, boot] = await Promise.all([agentProc.processStart(member), agentProc.bootId()]);
+    const ticks = Number(String(memberStart).slice('linux:'.length));
+    assert.ok(Number.isInteger(ticks), String(memberStart));
+    const record = (start, label) => ({ pgid: g.pid, start, boot, cwd: realpathSync(folder), owner: { pid: 999999, start: 'linux:2' }, label, at: '' });
+    // Everything else holds (this boot, a live member in the recorded folder), but the member
+    // started before the recorded leader: it can't be the agent's.
+    await writeGroups([record(`linux:${ticks + 1}`, 'member older than the leader')]);
+    assert.deepEqual(await agentProc.sweepAgentGroups(), []);
+    assert.ok(alive(member), 'the member is left alone');
+    assert.ok(!pidsJson().some((r) => r.pgid === g.pid), 'the stale record goes');
+    // The same record with the leader started first: the agent's group, so it is ended.
+    await writeGroups([record(`linux:${ticks}`, 'leader first')]);
+    assert.deepEqual(await agentProc.sweepAgentGroups(), [g.pid]);
+    assert.deepEqual(await stillAlive([member]), []);
+  });
+
   it('the sweep leaves a group whose leader id now belongs to another program, and a running Magnusim', async () => {
     const code = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1<<30)'],{stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1<<30);";
     const g = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'ignore'], detached: true });
@@ -762,5 +1034,22 @@ describe('POSIX: the process group', { ...LIMIT, skip: WIN ? 'POSIX only (proces
       'each helper finished its cleanup after SIGTERM, before any SIGKILL',
     );
     assert.ok(Date.now() - t0 < CEILING, `stopped in ${Date.now() - t0} ms`);
+  });
+});
+// --------------------------------------------------------------------------------------------
+describe("this file's own end (test support)", LIMIT, () => {
+  it('signals only the pids still running as one of its own processes, never one another program has now', async () => {
+    // Its own (a helper's one-liner), and a program that now has a recorded pid (no mark of ours).
+    const mine = spawn(process.execPath, ['-e', 'setInterval(()=>{},1<<30)'], { stdio: 'ignore', windowsHide: true });
+    const other = spawn(process.execPath, ['-e', 'setTimeout(()=>{},1e9)'], { stdio: 'ignore', windowsHide: true });
+    made.add(mine.pid);
+    try {
+      await Promise.all([mine, other].map((c) => new Promise((r) => c.once('spawn', r))));
+      assert.deepEqual(killOwn([mine.pid, other.pid], [ROOT, 'setInterval(()=>{},1<<30)']), [mine.pid]);
+      assert.deepEqual(await stillAlive([mine.pid]), [], 'its own process is ended');
+      assert.ok(alive(other.pid), 'the other program is left alone');
+    } finally {
+      other.kill('SIGKILL');
+    }
   });
 });

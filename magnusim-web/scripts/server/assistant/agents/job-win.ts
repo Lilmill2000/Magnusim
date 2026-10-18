@@ -18,8 +18,11 @@
  * with Magnusim, however Magnusim ends.
  *
  * Always an async spawn, never spawnSync. Start-up takes 1-3 s (Add-Type compiles), so a keeper
- * is warmed ahead (warmKeeper). A keeper that is blocked or gives no `ready` in 20 s counts as
- * blocked: the agent then runs without a job, and its tree kill is best effort (taskkill /T).
+ * is warmed ahead: each agent start whose keeper got ready warms the next one (warmKeeper, from
+ * process.ts), which then waits without holding Node's event loop open (hold()), and the next
+ * start (a turn's, a Test's or a discovery probe's) takes it (takeKeeper). A keeper that is
+ * blocked or gives no `ready` in 20 s counts as blocked: the agent then runs without a job, and
+ * its tree kill is best effort (taskkill /T).
  * MAGNUSIM_TEST_ASSISTANT_JOB=blocked makes every keeper count as blocked (tests; honoured only
  * with MAGNUSIM_TEST_ASSISTANT=1 in a test home, otherwise ignored with a log line).
  */
@@ -167,6 +170,8 @@ export class JobKeeper {
   private waiters: Array<{ resolve: (line: string) => void; reject: (e: KeeperError) => void; timer: ReturnType<typeof setTimeout> }> = [];
   private failure: KeeperError | null = null;
   private closedByUs = false;
+  /** Whether it keeps Node's event loop open (a warmed keeper waiting to be taken doesn't). */
+  private held = true;
   /** Resolves when the keeper answered `ready`; rejects with a KeeperError (blocked, timeout, failed). */
   readonly ready: Promise<void>;
   /** Resolves when the keeper process has ended. */
@@ -251,6 +256,25 @@ export class JobKeeper {
     if (line !== 'killed') throw new KeeperError('failed', line.slice(0, 200));
   }
 
+  /**
+   * Whether this keeper keeps Node's event loop open: not while it waits, warmed, to be taken
+   * (a process with nothing else to do may end meanwhile; its pipe then closes and the keeper
+   * exits), again once an agent's start takes it.
+   */
+  hold(on: boolean): void {
+    this.held = on;
+    const child = this.child;
+    // The process and its pipes (net sockets: ref and unref, which the stream types don't name).
+    for (const h of [child, child?.stdin, child?.stdout, child?.stderr] as Array<{ ref?(): unknown; unref?(): unknown } | null | undefined>) {
+      if (on) h?.ref?.();
+      else h?.unref?.();
+    }
+    for (const w of this.waiters) {
+      if (on) w.timer.ref();
+      else w.timer.unref();
+    }
+  }
+
   /** Ends the keeper: its stdin closes, it exits, and KILL_ON_JOB_CLOSE ends what is still in the job. */
   close(): void {
     this.closedByUs = true;
@@ -288,6 +312,7 @@ export class JobKeeper {
         reject(e);
         if (this.state === 'starting') this.fail(e);
       }, timeoutMs);
+      if (!this.held) timer.unref();
       this.waiters.push({ resolve, reject, timer });
     });
   }
@@ -326,17 +351,28 @@ export class JobKeeper {
 
 let warmed: JobKeeper | null = null;
 
-/** Starts a keeper ahead of the next agent start (in parallel with discovery). */
+/**
+ * Starts a keeper ahead of the next agent start (process.ts calls it once a start's own keeper
+ * got ready, so discovery's probes and every later start find one warming or ready). It waits
+ * without holding Node's event loop open.
+ */
 export function warmKeeper(o: KeeperOptions = {}): void {
   if (process.platform !== 'win32' || warmed) return;
   warmed = JobKeeper.start(o);
+  warmed.hold(false);
 }
 
-/** The warmed keeper (if any, and not failed), or a new one. Each agent gets its own. */
+/**
+ * The warmed keeper (if any, not failed, and the test switch doesn't block keepers now), or a
+ * new one. Each agent gets its own.
+ */
 export function takeKeeper(o: KeeperOptions = {}): JobKeeper {
   const w = warmed;
   warmed = null;
-  if (w && !w.error) return w;
+  if (w && !w.error && !jobTestSwitch(o.env ?? process.env).blocked) {
+    w.hold(true);
+    return w;
+  }
   w?.close();
   return JobKeeper.start(o);
 }
