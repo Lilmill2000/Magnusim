@@ -12,11 +12,18 @@
 // beside a saved API key (D-A); a custom agent added with a variable to pass, its allow switch
 // (the question with Don't focused, Enter answering Don't, Allow, off with no question), the
 // allow routes refused without the page's Origin, the switch asked again once the program's
-// path changed, and Remove. No agent is ever started for a message here (the Test and agent
-// turns are the next commit's): the fake's controller records none.
+// path changed (Turn off clearing the old allow), and Remove. No agent is ever started for a message here (the Test and agent
+// turns are the next commit's): the fake's controller records none, and every launcher start
+// (discovery's --version probes, which never reach the controller) writes its pid, each one
+// ended by the time the spec does.
+//
+// A server with agent turns (its POST /api/assistant/agents/test answers anything but the
+// router's bare 404) must also: carry the agent limits in its status (shown under Limits),
+// take a coding agent as the default, and say in each row which modes Magnusim uses with it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { startFakeAcp } from './support/fake-acp.mjs';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { removeTreeSync } from '../scripts/remove-tree.js';
@@ -44,8 +51,68 @@ let llm;
 let first;
 let searchDir;
 let home;
+/** Where every launcher start writes its pid, and the fake's own launchers (outside the search folders). */
+let pidsFile;
+let launchers;
+let launcherCount = 0;
+/** This server runs coding agents' turns (its Test route is there). */
+let agentTurns = false;
 
 const api = (path) => `${host.base}${path}`;
+
+/**
+ * The fake's launcher behind a first script at `file` that writes its pid to `pidsFile`, at
+ * every start: discovery's --version probes too, which never reach the fake's controller.
+ */
+function writeLauncher(file, opts) {
+  const inner = fake.writeLauncher(join(launchers, `${(launcherCount += 1)}.mjs`), opts);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      '#!/usr/bin/env node',
+      "// Writes this start's pid, then runs the scripted agent (written by assistant-agents.spec.js).",
+      "import('node:fs')",
+      '  .then((fs) => {',
+      `    fs.appendFileSync(${JSON.stringify(pidsFile)}, process.pid + '\\n');`,
+      `    return import(${JSON.stringify(pathToFileURL(inner).href)});`,
+      '  })',
+      '  .catch((err) => {',
+      "    process.stderr.write(String((err && err.stack) || err) + '\\n');",
+      '    process.exit(70);',
+      '  });',
+      '',
+    ].join('\n'),
+  );
+  return file;
+}
+
+/** The pids every launcher start wrote. */
+const launcherPids = () =>
+  readFileSync(pidsFile, 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map(Number);
+
+/** Whether a process still runs (EPERM: it does, as another account's). */
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+/**
+ * Whether the server runs coding agents' turns: its Test route answers anything but the router's
+ * bare 404 (no code). The probe names no agent, so nothing is started.
+ */
+async function hasAgentTurns() {
+  const r = await fetch(api('/api/assistant/agents/test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'zz-no-such-agent', message: false }) });
+  const body = await r.json().catch(() => ({}));
+  return r.status !== 404 || typeof body?.code === 'string';
+}
 const winRel = (...parts) => parts.join('/').split('/').join('\\');
 
 /** npm's Windows shim for a script inside <dir>/node_modules (what discovery parses, never runs). */
@@ -81,7 +148,7 @@ function installKnown(prefix, a) {
   const pkgDir = join(modules, ...a.pkg.split('/'));
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: a.pkg, version: a.version, bin: { [a.program]: 'dist/index.js' } }));
-  const script = fake.writeLauncher(join(pkgDir, 'dist', 'index.js'), { version: a.version });
+  const script = writeLauncher(join(pkgDir, 'dist', 'index.js'), { version: a.version });
   if (WIN) {
     writeFileSync(join(prefix, `${a.program}.cmd`), cmdShim(winRel('node_modules', a.pkg, 'dist/index.js')));
   } else {
@@ -95,10 +162,10 @@ function installKnown(prefix, a) {
 function installProgram(dir, name) {
   mkdirSync(dir, { recursive: true });
   if (WIN) {
-    fake.writeLauncher(join(dir, 'node_modules', name, 'agent.js'));
+    writeLauncher(join(dir, 'node_modules', name, 'agent.js'));
     writeFileSync(join(dir, `${name}.cmd`), cmdShim(winRel('node_modules', name, 'agent.js')));
   } else {
-    chmodSync(fake.writeLauncher(join(dir, name)), 0o755);
+    chmodSync(writeLauncher(join(dir, name)), 0o755);
   }
 }
 
@@ -143,6 +210,9 @@ test.beforeAll(async () => {
   const prefix = join(tmp, 'npm');
   first = join(tmp, 'first');
   home = join(tmp, 'home');
+  launchers = join(tmp, 'launchers');
+  pidsFile = join(tmp, 'launcher-pids.txt');
+  writeFileSync(pidsFile, '');
   mkdirSync(first, { recursive: true });
   mkdirSync(prefix, { recursive: true });
   installKnown(prefix, CLAUDE);
@@ -165,6 +235,7 @@ test.beforeAll(async () => {
   // The switches hold (else discovery would look at this PC's own agents): stop here.
   const status = await (await fetch(api('/api/assistant/status'))).json();
   expect(status.test_provider, 'the cloud providers go to the fake').toBe(true);
+  agentTurns = await hasAgentTurns();
 });
 
 test.beforeEach(async ({ request }) => {
@@ -177,13 +248,23 @@ test.beforeEach(async ({ request }) => {
 });
 
 test.afterAll(async () => {
+  // Read before the host goes (it removes its temp folder, the pids file with it).
+  const started = pidsFile && existsSync(pidsFile) ? launcherPids() : [];
   if (host) host.stop();
   if (llm) await llm.stop();
-  if (fake) {
-    // Nothing here starts an agent for a message or a connect: the controller heard from none.
-    expect(fake.pids(), 'no agent process reported to the controller').toEqual([]);
-    expect(fake.records(), 'no agent talked to the controller').toEqual([]);
-    await fake.stop();
+  try {
+    if (fake) {
+      // Nothing here starts an agent for a message or a connect: the controller heard from none.
+      expect(fake.pids(), 'no agent process reported to the controller').toEqual([]);
+      expect(fake.records(), 'no agent talked to the controller').toEqual([]);
+    }
+    if (host) {
+      // Every launcher start (discovery's --version probes) has ended: none left running.
+      expect(started.length, 'the launcher wrote the pids of the probes it ran').toBeGreaterThan(0);
+      await expect.poll(() => started.filter(isRunning), { timeout: 15_000, message: 'no launcher process left running' }).toEqual([]);
+    }
+  } finally {
+    if (fake) await fake.stop();
   }
 });
 
@@ -254,6 +335,11 @@ test('rows: each known agent found or missing, with its sign-in state; Claude Co
   await expect(defaults.locator('[data-assistant-default-option="agent:claude"] [data-assistant-dot]')).toHaveAttribute('data-assistant-dot', 'ready');
   const rows = await agentsNow(request);
   expect(rows.find((r) => r.id === 'claude')).toMatchObject({ found: true, verified_package: true, lockdown: 'tools_off', signed_in: 'yes', ready: true });
+  if (agentTurns) {
+    // Each row says which modes Magnusim uses with the agent (the Mode select offers only those).
+    expect(rows.find((r) => r.id === 'claude').allowed_modes).toContain('default');
+    expect(rows.find((r) => r.id === 'codex').allowed_modes).toEqual(['read-only']);
+  }
 });
 
 /** Claude Code signed in: its login file exists (discovery only checks that it does). */
@@ -281,22 +367,25 @@ test('Default and keys side by side (D-A): an API key saved and the agents found
   );
   await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today (API keys): $0.00 of $15.00');
   const agentLimits = pane.getByRole('group', { name: 'Coding agents limits' });
-  if (status.agent_caps) {
-    await expect(agentLimits.getByLabel('Changes per message')).toHaveValue(String(status.agent_caps.changes));
+  if (agentTurns) {
+    // A server with agent turns carries their limits in its status (spec 4.10, the defaults after a reset), and they show.
+    expect(status.agent_caps, 'the status carries the agent limits').toEqual({ changes: 24, calls: 400, turn_minutes: 60 });
+    await expect(agentLimits.getByLabel('Changes per message')).toHaveValue('24');
+    await expect(agentLimits.getByLabel('Tool calls per message')).toHaveValue('400');
+    await expect(agentLimits.getByLabel('Minutes per message')).toHaveValue('60');
   } else {
-    // A server whose status doesn't carry the agent limits yet shows none.
+    // A server without agent turns has no agent limits in its status, and the page shows none.
+    expect(status.agent_caps).toBeUndefined();
     await expect(agentLimits).toHaveCount(0);
   }
 });
 
 test('Default and keys side by side (D-A): the agent as the default keeps every key; back again, nothing is lost', async ({ page, request }) => {
   test.setTimeout(120_000);
+  // Keyed on the agent turns being there (not on the refusal's text): with them, this must run.
+  test.skip(!agentTurns, 'This server has no agent turns (no Test route), so it takes no coding agent as the default.');
   const probe = await request.post(api('/api/assistant/settings'), { data: { provider: 'agent:claude' } });
   const refusal = probe.ok() ? null : await probe.json();
-  test.skip(
-    probe.status() === 400 && refusal?.field === 'provider' && refusal?.error === 'Unknown provider.',
-    'This server does not take a coding agent as the default yet (it comes with agent turns).',
-  );
   expect(probe.status(), JSON.stringify(refusal)).toBe(200);
   await request.post(api('/api/assistant/settings'), { data: { provider: 'anthropic' } });
   signInClaude();
@@ -356,6 +445,7 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   // Only this window may add or allow one: without the page's Origin, both are refused.
   const listed = (await agentsNow(request)).find((r) => r.id === id);
   expect(listed).toMatchObject({ kind: 'custom', needs_allow: true, allowed: false, ready: false, reason: 'agent_not_allowed' });
+  if (agentTurns) expect(listed.allowed_modes, 'a custom agent stays in the mode it starts in').toBe('initial');
   const noOrigin = await request.post(api('/api/assistant/agents/allow'), { data: { id, allow: true, fingerprint: listed.fingerprint } });
   expect(noOrigin.status()).toBe(403);
   expect(await noOrigin.json()).toMatchObject({ code: 'browser_only' });
@@ -406,9 +496,13 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   ]);
 
   // Allowed again, then its program found elsewhere (an earlier search folder): asked again.
+  // The program moves only once Allow has answered (the switch shows on while it saves, and a
+  // program moved meanwhile is refused as changed).
   await toggle.click();
   await page.locator('#cf-confirm').click();
   await expect(sw).toBeChecked();
+  await expect(row).toHaveAttribute('data-assistant-agent-state', 'ready');
+  expect((await agentsNow(request)).find((r) => r.id === id)).toMatchObject({ allowed: true, fingerprint: listed.fingerprint });
   installProgram(first, CUSTOM_PROGRAM);
   await block.locator('[data-assistant-agents-refresh]').click();
   await expect(row).toHaveAttribute('data-assistant-agent-state', 'allow_changed');
@@ -418,6 +512,18 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   const changed = (await agentsNow(request)).find((r) => r.id === id);
   expect(changed).toMatchObject({ allowed: false, allow_changed: true, ready: false, reason: 'agent_allow_changed' });
   expect(changed.fingerprint).not.toBe(listed.fingerprint);
+
+  // The old allow is still kept (what started under it may still run): Turn off clears it, with no question.
+  const turnOff = row.getByRole('button', { name: 'Turn off' });
+  await expect(turnOff).toBeVisible();
+  await turnOff.click();
+  await expect(row).toHaveAttribute('data-assistant-agent-state', 'needs_allow');
+  await expect(turnOff).toHaveCount(0);
+  await expect(modal(page)).toBeHidden();
+  await expect(sw).toBeFocused();
+  expect(allowPosts.at(-1)).toEqual({ id, allow: false });
+  expect((await agentsNow(request)).find((r) => r.id === id)).toMatchObject({ allowed: false, allow_changed: false, reason: 'agent_not_allowed' });
+  expect(settingsFile().agents?.[id]?.allowed ?? null).toBeNull();
 
   // Remove: asked first; gone, and the focus is on Add a custom agent….
   await row.getByRole('button', { name: 'Remove' }).click();
