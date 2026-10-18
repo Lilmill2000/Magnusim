@@ -363,7 +363,8 @@ export class SketchMode implements SketchModeApi {
     this.attach();
     const h = this.services.viewport.get().handle;
     // P4b SELECT (fix round 1): the up every Normal to uses for a sketch (never upside down).
-    if (h && plane) h.lookAt(plane.normal, sketchUp(plane));
+    // The app's own turn (auto: not the person's camera move), asked first: the Assistant's sketch may keep the view.
+    if (h && plane && (this.services.apis.get().assistant?.autoCamera('sketch-entry', session.id) ?? true)) h.lookAt(plane.normal, sketchUp(plane), { auto: true });
     this.reframeWhenRolledBack(session);
     this.services.bus.emit('sketch:mode', { feature: session.feature });
     // Solve what is stored (a parameter may have changed a dimension) and analyse it.
@@ -400,7 +401,7 @@ export class SketchMode implements SketchModeApi {
       stop();
       // After every listener of this change: the viewport has the rolled-back bodies by then.
       queueMicrotask(() => {
-        if (this.session === session) this.services.viewport.get().handle?.reframe();
+        if (this.session === session && (this.services.apis.get().assistant?.autoCamera('sketch-reframe', session.id) ?? true)) this.services.viewport.get().handle?.reframe({ auto: true });
       });
     });
     const stop = () => {

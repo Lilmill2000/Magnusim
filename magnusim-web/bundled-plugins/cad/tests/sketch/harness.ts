@@ -91,6 +91,8 @@ export interface Harness {
 export interface HarnessOptions {
   handle?: Partial<ViewportHandle>;
   later?: { feature: Feature; state: 'ok' | 'rolled-back' }[];
+  /** Other areas' APIs in place before the sketch is entered (the Assistant's camera gate). */
+  apis?: Partial<AreaApis>;
 }
 
 export async function sketchHarness(start: Partial<SketchFeature> = {}, opts: HarnessOptions = {}): Promise<Harness> {
@@ -151,7 +153,7 @@ export async function sketchHarness(start: Partial<SketchFeature> = {}, opts: Ha
     mode: createStateStore<{ mode: Mode }>({ mode: 'model' }),
     viewport: createStateStore<{ handle: ViewportHandle | null }>({ handle: (opts.handle as ViewportHandle | undefined) ?? null }),
     modules: createModuleRegistry([]),
-    apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null }),
+    apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null, ...opts.apis }),
   };
   const mode = new SketchMode(services, solver, makeTool);
   const offCommands = registerSketchCommands(services, mode);

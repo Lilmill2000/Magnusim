@@ -74,8 +74,8 @@ const module: CadModule = {
         }
         // Beside the shown bodies (all of them when none is shown); at the origin with none.
         services.doc.setScaleModel('banana', placeBeside(bodyBoxes(services), mesh));
-        // Into view when the camera still frames the part as it was framed last.
-        requestAnimationFrame(() => requestAnimationFrame(() => services.viewport.get().handle?.refitIfOffScreen?.()));
+        // Into view when the camera still frames the part as it was framed last (the app's own refit: auto).
+        requestAnimationFrame(() => requestAnimationFrame(() => services.viewport.get().handle?.refitIfOffScreen?.({ auto: true })));
       },
     });
     return () => {

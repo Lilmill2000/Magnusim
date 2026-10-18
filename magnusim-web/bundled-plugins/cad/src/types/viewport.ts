@@ -72,6 +72,14 @@ export interface ViewportTool {
  * slightly above; the Fit button), `iso` a true isometric from front-right-top.
  */
 export type StandardView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso' | 'home';
+/**
+ * Options of a camera call. `auto`: the app's own move (sketch entry's Normal to, the turn to
+ * Isometric of a new extrude, a refit, a Part's camera put back), not the person's:
+ * userCameraMoves() does not count it.
+ */
+export interface CameraCallOpts {
+  auto?: boolean;
+}
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 export type Projection = 'perspective' | 'orthographic';
 /** Origin planes: 'auto' draws them on an empty part and while one is selected or hovered; 'always' draws them all the time. */
@@ -175,6 +183,38 @@ export interface ViewportStats {
   bvh: Record<BodyId, { ms: number; worker: boolean }>;
   triangles: number;
   drawCalls: number;
+  /** The WebGL context is lost (nothing draws; snapshot throws not_ready). */
+  contextLost?: boolean;
+  /** The camera is where the last framing put it: nobody orbited, panned or zoomed since. */
+  framed?: boolean;
+}
+
+/** Directions of ViewportHandle.snapshot: the standard views but Home, and iso from back-left-top. */
+export type SnapshotView = 'iso' | 'iso_back' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
+
+/** A picture of the Part drawn off screen (ViewportHandle.snapshot). */
+export interface SnapshotOptions {
+  view: SnapshotView;
+  /** The picture's size in pixels (1 to 4096 each, at most what the GPU draws). */
+  width: number;
+  height: number;
+  /** Bodies left out of the picture (the view keeps showing them). */
+  hide: BodyId[];
+  /** A cut parallel to an origin plane (as the section view's: `offset` mm along its normal, `flip` keeps the other side), or null. */
+  section: { plane: 'top' | 'front' | 'right'; offset: number; flip: boolean } | null;
+}
+
+export interface SnapshotResult {
+  /** RGBA, rows top to bottom, width x height x 4 bytes. */
+  rgba: Uint8ClampedArray;
+  width: number;
+  height: number;
+  /** Model mm per picture pixel (the picture is orthographic). */
+  mmPerPx: number;
+  /** Where a model point is in the picture (px, y down), or null when it is outside the picture's depth. */
+  project(p: Vec3): [number, number] | null;
+  /** The face of `body` seen at picture pixel (x, y), or null (another body, the cut's cap or nothing in front). */
+  visibleFaceAt(body: BodyId, x: number, y: number): number | null;
 }
 
 /**
@@ -210,11 +250,12 @@ export interface ViewportHandle {
    * Framing (fit, setView, lookAt) centres the part in what floating panels leave free: elements
    * marked [data-view-cover] over the left of the view. Until the user orbits, pans or zooms,
    * bodies that grow out of the framed view are framed again.
+   * Every camera call here without `auto` (CameraCallOpts) is the person's: userCameraMoves() counts it.
    */
-  fit(opts?: { animate?: boolean }): void;
-  setView(view: StandardView, opts?: { animate?: boolean }): void;
+  fit(opts?: { animate?: boolean } & CameraCallOpts): void;
+  setView(view: StandardView, opts?: { animate?: boolean } & CameraCallOpts): void;
   /** Turn the camera to look straight at a plane (Normal To / sketch entry), framing the shown part. `normal` points at the viewer. */
-  lookAt(normal: Vec3, up?: Vec3, opts?: { animate?: boolean }): void;
+  lookAt(normal: Vec3, up?: Vec3, opts?: { animate?: boolean } & CameraCallOpts): void;
   setDisplay(mode: DisplayMode): void;
   setProjection(p: Projection): void;
   setSection(patch: Partial<SectionState>): void;
@@ -246,13 +287,31 @@ export interface ViewportHandle {
    * model center / origin"); 'center' is the middle of the visible bodies.
    * The next change of the geometry puts the pivot back on the part.
    */
-  orbitAround(target: Vec3 | 'center'): void;
+  orbitAround(target: Vec3 | 'center', opts?: CameraCallOpts): void;
   /** The point the camera orbits about (for tests). */
   orbitPivot(): Vec3;
   /** Where the camera is now (position, target, up, projection), as a Part keeps it. */
   camera(): SavedCamera;
   /** Put the camera where a Part kept it (no transition; nothing is reported to onCameraChange). */
-  setCamera(camera: SavedCamera): void;
+  setCamera(camera: SavedCamera, opts?: CameraCallOpts): void;
+  /**
+   * How many times the person has moved the camera since the viewport was made: each camera call
+   * of this handle without `auto` that moved it (Fit, the standard views, Normal to, F, 1-7, N,
+   * Orbit around), each orbit, pan or zoom drag (once per drag) and each wheel step. The app's own
+   * moves pass `auto` and are not counted, nor is the viewport's own framing of new bodies, nor a
+   * snapshot. The Assistant's camera latch compares it before and after (counts, not frames).
+   */
+  userCameraMoves?(): number;
+  /**
+   * A picture of the Part drawn off screen in this task (no animation frame needed): an
+   * orthographic camera of its own framing the shown bodies (`hide` left out) from `view`, with
+   * the sketches and reference planes but no manipulators, markers, bananas, selection, hover or
+   * flash, an optional cut of its own, and the triad in a corner. The person's camera, framing,
+   * section view, highlight and saved view are never touched, userCameraMoves() does not change,
+   * and nothing is written. Throws an Error with code 'not_ready' when the WebGL context is lost.
+   * HTML overlays (dimension values, plane labels) are not in the picture.
+   */
+  snapshot?(o: SnapshotOptions): SnapshotResult;
   /**
    * The user moved the camera (orbit, pan, zoom, Fit, a standard view, Normal
    * to, the projection) and it has come to rest. Not called for the viewport's
@@ -282,13 +341,13 @@ export interface ViewportHandle {
    * reopened sketch calls it once its rebuild has rolled the later bodies back (review P2/P3
    * round 4: the view stayed on bodies the rollback hid). False when the camera was moved.
    */
-  reframe(): boolean;
+  reframe(opts?: CameraCallOpts): boolean;
   /**
    * Fit (keeping the direction) when what is drawn now (bodies and shown sketches) reaches off the
    * screen and nobody has orbited, panned or zoomed since the last framing; true when it did. Sketch
    * mode's end calls it (P4a review: a first large sketch stayed half off-screen after Finish).
    */
-  refitIfOffScreen?(): boolean;
+  refitIfOffScreen?(opts?: CameraCallOpts): boolean;
   /** Push a pointer tool on the stack; returns pop (safe to call twice). */
   pushTool(tool: ViewportTool): () => void;
   /** The ray under frame client coordinates (model mm). */

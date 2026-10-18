@@ -7,7 +7,7 @@
 // Values copied from the core viewer: src/viewport/colors.ts.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { Box3, BufferGeometry, Float32BufferAttribute, Group, LessEqualDepth, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer, type Material, type Object3D } from 'three';
+import { Box3, BufferGeometry, Color, Float32BufferAttribute, Group, LessEqualDepth, LinearSRGBColorSpace, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer, WebGLRenderTarget, type Material, type Object3D } from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
@@ -17,7 +17,7 @@ import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
 import { ORIGIN_PLANES, type BodyId, type OriginPlaneRef, type SavedCamera, type Vec2, type Vec3 } from '../types/doc';
 import type { PickResult, SelectionItem, SelectKind } from '../types/selection';
-import type { BoxSelectEvent, DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
+import type { BoxSelectEvent, CameraCallOpts, DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, SnapshotOptions, SnapshotResult, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
 import { bindViewport } from './bind';
 import { BvhClient } from './bvh';
 import { CameraRig, VIEW_DIRS, type CameraPose } from './camera';
@@ -45,6 +45,7 @@ import { kindsForFilter, makeProjector, pickAt, raycastBodies, rayAt, type PickB
 import { BOX_START_PX, boxCaption, boxCombine, boxFrom, boxKinds, boxStarts, type BoxKind, type BoxMode, type Rect } from './boxselect';
 import { visibleInBox } from './boxpick';
 import { DEFAULT_SECTION, SectionCaps, sectionPlane } from './section';
+import { notReady, projectToPicture, rowsTopDown, SNAPSHOT_HIDDEN_LAYERS, snapshotClip, snapshotRig, snapshotSize, snapshotTriadRect } from './snapshot';
 import { buildBodyData, edgeSegments, HL_HOVER, HL_NONE, HL_PICK, meshCentroid, planarFaceNormal, setFaceHl, type BodyData } from './tess';
 import { Triad } from './triad';
 
@@ -157,6 +158,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   const pickListeners = new Set<(e: ViewportPickEvent) => void>();
   let selected: SelectionItem[] = [];
   let flashItems: SelectionItem[] = [];
+  /** A snapshot is drawing: nothing is lit (no selection, hover or flash highlight). */
+  let plain = false;
   let filter: SelectKind[] = [];
   let lastGeomKey = '';
   let uploadPending = false;
@@ -271,6 +274,11 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   let anim: { from: CameraPose; to: CameraPose; t0: number; ms: number; aim?: { dir: Vec3 | null; up: Vec3 | null; cover: number } } | null = null;
   /** The camera is where the last framing put it (fit, a standard view, Look at): no orbit, pan or zoom since. */
   let framed = true;
+  /** The person's camera moves (handle calls without `auto`, drags, wheel steps): userCameraMoves(). */
+  let userMoves = 0;
+  const byPerson = (o?: CameraCallOpts) => {
+    if (!o?.auto) userMoves++;
+  };
   /**
    * Owners drawing something other than bodies (sketches): Auto then hides the origin planes as
    * it does once bodies exist (review P2/P3 round 1: on an empty Part the Top plane's square sat
@@ -664,6 +672,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   // ------------------------------------------------------------ highlight
   function hoverItems(): SelectionItem[] {
+    if (plain) return [];
     const h = state.get().hover;
     return [...(h ? [h.item] : []), ...flashItems];
   }
@@ -686,7 +695,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       return v && 3 * i + 2 < v.length ? [v[3 * i], v[3 * i + 1], v[3 * i + 2]] : null;
     };
     const isPlane = (ref: string): ref is OriginPlaneRef => ref in ORIGIN_PLANES;
-    for (const it of selected) {
+    for (const it of plain ? [] : selected) {
       switch (it.kind) {
         case 'face':
           faceMap(it.body).set(it.index, HL_PICK);
@@ -847,12 +856,12 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
 
   /**
    * What the layers that count in framing draw now: the shown sketches (`frame: true`) and the
-   * sketch being edited (a function); `shownOnly` leaves the latter out.
+   * sketch being edited (a function); `shownOnly` leaves the latter out, `skip` these layers (a snapshot's hidden ones).
    */
-  function layersBox(shownOnly = false): Box3 {
+  function layersBox(shownOnly = false, skip?: ReadonlySet<string>): Box3 {
     const out = new Box3();
     for (const l of layers.values()) {
-      if (!l.frame || !l.group.visible || (shownOnly && l.frame !== true)) continue;
+      if (!l.frame || !l.group.visible || (shownOnly && l.frame !== true) || skip?.has(l.layer.id)) continue;
       if (l.frame === true) {
         out.union(shownBox(l.group));
         continue;
@@ -1247,6 +1256,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         if (Math.hypot(p.x - drag.x0, p.y - drag.y0) <= threshold) return;
         drag.mode = drag.box ? 'box' : drag.button === 1 || (drag.button === 0 && e.shiftKey) ? 'pan' : drag.button === 2 ? 'zoom' : 'orbit';
         drag.moved = true;
+        // One move of the person's per drag (a box selection moves nothing).
+        if (drag.mode !== 'box') userMoves++;
         if (drag.mode === 'zoom') drag.anchor = anchorAt(drag.x0, drag.y0);
         if (state.get().hover) setHover(null);
         // The whole move counts from the press point.
@@ -1345,6 +1356,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const p = local(e);
     stopAnim();
     framed = false;
+    userMoves++;
     rig.zoomAt(f, anchorAt(p.x, p.y));
     request();
     scheduleHover(p);
@@ -1405,6 +1417,110 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   resize();
   rig.frame(framedSphere());
 
+  // ------------------------------------------------------------ snapshots (pictures off screen, snapshot.ts)
+  /**
+   * One picture into a render target of its own, in this task (no animation frame: it works in a
+   * hidden window). Its own orthographic camera; the bodies shaded with edges, `hide` left out;
+   * no manipulators, markers, bananas or highlight; its own cut. Everything is put back before it
+   * returns, and nothing here moves the person's camera, counts as their move, writes the
+   * viewport's state or reports a camera change (so nothing is saved).
+   */
+  function snapshot(o: SnapshotOptions): SnapshotResult {
+    if (disposed || renderer.getContext().isContextLost()) throw notReady();
+    const { width: w, height: h } = snapshotSize(o, renderer.capabilities.maxTextureSize);
+    const hide = new Set(o.hide ?? []);
+    const drawn = (b: BodyRec) => visibleOf(b) && !hide.has(b.id);
+    const shown = order.map((id) => bodies.get(id)).filter((b): b is BodyRec => !!b && drawn(b));
+    // It frames the bodies it shows; without any, the sketches (and reference planes) it shows; else the origin planes.
+    const box = new Box3();
+    for (const b of shown) box.union(b.data.bounds);
+    if (box.isEmpty()) box.union(layersBox(false, SNAPSHOT_HIDDEN_LAYERS));
+    if (box.isEmpty()) box.copy(origin.box());
+    const sphere = box.getBoundingSphere(new Sphere());
+    if (!(sphere.radius > 1e-6)) sphere.radius = 1;
+    sphere.radius *= FIT_MARGIN;
+    const snapRig = snapshotRig(o.view, sphere, w, h);
+    snapRig.scene.copy(sceneSphere());
+    const cam = snapRig.apply(w / h);
+    const cut = o.section ? snapshotClip(o.section) : null;
+    const layerShown = [...layers.values()].map((l) => [l.group, l.group.visible] as const);
+    const prevTarget = renderer.getRenderTarget();
+    const clearColor = renderer.getClearColor(new Color());
+    const clearAlpha = renderer.getClearAlpha();
+    const target = new WebGLRenderTarget(w, h, { samples: renderer.capabilities.maxSamples >= 4 ? 4 : 0, depthBuffer: true, stencilBuffer: true });
+    const pixels = new Uint8Array(w * h * 4);
+    try {
+      plain = true;
+      applyHighlight();
+      for (const b of bodies.values()) {
+        b.mesh.visible = drawn(b);
+        b.edges.visible = drawn(b) && b.data.drawEdges.length >= 6;
+      }
+      for (const l of layers.values()) if (SNAPSHOT_HIDDEN_LAYERS.has(l.layer.id)) l.group.visible = false;
+      const planes = cut ? [cut] : null;
+      for (const b of bodies.values()) {
+        setClipping(b.mesh.material, planes);
+        setClipping(b.edgeMat, planes);
+      }
+      for (const m of [selEdgeMat, hovEdgeMat, pointsMat]) setClipping(m, planes);
+      if (cut) {
+        caps.setBodies([...bodies.values()].map((b) => ({ key: `${b.id}|${b.tessKey}`, geometry: b.data.geometry, visible: drawn(b) })), cut);
+        caps.place(cut, snapRig.scene, BODY_COLOR);
+      }
+      caps.group.visible = !!cut;
+      for (const m of lineMats()) m.resolution.set(w, h);
+      for (const m of layerLineMats()) m.resolution.set(w, h);
+      // A render target's viewport and scissor are its own pixels (no pixel ratio), set on the target.
+      target.viewport.set(0, 0, w, h);
+      target.scissorTest = false;
+      renderer.setRenderTarget(target);
+      // Into a target three clears with the working (linear) values as they are: the view's
+      // background as the screen shows it. (CAD's own shaders, the bodies, caps and triad, write
+      // their sRGB colours either way; three's line and plane materials come out a little darker.)
+      renderer.setClearColor(new Color().setRGB(...rgb01(VIEWPORT_BG), LinearSRGBColorSpace), 1);
+      renderer.clear(true, true, true);
+      renderer.render(scene, cam);
+      const tr = snapshotTriadRect(w, h);
+      if (tr) {
+        renderer.clearDepth();
+        target.viewport.set(tr.x, tr.y, tr.s, tr.s);
+        target.scissor.set(tr.x, tr.y, tr.s, tr.s);
+        target.scissorTest = true;
+        renderer.setRenderTarget(target);
+        triad.sync(snapRig.quaternion());
+        renderer.render(triad.scene, triad.camera);
+      }
+      renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
+    } finally {
+      renderer.setRenderTarget(prevTarget);
+      // Set again with the view's own target: the next frame's clear must not use the target's values.
+      renderer.setClearColor(clearColor, clearAlpha);
+      target.dispose();
+      plain = false;
+      for (const [g, v] of layerShown) g.visible = v;
+      for (const m of lineMats()) m.resolution.set(width, height);
+      for (const m of layerLineMats()) m.resolution.set(width, height);
+      // The bodies' display flags, then (applySection) the view's own cut and caps.
+      applyDisplay();
+      applyHighlight();
+      request();
+    }
+    const view: PickView = { camera: cam, width: w, height: h, worldPerPixel: (p) => snapRig.worldPerPixel(p, h), clip: cut, occlude: true, faces: true };
+    return {
+      rgba: rowsTopDown(pixels, w, h),
+      width: w,
+      height: h,
+      mmPerPx: snapRig.orthoHeight / h,
+      project: (p) => projectToPicture(cam, w, h, p),
+      visibleFaceAt(body, x, y) {
+        // The bodies as drawn in the picture; their picking structures as they are now (built since, maybe).
+        const picks: PickBody[] = shown.map((b) => ({ id: b.id, data: b.data, bvh: b.bvh, vertices: b.vertices, seeThrough: b.seeThrough }));
+        const hit = raycastBodies(picks, rayAt(view, x, y), view);
+        return hit && !hit.cap && hit.body.id === body ? hit.face : null;
+      },
+    };
+  }
+
   let unbind: () => void = () => {};
 
   const handle: ViewportHandle = {
@@ -1462,22 +1578,26 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     },
     fit(o) {
       fit(o);
+      byPerson(o);
       cameraMoved();
     },
     setView(view, o) {
       setView(view, o);
+      byPerson(o);
       cameraMoved();
     },
     lookAt(normal, up, o) {
       lookAt(normal, up, o);
+      byPerson(o);
       cameraMoved();
     },
-    reframe() {
+    reframe(o) {
       if (!reframe()) return false;
+      byPerson(o);
       cameraMoved();
       return true;
     },
-    refitIfOffScreen() {
+    refitIfOffScreen(o) {
       if (disposed || !framed || anim) return false;
       const box = new Box3();
       for (const b of bodies.values()) if (visibleOf(b)) box.union(b.data.bounds);
@@ -1493,6 +1613,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       );
       if (!off) return false;
       fit();
+      byPerson(o);
       cameraMoved();
       return true;
     },
@@ -1584,7 +1705,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       const r = canvas.getBoundingClientRect();
       return [r.left + s[0], r.top + s[1]];
     },
-    orbitAround(target) {
+    orbitAround(target, o) {
+      byPerson(o);
       if (target === 'center') {
         const box = new Box3();
         for (const b of bodies.values()) if (visibleOf(b)) box.union(b.data.bounds);
@@ -1596,7 +1718,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       return [rig.pivot.x, rig.pivot.y, rig.pivot.z];
     },
     camera: savedCamera,
-    setCamera(c) {
+    userCameraMoves: () => userMoves,
+    snapshot,
+    setCamera(c, o) {
+      byPerson(o);
       stopAnim();
       // The camera a Part kept is the user's: bodies that grow out of it are not framed again.
       framed = false;
@@ -1705,7 +1830,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       };
     },
     lineResolution: () => [width, height],
-    stats: () => ({ ...stats, bvh: { ...stats.bvh } }),
+    stats: () => ({ ...stats, bvh: { ...stats.bvh }, contextLost: renderer.getContext().isContextLost(), framed }),
     measure(frames) {
       const gl = renderer.getContext();
       const px = new Uint8Array(4);

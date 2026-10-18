@@ -100,7 +100,8 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
       restorePlanes = false;
     }
     if (restoreCamera && s.rebuild.seq > 0 && s.rebuild.status !== 'running') {
-      if (s.view?.camera) handle.setCamera(s.view.camera);
+      // The Part's own camera put back: not a move of the person's (auto).
+      if (s.view?.camera) handle.setCamera(s.view.camera, { auto: true });
       restoreCamera = false;
     }
   };
@@ -138,7 +139,7 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
           let tries = 0;
           const check = () => {
             if (handle.state.get().animating && tries++ < 40) setTimeout(check, 50);
-            else handle.refitIfOffScreen?.();
+            else handle.refitIfOffScreen?.({ auto: true });
           };
           setTimeout(check, 60);
         }
