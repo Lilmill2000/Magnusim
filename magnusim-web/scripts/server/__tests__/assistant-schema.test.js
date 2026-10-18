@@ -1,7 +1,9 @@
 // The tool-schema subset (Foundation spec 7.2, 10.1): what is accepted and refused (with
 // the reason), the size caps, validation of every constraint, the two strict emitters
 // keeping only STRICT_KEEP with the other limits in words, the second dialect's nullable
-// optionals and their stripping, and the local-server dialect's copy as validated.
+// optionals and their stripping, and the local-server dialect's copy as validated. Every
+// problem with an input at once (12 named, 2000 characters, the rest counted), and the
+// local fill: "", [] and false for required strings, lists and booleans, nothing else.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -14,7 +16,8 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 after(() => rmSync(ROOT, { recursive: true, force: true }));
 
-const { checkSchema, validateInput, emitSchema, stripNullOptionals, STRICT_KEEP, limitWords, SCHEMA_MAX_DEPTH } = await import('../assistant/schema.ts');
+const { checkSchema, validateInput, emitSchema, stripNullOptionals, fillLocalDefaults, STRICT_KEEP, limitWords, SCHEMA_MAX_DEPTH, INPUT_MAX_PROBLEMS, INPUT_ERROR_MAX } =
+  await import('../assistant/schema.ts');
 
 const obj = (properties, required = Object.keys(properties), extra = {}) => ({ type: 'object', properties, required, additionalProperties: false, ...extra });
 
@@ -90,7 +93,7 @@ describe('validateInput: every constraint', () => {
     assert.match(validateInput(ADD, { by: -101 }).error, /by must be at least -100/);
     assert.match(validateInput(ADD, { by: 1.5 }).error, /by must be a whole number/);
     assert.match(validateInput(ADD, { by: '2' }).error, /by must be a whole number/);
-    assert.match(validateInput(ADD, {}).error, /missing "by"/);
+    assert.equal(validateInput(ADD, {}).error, 'the input is missing by.');
     assert.match(validateInput(ADD, { by: 1, extra: 2 }).error, /unknown field "extra"/);
     const good = { label: 'ok', tags: ['a'], mode: 'fast', fixed: 'x', scale: 1, flag: true, nested: { depth: 3 } };
     assert.deepEqual(validateInput(RICH, good), { ok: true });
@@ -107,6 +110,143 @@ describe('validateInput: every constraint', () => {
     assert.match(validateInput(RICH, { ...good, nested: { depth: 4 } }).error, /nested.depth must be at most 3/);
     assert.match(validateInput(RICH, { ...good, nested: null }).error, /nested must be an object/);
     assert.match(validateInput(ADD, [1]).error, /the input must be an object/);
+  });
+});
+
+/** A CAD-like tool: every field required, "" / [] / false when unused (the spec's example). */
+const EDGE = obj({
+  distance: { type: 'string', maxLength: 40 },
+  distance2: { type: 'string', maxLength: 40 },
+  to: { type: 'array', items: { type: 'string' }, maxItems: 8 },
+  body_name: { type: 'string', maxLength: 64 },
+  color: { type: 'boolean' },
+  entities: { type: 'array', items: obj({ kind: { type: 'string', enum: ['line', 'arc'] }, at: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 } }) },
+});
+const ENTITY = { kind: 'line', at: [0, 0] };
+
+describe('validateInput: every problem at once', () => {
+  it("names them all in one message, its path the first one's", () => {
+    const r = validateInput(EDGE, { distance: '5', entities: [ENTITY, ENTITY, ENTITY, { kind: 'line', at: [1] }] });
+    assert.deepEqual(r, {
+      ok: false,
+      error: 'the input is missing distance2, to, body_name, color (send "", [] or false when unused); entities[3].at must hold at least 2 items.',
+      path: '',
+      problems: 2,
+    });
+    const deep = validateInput(EDGE, { distance: '', distance2: '', to: [], body_name: '', color: false, entities: [{ kind: 'spline', at: [1, 'x'] }] });
+    assert.deepEqual([deep.error, deep.path, deep.problems], ['entities[0].kind must be one of "line", "arc"; entities[0].at[1] must be a number.', 'entities[0].kind', 2]);
+  });
+
+  it('every kind: missing, null on a required field, unknown, type, const, enum, range and size, at every depth', () => {
+    const input = { label: 'x'.repeat(65), tags: ['a', 'c', 1], mode: 'slow', fixed: 'y', scale: 0.1, flag: 'yes', nested: { depth: 4, odd: 1 }, more: 1, other: 2 };
+    const r = validateInput(RICH, input);
+    assert.equal(
+      r.error,
+      'the input has unknown fields "more", "other"; label must be at most 64 characters; tags[1] must be one of "a", "b"; tags[2] must be a string; ' +
+        'mode must be one of "fast", "fine"; fixed must be "x"; scale must be at least 0.5; flag must be a boolean; nested has an unknown field "odd"; nested.depth must be at most 3.',
+    );
+    assert.deepEqual([r.path, r.problems], ['', 10]);
+    // A null on a required field counts as missing (marked), beside the fields left out; its type is not checked too.
+    const both = obj({ a: { type: 'integer' }, b: { type: 'string' }, c: { type: 'boolean' }, 'two words': { type: 'array', items: { type: 'string' } } });
+    assert.equal(validateInput(both, { a: null, c: null }).error, 'the input is missing a (null), b, c (null), "two words" (send "", [] or false when unused).');
+    // The note names only the empty values of the fields it follows: none for numbers, enums, consts, objects or refused empties.
+    const kinds = obj({
+      n: { type: 'number' },
+      e: { type: 'string', enum: ['a'] },
+      k: { type: 'boolean', const: true },
+      o: obj({}),
+      s: { type: 'string', minLength: 1 },
+      l: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    });
+    assert.equal(validateInput(kinds, {}).error, 'the input is missing n, e, k, o, s, l.');
+    const some = obj({ s: { type: 'string' }, f: { type: 'boolean' }, n: { type: 'number' } });
+    assert.equal(validateInput(some, {}).error, 'the input is missing s, f, n (send "" or false when unused).');
+  });
+
+  it(`names at most ${INPUT_MAX_PROBLEMS} problems and counts the rest`, () => {
+    const many = obj({ rows: { type: 'array', items: { type: 'integer', maximum: 3 } } });
+    const r = validateInput(many, { rows: Array.from({ length: 20 }, (_, i) => 10 + i) });
+    assert.equal(r.problems, 20);
+    const named = r.error.split('; ');
+    assert.equal(named.length, INPUT_MAX_PROBLEMS + 1);
+    assert.deepEqual(named.slice(0, 2), ['rows[0] must be at most 3', 'rows[1] must be at most 3']);
+    assert.equal(named[INPUT_MAX_PROBLEMS - 1], 'rows[11] must be at most 3');
+    assert.equal(named[INPUT_MAX_PROBLEMS], 'and 8 more problems.');
+    const thirteen = validateInput(many, { rows: Array.from({ length: 13 }, () => 9) });
+    assert.match(thirteen.error, /; rows\[11\] must be at most 3; and 1 more problem\.$/);
+    const twelve = validateInput(many, { rows: Array.from({ length: 12 }, () => 9) });
+    assert.match(twelve.error, /; rows\[11\] must be at most 3\.$/);
+  });
+
+  it(`stays within ${INPUT_ERROR_MAX} characters: whole problems while they fit, the rest counted; one too long alone is cut`, () => {
+    const long = (i) => `f${i}_${'x'.repeat(300)}`;
+    const wide = obj(Object.fromEntries(Array.from({ length: 10 }, (_, i) => [long(i), { type: 'integer' }])));
+    const r = validateInput(wide, Object.fromEntries(Array.from({ length: 10 }, (_, i) => [long(i), 'x'])));
+    assert.ok(r.error.length <= INPUT_ERROR_MAX, String(r.error.length));
+    assert.equal(r.problems, 10);
+    const shown = r.error.split('; ').filter((p) => p.endsWith('must be a whole number'));
+    assert.ok(shown.length >= 5 && shown.length < 10, String(shown.length));
+    assert.deepEqual(shown, Array.from({ length: shown.length }, (_, i) => `${long(i)} must be a whole number`), 'whole problems, in order');
+    assert.ok(r.error.endsWith(`; and ${10 - shown.length} more problems.`), r.error.slice(-60));
+    // One problem longer than the room by itself: cut, marked, never past the cap.
+    const values = Array.from({ length: 64 }, (_, i) => `${i}${'v'.repeat(45)}`);
+    const choice = obj({ pick: { type: 'string', enum: values }, n: { type: 'integer' } });
+    const cut = validateInput(choice, { pick: 'none', n: 'x' });
+    assert.ok(cut.error.length <= INPUT_ERROR_MAX, String(cut.error.length));
+    assert.match(cut.error, /^pick must be one of "0v+\.\.\., .*…; and 1 more problem\.$/);
+    assert.equal(cut.path, 'pick');
+  });
+});
+
+describe('fillLocalDefaults: the local fill', () => {
+  it('fills required strings without enum, lists and booleans left out or sent as null, at every depth, and keeps every value given', () => {
+    const input = { distance: '5', distance2: null, entities: [{ kind: 'arc', at: [1, 2] }] };
+    const filled = fillLocalDefaults(EDGE, input);
+    assert.deepEqual(filled, { distance: '5', distance2: '', to: [], body_name: '', color: false, entities: [{ kind: 'arc', at: [1, 2] }] });
+    assert.deepEqual(validateInput(EDGE, filled), { ok: true });
+    assert.deepEqual(input, { distance: '5', distance2: null, entities: [{ kind: 'arc', at: [1, 2] }] }, 'the input itself is not changed');
+    const nested = obj({
+      rows: { type: 'array', items: obj({ label: { type: 'string' }, on: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string' } } }) },
+      inner: obj({ note: { type: 'string' } }),
+    });
+    assert.deepEqual(fillLocalDefaults(nested, { rows: [{}, { label: 'a', on: null }], inner: {} }), {
+      rows: [
+        { label: '', on: false, tags: [] },
+        { label: 'a', on: false, tags: [] },
+      ],
+      inner: { note: '' },
+    });
+  });
+
+  it('never guesses numbers, enums, consts or objects, nor an empty value the schema refuses, nor an optional field', () => {
+    const kinds = obj({
+      n: { type: 'number' },
+      i: { type: 'integer' },
+      e: { type: 'string', enum: ['a', ''] },
+      c: { type: 'string', const: 'x' },
+      k: { type: 'boolean', const: false },
+      o: obj({ s: { type: 'string' } }),
+      s: { type: 'string', minLength: 1 },
+      l: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    });
+    assert.deepEqual(fillLocalDefaults(kinds, { n: null }), { n: null });
+    assert.deepEqual(fillLocalDefaults(kinds, {}), {});
+    assert.equal(validateInput(kinds, fillLocalDefaults(kinds, {})).error, 'the input is missing n, i, e, c, k, o, s, l.');
+    assert.deepEqual(fillLocalDefaults(RICH, {}), {}, "RICH's only required field has a minLength");
+    assert.deepEqual(fillLocalDefaults(obj({ flag: { type: 'boolean' } }, []), {}), {}, 'an optional field stays out');
+    // Wrong types and other values are left for validation, not replaced.
+    const wrong = { distance: 5, to: 'a', entities: 'x', color: 'no', body_name: '', distance2: '' };
+    assert.deepEqual(fillLocalDefaults(EDGE, wrong), wrong);
+    assert.deepEqual(fillLocalDefaults(EDGE, [1]), [1], 'a non-object input is left as it is');
+  });
+
+  it('never sets a prototype: a "__proto__" key stays a key, and validation refuses it', () => {
+    const note = obj({ note: { type: 'string' } });
+    const filled = fillLocalDefaults(note, JSON.parse('{"__proto__":{"note":"x"}}'));
+    assert.equal(Object.getPrototypeOf(filled), Object.prototype);
+    assert.deepEqual(Object.keys(filled), ['__proto__', 'note']);
+    assert.equal(filled.note, '');
+    assert.match(validateInput(note, filled).error, /unknown field "__proto__"/);
   });
 });
 
@@ -167,7 +307,7 @@ describe('emitSchema', () => {
     // A required field's null stays, and validation refuses it.
     const req = stripNullOptionals(RICH, { label: null });
     assert.deepEqual(req, { label: null });
-    assert.match(validateInput(RICH, req).error, /label must be a string/);
+    assert.equal(validateInput(RICH, req).error, 'the input is missing label (null).');
     const list = obj({ rows: { type: 'array', items: obj({ a: { type: 'integer' } }, []) } });
     assert.deepEqual(stripNullOptionals(list, { rows: [{ a: null }, { a: 1 }] }), { rows: [{}, { a: 1 }] });
   });

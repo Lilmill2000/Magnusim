@@ -6,8 +6,11 @@
  *    list it last served). Anything else, a tool the per-request cap left out and the
  *    Settings test's own tool included, is `no_tool`. A tool result can never add a tool.
  * 2. Input the model wrote as broken JSON is `invalid_input`.
- * 3. Nulls the second cloud dialect sends for optional fields are removed, then the input
- *    is validated against every constraint of the tool's schema (`invalid_input`).
+ * 3. Nulls the second cloud dialect sends for optional fields are removed; a local model's
+ *    call of a workspace tool gets "", [] or false for the required fields it left out or
+ *    sent as null, when their type has that empty value (fillLocalDefaults). Then the input
+ *    is validated against every constraint of the tool's schema, every problem named at
+ *    once (`invalid_input`).
  * 4. Availability is checked again now, with the plugin-epoch fence (`unavailable`,
  *    `plugin_off`).
  * 5. compute and destructive tools ask first (a confirm gate); a no, the timeout or Stop
@@ -31,7 +34,7 @@ import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
 import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
-import { stripNullOptionals, validateInput } from './schema.ts';
+import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
 import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
 
@@ -300,7 +303,9 @@ export class ToolRunner {
     if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
     // 2-3. The input.
     if (call.inputError) return errorResult(call, 'invalid_input', call.inputError);
-    const input = stripNullOptionals(def.schema, call.input ?? {}) as Record<string, unknown>;
+    let input = stripNullOptionals(def.schema, call.input ?? {}) as Record<string, unknown>;
+    // A local model often leaves out the fields it has no use for: a workspace tool gets their empty values.
+    if (o.ctx.local && def.source.kind === 'workspace') input = fillLocalDefaults(def.schema, input) as Record<string, unknown>;
     const valid = validateInput(def.schema, input);
     if (!valid.ok) return errorResult(call, 'invalid_input', valid.error);
     // 4. Still available, and its plugin not turned off or replaced.

@@ -25,7 +25,8 @@
 // Stop ends it, and the frame's page loaded again during the turn hearing it run (H3). And a
 // destructive tool's confirm note as its question's text, mystery's question saying "can't be
 // undone" without one (H10).
-// And one turn per tab: a second one while it works is refused 409 tab_busy (H4).
+// And one turn per tab: a second one while it works is refused 409 tab_busy (H4). And every
+// problem with a call's input in one result, the terminal showing them all (H9).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -1105,4 +1106,47 @@ test("a reload of the workspace's own page while its turn runs: the reloaded pag
     fake.release('frame-reload');
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   }
+});
+
+test('a call with several problems in its input hears them all at once: the model and the terminal get every one and the page never runs it; on the local server a number left out is not guessed', async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const before = chats().length;
+  const ALL = 'the input has an unknown field "extra"; by must be at most 100; steps must be at least 1.';
+  // The model fixes every problem in one round: it adds 2 only when the one result named them all.
+  fake.reply(
+    { tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 500, steps: 0, extra: true } }] },
+    (body) => ({ tools: [{ name: `${PLUGIN}__add`, input: { by: resultsIn(body)[0].error.message === ALL ? 2 : 1 } }] }),
+    { text: 'Added 2.' },
+  );
+  const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', w.tab, 'Add 500 slowly.'], {
+    cwd: WEB_ROOT,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let out = '';
+  cli.stdout.on('data', (b) => (out += b));
+  cli.stderr.on('data', (b) => (out += b));
+  const exited = new Promise((done) => cli.once('exit', done));
+  try {
+    expect(await exited, out).toBe(0);
+  } finally {
+    cli.kill();
+  }
+  await expect(w.frame.locator('#counter')).toHaveText('2');
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add']);
+  expect(resultsIn(chats()[before + 1])).toEqual([{ tool: `${PLUGIN}__slow_add`, ok: false, error: { code: 'invalid_input', message: ALL }, images: [] }]);
+  // What the person reads in the terminal: the refused call with every problem, then the fixed one.
+  expect(out).toContain(`→ ${PLUGIN}__slow_add {"by":500,"steps":0,"extra":true}\n✗ invalid_input: ${ALL}\n→ ${PLUGIN}__add {"by":2}\n✓ Added 2: the counter is 2\n`);
+
+  // The local server fills only "", [] and false: a number left out is named, and nothing runs.
+  await useScriptedModel(request, host.base, fake, 'local');
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: {} }] }, (body) => ({ text: resultsIn(body)[0].error.message }));
+  const t = await startTurn(request, host.base, { text: 'Add something.', tab: w.tab });
+  const e = await t.ended();
+  expect([e.turn.state, e.turn.text_so_far]).toEqual(['done', 'the input is missing by.']);
+  await expect(w.frame.locator('#counter')).toHaveText('2');
+  expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add']);
 });
