@@ -861,6 +861,93 @@ describe("a local server's context (CAD tools spec H5)", () => {
   });
 });
 
+describe('images only for models that read them (CAD tools spec H6)', () => {
+  /** A PNG header that says `side`×`side` px (the runner reads only the header). */
+  const png = (side) => {
+    const b = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+    b.writeUInt32BE(side, 16);
+    b.writeUInt32BE(side, 20);
+    return b.toString('base64');
+  };
+  const snap = (side = 1) =>
+    hostTool('snap', { run: async () => ({ ok: true, text: 'A picture.', images: [{ type: 'image', mediaType: 'image/png', base64: png(side), width: side, height: side }], summary: 'snapped' }) });
+  /** A local server's adapter whose word on images is `says(call)` (call 1, 2, …), recording each question. */
+  const localSays = (says, o = {}) => {
+    const m = mk({ provider: 'openai_compatible', ...o });
+    m.provider.asked = 0;
+    m.provider.readsImages = (model) => {
+      assert.equal(model, 'local-model');
+      m.provider.asked += 1;
+      return says(m.provider.asked);
+    };
+    return m;
+  };
+  const notes = (t) => ofType(t, 'note').map((e) => e.text);
+  const LEFT = 'Images were left out.';
+  const REFUSED = 'The server refused the images.';
+
+  it("a turn knows whether its model reads images: a cloud model does; a local one as its adapter says after the row and after each answer (null while nothing says)", async () => {
+    const cloud = mk();
+    cloud.provider.script({ text: 'ok' });
+    let r = await startTurn(cloud, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.images, true);
+
+    const unknown = localSays(() => null);
+    unknown.provider.script({ text: 'ok' });
+    r = await startTurn(unknown, 'x');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.images, unknown.provider.asked], ['done', null, 2], 'asked after the row read and after the answer');
+
+    // Unknown until the server refused this request's images (the adapter remembered it): false from then on.
+    const refused = localSays((n) => (n === 1 ? null : false), { hostTools: [snap()] });
+    refused.provider.script({ tools: [{ name: 'snap' }] }, { text: 'none seen', notes: [REFUSED] });
+    r = await startTurn(refused, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.equal(r.turn.images, false);
+    const vlm = localSays(() => true);
+    vlm.provider.script({ text: 'ok' });
+    r = await startTurn(vlm, 'x');
+    await settled(r.turn);
+    assert.equal(r.turn.images, true);
+  });
+
+  it("the adapter's notes on a request become note events, each once a turn (the next turn says it again), in the order given", async () => {
+    const m = localSays(() => false, { hostTools: [snap()] });
+    m.provider.script({ tools: [{ name: 'snap' }], notes: [REFUSED] }, { tools: [{ name: 'snap' }], notes: [LEFT, REFUSED] }, { text: 'done', notes: [LEFT] });
+    let r = await startTurn(m, 'Look twice.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(notes(r.turn), [REFUSED, LEFT]);
+    // Each note sits after the answer that brought it, before that step's tool calls.
+    const kinds = eventsOf(r.turn).filter((e) => e.type === 'note' || e.type === 'tool_call').map((e) => (e.type === 'note' ? e.text : 'call'));
+    assert.deepEqual(kinds, [REFUSED, 'call', LEFT, 'call']);
+    m.provider.script({ text: 'again', notes: [LEFT] });
+    r = await startTurn(m, { text: 'And now?', conversation: r.body.conversation });
+    await settled(r.turn);
+    assert.deepEqual(notes(r.turn), [LEFT]);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a model that doesn't read images: the estimate leaves its images out, so they take none of a small context's room", async () => {
+    // The second request's limit, with a 1500 px picture (3000 tokens by the estimate) in the first result.
+    const secondLimit = async (says) => {
+      const m = localSays(says, { hostTools: [snap(1500)] });
+      m.provider.modelRow = async () => ({ context: 10_000, type: null });
+      m.provider.script({ tools: [{ name: 'snap' }], usage: { input: 2000, output: 30 } }, { text: 'done' });
+      const r = await startTurn(m, 'Look.');
+      await settled(r.turn);
+      assert.equal(r.turn.state, 'done');
+      return m.provider.requests[1].req.maxOutputTokens;
+    };
+    const counted = await secondLimit(() => null);
+    const leftOut = await secondLimit(() => false);
+    assert.ok(counted >= 2048 && leftOut < 8192, `${counted} / ${leftOut}`);
+    assert.equal(leftOut - counted, 3000);
+  });
+});
+
 describe('the offered list', () => {
   it('a tool the 24-tool local cap left out, and the Settings test’s tool, are no_tool; the cap is noted once', async () => {
     const many = Array.from({ length: 30 }, (_, i) => hostTool(`tool_${String(i).padStart(2, '0')}`, { priority: i }));

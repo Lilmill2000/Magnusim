@@ -9,6 +9,8 @@
  *       before this request, forgotten answers ask again
  *     a local server's model row (its context, kept 60 s): the answer gets the room the
  *       prompt leaves; too little → failed (context) before this request
+ *     whether the model reads images (cloud: yes; a local server: its row's type, or a
+ *       refusal remembered); the adapter's notes on how a request went, each once a turn
  *     model: one request with this step's tools (computed by the host, every step)
  *       refusal → failed · context → failed · max_tokens → capped · no calls → done
  *     tools: each call in order, through the runner (only this step's tools resolve)
@@ -88,6 +90,8 @@ export interface LoopTurn extends RunnerTurn {
   servedBy: string | null;
   /** The local server's context for the turn's model, once its model row said (tokens). */
   contextTokens: number | null;
+  /** Whether the turn's model reads images: true for cloud models; a local one's once its row or its server said (null until then). */
+  images: boolean | null;
   setState(s: TurnState): void;
   end(state: EndState, reason: string, message: string | null): void;
   note(text: string): void;
@@ -374,6 +378,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   let prev: EstimateInput['prev'] = null;
   let counted = 0;
   const notedDrops = new Set<string>();
+  const notedByAdapter = new Set<string>();
+  // Cloud models read images; a local server's model as its adapter knows (null: not known yet).
+  const learnImages = () => {
+    const known = adapter.id === 'openai_compatible' ? (adapter.readsImages?.(model) ?? null) : true;
+    if (known !== null) t.images = known;
+  };
 
   for (let step = 1; ; step += 1) {
     if (stoppedNow(t)) return;
@@ -415,6 +425,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     if (stoppedNow(t)) return;
     const contextTokens = row?.context ?? t.contextTokens ?? conv.contextTokens;
     if (contextTokens) t.contextTokens = conv.contextTokens = contextTokens;
+    learnImages();
 
     // The spend estimate and the day's reservation (cloud only; a local server costs nothing).
     const fresh = freshOf(conv.messages.slice(counted));
@@ -430,7 +441,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         cloud: adapter.cloud,
         fallbackTargets: adapter.fallbackTargets(model),
         newChars: fresh.chars + systemChars,
-        newImages: fresh.images,
+        // Images a model doesn't read are left out of its request (each as a line of text).
+        newImages: t.images === false ? [] : fresh.images,
         toolCount: tools.length,
         firstStep: step === 1,
         prev,
@@ -548,6 +560,13 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       return t.end('capped', reason, capText(reason, caps));
     }
     t.servedBy = out.servedBy || t.servedBy;
+    for (const text of out.notes ?? []) {
+      if (notedByAdapter.has(text)) continue;
+      notedByAdapter.add(text);
+      t.note(text);
+    }
+    // A server that refused this request's images: the model is text-only from now on.
+    learnImages();
 
     if (out.stop === 'refusal') {
       t.discard(step);

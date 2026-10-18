@@ -15,6 +15,9 @@
 // vlm | embeddings) at the first route, an Ollama one (`context` as num_ctx, `max` as the
 // model's context length, vision for vlm) at the second; anything else is 404. They take
 // no failNext and no hold, and the log calls them `kind: 'model_row'`.
+// textOnly(...ids) makes the local server refuse (400, TEXT_ONLY_REFUSAL) a chat request
+// for one of those models that carries an image, as a server whose model can't read images
+// does (CAD tools spec H6); textOnly() with no ids clears it.
 //
 // Each chat request takes the next scripted step (reply()) and streams it in that
 // dialect's server-sent events. A step:
@@ -70,6 +73,13 @@ const DEFAULT_MODELS = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The local server's refusal of an image for a model that can't read one (textOnly()). The
+ * words are as users report a local server's answer to an image sent to a text-only model;
+ * not recorded from a live server.
+ */
+export const TEXT_ONLY_REFUSAL = 'Model does not support images. Please use a model that does.';
 
 /**
  * What local servers answer about one model, the shapes the fake serves its rows in.
@@ -234,6 +244,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   const modelLists = { anthropic: [...DEFAULT_MODELS.anthropic], openai: [...DEFAULT_MODELS.openai], compat: [...DEFAULT_MODELS.compat] };
   /** The local server's model rows, by id (models() entries that are rows). */
   const modelRows = new Map();
+  /** Local-server models that can't read images (textOnly()). */
+  const textOnlyModels = new Set();
   const emitted = { thinking: new Map(), fallback: new Set(), reasoning: new Map() };
   let disconnects = 0;
   let n = 0;
@@ -381,6 +393,9 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
 
   function checkCompat(body) {
     if (!body || typeof body.model !== 'string' || !Array.isArray(body.messages)) throw new Refusal('model and messages are required');
+    if (textOnlyModels.has(body.model) && body.messages.some((m) => Array.isArray(m.content) && m.content.some((c) => c && c.type === 'image_url'))) {
+      throw new Refusal(TEXT_ONLY_REFUSAL);
+    }
     body.messages.forEach((m, i) => {
       if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
         const answered = [];
@@ -780,6 +795,11 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         modelRows.clear();
         for (const m of list) if (m && typeof m === 'object') modelRows.set(m.id, { ...m });
       }
+    },
+    /** Local-server models that can't read images: a chat request for one that carries an image is refused 400 (none: clears). */
+    textOnly(...ids) {
+      textOnlyModels.clear();
+      for (const id of ids) textOnlyModels.add(id);
     },
     /** The next model list (of a dialect, or any) waits until release(name), or until the client closes. */
     holdModels(name, dialect) {

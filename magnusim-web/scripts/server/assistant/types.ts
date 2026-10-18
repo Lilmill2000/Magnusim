@@ -44,6 +44,8 @@ export interface ProviderResult {
   message: AssistantMessage; stop: StopReason; usage: Usage; attempts: Attempt[]; servedBy: string; refusal?: { category: string | null; explanation: string };
   /** A local model wrote a tool call as text instead of calling the tool (its chat template doesn't do tools). */
   toolCallAsText?: boolean;
+  /** One-line notes for the person on how the request went (its images left out); the loop logs each once per turn. */
+  notes?: string[];
 }
 /** `storage_unavailable`: the secret store can't unlock the saved key right now (its helper was blocked or timed out). */
 export type ProviderErrorCode = 'no_key' | 'storage_unavailable' | 'deps_missing' | 'auth' | 'model' | 'rate_limit' | 'overloaded' | 'server'
@@ -69,4 +71,10 @@ export interface ProviderAdapter {
   send(req: ProviderRequest, signal: AbortSignal, onEvent: (e: StreamEvent) => void): Promise<ProviderResult>;
   /** The local server's row for `model` (null when it offers none); only the local-server adapter has one. Never throws. */
   modelRow?(model: string, signal: AbortSignal): Promise<ModelRow | null>;
+  /**
+   * Whether `model` reads images, as far as the adapter knows: its kept row's type, or the
+   * server's refusal of images remembered; null when nothing says. Only the local-server
+   * adapter has one (the cloud models read images).
+   */
+  readsImages?(model: string): boolean | null;
 }

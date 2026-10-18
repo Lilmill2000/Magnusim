@@ -17,7 +17,8 @@
 // dead frame); a call to the app in flight
 // keeping a tool call alive past the server's stall window; a hidden tab kept for the call and
 // the hold after it, then dormant (409 tab_hidden) and back when shown; two tabs; an image
-// result; a remote viewer; a tab hidden at load; the terminal client
+// result (for a local model that can't read it, words in its place: H6); a remote viewer; a tab
+// hidden at load; the terminal client
 // (scripts/assistant-run.mjs) on the only connected tab. And the shared helpers
 // (support/assistant.js, CAD tools spec H1): the scripted model on the local server, its steps
 // answering from the request, and questions answered through their route. And a failed call's
@@ -41,7 +42,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { answerGate, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
-import { startFakeLlm } from './support/fake-llm.mjs';
+import { startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
 import { startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { expect, test } from './support/stress.js';
@@ -830,6 +831,78 @@ test('an image result: snap puts a 64x64 PNG block in the next request', async (
   const png = Buffer.from(result.images[0].source.data, 'base64');
   expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
   expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([64, 64]);
+});
+
+test("a local model that can't read pictures: its server refuses snap's picture, the request goes again with words in its place, the terminal says so, and the next turn leaves pictures out", async ({
+  page,
+  request,
+}) => {
+  // What the person and the model read (the local-server adapter's words, CAD tools spec H6).
+  const LEFT_OUT = '[An image was left out: the local server does not accept images.]';
+  const REFUSED_NOTE = 'The local server refused the images, so the request went again without them; this model gets none from now on.';
+  const LEFT_OUT_NOTE = "The local model doesn't read images: they are left out of its requests.";
+  const hasImage = (r) => JSON.stringify(r.body).includes('"image_url"');
+  /** One turn in the terminal client on this tab: what the person reads (stdout and stderr), once it exits 0. */
+  const terminal = async (text) => {
+    const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', w.tab, text], {
+      cwd: WEB_ROOT,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let out = '';
+    cli.stdout.on('data', (b) => (out += b));
+    cli.stderr.on('data', (b) => (out += b));
+    let timer;
+    const ceiling = new Promise((done) => {
+      timer = setTimeout(() => done('still running after 120 s'), 120_000);
+    });
+    try {
+      expect(await Promise.race([new Promise((done) => cli.once('exit', done)), ceiling]), out).toBe(0);
+    } finally {
+      clearTimeout(timer);
+      cli.kill();
+    }
+    return out;
+  };
+  // The model says what came back where the picture was.
+  const answer = (body) => ({ text: body.messages.at(-1).content === `Images from the tool results above:\n\n${LEFT_OUT}` ? 'No picture came, only a note.' : 'Something else came.' });
+
+  const w = await openCounter(page, request);
+  const model = await useScriptedModel(request, host.base, fake, 'local');
+  fake.textOnly(model.model);
+  try {
+    let before = chats().length;
+    fake.reply({ tools: [{ name: `${PLUGIN}__snap`, input: {} }] }, answer);
+    let out = await terminal('Show me the counter.');
+    // The person reads that the pictures were left out, and the model's answer to the words it got.
+    expect(out).toContain(`note: ${REFUSED_NOTE}\n`);
+    expect(out).toContain('No picture came, only a note.');
+    let sent = chats().slice(before);
+    expect(sent.map((r) => [r.dialect, r.refused ?? null, hasImage(r)])).toEqual([
+      [model.dialect, null, false],
+      [model.dialect, TEXT_ONLY_REFUSAL, true],
+      [model.dialect, null, false],
+    ]);
+    // The result's text still reached the model, and the picture's place says why it is missing.
+    expect(resultsIn(sent[2])).toEqual([{ tool: `${PLUGIN}__snap`, ok: true, text: 'A picture of the counter (0).', images: [] }]);
+    expect(sent[2].body.messages.at(-1)).toEqual({ role: 'user', content: `Images from the tool results above:\n\n${LEFT_OUT}` });
+    expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['snap']);
+
+    // The next turn: the server is not sent a picture again, and the terminal says why.
+    before = chats().length;
+    fake.reply({ tools: [{ name: `${PLUGIN}__snap`, input: {} }] }, answer);
+    out = await terminal('Show me the counter again.');
+    expect(out).toContain(`note: ${LEFT_OUT_NOTE}\n`);
+    expect(out).not.toContain(REFUSED_NOTE);
+    expect(out).toContain('No picture came, only a note.');
+    sent = chats().slice(before);
+    expect(sent.map((r) => [r.refused ?? null, hasImage(r)])).toEqual([
+      [null, false],
+      [null, false],
+    ]);
+  } finally {
+    fake.textOnly();
+  }
 });
 
 test('a remote viewer: the page hears its tools are not available, and nothing registers', async ({ browser, request }) => {

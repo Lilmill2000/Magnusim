@@ -21,7 +21,7 @@ process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const { startFakeLlm, LOCAL_SERVER_ROWS } = await import('../../../e2e/support/fake-llm.mjs');
+const { startFakeLlm, LOCAL_SERVER_ROWS, TEXT_ONLY_REFUSAL } = await import('../../../e2e/support/fake-llm.mjs');
 const fake = await startFakeLlm();
 // Read once, at the first cloud request: both cloud adapters talk to the fake.
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
@@ -36,7 +36,9 @@ const { CLOUD_WATCHDOG, LOCAL_WATCHDOG } = await import('../assistant/providers/
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
-const { lmStudioRow, ollamaRow, serverRoot, MODEL_ROW_TTL_MS } = await import('../assistant/providers/openai-compatible.ts');
+const { lmStudioRow, ollamaRow, serverRoot, MODEL_ROW_TTL_MS, IMAGE_LEFT_OUT, IMAGES_REFUSED_NOTE, IMAGES_LEFT_OUT_NOTE, imagesOfType } = await import(
+  '../assistant/providers/openai-compatible.ts'
+);
 const prices = await import('../assistant/prices.ts');
 const { ProviderError } = await import('../assistant/types.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -1154,6 +1156,160 @@ describe("a local server's model row (CAD tools spec H5)", () => {
       server.closeAllConnections?.();
       await new Promise((r) => server.close(r));
     }
+  });
+});
+
+describe('images only for models that read them (CAD tools spec H6)', () => {
+  const sig = () => new AbortController().signal;
+  const img = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 1, height: 1 };
+  /** A local request that carries two images: one of the person's beside their text, and one in a tool result. */
+  const withPictures = (model) =>
+    request(
+      'openai_compatible',
+      [
+        { role: 'user', parts: [{ type: 'text', text: 'look' }, img] },
+        {
+          role: 'assistant',
+          parts: [{ type: 'tool_call', callId: 'call_1', name: 'snap', input: {} }],
+          raw: { provider: 'openai_compatible', model, payload: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'snap', arguments: '{}' } }] } },
+        },
+        { role: 'user', parts: [{ type: 'tool_result', callId: 'call_1', isError: false, text: '{"tool":"snap","ok":true}', images: [img] }] },
+      ],
+      { model },
+    );
+  const local = (o) => adapterFor('openai_compatible', o);
+  const hasImage = (r) => JSON.stringify(r.body).includes('"image_url"');
+  const DEFAULT_COMPAT = ['qwen3.8-27b', 'gemma-4-31b'];
+
+  it("a 400 for a request with images: sent once more with each image as words, then the model is text-only for the process (the next turn's adapter too); a test reset forgets", async () => {
+    const model = 'text-model';
+    fake.textOnly(model);
+    try {
+      fake.reply({ text: 'No picture here.' });
+      const from = chat('compat').length;
+      const a = local();
+      assert.equal(a.readsImages(model), null, 'nothing says yet');
+      const r = await a.send(withPictures(model), sig(), () => {});
+      assert.deepEqual(r.notes, [IMAGES_REFUSED_NOTE]);
+      assert.deepEqual(r.message.parts, [{ type: 'text', text: 'No picture here.' }]);
+      const sent = chat('compat').slice(from);
+      assert.equal(sent.length, 2, 'the request, then once more');
+      assert.equal(sent[0].refused, TEXT_ONLY_REFUSAL);
+      assert.ok(hasImage(sent[0]), 'the first one carried the images');
+      assert.equal(sent[1].refused, undefined);
+      assert.ok(!hasImage(sent[1]), 'the second one carries none');
+      const [system, mine, answer, toolMsg, pictures] = sent[1].body.messages;
+      assert.equal(system.role, 'system');
+      assert.deepEqual(mine, { role: 'user', content: `look
+
+${IMAGE_LEFT_OUT}` });
+      assert.equal(answer.role, 'assistant');
+      assert.deepEqual(toolMsg, { role: 'tool', tool_call_id: 'call_1', content: '{"tool":"snap","ok":true}' });
+      assert.deepEqual(pictures, { role: 'user', content: `Images from the tool results above:
+
+${IMAGE_LEFT_OUT}` });
+      assert.equal(a.readsImages(model), false);
+
+      // The next turn's adapter leaves them out at once: one request, and the other note.
+      fake.reply({ text: 'Still none.' });
+      let n = chat('compat').length;
+      const r2 = await local().send(withPictures(model), sig(), () => {});
+      assert.deepEqual(r2.notes, [IMAGES_LEFT_OUT_NOTE]);
+      assert.equal(chat('compat').length, n + 1);
+      assert.ok(!hasImage(lastChat('compat')) && !lastChat('compat').refused);
+      // A request with no image carries no note; another model on that server still gets its images.
+      fake.reply({ text: 'plain' }, { text: 'I see it.' });
+      assert.equal((await local().send(request('openai_compatible', [userText('hi')], { model }), sig(), () => {})).notes, undefined);
+      const other = await local().send(withPictures('qwen3.8-27b'), sig(), () => {});
+      assert.equal(other.notes, undefined);
+      assert.ok(hasImage(lastChat('compat')));
+
+      // A test reset (as a server start) forgets: the images go again, and are refused again.
+      resetAssistantState();
+      assert.equal(local().readsImages(model), null);
+      fake.reply({ text: 'again' });
+      n = chat('compat').length;
+      assert.deepEqual((await local().send(withPictures(model), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE]);
+      assert.equal(chat('compat').length, n + 2);
+    } finally {
+      fake.textOnly();
+    }
+  });
+
+  it("the model's row says: vlm gets images, llm and embeddings don't (left out at once, with the note); no type, no row or a row past its 60 s says nothing; a refusal wins over vlm", async () => {
+    assert.deepEqual(['vlm', 'llm', 'embeddings', null, 'other'].map(imagesOfType), [true, false, false, null, null]);
+    let now = 9_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'eyes', context: 32768, type: 'vlm' }, { id: 'words', context: 32768, type: 'llm' }, { id: 'ol-eyes', type: 'vlm', server: 'ollama' }, 'no-row'], 'compat');
+    try {
+      const a = local(clock);
+      const ids = ['eyes', 'words', 'ol-eyes', 'no-row'];
+      for (const id of ids) await a.modelRow(id, sig());
+      assert.deepEqual(ids.map((id) => a.readsImages(id)), [true, false, true, null]);
+      fake.reply({ text: 'a' }, { text: 'b' }, { text: 'c' });
+      const from = chat('compat').length;
+      const words = await a.send(withPictures('words'), sig(), () => {});
+      assert.deepEqual(words.notes, [IMAGES_LEFT_OUT_NOTE]);
+      assert.equal((await a.send(withPictures('eyes'), sig(), () => {})).notes, undefined);
+      assert.equal((await a.send(withPictures('no-row'), sig(), () => {})).notes, undefined);
+      const sent = chat('compat').slice(from);
+      assert.deepEqual(sent.map(hasImage), [false, true, true]);
+      assert.deepEqual(sent.map((r) => r.refused), [undefined, undefined, undefined]);
+      // A row past its 60 s says nothing until it is read again.
+      now += MODEL_ROW_TTL_MS;
+      assert.equal(a.readsImages('words'), null);
+      await a.modelRow('words', sig());
+      assert.equal(a.readsImages('words'), false);
+      // A vision model loaded without what reads images: the server's refusal wins over the row.
+      fake.textOnly('eyes');
+      fake.reply({ text: 'd' });
+      assert.deepEqual((await a.send(withPictures('eyes'), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE]);
+      assert.equal(a.readsImages('eyes'), false);
+    } finally {
+      fake.textOnly();
+      fake.models(DEFAULT_COMPAT, 'compat');
+    }
+  });
+
+  it('which refusals are sent again: a 400, or a server error that names images, once; never one without images, a 500 naming none, the context, or a second refusal', async () => {
+    const model = 'retry-model';
+    const mmproj = { error: { code: 500, message: 'image input is not supported - hint: if this is unexpected, you may need to provide the mmproj', type: 'server_error' } };
+    const count = async (fn) => {
+      const n = chat('compat').length;
+      await fn();
+      return chat('compat').length - n;
+    };
+    try {
+      // A server whose model was loaded without its image projector.
+      fake.failNext({ status: 500, body: mmproj, dialect: 'compat' });
+      fake.reply({ text: 'ok' });
+      assert.equal(await count(async () => assert.deepEqual((await local().send(withPictures(model), sig(), () => {})).notes, [IMAGES_REFUSED_NOTE])), 2);
+      resetAssistantState();
+      const fails = [
+        [{ status: 500 }, withPictures(model), 'server', 1],
+        [{ status: 400 }, request('openai_compatible', [userText('no picture')], { model }), 'bad_request', 1],
+        [{ status: 400, body: { error: { message: "This model's maximum context length is 4096 tokens.", type: 'invalid_request_error' } } }, withPictures(model), 'context', 1],
+        [{ status: 400, times: 2 }, withPictures(model), 'bad_request', 2],
+        [{ status: 500, body: mmproj, times: 2 }, withPictures(model), 'server', 2],
+      ];
+      for (const [fail, req, code, requests] of fails) {
+        fake.failNext({ ...fail, dialect: 'compat' });
+        const sent = await count(() =>
+          assert.rejects(local().send(req, sig(), () => {}), (e) => {
+            assert.equal(e.code, code, JSON.stringify(fail));
+            return true;
+          }),
+        );
+        assert.equal(sent, requests, JSON.stringify(fail));
+        assert.equal(local().readsImages(model), null, `nothing remembered after ${JSON.stringify(fail)}`);
+      }
+    } finally {
+      fake.textOnly();
+    }
+  });
+
+  it('the cloud adapters have no images rule (their models read images)', () => {
+    for (const provider of ['anthropic', 'openai']) assert.equal(adapterFor(provider).readsImages, undefined, provider);
   });
 });
 

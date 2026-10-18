@@ -166,6 +166,8 @@ export class Turn implements LoopTurn {
   servedBy: string | null = null;
   /** The local server's context for this turn's model, once its model row said (tokens; null until then, and for cloud models). */
   contextTokens: number | null = null;
+  /** Whether this turn's model reads images: true for cloud models; a local one's once its row or its server said (null until then). */
+  images: boolean | null = null;
   endedAt: number | null = null;
   endReason: string | null = null;
   message: string | null = null;

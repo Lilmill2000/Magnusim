@@ -226,6 +226,11 @@ No test reaches a real model provider or this PC's real Assistant files.
     which the file exports with where each shape came from. The app keeps a row 60 s;
     a test reset forgets it. `e2e/assistant-local-context.spec.js` runs turns from the
     terminal client against a small and a larger context.
+  - `fake.textOnly(...ids)` makes the local server refuse (400, `TEXT_ONLY_REFUSAL`) a
+    request for one of those models that carries an image, as a server whose model
+    can't read images does; `fake.textOnly()` clears it. The workspace tools spec runs a
+    local turn whose tool returns a picture against it: the app sends the request again
+    with words in the picture's place, and the next turn sends no picture.
   - `fake.requests()` lists every request with its headers and body (`kind` is `chat`
     for a model request, `model_row` for a row read);
     `fake.disconnects()` counts answers the client closed early.
