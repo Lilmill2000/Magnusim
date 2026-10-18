@@ -421,6 +421,12 @@ export interface AgentRow {
   /** The saved choices (null: the agent's own). */
   model: string | null;
   mode: string | null;
+  /**
+   * The modes Magnusim uses with it (the catalogue's allowedModes, spec 4.2): their ids, or
+   * 'initial' (only the mode it starts in: no Mode select). Null when the server doesn't say,
+   * and then the page offers no mode either.
+   */
+  allowed_modes: string[] | 'initial' | null;
   /** What its last Test or connect listed (memory only). */
   last: { modes: ModeView[]; models: ModelView[]; at: string } | null;
   /** The sign-in block from its last `auth_required`. */

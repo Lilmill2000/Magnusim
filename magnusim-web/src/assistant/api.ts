@@ -147,6 +147,7 @@ export function readAgentRow(raw: unknown): AgentRow | null {
     fingerprint: str(raw.fingerprint),
     model: str(raw.model),
     mode: str(raw.mode),
+    allowed_modes: raw.allowed_modes === 'initial' ? 'initial' : Array.isArray(raw.allowed_modes) ? strs(raw.allowed_modes, 32) : null,
     last,
     sign_in: signIn,
     ready: raw.ready === true,

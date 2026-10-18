@@ -9,8 +9,13 @@
  * - One row per agent (`data-assistant-agent`, `data-assistant-agent-state`): missing (the
  *   install line, Copy for a command), signed_out (the Sign in block), needs_allow and
  *   allow_changed (the switch, off), ready (its line, Test, Model and Mode once a Test or
- *   connect listed them, the billing line), testing, and error (the last check's error, with
- *   the Sign in block when the agent asked to sign in).
+ *   connect listed them, the modes only those Magnusim uses with it, the billing line),
+ *   testing, and error (the last check's error, an alert, with the Sign in block when the
+ *   agent asked to sign in).
+ * - Signed in or not: the login file (the row's `signed_in`), unless the agent itself said
+ *   more: a check here that got through, or that it isn't signed in (its auth_required, here or
+ *   the server's `sign_in` from the last one, which shows the Sign in block until a check
+ *   gets through).
  * - The allow switch (D-B, spec 4.9) shows on every agent whose own tools Magnusim can't switch
  *   off, off by default, with its warning beside it always. On asks first (No focused: Enter
  *   and Escape answer Don't), then POSTs the fingerprint of the command the row shows; off
@@ -37,7 +42,7 @@ import {
   signInAgent,
 } from '../../assistant/api';
 import { refreshStatus, stepChange, writeStatus } from '../../assistant/status';
-import type { AgentRow, AgentTestAnswer, AssistantStatus, SignInMethodView } from '../../assistant/wire';
+import type { AgentRow, AgentTestAnswer, AssistantStatus, ModeView, SignInMethodView } from '../../assistant/wire';
 import { confirmAction } from '../../workbench/dialogs';
 
 const SETTINGS = '/api/assistant/settings';
@@ -86,6 +91,8 @@ export const signingInText = (name: string) => `Waiting for ${name} to finish si
 export const NO_AGENT_TEST_TEXT = "This copy of Magnusim can't test coding agents yet.";
 export const NO_SIGN_IN_TEXT = "This copy of Magnusim can't sign in to coding agents yet.";
 export const signedInDoneText = (name: string) => `${name} finished signing in. Connect again to check.`;
+/** A connect that got through to an agent that says it isn't signed in (`<Name> <version>`). */
+export const connectedSignedOutText = (nameVersion: string) => `Connected to ${nameVersion}, but it says it isn't signed in.`;
 
 export const CUSTOM_HELP =
   'The program and its arguments, for example C:\\Tools\\my-agent.exe --acp. Magnusim starts it directly, never through a command shell. It must speak the agent protocol (ACP) on its input and output.';
@@ -114,10 +121,21 @@ export function ownToolsLine(ownTools: 'off' | 'on'): string {
   return ownTools === 'off' ? OWN_TOOLS_OFF : OWN_TOOLS_ON;
 }
 
+/**
+ * Whether the agent itself said, in a check's answer, that it isn't signed in (spec 4.3: its
+ * `_auth/status_update {kind:'none'}` during a connect or Test). The answer's `signed_in` is the
+ * row's login-file value unless the agent said so, so it counts only where it differs from the
+ * row's 'no'; and an agent that answered the Test's message is signed in, whatever it said.
+ */
+export function agentSaidSignedOut(a: AgentTestAnswer, row: Pick<AgentRow, 'signed_in'>): boolean {
+  return a.ok && a.tools === null && a.signed_in === 'no' && row.signed_in !== 'no';
+}
+
 /** A Test's or connect's result line (spec 5.7) and whether everything works. */
-export function agentTestLine(a: AgentTestAnswer, row: Pick<AgentRow, 'name' | 'version' | 'own_tools'>, message: boolean): { ok: boolean; text: string } {
+export function agentTestLine(a: AgentTestAnswer, row: Pick<AgentRow, 'name' | 'version' | 'own_tools' | 'signed_in'>, message: boolean): { ok: boolean; text: string } {
   if (!a.ok) return { ok: false, text: a.error };
   const version = a.version ?? row.version;
+  if (agentSaidSignedOut(a, row)) return { ok: false, text: connectedSignedOutText(withVersion(row.name, version)) };
   if (!message) return { ok: true, text: `Connected to ${withVersion(row.name, version)}.` };
   if (a.tools === 'not_used') {
     return {
@@ -160,8 +178,24 @@ export interface AgentDone {
   text: string;
   code: string | null;
   auth: SignInMethodView[] | null;
-  /** The check got through to a session: the agent is signed in, whatever its login file says. */
+  /** The check got through to a session and the agent didn't say it isn't signed in: signed in, whatever its login file says. */
   connected: boolean;
+  /** The agent itself said it isn't signed in (its auth_required, or a connect that got through saying so). */
+  signedOut: boolean;
+}
+
+/**
+ * Whether the row is signed in as the page says it: the newest word from the agent itself (a
+ * check run here; else the server's sign-in block from its last auth_required, which a
+ * successful connect or Test clears), else the login file (the row's `signed_in`).
+ */
+function loginOf(row: AgentRow, done: AgentDone | null): 'connected' | 'signed_out' | 'file' {
+  if (done?.kind === 'check') {
+    if (done.signedOut) return 'signed_out';
+    if (done.connected) return 'connected';
+  }
+  if (row.sign_in) return 'signed_out';
+  return 'file';
 }
 
 /** A row's state (spec 5.6) apart from a check running now. */
@@ -170,7 +204,9 @@ function baseState(row: AgentRow, done: AgentDone | null): Exclude<AgentRowState
   if (row.error) return 'error';
   if (row.needs_allow && !row.allowed) return row.allow_changed ? 'allow_changed' : 'needs_allow';
   if (done && done.kind === 'check' && !done.answered) return 'error';
-  if (row.signed_in === 'no' && !done?.connected && !row.last) return 'signed_out';
+  const login = loginOf(row, done);
+  if (login === 'connected') return 'ready';
+  if (login === 'signed_out' || row.signed_in === 'no') return 'signed_out';
   return 'ready';
 }
 
@@ -414,6 +450,8 @@ function AgentRowView({
 }) {
   const [busy, setBusy] = useState<AgentBusy>(null);
   const [done, setDone] = useState<AgentDone | null>(null);
+  /** Checks done here (a new failure is a new alert, even with the same text). */
+  const [runs, setRuns] = useState(0);
   const running = useRef(false);
   const pending = useRef<AbortController | null>(null);
   const rowRef = useRef<HTMLLIElement>(null);
@@ -457,6 +495,7 @@ function AgentRowView({
       const next = await work(ac.signal);
       if (ac.signal.aborted) return;
       setDone(next);
+      setRuns((n) => n + 1);
       setBusy(null);
       // Its row now carries what the check listed (modes, models) or its ways to sign in.
       onReload();
@@ -472,20 +511,22 @@ function AgentRowView({
       try {
         const a = await checkAgent(row.id, message, signal);
         const line = agentTestLine(a, row, message);
-        return { kind: 'check', answered: a.ok, good: line.ok, text: line.text, code: a.ok ? null : a.code, auth: a.auth ?? null, connected: a.ok };
+        const signedOut = a.ok ? agentSaidSignedOut(a, row) : a.code === 'agent_signin';
+        return { kind: 'check', answered: a.ok, good: line.ok, text: line.text, code: a.ok ? null : a.code, auth: a.auth ?? null, connected: a.ok && !signedOut, signedOut };
       } catch (err) {
-        return { kind: 'check', answered: false, good: false, text: isMissingRoute(err) ? NO_AGENT_TEST_TEXT : errorText(err), code: null, auth: null, connected: false };
+        return { kind: 'check', answered: false, good: false, text: isMissingRoute(err) ? NO_AGENT_TEST_TEXT : errorText(err), code: null, auth: null, connected: false, signedOut: false };
       }
     });
 
   const signIn = (method: SignInMethodView) =>
     runCheck('signing_in', async (signal) => {
+      const was = { auth: null, connected: false, signedOut: false };
       try {
         const r = await signInAgent(row.id, method.id, signal);
-        if (r.ok) return { kind: 'sign_in', answered: true, good: true, text: signedInDoneText(name), code: null, auth: null, connected: false };
-        return { kind: 'sign_in', answered: false, good: false, text: r.error, code: r.code, auth: null, connected: false };
+        if (r.ok) return { kind: 'sign_in', answered: true, good: true, text: signedInDoneText(name), code: null, ...was };
+        return { kind: 'sign_in', answered: false, good: false, text: r.error, code: r.code, ...was };
       } catch (err) {
-        return { kind: 'sign_in', answered: false, good: false, text: isMissingRoute(err) ? NO_SIGN_IN_TEXT : errorText(err), code: null, auth: null, connected: false };
+        return { kind: 'sign_in', answered: false, good: false, text: isMissingRoute(err) ? NO_SIGN_IN_TEXT : errorText(err), code: null, ...was };
       }
     });
 
@@ -510,10 +551,13 @@ function AgentRowView({
 
   // The ways to sign in: from the last check here, else from the server's last auth_required.
   const methods = done?.auth ?? row.sign_in?.methods ?? [];
-  const showSignIn = base === 'signed_out' || (base === 'error' && done?.code === 'agent_signin');
+  // A failed check shows the block when the agent asked to sign in now or at its last auth_required.
+  const showSignIn = base === 'signed_out' || (base === 'error' && !row.error && (!!done?.signedOut || !!row.sign_in));
   const canCheck = base === 'ready' || (base === 'error' && !row.error);
+  // A failed check is an alert (spec 5.6); a check running or done well is announced politely.
+  const failed = !busy && !!done && !done.good ? done : null;
   const resultText =
-    busy === 'testing' ? testingText(name) : busy === 'connecting' ? connectingText(name) : busy === 'signing_in' ? signingInText(name) : (done?.text ?? '');
+    busy === 'testing' ? testingText(name) : busy === 'connecting' ? connectingText(name) : busy === 'signing_in' ? signingInText(name) : failed ? '' : (done?.text ?? '');
 
   return (
     <li
@@ -578,13 +622,14 @@ function AgentRowView({
           </span>
         </div>
       ) : null}
-      <p
-        role="status"
-        className={`wiz-assistant-agent-result ${!busy && done && !done.good ? 'wiz-assistant-error' : 'wiz-assistant-meta'}`}
-        data-assistant-agent-result={busy ? 'running' : done ? (done.good ? 'ok' : 'failed') : ''}
-      >
+      <p role="status" className="wiz-assistant-agent-result wiz-assistant-meta" {...(failed ? {} : { 'data-assistant-agent-result': busy ? 'running' : done ? 'ok' : '' })}>
         {resultText}
       </p>
+      {failed ? (
+        <p key={runs} role="alert" className="wiz-assistant-agent-result wiz-assistant-error" data-assistant-agent-result="failed">
+          {failed.text}
+        </p>
+      ) : null}
       {base === 'ready' || base === 'error' ? <ChoiceBlock row={row} onReload={onReload} /> : null}
       {row.reason === 'mcp_unavailable' ? (
         <p className="wiz-assistant-warn" data-assistant-agent-mcp="1">
@@ -616,8 +661,10 @@ function AgentRowView({
 function headline(row: AgentRow, state: AgentRowState, done: AgentDone | null): string {
   if (state === 'missing') return row.kind === 'known' ? notInstalledText(row.name) : `${row.name} · ${row.error ?? 'not found.'}`;
   const parts = [withVersion(row.name, row.version)];
-  // A connect that got through says more than a missing login file.
-  if (!(row.signed_in === 'no' && done?.connected)) parts.push(loginLine(row));
+  // The agent's own word says more than its login file: a connect that got through, or its "sign in first".
+  const login = loginOf(row, done);
+  if (login === 'signed_out') parts.push(LOGIN_NO);
+  else if (!(login === 'connected' && row.signed_in === 'no')) parts.push(loginLine(row));
   if ((state === 'ready' || state === 'signed_out' || (state === 'error' && !row.error)) && (row.own_tools === 'off' || row.allowed)) parts.push(ownToolsLine(row.own_tools));
   return parts.join(' · ');
 }
@@ -741,8 +788,8 @@ function SignInBlock({
       {commands.map(({ m, line }) => (
         <SignInCommand key={m.id} line={line} methodId={m.id} />
       ))}
-      {/* No command Magnusim may show, and no way the agent signs in by itself: its own documentation. */}
-      {!commands.length && !agentMethods.length ? (
+      {/* A terminal way whose command Magnusim may not show, or no way here at all: its own documentation. */}
+      {terminal.length > commands.length || (!commands.length && !agentMethods.length) ? (
         <p className="wiz-assistant-meta" data-assistant-agent-signin-docs="1">
           {signInDocsText(name)}
         </p>
@@ -793,9 +840,19 @@ function SignInCommand({ line, methodId }: { line: string; methodId: string }) {
 
 // ---------------------------------------------------------------- model and mode (once listed)
 
+/**
+ * The modes the Mode select offers (spec 4.2): those the agent listed that Magnusim uses with it.
+ * None for an agent kept in the mode it starts in ('initial'), or when the server doesn't say.
+ */
+export function offeredModes(row: Pick<AgentRow, 'last' | 'allowed_modes'>): ModeView[] {
+  const allowed = row.allowed_modes;
+  if (!Array.isArray(allowed)) return [];
+  return (row.last?.modes ?? []).filter((m) => allowed.includes(m.id));
+}
+
 function ChoiceBlock({ row, onReload }: { row: AgentRow; onReload: () => void }) {
   const models = row.last?.models ?? [];
-  const modes = row.last?.modes ?? [];
+  const modes = offeredModes(row);
   const [error, setError] = useState('');
   const [pending, setPending] = useState<{ model?: string | null; mode?: string | null }>({});
   const errorId = useId();
