@@ -16,7 +16,8 @@
  *     the agent's updates go to the log (text, plan, its own tools, its mode and model; our
  *       own tools' updates are not logged: the runner's tool_call / tool_result are their record)
  *     its MCP calls run here (AgentTurnRun.run): the turn's owner, tab, caps, log and signal; a
- *       call that arrived before this prompt went out (an earlier message's) answers `stopped`
+ *       call that arrived before this prompt went out (an earlier message's) answers `stopped`;
+ *       one still open when the turn ends, however it ends, logs its result before the end
  *     its permission requests: ours auto-allowed (allow_once only, a tool in the list served
  *       now); ours otherwise (a tool that left that list) answered no at once with a note, never
  *       asked as its own tool; its own a question in the Magnusim window (4 minutes;
@@ -46,7 +47,7 @@ import { contextBlock, guideBlock } from '../prompt.ts';
 import { destinationOf } from '../providers/index.ts';
 import { agentPrivacyGate, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, type ProjectInfo } from '../privacy.ts';
 import { redact } from '../redact.ts';
-import { errorResult, gateInputText, riskOf, STOPPED_BEFORE, type RunnerEvent, type RunnerTurn, type RunResult, type ToolRunner } from '../runner.ts';
+import { abortedResult, callAbortOf, errorResult, gateInputText, riskOf, STOPPED_BEFORE, type CallAbort, type RunnerEvent, type RunnerTurn, type RunResult, type ToolRunner } from '../runner.ts';
 import { cleanText } from '../sanitize.ts';
 import type { AgentCaps, AssistantSettings } from '../settings.ts';
 import type { Clock, GateBroker, GateEvent, GateOwner, GateRequest } from '../gates.ts';
@@ -112,6 +113,8 @@ export interface AgentRunTurn extends RunnerTurn {
   armMinutes(limitMs: number, text: string): void;
   /** Hears the minutes cap fire, whether or not a call is open. */
   onMinutesUp(fn: () => void): () => void;
+  /** Hears the turn end, before `end` is logged, with how its calls now read (a call still open logs its result then). */
+  onEnding(fn: (why: CallAbort) => void): () => void;
   stopEnd(): EndInfo;
 }
 
@@ -316,12 +319,20 @@ class AgentTurnRun implements AgentDispatch {
     // The runner's own question for this call (its confirm gate) counts with the agent's own
     // questions, which may be open beside it.
     let asking = false;
+    // Its result is in the log (the runner's, or the one logged as the turn ended).
+    let logged = false;
     const turn: RunnerTurn = {
       id: t.id,
       get step() {
         return t.step;
       },
-      emit: (e) => t.emit(e),
+      emit: (e) => {
+        if (e.type === 'tool_result' && e.call === call.callId) {
+          if (logged) return;
+          logged = true;
+        }
+        t.emit(e);
+      },
       setState: (s) => {
         if (s === 'awaiting_confirmation' && !asking) {
           asking = true;
@@ -335,6 +346,18 @@ class AgentTurnRun implements AgentDispatch {
       pause: () => t.pause(),
       resume: () => t.resume(),
     };
+    // The turn may end while this call is open (its agent exited, Stop on an agent that answered
+    // the cancel without waiting for its call, the server stopping), the call aborted with it.
+    // Its result is then logged at once, before the turn's `end`: the runner's own would come once
+    // the tool answers its abort, after the end, when nothing is logged any more. It reads as the
+    // runner gives it for that abort ("before this ran" while its question was open).
+    const started = this.d.clock.now();
+    const offEnding = t.onEnding((why) => {
+      if (logged) return;
+      logged = true;
+      const ended = abortedResult(call, callAbortOf(signal) ?? why, !asking);
+      t.emit({ type: 'tool_result', call: call.callId, ok: ended.ok, ...(ended.code ? { code: ended.code } : {}), summary: ended.summary, ms: Math.max(0, this.d.clock.now() - started) });
+    });
     let r: RunResult;
     try {
       r = await this.d.runner.run(call, {
@@ -347,6 +370,7 @@ class AgentTurnRun implements AgentDispatch {
         ...(o.onProgress ? { onProgress: o.onProgress } : {}),
       });
     } finally {
+      offEnding();
       t.callDone();
       if (asking) this.questions -= 1;
       this.callsOpen -= 1;

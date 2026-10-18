@@ -521,6 +521,124 @@ describe('how an agent turn ends (spec 4.7 stop reasons)', LIMIT, () => {
   });
 });
 
+describe('a call still open as an agent turn ends: its result is logged before the end, whenever its tool answers', LIMIT, () => {
+  /**
+   * A world whose slow_add says it is under way, then answers its abort only once the test lets
+   * it go: a page's last answer comes back over the relay, so a turn that ends as its call is
+   * aborted (the server hearing the agent's exit before the bridge's socket closes, as on Linux)
+   * ends before its tool answers. Nothing waits for that answer before the end.
+   */
+  async function lateAnswerWorld() {
+    let letGo;
+    const late = new Promise((r) => (letGo = r));
+    let started;
+    const inTool = new Promise((r) => (started = r));
+    const tool = { answered: false };
+    const w = await world({
+      invoke: (call) =>
+        call.tool === 'slow_add'
+          ? new Promise((resolve) => {
+              const answer = () => {
+                tool.answered = true;
+                resolve({ ok: false, error: { code: 'aborted', message: 'aborted' }, summary: 'aborted' });
+              };
+              call.signal.addEventListener('abort', () => void late.then(answer), { once: true });
+              started();
+              call.progress(0.5, 'Halfway');
+            })
+          : { ok: true, data: { counter: 2 }, summary: 'ran' },
+    });
+    return { w, inTool, letGo, tool };
+  }
+
+  /** The slow call's one result, logged before the end, reads `summary` (stopped, not ok). */
+  function loggedBeforeEnd(turn, summary) {
+    const events = H.eventsOf(turn);
+    const call = events.find((x) => x.type === 'tool_call' && x.tool === 'ai-demo__slow_add');
+    assert.ok(call, 'the slow call ran');
+    const results = events.filter((x) => x.type === 'tool_result' && x.call === call.call);
+    assert.deepEqual(
+      results.map((x) => ({ ok: x.ok, code: x.code, summary: x.summary })),
+      [{ ok: false, code: 'stopped', summary }],
+    );
+    const end = events.find((x) => x.type === 'end');
+    assert.ok(end && results[0].seq < end.seq, 'the result is logged before the end');
+  }
+
+  const afterALittle = () => new Promise((r) => setTimeout(r, 100));
+
+  it('the agent exits during its call: the call reads as the agent stopping', async () => {
+    const { w, inTool, letGo, tool } = await lateAnswerWorld();
+    try {
+      const r = await w.turn({ text: 'Add.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script('exitDuringCall', { call: { tool: 'ai-demo__slow_add', args: { by: 1 } } }, { say: 'never' });
+      await inTool;
+      await settledTurn(r.turn);
+      const pid = lastPid(claude);
+      assert.deepEqual([endOf(r.turn).state, endOf(r.turn).reason], ['failed', 'agent_exited']);
+      assert.equal(tool.answered, false, 'its tool had not answered its abort when the turn ended');
+      loggedBeforeEnd(r.turn, 'Claude Code stopped unexpectedly while it ran; it may or may not have finished.');
+      // The tool's late answer adds nothing to the log.
+      letGo();
+      await H.until(() => tool.answered, CEILING, 'the late answer');
+      await afterALittle();
+      loggedBeforeEnd(r.turn, 'Claude Code stopped unexpectedly while it ran; it may or may not have finished.');
+      await gone(pid);
+    } finally {
+      letGo();
+      await w.close();
+    }
+  });
+
+  it("Stop on an agent that answers the cancel without waiting for its call: the call reads as the person's Stop, and the agent hears the same", async () => {
+    const { w, inTool, letGo, tool } = await lateAnswerWorld();
+    try {
+      const r = await w.turn({ text: 'Add.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      // A cancel ends this prompt at once, without waiting for its call.
+      claude.script({ calls: [{ tool: 'ai-demo__slow_add', args: { by: 1 } }] });
+      await inTool;
+      const pid = lastPid(claude);
+      const stop = await w.m.manager.stop(r.turn.id, CEILING);
+      assert.equal(stop.body.turn.state, 'stopped');
+      await settledTurn(r.turn);
+      assert.deepEqual([endOf(r.turn).state, endOf(r.turn).reason], ['stopped', 'user']);
+      assert.equal(tool.answered, false, 'its tool had not answered its abort when the turn ended');
+      loggedBeforeEnd(r.turn, 'Stopped by the user while it ran; it may or may not have finished.');
+      letGo();
+      const heard = await claude.waitFor((x) => x.event === 'mcp_result' && x.tool === 'ai-demo__slow_add' && claude.of(pid)(x), CEILING);
+      assert.match(heard.result.content[0].text, /"code":"stopped".*Stopped by the user while it ran; it may or may not have finished\./);
+      await afterALittle();
+      loggedBeforeEnd(r.turn, 'Stopped by the user while it ran; it may or may not have finished.');
+    } finally {
+      letGo();
+      await w.close();
+    }
+  });
+
+  it('the server stops during the call: the call reads as the server stopping', async () => {
+    const { w, inTool, letGo, tool } = await lateAnswerWorld();
+    try {
+      const r = await w.turn({ text: 'Add.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ call: { tool: 'ai-demo__slow_add', args: { by: 1 } } }, { say: 'never' });
+      await inTool;
+      w.m.manager.shutdown();
+      assert.deepEqual([endOf(r.turn).state, endOf(r.turn).reason], ['failed', 'shutdown']);
+      assert.equal(tool.answered, false, 'its tool had not answered its abort when the turn ended');
+      loggedBeforeEnd(r.turn, 'The server stopped while it ran; it may or may not have finished.');
+      letGo();
+      await settledTurn(r.turn);
+      await afterALittle();
+      loggedBeforeEnd(r.turn, 'The server stopped while it ran; it may or may not have finished.');
+    } finally {
+      letGo();
+      await w.close();
+    }
+  });
+});
+
 describe('a call still open when the turn ends says why: never the person when it wasn\u2019t', () => {
   it('Stop, a key change or a switch turned off: the person; the server stopping: the server; the agent exiting: it stopped unexpectedly; any other end: the turn ended', async () => {
     const { Turn } = await import('../assistant/turns.ts');

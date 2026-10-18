@@ -227,6 +227,8 @@ export class Turn implements AnyTurn {
   private pauseDepth = 0;
   private offShutdown: (() => void) | null = null;
   private readonly minutesListeners = new Set<() => void>();
+  /** Who hears the turn end before `end` is logged (onEnding): an agent's calls still open. */
+  private readonly endingListeners = new Set<(why: CallAbort) => void>();
   /** The agent's version once its session is ready (an agent turn's summary). */
   agentVersion: string | null = null;
 
@@ -437,6 +439,18 @@ export class Turn implements AnyTurn {
     }, Math.max(0, left));
   }
 
+  /**
+   * Hears the turn end, inside end(): after its open call was aborted and before `end` is logged,
+   * with how a call of it now reads (stopAbort). An agent turn's MCP call runs beside the turn's
+   * own flow, so one still open logs its result here: nothing is logged after `end`.
+   */
+  onEnding(fn: (why: CallAbort) => void): () => void {
+    this.endingListeners.add(fn);
+    return () => {
+      this.endingListeners.delete(fn);
+    };
+  }
+
   /** Hears the minutes cap fire, whether or not a call is open (spec 6.1: agent turns stop on it). */
   onMinutesUp(fn: () => void): () => void {
     this.minutesListeners.add(fn);
@@ -484,7 +498,8 @@ export class Turn implements AnyTurn {
 
   /**
    * The server is stopping: the turn ends now (failed), and its loop unwinds after,
-   * answering its calls "The server stopped…" in the conversation; nothing more is logged.
+   * answering its calls "The server stopped…" in the conversation; nothing more is logged (an
+   * agent's call still open logged that result before the end: onEnding).
    */
   shutdown(): void {
     if (this.ended) return;
@@ -507,6 +522,16 @@ export class Turn implements AnyTurn {
       this.stopAs = { state, reason, message };
       this.abort.abort(new ProviderError('aborted', 'The turn ended.'));
     }
+    // A call still open (an agent's, which its MCP connection runs) logs its result first.
+    const why = this.stopAbort();
+    for (const fn of [...this.endingListeners]) {
+      try {
+        fn(why);
+      } catch {
+        /* a listener never stops the end */
+      }
+    }
+    this.endingListeners.clear();
     this.push({ type: 'state', state });
     this.push({ type: 'end', state, reason: this.endReason, message: this.message });
     this.closed = true;

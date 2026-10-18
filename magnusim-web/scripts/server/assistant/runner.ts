@@ -193,6 +193,19 @@ export function callAbortOf(signal: AbortSignal): CallAbort | null {
   return { code: 'stopped' };
 }
 
+/**
+ * The result of a call stopped by `why`: before its tool ran, or while it ran (`running`: it may or
+ * may not have finished). An agent turn that ends with a call still open logs this for it.
+ */
+export function abortedResult(call: ToolCallPart, why: CallAbort, running: boolean): RunResult {
+  if (why.code === 'capped') {
+    const text = why.text || 'This turn reached a limit.';
+    return errorResult(call, 'capped', running ? `Stopped: ${text} It may or may not have finished.` : `Not run: ${text}`);
+  }
+  if (why.code === 'stalled') return errorResult(call, 'stalled', why.text || 'No progress for too long; it was stopped and may or may not have finished.');
+  return errorResult(call, 'stopped', stoppedText(running, why.server === true, why.cause));
+}
+
 function lowerFirst(s: string): string {
   if (s.length > 1 && s[1] === s[1].toUpperCase() && /[A-Z]/.test(s[1])) return s;
   return s.charAt(0).toLowerCase() + s.slice(1);
@@ -361,13 +374,7 @@ export class ToolRunner {
   }
 
   private abortedResult(call: ToolCallPart, signal: AbortSignal, running: boolean): RunResult {
-    const why = callAbortOf(signal) ?? { code: 'stopped' as const };
-    if (why.code === 'capped') {
-      const text = why.text || 'This turn reached a limit.';
-      return errorResult(call, 'capped', running ? `Stopped: ${text} It may or may not have finished.` : `Not run: ${text}`);
-    }
-    if (why.code === 'stalled') return errorResult(call, 'stalled', why.text || 'No progress for too long; it was stopped and may or may not have finished.');
-    return errorResult(call, 'stopped', stoppedText(running, why.server === true, why.cause));
+    return abortedResult(call, callAbortOf(signal) ?? { code: 'stopped' }, running);
   }
 
   private async execute(call: ToolCallPart, def: ToolDef, input: Record<string, unknown>, o: RunOptions): Promise<RunResult> {

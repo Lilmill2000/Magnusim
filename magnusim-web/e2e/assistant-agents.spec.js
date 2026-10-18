@@ -1380,20 +1380,49 @@ test('the agent crashing mid-tool: the call ends, the turn fails agent_exited wi
   await postOk(request, '/api/assistant/settings', { privacy: 'allow' });
   const token = await launchToken(request);
   const w = await openCounter(page, request);
+  // The page's last answer for the aborted call waits until the turn has ended: the order a
+  // Linux server hears things in (the agent's exit before its bridge's socket closes, the
+  // page's answer after both), made certain on every OS. Nothing waits for that answer.
+  const RESULT_ROUTE = '**/api/assistant/relay/result';
+  let letAnswer = () => undefined;
+  const answerHeld = new Promise((done) => {
+    letAnswer = done;
+  });
+  let answers = 0;
+  let answering = Promise.resolve();
+  await page.route(RESULT_ROUTE, (route) => {
+    answers += 1;
+    answering = answerHeld.then(() => route.continue());
+    return answering;
+  });
   fake.script('exitDuringCall', { call: { tool: `${PLUGIN}__slow_add`, args: { by: 3 } } });
   const t = await agentTurn(request, { text: 'Add 3 slowly.', tab: w.tab, provider: 'agent:claude' }, token);
-  const { turn, events } = await t.ended(60_000);
-  expect(turn).toMatchObject({ state: 'failed', end_reason: 'agent_exited', message: "Claude Code stopped unexpectedly. Its last words: 'fake agent: exiting during a call'" });
-  const call = ofType(events, 'tool_call').find((e) => e.tool === `${PLUGIN}__slow_add`);
-  expect(call, 'the slow call ran').toBeTruthy();
-  // The call says the agent went (never "Stopped by the user", never "The server stopped").
-  expect(ofType(events, 'tool_result').find((e) => e.call === call.call)).toMatchObject({
-    ok: false,
-    code: 'stopped',
-    summary: 'Claude Code stopped unexpectedly while it ran; it may or may not have finished.',
-  });
-  await expect(w.frame.locator('#aborted')).toHaveText('aborted');
-  await expect(w.frame.locator('#counter')).toHaveText('0');
+  try {
+    const { turn, events } = await t.ended(60_000);
+    expect(turn).toMatchObject({ state: 'failed', end_reason: 'agent_exited', message: "Claude Code stopped unexpectedly. Its last words: 'fake agent: exiting during a call'" });
+    const call = ofType(events, 'tool_call').find((e) => e.tool === `${PLUGIN}__slow_add`);
+    expect(call, 'the slow call ran').toBeTruthy();
+    // The call says the agent went (never "Stopped by the user", never "The server stopped"),
+    // logged before the turn's end although the page had not answered yet.
+    const resultsIn = (log) =>
+      ofType(log, 'tool_result')
+        .filter((e) => e.call === call.call)
+        .map((e) => ({ ok: e.ok, code: e.code, summary: e.summary, before_end: e.seq < log.find((x) => x.type === 'end').seq }));
+    const CRASHED = { ok: false, code: 'stopped', summary: 'Claude Code stopped unexpectedly while it ran; it may or may not have finished.', before_end: true };
+    expect(resultsIn(events)).toEqual([CRASHED]);
+    await expect(w.frame.locator('#aborted')).toHaveText('aborted');
+    await expect.poll(() => answers, { message: 'the page answered the abort (held)' }).toBe(1);
+    letAnswer();
+    await expect(w.frame.locator('#counter')).toHaveText('0');
+    // Its answer reached the server (nothing of the call waits there) and added nothing to the log.
+    await expect.poll(async () => (await getJson(request, '/api/test/assistant/state')).links[w.tab]?.pending ?? 0).toBe(0);
+    expect(resultsIn((await getJson(request, `/api/assistant/turns/${t.id}?since=0`)).events), 'the whole log').toEqual([CRASHED]);
+  } finally {
+    letAnswer();
+    // The held answer goes on before its route goes (the page may be gone when a check failed).
+    await answering.catch(() => {});
+    await page.unroute(RESULT_ROUTE);
+  }
   const { pid, tree } = lastAgent(fake);
   expect(tree.map((p) => p.role).sort()).toEqual(['agent', 'mcp']);
   await expect.poll(() => runningRoles(tree), { timeout: 15_000, message: 'no bridge left' }).toEqual([]);
