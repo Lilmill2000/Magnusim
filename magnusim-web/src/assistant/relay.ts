@@ -45,11 +45,13 @@
  * it has any.
  *
  * Turns (`turn`, CAD tools spec H3): each start, change and end of a turn bound to this tab goes
- * to the open workspace's frame (its publication's tellTurn), and a new frame hears the running
- * ones once. The running ones are remembered: a frame may stop only those (stopAnnouncedTurn,
- * through the turn's own Stop route). A new link's server sends its running turns again right
- * after `active`, as many as its `turns`: one this page knew of that does not come again ended
- * while the link was down, and the frame hears it ended (with no `end`).
+ * to the open workspace's frame (its publication's tellTurn), and a new page there (a new frame,
+ * or the frame's page loaded again) hears the running ones once. The running ones are
+ * remembered: a frame may stop only those (stopAnnouncedTurn, through the turn's own Stop
+ * route). A new link's server sends its running turns again right after `active`, as many as
+ * its `turns`: one this page knew of that does not come again ended while the link was down,
+ * and a page told of it hears it ended (with no `end`). A new page is told only what a link
+ * says runs: never while there is none, nor before a new one said which still run.
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import type { AssistantRegistration, AssistantStopAnswer, AssistantTurn } from '../plugin-sdk/workspace';
@@ -140,7 +142,7 @@ interface Relay {
   turnsEnded: string[];
   /** After a new link: how many running turns its `active` says come again (null before it), and those that came. */
   relink: { need: number | null; seen: Set<string> } | null;
-  /** The frame the turns were last told to: a new one hears the running ones once. */
+  /** The page (pageOf) told the running turns: a new one hears them once. */
   turnsToldTo: string | null;
   pinned: boolean;
   kickQueued: boolean;
@@ -727,7 +729,8 @@ function onTurn(r: Relay, d: RelayFrameData['turn']): void {
   }
   r.turnsRunning.set(turn.id, turn);
   r.relink?.seen.add(turn.id);
-  tellTurn(r, turn);
+  // A page not told yet hears every running one now (this one too); a page told hears this one.
+  if (!tellNewFrame(r)) tellTurn(r, turn);
   checkRelink(r);
 }
 
@@ -745,32 +748,51 @@ function checkRelink(r: Relay): void {
   for (const [id, turn] of [...r.turnsRunning]) {
     if (!k.seen.has(id)) turnEnded(r, { id, state: 'ended', title: turn.title, local: turn.local, contextTokens: turn.contextTokens, images: turn.images, used: turn.used });
   }
+  // What runs is known again: a page not told yet hears those that run (never the ones that ended meanwhile).
+  tellNewFrame(r);
 }
 
-/** The open workspace's frame hears a turn (a dead frame, or none, hears nothing). */
-function tellTurn(r: Relay, turn: AssistantTurn): void {
+/** A publication's page: its frame, and which load of that frame's page (a reload keeps the frame). */
+const pageOf = (p: PublishedTools): string => `${p.frameId}#${p.load}`;
+
+/** The open workspace's frame, when it may hear turns (a dead frame, or none, hears nothing). */
+function listening(): PublishedTools | null {
   const cur = workspaceToolsSnapshot().current;
-  if (!cur || cur.dead || !cur.tellTurn) return;
-  r.turnsToldTo = cur.frameId;
+  return cur && !cur.dead && cur.tellTurn ? cur : null;
+}
+
+function sendTurn(cur: PublishedTools, turn: AssistantTurn): void {
   try {
-    cur.tellTurn({ ...turn, used: { ...turn.used } });
+    cur.tellTurn?.({ ...turn, used: { ...turn.used } });
   } catch (e) {
     console.warn('[CFD] assistant turn', e);
   }
 }
 
-/** A frame that offers tools for the first time hears the turns running now. */
-function tellNewFrame(r: Relay): void {
-  const cur = workspaceToolsSnapshot().current;
-  if (!cur || cur.dead || cur.frameId === r.turnsToldTo) return;
-  r.turnsToldTo = cur.frameId;
-  for (const turn of r.turnsRunning.values()) tellTurn(r, turn);
+/** The open workspace's page hears a turn once it was told the running ones (tellNewFrame). */
+function tellTurn(r: Relay, turn: AssistantTurn): void {
+  const cur = listening();
+  if (cur && pageOf(cur) === r.turnsToldTo) sendTurn(cur, turn);
+}
+
+/**
+ * A page that offers tools and was not told the running turns yet (a new frame, or the frame's
+ * page loaded again) hears them once, as soon as this page knows them: on a link that is not
+ * waiting to hear which still run. True when it was told now.
+ */
+function tellNewFrame(r: Relay): boolean {
+  const cur = listening();
+  if (!cur || pageOf(cur) === r.turnsToldTo || !r.link || r.relink) return false;
+  r.turnsToldTo = pageOf(cur);
+  for (const turn of r.turnsRunning.values()) sendTurn(cur, turn);
+  return true;
 }
 
 /**
  * A frame's Stop of a turn (the bridge's assistant.stop): only a turn the server told this tab of
  * is stopped, through its own Stop route, which answers once it ended (at most 5 s); one this tab
- * heard end answers `ended`, any other `not_this_tab`.
+ * heard end, or one that ended another way before the Stop reached it, answers `ended`, any other
+ * `not_this_tab`.
  */
 export async function stopAnnouncedTurn(turn: string): Promise<AssistantStopAnswer> {
   const r = R;
@@ -778,7 +800,12 @@ export async function stopAnnouncedTurn(turn: string): Promise<AssistantStopAnsw
   if (!r.turnsRunning.has(turn)) return { stopped: false, reason: r.turnsEnded.includes(turn) ? 'ended' : 'not_this_tab' };
   const a = await post(`/api/assistant/turns/${encodeURIComponent(turn)}/stop`, {});
   if (!a) return { stopped: false, reason: 'not_connected' };
-  if (a.status === 200 && a.body.ok === true) return { stopped: true };
+  if (a.status === 200 && a.body.ok === true) {
+    // Stopped (by this Stop or one before it), or still stopping after the route's 5 s. A turn
+    // that ended another way first (done, failed, capped: its end still on its way here) was not.
+    const turnState = a.body.turn && typeof a.body.turn === 'object' ? (a.body.turn as { state?: unknown }).state : undefined;
+    return a.body.stopping === true || turnState === 'stopped' ? { stopped: true } : { stopped: false, reason: 'ended' };
+  }
   return { stopped: false, reason: codeOf(a) || `http_${a.status}` };
 }
 

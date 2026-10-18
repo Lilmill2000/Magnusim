@@ -19,7 +19,9 @@
  * - A frame keeps its last taken list (its verdict said available) while a newer one of it
  *   is not taken (refused, abandoned, superseded): the bridge and the SDK keep that list's
  *   tools and handler, so the relay keeps it on the server (workspaceFrameKept).
- * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays.
+ * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays. A
+ *   frame's page that loads again (a reload keeps the frame and its bridge) offers its lists
+ *   under the same frame id with the next `load`: a new page there.
  *
  * The state is on globalThis, so a hot swap of this module keeps the revs going up.
  */
@@ -50,6 +52,8 @@ export interface PublishedTools {
   readonly rev: number;
   /** The frame (WorkspaceBridge instance) that offered it. */
   readonly frameId: string;
+  /** Which load of that frame's page offered it: one more each time a page of the frame went away (its list withdrawn). */
+  readonly load: number;
   readonly scope: WorkspaceToolsScope;
   readonly tools: readonly CheckedTool[];
   readonly guide: string;
@@ -88,6 +92,8 @@ interface ToolsState {
   kept: Map<string, Rec>;
   /** Frames whose plugin went, with the reason. */
   dead: Map<string, string>;
+  /** How many times each frame's page went away (its next page's `load`). */
+  loads: Map<string, number>;
   snap: WorkspaceToolsSnapshot;
   listeners: Set<() => void>;
 }
@@ -95,7 +101,7 @@ interface ToolsState {
 const KEY = Symbol.for('magnusim.workspaceTools');
 
 function fresh(): ToolsState {
-  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), kept: new Map(), dead: new Map(), snap: { current: null }, listeners: new Set() };
+  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), kept: new Map(), dead: new Map(), loads: new Map(), snap: { current: null }, listeners: new Set() };
 }
 
 function st(): ToolsState {
@@ -105,6 +111,8 @@ function st(): ToolsState {
     s = fresh();
     g[KEY] = s;
   }
+  // A state an older copy of this module made (a hot swap) has no loads yet.
+  s.loads ??= new Map();
   return s;
 }
 
@@ -181,6 +189,7 @@ export function publishWorkspaceTools(
     view: Object.freeze({
       rev: ++s.rev,
       frameId,
+      load: s.loads.get(frameId) ?? 0,
       scope: Object.freeze({
         project_id: scope.project_id,
         plugin: scope.plugin,
@@ -211,6 +220,8 @@ export function publishWorkspaceTools(
 export function withdrawWorkspaceTools(frameId: string): void {
   const s = st();
   s.kept.delete(frameId);
+  // What the frame offers next comes from a new page.
+  s.loads.set(frameId, (s.loads.get(frameId) ?? 0) + 1);
   let changed = false;
   for (const rec of [...s.waiting]) {
     if (rec.view.frameId !== frameId) continue;

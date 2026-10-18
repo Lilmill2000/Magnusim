@@ -21,8 +21,9 @@
 // answering from the request, and questions answered through their route. And a failed call's
 // hint and detail reaching the model and the terminal, a result's summary only the log (H2).
 // And the turn bound to the tab reaching its frame (its title, what it used, its end), whose own
-// Stop ends it (H3). And a destructive tool's confirm note as its question's text, mystery's
-// question saying "can't be undone" without one (H10).
+// Stop ends it, and the frame's page loaded again during the turn hearing it run (H3). And a
+// destructive tool's confirm note as its question's text, mystery's question saying "can't be
+// undone" without one (H10).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -55,6 +56,9 @@ const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it wi
 const RESET_NOTE = 'Sets the counter to 0; add can bring it back.';
 const PROJECT_TITLE = 'Counter project';
 const HOLD_MS = 2000;
+/** One step's ceiling in the newer tests: well past Playwright's 5 s default, for CI's slow runners. */
+const STEP_MS = 15_000;
+const STEP = { timeout: STEP_MS };
 /** The page's own grace before a hidden tab lets its stream go (src/api/eventHub.ts HIDDEN_GRACE_MS). */
 const HIDDEN_GRACE_MS = 3000;
 const STRICT_REFUSED = ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'pattern', 'format', 'title'];
@@ -970,4 +974,60 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
   // Only a running turn told to this tab is the frame's to stop.
   expect(await w.handle.evaluate((id) => window.__stopTurn(id), t.id)).toEqual({ stopped: false, reason: 'ended' });
   expect(await w.handle.evaluate(() => window.__stopTurn('t-never-told'))).toEqual({ stopped: false, reason: 'not_this_tab' });
+});
+
+test("a reload of the workspace's own page while its turn runs: the reloaded page shows that turn running as it offers its tools again, then how it ended", async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  const before = chats().length;
+  const TITLE = 'Add 1, then wait.';
+  // The model's answer after the add waits for the test: nothing of the turn changes meanwhile,
+  // so only the offer of the reloaded page's tools can tell it that the turn runs.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { text: 'Added 1.', hold: 'frame-reload' });
+  // The old page's tools are withdrawn as the new page says hello; that POST is held, so the
+  // relay's channel (and its link) stays while the new page offers its tools.
+  let letGo = () => undefined;
+  const held = new Promise((done) => {
+    letGo = done;
+  });
+  let withdrawals = 0;
+  await page.route('**/api/assistant/relay/tools', async (route) => {
+    if ((route.request().postDataJSON()?.tools || []).length === 0) {
+      withdrawals += 1;
+      await held;
+    }
+    await route.continue().catch(() => undefined);
+  });
+  // The turns the frame's current page heard ("<state>: <title>"); null until the reloaded page connected.
+  const heardByNewPage = () =>
+    w.handle.evaluate(() => (window.__ws && !window.__beforeReload ? window.__turns.map((x) => `${x.state}: ${x.title}`) : null)).catch(() => null);
+  try {
+    const t = await startTurn(request, host.base, { text: TITLE, tab: w.tab });
+    await expect(w.frame.locator('#counter')).toHaveText('1', STEP);
+    await expect.poll(() => chats().length, { message: "the model's held answer was asked for", ...STEP }).toBe(before + 2);
+    await expect.poll(() => w.handle.evaluate((id) => window.__turns.filter((x) => x.id === id).at(-1)?.used.steps ?? -1, t.id), STEP).toBe(1);
+    await expect(w.frame.locator('#turn-state')).toHaveText(`running: ${TITLE}`, STEP);
+    // Only the frame's page loads again: the app, its tab and the frame stay.
+    await w.handle
+      .evaluate(() => {
+        window.__beforeReload = true;
+        location.reload();
+      })
+      .catch(() => undefined);
+    // Polled often: the new page's offer waits behind the held withdrawal, and gives up after 5 s.
+    await expect.poll(heardByNewPage, { message: 'the reloaded page hears the running turn', timeout: 30_000, intervals: [100] }).toEqual([`running: ${TITLE}`]);
+    expect(withdrawals, "the old page's withdrawal was still held").toBe(1);
+    letGo();
+    await expect(w.frame.locator('#turn-state')).toHaveText(`running: ${TITLE}`, STEP);
+    await expect(w.frame.locator('#counter')).toHaveText('0', STEP);
+    await expect(w.frame.locator('#ai-available')).toHaveText('yes', STEP);
+    await expect.poll(async () => tabRow(request, w.tab).then((r) => (r ? `${r.connected}:${r.tools.length}` : 'none')), STEP).toBe(`true:${TOOLS.length}`);
+    fake.release('frame-reload');
+    expect((await t.ended()).turn.state).toBe('done');
+    await expect(w.frame.locator('#turn-state')).toHaveText(`done: ${TITLE}`, STEP);
+    expect(await heardByNewPage(), 'told once, then its end').toEqual([`running: ${TITLE}`, `ended: ${TITLE}`]);
+  } finally {
+    letGo();
+    fake.release('frame-reload');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  }
 });

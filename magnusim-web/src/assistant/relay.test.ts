@@ -1170,7 +1170,7 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     expect(Object.hasOwn(turns[3], 'end')).toBe(false);
   });
 
-  it('a new frame (a reload) hears the running turns once as it offers its tools; a dead frame hears nothing', async () => {
+  it('a new frame hears the running turns once as it offers its tools; a dead frame hears nothing', async () => {
     const turns = await heard();
     const ch = channel();
     ch.frame('turn', turnFrame('t-1'));
@@ -1197,6 +1197,82 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     await settle();
     ch.frame('turn', turnFrame('t-1', { state: 'ended', end: { state: 'done', reason: 'end_turn' } }));
     expect(next).toHaveLength(2);
+  });
+
+  it("the frame's own page loaded again (a reload keeps the frame and its id) hears the running turns once more as it offers its tools again, its withdrawal still out", async () => {
+    const turns = await heard();
+    const ch = channel();
+    ch.frame('turn', turnFrame('t-1'));
+    expect(turns).toEqual([told('t-1')]);
+    // The page goes (the bridge's close at the new page's hello): its list is withdrawn, and
+    // that POST is held, so the channel stays.
+    void publishWorkspaceTools(SCOPE, 'frame-1', null, invoke);
+    await settle();
+    const withdrawal = take('/api/assistant/relay/tools');
+    expect(withdrawal.body.tools).toEqual([]);
+    // The new page, under the same frame id: it hears the running turn at once, before its verdict.
+    const again: AssistantTurn[] = [];
+    const verdict = register(['add'], 'frame-1', 'Counter notes', (t) => again.push(t));
+    await settle();
+    expect(again).toEqual([told('t-1')]);
+    expect(turns, 'the page that went hears nothing more').toHaveLength(1);
+    withdrawal.answer(200, { ok: true, available: true, accepted: [], refused: [] });
+    await settle();
+    accept(take('/api/assistant/relay/tools'));
+    await settle();
+    expect(await verdict).toMatchObject({ available: true });
+    expect(channels).toHaveLength(1);
+    // Told once: its own list again is not told again; changes go to it.
+    void register(['add', 'reset'], 'frame-1', 'Counter notes', (t) => again.push(t));
+    await settle();
+    accept(take('/api/assistant/relay/tools'));
+    await settle();
+    ch.frame('turn', turnFrame('t-1', { used: { ...USED, steps: 1 } }));
+    expect(again.map((t) => [t.state, t.used.steps])).toEqual([
+      ['running', 0],
+      ['running', 1],
+    ]);
+    expect(turns).toHaveLength(1);
+  });
+
+  it('while no link says which turns run (the channel went with nothing offered, then a new one before its `active`), a new page hears nothing; then only those that still run, never one that ended meanwhile', async () => {
+    const turns = await heard();
+    const first = channel();
+    first.frame('turn', turnFrame('t-1'));
+    first.frame('turn', turnFrame('t-2', { title: 'Second' }));
+    // Back: the list is withdrawn, and with nothing offered the channel goes (the turns run on).
+    void publishWorkspaceTools(SCOPE, 'frame-1', null, invoke);
+    await settle();
+    take('/api/assistant/relay/tools').answer(200, { ok: true, available: true, accepted: [], refused: [] });
+    await settle();
+    expect(first.closed).toBe(true);
+    // t-1 ends while there is no channel. A workspace opens again: a new channel, no link yet.
+    const next: AssistantTurn[] = [];
+    const verdict = register(['add'], 'frame-2', 'Counter notes', (t) => next.push(t));
+    await settle();
+    const second = channel();
+    expect(second).not.toBe(first);
+    expect(next, 'no link: nothing is known of the turns').toEqual([]);
+    second.frame('linked', { link: LINK_B });
+    await settle();
+    expect(next, 'a new link, before its `active`').toEqual([]);
+    second.frame('active', { turns: 1, hold_until: null });
+    await settle();
+    expect(next, 'until the one it says runs came again').toEqual([]);
+    second.frame('turn', turnFrame('t-2', { title: 'Second' }));
+    await settle();
+    expect(next).toEqual([told('t-2', { title: 'Second' })]);
+    expect(turns, 'the page that went hears nothing more').toHaveLength(2);
+    expect(await stopAnnouncedTurn('t-1')).toEqual({ stopped: false, reason: 'ended' });
+    accept(take('/api/assistant/relay/tools'));
+    await settle();
+    expect(await verdict).toMatchObject({ available: true });
+    // Its changes from then on go to it.
+    second.frame('turn', turnFrame('t-2', { title: 'Second', state: 'ended', end: { state: 'done', reason: 'end_turn' } }));
+    expect(next.map((t) => [t.id, t.state])).toEqual([
+      ['t-2', 'running'],
+      ['t-2', 'ended'],
+    ]);
   });
 
   it("a frame's Stop goes to the turn's own Stop route only for a running turn told to this tab: stopped once that answers; `ended` for one it heard end, `not_this_tab` for any other", async () => {
@@ -1229,6 +1305,28 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     // No relay: not connected.
     stopAssistantRelay();
     expect(await stopAnnouncedTurn('t-1')).toEqual({ stopped: false, reason: 'not_connected' });
+  });
+
+  it("a Stop that reaches a turn which ended another way first (its end still on its way here) answers `ended`; one still stopping after the route's 5 s is stopped", async () => {
+    await heard();
+    channel().frame('turn', turnFrame('t-1'));
+    // The route answers 200 for any turn that ended: it read done, failed or capped, not stopped.
+    for (const state of ['done', 'failed', 'capped']) {
+      const asked = stopAnnouncedTurn('t-1');
+      await settle();
+      take('/api/assistant/turns/t-1/stop').answer(200, { ok: true, turn: { id: 't-1', state } });
+      expect(await asked, state).toEqual({ stopped: false, reason: 'ended' });
+    }
+    // Still stopping when the route's 5 s ran out: it goes on to stopped.
+    const slow = stopAnnouncedTurn('t-1');
+    await settle();
+    take('/api/assistant/turns/t-1/stop').answer(200, { ok: true, stopping: true, turn: { id: 't-1', state: 'running' } });
+    expect(await slow).toEqual({ stopped: true });
+    // An answer that says nothing of the turn: not stopped as far as this page can tell.
+    const bare = stopAnnouncedTurn('t-1');
+    await settle();
+    take('/api/assistant/turns/t-1/stop').answer(200, { ok: true });
+    expect(await bare).toEqual({ stopped: false, reason: 'ended' });
   });
 
   it('a new link: the running turns it knew of come again after `active`; one that does not ended while the link was down (told with no `end`); `active {turns: 0}` ends them all', async () => {
