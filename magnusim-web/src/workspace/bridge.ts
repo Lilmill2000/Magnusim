@@ -57,11 +57,16 @@
  * window waits too) and its assistant.result, checked and capped here (images read to base64
  * in this page). `assistantAbort` stops it: on Stop (the page's answer is
  * awaited for 2 s), on a stall, when a leave begins (`leaving`) and when the channel ends
- * (`closed`, after which hooks.assistantTools(null) withdraws the tools).
+ * (`closed`, after which hooks.assistantTools(null) withdraws the tools). The assistant's turns
+ * bound to this tab reach the page as the event `assistantTurn` (assistantTurn(), from the page
+ * relay), and the page's assistant.stop {turn} goes to hooks.assistantStop, which stops only a
+ * turn told to this tab.
  */
 import type {
   AssistantRegistration,
   AssistantRisk,
+  AssistantStopAnswer,
+  AssistantTurn,
   ComputeJob,
   EditedGeometry,
   FileInfo,
@@ -226,6 +231,7 @@ const NOT_HOOK_WORK = new Set([
   'assistant.register',
   'assistant.progress',
   'assistant.result',
+  'assistant.stop',
 ]);
 
 /** Link refusals that are no error of the hook: "Keep editing", the Queue's remove, a newer link. */
@@ -286,6 +292,11 @@ export interface BridgeHooks {
    * and is withdrawn if its verdict comes late. No hook: the page hears `no_assistant`.
    */
   assistantTools?(reg: { tools: CheckedTool[]; guide: string } | null): AssistantPublication;
+  /**
+   * The page's assistant.stop (1.9, unreleased): stop that turn of the app's assistant, only when
+   * it was told to this tab (else `not_this_tab`). No hook: the page hears `no_assistant`.
+   */
+  assistantStop?(turn: string): Promise<AssistantStopAnswer>;
 }
 
 /** What hooks.assistantTools answers: the verdict to come, and how to drop a list it was too late for. */
@@ -1312,6 +1323,8 @@ export class WorkspaceCalls {
         inv.done(await assistantCallOutcome(params));
         return { ok: true };
       }
+      case 'assistant.stop':
+        return this.stopAssistantTurn(params.turn);
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
     }
@@ -1368,6 +1381,25 @@ export class WorkspaceCalls {
       this.assistantTools = accepted;
     }
     return verdict;
+  }
+
+  /**
+   * assistant.stop {turn} (1.9, unreleased): the app stops that turn of its assistant when it was
+   * told to this tab (hooks.assistantStop). `bad_request` for a turn that is not an id; the answer
+   * is always {stopped, reason?}.
+   */
+  private async stopAssistantTurn(turn: unknown): Promise<AssistantStopAnswer> {
+    if (typeof turn !== 'string' || !turn || turn.length > 128) throw badParam('turn (the id of a turn this page was told of)');
+    if (!this.hooks.assistantStop) return { stopped: false, reason: 'no_assistant' };
+    let answer: AssistantStopAnswer;
+    try {
+      answer = await this.hooks.assistantStop(turn);
+    } catch (e) {
+      this.hooks.log('assistant stop: the app did not take it', e);
+      return { stopped: false, reason: 'failed' };
+    }
+    if (answer?.stopped === true) return { stopped: true };
+    return { stopped: false, reason: cleanLine(answer?.reason, 64) || 'failed' };
   }
 
   /**
@@ -2480,6 +2512,20 @@ export class WorkspaceBridge {
       if (this.channel === current && this.alive !== current.instance) this.closeChannel();
     }, PROBE_MS);
   };
+
+  /**
+   * A turn of the app's assistant bound to this tab started, changed or ended (1.9, unreleased):
+   * the page hears it as the event `assistantTurn` (nothing while its page is not connected).
+   */
+  assistantTurn(turn: AssistantTurn): void {
+    const ch = this.channel;
+    if (!ch || !ch.welcomed) return;
+    try {
+      ch.port.postMessage({ event: 'assistantTurn', data: turn });
+    } catch (e) {
+      this.hooks.log('assistant turn: the page could not be told', e);
+    }
+  }
 
   /**
    * The study as the host now has it (a rename in the header, a save): the frame

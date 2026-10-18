@@ -11,11 +11,16 @@
 // read_study (read, a 1 s stall window: it waits on the app's answer to ws.study.get(), which
 // keeps it alive however long that takes) and fail_hint (read: it always fails, with a hint
 // that says how to fix it and a detail the model can act on). A registration the app could
-// not take yet (not_connected) is made again when the page is shown.
+// not take yet (not_connected) is made again when the page is shown. The page hears the
+// turns bound to its tab (ws.assistant.onTurn) and its Stop button stops the last one
+// (ws.assistant.stop).
 //
 // What the e2e reads: #counter, #slow, #aborted, #ai-available ("yes" or "no") with
 // #ai-reason, #calls (the tools run, in order), and window.__aiCalls; window.__register()
-// registers again.
+// registers again. #turn-state reads "<state>: <title>" for the last turn heard (running, or
+// how it ended: done, stopped, failed, capped, or "ended" when the page did not hear how),
+// window.__turns every turn event; #stop stops that turn, #stop-answer says how
+// ("stopped", or "not stopped: <reason>"), and window.__stopTurn(id) stops any id.
 import { connect } from '@magnusim/workspace';
 
 const $ = (id) => document.getElementById(id);
@@ -199,4 +204,25 @@ window.__register = register;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && lastReason === 'not_connected') void register();
 });
+
+// The turns bound to this tab, heard before the tools are offered (the running ones are told
+// once a page offers tools), and the Stop of the last one.
+let lastTurn = null;
+window.__turns = [];
+if (ws.assistant && typeof ws.assistant.onTurn === 'function') {
+  ws.assistant.onTurn((turn) => {
+    window.__turns.push(turn);
+    lastTurn = turn;
+    const state = turn.state === 'running' ? 'running' : turn.end ? turn.end.state : 'ended';
+    $('turn-state').textContent = `${state}: ${turn.title}`;
+  });
+}
+window.__stopTurn = (id) => ws.assistant.stop(id);
+$('stop').addEventListener('click', async () => {
+  if (!lastTurn || !ws.assistant) return;
+  $('stop-answer').textContent = 'stopping';
+  const answer = await ws.assistant.stop(lastTurn.id);
+  $('stop-answer').textContent = answer.stopped ? 'stopped' : `not stopped: ${answer.reason}`;
+});
+
 await register();

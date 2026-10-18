@@ -848,7 +848,61 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     await expect(ws.assistant!.register('add' as never, vi.fn())).rejects.toThrow(TypeError);
     await expect(ws.assistant!.register([ADD], null)).rejects.toThrow(TypeError);
     await expect(ws.assistant!.register([ADD], 'run' as never)).rejects.toThrow(TypeError);
+    expect(() => ws.assistant!.onTurn('listen' as never)).toThrow(TypeError);
+    await expect(ws.assistant!.stop('' as never)).rejects.toThrow(TypeError);
+    await expect(ws.assistant!.stop(5 as never)).rejects.toThrow(TypeError);
     expect(methods(posts)).toEqual([]);
+  });
+
+  it("onTurn hears the host's assistantTurn events until it is stopped: each listener its own copy, one that throws leaves the others", async () => {
+    const { ws, push } = await open(accepting);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const turn = {
+      id: 't-1',
+      state: 'running',
+      title: 'Add 2 to the counter',
+      local: true,
+      contextTokens: 32768,
+      images: false,
+      used: { steps: 1, stepsCap: 50, usd: 0, usdCap: 3 },
+    };
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    const off = ws.assistant!.onTurn((t) => {
+      first.push(t);
+      t.used.steps = 99;
+      throw new Error('a listener broke');
+    });
+    ws.assistant!.onTurn((t) => second.push(t));
+    push({ event: 'assistantTurn', data: turn });
+    expect(first).toHaveLength(1);
+    expect(second).toEqual([turn]);
+    expect(warn).toHaveBeenCalledWith('[workspace] assistant.onTurn', expect.any(Error));
+    off();
+    const ended = { ...turn, state: 'ended', end: { state: 'done', reason: 'end_turn' } };
+    push({ event: 'assistantTurn', data: ended });
+    // Not a turn at all: nobody hears it.
+    push({ event: 'assistantTurn', data: 'turn' });
+    expect(first).toHaveLength(1);
+    expect(second).toEqual([turn, ended]);
+  });
+
+  it('stop asks the host for that turn and answers {stopped} or {stopped:false, reason}; a host without the call answers not_allowed; another refusal rejects', async () => {
+    const answers: Record<string, unknown> = { 't-1': { stopped: true }, 't-2': { stopped: false, reason: 'not_this_tab' }, 't-3': { stopped: false } };
+    const { ws, posts } = await open((method, params) => {
+      if (method !== 'assistant.stop') return accepting(method, params);
+      if (params.turn === 't-4') throw Object.assign(new Error('bad parameter: turn'), { code: 'bad_request' });
+      return answers[String(params.turn)];
+    });
+    expect(await ws.assistant!.stop('t-1')).toEqual({ stopped: true });
+    expect(await ws.assistant!.stop('t-2')).toEqual({ stopped: false, reason: 'not_this_tab' });
+    expect(await ws.assistant!.stop('t-3')).toEqual({ stopped: false, reason: 'failed' });
+    await expect(ws.assistant!.stop('t-4')).rejects.toMatchObject({ code: 'bad_request' });
+    expect(posts.filter((p) => p.method === 'assistant.stop').map((p) => p.params)).toEqual([{ turn: 't-1' }, { turn: 't-2' }, { turn: 't-3' }, { turn: 't-4' }]);
+    const older = await open((method) => {
+      throw Object.assign(new Error(`not allowed: ${JSON.stringify(method)}`), { code: 'not_allowed' });
+    });
+    expect(await older.ws.assistant!.stop('t-1')).toEqual({ stopped: false, reason: 'not_allowed' });
   });
 
   it('a throw keeps its code only from the page list (invalid_input, busy, not_ready, failed); anything else is failed', async () => {

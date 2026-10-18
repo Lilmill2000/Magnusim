@@ -543,6 +543,39 @@ export interface AssistantRegistration {
   reason?: string;
 }
 
+/**
+ * A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked,
+ * as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change
+ * (at most once a second); `ended` once, at its end.
+ */
+export interface AssistantTurn {
+  /** The turn's id: AssistantCall.turn of each of its calls. */
+  id: string;
+  state: 'running' | 'ended';
+  /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
+  title: string;
+  /** It runs on a local server (a smaller model, often with less room: keep results short). */
+  local: boolean;
+  /** The model's context in tokens, when the app knows it (null otherwise). */
+  contextTokens: number | null;
+  /** Whether the model reads images, when the app knows it (null otherwise). */
+  images: boolean | null;
+  /** What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). */
+  used: { steps: number; stepsCap: number; usd: number; usdCap: number };
+  /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
+  end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
+}
+
+/**
+ * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
+ * that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant",
+ * "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+ */
+export interface AssistantStopAnswer {
+  stopped: boolean;
+  reason?: string;
+}
+
 /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
 export interface WorkspaceAssistant {
   /**
@@ -554,6 +587,17 @@ export interface WorkspaceAssistant {
    * Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
    */
   register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+  /**
+   * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen
+   * before register: the turns already running are told to a page once it offers tools. Returns a
+   * function that stops listening.
+   */
+  onTurn(fn: (turn: AssistantTurn) => void): () => void;
+  /**
+   * Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted
+   * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
+   */
+  stop(turn: string): Promise<AssistantStopAnswer>;
 }
 
 export interface ConfirmOptions {
@@ -965,6 +1009,8 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   let assistantAccepted = new Set<string>();
   let assistantSerial = 0;
   const assistantCalls = new Map<string, AbortController>();
+  // Who hears the assistant's turns bound to this tab (ws.assistant.onTurn).
+  const turnListeners = new Set<(turn: AssistantTurn) => void>();
   let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
@@ -1027,6 +1073,19 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     if (msg.event === 'assistantAbort') {
       const id = String(((msg.data || {}) as { call?: unknown }).call || '');
       assistantCalls.get(id)?.abort(new DOMException('The call was stopped', 'AbortError'));
+      return;
+    }
+    if (msg.event === 'assistantTurn') {
+      // Each listener its own copy: one that changes it changes nothing for the others.
+      for (const fn of [...turnListeners]) {
+        const turn = jsonCopy(msg.data);
+        if (!turn || typeof turn !== 'object') return;
+        try {
+          fn(turn as AssistantTurn);
+        } catch (e) {
+          console.warn('[workspace] assistant.onTurn', e);
+        }
+      }
       return;
     }
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
@@ -1383,6 +1442,26 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
           assistantAccepted = new Set(tools.length ? reg.accepted : []);
         }
         return reg;
+      },
+      onTurn: (fn) => {
+        if (typeof fn !== 'function') throw new TypeError('assistant.onTurn takes a function');
+        turnListeners.add(fn);
+        return () => {
+          turnListeners.delete(fn);
+        };
+      },
+      stop: async (turn) => {
+        if (typeof turn !== 'string' || !turn) throw new TypeError('assistant.stop takes the id of a turn this page was told of');
+        let answer: { stopped?: unknown; reason?: unknown } | null;
+        try {
+          answer = await call<{ stopped?: unknown; reason?: unknown } | null>('assistant.stop', { turn });
+        } catch (e) {
+          // A host without the call: nothing was stopped.
+          if ((e as { code?: unknown } | null)?.code === 'not_allowed') return { stopped: false, reason: 'not_allowed' };
+          throw e;
+        }
+        if (answer?.stopped === true) return { stopped: true };
+        return { stopped: false, reason: typeof answer?.reason === 'string' && answer.reason ? answer.reason : 'failed' };
       },
     },
     on(event: string, fn: (data: never) => void) {

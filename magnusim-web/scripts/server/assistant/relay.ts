@@ -15,6 +15,12 @@
  *                                  its channel while turns > 0 or until then; the one at an
  *                                  open tells a page that last heard of a turn (before a
  *                                  restart or a long drop) that none run.
+ *   turn {id, state, title, local, context_tokens, images, used, end?}   a turn bound to the tab
+ *                                  (turns.ts TurnPageView): state 'running' as it starts and after
+ *                                  each change (at most once a second), 'ended' once with `end`
+ *                                  {state, reason}; each running one again right after `active` on
+ *                                  every new link (as many as its `turns`). Sent before the
+ *                                  `active` its start or end changes.
  *   invoke {call, turn, tool, input, timeout_s}   run the page's tool `tool` (its own name)
  *   abort {call}                   Stop, a turn limit, or the call stalled
  *   gate {gate}                    a question (GateView) of a turn bound to this tab
@@ -81,7 +87,7 @@ import type { Registry, ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
-import type { TurnManager } from './turns.ts';
+import type { Turn, TurnManager } from './turns.ts';
 import type { ImagePart } from './types.ts';
 
 export const LINK_RE = /^[0-9a-f]{24}$/;
@@ -361,8 +367,11 @@ export class Relay {
     });
     if (!o.keepPresenter) this.turns.gates.setPresenter(this.presenter);
     this.turns.setTabInfo((tab) => this.tabInfo(tab));
-    this.offTurns = this.turns.onTurnChange((t) => {
-      if (t.tab) this.turnsChanged(t.tab);
+    this.offTurns = this.turns.onTurnChange((t, change) => {
+      if (!t.tab) return;
+      // Its page hears the turn first, then the tab's count its start or end changed.
+      this.sendTurn(t.tab, t);
+      if (change !== 'updated') this.turnsChanged(t.tab);
     });
     this.offBump = (o.onEpochBump ?? onPluginEpochBump)((key: string) => this.onEpochBump(key));
     this.offRegistry = o.onRegistryChanged ? o.onRegistryChanged(() => this.registryChanged()) : () => {};
@@ -389,6 +398,8 @@ export class Relay {
     // Always, none and no hold too: a page that last heard of a bound turn (before a server
     // restart, or a drop longer than the hold) learns that none run and lets its channel go.
     send('active', { turns: n, hold_until: this.liveHold(t) });
+    // Its running turns again, right after: one the page knew of and does not hear now ended meanwhile.
+    for (const turn of this.turns.runningForTab(meta.tab)) send('turn', turn.pageView());
     // Questions of its turns that waited for it are shown now.
     this.turns.gates.tabLinked(meta.tab);
     return { ok: true, cleanup: () => this.linkEnded(rec) };
@@ -797,6 +808,13 @@ export class Relay {
   }
 
   // ------------------------------------------------------------ turns and gates
+
+  /** A turn bound to the tab started, changed or ended: its page hears it on the live link. */
+  private sendTurn(tab: string, turn: Turn): void {
+    if (this.closed) return;
+    const l = this.tabs.get(tab)?.link;
+    if (l && l.open) l.send('turn', turn.pageView());
+  }
 
   private turnsChanged(tab: string): void {
     if (this.closed) return;

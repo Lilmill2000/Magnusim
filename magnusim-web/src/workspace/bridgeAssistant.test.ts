@@ -5,7 +5,7 @@
 // channel ending the call, and what the allowlist does with the new messages; then the real SDK
 // against this bridge, so both sides keep the same tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connect, type AssistantTool, type StudyRecord } from '../plugin-sdk/workspace';
+import { connect, type AssistantTool, type AssistantTurn, type StudyRecord } from '../plugin-sdk/workspace';
 import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_ALIVE_MS,
@@ -909,6 +909,19 @@ describe('the allowlist and the assistant (1.9, unreleased)', () => {
     t.end();
   });
 
+  it("the page's Stop of a turn is no work of a running leave's hook (NOT_HOOK_WORK) either", async () => {
+    const h = hooks();
+    h.assistantStop = vi.fn(async () => ({ stopped: true }));
+    const t = await connected(h);
+    await t.call('nav.leaveHook', { on: true });
+    const seen: LeaveActivity[] = [];
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: (x) => seen.push(x) });
+    await settle(() => of(t.events, 'leave').length === 1, 'the leave');
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: true });
+    expect(seen.filter((x) => x.kind === 'calls')).toEqual([{ kind: 'calls', inFlight: 0 }]);
+    t.end();
+  });
+
   it('a call the bridge does not have is not_allowed, as for any other', async () => {
     const t = await connected();
     for (const method of ['assistant.invoke', 'assistant.unregister', 'assistant.tools', 'assistant']) {
@@ -916,6 +929,94 @@ describe('the allowlist and the assistant (1.9, unreleased)', () => {
       expect(r.error).toEqual({ message: `not allowed: ${JSON.stringify(method)}`, code: 'not_allowed' });
     }
     expect(t.h.log).toHaveBeenCalledWith(expect.stringContaining('not allowed: "assistant.invoke"'), { tools: [] });
+    t.end();
+  });
+});
+
+describe("the assistant's turns and the page's Stop (1.9, unreleased)", () => {
+  const TURN: AssistantTurn = {
+    id: 't-1',
+    state: 'running',
+    title: 'Add 2 to the counter',
+    local: false,
+    contextTokens: null,
+    images: null,
+    used: { steps: 1, stepsCap: 50, usd: 0.01, usdCap: 3 },
+  };
+
+  it('assistantTurn() reaches the page as the event `assistantTurn`; nothing goes to a page not connected yet, or after its channel closed', async () => {
+    const t = await connected();
+    t.bridge.assistantTurn(TURN);
+    t.bridge.assistantTurn({ ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } });
+    await settle(() => of(t.events, 'assistantTurn').length === 2, 'the turn events');
+    expect(of(t.events, 'assistantTurn').map((e) => e.data)).toEqual([TURN, { ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } }]);
+    t.end();
+    t.bridge.assistantTurn(TURN);
+    // A bridge whose page never said hello.
+    const h = hooks();
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    const lone = new WorkspaceBridge(frame, new WorkspaceCalls(SCOPE, h), h);
+    lone.assistantTurn(TURN);
+    await Promise.resolve();
+    expect(of(t.events, 'assistantTurn')).toHaveLength(2);
+    expect(h.log).not.toHaveBeenCalled();
+    frame.remove();
+  });
+
+  it('assistant.stop {turn} asks hooks.assistantStop and answers {stopped} or {stopped:false, reason}; no hook: no_assistant; a hook that fails: failed; a turn that is no id: bad_request', async () => {
+    const h = hooks();
+    h.assistantStop = vi.fn(async (turn: string) => (turn === 't-1' ? { stopped: true } : { stopped: false, reason: 'not_this_tab' }));
+    const t = await connected(h);
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: true });
+    expect((await t.call('assistant.stop', { turn: 't-9' })).result).toEqual({ stopped: false, reason: 'not_this_tab' });
+    expect(h.assistantStop.mock.calls).toEqual([['t-1'], ['t-9']]);
+    for (const turn of [undefined, '', 5, 'x'.repeat(129)]) {
+      expect((await t.call('assistant.stop', { turn })).error, String(turn)).toMatchObject({ code: 'bad_request' });
+    }
+    expect(h.assistantStop).toHaveBeenCalledTimes(2);
+    // What the hook answers is cleaned; a failure is `failed`, and so is a refusal with no reason.
+    h.assistantStop.mockResolvedValueOnce({ stopped: false, reason: `ended${BEL}${RLO}` });
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'ended' });
+    h.assistantStop.mockResolvedValueOnce({ stopped: false });
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'failed' });
+    h.assistantStop.mockRejectedValueOnce(new Error('the relay broke'));
+    expect((await t.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'failed' });
+    expect(h.log).toHaveBeenCalledWith('assistant stop: the app did not take it', expect.any(Error));
+    t.end();
+    const bare = await connected();
+    expect((await bare.call('assistant.stop', { turn: 't-1' })).result).toEqual({ stopped: false, reason: 'no_assistant' });
+    bare.end();
+  });
+
+  it("through the real SDK: onTurn hears assistantTurn (each listener its own copy, one that throws leaves the others, off stops it); stop reaches the app's hook", async () => {
+    const h = hooks();
+    h.assistantStop = vi.fn(async () => ({ stopped: true }));
+    const t = await sdkConnected(h);
+    const assistant = t.ws.assistant!;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const a: AssistantTurn[] = [];
+    const b: AssistantTurn[] = [];
+    const offA = assistant.onTurn((turn) => {
+      a.push(turn);
+      turn.title = 'changed here';
+      throw new Error('a listener broke');
+    });
+    assistant.onTurn((turn) => b.push(turn));
+    t.bridge.assistantTurn(TURN);
+    await settle(() => b.length === 1, 'the turn');
+    expect(a).toHaveLength(1);
+    expect(b).toEqual([TURN]);
+    expect(warn).toHaveBeenCalledWith('[workspace] assistant.onTurn', expect.any(Error));
+    offA();
+    const ended: AssistantTurn = { ...TURN, state: 'ended', end: { state: 'stopped', reason: 'user' } };
+    t.bridge.assistantTurn(ended);
+    await settle(() => b.length === 2, 'its end');
+    expect(a).toHaveLength(1);
+    expect(b[1]).toEqual(ended);
+    expect(await assistant.stop('t-1')).toEqual({ stopped: true });
+    expect(h.assistantStop).toHaveBeenCalledWith('t-1');
+    warn.mockRestore();
     t.end();
   });
 });

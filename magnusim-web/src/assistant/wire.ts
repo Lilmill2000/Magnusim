@@ -202,6 +202,12 @@ export interface RelayFrameData {
    * the last one ended (ms since 1970 or an ISO date; null or absent: no hold).
    */
   active: { turns: number; hold_until?: number | string | null };
+  /**
+   * A turn bound to this tab: 'running' as it starts and after each change (at most once a
+   * second), 'ended' once with how it ended. Each running one comes again right after `active`
+   * on a new link, as many as its `turns`.
+   */
+  turn: RelayTurnFrame;
   /** Run a tool of the page (`tool` is the page's own name for it). */
   invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number };
   abort: { call: string };
@@ -210,6 +216,22 @@ export interface RelayFrameData {
   gate_closed: { gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' };
   /** The server dropped this tab's registration (its plugin was turned off or replaced). */
   unregistered: { reason: string };
+}
+
+/**
+ * A turn bound to this tab, as the server tells the page (CAD tools spec H3): its title is the
+ * first line of the person's request (at most 60 characters), `local` says it runs on a local
+ * server, `used.steps` counts its tool calls. context_tokens and images: null while unknown.
+ */
+export interface RelayTurnFrame {
+  id: string;
+  state: 'running' | 'ended';
+  title: string;
+  local: boolean;
+  context_tokens: number | null;
+  images: boolean | null;
+  used: { steps: number; steps_cap: number; usd: number; usd_cap: number };
+  end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
 }
 
 export type RelayFrameType = keyof RelayFrameData;

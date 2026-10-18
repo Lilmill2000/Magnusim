@@ -653,6 +653,129 @@ describe('a call', { timeout: 30_000 }, () => {
   });
 });
 
+describe('turns reach the page (CAD tools spec H3)', { timeout: 30_000 }, () => {
+  // The request's first line: a control in it and a tab, cleaned; 60 characters of it are the title.
+  const ASKED = 'Add one\u0007to the counter,\tthen add two more to it, and then say what it reads now';
+  const TITLE = 'Add one to the counter, then add two more to it, and then say what it reads now'.slice(0, 60);
+  const channelEvents = (p) => p.frames.filter((f) => f.c === 'assistant:1').map((f) => f.event);
+
+  it("a bound turn's `turn` frame: running at its start (before its `active`), again after a call's result (at most once a second), ended once with how it ended; titled by the request's first line; local on a local server", async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    const caps = m.state.settings.caps;
+    const changes = [];
+    s.handle.turns.onTurnChange((t, change) => changes.push([change, m.clock.now(), t.calls]));
+    const t0 = m.clock.now();
+    m.provider.script({ tools: [{ name: 'ai-demo__add', input: { by: 1 } }] }, { tools: [{ name: 'ai-demo__add', input: { by: 2 } }] }, { text: 'It reads 3.', hold: 'answer' });
+    const started = await s.post('/api/assistant/turns', { text: `${ASKED}\nThen stop.`, tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    const running = (steps) => ({
+      id: t.id,
+      state: 'running',
+      title: TITLE,
+      local: true,
+      context_tokens: null,
+      images: null,
+      used: { steps, steps_cap: caps.steps, usd: 0, usd_cap: caps.turn_usd },
+    });
+    assert.deepEqual(await page.frame('turn', 0), running(0));
+    await page.frame('active', 1);
+    assert.deepEqual(channelEvents(page).slice(0, 4), ['linked', 'active', 'turn', 'active'], 'the turn before the count its start changed');
+    const first = await page.frame('invoke', 0);
+    await s.progress(link, first.call, { ack: true });
+    await s.result(link, first.call, { ok: true, result: { text: 'Now 1' } });
+    // The first change since its start goes at once.
+    assert.deepEqual(await page.frame('turn', 1), running(1));
+    const second = await page.frame('invoke', 1);
+    await s.progress(link, second.call, { ack: true });
+    await s.result(link, second.call, { ok: true, result: { text: 'Now 3' } });
+    await m.provider.reached('answer');
+    // The next within the second is held back, then goes a second after the first.
+    assert.deepEqual(changes, [
+      ['started', t0, 0],
+      ['updated', t0, 1],
+    ]);
+    m.clock.advance(999);
+    assert.equal(changes.length, 2, 'not before the second is up');
+    m.clock.advance(1);
+    assert.deepEqual(changes.at(-1), ['updated', t0 + 1000, 2]);
+    assert.deepEqual(await page.frame('turn', 2), running(2));
+    m.provider.release('answer');
+    await settled(t);
+    assert.deepEqual(await page.frame('turn', 3), { ...running(2), state: 'ended', end: { state: 'done', reason: 'end_turn' } });
+    await page.frame('active', 2);
+    assert.deepEqual(channelEvents(page).slice(-2), ['turn', 'active'], 'its end before the count it changed');
+    assert.deepEqual(changes.map(([c]) => c), ['started', 'updated', 'updated', 'ended']);
+    assert.equal(page.of('turn').length, 4, 'one end, nothing after it');
+  });
+
+  it("what the app learns of the turn's model (its context, whether it reads images) is a change of the turn too, under the same once-a-second rule; nothing after its end; a cloud turn is not local", async () => {
+    const { m, s } = await setup();
+    const { page } = await linkedPage(s);
+    const changes = [];
+    s.handle.turns.onTurnChange((t, change) => changes.push(change));
+    m.provider.script({ text: 'Thinking.', hold: 'h' });
+    const started = await s.post('/api/assistant/turns', { text: 'Think about it', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    await m.provider.reached('h');
+    t.setModelFacts({ contextTokens: 32_768 });
+    assert.deepEqual(await page.frame('turn', 1), { ...t.pageView(), context_tokens: 32_768, images: null });
+    // Nothing new: no change.
+    t.setModelFacts({ contextTokens: 32_768, images: null });
+    assert.deepEqual(changes, ['started', 'updated']);
+    t.setModelFacts({ images: false });
+    assert.deepEqual(changes, ['started', 'updated'], 'held for the rest of the second');
+    m.clock.advance(1000);
+    assert.deepEqual(await page.frame('turn', 2), { ...t.pageView(), context_tokens: 32_768, images: false });
+    m.provider.release('h');
+    await settled(t);
+    t.setModelFacts({ images: true });
+    assert.deepEqual(changes, ['started', 'updated', 'updated', 'ended'], 'no change after its end');
+    assert.deepEqual((await page.frame('turn', 3)).end, { state: 'done', reason: 'end_turn' });
+    // A cloud provider's turn (no tab, no project: no question) is not local.
+    const cloud = makeManager({ dir: ROOT, provider: 'anthropic' });
+    cloud.provider.script({ text: 'Hello.' });
+    const c = await cloud.manager.start({ text: 'Hi' });
+    assert.equal(c.status, 202, JSON.stringify(c.body));
+    const ct = cloud.manager.get(c.body.turn);
+    await settled(ct);
+    assert.deepEqual([ct.pageView().local, ct.pageView().state, ct.pageView().end], [false, 'ended', { state: 'done', reason: 'end_turn' }]);
+  });
+
+  it("a new link hears the tab's running turns again right after `active` (as many as it says); another tab's page, and a turn with no tab, reach no page", async () => {
+    const { m, s } = await setup();
+    const A = await linkedPage(s);
+    const B = await linkedPage(s);
+    m.provider.script({ text: 'Waiting.', hold: 'bound' }, { text: 'Free.', hold: 'free' });
+    const bound = await s.post('/api/assistant/turns', { text: 'Wait here', tab: A.page.tab });
+    assert.equal(bound.status, 202, JSON.stringify(bound.json));
+    const t = s.handle.turns.get(bound.json.turn);
+    await m.provider.reached('bound');
+    const loose = await s.post('/api/assistant/turns', { text: 'No tab' });
+    assert.equal(loose.status, 202, JSON.stringify(loose.json));
+    const free = s.handle.turns.get(loose.json.turn);
+    await m.provider.reached('free');
+    assert.equal((await A.page.frame('turn', 0)).id, t.id);
+    // A's stream drops while the turn runs, and comes back on a new link.
+    A.page.serverDrop();
+    await until(async () => (await s.tabs()).find((x) => x.tab === A.page.tab)?.connected === false, 5000, 'the dormant registration');
+    const again = await s.page(A.page.tab);
+    await again.open();
+    assert.deepEqual(await again.frame('turn', 0), t.pageView());
+    assert.deepEqual(channelEvents(again).slice(0, 3), ['linked', 'active', 'turn']);
+    assert.deepEqual(again.of('active'), [{ turns: 1, hold_until: null }]);
+    m.provider.release('free');
+    await settled(free);
+    m.provider.release('bound');
+    await settled(t);
+    assert.equal((await again.frame('turn', 1)).state, 'ended');
+    assert.deepEqual(B.page.of('turn'), [], "B heard nothing of A's turn, nor of the one with no tab");
+    assert.deepEqual(again.of('turn').map((x) => x.id), [t.id, t.id]);
+  });
+});
+
 describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
   it('after a bound turn ends `active` carries hold_until; a dropped link leaves the registration dormant for the hold (a turn on it: 409 tab_hidden); the same tab linking again registers again; past the hold it is gone (400 bad_tab)', async () => {
     const { m, s } = await setup();

@@ -90,6 +90,27 @@ export const TURN_LIMITS = Object.freeze({
   textMax: 20_000,
 });
 
+/** A turn's changes (each call's result, a fact of its model) are heard at most this often (TurnChange 'updated'). */
+export const TURN_UPDATE_MS = 1000;
+/** A turn's title for its tab's page: the first line of the person's request, cleaned, at most this long. */
+export const TURN_TITLE_MAX = 60;
+
+/**
+ * A turn as the page of its tab hears it (the relay's `turn` frame, CAD tools spec H3): running
+ * from its start, ended once. `steps` counts its tool calls (the steps cap's count); local: it runs
+ * on a local server. context_tokens and images: null while the app doesn't know them.
+ */
+export interface TurnPageView {
+  id: string;
+  state: 'running' | 'ended';
+  title: string;
+  local: boolean;
+  context_tokens: number | null;
+  images: boolean | null;
+  used: { steps: number; steps_cap: number; usd: number; usd_cap: number };
+  end?: { state: EndState; reason: string };
+}
+
 const STOPPED_TEXT = 'Stopped.';
 const TERMINAL: ReadonlySet<TurnState> = new Set(['done', 'stopped', 'failed', 'capped']);
 
@@ -123,6 +144,8 @@ interface TurnInit {
   clock: Clock;
   gates: GateBroker;
   onEnded?: (t: Turn) => void;
+  /** What its tab's page shows changed (at most once a TURN_UPDATE_MS; never after its end). */
+  onUpdated?: (t: Turn) => void;
 }
 
 export class Turn implements LoopTurn {
@@ -146,10 +169,17 @@ export class Turn implements LoopTurn {
   message: string | null = null;
   /** The loop (and its last appends) has finished: the conversation is free again. */
   settled = false;
+  /** The model's context in tokens, once the app knows it (setModelFacts); null until then. */
+  contextTokens: number | null = null;
+  /** Whether the model reads images, once the app knows it (setModelFacts); null until then. */
+  images: boolean | null = null;
 
   private readonly clock: Clock;
   private readonly gates: GateBroker;
   private readonly onEnded?: (t: Turn) => void;
+  private readonly onUpdated?: (t: Turn) => void;
+  private updatedAt = Number.NEGATIVE_INFINITY;
+  private updateTimer: unknown = null;
   private readonly abort = new AbortController();
   private stopAs: { state: EndState; reason: string; message: string | null } | null = null;
   private readonly log: TurnEvent[] = [];
@@ -179,6 +209,7 @@ export class Turn implements LoopTurn {
     this.clock = o.clock;
     this.gates = o.gates;
     this.onEnded = o.onEnded;
+    this.onUpdated = o.onUpdated;
     this.startedAt = o.clock.now();
     this.abort.signal.addEventListener('abort', () => this.call?.abort(this.stopAbort()), { once: true });
     this.offShutdown = onAssistantShutdown(() => this.shutdown());
@@ -240,6 +271,40 @@ export class Turn implements LoopTurn {
 
   emit(e: RunnerEvent | TurnEventBody): void {
     this.push(e as TurnEventBody);
+    // A call's result: the steps and money its tab's page shows moved on.
+    if (e.type === 'tool_result') this.changed();
+  }
+
+  /**
+   * What the app learned of the turn's model (its context, whether it reads images): kept for
+   * its tab's page, which hears of a change (as `updated`).
+   */
+  setModelFacts(f: { contextTokens?: number | null; images?: boolean | null }): void {
+    let moved = false;
+    if (f.contextTokens !== undefined && f.contextTokens !== this.contextTokens) {
+      this.contextTokens = f.contextTokens;
+      moved = true;
+    }
+    if (f.images !== undefined && f.images !== this.images) {
+      this.images = f.images;
+      moved = true;
+    }
+    if (moved) this.changed();
+  }
+
+  /** Something its tab's page shows changed: onUpdated now, or once TURN_UPDATE_MS has passed since the last. */
+  private changed(): void {
+    if (this.ended || !this.onUpdated || this.updateTimer !== null) return;
+    const wait = this.updatedAt + TURN_UPDATE_MS - this.clock.now();
+    if (wait <= 0) this.updated();
+    else this.updateTimer = this.clock.setTimeout(() => this.updated(), wait);
+  }
+
+  private updated(): void {
+    this.updateTimer = null;
+    if (this.ended) return;
+    this.updatedAt = this.clock.now();
+    this.onUpdated?.(this);
   }
 
   note(text: string): void {
@@ -411,6 +476,9 @@ export class Turn implements LoopTurn {
     this.message = message === null ? null : cleanText(message, 2000);
     this.clock.clearTimeout(this.minutes.timer);
     this.minutes.timer = null;
+    // Its end says what it used: no update follows it.
+    this.clock.clearTimeout(this.updateTimer);
+    this.updateTimer = null;
     this.offShutdown?.();
     this.offShutdown = null;
     // Nothing of this turn runs on: questions still open are withdrawn.
@@ -460,6 +528,21 @@ export class Turn implements LoopTurn {
       served_by: this.servedBy,
     };
   }
+
+  /** The turn as its tab's page hears it (the relay's `turn` frame). */
+  pageView(): TurnPageView {
+    const ended = this.ended;
+    return {
+      id: this.id,
+      state: ended ? 'ended' : 'running',
+      title: cleanText(this.prompt.split(/\r\n?|\n/)[0], TURN_TITLE_MAX),
+      local: this.settings.provider === 'openai_compatible',
+      context_tokens: this.contextTokens,
+      images: this.images,
+      used: { steps: this.calls, steps_cap: this.settings.caps.steps, usd: round6(this.usd), usd_cap: this.settings.caps.turn_usd },
+      ...(ended ? { end: { state: this.state as EndState, reason: this.endReason ?? this.state } } : {}),
+    };
+  }
 }
 
 // ---------------------------------------------------------------- the manager
@@ -491,8 +574,8 @@ export interface TurnManagerDeps {
 
 export type Answer = { status: number; body: Record<string, unknown> };
 
-/** A turn of the manager started or ended. */
-export type TurnChange = 'started' | 'ended';
+/** A turn of the manager started, changed (a call's result, a fact of its model: at most once a second) or ended. */
+export type TurnChange = 'started' | 'updated' | 'ended';
 
 /** What the relay knows of a tab beyond its registration (ms since 1970, or null). */
 export interface TabInfo {
@@ -574,7 +657,10 @@ export class TurnManager {
     return assistantState().turns as Map<string, Turn>;
   }
 
-  /** Hears each turn this manager starts, as it starts and as it ends (the relay counts a tab's bound turns). */
+  /**
+   * Hears each turn this manager starts, as it starts, as it changes and as it ends (the relay
+   * counts a tab's bound turns, and tells the tab's page of them).
+   */
   onTurnChange(fn: (t: Turn, change: TurnChange) => void): () => void {
     this.turnListeners.add(fn);
     return () => {
@@ -625,7 +711,12 @@ export class TurnManager {
 
   /** Running turns bound to a tab. */
   activeForTab(tab: string): number {
-    return this.running().filter((t) => t.tab === tab && !t.ended).length;
+    return this.runningForTab(tab).length;
+  }
+
+  /** The running turns bound to a tab, oldest first. */
+  runningForTab(tab: string): Turn[] {
+    return this.running().filter((t) => t.tab === tab && !t.ended);
   }
 
   /**
@@ -747,6 +838,7 @@ export class TurnManager {
       clock: this.clock,
       gates: this.gates,
       onEnded: (ended) => this.turnChanged(ended, 'ended'),
+      onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
     conv.running = id;
     conv.lastUsed = this.clock.now();

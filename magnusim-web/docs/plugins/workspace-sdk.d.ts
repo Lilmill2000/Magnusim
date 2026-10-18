@@ -557,6 +557,45 @@ declare module '@magnusim/workspace' {
       /** Why not available: "not_connected" (try again later), "no_assistant", "remote", … */
       reason?: string;
   }
+  /**
+   * A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked,
+   * as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change
+   * (at most once a second); `ended` once, at its end.
+   */
+  export interface AssistantTurn {
+      /** The turn's id: AssistantCall.turn of each of its calls. */
+      id: string;
+      state: 'running' | 'ended';
+      /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
+      title: string;
+      /** It runs on a local server (a smaller model, often with less room: keep results short). */
+      local: boolean;
+      /** The model's context in tokens, when the app knows it (null otherwise). */
+      contextTokens: number | null;
+      /** Whether the model reads images, when the app knows it (null otherwise). */
+      images: boolean | null;
+      /** What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server). */
+      used: {
+          steps: number;
+          stepsCap: number;
+          usd: number;
+          usdCap: number;
+      };
+      /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
+      end?: {
+          state: 'done' | 'stopped' | 'failed' | 'capped';
+          reason: string;
+      };
+  }
+  /**
+   * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
+   * that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant",
+   * "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+   */
+  export interface AssistantStopAnswer {
+      stopped: boolean;
+      reason?: string;
+  }
   /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
   export interface WorkspaceAssistant {
       /**
@@ -570,6 +609,17 @@ declare module '@magnusim/workspace' {
       register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: {
           guide?: string;
       }): Promise<AssistantRegistration>;
+      /**
+       * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen
+       * before register: the turns already running are told to a page once it offers tools. Returns a
+       * function that stops listening.
+       */
+      onTurn(fn: (turn: AssistantTurn) => void): () => void;
+      /**
+       * Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted
+       * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
+       */
+      stop(turn: string): Promise<AssistantStopAnswer>;
   }
   export interface ConfirmOptions {
       title: string;

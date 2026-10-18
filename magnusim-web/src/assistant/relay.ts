@@ -40,9 +40,16 @@
  * call runs and while a question is open; otherwise a hidden tab lets it go as usual. A new
  * link starts with no turns and no hold: its server says `active` right after `linked` when
  * it has any.
+ *
+ * Turns (`turn`, CAD tools spec H3): each start, change and end of a turn bound to this tab goes
+ * to the open workspace's frame (its publication's tellTurn), and a new frame hears the running
+ * ones once. The running ones are remembered: a frame may stop only those (stopAnnouncedTurn,
+ * through the turn's own Stop route). A new link's server sends its running turns again right
+ * after `active`, as many as its `turns`: one this page knew of that does not come again ended
+ * while the link was down, and the frame hears it ended (with no `end`).
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
-import type { AssistantRegistration } from '../plugin-sdk/workspace';
+import type { AssistantRegistration, AssistantStopAnswer, AssistantTurn } from '../plugin-sdk/workspace';
 import { confirmAction } from '../workbench/dialogs';
 import {
   markWorkspaceFrameDead,
@@ -58,7 +65,7 @@ import {
 import type { AssistantCallOutcome } from '../workspace/bridge';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
 import { refreshStatus, statusSnapshot, subscribeStatus, type StatusSnapshot } from './status';
-import type { GateView, RelayFrameData, RelayFrameType, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody } from './wire';
+import type { GateView, RelayFrameData, RelayFrameType, RelayProgressBody, RelayResultBody, RelayTool, RelayToolsBody, RelayTurnFrame } from './wire';
 
 /** The channel's name on the tab's event stream (no such route: src/api/eventHub.ts). */
 export const RELAY_CHANNEL_URL = '/api/assistant/events?role=relay';
@@ -77,6 +84,9 @@ const RETRY_MS = 1000;
 export const GATE_RESHOWN_MS = 5000;
 /** The longest a question stays open here when its expires_at is missing or far off. */
 const GATE_MAX_MS = 60 * 60_000;
+/** How many ended turns this page remembers (a Stop of one answers `ended`). */
+const TURNS_ENDED_KEPT = 16;
+const TURN_END_STATES: ReadonlySet<string> = new Set(['done', 'stopped', 'failed', 'capped']);
 
 /** What the frame hears for an empty list, or when nothing of this page is on the server. */
 const NOTHING_HELD: AssistantRegistration = { available: true, accepted: [], refused: [] };
@@ -121,6 +131,14 @@ interface Relay {
   turns: number;
   holdUntil: number;
   holdTimer: ReturnType<typeof setTimeout> | null;
+  /** The turns bound to this tab that the server says run, by id (as the frame hears them). */
+  turnsRunning: Map<string, AssistantTurn>;
+  /** Turns this page heard end, newest last (at most TURNS_ENDED_KEPT). */
+  turnsEnded: string[];
+  /** After a new link: how many running turns its `active` says come again (null before it), and those that came. */
+  relink: { need: number | null; seen: Set<string> } | null;
+  /** The frame the turns were last told to: a new one hears the running ones once. */
+  turnsToldTo: string | null;
   pinned: boolean;
   kickQueued: boolean;
   unsubscribe: () => void;
@@ -215,6 +233,7 @@ function run(r: Relay): void {
   if (cur && !cur.settled && cur.tools.length === 0 && !r.maybeHeld && !r.pumping) settleWorkspaceTools(cur.rev, NOTHING_HELD);
   if (!r.ch && cur && live(cur) && cur.rev > r.refusedRev) openRelay(r);
   if (r.ch && r.link) void pump(r);
+  tellNewFrame(r);
   updatePin(r);
   maybeClose(r);
 }
@@ -263,6 +282,7 @@ function openRelay(r: Relay): void {
     });
   on('linked', (d) => onLinked(r, d));
   on('active', (d) => onActive(r, d));
+  on('turn', (d) => onTurn(r, d));
   on('invoke', (d) => onInvoke(r, d));
   on('abort', (d) => {
     if (typeof d.call === 'string') r.invokes.get(d.call)?.ctl.abort();
@@ -288,6 +308,8 @@ function onLinked(r: Relay, d: RelayFrameData['linked']): void {
   // the link was down, has none, and an old count would pin the stream for good).
   r.turns = 0;
   r.holdUntil = 0;
+  // The running turns it knew of come again right after `active`: one that does not ended meanwhile.
+  r.relink = r.turnsRunning.size ? { need: null, seen: new Set() } : null;
   // A fresh start: what waited for a retry goes now.
   if (r.retryTimer) clearTimeout(r.retryTimer);
   r.retryTimer = null;
@@ -654,7 +676,97 @@ function onActive(r: Relay, d: RelayFrameData['active']): void {
   const n = Number(d.turns);
   r.turns = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
   r.holdUntil = Math.min(timeOf(d.hold_until), Date.now() + HOLD_MAX_MS);
+  // A new link's first: this many running turns come again next.
+  if (r.relink && r.relink.need === null) {
+    r.relink.need = r.turns;
+    checkRelink(r);
+  }
   updatePin(r);
+}
+
+// ---------------------------------------------------------------- turns
+
+/** A `turn` frame as the frame hears it (AssistantTurn), or null when it is not one. */
+function turnOf(d: unknown): AssistantTurn | null {
+  const x = d && typeof d === 'object' ? (d as Partial<RelayTurnFrame>) : null;
+  if (!x || typeof x.id !== 'string' || !x.id || x.id.length > 128 || (x.state !== 'running' && x.state !== 'ended')) return null;
+  const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  const used: Partial<RelayTurnFrame['used']> = x.used && typeof x.used === 'object' ? x.used : {};
+  const end = x.state === 'ended' && x.end && typeof x.end === 'object' && TURN_END_STATES.has(String(x.end.state)) ? x.end : null;
+  return {
+    id: x.id,
+    state: x.state,
+    title: typeof x.title === 'string' ? x.title.slice(0, 60) : '',
+    local: x.local === true,
+    contextTokens: typeof x.context_tokens === 'number' && Number.isSafeInteger(x.context_tokens) && x.context_tokens > 0 ? x.context_tokens : null,
+    images: typeof x.images === 'boolean' ? x.images : null,
+    used: { steps: count(used.steps), stepsCap: count(used.steps_cap), usd: count(used.usd), usdCap: count(used.usd_cap) },
+    ...(end ? { end: { state: end.state, reason: typeof end.reason === 'string' ? end.reason.slice(0, 80) : '' } } : {}),
+  };
+}
+
+function onTurn(r: Relay, d: RelayFrameData['turn']): void {
+  const turn = turnOf(d);
+  if (!turn) return;
+  if (turn.state === 'ended') {
+    turnEnded(r, turn);
+    return;
+  }
+  r.turnsRunning.set(turn.id, turn);
+  r.relink?.seen.add(turn.id);
+  tellTurn(r, turn);
+  checkRelink(r);
+}
+
+function turnEnded(r: Relay, turn: AssistantTurn): void {
+  r.turnsRunning.delete(turn.id);
+  r.turnsEnded = [...r.turnsEnded.filter((id) => id !== turn.id), turn.id].slice(-TURNS_ENDED_KEPT);
+  tellTurn(r, turn);
+}
+
+/** Every running turn of a new link came again: the ones it knew of that did not ended while it was down. */
+function checkRelink(r: Relay): void {
+  const k = r.relink;
+  if (!k || k.need === null || k.seen.size < k.need) return;
+  r.relink = null;
+  for (const [id, turn] of [...r.turnsRunning]) {
+    if (!k.seen.has(id)) turnEnded(r, { id, state: 'ended', title: turn.title, local: turn.local, contextTokens: turn.contextTokens, images: turn.images, used: turn.used });
+  }
+}
+
+/** The open workspace's frame hears a turn (a dead frame, or none, hears nothing). */
+function tellTurn(r: Relay, turn: AssistantTurn): void {
+  const cur = workspaceToolsSnapshot().current;
+  if (!cur || cur.dead || !cur.tellTurn) return;
+  r.turnsToldTo = cur.frameId;
+  try {
+    cur.tellTurn({ ...turn, used: { ...turn.used } });
+  } catch (e) {
+    console.warn('[CFD] assistant turn', e);
+  }
+}
+
+/** A frame that offers tools for the first time hears the turns running now. */
+function tellNewFrame(r: Relay): void {
+  const cur = workspaceToolsSnapshot().current;
+  if (!cur || cur.dead || cur.frameId === r.turnsToldTo) return;
+  r.turnsToldTo = cur.frameId;
+  for (const turn of r.turnsRunning.values()) tellTurn(r, turn);
+}
+
+/**
+ * A frame's Stop of a turn (the bridge's assistant.stop): only a turn the server told this tab of
+ * is stopped, through its own Stop route, which answers once it ended (at most 5 s); one this tab
+ * heard end answers `ended`, any other `not_this_tab`.
+ */
+export async function stopAnnouncedTurn(turn: string): Promise<AssistantStopAnswer> {
+  const r = R;
+  if (!r) return { stopped: false, reason: 'not_connected' };
+  if (!r.turnsRunning.has(turn)) return { stopped: false, reason: r.turnsEnded.includes(turn) ? 'ended' : 'not_this_tab' };
+  const a = await post(`/api/assistant/turns/${encodeURIComponent(turn)}/stop`, {});
+  if (!a) return { stopped: false, reason: 'not_connected' };
+  if (a.status === 200 && a.body.ok === true) return { stopped: true };
+  return { stopped: false, reason: codeOf(a) || `http_${a.status}` };
 }
 
 /** Pinned while turns are bound here or held, a call runs or a question is open. */
@@ -716,6 +828,10 @@ export function startAssistantRelay(): () => void {
       turns: 0,
       holdUntil: 0,
       holdTimer: null,
+      turnsRunning: new Map(),
+      turnsEnded: [],
+      relink: null,
+      turnsToldTo: null,
       pinned: false,
       kickQueued: false,
       unsubscribe: () => undefined,

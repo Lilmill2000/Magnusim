@@ -291,7 +291,8 @@ No test reaches a real model provider or this PC's real Assistant files.
     too), and `fail_hint`, which always fails with a `hint` and a `detail` (they reach
     the model's next request and the terminal client). It shows `#counter`, `#aborted`
     and `#ai-available`, and registers again once shown when its tab was hidden at
-    load.
+    load. It hears the turns bound to its tab (`#turn-state` reads "running: <title>",
+    then how it ended), and its `#stop` button stops the turn through the bridge.
   - Its server: `startHost({pluginsFrom, env})` with `MAGNUSIM_TEST_ASSISTANT=1`,
     the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1` (to count and cut a tab's
     stream), a 2 s hold and a 60 s dormant time.

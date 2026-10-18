@@ -256,6 +256,17 @@ The app's answer to ws.assistant.register (unreleased, 1.9).
 - `refused: { name: string; code: string; message: string; }[]`: The tools it refused, each with why.
 - `reason?: string | undefined`: Why not available: "not_connected" (try again later), "no_assistant", "remote", …
 
+#### AssistantStopAnswer
+
+```ts
+interface AssistantStopAnswer
+```
+
+ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of that id was told to this page), "ended" (it already ended), "not_connected", "no_assistant", "not_allowed" (a host without the call), or the app's code ("unknown_turn").
+
+- `stopped: boolean`
+- `reason?: string | undefined`
+
 #### AssistantTool
 
 ```ts
@@ -270,6 +281,27 @@ A tool the app's assistant may call while this workspace is open (unreleased, 1.
 - `inputSchema: AssistantObjectSchema`
 - `risk: AssistantRisk`
 - `timeoutS?: number | undefined`: Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit.
+
+#### AssistantTurn
+
+```ts
+interface AssistantTurn
+```
+
+A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what the person asked, as the page hears it with ws.assistant.onTurn. `running` as it starts and again after each change (at most once a second); `ended` once, at its end.
+
+- `id: string`: The turn's id: AssistantCall.turn of each of its calls.
+- `state: "running" | "ended"`
+- `title: string`: The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well).
+- `local: boolean`: It runs on a local server (a smaller model, often with less room: keep results short).
+- `contextTokens: number | null`: The model's context in tokens, when the app knows it (null otherwise).
+- `images: boolean | null`: Whether the model reads images, when the app knows it (null otherwise).
+- `used: { … }`: What it used so far and its limits: tool calls (`steps`) and dollars (`usd`; 0 on a local server).
+- `used.steps: number`
+- `used.stepsCap: number`
+- `used.usd: number`
+- `used.usdCap: number`
+- `end?: { … }`: How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then).
 
 #### ClaimedTwice
 
@@ -760,6 +792,8 @@ interface WorkspaceAssistant
 Tools this page offers to the app's assistant (unreleased, next host minor 1.9).
 
 - `register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; } | undefined): Promise<AssistantRegistration>`: Set this page's tools and their handler in one step; register([], null) withdraws them. `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation). Resolves once the app has the list. available:false with reason 'not_connected' means the app could not reach the assistant from this tab yet (for example the tab opened in the background): call register again later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay. Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
+- `onTurn(fn: (turn: AssistantTurn) => void): () => void`: Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen before register: the turns already running are told to a page once it offers tools. Returns a function that stops listening.
+- `stop(turn: string): Promise<AssistantStopAnswer>`: Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
 
 #### WorkspaceContext
 

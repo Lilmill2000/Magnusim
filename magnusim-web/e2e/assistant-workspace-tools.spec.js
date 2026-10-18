@@ -20,6 +20,8 @@
 // (support/assistant.js, CAD tools spec H1): the scripted model on the local server, its steps
 // answering from the request, and questions answered through their route. And a failed call's
 // hint and detail reaching the model and the terminal, a result's summary only the log (H2).
+// And the turn bound to the tab reaching its frame (its title, what it used, its end), whose own
+// Stop ends it (H3).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -917,4 +919,47 @@ test("a failed call says how to fix it: its hint and detail reach the model's ne
   expect(out).toContain(`→ ${PLUGIN}__fail_hint {}\n✗ invalid_input: ${FAIL.message}\n  hint: ${FAIL.hint}\n`);
   expect(out).toContain(`→ ${PLUGIN}__add {"by":3}\n✓ Added 3: the counter is 3\n`);
   expect(out).toContain('Added 3 instead.');
+});
+
+test("the frame hears its turn: #turn-state shows the request's first line and the frame gets what it used; the frame's own Stop ends the turn stopped within the 10 s ceiling", async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const { caps } = await getJson(request, '/api/assistant/status');
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] });
+  const t = await startTurn(request, host.base, { text: 'Add 1, then 5 slowly.\nTake your time.', tab: w.tab });
+  await expect(w.frame.locator('#turn-state')).toHaveText('running: Add 1, then 5 slowly.');
+  await slowRunning(t, w, 5);
+  await expect(w.frame.locator('#counter')).toHaveText('1');
+  // The add's result moved its steps on; the frame has the turn's limits too.
+  const lastOf = () => w.handle.evaluate((id) => window.__turns.filter((x) => x.id === id).at(-1), t.id);
+  await expect.poll(async () => (await lastOf()).used.steps, { message: "the add's step" }).toBe(1);
+  expect(await lastOf()).toMatchObject({
+    id: t.id,
+    state: 'running',
+    title: 'Add 1, then 5 slowly.',
+    local: false,
+    contextTokens: null,
+    images: null,
+    used: { stepsCap: caps.steps, usdCap: caps.turn_usd },
+  });
+  // The frame's own Stop, while the slow call runs.
+  const stopAt = Date.now();
+  await w.frame.locator('#stop').click();
+  await expect(w.frame.locator('#stop-answer')).toHaveText('stopped');
+  const { turn, events } = await t.ended();
+  expect(Date.now() - stopAt, 'stopped within the 10 s ceiling').toBeLessThan(10_000);
+  expect(turn).toMatchObject({ state: 'stopped', end_reason: 'user' });
+  await expect(w.frame.locator('#turn-state')).toHaveText('stopped: Add 1, then 5 slowly.');
+  await expect(w.frame.locator('#aborted')).toHaveText('aborted');
+  await expect(w.frame.locator('#counter')).toHaveText('1');
+  expect(ofType(events, 'tool_result').map((e) => [e.ok, e.code ?? null])).toEqual([
+    [true, null],
+    [false, 'stopped'],
+  ]);
+  expect(await lastOf()).toMatchObject({ state: 'ended', end: { state: 'stopped', reason: 'user' }, used: { steps: 2 } });
+  // Only a running turn told to this tab is the frame's to stop.
+  expect(await w.handle.evaluate((id) => window.__stopTurn(id), t.id)).toEqual({ stopped: false, reason: 'ended' });
+  expect(await w.handle.evaluate(() => window.__stopTurn('t-never-told'))).toEqual({ stopped: false, reason: 'not_this_tab' });
 });

@@ -569,6 +569,7 @@ Rules:
 4. **Results are data.** Return text, or `{text, data, images}`. What you return reaches the model as data, never as instructions. Your tools' descriptions and the `guide` reach it as your plugin's own text (the tool definitions, its instructions): keep them fixed, never filled from a project. Progress labels show in the turn's log, not to the model.
 5. **No project data in the `guide`.** It is fixed text about your workspace, kept for a whole conversation.
 6. **Say how to fix it, and name what you did.** A thrown error may carry a `hint` (one sentence: how to fix it) and a `detail` (plain JSON: the field, the candidates, the range); the model reads both with the message. A result's `summary` is the turn log's line for the call, never the model's.
+7. **Hear the turn.** `assistant.onTurn(fn)` tells you when a request of the person's starts, changes and ends (its `title`, the steps and money it used); `assistant.stop(turn)` stops one told to your tab. Listen before you register.
 
 [authoring.md](authoring.md), "Assistant tools in a workspace (unreleased)", has the whole contract, and [compatibility.md](compatibility.md), "Unreleased additions (next minor, 1.9)", the bridge messages and codes.
 
