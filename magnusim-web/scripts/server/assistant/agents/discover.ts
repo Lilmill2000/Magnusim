@@ -929,6 +929,14 @@ export interface AgentRunHooks {
   stop(id: string, text: string): Promise<void>;
 }
 
+/**
+ * What the agent itself said of its login at its last check that got through, or its last
+ * auth_required (memory only): 'none' (it isn't signed in), 'signed_in' (it said so, or it
+ * answered a Test's message), 'silent' (a connect it said nothing on: it starts, and whether it is
+ * signed in isn't known).
+ */
+export type AgentWord = 'none' | 'signed_in' | 'silent';
+
 /** What the last Test or connect listed (memory only). */
 export interface AgentLast {
   modes: ModeView[];
@@ -951,6 +959,7 @@ interface AgentsCache {
   versions: Map<string, string | null>;
   last: Map<string, AgentLast>;
   signIn: Map<string, Record<string, unknown>>;
+  word: Map<string, AgentWord>;
 }
 
 interface AgentsGlobal {
@@ -975,7 +984,7 @@ function cacheOf(): AgentsCache {
   const g = globals();
   let c = g.byState.get(key);
   if (!c) {
-    c = { result: null, running: null, queued: null, gen: 0, versions: new Map(), last: new Map(), signIn: new Map() };
+    c = { result: null, running: null, queued: null, gen: 0, versions: new Map(), last: new Map(), signIn: new Map(), word: new Map() };
     g.byState.set(key, c);
   }
   return c;
@@ -996,10 +1005,21 @@ export function rememberAgentLast(id: string, last: AgentLast | null): void {
   else cacheOf().last.delete(id);
 }
 
-/** The sign-in block from the last auth_required (shown in its row). */
+/**
+ * The sign-in block from the last auth_required, or from a connect it said 'none' to (shown in
+ * its row). A block is the agent's word that it isn't signed in; null leaves its word as it is.
+ */
 export function rememberAgentSignIn(id: string, view: Record<string, unknown> | null): void {
-  if (view) cacheOf().signIn.set(id, view);
-  else cacheOf().signIn.delete(id);
+  if (view) {
+    cacheOf().signIn.set(id, view);
+    cacheOf().word.set(id, 'none');
+  } else cacheOf().signIn.delete(id);
+}
+
+/** The agent's own word on its login (null: forgotten, its login file decides again). */
+export function rememberAgentWord(id: string, word: AgentWord | null): void {
+  if (word) cacheOf().word.set(id, word);
+  else cacheOf().word.delete(id);
 }
 
 /** The last discovery (null: none since the server started). Never runs one. */
@@ -1131,6 +1151,8 @@ export interface AgentRow {
   allowed_modes: string[] | 'initial';
   last: AgentLast | null;
   sign_in: Record<string, unknown> | null;
+  /** What the agent itself said of its login last (AgentWord), or null: no check since the server started. */
+  auth_word: AgentWord | null;
   ready: boolean;
   reason: string | null;
   /**
@@ -1181,6 +1203,7 @@ export function agentRow(e: AgentEntry, ctx: RowContext): AgentRow {
     allowed_modes: modes === 'initial' ? 'initial' : [...modes],
     last: c.last.get(e.id) ?? null,
     sign_in: c.signIn.get(e.id) ?? null,
+    auth_word: c.word.get(e.id) ?? null,
     ready: false,
     reason: null,
     error: e.error?.message ?? null,
@@ -1191,16 +1214,29 @@ export function agentRow(e: AgentEntry, ctx: RowContext): AgentRow {
 }
 
 /**
+ * Whether the agent isn't signed in, as Settings says it: its own word first (its 'none', or the
+ * sign-in block of its last auth_required), then its login file; its word that it is signed in,
+ * or a connect it said nothing on (it starts; not known), counts over a missing login file.
+ * The row's line, its dot, the Default choice and the status agree on it.
+ */
+export function agentSignedOut(row: Pick<AgentRow, 'sign_in' | 'auth_word' | 'signed_in'>): boolean {
+  if (row.sign_in || row.auth_word === 'none') return true;
+  if (row.auth_word === 'signed_in' || row.auth_word === 'silent') return false;
+  return row.signed_in === 'no';
+}
+
+/**
  * Why a turn on this agent can't start now (spec 5.2 readiness), or null: it is ready only when
- * found and startable, signed in or not known to be signed out, allowed or with its own tools
- * off, its tool connection can run, and privacy lets it run at all (under "Never send project
- * data" a turn on an agent whose own tools stay on is refused even from Home, spec 4.14).
+ * found and startable, signed in or not known to be signed out (agentSignedOut), allowed or
+ * with its own tools off, its tool connection can run, and privacy lets it run at all (under
+ * "Never send project data" a turn on an agent whose own tools stay on is refused even from
+ * Home, spec 4.14).
  */
 function readinessReason(row: AgentRow, e: AgentEntry, ctx: RowContext): string | null {
   if (!e.found) return e.error?.code === 'bad_command' ? 'bad_command' : 'agent_missing';
   if (e.error) return e.error.code;
   if (row.needs_allow && !row.allowed) return row.allow_changed ? 'agent_allow_changed' : 'agent_not_allowed';
-  if (row.signed_in === 'no') return 'agent_signed_out';
+  if (agentSignedOut(row)) return 'agent_signed_out';
   if (!ctx.mcp.available) return 'mcp_unavailable';
   if (ctx.settings.privacy === 'deny' && row.own_tools === 'on') return 'privacy_denied';
   return null;
@@ -1243,6 +1279,13 @@ const NOT_READY_DETAIL: Readonly<Record<string, string>> = Object.freeze({
 
 const LOGIN_SHORT: Readonly<Record<SignedIn, string>> = Object.freeze({ yes: 'Signed in', key: 'Key from the environment', no: 'Not signed in', unknown: 'Sign-in not known' });
 
+/** A ready row's sign-in as its line says it: the agent's word that it is signed in, a connect it said nothing on with no login file (not known), else the login file. */
+function readyLogin(row: AgentRow): SignedIn {
+  if (row.auth_word === 'signed_in' && row.signed_in !== 'key') return 'yes';
+  if (row.auth_word === 'silent' && row.signed_in === 'no') return 'unknown';
+  return row.signed_in;
+}
+
 /**
  * The status' providers_ready rows of the coding agents (`agent:<id>`): every found known agent
  * and every custom agent of the last discovery (a custom agent not looked up since it was added:
@@ -1257,7 +1300,7 @@ export function agentReadyRows(ctx: RowContext): Record<string, Record<string, u
   const put = (id: string, name: string, row: AgentRow | null) => {
     const reason = row ? row.reason : 'not_checked';
     let detail: string;
-    if (row && row.ready) detail = [row.key_var ? `Uses ${row.key_var}` : LOGIN_SHORT[row.signed_in], row.version].filter(Boolean).join(' · ');
+    if (row && row.ready) detail = [row.key_var ? `Uses ${row.key_var}` : LOGIN_SHORT[readyLogin(row)], row.version].filter(Boolean).join(' · ');
     else detail = NOT_READY_DETAIL[reason ?? ''] ?? 'Not ready';
     out[`agent:${id}`] = { label: name, kind: 'agent', ready: !!row?.ready, reason, billing: 'agent_account', detail };
   };
@@ -1377,6 +1420,7 @@ export async function removeCustomAgentRequest(body: Record<string, unknown>): P
   uncacheEntry(id);
   rememberAgentLast(id, null);
   rememberAgentSignIn(id, null);
+  rememberAgentWord(id, null);
   // Saved first, so no new turn starts; then a session kept between messages ends too.
   await hooks().stop(id, `${name} was removed in Settings.`);
   alog('info', 'custom agent removed', { agent: id });

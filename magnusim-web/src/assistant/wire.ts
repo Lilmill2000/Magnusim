@@ -445,8 +445,15 @@ export interface AgentRow {
   allowed_modes: string[] | 'initial' | null;
   /** What its last Test or connect listed (memory only). */
   last: { modes: ModeView[]; models: ModelView[]; at: string } | null;
-  /** The sign-in block from its last `auth_required`. */
+  /** The sign-in block from its last `auth_required`, or from a connect it said 'none' to. */
   sign_in: SignInView | null;
+  /**
+   * What the agent itself said of its login at its last check that got through (or its last
+   * auth_required: 'none'), since the server started: 'none', 'signed_in' (it said so, or it
+   * answered a Test), 'silent' (a connect it said nothing on), or null (no word: its login file
+   * decides). Its readiness (`ready`, the dot) follows it, as the row's line does.
+   */
+  auth_word: 'none' | 'signed_in' | 'silent' | null;
   ready: boolean;
   /** The code a turn on it is refused with now (agent_missing, agent_not_allowed, ...). */
   reason: string | null;

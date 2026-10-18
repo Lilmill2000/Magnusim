@@ -19,8 +19,10 @@
 // the clipboard; signed in, connect again connects; the Test calls Magnusim's test tool; the
 // Model it listed saved, and no Mode select when Magnusim uses one mode); connect again on an
 // agent whose session starts but that says it isn't signed in (as Claude Code's adapter does):
-// never Connected or ready, the Sign in block kept with its command, also when the step opens
-// again, until it says it is signed in; the Default choice
+// never Connected or ready (its dot and its Default line with it), the Sign in block kept with
+// its command, also when the step opens again, over a login file too, and when its word comes
+// only after its session started (the connect waits for it), until it says it is signed in
+// (ready, with no login file); the Default choice
 // offering the agents found beside a saved API key (D-A), a coding agent as the default keeping
 // every key, and the coding agents' limits shown and saved; a custom agent added with a
 // variable to pass, a turn on it refused without the launch proof and while it is off (nothing
@@ -96,7 +98,7 @@ let pidsFile;
 let launchers;
 let launcherCount = 0;
 /** What each scripted agent is when it starts (each test starts from these). */
-const BASE_FAKE = Object.freeze({ requireSignIn: false, authStatus: null, authMethods: [], stubborn: false });
+const BASE_FAKE = Object.freeze({ requireSignIn: false, authStatus: null, authStatusHold: null, authMethods: [], stubborn: false });
 /** Claude Code's adapter marks Magnusim's tools with their name in _meta; the Test's line names its version. */
 const CLAUDE_FAKE = Object.freeze({ ...BASE_FAKE, style: 'tool_name_meta', agentInfo: { name: 'claude-agent-acp', title: 'Claude Code', version: CLAUDE.version } });
 /** Codex's adapter flags its MCP calls and approvals; it lists the read-only mode Magnusim starts it in. */
@@ -594,7 +596,7 @@ test("signing in: connect again hears Claude Code ask for it, and the Sign in bl
   await expect.poll(() => strays(fake.pids().map((p) => p.pid), host.tmp), { timeout: 15_000 }).toEqual([]);
 });
 
-test("connect again on Claude Code that isn't signed in, its session starting as its adapter's does: the agent's own word wins, so the row stays signed out with the Sign in block and its command (opened again too) and never says Connected; once it says it is signed in, it connects", async ({ page, request }) => {
+test("connect again on Claude Code that isn't signed in, its session starting as its adapter's does: the agent's own word wins, so the row (its dot and Default line too) stays signed out with the Sign in block and its command (opened again too, over a login file, and when its word comes late) and never says Connected; once it says it is signed in, it connects", async ({ page, request }) => {
   test.setTimeout(120_000);
   const listed = (await agentsNow(request)).find((r) => r.id === 'claude');
   expect(listed.script, 'the resolved script').toBeTruthy();
@@ -616,6 +618,8 @@ test("connect again on Claude Code that isn't signed in, its session starting as
   await openAssistantStep(page);
   const claude = rowOf(page, 'claude');
   await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out', { timeout: 30_000 });
+  // The Default choice's line for it (its readiness, as the row's dot).
+  const claudeDefault = page.getByRole('radiogroup', { name: 'Default provider' }).locator('[data-assistant-default-option="agent:claude"] [data-assistant-default-state]');
   const signIn = claude.getByRole('group', { name: 'Sign in to Claude Code' });
   await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
   await expect(claude.locator('[data-assistant-agent-result="failed"]')).toHaveText(`Connected to Claude Code ${CLAUDE.version}, but it says it isn't signed in.`);
@@ -635,15 +639,47 @@ test("connect again on Claude Code that isn't signed in, its session starting as
   await openAssistantStep(page);
   await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out', { timeout: 30_000 });
   await expect(signIn.locator('[data-assistant-agent-signin-command="claude-login"]')).toHaveText(`${CLAUDE.program} --cli auth login`);
+  await expect(claudeDefault).toHaveText('Not signed in');
 
-  // It says it is signed in now (its own word; still no login file): connect again connects, and Test shows.
-  fake.configure({ authStatus: 'account' });
+  // A login file there now (one a logout outlived): its word still wins, over the file, in the
+  // row, its dot and the Default choice.
+  signInClaude();
+  await page.reload();
+  await openAssistantStep(page);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out', { timeout: 30_000 });
+  await expect(claude).toHaveAttribute('data-ready', '0');
+  await expect(claudeDefault).toHaveText('Not signed in');
+  await expect(claudeDefault).toHaveAttribute('data-assistant-default-state', 'not-ready');
+  // Its word comes only after its session started this time (as its adapter's own background
+  // read of its login lands): the connect waits for it, and it still wins.
+  const hold = `late-login-${Date.now()}`;
+  fake.configure({ authStatusHold: hold });
+  await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
+  const held = await fake.waitFor((r) => r.event === 'holding' && r.name === hold, 30_000);
+  expect(fake.sent(held.pid).some((m) => m.result && typeof m.result.sessionId === 'string'), 'its session started before its word').toBe(true);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'testing');
+  fake.release(hold);
+  await expect(claude.locator('[data-assistant-agent-result="failed"]')).toHaveText(`Connected to Claude Code ${CLAUDE.version}, but it says it isn't signed in.`);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out');
+  await expect(claude).toHaveAttribute('data-ready', '0');
+  await expect(claude.locator('[data-assistant-agent-line]')).toHaveText(`Claude Code ${CLAUDE.version} · Not signed in. · ${OWN_TOOLS_OFF}`);
+  await expect(claude.locator('[data-assistant-agent-result="ok"]')).toHaveCount(0);
+  await expect(claudeDefault).toHaveText('Not signed in');
+
+  // It says it is signed in now (its own word; no login file): connect again connects, Test
+  // shows, and it is ready everywhere (its dot, the Default choice).
+  removeTreeSync(join(home, '.claude'));
+  fake.configure({ authStatus: 'account', authStatusHold: null });
   await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
   await expect(claude.locator('[data-assistant-agent-result="ok"]')).toHaveText(`Connected to Claude Code ${CLAUDE.version}.`);
   await expect(claude).toHaveAttribute('data-assistant-agent-state', 'ready');
+  await expect(claude).toHaveAttribute('data-ready', '1');
   await expect(claude.getByRole('button', { name: 'Test' })).toBeVisible();
   await expect(claude.locator('[data-assistant-agent-signin]')).toHaveCount(0);
-  expect((await agentsNow(request)).find((r) => r.id === 'claude').sign_in).toBeNull();
+  await expect(claudeDefault).toHaveText(`Signed in · ${CLAUDE.version}`);
+  await expect(claudeDefault).toHaveAttribute('data-assistant-default-state', 'ready');
+  const now = (await agentsNow(request)).find((r) => r.id === 'claude');
+  expect([now.sign_in, now.signed_in, now.auth_word, now.ready]).toEqual([null, 'no', 'signed_in', true]);
   await expect.poll(() => fake.pids().filter((p) => isRunning(p.pid)).map((p) => p.pid), { timeout: 15_000 }).toEqual([]);
 });
 
@@ -722,7 +758,7 @@ test('Default and keys side by side (D-A): the agent as the default keeps every 
   expect((await assistantStatus(request, host.base)).providers_ready['agent:claude'].ready).toBe(true);
 });
 
-test("a custom agent: added with a variable to pass, off until allowed; the allow switch asks first (Don't focused, Enter answers Don't), Allow, off with no question; asked again once its program's path changed; Remove", async ({ page, request }) => {
+test("a custom agent: added with a variable to pass, off until allowed; the allow switch asks first (Don't focused, Enter answers Don't), Allow; off while Never send project data is chosen in the step, at once; off with no question; asked again once its program's path changed; Remove", async ({ page, request }) => {
   test.setTimeout(180_000);
   const allowPosts = [];
   page.on('request', (r) => {
@@ -837,6 +873,24 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   // Kept between messages: its process runs on until the switch goes off.
   const kept = customFake.pids('agent').at(-1).pid;
   expect(isRunning(kept)).toBe(true);
+
+  // Project data set to Never send project data in this step: its row says at once that it stays
+  // off and why (its own tools stay on), its dot grey, as the Default choice says; back to Ask, on.
+  const privacyLine = row.locator('[data-assistant-agent-privacy]');
+  const customDefault = pane.locator(`[data-assistant-default-option="agent:${id}"] [data-assistant-default-state]`);
+  await expect(row).toHaveAttribute('data-ready', '1');
+  await expect(privacyLine).toHaveCount(0);
+  await pane.locator('[data-assistant-privacy-option="deny"] input').check();
+  await expect(pane.locator('[data-assistant-privacy]')).toHaveAttribute('data-assistant-privacy', 'deny');
+  await expect(privacyLine).toHaveText(`${CUSTOM_NAME} can read your project files with its own tools, so it stays off while Project data (below) is set to Never send project data.`);
+  await expect(row).toHaveAttribute('data-ready', '0');
+  await expect(row.locator('[data-assistant-dot]')).toHaveAttribute('data-assistant-dot', 'not-ready');
+  await expect(customDefault).toHaveText('Off while Never send project data is on');
+  await pane.locator('[data-assistant-privacy-option="ask"] input').check();
+  await expect(pane.locator('[data-assistant-privacy]')).toHaveAttribute('data-assistant-privacy', 'ask');
+  await expect(privacyLine).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-ready', '1');
+  await expect(row.locator('[data-assistant-dot]')).toHaveAttribute('data-assistant-dot', 'ready');
 
   // Off: at once, no question.
   await toggle.click();

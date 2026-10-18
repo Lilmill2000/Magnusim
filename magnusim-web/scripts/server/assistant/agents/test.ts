@@ -43,7 +43,7 @@ import { CONNECTION_CHECK } from '../provider-test.ts';
 import { cleanText } from '../sanitize.ts';
 import { agentPrefs, isAgentOf, loadSettings, setAgentLockdownFailed, type AssistantSettings } from '../settings.ts';
 import { OursMatcher, pickOption, REJECT_KINDS, terminalSignIn, type AuthMethodView, type ModelView, type ModeView } from './acp.ts';
-import { agentRow, agentStartRefusal, ensureAgents, rememberAgentLast, rememberAgentSignIn, resolveAgentNow, type AgentEntry, type AgentRow } from './discover.ts';
+import { agentRow, agentStartRefusal, ensureAgents, rememberAgentLast, rememberAgentSignIn, rememberAgentWord, resolveAgentNow, type AgentEntry, type AgentRow } from './discover.ts';
 import { agentHost, AGENTS_BUSY_TEXT, type Transient } from './host.ts';
 import { knownAgent, policyOf } from './known.ts';
 import { AGENT_TOOLS_MS, AgentRunError, AgentSession, agentErrorOf, type FoundAgent } from './session.ts';
@@ -277,7 +277,9 @@ export interface RunOptions {
  * auth_status, own_tools, images, modes, models, tools, auth?} or {ok:false, code, error, auth?}
  * (spec 4.13). `signed_in` is the login file's, read again now; `auth_status` is what the agent
  * itself said in its `_auth/status_update` ('none', 'signed_in', or null when it said nothing),
- * and a connect it says 'none' to carries its ways to sign in (`auth`).
+ * and a connect it says 'none' to carries its ways to sign in (`auth`). A connect to an agent
+ * that says it reports its login (its `initialize`) waits for that word, within its bound. The
+ * agent's word is kept for its row (discover.ts rememberAgentWord): its readiness follows it.
  */
 export async function agentTestRequest(body: Record<string, unknown>, o: RunOptions): Promise<Answer> {
   if (body.message !== undefined && typeof body.message !== 'boolean') return refuse(400, 'bad_request', 'message must be true or false.');
@@ -357,13 +359,22 @@ async function runTest(p: Prepared, tr: Transient, message: boolean, o: RunOptio
       if ('e' in outcome) throw outcome.e;
       tools = called ? 'works' : 'not_used';
     }
+    // A connect: the agent's word on its login may come after its session started (one adapter
+    // reads it in the background from initialize, and nothing there waits for it), so a connect
+    // to an agent that says it reports it waits for it, within its bound.
+    if (!message) {
+      await session.waitAuthStatus(signal);
+      if (signal.aborted) throw signal.reason ?? new Error('aborted');
+    }
+    const ms = Date.now() - t0;
     // The agent's own word on its login, apart from its login file (`signed_in`). A connect that
     // got through to an agent saying it isn't signed in keeps its ways to sign in on its row; one
-    // that answered the Test's message is signed in, whatever it said.
-    const ms = Date.now() - t0;
+    // that answered the Test's message is signed in, whatever it said. The row keeps the word
+    // (its readiness, the Default choice and the status follow it).
     const said = session.authStatus;
     const signIn = !message && said === 'none' ? signInView(session.info.auth, found) : null;
     rememberAgentSignIn(found.id, signIn);
+    rememberAgentWord(found.id, message ? 'signed_in' : (said ?? 'silent'));
     // The login file as it is now ("I've signed in: connect again"): the cached row may be older.
     const now = await resolveAgentNow(found.id, settings).catch(() => null);
     const answer: Record<string, unknown> = {
@@ -418,7 +429,9 @@ export async function agentSignInRequest(body: Record<string, unknown>, o: RunOp
   tr.session = session;
   try {
     await session.signIn(method, signal);
+    // Signed in by its own sign-in: its login file decides again until the next check.
     rememberAgentSignIn(found.id, null);
+    rememberAgentWord(found.id, null);
     // Its login file may be there now.
     const again = await resolveAgentNow(found.id, await loadSettings()).catch(() => null);
     alog('info', 'agent sign-in', { agent: found.id, ok: true });

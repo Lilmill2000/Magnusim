@@ -322,9 +322,14 @@ No test reaches a real model provider or this PC's real Assistant files.
     title, and approvals that carry the tool call's id) or `none` (a custom command).
   - `requireSignIn` refuses `session/new` with -32000 until `fake.signIn()` writes its
     marker (an `authenticate` writes it too). `authStatus: 'none'` (or another kind, such
-    as `'account'`) lets `session/new` through but first sends `_auth/status_update
-    {authStatus: {kind}}`, as an adapter that reports its own login does: the way such an
-    agent says it isn't signed in on a connect. `fake.argvWith({helpersAtStart: n})` makes it
+    as `'account'`) says in `initialize` that it reports its own login
+    (`agentCapabilities._meta.authStatus`) and lets `session/new` through but first sends
+    `_auth/status_update {authStatus: {kind}}`, as an adapter that reports its own login does:
+    the way such an agent says it isn't signed in on a connect. With `authStatusHold: name`
+    that report goes after the `session/new` answer instead, once `fake.release(name)` (it
+    records `{event: 'holding', name}` first), as that adapter's background read of its login
+    lands; `authStatus: 'silent'` says it reports its login and never does (a connect then
+    waits for it only within its bound). `fake.argvWith({helpersAtStart: n})` makes it
     start n helpers before it reads anything.
   - **Through agent discovery.** Discovery starts a package's bin as `[node, <script>,
     ...args]`, with no `--control` and no `MAGNUSIM_` variable (the agent's environment

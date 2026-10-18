@@ -186,6 +186,7 @@ export function readAgentRow(raw: unknown): AgentRow | null {
     allowed_modes: raw.allowed_modes === 'initial' ? 'initial' : Array.isArray(raw.allowed_modes) ? strs(raw.allowed_modes, 32) : null,
     last,
     sign_in: signIn,
+    auth_word: raw.auth_word === 'none' || raw.auth_word === 'signed_in' || raw.auth_word === 'silent' ? raw.auth_word : null,
     ready: raw.ready === true,
     reason: str(raw.reason),
     error: str(raw.error),

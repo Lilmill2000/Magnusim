@@ -98,6 +98,21 @@ import { AgentStartError, startAgentProcess, WORKDIR_PREFIX, type AgentEnvSpec, 
 import { RpcError, RpcExited, RpcPeer, RpcTimeout, type ExitInfo, type RpcId } from './rpc.ts';
 import type { SignedIn } from './discover.ts';
 
+/**
+ * How long after `initialize` answered a connect waits for the agent's word on its login, when
+ * the agent says it reports it: one adapter reads its login in the background from initialize,
+ * nothing there waits for it, and its own read gives up after 5 s.
+ */
+export const AUTH_STATUS_WAIT_MS = 6_000;
+
+/** Whether the agent says it reports its own login (`agentCapabilities._meta.authStatus`, an object: one adapter's extension). */
+export function reportsAuthStatus(init: unknown): boolean {
+  const caps = (init as { agentCapabilities?: unknown } | null)?.agentCapabilities;
+  const meta = caps && typeof caps === 'object' ? (caps as { _meta?: unknown })._meta : null;
+  const marker = meta && typeof meta === 'object' ? (meta as { authStatus?: unknown }).authStatus : null;
+  return !!marker && typeof marker === 'object';
+}
+
 /** A coding agent as a turn (or a Settings Test) starts it: what discovery found, as its row read it. */
 export interface FoundAgent {
   id: string;
@@ -259,6 +274,12 @@ export class AgentSession {
    * 'signed_in' (any other kind: an account, a key, a gateway...), or null (nothing yet).
    */
   authStatus: 'none' | 'signed_in' | null = null;
+  /** Its `initialize` said it reports its login (`_meta.authStatus`). */
+  authReports = false;
+  /** When `initialize` answered (waitAuthStatus counts from it). */
+  private initAt = 0;
+  /** waitAuthStatus's wake-ups (its first word on its login). */
+  private readonly authWaiters = new Set<() => void>();
   /** What it did between prompts that ends it (the first one), or null. */
   offence: AgentOffence | null = null;
   /** A turn ended with the offence as its own end (the next turn needn't say it again). */
@@ -352,6 +373,8 @@ export class AgentSession {
       throw new AgentRunError('agent_protocol', `${this.agent.name} speaks another version of the agent protocol (${pv ?? 'none'}); Magnusim speaks ${PROTOCOL_VERSION}.`);
     }
     const ai = agentInfo(init);
+    this.initAt = Date.now();
+    this.authReports = reportsAuthStatus(init);
     this.info = {
       name: this.agent.name,
       version: ai?.version ?? this.agent.version,
@@ -413,6 +436,32 @@ export class AgentSession {
     const code = (this.offence as AgentOffence).code;
     this.offenceTold = true;
     return new AgentRunError(code, code === 'agent_lockdown' ? LOCKDOWN_TEXT(this.agent.name) : MODE_TEXT(this.agent.name));
+  }
+
+  /**
+   * A connect's wait for the agent's word on its login: until its first `_auth/status_update`,
+   * `ms` after `initialize` answered at most, the process ending, or `signal`. At once when it
+   * said something already, or when it doesn't say it reports its login.
+   */
+  async waitAuthStatus(signal: AbortSignal, ms: number = AUTH_STATUS_WAIT_MS): Promise<void> {
+    if (!this.authReports || this.authStatus !== null || signal.aborted) return;
+    const left = this.initAt + ms - Date.now();
+    if (left <= 0) return;
+    let wake = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+        this.authWaiters.add(wake);
+        timer = setTimeout(wake, left);
+        signal.addEventListener('abort', wake, { once: true });
+        this.proc?.exited.then(wake, wake);
+      });
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', wake);
+      this.authWaiters.delete(wake);
+    }
   }
 
   /**
@@ -692,7 +741,11 @@ export class AgentSession {
     }
     if (method === '_auth/status_update') {
       const kind = authStatusKind(params);
-      if (kind) this.authStatus = kind === 'none' ? 'none' : 'signed_in';
+      if (kind) {
+        this.authStatus = kind === 'none' ? 'none' : 'signed_in';
+        // A connect waiting for its word (waitAuthStatus) reads it now.
+        for (const wake of [...this.authWaiters]) wake();
+      }
       try {
         this.o.onAuthStatus?.(kind);
       } catch {

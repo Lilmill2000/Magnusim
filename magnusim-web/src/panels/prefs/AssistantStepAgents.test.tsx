@@ -160,6 +160,7 @@ function applySettings(patch: Record<string, unknown>): Answer {
   if (settingsAnswer) return settingsAnswer;
   const next = { ...status };
   if ('provider' in patch) next.provider = patch.provider;
+  if ('privacy' in patch) next.privacy = patch.privacy;
   if ('agent_caps' in patch) next.agent_caps = { ...(next.agent_caps as object), ...(patch.agent_caps as object) };
   if ('agents' in patch) {
     for (const [id, p] of Object.entries(patch.agents as Record<string, Record<string, unknown>>)) {
@@ -526,6 +527,31 @@ describe('Coding agents: each row state', () => {
     expect(agent('claude').querySelector('[data-assistant-agent-privacy]')).toBeNull();
   });
 
+  it('Project data changed in the step reads the list again: the row of an agent whose own tools stay on follows it at once (off and why, its dot grey; back on)', async () => {
+    rows = [codex({ allowed: true, ready: true, reason: null }), row()];
+    await renderAgents();
+    const dot = () => agent('codex').querySelector('[data-assistant-dot]');
+    expect(dot()).toHaveAttribute('data-assistant-dot', 'ready');
+    expect(agent('codex').querySelector('[data-assistant-agent-privacy]')).toBeNull();
+    const reads = listReads().length;
+    // The server's rows under Never send project data.
+    rows = [codex({ allowed: true, ready: false, reason: 'privacy_denied' }), row()];
+    fireEvent.click(q('[data-assistant-privacy-option="deny"] input')!);
+    await waitFor(() => expect(q('[data-assistant-privacy]')).toHaveAttribute('data-assistant-privacy', 'deny'));
+    await waitFor(() => expect(agent('codex').querySelector('[data-assistant-agent-privacy]')!.textContent).toBe(privacyDeniedText('Codex')));
+    expect(dot()).toHaveAttribute('data-assistant-dot', 'not-ready');
+    expect(agent('codex')).toHaveAttribute('data-ready', '0');
+    expect(listReads().length).toBeGreaterThan(reads);
+    // Back to Ask: on again.
+    rows = [codex({ allowed: true, ready: true, reason: null }), row()];
+    fireEvent.click(q('[data-assistant-privacy-option="ask"] input')!);
+    await waitFor(() => expect(q('[data-assistant-privacy]')).toHaveAttribute('data-assistant-privacy', 'ask'));
+    await waitFor(() => expect(agent('codex').querySelector('[data-assistant-agent-privacy]')).toBeNull());
+    expect(dot()).toHaveAttribute('data-assistant-dot', 'ready');
+    expect(agent('codex')).toHaveAttribute('data-ready', '1');
+  });
+
+
   it('agentRowState: every state from a row and the checks run here', () => {
     const r = readAgentRow(row())!;
     expect(agentRowState(r)).toBe('ready');
@@ -836,6 +862,50 @@ describe('Coding agents: sign in (spec 4.12)', () => {
     fireEvent.click(q('[data-assistant-agents-refresh]')!);
     await waitFor(() => expect(agent('claude').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_YES} · ${OWN_TOOLS_OFF}`));
     expect(stateOf('claude')).toBe('ready');
+  });
+
+  it("the agent's word the server keeps decides the row when the step opens, as its readiness does: its 'none' over a login file, its 'signed_in' or a connect it said nothing on over a missing one", async () => {
+    rows = [
+      row({ signed_in: 'yes', auth_word: 'none', ready: false, reason: 'agent_signed_out' }),
+      row({ id: 'b', name: 'B', signed_in: 'no', auth_word: 'signed_in', ready: true }),
+      row({ id: 'c', name: 'C', signed_in: 'no', auth_word: 'silent', ready: true }),
+      row({ id: 'd', name: 'D', signed_in: 'yes', auth_word: 'silent', ready: true }),
+    ];
+    await renderAgents();
+    expect(stateOf('claude')).toBe('signed_out');
+    expect(agent('claude').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_NO} · ${OWN_TOOLS_OFF}`);
+    expect(within(agent('claude')).getByRole('group', { name: signInHeading('Claude Code') })).toBeInTheDocument();
+    expect(agent('claude')).toHaveAttribute('data-ready', '0');
+    expect(stateOf('b')).toBe('ready');
+    expect(agent('b').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`B 0.85.1 · ${OWN_TOOLS_OFF}`);
+    expect(agent('b')).toHaveAttribute('data-ready', '1');
+    expect(stateOf('c')).toBe('ready');
+    expect(agent('c').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`C 0.85.1 · ${LOGIN_UNKNOWN} · ${OWN_TOOLS_OFF}`);
+    expect(within(agent('c')).getByRole('button', { name: 'Test' })).toBeInTheDocument();
+    expect(agent('c')).toHaveAttribute('data-ready', '1');
+    // A login file there: it decides.
+    expect(agent('d').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`D 0.85.1 · ${LOGIN_YES} · ${OWN_TOOLS_OFF}`);
+    expect(readAgentRow(row({ auth_word: 'maybe' }))!.auth_word).toBeNull();
+  });
+
+  it("a check's own word gives way to the server's newer one: its row read again with a sign-in block (the agent asked to sign in since) is signed out, with its dot", async () => {
+    rows = [row({ signed_in: 'no', ready: false, reason: 'agent_signed_out' })];
+    testAnswer = { status: 200, body: { ok: true, agent: 'claude-agent-acp', version: '0.85.1', ms: 900, signed_in: 'no', auth_status: 'signed_in', own_tools: 'off', images: true, modes: [], models: [], tools: null } };
+    await renderAgents();
+    // The server keeps its word: the row read after the connect says it too.
+    rows = [row({ signed_in: 'no', auth_word: 'signed_in', ready: true })];
+    fireEvent.click(within(agent('claude')).getByRole('button', { name: CONNECT_AGAIN }));
+    await waitFor(() => expect(agent('claude')).toHaveAttribute('data-ready', '1'));
+    expect(stateOf('claude')).toBe('ready');
+    // A turn heard auth_required since: Refresh reads it, and the row follows the server, not the connect.
+    rows = [row({ signed_in: 'no', auth_word: 'none', sign_in: { methods: [terminal] }, ready: false, reason: 'agent_signed_out' })];
+    fireEvent.click(q('[data-assistant-agents-refresh]')!);
+    await waitFor(() => expect(agent('claude')).toHaveAttribute('data-ready', '0'));
+    expect(stateOf('claude')).toBe('signed_out');
+    expect(agent('claude').querySelector('[data-assistant-agent-line]')!.textContent).toBe(`Claude Code 0.85.1 · ${LOGIN_NO} · ${OWN_TOOLS_OFF}`);
+    expect(agent('claude').querySelector('[data-assistant-agent-signin-command="claude-login"]')!.textContent).toBe('claude-agent-acp --cli auth login');
+    // Its result line stays.
+    expect(agent('claude').querySelector('[data-assistant-agent-result]')!.textContent).toBe('Connected to Claude Code 0.85.1.');
   });
 
   it('a connect that asks to sign in is an error with the Sign in block of its ways', async () => {

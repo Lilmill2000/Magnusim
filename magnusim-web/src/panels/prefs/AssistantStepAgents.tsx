@@ -16,7 +16,11 @@
  *   more: a Test it answered, its own auth status on a connect (signed in, or not: that wins over
  *   the file), or its auth_required (here, or the server's `sign_in` from the last one, which shows
  *   the Sign in block until a check gets through). A connect it said nothing on proves only that
- *   it starts: with no login file the row says Magnusim can't tell, and offers Test.
+ *   it starts: with no login file the row says Magnusim can't tell, and offers Test. The server
+ *   keeps the agent's word (the row's `auth_word`) and its readiness follows it, so the line, the
+ *   dot and the Default choice agree, also when the step opens again.
+ * - Privacy changed in this step (Never send project data, or back): the list is read again, so
+ *   a row whose agent's own tools stay on says it stays off (or not), its dot with it.
  * - The allow switch (D-B, spec 4.9) shows on every agent whose own tools Magnusim can't switch
  *   off, off by default, with its warning beside it always. On asks first (No focused: Enter
  *   and Escape answer Don't), then POSTs the fingerprint of the command the row shows; off
@@ -225,15 +229,21 @@ export interface AgentDone {
 
 /**
  * Whether the row is signed in as the page says it: the newest word from a check run here
- * (checkLogin); else the server's sign-in block from the agent's last auth_required or 'none'
- * (a check that gets through otherwise clears it); else the login file (the row's `signed_in`).
+ * (checkLogin), until the row read after it says it too; else the agent's word the server keeps
+ * (the sign-in block from its last auth_required or 'none', its `auth_word`), as its readiness
+ * reads it; else the login file (the row's `signed_in`).
  */
 function loginOf(row: AgentRow, done: AgentDone | null): 'connected' | 'signed_out' | 'unsure' | 'file' {
   // A connect it said nothing on counts only while its login file says no: once the file is there, the file decides.
   if (done?.kind === 'check' && done.login && (done.login !== 'unsure' || row.signed_in === 'no')) return done.login;
-  if (row.sign_in) return 'signed_out';
+  if (row.sign_in || row.auth_word === 'none') return 'signed_out';
+  if (row.auth_word === 'signed_in') return 'connected';
+  if (row.auth_word === 'silent' && row.signed_in === 'no') return 'unsure';
   return 'file';
 }
+
+/** What the server says of the row's sign-in (a newer one than a check run here, once it changes). */
+const loginKey = (row: AgentRow) => `${row.signed_in}:${row.auth_word ?? ''}:${row.sign_in ? 1 : 0}`;
 
 /** A row's state (spec 5.6) apart from a check running now. */
 function baseState(row: AgentRow, done: AgentDone | null): Exclude<AgentRowState, 'testing' | 'checking'> {
@@ -348,6 +358,16 @@ export function AssistantStepAgents({ status }: { status: AssistantStatus }) {
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  // Privacy changed (its save answered): the rows' readiness changes with it (an agent whose own
+  // tools stay on is off under Never send project data), so the list is read again.
+  const privacy = status.privacy;
+  const privacyBefore = useRef(privacy);
+  useEffect(() => {
+    if (privacyBefore.current === privacy) return;
+    privacyBefore.current = privacy;
+    void load(false);
+  }, [privacy, load]);
 
   /** A row an action answered with: shown at once; a list read on its way is older, so it is dropped. */
   const putRow = useCallback((row: AgentRow) => {
@@ -515,6 +535,15 @@ function AgentRowView({
     lastChecked.current = checked;
     if (!running.current) setDone(null);
   }, [checked]);
+  // The server's word on the sign-in changed (the row read after a check, or since): it is the
+  // newest, so a check's own word no longer decides (its line stays).
+  const login = loginKey(row);
+  const lastLogin = useRef(login);
+  useEffect(() => {
+    if (lastLogin.current === login) return;
+    lastLogin.current = login;
+    if (!running.current) setDone((d) => (d && d.login ? { ...d, login: null } : d));
+  }, [login]);
 
   const base = baseState(row, done);
   const state: AgentRowState = busy ? 'testing' : base;

@@ -29,20 +29,26 @@
 //     none: neither (a custom command).
 //   protocolVersion (1), agentInfo, images, loadSession, authMethods (terminal or agent only),
 //   requireSignIn (session/new answers -32000 while the controller's sign-in marker is
-//   missing), authSignsIn (authenticate writes the marker; default true), authStatus (a kind,
-//   for example 'none' or 'account': session/new sends _auth/status_update {authStatus: {kind,
-//   label}} before its answer, as one adapter reports its login, and the session
-//   still starts), modes,
+//   missing), authSignsIn (authenticate writes the marker; default true), modes,
 //   configOptions, models (pre-v1, off by default), stubborn (ignores the end of its input and
 //   SIGTERM), stderrAtStart, envReport (variable names whose presence it reports).
+//   authStatus: kind   what it says of its own login, a kind such as 'none' or 'account':
+//                   initialize says it reports its login (agentCapabilities._meta.authStatus {}),
+//                   and session/new sends _auth/status_update {authStatus: {kind, label}} before
+//                   its answer (refused or not), as one adapter reports its login, and the
+//                   session still starts; 'silent': it says it reports its login and never does
+//   authStatusAt: 'initialize'   that report goes once, right after its initialize answer, and
+//                   never at session/new, as the adapter that probes its sign-in at initialize
+//                   does
+//   authStatusHold: name   the session/new report goes after its answer instead, once
+//                   release(name) (a 'holding' record first; a refused session/new says
+//                   nothing), as that adapter's own background read of its login lands
 //   mcpLate: name   answers session/new first and starts its MCP server only once release(name)
 //                   (a 'holding' record first), as an agent whose MCP servers connect in the
 //                   background does; each prompt records 'prompt_tools' (the tools its server had
 //                   listed when the prompt came, null for none yet)
 //   setModeReport: id   answers session/set_mode and, in the same write, reports current mode id
 //                   (current_mode_update), as an agent that switched itself meanwhile
-//   authStatus: {kind, label}   sends _auth/status_update {authStatus} right after its
-//                   initialize answer, as the adapter that probes its sign-in at initialize does
 //   afterSessionNew: [{update} | {request: {method, params}}]   sent right after its session/new
 //                   answer (the session id filled in), while the client still sets the session up
 //
@@ -232,6 +238,16 @@ function requestClient(method, params) {
   });
 }
 const sessionUpdate = (sessionId, update) => notifyClient('session/update', { sessionId, update });
+/** The kind it says of its own login (authStatus), or null: none set, or 'silent'. */
+function loginWord() {
+  const word = config.authStatus;
+  return typeof word === 'string' && word && word !== 'silent' ? word : null;
+}
+/** Its word on its login, nested as the adapter sends it (nothing when it has none to say). */
+function tellLogin() {
+  const word = loginWord();
+  if (word) notifyClient('_auth/status_update', { authStatus: { kind: word, label: word === 'none' ? 'Not logged in' : 'Signed in' } });
+}
 
 let config = null;
 const sessions = new Map();
@@ -635,9 +651,11 @@ async function handleRequest(msg) {
         authMethods: config.authMethods || [],
         agentInfo: config.agentInfo || { name: 'fake-acp-agent', title: 'Fake agent', version: '1.2.3' },
       };
+      // It says it reports its own login (the marker is an empty object).
+      if (typeof config.authStatus === 'string' && config.authStatus) result.agentCapabilities._meta = { authStatus: {} };
       reply(id, result);
-      // As the adapter that probes its sign-in at initialize: its status, right after.
-      if (config.authStatus) notifyClient('_auth/status_update', { authStatus: config.authStatus });
+      // As the adapter that probes its sign-in at initialize: its word, right after its answer.
+      if (config.authStatusAt === 'initialize') tellLogin();
       return undefined;
     }
     case 'authenticate': {
@@ -645,10 +663,12 @@ async function handleRequest(msg) {
       return reply(id, {});
     }
     case 'session/new': {
-      // The adapter's own word on its login (it reports it at each session it creates, refused or not).
-      if (typeof config.authStatus === 'string' && config.authStatus) {
-        notifyClient('_auth/status_update', { authStatus: { kind: config.authStatus, label: config.authStatus === 'none' ? 'Not logged in' : 'Signed in' } });
-      }
+      // The adapter's own word on its login (it reports it at each session it creates, refused or
+      // not), or later (authStatusHold: its background read of its login, after this answer);
+      // never here when it said it at initialize (authStatusAt).
+      const atSession = config.authStatusAt !== 'initialize';
+      const late = typeof config.authStatusHold === 'string' && config.authStatusHold ? config.authStatusHold : null;
+      if (atSession && !late) tellLogin();
       if (config.requireSignIn && !(config.marker && existsSync(config.marker))) {
         return replyError(id, -32000, 'Authentication required');
       }
@@ -688,6 +708,14 @@ async function handleRequest(msg) {
           await getJson(`/hold?name=${encodeURIComponent(config.mcpLate)}`);
           s.mcp = startMcp(server, sessionId);
         })();
+      }
+      if (atSession && late && loginWord()) {
+        // Its word on its login after the answer, once released (its background read landing).
+        void (async () => {
+          await record({ event: 'holding', name: late });
+          await getJson(`/hold?name=${encodeURIComponent(late)}`);
+          tellLogin();
+        })().catch(() => {});
       }
       // Once per session: a file read the client must refuse.
       requestClient('fs/read_text_file', { sessionId, path: join(String(params?.cwd || '.'), 'notes.txt') }).then((answer) =>
