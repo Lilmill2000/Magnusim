@@ -5,7 +5,7 @@
 //     keeps the parameter's comment ("-" removes it); a bad name, a bad expression (with the parameters there are),
 //     a removal still used and an unknown name answer before anything changes, naming the row;
 //   - body: rename, colour and simulation in one step; a clash, a bad colour and nothing to change
-//     refused;
+//     refused; a name in quotes (as get_model writes one with parentheses) names the body;
 //   - edit_feature: a value by its path, rename, suppress and move (before, after, end) with the
 //     Part's own words when refused; a field it does not have, and a sketch dimension the sketch
 //     does not have, refused;
@@ -139,6 +139,10 @@ describe('body', () => {
       await h.add('extrude', { profiles: [p.profile], extent: { kind: 'blind', distance: '3 mm' }, op: 'new' });
       const second = h.doc.state.get().rebuild.bodies.find((b) => b.id !== p.body)!.name;
       expect(await h.call('body', { body: second, rename_to: 'PLATE', color: '', simulation: 'keep' })).toMatchObject({ ok: false, error: { detail: { reason: 'name_taken', field: 'rename_to' } } });
+      // A name with the selectors' own characters, in quotes as get_model writes it, names the body too.
+      await h.ok('body', { body: second, rename_to: 'Plate (copy)', color: '', simulation: 'keep' });
+      const quoted = await h.ok('body', { body: '"Plate (copy)"', rename_to: 'Copy', color: '', simulation: 'keep' });
+      expect(quoted.data).toMatchObject({ body: { name: 'Copy' }, resolved: { body: 'Plate (copy)' } });
     },
     REAL_KERNEL_MS,
   );

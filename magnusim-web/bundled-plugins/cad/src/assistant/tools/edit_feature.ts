@@ -16,7 +16,8 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import type { Feature, FeatureId } from '../../types/doc';
+import { isDimension } from '../../sketch/model';
+import type { Feature, FeatureId, SketchFeature } from '../../types/doc';
 import type { EditResult } from '../../types/doc-service';
 import { uiFor } from '../../ui/controller';
 import { heartbeat } from '../busy';
@@ -100,6 +101,16 @@ function moveIndex(features: readonly Feature[], f: Feature, move: string, findN
   return to === from ? null : { to, words: `${before ? 'before' : 'after'} ${other.name}` };
 }
 
+/** The sketch `f` is made from (its profiles' sketch) when `field` is one of that sketch's dimensions (a hole's d, h1x...), or null. */
+function sketchWithDimension(s: { doc: { features: readonly Feature[] } }, f: Feature, field: string): SketchFeature | null {
+  const profiles = (f as Feature & { profiles?: unknown }).profiles;
+  if (!Array.isArray(profiles) || !profiles.length) return null;
+  const id = (profiles[0] as { sketch?: unknown }).sketch;
+  const sketch = s.doc.features.find((g) => g.id === id);
+  if (!sketch || sketch.type !== 'sketch') return null;
+  return sketch.constraints.some((c) => c.id === field && isDimension(c)) ? sketch : null;
+}
+
 /** A refusal of the Part's own edit as the tool's error. */
 function refused(field: string, r: EditResult): ToolError {
   const reason = r.ok ? '' : r.reason;
@@ -124,20 +135,30 @@ const editFeature: EditTool<Plan> = {
     const dims = rows.length && f.type === 'sketch' ? await planDimensions(ctx, f, rows.map((r) => ({ field: str(r?.field), value: str(r?.value) }))) : null;
     if (dims) for (const x of dims.set) set.push({ field: x.field, path: x.field, value: x.value });
     const problems: string[] = [];
+    let redirect: string | null = null;
     for (const [i, row] of (dims ? [] : rows).entries()) {
       const field = str(row?.field);
       const value = str(row?.value);
       const path = pathOfField(f, field, services);
       if (!path) {
         const fields = valuesOf(f, services).map((v) => v.field);
-        problems.push(`set[${i}].field: ${f.name} has no field "${field}" (its fields: ${fields.length ? fields.join(', ') : 'none'})`);
+        const sketch = sketchWithDimension(s, f, field);
+        if (sketch) {
+          redirect ??= sketch.name;
+          problems.push(`set[${i}].field: ${field} is a dimension of ${sketch.name}, the sketch ${f.name} is made from: edit_feature ${sketch.name} with it (${f.name}'s own fields: ${fields.length ? fields.join(', ') : 'none'})`);
+        } else problems.push(`set[${i}].field: ${f.name} has no field "${field}" (its fields: ${fields.length ? fields.join(', ') : 'none'})`);
         continue;
       }
       if (!value) problems.push(`set[${i}].value: enter an expression ("12 mm", "w/2")`);
       if (set.some((x) => x.path === path)) problems.push(`set[${i}]: ${field} is set twice`);
       set.push({ field, path, value });
     }
-    if (problems.length) throw new ToolError('bad_input', `${problems.slice(0, 12).join('; ')}.`, { detail: { problems: problems.slice(0, 12) } });
+    if (problems.length) {
+      throw new ToolError('bad_input', `${problems.slice(0, 12).join('; ')}.`, {
+        detail: { problems: problems.slice(0, 12), ...(redirect ? { sketch: redirect } : {}) },
+        ...(redirect ? { hint: `Call edit_feature with feature "${redirect}" and the same set rows.` } : {}),
+      });
+    }
     // The dry run: the feature with each new value, as its type checks it.
     let patched: Feature = f;
     const def = services.doc.features.get(f.type);

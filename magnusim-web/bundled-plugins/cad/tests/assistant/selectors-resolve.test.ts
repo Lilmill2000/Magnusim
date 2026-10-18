@@ -331,6 +331,12 @@ describe('selectors on a real block', () => {
         for (const c of cands) expect(c).toMatchObject({ handle: expect.stringMatching(/^#f\d+$/), words: expect.any(String), center_mm: expect.any(Array) });
         expect(await reasonOf(selectOne(sc, 'Body 1 faces %sphere', 'face', 'on'))).toMatchObject({ reason: 'nothing_selected', detail: { field: 'on' } });
         expect(await reasonOf(selectOne(sc, 'Body 1 fcaes', 'face', 'on'))).toMatchObject({ reason: 'bad_selector', detail: { field: 'on', column: 8 } });
+        // A filter alone: the answer says it goes after its scope, with the form.
+        for (const [text, want] of [['+Z', 'face'], ['hole', 'face'], ['largest', 'face'], ['|Z', 'edge']] as const) {
+          const bare = await reasonOf(selectOne(sc, text, want, 'face'));
+          expect(bare.reason, text).toBe('bad_selector');
+          expect(bare.message, text).toMatch(new RegExp(`: a filter goes after its scope, as in "[^"]+ ${want === 'edge' ? 'edges' : 'faces'} ${text.replace(/[|+]/g, (c) => `\\${c}`)}"\\.$`));
+        }
       });
     },
     REAL_KERNEL_MS,

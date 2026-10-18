@@ -91,7 +91,7 @@ const ALL_VALUES = new Set([...VALUES.values()].flatMap((s) => [...s]));
 const value = (at: string, v: string) => expect(VALUES.get(at), at).toContain(v);
 
 /** Reply keys the guide and help name (each one a key the tools' replies carry). */
-const REPLY_KEYS = ['dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm'];
+const REPLY_KEYS = ['dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut'];
 
 /** Every text of help, and the guide. */
 const helpTexts = () => Object.values(HELP).flatMap((rows) => rows.flatMap((r) => [r.about, r.text]));

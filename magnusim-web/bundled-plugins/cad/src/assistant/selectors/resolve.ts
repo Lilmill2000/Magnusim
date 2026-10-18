@@ -1016,6 +1016,9 @@ function textOf(sel: Sel): string {
   }
 }
 
+/** A selector that does not read and starts with a filter (>Z, +Z, |Z, #Z, %cylinder, hole, boss, largest, smallest, radius, nearest): its scope is missing. */
+const BARE_FILTER = /^(?:[<>+|%-]|#(?![fevb][1-9])|(?:hole|boss|largest|smallest|radius|nearest)(?:\s|$))/i;
+
 /** Parse `text` for `want`, a syntax error as bad_selector with its column. */
 export function parseFor(sc: Scene, text: string, want: Want, field?: string): Sel {
   try {
@@ -1023,7 +1026,13 @@ export function parseFor(sc: Scene, text: string, want: Want, field?: string): S
   } catch (e) {
     if (!(e instanceof SelectorSyntaxError)) throw e;
     const names = /no .* (starts here|is called)/.test(e.message) ? { features: sc.known.features.slice(0, 20).map((f) => f.name), bodies: sc.known.bodies.slice(0, 20).map((b) => b.name) } : null;
-    throw new ToolError('bad_selector', `${field ? `${field}: ` : ''}${e.message} (column ${e.column} of "${text}").`, { detail: { ...(field ? { field } : {}), selector: text, column: e.column, ...(names ? { names } : {}) } });
+    // A filter alone ("+Z", "hole", "largest" as a face): it goes after its scope.
+    const bare = want !== 'region' && want !== 'body' && want !== 'plane' && want !== 'axis' && BARE_FILTER.test(text.trim());
+    const example = bare ? `${sc.known.bodies[0]?.name ?? 'Body 1'} ${want === 'edge' ? 'edges' : want === 'vertex' ? 'vertices' : 'faces'} ${text.trim()}` : '';
+    throw new ToolError('bad_selector', `${field ? `${field}: ` : ''}${e.message} (column ${e.column} of "${text}")${bare ? `: a filter goes after its scope, as in "${example}"` : ''}.`, {
+      detail: { ...(field ? { field } : {}), selector: text, column: e.column, ...(names ? { names } : {}) },
+      ...(bare ? { hint: `Put the body (or "all") and the kind first: "${example}"; find lists what it names.` } : {}),
+    });
   }
 }
 

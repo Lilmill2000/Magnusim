@@ -119,6 +119,19 @@ describe('the selector grammar', () => {
     expect(p('edges of Base.end', 'edge')).toMatchObject({ t: 'edges-of', face: { t: 'role', role: 'end' }, filters: [] });
     expect(p('edges of Base.end %line', 'edge')).toMatchObject({ t: 'edges-of', filters: [{ f: '%', type: 'line' }] });
     expect(p('edges of #f2 |X', 'edge')).toMatchObject({ t: 'edges-of', face: { t: 'handle' }, filters: [{ f: '|' }] });
+    // A face query goes in brackets with its own filters; the filters after them are the edges'.
+    expect(p('edges of (Body 1 faces >Z) >X', 'edge')).toMatchObject({ t: 'edges-of', face: { t: 'query', of: 'face', filters: [{ f: '>', ax: { text: 'Z' } }] }, filters: [{ f: '>', ax: { text: 'X' } }] });
+    expect(p('edges of (Body 1 faces >Z) %line', 'edge')).toMatchObject({ face: { t: 'query', filters: [{ f: '>' }] }, filters: [{ f: '%', type: 'line' }] });
+    expect(p('edges of (Body 1 faces >Z |X)', 'edge')).toMatchObject({ face: { t: 'query', filters: [{ f: '>' }, { f: '|' }] }, filters: [] });
+    expect(p('edges of (Base.end) |X', 'edge')).toMatchObject({ face: { t: 'role', role: 'end' }, filters: [{ f: '|' }] });
+    expect(p('edges of Body 1 faces', 'edge')).toMatchObject({ face: { t: 'query', filters: [] }, filters: [] });
+    // Bare with a filter it could be read either way: refused, naming both bracket forms.
+    for (const tail of ['>X', '|X', '%line']) {
+      const e = err(`edges of Body 1 faces >Z ${tail}`, 'edge');
+      expect(e).toMatchObject({ column: 23 });
+      expect(e.message).toContain(`put a face query in brackets here, the faces' filters inside and the edges' after them: "edges of (Body 1 faces >Z ${tail})" takes every edge of those faces, "edges of (Body 1 faces) >Z ${tail}" filters the edges`);
+    }
+    expect(err('edges of (Body 1 faces >Z', 'edge').message).toMatch(/expected "\)" after the face/);
     expect(p('Base.end & Base.side(r.top)', 'edge')).toMatchObject({ t: 'pair', a: { role: 'end' }, b: { role: 'side', detail: 'r__top' } });
     expect(p('Bracket.side(p.3) & Bracket.side(p.4)', 'edge')).toMatchObject({ t: 'pair', a: { feature: { id: 'f_bracket' }, detail: 'p__3' }, b: { detail: 'p__4' } });
     expect(err('face at (0, 0)', 'face').message).toMatch(/expected ","/);

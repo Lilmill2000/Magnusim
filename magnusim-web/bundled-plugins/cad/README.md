@@ -551,7 +551,8 @@ open: Back or a reload clears it.
 
 **Deleting asks you.** Before the Assistant deletes features the app asks
 "Allow the Assistant to delete features?", "Deletes features from the Part;
-Ctrl+Z brings them back.", with the keyboard on **Don't**. A feature another one
+one Ctrl+Z takes back the whole request, this deletion with it.", with the
+keyboard on **Don't**. A feature another one
 uses is not deleted; the Assistant is told which features use it.
 
 **Honest results.** Each call applies completely or not at all (unless you

@@ -1,6 +1,8 @@
 // Why a join, cut or intersect met nothing (CAD tools spec §7.4, §12.1 diagnose), on the REAL
 // kernel through the extrude and revolve tools. Every miss changes nothing (no feature, no panel,
 // no undo entry) and says which way it missed:
+//   - a blind cut pointing away from a plate it does not reach either way at its distance:
+//     wrong_side with how far the body starts (gap_mm), and the hint's cut works;
 //   - a blind cut pointing away from the plate: wrong_side, with the body the other way and the
 //     flip hint ("set flip false" when flip is already true); a through cut the wrong way too;
 //   - the L bracket walk: a hole sketched on its -X face at v = +22.5 and cut through misses below
@@ -165,6 +167,25 @@ describe('a cut that stops short, and cuts on given bodies', () => {
       expect(e).toMatchObject({ hint: HINTS.too_short, detail: { reason: 'feature_failed', sub: 'too_short', in_line: 'Body 1' } });
       expect(e.message).toMatch(/The profile is in line with Body 1, but the extrude stops before it reaches it\./);
       same();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'is wrong_side, with how far the body starts, when the cut points away from a body beyond its distance; the hint works',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await plate(h);
+      // 10 mm up, pointing up (flip false): the plate (z 0 to 6) is the other way, 4 mm away.
+      await ok(h, 'sketch', disc('High', 'Top offset 10 mm', 0, 0));
+      const same = unchanged(h);
+      const e = await fail(h, 'extrude', EXTRUDE({ sketch: 'High', distance: '2 mm', flip: false, op: 'cut' }));
+      expect(e).toMatchObject({ detail: { reason: 'feature_failed', sub: 'wrong_side', other_way: 'Body 1', gap_mm: 4 }, hint: 'The cut points away from the body: set flip true and a distance over 4 mm (or extent through), or use hole.' });
+      expect(e.message).toMatch(/It points away from the body, and Body 1 starts 4 mm away on the other side: with flip true and a distance over 4 mm it would cut Body 1\./);
+      same();
+      // As the hint says: the cut goes 2 mm into the plate.
+      await ok(h, 'extrude', EXTRUDE({ sketch: 'High', distance: '6 mm', flip: true, op: 'cut' }));
+      expect(volume(h)).toBeCloseTo(14400 - 25 * PI * 2, 3);
     },
     REAL_KERNEL_MS,
   );

@@ -90,8 +90,13 @@ into the message. Anything else thrown is `internal`; an aborted call is `stoppe
 Reads wait (at most 30 s, a sign of life every 5 s) for the Part to open and the kernel
 to start (`busy.ts`), then for the rebuild to catch up (`doc.settled()`). Reply budgets
 (`turn-info.ts`): brief 8 KB (3 KB on a local turn), older features collapsing above 80
-(30); full 24 KB (12 KB); one sketch 16 KB (8 KB). A local turn whose model has less than
-24,000 tokens of context answers `not_ready` `small_context`.
+(30); full 24 KB (12 KB); one sketch 16 KB (8 KB). The Part's facts get half a brief's room
+(`fitBase`): a long body list is halved first; then the parameters lose their comments, then
+their expressions (each keeps its name, kind and value), and only a list whose names alone do
+not fit is halved (`params_cut` says what went and that `get_model detail full` has it,
+`params_more` counts the rest). The collapsed row of older features points to `detail full`
+and `feature <name>`. A local turn whose model has less than 24,000 tokens of context answers
+`not_ready` `small_context`.
 
 ## An edit call (`step.ts`, `judge.ts`, `ledger.ts`, `busy.ts`, `pace.ts`)
 
@@ -168,7 +173,8 @@ answers `busy` `paused` with nothing kept.
 
 `delete` is the one destructive tool: the app asks the person before the call reaches the
 page ("Allow the Assistant to delete features?", with its confirm note "Deletes features from
-the Part; Ctrl+Z brings them back." in place of "can't be undone"), so a declined call never
+the Part; one Ctrl+Z takes back the whole request, this deletion with it." in place of "can't
+be undone": the delete is sealed into the request's one undo group), so a declined call never
 runs here. The plan resolves every name (any case, or its id; a name given twice or not in the
 Part is refused, every problem at once), then finds every feature outside the list that uses
 one in it: its parents, or the makers of the bodies it names (`dependencies` in
@@ -195,7 +201,12 @@ One string names faces, edges, vertices, bodies, planes, axes or sketch regions
   back every label it writes (tests pin the round trip on real bodies).
 - `selectors/parse.ts`: pure; the Part's names come in as data, the longest known name
   wins, quotes are allowed, and a body and a feature of one name are read by the grammar.
-  Errors carry the 1-based column (`bad_selector`, `detail.column`).
+  Errors carry the 1-based column (`bad_selector`, `detail.column`); a selector that starts
+  with a filter ("+Z", "hole") is told that a filter goes after its scope, with the form
+  (`parseFor`). In `edges of`, a face query goes in brackets with its own filters, and the
+  filters after the brackets pick among the edges ("edges of (Body 1 faces >Z) >X"); written
+  bare with a filter it is refused, naming both bracket forms, since the filter could be the
+  faces' or the edges'.
 - `selectors/resolve.ts`: `withScene(ctx, {before?, sketch?, self?}, fn)` reads the shown
   bodies once the rebuild caught up (a new feature), or `doc.bodiesBefore(feature)` (an
   edit), and runs `fn` again once when the Part rebuilt or the kernel restarted meanwhile
@@ -299,7 +310,10 @@ What they share is in `region-tools.ts`:
 the other way meet a body (`other_way`; the hint says `set flip false` when flip is already
 true, and a revolve's says to turn the other way), `too_short` when the whole sweep (through
 everything both ways, a full turn) meets one the extent does not reach (`in_line`), else
-`off_body`. Every answer has `detail.frame` (u, v and n in model axes, the origin, and the
+`off_body`. A blind extrude is checked one way at a time: when only the other way (through
+everything) meets a body farther than the distance, the answer is `wrong_side` with `gap_mm`
+(how far away the body starts) and a hint to flip and go past it, never `too_short` (no
+longer distance this way would reach it). Every answer has `detail.frame` (u, v and n in model axes, the origin, and the
 words "u runs +Y, v runs -Z, origin (0, 0, 0)"), `profile_bbox_mm` and each body's box. Its
 kernel calls are refused after a worker respawn (the shape ids died): the sub-reason is then
 left out and the message says the check could not be made.

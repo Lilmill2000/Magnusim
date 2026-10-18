@@ -6,7 +6,10 @@
 //     wrong_side  the same regions with flip the other way meet a body (extrude_regions or
 //                 revolve_regions, then boolean common per body, as extrude/def.ts does)
 //     too_short   the whole sweep (an extrude through everything both ways, a full turn) meets
-//                 one, but this extent stops before it: make it longer
+//                 one, but this extent stops before it: make it longer. A blind extrude is checked
+//                 one way at a time (through everything along it, then the other way): a body
+//                 that only the other way meets, farther than the distance, is wrong_side with
+//                 how far away it starts (gap_mm), since no longer distance this way reaches it
 //     off_body    neither: the profile lies beside the bodies; the frame (where u and v point in
 //                 model axes, and the origin) and the profile's model box beside each body's
 // A kernel that refuses one of the checks (or restarts) leaves the sub-reason out: the answer says
@@ -170,10 +173,11 @@ async function bboxOf(sc: Scene, shape: ShapeId, exact = false): Promise<BBox> {
 }
 
 /**
- * The feature's tool shape made another way (flip turned, or the whole sweep), or null when that
- * way makes nothing (the kernel refuses it). The shape is released with the scene.
+ * The feature's tool shape made another way (flip turned; the whole sweep; an extrude through
+ * everything its own way, `ahead`, or the other way, `behind`), or null when that way makes
+ * nothing (the kernel refuses it). The shape is released with the scene.
  */
-async function toolShape(sc: Scene, how: 'flip' | 'whole'): Promise<ShapeId | null> {
+async function toolShape(sc: Scene, how: 'flip' | 'whole' | 'ahead' | 'behind'): Promise<ShapeId | null> {
   const { f, out, keys, services, kernel } = sc;
   const units = services.doc.units;
   const section = { plane: out.plane, curves: out.curves, regions: keys };
@@ -181,7 +185,7 @@ async function toolShape(sc: Scene, how: 'flip' | 'whole'): Promise<ShapeId | nu
     let id: ShapeId;
     if (f.type === 'extrude') {
       let extent;
-      if (how === 'whole') extent = { kind: 'through_all' as const, targets: sc.targets.map((b) => b.shape), both: true };
+      if (how !== 'flip') extent = { kind: 'through_all' as const, targets: sc.targets.map((b) => b.shape), both: how === 'whole' };
       else {
         const v = resolveExtent(f, units);
         if (!v.ok) return null;
@@ -189,7 +193,7 @@ async function toolShape(sc: Scene, how: 'flip' | 'whole'): Promise<ShapeId | nu
         if (!k.ok) return null;
         extent = k.extent;
       }
-      id = (await kernel.call('extrude_regions', { ...section, extent, flip: how === 'flip' ? !f.flip : !!f.flip })).result.id;
+      id = (await kernel.call('extrude_regions', { ...section, extent, flip: how === 'flip' || how === 'behind' ? !f.flip : !!f.flip })).result.id;
     } else {
       if (!f.axis) return null;
       const axis = await resolveAxis(f.axis, buildCtx(sc));
@@ -218,6 +222,12 @@ async function firstOverlap(sc: Scene, tool: ShapeId): Promise<EndBody | null> {
     if (!c.empty) return body;
   }
   return null;
+}
+
+/** The first target body an extrude through everything one way meets (`ahead`: its own way, `behind`: the other), or null. */
+async function firstWay(sc: Scene, how: 'ahead' | 'behind'): Promise<EndBody | null> {
+  const tool = await toolShape(sc, how);
+  return tool !== null ? firstOverlap(sc, tool) : null;
 }
 
 /** Whether flipping changes the shape at all (symmetric extents and equal two-sided ones do not). */
@@ -313,6 +323,24 @@ export async function diagnoseMiss(services: AppServices, f: SweptFeature, o: { 
         const words = f.type === 'extrude' ? `It points away from the body: with flip ${!f.flip} it would ${verb} ${hit.name}.` : `It turns away from the body: with flip ${!f.flip} it would ${verb} ${hit.name}.`;
         const hint = f.type === 'revolve' ? `The ${verb} turns away from the body: set flip ${!f.flip}.` : f.flip ? `The ${verb} points away from the body: set flip false, or use hole.` : undefined;
         return { sub: 'wrong_side', words, detail: { sub: 'wrong_side', other_way: hit.name, ...detail }, ...(hint ? { hint } : {}) };
+      }
+    }
+    // A blind extrude: its own way (any length), then the other way (flip and length both wrong).
+    const blind = f.type === 'extrude' && (() => {
+      const v = resolveExtent(f, sc.services.doc.units);
+      return v.ok && v.values.kind === 'blind';
+    })();
+    if (blind) {
+      const behind = (await firstWay(sc, 'ahead')) ? null : await firstWay(sc, 'behind');
+      if (behind) {
+        // How far the body starts from the sketch plane, the other way.
+        const away: Vec3 = (f.flip ? [...plane.normal] : plane.normal.map((c) => -c)) as Vec3;
+        const b = await bboxOf(sc, behind.shape, true);
+        let near = Infinity;
+        for (const x of [b[0], b[3]]) for (const y of [b[1], b[4]]) for (const z of [b[2], b[5]]) near = Math.min(near, (x - plane.origin[0]) * away[0] + (y - plane.origin[1]) * away[1] + (z - plane.origin[2]) * away[2]);
+        const gap = Math.max(0, near);
+        const words = `It points away from the body, and ${behind.name} starts ${len(gap)} mm away on the other side: with flip ${!f.flip} and a distance over ${len(gap)} mm it would ${verb} ${behind.name}. ${where}`;
+        return { sub: 'wrong_side', words, detail: { sub: 'wrong_side', other_way: behind.name, gap_mm: len(gap), ...detail }, hint: `The ${verb} points away from the body: set flip ${!f.flip} and a distance over ${len(gap)} mm (or extent through), or use hole.` };
       }
     }
     const whole = await toolShape(sc, 'whole');

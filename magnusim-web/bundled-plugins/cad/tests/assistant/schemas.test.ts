@@ -88,7 +88,7 @@ describe('the 18 tools', () => {
   it('delete alone asks, and its question says Ctrl+Z brings the features back (at most 120 characters)', () => {
     expect(CAD_TOOLS.filter((t) => t.confirm).map((t) => t.name)).toEqual(['delete']);
     const note = toolNamed('delete')!.confirm!;
-    expect(note).toBe('Deletes features from the Part; Ctrl+Z brings them back.');
+    expect(note).toBe('Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.');
     expect(note.length).toBeLessThanOrEqual(120);
   });
 

@@ -96,6 +96,17 @@ describe('help', () => {
     expect(text('help')).toContain('Every field of every tool is required: "", [] or false when unused.');
     expect(HELP.parameters.map((r) => r.about)).toEqual(['expressions', 'bare numbers', 'names', 'kinds']);
     expect(HELP.parameters[0].text).toContain('mm, cm, m, in, ft, deg, rad');
+    // Only the first cloud dialect leaves view out of its strict budget (the second sends every tool strict).
+    expect(text('view')).toContain('not strict on the first cloud dialect (its 20-tool budget)');
+    expect(text('view')).not.toContain('the cloud dialects');
+  });
+
+  it('says what the Part does with a join: cut and intersect need overlap, a join also takes a body it shares a face with', () => {
+    const all = [GUIDE, ...Object.values(HELP).flatMap((rows) => rows.map((r) => r.text)), ...CAD_TOOLS.map((t) => t.description), JSON.stringify(CAD_TOOLS.map((t) => t.inputSchema))].join('\n');
+    // body-op.ts: an unscoped join takes a body the tool only touches, when the two fuse into one solid.
+    expect(all).not.toMatch(/join, cut,? (and )?intersect (change bodies (\(\[\] = every body it meets\) )?and )?need overlap/);
+    expect(GUIDE).toContain('BOOLEANS: cut, intersect need overlap; join also takes a body sharing a face.');
+    expect(HELP.traps.find((r) => r.about === 'overlap')!.text).toContain('A join also takes a body it shares a face with');
   });
 
   it("the sketch topic gives each entity kind, the solver's ref signatures, joins and the frames", () => {

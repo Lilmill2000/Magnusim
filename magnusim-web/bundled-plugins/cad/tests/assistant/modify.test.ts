@@ -3,7 +3,8 @@
 // e_1 to e_4: bottom, right, top, left):
 //   - a fillet of a face keeps the face (every edge of it, a live set); one of an edge between two
 //     faces keeps that edge (a fixed set), its volume as the formula says; "edges of <face>" with a
-//     filter is a fixed set of edges;
+//     filter is a fixed set of edges, a face query in brackets too ("edges of (Body 1 faces >Z) >X"),
+//     and one written bare with a filter is refused;
 //   - a fillet too large for its wall changes nothing (no feature, no undo entry, no panel) and
 //     answers feature_failed with CAD's own words (the edges, and the largest radius that works);
 //   - targets on two bodies, a body or a region as a target, a size2 on a fillet and a bad size
@@ -87,6 +88,25 @@ describe('modify fillet', () => {
       expect(featureNamed<FilletFeature>(h, 'Fillet 1').edges).toHaveLength(2);
       // Two vertical edges, 6 mm long each.
       expect(volume(h)).toBeCloseTo(14400 - 2 * filletLoss(1, 6), 3);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a face query in brackets: the filter after them picks among its edges; written bare with a filter it is refused',
+    async () => {
+      h = await assistantHarness();
+      await plate(h);
+      // Bare, the filter could be the faces' or the edges': refused, nothing changed.
+      const bare = await h.call('modify', MODIFY({ targets: ['edges of Body 1 faces >Z >X'], size: '1 mm' }));
+      expect(bare).toMatchObject({ ok: false, error: { detail: { reason: 'bad_selector' } } });
+      expect((bare as { error: { message: string } }).error.message).toContain('put a face query in brackets here');
+      expect(h.doc.state.get().doc.features).toHaveLength(2);
+      // The top face's +X edge, 40 mm long, alone.
+      const one = await h.ok('modify', MODIFY({ targets: ['edges of (Body 1 faces >Z) >X'], size: '1 mm' }));
+      expect(one.data).toMatchObject({ kept_as: '1 edge (a fixed set)' });
+      expect(featureNamed<FilletFeature>(h, 'Fillet 1').edges).toHaveLength(1);
+      expect(volume(h)).toBeCloseTo(14400 - filletLoss(1, 40), 3);
     },
     REAL_KERNEL_MS,
   );

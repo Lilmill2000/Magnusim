@@ -167,7 +167,8 @@ describe("the guide's and help's selectors", () => {
 
   it('every selector the guide shows reads', () => {
     const section = GUIDE.slice(GUIDE.indexOf('SELECTORS'), GUIDE.indexOf('BOOLEANS'));
-    const quoted = [...section.matchAll(/"([^"]+)"/g)].map((m) => m[1]).filter((q) => !['+Z', '|Z', '#Z', '%cylinder', 'hole', 'largest', '>Z[2]'].includes(q));
+    // Every string the guide quotes is a whole selector (a filter alone reads as nothing).
+    const quoted = [...section.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(quoted).toEqual(['Base.start', 'Base.end', 'Base.side', 'Base.side(l2)', 'Body 1 faces >Z', 'edges of Base.end', 'Base.end & Base.side(r.top)', 'Body 1 edges |Z', 'Body 1 face at (0, 0, 6)', 'selection']);
     for (const q of quoted) reads(q, 'any');
     for (const f of ['>Z[2]', '+Z', '|Z', '#Z', '%cylinder', 'hole', 'largest']) reads(`Body 1 faces ${f}`, 'face');

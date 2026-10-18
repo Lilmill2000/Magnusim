@@ -7,6 +7,9 @@
 //   selection                                        the person's selection
 //   face       FEATURE.ROLE[(DETAIL)][~k] | SCOPE faces FILTER* | [BODY] face at (x, y, z) | #f
 //   edge       edges of FACE FILTER* | FACE & FACE | SCOPE edges FILTER* | [BODY] edge at (...) | #e
+//              (a face query goes in brackets there, its own filters inside: "edges of (Body 1
+//              faces >Z) |X"; written bare with a filter it is refused, as the filters would be
+//              read as the faces' or the edges' either way)
 //   vertex     SCOPE vertices FILTER* | [BODY] vertex at (...) | #v
 //   body       BODY | bodies of FEATURE | all bodies | bodies | #b
 //   plane      (Top|Front|Right|XY|XZ|YZ | PLANE FEATURE | FACE) [offset EXPR [flip]]
@@ -378,15 +381,15 @@ class Parser {
     }
   }
 
-  /** SCOPE faces|edges|vertices FILTER*. */
-  query(i: number, of: 'face' | 'edge' | 'vertex'): R<Sel> {
+  /** SCOPE faces|edges|vertices FILTER* (no filters with `bare`: the words up to "faces"). */
+  query(i: number, of: 'face' | 'edge' | 'vertex', bare = false): R<Sel> {
     const word = of === 'face' ? 'faces' : of === 'edge' ? 'edges' : 'vertices';
     const after = (scope: Scope, at: number): R<Sel> => {
       const s = this.sp(at);
       if (s === at && at < this.src.length) return this.fail(at, `expected " ${word}"`);
       const w = this.word(s, word);
       if (w < 0) return this.fail(s, `expected "${word}" after the scope`);
-      const f = this.filters(w, of);
+      const f = bare ? { v: [], at: w } : this.filters(w, of);
       return f ? { v: { t: 'query', of, scope, filters: f.v, text: this.src.slice(i, f.at).trim() }, at: f.at } : null;
     };
     let at = this.word(i, 'all');
@@ -540,14 +543,38 @@ class Parser {
     const at = this.words(i, 'edges of');
     if (at < 0) return this.fail(i, 'expected "edges of <face>"');
     const s = this.sp(at);
-    for (const alt of [() => this.handle(s, 'f'), () => this.selection(s), () => this.at(s, 'face'), () => this.role(s), () => this.query(s, 'face')]) {
+    const withFilters = (face: Sel, from: number): R<Sel> => {
+      const fl = this.filters(from, 'edge');
+      return fl ? { v: { t: 'edges-of', of: 'edge', face, filters: fl.v, text: this.src.slice(i, fl.at).trim() }, at: fl.at } : null;
+    };
+    // Any face in brackets (a query with its own filters): the filters after them are the edges'.
+    if (this.src[s] === '(') {
+      const f = this.face(this.sp(s + 1));
+      if (f) {
+        const close = this.sp(f.at);
+        if (this.src[close] === ')') {
+          const r = withFilters(f.v, close + 1);
+          if (r) return r;
+        } else this.fail(close, 'expected ")" after the face', 2);
+      }
+    }
+    for (const alt of [() => this.handle(s, 'f'), () => this.selection(s), () => this.at(s, 'face'), () => this.role(s)]) {
       const f = alt();
       if (!f) continue;
-      const fl = this.filters(f.at, 'edge');
-      if (!fl) continue;
-      return { v: { t: 'edges-of', of: 'edge', face: f.v, filters: fl.v, text: this.src.slice(i, fl.at).trim() }, at: fl.at };
+      const r = withFilters(f.v, f.at);
+      if (r) return r;
     }
-    return null;
+    // A face query written bare: with nothing after "faces" it is every face of the scope; a filter
+    // after it could be the faces' or the edges', so the brackets must say which.
+    const q = this.query(s, 'face', true);
+    if (!q) return null;
+    const next = this.sp(q.at);
+    if (next < this.src.length && next > q.at && this.src[next] !== '&' && this.src[next] !== ')') {
+      const query = this.src.slice(s, q.at).trim();
+      const rest = this.src.slice(next).trim();
+      return this.fail(next, `put a face query in brackets here, the faces' filters inside and the edges' after them: "edges of (${query} ${rest})" takes every edge of those faces, "edges of (${query}) ${rest}" filters the edges`, 3);
+    }
+    return withFilters(q.v, q.at);
   }
 
   private pair(i: number): R<Sel> {

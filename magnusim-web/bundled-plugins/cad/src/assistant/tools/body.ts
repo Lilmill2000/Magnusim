@@ -42,10 +42,18 @@ function byHandle(ctx: CallCtx, handle: string): BodyInfo {
   return b;
 }
 
+/** `"Body 1 (Mirror copy)"` → `Body 1 (Mirror copy)`: a whole name in quotes, its escaped quotes and backslashes read back (labels.ts quoteName). */
+export function unquoted(text: string): string {
+  const t = text.trim();
+  if (t.length < 2 || !t.startsWith('"') || !t.endsWith('"')) return t;
+  return t.slice(1, -1).replace(/\\(["\\])/g, '$1').trim();
+}
+
 const bodyTool: EditTool<Plan> = {
   async plan(ctx) {
     const s = ctx.services.doc.state.get();
-    const want = str(ctx.input.body);
+    // A name in quotes, as get_model writes one with the selectors' own characters ("Body 1 (Mirror copy)").
+    const want = unquoted(str(ctx.input.body));
     const bodies = s.rebuild.bodies;
     const b = want.startsWith('#') ? byHandle(ctx, want) : (bodies.find((x) => x.name.toLowerCase() === want.toLowerCase()) ?? bodies.find((x) => x.id === want));
     if (!b) {

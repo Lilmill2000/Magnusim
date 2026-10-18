@@ -31,7 +31,7 @@ const EDIT = str(80, '"" makes a new one; an existing feature name replaces its 
 const NAME = str(40, '"" for the next free name; names are unique.');
 const EXPR = (d: string, min = 0) => str(200, d, min);
 const SEL = (d: string) => str(300, d);
-const OP = en(['new', 'join', 'cut', 'intersect'], 'new makes a body; join, cut and intersect change bodies and need overlap.');
+const OP = en(['new', 'join', 'cut', 'intersect'], 'new makes a body; join, cut and intersect change bodies: cut and intersect need overlap, join overlap or a shared face.');
 const BODIES = arr(str(80, 'A body name'), 0, 32, 'join, cut, intersect: the bodies; [] means every body it meets. new: [].');
 const BODY_NAME = str(40, 'op new: the body name; "" for Body N.');
 const COLOR = str(7, 'op new: "#rrggbb"; "" for the default.');
@@ -214,7 +214,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Extrude regions of one sketch (edit "" makes one; edit: a name replaces that extrude\'s inputs). regions: ["all"] (every hole stays open), region ids ["r2"], or ["at(u, v)"]. extent: blind (distance along the sketch normal; flip for the other way), symmetric (distance in all, half each side), two (distance along, distance2 against), through or through_both (past every body), to (up to the face or vertex in to; distance is an extra offset or ""). op new makes a body (body_name, color #rrggbb, or ""); join, cut and intersect change bodies ([] = every body it meets) and need overlap. On a face the normal points out of the part: a cut into it needs flip true (or use hole). Returns the state, body changes (volume, bounding box, solids), the faces it made (Name.start, .end, .side(...)) and warnings. A failure, or a cut that removes nothing, changes nothing and says which way it missed.',
+      'Extrude regions of one sketch (edit "" makes one; edit: a name replaces that extrude\'s inputs). regions: ["all"] (every hole stays open), region ids ["r2"], or ["at(u, v)"]. extent: blind (distance along the sketch normal; flip for the other way), symmetric (distance in all, half each side), two (distance along, distance2 against), through or through_both (past every body), to (up to the face or vertex in to; distance is an extra offset or ""). op new makes a body (body_name, color #rrggbb, or ""); join, cut and intersect change bodies ([] = every body it meets): cut and intersect need overlap, join overlap or a shared face. On a face the normal points out of the part: a cut into it needs flip true (or use hole). Returns the state, body changes (volume, bounding box, solids), the faces it made (Name.start, .end, .side(...)) and warnings. A failure, or a cut that removes nothing, changes nothing and says which way it missed.',
     schema: obj({
       edit: EDIT,
       name: NAME,
@@ -378,9 +378,9 @@ const SPECS: ToolSpec[] = [
     title: 'Delete features',
     risk: 'destructive',
     timeoutS: 120,
-    confirm: 'Deletes features from the Part; Ctrl+Z brings them back.',
+    confirm: 'Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.',
     description:
-      'Delete features by name. The person is asked first. Refused, with nothing changed, while a feature not in the list uses one of them: the error names every user. Features that fail afterwards are listed. The person can bring them back with Undo. To take back your own recent calls use undo instead (no question).',
+      'Delete features by name. The person is asked first. Refused, with nothing changed, while a feature not in the list uses one of them: the error names every user. Features that fail afterwards are listed. The person can bring them back with Undo, which takes back the whole request with them. To take back your own recent calls use undo instead (no question).',
     schema: obj({ features: arr(str(80, 'Feature name'), 1, 20, 'Features to delete.') }),
   },
   {

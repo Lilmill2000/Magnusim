@@ -10,7 +10,8 @@
 //   - refused before anything changes (no feature, no panel, no undo entry): the fields, a curved
 //     face (not_flat), a tilted face (bad_input: use sketch and extrude cut), a missing coordinate,
 //     every expression problem at once, a centre off the face's plane, a centre outside the face
-//     (named by its row), the same centre twice, a name taken; a hole that breaks the face's edge
+//     (named by its row), the same centre twice, a name taken; edit_feature of the cut's d points to
+//     the hole's sketch; a hole that breaks the face's edge
 //     (its centre off the face within half the diameter, or on it near an edge) is made and warned;
 //   - a value (set_params, the sketch's position dimension, with a rename too) that moves a hole
 //     off its body, where it builds and cuts nothing, changes nothing (broke_downstream with the
@@ -258,6 +259,10 @@ describe('hole', () => {
       expect((await fail(h, 'hole', HOLE({ name: 'wedge', centers: [CTR('5 mm', '5 mm', '')] }))).detail).toMatchObject({ reason: 'name_taken' });
       // The face as one face: a selector naming several lists candidates.
       expect((await fail(h, 'hole', HOLE({ face: 'Base faces |Z', centers: [CTR('5 mm', '5 mm', '')] }))).detail).toMatchObject({ reason: 'selector_ambiguous', field: 'face' });
+      // The diameter sent to the cut: it is a dimension of the hole's sketch, and the answer says which.
+      const onCut = await fail(h, 'edit_feature', EDIT('Hole 1', { set: [{ field: 'd', value: '8 mm' }] }));
+      expect(onCut).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_input', sketch: 'Hole 1 sketch' }, hint: 'Call edit_feature with feature "Hole 1 sketch" and the same set rows.' });
+      expect(onCut.message).toBe("bad_input: set[0].field: d is a dimension of Hole 1 sketch, the sketch Hole 1 is made from: edit_feature Hole 1 sketch with it (Hole 1's own fields: none).");
       expect(h.doc.state.get().doc).toBe(doc);
       expect(undoLabel(h)).toBe(label);
       expect(uiFor(h.services).state.get().panel).toBeNull();

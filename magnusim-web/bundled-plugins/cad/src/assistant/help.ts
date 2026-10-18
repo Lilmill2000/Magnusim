@@ -65,7 +65,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
     'Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
   find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets. count is every match, limit only cuts rows.',
   get_model:
-    "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit; a hole's sketch and cut show made_by hole and are edited as sketch and extrude. user_changes: what the person changed since your last call. editable false says why.",
+    "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit; a hole's sketch and cut show made_by hole and are edited as sketch and extrude. user_changes: what the person changed since your last call (while this one ran too). A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. editable false says why.",
   help: 'Fixed text; no Part needed. Every field of every tool is required: "", [] or false when unused.',
   hole:
     'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
@@ -83,7 +83,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   sweep_loft:
     "sweep: profiles are regions of one sketch; draw them on a plane through the path's start, square to it; path curves run end to end. loft: one region per sketch, in order, none with a hole. Faces: <Name>.side(<profile entity>@<path entity>) (<Name>.side(o): every side swept from o), <Name>.start, <Name>.end.",
   undo: 'steps n: your newest n calls of this request, back to before the oldest. previous_turn true (steps 0): the whole previous request, while it is the newest change. not_own_step when the person changed the Part after one of them.',
-  view: "Checked, but not strict on the cloud dialects. labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
+  view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
 /** Each tool: its title, how much it may change, its fields, and its rules. */
@@ -137,7 +137,7 @@ const selectorRows = (): HelpRow[] => [
   },
   {
     about: 'edges',
-    text: `"edges of Base.end" (every edge of the face; a fillet or chamfer keeps the face, so the set follows later changes), "edges of Base.end %line" (with a filter: those edges, a fixed set), "Base.end & Base.side(r.top)" (the edge between two faces of one body), "Body 1 edges |Z".`,
+    text: `"edges of Base.end" (every edge of the face; a fillet or chamfer keeps the face, so the set follows later changes), "edges of Base.end %line" (with a filter: those edges, a fixed set), "edges of (Body 1 faces >Z) |X" (a face query goes in brackets, its own filters inside; the filters after the brackets pick among the edges), "Base.end & Base.side(r.top)" (the edge between two faces of one body), "Body 1 edges |Z".`,
   },
   {
     about: 'bodies',
@@ -202,7 +202,7 @@ const trapRows = (): HelpRow[] => [
   { about: 'bare numbers', text: 'A number with no unit takes the Part\'s display unit ("20" in an inch Part is 20 in): always write units.' },
   { about: 'cuts into a face', text: "A face's normal points out of the part, so an extrude cut sketched on it needs flip true; hole cuts inward by itself. detail.sub says why a cut missed: wrong_side (flip it), off_body (the profile lies beside the body: read detail.frame), too_short (go further, or through)." },
   { about: 'side face frames', text: "+Y and -X faces have v running -Z (a point higher than such a face's origin has a negative v), and a -Z face has v running -Y. find shows each face's frame; hole takes model coordinates instead." },
-  { about: 'overlap', text: 'join, cut and intersect need overlap: touching is not enough. Joining pieces that do not touch makes one body of several solids. A pattern whose copies miss the body fails: use op new, then combine with "bodies of <pattern>".' },
+  { about: 'overlap', text: 'cut and intersect need overlap: touching is not enough. A join also takes a body it shares a face with (an edge or a point is not enough). Joining pieces that do not touch makes one body of several solids. A pattern whose copies miss the body fails: use op new, then combine with "bodies of <pattern>".' },
   { about: 'regions', text: '"all" leaves every hole open: a circle inside a rectangle stays a hole, and so do overlapping holes, a keyhole and a hole a line crosses (each piece lies in the hole); an island in a hole is material again; overlapping shapes with nothing around them are their union. r1, r2... go by area, largest first, and change when the outline changes: at(u, v) keeps pointing at one place.' },
   { about: 'joined points', text: 'Points within 0.05 mm are one point: two circles drawn at one centre share it, so anchor it once (a second coincident on it repeats the first and is refused).' },
   { about: 'dimensions through 0', text: 'A signed dimension (distance_x, distance_y, angle) driven through 0 mirrors the sketch: set_params and edit_feature say so in flipped.' },

@@ -5,7 +5,9 @@
 //     faces by role), bodies (valid, solids, shells, voids, volume, bounding box, maker), the
 //     guide pointer once per key;
 //   - the budgets: a 20-feature Part within 8 KB, within 3 KB on a local turn with the older
-//     features collapsed (errors named), 85 features collapse above 80;
+//     features collapsed (errors named, a pointer to the rest), 85 features collapse above 80; a
+//     local brief of a dozen commented parameters keeps every name (comments and expressions go
+//     first, params_cut says so), and a long list is halved only once its names do not fit;
 //   - full: inputs null with a summary while no tool writes the type, expression fields;
 //   - one sketch: its plane in numbers and words, the solver's state now (free parameters by the
 //     sketch tool's names), every region with its depth and model point, its input form for the
@@ -135,7 +137,7 @@ describe('get_model brief', () => {
 
 describe('get_model within its budget', () => {
   it(
-    'long lists of parameters are halved, the rest counted, so the features keep their room',
+    'long lists of parameters lose their expressions, then are halved, the rest counted, so the features keep their room',
     async () => {
       h = await assistantHarness();
       await plate(h);
@@ -145,8 +147,44 @@ describe('get_model within its budget', () => {
       expect(bytes(d)).toBeLessThanOrEqual(8 * 1024);
       const params = d.params as Row[];
       expect(params.length + (d.params_more as number)).toBe(123);
-      expect(params[0]).toEqual({ name: 'w', kind: 'length', expr: '60 mm', value: 60 });
+      expect(params[0]).toEqual({ name: 'w', kind: 'length', value: 60 });
+      expect(d.params_cut).toBe('expressions and comments left out; get_model detail full lists every parameter with its expression and comment');
       expect((d.features as Row[]).map((f) => f.name)).toEqual(['Sketch 1', 'Extrude 1']);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a local brief of a dozen commented parameters keeps every name (the comments go first, and it says where they are); collapsed features point to the rest",
+    async () => {
+      h = await assistantHarness();
+      // The poker chip's parameters, with its comments (eval/references/poker-chip.json).
+      const chip: [string, string, string][] = [
+        ['chip_d', '39 mm', 'chip diameter'],
+        ['chip_t', '3.3 mm', 'chip thickness'],
+        ['disc', '1.25 in', 'centre insert diameter'],
+        ['gap', '0.2 mm', 'clearance around the insert'],
+        ['disc_t', '1 mm', 'insert pocket depth'],
+        ['floor_t', '(chip_t - disc_t) / 2', 'floor under the pocket'],
+        ['ring_ri', '16.5 mm', 'spot ring inner radius'],
+        ['ring_ro', '18.5 mm', 'spot ring outer radius'],
+        ['ring_t', '1 mm', 'ring thickness at mid height'],
+        ['spot_ri', '15 mm', 'spot inner radius'],
+        ['spot_w', '20 deg', 'spot width'],
+        ['n', '6', 'number of spots'],
+      ];
+      for (const [name, expr, comment] of chip) h.doc.addParam({ name, expr, quantity: name === 'spot_w' ? 'angle' : name === 'n' ? 'scalar' : 'length', comment });
+      await plate(h);
+      // More features than a local brief keeps (30): the older ones collapse.
+      for (let i = 0; i < 32; i++) await h.add('ref_plane', { plane: { kind: 'origin', plane: 'origin:top' }, distance: `${i + 20} mm` });
+      h.fake.emitTurn({ id: 't-local', title: 'Chip', local: true, contextTokens: 32_768, images: false });
+      const d = (await h.ok('get_model', BRIEF, { turn: 't-local' })).data;
+      expect(bytes(d)).toBeLessThanOrEqual(3 * 1024);
+      expect((d.params as Row[]).map((p) => p.name)).toEqual([...chip.map((c) => c[0]), 'w', 'd', 't']);
+      expect(d.params_more).toBeUndefined();
+      expect(d.params_cut).toMatch(/left out; get_model detail full lists every parameter/);
+      const rows = d.features as Row[];
+      expect(rows[0]).toMatchObject({ earlier: expect.any(Number), more: 'get_model detail full, or get_model feature <name>' });
     },
     REAL_KERNEL_MS,
   );

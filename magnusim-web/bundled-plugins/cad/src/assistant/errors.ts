@@ -113,7 +113,7 @@ export const HINTS: Readonly<Record<Reason | SubReason, string>> = Object.freeze
   no_images: "The model can't read images here: use measure and find.",
   small_context: 'Load the local model with a longer context (at least 24,000 tokens) in the local server, or start a new conversation.',
   not_built: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.',
-  no_overlap: 'A join needs overlap: move the profile onto the body, or use op new and then combine.',
+  no_overlap: 'A join needs to overlap the body or share a face with it: move the profile onto the body, or use op new and then combine.',
   wrong_side: 'The cut points away from the body: set flip true, or use hole.',
   too_short: 'The cut stops before it reaches the body: make distance (or angle) larger, or use extent through (a revolve: full).',
   off_body: 'The profile lies beside the body: read detail.frame (where u and v point in model axes) and move the profile.',

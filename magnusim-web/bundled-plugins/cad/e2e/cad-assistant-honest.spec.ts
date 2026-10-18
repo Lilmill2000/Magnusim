@@ -9,7 +9,7 @@
 // on r.top"); the person's tree, panels and Undo stay as they were. Resent without it, the sketch
 // is made through the person's sketch panel, fully defined, and one Undo takes it back.
 // delete (honest 7, T9) asks the person first in the app's dialog ("Allow the Assistant to delete
-// features?", its copy saying Ctrl+Z brings them back, Don't focused): Enter answers Don't, the
+// features?", its copy saying one Ctrl+Z takes back the whole request with the deletion, Don't focused): Enter answers Don't, the
 // model gets declined and the Part never hears the call; a click on Allow deletes the feature the
 // tree shows, and one Ctrl+Z brings it back.
 // A sketch the model moves onto an offset plane: the tree shows the new plane above the sketch,
@@ -264,7 +264,7 @@ test("cad:assistant-honest-delete delete asks the person first: Don't keeps the 
   const t1 = await startTurn(request, host, { text: 'Delete the extrude.', tab });
   await expect(dialog).toBeVisible(STEP);
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to delete features?');
-  await expect(page.locator('#cf-copy')).toContainText('Deletes features from the Part; Ctrl+Z brings them back.');
+  await expect(page.locator('#cf-copy')).toContainText('Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.');
   await expect(page.locator('#cf-copy')).toContainText('What it sent: {"features":["Extrude 1"]}. Nothing runs until you choose.');
   await expect(page.locator('#cf-confirm')).toHaveText('Allow');
   await expect(page.locator('#cf-cancel')).toHaveText("Don't");
@@ -452,7 +452,7 @@ test('cad:assistant-honest-join a boss joined beside the plate changes nothing a
     ok: false,
     error: {
       code: 'failed',
-      hint: 'A join needs overlap: move the profile onto the body, or use op new and then combine.',
+      hint: 'A join needs to overlap the body or share a face with it: move the profile onto the body, or use op new and then combine.',
       detail: { reason: 'feature_failed', feature: 'Boss', sub: 'no_overlap', message: 'Nothing to join: Boss shares no face with a body made before it', profile_bbox_mm: [[65, 10, 0], [75, 20, 0]], bodies: [{ body: 'Body 1', bbox_mm: [[0, 0, 0], [40, 30, 6]] }] },
     },
   });

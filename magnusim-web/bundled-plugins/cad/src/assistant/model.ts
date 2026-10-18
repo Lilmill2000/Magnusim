@@ -249,7 +249,7 @@ function collapse(rows: Row[], keep: number): Row[] {
   const states: Record<string, number> = {};
   for (const r of earlier) states[String(r.state)] = (states[String(r.state)] ?? 0) + 1;
   const errors = earlier.filter((r) => r.state === 'error').map((r) => String(r.name));
-  return [{ earlier: earlier.length, states, ...(errors.length ? { errors: errors.slice(0, 20) } : {}) }, ...rows.slice(rows.length - keep)];
+  return [{ earlier: earlier.length, states, ...(errors.length ? { errors: errors.slice(0, 20) } : {}), more: 'get_model detail full, or get_model feature <name>' }, ...rows.slice(rows.length - keep)];
 }
 
 export interface ModelInput {
@@ -304,21 +304,31 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
 /** What one feature's reply keeps of the Part's facts (its row is the point). */
 const FEATURE_BASE = ['part', 'units', 'editable', 'why', 'rolled_back', 'person', 'rebuild', 'notes', 'limits'];
 
+/** Where the parameters a brief leaves out are (the comments, the expressions, the rest of the list). */
+export const PARAMS_FULL = 'get_model detail full lists every parameter with its expression and comment';
+
 /**
- * The Part's facts within `max` bytes: long lists of bodies, then of parameters, are halved (the
- * rest counted), so the features keep the room.
+ * The Part's facts within `max` bytes, so the features keep the room: a long list of bodies is
+ * halved first; then the parameters' comments go, then their expressions (each keeps its name,
+ * kind and value: the names are what set_params and every expression use); only a list whose
+ * names alone do not fit is halved. What went is said (params_cut, params_more) with where to read it.
  */
 function fitBase(base: Row, max: number): Row {
   let b = base;
+  const cut = (what: string, extra: Row = {}) => ({ ...b, ...extra, params_cut: `${what}; ${PARAMS_FULL}` });
   for (let guard = 0; guard < 20 && jsonBytes(b) > max; guard++) {
     const bodies = b.bodies as Row[];
     const params = b.params as Row[];
     if (bodies.length > 5) {
       const keep = Math.ceil(bodies.length / 2);
       b = { ...b, bodies: bodies.slice(0, keep), bodies_more: (Number(b.bodies_more) || 0) + bodies.length - keep };
+    } else if (params.some((p) => 'comment' in p)) {
+      b = cut('comments left out', { params: params.map(({ comment: _c, ...p }) => p) });
+    } else if (params.some((p) => 'expr' in p)) {
+      b = cut('expressions and comments left out', { params: params.map(({ expr: _e, ...p }) => p) });
     } else if (params.length > 10) {
       const keep = Math.ceil(params.length / 2);
-      b = { ...b, params: params.slice(0, keep), params_more: (Number(b.params_more) || 0) + params.length - keep };
+      b = cut('expressions and comments left out', { params: params.slice(0, keep), params_more: (Number(b.params_more) || 0) + params.length - keep });
     } else break;
   }
   return b;

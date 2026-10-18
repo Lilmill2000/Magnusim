@@ -43,7 +43,8 @@ in the Part" in `README.md`.
   while the request runs pauses it too. Selecting, hovering and orbiting are not
   taking over.
 - Deleting asks you first, in the app's own question: "Allow the Assistant to
-  delete features?", "Deletes features from the Part; Ctrl+Z brings them back."
+  delete features?", "Deletes features from the Part; one Ctrl+Z takes back
+  the whole request, this deletion with it."
 - Its pictures and measurements never move your camera or change your view.
   Once you move the camera during a request, the Assistant's automatic view
   turns stop for the rest of it. Watching needs the Magnusim window shown: in a
