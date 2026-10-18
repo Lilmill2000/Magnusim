@@ -232,6 +232,15 @@ function strays(pids, root) {
   });
 }
 
+/**
+ * The roles in `tree` (an agent's reported processes) still running as one of this spec's
+ * processes: a pid the OS has given to another program since is none of them (strays).
+ */
+function runningRoles(tree) {
+  const left = new Set(strays(tree.map((p) => p.pid), host.tmp));
+  return tree.filter((p) => left.has(p.pid)).map((p) => p.role);
+}
+
 const winRel = (...parts) => parts.join('/').split('/').join('\\');
 
 /** npm's Windows shim for a script inside <dir>/node_modules (what discovery parses, never runs). */
@@ -573,7 +582,7 @@ test("signing in: connect again hears Claude Code ask for it, and the Sign in bl
   expect(got.filter((m) => m.method === 'session/prompt')).toHaveLength(1);
   expect(fake.events('mcp_result', testPid)).toEqual([expect.objectContaining({ tool: 'connection_check', error: null })]);
   // Each check ended its agent (the tree kill): none runs now.
-  await expect.poll(() => fake.pids().filter((p) => isRunning(p.pid)).map((p) => p.pid), { timeout: 15_000 }).toEqual([]);
+  await expect.poll(() => strays(fake.pids().map((p) => p.pid), host.tmp), { timeout: 15_000 }).toEqual([]);
 });
 
 /** Claude Code signed in: its login file exists (discovery only checks that it does). */
@@ -776,7 +785,7 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   ]);
   // Off is the kill switch: what it still ran is gone (its bridge too).
   const keptTree = customFake.pids().filter((p) => p.agent === kept);
-  await expect.poll(() => keptTree.filter((p) => isRunning(p.pid)).map((p) => p.role), { timeout: 15_000 }).toEqual([]);
+  await expect.poll(() => runningRoles(keptTree), { timeout: 15_000 }).toEqual([]);
 
   // Allowed again, then its program found elsewhere (an earlier search folder): asked again.
   // The program moves only once Allow has answered (the switch shows on while it saves, and a
@@ -1194,7 +1203,8 @@ test('Stop during a tool on a stubborn agent: the page aborts the call, the turn
   const call = await slowRunning(t, w);
   const { pid, tree } = lastAgent(fake);
   expect(tree.map((p) => p.role).sort()).toEqual(['agent', 'helper', 'helper', 'mcp']);
-  expect(tree.filter((p) => isRunning(p.pid))).toHaveLength(4);
+  // Counted as the end check counts them (so its empty list means gone, not unrecognised).
+  expect(runningRoles(tree).sort()).toEqual(['agent', 'helper', 'helper', 'mcp']);
   const stopAt = Date.now();
   const r = await postOk(request, `/api/assistant/turns/${t.id}/stop`, {});
   await expect(w.frame.locator('#aborted')).toHaveText('aborted');
@@ -1205,7 +1215,7 @@ test('Stop during a tool on a stubborn agent: the page aborts the call, the turn
   await expect(w.frame.locator('#counter')).toHaveText('0');
   // It heard the cancel (it was there to hear it), ignored it, and its whole tree went after the wait.
   await fake.waitFor((rec) => rec.pid === pid && rec.dir === 'in' && rec.msg?.method === 'session/cancel', 10_000);
-  await expect.poll(() => tree.filter((p) => isRunning(p.pid)).map((p) => p.role), { timeout: AGENT_CANCEL_MS + 10_000, message: 'the agent, its helpers and its bridge are gone' }).toEqual([]);
+  await expect.poll(() => runningRoles(tree), { timeout: AGENT_CANCEL_MS + 10_000, message: 'the agent, its helpers and its bridge are gone' }).toEqual([]);
   expect(Date.now() - stopAt, 'within the wait and the ceiling').toBeLessThan(AGENT_CANCEL_MS + 10_000);
   expect(Date.parse(turn.ended_at) - stopAt, 'the kill waited for the agent to answer the cancel').toBeGreaterThanOrEqual(AGENT_CANCEL_MS - 1000);
   // The conversation keeps no process.
@@ -1241,7 +1251,7 @@ test("Stop while the agent's own question is open: the question goes, the agent 
   expect(reply, 'the permission answered before the cancel').toBeLessThan(cancel);
   // Polite: it answered the prompt cancelled at once, so it was not killed (kept for the conversation).
   await customFake.waitFor((rec) => rec.pid === pid && rec.dir === 'out' && rec.msg?.result?.stopReason === 'cancelled', 10_000);
-  expect(tree.filter((p) => isRunning(p.pid)).map((p) => p.role).sort()).toEqual(['agent', 'mcp']);
+  expect(runningRoles(tree).sort()).toEqual(['agent', 'mcp']);
   const agents = Object.values((await getJson(request, '/api/test/assistant/state')).agents);
   expect(agents).toEqual([expect.objectContaining({ agent: id, state: 'ready' })]);
 });
@@ -1268,7 +1278,7 @@ test('the agent crashing mid-tool: the call ends, the turn fails agent_exited wi
   await expect(w.frame.locator('#counter')).toHaveText('0');
   const { pid, tree } = lastAgent(fake);
   expect(tree.map((p) => p.role).sort()).toEqual(['agent', 'mcp']);
-  await expect.poll(() => tree.filter((p) => isRunning(p.pid)).map((p) => p.role), { timeout: 15_000, message: 'no bridge left' }).toEqual([]);
+  await expect.poll(() => runningRoles(tree), { timeout: 15_000, message: 'no bridge left' }).toEqual([]);
 
   // The next message of the conversation starts it again, and says it doesn't remember.
   fake.script({ say: 'Here again.' });
