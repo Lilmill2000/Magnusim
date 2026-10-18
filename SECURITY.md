@@ -145,8 +145,10 @@ Settings before handing the PC to someone else.
 Any program and any other account signed in to this PC can call the
 Assistant's requests (start a turn, change its settings): the local check
 proves a request came from this PC, not who sent it. Another account can't read
-the key, but can spend it within the limits. A turn on a coding agent also
-needs a proof of this account (Coding agents, below).
+the key, but can spend it within the limits. Starting a coding agent (a turn,
+or its Test, connect check or sign-in in Settings) also needs a proof of this
+account, and so do adding a custom agent and allowing one (Coding agents,
+below).
 
 The Assistant's questions are answered only by the app tab that shows them,
 through that tab's own connection to the app, or by the program that started
@@ -173,7 +175,10 @@ A workspace page may offer the Assistant tools of its own while it is open. The
 frame never talks to the Assistant itself: it hands its list to the app's page,
 which passes it on over the tab's event stream, on a channel for this PC only
 whose every request carries an unguessable link. The tools belong to that tab
-and its project, and are offered only to turns started for that tab. The app
+and its project. They are offered to turns started for that tab (a coding
+agent's calls in such a turn included) and, while Other apps (MCP) is on and
+it is the only connected app tab, to the apps on this PC that use Magnusim's
+tools (see "Other apps on this PC"). The app
 checks each call's input against the limits the tool declared before the page
 sees it, runs one call at a time and caps what comes back. What a workspace says
 about itself is the plugin's own text, trusted like its code: its notes for the
@@ -269,7 +274,12 @@ Magnusim stops it at once (a tripwire), and from then on it needs its allow
 switch until Magnusim is updated. An agent that switches itself to a mode
 Magnusim doesn't use is stopped too. Settings the PC's administrator manages
 for the agent (managed policies, hooks) still apply, as in a terminal; the
-tripwire stops the agent if they bring one of its own tools back.
+tripwire stops the agent if they bring one of its own tools back. The check of
+the package is by its name, version and real path, not by who put it there: a
+whole package of the right name and version placed in an earlier folder of the
+`PATH` that another account can write to would count as the agent's own (and
+Magnusim asks its version when it looks for agents). Keep the folders on the
+`PATH` writable only by the owner and administrators.
 
 **The allow switch.** An agent whose own tools Magnusim can't switch off stays
 off until the owner turns on "Allow this agent" in Settings, after a question
@@ -280,19 +290,23 @@ questions cover only Magnusim's tools. The switch is kept per agent with a
 fingerprint of the program's path, the resolved script's path and the
 arguments it was allowed for: a new path or new arguments count as off and
 ask again, but an update of the program in place keeps it on. Turning it on
-takes a request carrying the app's own origin, which the Settings page sends
-after its question; a tool, a turn, the settings request, the terminal client
-and an agent whose own tools are off never send one. That keeps out commands
-slipped into an agent's or a model's work, not programs the owner runs: any
-program on this PC can send that origin (see "This PC, not this account").
-Turning it off is always taken, with no question, and ends what the agent
-still runs. A custom agent is added the same way and needs its switch, even to
-connect.
+takes a request from the Settings page itself, sent after its question: the
+app's own origin and the live link of the page's own connection to the app
+(the page opens that connection for it). A tool, a turn, the settings request,
+the terminal client and an agent whose own tools are off send neither. That
+keeps out commands slipped into an agent's or a model's work, not programs the
+owner runs, and only raises the bar for other accounts (see "This PC, not this
+account"). Turning it off is always taken, with no question, and ends what the
+agent still runs. A custom agent is added the same way and needs its switch,
+even to connect.
 
-**Who starts it, who answers it.** A turn on a coding agent needs a proof of
-this account: the per-launch token from `mcp.json`, which the terminal client
-reads and sends, or the live connection of the app tab the turn is for, which
-the page has. A coding agent's request to use one of its own tools becomes a
+**Who starts it, who answers it.** Starting a coding agent needs a proof of
+this account, for a turn and for its Test, connect check and sign-in in
+Settings alike: the per-launch token from `mcp.json`, which the terminal client
+reads and sends only to a Magnusim that first proves, for the port it reached,
+that it holds the same token; or the live link of an app tab's connection to
+the app, which the page sends (from any page: Settings, a workspace, Home). A
+coding agent's request to use one of its own tools becomes a
 question that only the Magnusim window answers, as does its privacy question,
 never the program that started the turn. Its requests to use Magnusim's own
 tools are allowed by Magnusim ("Auto-allowed" in the turn's log), because
@@ -321,17 +335,21 @@ tool calls and 60 active minutes (Settings → Assistant → Limits).
 
 **This PC, not this account.** The local check proves a request came from this
 PC, not which account sent it. Any program the owner runs, an allowed agent's
-own shell included, can read `mcp.json`, call the Assistant's requests, send
-the page's origin (add a custom agent, turn an allow switch on) and take over a
-tab's connection to the app. Another account signed in to this PC
-(one that isn't an administrator) can't read `mcp.json`, but it can forge the
-page's origin: it can add a custom agent or turn an allow switch on, and with
-effort take over a tab's connection to use an agent that is allowed.
-Magnusim's guarantees hold against agents whose own tools are off and against
-everything off this PC, not against code the owner lets run: allow agents only
-on a PC whose other accounts you trust.
-A proof of the owner's account for these Settings changes is planned after
-v0.5.0.
+own shell included, can read `mcp.json`, call the Assistant's requests and
+connect to the app as a tab does, so it can do whatever the Settings page can.
+Another account signed in to this PC (one that isn't an administrator) can't
+read `mcp.json`, and the page's origin, which it can forge, is not enough by
+itself: adding a custom agent, turning an allow switch on and starting any
+coding agent (a turn, its Test, connect check or sign-in) also need the
+per-launch token or the live link of an app tab's connection to the app. That
+link isn't tied to an account either: any program on this PC that connects to
+the app as a tab does gets one. So another account can, with that effort, add a
+custom command, allow it and have Magnusim run it as the owner, or use an agent
+that is allowed. Magnusim's guarantees hold against agents whose own tools are
+off and against everything off this PC, not against code the owner lets run or
+other accounts on this PC: allow agents only on a PC whose other accounts you
+trust. A proof of the owner's account that another account can't get, for
+these Settings changes, is planned after v0.5.0.
 
 ## Releases and reports
 
