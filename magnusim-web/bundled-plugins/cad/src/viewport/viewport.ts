@@ -188,7 +188,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   // ------------------------------------------------------------ overlays and tools (P2/P3)
   // Layers: other areas' drawing (sketch geometry, regions, handles, measure
   // markers) in model coordinates, plus an html element over the canvas each.
-  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null) }>();
+  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null); plain?: (on: boolean) => void }>();
   const frameListeners = new Set<() => void>();
   /** Fat lines in layers get the viewport's size, as the bodies' edges do. */
   function layerLineMats(): LineMaterial[] {
@@ -961,22 +961,29 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     goTo(poseFor(dir, up, true), animate, { dir, up });
   }
 
-  /** The last framing again with what is drawn now, while nobody has moved the camera since it. */
-  function reframe(): boolean {
+  /**
+   * The last framing again with what is drawn now, while nobody has moved the camera since it:
+   * 'moved' when it framed again (or aimed the running transition elsewhere), 'same' when nothing
+   * changed (the camera stays), false when the camera was moved since.
+   */
+  function reframe(): 'moved' | 'same' | false {
     if (!framed || !lastAim || disposed) return false;
     const now = framedSphere();
     now.radius *= FIT_MARGIN;
+    const eps = 1e-6 * Math.max(1, now.radius);
     if (anim?.aim) {
+      const was = anim.to;
       anim.to = poseFor(anim.aim.dir, anim.aim.up, true);
       framedOn = now;
       request();
-      return true;
+      const to = anim.to;
+      const same = was.position.distanceTo(to.position) <= eps && was.target.distanceTo(to.target) <= eps && was.up.distanceTo(to.up) <= 1e-9 && Math.abs(was.orthoHeight - to.orthoHeight) <= eps && Math.abs((was.shift ?? 0) - (to.shift ?? 0)) <= 1e-6;
+      return same ? 'same' : 'moved';
     }
     // Nothing changed: the camera stays where it is (no transition to the same place).
-    const eps = 1e-6 * Math.max(1, now.radius);
-    if (framedOn && now.center.distanceTo(framedOn.center) <= eps && Math.abs(now.radius - framedOn.radius) <= eps) return true;
+    if (framedOn && now.center.distanceTo(framedOn.center) <= eps && Math.abs(now.radius - framedOn.radius) <= eps) return 'same';
     frameTo(lastAim.dir, lastAim.up, true);
-    return true;
+    return 'moved';
   }
 
   // ------------------------------------------------------------ the camera a Part keeps
@@ -1421,7 +1428,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   /**
    * One picture into a render target of its own, in this task (no animation frame: it works in a
    * hidden window). Its own orthographic camera; the bodies shaded with edges, `hide` left out;
-   * no manipulators, markers, bananas or highlight; its own cut. Everything is put back before it
+   * no manipulators, markers, bananas or highlight (the layers with a `plain` hook draw plain;
+   * sketch mode's own layers keep their selection and hover); its own cut. Everything is put back before it
    * returns, and nothing here moves the person's camera, counts as their move, writes the
    * viewport's state or reports a camera change (so nothing is saved).
    */
@@ -1449,9 +1457,23 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const clearAlpha = renderer.getClearAlpha();
     const target = new WebGLRenderTarget(w, h, { samples: renderer.capabilities.maxSamples >= 4 ? 4 : 0, depthBuffer: true, stencilBuffer: true });
     const pixels = new Uint8Array(w * h * 4);
+    // Layers that colour by the selection or hover draw plain for the picture (addLayer's `plain`).
+    const plainLayers: ((on: boolean) => void)[] = [];
+    const plainCall = (fn: (on: boolean) => void, on: boolean) => {
+      try {
+        fn(on);
+      } catch (err) {
+        console.error('[cad] layer plain failed', err);
+      }
+    };
     try {
       plain = true;
       applyHighlight();
+      for (const l of layers.values()) {
+        if (!l.plain) continue;
+        plainLayers.push(l.plain);
+        plainCall(l.plain, true);
+      }
       for (const b of bodies.values()) {
         b.mesh.visible = drawn(b);
         b.edges.visible = drawn(b) && b.data.drawEdges.length >= 6;
@@ -1497,6 +1519,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       renderer.setClearColor(clearColor, clearAlpha);
       target.dispose();
       plain = false;
+      for (const fn of plainLayers) plainCall(fn, false);
       for (const [g, v] of layerShown) g.visible = v;
       for (const m of lineMats()) m.resolution.set(width, height);
       for (const m of layerLineMats()) m.resolution.set(width, height);
@@ -1592,9 +1615,13 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       cameraMoved();
     },
     reframe(o) {
-      if (!reframe()) return false;
-      byPerson(o);
-      cameraMoved();
+      const r = reframe();
+      if (!r) return false;
+      // Only a reframe that moves the camera is a move (and, without auto, the person's).
+      if (r === 'moved') {
+        byPerson(o);
+        cameraMoved();
+      }
       return true;
     },
     refitIfOffScreen(o) {
@@ -1778,7 +1805,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
           request();
         },
       };
-      layers.set(id, { layer, group, html, frame: typeof o.frame === 'function' ? o.frame : !!o.frame });
+      layers.set(id, { layer, group, html, frame: typeof o.frame === 'function' ? o.frame : !!o.frame, plain: o.plain });
       request();
       return layer;
     },

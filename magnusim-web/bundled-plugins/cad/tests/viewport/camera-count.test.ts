@@ -1,20 +1,24 @@
 // The viewport counts the person's camera moves and not the app's own (userCameraMoves, for the
 // Assistant's camera latch), and its snapshot draws off screen and puts everything back. The real
 // viewport (src/viewport/viewport.ts) on a stand-in for three's WebGLRenderer (jsdom has no WebGL):
-//   - every handle camera call without `auto` that moves the camera counts once: Fit, a standard
-//     view, Normal to (F, 1-7, N and a menu's Normal to all call these), Orbit around, a camera
-//     put back by hand, a reframe or refit that moved; with `auto` none of them counts;
+//   - every handle camera call without `auto` counts once: Fit, a standard view, Normal to (F,
+//     1-7, N and a menu's Normal to all call these), Orbit around, a camera put back by hand, and
+//     a reframe or refit only when it moved the camera (a reframe that changes nothing is no move
+//     and reports no camera change); with `auto` none of them counts;
 //   - a drag counts once (orbit, pan, zoom), a wheel step once; a click and a box selection never;
 //   - the app's own moves in bind.ts (a Part's camera put back on open, the refit after sketch
 //     mode) pass `auto` (sketch entry, the reopened sketch's reframe and the new extrude's turn
 //     to Isometric: tests/sketch/auto-camera.test.ts, tests/features/extrude/auto-camera.test.tsx;
-//     all five in the real app: e2e/cad-viewport-snapshot.spec.ts);
+//     the banana's refit: tests/features/scale/auto-camera.test.ts; each automatic call in the
+//     real app, with its options: e2e/cad-viewport-snapshot.spec.ts);
 //   - a snapshot renders into its own target with an orthographic camera, the hidden bodies, the
-//     manipulator layers and the highlight left out and its own cut, then puts back the target,
-//     the flags, the view's cut and highlight and the line widths, and moves, counts and writes
-//     nothing; a lost context throws not_ready.
+//     manipulator layers and the selection, hover and flash left out (layers with a `plain` hook
+//     draw plain around it), shaded with edges whatever the display mode, and its own cut on the
+//     bodies and caps; it runs no frame of the view (onFrame), then puts back the target, the
+//     flags, the display, the view's cut and caps, the highlight and the line widths, and moves,
+//     counts and writes nothing; a lost context throws not_ready.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { BoxGeometry, Mesh, type Object3D } from 'three';
+import { BoxGeometry, Mesh, Plane, type Object3D } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBus } from '../../src/lib/bus';
 import { createSelectionStore } from '../../src/lib/selection';
@@ -27,6 +31,8 @@ import type { CadEvents } from '../../src/types/events';
 import type { TessPayload } from '../../src/types/kernel';
 import type { ViewportHandle } from '../../src/types/viewport';
 import { viewportCommands } from '../../src/viewport/commands';
+import { sectionPlane } from '../../src/viewport/section';
+import { snapshotClip } from '../../src/viewport/snapshot';
 import { createViewport } from '../../src/viewport/viewport';
 
 /** What the stand-in renderer saw at each render call. */
@@ -38,13 +44,20 @@ interface Seen {
   visible: Record<string, boolean>;
   /** Sum of each body's highlight attribute (0: nothing lit). */
   lit: Record<string, number>;
-  /** Clipping planes of each body's material. */
-  clips: Record<string, number>;
+  /** Clipping planes of each body's material, each as [nx, ny, nz, constant]. */
+  clips: Record<string, number[][]>;
+  /** The section caps' stencil meshes of each body: shown or not, and their clipping plane. */
+  stencils: Record<string, { visible: boolean; clip: number[] | null }[]>;
   /** Line resolution of each body's edges. */
   resolution: Record<string, [number, number]>;
 }
 
-const gpu = vi.hoisted(() => ({ last: null as unknown as { lost: boolean; seen: Seen[]; target: unknown; clears: boolean[] } }));
+/** A clipping plane as [nx, ny, nz, constant], rounded (comparable with toEqual). */
+const { planeOf } = vi.hoisted(() => ({
+  planeOf: (p: { normal: { x: number; y: number; z: number }; constant: number }) => [p.normal.x, p.normal.y, p.normal.z, p.constant].map((v) => Math.round(v * 1e6) / 1e6 + 0),
+}));
+
+const gpu = vi.hoisted(() => ({ last: null as unknown as { lost: boolean; seen: Seen[]; target: unknown; clears: boolean[] }, log: [] as string[] }));
 
 vi.mock('three', async (importOriginal) => {
   const three = await importOriginal<typeof import('three')>();
@@ -85,14 +98,26 @@ vi.mock('three', async (importOriginal) => {
       this.target = t;
     }
     render(scene: Object3D, camera: { isOrthographicCamera?: boolean }) {
-      const s: Seen = { toTarget: !!this.target, ortho: !!camera.isOrthographicCamera, scissor: !!this.target?.scissorTest, visible: {}, lit: {}, clips: {}, resolution: {} };
+      gpu.log.push('render');
+      const s: Seen = { toTarget: !!this.target, ortho: !!camera.isOrthographicCamera, scissor: !!this.target?.scissorTest, visible: {}, lit: {}, clips: {}, stencils: {}, resolution: {} };
+      type Clipped = Mesh & { material: { clippingPlanes?: Parameters<typeof planeOf>[0][] | null; resolution?: { x: number; y: number } } };
+      // A stencil mesh draws its body's geometry: the body it belongs to.
+      const bodyOf = new Map<unknown, string>();
+      scene.traverse((o) => {
+        if (o.name.startsWith('body:')) bodyOf.set((o as Mesh).geometry, o.name.slice(5));
+      });
       scene.traverse((o) => {
         if (o.name) s.visible[o.name] = o.visible;
-        const m = o as Mesh & { material: { clippingPlanes?: unknown[] | null; resolution?: { x: number; y: number } } };
+        const m = o as Clipped;
         if (o.name.startsWith('body:')) {
           const id = o.name.slice(5);
           s.lit[id] = Array.from(m.geometry.getAttribute('hl').array as Uint8Array).reduce((a, b) => a + b, 0);
-          s.clips[id] = m.material.clippingPlanes?.length ?? 0;
+          s.clips[id] = (m.material.clippingPlanes ?? []).map(planeOf);
+        }
+        if (o.name === 'section-stencil') {
+          const id = bodyOf.get(m.geometry) ?? '?';
+          const c = m.material.clippingPlanes?.[0];
+          (s.stencils[id] ??= []).push({ visible: o.visible, clip: c ? planeOf(c) : null });
         }
         if (o.name.startsWith('edges:')) s.resolution[o.name.slice(6)] = [m.material.resolution!.x, m.material.resolution!.y];
       });
@@ -199,12 +224,37 @@ describe('userCameraMoves', () => {
     h.orbitAround('center');
     h.setCamera(h.camera());
     expect(moves(h)).toBe(5);
-    // A reframe counts only when it frames (after setCamera the view is no longer framed).
+    // A reframe counts only when it moves the camera: not after setCamera (the view is no longer
+    // framed: false), not right after a fit (nothing changed: true, the camera stays), but once
+    // what is drawn has grown since the framing.
     expect(h.reframe()).toBe(false);
     expect(moves(h)).toBe(5);
     h.fit({ animate: false });
+    expect(moves(h)).toBe(6);
+    const fitted = h.camera();
     expect(h.reframe()).toBe(true);
+    vi.advanceTimersByTime(2000);
+    expect(h.camera()).toEqual(fitted);
+    expect(moves(h)).toBe(6);
+    const grown = h.addLayer('grown', { frame: true });
+    const g = new Mesh(new BoxGeometry(1, 1, 1));
+    g.position.set(0, 0, 60);
+    grown.group.add(g);
+    expect(h.reframe()).toBe(true);
+    vi.advanceTimersByTime(2000);
+    expect(h.camera().target).not.toEqual(fitted.target);
     expect(moves(h)).toBe(7);
+    // During a transition: aimed at the same place again is no move; aimed elsewhere is.
+    h.fit();
+    expect(h.state.get().animating).toBe(true);
+    expect(moves(h)).toBe(8);
+    expect(h.reframe()).toBe(true);
+    expect(moves(h)).toBe(8);
+    g.position.set(0, 0, -60);
+    expect(h.reframe()).toBe(true);
+    expect(moves(h)).toBe(9);
+    vi.advanceTimersByTime(2000);
+    grown.dispose();
 
     // The same calls as the app's own: the camera moves, the count does not.
     h.setView('front', { animate: false, auto: true });
@@ -215,8 +265,16 @@ describe('userCameraMoves', () => {
     h.orbitAround([0, 0, 0], { auto: true });
     h.setCamera(h.camera(), { auto: true });
     h.fit({ animate: false, auto: true });
+    // A reframe of the app's own that moves the camera (a layer grew since the fit): not counted.
+    const more = h.addLayer('more', { frame: true });
+    more.group.add(new Mesh(new BoxGeometry(1, 1, 1)).translateY(80));
+    const before = h.camera();
     expect(h.reframe({ auto: true })).toBe(true);
-    expect(moves(h)).toBe(7);
+    vi.advanceTimersByTime(2000);
+    expect(h.camera().target).not.toEqual(before.target);
+    more.dispose();
+    h.fit({ animate: false, auto: true });
+    expect(moves(h)).toBe(9);
 
     // A refit that moves counts like the rest; one that does not (nothing off screen) does not.
     expect(h.refitIfOffScreen!()).toBe(false);
@@ -226,10 +284,29 @@ describe('userCameraMoves', () => {
     far.group.add(m);
     expect(h.refitIfOffScreen!({ auto: true })).toBe(true);
     vi.advanceTimersByTime(1000);
-    expect(moves(h)).toBe(7);
+    expect(moves(h)).toBe(9);
     m.position.set(-90000, 0, 0);
     expect(h.refitIfOffScreen!()).toBe(true);
-    expect(moves(h)).toBe(8);
+    expect(moves(h)).toBe(10);
+  });
+
+  it('a reframe that changes nothing is not reported as a camera change; one that frames again is', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance'] });
+    const { h } = viewport();
+    withCube(h);
+    h.fit({ animate: false, auto: true });
+    vi.advanceTimersByTime(2000);
+    const changes: SavedCamera[] = [];
+    h.onCameraChange((c) => changes.push(c));
+    expect(h.reframe()).toBe(true);
+    vi.advanceTimersByTime(2000);
+    expect(changes).toEqual([]);
+    const grown = h.addLayer('grown', { frame: true });
+    grown.group.add(new Mesh(new BoxGeometry(1, 1, 1)).translateZ(60));
+    expect(h.reframe({ auto: true })).toBe(true);
+    vi.advanceTimersByTime(2000);
+    expect(changes).toHaveLength(1);
+    expect(moves(h)).toBe(0);
   });
 
   it('a drag counts once (orbit, pan, zoom), a wheel step once; a click or a box selection never', () => {
@@ -300,35 +377,64 @@ describe('userCameraMoves', () => {
 
 describe('snapshot', () => {
   it("draws off screen with its own camera and cut, leaves out what it should, and puts everything back", async () => {
-    const { h, gl } = viewport();
+    const { h, gl, canvas } = viewport();
     withCube(h);
     await vi.waitFor(() => expect(h.state.get().bvhPending).toBe(0));
-    // The person's view: a face selected, a section on, a manipulator and a sketch layer shown.
-    h.highlight([{ kind: 'face', body: 'b_1', index: 4 }]);
+    // The person's view: a face selected, the pointer hovering a face of b_1, a list row flashing a
+    // face of b_2, a section on, a manipulator and a sketch layer shown, and a layer with a plain hook.
     h.setSection({ on: true, plane: 'origin:right', offset: 5 });
+    h.highlight([{ kind: 'face', body: 'b_1', index: 4 }]);
+    // Hovered: a face of b_1 the selection does not light (lit counts it apart from the pick).
+    const at = h.project([2, 5, 5])!;
+    expect(h.pick(at[0], at[1])?.item).toMatchObject({ kind: 'face', body: 'b_1' });
+    expect(h.pick(at[0], at[1])?.item).not.toMatchObject({ index: 4 });
+    pointer(canvas, 'pointermove', { x: at[0], y: at[1] });
+    await vi.waitFor(() => expect(h.state.get().hover?.item).toMatchObject({ kind: 'face', body: 'b_1' }));
+    h.flash([{ kind: 'face', body: 'b_2', index: 0 }]);
     const manip = h.addLayer('extrude.handle');
     manip.group.add(new Mesh(new BoxGeometry(1, 1, 1)));
     const sketch = h.addLayer('profiles.sketches', { frame: true });
     sketch.group.add(new Mesh(new BoxGeometry(1, 1, 1)));
+    h.addLayer('profiles.regions', { plain: (on) => gpu.log.push(`plain:${on}`) });
+    const frames = vi.fn();
+    h.onFrame(frames);
+    await vi.waitFor(() => expect(frames).toHaveBeenCalled());
     const camera = h.camera();
     const vstate = h.state.get();
+    expect(vstate.hover?.item).toMatchObject({ kind: 'face', body: 'b_1' });
+    // The view's last frame (its scene, not the triad's): the selection, hover and flash lit.
+    const lit = gl.seen.filter((s) => 'b_1' in s.lit).at(-1)!.lit;
+    expect(lit.b_1).toBeGreaterThan(0);
     const framed = h.stats().framed;
     const count = moves(h);
+    const viewCut = planeOf(sectionPlane(vstate.section, new Plane()));
+    const snapCut = planeOf(snapshotClip({ plane: 'top', offset: 5, flip: false }));
+    expect(viewCut).not.toEqual(snapCut);
     gl.seen.length = 0;
     gl.clears.length = 0;
+    gpu.log.length = 0;
+    frames.mockClear();
 
     const r = h.snapshot!({ view: 'iso_back', width: 160, height: 120, hide: ['b_2'], section: { plane: 'top', offset: 5, flip: false } });
 
-    // Into a target of its own: the scene orthographic, then the triad in a scissored corner.
+    // Into a target of its own: the scene orthographic, then the triad in a scissored corner; the
+    // layer drew plain for both and is put back after; no frame of the view ran (onFrame, labels).
     expect(gl.seen.map((s) => [s.toTarget, s.ortho, s.scissor])).toEqual([
       [true, true, false],
       [true, false, true],
     ]);
+    expect(gpu.log).toEqual(['plain:true', 'render', 'render', 'plain:false']);
+    expect(frames).not.toHaveBeenCalled();
     const drawn = gl.seen[0];
     expect(drawn.visible).toMatchObject({ 'body:b_1': true, 'edges:b_1': true, 'body:b_2': false, 'edges:b_2': false, 'layer:extrude.handle': false, 'layer:profiles.sketches': true, 'section-caps': true });
-    // Nothing lit, its own cut on every body, lines as wide as in a 160 x 120 view.
+    // Nothing lit (no selection, hover or flash), its own cut on every body and on the caps of the
+    // bodies it shows, lines as wide as in a 160 x 120 view.
     expect(drawn.lit).toEqual({ b_1: 0, b_2: 0 });
-    expect(drawn.clips).toEqual({ b_1: 1, b_2: 1 });
+    expect(drawn.clips).toEqual({ b_1: [snapCut], b_2: [snapCut] });
+    expect(drawn.stencils).toEqual({
+      b_1: [{ visible: true, clip: snapCut }, { visible: true, clip: snapCut }],
+      b_2: [{ visible: false, clip: snapCut }, { visible: false, clip: snapCut }],
+    });
     expect(drawn.resolution.b_1).toEqual([160, 120]);
 
     // Everything put back: the target, the camera, the view's state, the count, the framing.
@@ -340,13 +446,20 @@ describe('snapshot', () => {
     expect(moves(h)).toBe(count);
     expect(h.stats().framed).toBe(framed);
     gl.seen.length = 0;
-    // The next frame of the view: the hidden body, the manipulator and the highlight back, the view's own cut.
+    // The next frame of the view: the hidden body, the manipulator, the selection, hover and flash
+    // back, the view's own cut on the bodies and caps for both bodies.
     await vi.waitFor(() => expect(gl.seen.length).toBeGreaterThan(0));
     const next = gl.seen[0];
     expect(next.toTarget).toBe(false);
+    expect(frames).toHaveBeenCalled();
     expect(next.visible).toMatchObject({ 'body:b_2': true, 'layer:extrude.handle': true, 'section-caps': true });
-    expect(next.lit.b_1).toBeGreaterThan(0);
-    expect(next.clips).toEqual({ b_1: 1, b_2: 1 });
+    expect(next.lit).toEqual(lit);
+    expect(lit.b_2).toBeGreaterThan(0);
+    expect(next.clips).toEqual({ b_1: [viewCut], b_2: [viewCut] });
+    expect(next.stencils).toEqual({
+      b_1: [{ visible: true, clip: viewCut }, { visible: true, clip: viewCut }],
+      b_2: [{ visible: true, clip: viewCut }, { visible: true, clip: viewCut }],
+    });
     expect(next.resolution.b_1).toEqual([800, 600]);
 
     // The picture: its size, rows top first, mm per pixel; the shown body framed in the middle.
@@ -358,6 +471,34 @@ describe('snapshot', () => {
     expect(c[1]).toBeCloseTo(60, 6);
     // Seen from back-left-top, +X runs to the left.
     expect(r.project([10, 5, 5])![0]).toBeLessThan(80);
+  });
+
+  it("draws shaded with edges whatever the view's display mode, which the next frame has again", async () => {
+    const { h, gl } = viewport();
+    withCube(h);
+    // The view's own section on: in wireframe it draws no caps; a picture without a cut has none either.
+    h.setSection({ on: true, plane: 'origin:top', offset: 5 });
+    for (const [display, mesh, edges, caps] of [
+      ['wireframe', false, true, false],
+      ['shaded', true, false, true],
+    ] as const) {
+      h.setDisplay(display);
+      gl.seen.length = 0;
+      await vi.waitFor(() => expect(gl.seen.length).toBeGreaterThan(0));
+      expect(gl.seen[0].visible, display).toMatchObject({ 'body:b_1': mesh, 'edges:b_1': edges, 'section-caps': caps });
+      gl.seen.length = 0;
+      h.snapshot!({ view: 'iso', width: 64, height: 64, hide: [], section: null });
+      expect(gl.seen[0].visible, `${display}: the picture`).toMatchObject({ 'body:b_1': true, 'edges:b_1': true, 'body:b_2': true, 'edges:b_2': true, 'section-caps': false });
+      expect(gl.seen[0].clips, `${display}: no cut in the picture`).toEqual({ b_1: [], b_2: [] });
+      gl.seen.length = 0;
+      h.snapshot!({ view: 'iso', width: 64, height: 64, hide: [], section: { plane: 'front', offset: 0, flip: true } });
+      expect(gl.seen[0].visible['section-caps'], `${display}: a cut's caps in the picture`).toBe(true);
+      expect(h.state.get().display).toBe(display);
+      gl.seen.length = 0;
+      await vi.waitFor(() => expect(gl.seen.length).toBeGreaterThan(0));
+      expect(gl.seen[0].visible, `${display}: the next frame`).toMatchObject({ 'body:b_1': mesh, 'edges:b_1': edges, 'body:b_2': mesh, 'edges:b_2': edges, 'section-caps': caps });
+      expect(gl.seen[0].clips.b_1).toHaveLength(1);
+    }
   });
 
   it('visibleFaceAt: the face of that body in front at a picture pixel, else null', async () => {

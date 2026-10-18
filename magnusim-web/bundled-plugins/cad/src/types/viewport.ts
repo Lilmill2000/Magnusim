@@ -295,9 +295,10 @@ export interface ViewportHandle {
   /** Put the camera where a Part kept it (no transition; nothing is reported to onCameraChange). */
   setCamera(camera: SavedCamera, opts?: CameraCallOpts): void;
   /**
-   * How many times the person has moved the camera since the viewport was made: each camera call
-   * of this handle without `auto` that moved it (Fit, the standard views, Normal to, F, 1-7, N,
-   * Orbit around), each orbit, pan or zoom drag (once per drag) and each wheel step. The app's own
+   * How many times the person has moved the camera since the viewport was made: each call of this
+   * handle's fit, setView, lookAt, orbitAround or setCamera without `auto` (Fit, the standard
+   * views, Normal to, F, 1-7, N, Orbit around), each reframe or refitIfOffScreen without `auto`
+   * that moved the camera, each orbit, pan or zoom drag (once per drag) and each wheel step. The app's own
    * moves pass `auto` and are not counted, nor is the viewport's own framing of new bodies, nor a
    * snapshot. The Assistant's camera latch compares it before and after (counts, not frames).
    */
@@ -309,7 +310,10 @@ export interface ViewportHandle {
    * flash, an optional cut of its own, and the triad in a corner. The person's camera, framing,
    * section view, highlight and saved view are never touched, userCameraMoves() does not change,
    * and nothing is written. Throws an Error with code 'not_ready' when the WebGL context is lost.
-   * HTML overlays (dimension values, plane labels) are not in the picture.
+   * HTML overlays (dimension values, plane labels) are not in the picture. Layers that colour by
+   * the selection or hover draw plain through addLayer's `plain` (the profile regions, the
+   * reference geometry); sketch mode's own layers do not: in a picture taken while a sketch is
+   * edited, that sketch's selection, hover halo and a tool's preview show as on screen.
    */
   snapshot?(o: SnapshotOptions): SnapshotResult;
   /**
@@ -332,14 +336,18 @@ export interface ViewportHandle {
    * standard views, Look at, a refit), as the shown sketches do; `true` for everything it
    * draws, or a function giving the box that counts (model mm; null when nothing does), so a
    * sketch counts its curves and dimensions but not its grid. Sketches and bodies are framed
-   * together; the origin planes' extent only when neither is drawn.
+   * together; the origin planes' extent only when neither is drawn. `plain`: called with true
+   * just before a snapshot draws and with false right after it (both in that task): the layer
+   * then draws without its selection, hover and flash colours, synchronously, and puts them back.
    */
-  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null) }): OverlayLayer;
+  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null); plain?: (on: boolean) => void }): OverlayLayer;
   /**
    * The last framing (Fit, a standard view, Look at) again, with what is drawn now, when the
    * camera is still where that framing put it (nobody orbited, panned or zoomed since). A
    * reopened sketch calls it once its rebuild has rolled the later bodies back (review P2/P3
-   * round 4: the view stayed on bodies the rollback hid). False when the camera was moved.
+   * round 4: the view stayed on bodies the rollback hid). False when the camera was moved; true
+   * also when nothing changed and the camera stays where it is (then not a move: not counted by
+   * userCameraMoves, nothing reported to onCameraChange).
    */
   reframe(opts?: CameraCallOpts): boolean;
   /**
