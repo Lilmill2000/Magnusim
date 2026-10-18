@@ -5,7 +5,7 @@
 //                (shells - solids for closed solids; null for a surface body), faces, edges, valid
 //                (DocService.measure, which keeps the shells);
 //   entityFacts  one face, edge, vertex, point, plane or axis: kernel measure {a} (and topo for a
-//                curved face's axis), a point on a face from its triangles;
+//                curved face's axis), a point on a face by the selectors' rule (find's point_mm);
 //   pairFacts    two targets: kernel measure {a, b} (minimum distance, both points, delta, angle,
 //                centre distance);
 //   overlapFacts two bodies: their common volume (boolean common, props, release; empty is 0)
@@ -26,6 +26,8 @@ import type { BodyInfo, KernelCallError, KernelReply } from '../types/kernel';
 import type { BBox, KernelOp, KernelParams, MeasureOne, MeasureTarget, PlaneCurve, ShapeId, SketchCurve } from '../types/kernel-protocol';
 import { ToolError } from './errors';
 import type { Entity } from './measure-targets';
+import { pointOnFace } from './selectors/geometry';
+import type { TopoFace } from './selectors/resolve';
 import { regionRows } from './sketch/regions';
 
 /** Two bodies closer than this (mm) meet: the replies give lengths to 1e-4 mm. */
@@ -120,36 +122,6 @@ export async function bodyFacts(services: AppServices, b: BodyInfo): Promise<Bod
   };
 }
 
-/** The triangle of a face with the largest inscribed circle, and that circle's centre: a point on the face. */
-export function pointOnFace(b: BodyInfo, face: number): Vec3 | null {
-  const t = b.tess;
-  if (!t || 2 * face + 1 >= t.faceRanges.length) return null;
-  const start = t.faceRanges[2 * face];
-  const count = t.faceRanges[2 * face + 1];
-  const P = (i: number): Vec3 => [t.positions[3 * i], t.positions[3 * i + 1], t.positions[3 * i + 2]];
-  const dist = (a: Vec3, c: Vec3) => Math.hypot(a[0] - c[0], a[1] - c[1], a[2] - c[2]);
-  let best: Vec3 | null = null;
-  let bestR = -1;
-  for (let k = start; k + 2 < start + count && k + 2 < t.indices.length; k += 3) {
-    const A = P(t.indices[k]);
-    const B = P(t.indices[k + 1]);
-    const C = P(t.indices[k + 2]);
-    const a = dist(B, C);
-    const bb = dist(C, A);
-    const c = dist(A, B);
-    const per = a + bb + c;
-    if (!(per > 0)) continue;
-    const s2 = per / 2;
-    const area = Math.sqrt(Math.max(0, s2 * (s2 - a) * (s2 - bb) * (s2 - c)));
-    const r = area / s2;
-    if (r > bestR) {
-      bestR = r;
-      best = [(a * A[0] + bb * B[0] + c * C[0]) / per, (a * A[1] + bb * B[1] + c * C[1]) / per, (a * A[2] + bb * B[2] + c * C[2]) / per];
-    }
-  }
-  return best;
-}
-
 /** One face, edge, vertex, point, plane or axis as the kernel measures it (raw; mm, mm², degrees). */
 export interface EntityFacts {
   kind: Entity['kind'];
@@ -181,14 +153,17 @@ export async function entityFacts(services: AppServices, e: Exclude<Entity, { ki
     if (typeof one.area === 'number') out.area = one.area;
     if (typeof one.radius === 'number') out.radius = one.radius;
     if (one.center) out.center = [...one.center];
+    let axis: { origin: Vec3; dir: Vec3 } | undefined;
     if (one.type === 'plane' && one.dir) out.normal = [...one.dir];
     else if (one.dir) {
       // A curved face's axis runs through the point topo gives (its centroid may lie off the axis).
       const topo = await kcall(services, 'topo', { id: e.body.shape, faces: [e.index], edges: 'none', vertices: 'none', face_bbox: 'none', face_mass: false }, `read ${e.words}`, faces);
       const f = topo.result.faces.find((x) => x.i === e.index) ?? topo.result.faces[0];
+      axis = f?.axis ? { origin: [...f.axis.origin], dir: [...f.axis.dir] } : undefined;
       out.axis = { point: f?.axis ? [...f.axis.origin] : out.center ? [...out.center] : [0, 0, 0], dir: [...one.dir] };
     }
-    const p = pointOnFace(e.body, e.index);
+    // A point on the face by the selectors' rule (find's point_mm): on its plane or cylinder.
+    const p = e.body.tess ? pointOnFace(e.body.tess, e.index, { type: (one.type ?? 'other') as TopoFace['type'], normal: out.normal, centroid: out.center ?? null, axis, radius: out.radius }) : null;
     if (p) out.point = p;
     return out;
   }

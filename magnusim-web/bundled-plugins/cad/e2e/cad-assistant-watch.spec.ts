@@ -9,8 +9,9 @@
 // view's handles (the S2 integration): a picture's #f1 is the face find reads as #f1, and its #b1
 // renames the block through body, as the person's tree shows.
 // measure (watch 6, T10): the chip says "Measure" while it runs; the model gets a block's volume
-// and no voids, two separate blocks' distance, no overlap and two solids joined, and a cut's area;
-// the turn's log reads each measurement; nothing in the Part changes.
+// and no voids, two separate blocks' distance, no overlap and two solids joined, a cut's area, and
+// a face by its label (find's selectors); the turn's log reads each measurement; nothing in the
+// Part changes.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -247,7 +248,7 @@ test("cad:assistant-watch-find find lists the matches with handles and lights th
   await cadFrame(page).evaluate(() => (window as unknown as Pace).__CAD__.assistant.setPace(null));
 });
 
-test('cad:assistant-watch-measure measure gives a body its volume and voids, two separate bodies no overlap and two solids joined, a cut its area; the log reads them', async ({ page, request }) => {
+test('cad:assistant-watch-measure measure gives a body its volume and voids, two separate bodies no overlap and two solids joined, a cut its area, a face by its label; the log reads them', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant measure');
   const { frame, tab } = await openNewPart(page, request, host, pid);
@@ -263,6 +264,7 @@ test('cad:assistant-watch-measure measure gives a body its volume and voids, two
     { tools: [{ name: 'cad__measure', input: { targets: ['Body 1'], section: '' } }] },
     { tools: [{ name: 'cad__measure', input: { targets: ['Body 1', 'Body 2'], section: '' } }] },
     { tools: [{ name: 'cad__measure', input: { targets: ['Body 2'], section: 'Top offset 10 mm' } }] },
+    { tools: [{ name: 'cad__measure', input: { targets: ['Extrude 2.end'], section: '' } }] },
     { text: 'Two separate blocks of 8000 mm3.' },
   );
   // The first measure stops once the Part has settled: the chip says what runs.
@@ -279,10 +281,11 @@ test('cad:assistant-watch-measure measure gives a body its volume and voids, two
     { ok: true, summary: 'Measured Body 1: volume 8000 mm3, 1 solid, 0 voids' },
     { ok: true, summary: 'Measured Body 1 to Body 2: distance 20 mm, overlap 0 mm3, joined 2 solids and 0 voids' },
     { ok: true, summary: 'Measured Body 2 cut at Top offset 10 mm: area 400 mm2 in 1 piece, 0 holes' },
+    { ok: true, summary: 'Measured face Extrude 2.end on Body 2: plane, area 400 mm2' },
   ]);
 
   // What the model got back.
-  const [, afterBody, afterPair, afterSection] = chats(host).slice(before);
+  const [, afterBody, afterPair, afterSection, afterFace] = chats(host).slice(before);
   const [body] = resultsIn(afterBody);
   expect(body).toMatchObject({
     tool: 'cad__measure',
@@ -293,8 +296,10 @@ test('cad:assistant-watch-measure measure gives a body its volume and voids, two
   expect(pair).toMatchObject({ tool: 'cad__measure', ok: true, data: { distance_mm: 20, delta_mm: [20, 0, 0], overlap_mm3: 0, touching: false, union_solids: 2, union_voids: 0 } });
   const [section] = resultsIn(afterSection);
   expect(section).toMatchObject({ tool: 'cad__measure', ok: true, data: { body: 'Body 2', section: { plane: 'Top offset 10 mm', area_mm2: 400, loops: 1, holes: 0, regions: [{ area_mm2: 400, holes: 0 }] } } });
+  const [face] = resultsIn(afterFace);
+  expect(face).toMatchObject({ tool: 'cad__measure', ok: true, data: { target: 'Extrude 2.end', kind: 'face', body: 'Body 2', type: 'plane', area_mm2: 400, normal: [0, 0, 1], center_mm: [50, 10, 20] } });
   // A read: the Part is as it was (the same revision in every answer, no feature added).
-  const revs = [body, pair, section].map((r) => r.data!.rev);
+  const revs = [body, pair, section, face].map((r) => r.data!.rev);
   expect(new Set(revs).size).toBe(1);
   expect(await features()).toMatchObject({ features: 4, bodies: 2 });
   await expect(chip).toHaveText('Assistant: Measure the blocks. · done', STEP);

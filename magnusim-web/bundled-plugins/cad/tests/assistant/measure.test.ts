@@ -18,7 +18,11 @@
 //     a second change answers busy/changed; a kernel restart mid-measure measures again, and the
 //     ids of shapes the dead worker made are never released in the next one; a change while the
 //     call is held at after-settled is measured;
-//   - the rollback bar above the end: the bodies there, said so.
+//   - the rollback bar above the end: the bodies there, said so;
+//   - by selector (find's selectors): a role label, a query, a handle find gave (the same point on
+//     the face as find's), a face's plane with an offset as the section; several things are
+//     selector_ambiguous with handles; a split face's warning; a text that is no body and no
+//     selector names its column; a region, a handle never given.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HELP } from '../../src/assistant/help';
@@ -33,6 +37,7 @@ import type { SketchOutput } from '../../src/types/sketch';
 import { block } from '../doc/blocks';
 import { realKernelAnywhere } from '../features/p2/kernel-anywhere';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
+import { bodyNamed, extrude, faceNamed, plate, regions, Shapes, sketchOnFace } from './parts';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -473,6 +478,78 @@ describe('measure while the Part changes', () => {
       expect(end.data).toMatchObject({ volume_mm3: 7000, voids: 1 });
       expect(end.data.rolled_back).toBeUndefined();
       expect(end.data.note).toBeUndefined();
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe('measure: by selector', () => {
+  it(
+    "a role label, a query and a handle find gave; a face's plane as the section; several things are ambiguous with handles; a bad selector, a region and an unknown handle say why",
+    async () => {
+      h = await assistantHarness();
+      await ring(h, 10, 4, 10);
+      const reason = async (input: Row) => {
+        const r = await h!.call('measure', input);
+        if (r.ok) throw new Error(`measure answered ${JSON.stringify(r.result)}`);
+        return r.error as { code: string; message: string; detail: Row };
+      };
+
+      // A role label: the ring's top face.
+      const top = await h.ok('measure', M(['Extrude 1.end']));
+      expect(top.data).toMatchObject({ target: 'Extrude 1.end', kind: 'face', body: 'Body 1', words: 'face Extrude 1.end on Body 1', type: 'plane', area_mm2: sig6(Math.PI * (100 - 16)), normal: [0, 0, 1] });
+      expect(top.text).toBe('face Extrude 1.end on Body 1: plane, area 263.894 mm2');
+      // Its plane 5 mm down cuts the whole ring.
+      const cut = await h.ok('measure', M(['Body 1'], 'Extrude 1.end offset -5 mm'));
+      expect(cut.data.section).toMatchObject({ plane: 'face Extrude 1.end on Body 1 offset -5 mm', area_mm2: sig6(Math.PI * (100 - 16)), loops: 2, holes: 1 });
+      // Two faces: 10 mm apart, parallel.
+      expect((await h.ok('measure', M(['Extrude 1.end', 'Extrude 1.start']))).data).toMatchObject({ distance_mm: 10, parallel: true });
+
+      // A handle find gave: the hole, at the same point on it as find says, on the cylinder.
+      const [hole] = (await h.ok('find', { query: 'Body 1 faces hole', limit: 10 })).data.rows as Row[];
+      expect(hole).toMatchObject({ handle: expect.stringMatching(/^#f\d+$/), type: 'cylinder', radius_mm: 4, hole: true });
+      const byHandle = await h.ok('measure', M([hole.handle as string]));
+      expect(byHandle.data).toMatchObject({ kind: 'face', type: 'cylinder', radius_mm: 4, point_mm: hole.point_mm });
+      const p = byHandle.data.point_mm as number[];
+      expect(Math.abs(Math.hypot(p[0], p[1]) - 4)).toBeLessThan(1e-3);
+
+      // A query naming two things: ambiguous, each candidate with a handle; a filter narrows it to one.
+      const two = await reason(M(['Body 1 edges %circle radius 10 mm']));
+      expect(two).toMatchObject({ code: 'invalid_input', detail: { reason: 'selector_ambiguous', field: 'targets[0]', count: 2 } });
+      expect((two.detail.candidates as Row[]).map((c) => String(c.handle))).toEqual([expect.stringMatching(/^#e\d+$/), expect.stringMatching(/^#e\d+$/)]);
+      const rim = await h.ok('measure', M(['Body 1 edges %circle radius 10 mm >Z']));
+      expect(rim.data).toMatchObject({ kind: 'edge', type: 'circle', radius_mm: 10, circumference_mm: 62.8319 });
+      expect((rim.data.center_mm as number[])[2]).toBe(10);
+
+      // Neither a body nor a selector: the selector's column, and the bodies.
+      const bad = await reason(M(['Body 1 faces >Q']));
+      expect(bad).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_selector', field: 'targets[0]', selector: 'Body 1 faces >Q', column: expect.any(Number), bodies: ['Body 1'] } });
+      expect(bad.message).toMatch(/^bad_selector: targets\[0\]: "Body 1 faces >Q" is not a body here, nor a selector \(.*column \d+.*\)\. Use a body name, a face, edge or vertex selector/);
+      expect(bad.message).toContain('Bodies: Body 1.');
+      const badCut = await reason(M(['Body 1'], 'Extrude 1.end offsett 5 mm'));
+      expect(badCut).toMatchObject({ detail: { reason: 'bad_section', field: 'section', column: expect.any(Number) } });
+      // A sketch region is no measure target; a handle this request never gave is stale.
+      expect(await reason(M(['Sketch 1 r1']))).toMatchObject({ detail: { reason: 'bad_selector', field: 'targets[0]' }, message: expect.stringContaining('is a sketch region') });
+      expect(await reason(M(['#f99']))).toMatchObject({ detail: { reason: 'selector_stale', handle: '#f99' } });
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a split face measured by its label carries the selector's warning",
+    async () => {
+      h = await assistantHarness();
+      // The plate's top face cut in two by a groove across it.
+      const p = await plate(h);
+      const b = bodyNamed(h, 'Body 1');
+      const groove = await sketchOnFace(h, 'Groove sketch', b, faceNamed(b, `F:${p.extrude}:end`), new Shapes().rect('g', -2, -25, 2, 25));
+      await extrude(h, 'Groove', regions(h, groove), { op: 'cut', flip: true, distance: '2 mm' });
+      const rows = (await h.ok('find', { query: 'Extrude 1.end', limit: 10 })).data.rows as Row[];
+      expect(rows.map((r) => r.label)).toEqual(['Extrude 1.end~1', 'Extrude 1.end~2']);
+      expect(String(rows[0].warning)).toContain('split face');
+      const m = await h.ok('measure', M(['Extrude 1.end~1']));
+      expect(m.data).toMatchObject({ kind: 'face', type: 'plane', words: 'face Extrude 1.end~1 on Body 1', warning: rows[0].warning });
+      expect(m.data.area_mm2).toBe(sig6(28 * 40));
     },
     REAL_KERNEL_MS,
   );

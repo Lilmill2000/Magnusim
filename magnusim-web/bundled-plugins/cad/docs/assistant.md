@@ -163,8 +163,8 @@ read as they are:
 - one body: `DocService.measure` (volume, area, centre of mass, bounding box, solids,
   shells); `voids` is shells minus solids for closed solids, null for a surface body;
 - one face, edge or vertex: kernel `measure {a}` (plus `topo` for a curved face's axis
-  point), a point on a face from its largest-inradius triangle, a round edge's
-  circumference or arc angle;
+  point), a point on a face by the selectors' rule (`selectors/geometry.ts` `pointOnFace`,
+  the same `point_mm` find gives), a round edge's circumference or arc angle;
 - two targets: kernel `measure {a, b}`; two bodies also `boolean common` then `props`
   (the overlap; empty is 0) and `boolean fuse` then `props` (the union's solids and
   voids), each made shape released;
@@ -176,11 +176,14 @@ again once; a second change is `busy`/`changed`.
 
 Targets (`measure-targets.ts`): a body's name or id (a name is the body's first), `(x, y,
 z)`, `selection` (one selected thing), Top/Front/Right (XY/XZ/YZ) with `offset <length>`
-and `flip`, X/Y/Z axis, origin, and construction planes, axes and points by name. Other
-selectors (faces, edges and vertices, handles) go to the resolver find's selectors
-register with `registerSelectorResolver`; without one they answer `bad_selector` naming
-the forms that work. The section takes the same planes, `selection` with a flat face,
-and a face from that resolver.
+and `flip`, X/Y/Z axis, origin, and construction planes, axes and points by name. Every
+other selector (faces, edges and vertices, handles from find or view, the selectors' planes
+and axes) goes to `measure-selectors.ts`, which the measure tool registers with
+`registerSelectorResolver`: find's selectors on the bodies built now, one thing per target
+(several are `selector_ambiguous` with handles), a selector's warning as `warning`. A text
+that is neither a body nor a selector answers `bad_selector` with the selector's column and
+the forms that work. The section takes the same planes, `selection` with a flat face, and a
+flat face by selector (`Base.end offset -5 mm`).
 
 ## Pictures (`view`, `view.ts`)
 

@@ -9,9 +9,10 @@
 //                   name, each with " offset <length>" and " flip" (the offset the other way);
 //   an axis         X, Y or Z (" axis" may follow), a construction axis's name;
 //   a point         origin, a construction point's name.
-// Everything else (faces, edges and vertices by selector, find's handles) goes to the selector
-// resolver find's selectors register (registerSelectorResolver); until one is registered such a
-// target answers bad_selector and says which forms work.
+// Everything else (faces, edges and vertices by selector, the handles find and view give, the
+// selectors' planes and axes) goes to the selector resolver the measure tool registers
+// (registerSelectorResolver, measure-selectors.ts). A text that is neither answers bad_selector
+// with the selector's own words (and its column) and the forms that work.
 // A target is one thing: none is nothing_selected, several selector_ambiguous with candidates.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -27,26 +28,31 @@ import { ToolError } from './errors';
 import { selectionWords } from './model';
 import { vec } from './numbers';
 
-/** One thing a measure target names, as built now. `words` says what it is ("face End face of Plate on Body 1"). */
-export type Entity =
+/**
+ * One thing a measure target names, as built now. `words` says what it is ("face End face of Plate
+ * on Body 1"); `warnings` what the selector warned of ("#f3 moved: check", a split face).
+ */
+export type Entity = (
   | { kind: 'body'; body: BodyInfo; words: string }
   | { kind: 'face'; body: BodyInfo; index: number; words: string }
   | { kind: 'edge'; body: BodyInfo; index: number; words: string }
   | { kind: 'vertex'; body: BodyInfo; index: number; words: string }
   | { kind: 'point'; p: Vec3; words: string }
   | { kind: 'plane'; frame: PlaneFrame; words: string }
-  | { kind: 'axis'; origin: Vec3; dir: Vec3; words: string };
+  | { kind: 'axis'; origin: Vec3; dir: Vec3; words: string }
+) & { warnings?: string[] };
 
 /**
  * Resolves a selector of the selector language (faces, edges, vertices, handles) to what it names
- * on the bodies built now, or throws its ToolError (bad_selector, nothing_selected, selector_stale,
- * ...). Returns null for a text it does not read. find's selectors register one.
+ * on the bodies built now, or throws its ToolError (bad_selector with the column where the text
+ * stops being a selector, nothing_selected, selector_stale, ...). Returns null for a text it does
+ * not read. The measure tool registers measure-selectors.ts.
  */
 export type SelectorResolver = (ctx: CallCtx, text: string, o: { field: string }) => Promise<readonly Entity[] | null>;
 
 let selectorResolver: SelectorResolver | null = null;
 
-/** The selector language's resolver (find's selectors), or null to take it away (tests). */
+/** The selector language's resolver (measure-selectors.ts), or null to take it away (tests). */
 export function registerSelectorResolver(fn: SelectorResolver | null): void {
   selectorResolver = fn;
 }
@@ -198,8 +204,18 @@ function one(list: readonly Entity[], text: string, field: string): Entity {
   });
 }
 
-/** The words of a target that names nothing this build reads, with what exists. */
-function unknownTarget(s: DocState, text: string, field: string): ToolError {
+/** A selector's own syntax error (bad_selector with its column), or null. */
+const syntaxError = (e: unknown): ToolError | null => (e instanceof ToolError && e.reason === 'bad_selector' && typeof e.detail.column === 'number' ? e : null);
+
+/** What a selector's syntax error says, without its reason and field ("no body or feature is called ... (column 1 of ...)"). */
+function syntaxWords(e: ToolError, field: string): string {
+  let t = e.message.replace(/^bad_selector: /, '');
+  if (t.startsWith(`${field}: `)) t = t.slice(field.length + 2);
+  return t.replace(/\.$/, '');
+}
+
+/** The words of a target that names nothing measure reads, with what exists (and why it is no selector). */
+function unknownTarget(s: DocState, text: string, field: string, parse: ToolError | null): ToolError {
   const bodies = s.rebuild.bodies.map((b) => b.name);
   const stored = Object.values(s.doc.bodies).map((b) => b.name);
   const want = unquote(text).toLowerCase();
@@ -208,8 +224,8 @@ function unknownTarget(s: DocState, text: string, field: string): ToolError {
   }
   return new ToolError(
     'bad_selector',
-    `${field}: "${text}" is not a body here, and faces, edges and vertices by selector are not in this build yet. Use a body name, "(x, y, z)", "selection" (what the person selected), Top, Front, Right (with "offset <length>"), an axis, or a construction plane. Bodies: ${bodies.slice(0, NAMES_MAX).join(', ') || 'none yet'}.`,
-    { detail: { field, bodies: bodies.slice(0, NAMES_MAX) } },
+    `${field}: "${text}" is not a body here${parse ? `, nor a selector (${syntaxWords(parse, field)})` : ''}. Use a body name, a face, edge or vertex selector (help selectors), "(x, y, z)", "selection" (what the person selected), Top, Front, Right (with "offset <length>"), an axis, or a construction plane. Bodies: ${bodies.slice(0, NAMES_MAX).join(', ') || 'none yet'}.`,
+    { detail: { field, bodies: bodies.slice(0, NAMES_MAX), ...(parse ? { selector: text, column: parse.detail.column } : {}) } },
   );
 }
 
@@ -230,11 +246,19 @@ export async function resolveTarget(ctx: CallCtx, s: DocState, text: string, fie
   }
   const ref = referenceGeometry(ctx, s, raw, field);
   if (ref) return ref;
+  let parse: ToolError | null = null;
   if (selectorResolver) {
-    const list = await selectorResolver(ctx, raw, { field });
+    let list: readonly Entity[] | null = null;
+    try {
+      list = await selectorResolver(ctx, raw, { field });
+    } catch (e) {
+      // Neither a body nor a selector: say both (with the selector's column).
+      parse = syntaxError(e);
+      if (!parse) throw e;
+    }
     if (list) return one(list, raw, field);
   }
-  throw unknownTarget(s, raw, field);
+  throw unknownTarget(s, raw, field, parse);
 }
 
 /** Where a section cuts, in model terms: its frame and the words for it. */
@@ -257,6 +281,7 @@ export async function resolveSectionPlane(ctx: CallCtx, s: DocState, text: strin
   }
   const { base, offset, flip } = splitOffset(raw);
   let e: Entity | null = null;
+  let parse: ToolError | null = null;
   if (/^selection$/i.test(base)) {
     const sel = selectionEntities(ctx, s);
     if (!sel.entities.length) throw new ToolError('nothing_selected', 'section: the person has no flat face or plane selected.', { detail: { field } });
@@ -264,10 +289,22 @@ export async function resolveSectionPlane(ctx: CallCtx, s: DocState, text: strin
   } else if (bodyNamed(s, base)) {
     throw new ToolError('bad_section', `section: ${unquote(base)} is a body; the section is a plane (Top offset 4 mm, a construction plane, a flat face).`, { detail: { field } });
   } else if (selectorResolver) {
-    const list = await selectorResolver(ctx, base, { field });
+    let list: readonly Entity[] | null = null;
+    try {
+      list = await selectorResolver(ctx, base, { field });
+    } catch (err) {
+      parse = syntaxError(err);
+      if (!parse) throw err;
+    }
     if (list) e = one(list, base, field);
   }
-  if (!e) throw new ToolError('bad_section', `section: "${raw}" is not a plane here. Use Top, Front or Right (with "offset <length>"), a construction plane, or "selection" with a flat face selected.`, { detail: { field } });
+  if (!e) {
+    throw new ToolError(
+      'bad_section',
+      `section: "${raw}" is not a plane here${parse ? ` (${syntaxWords(parse, field)})` : ''}. Use Top, Front or Right (with "offset <length>"), a construction plane, a flat face (with "offset <length>"), or "selection" with a flat face selected.`,
+      { detail: { field, ...(parse ? { selector: base, column: parse.detail.column } : {}) } },
+    );
+  }
   if (e.kind === 'plane') return { frame: offsetBy(ctx, e.frame, offset, flip, field), words: offset === null ? e.words : raw };
   if (e.kind !== 'face') throw new ToolError('bad_section', `section: ${e.words} is not a plane or a flat face.`, { detail: { field } });
   const frame = await planeOfFace(e);

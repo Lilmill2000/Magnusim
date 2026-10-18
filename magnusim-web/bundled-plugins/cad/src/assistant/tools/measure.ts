@@ -19,10 +19,14 @@ import type { BodyInfo } from '../../types/kernel';
 import { heartbeat, waitForRead } from '../busy';
 import { ToolError } from '../errors';
 import { bodyFacts, entityFacts, overlapFacts, pairFacts, planeOfFace, sectionFacts, SECTION_REGIONS_MAX, TOUCH_MM, type BodyFacts, type EntityFacts, type OverlapFacts, type PairFacts, type SectionFacts } from '../measure';
-import { resolveSectionPlane, resolveTarget, type Entity, type SectionPlane } from '../measure-targets';
+import { selectorTargets } from '../measure-selectors';
+import { registerSelectorResolver, resolveSectionPlane, resolveTarget, type Entity, type SectionPlane } from '../measure-targets';
 import { dir, len, sig6, vec } from '../numbers';
 
 type Row = Record<string, unknown>;
+
+// Faces, edges, vertices and handles by selector (selectors/), after measure's own forms.
+registerSelectorResolver(selectorTargets);
 
 /** What a call read: the model, the rebuild it measured and the kernel's worker (a respawn kills every shape). */
 interface Stamp {
@@ -84,8 +88,11 @@ function bodyRow(target: string, f: BodyFacts): Row {
   return row;
 }
 
+/** What the selector warned of for a target ("#f3 moved: check", a split face), as `warning`. */
+const warningOf = (e: Entity): Row => (e.warnings?.length ? { warning: e.warnings.join('; ') } : {});
+
 function entityRow(target: string, e: Exclude<Entity, { kind: 'body' }>, f: EntityFacts): Row {
-  const row: Row = { target, kind: e.kind, ...('body' in e ? { body: e.body.name } : {}), words: e.words };
+  const row: Row = { target, kind: e.kind, ...('body' in e ? { body: e.body.name } : {}), words: e.words, ...warningOf(e) };
   if (f.type) row.type = f.type;
   if (f.area !== undefined) row.area_mm2 = sig6(f.area);
   if (f.length !== undefined) row.length_mm = len(f.length);
@@ -114,7 +121,7 @@ function bodyText(f: BodyFacts): string {
 }
 
 function pairRow(targets: string[], a: Entity, b: Entity, p: PairFacts, o: OverlapFacts | null): Row {
-  const short = (t: string, e: Entity) => ({ target: t, kind: e.kind, words: e.words });
+  const short = (t: string, e: Entity) => ({ target: t, kind: e.kind, words: e.words, ...warningOf(e) });
   const row: Row = {
     targets: [short(targets[0], a), short(targets[1], b)],
     distance_mm: len(p.distance),
