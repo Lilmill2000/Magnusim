@@ -26,6 +26,8 @@ export interface AgentBinding {
   id: string;
   conversation: string;
   agent: string;
+  /** The agent's name as the person reads it (a call it was running when it went says who). */
+  name?: string;
   /** A Settings Test binding (served only connection_check). */
   test: boolean;
 }
@@ -58,8 +60,11 @@ interface BindingEntry {
   binding: AgentBinding;
   /** The session id of its live connection (or a handshake that claimed it). */
   live: string | null;
-  /** Closes the live connection (set by the server while one is live). */
-  closeLive: (() => void) | null;
+  /**
+   * Closes the live connection (set by the server while one is live); `cause` when the agent went
+   * by itself (its calls say so), else Magnusim ended it.
+   */
+  closeLive: ((why?: { cause?: string }) => void) | null;
   dispatch: AgentDispatch | null;
   /** A Test binding's call of connection_check (the Test records "called"). */
   onTestCall: (() => void) | null;
@@ -85,8 +90,14 @@ function table(): Map<string, BindingEntry> {
 export const BINDING_RE = /^b-[0-9a-f]{24}$/;
 
 /** A new binding for an agent session (or a Settings Test). */
-export function mintBinding(o: { conversation: string; agent: string; test?: boolean; dispatch?: AgentDispatch | null; onTestCall?: () => void }): AgentBinding {
-  const binding: AgentBinding = { id: `b-${randomBytes(12).toString('hex')}`, conversation: o.conversation, agent: o.agent, test: o.test === true };
+export function mintBinding(o: { conversation: string; agent: string; name?: string; test?: boolean; dispatch?: AgentDispatch | null; onTestCall?: () => void }): AgentBinding {
+  const binding: AgentBinding = {
+    id: `b-${randomBytes(12).toString('hex')}`,
+    conversation: o.conversation,
+    agent: o.agent,
+    ...(o.name ? { name: o.name } : {}),
+    test: o.test === true,
+  };
   table().set(binding.id, { binding, live: null, closeLive: null, dispatch: o.dispatch ?? null, onTestCall: o.onTestCall ?? null, served: null });
   return binding;
 }
@@ -108,18 +119,21 @@ export function bindingServes(id: string, name: string): boolean {
   return table().get(id)?.served?.has(name) === true;
 }
 
-/** The session ended: its binding is refused from now on, and its live connection closes. */
-export function dropBinding(id: string): void {
+/**
+ * The session ended: its binding is refused from now on, and its live connection closes.
+ * `cause`: the agent went by itself (its exit), not ended by Magnusim.
+ */
+export function dropBinding(id: string, why?: { cause?: string }): void {
   const e = table().get(id);
   if (!e) return;
   table().delete(id);
   const close = e.closeLive;
   e.closeLive = null;
-  close?.();
+  close?.(why);
 }
 
 export type BindingClaim =
-  | { ok: true; entry: Readonly<BindingEntry>; attach(close: () => void): void; release(): void }
+  | { ok: true; entry: Readonly<BindingEntry>; attach(close: (why?: { cause?: string }) => void): void; release(): void }
   | { ok: false; code: 'binding' | 'binding_in_use' };
 
 /**

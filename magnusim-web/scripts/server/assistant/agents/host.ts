@@ -305,7 +305,7 @@ export class AgentHost {
     this.hadAgent.add(o.conversation);
     const offence = this.offended.get(o.conversation) ?? null;
     this.offended.delete(o.conversation);
-    const binding = mintBinding({ conversation: o.conversation, agent: o.agent.id, dispatch: e.dispatch });
+    const binding = mintBinding({ conversation: o.conversation, agent: o.agent.id, name: o.agent.name, dispatch: e.dispatch });
     setBindingDispatch(binding.id, e.dispatch);
     const where = this.placement();
     const session = new AgentSession({

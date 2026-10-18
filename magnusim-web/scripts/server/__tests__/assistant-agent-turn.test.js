@@ -463,18 +463,36 @@ describe('how an agent turn ends (spec 4.7 stop reasons)', LIMIT, () => {
     }
   });
 
-  it('a crash mid-tool: failed/agent_exited with its last words, the call answered, and the next message starts it again with the note', async () => {
-    const w = await world();
+  it('a crash mid-tool: failed/agent_exited with its last words, the call answered as the agent stopping (not the person, not the server), and the next message starts it again with the note', async () => {
+    // The tool says it is under way (the fake exits on that progress), then runs until aborted.
+    const w = await world({
+      invoke: (call) =>
+        call.tool === 'slow_add'
+          ? new Promise((resolve) => {
+              call.signal.addEventListener('abort', () => resolve({ ok: false, error: { code: 'aborted', message: 'aborted' }, summary: 'aborted' }), { once: true });
+              call.progress(0.5, 'Halfway');
+            })
+          : { ok: true, data: { counter: 2 }, summary: 'ran' },
+    });
     try {
       const r = await w.turn({ text: 'Add.', provider: 'agent:claude', tab: 'tab-1' });
       assert.equal(r.status, 202, JSON.stringify(r.body));
-      claude.script('exitDuringCall', { call: { tool: 'ai-demo__add', args: { by: 1 } } }, { say: 'never' });
+      claude.script('exitDuringCall', { call: { tool: 'ai-demo__slow_add', args: { by: 1 } } }, { say: 'never' });
       assert.equal(r.status, 202, JSON.stringify(r.body));
       await settledTurn(r.turn);
       const pid = lastPid(claude);
       const e = endOf(r.turn);
       assert.deepEqual([e.state, e.reason], ['failed', 'agent_exited']);
       assert.equal(e.message, "Claude Code stopped unexpectedly. Its last words: 'fake agent: exiting during a call'");
+      // The call it was in: aborted by the agent going, whichever the server heard first (the
+      // bridge's socket closing, the binding dropped at the exit, or the turn ending).
+      const call = H.eventsOf(r.turn).find((x) => x.type === 'tool_call' && x.tool === 'ai-demo__slow_add');
+      assert.ok(call, 'the slow call ran');
+      const res = H.eventsOf(r.turn).find((x) => x.type === 'tool_result' && x.call === call.call);
+      assert.deepEqual(
+        res && { ok: res.ok, code: res.code, summary: res.summary },
+        { ok: false, code: 'stopped', summary: 'Claude Code stopped unexpectedly while it ran; it may or may not have finished.' },
+      );
       await gone(pid);
       // Its bridge went with it: nothing of the session is left.
       for (const p of claude.pids('mcp')) await gone(p.pid);
@@ -488,6 +506,36 @@ describe('how an agent turn ends (spec 4.7 stop reasons)', LIMIT, () => {
     } finally {
       await w.close();
     }
+  });
+});
+
+describe('a call still open when the turn ends says why: never the person when it wasn\u2019t', () => {
+  it('Stop, a key change or a switch turned off: the person; the server stopping: the server; the agent exiting: it stopped unexpectedly; any other end: the turn ended', async () => {
+    const { Turn } = await import('../assistant/turns.ts');
+    const { GateBroker, realClock } = await import('../assistant/gates.ts');
+    const { callAbortOf, stoppedText } = await import('../assistant/runner.ts');
+    const agent = { kind: 'agent', provider: 'agent:claude', model: '', agent: { id: 'claude', name: 'Claude Code', version: '1.0.0', ownTools: 'off' }, caps: {} };
+    const model = { provider: 'anthropic', model: 'm', caps: {} };
+    let n = 0;
+    const openCall = (settings, end) => {
+      const t = new Turn({ id: `t-why-${(n += 1)}`, prompt: 'x', conv: { id: 'c-why' }, tab: null, projectId: null, simulationId: null, settings, clock: realClock, gates: new GateBroker() });
+      const signal = t.callSignal();
+      end(t);
+      assert.ok(signal.aborted);
+      const why = callAbortOf(signal);
+      if (!t.ended) t.end('stopped', 'test', null);
+      return [stoppedText(true, why.server === true, why.cause), stoppedText(false, why.server === true, why.cause)];
+    };
+    const PERSON = ['Stopped by the user while it ran; it may or may not have finished.', 'Stopped by the user before this ran.'];
+    assert.deepEqual(openCall(agent, (t) => t.stop()), PERSON);
+    assert.deepEqual(openCall(model, (t) => t.stop('key_changed', 'The provider key was changed.')), PERSON);
+    assert.deepEqual(openCall(agent, (t) => t.stop('agent_off', 'Turned off.', 'stopped')), PERSON);
+    assert.deepEqual(openCall(agent, (t) => t.shutdown()), ['The server stopped while it ran; it may or may not have finished.', 'The server stopped before this ran.']);
+    assert.deepEqual(openCall(agent, (t) => t.end('failed', 'agent_exited', 'Claude Code stopped unexpectedly.')), [
+      'Claude Code stopped unexpectedly while it ran; it may or may not have finished.',
+      'Claude Code stopped unexpectedly before this ran.',
+    ]);
+    assert.deepEqual(openCall(agent, (t) => t.end('failed', 'agent_lockdown', 'Locked.')), ['The turn ended while it ran; it may or may not have finished.', 'The turn ended before this ran.']);
   });
 });
 

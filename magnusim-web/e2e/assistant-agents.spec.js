@@ -1215,7 +1215,12 @@ test('the agent crashing mid-tool: the call ends, the turn fails agent_exited wi
   expect(turn).toMatchObject({ state: 'failed', end_reason: 'agent_exited', message: "Claude Code stopped unexpectedly. Its last words: 'fake agent: exiting during a call'" });
   const call = ofType(events, 'tool_call').find((e) => e.tool === `${PLUGIN}__slow_add`);
   expect(call, 'the slow call ran').toBeTruthy();
-  expect(ofType(events, 'tool_result').find((e) => e.call === call.call)).toMatchObject({ ok: false });
+  // The call says the agent went (never "Stopped by the user", never "The server stopped").
+  expect(ofType(events, 'tool_result').find((e) => e.call === call.call)).toMatchObject({
+    ok: false,
+    code: 'stopped',
+    summary: 'Claude Code stopped unexpectedly while it ran; it may or may not have finished.',
+  });
   await expect(w.frame.locator('#aborted')).toHaveText('aborted');
   await expect(w.frame.locator('#counter')).toHaveText('0');
   const { pid, tree } = lastAgent(fake);

@@ -139,6 +139,8 @@ export const TURN_LIMITS = Object.freeze({
 
 const STOPPED_TEXT = 'Stopped.';
 const TERMINAL: ReadonlySet<TurnState> = new Set(['done', 'stopped', 'failed', 'capped']);
+/** The stop reasons that are the person's doing: Stop, a key change, an agent's switch turned off. */
+const BY_THE_PERSON: ReadonlySet<string> = new Set(['user', 'key_changed', 'agent_off']);
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
@@ -453,9 +455,16 @@ export class Turn implements AnyTurn {
     this.call = null;
   }
 
-  /** How a stopped call reads: the server stopping, or the person (Stop, a key change). */
+  /**
+   * How a stopped call reads: the server stopping; the person (Stop, a key change, an agent's
+   * switch turned off); the agent that ran it exiting; or, for any other end, the turn ending.
+   */
   private stopAbort(): CallAbort {
-    return { code: 'stopped', ...(this.stopAs?.reason === 'shutdown' ? { server: true } : {}) };
+    const reason = this.stopAs?.reason ?? 'user';
+    if (reason === 'shutdown') return { code: 'stopped', server: true };
+    if (BY_THE_PERSON.has(reason)) return { code: 'stopped' };
+    if (reason === 'agent_exited' && isAgentSettings(this.settings)) return { code: 'stopped', cause: `${this.settings.agent.name} stopped unexpectedly` };
+    return { code: 'stopped', cause: 'The turn ended' };
   }
 
   // ------------------------------------------------------------ ending

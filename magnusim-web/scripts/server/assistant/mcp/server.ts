@@ -284,6 +284,11 @@ function withheldInputError(def: ToolDef, input: Record<string, unknown> | undef
   return WITHHELD_INPUT_TEXT;
 }
 
+/** The SDK's abort of a request whose connection closed (its SdkError CONNECTION_CLOSED). */
+function connectionClosed(reason: unknown): boolean {
+  return reason instanceof Error && (reason as { code?: unknown }).code === 'CONNECTION_CLOSED';
+}
+
 /** `p`'s value, or 'aborted' as soon as `signal` aborts (`p` goes on). */
 function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
   if (signal.aborted) return Promise.resolve('aborted');
@@ -651,7 +656,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
 
   /** A call that stopped before its tool ran: by the client's cancel, its connection closing, or the server. */
   function stoppedBefore(call: ToolCallPart, signal: AbortSignal): RunResult {
-    return errorResult(call, 'stopped', stoppedText(false, callAbortOf(signal)?.server === true));
+    const why = callAbortOf(signal);
+    return errorResult(call, 'stopped', stoppedText(false, why?.server === true, why?.cause));
   }
 
   /** The privacy rules for an external app reading the project of `ctx` now, read live, with no question. */
@@ -903,10 +909,15 @@ export function createMcpService(d: McpServiceDeps): McpService {
     };
     const started = clock.now();
     // The client's notifications/cancelled is a Stop for this call; the connection closing
-    // passes on its own reason (with `server` when Magnusim closed it).
+    // passes on its own reason (with `server` when Magnusim closed it). The SDK aborts the
+    // request too when its transport closes: that is the connection's reason, never a Stop.
     const abort = new AbortController();
-    const onCancel = () => abort.abort({ code: 'stopped' } satisfies CallAbort);
     const onClosed = () => abort.abort(closed.reason);
+    const onCancel = () => {
+      if (!connectionClosed(ctx.mcpReq.signal.reason)) abort.abort({ code: 'stopped' } satisfies CallAbort);
+      else if (closed.aborted) onClosed();
+      else abort.abort({ code: 'stopped', cause: goneCause(session) } satisfies CallAbort);
+    };
     if (closed.aborted) onClosed();
     else if (ctx.mcpReq.signal.aborted) onCancel();
     closed.addEventListener('abort', onClosed, { once: true });
@@ -953,6 +964,12 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return toMcpResult(r);
   }
 
+  /** Why a connection's calls stopped when it closed from the other side. */
+  function goneCause(session: McpSession): string {
+    if (session.binding) return `${session.binding.name || 'The coding agent'} stopped unexpectedly`;
+    return `${session.client.name || 'The app'} disconnected`;
+  }
+
   function serve(conn: McpConnection, hello: McpHello, claim: (BindingClaim & { ok: true }) | null, sdk: Sdk): void {
     const session: McpSession = {
       id: conn.id,
@@ -971,12 +988,18 @@ export function createMcpService(d: McpServiceDeps): McpService {
     const offShutdown = onAssistantShutdown(() => conn.close({ server: true }));
     // A registration changed: recomputed once the change is done (never inside it).
     const offChange = d.registry.onChange(() => queueMicrotask(() => recheck(session)));
-    claim?.attach(() => conn.close({ server: true }));
+    // Its binding dropped: Magnusim ended the agent (server), or the agent exited by itself (cause).
+    let cause: string | null = null;
+    claim?.attach((why) => {
+      if (why?.cause) cause = why.cause;
+      conn.close(why?.cause ? {} : { server: true });
+    });
     conn.onClose(({ server }) => {
       live.closed = true;
       live.server = null;
       offChange();
-      closed.abort({ code: 'stopped', ...(server ? { server: true } : {}) } satisfies CallAbort);
+      // Closed from the other side: the agent (the bridge is its child) or the app went, never the person.
+      closed.abort({ code: 'stopped', ...(server ? { server: true } : { cause: cause ?? goneCause(session) }) } satisfies CallAbort);
       offShutdown();
       claim?.release();
       sessions.delete(session.id);

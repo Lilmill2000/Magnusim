@@ -1085,11 +1085,50 @@ describe('tools/call', () => {
       await H.until(() => hold.calls.length === 1, 5000, 'the first call');
       c.sock.destroy();
       await H.until(() => hold.calls[0].aborted, 5000, 'the running call aborted');
-      assert.equal(hold.calls[0].aborted.code, 'stopped');
-      assert.equal(hold.calls[0].aborted.server, undefined, 'the app went, not the server');
+      assert.deepEqual(hold.calls[0].aborted, { code: 'stopped', cause: 'socket-client disconnected' }, 'the app went: not the server, not a Stop');
       await Promise.all(calls);
       await noConnections();
       assert.equal(hold.calls.length, 1, 'the queued calls never ran');
+    } finally {
+      await w.close();
+    }
+  });
+
+  it("an agent binding's running call says who went, never the person: the agent's side closing, its binding dropped at its exit; Magnusim dropping it is the server", async () => {
+    const hold = holdTool('hold');
+    const w = await world({ clients: false, hostTools: [hold.def] });
+    try {
+      const ctx = { tab: null, projectId: null, simulationId: null, cloud: true, local: false };
+      const owner = { kind: 'turn', id: 't-gone', tab: null };
+      const results = [];
+      const dispatch = {
+        ctx: () => ctx,
+        run: async (call, o) => {
+          const r = await w.m.manager.runner.run(call, { owner, ctx, signal: o.signal, offered: o.offered });
+          results.push(r.summary);
+          return r;
+        },
+      };
+      const ends = [
+        // The bridge's socket closes (the agent exited; the bridge is its child).
+        ['the socket', (b, c) => c.sock.destroy(), 'Fake Agent stopped unexpectedly while it ran; it may or may not have finished.'],
+        // The agent's exit seen first: its binding is dropped with that cause.
+        ['its exit', (b) => B.dropBinding(b.id, { cause: 'Fake Agent stopped unexpectedly' }), 'Fake Agent stopped unexpectedly while it ran; it may or may not have finished.'],
+        // Magnusim ended the agent: the server.
+        ['Magnusim', (b) => B.dropBinding(b.id), 'The server stopped while it ran; it may or may not have finished.'],
+      ];
+      for (const [i, [label, end, text]] of ends.entries()) {
+        const b = B.mintBinding({ conversation: `c-gone-${i}`, agent: 'fake', name: 'Fake Agent', dispatch });
+        const c = await w.client({ binding: b.id });
+        const call = c.client.callTool({ name: 'hold', arguments: { n: i } }).catch((e) => e);
+        await H.until(() => hold.calls.length === i + 1, 5000, `the call (${label})`);
+        end(b, c);
+        await H.until(() => results.length === i + 1, 5000, `its result (${label})`);
+        assert.equal(results[i], text, label);
+        await call;
+        B.dropBinding(b.id);
+        await closed(c.sock);
+      }
     } finally {
       await w.close();
     }

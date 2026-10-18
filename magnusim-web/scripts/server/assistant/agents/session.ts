@@ -612,7 +612,8 @@ export class AgentSession {
     const unexpected = this.state !== 'ended';
     this.state = 'ended';
     this.cancelOpen();
-    dropBinding(this.binding.id);
+    // Exited by itself: a call it was running says it stopped unexpectedly (not "the server stopped").
+    dropBinding(this.binding.id, unexpected ? { cause: `${this.agent.name} stopped unexpectedly` } : undefined);
     if (unexpected) alog('info', 'agent ended by itself', { agent: this.agent.id, code: info.code, signal: info.signal });
     try {
       this.o.onExit?.(this, info);
