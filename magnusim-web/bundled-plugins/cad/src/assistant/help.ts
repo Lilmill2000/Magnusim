@@ -33,10 +33,12 @@ export const HELP_TOPIC_BYTES = 8 * 1024;
 export const HELP_EXAMPLE_BYTES = 12 * 1024;
 /** The app's cap on one string in a reply's data. */
 export const HELP_STRING_MAX = 2000;
+/** What the features topic adds to the row of a tool the page does not offer now (the eval's core set). */
+export const NOT_OFFERED = 'Not offered now: do without it.';
 
-/** The guide in rows, one per part (the app cuts each string in data at 2000 characters). */
-function guideRows(): HelpRow[] {
-  return GUIDE.split(/\n\n+/).map((part) => {
+/** A guide in rows, one per part (the app cuts each string in data at 2000 characters): GUIDE, or a Part's guide without some tools. */
+export function guideRows(guide: string = GUIDE): HelpRow[] {
+  return guide.split(/\n\n+/).map((part) => {
     const head = /^([A-Z]{3,})\b/.exec(part);
     return { about: head ? head[1].toLowerCase() : 'introduction', text: part };
   });

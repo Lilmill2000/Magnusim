@@ -656,7 +656,8 @@ shot through the app; a failing first shot gets one repair turn).
   with each error's reason and, for edits, `paced`: the ms waited at pace points), the turns,
   the hold points, `setHoldS(s)` (the edits' wait for the person), `setPace(pace, scale)`,
   `setAskEach(on)` (neither written to the person's preferences), `approving()`, `paused()`,
-  `setToolset('core')` for the eval's A/B runs, and the eval's `evalFacts(ask)`,
+  `setToolset('core')` for the eval's A/B runs (its 13 tools with a guide naming only them,
+  `guide.ts guideWithout`; help features marks the 5 not offered), and the eval's `evalFacts(ask)`,
   `evalSetParam(name, expr)` and `evalPicture()`.
 - Watch mode's vitest files: `sketch-write` (the watch path on the real solver: guesses then
   the pull, the solution first when it moves far, the final exact apply on a forced other

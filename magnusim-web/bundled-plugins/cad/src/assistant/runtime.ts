@@ -63,6 +63,11 @@ export interface AssistantRuntime {
   /** Whether a tool answers in this build (the others answer not_ready "not in this build yet"). */
   isBuilt(name: string): boolean;
   /**
+   * The tools the page offers now, by name: all 18, or the eval's core set (testing.ts
+   * setToolset). The guide registered and help's guide and features topics follow it.
+   */
+  offered: readonly string[];
+  /**
    * The host passes a page error's hint and detail to the model (H2). True with the host's turn
    * events (H3 came after H2); without them the hint goes into the message.
    */

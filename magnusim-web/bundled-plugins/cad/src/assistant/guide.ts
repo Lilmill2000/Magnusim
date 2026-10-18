@@ -5,7 +5,9 @@
 // workspace's notes. tests/assistant/guide.test.ts pins its facts against the code (the frames,
 // the join, the parts, every tool, field, value and selector it names), and
 // guide-example.test.ts builds its EXAMPLES, which are help's worked parts (examples.ts)
-// abridged, on the real kernel.
+// abridged, on the real kernel. guideWithout(tools) is the guide of a Part that offers only some
+// of its tools (the eval's core set, testing.ts setToolset): the words that send the model to the
+// others go, and one line names the tools not offered.
 // No runtime imports: the app's host test imports this file with Node's type stripping.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -52,3 +54,26 @@ export const GUIDE = [
   '2 L bracket. sketch on Front: polyline p [0,0,50,0,50,5,5,5,5,40,0,40,0,0], infer; coincident [p.p0, origin]; distance [p.1] "a", [p.6] "b", [p.2] "t", [p.5] "t". extrude "Bracket" symmetric "wid" new. modify fillet ["Bracket.side(p.3) & Bracket.side(p.4)"] "r".',
   '3 Flange. sketch on Front: rect r [10,0,40,8]; horizontal [r.bl, origin]; distance_x [origin, r.bl] "bore/2", [origin, r.br] "od/2"; distance [r.left] "t". revolve "Flange" axis "Z axis" full new. hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "" diameter "hd", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg".',
 ].join('\n');
+
+/** The guide's words that send the model to a tool, and what they say without it (each once in GUIDE). */
+export const GUIDE_TOOL_WORDS: readonly (readonly [tool: string, words: string, without: string])[] = Object.freeze([
+  ['view', '; view at milestones and at the end.', '.'],
+  ['edit_feature', ' or edit_feature;', ';'],
+  ['delete', '; delete asks the person.', '.'],
+] as const);
+
+/** The line that names the tools a Part does not offer now. */
+export const notOfferedLine = (tools: readonly string[]) => `Tools not offered now: ${tools.join(', ')}.`;
+
+/**
+ * The guide of a Part that offers all its tools but `tools` (the eval's core set): GUIDE without
+ * the words that send the model to them, and a line under the introduction naming them. GUIDE
+ * itself when every tool is offered.
+ */
+export function guideWithout(tools: readonly string[]): string {
+  if (!tools.length) return GUIDE;
+  let g = GUIDE;
+  for (const [tool, words, without] of GUIDE_TOOL_WORDS) if (tools.includes(tool)) g = g.replace(words, without);
+  const intro = g.indexOf('\n\n');
+  return `${g.slice(0, intro)}\n${notOfferedLine(tools)}${g.slice(intro)}`;
+}

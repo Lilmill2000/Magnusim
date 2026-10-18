@@ -3,6 +3,9 @@
 //   - the bridge's guard: no ws.assistant -> null; a host without turn events -> onTurn and stop
 //     null; an older host's not_allowed -> {available: false, reason: 'not_allowed'};
 //   - one registration of the 18 tools with the guide, the turns heard before it;
+//   - the eval's core set (setToolset('core')): its 13 tools with the guide that names only them,
+//     help's guide topic that guide and help features marking the 5 not offered; 'all' brings
+//     the 18 and the guide back;
 //   - after not_connected the tools are offered again when the tab shows (not while hidden), and
 //     never again after remote, no_assistant or not_allowed;
 //   - a call's progress keeps `waiting` on its way to the host;
@@ -11,15 +14,18 @@
 import type { AssistantCall, AssistantRegistration, Workspace } from '@magnusim/workspace';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCallHandler } from '../../src/assistant/call';
-import { GUIDE } from '../../src/assistant/guide';
+import { GUIDE, guideWithout, notOfferedLine } from '../../src/assistant/guide';
+import { HELP, HELP_TOPIC_BYTES, NOT_OFFERED } from '../../src/assistant/help';
+import { assistantTestHandle } from '../../src/assistant/install';
 import { runtimeOf } from '../../src/assistant/runtime';
-import { TOOL_NAMES } from '../../src/assistant/schemas';
+import { CORE_TOOLSET, TOOL_NAMES } from '../../src/assistant/schemas';
 import { assistantOf } from '../../src/lib/bridge';
 import type { ToolImpl } from '../../src/types/assistant';
 import { FakeKernel } from '../doc/fake-kernel';
 import { createFakeAssistant } from '../fakes/assistant-sdk';
 import { createFakeWorkspace } from '../fakes/workspace-sdk';
 import { assistantHarness, type AssistantHarness } from './harness';
+import { resultAsSent } from './sanitize-copy';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -106,6 +112,36 @@ describe('the registration', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     await Promise.resolve();
     expect(h.fake.registrations).toHaveLength(1);
+  });
+
+  it("the eval's core set: its 13 tools with a guide that names only them; help says which are not offered; 'all' brings back the 18", async () => {
+    h = await start();
+    const handle = assistantTestHandle(h.services)!;
+    const missing = TOOL_NAMES.filter((n) => !CORE_TOOLSET.includes(n));
+    expect(missing).toEqual(['body', 'delete', 'edit_feature', 'sweep_loft', 'view']);
+    expect(await handle.setToolset('core')).toMatchObject({ available: true });
+    const reg = h.fake.registrations.at(-1)!;
+    expect(reg.tools.map((t) => t.name)).toEqual(TOOL_NAMES.filter((n) => CORE_TOOLSET.includes(n)));
+    expect(handle.tools).toEqual([...CORE_TOOLSET]);
+    // The guide it registers sends the model to none of the 5, and says they are not offered.
+    expect(reg.guide).toBe(guideWithout(missing));
+    expect(reg.guide).toContain(notOfferedLine(missing));
+    expect(reg.guide).not.toMatch(/view at milestones|edit_feature;|delete asks/);
+    // help guide is that guide; help features marks the 5 (and only them); both whole through the app's rules.
+    const guide = await h.ok('help', { topic: 'guide' });
+    expect((guide.data.rows as { text: string }[]).map((r) => r.text).join('\n\n')).toBe(reg.guide);
+    const features = await h.ok('help', { topic: 'features' });
+    const rows = features.data.rows as { about: string; text: string }[];
+    expect(rows.filter((r) => r.text.endsWith(` ${NOT_OFFERED}`)).map((r) => r.about)).toEqual(missing);
+    for (const r of rows) if (!missing.includes(r.about)) expect(r.text, r.about).toBe(HELP.features.find((x) => x.about === r.about)!.text);
+    expect(Buffer.byteLength(JSON.stringify({ topic: 'features', rows }))).toBeLessThanOrEqual(HELP_TOPIC_BYTES);
+    for (const r of [guide, features]) expect(resultAsSent('cad__help', r).truncated).toBeUndefined();
+    // Back to every tool: the 18, the guide, help as it is.
+    expect(await handle.setToolset('all')).toMatchObject({ available: true });
+    expect(h.fake.registrations.at(-1)!.tools.map((t) => t.name)).toEqual([...TOOL_NAMES]);
+    expect(h.fake.registrations.at(-1)!.guide).toBe(GUIDE);
+    expect((await h.ok('help', { topic: 'features' })).data.rows).toEqual(HELP.features);
+    expect((await h.ok('help', { topic: 'guide' })).data.rows).toEqual(HELP.guide);
   });
 
   it('uninstall withdraws the tools (register([], null))', async () => {

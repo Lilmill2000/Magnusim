@@ -8,13 +8,15 @@
 // for its tool's schema (all fields, types, values, sizes) and every selector in it reads; the
 // guide says how a file is made (Export STEP) and how busy answers end a turn; no vendor names
 // and no project data. The worked parts are built on the real kernel in guide-example.test.ts.
+// The guide of a Part that offers only some tools (the eval's core set, guideWithout): it names
+// none of the others but in the one line that lists them, and is the guide otherwise.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { HINTS, REASONS } from '../../src/assistant/errors';
 import { WORKED_PARTS } from '../../src/assistant/examples';
-import { GUIDE } from '../../src/assistant/guide';
+import { GUIDE, GUIDE_TOOL_WORDS, guideWithout, notOfferedLine } from '../../src/assistant/guide';
 import { HELP } from '../../src/assistant/help';
-import { CAD_TOOLS, HELP_TOPICS, TOOL_NAMES, toolNamed } from '../../src/assistant/schemas';
+import { CAD_TOOLS, CORE_TOOLSET, HELP_TOPICS, TOOL_NAMES, toolNamed } from '../../src/assistant/schemas';
 import { parseSelector, type KnownNames, type Want } from '../../src/assistant/selectors/parse';
 import { expandEntity, JOIN_TOL, type EntityKind } from '../../src/assistant/sketch/macros';
 import { faceFrame, ydirOf } from '../../src/features/sketch/plane';
@@ -207,6 +209,51 @@ describe('the CAD guide', () => {
   it('names no vendor and holds no project data', () => {
     expect(namesVendor(GUIDE)).toBe(false);
     expect(GUIDE).not.toMatch(/proj-|st-[a-z0-9]|\\Users\\|\/home\//);
+  });
+});
+
+/** Whether `text` names tool `t` as a word (not inside a longer name, a selector or a handle). */
+const names = (text: string, t: string) => new RegExp(`(?<![\\w.#])${t}(?!\\w)`).test(text);
+
+describe("the guide of a Part that offers only some of its tools (the eval's core set)", () => {
+  it('is the guide itself when every tool is offered', () => {
+    expect(guideWithout([])).toBe(GUIDE);
+  });
+
+  it("each of the guide's words that send the model to a tool is there once and names that tool; no other left-out tool is named", () => {
+    for (const [tool, words] of GUIDE_TOOL_WORDS) {
+      expect(GUIDE.split(words).length - 1, tool).toBe(1);
+      expect(names(words, tool), tool).toBe(true);
+    }
+    for (const t of TOOL_NAMES) if (!CORE_TOOLSET.includes(t)) expect(names(GUIDE, t), t).toBe(GUIDE_TOOL_WORDS.some(([x]) => x === t));
+  });
+
+  it("without the core set's 5: none of them named but in the line under the introduction; ASCII within 3950; the rest as the guide", () => {
+    const missing = TOOL_NAMES.filter((t) => !CORE_TOOLSET.includes(t));
+    const g = guideWithout(missing);
+    expect(g.length).toBeLessThanOrEqual(3950);
+    expect(g).toMatch(/^[\x20-\x7e\n]*$/);
+    expect(bridgeClean(g)).toBe(g);
+    const lines = g.split('\n');
+    expect(lines[0]).toBe(GUIDE.split('\n')[0]);
+    expect(lines[1]).toBe(notOfferedLine(missing));
+    expect(lines[1]).toBe('Tools not offered now: body, delete, edit_feature, sweep_loft, view.');
+    const rest = lines.filter((_, i) => i !== 1).join('\n');
+    for (const t of missing) expect(names(rest, t), t).toBe(false);
+    for (const t of CORE_TOOLSET) expect(names(rest, t), t).toBe(names(GUIDE, t));
+    // Only those words changed.
+    expect(rest).toContain('5 measure against the plan.\nDone:');
+    expect(rest).toContain('EDITING: change sizes via parameters; else call the tool again with edit');
+    expect(rest).toContain('undo takes back your own steps. Leave the person');
+    expect(rest.length).toBe(GUIDE.length - GUIDE_TOOL_WORDS.reduce((n, [, w, wo]) => n + w.length - wo.length, 0));
+  });
+
+  it("each tool the core set leaves out, left out alone, is named only in that line", () => {
+    for (const t of TOOL_NAMES.filter((x) => !CORE_TOOLSET.includes(x))) {
+      const lines = guideWithout([t]).split('\n');
+      expect(lines[1], t).toBe(notOfferedLine([t]));
+      expect(names(lines.filter((_, i) => i !== 1).join('\n'), t), t).toBe(false);
+    }
   });
 });
 

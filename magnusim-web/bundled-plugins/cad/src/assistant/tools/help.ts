@@ -1,20 +1,30 @@
 // help: the fixed CAD reference (CAD tools spec §3.2.5, §10.2). Needs no Part and never waits.
-// The features topic says which tools this build answers.
+// The features topic says which tools this build answers, and which the page does not offer now
+// (the eval's core set); the guide topic is the guide the page registered (guide.ts guideWithout).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ToolImpl } from '../../types/assistant';
 import { ToolError } from '../errors';
-import { HELP, isHelpTopic } from '../help';
+import { guideWithout } from '../guide';
+import { guideRows, HELP, isHelpTopic, NOT_OFFERED } from '../help';
 import { runtimeOf } from '../runtime';
-import { HELP_TOPICS } from '../schemas';
+import { HELP_TOPICS, TOOL_NAMES } from '../schemas';
 
 export const tool: ToolImpl = {
   kind: 'read',
   async run(ctx) {
     const topic = ctx.input.topic;
     if (!isHelpTopic(topic)) throw new ToolError('bad_input', `topic must be one of ${HELP_TOPICS.join(', ')}.`, { detail: { field: 'topic' } });
-    const built = runtimeOf(ctx.services)?.isBuilt ?? (() => true);
-    const rows = HELP[topic].map((r) => (topic === 'features' && !built(r.about) ? { ...r, text: `${r.text} Not in this build yet.` } : r));
+    const rt = runtimeOf(ctx.services);
+    const built = rt?.isBuilt ?? (() => true);
+    const offered = rt?.offered ?? TOOL_NAMES;
+    const missing = TOOL_NAMES.filter((n) => !offered.includes(n));
+    const base = topic === 'guide' && missing.length ? guideRows(guideWithout(missing)) : HELP[topic];
+    const rows = base.map((r) => {
+      if (topic !== 'features') return r;
+      if (!built(r.about)) return { ...r, text: `${r.text} Not in this build yet.` };
+      return missing.includes(r.about) ? { ...r, text: `${r.text} ${NOT_OFFERED}` } : r;
+    });
     return { text: `help ${topic}: ${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`, data: { topic, rows }, summary: `Read help ${topic}` };
   },
 };

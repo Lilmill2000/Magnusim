@@ -56,7 +56,9 @@ Exactly one driver:
   network. This is what the e2e (`e2e/cad-assistant-eval.spec.ts`) runs.
 
 Options: `--runs N`, `--label text`, `--toolset core` (the 13-tool core set: get_model, find,
-measure, help, set_params, sketch, extrude, hole, revolve, modify, pattern, combine, undo),
+measure, help, set_params, sketch, extrude, hole, revolve, modify, pattern, combine, undo; the
+Part registers them with a guide that names only them and a line listing the 5 not offered, and
+help features marks those 5),
 `--pace watch` (the default is fast), `--headed` (show the browser), `--tab <id>` (attach: bind
 the turns to that tab; it must show the project the run made; by default the tab whose
 registration names it, never "auto"), `--no-repair`, `--out <dir>`, `--port-from <n>`,
