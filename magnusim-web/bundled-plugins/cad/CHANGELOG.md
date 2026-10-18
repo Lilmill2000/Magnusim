@@ -20,22 +20,26 @@ in the Part" in `README.md`.
   (the Assistant pauses)". A Parameters panel you have open stays open and
   flashes the rows the Assistant changed.
 - Each call is all or nothing: a step that fails, is stopped or is taken over
-  leaves the Part as it was. A join, cut or hole that misses the part changes
-  nothing, and the Assistant is told why (which way it missed).
+  leaves the Part as it was (unless a change of yours during it means taking it
+  back would undo yours: then what it made before stays, and the chip names
+  it). A join, cut or hole that misses the part changes nothing, and the
+  Assistant is told why (which way it missed).
 - All of one request's changes are one undo step ("Undo Assistant: <your
   request>"). A change of yours in between starts a new one and is never undone
   with the Assistant's.
 - The Assistant chip in the dock says what it is doing ("Assistant · Sketch Plate
-  sketch · 12 of 120 steps") and has Pause, Resume, Stop, Fast / Watch and Ask
-  each step (Keep or Discard each step before it is kept). When a request ends
+  sketch · 12 of 120 steps") and has Pause (a step it is making stops where it
+  is until Resume), Resume, Stop, Fast / Watch and Ask each step (Keep or
+  Discard each step before it is kept). When a request ends
   it shows Undo (while nothing newer was done) and the Part's health ("· Fillet 1
   fails", "· 1 sketch under-defined"); a click on the health selects that
   feature.
 - You come first. While you have a panel, a menu, a dialog or a rename open, or
   the rollback bar is not at the end, its edits wait (up to 10 minutes) and the
   chip says what it waits for. Escape, Ctrl+Z or a toolbar command (Parameters
-  too) during one of its steps takes over: that step is discarded
-  and the Assistant pauses in this Part until the request ends. Undoing its steps
+  too) during one of its steps takes over: that step is discarded (all of it,
+  for Ctrl+Z between its panels) and the Assistant pauses in this Part until the
+  request ends. Undoing its steps
   while the request runs pauses it too. Selecting, hovering and orbiting are not
   taking over.
 - Deleting asks you first, in the app's own question: "Allow the Assistant to
