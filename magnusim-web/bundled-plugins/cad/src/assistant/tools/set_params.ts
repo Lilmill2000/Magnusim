@@ -4,7 +4,8 @@
 // rename rewrites every use, and a removal still used in the final Part refuses the call. The
 // same check runs first as a dry run, so a bad name, expression or removal answers before
 // anything changes, naming its row (set[2].expr, remove[0]). A value edit: a feature that built
-// and fails after the change reverts the call (broke_downstream). The answer gives each row's
+// and fails after the change, or a scoped cut (a hole) it moves off its body, reverts the call
+// (broke_downstream). The answer gives each row's
 // value evaluated, what was removed, how the features rebuilt, and the sketches the change turned
 // over (`flipped`: a dimension driven through zero mirrors its sketch; sketch/flip.ts).
 // At the watch pace with no panel open, the Assistant's own Parameters panel (read-only) shows the
@@ -137,6 +138,8 @@ const setParams: EditTool<Plan> = {
     return {
       part: 'Parameters',
       value: true,
+      // A parameter can drive any feature: every scoped cut is checked.
+      scopedFrom: 0,
       rows,
       where,
       names,

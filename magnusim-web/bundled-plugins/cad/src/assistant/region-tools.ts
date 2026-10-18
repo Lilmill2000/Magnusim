@@ -10,17 +10,19 @@
 //   misses    an operation that meets nothing fails with CAD's own words and, from diagnose.ts,
 //             which way it missed (detail.sub, the frame); a scoped cut that cut nothing away is
 //             cut_removed_nothing, a scoped intersect that would leave nothing of its bodies fails
-//             (a kernel restart while their volumes are read answers busy changed)
+//             (a kernel restart while their volumes are read answers busy changed); after a
+//             value edit, a scoped cut or intersect that acted before it and acts on nothing now
+//             (it still builds) reverts the edit (scopedActing, scopedLost, scopedLostError)
 // The field rules are checked in plan, every problem at once (bad_input).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { BodyId, Feature, FeatureId, RegionRef, SketchFeature } from '../types/doc';
-import type { EndBody } from '../types/doc-service';
+import type { DocState, EndBody } from '../types/doc-service';
 import type { ShapeId } from '../types/kernel-protocol';
 import { heartbeat } from './busy';
 import { diagnoseMiss, isMiss, type Miss, type SweptFeature } from './diagnose';
-import { isToolError, ToolError } from './errors';
+import { HINTS, isToolError, ToolError } from './errors';
 import { andList, bodyText, fillFeature, str, strings, type FeatureFill } from './feature-tools';
 import type { JudgedPlan } from './judge';
 import { featureByName } from './model';
@@ -219,6 +221,106 @@ export async function checkScoped(ctx: EditCtx, id: FeatureId): Promise<string[]
     throw new ToolError('feature_failed', withMiss(`${f.name} fails: it overlaps none of ${names}, so the intersect would leave nothing of ${rows.length === 1 ? 'it' : 'them'}.`, miss), { detail: { feature: f.name, message: null, actions: [], scope: rows.map((r) => r.body.name), ...miss.detail }, ...(miss.hint ? { hint: miss.hint } : {}) });
   }
   return f.op === 'cut' ? untouched.map((r) => `${f.name} cut nothing away from ${r.body.name}`) : [];
+}
+
+/** The most scoped cuts and intersects an edit checks (the earliest ones from its start). */
+export const SCOPED_CHECK_MAX = 40;
+
+/** A scoped cut or intersect that acted on its bodies before an edit (scopedActing), by id. */
+export type ScopedActing = { id: FeatureId; name: string }[];
+
+/** A scoped cut or intersect that no longer acts after an edit: its name and the words. */
+export interface ScopedLost {
+  id: FeatureId;
+  name: string;
+  words: string;
+}
+
+/** A feature that cuts or intersects only the bodies it names (holes, an extrude cut with bodies [...]), built now. */
+function scopedFeature(s: DocState, f: Feature): (Feature & { op: 'cut' | 'intersect'; scope: BodyId[] }) | null {
+  const g = f as Feature & { op?: unknown; scope?: unknown };
+  if ((g.op !== 'cut' && g.op !== 'intersect') || !Array.isArray(g.scope) || !g.scope.length || f.suppressed) return null;
+  const st = s.rebuild.features[f.id]?.state;
+  return st === 'ok' || st === 'warning' ? (g as Feature & { op: 'cut' | 'intersect'; scope: BodyId[] }) : null;
+}
+
+/**
+ * Whether a scoped cut still takes something away from one of its bodies (an intersect: still
+ * leaves something of one), from the bodies just before and just after it; null when it has no
+ * body of its scope before it. `vols` keeps each shape's volume once.
+ */
+async function scopedActs(services: AppServices, f: Feature & { op: 'cut' | 'intersect'; scope: BodyId[] }, epoch: number, vols: Map<ShapeId, number>): Promise<{ acts: boolean; names: string[] } | null> {
+  const before = (await services.doc.bodiesBefore(f.id)).bodies.filter((b) => f.scope.includes(b.id));
+  if (!before.length) return null;
+  const after = await bodiesAfter(services, f.id);
+  const vol = async (shape: ShapeId) => {
+    if (!vols.has(shape)) vols.set(shape, await volumeOf(services, shape, epoch));
+    return vols.get(shape)!;
+  };
+  const names = before.map((b) => b.name);
+  for (const b of before) {
+    const a = after.find((x) => x.id === b.id);
+    if (f.op === 'intersect') {
+      if (a) return { acts: true, names };
+      continue;
+    }
+    // A cut that took the whole body away acted on it.
+    if (!a) return { acts: true, names };
+    const was = await vol(b.shape);
+    if (Math.abs((await vol(a.shape)) - was) > CUT_NOTHING_REL * Math.max(Math.abs(was), 1e-12)) return { acts: true, names };
+  }
+  return { acts: false, names };
+}
+
+/**
+ * Before a value edit (CAD tools spec §7.4): the scoped cuts and intersects from feature index
+ * `from` on that act on their bodies now (a kernel restart meanwhile answers busy changed).
+ */
+export async function scopedActing(ctx: Pick<EditCtx, 'services'>, from: number): Promise<ScopedActing> {
+  const { services } = ctx;
+  const s = services.doc.state.get();
+  const epoch = services.kernel.status.get().respawns;
+  const vols = new Map<ShapeId, number>();
+  const out: ScopedActing = [];
+  const list = s.doc.features.slice(Math.max(0, from)).map((f) => scopedFeature(s, f)).filter((f) => f !== null).slice(0, SCOPED_CHECK_MAX);
+  for (const f of list) {
+    const r = await scopedActs(services, f, epoch, vols);
+    if (r?.acts) out.push({ id: f.id, name: f.name });
+  }
+  return out;
+}
+
+/** After the edit: those of `acting` that still build but no longer act on their bodies, with the words. */
+export async function scopedLost(ctx: Pick<EditCtx, 'services'>, acting: ScopedActing): Promise<ScopedLost[]> {
+  const { services } = ctx;
+  if (!acting.length) return [];
+  const s = services.doc.state.get();
+  const epoch = services.kernel.status.get().respawns;
+  const vols = new Map<ShapeId, number>();
+  const out: ScopedLost[] = [];
+  for (const a of acting) {
+    const g = s.doc.features.find((x) => x.id === a.id);
+    const f = g ? scopedFeature(s, g) : null;
+    if (!f) continue;
+    const r = await scopedActs(services, f, epoch, vols);
+    if (!r || r.acts) continue;
+    const words = f.op === 'cut' ? `${f.name} cuts nothing away from ${andList(r.names)}` : `${f.name} leaves nothing of ${andList(r.names)}`;
+    out.push({ id: f.id, name: f.name, words });
+  }
+  return out;
+}
+
+/**
+ * The answer of a value edit after which scoped cuts or intersects no longer act on their bodies
+ * (broke_downstream; the call reverts), with the first one's diagnosis (which way it misses now).
+ */
+export async function scopedLostError(services: AppServices, lost: readonly ScopedLost[]): Promise<ToolError> {
+  const f = services.doc.state.get().doc.features.find((g) => g.id === lost[0].id);
+  const miss: Miss = f && (f.type === 'extrude' || f.type === 'revolve') ? await missOf(services, f as SweptFeature) : { sub: null, words: '', detail: {} };
+  const list = andList(lost.map((l) => l.words));
+  const broke = lost.slice(0, 20).map((l) => ({ feature: l.name, message: l.words }));
+  // The value is what to change, not the profile: the reason's own hint, whatever way it misses.
+  return new ToolError('broke_downstream', withMiss(`Nothing changed: after it ${list}.`, miss), { detail: { broke, ...miss.detail }, hint: HINTS.broke_downstream });
 }
 
 /** After the Done of a new body: its name and colour, inside the step (one-shot edits). */

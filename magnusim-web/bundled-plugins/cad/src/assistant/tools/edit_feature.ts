@@ -4,10 +4,12 @@
 // place in the history ("end", "before X", "after X"), in one step.
 //   - Values go through the person's own Edit panel (openEditForAssistant, read-only for the
 //     person): one update with every changed top-level field whole, the live rebuild, then an
-//     honest Done. A value that makes the feature fail, or a working feature after it, changes
-//     nothing (feature_failed, broke_downstream).
+//     honest Done. A value that makes the feature fail, or a working feature after it, or moves a
+//     scoped cut after it off its body (it builds but cuts nothing), changes nothing
+//     (feature_failed, broke_downstream).
 //   - rename, setSuppressed and move are the Part's own edits, with their refusal words; they are
-//     structural, so a feature they turn red is kept and listed in `broke`.
+//     structural, so a feature they turn red is kept and listed in `broke`. With values in the same
+//     call, the values are judged first, as a value edit, before the rename, suppression or move.
 //   - A sketch's dimension values (set rows naming its dimension ids) are checked headless first and
 //     go through sketch mode, which solves the stored geometry with them (sketch/dims.ts); the answer
 //     says when a change turned a sketch over (`flipped`).
@@ -161,12 +163,15 @@ const editFeature: EditTool<Plan> = {
     const move = moveIndex(s.doc.features, f, str(ctx.input.move), (n) => featureByName(s, n));
     if (!patch && !dims && rename === null && suppress === null && !move) throw new ToolError('bad_input', `Nothing to change in ${f.name}: give set rows, rename_to, suppress or move.`);
     const value = (!!patch || !!dims) && rename === null && suppress === null && !move;
+    const at = s.doc.features.indexOf(f);
     const resolved: Record<string, string> = { feature: `${f.name} (${f.type})` };
     for (const x of set) resolved[x.field] = x.path === x.field ? x.value : `${x.value} (${x.path})`;
     if (move) resolved.move = move.words;
     return {
       part: `Edit ${rename ?? f.name}`,
       value,
+      // A rename alone moves nothing: no cut to check.
+      ...(patch || dims || suppress !== null || move ? { scopedFrom: move ? Math.min(at, move.to) : at } : {}),
       own: patch || dims ? f.id : null,
       feature: f.id,
       resolved,
@@ -186,9 +191,12 @@ const editFeature: EditTool<Plan> = {
     const { services } = ctx;
     const { doc } = services;
     const ui = uiFor(services);
+    const structural = plan.renameTo !== null || plan.suppress !== null || plan.moveTo !== null;
     if (plan.dims) {
       await applyDimensions(ctx, plan.dims);
-      if (plan.renameTo !== null || plan.suppress !== null || plan.moveTo !== null) await ctx.checkpoint({ hold: 'between-opens' });
+      // The values first, as a value edit: what they break reverts the call, whatever follows them.
+      if (structural) await ctx.judgeValues();
+      if (structural) await ctx.checkpoint({ hold: 'between-opens' });
     } else if (plan.patch) {
       const before = stateWord(doc.state.get().rebuild.features[plan.id]);
       const s = ui.openEditForAssistant(ctx.step, plan.id);
@@ -206,8 +214,10 @@ const editFeature: EditTool<Plan> = {
       }
       const why = ui.doneForAssistant(ctx.step);
       if (why) throw new ToolError('incomplete', `${plan.name}: ${why}.`);
+      // The values first, as a value edit: what they break reverts the call, whatever follows them.
+      if (structural) await ctx.judgeValues();
       // Between the panel and the one-shot edits: a change of the person's here makes the step unclean.
-      if (plan.renameTo !== null || plan.suppress !== null || plan.moveTo !== null) await ctx.checkpoint({ hold: 'between-opens' });
+      if (structural) await ctx.checkpoint({ hold: 'between-opens' });
     }
     if (plan.renameTo !== null) {
       const r = ctx.step.run(() => doc.rename(plan.id, plan.renameTo!));

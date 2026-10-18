@@ -10,7 +10,11 @@
 //   - refused before anything changes (no feature, no panel, no undo entry): the fields, a curved
 //     face (not_flat), a tilted face (bad_input: use sketch and extrude cut), a missing coordinate,
 //     every expression problem at once, a centre off the face's plane, a centre outside the face
-//     (named by its row), the same centre twice, a name taken;
+//     (named by its row), the same centre twice, a name taken; a hole that breaks the face's edge
+//     (its centre off the face within half the diameter, or on it near an edge) is made and warned;
+//   - a value (set_params, the sketch's position dimension, with a rename too) that moves a hole
+//     off its body, where it builds and cuts nothing, changes nothing (broke_downstream with the
+//     diagnosis); a structural edit that leaves a scoped cut with nothing to cut is kept and warns;
 //   - a person's panel opened between the sketch and the cut (between-opens, forced) is waited
 //     for: the step goes back under it, and once it closes the call plans anew and keeps both
 //     features as one undo group;
@@ -339,4 +343,55 @@ describe('hole', () => {
       HOLE_MS,
     );
   }
+
+  it(
+    "a hole that breaks the face's edge is made and warned of: off the face within half the diameter, or on it near an edge",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      const r = await ok(h, 'hole', HOLE({ centers: [CTR('31 mm', '0 mm', ''), CTR('0 mm', '19 mm', ''), CTR('0 mm', '0 mm', '')] }));
+      expect(r.data.warnings).toEqual([
+        'centers[0] (31, 0, 10) is 1 mm outside Base.end: the hole 5 mm across breaks its edge (a notch)',
+        'centers[1] (0, 19, 10) is 1 mm from an edge of Base.end: the hole 5 mm across breaks that edge (a notch)',
+      ]);
+      expect(r.text).toMatch(/^Hole 1 ok: 3 holes 5 mm across, through, in Base\.end/);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a value that moves a hole off its body (it still builds, cutting nothing) changes nothing; a structural edit that does warns',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      await ok(h, 'set_params', { set: [P('hx', '10 mm')], remove: [] });
+      await ok(h, 'hole', HOLE({ centers: [CTR('hx', '0 mm', '')] }));
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 6.25 * 10, 4);
+      const doc = h.doc.state.get().doc;
+      const label = undoLabel(h);
+      // set_params moves the hole past the block's +X side: the cut builds and removes nothing.
+      const param = await fail(h, 'set_params', { set: [P('hx', '40 mm')], remove: [] });
+      expect(param).toMatchObject({ code: 'failed', detail: { reason: 'broke_downstream', broke: [{ feature: 'Hole 1', message: 'Hole 1 cuts nothing away from Body 1' }], sub: 'off_body' }, hint: 'Nothing changed: pick a value that keeps the features in detail.broke working.' });
+      expect(param.message).toMatch(/^broke_downstream: Nothing changed: after it Hole 1 cuts nothing away from Body 1\. The profile lies beside Body 1/);
+      // The sketch's position dimension, as the hole tool's description sends the model to change it.
+      const dim = await fail(h, 'edit_feature', EDIT('Hole 1 sketch', { set: [{ field: 'h1x', value: '40 mm' }] }));
+      expect(dim).toMatchObject({ detail: { reason: 'broke_downstream', broke: [{ feature: 'Hole 1' }] } });
+      // With a rename in the same call: the value is still judged as a value.
+      expect(await fail(h, 'edit_feature', EDIT('Hole 1 sketch', { set: [{ field: 'h1x', value: '40 mm' }], rename_to: 'Moved' }))).toMatchObject({ detail: { reason: 'broke_downstream' } });
+      expect(h.doc.state.get().doc).toBe(doc);
+      expect(undoLabel(h)).toBe(label);
+      await h.settle();
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 6.25 * 10, 4);
+      // A tab joined at x 30..50 and a scoped cut into it from above; suppressing the tab (structural)
+      // leaves the cut building with nothing to cut: kept, and said.
+      await ok(h, 'sketch', SK({ name: 'Tab sketch', entities: [E('t', 'rect', [30, -10, 50, 10])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Tab', sketch: 'Tab sketch', distance: '10 mm', op: 'join' }));
+      await ok(h, 'sketch', SK({ name: 'Notch sketch', on: 'Top offset 10 mm', entities: [E('c', 'circle', [40, 0, 3])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Notch', sketch: 'Notch sketch', extent: 'through', flip: true, op: 'cut', bodies: ['Body 1'] }));
+      const kept = await ok(h, 'edit_feature', EDIT('Tab', { suppress: 'suppress' }));
+      expect(kept.data.warnings).toContain('Notch cuts nothing away from Body 1');
+      expect(names(h)).toContain('Notch');
+    },
+    HOLE_MS,
+  );
 });

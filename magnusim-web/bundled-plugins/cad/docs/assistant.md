@@ -122,12 +122,17 @@ An edit tool is `{kind: 'edit', run: (ctx) => runEdit(ctx, tool)}` with an `Edit
    the Part and no panel session is open (between its panels, while it waits for the rebuild,
    judges or asks "keep it?") takes all of the step back to its mark at once and undoes nothing
    else (`doc.assistant.undoTakesOver`; Undo's hint says so): `taken_over` `undo`.
-4. **Judge** (`judge.ts`) once the rebuild settled: a failed rebuild or a kernel stop is
-   `kernel_failed`; the call's own feature failing is `feature_failed` with its own message and
-   actions; a value edit (`set_params`, `edit_feature` with only `set`) that turns a working
-   feature red is `broke_downstream`; those revert. A structural edit keeps what it broke
-   (`broke`; `get_model` marks it `broken_by_you`). Warnings: the own feature's, a feature newly
-   warning, a body with more solids.
+4. **Judge** (`judge.ts`) once the rebuild settled: a failed rebuild (also one that fails with
+   the same words as before the call: nothing is built) or a kernel stop is `kernel_failed`; the
+   call's own feature failing is `feature_failed` with its own message and actions; a value edit
+   (`set_params`, `edit_feature` with only `set`) that turns a working feature red, or leaves a
+   scoped cut or intersect that acted before it acting on nothing (a hole moved off its body
+   still builds: `scopedActing` before, `scopedLost` after, in `region-tools.ts`), is
+   `broke_downstream`; those revert. `edit_feature` with `set` and a rename, suppression or move
+   judges its values first, as a value edit (`judgeValues`), before the rest. A structural edit
+   keeps what it broke (`broke`; `get_model` marks it `broken_by_you`) and warns of a scoped cut
+   left with nothing to cut. Warnings: the own feature's, a feature newly warning, a body with
+   more solids.
 5. **Seal** the step's undo steps into the key's group (`ledger.ts` `groupLabel`: "Assistant:
    <request>", or "Assistant (other app): <first part> +N"), and keep the call in the key's
    ledger (its mark, the model after) for the `undo` tool and `get_model`'s
@@ -338,6 +343,10 @@ One step makes two features through the person's own paths:
 2. `<name>` (an extrude, `fillSwept`): every circle (`all`), `flip: true` (into the material),
    op cut, scoped to the face's body, `through_all` or blind `distance`; `checkScoped` after its
    Done (`cut_removed_nothing`).
+
+A centre within half the diameter of the face but off it, or on it nearer one of the face's
+edges than half the diameter (the kernel's `measure` against each edge, at most
+`EDGE_MEASURES_MAX` measures in one call), cuts a notch: the hole is made and a warning names it.
 
 The hold point `between-opens` sits between the two. `name` `""` takes the next `Hole k` whose
 sketch name is free too; a given name may be at most 33 characters (its sketch's name keeps the

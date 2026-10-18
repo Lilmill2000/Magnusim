@@ -2,7 +2,8 @@
 // (busy.ts: not ready, another turn, the person, the rollback bar, a pause), plans against the
 // settled Part (selectors, names, a dry run: every refusal before anything changes), opens ONE
 // Assistant step (doc.assistant.begin: the save hold, the person first), applies through the
-// person's own paths, waits for the rebuild, and judges it (judge.ts). Kept, its undo steps are
+// person's own paths, waits for the rebuild, and judges it (judge.ts; with the plan's scopedFrom,
+// also the scoped cuts a value edit could move off their bodies, region-tools.ts). Kept, its undo steps are
 // sealed into the key's undo group ("Assistant: <request>") and the call goes into the key's
 // ledger; otherwise the step goes back to its mark exactly and the call answers why. A Stop, a
 // stall or Back (the call's signal) reverts at once, synchronously, before anything else runs.
@@ -35,6 +36,7 @@ import { waitForApproval } from './approval';
 import { heartbeat, personBlock, waitedWords, waitForEdit, waitWhilePaused } from './busy';
 import { asToolError, isToolError, ToolError } from './errors';
 import { report, snapshotStates, verdict, type JudgedPlan } from './judge';
+import { scopedActing, scopedLost, scopedLostError, type ScopedActing } from './region-tools';
 import { groupLabel } from './ledger';
 import { HIDDEN_NOTE, type CallPacer, type PacePoint } from './pace';
 import { describeChanges } from './rev';
@@ -46,6 +48,13 @@ export interface EditPlan extends JudgedPlan {
   part: string;
   /** The call goes into no ledger (the undo tool itself). */
   noLedger?: boolean;
+  /**
+   * The history index from which the call can move a scoped cut or intersect off its bodies (a
+   * value edit: set_params, edit_feature), or undefined: those from there that act on their bodies
+   * are checked before and after (region-tools.ts scopedActing); one that no longer does reverts a
+   * value edit (broke_downstream) and warns after a structural one.
+   */
+  scopedFrom?: number;
 }
 
 export interface CheckpointOptions {
@@ -74,6 +83,12 @@ export interface EditCtx extends CallCtx {
   wrote(session: EditSession): void;
   /** Run fn: a change of the selection inside it is the call's own (the person's selection still comes back after the call). */
   quietly<T>(fn: () => T): T;
+  /**
+   * Judge what the call changed so far as a value edit, once the rebuild settled (edit_feature's
+   * values, before its rename, suppression or move): a feature that worked and fails now, or a
+   * scoped cut that no longer cuts, throws the call's error (it reverts).
+   */
+  judgeValues(): Promise<void>;
 }
 
 export interface EditTool<P extends EditPlan> {
@@ -188,6 +203,8 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
     const on = plannedOn(services);
     const before = snapshotStates(doc.state.get());
     const plan = await tool.plan(ctx);
+    // A value edit can move a scoped cut off its body (it still builds): what acts now, to compare after.
+    const acting: ScopedActing | null = plan.scopedFrom === undefined ? null : await heartbeat(ctx, scopedActing(ctx, plan.scopedFrom), 'Checking the cuts');
     await ctx.hold('after-plan');
     ctx.checkAbort();
     // The person opened something while the call planned: wait for them again, then plan anew.
@@ -242,6 +259,13 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
     };
     // A pause pressed while the step runs: it waits here until Resume (a take-over or a change ends the wait; check says why).
     const untilResumed = () => waitWhilePaused(ctx, rt, () => !!st.takenOver || !st.clean, plan.part);
+    /** The scoped cuts that acted before the call and no longer do, once the rebuild settled. */
+    const lostNow = async () => {
+      if (!acting?.length) return [];
+      const lost = await heartbeat(ctx, scopedLost(ctx, acting), 'Checking the cuts');
+      check();
+      return lost;
+    };
     const ectx: EditCtx = {
       ...ctx,
       owner,
@@ -251,6 +275,14 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
         drafts.set(s, s.draft);
       },
       quietly: (fn) => sel.quietly(fn),
+      async judgeValues() {
+        await heartbeat(ctx, doc.settled(ctx.signal), 'Waiting for the rebuild');
+        check();
+        const v = verdict(before, snapshotStates(doc.state.get()), { ...plan, value: true });
+        if (v.error) throw v.error;
+        const lost = await lostNow();
+        if (lost.length) throw await scopedLostError(services, lost);
+      },
       async checkpoint(o = {}) {
         if (watchedHidden()) ranHidden = true;
         check();
@@ -271,6 +303,10 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
       const after = snapshotStates(doc.state.get());
       const v = verdict(before, after, plan);
       if (v.error) throw v.error;
+      // A scoped cut the change moved off its body still builds: a value edit reverts, a structural one warns.
+      const lost = await lostNow();
+      if (lost.length && plan.value) throw await scopedLostError(services, lost);
+      for (const l of lost) v.warnings.push(l.words);
       // "Ask each step": the person keeps or discards the judged step before it is sealed.
       if (rt.askEach.get()) {
         const answer = await waitForApproval(ctx, rt, st, plan.part);

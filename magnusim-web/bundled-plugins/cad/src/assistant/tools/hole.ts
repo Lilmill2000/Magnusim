@@ -12,8 +12,10 @@
 //      outward normal (flip: into the material), through that body or blind `distance` deep.
 // Every refusal comes before anything changes, each kind of problem all at once: the fields
 // (bad_input), the expressions (expr_error), then where the centres are (bad_input: off the
-// face's plane, outside the face, the same centre twice). A cut that removes nothing answers
-// cut_removed_nothing with the diagnosis (region-tools.ts).
+// face's plane, outside the face, the same centre twice). A centre within half the diameter of the
+// face that is off it, or nearer one of its edges than that, cuts a notch: a warning names it
+// (measured against the face's edges, at most EDGE_MEASURES_MAX measures). A cut that removes
+// nothing answers cut_removed_nothing with the diagnosis (region-tools.ts).
 // get_model full shows the two features as sketch and extrude inputs, with made_by "hole"; the
 // model changes them as such (edit_feature on the sketch's d changes every hole).
 // Owner: ASSISTANT.
@@ -50,6 +52,8 @@ export const CENTERS_MAX = 24;
 const COS1 = Math.cos(Math.PI / 180);
 /** A centre's coordinate along the normal this close to the face's plane is on it (mm). */
 export const ON_PLANE_MM = 1e-4;
+/** The most kernel measures of centres against the face's edges (the notch warning); past it a centre is not checked. */
+export const EDGE_MEASURES_MAX = 200;
 const SKETCH_SUFFIX = ' sketch';
 /** The longest name: its sketch is "<name> sketch", within the Part's name rule. */
 export const HOLE_NAME_MAX = NAME_MAX - SKETCH_SUFFIX.length;
@@ -239,15 +243,36 @@ const holeTool: EditTool<Plan> = {
         }
         centers.push([p[0], p[1], p[2]]);
       }
+      const warnings = [...hit.warnings];
       if (D! > 0) {
+        // The face's own edges (its outer boundary and any hole in it), for a hole that breaks one.
+        const t = await sc.cache.topo(hit.body.shape, { faces: hit.body.faces, signal: sc.signal });
+        const edges = t.edges.filter((e) => e.type !== 'degenerate' && e.faces.includes(hit.index));
+        let measures = EDGE_MEASURES_MAX;
         for (const [r, p] of centers.entries()) {
           if (where.some((w) => w.startsWith(`centers[${r}].`))) continue;
           const m = await sc.services.kernel.call('measure', { a: { id: hit.body.shape, face: hit.index }, b: { point: p } });
           const d = m.result.distance ?? Infinity;
-          if (d >= D! / 2 - 1e-6) where.push(`centers[${r}] ${at(p)} is ${Number.isFinite(d) ? `${len(d)} mm` : 'far'} outside ${label} (a hole ${len(D!)} mm across needs its centre within ${len(D! / 2)} mm of the face)`);
+          if (d >= D! / 2 - 1e-6) {
+            where.push(`centers[${r}] ${at(p)} is ${Number.isFinite(d) ? `${len(d)} mm` : 'far'} outside ${label} (a hole ${len(D!)} mm across needs its centre within ${len(D! / 2)} mm of the face)`);
+            continue;
+          }
+          if (warnings.length >= 8) continue;
+          // Within half the diameter but off the face, or on it nearer an edge than that: a notch, not a round hole.
+          if (d > ON_PLANE_MM) {
+            warnings.push(`centers[${r}] ${at(p)} is ${len(d)} mm outside ${label}: the hole ${len(D!)} mm across breaks its edge (a notch)`);
+            continue;
+          }
+          if (measures < edges.length) continue;
+          measures -= edges.length;
+          let near = Infinity;
+          for (const e of edges) {
+            const em = await sc.services.kernel.call('measure', { a: { id: hit.body.shape, edge: e.i }, b: { point: p } });
+            near = Math.min(near, em.result.distance ?? Infinity);
+          }
+          if (near < D! / 2 - 1e-6) warnings.push(`centers[${r}] ${at(p)} is ${len(near)} mm from an edge of ${label}: the hole ${len(D!)} mm across breaks that edge (a notch)`);
         }
       }
-      const warnings = [...hit.warnings];
       for (let a = 0; a < centers.length; a++) {
         for (let b = a + 1; b < centers.length; b++) {
           const gap = Math.hypot(...sub(centers[a], centers[b]));

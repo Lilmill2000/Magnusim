@@ -1,10 +1,12 @@
 // The honest outcome of one edit call (CAD tools spec §7.4, §7.5): the Part's feature states and
 // bodies before and after the step, compared once the rebuild settled.
-//   - the whole rebuild failed, or the kernel stopped a feature: revert, kernel_failed;
+//   - the whole rebuild failed (also when it failed the same way before the call: nothing is
+//     built), or the kernel stopped a feature: revert, kernel_failed;
 //   - the call's own feature (the one its panel filled) now fails: revert, feature_failed with the
 //     feature's own message and actions;
 //   - a value edit (set_params, edit_feature set) turned a feature that worked red: revert,
-//     broke_downstream with each feature and its message;
+//     broke_downstream with each feature and its message (step.ts adds the scoped cuts it left
+//     cutting nothing, region-tools.ts);
 //   - a structural edit (a rename, a move, a suppression, the undo tool, ...) did: kept, listed in
 //     `broke` (get_model marks them broken_by_you while they fail);
 //   - warnings: the own feature's warning, features newly warning (a repaired reference), a body
@@ -85,8 +87,10 @@ const stopped = (f: FeatureSnap) => f.actions.includes('retry');
 /** The outcome of a step, from the states before it and after its rebuild settled (§7.4). */
 export function verdict(before: StateSnap, after: StateSnap, plan: JudgedPlan): Verdict {
   const out: Verdict = { error: null, broke: [], fixed: [], warnings: [] };
-  if (after.message && after.message !== before.message) {
-    out.error = new ToolError('kernel_failed', `The rebuild failed: ${after.message}`, { detail: { message: after.message } });
+  // A whole rebuild that failed built nothing (every feature pending), whatever it said before the call.
+  if (after.message) {
+    const again = after.message === before.message;
+    out.error = new ToolError('kernel_failed', `${again ? 'The rebuild still fails after this change' : 'The rebuild failed'}: ${after.message}`, { detail: { message: after.message, ...(again ? { before: true } : {}) } });
     return out;
   }
   const own = plan.own ? after.features.get(plan.own) : undefined;

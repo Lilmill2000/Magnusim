@@ -389,7 +389,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 240,
     description:
-      'Drill round holes into one flat face in one step: it makes a sketch and a cut extrude, named "<name> sketch" and "<name>". face: one flat face whose normal is along X, Y or Z. centers: model coordinates as expressions, "" for the coordinate along the face normal (on a face facing +Z: x and y, z ""). diameter: an expression. depth through (through the face\'s body) or blind (distance deep). The cut always goes into the material. Each centre must lie on the face. Change sizes later through parameters, or edit_feature on the sketch\'s dimensions (d is the diameter; h1x, h1y, h2x... the positions). A failure changes nothing.',
+      'Drill round holes into one flat face in one step: it makes a sketch and a cut extrude, named "<name> sketch" and "<name>". face: one flat face whose normal is along X, Y or Z. centers: model coordinates as expressions, "" for the coordinate along the face normal (on a face facing +Z: x and y, z ""). diameter: an expression. depth through (through the face\'s body) or blind (distance deep). The cut always goes into the material. Each centre must be within half the diameter of the face; a hole that breaks the face\'s edge makes a notch, and a warning says so. Change sizes later through parameters, or edit_feature on the sketch\'s dimensions (d is the diameter; h1x, h1y, h2x... the positions, signed in the face\'s u and v: get_model full shows them). A failure changes nothing.',
     schema: obj({
       name: NAME,
       face: SEL('One flat face whose normal is along X, Y or Z'),
