@@ -103,7 +103,7 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   host.fake.reply(
     // The model is still answering: the chip says the Assistant thinks.
     { hold: 'think', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
-    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Plate.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' } }] },
+    { tools: [{ name: 'cad__sweep_loft', input: { edit: '', name: '', kind: 'sweep', profiles: ['Sketch 1'], path: 'Sketch 2', orientation: 'follow', ruled: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
     { text: 'The Part is empty, and I cannot drill yet.' },
   );
   // The read stops where the Part has settled, so the chip is seen working.
@@ -139,15 +139,15 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   expect(typeof read.data!.rev).toBe('number');
   const [hole] = resultsIn(afterHole);
   expect(hole).toMatchObject({
-    tool: 'cad__hole',
+    tool: 'cad__sweep_loft',
     ok: false,
-    error: { code: 'not_ready', message: 'not_built: hole is not in this build yet.', hint: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.', detail: { reason: 'not_built', tool: 'hole' } },
+    error: { code: 'not_ready', message: 'not_built: sweep_loft is not in this build yet.', hint: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.', detail: { reason: 'not_built', tool: 'sweep_loft' } },
   });
   // The page's ledger: what the eval counts.
   const calls = await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { calls: { tool: string; ok: boolean; reason?: string; key: string }[] } } }).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null, key: c.key })));
   expect(calls).toEqual([
     { tool: 'get_model', ok: true, reason: null, key: `turn:${t.id}` },
-    { tool: 'hole', ok: false, reason: 'not_built', key: `turn:${t.id}` },
+    { tool: 'sweep_loft', ok: false, reason: 'not_built', key: `turn:${t.id}` },
   ]);
 });
 

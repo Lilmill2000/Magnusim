@@ -270,7 +270,47 @@ a selector and bodies by name, so the inputs resent with `edit` leave the featur
 Tests: `extrude.test.ts`, `diagnose.test.ts` (each miss, and races forced by holding the
 diagnosis's own kernel call: the person's Escape, a kernel restart), `features-io.test.ts`
 (round trips of features the person made), `guide-example.test.ts` (the guide's plate, bracket
-and flange up to their holes); e2e `cad:assistant-honest-join`, `-miss` and `-offbody`.
+and flange; their holes with `hole`, below); e2e `cad:assistant-honest-join`, `-miss` and
+`-offbody`.
+
+## Holes (`hole`, `tools/hole.ts`)
+
+Round holes into one flat face in one call, so the model never meets the face's frame or the
+cut's flip. The face is one face selector whose outward normal runs along X, Y or Z within 1
+degree (a curved face is `not_flat`; a tilted one `bad_input`: use `sketch` on it and `extrude`
+cut). The centres are model coordinates as expressions, `""` for the one along the face's normal
+(or that coordinate as the face lies, within 1e-4 mm). Refused before anything changes, each kind
+all at once: the fields (`bad_input`), the expressions (`expr_error`), then where the centres are
+(`bad_input`: off the face's plane, farther than half the diameter from the face, measured by the
+kernel, so a centre in an existing hole is off it too; the same centre twice). Overlapping holes
+are a warning.
+
+One step makes two features through the person's own paths:
+
+1. `<name> sketch` on the face (`writeSketch`, sketch mode): circles `h1`, `h2`, ... with `d`
+   (diameter of `h1`), `eq2`, ... (equal to `h1`) and the positions `hkx` / `hky`
+   (`distance_x` / `distance_y` from the sketch origin, the model origin projected onto the
+   face). Each is the model expression of the axis the sketch's u or v runs along, negated where
+   it runs against it (`negated`: `"12 mm"` -> `"-12 mm"`, `"b/2"` -> `"-(b/2)"`): on a -X face
+   (u +Y, v -Z) z `"b/2"` is `h1y` `"-(b/2)"`. Compiled and solved headless in plan; always
+   fully defined.
+2. `<name>` (an extrude, `fillSwept`): every circle (`all`), `flip: true` (into the material),
+   op cut, scoped to the face's body, `through_all` or blind `distance`; `checkScoped` after its
+   Done (`cut_removed_nothing`).
+
+The hold point `between-opens` sits between the two. `name` `""` takes the next `Hole k` whose
+sketch name is free too; a given name may be at most 33 characters (its sketch's name keeps the
+Part's 40). The data adds `made`, `centers_mm`, `diameter_mm`, `depth_mm` and `dimensions` (the
+sketch's ids and expressions). There is no `edit` field: `get_model full` shows the two features
+as `sketch` and `extrude` inputs with `made_by: "hole"` (`made-with.ts`, this page's memory, as
+`by: "assistant"`), and the model changes them with those tools or `edit_feature` (the sketch's
+`d` changes every hole).
+
+Tests: `hole.test.ts` (the six axis faces, the holes' axes as `find` measures them and the signs
+of `h1x` / `h1y`; through and blind volumes, parameters, `edit_feature`, one undo entry, the
+round trip; every refusal; a person's panel at `between-opens`, forced); `guide-example.test.ts`
+(the plate's four holes, the flange's hole and its circular pattern); e2e
+`cad:assistant-honest-hole` (the bracket's -X face).
 
 ## Measuring (`measure`, `measure.ts`, `measure-targets.ts`)
 

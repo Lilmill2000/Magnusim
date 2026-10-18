@@ -550,3 +550,66 @@ test('cad:assistant-honest-offbody a hole cut beside the L bracket answers off_b
   await expect.poll(() => volumeNow(page), STEP).toBe(12750);
   expect(await undoNow(page)).toBe('Assistant: An L bracket with a hole in its upright.');
 });
+
+// Honest 3, the hole (T6): on the L bracket's -X face, where a sketched profile at v = +22.5 cut
+// beside the bracket, hole takes model coordinates (x "" along the face's normal, y 0, z "b/2")
+// and the hole lands in the upright: the sketch's v runs -Z there, so its position is written
+// "-(b/2)" for the model. The person's tree shows the hole's sketch and cut, fully defined, the
+// volume chip falls by pi 3^2 5, and one Undo takes the whole request back.
+test('cad:assistant-honest-hole hole on the bracket\'s -X face lands where the model coordinates say; one Undo takes it back', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const L = [0, 0, 50, 0, 50, 5, 5, 5, 5, 40, 0, 40, 0, 0];
+  const lProfile = {
+    edit: '',
+    name: 'L profile',
+    on: 'Front',
+    entities: [{ id: 'p', kind: 'polyline', at: L, construction: false }],
+    constraints: [
+      { id: 'o', kind: 'coincident', refs: ['p.p0', 'origin'], value: '' },
+      { id: 'da', kind: 'distance', refs: ['p.1'], value: 'a' },
+      { id: 'db', kind: 'distance', refs: ['p.6'], value: 'b' },
+      { id: 't1', kind: 'distance', refs: ['p.2'], value: 't' },
+      { id: 't2', kind: 'distance', refs: ['p.5'], value: 't' },
+    ],
+    infer: true,
+  };
+  const row = (name: string, expr: string) => ({ name, kind: 'length', expr, comment: '', rename_to: '' });
+  const pid = await newProject(request, host, 'Assistant honest hole');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as MissCad).__CAD__.assistant.setPace('fast', 0));
+  const next = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__set_params', input: { set: [row('a', '50 mm'), row('b', '40 mm'), row('t', '5 mm')], remove: [] } }] },
+    { tools: [{ name: 'cad__sketch', input: lProfile }] },
+    { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Bracket', sketch: 'L profile', extent: 'symmetric', distance: '30 mm' }) }] },
+    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Bracket.side(p.6)', centers: [{ x: '', y: '0 mm', z: 'b/2' }], diameter: '6 mm', depth: 'through', distance: '' } }] },
+    { text: 'The bracket has a 6 mm hole through its upright.' },
+  );
+  const t = await startTurn(request, host, { text: 'An L bracket with a hole in its upright.', tab });
+  expect((await t.ended(STEP_MS * 5)).turn.state).toBe('done');
+  const [, , , afterBracket, afterHole] = chats(host).slice(next);
+  expect(resultsIn(afterBracket)[0]).toMatchObject({ tool: 'cad__extrude', ok: true, text: 'Extrude Bracket ok · Body 1 made (12750 mm³)' });
+  const [hole] = resultsIn(afterHole);
+  expect(hole).toMatchObject({
+    tool: 'cad__hole',
+    ok: true,
+    text: 'Hole 1 ok: 1 hole 6 mm across, through, in Bracket.side(p.6) · Body 1 12750 → 12609 mm³',
+    data: {
+      feature: { name: 'Hole 1', type: 'extrude', state: 'ok' },
+      made: ['Hole 1 sketch', 'Hole 1'],
+      resolved: { face: 'Bracket.side(p.6) (faces -X)', frame: 'u runs +Y, v runs -Z, origin (0, 0, 0)', op: 'cut Body 1' },
+      centers_mm: [[0, 0, 20]],
+      dimensions: { d: '6 mm', h1x: '0 mm', h1y: '-(b/2)' },
+      broke: [],
+    },
+  });
+  // What the person sees: the bracket, the hole's sketch (fully defined: no "(-)") and its cut,
+  // no panel left open, the volume chip less pi 3^2 5.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['L profile', 'Bracket', 'Hole 1 sketch', 'Hole 1']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  await expect.poll(() => volumeNow(page), STEP).toBe(Math.round(12750 - Math.PI * 9 * 5));
+  // One Undo for the whole request.
+  expect(await undoNow(page)).toBe('Assistant: An L bracket with a hole in its upright.');
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(() => treeNames(page), STEP).toEqual([]);
+});

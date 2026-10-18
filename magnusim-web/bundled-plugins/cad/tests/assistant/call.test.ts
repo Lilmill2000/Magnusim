@@ -28,22 +28,22 @@ afterEach(() => {
 const start = (o: HarnessOptions = {}) => assistantHarness({ kernel: new FakeKernel(), ...o });
 const phase = (x: AssistantHarness) => runtimeOf(x.services)!.store.get().phase;
 
-const HOLE = { name: '', face: 'Plate.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' };
 const SWEEP = { edit: '', name: '', kind: 'sweep', profiles: ['Sketch 1'], path: 'Sketch 2', orientation: 'follow', ruled: false, op: 'new', bodies: [], body_name: '', color: '' };
 
 describe('tools not in this build', () => {
   it('answer not_ready "not in this build yet", with the reason, its hint and the tool in detail', async () => {
     h = await start();
-    const r = await h.call('hole', HOLE);
+    const r = await h.call('sweep_loft', SWEEP);
     expect(r).toEqual({
       ok: false,
-      error: { code: 'not_ready', message: 'not_built: hole is not in this build yet.', hint: HINTS.not_built, detail: { reason: 'not_built', tool: 'hole' } },
+      error: { code: 'not_ready', message: 'not_built: sweep_loft is not in this build yet.', hint: HINTS.not_built, detail: { reason: 'not_built', tool: 'sweep_loft' } },
     });
     // Every tool of the 18 is offered; the ones this build answers say so in help features.
     const help = await h.ok('help', { topic: 'features' });
     const rows = (help.data as { rows: { about: string; text: string }[] }).rows;
     expect(rows.map((x) => x.about)).toEqual([...TOOL_NAMES]);
-    expect(rows.find((x) => x.about === 'hole')!.text).toMatch(/Not in this build yet\.$/);
+    expect(rows.find((x) => x.about === 'sweep_loft')!.text).toMatch(/Not in this build yet\.$/);
+    expect(rows.find((x) => x.about === 'hole')!.text).not.toMatch(/Not in this build yet/);
     expect(rows.find((x) => x.about === 'extrude')!.text).not.toMatch(/Not in this build yet/);
     expect(rows.find((x) => x.about === 'get_model')!.text).not.toMatch(/Not in this build yet/);
   });
@@ -64,17 +64,17 @@ describe('the reply and the ledger', () => {
     expect(r.data.rev).toBe(runtimeOf(h.services)!.rev.current());
     expect(r.text).toBe('help parameters: 4 rows');
     expect(r.summary).toBe('Read help parameters');
-    await h.call('hole', HOLE, { turn: '' });
+    await h.call('sweep_loft', SWEEP, { turn: '' });
     const calls = runtimeOf(h.services)!.calls;
     expect(calls.map(({ ms: _ms, call: _c, ...c }) => c)).toEqual([
       { turn: 't-7', key: 'turn:t-7', tool: 'help', ok: true },
-      { turn: '', key: 'ext:1', tool: 'hole', ok: false, code: 'not_ready', reason: 'not_built' },
+      { turn: '', key: 'ext:1', tool: 'sweep_loft', ok: false, code: 'not_ready', reason: 'not_built' },
     ]);
     expect(events).toEqual([
       { turn: 't-7', call: 'c-1', tool: 'help', phase: 'start' },
       { turn: 't-7', call: 'c-1', tool: 'help', phase: 'end', ok: true },
-      { turn: '', call: 'c-2', tool: 'hole', phase: 'start' },
-      { turn: '', call: 'c-2', tool: 'hole', phase: 'end', ok: false },
+      { turn: '', call: 'c-2', tool: 'sweep_loft', phase: 'start' },
+      { turn: '', call: 'c-2', tool: 'sweep_loft', phase: 'end', ok: false },
     ]);
   });
 

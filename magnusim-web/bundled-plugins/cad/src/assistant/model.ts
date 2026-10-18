@@ -29,6 +29,7 @@ import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
 import { inputsOf, summaryOf, valuesOf } from './features-io';
 import { LabelIndex } from './labels';
+import { madeWith } from './made-with';
 import { dir, jsonBytes, len, sig6, vec } from './numbers';
 import { runtimeOf } from './runtime';
 import { describeSketch, TOO_BIG_WORDS } from './sketch/describe';
@@ -150,6 +151,9 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
 /** One feature, full: brief plus its inputs (or a summary) and its expression fields. */
 export function fullFeature(services: AppServices, s: DocState, f: Feature): Row {
   const row = briefFeature(services, s, f);
+  // A feature another tool made as part of its work (a hole's sketch and cut): edited as its own type.
+  const by = madeWith(services, f.id);
+  if (by) row.made_by = by;
   const inputs = inputsOf(f, services);
   row.inputs = inputs;
   if (!inputs) row.summary = summaryOf(f, services);

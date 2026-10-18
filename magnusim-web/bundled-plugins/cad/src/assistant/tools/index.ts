@@ -23,6 +23,7 @@ export { tool as get_model } from './get_model';
 // help: CAD reference.
 export { tool as help } from './help';
 // hole: Holes.
+export { tool as hole } from './hole';
 // measure: Measure.
 export { tool as measure } from './measure';
 // modify: Fillet, chamfer or shell.
