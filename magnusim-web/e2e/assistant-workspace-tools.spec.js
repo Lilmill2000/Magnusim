@@ -30,7 +30,8 @@
 // And one turn per tab: a second one while it works is refused 409 tab_busy (H4). And every
 // problem with a call's input in one result, the terminal showing them all (H9); a local
 // model's string, list and boolean fields left out filled with "", [] and false (H9).
-// And a cloud provider that can't compile the tools strictly: sent again unchecked by it (H8).
+// And a cloud provider that can't compile the tools strictly: sent again unchecked by it (H8),
+// and the shared turn helper failing a turn that got that note unless the test expects it.
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -972,6 +973,16 @@ test("a cloud provider that can't compile the tools strictly: the request goes a
   expect(out).toContain('The counter is 2.');
   sent = chats().slice(before);
   expect(sent.map(strictness)).toEqual([unchecked]);
+
+  // The shared turn helper fails a turn that got this note unless the test expects it, so a
+  // schema the provider would refuse can't pass a test only because the app sent it again.
+  fake.reply({ text: 'Still 2.' }, { text: 'Still 2, as expected.' });
+  const unexpected = await startTurn(request, host.base, { text: 'What is the counter now?', tab: w.tab });
+  await expect(unexpected.ended()).rejects.toThrow(`the provider refused this turn's strict tools and the app sent them again unchecked by it (note: "${NOTE}")`);
+  const expected = await startTurn(request, host.base, { text: 'And now?', tab: w.tab }, { strictFallback: true });
+  const { turn, events } = await expected.ended();
+  expect(turn.state).toBe('done');
+  expect(events.filter((e) => e.type === 'note').map((e) => e.text)).toContain(NOTE);
 });
 
 test('a remote viewer: the page hears its tools are not available, and nothing registers', async ({ browser, request }) => {

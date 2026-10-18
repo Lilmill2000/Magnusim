@@ -216,21 +216,33 @@ export function trackTab(page) {
 
 /**
  * Starts a turn on the server at `base` (POST /api/assistant/turns `body`: {text, tab?,
- * conversation?, context?}; expects 202) and follows it (followTurn), with its
+ * conversation?, context?}; expects 202) and follows it (followTurn, with `opts`), with its
  * `conversation` and, when the server gives one, the `answerKey` its questions take.
  */
-export async function startTurn(request, base, body) {
+export async function startTurn(request, base, body, opts = {}) {
   const r = await request.post(`${base}/api/assistant/turns`, { data: body });
   const j = await r.json();
   expect(r.status(), JSON.stringify(j)).toBe(202);
-  const t = followTurn(request, base, j.turn);
+  const t = followTurn(request, base, j.turn, opts);
   t.conversation = j.conversation ?? null;
   t.answerKey = j.answer_key ?? null;
   return t;
 }
 
-/** Follows turn `id`'s event log through the long-poll (GET /api/assistant/turns/:id). */
-export function followTurn(request, base, id) {
+/**
+ * The words of the app's note when a cloud provider refused to compile a request's strict
+ * tools and the request went again with the workspace's tools not strict (CAD tools spec H8).
+ * Against the fake that means a strict schema broke one of its rules (a limit keyword, the
+ * strict budget): the turn still ends well, so ended() fails it unless the test expects it.
+ */
+const STRICT_FALLBACK = /could not compile these tools strictly/;
+
+/**
+ * Follows turn `id`'s event log through the long-poll (GET /api/assistant/turns/:id).
+ * `ended()` throws when the turn got the strict-tools fallback note, unless
+ * `opts.strictFallback` is true (a test that makes the provider refuse its schemas).
+ */
+export function followTurn(request, base, id, { strictFallback = false } = {}) {
   const events = [];
   let next = 0;
   let summary = null;
@@ -265,12 +277,18 @@ export function followTurn(request, base, id) {
       if (!ended) await pull(0);
       return events;
     },
-    /** The turn's summary and events once it ended, within `ms`. */
+    /** The turn's summary and events once it ended, within `ms` (see followTurn on the strict-tools note). */
     async ended(ms = 30_000) {
       const until = Date.now() + ms;
       while (!ended) {
         if (Date.now() > until) throw new Error(`the turn did not end within ${ms} ms: ${JSON.stringify(events.slice(-8))}`);
         await pull(Math.min(5000, until - Date.now()));
+      }
+      const fallback = strictFallback ? null : events.find((e) => e.type === 'note' && STRICT_FALLBACK.test(String(e.text)));
+      if (fallback) {
+        throw new Error(
+          `the provider refused this turn's strict tools and the app sent them again unchecked by it (note: "${fallback.text}"): a strict schema breaks a rule of the provider's, or the strict budget; a test that means it passes {strictFallback: true} to startTurn or followTurn`,
+        );
       }
       return { turn: summary, events };
     },

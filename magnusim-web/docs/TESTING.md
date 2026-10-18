@@ -243,7 +243,12 @@ No test reaches a real model provider or this PC's real Assistant files.
     left without its result, an echoed opaque part (thinking, fallback, encrypted
     reasoning) that changed, a strict tool schema with a limit keyword, a replayed
     reasoning item without its encrypted content. So a test that passes against it
-    has sent what the real service accepts.
+    has sent what the real service accepts, with one catch: a cloud request whose strict
+    workspace tool breaks a schema rule (a limit keyword, the strict budget) is sent
+    again by the app with the workspace's tools not strict, and the turn goes on with
+    a note. `followTurn`'s `ended()` (and so `startTurn`'s) fails a turn that got that
+    note unless the test passes `{strictFallback: true}`; a test that follows a turn
+    another way (the terminal client) checks for the note itself.
 - **Pointing the app at it.** Both cloud adapters go to the fake with
   `MAGNUSIM_TEST_ASSISTANT=1` and `MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL=<fake.base>`.
   The address is honoured only with the switch, in a test home and for plain http on
@@ -331,8 +336,9 @@ No test reaches a real model provider or this PC's real Assistant files.
     `useScriptedModel(request, base, fake, 'cloud' | 'local')` points the server at
     the fake (the first cloud dialect with a test key, or the local-server dialect at
     `fake.compatBase`) with project data allowed; `trackTab(page)`;
-    `startTurn(request, base, body)` and `followTurn(request, base, id)` (`waitFor`,
-    `latest`, `ended`); `answerGate(request, base, turn, allow, {kind, tool})`
+    `startTurn(request, base, body, opts?)` and `followTurn(request, base, id, opts?)`
+    (`waitFor`, `latest`, `ended`; `opts.strictFallback` above);
+    `answerGate(request, base, turn, allow, {kind, tool})`
     answers the turn's next question through its route, as a click would;
     `offeredTools(req)` lists a request's tools as `{name, strict}`; and
     `resultsIn(req)` the tool results it carries (a fake request or a function step's
