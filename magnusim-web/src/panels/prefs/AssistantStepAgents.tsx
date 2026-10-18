@@ -46,6 +46,7 @@ import {
 import { refreshStatus, stepChange, writeStatus } from '../../assistant/status';
 import type { AgentRow, AgentTestAnswer, AssistantStatus, ModeView, SignInMethodView } from '../../assistant/wire';
 import { confirmAction } from '../../workbench/dialogs';
+import { MCP_DEPS_TEXT, mcpDownReason } from './AssistantStepMcp';
 
 const SETTINGS = '/api/assistant/settings';
 
@@ -112,6 +113,14 @@ export const MODE_DEFAULT = 'The mode it starts in';
 /** No mode chosen when Magnusim sets one at every start (spec 4.6 step 6): the mode it sets. */
 export const magnusimModeText = (name: string) => `${name} (Magnusim's choice)`;
 export const MCP_UNAVAILABLE_TEXT = "Magnusim couldn't open the connection its tools use. Restart Magnusim; if it keeps happening, see Other apps (MCP) below.";
+/** Under "Never send project data" a turn on an agent whose own tools stay on is refused, even from Home (spec 4.14). */
+export const privacyDeniedText = (name: string) =>
+  `${name} can read your project files with its own tools, so it stays off while Project data (below) is set to Never send project data.`;
+
+/** Why the row's tool connection can't run: a package missing needs Setup again, not a restart. */
+export function mcpUnavailableText(status: AssistantStatus): string {
+  return mcpDownReason(status) === 'deps_missing' ? MCP_DEPS_TEXT : MCP_UNAVAILABLE_TEXT;
+}
 
 const secs = (ms: number) => (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
 const withVersion = (name: string, version: string | null | undefined) => (version ? `${name} ${version}` : name);
@@ -656,7 +665,12 @@ function AgentRowView({
       {base === 'ready' || base === 'error' ? <ChoiceBlock row={row} onReload={onReload} /> : null}
       {row.reason === 'mcp_unavailable' ? (
         <p className="wiz-assistant-warn" data-assistant-agent-mcp="1">
-          {MCP_UNAVAILABLE_TEXT}
+          {mcpUnavailableText(status)}
+        </p>
+      ) : null}
+      {row.reason === 'privacy_denied' ? (
+        <p className="wiz-assistant-warn" data-assistant-agent-privacy="1">
+          {privacyDeniedText(name)}
         </p>
       ) : null}
       {row.found ? (

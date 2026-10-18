@@ -1495,6 +1495,20 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     assert.equal((await browserPost('/api/assistant/agents/allow', { id: row.id, allow: true, fingerprint: row.fingerprint })).status, 200);
     status = (await get('/api/assistant/status')).json;
     assert.equal(status.providers_ready[`agent:${row.id}`].ready, true);
+    // Under "Never send project data" its own tools stay on, so every turn on it is refused, even
+    // from Home: not ready, and its line says why (the row too).
+    assert.equal((await plainPost('/api/assistant/settings', { privacy: 'deny' })).status, 200);
+    try {
+      status = (await get('/api/assistant/status')).json;
+      const denied = status.providers_ready[`agent:${row.id}`];
+      assert.deepEqual([denied.ready, denied.reason, denied.detail], [false, 'privacy_denied', 'Off while Never send project data is on']);
+      assert.deepEqual([(await rowsOf())[row.id].ready, (await rowsOf())[row.id].reason], [false, 'privacy_denied']);
+      // An agent whose own tools are off may still run from Home: still ready.
+      assert.deepEqual([status.providers_ready['agent:claude'].ready, status.providers_ready['agent:claude'].reason], [true, null]);
+    } finally {
+      assert.equal((await plainPost('/api/assistant/settings', { privacy: 'ask' })).status, 200);
+    }
+    assert.equal((await get('/api/assistant/status')).json.providers_ready[`agent:${row.id}`].ready, true);
 
     // At most 8. A name counts characters as the person sees them: 45 emoji keep their first 40.
     const smile = String.fromCodePoint(0x1f642);

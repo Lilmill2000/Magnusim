@@ -1193,7 +1193,8 @@ export function agentRow(e: AgentEntry, ctx: RowContext): AgentRow {
 /**
  * Why a turn on this agent can't start now (spec 5.2 readiness), or null: it is ready only when
  * found and startable, signed in or not known to be signed out, allowed or with its own tools
- * off, and its tool connection can run.
+ * off, its tool connection can run, and privacy lets it run at all (under "Never send project
+ * data" a turn on an agent whose own tools stay on is refused even from Home, spec 4.14).
  */
 function readinessReason(row: AgentRow, e: AgentEntry, ctx: RowContext): string | null {
   if (!e.found) return e.error?.code === 'bad_command' ? 'bad_command' : 'agent_missing';
@@ -1201,6 +1202,7 @@ function readinessReason(row: AgentRow, e: AgentEntry, ctx: RowContext): string 
   if (row.needs_allow && !row.allowed) return row.allow_changed ? 'agent_allow_changed' : 'agent_not_allowed';
   if (row.signed_in === 'no') return 'agent_signed_out';
   if (!ctx.mcp.available) return 'mcp_unavailable';
+  if (ctx.settings.privacy === 'deny' && row.own_tools === 'on') return 'privacy_denied';
   return null;
 }
 
@@ -1234,6 +1236,7 @@ const NOT_READY_DETAIL: Readonly<Record<string, string>> = Object.freeze({
   agent_allow_changed: 'Its command changed since you allowed it',
   agent_signed_out: 'Not signed in',
   mcp_unavailable: "Magnusim's tool connection isn't available",
+  privacy_denied: 'Off while Never send project data is on',
   not_checked: 'Not looked for yet',
   agent_unknown: 'No such coding agent',
 });

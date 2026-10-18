@@ -76,6 +76,12 @@ function mcpPartOf(status: AssistantStatus): McpStatus | null {
   };
 }
 
+/** Why the connection can't run now, as the status says it (null: it runs, it wasn't tried, or the server doesn't say). */
+export function mcpDownReason(status: AssistantStatus): string | null {
+  const part = mcpPartOf(status);
+  return part && !part.running ? part.reason : null;
+}
+
 function answerOf(j: Record<string, unknown>): McpAnswer {
   const rows = Array.isArray(j.connections) ? j.connections : [];
   return {

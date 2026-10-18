@@ -1976,6 +1976,9 @@ describe('the server', () => {
     const depsBefore = await sdk.depsStatus();
     sdk.setSdkSpecifierForTests(sdk.MCP_SDK_NAME, '@magnusim-test/no-such-mcp-package');
     try {
+      // Not started yet (no settings file when the server started): the status says why all the same.
+      const before = await routes.assistantStatus();
+      assert.deepEqual([before.mcp.running, before.mcp.reason], [false, 'deps_missing']);
       const st = await L.startMcpListener();
       assert.deepEqual(st, { running: false, reason: 'deps_missing', port: null, connected: 0 });
       const status = await routes.assistantStatus();

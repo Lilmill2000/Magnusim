@@ -286,7 +286,7 @@ const STATUS_PARTS: StatusPart[] = [
     /** Each provider's readiness: a turn or the Test may name any of them, whatever the default. */
     providers_ready: { ...perProvider((id) => providerRow(id, src)), ...agentReadyRows(src.agents) },
   }),
-  ({ settings: s }) => ({ mcp: mcpStatus(s) }),
+  ({ settings: s, agents }) => ({ mcp: mcpStatus(s, agents.mcp) }),
   () => ({
     /** When the coding agents were last looked for (null: not since the server started; GET /agents looks). */
     agents_checked_at: agentsCache()?.checked_at ?? null,
@@ -303,10 +303,14 @@ async function mcpAvailability(): Promise<RowContext['mcp']> {
   return { available: true, reason: null };
 }
 
-/** Other apps (MCP): the switch, and whether the connection runs (and why not). */
-function mcpStatus(s: AssistantSettings): { clients: boolean; running: boolean; reason: string | null; port: number | null; connected: number } {
+/**
+ * Other apps (MCP): the switch, and whether the connection runs (and why not: the listener's
+ * reason, else, when it wasn't started yet, why it couldn't be, such as its package missing).
+ */
+function mcpStatus(s: AssistantSettings, avail: RowContext['mcp']): { clients: boolean; running: boolean; reason: string | null; port: number | null; connected: number } {
   const l = mcpListenerStatus();
-  return { clients: s.mcp.clients, running: l.running, reason: l.reason, port: l.port ?? s.mcp.port, connected: l.connected };
+  const reason = l.running ? null : (l.reason ?? (avail.available ? null : avail.reason));
+  return { clients: s.mcp.clients, running: l.running, reason, port: l.port ?? s.mcp.port, connected: l.connected };
 }
 
 function perProvider<T>(fn: (id: ProviderId) => T): Record<ProviderId, T> {
@@ -726,7 +730,7 @@ function registerMcpRoutes(router: Router): void {
     local(async (ctx) => {
       const s = await loadSettings();
       const { command, args, snippet } = mcpClientConfig();
-      const st = mcpStatus(s);
+      const st = mcpStatus(s, await mcpAvailability());
       ctx.sendJson(200, { ok: true, clients: st.clients, running: st.running, reason: st.reason, port: st.port, bridge: { command, args }, snippet, connections: mcpConnections() });
     }),
   );

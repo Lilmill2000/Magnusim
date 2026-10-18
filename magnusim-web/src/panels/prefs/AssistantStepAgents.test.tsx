@@ -18,6 +18,8 @@ import {
   CONNECT_AGAIN,
   connectedSignedOutText,
   connectNote,
+  MCP_UNAVAILABLE_TEXT,
+  privacyDeniedText,
   CUSTOM_HELP,
   defaultBillingText,
   holdsOldAllow,
@@ -45,6 +47,7 @@ import {
   turnOffNote,
   VARS_HELP,
 } from './AssistantStepAgents';
+import { MCP_DEPS_TEXT } from './AssistantStepMcp';
 
 // The real dialog for the tests that press its keys; a scripted answer for the others.
 const confirmAction = vi.fn(async (_opts?: Record<string, unknown>) => false);
@@ -497,6 +500,29 @@ describe('Coding agents: each row state', () => {
     expect(agent('custom-000001').querySelector('[data-assistant-agent-error]')).toHaveAttribute('role', 'alert');
     expect(agent('custom-000001').querySelector('[data-assistant-agent-error]')!.textContent).toContain("can't start x.bat");
     expect(agent('custom-000001').querySelector('[data-assistant-agent-test], [data-assistant-agent-allow]')).toBeNull();
+  });
+
+  it("a row whose tool connection can't run says why, from the status' reason: its package missing (run Setup again, never restart) or anything else (restart)", async () => {
+    rows = [row({ ready: false, reason: 'mcp_unavailable' })];
+    await renderAgents({ mcp: { clients: false, running: false, reason: 'deps_missing', port: null, connected: 0 } });
+    expect(agent('claude').querySelector('[data-assistant-agent-mcp]')!.textContent).toBe(MCP_DEPS_TEXT);
+    expect(MCP_DEPS_TEXT).toBe("Magnusim's tool-connection package isn't installed. Run Setup.bat again.");
+    expect(agent('claude').textContent).not.toContain('Restart Magnusim');
+    cleanup();
+    resetStatusStore();
+    await renderAgents({ mcp: { clients: false, running: false, reason: 'bind_failed', port: 51234, connected: 0 } });
+    expect(agent('claude').querySelector('[data-assistant-agent-mcp]')!.textContent).toBe(MCP_UNAVAILABLE_TEXT);
+    expect(MCP_UNAVAILABLE_TEXT).toBe("Magnusim couldn't open the connection its tools use. Restart Magnusim; if it keeps happening, see Other apps (MCP) below.");
+  });
+
+  it('under Never send project data an agent whose own tools stay on says it is off and why (every turn on it is refused), its dot grey; one whose tools are off says nothing of it', async () => {
+    rows = [codex({ allowed: true, ready: false, reason: 'privacy_denied' }), row()];
+    await renderAgents({ privacy: 'deny' });
+    const r = agent('codex');
+    expect(r.querySelector('[data-assistant-agent-privacy]')!.textContent).toBe(privacyDeniedText('Codex'));
+    expect(privacyDeniedText('Codex')).toBe('Codex can read your project files with its own tools, so it stays off while Project data (below) is set to Never send project data.');
+    expect(r.querySelector('[data-assistant-dot]')).toHaveAttribute('data-assistant-dot', 'not-ready');
+    expect(agent('claude').querySelector('[data-assistant-agent-privacy]')).toBeNull();
   });
 
   it('agentRowState: every state from a row and the checks run here', () => {
