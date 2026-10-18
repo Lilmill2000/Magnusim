@@ -33,7 +33,9 @@
  * Limits (min of the turn's snapshot and the live settings): 24 changes (later change calls are
  * answered `capped`, reads go on), 400 calls (then every call `capped`, and 5 more end the turn
  * capped/agent_calls), 60 active minutes (Turn.onMinutesUp: it fires whether or not a call is
- * open). $ limits, tokens and the day's ledger don't apply: the agent bills its own account.
+ * open). As in a loop turn, questions and a call's waits for the person (its progress `waiting`,
+ * for 20 minutes of one call's waits: runner.ts WAIT_PAUSE_MAX_MS, said in the log) are not
+ * active. $ limits, tokens and the day's ledger don't apply: the agent bills its own account.
  *
  * Stop (and a limit, the minutes, the allow switch going off): a call still open stops as that
  * end reads, every open permission request is answered `cancelled`, then session/cancel; when
@@ -347,6 +349,8 @@ class AgentTurnRun implements AgentDispatch {
       },
       pause: () => t.pause(),
       resume: () => t.resume(),
+      // The runner's lines for the turn's log (a call that waited its 20 minutes for the person).
+      note: (text) => t.note(text),
     };
     // The turn may end while this call is open (its agent exited, Stop on an agent that answered
     // the cancel without waiting for its call, the server stopping, Magnusim ending its agent),

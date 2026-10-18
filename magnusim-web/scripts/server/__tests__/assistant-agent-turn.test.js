@@ -65,6 +65,7 @@ const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
 const { GUIDE_CHANGED_NOTE } = await import('../assistant/loop.ts');
 const { TAB_BUSY_TEXT } = await import('../assistant/turns.ts');
+const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
 const WIN = process.platform === 'win32';
 const LIMIT = { timeout: 180_000 };
@@ -1305,6 +1306,59 @@ describe('limits for agent turns (spec 4.10)', LIMIT, () => {
       byTab(w, g, true);
       await settledTurn(r.turn);
       assert.equal(endOf(r.turn).state, 'done');
+    } finally {
+      await w.close();
+    }
+  });
+
+  it("a page's call that says it waits for the person leaves the minutes out as in a loop turn: 20 minutes of its waits only, then they run, the log says so once, and the minutes per message end the turn (fake clock)", async () => {
+    assert.equal(WAIT_PAUSE_MAX_MS, 20 * 60_000);
+    let rt = null;
+    const w = await world({
+      settings: { agent_caps: { changes: 24, calls: 400, turn_minutes: 60 } },
+      invoke: (call) =>
+        new Promise((resolve) => {
+          rt = call;
+          call.signal.addEventListener('abort', () => resolve({ ok: false, error: { code: 'aborted', message: 'aborted' }, summary: 'aborted' }), { once: true });
+        }),
+    });
+    try {
+      claude.script({ call: { tool: 'ai-demo__slow_add', args: { by: 1 } } }, { say: 'never' });
+      const r = await w.turn({ text: 'Wait for me.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      const t = r.turn;
+      await H.until(() => rt, CEILING, 'the call in the page');
+      assert.equal(t.activeMs(), 0, 'no clock time yet');
+      const waited = () => H.eventsOf(t).filter((e) => e.type === 'note' && e.text === WAITED_TOO_LONG_NOTE).length;
+      w.m.clock.advance(10_000);
+      /** The page's heartbeat: a waiting progress every 5 s (its stall window is 40 s), for `ms`. */
+      const waitFor = (ms) => {
+        for (let i = 0; i < ms / 5_000; i += 1) {
+          rt.progress(null, 'Waiting for you', { waiting: true });
+          w.m.clock.advance(5_000);
+        }
+      };
+      waitFor(15 * 60_000);
+      await H.tick();
+      assert.equal(t.activeMs(), 10_000, 'fifteen minutes of waiting: none of it counts');
+      assert.equal(waited(), 0);
+      waitFor(5 * 60_000);
+      await H.tick();
+      assert.equal(t.activeMs(), 10_000, 'twenty minutes: still none');
+      assert.equal(waited(), 1, 'the minutes run again, and the log says why');
+      // Still waiting, as it says, up to its minutes: 60 of the turn's, 80 of the clock's.
+      waitFor(60 * 60_000 - 10_000 - 5_000);
+      await H.tick();
+      assert.equal(t.ended, false, 'just under the minutes');
+      waitFor(5_000);
+      await settledTurn(t);
+      const e = endOf(t);
+      assert.deepEqual([e.state, e.reason, e.message], ['capped', 'turn_minutes', 'Stopped after 60 minutes of work.']);
+      assert.deepEqual(
+        H.eventsOf(t).filter((x) => x.type === 'tool_result').map((x) => [x.ok, x.code]),
+        [[false, 'capped']],
+      );
+      assert.equal(waited(), 1, 'said once');
     } finally {
       await w.close();
     }
