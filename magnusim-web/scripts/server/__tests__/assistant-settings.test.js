@@ -47,14 +47,14 @@ describe('defaults and bounds', () => {
       base_url_confirmed_remote: null,
       effort: 'default',
       privacy: 'ask',
-      caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
+      caps: { turn_usd: 8, day_usd: 15, steps: 120, turn_minutes: 60, turn_tokens: 10_000_000 },
       consents: {},
     });
     assert.deepEqual(S.DEFAULT_SETTINGS, s);
     assert.equal(existsSync(join(ROOT, 'home')), false);
     // A copy: changing it changes nothing.
     s.caps.turn_usd = 99;
-    assert.equal((await S.loadSettings()).caps.turn_usd, 3);
+    assert.equal((await S.loadSettings()).caps.turn_usd, 8);
   });
 
   it('every limit has its range (ends included) and the day is at least the turn', () => {
@@ -69,7 +69,7 @@ describe('defaults and bounds', () => {
     };
     const ranges = {
       turn_usd: [0.05, 15, 0.04, 100.01],
-      day_usd: [3, 1000, 0.09, 1000.5],
+      day_usd: [8, 1000, 0.09, 1000.5], // the lowest a day can be beside the default $8.00 turn
       steps: [1, 200, 0, 201],
       turn_minutes: [1, 240, 0, 241],
       turn_tokens: [10_000, 50_000_000, 9_999, 50_000_001],
@@ -83,6 +83,8 @@ describe('defaults and bounds', () => {
       bad({ [key]: Number.NaN }, `caps.${key}`);
     }
     for (const key of ['steps', 'turn_minutes', 'turn_tokens']) bad({ [key]: 10_000.5 }, `caps.${key}`);
+    assert.equal(ok({ ...d.caps }).ok, true, 'the defaults pass their own checks, the day at least the turn');
+    bad({ day_usd: 7.99 }, 'caps.day_usd'); // under the default $8.00 turn
     assert.equal(ok({ turn_usd: 0.05, day_usd: 0.1 }).ok, true);
     bad({ turn_usd: 20, day_usd: 10 }, 'caps.day_usd');
     bad({ turn_usd: 16 }, 'caps.day_usd'); // over today's $15.00
@@ -204,7 +206,7 @@ describe('the base URL', () => {
     const n = S.normalizeSettings({ provider: 'x', effort: 'high', caps: { steps: 500, turn_usd: 2 }, models: { openai: 'bad id' } });
     assert.equal(n.provider, 'off');
     assert.equal(n.effort, 'high');
-    assert.equal(n.caps.steps, 50);
+    assert.equal(n.caps.steps, 120);
     assert.equal(n.caps.turn_usd, 2);
     assert.equal(n.models.openai, 'gpt-6.1-sol');
     assert.deepEqual(S.normalizeSettings({ caps: { turn_usd: 50, day_usd: 10 } }).caps, S.defaultSettings().caps);

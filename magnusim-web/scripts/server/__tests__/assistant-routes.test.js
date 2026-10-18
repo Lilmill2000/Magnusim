@@ -354,7 +354,7 @@ describe('status, settings and keys', () => {
     assert.equal(s.effort, 'default');
     assert.equal(s.privacy, 'ask');
     assert.equal(s.consents, 0);
-    assert.deepEqual(s.caps, { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 });
+    assert.deepEqual(s.caps, { turn_usd: 8, day_usd: 15, steps: 120, turn_minutes: 60, turn_tokens: 10_000_000 });
     for (const slot of ['anthropic', 'openai', 'openai_compatible']) assert.deepEqual(s.keys[slot], { set: false, last4: null, set_at: null, state: 'none' });
     assert.equal(s.storage.kind, 'file');
     assert.equal(s.keys_notice, null);
