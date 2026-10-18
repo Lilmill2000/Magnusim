@@ -25,6 +25,8 @@ export const SHARDS = {
     'e2e/cad-p1-review3.spec.ts',
     'e2e/cad-p15-review1.spec.ts',
     'e2e/cad-panel-done-reach.spec.ts',
+    // A panel the Assistant fills: read-only, badged, no viewport tools, taken over by the person.
+    'e2e/cad-assistant-panels.spec.ts',
     'e2e/cad-sd-kit.spec.ts',
     'e2e/cad-sd-review2-leave.spec.ts',
     'e2e/cad-p4a-toolbar.spec.ts',

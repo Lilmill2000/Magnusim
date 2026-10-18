@@ -733,6 +733,19 @@ html.cad-tb-drag-refused * {
   min-width: 0;
 }
 
+/* A panel the Assistant fills: its badge after the title (the panel is read-only for the person). */
+.cad-panel-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--mg-selected-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-selected-bg);
+  color: var(--mg-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+}
+
 .mesh-rename-input {
   width: 160px;
   max-width: 70%;
@@ -1032,6 +1045,11 @@ input.mgk-input.cad-param-name {
 .cad-param-add td {
   padding-top: 8px;
   border-top: 1px solid var(--mg-divider);
+}
+
+/* A row an Assistant step just changed (ParametersPanel FLASH_MS). */
+.cad-params tr[data-param-changed] > td {
+  background: var(--mg-selected-bg);
 }
 
 .cad-param-add-actions td {

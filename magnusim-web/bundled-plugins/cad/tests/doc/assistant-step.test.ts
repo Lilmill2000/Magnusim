@@ -259,6 +259,31 @@ describe('doc.assistant: the person always first', () => {
     st.end();
   });
 
+  it('takeOver with the step\'s owner (its Parameters panel, no session) marks the open step; another owner, no step or an ended one, nothing', async () => {
+    const { doc, takeOvers } = make();
+    await doc.load();
+    block(doc);
+    expect(doc.assistant.takeOver('escape', { owner: 'assistant:c1' })).toBe(false);
+    const st = doc.assistant.begin('assistant:c1');
+    expect(doc.assistant.takeOver('escape', { owner: 'assistant:c2' })).toBe(false);
+    expect(doc.assistant.takeOver('escape')).toBe(false);
+    expect(st.takenOver).toBeNull();
+    expect(takeOvers).toEqual([]);
+    expect(doc.assistant.takeOver('command', { owner: 'assistant:c1' })).toBe(true);
+    expect(st.takenOver).toBe('command');
+    expect(st.clean).toBe(false);
+    expect(takeOvers).toEqual([{ why: 'command' }]);
+    // The first why stays.
+    expect(doc.assistant.takeOver('escape', { owner: 'assistant:c1' })).toBe(true);
+    expect(st.takenOver).toBe('command');
+    // Nothing was changed: the revert has nothing to do, and seal refuses.
+    expect(st.revert()).toEqual({ ok: true });
+    expect(() => st.seal('turn:t1', 'Assistant: x')).toThrow('The person took this step over');
+    st.end();
+    expect(doc.assistant.takeOver('escape', { owner: 'assistant:c1' })).toBe(false);
+    expect(takeOvers).toHaveLength(2);
+  });
+
   it('a person\'s panel opened between two opens: the revert puts the mark back under it, open and untouched', async () => {
     const { doc } = make();
     await doc.load();

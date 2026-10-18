@@ -364,8 +364,14 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     if (open.owner) takeOver(why);
     else open.commit();
   };
-  function takeOver(why: TakeOverWhy): boolean {
-    if (!open || !open.owner) return false;
+  function takeOver(why: TakeOverWhy, opts: { owner?: string } = {}): boolean {
+    if (!open || !open.owner) {
+      // The Assistant's panel with no session (its Parameters panel): its step is marked.
+      if (!opts.owner || !step || step.owner !== opts.owner || step.ended) return false;
+      calls.push(`takeOver ${why}`);
+      if (!step.takenOver) step.takenOver = why;
+      return true;
+    }
     calls.push(`takeOver ${why}`);
     if (step && step.owner === open.owner && !step.takenOver) step.takenOver = why;
     open.discard();

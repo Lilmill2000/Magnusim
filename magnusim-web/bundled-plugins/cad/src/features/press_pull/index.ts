@@ -18,7 +18,7 @@ import { userItems } from '../../lib/selection';
 export async function runPressPull(services: AppServices): Promise<void> {
   const ui = uiFor(services);
   const p = ui.state.get().panel;
-  if (p?.kind === 'feature' && p.isNew && p.type === 'press_pull') return;
+  if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'press_pull') return;
   const faces = selectedFaces(userItems(services.selection));
   const bodyIds = [...new Set(faces.map((f) => f.body))];
   if (!faces.length || bodyIds.length !== 1) {

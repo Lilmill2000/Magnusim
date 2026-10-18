@@ -109,12 +109,12 @@ export function EnclosurePanel(props: FeaturePanelProps) {
     empty: allText,
   });
 
-  // The arrows in the view for as long as the panel is open.
+  // The arrows in the view for as long as the panel is open (none while the Assistant fills it).
   const tool = useRef<ReturnType<typeof startEnclosureHandles> | null>(null);
   const outRef = useRef(output);
   outRef.current = output;
   useEffect(() => {
-    if (!handle || typeof handle.pushTool !== 'function') return;
+    if (!handle || typeof handle.pushTool !== 'function' || props.session.owner) return;
     const t = startEnclosureHandles(services, handle, { session: props.session, color: overlayColors().under, output: () => outRef.current });
     tool.current = t;
     return () => {

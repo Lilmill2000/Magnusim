@@ -426,11 +426,17 @@ export function createDocService(opts: DocServiceOptions): DocService {
 
   /**
    * The person took over the Assistant's open session: it is discarded (never committed), the
-   * open step is marked, and the bus hears why. False when no Assistant session is open.
+   * open step is marked, and the bus hears why. False when no Assistant session is open, unless
+   * `owner` names the open step (its panel with no session, the Parameters panel): it is marked.
    */
-  function takeOver(why: TakeOverWhy): boolean {
+  function takeOver(why: TakeOverWhy, opts: { owner?: string } = {}): boolean {
     const s = open;
-    if (!s || !s.open || !s.owner) return false;
+    if (!s || !s.open || !s.owner) {
+      if (!opts.owner || !step || step.owner !== opts.owner || step.ended) return false;
+      if (!step.takenOver) step.takenOver = why;
+      bus.emit('assistant:taken-over', { why });
+      return true;
+    }
     s.discard();
     if (step && step.owner === s.owner && !step.takenOver) step.takenOver = why;
     bus.emit('assistant:taken-over', { why });

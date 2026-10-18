@@ -81,8 +81,8 @@ export function extrudeCommand(services: AppServices): CommandDef {
     enabled: () => ui.editBlock() ?? (anyProfiles(services) || services.doc.state.get().rebuild.bodies.length ? true : NO_PROFILES),
     run: () => {
       const p = ui.state.get().panel;
-      // The new extrude being edited stays open.
-      if (p?.kind === 'feature' && p.isNew && p.type === 'extrude') return;
+      // The person's new extrude being edited stays open (one the Assistant fills is taken over).
+      if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'extrude') return;
       const sel = userItems(services.selection);
       // A face picked where a shown sketch's profiles are is about those profiles (a sketch on that face):
       // the face itself is taken only when no shown sketch offers a profile.

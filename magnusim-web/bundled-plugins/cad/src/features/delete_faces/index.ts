@@ -26,7 +26,7 @@ export async function runDeleteFaces(services: AppServices): Promise<void> {
   const toast = (m: string) => services.bridge.toast(m, 'info');
   const p = ui.state.get().panel;
   // The open Delete faces panel already takes clicked faces.
-  if (p?.kind === 'feature' && p.type === 'delete_faces') return;
+  if (p?.kind === 'feature' && p.owner === 'person' && p.type === 'delete_faces') return;
   const faces = selectedFaces(userItems(services.selection));
   if (!faces.length) {
     ui.openNew('delete_faces');

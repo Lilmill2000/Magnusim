@@ -31,16 +31,20 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     // untouched until the next Undo.
     get hint() {
       const p = ui.state.get().panel;
+      // The Assistant's panel (a feature's or its Parameters): Undo takes it over (it goes, the Assistant pauses); nothing else is undone.
+      if (p?.owner === 'assistant') return 'Take over from the Assistant: its open panel is discarded';
       if (p?.kind === 'feature') return p.isNew ? 'Undo the new feature (Redo brings it back)' : 'Undo the changes made in the open panel (Redo brings them back)';
       const l = services.doc.state.get().history.undoLabel;
       return l ? `Undo ${l}` : undefined;
     },
     enabled: () => {
       const h = services.doc.state.get().history;
-      return ui.editBlock() ?? (h.canUndo || ui.state.get().panel?.kind === 'feature' ? true : 'Nothing to undo');
+      const p = ui.state.get().panel;
+      return ui.editBlock() ?? (h.canUndo || p?.kind === 'feature' || p?.owner === 'assistant' ? true : 'Nothing to undo');
     },
     run: () => {
-      if (ui.state.get().panel?.kind === 'feature') ui.cancelPanel();
+      const p = ui.state.get().panel;
+      if (p?.kind === 'feature' || p?.owner === 'assistant') ui.cancelPanel();
       else services.doc.undo();
     },
   };
@@ -68,7 +72,7 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     order: 10,
     enabled: () => ui.editBlock() ?? true,
     run: () => {
-      if (ui.state.get().panel?.kind === 'params') ui.closePanel();
+      if (ui.state.get().panel?.kind === 'params') ui.closePanel({ why: 'command' });
       else ui.openParams();
     },
   };

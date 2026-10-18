@@ -3,12 +3,15 @@
 // at the foot of the table. Each change is one undo step. An invalid name or
 // expression shows why inline and is not applied; a change the document
 // refuses (a cycle, a parameter in use) shows the document's reason.
+// Rows an Assistant step changes flash for FLASH_MS (data-param-changed), in
+// the person's open panel as in the Assistant's own (read-only) one.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
-import type { Param } from '../../types/doc';
+import type { AppServices } from '../../types/app';
+import type { Param, ParamId } from '../../types/doc';
 import type { Quantity, UnitsService } from '../../types/units';
 import { errText, uiFor } from '../controller';
 import { ICONS } from '../Icon';
@@ -117,7 +120,54 @@ function NameInput({ p, onError }: { p: Param; onError(msg: string | null): void
   );
 }
 
-function ParamRow({ p }: { p: Param }) {
+/** How long a row the Assistant changed stays flashed. */
+export const FLASH_MS = 1500;
+
+const NONE: ReadonlySet<ParamId> = new Set();
+
+/**
+ * The parameters an Assistant step just changed (added, renamed, a new expression or unit), each for
+ * FLASH_MS: a change of the parameters while a step is open whose newest undo step is that step's.
+ */
+function useAssistantChanges(services: AppServices): ReadonlySet<ParamId> {
+  const [ids, setIds] = useState<ReadonlySet<ParamId>>(NONE);
+  useEffect(() => {
+    const timers = new Map<ParamId, ReturnType<typeof setTimeout>>();
+    const off = services.doc.state.subscribe((s, prev) => {
+      if (s.doc.params === prev.doc.params) return;
+      const step = services.doc.assistant?.current();
+      if (!step || services.doc.assistant?.topGroup()?.tag !== step.owner) return;
+      const was = new Map(prev.doc.params.map((p) => [p.id, p]));
+      const hit = s.doc.params.filter((p) => {
+        const b = was.get(p.id);
+        return !b || b.name !== p.name || b.expr !== p.expr || b.quantity !== p.quantity;
+      });
+      if (!hit.length) return;
+      setIds((cur) => new Set([...cur, ...hit.map((p) => p.id)]));
+      for (const { id } of hit) {
+        clearTimeout(timers.get(id));
+        timers.set(
+          id,
+          setTimeout(() => {
+            timers.delete(id);
+            setIds((cur) => {
+              const next = new Set(cur);
+              next.delete(id);
+              return next.size ? next : NONE;
+            });
+          }, FLASH_MS),
+        );
+      }
+    });
+    return () => {
+      off();
+      for (const t of timers.values()) clearTimeout(t);
+    };
+  }, [services]);
+  return ids;
+}
+
+function ParamRow({ p, changed = false }: { p: Param; changed?: boolean }) {
   const services = useServices();
   const { doc } = services;
   const units = doc.units;
@@ -126,7 +176,7 @@ function ParamRow({ p }: { p: Param }) {
   const opts = quantityOptions(units);
   return (
     <>
-      <tr className={error ? 'is-invalid' : undefined} data-param-row={p.name} data-param-id={p.id}>
+      <tr className={error ? 'is-invalid' : undefined} data-param-row={p.name} data-param-id={p.id} data-param-changed={changed ? '1' : undefined}>
         <td>
           <NameInput p={p} onError={setError} />
         </td>
@@ -325,6 +375,7 @@ export function ParametersPanel() {
   const ui = uiFor(services);
   const params = useStateStore(services.doc.state, (s) => s.doc.params);
   useStateStore(services.doc.state, (s) => s.doc.units);
+  const changed = useAssistantChanges(services);
   return (
     <PanelChrome panel="params" title="Parameters" onDone={() => ui.closePanel()} className="cad-params-panel">
       <table className="cad-params" aria-label="Parameters">
@@ -348,7 +399,7 @@ export function ParametersPanel() {
             </tr>
           )}
           {params.map((p) => (
-            <ParamRow key={p.id} p={p} />
+            <ParamRow key={p.id} p={p} changed={changed.has(p.id)} />
           ))}
           <AddRow />
         </tbody>

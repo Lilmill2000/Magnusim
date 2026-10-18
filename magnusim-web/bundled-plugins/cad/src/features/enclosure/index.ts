@@ -38,7 +38,7 @@ export function enclosureCommand(services: AppServices): CommandDef {
     run: () => {
       const p = ui.state.get().panel;
       // The new enclosure being edited stays open.
-      if (p?.kind === 'feature' && p.isNew && p.type === 'enclosure') return;
+      if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'enclosure') return;
       ui.openNew('enclosure');
     },
   };

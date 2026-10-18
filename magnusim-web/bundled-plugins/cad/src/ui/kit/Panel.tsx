@@ -15,6 +15,10 @@
 // Rules (Daniel's): Done in the foot closes; Delete (a link, foot left) only
 // when something can be removed; NO tick or checkmark in the head; valid field
 // changes apply live, so Done only closes.
+// A panel the Assistant fills (PanelOwnerProvider, set by LeftStack from the
+// panel's owner) is read-only: data-panel-owner="assistant", an "Assistant"
+// badge in the head, the title not renamable, the field body inert, no Delete,
+// and Done disabled with the reason (the person takes over with Escape).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {
@@ -27,12 +31,28 @@ import {
   type DataAttrs,
   type SelectOption,
 } from '@magnusim/plugin-ui';
-import type { ReactNode } from 'react';
+import { createContext, useContext, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { commitPendingEdits, focusPendingEdit, pendingEdits } from '../../lib/pendingEdits';
 import { Button } from './Button';
 import { RenameTitle, type RenameFn } from './Rename';
 
 export type { SelectOption };
+
+/** Who fills the open panel: the person, or the Assistant (its panels are read-only and drive no viewport tools). */
+export type PanelOwner = 'person' | 'assistant';
+
+const PanelOwnerContext = createContext<PanelOwner>('person');
+
+/** Around the open panel's body (LeftStack): its owner, for the chrome and the pick tools inside it. */
+export const PanelOwnerProvider = PanelOwnerContext.Provider;
+
+/** The owner of the panel this component is in ('person' outside any panel). */
+export function usePanelOwner(): PanelOwner {
+  return useContext(PanelOwnerContext);
+}
+
+/** Done's reason on a panel the Assistant fills. */
+export const ASSISTANT_PANEL_DONE = 'The Assistant is filling this in · Esc takes over (the Assistant pauses)';
 
 export interface PanelChromeProps {
   title: string;
@@ -64,24 +84,32 @@ export interface PanelChromeProps {
   footLeft?: ReactNode;
 }
 
-export function PanelChrome({
-  title,
-  onRename,
-  renameLabel = 'feature',
-  onRenameGiveUp,
-  accent = null,
-  children,
-  onDone,
-  doneDisabled = null,
-  onDelete,
-  deleteBlock = null,
-  deleteLabel = 'Delete',
-  foot,
-  className,
-  panel,
-  headAside = null,
-  footLeft = null,
-}: PanelChromeProps) {
+export function PanelChrome(props: PanelChromeProps) {
+  const assistant = usePanelOwner() === 'assistant';
+  // The Assistant's panel: its fields can be seen, not used (inert, set here: the host's React may not know the attribute).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    bodyRef.current?.toggleAttribute('inert', assistant);
+  }, [assistant]);
+  const {
+    title,
+    renameLabel = 'feature',
+    onRenameGiveUp,
+    accent = null,
+    children,
+    onDone,
+    deleteLabel = 'Delete',
+    foot,
+    className,
+    panel,
+    headAside = null,
+    footLeft = null,
+  } = props;
+  // Read-only for the person while the Assistant fills it: no rename, no Delete, Done says why it waits.
+  const onRename = assistant ? null : props.onRename;
+  const onDelete = assistant ? null : props.onDelete;
+  const deleteBlock = assistant ? null : (props.deleteBlock ?? null);
+  const doneDisabled = assistant ? ASSISTANT_PANEL_DONE : (props.doneDisabled ?? null);
   const blocked = !onDelete && deleteBlock ? (
     <div data-delete-block="1">
       <Hint>Delete is off: {deleteBlock}</Hint>
@@ -97,7 +125,7 @@ export function PanelChrome({
   // The kit PanelChrome's markup (mgk-panel, -head, -title, -body, -foot, -foot-left, Done), card drawn.
   const cls = ['mgk-type', 'mgk-panel', 'mgk-panel--card', 'cad-panel', accent ? `is-accent-${accent}` : '', className || ''].filter(Boolean).join(' ');
   return (
-    <section className={cls} data-cad-panel={panel} aria-label={title}>
+    <section className={cls} data-cad-panel={panel} data-panel-owner={assistant ? 'assistant' : undefined} aria-label={title}>
       <div className="mgk-panel-head">
         {onRename ? (
           <RenameTitle name={title} label={renameLabel} onRename={onRename} onGiveUp={onRenameGiveUp} />
@@ -106,11 +134,18 @@ export function PanelChrome({
             <span className="mgk-panel-title" data-panel-title="1">
               {title}
             </span>
+            {assistant ? (
+              <span className="cad-panel-badge" data-panel-badge="assistant">
+                Assistant
+              </span>
+            ) : null}
           </div>
         )}
         {headAside}
       </div>
-      <div className="mgk-panel-body">{children}</div>
+      <div className="mgk-panel-body" ref={bodyRef}>
+        {children}
+      </div>
       {foot || blocked ? (
         <div className="cad-panel-note">
           {foot}

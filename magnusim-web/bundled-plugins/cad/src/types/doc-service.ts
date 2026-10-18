@@ -276,9 +276,11 @@ export interface AssistantDoc {
   /**
    * The person took over the Assistant's open session (its panel's Escape or Enter, a command, a draft
    * change): it is discarded, the open step is marked `takenOver`, and 'assistant:taken-over' is emitted.
-   * False (nothing done) when no session the Assistant owns is open.
+   * False (nothing done) when no session the Assistant owns is open. With `owner` (a panel the
+   * Assistant shows with no session, its Parameters panel): that step, while it is the open one, is
+   * marked and the event emitted even with no session open.
    */
-  takeOver(why: TakeOverWhy): boolean;
+  takeOver(why: TakeOverWhy, opts?: { owner?: string }): boolean;
 }
 
 /** Rows for DocService.editParams: all applied in one undo step. */

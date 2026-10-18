@@ -19,7 +19,7 @@ export const SPLIT_COMMAND = 'modify.split';
 export function runSplit(services: AppServices): void {
   const ui = uiFor(services);
   const p = ui.state.get().panel;
-  if (p?.kind === 'feature' && p.isNew && p.type === 'split') return;
+  if (p?.kind === 'feature' && p.owner === 'person' && p.isNew && p.type === 'split') return;
   const built = new Set(services.doc.state.get().rebuild.bodies.map((b) => b.id));
   const picked = [...selectedBodies(userSelection(services.selection.get()))].filter((id) => built.has(id));
   ui.openNew('split', picked.length ? ({ targets: picked } as Partial<SplitFeature>) : undefined);
