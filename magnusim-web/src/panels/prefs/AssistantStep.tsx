@@ -38,6 +38,7 @@ import type {
 } from '../../assistant/wire';
 import type { IslandProps } from '../../islands';
 import { confirmAction } from '../../workbench/dialogs';
+import { AssistantStepMcp } from './AssistantStepMcp';
 
 const SETTINGS = '/api/assistant/settings';
 
@@ -337,6 +338,7 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
           <ProviderCard key={p.id} p={p} status={status} />
         ))}
       </div>
+      <AssistantStepMcp status={status} />
       <PrivacyBlock status={status} />
       <LimitsBlock status={status} />
       <TestSwitchLine status={status} />

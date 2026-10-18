@@ -5187,6 +5187,22 @@ body.is-recording #viewport-gizmo {
 .wiz-assistant-error-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-md); color: var(--mg-danger); }
 /* A command in a server's sentence ("Ollama: `ollama serve`"). */
 .wiz-assistant code { padding: 0 var(--mg-space-1); border-radius: var(--mg-radius-xs); background: var(--mg-surface-muted); font-family: var(--mg-font-mono); }
+/* Other apps (MCP): the switch, the config to paste, and the apps connected now. */
+.wiz-assistant-switch { display: inline-flex; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-md); color: var(--mg-text-strong); cursor: pointer; }
+.wiz-assistant-switch .switch { flex-shrink: 0; }
+.wiz-assistant-snippet {
+  margin: 0;
+  padding: var(--mg-space-2);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-xs);
+  background: var(--mg-surface-muted);
+  font-family: var(--mg-font-mono);
+  font-size: var(--mg-text-sm);
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+}
+.wiz-assistant-connections { margin: 0; padding-left: var(--mg-space-4); font-size: var(--mg-text-sm); color: var(--mg-text-body); }
 /* The provider cards, always listed whatever the default, and the ready dot of each provider. */
 .wiz-assistant-cards { gap: var(--mg-space-2); }
 .wiz-assistant-card {
