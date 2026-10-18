@@ -246,10 +246,19 @@ function shortText(v: unknown, max: number): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= max;
 }
 
+/**
+ * Whether `name` may be a custom agent's name: 1–40 characters, counted as cleanText counts
+ * them (code points, so an emoji is one), with no control character.
+ */
+export function customNameValid(name: unknown): name is string {
+  if (typeof name !== 'string' || !name) return false;
+  return [...name].length <= CUSTOM_NAME_MAX && !/\p{Cc}/u.test(name);
+}
+
 /** A custom agent as stored, or null when it breaks a rule. */
 export function normalizeCustomAgent(raw: unknown): CustomAgent | null {
   if (!isRecord(raw) || typeof raw.id !== 'string' || !CUSTOM_ID_RE.test(raw.id)) return null;
-  if (typeof raw.name !== 'string' || !raw.name || raw.name.length > CUSTOM_NAME_MAX || /\p{Cc}/u.test(raw.name)) return null;
+  if (!customNameValid(raw.name)) return null;
   const argv = raw.argv;
   if (!Array.isArray(argv) || argv.length < 1 || argv.length > CUSTOM_ARGV_MAX) return null;
   if (!argv.every((a) => typeof a === 'string' && a.length <= CUSTOM_ARG_CHARS && !a.includes('\0')) || !argv[0]) return null;
@@ -258,11 +267,16 @@ export function normalizeCustomAgent(raw: unknown): CustomAgent | null {
   return { id: raw.id, name: raw.name, argv: [...(argv as string[])], keep_env: [...new Set(keep as string[])] };
 }
 
-function normalizeAgentPrefs(raw: unknown): AgentPrefs {
+/**
+ * An agent's saved choices as read. A mode is kept only when Magnusim may use it for that agent
+ * now (its allowedModes; a custom command: none), so a mode written by hand or kept from an
+ * older catalogue never reaches a session.
+ */
+function normalizeAgentPrefs(id: string, raw: unknown): AgentPrefs {
   const p: AgentPrefs = { model: null, mode: null, allowed: null, lockdown_failed: null };
   if (!isRecord(raw)) return p;
   if (typeof raw.model === 'string' && MODEL_RE.test(raw.model)) p.model = raw.model;
-  if (typeof raw.mode === 'string' && MODEL_RE.test(raw.mode)) p.mode = raw.mode;
+  if (typeof raw.mode === 'string' && MODEL_RE.test(raw.mode) && modeAllowed(knownAgent(id), raw.mode)) p.mode = raw.mode;
   const a = raw.allowed;
   if (isRecord(a) && typeof a.fingerprint === 'string' && FINGERPRINT_RE.test(a.fingerprint) && shortText(a.at, 40)) p.allowed = { fingerprint: a.fingerprint, at: a.at };
   const l = raw.lockdown_failed;
@@ -325,7 +339,7 @@ export function normalizeSettings(raw: unknown): AssistantSettings {
   }
   // Agent ids come from the file: own properties only, and only agents these settings know.
   if (isRecord(raw.agents)) {
-    for (const [id, p] of Object.entries(raw.agents)) if (isAgentOf(s, id)) setOwn(s.agents, id, normalizeAgentPrefs(p));
+    for (const [id, p] of Object.entries(raw.agents)) if (isAgentOf(s, id)) setOwn(s.agents, id, normalizeAgentPrefs(id, p));
   }
   if (isRecord(raw.agent_caps)) {
     for (const key of Object.keys(AGENT_CAP_BOUNDS) as Array<keyof AgentCaps>) {

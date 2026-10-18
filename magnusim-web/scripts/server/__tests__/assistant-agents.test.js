@@ -13,8 +13,10 @@
 //
 // Nothing here reads this PC's real agents, home or temp folder: discovery searches only the
 // test's folders (MAGNUSIM_TEST_ASSISTANT_AGENT_PATHS, or the folders a call names) with a test
-// home, and every probe's working folder is in the test's own temp folder. The agents are the
-// scripted fake (through its launcher) and small scripts; every process is checked by pid.
+// home (under which the real environment's agent variables are not read either), and every
+// probe's working folder is in the test's own temp folder. The agents are the scripted fake
+// (through its launcher) and small scripts; every process is checked by pid. Discovery starts
+// only the verified package or an allowed program (a lookalike never runs: report files).
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -142,6 +144,35 @@ function npmPrefix(dir, { pkg, program, version = '1.0.0', bin = 'dist/index.js'
 
 const CLAUDE = { pkg: '@agentclientprotocol/claude-agent-acp', program: 'claude-agent-acp' };
 
+/**
+ * A script that appends one line to `report` each time it runs ({name, argv, env names}) and
+ * prints `<name> <version>`: a run that never happens leaves no line.
+ */
+function reporter(file, report, name, version) {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      `fs.appendFileSync(${JSON.stringify(report)}, JSON.stringify({ name: ${JSON.stringify(name)}, argv: process.argv.slice(2), env: Object.keys(process.env) }) + '\\n');`,
+      `process.stdout.write(${JSON.stringify(`${name} ${version}\n`)});`,
+      '',
+    ].join('\n'),
+  );
+  if (!WIN) chmodSync(file, 0o755);
+  return file;
+}
+
+/** The lines a reporter() wrote ([] when it never ran). */
+const runsOf = (report) =>
+  existsSync(report)
+    ? readFileSync(report, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : [];
+
 let n = 0;
 /** A new empty folder under ROOT. */
 function folder(name) {
@@ -152,7 +183,8 @@ function folder(name) {
 }
 
 /** Discovery on the given folders and home, as Windows lays them out (files only: works on Linux too). */
-const discover = (folders, o = {}) => D.discoverAgents({ platform: 'win32', folders, home: o.home ?? folder('home'), env: o.env ?? {}, custom: o.custom ?? [], probe: false, tmp: TMP, ...o });
+const discover = (folders, o = {}) =>
+  D.discoverAgents({ platform: 'win32', folders, home: o.home ?? folder('home'), env: o.env ?? {}, custom: o.custom ?? [], settings: S.defaultSettings(), probe: false, tmp: TMP, ...o });
 const entry = (d, id) => d.agents.find((a) => a.id === id);
 
 /** The row an entry gives with default settings (a tools-off agent needs no switch). */
@@ -231,6 +263,11 @@ describe('the catalogue (spec 4.2)', () => {
     assert.deepEqual(byId.claude.login, { file: '.claude/.credentials.json', dirVar: 'CLAUDE_CONFIG_DIR', fileInDir: '.credentials.json', keyring: ['darwin'] });
     assert.deepEqual(byId.codex.login, { file: '.codex/auth.json', dirVar: 'CODEX_HOME', fileInDir: 'auth.json', keyring: true });
     assert.deepEqual(byId.grok.startAuth, { methods: ['xai.api_key', 'cached_token'], meta: { headless: true } });
+    // The version probe's arguments: Grok Build's never let it update itself.
+    assert.deepEqual(
+      Object.fromEntries(K.KNOWN_AGENTS.map((a) => [a.id, a.versionArgs && [...a.versionArgs]])),
+      { claude: ['--version'], codex: ['--version'], opencode: ['--version'], grok: ['--no-auto-update', '--version'], gemini: ['--version'] },
+    );
     assert.equal(K.knownAgent('nope'), null);
     assert.equal(K.knownAgent('constructor'), null);
   });
@@ -483,6 +520,102 @@ describe('discovery on fake folders (spec 4.3)', () => {
     assert.deepEqual(c5.argv, [named, '--acp']);
     assert.equal(c5.lockdown, 'none');
     assert.equal((await rowOf(c5)).needs_allow, true);
+  });
+
+  it('discovery starts only the verified package or an allowed program, with no key, login-folder or agent variable; never a lookalike', LIMIT, async () => {
+    const report = join(folder('reports'), 'runs.jsonl');
+    const verified = folder('pverified');
+    const { script } = npmPrefix(verified, { ...CLAUDE, version: '0.85.1' });
+    reporter(script, report, 'adapter', '0.85.1-probed');
+    // A lookalike shim in an earlier folder, to another package's script.
+    const planted = folder('pplanted');
+    reporter(join(planted, 'node_modules', 'evil', 'x.js'), report, 'lookalike', '6.6.6');
+    writeFileSync(join(planted, 'claude-agent-acp.cmd'), cmdShim(winRel('node_modules', 'evil', 'x.js')));
+    const env = { ANTHROPIC_API_KEY: 'sk-test-owner-key', CLAUDE_CODE_OAUTH_TOKEN: 'owner-oauth', CLAUDE_CONFIG_DIR: folder('cfgdir'), CLAUDE_EXTRA: 'own prefix', HTTPS_PROXY: 'http://proxy.invalid:1' };
+
+    const lookalike = entry(await discover([planted, verified], { probe: true, refresh: true, env }), 'claude');
+    assert.equal(lookalike.verifiedPackage, false);
+    assert.equal(lookalike.version, null, 'not asked');
+    assert.deepEqual(runsOf(report), [], 'the lookalike never ran');
+
+    const own = entry(await discover([verified], { probe: true, refresh: true, env }), 'claude');
+    assert.equal(own.version, '0.85.1-probed');
+    const [run] = runsOf(report);
+    assert.equal(run.name, 'adapter');
+    assert.deepEqual(run.argv, ['--version']);
+    const has = (name) => run.env.some((k) => k.toUpperCase() === name);
+    for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'CLAUDE_EXTRA']) assert.ok(!has(name), `${name} never reaches a version probe`);
+    assert.ok(has('HTTPS_PROXY') && has('PATH'), 'the system part of the allowlist does');
+
+    // Allowed for that very program (its fingerprint): asked.
+    const s = S.defaultSettings();
+    s.agents.claude = { model: null, mode: null, allowed: { fingerprint: lookalike.fingerprint, at: 'now' }, lockdown_failed: null };
+    const allowed = entry(await discover([planted, verified], { probe: true, refresh: true, env, settings: s }), 'claude');
+    assert.equal(allowed.version, '6.6.6');
+    assert.deepEqual(runsOf(report).map((r) => r.name), ['adapter', 'lookalike']);
+    // Allowed for another program: not asked.
+    s.agents.claude.allowed.fingerprint = 'd'.repeat(64);
+    assert.equal(entry(await discover([planted, verified], { probe: true, refresh: true, env, settings: s }), 'claude').version, null);
+    assert.equal(runsOf(report).length, 2);
+
+    // Grok Build's own package: asked with --no-auto-update.
+    const grokDir = folder('pgrok');
+    const grok = npmPrefix(grokDir, { pkg: '@xai-official/grok', program: 'grok', version: '1.0.49', bin: 'bin/grok.js' });
+    reporter(grok.script, report, 'grok', '1.0.49');
+    assert.equal(entry(await discover([grokDir], { probe: true, refresh: true }), 'grok').version, '1.0.49');
+    assert.deepEqual(runsOf(report).at(-1).argv, ['--no-auto-update', '--version']);
+  });
+
+  it('under the test home switch the real environment’s agent variables are not read: the test home is the only place looked at', async () => {
+    const dir = folder('envscrub');
+    printer(join(dir, 'node_modules', 'codex-fork', 'bin', 'codex.js'), 'codex-acp 2.1.1');
+    writeFileSync(join(dir, 'codex-acp.cmd'), cmdShim(winRel('node_modules', 'codex-fork', 'bin', 'codex.js')));
+    npmPrefix(dir, { pkg: 'opencode-ai', program: 'opencode', version: '1.18.34', bin: 'bin/oc.js' });
+    const codexHome = folder('real-codex-home');
+    writeFileSync(join(codexHome, 'auth.json'), '{}');
+    const xdg = folder('real-xdg');
+    mkdirSync(join(xdg, 'opencode'));
+    writeFileSync(join(xdg, 'opencode', 'opencode.json'), '{"default_agent": "leaked"}');
+    const real = { CODEX_HOME: codexHome, XDG_CONFIG_HOME: xdg, OPENAI_API_KEY: 'sk-real-owner-key' };
+    const scrubbed = D.testHomeEnv({ ...real, PATH: '/bin', CLAUDE_CONFIG_DIR: '/c', ANTHROPIC_BASE_URL: 'x', GROK_X: 'y', HOME: '/h' });
+    assert.deepEqual(scrubbed, { PATH: '/bin', HOME: '/h' });
+    // No env given: the switches' home (AGENT_HOME, with no login of these) and the real environment without them.
+    const look = () => D.discoverAgents({ platform: 'win32', folders: [dir], custom: [], settings: S.defaultSettings(), probe: false, tmp: TMP });
+    Object.assign(process.env, real);
+    let d;
+    try {
+      d = await look();
+    } finally {
+      for (const k of Object.keys(real)) delete process.env[k];
+    }
+    assert.deepEqual([entry(d, 'codex').signedIn, entry(d, 'codex').keyVar], ['unknown', null], 'neither CODEX_HOME’s file nor the key counted');
+    assert.equal(entry(d, 'opencode').defaultAgent, null, 'XDG_CONFIG_HOME not read');
+    // Control: the same variables given to discovery are read.
+    const given = await D.discoverAgents({ platform: 'win32', folders: [dir], home: AGENT_HOME, env: real, custom: [], settings: S.defaultSettings(), probe: false, tmp: TMP });
+    assert.equal(entry(given, 'codex').signedIn, 'yes');
+    assert.equal(entry(given, 'opencode').defaultAgent, 'leaked');
+  });
+
+  it('POSIX: a custom command by its full path must be executable, or a node script', { skip: WIN && 'POSIX executable bits' }, async () => {
+    const dir = folder('pcustom');
+    writeFileSync(join(dir, 'data.txt'), 'not a program\n');
+    chmodSync(join(dir, 'data.txt'), 0o644);
+    writeFileSync(join(dir, 'tool'), '#!/bin/sh\necho 1\n');
+    chmodSync(join(dir, 'tool'), 0o755);
+    printer(join(dir, 'agent.js'), 'agent 1.0.0');
+    chmodSync(join(dir, 'agent.js'), 0o644);
+    const custom = [
+      { id: 'custom-0d0d01', name: 'Data', argv: [join(dir, 'data.txt'), '--acp'], keep_env: [] },
+      { id: 'custom-0d0d02', name: 'Tool', argv: [join(dir, 'tool'), '--acp'], keep_env: [] },
+      { id: 'custom-0d0d03', name: 'Script', argv: [join(dir, 'agent.js')], keep_env: [] },
+    ];
+    const d = await D.discoverAgents({ platform: process.platform, folders: [], home: folder('home'), env: {}, custom, settings: S.defaultSettings(), probe: false, tmp: TMP });
+    const data = entry(d, 'custom-0d0d01');
+    assert.deepEqual([data.found, data.argv, data.error?.code], [false, null, 'bad_command']);
+    assert.match(data.error.message, /isn't marked as a program/);
+    assert.equal((await rowOf(data)).reason, 'bad_command');
+    assert.deepEqual(entry(d, 'custom-0d0d02').argv, [join(dir, 'tool'), '--acp']);
+    assert.deepEqual(entry(d, 'custom-0d0d03').argv, [process.execPath, join(dir, 'agent.js')]);
   });
 
   it('a custom command: found on PATH or by its full path, never relative, and a .bat it can’t start', async () => {
@@ -752,20 +885,59 @@ describe('rows and when an agent may start (spec 4.9, 4.13, 5.4)', () => {
     assert.equal((await rowOf(signedIn)).ready, true);
   });
 
-  it('a program whose tools stay on needs its switch for everything, except the connect check and sign-in of a known agent’s verified package', async () => {
-    const row = (o) => ({ id: 'x', name: 'X', kind: 'known', found: true, verified_package: false, needs_allow: true, allowed: false, allow_changed: false, reason: null, ...o });
+  it('a program whose tools stay on needs its switch for everything; only a documented lockdown’s verified package may connect and sign in without it', async () => {
+    const PURPOSES = ['connect', 'sign_in', 'test', 'turn'];
+    const row = (o) => ({ id: 'x', name: 'X', kind: 'known', found: true, verified_package: false, lockdown: 'none', needs_allow: true, allowed: false, allow_changed: false, reason: null, error: null, ...o });
     const refused = (r, purpose) => D.agentStartRefusal(r, purpose)?.code ?? null;
     const custom = row({ kind: 'custom' });
-    for (const p of ['connect', 'sign_in', 'test', 'turn']) assert.equal(refused(custom, p), 'agent_not_allowed', `custom ${p}`);
-    const documented = row({ verified_package: true });
-    assert.deepEqual(['connect', 'sign_in', 'test', 'turn'].map((p) => refused(documented, p)), [null, null, 'agent_not_allowed', 'agent_not_allowed']);
+    for (const p of PURPOSES) assert.equal(refused(custom, p), 'agent_not_allowed', `custom ${p}`);
+    const documented = row({ verified_package: true, lockdown: 'documented' });
+    assert.deepEqual(PURPOSES.map((p) => refused(documented, p)), [null, null, 'agent_not_allowed', 'agent_not_allowed']);
+    // Class none on its own package (an agent whose tools can't be switched off, a fired tripwire): the switch for everything.
+    const classNone = row({ verified_package: true, lockdown: 'none' });
+    assert.deepEqual(PURPOSES.map((p) => refused(classNone, p)), PURPOSES.map(() => 'agent_not_allowed'));
     const shimmed = row({ verified_package: false });
     assert.equal(refused(shimmed, 'connect'), 'agent_not_allowed');
-    const toolsOff = row({ verified_package: true, needs_allow: false });
-    for (const p of ['connect', 'sign_in', 'test', 'turn']) assert.equal(refused(toolsOff, p), null, p);
+    const toolsOff = row({ verified_package: true, lockdown: 'tools_off', needs_allow: false });
+    for (const p of PURPOSES) assert.equal(refused(toolsOff, p), null, p);
     assert.equal(refused(row({ kind: 'custom', allowed: true }), 'turn'), null);
     assert.equal(refused(row({ kind: 'custom', allow_changed: true }), 'connect'), 'agent_allow_changed');
     assert.equal(refused(row({ found: false }), 'connect'), 'agent_missing');
+
+    // Through discovery: each known agent's own package.
+    const dir = folder('start');
+    npmPrefix(dir, { pkg: '@agentclientprotocol/codex-acp', program: 'codex-acp', version: '2.1.1' });
+    npmPrefix(dir, { pkg: '@xai-official/grok', program: 'grok', version: '1.0.49', bin: 'bin/grok.js' });
+    npmPrefix(dir, { pkg: 'opencode-ai', program: 'opencode', version: '1.18.34', bin: 'bin/oc.js' });
+    npmPrefix(dir, { ...CLAUDE, version: '0.85.1' });
+    writeFileSync(join(dir, 'gemini.bat'), '@echo off\r\ngemini-real.exe %*\r\n');
+    const d = await discover([dir], {
+      custom: [
+        { id: 'custom-0e0e01', name: 'Relative', argv: ['sub\\x.exe'], keep_env: [] },
+        { id: 'custom-0e0e02', name: 'Gone', argv: ['nowhere-agent'], keep_env: [] },
+      ],
+    });
+    const at = async (id, s) => rowOf(entry(d, id), s);
+    for (const id of ['codex', 'grok']) {
+      const r = await at(id);
+      assert.deepEqual([r.verified_package, r.lockdown], [true, 'none'], id);
+      for (const p of PURPOSES) assert.equal(refused(r, p), 'agent_not_allowed', `${id} ${p}`);
+    }
+    const oc = await at('opencode');
+    assert.deepEqual(PURPOSES.map((p) => refused(oc, p)), [null, null, 'agent_not_allowed', 'agent_not_allowed']);
+    const tripped = S.defaultSettings();
+    tripped.agents.claude = { model: null, mode: null, allowed: null, lockdown_failed: { version: await appVersion(), at: 'x' } };
+    const claudeTripped = await at('claude', tripped);
+    for (const p of PURPOSES) assert.equal(refused(claudeTripped, p), 'agent_not_allowed', `tripped ${p}`);
+    // The refusals carry the row's own text: spec 4.3's copy for a script, the command's problem, a custom command not found.
+    const gemini = await at('gemini');
+    assert.equal(gemini.error, D.CANT_START_TEXT('gemini.bat'));
+    assert.deepEqual(D.agentStartRefusal(gemini, 'turn'), { code: 'cant_start_script', error: D.CANT_START_TEXT('gemini.bat') });
+    const relative = D.agentStartRefusal(await at('custom-0e0e01'), 'connect');
+    assert.equal(relative.code, 'bad_command');
+    assert.match(relative.error, /^Relative's command can't be used\. Give the program's full path/);
+    assert.deepEqual(D.agentStartRefusal(await at('custom-0e0e02'), 'turn'), { code: 'agent_missing', error: "Magnusim can't find nowhere-agent on this PC." });
+    assert.match(D.agentStartRefusal(await at('codex', S.defaultSettings()), 'turn').error, /^Codex is off until you allow it/);
   });
 });
 
@@ -833,6 +1005,38 @@ describe('the agents’ settings (spec 5.1)', () => {
     assert.equal(s.agents.codex.allowed, null, 'a broken record is no switch');
     assert.deepEqual(s.agent_caps, { changes: 5, calls: 400, turn_minutes: 30 });
     assert.equal(Object.getPrototypeOf(s.agents), Object.prototype);
+  });
+
+  it('a saved mode is kept at load only when Magnusim may use it for that agent now', () => {
+    const s = S.normalizeSettings({
+      custom_agents: [{ id: 'custom-00bb11', name: 'Mine', argv: ['a'], keep_env: [] }],
+      agents: {
+        claude: { mode: 'bypassPermissions', model: 'opus' },
+        codex: { mode: 'read-only' },
+        gemini: { mode: 'default' },
+        opencode: { mode: 'build' },
+        grok: { mode: 'agent-full-access' },
+        'custom-00bb11': { mode: 'default' },
+      },
+    });
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(s.agents).map(([id, p]) => [id, p.mode])),
+      { claude: null, codex: 'read-only', gemini: 'default', opencode: null, grok: null, 'custom-00bb11': null },
+    );
+    assert.equal(s.agents.claude.model, 'opus', 'the rest of its choices stay');
+    assert.equal(S.agentPrefs(s, 'claude').mode, null);
+  });
+
+  it('a custom agent’s name is 1–40 characters as cleanText counts them (an emoji is one)', () => {
+    const smile = String.fromCodePoint(0x1f642);
+    assert.equal(S.customNameValid(smile.repeat(40)), true);
+    assert.equal(S.customNameValid(smile.repeat(41)), false);
+    assert.equal(S.customNameValid('a'.repeat(40)), true);
+    assert.equal(S.customNameValid('a'.repeat(41)), false);
+    assert.equal(S.customNameValid(''), false);
+    assert.equal(S.customNameValid('a\u0007b'), false);
+    const c = S.normalizeCustomAgent({ id: 'custom-00cc11', name: smile.repeat(40), argv: ['a'], keep_env: [] });
+    assert.equal(c?.name, smile.repeat(40));
   });
 });
 
@@ -933,11 +1137,13 @@ function spyProcesses() {
 
 describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
   let claudeScript;
+  /** Every run of the codex fork (discovery may start it only once it is allowed). */
+  const CODEX_RUNS = join(ROOT, 'codex-fork-runs.jsonl');
   before(async () => {
     resetAssistantState();
     // path-b: the verified adapter (signed in), and a codex shim to a fork (class none, keyring login).
     ({ script: claudeScript } = npmPrefix(PATH_B, { ...CLAUDE, version: '0.85.1' }));
-    printer(join(PATH_B, 'node_modules', 'codex-fork', 'bin', 'codex.js'), 'codex-acp 2.1.1');
+    reporter(join(PATH_B, 'node_modules', 'codex-fork', 'bin', 'codex.js'), CODEX_RUNS, 'codex-acp', '2.1.1');
     writeFileSync(join(PATH_B, 'codex-acp.cmd'), cmdShim(winRel('node_modules', 'codex-fork', 'bin', 'codex.js')));
     if (!WIN) {
       // POSIX looks for the bare program names, executable.
@@ -985,7 +1191,8 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     assert.match(claude.fingerprint, /^[0-9a-f]{64}$/);
     const codex = rows.codex;
     assert.deepEqual([codex.found, codex.verified_package, codex.lockdown, codex.own_tools], [true, false, 'none', 'on']);
-    assert.equal(codex.version, '2.1.1');
+    assert.equal(codex.version, null, 'a shim to another package is not asked its version');
+    assert.deepEqual(runsOf(CODEX_RUNS), [], 'GET /agents never started it');
     assert.deepEqual([codex.needs_allow, codex.allowed, codex.signed_in, codex.reason], [true, false, 'unknown', 'agent_not_allowed']);
     for (const id of ['opencode', 'grok', 'gemini']) {
       assert.deepEqual([rows[id].found, rows[id].install, rows[id].reason], [false, K.knownAgent(id).install, 'agent_missing'], id);
@@ -1040,6 +1247,10 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     assert.equal(ok.status, 200, JSON.stringify(ok.json));
     assert.deepEqual([ok.json.agent.allowed, ok.json.agent.needs_allow, ok.json.agent.ready, ok.json.agent.reason], [true, true, true, null]);
     assert.equal(onDisk().agents.codex.allowed.fingerprint, fp);
+    // Allowed for that program: discovery may now ask its version.
+    assert.deepEqual(runsOf(CODEX_RUNS), []);
+    assert.equal((await rowsOf('?refresh=1')).codex.version, '2.1.1');
+    assert.deepEqual(runsOf(CODEX_RUNS).map((r) => r.argv), [['--version']]);
     const status = (await get('/api/assistant/status')).json;
     assert.equal(status.providers_ready['agent:codex'].ready, true, 'a keyring login (unknown) counts as ready');
     // Its mode is a settings field.
@@ -1050,11 +1261,20 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
   it('allow:true is refused while that agent runs; allow:false is always taken, saved first, and stops it before answering', async () => {
     const stops = [];
     let running = true;
+    let entered;
+    const stopEntered = new Promise((r) => (entered = r));
+    let release;
+    const stopReleased = new Promise((r) => (release = r));
     D.setAgentRunHooks({
       running: (id) => running && id === 'codex',
       async stop(id, text) {
-        stops.push({ id, text, allowedWhenStopped: onDisk()?.agents?.codex?.allowed ?? null });
+        const record = { id, text, allowedWhenStopped: onDisk()?.agents?.codex?.allowed ?? null, finished: false };
+        stops.push(record);
+        entered();
+        // As agent turns' stop: it takes a while (cancel, its wait, the tree kill).
+        await stopReleased;
         running = false;
+        record.finished = true;
       },
     });
     try {
@@ -1064,16 +1284,46 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
       assert.equal(on.json.code, 'agent_running');
       assert.equal(stops.length, 0);
       // Off: no fingerprint, while it runs.
-      const off = await browserPost('/api/assistant/agents/allow', { id: 'codex', allow: false });
+      const offSent = browserPost('/api/assistant/agents/allow', { id: 'codex', allow: false });
+      let answeredAt = null;
+      offSent.then(() => (answeredAt = stops.map((s) => s.finished)));
+      await Promise.race([stopEntered, new Promise((_, fail) => setTimeout(() => fail(new Error('the stop never started')), CEILING))]);
+      // No answer while the stop runs (a window long enough for a route that didn't wait to answer).
+      const early = await Promise.race([offSent.then(() => 'answered'), new Promise((r) => setTimeout(() => r('waiting'), 1_500))]);
+      assert.equal(early, 'waiting', 'the route answers only after the stop finished');
+      release();
+      const off = await offSent;
       assert.equal(off.status, 200, JSON.stringify(off.json));
-      assert.deepEqual(stops, [{ id: 'codex', text: 'Codex was turned off in Settings.', allowedWhenStopped: null }]);
+      assert.deepEqual(answeredAt, [true], 'the stop had finished when the answer came');
+      assert.deepEqual(stops, [{ id: 'codex', text: 'Codex was turned off in Settings.', allowedWhenStopped: null, finished: true }]);
       assert.equal(off.json.agent.allowed, false);
       assert.equal(off.json.agent.reason, 'agent_not_allowed');
       assert.equal(onDisk().agents.codex.allowed, null);
       // Still browser only.
       assert.equal((await plainPost('/api/assistant/agents/allow', { id: 'codex', allow: false })).status, 403);
     } finally {
+      release();
       D.setAgentRunHooks(null);
+    }
+  });
+
+  it('allow:false stops the agent even when the switch can’t be saved, and says so', async () => {
+    const stops = [];
+    D.setAgentRunHooks({ running: () => false, stop: async (id, text) => void stops.push({ id, text }) });
+    const saved = readFileSync(SETTINGS_FILE);
+    // settings.json is a folder: the save's rename fails (as on a locked file), whatever the platform.
+    await removeTree(SETTINGS_FILE);
+    mkdirSync(join(SETTINGS_FILE, 'blocked'), { recursive: true });
+    try {
+      const off = await browserPost('/api/assistant/agents/allow', { id: 'codex', allow: false });
+      assert.equal(off.status, 500, JSON.stringify(off.json));
+      assert.equal(off.json.code, 'save_failed');
+      assert.match(off.json.error, /^Codex was stopped, but Magnusim couldn't save its switch as off/);
+      assert.deepEqual(stops, [{ id: 'codex', text: 'Codex was turned off in Settings.' }]);
+    } finally {
+      D.setAgentRunHooks(null);
+      await removeTree(SETTINGS_FILE);
+      writeFileSync(SETTINGS_FILE, saved);
     }
   });
 
@@ -1140,13 +1390,15 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     status = (await get('/api/assistant/status')).json;
     assert.equal(status.providers_ready[`agent:${row.id}`].ready, true);
 
-    // At most 8.
+    // At most 8. A name counts characters as the person sees them: 45 emoji keep their first 40.
+    const smile = String.fromCodePoint(0x1f642);
     const ids = [row.id];
     for (let i = 1; i < 8; i += 1) {
-      const more = await add({ name: `Agent ${i}`, command: cmd });
-      assert.equal(more.status, 200);
+      const more = await add({ name: i === 1 ? smile.repeat(45) : `Agent ${i}`, command: cmd });
+      assert.equal(more.status, 200, JSON.stringify(more.json));
       ids.push(more.json.agent.id);
     }
+    assert.equal(onDisk().custom_agents.find((c) => c.id === ids[1]).name, smile.repeat(40));
     await bad({ name: 'Ninth', command: cmd }, 'too_many');
     assert.equal(onDisk().custom_agents.length, 8);
 
@@ -1163,11 +1415,114 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
       D.setAgentRunHooks(null);
     }
     assert.equal(onDisk().agents[row.id].allowed.fingerprint, row.fingerprint);
-    assert.equal((await remove(row.id)).status, 200);
+    // Removed: what it still has (a session kept between messages) is stopped too.
+    const stops = [];
+    D.setAgentRunHooks({ running: () => false, stop: async (id, text) => void stops.push({ id, text, listed: onDisk().custom_agents.some((c) => c.id === id) }) });
+    try {
+      assert.equal((await remove(row.id)).status, 200);
+    } finally {
+      D.setAgentRunHooks(null);
+    }
+    assert.deepEqual(stops, [{ id: row.id, text: 'My agent was removed in Settings.', listed: false }]);
     assert.ok(!onDisk().custom_agents.some((c) => c.id === row.id));
     assert.equal(onDisk().agents[row.id], undefined, 'its choices went with it');
     assert.equal((await get('/api/assistant/status')).json.providers_ready[`agent:${row.id}`], undefined);
     assert.equal((await rowsOf())[row.id], undefined);
     for (const id of ids.slice(1)) assert.equal((await remove(id)).status, 200);
+  });
+
+  describe('a discovery that runs while things change', () => {
+    /** OpenCode's own package in path-b, whose --version counts its runs and waits while HOLD exists. */
+    const OC = join(ROOT, 'oc-probe');
+    const COUNT = join(OC, 'count');
+    const STARTED = join(OC, 'started');
+    const HOLD = join(OC, 'hold');
+    let ocPkg;
+    before(() => {
+      mkdirSync(OC, { recursive: true });
+      const made = npmPrefix(PATH_B, { pkg: 'opencode-ai', program: 'opencode', version: '1.18.34', bin: 'bin/oc.js' });
+      ocPkg = made.pkgDir;
+      writeFileSync(
+        made.script,
+        [
+          '#!/usr/bin/env node',
+          "const fs = require('node:fs');",
+          `const n = (fs.existsSync(${JSON.stringify(COUNT)}) ? Number(fs.readFileSync(${JSON.stringify(COUNT)}, 'utf8')) : 0) + 1;`,
+          `fs.writeFileSync(${JSON.stringify(COUNT)}, String(n));`,
+          `fs.writeFileSync(${JSON.stringify(STARTED)}, String(n));`,
+          "const done = () => process.stdout.write('opencode 1.0.' + n + '\\n');",
+          `if (!fs.existsSync(${JSON.stringify(HOLD)})) done();`,
+          `else { const t = setInterval(() => { if (!fs.existsSync(${JSON.stringify(HOLD)})) { clearInterval(t); done(); } }, 20); }`,
+          '',
+        ].join('\n'),
+      );
+      if (!WIN) symlinkSync(made.script, join(PATH_B, 'opencode'));
+    });
+    after(async () => {
+      for (const f of [HOLD, join(PATH_B, 'opencode.cmd'), join(PATH_B, 'opencode'), ocPkg]) await removeTree(f);
+    });
+    const runs = () => (existsSync(COUNT) ? Number(readFileSync(COUNT, 'utf8')) : 0);
+    /** A discovery held at OpenCode's version until release() (a long probe limit: the test releases it). */
+    async function heldDiscovery() {
+      if (existsSync(STARTED)) await removeTree(STARTED);
+      writeFileSync(HOLD, '');
+      const run = D.refreshAgents({ refresh: true, probeMs: 120_000 });
+      const end = Date.now() + CEILING;
+      while (!existsSync(STARTED)) {
+        assert.ok(Date.now() < end, 'the held probe never started');
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return { run, release: () => removeTree(HOLD) };
+    }
+
+    it('a custom agent added or removed while a discovery runs is in (or out of) what it keeps', LIMIT, async () => {
+      const cmd = `"${process.execPath}" "${fake.agentPath}" --acp`;
+      const held = await heldDiscovery();
+      let joined;
+      let id;
+      try {
+        const added = await browserPost('/api/assistant/agents/custom', { name: 'Added meanwhile', command: cmd });
+        assert.equal(added.status, 200, JSON.stringify(added.json));
+        id = added.json.agent.id;
+        // GET /agents' work, which joins the discovery that runs.
+        joined = D.listAgents({ mcp: async () => ({ available: true, reason: null }) });
+      } finally {
+        await held.release();
+      }
+      const d = await held.run;
+      assert.ok(d.agents.some((a) => a.id === id), 'the discovery that ran meanwhile has it');
+      assert.equal(D.agentsCache(), d);
+      const rows = Object.fromEntries((await joined).body.agents.map((a) => [a.id, a]));
+      assert.equal(rows[id]?.name, 'Added meanwhile', 'the joined list shows it');
+      assert.ok((await D.ensureAgents()).agents.some((a) => a.id === id), 'a turn’s start finds it');
+      assert.equal((await get('/api/assistant/status')).json.providers_ready[`agent:${id}`].reason, 'agent_not_allowed', 'looked up, not not_checked');
+
+      const held2 = await heldDiscovery();
+      try {
+        assert.equal((await plainPost('/api/assistant/agents/custom/remove', { id })).status, 200);
+      } finally {
+        await held2.release();
+      }
+      const d2 = await held2.run;
+      assert.ok(!d2.agents.some((a) => a.id === id), 'the discovery that ran meanwhile doesn’t bring it back');
+      assert.equal(D.agentsCache(), d2);
+      assert.ok(!(await D.ensureAgents()).agents.some((a) => a.id === id));
+      assert.equal((await get('/api/assistant/status')).json.providers_ready[`agent:${id}`], undefined);
+    });
+
+    it('Refresh asked while a plain discovery runs asks every version again, once, right after it', LIMIT, async () => {
+      await rowsOf();
+      const before = runs();
+      const plain = D.refreshAgents();
+      const refresh = D.refreshAgents({ refresh: true });
+      assert.notEqual(refresh, plain, 'not merged into the plain one');
+      assert.equal(D.refreshAgents({ refresh: true }), refresh, 'one Refresh run queued');
+      assert.equal(D.refreshAgents(), plain, 'a plain caller joins the one running');
+      const [p, r] = await Promise.all([plain, refresh]);
+      assert.equal(entry(p, 'opencode').version, `1.0.${before}`, 'the plain run kept the version it had');
+      assert.equal(entry(r, 'opencode').version, `1.0.${before + 1}`, 'the Refresh asked again');
+      assert.equal(runs(), before + 1);
+      assert.equal(D.agentsCache(), r);
+    });
   });
 });

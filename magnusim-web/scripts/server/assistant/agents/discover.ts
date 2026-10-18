@@ -27,13 +27,21 @@
  * 1 succeeded with the catalogue's package: its name, a version at or above `checked.
  * minVersion`, and the script's real path inside the package's real path. Anything else (an
  * .exe of the program's name earlier in PATH, a shim parse, a package of another name or an
- * older version, a custom command whatever its name) is class 'none': the allow switch.
+ * older version, a custom command whatever its name) is class 'none': the allow switch. The
+ * rule protects against a program planted under an agent's name, not against a whole package
+ * planted beside it in an earlier PATH folder that someone else can write to (a limit of the
+ * rule, for SECURITY.md).
  *
- * Version: `<program> --version` through process.ts (the agent's environment allowlist, a fresh
- * private working folder, never Magnusim's own environment or folder), stdin closed, the first
- * 4 KB of stdout, at most 3 s and then the tree kill; the first word starting with a digit
- * (at most 40 characters). At most 4 at once. Custom commands are not asked (their Test is).
- * Unchanged programs keep their version between runs unless the person presses Refresh.
+ * Version: the catalogue's version arguments (`versionArgs`, in place of the ACP arguments)
+ * through process.ts: a fresh private working folder, never Magnusim's own environment or
+ * folder, and only the system's variables of the allowlist (a version needs no login, so no
+ * key, login-folder or agent-prefix variable); stdin closed, the first 4 KB of stdout, at most
+ * 3 s and then the tree kill; the first word starting with a digit (at most 40 characters). At
+ * most 4 at once. Only a program discovery may start without a click is asked: a known agent's
+ * own verified package, or one whose allow switch is on for that very program (fingerprint).
+ * Anything else (a lookalike earlier in PATH, a shim to another package) is never started by
+ * discovery, and custom commands are not asked (their Test is). Unchanged programs keep their
+ * version between runs unless the person presses Refresh.
  *
  * Signed in: ONLY whether the login file exists ($<dirVar>/<fileInDir> when that variable is
  * set, else ~/<file>), by fs.stat: the file is never opened or read. With no file: 'key' when
@@ -47,7 +55,10 @@
  * Test switches (honoured only with MAGNUSIM_TEST_ASSISTANT=1 in a test home, else ignored
  * with a log line): MAGNUSIM_TEST_ASSISTANT_AGENT_PATHS (the search folders, exactly; a
  * path-delimiter list) and MAGNUSIM_TEST_ASSISTANT_AGENT_HOME (the home login files and the
- * home-relative folders are looked up in; probes' working folders go in its tmp folder).
+ * home-relative folders are looked up in; probes' working folders go in its tmp folder). Under
+ * the home switch the real environment's agent variables (every catalogue key, login-folder and
+ * own-prefix variable) and XDG_CONFIG_HOME / XDG_DATA_HOME are not read, so the test home is the
+ * only place looked at and no probe gets the person's keys.
  *
  * Search folders, the probe's limits and the version rule follow SolidCraft's agent chat
  * (discover.rs, MIT/Apache-2.0); the code is our own.
@@ -68,6 +79,7 @@ import {
   CUSTOM_ARGV_MAX,
   CUSTOM_AGENTS_MAX,
   CUSTOM_NAME_MAX,
+  customNameValid,
   isAgentOf,
   KEEP_ENV_MAX,
   KEEP_ENV_RE,
@@ -636,6 +648,8 @@ export interface DiscoverOptions {
   home?: string;
   /** The search folders (the test switch's, else searchFolders()). */
   folders?: string[];
+  /** The settings (the custom agents and the allow switches; loaded otherwise). */
+  settings?: AssistantSettings;
   /** The custom agents to resolve (the settings' otherwise). */
   custom?: readonly CustomAgent[];
   /** false: no version probe (tests of resolution). */
@@ -740,7 +754,13 @@ export async function resolveCustom(a: CustomAgent, c: Ctx): Promise<AgentEntry>
   let found: FoundFile | null = null;
   if (/[\\/]/.test(prog)) {
     if (!P.isAbsolute(prog)) return missing(a.id, a.name, 'custom', null, env, { code: 'bad_command', message: "Give the program's full path, or a program name found on PATH." }, command);
-    if (await isFile(prog)) found = { path: prog, dir: dirname(prog), ext: extname(prog).toLowerCase() };
+    if (await isFile(prog)) {
+      // POSIX: a program is an executable file (as on PATH); a node script starts with node whatever its mode.
+      if (c.platform !== 'win32' && !(await isExecutable(prog)) && !NODE_SCRIPT_EXT.has(extname(prog).toLowerCase()) && !(await isNodeScript(prog))) {
+        return missing(a.id, a.name, 'custom', null, env, { code: 'bad_command', message: `Magnusim can't run ${cleanText(basename(prog), 200)}: it isn't marked as a program (executable).` }, command);
+      }
+      found = { path: prog, dir: dirname(prog), ext: extname(prog).toLowerCase() };
+    }
   } else {
     found = await findProgram(prog, c.folders, c.platform);
   }
@@ -779,12 +799,34 @@ async function openCodeDefaultAgent(c: Ctx): Promise<string | null> {
   return null;
 }
 
+/**
+ * The environment discovery reads under the test home switch: the real one without any agent's
+ * key, login-folder or own-prefix variable and without XDG_CONFIG_HOME / XDG_DATA_HOME, so login
+ * files and configs are looked up only in the test home and no probe gets the person's keys.
+ */
+export function testHomeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const exact = new Set(['XDG_CONFIG_HOME', 'XDG_DATA_HOME']);
+  const prefixes: string[] = [];
+  for (const k of KNOWN_AGENTS) {
+    for (const v of k.keyVars) exact.add(v.toUpperCase());
+    if (k.login?.dirVar) exact.add(k.login.dirVar.toUpperCase());
+    for (const p of k.envPrefixes) prefixes.push(p.toUpperCase());
+  }
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    const n = name.toUpperCase();
+    if (exact.has(n) || prefixes.some((p) => n.startsWith(p))) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
 /** The context discovery runs in: the switches' folders and home in a test, else this PC's. */
 async function contextOf(o: DiscoverOptions): Promise<{ ctx: Ctx; tmp: string | undefined }> {
-  const env = o.env ?? process.env;
-  const platform = o.platform ?? process.platform;
   const sw = agentTestSwitches(process.env);
   reportIgnored(sw);
+  const env = o.env ?? (sw.home ? testHomeEnv(process.env) : process.env);
+  const platform = o.platform ?? process.platform;
   const home = o.home ?? sw.home ?? homedir();
   const folders = o.folders ?? sw.paths ?? (await searchFolders({ env, platform, home }));
   let tmp = o.tmp;
@@ -794,6 +836,17 @@ async function contextOf(o: DiscoverOptions): Promise<{ ctx: Ctx; tmp: string | 
     await mkdir(tmp, { recursive: true }).catch(() => {});
   }
   return { ctx: { env, platform, home, folders }, tmp };
+}
+
+/**
+ * Whether discovery may start this known agent's program to ask its version, with no click:
+ * only its own verified package, or a program whose allow switch is on for that very program.
+ * A lookalike earlier in PATH, a shim to another package and the like are never started here.
+ */
+function mayProbe(e: AgentEntry, settings: AssistantSettings): boolean {
+  if (e.verifiedPackage) return true;
+  const allowed = agentPrefs(settings, e.id).allowed;
+  return !!allowed && !!e.fingerprint && allowed.fingerprint === e.fingerprint;
 }
 
 function versionKey(e: AgentEntry, mtimes: number[]): string {
@@ -816,7 +869,8 @@ async function mtimeOf(p: string | null): Promise<number> {
 export async function discoverAgents(o: DiscoverOptions = {}): Promise<Discovery> {
   const t0 = Date.now();
   const { ctx, tmp } = await contextOf(o);
-  const custom = o.custom ?? (await loadSettings()).custom_agents;
+  const settings = o.settings ?? (await loadSettings());
+  const custom = o.custom ?? settings.custom_agents;
   const safe = async (fn: () => Promise<AgentEntry>, fallback: () => AgentEntry) => {
     try {
       return await fn();
@@ -833,7 +887,7 @@ export async function discoverAgents(o: DiscoverOptions = {}): Promise<Discovery
   );
   if (o.probe !== false) {
     const g = cacheOf();
-    const toAsk = known.filter((e) => e.found && !e.error && e.argv && knownAgent(e.id)?.versionArg);
+    const toAsk = known.filter((e) => e.found && !e.error && e.argv && knownAgent(e.id)?.versionArgs && mayProbe(e, settings));
     await limited(toAsk, PROBES_AT_ONCE, async (e) => {
       const k = knownAgent(e.id) as KnownAgent;
       const key = versionKey(e, [await mtimeOf(e.program), await mtimeOf(e.script)]);
@@ -842,7 +896,15 @@ export async function discoverAgents(o: DiscoverOptions = {}): Promise<Discovery
         return;
       }
       const base = (e.argv as string[]).slice(0, (e.argv as string[]).length - k.args.length);
-      const v = await probeVersion([...base, k.versionArg as string], { env: e.env, label: `${e.id} --version`, baseEnv: ctx.env, tmp, timeoutMs: o.probeMs, graceMs: o.graceMs });
+      // The system's variables only: a version needs no key, login folder or agent variable.
+      const v = await probeVersion([...base, ...(k.versionArgs as readonly string[])], {
+        env: { searchFolders: ctx.folders },
+        label: `${e.id} --version`,
+        baseEnv: ctx.env,
+        tmp,
+        timeoutMs: o.probeMs,
+        graceMs: o.graceMs,
+      });
       if (v) e.version = v;
       g.versions.set(key, e.version);
     });
@@ -859,7 +921,11 @@ export async function discoverAgents(o: DiscoverOptions = {}): Promise<Discovery
 export interface AgentRunHooks {
   /** Whether any turn (or Test, connect or sign-in) of that agent runs now. */
   running(id: string): boolean;
-  /** Stops that agent's running turns with `text` and tree-kills its processes. */
+  /**
+   * Stops that agent's running turns with `text` and tree-kills every process of it, idle
+   * sessions kept between messages included; resolves once they are gone (the allow switch
+   * turned off, a custom agent removed).
+   */
   stop(id: string, text: string): Promise<void>;
 }
 
@@ -872,7 +938,16 @@ export interface AgentLast {
 
 interface AgentsCache {
   result: Discovery | null;
-  running: Promise<Discovery> | null;
+  /** The discovery running now, and whether it asks every version again. */
+  running: { promise: Promise<Discovery>; refresh: boolean } | null;
+  /** A Refresh asked while a plain discovery ran: it runs right after that one. */
+  queued: Promise<Discovery> | null;
+  /**
+   * Bumped by every change to the cached entries (a custom agent added or removed, an agent
+   * resolved again): a discovery that ends under a newer one takes the settings' custom agents
+   * again before it is kept, so it never brings back a removed one or drops a new one.
+   */
+  gen: number;
   versions: Map<string, string | null>;
   last: Map<string, AgentLast>;
   signIn: Map<string, Record<string, unknown>>;
@@ -900,7 +975,7 @@ function cacheOf(): AgentsCache {
   const g = globals();
   let c = g.byState.get(key);
   if (!c) {
-    c = { result: null, running: null, versions: new Map(), last: new Map(), signIn: new Map() };
+    c = { result: null, running: null, queued: null, gen: 0, versions: new Map(), last: new Map(), signIn: new Map() };
     g.byState.set(key, c);
   }
   return c;
@@ -932,20 +1007,53 @@ export function agentsCache(): Discovery | null {
   return cacheOf().result;
 }
 
-/** Runs discovery (one at a time: a caller while one runs gets that one) and keeps it. */
-export function refreshAgents(o: { refresh?: boolean } = {}): Promise<Discovery> {
+/**
+ * Runs discovery and keeps it: one at a time, so a caller while one runs gets that one, except
+ * that a Refresh (every version asked again) asked while a plain discovery runs gets one Refresh
+ * run right after it. `probeMs`: tests' probe limit.
+ */
+export function refreshAgents(o: { refresh?: boolean; probeMs?: number } = {}): Promise<Discovery> {
   const c = cacheOf();
-  if (c.running) return c.running;
-  const run = discoverAgents({ refresh: o.refresh }).then((d) => {
-    c.result = d;
-    return d;
-  });
-  c.running = run;
+  const refresh = o.refresh === true;
+  if (c.running) {
+    if (!refresh || c.running.refresh) return c.running.promise;
+    if (!c.queued) {
+      const queued: Promise<Discovery> = c.running.promise
+        .catch(() => null)
+        .then(() => {
+          if (c.queued === queued) c.queued = null;
+          return refreshAgents({ ...o, refresh: true });
+        });
+      c.queued = queued;
+    }
+    return c.queued;
+  }
+  const gen = c.gen;
+  const run = discoverAgents({ refresh, probeMs: o.probeMs }).then((d) => keepDiscovery(c, d, gen));
+  c.running = { promise: run, refresh };
   const clear = () => {
-    if (c.running === run) c.running = null;
+    if (c.running?.promise === run) c.running = null;
   };
   run.then(clear, clear);
   return run;
+}
+
+/**
+ * Keeps a finished discovery. When a custom agent was added or removed (or an agent resolved
+ * again) while it ran, its custom entries are taken again from the settings as they are now
+ * (each from this run, the cache, or resolved now; no process) before it is kept.
+ */
+async function keepDiscovery(c: AgentsCache, d: Discovery, startGen: number): Promise<Discovery> {
+  let gen = startGen;
+  for (let i = 0; c.gen !== gen && i < 8; i += 1) {
+    gen = c.gen;
+    const [settings, { ctx }] = await Promise.all([loadSettings(), contextOf({})]);
+    const before = c.result;
+    const customs = await Promise.all(settings.custom_agents.map(async (a) => cachedCustom(d, a) ?? cachedCustom(before, a) ?? resolveCustom(a, ctx)));
+    d.agents = [...d.agents.filter((e) => e.kind === 'known'), ...customs];
+  }
+  c.result = d;
+  return d;
 }
 
 /** The cached discovery when younger than `maxAgeMs`, else a new one (a turn's start). */
@@ -957,7 +1065,9 @@ export async function ensureAgents(maxAgeMs: number = AGENT_CACHE_MS): Promise<D
 
 /** Puts one entry in the cache (a custom agent added, an agent resolved again), if there is a cache. */
 function cacheEntry(e: AgentEntry): void {
-  const d = cacheOf().result;
+  const c = cacheOf();
+  c.gen += 1;
+  const d = c.result;
   if (!d) return;
   const i = d.agents.findIndex((a) => a.id === e.id);
   if (i >= 0) d.agents[i] = e;
@@ -965,7 +1075,9 @@ function cacheEntry(e: AgentEntry): void {
 }
 
 function uncacheEntry(id: string): void {
-  const d = cacheOf().result;
+  const c = cacheOf();
+  c.gen += 1;
+  const d = c.result;
   if (d) d.agents = d.agents.filter((a) => a.id !== id);
 }
 
@@ -1016,6 +1128,11 @@ export interface AgentRow {
   sign_in: Record<string, unknown> | null;
   ready: boolean;
   reason: string | null;
+  /**
+   * Why it can't be started, as the person reads it (cant_start_script: spec 4.3's copy naming
+   * the file; bad_command; a custom command not found), else null.
+   */
+  error: string | null;
 }
 
 export interface RowContext {
@@ -1059,6 +1176,7 @@ export function agentRow(e: AgentEntry, ctx: RowContext): AgentRow {
     sign_in: c.signIn.get(e.id) ?? null,
     ready: false,
     reason: null,
+    error: e.error?.message ?? null,
   };
   row.reason = readinessReason(row, e, ctx);
   row.ready = row.reason === null;
@@ -1145,16 +1263,22 @@ export function agentReadyRows(ctx: RowContext): Record<string, Record<string, u
 export type AgentStartPurpose = 'connect' | 'sign_in' | 'test' | 'turn';
 
 /**
- * Whether an agent may be started now for `purpose` (spec 4.13, 4.12), or why not. A program
- * whose own tools stay on needs its allow switch for everything, except that a known agent
- * resolved through its verified package (the program the person installed) may be started for
- * the plain connect check and sign-in while its switch is off. A custom command never is.
+ * Whether an agent may be started now for `purpose` (spec 4.12, 4.13, 5.3, 14 S12), or why not.
+ * A program whose own tools stay on needs its allow switch for everything. The one exception is
+ * the plain connect check and sign-in of a known agent's own verified package whose class isn't
+ * 'none' (a documented lockdown not yet checked live: the program the person installed, given
+ * Magnusim's lockdown). Class 'none' (an agent whose tools can't be switched off, a fired
+ * lockdown tripwire, any program not resolved through its package) and a custom command need
+ * the switch for those too.
  */
 export function agentStartRefusal(row: AgentRow, purpose: AgentStartPurpose): { code: string; error: string } | null {
-  if (!row.found) return { code: 'agent_missing', error: `${row.name} isn't installed on this PC. Settings → Assistant shows how to install it.` };
-  if (row.reason === 'cant_start_script' || row.reason === 'bad_command') return { code: row.reason, error: `Magnusim can't start ${row.name} without a command shell.` };
+  if (row.reason === 'cant_start_script') return { code: row.reason, error: row.error ?? `Magnusim can't start ${row.name} without a command shell.` };
+  if (row.reason === 'bad_command') return { code: row.reason, error: `${row.name}'s command can't be used. ${row.error ?? 'Change it in Settings → Assistant.'}` };
+  if (!row.found) {
+    return { code: 'agent_missing', error: row.kind === 'custom' && row.error ? row.error : `${row.name} isn't installed on this PC. Settings → Assistant shows how to install it.` };
+  }
   if (row.needs_allow && !row.allowed) {
-    if ((purpose === 'connect' || purpose === 'sign_in') && row.kind === 'known' && row.verified_package) return null;
+    if ((purpose === 'connect' || purpose === 'sign_in') && row.kind === 'known' && row.verified_package && row.lockdown !== 'none') return null;
     if (row.allow_changed) return { code: 'agent_allow_changed', error: `${row.name}'s command changed since you allowed it. Allow it again in Settings → Assistant.` };
     return { code: 'agent_not_allowed', error: `${row.name} is off until you allow it in Settings → Assistant: its own tools can run commands and change files on this PC.` };
   }
@@ -1189,7 +1313,7 @@ const NEVER_PASSED = /^(MAGNUSIM_|CFDDESK_|npm_)|^(NODE_OPTIONS|ELECTRON_RUN_AS_
 export async function addCustomAgentRequest(r: AgentRouteContext, body: Record<string, unknown>): Promise<Answer> {
   const refuse = (code: string, error: string, field?: string): Answer => ({ status: 400, body: { ok: false, code, error, ...(field ? { field } : {}) } });
   const name = cleanText(body.name, CUSTOM_NAME_MAX);
-  if (!name) return refuse('bad_name', 'Give the agent a name (up to 40 characters).', 'name');
+  if (!name || !customNameValid(name)) return refuse('bad_name', 'Give the agent a name (up to 40 characters).', 'name');
   if (typeof body.command !== 'string' || body.command.length > CUSTOM_ARGV_MAX * (CUSTOM_ARG_CHARS + 3)) return refuse('bad_command', 'Enter the command that starts the agent.', 'command');
   const argv = splitCommand(body.command);
   if (!argv.length || !argv[0]) return refuse('bad_command', 'Enter the command that starts the agent.', 'command');
@@ -1230,6 +1354,8 @@ export async function removeCustomAgentRequest(body: Record<string, unknown>): P
   uncacheEntry(id);
   rememberAgentLast(id, null);
   rememberAgentSignIn(id, null);
+  // Saved first, so no new turn starts; then a session kept between messages ends too.
+  await hooks().stop(id, `${name} was removed in Settings.`);
   alog('info', 'custom agent removed', { agent: id });
   return { status: 200, body: { ok: true } };
 }
@@ -1246,9 +1372,20 @@ export async function allowAgentRequest(r: AgentRouteContext, body: Record<strin
   if (typeof body.allow !== 'boolean') return { status: 400, body: { ok: false, code: 'bad_request', error: 'allow must be true or false.' } };
   const name = knownAgent(id)?.name ?? settings.custom_agents.find((c) => c.id === id)?.name ?? id;
   if (body.allow === false) {
-    // Saved first, so no new turn starts; then what runs stops.
-    const next = await setAgentAllowed(id, null);
+    // Saved first, so no new turn starts; then what runs stops, even when the save failed:
+    // this is the kill switch.
+    let next: AssistantSettings | null = null;
+    let saveError: unknown = null;
+    try {
+      next = await setAgentAllowed(id, null);
+    } catch (err) {
+      saveError = err;
+    }
     await hooks().stop(id, `${name} was turned off in Settings.`);
+    if (!next) {
+      alog('error', 'agent allow switch could not be saved off; the agent was stopped', { agent: id, error: cleanText(String((saveError as Error)?.message ?? saveError), 200) });
+      return { status: 500, body: { ok: false, code: 'save_failed', error: `${name} was stopped, but Magnusim couldn't save its switch as off. Turn it off again.` } };
+    }
     alog('info', 'agent allow switch off', { agent: id });
     const e = await resolveAgentNow(id, next);
     return { status: 200, body: { ok: true, agent: e ? agentRow(e, await rowContext(r, next)) : null } };

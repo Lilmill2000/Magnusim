@@ -55,14 +55,17 @@
  *                                        itself is a loopback socket, assistant/mcp/listener.ts)
  *   GET  /api/assistant/agents          ?refresh=1 → {ok, checked_at, took_ms, agents:[AgentRow]}: the
  *                                        coding agents on this PC (assistant/agents/discover.ts; it
- *                                        runs each found agent's --version; Refresh asks again)
+ *                                        runs --version of each agent's own verified package or an
+ *                                        allowed program, never anything else; Refresh asks again)
  *   POST /api/assistant/agents/custom   {name, command, keep_env?} → {ok, agent}: a custom agent (off
  *                                        until allowed); browser only (403 browser_only); 400
  *                                        bad_name, bad_command, bad_keep_env, cant_start_script, too_many
- *   POST /api/assistant/agents/custom/remove  {id} → {ok}; 404; 409 agent_running
+ *   POST /api/assistant/agents/custom/remove  {id} → {ok} (what it still runs is stopped); 404;
+ *                                        409 agent_running
  *   POST /api/assistant/agents/allow    {id, allow, fingerprint?} → {ok, agent}: the allow switch;
  *                                        browser only (403 browser_only). allow:false is always taken
- *                                        and stops that agent first; allow:true needs the row's
+ *                                        and stops that agent first, even when the switch can't be
+ *                                        saved (then 500 save_failed); allow:true needs the row's
  *                                        fingerprint (409 fingerprint_changed) and is refused while
  *                                        the agent runs (409 agent_running); 404 agent_unknown
  *

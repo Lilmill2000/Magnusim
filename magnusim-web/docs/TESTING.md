@@ -329,7 +329,10 @@ No test reaches a real model provider or this PC's real Assistant files.
     makes agent discovery search exactly those folders, never PATH or the npm folders, and
     `MAGNUSIM_TEST_ASSISTANT_AGENT_HOME=<folder>` is the home its login files and home
     folders are looked up in (its `tmp` folder then holds the version probes' working
-    folders). Otherwise they are ignored with a log line.
+    folders); under it the real environment's agent variables (each known agent's key,
+    login-folder and own-prefix variables) and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` are not
+    read, so a host started with it never looks at this PC's agent logins. Otherwise they are
+    ignored with a log line.
     `scripts/server/__tests__/assistant-agents.test.js` lays out npm prefixes as npm does on
     Windows (a `.cmd` shim beside `node_modules/<package>/package.json`): plain files, so
     the same layout runs on Linux with `platform: 'win32'` passed to discovery.

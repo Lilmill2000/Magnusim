@@ -72,8 +72,12 @@ export interface KnownAgent {
   startAuth?: { methods: readonly string[]; meta?: Readonly<Record<string, unknown>> };
   /** Its addition to session/new (acp.ts sessionNewParams). */
   sessionMeta: SessionMetaHook | null;
-  /** The argument that prints its version (null: it doesn't, and is never asked). */
-  versionArg: string | null;
+  /**
+   * The arguments that print its version, in place of its ACP arguments (null: it prints none and
+   * is never asked). Grok Build's carry --no-auto-update, as its start does: the program updates
+   * itself, and a version probe must never update it (whether --version alone would is UNVERIFIED).
+   */
+  versionArgs: readonly string[] | null;
   /** Variables Magnusim sets for it at a start. */
   env?(ctx: AgentEnvContext): Record<string, string>;
   /** Gemini CLI: the system settings file Magnusim writes for it (its path goes in env()). */
@@ -151,7 +155,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: ['default'],
     ours: 'tool_name_meta',
     sessionMeta: CLAUDE_CODE_SESSION,
-    versionArg: '--version',
+    versionArgs: ['--version'],
   }),
   Object.freeze<KnownAgent>({
     id: 'codex',
@@ -169,7 +173,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: ['read-only'],
     ours: 'mcp_call_flag',
     sessionMeta: null,
-    versionArg: '--version',
+    versionArgs: ['--version'],
     env: () => ({
       INITIAL_AGENT_MODE: 'read-only',
       CODEX_CONFIG: JSON.stringify({ web_search: 'disabled', features: { shell_tool: false } }),
@@ -191,7 +195,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: 'initial',
     ours: null,
     sessionMeta: null,
-    versionArg: '--version',
+    versionArgs: ['--version'],
     env: (ctx) => ({ OPENCODE_CONFIG_CONTENT: openCodeConfig(ctx.defaultAgent) }),
   }),
   Object.freeze<KnownAgent>({
@@ -209,7 +213,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     ours: null,
     startAuth: { methods: ['xai.api_key', 'cached_token'], meta: { headless: true } },
     sessionMeta: null,
-    versionArg: '--version',
+    versionArgs: ['--no-auto-update', '--version'],
   }),
   Object.freeze<KnownAgent>({
     id: 'gemini',
@@ -225,7 +229,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: ['default'],
     ours: null,
     sessionMeta: null,
-    versionArg: '--version',
+    versionArgs: ['--version'],
     env: (ctx): Record<string, string> => (ctx.systemSettingsPath ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: ctx.systemSettingsPath } : {}),
     systemSettings: geminiSystemSettings,
   }),
