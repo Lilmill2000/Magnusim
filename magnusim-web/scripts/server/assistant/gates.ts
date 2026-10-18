@@ -4,21 +4,23 @@
  * Two kinds: `confirm` (a compute or destructive tool asks before it runs) and `privacy`
  * (a cloud turn asks before a project's data leaves this PC). A gate is a server object:
  *
- * - it is shown where its owner can be seen. A turn bound to an app tab is shown there
- *   through a presenter (the page relay; until a tab has a live link the presenter
- *   reaches nobody); a turn with no tab (the developer CLI) is read through the turn's
- *   long-poll and asked at the terminal. A later MCP server maps it to its own prompt;
+ * - it is shown where its owner can be seen. A turn bound to an app tab, or an MCP call
+ *   (owner `mcp`: the tab its call ran in), is shown there through a presenter (the page
+ *   relay; until a tab has a live link the presenter reaches nobody); a turn with no tab
+ *   (the developer CLI) is read through the turn's long-poll and asked at the terminal. An
+ *   MCP client never answers one: Magnusim asks only in its own window (phase 3 spec 3.5);
  * - only whoever can show it to the person answers it: the app tab that shows it, through
  *   its live relay link (POST /api/assistant/relay/gate), or the program that started its
  *   turn, with the turn's answer key (POST /api/assistant/gates/:id; turns.ts checks the
  *   proof). A `link_only` question is answered only in the tab. The first answer wins, and
  *   a second one is told `already`;
- * - it is never allowed by itself: after 10 minutes it is denied (`timeout`), and the
- *   owner's Stop withdraws it (denied, `stop`). Nothing else answers it, and a tool
- *   result can't: only these routes reach answer();
- * - when a tab-bound gate can't be shown (no live link), or its link goes for 15 s, the
- *   owner is told once (a `note` the CLI shows); the gate is shown again when the tab's
- *   link returns, and stays answerable with the answer key meanwhile.
+ * - it is never allowed by itself: after 10 minutes (or the gate's own time) it is denied
+ *   (`timeout`), and the owner's Stop withdraws it (denied, `stop`). Nothing else answers
+ *   it, and a tool result can't: only these routes reach answer();
+ * - when a tab-bound gate can't be shown (no live link), or its link goes for 15 s, it
+ *   counts as unseen (unseen(), until it is shown again) and the owner is told once (a
+ *   `note` the CLI shows); the gate is shown again when the tab's link returns, and stays
+ *   answerable with the answer key meanwhile.
  *
  * Open and answered gates live in the Assistant's state on globalThis, so a server Vite
  * restarted in this process still answers a gate an older one opened.
@@ -78,7 +80,11 @@ export interface GateView {
 
 export type GateRequest = Omit<GateView, 'id' | 'opened_at' | 'expires_at'>;
 
-export type GateOwner = { kind: 'turn'; id: string; tab: string | null } | { kind: 'mcp'; session: string };
+/**
+ * Whose question it is: a turn's (shown in its bound tab), or an external MCP session's
+ * (phase 3 spec 3.5: shown in the app tab its call ran in, resolved at the call).
+ */
+export type GateOwner = { kind: 'turn'; id: string; tab: string | null } | { kind: 'mcp'; session: string; tab: string | null };
 
 /** Shows a gate to the person (the page relay for a tab; MCP later). */
 export interface GatePresenter {
@@ -118,6 +124,14 @@ interface OpenEntry {
   timer: unknown;
   unseenTimer: unknown;
   noted: boolean;
+  /** Its tab has had no live link for the unseen wait, and it was not shown since (unseen()). */
+  hidden: boolean;
+}
+
+/** A gate's own options. */
+export interface AskOptions {
+  /** How long it waits before it is denied (`timeout`); the broker's own when left out. */
+  timeoutMs?: number;
 }
 
 interface ClosedEntry {
@@ -136,8 +150,8 @@ function table(): Map<string, Entry> {
   return assistantState().gates as Map<string, Entry>;
 }
 
-/** The app tab that shows an owner's questions (null: none). */
-export const tabOf = (owner: GateOwner): string | null => (owner.kind === 'turn' ? owner.tab : null);
+/** The app tab that shows an owner's questions, a turn's or an MCP session's (null: none). */
+export const tabOf = (owner: GateOwner): string | null => (typeof owner.tab === 'string' && owner.tab ? owner.tab : null);
 
 function cleanDetail(rows: GateDetail[] | undefined): GateDetail[] | undefined {
   if (!Array.isArray(rows) || !rows.length) return undefined;
@@ -192,13 +206,16 @@ export class GateBroker {
   }
 
   /**
-   * Opens a gate and waits for its answer. Resolves 'deny' on a no, after the timeout,
-   * or when `signal` aborts (Stop); never 'allow' by itself.
+   * Opens a gate and waits for its answer. Resolves 'deny' on a no, after the timeout (the
+   * gate's own, `o.timeoutMs`, else the broker's; its expires_at says when), or when
+   * `signal` aborts (Stop); never 'allow' by itself.
    */
-  ask(g: GateRequest, owner: GateOwner, signal: AbortSignal): Promise<GateAnswer> {
+  ask(g: GateRequest, owner: GateOwner, signal: AbortSignal, o: AskOptions = {}): Promise<GateAnswer> {
     if (signal.aborted) return Promise.resolve('deny');
     this.sweep();
     const now = this.clock.now();
+    const own = o.timeoutMs;
+    const timeoutMs = typeof own === 'number' && Number.isFinite(own) && own > 0 ? own : this.timeoutMs;
     const id = `g-${randomBytes(8).toString('hex')}`;
     const detail = cleanDetail(g.detail);
     const view: GateView = {
@@ -216,7 +233,7 @@ export class GateBroker {
       ...(g.project ? { project: { id: cleanText(g.project.id, 128), title: cleanText(g.project.title, 80) } } : {}),
       ...(g.link_only === true ? { link_only: true } : {}),
       opened_at: new Date(now).toISOString(),
-      expires_at: new Date(now + this.timeoutMs).toISOString(),
+      expires_at: new Date(now + timeoutMs).toISOString(),
     };
     return new Promise<GateAnswer>((resolve) => {
       let done = false;
@@ -227,8 +244,9 @@ export class GateBroker {
         owner,
         broker: this,
         noted: false,
+        hidden: false,
         unseenTimer: null,
-        timer: this.clock.setTimeout(() => entry.settle('deny', 'timeout'), this.timeoutMs),
+        timer: this.clock.setTimeout(() => entry.settle('deny', 'timeout'), timeoutMs),
         settle: (answer, by) => {
           if (done) return;
           done = true;
@@ -265,19 +283,29 @@ export class GateBroker {
     if (shown) {
       this.clock.clearTimeout(entry.unseenTimer);
       entry.unseenTimer = null;
+      entry.hidden = false;
     } else if (tabOf(entry.owner) !== null) {
       this.startUnseen(entry);
     }
   }
 
+  /** The unseen wait: then the gate counts as hidden (until shown again), and its owner is told once. */
   private startUnseen(entry: OpenEntry): void {
-    if (entry.noted || entry.unseenTimer) return;
+    if (entry.unseenTimer) return;
     entry.unseenTimer = this.clock.setTimeout(() => {
       entry.unseenTimer = null;
-      if (table().get(entry.view.id) !== entry || entry.noted) return;
+      if (table().get(entry.view.id) !== entry) return;
+      entry.hidden = true;
+      if (entry.noted) return;
       entry.noted = true;
       this.tell({ type: 'unseen', view: entry.view, owner: entry.owner, text: GATE_UNSEEN_NOTE });
     }, this.unseenMs);
+  }
+
+  /** Whether an open gate's tab has had no live link for the unseen wait (and has not shown it since). */
+  unseen(id: string): boolean {
+    const e = table().get(String(id));
+    return !!e && e.state === 'open' && e.hidden;
   }
 
   /** A gate, open or still remembered as answered, with its owner (to check who may answer it); null when unknown. */

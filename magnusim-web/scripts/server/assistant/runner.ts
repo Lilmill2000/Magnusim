@@ -1,6 +1,7 @@
 /**
- * Runs one tool call (Foundation spec 6.3). Independent of turns, so a later MCP server
- * runs calls the same way; a turn passes hooks for its log and its clock.
+ * Runs one tool call (Foundation spec 6.3). Independent of turns, so the MCP server runs
+ * calls the same way (its own progress listener, and its question's own wait,
+ * `gateTimeoutMs`); a turn passes hooks for its log and its clock.
  *
  * 1. Resolve the name ONLY in `offered`: the list sent in that step's request (MCP: the
  *    list it last served). Anything else, a tool the per-request cap left out and the
@@ -62,6 +63,10 @@ export interface RunOptions {
   turn?: RunnerTurn;
   /** This step's tools by name: the only names that may run. */
   offered: ReadonlyMap<string, ToolDef>;
+  /** How long its confirm question waits (the broker's own when left out: 10 minutes). */
+  gateTimeoutMs?: number;
+  /** Hears the tool's progress, as a turn's log does (MCP: the client's progress notifications). */
+  onProgress?: (fraction: number | null, label: string) => void;
 }
 
 export interface RunResult {
@@ -301,7 +306,7 @@ export class ToolRunner {
       o.turn?.pause();
       let answer: 'allow' | 'deny';
       try {
-        answer = await this.gates.ask(confirmGate(def, input, o.turn?.id ?? null), o.owner, o.signal);
+        answer = await this.gates.ask(confirmGate(def, input, o.turn?.id ?? null), o.owner, o.signal, { timeoutMs: o.gateTimeoutMs });
       } finally {
         o.turn?.resume();
         o.turn?.setState('tools');
@@ -346,6 +351,11 @@ export class ToolRunner {
       // with nothing) holds the window open and has nothing to show: no row in the log.
       if (f === null && !text) return;
       o.turn?.emit({ type: 'tool_progress', call: call.callId, fraction: f, label: text });
+      try {
+        o.onProgress?.(f, text);
+      } catch {
+        /* a listener's failure never stops the tool */
+      }
     };
 
     let outcome: ToolOutcome | null = null;

@@ -17,7 +17,8 @@
  *                                  restart or a long drop) that none run.
  *   invoke {call, turn, tool, input, timeout_s}   run the page's tool `tool` (its own name)
  *   abort {call}                   Stop, a turn limit, or the call stalled
- *   gate {gate}                    a question (GateView) of a turn bound to this tab
+ *   gate {gate}                    a question (GateView) of a turn bound to this tab, or of
+ *                                  an MCP call that ran in it
  *   gate_closed {gate, answer, by} that question was answered, timed out or withdrawn
  *   unregistered {reason}          'plugin_off': the tab's tools are gone; that publication
  *                                  must not register again (a new frame may)
@@ -63,7 +64,8 @@
  * - A plugin turned off, swapped or reset (foam-runner.js bumpPluginEpoch) drops its
  *   registrations in every tab, fails their calls (`plugin_off`) and tells each page
  *   `unregistered`, synchronously, before the worker answers.
- * - Gates of a turn bound to a tab are shown there (the GateBroker's presenter): sent to its
+ * - Gates of a turn bound to a tab, and of an MCP call that ran in one (any owner gates.ts
+ *   tabOf gives a tab), are shown there (the GateBroker's presenter): sent to its
  *   live link, sent again when its link returns; the broker notes an unseen one after 15 s.
  *   Each link remembers the gates it was sent: the page answers one only on such a link,
  *   while it is its tab's live link (the turn's answer key is the other way, turns.ts).
@@ -79,7 +81,7 @@ import { onPluginEpochBump } from '../../foam-runner.js';
 import { liveRegistryLoaded, mesherEntries, pluginLoaded as livePluginLoaded } from '../../registry-defaults.js';
 import type { ChannelMeta, ChannelOpened, ChannelSend } from '../event-hub.ts';
 import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
-import { realClock, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
+import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
 import type { Registry, ToolOutcome } from './registry.ts';
@@ -822,9 +824,11 @@ export class Relay {
     this.maybeForget(t);
   }
 
+  /** Any owner with a tab (a turn bound to it, or an MCP call that ran in it): its live link shows the question. */
   private presentGate(view: GateView, owner: GateOwner): boolean {
-    if (this.closed || owner.kind !== 'turn' || !owner.tab) return false;
-    const l = this.tabs.get(owner.tab)?.link;
+    const tab = tabOf(owner);
+    if (this.closed || !tab) return false;
+    const l = this.tabs.get(tab)?.link;
     if (!l || !l.open || l.silent) return false;
     const sent = l.send('gate', { gate: view });
     if (sent) {
@@ -854,8 +858,9 @@ export class Relay {
   }
 
   private withdrawGate(view: GateView, owner: GateOwner, closed: { answer: GateAnswer; by: GateClosedBy }): void {
-    if (this.closed || owner.kind !== 'turn' || !owner.tab) return;
-    const l = this.tabs.get(owner.tab)?.link;
+    const tab = tabOf(owner);
+    if (this.closed || !tab) return;
+    const l = this.tabs.get(tab)?.link;
     if (!l || !l.open) return;
     l.send('gate_closed', { gate: view.id, answer: closed?.answer ?? 'deny', by: closed?.by ?? 'stop' });
   }

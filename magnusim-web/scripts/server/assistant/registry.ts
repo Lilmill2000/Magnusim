@@ -215,6 +215,7 @@ export class Registry implements ToolRegistry {
   private readonly epochOf: (key: string) => string;
   private readonly tabs = new Map<string, TabEntry>();
   private readonly sources = new Set<(ctx: ToolCtx) => ToolDef[]>();
+  private readonly changeListeners = new Set<(tab: string) => void>();
 
   constructor(o: RegistryOptions = {}) {
     this.epochOf = o.pluginEpoch ?? ((key: string) => String(foamPluginEpoch(key)));
@@ -222,17 +223,45 @@ export class Registry implements ToolRegistry {
     for (const t of o.hostTools ?? []) this.addHostTool(t);
   }
 
+  /**
+   * Hears each change of what may be offered (phase 3 spec 3.4: MCP connections send
+   * list_changed): a tab's registration set or dropped, connected or dormant (`tab`), a host
+   * tool or a tool source added or removed ('*'). A plugin turned off, swapped or reset comes
+   * through the relay, which drops its registrations. Sources are pure functions of the
+   * context, so a change inside one is not heard: MCP recomputes its list around each call.
+   * Listeners run synchronously, inside the change: defer any work that reads the registry
+   * or the relay back.
+   */
+  onChange(fn: (tab: string) => void): () => void {
+    this.changeListeners.add(fn);
+    return () => {
+      this.changeListeners.delete(fn);
+    };
+  }
+
+  private changed(tab: string): void {
+    for (const fn of [...this.changeListeners]) {
+      try {
+        fn(tab);
+      } catch {
+        /* a listener's failure never blocks a registration */
+      }
+    }
+  }
+
   /** A host tool (plain snake_case, no `__`). */
   addHostTool(t: ToolDef): void {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(t.name) || t.name.includes('__')) throw new Error(`bad host tool name: ${t.name}`);
     if (this.host.some((h) => h.name === t.name)) throw new Error(`duplicate host tool: ${t.name}`);
     this.host.push(t);
+    this.changed('*');
   }
 
   registerToolSource(fn: (ctx: ToolCtx) => ToolDef[]): () => void {
     this.sources.add(fn);
+    this.changed('*');
     return () => {
-      this.sources.delete(fn);
+      if (this.sources.delete(fn)) this.changed('*');
     };
   }
 
@@ -249,7 +278,7 @@ export class Registry implements ToolRegistry {
 
   setWorkspace(tab: string, link: string, reg: WorkspaceRegistration | null): { accepted: string[]; refused: Refusal[] } {
     if (!reg) {
-      this.tabs.delete(tab);
+      if (this.tabs.delete(tab)) this.changed(tab);
       return { accepted: [], refused: [] };
     }
     const epoch = reg.epoch ?? this.epochOf(reg.plugin);
@@ -287,6 +316,7 @@ export class Registry implements ToolRegistry {
     }
     tools.sort(byName);
     this.tabs.set(tab, { tab, link, source, reg, epoch, tools, refused, guide: cleanGuide(reg.guide ?? '', GUIDE_MAX), connected: true });
+    this.changed(tab);
     return { accepted: tools.map((t) => t.localName), refused };
   }
 
@@ -360,8 +390,9 @@ export class Registry implements ToolRegistry {
    */
   setConnected(tab: string, link: string, connected: boolean): void {
     const e = this.tabs.get(tab);
-    if (!e || e.link !== link) return;
+    if (!e || e.link !== link || e.connected === connected) return;
     e.connected = connected;
+    this.changed(tab);
   }
 
   /** What a tab registered (for /tabs and diagnostics). */

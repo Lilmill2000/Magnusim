@@ -806,12 +806,17 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
 
   if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay);
 
-  // Other apps and coding agents reach this server's tools through the process-wide listener.
+  // Other apps and coding agents reach this server's tools through the process-wide listener:
+  // its questions through this server's gates (shown by its relay), its privacy rules with the
+  // same project rows and remembered answers as the turns'.
   const mcp = createMcpService({
     registry: turns.registry,
     runner: turns.runner,
+    gates: turns.gates,
     resolveTab: (target) => turns.resolveTab(target),
     settings: deps.turns?.settings ?? loadSettings,
+    projects: deps.turns?.projects ?? projectLookup(createHostCaller({ port: () => deps.port?.() ?? null })),
+    remember: deps.turns?.remember ?? remember,
     clock: turns.clock,
   });
   const disposeMcp = setMcpHandler(mcp.handler);

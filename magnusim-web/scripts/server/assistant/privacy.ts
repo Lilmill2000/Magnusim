@@ -111,6 +111,38 @@ export function privacyGate(o: { turn: string; project: ProjectInfo; provider: P
   };
 }
 
+// ---------------------------------------------------------------- other apps (MCP)
+
+/**
+ * Other apps on this PC (MCP clients) count as off-PC: Magnusim can't know where a client
+ * sends what it reads (phase 3 spec 3.6). They share one destination, so one answer covers
+ * every app using Magnusim's tools, and the question says so.
+ */
+export const MCP_DESTINATION = 'mcp';
+export const MCP_DESTINATION_LABEL = 'Other apps on this PC';
+export const MCP_PRIVACY_DENIED_TEXT =
+  "Settings → Assistant is set to never send project data off this PC. Other apps (MCP) can't read this project.";
+
+/**
+ * The question before an app on this PC reads a project's data. `client` is the name the
+ * app gives itself (self-declared, cleaned and quoted like a title); without one the copy
+ * leaves it out.
+ */
+export function mcpPrivacyGate(o: { project: ProjectInfo; client: string }): GateRequest {
+  const title = quotedTitle(o.project.title, o.project.id);
+  const client = cleanText(o.client, 64).replace(QUOTES, "'");
+  const who = client ? `An app on this PC using Magnusim's tools ("${client}", as it calls itself)` : "An app on this PC using Magnusim's tools";
+  return {
+    kind: 'privacy',
+    turn: null,
+    title: `Let other apps read project "${title}"?`,
+    copy: `${who} is about to read this project's names, settings, results and pictures of the open workspace. It may send them to its own AI service. This answer covers every app using Magnusim's tools. Settings → Assistant can change this.`,
+    yes: 'Allow',
+    no: "Don't allow",
+    project: { id: o.project.id, title },
+  };
+}
+
 /** Remembers "Send" for this project (as it is now) and destination. */
 export async function remember(projectId: string, createdAt: string | null, destination: string): Promise<void> {
   await rememberConsent(projectId, createdAt, destination);

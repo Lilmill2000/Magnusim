@@ -16,14 +16,33 @@
  *   result caps), one at a time per connection in arrival order (16 at most at once,
  *   `busy` past that), and comes back as the same cleaned JSON text the Assistant's model
  *   gets, plus its images; `isError` for an error.
- * - Project data: external apps are offered workspace and other plugin tools without
- *   their registration text (a generic description, schemas without enums, descriptions,
- *   titles, consts, defaults or examples), whatever their projectData flag, and their
- *   instructions carry no workspace guide: a registration's text can hold project names.
- *   No tool that reads project data runs for them yet: they are refused `project_data_off`
- *   until the privacy rules (the per-project question for "other apps") cover them. Nor
- *   does a tool that asks first (compute, destructive): no app tab shows an app's
- *   questions yet (`questions_off`).
+ * - Privacy (spec 3.6): every external app counts as off this PC, under one destination,
+ *   `mcp` ("Other apps on this PC"). Until Settings → Assistant allows the tab's project for
+ *   it (Always allow, or an Allow remembered for the project), external apps are offered
+ *   workspace and other plugin tools without their registration text (a generic
+ *   description, schemas without enums, descriptions, titles, consts, defaults or examples),
+ *   whatever their projectData flag, and their instructions carry no workspace guide: a
+ *   registration's text can hold project names. Before a tool that reads project data runs,
+ *   the mode is read live: Never send refuses it (`privacy_denied`); Ask opens the question
+ *   in the tab ("Let other apps read project …?", one answer for every app), and Allow is
+ *   remembered and the list changes (list_changed); Don't allow, the timeout or a cancel
+ *   leave it unrun (`declined`, `stopped`).
+ * - Questions (spec 3.5): a compute or destructive tool asks first, as the Assistant's do: the
+ *   gate's owner is {kind:'mcp', session, tab} (the tab the call runs in), the page relay
+ *   shows it as the app's own dialog with No focused, and only that tab's link answers it:
+ *   an MCP client never can (no elicitation, no answer key). It waits 10 minutes. With no tab
+ *   to show it, the call is refused at once (`no_window`). While a question waits, a request
+ *   that carried a progressToken gets notifications/progress at once and every 15 s ("Waiting
+ *   for an answer in Magnusim", and "…its window is hidden or closed…" once its tab has had
+ *   no live link for 15 s), which keeps clients that reset their timeout on progress waiting.
+ *   A tool's own progress is passed on the same way.
+ * - Cancellation: the client's notifications/cancelled is a Stop for that call (a question it
+ *   waits on closes, `stopped`); a waiting call leaves the queue at once.
+ * - List changes (spec 3.4): the registry's changes (registry.onChange), and a check before
+ *   and after each call (sources are pure functions), recompute the list of each connection
+ *   that listed; one that differs from the list last served sends
+ *   notifications/tools/list_changed once (a modern-era client hears it on its
+ *   subscriptions/listen stream).
  * - External apps share process-wide rates (a reconnect doesn't reset them): 120 change
  *   calls and 1200 calls per rolling hour (`rate_limited`, with the time to wait).
  * - Other apps turned off: the settings save closes external apps' connections
@@ -37,15 +56,17 @@
  *   close, one per call and the listener's refused handshakes: never inputs, results,
  *   arguments or the token.
  */
+import { createHash } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
-import { realClock, type Clock } from '../gates.ts';
+import { GATE_TIMEOUT_MS, realClock, type Clock, type GateBroker } from '../gates.ts';
 import { appVersion } from '../host-tools.ts';
 import { alog } from '../log.ts';
+import { MCP_DESTINATION, MCP_PRIVACY_DENIED_TEXT, mcpPrivacyGate, privacyDecision, remember as rememberConsent, type ProjectInfo } from '../privacy.ts';
 import { guideBlock, SYSTEM_PROMPT } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
 import type { Registry, ToolCtx, ToolDef } from '../registry.ts';
-import { errorResult, riskOf, STOPPED_BEFORE, type CallAbort, type RunResult, type ToolRunner } from '../runner.ts';
+import { callAbortOf, errorResult, riskOf, STOPPED_BEFORE, stoppedText, type CallAbort, type RunResult, type ToolRunner } from '../runner.ts';
 import { cleanText, resultText } from '../sanitize.ts';
 import { emitSchema, validateInput } from '../schema.ts';
 import type { AssistantSettings } from '../settings.ts';
@@ -65,11 +86,19 @@ export const MCP_INSTRUCTIONS = [
   ...SYSTEM_PROMPT.split('\n').slice(1),
 ].join('\n');
 
-export const PROJECT_DATA_OFF_TEXT =
-  "Magnusim doesn't give other apps (MCP) project data yet: only its tools that read no project data run for them.";
-export const QUESTIONS_OFF_TEXT =
-  "Magnusim can't ask its questions for other apps (MCP) yet, so tools that ask first (computations, and changes that can't be undone) don't run for them.";
+/** How long an external app's question waits before it is declined. */
+export const MCP_GATE_TIMEOUT_MS = GATE_TIMEOUT_MS;
+/** How often a waiting question tells the client it still waits. */
+export const WAIT_PROGRESS_MS = 15_000;
+export const WAITING_TEXT = 'Waiting for an answer in Magnusim';
+export const WAITING_HIDDEN_TEXT = 'Waiting for an answer in Magnusim: its window is hidden or closed. Show it to answer.';
+export const PRIVACY_DECLINED_TEXT = "The person didn't allow other apps to read this project's data, so the tool did not run. Nothing was read.";
+export const PROJECT_UNREADABLE_TEXT = "Magnusim couldn't read this project's row, so it can't ask about its data; the tool did not run.";
+export const NO_WINDOW_TEXT =
+  'Magnusim asks the person before this tool runs, and only in its own window, but no app tab can show the question now. Show the Magnusim window with one workspace open, then call it again.';
 export const TOOLS_CHANGED_HINT = 'The tools changed. List the tools again.';
+/** A project's row is read again after this long (the privacy rules need its created_at). */
+const PROJECT_KEEP_MS = 10_000;
 export const NOTHING_RUNS_TEXT = "Nothing runs between messages: the person hasn't sent one, or stopped it.";
 const BUSY_CALLS_TEXT = 'Too many calls are waiting on this connection (16 at most). Wait for one to finish.';
 const BINDING_TEXT = 'That coding-agent session has ended.';
@@ -83,11 +112,16 @@ interface SdkContext {
   mcpReq: {
     signal: AbortSignal;
     envelope?: Record<string, unknown>;
+    /** The request's own _meta (its progressToken). */
+    _meta?: Record<string, unknown>;
+    /** A notification about this request (progress). */
+    notify(n: { method: string; params?: Record<string, unknown> }): Promise<void>;
   };
 }
 interface SdkServer {
   setRequestHandler(method: string, handler: (request: { params?: Record<string, unknown> }, ctx: SdkContext) => unknown): void;
   getClientVersion(): unknown;
+  sendToolListChanged(): Promise<void>;
 }
 type SdkServerCtor = new (
   info: { name: string; version: string },
@@ -201,6 +235,63 @@ function withHint(call: ToolCallPart, r: RunResult, hint: string): RunResult {
   return errorResult(call, r.code ?? 'failed', message, hint);
 }
 
+/** A call's progress notifications: only when its request carried a progressToken. */
+interface ProgressSender {
+  /** `fraction` (0..1) known: progress round(fraction*100) of 100; else the count of updates. Always increasing. */
+  send(fraction: number | null, message: string): void;
+  /** The call answered: nothing more is sent for its token. */
+  close(): void;
+}
+
+function progressOf(ctx: SdkContext): ProgressSender | null {
+  const token = ctx.mcpReq._meta?.progressToken;
+  if (typeof token !== 'string' && typeof token !== 'number') return null;
+  let last = 0;
+  let closed = false;
+  return {
+    send(fraction, message) {
+      if (closed) return;
+      const known = typeof fraction === 'number' && Number.isFinite(fraction);
+      let value = known ? Math.round(Math.min(1, Math.max(0, fraction)) * 100) : last + 1;
+      if (value <= last) value = last + 1;
+      last = value;
+      const params: Record<string, unknown> = { progressToken: token, progress: value };
+      if (known && value <= 100) params.total = 100;
+      if (message) params.message = message;
+      ctx.mcpReq.notify({ method: 'notifications/progress', params }).catch(() => {});
+    },
+    close() {
+      closed = true;
+    },
+  };
+}
+
+/**
+ * A tool as a list's signature counts it. A host or workspace tool by its own object: a tab
+ * that registers again offers new tools even under the same names (the earlier ones are
+ * unavailable), so the list changed. Another source's tool by what it says: a source is a
+ * pure function that may build its tools afresh at each call.
+ */
+const DEF_IDS = new WeakMap<ToolDef, string>();
+let defSerial = 0;
+function defKey(def: ToolDef): string {
+  const kind = def.source.kind;
+  if (kind !== 'host' && kind !== 'workspace') {
+    try {
+      const text = JSON.stringify([def.title, def.description, def.schema, def.risk, def.projectData, def.source]);
+      return `c${createHash('sha256').update(text).digest('hex').slice(0, 16)}`;
+    } catch {
+      /* not plain JSON: counted by its object */
+    }
+  }
+  let n = DEF_IDS.get(def);
+  if (n === undefined) {
+    n = `i${++defSerial}`;
+    DEF_IDS.set(def, n);
+  }
+  return n;
+}
+
 // ---------------------------------------------------------------- rates (process-wide)
 
 const RATES = Symbol.for('magnusim.assistant.mcpRates');
@@ -254,9 +345,15 @@ export function resetMcpRatesForTests(): void {
 export interface McpServiceDeps {
   registry: Registry;
   runner: ToolRunner;
+  /** The questions' broker (TurnManager.gates): a call's questions are asked through it and watched for wait progress. */
+  gates: GateBroker;
   /** TurnManager.resolveTab: the only connected app tab ('auto'), or why there is none. */
   resolveTab(target: string): { tab: string; projectId: string; studyId: string } | { status: number; body: Record<string, unknown> };
   settings(): Promise<AssistantSettings>;
+  /** A project's row (its title and created_at), for the privacy rules (privacy.ts projectLookup); none: unreadable. */
+  projects?: (id: string, o: { signal: AbortSignal; turn: string }) => Promise<ProjectInfo | null>;
+  /** Remembers an Allow for a project and destination (privacy.ts remember, by default). */
+  remember?: (projectId: string, createdAt: string | null, destination: string) => Promise<void>;
   clock?: Clock;
   /** The MCP package (load-sdk.ts loadMcpSdk). */
   sdk?: () => Promise<McpSdkModules>;
@@ -271,11 +368,36 @@ export interface McpService {
   sessions(): McpSession[];
 }
 
+/** A list as computed for a session now: what it serves, whether registration text is withheld, and its signature. */
+interface ListView {
+  served: Map<string, ToolDef>;
+  /** External apps before privacy allows the project: workspace and plugin tools without their registration text. */
+  withheld: boolean;
+  sig: string;
+}
+
+/** A connection's own state beyond its session. */
+interface Live {
+  /** The SDK instance serving it (the last the factory made: serveStdio may make a probe first). */
+  server: SdkServer | null;
+  /** The signature of the list last served (null before any tools/list). */
+  servedSig: string | null;
+  /** The signature last announced with list_changed. */
+  notifiedSig: string | null;
+  checking: boolean;
+  again: boolean;
+  closed: boolean;
+}
+
 export function createMcpService(d: McpServiceDeps): McpService {
   const clock = d.clock ?? realClock;
   const loadSdk = d.sdk ?? loadMcpSdk;
   const version = d.version ?? appVersion;
+  const remember = d.remember ?? rememberConsent;
   const sessions = new Map<string, McpSession>();
+  const lives = new WeakMap<McpSession, Live>();
+  /** Project rows read lately, per session (a client's calls in a row read it once). */
+  const projectRows = new WeakMap<McpSession, Map<string, { row: ProjectInfo; at: number }>>();
 
   /** The context a session's tools are listed and run in now, and why it has no tab. */
   function contextOf(session: McpSession): { ctx: ToolCtx; why: string | null } {
@@ -288,8 +410,40 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return { ctx: { tab: t.tab, projectId: t.projectId || null, simulationId: t.studyId || null, cloud: true, local: false }, why: null };
   }
 
-  /** An external app sees no workspace or plugin tool's registration text (it can hold project names). */
-  const withheld = (session: McpSession, def: ToolDef) => session.kind === 'external' && def.source.kind !== 'host';
+  /** The project's row, kept a moment per session; null when it can't be read. */
+  async function projectRow(session: McpSession, id: string, signal: AbortSignal): Promise<ProjectInfo | null> {
+    let rows = projectRows.get(session);
+    if (!rows) {
+      rows = new Map();
+      projectRows.set(session, rows);
+    }
+    const kept = rows.get(id);
+    if (kept && clock.now() - kept.at < PROJECT_KEEP_MS) return kept.row;
+    let row: ProjectInfo | null = null;
+    try {
+      row = d.projects ? await d.projects(id, { signal, turn: session.id }) : null;
+    } catch {
+      row = null;
+    }
+    if (row) rows.set(id, { row, at: clock.now() });
+    else rows.delete(id);
+    return row;
+  }
+
+  /**
+   * Whether an external app may see registration text now: Settings → Assistant always
+   * allows project data, or allows the tab's project for other apps (an Allow remembered for
+   * it as it is now). With no project, only Always allow does.
+   */
+  async function projectOpen(session: McpSession, ctx: ToolCtx): Promise<boolean> {
+    if (session.kind !== 'external') return true;
+    const s = await d.settings();
+    if (s.privacy === 'allow') return true;
+    if (s.privacy === 'deny' || !ctx.projectId) return false;
+    const row = await projectRow(session, ctx.projectId, new AbortController().signal);
+    if (!row) return false;
+    return privacyDecision(s, { cloud: true, destination: MCP_DESTINATION, projectId: row.id, createdAt: row.created_at }) === 'allow';
+  }
 
   function listFor(session: McpSession, ctx: ToolCtx, log: boolean): Map<string, ToolDef> {
     return servedMap(
@@ -298,13 +452,23 @@ export function createMcpService(d: McpServiceDeps): McpService {
     );
   }
 
-  function instructions(session: McpSession): string {
-    // A Test binding gets the rules alone. So does an external app: the workspace guide is
-    // registration text, which waits for the privacy rules as the tools' own text does.
-    if (session.binding?.test || session.kind === 'external') return MCP_INSTRUCTIONS;
+  async function viewOf(session: McpSession, log: boolean): Promise<ListView> {
+    const { ctx } = contextOf(session);
+    const served = listFor(session, ctx, log);
+    const text = [...served.values()].some((def) => def.source.kind !== 'host');
+    const withheld = text && !(await projectOpen(session, ctx));
+    const sig = `${[...served].map(([name, def]) => `${name}:${defKey(def)}`).join('|')}#${withheld ? 'withheld' : 'full'}`;
+    return { served, withheld, sig };
+  }
+
+  async function instructions(session: McpSession): Promise<string> {
+    // A Test binding gets the rules alone. So does an external app until privacy allows the
+    // project: the workspace guide is registration text, as the tools' own text is.
+    if (session.binding?.test) return MCP_INSTRUCTIONS;
     const { ctx } = contextOf(session);
     const ws = ctx.tab ? d.registry.workspaceOf(ctx.tab) : null;
     if (!ws?.guide) return MCP_INSTRUCTIONS;
+    if (!(await projectOpen(session, ctx).catch(() => false))) return MCP_INSTRUCTIONS;
     return `${MCP_INSTRUCTIONS}\n\n${guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin)}`;
   }
 
@@ -324,11 +488,50 @@ export function createMcpService(d: McpServiceDeps): McpService {
       // A JSON-RPC error with the Settings text (the SDK answers a thrown error's message).
       throw Object.assign(new Error(CLIENTS_OFF_TEXT), { data: { code: 'clients_off' } });
     }
-    const { ctx } = contextOf(session);
-    const served = listFor(session, ctx, true);
-    session.served = served;
-    return [...served].map(([name, def]) => toolView(name, def, withheld(session, def)));
+    const view = await viewOf(session, true);
+    session.served = view.served;
+    const live = lives.get(session);
+    if (live) {
+      live.servedSig = view.sig;
+      live.notifiedSig = null;
+    }
+    return [...view.served].map(([name, def]) => toolView(name, def, view.withheld && def.source.kind !== 'host'));
   }
+
+  /**
+   * Recomputes a connection's list (after a registry change, around each call, after an
+   * Allow): one that differs from the list last served is announced once (list_changed).
+   */
+  function recheck(session: McpSession): void {
+    const live = lives.get(session);
+    if (!live || live.closed || session.binding?.test) return;
+    if (live.checking) {
+      live.again = true;
+      return;
+    }
+    live.checking = true;
+    void (async () => {
+      try {
+        do {
+          live.again = false;
+          if (live.servedSig === null || !live.server) return;
+          if (session.kind === 'external' && !(await d.settings()).mcp.clients) return;
+          const view = await viewOf(session, false);
+          if (live.closed || view.sig === live.servedSig || view.sig === live.notifiedSig) continue;
+          live.notifiedSig = view.sig;
+          await live.server.sendToolListChanged().catch(() => {});
+        } while (live.again && !live.closed);
+      } catch {
+        /* the next change or call checks again */
+      } finally {
+        live.checking = false;
+      }
+    })();
+  }
+
+  const recheckAll = () => {
+    for (const s of sessions.values()) recheck(s);
+  };
 
   /** A Settings Test binding's call: connection_check only, the canned answer, no ToolRunner. */
   function testCall(session: McpSession, call: ToolCallPart): RunResult {
@@ -347,9 +550,88 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return { part: { type: 'tool_result', callId: call.callId, isError: false, text, images: [] }, ok: true, code: null, summary: 'Connection checked' };
   }
 
-  async function runOne(session: McpSession, call: ToolCallPart, signal: AbortSignal): Promise<{ r: RunResult; def: ToolDef | null }> {
+  /** A call that stopped before its tool ran: by the client's cancel, its connection closing, or the server. */
+  function stoppedBefore(call: ToolCallPart, signal: AbortSignal): RunResult {
+    return errorResult(call, 'stopped', stoppedText(false, callAbortOf(signal)?.server === true));
+  }
+
+  /**
+   * The privacy rules before an external app's call of a tool that reads project data
+   * (spec 3.6), read live: null when it may run, else its answer.
+   */
+  async function requireProjectData(session: McpSession, call: ToolCallPart, def: ToolDef, ctx: ToolCtx, signal: AbortSignal): Promise<RunResult | null> {
+    if (session.kind !== 'external' || !def.projectData || !ctx.projectId) return null;
+    let available: true | string;
+    try {
+      available = def.available(ctx);
+    } catch {
+      available = 'unavailable';
+    }
+    // A tool that can't run here reads nothing: the runner says why.
+    if (available !== true) return null;
+    const s = await d.settings();
+    if (s.privacy === 'allow') return null;
+    if (s.privacy === 'deny') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
+    const project = await projectRow(session, ctx.projectId, signal);
+    if (signal.aborted) return stoppedBefore(call, signal);
+    if (!project) return errorResult(call, 'project_unreadable', PROJECT_UNREADABLE_TEXT);
+    const verdict = privacyDecision(s, { cloud: true, destination: MCP_DESTINATION, projectId: project.id, createdAt: project.created_at });
+    if (verdict === 'allow') return null;
+    if (verdict === 'deny') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
+    const answer = await d.gates.ask(mcpPrivacyGate({ project, client: session.client.name }), { kind: 'mcp', session: session.id, tab: ctx.tab }, signal, {
+      timeoutMs: MCP_GATE_TIMEOUT_MS,
+    });
+    if (signal.aborted) return stoppedBefore(call, signal);
+    if (answer !== 'allow') return errorResult(call, 'declined', PRIVACY_DECLINED_TEXT);
+    // "Never send" chosen while the question was open wins over its Allow.
+    if ((await d.settings()).privacy === 'deny') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
+    await remember(project.id, project.created_at, MCP_DESTINATION);
+    // Every app's list shows the project's tools in full now.
+    recheckAll();
+    return null;
+  }
+
+  /**
+   * While one of this call's questions waits: progress at once and every 15 s, worded by
+   * whether its tab can show it. Returns the stop.
+   */
+  function watchQuestions(session: McpSession, progress: ProgressSender): () => void {
+    const waiting = new Map<string, { timer: unknown; stopped: boolean }>();
+    const stop = (id: string) => {
+      const w = waiting.get(id);
+      if (!w) return;
+      w.stopped = true;
+      clock.clearTimeout(w.timer);
+      waiting.delete(id);
+    };
+    const off = d.gates.subscribe((e) => {
+      if (e.owner.kind !== 'mcp' || e.owner.session !== session.id) return;
+      const id = e.view.id;
+      if (e.type === 'closed') {
+        stop(id);
+        return;
+      }
+      if (e.type !== 'open' || waiting.has(id)) return;
+      const w = { timer: null as unknown, stopped: false };
+      waiting.set(id, w);
+      const tick = () => {
+        if (w.stopped) return;
+        progress.send(null, d.gates.unseen(id) ? WAITING_HIDDEN_TEXT : WAITING_TEXT);
+        w.timer = clock.setTimeout(tick, WAIT_PROGRESS_MS);
+      };
+      // After the question was offered to its tab: its unseen wait starts first, so a tick at
+      // the same moment reads it.
+      queueMicrotask(tick);
+    });
+    return () => {
+      off();
+      for (const id of [...waiting.keys()]) stop(id);
+    };
+  }
+
+  async function runOne(session: McpSession, call: ToolCallPart, signal: AbortSignal, progress: ProgressSender | null): Promise<{ r: RunResult; def: ToolDef | null }> {
     if (session.binding?.test) return { r: testCall(session, call), def: null };
-    if (signal.aborted) return { r: errorResult(call, 'stopped', STOPPED_BEFORE), def: null };
+    if (signal.aborted) return { r: stoppedBefore(call, signal), def: null };
     // Other apps turned off since this app connected (or since this call was queued).
     if (session.kind === 'external' && !(await d.settings()).mcp.clients) return { r: errorResult(call, 'clients_off', CLIENTS_OFF_TEXT), def: null };
     const { ctx, why } = contextOf(session);
@@ -365,14 +647,22 @@ export function createMcpService(d: McpServiceDeps): McpService {
       if (!dispatch) return { r: errorResult(call, 'stopped', NOTHING_RUNS_TEXT), def };
       return { r: await dispatch.run(call, { offered, signal }), def };
     }
-    if (def.projectData) return { r: errorResult(call, 'project_data_off', PROJECT_DATA_OFF_TEXT), def };
-    // Its question could reach nobody yet (no app tab shows an app's questions): refused at
-    // once rather than declined after ten unseen minutes.
     const risk = riskOf(def);
-    if (risk === 'compute' || risk === 'destructive') return { r: errorResult(call, 'questions_off', QUESTIONS_OFF_TEXT), def };
+    // Its question could reach nobody (no app tab shows it): refused at once rather than
+    // declined after ten unseen minutes.
+    if ((risk === 'compute' || risk === 'destructive') && !ctx.tab) return { r: errorResult(call, 'no_window', NO_WINDOW_TEXT, why ?? undefined), def };
     const rate = takeRate(clock.now(), risk);
     if (!rate.ok) return { r: errorResult(call, 'rate_limited', rate.text), def };
-    let r = await d.runner.run(call, { owner: { kind: 'mcp', session: session.id }, ctx, signal, offered });
+    const refused = await requireProjectData(session, call, def, ctx, signal);
+    if (refused) return { r: refused, def };
+    let r = await d.runner.run(call, {
+      owner: { kind: 'mcp', session: session.id, tab: ctx.tab },
+      ctx,
+      signal,
+      offered,
+      gateTimeoutMs: MCP_GATE_TIMEOUT_MS,
+      ...(progress ? { onProgress: (fraction: number | null, label: string) => progress.send(fraction, label) } : {}),
+    });
     // A tool of an earlier list (the tab registered again, or went): say how to recover.
     if (r.code === 'unavailable' && ![...listFor(session, contextOf(session).ctx, false).values()].includes(def)) r = withHint(call, r, TOOLS_CHANGED_HINT);
     return { r, def };
@@ -409,13 +699,22 @@ export function createMcpService(d: McpServiceDeps): McpService {
     closed.addEventListener('abort', onClosed, { once: true });
     ctx.mcpReq.signal.addEventListener('abort', onCancel, { once: true });
     const signal = abort.signal;
+    const progress = progressOf(ctx);
     let def: ToolDef | null = null;
+    // The list may have changed since it was served (a source is a pure function).
+    recheck(session);
     const queued = session.queue.run(
       signal,
       async () => {
-        const out = await runOne(session, call, signal);
-        def = out.def;
-        return out.r;
+        // Its questions are watched only while it runs: one call at a time per connection.
+        const unwatch = progress ? watchQuestions(session, progress) : () => {};
+        try {
+          const out = await runOne(session, call, signal, progress);
+          def = out.def;
+          return out.r;
+        } finally {
+          unwatch();
+        }
       },
       () => errorResult(call, 'stopped', STOPPED_BEFORE),
     );
@@ -423,9 +722,11 @@ export function createMcpService(d: McpServiceDeps): McpService {
     try {
       r = queued ? await queued : errorResult(call, 'busy', BUSY_CALLS_TEXT);
     } finally {
+      progress?.close();
       closed.removeEventListener('abort', onClosed);
       ctx.mcpReq.signal.removeEventListener('abort', onCancel);
     }
+    recheck(session);
     const ran = def as ToolDef | null;
     alog('info', 'mcp call', {
       session: session.id,
@@ -449,11 +750,18 @@ export function createMcpService(d: McpServiceDeps): McpService {
       opened: conn.opened,
       calls: 0,
     };
+    const live: Live = { server: null, servedSig: null, notifiedSig: null, checking: false, again: false, closed: false };
+    lives.set(session, live);
     const closed = new AbortController();
     let handle: { close(): Promise<void> } | null = null;
     const offShutdown = onAssistantShutdown(() => conn.close({ server: true }));
+    // A registration changed: recomputed once the change is done (never inside it).
+    const offChange = d.registry.onChange(() => queueMicrotask(() => recheck(session)));
     claim?.attach(() => conn.close({ server: true }));
     conn.onClose(({ server }) => {
+      live.closed = true;
+      live.server = null;
+      offChange();
       closed.abort({ code: 'stopped', ...(server ? { server: true } : {}) } satisfies CallAbort);
       offShutdown();
       claim?.release();
@@ -476,7 +784,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
       async () => {
         const server = new sdk.Server(
           { name: 'magnusim', version: (await version().catch(() => '')) || '0' },
-          { capabilities: { tools: {} }, instructions: instructions(session) },
+          { capabilities: { tools: { listChanged: true } }, instructions: await instructions(session) },
         );
         server.setRequestHandler('tools/list', async (_request, ctx) => {
           noteClient(session, conn, server, ctx);
@@ -486,6 +794,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
           noteClient(session, conn, server, ctx);
           return callTool(session, conn, request.params ?? {}, ctx, closed.signal);
         });
+        if (!live.closed) live.server = server;
         return server;
       },
       {
