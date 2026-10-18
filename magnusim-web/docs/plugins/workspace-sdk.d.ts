@@ -503,7 +503,12 @@ declare module '@magnusim/workspace' {
   export interface AssistantCall {
       /** The call's id. */
       call: string;
-      /** The assistant's turn that made the call: calls of one turn share it (one undo step, for example). */
+      /**
+       * The assistant's turn that made the call: calls of one turn share it (one undo step, for example).
+       * A call from another app on this PC (MCP) has no turn: it reads "mcp:" and the app's connection id,
+       * the same for every call on that connection. A connection may stay open as long as the app runs,
+       * so end such a group after a pause or a change the user made, too.
+       */
       turn: string;
       /** The tool's name, as registered. */
       tool: string;

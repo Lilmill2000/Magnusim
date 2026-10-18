@@ -68,6 +68,12 @@ export interface RunOptions {
   /** The call's signal (Turn.callSignal()); its reason is a CallAbort. */
   signal: AbortSignal;
   turn?: RunnerTurn;
+  /**
+   * The turn the tool is told when no turn of the Assistant's makes the call (MCP: another app's
+   * connection, `mcp:<connection id>`, which a workspace page gets as AssistantCall.turn). Its
+   * question still has no turn: no turn's answer key answers it.
+   */
+  callTurn?: string;
   /** This step's tools by name: the only names that may run. */
   offered: ReadonlyMap<string, ToolDef>;
   /** How long its confirm question waits (the broker's own when left out: 10 minutes). */
@@ -399,7 +405,7 @@ export class ToolRunner {
     let onAbort: (() => void) | null = null;
     const released = new AbortController();
     const ran = Promise.resolve()
-      .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? null, progress, released: released.signal }))
+      .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? o.callTurn ?? null, progress, released: released.signal }))
       .then(
         (out): ToolOutcome | null => {
           return out && typeof out === 'object' ? out : { ok: false, error: { code: 'bad_result', message: 'The tool gave no result.' }, summary: 'No result' };

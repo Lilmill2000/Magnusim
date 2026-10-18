@@ -15,7 +15,9 @@
  *   (schema validation, the epoch fence, availability, questions, stall windows and
  *   result caps), one at a time per connection in arrival order (16 at most at once,
  *   `busy` past that), and comes back as the same cleaned JSON text the Assistant's model
- *   gets, plus its images; `isError` for an error.
+ *   gets, plus its images; `isError` for an error. An external app's call is made by no turn
+ *   of the Assistant's: its tool is told the turn `mcp:<connection id>`, the same for every
+ *   call on that connection (a workspace page's AssistantCall.turn, which groups its undo).
  * - Privacy (spec 3.6): every external app counts as off this PC, under one destination,
  *   `mcp` ("Other apps on this PC"). Until Settings → Assistant allows the tab's project for
  *   it (Always allow, or an Allow remembered for the project), external apps are offered
@@ -871,6 +873,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
       ctx,
       signal,
       offered,
+      // No turn of the Assistant's: the tool is told this connection's (one per app connected).
+      callTurn: `mcp:${session.id}`,
       gateTimeoutMs: MCP_GATE_TIMEOUT_MS,
       // Its question says another app asks, as it calls itself.
       app: mcpAppText(session.client.name),

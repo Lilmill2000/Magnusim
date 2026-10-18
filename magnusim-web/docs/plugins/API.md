@@ -212,7 +212,7 @@ interface AssistantCall
 One call of a tool, as the handler gets it (unreleased, 1.9).
 
 - `call: string`: The call's id.
-- `turn: string`: The assistant's turn that made the call: calls of one turn share it (one undo step, for example).
+- `turn: string`: The assistant's turn that made the call: calls of one turn share it (one undo step, for example). A call from another app on this PC (MCP) has no turn: it reads "mcp:" and the app's connection id, the same for every call on that connection. A connection may stay open as long as the app runs, so end such a group after a pause or a change the user made, too.
 - `tool: string`: The tool's name, as registered.
 - `input: Record<string, unknown>`: The input, already checked against the tool's inputSchema.
 - `signal: AbortSignal`: Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more.

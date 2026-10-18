@@ -1329,7 +1329,8 @@ describe('in the open workspace: questions, privacy, progress and list changes',
       r = await w.s.post('/api/assistant/relay/gate', { link: w.link, gate: gate.id, allow: true });
       assert.deepEqual([r.status, r.json], [200, { ok: true }]);
       const inv = await w.answer(0, { ok: true, result: { text: 'The counter is 0.', data: { count: 0 } } });
-      assert.deepEqual([inv.tool, inv.turn], ['reset', null]);
+      // Its question has no turn; the tool is told the app's connection as its turn.
+      assert.deepEqual([inv.tool, inv.turn], ['reset', `mcp:${L.mcpConnections().find((row) => row.name === 'Desk App').id}`]);
       const result = await call;
       assert.ok(!result.isError);
       assert.deepEqual(M.resultJson(result), { tool: 'ai-demo__reset', ok: true, data: { count: 0 }, text: 'The counter is 0.' });
@@ -1428,6 +1429,31 @@ describe('in the open workspace: questions, privacy, progress and list changes',
         { progress: 25, total: 100, message: 'Adding 1: step 1' },
         { progress: 26, message: 'Adding 1: still going' },
       ]);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it("another app's call is told the turn mcp:<its connection's id> (AssistantCall.turn): the same for each call on one connection, another app's differs, and a host tool is told it too", async () => {
+    const told = [];
+    const probe = H.hostTool('turn_probe', { run: async (_input, rt) => (told.push(rt.turn), { ok: true, data: {}, summary: 'probed' }) });
+    const w = await appWorld({ hostTools: [probe] });
+    try {
+      const a = await w.client({ name: 'App A' });
+      const b = await w.client({ name: 'App B' });
+      const add = async (c, n) => {
+        const call = c.client.callTool({ name: 'ai-demo__add', arguments: { by: 1 } });
+        const inv = await w.answer(n);
+        assert.ok(!(await call).isError);
+        return inv.turn;
+      };
+      const turns = [await add(a, 0), await add(a, 1), await add(b, 2)];
+      for (const c of [a, b]) assert.ok(!(await c.client.callTool({ name: 'turn_probe', arguments: {} })).isError);
+      const id = Object.fromEntries(L.mcpConnections().map((row) => [row.name, row.id]));
+      assert.match(id['App A'], /^m-[0-9a-z]+-[0-9a-f]{8}$/);
+      assert.notEqual(id['App A'], id['App B']);
+      assert.deepEqual(turns, [`mcp:${id['App A']}`, `mcp:${id['App A']}`, `mcp:${id['App B']}`]);
+      assert.deepEqual(told, [`mcp:${id['App A']}`, `mcp:${id['App B']}`]);
     } finally {
       await w.close();
     }

@@ -60,6 +60,7 @@ export interface ToolOutcome {
 export interface ToolRunContext {
   signal: AbortSignal;
   ctx: ToolCtx;
+  /** The turn that makes the call; another app's call (MCP) has `mcp:<connection id>` (RunOptions.callTurn). */
   turn: string | null;
   progress(fraction: number | null, label: string): void;
   /** Aborts when the runner stops waiting for this call (it was aborted and its grace ran out). */
