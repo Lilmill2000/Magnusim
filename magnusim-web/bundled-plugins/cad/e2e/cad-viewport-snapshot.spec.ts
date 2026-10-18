@@ -2,20 +2,27 @@
 // Assistant's view tool and camera latch build on them), in the host's sandboxed frame:
 //  - handle.snapshot gives a picture of the size asked and leaves the person's view as it was:
 //    the camera, the Part's saved camera, whether the view is still framed, the section view, the
-//    selection and the count of camera moves are unchanged, nothing is written, and the canvas
-//    shows the same pixels afterwards. The picture shows the bodies (over 2 % of it), leaves a
-//    hidden body out, shows a cut's hatched cap, and iso_back sees the part from back-left-top
-//    (the body at +X on the left, on the right in iso); project() lands on the body it names and
-//    visibleFaceAt() finds its face there.
-//  - The app's own camera turns are not the person's moves: sketch entry's Normal to, the new
-//    Extrude's turn to Isometric, the refit after Finish sketch, the banana's refit and a reopened
-//    sketch's reframe. A drag, a wheel step, F, 7, a face's right-click Normal to and the Fit
-//    button each count once.
+//    selection and the count of camera moves are unchanged, nothing is written (the model through
+//    ws.files, the Part's view through ws.data), and the canvas shows the same pixels afterwards;
+//    no snapshot schedules a timer (a camera change is reported and saved only from one), and one
+//    real camera move afterwards is reported once and writes the view once. The picture shows the
+//    bodies (over 2 % of it), leaves a selected face unlit and a hidden body out, shows a cut's
+//    hatched cap, and iso_back sees the part from back-left-top (the body at +X on the left, on
+//    the right in iso); project() lands on the body it names and visibleFaceAt() finds its face.
+//  - The app's own camera turns are not the person's moves: every camera call the app makes on
+//    its own is recorded with its options and passes auto, and the count stays: sketch entry's
+//    Normal to, the refit after Finish of a first sketch drawn past the edges (it moves the
+//    camera), the new Extrude's turn to Isometric (it moves the camera), the banana's refit,
+//    a reopened sketch's Normal to (it moves the camera) and its reframe once the later Extrude
+//    is rolled back, and the refit after that Finish (those three find nothing to move here; a
+//    refit or reframe that moves is counted only without auto: tests/viewport/camera-count.test.ts).
+//    A drag, a wheel step, F, 7, a face's right-click Normal to and the Fit button each count once
+//    (the handle calls among them without auto).
 // Coarse facts only (SwiftShader on Linux CI): fractions and colour families, never exact pixels.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test, type APIRequestContext, type Frame, type FrameLocator, type Page } from '@playwright/test';
-import { addSolid, countFileWrites, drawBlock, fileWrites, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
+import { addSolid, countFileWrites, drawRectangle, fileWrites, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
 
 type V3 = [number, number, number];
@@ -46,6 +53,8 @@ interface Seen {
   hatch: number;
   /** At each probe's projected pixel: its colour and the face of the probe's body seen there. */
   probes: ({ rgb: [number, number, number]; face: number | null } | null)[];
+  /** The delays of the timers the snapshot call scheduled (a camera change to report, a save): none. */
+  timers: number[];
 }
 
 async function freshPart(page: Page, request: APIRequestContext) {
@@ -115,7 +124,20 @@ function picture(frame: Frame, o: Shot, probes: { p: V3; body: string }[] = []):
   return frame.evaluate(
     ({ o, probes }) => {
       const h = (window as unknown as W).__CAD__.services.viewport.get().handle;
-      const r = h.snapshot(o);
+      // Every timer the call schedules: a camera change is reported, and saved, only from a timer
+      // (the camera's rest), so none scheduled here means none is pending from the snapshot.
+      const timers: number[] = [];
+      const setTimeoutWas = window.setTimeout;
+      window.setTimeout = ((fn: TimerHandler, ms?: number, ...a: unknown[]) => {
+        timers.push(ms ?? 0);
+        return setTimeoutWas(fn, ms, ...a);
+      }) as typeof window.setTimeout;
+      let r;
+      try {
+        r = h.snapshot(o);
+      } finally {
+        window.setTimeout = setTimeoutWas;
+      }
       const px = r.rgba as Uint8ClampedArray;
       const w = r.width as number;
       const ht = r.height as number;
@@ -148,11 +170,30 @@ function picture(frame: Frame, o: Shot, probes: { p: V3; body: string }[] = []):
         const k = 4 * (y * w + x);
         return { rgb: [px[k], px[k + 1], px[k + 2]] as [number, number, number], face: r.visibleFaceAt(body, s[0], s[1]) as number | null };
       });
-      return { width: w, height: ht, length: px.length, mmPerPx: r.mmPerPx, drawn: drawn / n, red: red / n, redX: red ? redX / red / w : null, hatch: hatch / n, probes: seenAt };
+      return { width: w, height: ht, length: px.length, mmPerPx: r.mmPerPx, drawn: drawn / n, red: red / n, redX: red ? redX / red / w : null, hatch: hatch / n, probes: seenAt, timers };
     },
     { o, probes },
   );
 }
+
+/**
+ * Record each ws.data write from now on (the Part's view file goes there: the camera, folders,
+ * eyes; the model goes through ws.files, which countFileWrites records).
+ */
+async function countDataWrites(page: Page) {
+  await workspaceFrame(page).evaluate(() => {
+    const w = window as unknown as W & { __dataWrites?: string[] };
+    const data = w.__CAD__.services.bridge.data;
+    w.__dataWrites = [];
+    const write = data.write.bind(data);
+    data.write = (...a: unknown[]) => {
+      w.__dataWrites!.push(String(a[0]));
+      return write(...a);
+    };
+  });
+}
+
+const dataWrites = (page: Page) => workspaceFrame(page).evaluate(() => [...((window as unknown as { __dataWrites?: string[] }).__dataWrites ?? [])]);
 
 /** The middle of the canvas, clear of the tree, the toolbar, the dock and the triad: as the page shows it. */
 async function canvasShot(page: Page): Promise<Buffer> {
@@ -200,6 +241,7 @@ test('cad:viewport-snapshot a picture drawn off screen leaves the view as it was
     w.__CAD__.services.viewport.get().handle.onCameraChange(() => (w.__cameraChanges = (w.__cameraChanges ?? 0) + 1));
   });
   await countFileWrites(page);
+  await countDataWrites(page);
   const shotBefore = await canvasShot(page);
 
   // Iso, both blocks: the size asked, the bodies drawn, the red one on the right.
@@ -217,7 +259,8 @@ test('cad:viewport-snapshot a picture drawn off screen leaves the view as it was
   expect(onA && onA.face).not.toBeNull();
   expect(onA!.rgb[0] - onA!.rgb[2], 'grey, not red, where the grey block is').toBeLessThan(20);
   expect(onB && onB.face).not.toBeNull();
-  expect(onB!.rgb[0] - onB!.rgb[2], 'red where the red block is').toBeGreaterThan(60);
+  // The probe is on the face the person selected (its front): red, not the pick green it has on screen.
+  expect(onB!.rgb[0] - onB!.rgb[2], 'red where the red block is, its selected face unlit').toBeGreaterThan(60);
 
   // The red block hidden: its colour is gone (the picture frames the grey one alone).
   const hidden = await picture(frame, { view: 'iso', width: 320, height: 240, hide: [b.body!], section: null }, [{ p: [50, 0, 10], body: b.body! }]);
@@ -237,51 +280,146 @@ test('cad:viewport-snapshot a picture drawn off screen leaves the view as it was
   expect(cut.hatch, 'the hatched cap shows').toBeGreaterThan(0.01);
   expect(cut.hatch).toBeGreaterThan(plain.hatch * 5);
 
+  // No snapshot scheduled a timer: no camera change is waiting to be reported (and saved).
+  for (const [name, s] of Object.entries({ iso, hidden, back, plain, cut })) expect(s.timers, `${name}: timers the snapshot scheduled`).toEqual([]);
+
   // The person's view as it was: camera, saved camera, framing, section, selection, count; no camera
   // change reported and nothing written; the canvas shows the same pixels.
   await still(page);
   expect(await viewNow(page)).toEqual(before);
   expect(differs(shotBefore, await canvasShot(page)), 'the canvas after the pictures').toBeLessThan(0.002);
-  // A camera change would be reported after it rests (400 ms) and saved after that: give both time.
-  await page.waitForTimeout(1500);
-  expect(await frame.evaluate(() => (window as unknown as { __cameraChanges?: number }).__cameraChanges)).toBe(0);
+  const changes = () => frame.evaluate(() => (window as unknown as { __cameraChanges?: number }).__cameraChanges);
+  expect(await changes()).toBe(0);
   expect(await fileWrites(page)).toEqual([]);
-  expect(await viewNow(page)).toEqual(before);
+  expect(await dataWrites(page)).toEqual([]);
+  // What would have shown a change works: one real move of the camera (a standard view, as the
+  // views menu does) is reported once when it rests, and the Part's view is written once.
+  await frame.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('top', { animate: false }));
+  await expect.poll(changes, { timeout: 30_000 }).toBe(1);
+  await expect.poll(async () => (await dataWrites(page)).length, { timeout: 30_000 }).toBe(1);
+  expect(await changes()).toBe(1);
+  expect(await fileWrites(page)).toEqual([]);
+  expect((await viewNow(page)).saved).not.toEqual(before.saved);
   expect(seen.errors).toEqual([]);
 });
 
-/** Open the history's sketch again (a double-click on its row), as the person does. */
-async function reopenSketch(page: Page, frame: FrameLocator) {
-  await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"] > .tree-row').first().dblclick();
-  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await still(page);
+/**
+ * One camera call on the viewport handle: the method, whether it passed `auto`, what it returned;
+ * before it, the camera's target and whether the view was still as its last framing left it.
+ */
+interface CameraCall {
+  name: string;
+  auto: boolean;
+  ret: unknown;
+  before: V3;
+  framed: boolean;
+}
+
+/**
+ * Record every camera call on the viewport handle from now on (the app looks the handle's
+ * methods up at each call, so each call goes through the record), with where each method takes
+ * its options (CameraCallOpts).
+ */
+async function recordCameraCalls(page: Page) {
+  await workspaceFrame(page).evaluate(() => {
+    const w = window as unknown as W & { __cameraCalls?: CameraCall[] };
+    const h = w.__CAD__.services.viewport.get().handle;
+    w.__cameraCalls = [];
+    const optsAt: Record<string, number> = { fit: 0, setView: 1, lookAt: 2, orbitAround: 1, setCamera: 1, reframe: 0, refitIfOffScreen: 0 };
+    for (const [name, i] of Object.entries(optsAt)) {
+      const real = h[name];
+      h[name] = (...a: unknown[]) => {
+        const before = h.camera().target as V3;
+        const framed = h.stats().framed as boolean;
+        const ret = real.apply(h, a);
+        w.__cameraCalls!.push({ name, auto: !!(a[i] as { auto?: boolean } | undefined)?.auto, ret: ret ?? null, before, framed });
+        return ret;
+      };
+    }
+  });
+}
+
+/** The camera calls recorded so far; `take` also clears them. */
+const cameraCalls = (page: Page, take = false) =>
+  workspaceFrame(page).evaluate((t) => {
+    const calls = (window as unknown as { __cameraCalls: CameraCall[] }).__cameraCalls;
+    return t ? calls.splice(0) : [...calls];
+  }, take);
+
+const called = async (page: Page, name: string) => (await cameraCalls(page)).some((c) => c.name === name);
+
+/**
+ * The app's own camera calls of one step, taken: every one passed auto, and among them those
+ * named (in this order; others may come between, such as a new sketch's reframe when its first
+ * build was still running as sketch mode began).
+ */
+async function ownCalls(page: Page, want: Partial<CameraCall>[]) {
+  const calls = await cameraCalls(page, true);
+  expect(calls.filter((c) => !c.auto), 'camera calls without auto').toEqual([]);
+  let at = 0;
+  for (const w of want) {
+    const i = calls.findIndex((c, k) => k >= at && Object.entries(w).every(([key, v]) => c[key as keyof CameraCall] === v));
+    expect(i, `${JSON.stringify(w)} in ${JSON.stringify(calls)}`).toBeGreaterThanOrEqual(0);
+    at = i + 1;
+  }
 }
 
 test("cad:viewport-camera-moves the app's own turns are not the person's camera moves; a drag, a wheel step, F, 7, Normal to and Fit are", async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
+  await recordCameraCalls(page);
   const m0 = await moves(page);
-  // A block drawn as the person draws one: sketch entry looks down at the Top plane, Finish refits,
-  // and the new Extrude seen along its direction turns to Isometric. None of them is the person's.
-  await drawBlock(page, frame, 30, 20, 10);
+  // A first sketch drawn past the edges of the view, as the person draws one: sketch entry looks
+  // down at the Top plane, and once sketch mode has ended the view refits to bring it all in (it
+  // moves the camera: refitIfOffScreen answers true). Both are the app's own: auto, not counted.
+  await drawRectangle(page, frame, 600, 400);
+  await expect.poll(() => called(page, 'refitIfOffScreen'), { timeout: 30_000 }).toBe(true);
   await still(page);
+  expect(await moves(page), "no move of the person's while it was drawn (one leaves the view unframed: no refit)").toBe(m0);
+  const first = await cameraCalls(page);
+  expect(first.filter((c) => c.name === 'refitIfOffScreen').map((c) => c.ret), `one refit, and it moved the camera: ${JSON.stringify(first)}`).toEqual([true]);
+  await ownCalls(page, [{ name: 'lookAt' }, { name: 'refitIfOffScreen', ret: true }]);
+  // Extruded 40 mm: the new Extrude seen along its direction turns the view to Isometric.
+  await frame.locator('[data-cad-toolbar] [data-command="solid.extrude"]').click();
+  const panel = frame.locator('[data-cad-panel="feature"]');
+  await expect(panel.locator('[data-profile-list] [data-profile]')).toHaveCount(1);
   const s3 = 1 / Math.sqrt(3);
   await looksAlong(page, [s3, -s3, s3]);
+  const dist = panel.locator('.nui[data-field="distance"] input');
+  await dist.fill('40');
+  await dist.press('Enter');
+  await expect(panel.locator('.nui[data-field="distance"] [data-nui-error]')).toHaveCount(0);
+  await panel.locator('[data-panel-done]').click();
+  await expect(panel).toHaveCount(0);
+  await still(page);
+  await ownCalls(page, [{ name: 'setView' }]);
   expect(await moves(page)).toBe(m0);
-  // The banana for scale: put beside the block, the view refits by itself.
+
+  // The banana for scale, put beside the block: its refit is the app's own too (here nothing is
+  // off screen, so it moves nothing; tests/features/scale/auto-camera.test.ts pins its options).
   await runCommand(frame, 'scale.banana');
   await expect(frame.locator('[data-layer="scale-banana"]')).toHaveCount(1);
+  await expect.poll(() => called(page, 'refitIfOffScreen'), { timeout: 30_000 }).toBe(true);
   await still(page);
+  await ownCalls(page, [{ name: 'refitIfOffScreen' }]);
   expect(await moves(page)).toBe(m0);
   // Taken away again: a press on it drags the banana, not the view (the drags below must orbit).
   await runCommand(frame, 'scale.banana');
   await expect(frame.locator('[data-layer="scale-banana"]')).toHaveCount(0);
-  // The sketch opened again with the Extrude after it: Normal to its plane, then the reframe once the
-  // Extrude is rolled back; Finish refits. Still none of the person's.
-  await reopenSketch(page, frame);
+  // The sketch opened again with the Extrude after it: Normal to its plane (the block is already
+  // left out as sketch mode starts), then the reframe once the rebuild has rolled the Extrude back
+  // (here nothing changed by then, so it leaves the camera where it is; a reframe that moves is
+  // counted only without auto: tests/viewport/camera-count.test.ts); Finish refits (nothing is off
+  // screen). None of them is the person's.
+  await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"] > .tree-row').first().dblclick();
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
   await looksAlong(page, [0, 0, 1]);
+  await expect.poll(() => called(page, 'reframe'), { timeout: 60_000 }).toBe(true);
+  await still(page);
   await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+  await expect.poll(() => called(page, 'refitIfOffScreen'), { timeout: 30_000 }).toBe(true);
   await still(page);
+  await ownCalls(page, [{ name: 'lookAt' }, { name: 'reframe' }, { name: 'refitIfOffScreen' }]);
   expect(await moves(page)).toBe(m0);
 
   // The person's moves: each counts once.
@@ -302,7 +440,7 @@ test("cad:viewport-camera-moves the app's own turns are not the person's camera 
   await expect.poll(() => moves(page)).toBe(m0 + 4);
   await still(page);
   // The block's top face, right-clicked: Normal to.
-  const topFace = await modelOnPage(page, [15, 10, 10]);
+  const topFace = await modelOnPage(page, [300, 200, 40]);
   await page.mouse.click(topFace[0], topFace[1], { button: 'right' });
   await frame.locator('[data-cad-menu] [data-menu-item="normal-to"]').click();
   await looksAlong(page, [0, 0, 1]);
@@ -310,8 +448,17 @@ test("cad:viewport-camera-moves the app's own turns are not the person's camera 
   await frame.locator('[data-vp-fit]').click();
   await expect.poll(() => moves(page)).toBe(m0 + 6);
   await still(page);
+  // F, 7, Normal to and the Fit button (the Home view) went through the handle without auto (the
+  // drag and the wheel are the view's own).
+  expect((await cameraCalls(page, true)).map((c) => [c.name, c.auto])).toEqual([
+    ['fit', false],
+    ['setView', false],
+    ['lookAt', false],
+    ['setView', false],
+  ]);
   // A picture off screen is not a move either.
   await workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.snapshot({ view: 'iso', width: 64, height: 64, hide: [], section: null }));
   expect(await moves(page)).toBe(m0 + 6);
+  expect(await cameraCalls(page)).toEqual([]);
   expect(seen.errors).toEqual([]);
 });
