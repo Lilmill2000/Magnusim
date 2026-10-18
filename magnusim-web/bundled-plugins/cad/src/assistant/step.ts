@@ -323,6 +323,9 @@ function failure(e: unknown, rv: { ok: true } | { ok: false; reason: string }, s
   if (!rv.ok) {
     const kept = keptWords(step, services);
     err.detail.kept = kept.length ? kept : [rv.reason];
+    // A take-over the person's own change made: the chip names what of the step stayed (review: it said only "you took over").
+    const left = step.left();
+    if (err.reason === 'taken_over' && left.length) rt.pause.stayed(left.length === 1 ? left[0] : `${left[0]} and ${left.length - 1} more`);
   }
   return err;
 }

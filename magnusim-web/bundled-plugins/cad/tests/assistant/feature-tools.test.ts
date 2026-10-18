@@ -139,4 +139,31 @@ describe('two panels in one call (a mirror about an offset plane)', () => {
     },
     REAL_KERNEL_MS,
   );
+
+  it(
+    "a tree rename of the person's while the mirror's panel is open takes it over: the plane stays (the revert would undo the rename), and the chip names it",
+    async () => {
+      h = await assistantHarness();
+      const p = await plate(h);
+      const rt = runtimeOf(h.services)!;
+      const ui = uiFor(h.services);
+      h.fake.emitTurn({ id: 't-1', title: 'Mirror it' });
+      // The plane is made (between-opens), then the mirror's own panel opens (after-open).
+      rt.holds.hold('between-opens');
+      const r = h.call('pattern', MIRROR, { turn: 't-1' });
+      await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['between-opens']), { timeout: 60_000 });
+      rt.holds.hold('after-open');
+      rt.holds.release('between-opens');
+      await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['after-open']), { timeout: 60_000 });
+      expect(ui.state.get().panel).toMatchObject({ owner: 'assistant' });
+      expect(names(h)).toContain('Plane 1');
+      expect(ui.renameFeature(p.extrude, 'Base')).toBeNull();
+      rt.holds.release('after-open');
+      expect(await r).toMatchObject({ ok: false, error: { code: 'busy', detail: { reason: 'taken_over', why: 'command', kept: ['renamed Extrude 1 to Base', 'added Plane 1 (ref_plane)'] } } });
+      expect(names(h)).toEqual(['Sketch 1', 'Base', 'Plane 1']);
+      // The person sees what stayed, not only "you took over".
+      expect(rt.store.get()).toMatchObject({ phase: 'paused', note: 'you took over · Plane 1 stayed' });
+    },
+    REAL_KERNEL_MS,
+  );
 });

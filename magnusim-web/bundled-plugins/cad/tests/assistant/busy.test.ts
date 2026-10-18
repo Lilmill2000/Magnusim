@@ -16,7 +16,7 @@
 //     not_ready; reads never wait.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPause, EDIT_WAIT_MS, personBlock, SOFT_MAX_MS } from '../../src/assistant/busy';
+import { createPause, EDIT_WAIT_MS, pauseNote, personBlock, SOFT_MAX_MS } from '../../src/assistant/busy';
 import { assistantTestHandle } from '../../src/assistant/install';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { registerPendingEdit } from '../../src/lib/pendingEdits';
@@ -282,6 +282,20 @@ describe('the pause', () => {
       ok: false,
       error: { code: 'busy', message: expect.stringMatching(/^paused: The call waited [\d.]+ s: the person redid the Assistant's steps in this Part\.$/), detail: { reason: 'paused', why: 'redo' } },
     });
+  });
+
+  it("a take-over's note names what of the step stayed (the person's change refused its revert)", () => {
+    const p = createPause();
+    p.set('take_over', 'turn:t-1', 't-1');
+    expect(pauseNote(p.get()!)).toBe('you took over');
+    p.stayed('Plane 1');
+    expect(p.get()).toEqual({ why: 'take_over', key: 'turn:t-1', turn: 't-1', stayed: 'Plane 1' });
+    expect(pauseNote(p.get()!)).toBe('you took over · Plane 1 stayed');
+    // Only a take-over's.
+    const q = createPause();
+    q.set('person', 'turn:t-1', 't-1');
+    q.stayed('Plane 1');
+    expect(pauseNote(q.get()!)).toBeNull();
   });
 
   it('a turn that has ended takes no pause; an outside session that went on because of the person keeps its pause', () => {

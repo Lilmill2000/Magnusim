@@ -524,12 +524,18 @@ says what it does:
   told you are busy, and to say what it needs and end its request. A Parameters
   panel you have open but are not typing in does not count: it stays open, shows
   the new values and flashes the rows that changed.
-- **Taking over.** During one of its steps, Escape, Ctrl+Z, Ctrl+Y, a toolbar
-  or tree command (Parameters too), any change of yours to the Part, or Enter or
-  Finish sketch in its sketch takes the step over: it is discarded, nothing of
-  it is kept, and the Assistant pauses in this Part until the request ends (the
-  chip's Resume lets it go on). Undoing its steps while the request runs pauses
-  it the same way ("you undid its steps"; a redo: "you redid its steps").
+- **Taking over.** During one of its steps, Escape, Ctrl+Z, Ctrl+Y (the Undo
+  button's tip then says it takes the step over), a toolbar or tree command
+  (Parameters too), or Enter or Finish sketch in its sketch takes the step
+  over: it is discarded, nothing of it is kept, and the Assistant pauses in this
+  Part until the request ends (the chip's Resume lets it go on). A change of
+  yours to the Part during a step (a rename, a value, a Delete) stops it too,
+  and yours is kept; what the step had already made before your change (the
+  offset plane of its sketch, say) then stays as well, since taking it back
+  would undo yours. The Assistant is told what stayed, the chip names it when
+  it pauses ("you took over · Plane 1 stayed"), and Ctrl+Z takes it back.
+  Undoing its steps while the request runs pauses it the same way ("you undid
+  its steps"; a redo: "you redid its steps").
 - **Looking is not taking over**: selecting, hovering and orbiting in the view,
   and clicks on the fields of its panel.
 - It is told to leave what you made alone unless you ask, and everything it
@@ -548,9 +554,10 @@ open: Back or a reload clears it.
 Ctrl+Z brings them back.", with the keyboard on **Don't**. A feature another one
 uses is not deleted; the Assistant is told which features use it.
 
-**Honest results.** Each call applies completely or not at all. While a call
-runs, the saved Part stays as it was before it, so a reload, a crash or Back in
-the middle of one never leaves half a step in the Part. A feature that fails (a
+**Honest results.** Each call applies completely or not at all (unless you
+change the Part while it runs: see Taking over). While a call runs, the saved
+Part stays as it was before it, so a reload, a crash or Back in the middle of
+one never leaves half a step in the Part. A feature that fails (a
 fillet too large, a join that touches nothing, a cut that misses the part) is
 not kept, and its reason goes back to the model, with which way a cut missed. A
 changed size that would break a later feature is put back. A change of

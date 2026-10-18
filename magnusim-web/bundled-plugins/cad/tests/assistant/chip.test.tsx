@@ -116,12 +116,17 @@ describe('the chip in the dock', () => {
     act(() => store.set({ ...base, phase: 'thinking', turn: turn() }));
     expect(chip()?.getAttribute('data-assistant-state')).toBe('thinking');
     expect(words()).toBe('Assistant · thinking · 3 of 120 steps');
-    expect(chip()?.getAttribute('aria-busy')).toBe('true');
+    // The live region is the words alone: a screen reader hears them, not the buttons beside them.
+    const live = () => chip()!.querySelector('[data-assistant-text]')!;
+    expect(chip()?.getAttribute('role')).toBeNull();
+    expect(live().getAttribute('role')).toBe('status');
+    expect(live().querySelector('button')).toBeNull();
+    expect(live().getAttribute('aria-busy')).toBe('true');
     expect(phase()).toBe('thinking');
     act(() => store.set({ phase: 'ended', turn: turn('done') }));
     expect(chip()?.getAttribute('data-assistant-state')).toBe('ended');
     expect(words()).toBe('Assistant: Plate with four holes · done');
-    expect(chip()?.getAttribute('aria-busy')).toBeNull();
+    expect(live().getAttribute('aria-busy')).toBeNull();
     act(() => store.set({ phase: 'idle', turn: null }));
     expect(chip()).toBeNull();
     expect(phase()).toBe('idle');
@@ -211,6 +216,11 @@ describe('the chip in the dock', () => {
     expect(chip().getAttribute('data-assistant-health')).toBe('ok');
     expect(chip().querySelector('[data-assistant-health-text]')).toBeNull();
     expect(chip().querySelector('[data-assistant-action="undo"]')).toBeNull();
+    // A rebuild that failed with no feature to show: the words, but no button that would do nothing.
+    act(() => doc.set(docState([{ name: 'Base', state: 'ok' }], 'failed')));
+    expect(chip().getAttribute('data-assistant-health')).toBe('error');
+    expect(chip().querySelector('[data-assistant-health-text]')!.textContent).toBe('· the rebuild failed');
+    expect(chip().querySelector('[data-assistant-health-text]')!.tagName).toBe('SPAN');
     // Not ended: no health at all.
     act(() => store.set({ phase: 'thinking', turn: turn() }));
     expect(chip().getAttribute('data-assistant-health')).toBeNull();

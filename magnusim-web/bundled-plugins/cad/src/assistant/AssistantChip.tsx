@@ -13,7 +13,9 @@
 // speaks of has ended (its last call may still be finishing). An ended turn also shows the Part's health
 // (health.ts: "· Fillet 1 fails", "· 1 sketch under-defined"; `data-assistant-health` ok, warn or
 // error, the chip amber or red when not ok), and a click on those words selects the first such
-// tree row. Nothing shows while the Assistant is off or idle.
+// tree row (plain words when there is no row to show: a rebuild that failed). Nothing shows while
+// the Assistant is off or idle. The live region (role status) is the words alone, so a screen
+// reader hears what changed, not the buttons; the buttons are 24 px targets, Stop set apart.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useServices } from '../lib/services';
@@ -136,24 +138,27 @@ export function AssistantChip() {
   const busy = s.phase === 'working' || s.phase === 'thinking';
   const buttons = chipButtons(s, end.undo);
   const cls = ['cad-chip', 'cad-assistant-chip', ended && end.health === 'error' ? 'is-error' : '', ended && end.health === 'warn' ? 'is-warning' : ''].filter(Boolean).join(' ');
+  const first = end.first;
   return (
-    <div className={cls} data-chip="assistant" data-assistant-state={s.phase} data-assistant-health={ended ? end.health : undefined} role="status" aria-busy={busy || undefined}>
+    <div className={cls} data-chip="assistant" data-assistant-state={s.phase} data-assistant-health={ended ? end.health : undefined}>
       {busy ? <span className="tree-spin cad-chip-spin" aria-hidden="true" /> : null}
-      <span className="cad-chip-v" data-assistant-text="">
+      <span className="cad-chip-v" data-assistant-text="" role="status" aria-busy={busy || undefined}>
         {text}
       </span>
-      {ended && end.words ? (
+      {ended && end.words && first ? (
         <button
           type="button"
           className="cad-chip-link cad-assistant-health"
           data-assistant-health-text=""
           title="Show it in the tree"
-          onClick={() => {
-            if (end.first) selectItem(services.selection, { kind: 'feature', feature: end.first }, false);
-          }}
+          onClick={() => selectItem(services.selection, { kind: 'feature', feature: first }, false)}
         >
           · {end.words}
         </button>
+      ) : ended && end.words ? (
+        <span className="cad-assistant-health" data-assistant-health-text="">
+          · {end.words}
+        </span>
       ) : null}
       {buttons.map((b) => (
         <button key={b.id} type="button" className="cad-chip-link" data-assistant-action={b.id} title={b.title} aria-pressed={b.pressed === undefined ? undefined : b.pressed} onClick={() => run(api?.actions, b, s)}>

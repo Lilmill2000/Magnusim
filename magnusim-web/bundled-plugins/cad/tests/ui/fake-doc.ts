@@ -426,6 +426,7 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
         if (!result) result = st.ended ? { ok: false, reason: 'This Assistant step has ended' } : restoreMark(mark);
         return result;
       },
+      left: () => [],
       end() {
         if (st.ended) return;
         st.ended = true;

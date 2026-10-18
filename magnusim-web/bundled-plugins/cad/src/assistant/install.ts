@@ -110,6 +110,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     const p = pause.get();
     const phase = phaseOf(s, running, lingering, !!p);
     if (phase !== s.phase) store.set(phase === 'paused' && p ? { phase, note: pauseNote(p) } : { phase });
+    else if (phase === 'paused' && p && s.note !== pauseNote(p)) store.set({ note: pauseNote(p) });
   };
   offs.push(store.subscribe(refresh));
   const onCall = services.bus.on('assistant:call', (e) => {
@@ -163,6 +164,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       if (p) {
         if (store.get().phase !== 'approve') store.set({ phase: 'paused', note: pauseNote(p) });
       } else if (store.get().phase === 'paused') store.set({ phase: 'idle', note: null });
+      // (A note that changed while paused, "· Plane 1 stayed", follows through refresh.)
     }),
     turns.subscribe((t) => {
       if (t.state === 'ended') pause.turnEnded(t.id);

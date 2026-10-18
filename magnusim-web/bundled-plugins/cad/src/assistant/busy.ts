@@ -186,6 +186,8 @@ export interface Pause {
   key: string;
   /** The turn it ends with (the host told of it), or null: it ends at the next key. */
   turn: string | null;
+  /** A take-over whose step could not go back (the person changed the Part): what of it stayed ("Plane 1"). */
+  stayed?: string;
 }
 
 export interface PauseState {
@@ -194,6 +196,8 @@ export interface PauseState {
   set(why: PauseWhy, key: string, turn: string | null): void;
   /** Resume (the chip's Resume). */
   resume(): void;
+  /** The take-over pause on now: what of the step stayed (the chip names it). */
+  stayed(words: string): void;
   /** A call of `key` starts: a pause with no turn of another key ends (the next key). */
   enterKey(key: string): void;
   /** The host says a turn ended: its pause ends with it. */
@@ -226,6 +230,9 @@ export function createPause(o: PauseOptions = {}): PauseState {
     resume() {
       if (now) tell(null);
     },
+    stayed(words) {
+      if (now && now.why === 'take_over' && words && now.stayed !== words) tell({ ...now, stayed: words });
+    },
     enterKey(key) {
       if (now && !now.turn && now.key !== key && !o.sameSession?.(now.key, key)) tell(null);
     },
@@ -243,7 +250,8 @@ export function createPause(o: PauseOptions = {}): PauseState {
 
 /** The chip's words for a pause. */
 export function pauseNote(p: Pause): string | null {
-  return p.why === 'take_over' ? 'you took over' : p.why === 'undo' ? 'you undid its steps' : p.why === 'redo' ? 'you redid its steps' : null;
+  if (p.why === 'take_over') return p.stayed ? `you took over · ${p.stayed} stayed` : 'you took over';
+  return p.why === 'undo' ? 'you undid its steps' : p.why === 'redo' ? 'you redid its steps' : null;
 }
 
 /** A pause in words, for the model ("the person took over a step"). */

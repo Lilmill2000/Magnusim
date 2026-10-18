@@ -1258,6 +1258,28 @@ input.mgk-input.cad-param-name {
   cursor: pointer;
 }
 
+/* The Assistant's chip: its words wrap within the dock; its actions are 24 px targets, Stop set
+   apart from Pause (an irreversible action beside a reversible one). */
+.cad-assistant-chip {
+  max-width: 100%;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.cad-assistant-chip .cad-chip-v {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cad-assistant-chip .cad-chip-link {
+  min-height: 24px;
+  padding: 0 4px;
+}
+
+.cad-assistant-chip [data-assistant-action="stop"] {
+  margin-left: 8px;
+}
+
 .cad-chip-link:hover {
   background: none;
   color: var(--mg-link-strong-hover);

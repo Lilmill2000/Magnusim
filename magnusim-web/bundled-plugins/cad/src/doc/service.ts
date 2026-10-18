@@ -612,6 +612,10 @@ export function createDocService(opts: DocServiceOptions): DocService {
       return this.result;
     }
 
+    left(): string[] {
+      return undo.snapshot().done.filter((e) => e.tag === this.owner).map((e) => e.label);
+    }
+
     end(): void {
       if (this.ended) return;
       // A session of this step's still open (its call did not drop it): it goes, never left behind.

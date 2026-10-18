@@ -149,7 +149,8 @@ the Assistant's steps while its turn runs, or by the chip's Pause; it ends with 
 host's turn events) or, without them, at the next key. A turn the host said has ended takes no
 pause, and an outside client's key that went up only because the person changed the Part
 (`session-key.ts` `sameSession`) is no next key. The chip shows `paused` ("you took over", "you
-undid its steps", "you redid its steps") whatever else runs (`state.ts` `phaseOf`): after a
+undid its steps", "you redid its steps"; a take-over whose revert the person's change refused
+names what stayed: "you took over · Plane 1 stayed", from `AssistantStep.left()`) whatever else runs (`state.ts` `phaseOf`): after a
 "keep it?" too. A step already running when the person pauses waits at its next pace point,
 and before it is judged (`waitWhilePaused`): open, held (the stored Part stays the mark),
 progress `waiting`; Resume lets it go on, a take-over or Stop ends it, and after the wait cap it
@@ -500,7 +501,8 @@ a gap, a Stop and a person's change at `between-opens`, the loft frustum); e2e
 ## The person's view
 
 The chip (`[data-chip="assistant"][data-assistant-state]`, its words in
-`[data-assistant-text]`, its buttons `[data-assistant-action]`) and the frame's
+`[data-assistant-text]`, the live region (`role="status"`, the words alone), its buttons
+`[data-assistant-action]`, 24 px targets with Stop set apart) and the frame's
 `.cad-app[data-assistant]` follow `state.ts`: `off`, `idle`, `thinking` (a turn runs, no
 call), `working` (a call runs: the tool's title, then the step it makes: "Sketch Plate
 sketch"), `waiting` (an edit waits for the person: what it asks), `approve` (Ask each step:

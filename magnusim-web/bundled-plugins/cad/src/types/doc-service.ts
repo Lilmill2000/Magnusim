@@ -252,6 +252,11 @@ export interface AssistantStep {
    */
   revert(): EditResult;
   /**
+   * The labels of this step's own undo steps still in the history, unsealed ("Plane 1"): what
+   * stayed of it after a revert the person's change refused. Empty once reverted or sealed.
+   */
+  left(): string[];
+  /**
    * Release the save hold (idempotent): a write follows when the model differs from what is stored.
    * 'assistant:step-ended' is emitted (once), so a panel the step showed with no session closes.
    */

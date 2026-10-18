@@ -8,7 +8,8 @@
 //   2. The toolbar's Extrude while the Assistant's Fillet panel is open: the person's own Extrude
 //      panel opens and the Assistant's step is gone (taken_over, a command). A tree rename while the
 //      Assistant draws a sketch: the sketch goes, the rename is kept and stored, and the model hears
-//      what stayed (detail.kept).
+//      what stayed (detail.kept). On an offset plane the step made first, the plane stays too (the
+//      revert would undo the rename): the chip names it ("you took over · Plate sketch plane stayed").
 //   3. Ctrl+Z in a sketch the Assistant draws: taken over, the sketch gone; the person's Line there
 //      before it is refused with the note.
 //   4. Looking is not taking over: clicks and a drag in the view at the Assistant's sketch, a click
@@ -24,7 +25,8 @@
 //      The person's Ctrl+Z while the chip asks "Hole 1 · keep it?" (no panel open; the toolbar's
 //      Undo says it takes the step over) takes the whole hole back at once: no "Hole 1 sketch"
 //      left in the tree or the stored model, the history as before, the model hears taken_over.
-//   8. Pause while the Assistant draws a sketch (sketch-step:2) holds it where it is: the chip
+//   8. (The chip's buttons are 24 px targets with Stop set apart, its live region its words.)
+//      Pause while the Assistant draws a sketch (sketch-step:2) holds it where it is: the chip
 //      says paused with Resume, its read-only panel stays, nothing is stored; Resume finishes it,
 //      and with Ask each step on the chip then asks, and Keep keeps it.
 // The sketches are drawn at the watch pace with no delays (setPace('watch', 0)): every entity is
@@ -209,6 +211,39 @@ test("cad:assistant-takeover-command the toolbar's Extrude takes over the Assist
   expect(r2).toMatchObject({ tool: 'cad__sketch', ok: false, error: { code: 'busy', detail: { reason: 'taken_over', why: 'command', kept: ['renamed Extrude 1 to Base'] } } });
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Base'], STEP);
   await expect.poll(async () => (await storedModel(request, host, pid, sid))?.features.map((f) => f.name), STEP).toEqual(['Sketch 1', 'Base']);
+});
+
+test("cad:assistant-takeover-command-plane a tree rename while the Assistant draws on its own offset plane: the sketch goes, the plane and the rename stay, and the chip names the plane", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant takeover plane');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  const sid = studyOf(page);
+  await forcePace(page, 'fast', 0);
+  await addSolid(page, { size: [40, 30, 10] });
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  await forcePace(page, 'watch', 0);
+  await holdAt(page, 'sketch-step:2');
+  const before = chats(host).length;
+  host.fake.reply({ tools: [sketchCall('Plate sketch', 'Top offset 20 mm')] }, { hold: 'plane-stayed', text: 'The person renamed a feature while I drew.' });
+  const t = await startTurn(request, host, { text: 'Sketch a plate above the block.', tab });
+  await reachedHold(page, 'sketch-step:2');
+  await showTreeDuringSketch(frame);
+  await frame.locator('[data-cad-tree] [data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: /^Extrude 1$/ }) }).locator('> .tree-row').click();
+  await page.keyboard.press('F2');
+  const input = frame.locator('[data-cad-tree] [data-feature-row] input');
+  await expect(input).toHaveValue('Extrude 1', STEP);
+  await input.fill('Base');
+  await input.press('Enter');
+  await expect(frame.locator('[data-cad-panel="sketch"]')).toHaveCount(0, STEP);
+  await releaseHold(page, 'sketch-step:2');
+  const [r] = resultsIn(await nthRequest(2, before));
+  expect(r).toMatchObject({ tool: 'cad__sketch', ok: false, error: { code: 'busy', detail: { reason: 'taken_over', why: 'command', kept: expect.arrayContaining(['renamed Extrude 1 to Base', 'added Plate sketch plane (ref_plane)']) } } });
+  // What the person sees: the plane stayed beside their rename, and the chip says so.
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Base', 'Plate sketch plane'], STEP);
+  await expect(chipWords(frame)).toHaveText('Assistant paused · you took over · Plate sketch plane stayed', STEP);
+  host.fake.release('plane-stayed');
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect.poll(async () => (await storedModel(request, host, pid, sid))?.features.map((f) => f.name), STEP).toEqual(['Sketch 1', 'Base', 'Plate sketch plane']);
 });
 
 test("cad:assistant-takeover-undo Ctrl+Z in a sketch the Assistant draws takes it over; the person's Line there is refused with the note", async ({ page, request }) => {
@@ -511,6 +546,14 @@ test('cad:assistant-takeover-pause-mid-step Pause while the Assistant draws a sk
     await reachedHold(page, 'sketch-step:2');
     const panel = frame.locator('[data-cad-panel="sketch"]');
     await expect(panel).toHaveAttribute('data-panel-owner', 'assistant', STEP);
+    // The chip's buttons are 24 px targets, Stop set apart from Pause; its live region is its words alone.
+    const pause = (await chipButton(frame, 'pause').boundingBox())!;
+    const stop = (await chipButton(frame, 'stop').boundingBox())!;
+    expect(pause.height).toBeGreaterThanOrEqual(24);
+    expect(stop.height).toBeGreaterThanOrEqual(24);
+    expect(stop.x - (pause.x + pause.width), 'Stop set apart from Pause').toBeGreaterThanOrEqual(12);
+    await expect(chip.locator('[role="status"]')).toHaveCount(1);
+    await expect(chip.locator('[role="status"] button')).toHaveCount(0);
     await chipButton(frame, 'pause').click();
     await expect(chip).toHaveAttribute('data-assistant-state', 'paused', STEP);
     await releaseHold(page, 'sketch-step:2');
