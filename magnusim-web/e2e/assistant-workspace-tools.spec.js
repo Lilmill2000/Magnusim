@@ -1291,12 +1291,12 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
     used: { stepsCap: caps.steps, usdCap: caps.turn_usd },
   });
   // The frame's own Stop, while the slow call runs.
-  const stopAt = Date.now();
+  const stopAt = performance.now();
   await w.frame.locator('#stop').click();
   // Its answer comes once the turn ended: the same 10 s ceiling, not Playwright's 5 s default.
   await expect(w.frame.locator('#stop-answer')).toHaveText('stopped', { timeout: 10_000 });
   const { turn, events } = await t.ended();
-  expect(Date.now() - stopAt, 'stopped within the 10 s ceiling').toBeLessThan(10_000);
+  expect(performance.now() - stopAt, 'stopped within the 10 s ceiling').toBeLessThan(10_000);
   expect(turn).toMatchObject({ state: 'stopped', end_reason: 'user' });
   await expect(w.frame.locator('#turn-state')).toHaveText('stopped: Add 1, then 5 slowly.', STEP);
   await expect(w.frame.locator('#aborted')).toHaveText('aborted', STEP);
