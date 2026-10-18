@@ -35,6 +35,13 @@ import {
 } from './support/assistant.js';
 import { expect, test } from './support/stress.js';
 
+/** Whether a switch shows the keyboard focus it has: its slider is outlined (the input itself is drawn invisible). */
+const focusRingShown = (sw) =>
+  sw.evaluate((el) => {
+    const s = getComputedStyle(el.nextElementSibling);
+    return el.matches(':focus-visible') && s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1;
+  });
+
 const REMOTE_TEXT =
   'The Assistant and its API keys can only be set up and used on the PC running Magnusim. Over remote access it is off.';
 
@@ -120,6 +127,18 @@ test('the Assistant step sits between Workspace and Plugins and is Off; Next goe
   await page.evaluate(() => window.__CFD_OPEN_WIZARD__({ step: 'assistant' }));
   await expect(pane.locator('[data-assistant-step]')).toHaveCount(1);
   await closeSettings(page);
+});
+
+test("the Other apps switch shows the keyboard focus (WCAG 2.4.7): tabbed to, its slider is outlined", async ({ page }) => {
+  await page.goto(`${host.base}/#/`);
+  const pane = await openAssistantStep(page);
+  const sw = pane.getByRole('switch', { name: "Let other AI apps on this PC use Magnusim's tools" });
+  await expect(sw).toHaveCount(1);
+  // From the control before it, Tab: the focus is on the switch, and seen.
+  await pane.locator('[data-assistant-agent-add-open]').focus();
+  await page.keyboard.press('Tab');
+  await expect(sw).toBeFocused();
+  expect(await focusRingShown(sw), 'the Other apps switch shows its focus').toBe(true);
 });
 
 test('a local server: its address and models; Test says tool calling works, names the chat template when a call comes as text, and says when nothing answers', async ({

@@ -313,6 +313,12 @@ async function agentsNow(request, refresh = false) {
 }
 
 const rowOf = (page, id) => assistantPane(page).locator(`[data-assistant-agent="${id}"]`);
+/** Whether a switch shows the keyboard focus it has: its slider is outlined (the input itself is drawn invisible). */
+const focusRingShown = (sw) =>
+  sw.evaluate((el) => {
+    const s = getComputedStyle(el.nextElementSibling);
+    return el.matches(':focus-visible') && s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1;
+  });
 const customRow = (page) => assistantPane(page).locator('[data-assistant-agent-kind="custom"]');
 const modal = (page) => page.locator('#modal-confirm');
 
@@ -748,6 +754,8 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   await expect(modal(page)).toBeHidden();
   await expect(sw).not.toBeChecked();
   await expect(sw).toBeFocused();
+  // The keyboard user sees where it went: the switch's focus ring.
+  expect(await focusRingShown(sw), 'the allow switch shows its focus').toBe(true);
   expect(allowPosts).toEqual([]);
   expect((await agentsNow(request)).find((r) => r.id === id).allowed).toBe(false);
 
