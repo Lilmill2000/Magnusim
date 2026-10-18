@@ -376,10 +376,26 @@ No test reaches a real model provider or this PC's real Assistant files.
   - `MAGNUSIM_TEST_ASSISTANT_AGENT_GATE_MS=<ms>`: how long an agent turn's questions wait
     (4 minutes otherwise).
 
-  A turn on a coding agent needs this account's proof. A test reads the launch token from
-  the test home's `mcp.json` (its path is the `--info` argument in the `bridge.args` of
-  `GET /api/assistant/mcp`) and sends it in the `x-magnusim-launch` header; the terminal
-  client finds the same file when it runs with the server's `MAGNUSIM_ASSISTANT_HOME`.
+  Starting a coding agent needs this account's proof, else 403 `launch_proof`: a turn
+  (`POST /api/assistant/turns`), the agent Test and connect check
+  (`POST /api/assistant/agents/test`, and `POST /api/assistant/test` for `agent:<id>`) and
+  sign-in (`POST /api/assistant/agents/sign-in`). The proof is either the launch token in the
+  `x-magnusim-launch` header (never in the body) or a live relay link of any app tab in the
+  body's `link`. A test reads the token from the test home's `mcp.json` (its path is the
+  `--info` argument in the `bridge.args` of `GET /api/assistant/mcp`). The terminal client
+  finds the same file when it runs with the server's `MAGNUSIM_ASSISTANT_HOME`, and sends the
+  token only once `POST /api/assistant/launch/check {nonce}` answered
+  HMAC-SHA256(token, "l<port>:<nonce>") for the port it reached; a stub app in
+  `assistant-cli.test.js` answers that check itself.
+
+  Adding a custom agent (`POST /api/assistant/agents/custom`) and turning an allow switch on
+  (`POST /api/assistant/agents/allow` with `allow:true`) need the app's own `Origin` and a
+  live relay link in `link`; the token is not taken there. Turning a switch off needs only the
+  `Origin`. A node test gets a link with the harness: `await (await relayPage(base)).open()`
+  (`assistant-harness.js`; the tab opens its relay channel for the proof alone, no workspace
+  needed). A browser test makes those calls through the page's own `src/assistant/api.ts`
+  (`page.evaluate(() => import('/src/assistant/api.ts'))`), which sends its tab's link.
+
   `GET /api/test/assistant/state` lists each conversation's agent (pid, state, how its tree
   is stopped), and every `POST /api/test/assistant/reset` ends them all.
   `scripts/server/__tests__/assistant-agent-turn.test.js` runs agent turns with the real
@@ -388,7 +404,8 @@ No test reaches a real model provider or this PC's real Assistant files.
   installed through discovery's switches with a controller of its own (so each keeps its own
   `style`), and checks that every process a fake or a launcher reported has ended (by its
   command line, since the OS reuses pids). Its turns start with `request.post` and the
-  launch token; its Stop test leaves the cancel wait at its real 3 s.
+  launch token; it adds and allows its custom agent through the page's `api.ts` (`addCustom`);
+  its Stop test leaves the cancel wait at its real 3 s.
 - **Other apps (MCP).** Two clients reach the MCP listener as another app on this PC would;
   neither reads this PC's own `mcp.json`.
   - `scripts/server/__tests__/assistant-mcp-harness.js` (not a test itself; imported
