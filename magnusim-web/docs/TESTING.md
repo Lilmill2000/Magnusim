@@ -377,8 +377,11 @@ No test reaches a real model provider or this PC's real Assistant files.
   is stopped), and every `POST /api/test/assistant/reset` ends them all.
   `scripts/server/__tests__/assistant-agent-turn.test.js` runs agent turns with the real
   bridge and listener; `e2e/assistant-agents.spec.js` runs Settings → Assistant → Coding
-  agents in a browser, the agents the fake installed through discovery's switches, and checks
-  that every process a fake or a launcher reported has ended.
+  agents and agent turns in the `ai-demo` workspace in a browser, each agent the fake
+  installed through discovery's switches with a controller of its own (so each keeps its own
+  `style`), and checks that every process a fake or a launcher reported has ended (by its
+  command line, since the OS reuses pids). Its turns start with `request.post` and the
+  launch token; its Stop test leaves the cancel wait at its real 3 s.
 - **Other apps (MCP).** Two clients reach the MCP listener as another app on this PC would;
   neither reads this PC's own `mcp.json`.
   - `scripts/server/__tests__/assistant-mcp-harness.js` (not a test itself; imported

@@ -21,11 +21,16 @@ September 2026 readiness audit. This list preserves the intended work.
   built: keys kept encrypted and write-only, Settings → Assistant with a
   connection test, limits and a privacy setting, turns that run on the server
   with their questions shown in the app, three read-only app tools, and tools a
-  workspace page offers (bridge 1.9, unreleased: the host still says 1.8). A
-  turn starts from the terminal client (`scripts/assistant-run.mjs`) until the
-  chat panel lands. Next, in this order: CAD's tools in its workspace, a
-  server other assistant programs can connect to (MCP), the chat panel, and
-  other plugins' tools; then the 1.9 bridge and SDK 1.5.0 release.
+  workspace page offers (bridge 1.9, unreleased: the host still says 1.8).
+  Other AI apps on this PC can use the same tools through MCP (off until turned
+  on in Settings), and a coding agent the person already uses, signed in with
+  their own account, can work for the Assistant beside the API keys: its own
+  shell, file and web tools are switched off where Magnusim can do that, and
+  otherwise it runs only once the person allows it; what it does is billed to
+  their account with that agent. A turn starts from the terminal client
+  (`scripts/assistant-run.mjs`) until the chat panel lands. Next, in this
+  order: CAD's tools in its workspace, the chat panel, and other plugins'
+  tools; then the 1.9 bridge and SDK 1.5.0 release.
 
 - **Plugin workspaces, later (Plugin Host H13):** a workspace opens only for a
   study in a project. To add: global workspaces that open without a project,

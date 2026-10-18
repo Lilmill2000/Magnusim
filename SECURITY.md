@@ -145,7 +145,8 @@ Settings before handing the PC to someone else.
 Any program and any other account signed in to this PC can call the
 Assistant's requests (start a turn, change its settings): the local check
 proves a request came from this PC, not who sent it. Another account can't read
-the key, but can spend it within the limits.
+the key, but can spend it within the limits. A turn on a coding agent also
+needs a proof of this account (Coding agents, below).
 
 The Assistant's questions are answered only by the app tab that shows them,
 through that tab's own connection to the app, or by the program that started
@@ -205,6 +206,129 @@ The Assistant's test switches (`MAGNUSIM_TEST_ASSISTANT_*`) work only together
 with `MAGNUSIM_TEST_ASSISTANT=1`; `run.bat` and Setup never set them. The
 stand-in key protector also needs a test home (`MAGNUSIM_ASSISTANT_HOME` or
 `MAGNUSIM_LOCAL_JSON`), so it never keeps the keys in this PC's real folder.
+## Other apps on this PC (MCP)
+
+Settings → Assistant → Other apps (MCP) lets other AI apps on this PC (a
+desktop chat app, a coding tool) use Magnusim's tools through the Model Context
+Protocol. It is off until the owner turns it on.
+
+- The connection is a socket on 127.0.0.1 only, apart from the app's web port:
+  a web page can't speak to it, and the tunnel and reverse proxies never
+  forward it. An app reaches it through a small bridge,
+  `scripts/assistant-mcp.mjs`, that the app starts. The config Settings shows
+  names the bridge and Magnusim's connection file, never a secret.
+- Each launch of Magnusim makes a new random token and writes it to
+  `mcp.json` beside the Assistant's settings, in the owner's own
+  application-data folder (mode 0600 on systems other than Windows). The
+  bridge and Magnusim each prove they hold it with a challenge both ways; the
+  token itself never crosses the socket and is never in a command line, in
+  Settings or in an answer. A clean exit removes the file, and the next start
+  replaces it. Any program the owner runs, and an administrator, can read it:
+  this keeps out other accounts and everything off this PC, not programs the
+  owner runs.
+- An app gets the tools of the one connected app tab (only the app-wide tools
+  with no tab or several), with the same questions and privacy rules as the
+  Assistant. A question shows in that tab as the app's own dialog, saying that
+  an app on this PC asks and naming it as it names itself (its own claim). Only
+  that tab answers it, never the app; it waits 10 minutes, and with no tab to
+  show it the call is refused.
+- Every app counts as sending data off this PC. Under "Ask" the first call
+  that reads a project asks once for all apps together (Allow covers every
+  app; Don't allow holds for 10 minutes); until then the project's tools are
+  listed without their own descriptions. "Never send" refuses them.
+- All apps together get 120 changes and 1200 calls an hour; at most 4 apps are
+  connected at once, each with one call at a time. Turning the switch off cuts
+  off the apps connected now.
+
+## Coding agents
+
+Settings → Assistant → Coding agents lets a coding agent the owner already
+uses, signed in with their own account, work for the Assistant beside the
+API-key providers. Magnusim starts it as a program on this PC and talks to it
+over its input and output (the Agent Client Protocol); the agent reaches
+Magnusim's tools only through the connection above, bound to the conversation.
+Agents are never part of Magnusim: the owner installs them, and Magnusim never
+sees, stores or passes on their login. What the agent reads through Magnusim's
+tools goes to the agent's own service, under the owner's account and terms, as
+it does when the owner uses the agent in a terminal. Magnusim can't see what
+that costs: it is billed to the owner's account with that agent, and the $
+limits apply to API keys only.
+
+**Its own tools off.** For an agent Magnusim knows how to lock down, a session
+starts with the agent's own shell, file and web tools switched off, the owner's
+own settings, instruction files and MCP servers for that agent left out, and a
+note telling it to use only Magnusim's tools. This counts only when the agent
+was found through its own published package at a version that was checked;
+another program of the same name, an older version or a custom command counts
+as an agent whose own tools stay on. Every agent is told there is no file
+system and no terminal, its file and terminal requests are refused, and it
+starts in an empty private working folder with only basic environment
+variables (no other provider's key, nothing of Magnusim's). If an agent whose
+tools should be off still uses or asks for a tool that isn't Magnusim's,
+Magnusim stops it at once (a tripwire), and from then on it needs its allow
+switch until Magnusim is updated. An agent that switches itself to a mode
+Magnusim doesn't use is stopped too. Settings the PC's administrator manages
+for the agent (managed policies, hooks) still apply, as in a terminal; the
+tripwire stops the agent if they bring one of its own tools back.
+
+**The allow switch.** An agent whose own tools Magnusim can't switch off stays
+off until the owner turns on "Allow this agent" in Settings, after a question
+with "Don't" focused. The warning beside the switch says what it means: once
+allowed, the agent can run commands, change files and read Magnusim's projects
+on this PC by its own rules, whatever the privacy setting says, and Magnusim's
+questions cover only Magnusim's tools. The switch is kept per agent with a
+fingerprint of the program, script and arguments it was allowed for; when any
+of them changes it counts as off and is asked again. Only the Settings page in
+the Magnusim window can turn it on (the request must carry the app's own
+origin): never a tool, a turn, the settings request or the terminal client.
+Turning it off is always taken, with no question, and ends what the agent
+still runs. A custom agent is added the same way and needs its switch, even to
+connect.
+
+**Who starts it, who answers it.** A turn on a coding agent needs a proof of
+this account: the per-launch token from `mcp.json`, which the terminal client
+reads and sends, or the live connection of the app tab the turn is for, which
+the page has. A coding agent's request to use one of its own tools becomes a
+question that only the Magnusim window answers, as does its privacy question,
+never the program that started the turn. Its requests to use Magnusim's own
+tools are allowed by Magnusim ("Auto-allowed" in the turn's log), because
+Magnusim asks its own questions for them; they are recognised only from fields
+the agent's own software sets, never from a title the model writes. Nothing an
+agent asks for runs between messages or after Stop.
+
+**Privacy.** Every coding agent counts as sending data off this PC, under its
+own destination: "Ask" asks once per project and per agent, in the Magnusim
+window, before the agent is started; "Never send" refuses turns about a
+project, and refuses every turn on an agent whose own tools stay on, since
+such an agent could read the projects folder by itself.
+
+**Stop.** Stop answers the agent's open requests as cancelled, then tells it
+to cancel; if it hasn't answered within 3 seconds, it is ended with everything
+it started. On Windows each agent runs inside a job object kept by a small
+Windows PowerShell helper, so its whole process tree ends with it, even if
+Magnusim itself is killed; if Windows blocks that helper, stopping is a
+best-effort process-tree kill, and Settings says to check Task Manager. On
+other systems the agent leads its own process group, which is ended as a
+whole; groups a crashed Magnusim left behind are ended at its next start, so
+until then they may outlive it. An agent is also ended when its conversation
+ends, after 15 minutes idle, when its switch goes off, when it crashes and when
+Magnusim stops; at most two run at once. Each message allows 24 changes, 400
+tool calls and 60 active minutes (Settings → Assistant → Limits).
+
+**This PC, not this account.** The local check proves a request came from this
+PC, not which account sent it. Any program the owner runs, an allowed agent's
+own shell included, can read `mcp.json`, call the Assistant's requests and
+take over a tab's connection to the app. Another account signed in to this PC
+(one that isn't an administrator) can't read `mcp.json`, but it can forge the
+page's origin: it can add a custom agent or turn an allow switch on, and with
+effort take over a tab's connection to use an agent that is allowed.
+Magnusim's guarantees hold against agents whose own tools are off and against
+everything off this PC, not against code the owner lets run: allow agents only
+on a PC whose other accounts you trust.
+A proof of the owner's account for these Settings changes is planned after
+v0.5.0.
+
+## Releases and reports
 
 Keep projects, `.cache`, local preferences, environment files, keys, recordings,
 and generated run reports out of source releases. `.gitignore` prevents new
