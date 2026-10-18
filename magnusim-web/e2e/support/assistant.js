@@ -273,16 +273,18 @@ export function trackTab(page) {
 
 /**
  * Starts a turn on the server at `base` (POST /api/assistant/turns `body`: {text, tab?,
- * conversation?, context?}; expects 202) and follows it (followTurn, with `opts`), with its
- * `conversation` and, when the server gives one, the `answerKey` its questions take.
+ * conversation?, context?, provider?}; expects 202) and follows it (followTurn, with `opts`), with
+ * its `conversation` and the `answerKey` its questions take (the 202 gives it only to whoever
+ * started the turn: answerGate sends it).
  */
 export async function startTurn(request, base, body, opts = {}) {
   const r = await request.post(`${base}/api/assistant/turns`, { data: body });
   const j = await r.json();
   expect(r.status(), JSON.stringify(j)).toBe(202);
+  expect(typeof j.answer_key, `the 202 carries the turn's answer key: ${JSON.stringify(Object.keys(j))}`).toBe('string');
   const t = followTurn(request, base, j.turn, opts);
   t.conversation = j.conversation ?? null;
-  t.answerKey = j.answer_key ?? null;
+  t.answerKey = j.answer_key;
   return t;
 }
 
@@ -357,13 +359,19 @@ const answeredGates = new WeakMap();
 
 /**
  * Answers the next question of turn `t` (from startTurn or followTurn) that nobody answered
- * yet, as a click on its Allow (Send) or Don't would: POST /api/assistant/gates/:id
- * {allow} (with the turn's answer key when the server gave one). `kind` ('confirm' |
- * 'privacy') and `tool` (the tool's full name) narrow which question; waits up to `ms` for
- * it. Resolves to the question as the turn's `gate` event shows it ({id, kind, tool?, title,
- * copy, yes, no, ...}).
+ * yet, as a click on its Allow (Send) or Don't would, the way the app takes it from whoever may
+ * answer:
+ * - the program that started the turn: POST /api/assistant/gates/:id {allow, answer_key} with
+ *   the turn's answer key (startTurn keeps it from the 202);
+ * - the Magnusim window that shows it: `page`'s own dialog, its Allow or Don't clicked (the page
+ *   answers on the relay link it was shown on), for a question only the window answers
+ *   (`link_only`: a coding agent's own tool, its privacy question) or a turn followed without
+ *   its key (followTurn). Without `page` there it throws, and nothing is sent.
+ * `kind` ('confirm' | 'privacy') and `tool` (the tool's full name) narrow which question; waits
+ * up to `ms` for it. Resolves to the question as the turn's `gate` event shows it ({id, kind,
+ * tool?, title, copy, yes, no, link_only?, ...}).
  */
-export async function answerGate(request, base, t, allow, { kind, tool, ms = 30_000 } = {}) {
+export async function answerGate(request, base, t, allow, { kind, tool, ms = 30_000, page } = {}) {
   let mine = answeredGates.get(t);
   if (!mine) answeredGates.set(t, (mine = new Set()));
   const open = (e) =>
@@ -373,8 +381,19 @@ export async function answerGate(request, base, t, allow, { kind, tool, ms = 30_
     (!tool || e.gate.tool === tool) &&
     !t.events.some((c) => c.type === 'gate_closed' && c.gate === e.gate.id);
   const { gate } = await t.waitFor(open, `a question to answer${kind ? ` (${kind})` : ''}${tool ? ` for ${tool}` : ''}`, ms);
+  if (!gate.link_only && t.answerKey) {
+    mine.add(gate.id);
+    await postOk(request, `${base}/api/assistant/gates/${gate.id}`, { allow, answer_key: t.answerKey });
+    return gate;
+  }
+  // No answer key answers this one: only the window that shows it does.
+  const why = gate.link_only ? 'only the Magnusim window answers this question (link_only)' : 'this turn has no answer key (start it with startTurn)';
+  if (!page) throw new Error(`answerGate: ${why}: pass {page} to answer it in the app's dialog. Question: ${JSON.stringify(gate.title)}`);
   mine.add(gate.id);
-  await postOk(request, `${base}/api/assistant/gates/${gate.id}`, { allow, ...(t.answerKey ? { answer_key: t.answerKey } : {}) });
+  await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: ms });
+  await expect(page.locator('#cf-heading')).toHaveText(gate.title, { timeout: ms });
+  await page.locator(allow ? '#cf-confirm' : '#cf-cancel').click();
+  await t.waitFor((e) => e.type === 'gate_closed' && e.gate === gate.id, `question ${gate.id} closed by the window's answer`, ms);
   return gate;
 }
 

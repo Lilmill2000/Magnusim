@@ -338,8 +338,11 @@ No test reaches a real model provider or this PC's real Assistant files.
     `fake.compatBase`) with project data allowed; `trackTab(page)`;
     `startTurn(request, base, body, opts?)` and `followTurn(request, base, id, opts?)`
     (`waitFor`, `latest`, `ended`; `opts.strictFallback` above);
-    `answerGate(request, base, turn, allow, {kind, tool})`
-    answers the turn's next question through its route, as a click would;
+    `answerGate(request, base, turn, allow, {kind, tool, page})`
+    answers the turn's next question as a click would: with the turn's answer key (only
+    the program that started a turn holds it; `startTurn` keeps it from the 202), or, for
+    a question only the window answers (`link_only`) or a turn followed without its key,
+    in `page`'s own dialog;
     `offeredTools(req)` lists a request's tools as `{name, strict}`; and
     `resultsIn(req)` the tool results it carries (a fake request or a function step's
     body). `setHidden()` (`e2e/support/link-streams.js`) makes a tab say

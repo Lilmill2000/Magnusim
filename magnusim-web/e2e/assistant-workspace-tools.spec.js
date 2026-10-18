@@ -44,7 +44,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { answerGate, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
+import { answerGate, followTurn, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { LLAMA_SERVER, startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
 import { startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
@@ -1199,6 +1199,31 @@ test("the scripted model on the local server answers from the request: each step
   await expect(w.frame.locator('#counter')).toHaveText('0', STEP);
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add', 'add', 'reset']);
   expect(chats().at(-1).step).toEqual({ text: `${PLUGIN}__reset: ok; ${PLUGIN}__mystery: declined` });
+});
+
+test("the shared answerGate answers as the app takes answers: with the turn's answer key, or in the page's own dialog when no key answers (a turn followed without its key); without the page it throws and the question stays open", async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 4 } }] }, { tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset.' });
+  // Started by another program: this test has the turn's id only, not its answer key.
+  const r = await request.post(api('/api/assistant/turns'), { data: { text: 'Add 4, then reset the counter.', tab: w.tab } });
+  const j = await r.json();
+  expect(r.status(), JSON.stringify(j)).toBe(202);
+  const t = followTurn(request, host.base, j.turn);
+  await expect(modal(page)).toBeVisible(STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('4', STEP);
+  await expect(answerGate(request, host.base, t, true)).rejects.toThrow(/this turn has no answer key/);
+  await expect(modal(page)).toBeVisible();
+  expect(ofType(await t.latest(), 'gate_closed'), 'still open: nothing was sent').toEqual([]);
+  const gate = await answerGate(request, host.base, t, true, { page });
+  expect(gate).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__reset` });
+  await expect(modal(page)).toBeHidden(STEP);
+  const { turn, events } = await t.ended();
+  expect(turn.state).toBe('done');
+  expect(ofType(events, 'gate_closed').map((e) => [e.gate, e.answer, e.by])).toEqual([[gate.id, 'allow', 'user']]);
+  await expect(w.frame.locator('#counter')).toHaveText('0', STEP);
 });
 
 test("a failed call says how to fix it: its hint and detail reach the model's next request and the terminal shows the hint; a result's summary is the log's line, never the model's", async ({

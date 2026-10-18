@@ -64,7 +64,7 @@ import { removeTreeSync } from '../scripts/remove-tree.js';
 import { e2eTemp, startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { infoPathOf } from './support/mcp-client.mjs';
-import { assistantPane, assistantStatus, openAssistantStep, openCard, resetAssistant, saveKey } from './support/assistant.js';
+import { answerGate, assistantPane, assistantStatus, openAssistantStep, openCard, resetAssistant, saveKey } from './support/assistant.js';
 import { expect, test } from './support/stress.js';
 
 const WIN = process.platform === 'win32';
@@ -1343,7 +1343,9 @@ test("privacy Ask for destination agent:claude: the question shows in the app be
   const t2 = await agentTurn(request, { text: 'Read the counter.', tab: w.tab, provider: 'agent:claude' }, token);
   await expect(dialog).toBeVisible({ timeout: 30_000 });
   expect(fake.pids('agent').length).toBe(starts);
-  await page.locator('#cf-confirm').click();
+  // Only the window answers it (link_only), never the turn's answer key: the shared helper clicks Send in the page.
+  const sent = await answerGate(request, host.base, t2, true, { kind: 'privacy', page });
+  expect(sent).toMatchObject({ kind: 'privacy', link_only: true });
   await expect(dialog).toBeHidden();
   const e2 = await t2.ended(60_000);
   expect(e2.turn.state).toBe('done');
