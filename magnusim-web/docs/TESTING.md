@@ -310,6 +310,13 @@ No test reaches a real model provider or this PC's real Assistant files.
     `hold` until `fake.release(name)`; crash, exit during a call, ignore cancel, spawn
     helper processes, switch mode, stop with a reason or answer with an error. The file's
     header lists every step and option.
+  - A controller that lives for a whole spec file (one per agent in
+    `e2e/assistant-agents.spec.js`) is reset before each test: `fake.reset()` forgets the
+    prompts scripted and not yet taken and lets every hold go, so a test that failed
+    before its turn reached the agent never runs its leftovers in the next test;
+    `fake.pending()` counts them, and the spec's `afterEach` checks every scripted prompt
+    was used. Its records stay: scope a check to the agents a test started
+    (`fake.pids('agent').slice(before)`, then `fake.received(pid)`).
   - `style` imitates how the adapters mark Magnusim's tools: `tool_name_meta` (the tool's
     name in the tool call's `_meta`), `mcp_call_flag` (a flagged `mcp.magnusim.<tool>`
     title, and approvals that carry the tool call's id) or `none` (a custom command).

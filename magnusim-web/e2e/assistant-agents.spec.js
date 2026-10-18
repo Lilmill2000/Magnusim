@@ -370,16 +370,23 @@ test.beforeEach(async ({ request }) => {
   fake.configure(CLAUDE_FAKE);
   codexFake.configure(CODEX_FAKE);
   customFake.configure(CUSTOM_FAKE);
-  for (const c of controllers()) c.signOut();
+  // A test that failed before its turn reached the agent leaves its scripts: they never run here.
+  for (const c of controllers()) {
+    c.reset();
+    c.signOut();
+  }
   removeTreeSync(join(home, '.claude'));
   removeTreeSync(first);
   mkdirSync(first, { recursive: true });
 });
 
 test.afterEach(async ({ request }) => {
+  // Every prompt a test scripted was taken by an agent it ran (read before the reset ends them).
+  const unused = controllers().map((c) => c.pending());
   // The reset ends every agent: nothing an agent or a launcher started is left running.
   await resetAssistant(request, host.base);
   await expect.poll(() => strays(everyPid(), host.tmp), { timeout: 15_000, message: 'no agent, bridge, helper or launcher process left running' }).toEqual([]);
+  expect(unused, 'every scripted prompt was used (Claude Code, Codex, the custom agent)').toEqual(controllers().map(() => 0));
 });
 
 test.afterAll(async () => {
@@ -480,6 +487,8 @@ test("signing in: connect again hears Claude Code ask for it, and the Sign in bl
   // The agent's own way to sign in, as the real adapter sends it: Magnusim's Node, its own script and safe arguments.
   const listed = (await agentsNow(request)).find((r) => r.id === 'claude');
   expect(listed.script, 'the resolved script').toBeTruthy();
+  // The agents this test starts (the controller lives for the whole file).
+  const startedBefore = fake.pids('agent').length;
   fake.configure({
     requireSignIn: true,
     authMethods: [
@@ -512,10 +521,10 @@ test("signing in: connect again hears Claude Code ask for it, and the Sign in bl
   // The server keeps the agent's ways to sign in on its row (sign_in), the command exactly as shown.
   const asked = (await agentsNow(request)).find((r) => r.id === 'claude');
   expect(asked.sign_in.methods).toEqual([expect.objectContaining({ id: 'claude-login', type: 'terminal', command: `${CLAUDE.program} --cli auth login` })]);
-  const startsBefore = fake.pids('agent').length;
-  expect(startsBefore, 'the connect check started the agent').toBeGreaterThan(0);
+  const checks = fake.pids('agent').slice(startedBefore);
+  expect(checks.length, 'the connect check started the agent').toBeGreaterThan(0);
   // It got no message: a connect check sends none.
-  expect(fake.received().filter((m) => m.method === 'session/prompt')).toEqual([]);
+  expect(checks.flatMap((p) => fake.received(p.pid)).filter((m) => m.method === 'session/prompt')).toEqual([]);
 
   // Signed in (its own marker, and the login file): connect again connects.
   fake.signIn();

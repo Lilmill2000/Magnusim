@@ -22,6 +22,10 @@
 //   configure(patch)              settings the next started fake reads (the header of
 //                                 fake-acp-agent.mjs lists them)
 //   script(...steps)              queues one prompt's steps (one call = one prompt, in order)
+//   pending()                     how many scripted prompts no prompt has taken yet
+//   reset()                       forgets the scripted prompts not taken yet and lets every hold
+//                                 go (and forgets them), so a test's leftovers never run in the
+//                                 next test's first prompt; the records stay
 //   release(name)                 lets a `hold` step go (before or after it is reached)
 //   records()                     everything the fakes recorded: {seq, pid, instance, dir:'in'|'out',
 //                                 msg} or {seq, pid, instance, event, ...}, in each fake's order
@@ -162,6 +166,15 @@ export async function startFakeAcp(options = {}) {
     },
     script(...steps) {
       prompts.push(steps);
+    },
+    pending: () => prompts.length,
+    reset() {
+      prompts.length = 0;
+      for (const h of holds.values()) {
+        h.released = true;
+        for (const w of h.waiters.splice(0)) w();
+      }
+      holds.clear();
     },
     release(name) {
       const h = hold(name);
