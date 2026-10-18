@@ -1,7 +1,7 @@
 // What the tools that make a body from sketch regions share (extrude and revolve; CAD tools spec
 // §3.2.8, §3.2.9, §7.4):
 //   sketch    one sketch by name (any case) or id; an edit's sketch must come before the feature
-//   regions   region selectors in that sketch: "all" (even-odd: holes stay open), "r2", "at(u, v)",
+//   regions   region selectors in that sketch: "all" (every hole stays open), "r2", "at(u, v)",
 //             a region key, or "<sketch> r2" naming the same sketch; each names at least one,
 //             the union kept once each
 //   op        new makes a body (body_name and color name and colour it after the panel's Done,

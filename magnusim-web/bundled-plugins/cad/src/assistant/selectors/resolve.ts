@@ -789,7 +789,7 @@ function byRegion(sc: Scene, sel: Extract<Sel, { t: 'region' }>): RegionHit[] {
     case 'regions':
       return hits(rows);
     case 'all':
-      // Even-odd: the regions at even depth are material, holes stay open.
+      // The regions at even depth are material: every hole stays open, an island in one is material.
       return hits(rows.filter((r) => r.depth % 2 === 0));
     case 'largest':
       return hits([rows[0]]);

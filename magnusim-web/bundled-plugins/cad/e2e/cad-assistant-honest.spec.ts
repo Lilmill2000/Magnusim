@@ -12,6 +12,8 @@
 // features?", its copy saying Ctrl+Z brings them back, Don't focused): Enter answers Don't, the
 // model gets declined and the Part never hears the call; a click on Allow deletes the feature the
 // tree shows, and one Ctrl+Z brings it back.
+// A plate with a keyhole (a circle and an overlapping slot) extruded as "all": the hole stays open
+// (the volume chip shows the plate less the keyhole, not a solid plate).
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -676,4 +678,44 @@ test('cad:assistant-honest-sweep a sweep whose path has a gap changes nothing; t
   expect(await label()).toBe('Assistant: A pipe elbow.');
   await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
   await expect.poll(() => treeNames(page), STEP).toEqual([]);
+});
+
+test('cad:assistant-honest-keyhole a plate with a keyhole extruded as "all" keeps the keyhole open: the volume is the plate less the keyhole', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest keyhole');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as MissCad).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  const keyhole = {
+    edit: '',
+    name: 'Key sk',
+    on: 'Top',
+    entities: [
+      { id: 'r', kind: 'rect', at: [-30, -20, 30, 20], construction: false },
+      { id: 'c', kind: 'circle', at: [0, 0, 5], construction: false },
+      { id: 's', kind: 'rect', at: [-2, -12, 2, 0], construction: false },
+    ],
+    constraints: [],
+    infer: false,
+  };
+  host.fake.reply({ tools: [{ name: 'cad__sketch', input: keyhole }] }, { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Plate', sketch: 'Key sk', distance: '5 mm' }) }] }, { text: 'The plate has its keyhole.' });
+  const t = await startTurn(request, host, { text: 'A 60 x 40 x 5 plate with a keyhole.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterSketch, afterExtrude] = chats(host).slice(before);
+  // The sketch's answer: the plate (one hole) and the keyhole's three pieces, each in the hole.
+  const [sk] = resultsIn(afterSketch);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true });
+  expect((sk.data!.regions as { holes: number; depth: number }[]).map((r) => [r.holes, r.depth])).toEqual([
+    [1, 0],
+    [0, 1],
+    [0, 1],
+    [0, 1],
+  ]);
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Plate', state: 'ok' } } });
+  // What the person sees: the plate less the keyhole (a circle r 5 and a 4 x 12 slot overlapping it).
+  const inside = 2 * (Math.sqrt(21) + 12.5 * Math.asin(0.4));
+  const KEYHOLE = 25 * Math.PI + 48 - inside;
+  await expect.poll(() => volumeNow(page), STEP).toBe(Math.round(5 * (2400 - KEYHOLE)));
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
 });

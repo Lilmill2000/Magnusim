@@ -153,7 +153,7 @@ const selectorRows = (): HelpRow[] => [
   },
   {
     about: 'regions',
-    text: `In the tool's sketch: all (even-odd: holes stay open), largest, r1 r2 ... (by area, largest first), at(u, v) in the sketch's mm. Another sketch: "Plate sketch r2"; "Plate sketch" alone is all of it; find "Plate sketch regions" lists every one.`,
+    text: `In the tool's sketch: all (every hole stays open), largest, r1 r2 ... (by area, largest first), at(u, v) in the sketch's mm. Another sketch: "Plate sketch r2"; "Plate sketch" alone is all of it; find "Plate sketch regions" lists every one.`,
   },
   {
     about: 'handles and selection',
@@ -203,7 +203,7 @@ const trapRows = (): HelpRow[] => [
   { about: 'cuts into a face', text: "A face's normal points out of the part, so an extrude cut sketched on it needs flip true; hole cuts inward by itself. detail.sub says why a cut missed: wrong_side (flip it), off_body (the profile lies beside the body: read detail.frame), too_short (go further, or through)." },
   { about: 'side face frames', text: "+Y and -X faces have v running -Z (a point higher than such a face's origin has a negative v), and a -Z face has v running -Y. find shows each face's frame; hole takes model coordinates instead." },
   { about: 'overlap', text: 'join, cut and intersect need overlap: touching is not enough. Joining pieces that do not touch makes one body of several solids. A pattern whose copies miss the body fails: use op new, then combine with "bodies of <pattern>".' },
-  { about: 'regions', text: '"all" is even-odd: a circle inside a rectangle stays a hole. r1, r2... go by area, largest first, and change when the outline changes: at(u, v) keeps pointing at one place.' },
+  { about: 'regions', text: '"all" leaves every hole open: a circle inside a rectangle stays a hole, and so do overlapping holes, a keyhole and a hole a line crosses (each piece lies in the hole); an island in a hole is material again; overlapping shapes with nothing around them are their union. r1, r2... go by area, largest first, and change when the outline changes: at(u, v) keeps pointing at one place.' },
   { about: 'joined points', text: 'Points within 0.05 mm are one point: two circles drawn at one centre share it, so anchor it once (a second coincident on it repeats the first and is refused).' },
   { about: 'dimensions through 0', text: 'A signed dimension (distance_x, distance_y, angle) driven through 0 mirrors the sketch: set_params and edit_feature say so in flipped.' },
   { about: 'fillets and shells', text: 'Fillet before shell. A radius at or above its wall fails. Edges take their tangent chain. A fillet on a face follows its edges as the part changes; on edges it keeps those edges.' },

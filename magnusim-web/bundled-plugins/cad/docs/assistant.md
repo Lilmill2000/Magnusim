@@ -264,10 +264,10 @@ What they share is in `region-tools.ts`:
 
 - `sketchFor`: the `sketch` field, a sketch by name or id (`not_found` lists the sketches); an
   edit's sketch must come before the feature (`later_feature`).
-- `regionsOf`: region selectors in that sketch (`all` is even-odd, so a plate's holes stay open;
-  `r2`; `at(u, v)`; a region key; `<sketch> r2` of the same sketch), each naming at least one,
-  kept once each, as `RegionRef`s (`refOfRegion`). An open sketch answers `open_profile` with its
-  open ends, a missing region `region_not_found` with the regions.
+- `regionsOf`: region selectors in that sketch (`all` leaves every hole open, overlapping or
+  split ones too; `r2`; `at(u, v)`; a region key; `<sketch> r2` of the same sketch), each naming at
+  least one, kept once each, as `RegionRef`s (`refOfRegion`). An open sketch answers
+  `open_profile` with its open ends, a missing region `region_not_found` with the regions.
 - `readOp`, `scopeOf`, `checkBodyName`: the op fields' rules, every problem in one `bad_input`
   (`bodies` is `[]` with `new`; `body_name` and `color` only with `new`; `#rrggbb`); `bodies` are
   body selectors; a `body_name` another body has is `name_taken` (a feature's name is fine).
