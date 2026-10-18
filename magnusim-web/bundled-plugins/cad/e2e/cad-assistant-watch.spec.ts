@@ -12,15 +12,26 @@
 // and no voids, two separate blocks' distance, no overlap and two solids joined, a cut's area, and
 // a face by its label (find's selectors); the turn's log reads each measurement; nothing in the
 // Part changes.
+// Watch mode (watch 2-4 and 7, T12): a watched build (the watch pace, delays at 0.3) shows the
+// Assistant's own read-only panels (its plane, the sketch with Done disabled and the reason, the
+// Fillet), the chip working with the step and the steps used, the DOF chip going from under- to
+// fully defined as the dimensions go in; the Undo hint names the request, one Ctrl+Z takes it all
+// back and Ctrl+Shift+Z brings it again. The person's open Parameters panel during set_params: no
+// wait, the new values and the flash, still open. The camera latch: a drag or a tree menu's Normal
+// to during the turn keeps the view where the person put it; with no move the sketch turns the
+// view to its plane. The chip after the turn: Undo is one Ctrl+Z of the request; the Part's health
+// says "· 1 sketch under-defined" (amber) or "· Fillet 1 fails" (red; a click selects its row).
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { HINTS } from '../src/assistant/errors';
 import { GUIDE } from '../src/assistant/guide';
 import {
   cadFrame,
   chats,
+  chipButton,
+  chipWords,
   newProject,
   offeredTools,
   openNewPart,
@@ -36,7 +47,7 @@ import {
   useScriptedModel,
   type AssistantHost,
 } from './assistant-helpers';
-import { addSolid, countFileWrites, fileWrites } from './helpers';
+import { addSolid, countFileWrites, fileWrites, runCommand, singleVolume } from './helpers';
 import { PNG, type Image } from './png';
 
 let host: AssistantHost;
@@ -110,17 +121,17 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { hold(p: string): void } } }).__CAD__.assistant.hold('after-settled'));
   const t = await startTurn(request, host, { text: 'Read the Part, then drill a hole.', tab });
   await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
-  await expect(chip).toHaveText(/^Assistant · thinking · \d+ of 120 steps$/, STEP);
+  await expect(chipWords(frame)).toHaveText(/^Assistant · thinking · \d+ of 120 steps$/, STEP);
   await expect(app).toHaveAttribute('data-assistant', 'thinking');
   host.fake.release('think');
   await expect(chip).toHaveAttribute('data-assistant-state', 'working', STEP);
-  await expect(chip).toHaveText(/^Assistant · Read the Part · \d+ of 120 steps$/);
+  await expect(chipWords(frame)).toHaveText(/^Assistant · Read the Part · \d+ of 120 steps$/);
   await expect(app).toHaveAttribute('data-assistant', 'working');
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { release(p: string): void } } }).__CAD__.assistant.release('after-settled'));
   const { turn } = await t.ended(STEP_MS * 2);
   expect(turn.state).toBe('done');
   await expect(chip).toHaveAttribute('data-assistant-state', 'ended', STEP);
-  await expect(chip).toHaveText('Assistant: Read the Part, then drill a hole. · done');
+  await expect(chipWords(frame)).toHaveText('Assistant: Read the Part, then drill a hole. · done');
   await expect(app).toHaveAttribute('data-assistant', 'ended');
   // Every phase the frame showed, in order (the second call answers at once: its working may not be drawn).
   const shown = await readRecord(page, 'phase');
@@ -271,7 +282,7 @@ test('cad:assistant-watch-measure measure gives a body its volume and voids, two
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { hold(p: string): void } } }).__CAD__.assistant.hold('after-settled'));
   const t = await startTurn(request, host, { text: 'Measure the blocks.', tab });
   await expect(chip).toHaveAttribute('data-assistant-state', 'working', STEP);
-  await expect(chip).toHaveText(/^Assistant · Measure · \d+ of 120 steps$/);
+  await expect(chipWords(frame)).toHaveText(/^Assistant · Measure · \d+ of 120 steps$/);
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { release(p: string): void } } }).__CAD__.assistant.release('after-settled'));
   const { turn, events } = await t.ended(STEP_MS * 2);
   expect(turn.state).toBe('done');
@@ -302,7 +313,7 @@ test('cad:assistant-watch-measure measure gives a body its volume and voids, two
   const revs = [body, pair, section, face].map((r) => r.data!.rev);
   expect(new Set(revs).size).toBe(1);
   expect(await features()).toMatchObject({ features: 4, bodies: 2 });
-  await expect(chip).toHaveText('Assistant: Measure the blocks. · done', STEP);
+  await expect(chipWords(frame)).toHaveText('Assistant: Measure the blocks. · done', STEP);
 });
 
 // ---- view (spec §12.3 watch 5): pictures drawn off screen reach the model; the person's view stays.
@@ -498,4 +509,229 @@ test('cad:assistant-watch-view-no-images a local model that reads no images is t
     // The scripted model listed again, with no row.
     host.fake.models([local.model], 'compat');
   }
+});
+
+// ---- Watch mode (watch 2-4 and 7, T12)
+
+type WW = {
+  __CAD__: {
+    assistant: { setPace(p: string | null, scale?: number | null): void; calls: { tool: string; ok: boolean; paced?: number }[] };
+    services: {
+      doc: {
+        addParam(p: { name: string; expr: string; quantity: string }): unknown;
+        beginNew(type: string, init: unknown): { feature: string; commit(): void };
+        undo(): void;
+        state: { get(): { doc: { features: { id: string; name: string }[]; params: { name: string; expr: string }[] }; history: { undoLabel: string | null }; rebuild: { status: string; features: Record<string, { state: string }> } } };
+      };
+      viewport: { get(): { handle: { camera(): { position: number[]; target: number[]; up: number[] }; state: { get(): { animating: boolean } }; userCameraMoves(): number } } };
+    };
+  };
+};
+const SE = (id: string, kind: string, at: number[]) => ({ id, kind, at, construction: false });
+const SC = (id: string, kind: string, refs: string[], value = '') => ({ id, kind, refs, value });
+const sketchOf = (name: string, on: string, constraints = [SC('c0', 'coincident', ['r.center', 'origin']), SC('dw', 'distance', ['r.bottom'], '60 mm'), SC('dh', 'distance', ['r.left'], '40 mm')]) => ({
+  name: 'cad__sketch',
+  input: { edit: '', name, on, entities: [SE('r', 'center_rect', [0.5, 0.4, 59, 39])], constraints, infer: false },
+});
+const SETP = (name: string, expr: string) => ({ name: 'cad__set_params', input: { set: [{ name, kind: 'length', expr, comment: '', rename_to: '' }], remove: [] } });
+/** The camera once no transition runs. */
+async function cameraNow(page: Page) {
+  await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.viewport.get().handle.state.get().animating), STEP).toBe(false);
+  return cadFrame(page).evaluate(() => {
+    const c = (window as unknown as WW).__CAD__.services.viewport.get().handle.camera();
+    return { position: c.position, target: c.target, up: c.up };
+  });
+}
+const paramsNow = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.doc.state.get().doc.params.map((p) => p.name));
+const undoNow = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.doc.state.get().history.undoLabel);
+const watchHistory = (frame: FrameLocator) => frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl');
+
+test('cad:assistant-watch-build a watched build: the read-only sketch panel and the DOF going to fully defined, then the Fillet panel; one Ctrl+Z takes the request back, Ctrl+Shift+Z brings it again', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant watched build');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 10] });
+  await expect(watchHistory(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  const label0 = await undoNow(page);
+  // What the frame shows, frame by frame: the panels and their owner, Done's reason, the chip, the DOF chip.
+  await recordShown(page, 'panel', '[data-cad-panel]', 'data-cad-panel');
+  await recordShown(page, 'owner', '[data-cad-panel]', 'data-panel-owner');
+  await recordShown(page, 'done', '[data-cad-panel] [data-panel-done]', 'data-disabled-reason');
+  await recordShown(page, 'chip', '[data-chip="assistant"]', 'data-assistant-state');
+  await recordShown(page, 'words', '[data-chip="assistant"] [data-assistant-text]');
+  await recordShown(page, 'dof', '[data-chip="sketch"]', 'data-state');
+  // The person's pace: watch, its delays at 0.3.
+  await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.setPace('watch', 0.3));
+  const before = chats(host).length;
+  host.fake.reply({ tools: [sketchOf('Plate sketch', 'Top offset 10 mm')] }, { tools: [{ name: 'cad__modify', input: { edit: '', name: '', kind: 'fillet', targets: ['Extrude 1.end'], size: '2 mm', size2: '', flip: false, inward: false } }] }, { text: 'The plate sketch and the rounded block are ready.' });
+  const t = await startTurn(request, host, { text: 'Build a plate.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  expect(resultsIn(chats(host)[before + 1])[0]).toMatchObject({ tool: 'cad__sketch', ok: true, data: { solver: { state: 'fully', dof: 0 } } });
+  expect(resultsIn(chats(host)[before + 2])[0]).toMatchObject({ tool: 'cad__modify', ok: true });
+  // The Assistant's own panels, read-only: first its plane, then the sketch, then the Fillet.
+  const panels = (await readRecord(page, 'panel')).filter((p) => p !== '(none)');
+  expect(panels).toEqual(['feature', 'sketch', 'feature']);
+  const owners = (await readRecord(page, 'owner')).filter((o) => o !== '(none)');
+  expect(owners.length).toBeGreaterThan(0);
+  expect(owners.every((o) => o === 'assistant'), owners.join(' ')).toBe(true);
+  expect(await readRecord(page, 'done')).toContain('The Assistant is filling this in · Esc takes over (the Assistant pauses)');
+  expect(await readRecord(page, 'chip')).toContain('working');
+  expect((await readRecord(page, 'words')).some((w) => /^Assistant · Sketch Plate sketch · \d+ of 120 steps$/.test(w))).toBe(true);
+  // The DOF chip went from under-defined to fully defined as the dimensions went in.
+  const dof = (await readRecord(page, 'dof')).filter((d) => d === 'under' || d === 'fully');
+  expect(dof.indexOf('under')).toBeGreaterThanOrEqual(0);
+  expect(dof[dof.length - 1]).toBe('fully');
+  expect(dof.indexOf('under')).toBeLessThan(dof.lastIndexOf('fully'));
+  // Every step was watched (it waited at its pace points).
+  const calls = await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, paced: c.paced ?? 0 })));
+  expect(calls.filter((c) => c.tool === 'sketch' || c.tool === 'modify').every((c) => c.paced > 0)).toBe(true);
+  // The tree, fully defined (no "(-)"); the volume went down with the fillet.
+  await expect(watchHistory(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Plate sketch plane', 'Plate sketch', 'Fillet 1'], STEP);
+  expect(await singleVolume(frame)).toBeLessThan(12_000);
+  // The Undo hint names the request; one Ctrl+Z takes all of it back, Ctrl+Shift+Z brings it again.
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').hover();
+  await expect(frame.locator('[data-cad-tip]')).toContainText('Undo Assistant: Build a plate.', STEP);
+  await page.mouse.move(5, 5);
+  const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  await page.keyboard.press('Control+z');
+  await expect(watchHistory(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  expect(await undoNow(page)).toBe(label0);
+  await page.keyboard.press('Control+Shift+z');
+  await expect(watchHistory(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Plate sketch plane', 'Plate sketch', 'Fillet 1'], STEP);
+});
+
+test("cad:assistant-watch-params-panel the person's open Parameters panel during set_params: no wait, the new values shown, the changed rows flash, the panel stays open", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant parameters panel');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => {
+    const w = window as unknown as WW;
+    w.__CAD__.assistant.setPace('watch', 0);
+    w.__CAD__.services.doc.addParam({ name: 'w', expr: '20 mm', quantity: 'length' });
+  });
+  await runCommand(frame, 'modify.parameters');
+  const panel = frame.locator('[data-cad-panel="params"]');
+  await expect(panel).toBeVisible();
+  await recordShown(page, 'chip', '[data-chip="assistant"]', 'data-assistant-state');
+  await recordShown(page, 'flash', '[data-cad-panel="params"] [data-param-changed]', 'data-param-row');
+  const before = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__set_params', input: { set: [{ name: 'w', kind: 'length', expr: '30 mm', comment: '', rename_to: '' }, { name: 'h', kind: 'length', expr: 'w/2', comment: '', rename_to: '' }], remove: [] } }] }, { text: 'w and h are set.' });
+  const t = await startTurn(request, host, { text: 'Set w and h.', tab });
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  expect(resultsIn(chats(host)[before + 1])[0]).toMatchObject({ tool: 'cad__set_params', ok: true, data: { params: [{ name: 'w', value: 30 }, { name: 'h', value: 15 }] } });
+  // It never waited: the person's idle panel is no reason to.
+  expect(await readRecord(page, 'chip')).not.toContain('waiting');
+  // Still the person's panel, open, with the new values; the changed rows flashed.
+  await expect(panel).toBeVisible();
+  await expect(panel).not.toHaveAttribute('data-panel-owner', /.+/);
+  await expect(panel.locator('[data-param-row="w"] .nui[data-field="expr"] input')).toHaveValue('30 mm');
+  await expect(panel.locator('[data-param-row="h"] .nui[data-field="expr"] input')).toHaveValue('w/2');
+  expect(await readRecord(page, 'flash')).toContain('w');
+});
+
+test('cad:assistant-watch-camera the camera latch: a drag or a tree menu Normal to in the turn keeps the view where the person left it; with no move the sketch turns the view to its plane', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant camera latch');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.setPace('watch', 0));
+  const chip = frame.locator('[data-chip="assistant"]');
+  const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
+  const moves = () => cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.viewport.get().handle.userCameraMoves());
+  const turns: [string, string, (() => Promise<void>) | null][] = [
+    [
+      'Front',
+      'drag',
+      async () => {
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 30, { steps: 8 });
+        await page.mouse.up();
+      },
+    ],
+    [
+      'Right',
+      'menu',
+      async () => {
+        await frame.locator('[data-tree-node="origin:top"] > .tree-row').click({ button: 'right' });
+        await frame.locator('[data-menu-item="normal-to"]').click();
+      },
+    ],
+    ['Top', 'none', null],
+  ];
+  for (const [on, how, look] of turns) {
+    host.fake.reply({ hold: `look-${how}`, tools: [sketchOf(`On ${on}`, on)] }, { text: 'Sketched.' });
+    const t = await startTurn(request, host, { text: `Sketch on ${on}.`, tab });
+    await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
+    const m0 = await moves();
+    if (look) {
+      await look();
+      await expect.poll(moves, STEP).toBeGreaterThan(m0);
+    }
+    const seen = await cameraNow(page);
+    host.fake.release(`look-${how}`);
+    expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+    const after = await cameraNow(page);
+    if (look) {
+      // Latched: the sketch's entry left the view where the person put it.
+      expect(after, `${how}: the camera stays`).toEqual(seen);
+    } else {
+      // No move in the turn: the view turned to look straight at Top (down -Z).
+      const d = after.target.map((v, i) => v - after.position[i]);
+      const n = Math.hypot(...d);
+      expect(d[2] / n).toBeLessThan(-0.999);
+    }
+  }
+});
+
+test("cad:assistant-watch-chip-end the chip after the turn: Undo is one Ctrl+Z of the request; the Part's health names an under-defined sketch, then a failing fillet (a click selects its row)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant chip at the end');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.setPace('fast', 0));
+  const chip = frame.locator('[data-chip="assistant"]');
+  const label0 = await undoNow(page);
+  // Undo: the request's group, as one Ctrl+Z.
+  host.fake.reply({ tools: [SETP('a', '3 mm')] }, { tools: [SETP('b', '4 mm')] }, { text: 'a and b.' });
+  const t1 = await startTurn(request, host, { text: 'Add a and b.', tab });
+  expect((await t1.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect(chip).toHaveAttribute('data-assistant-state', 'ended', STEP);
+  await expect(chip).toHaveAttribute('data-assistant-health', 'ok');
+  await chipButton(frame, 'undo').click();
+  await expect.poll(() => paramsNow(page), STEP).toEqual([]);
+  expect(await undoNow(page)).toBe(label0);
+  await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { services: { doc: { redo(): void } } } }).__CAD__.services.doc.redo());
+  expect(await paramsNow(page)).toEqual(['a', 'b']);
+  // A sketch left with dof 2: amber, "1 sketch under-defined".
+  host.fake.reply({ tools: [sketchOf('Loose', 'Top', [SC('c0', 'coincident', ['r.center', 'origin'])])] }, { text: 'The sketch still moves.' });
+  const t2 = await startTurn(request, host, { text: 'A loose sketch.', tab });
+  expect((await t2.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect(chip).toHaveAttribute('data-assistant-health', 'warn', STEP);
+  await expect(chip.locator('[data-assistant-health-text]')).toHaveText('· 1 sketch under-defined');
+  await expect(chipWords(frame)).toHaveText('Assistant: A loose sketch. · done');
+
+  // Then a failing fillet of the person's: red, "Fillet 1 fails" first, and a click on it selects its tree row.
+  const f2 = frame;
+  const tab2 = tab;
+  const made = await addSolid(page, { size: [40, 30, 6] });
+  await cadFrame(page).evaluate(
+    ({ extrude, body }) => {
+      const doc = (window as unknown as WW).__CAD__.services.doc;
+      const ref = { name: `F:${extrude}:end`, signature: { kind: 'face', type: 'plane', at: [20, 15, 6], dir: [0, 0, 1] } };
+      doc.beginNew('fillet', { body, edges: [], faces: [ref], radius: '50 mm' }).commit();
+    },
+    { extrude: made.extrude, body: made.body },
+  );
+  await expect(f2.locator('[data-cad-tree] [data-feature-row][data-state="error"]')).toHaveCount(1, { timeout: STEP_MS * 2 });
+  host.fake.reply({ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] }, { text: 'Fillet 1 fails: its radius is too large.' });
+  const t3 = await startTurn(request, host, { text: 'Check the part.', tab: tab2 });
+  expect((await t3.ended(STEP_MS * 2)).turn.state).toBe('done');
+  const chip2 = f2.locator('[data-chip="assistant"]');
+  await expect(chip2).toHaveAttribute('data-assistant-health', 'error', STEP);
+  await expect(chip2.locator('[data-assistant-health-text]')).toHaveText('· Fillet 1 fails · 1 sketch under-defined');
+  // A read made no group: no Undo.
+  await expect(chipButton(f2, 'undo')).toHaveCount(0);
+  await chip2.locator('[data-assistant-health-text]').click();
+  await expect(f2.locator('[data-cad-tree] [data-feature-row]').filter({ has: f2.locator('> .tree-row .tl', { hasText: /^Fillet 1$/ }) })).toHaveAttribute('aria-selected', 'true');
 });

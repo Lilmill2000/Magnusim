@@ -7,6 +7,9 @@
 // and fails after the change reverts the call (broke_downstream). The answer gives each row's
 // value evaluated, what was removed, how the features rebuilt, and the sketches the change turned
 // over (`flipped`: a dimension driven through zero mirrors its sketch; sketch/flip.ts).
+// At the watch pace with no panel open, the Assistant's own Parameters panel (read-only) shows the
+// rows change, a moment per row, and closes with the step; a Parameters panel the person has open
+// stays open and flashes the rows that changed.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { listOfNames, planParams } from '../../doc/params-bulk';
@@ -16,7 +19,10 @@ import type { Param, ParamId } from '../../types/doc';
 import type { ParamRows, ParamsResult } from '../../types/doc-service';
 import type { Quantity } from '../../types/units';
 import { ToolError } from '../errors';
+import { uiFor } from '../../ui/controller';
 import { len, sig6 } from '../numbers';
+import { macrotask } from '../pace';
+import { runtimeOf } from '../runtime';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { flippedSketches, sketchOutputs } from '../sketch/flip';
 
@@ -142,11 +148,24 @@ const setParams: EditTool<Plan> = {
 
   async apply(plan, ctx: EditCtx) {
     const { doc } = ctx.services;
-    await ctx.checkpoint({ pace: 'param', label: `Parameters · ${plan.names.length + plan.removed.length} rows` });
+    const rows = plan.names.length + plan.removed.length;
+    const words = `Parameters · ${rows} row${rows === 1 ? '' : 's'}`;
+    const ui = uiFor(ctx.services);
+    // Watched, with no panel open: the Assistant's own Parameters panel shows the rows change (it closes with the step).
+    if (runtimeOf(ctx.services)?.pace.watching() && !ui.state.get().panel) {
+      const why = ui.openParamsForAssistant(ctx.step);
+      if (!why) {
+        await macrotask();
+        await ctx.checkpoint({ hold: 'after-open', pace: 'open', label: words });
+      }
+    }
+    await ctx.checkpoint({ pace: 'param', label: words });
     const label = `Parameters: ${plan.rows.add.length + plan.rows.change.length + plan.rows.remove.length} changed`;
     const r: ParamsResult = ctx.step.run(() => doc.editParams(plan.rows, label));
     if (!r.ok) throw rowError(r, plan, doc.state.get().doc.params.map((p) => p.name));
-    await ctx.checkpoint({ pace: 'commit' });
+    // A moment per row more, while the panel shows the new values.
+    for (let i = 1; i < rows; i++) await ctx.checkpoint({ pace: 'param', label: words, fraction: (i + 1) / rows });
+    await ctx.checkpoint({ pace: 'commit', hold: 'before-commit', label: words });
   },
 
   reply(plan, data: EditData, ctx): ToolReply {

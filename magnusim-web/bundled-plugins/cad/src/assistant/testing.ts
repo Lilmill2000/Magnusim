@@ -20,6 +20,8 @@ export interface CallRecord {
   code?: string;
   reason?: string;
   ms: number;
+  /** An edit call: how long it waited at its pace points (ms; 0 at the fast pace or with the window hidden). */
+  paced?: number;
 }
 
 export interface HoldPoints {
@@ -96,6 +98,10 @@ export interface AssistantTestHandle {
   setHoldS(s: number | null): void;
   /** The pace whatever the person chose (never written to their preferences; null: theirs), and a scale for its delays (0: no waits; null: as they are). */
   setPace(pace: Pace | null, scale?: number | null): void;
+  /** "Ask each step" whatever the person chose (never written to their preferences; null: theirs). */
+  setAskEach(on: boolean | null): void;
+  /** The step waiting for the person's Keep or Discard ("Ask each step"), or null. */
+  approving(): { call: string; part: string } | null;
   /** The pause in this Part, or null. */
   paused(): Pause | null;
   /** The eval's A/B runs: offer every tool, or the 13-tool core set (registers again). */

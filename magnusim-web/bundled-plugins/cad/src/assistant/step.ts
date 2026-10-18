@@ -10,6 +10,10 @@
 // anew), at most three times; a take-over (Escape, Ctrl+Z, a command, a draft change) answers
 // busy taken_over and pauses the Assistant in this Part until the turn ends.
 // The person's selection comes back after the call, unless they changed it meanwhile.
+// Watch mode (§8): with "Ask each step" on, a judged step waits for the person's Keep or Discard
+// before it is sealed (approval.ts; Discard and no answer revert it: busy step_declined); a kept
+// step lets the view frame again (the camera latch, camera.ts); a call that ran at watch pace
+// while the window was hidden or covered says so (`note`). The chip names the step it works on.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { storedBodyName } from '../doc/features/body-ids';
@@ -21,11 +25,12 @@ import type { AssistantStep, EditSession, TakeOverWhy } from '../types/doc-servi
 import type { Feature } from '../types/doc';
 import type { Selection, SelectionItem } from '../types/selection';
 import { uiFor } from '../ui/controller';
-import { heartbeat, personBlock, waitForEdit } from './busy';
+import { waitForApproval } from './approval';
+import { heartbeat, personBlock, waitedWords, waitForEdit } from './busy';
 import { asToolError, isToolError, ToolError } from './errors';
 import { report, snapshotStates, verdict, type JudgedPlan } from './judge';
 import { groupLabel } from './ledger';
-import type { CallPacer, PacePoint } from './pace';
+import { HIDDEN_NOTE, type CallPacer, type PacePoint } from './pace';
 import { describeChanges } from './rev';
 import { runtimeOf, type AssistantRuntime } from './runtime';
 
@@ -61,6 +66,8 @@ export interface EditCtx extends CallCtx {
   checkpoint(o?: CheckpointOptions): Promise<void>;
   /** The draft the call just wrote into `session` (a checkpoint finds any other one a take-over). */
   wrote(session: EditSession): void;
+  /** Run fn: a change of the selection inside it is the call's own (the person's selection still comes back after the call). */
+  quietly<T>(fn: () => T): T;
 }
 
 export interface EditTool<P extends EditPlan> {
@@ -106,15 +113,24 @@ function stillThere(services: AppServices, sel: Selection): Selection {
 }
 
 /** The person's selection now, to put back after the call unless they changed it meanwhile. */
-function rememberSelection(services: AppServices): { restore(): void } {
+function rememberSelection(services: AppServices): { restore(): void; quietly<T>(fn: () => T): T } {
   const store = services.selection;
   const start: Selection = store.get();
   let theirs = false;
+  let mine = 0;
   // A change that is not a panel's highlight (the Assistant's panel shows its feature that way) is the person's.
   const off = store.subscribe((s) => {
-    if (!isPanelHighlight(s) && s.items.length) theirs = true;
+    if (!mine && !isPanelHighlight(s) && s.items.length) theirs = true;
   });
   return {
+    quietly(fn) {
+      mine += 1;
+      try {
+        return fn();
+      } finally {
+        mine -= 1;
+      }
+    },
     restore() {
       off();
       if (theirs) return;
@@ -171,6 +187,11 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
     }
     const st = step;
     const pacer = rt.pace.forCall(ctx.signal);
+    // The chip names the step ("Assistant · Sketch Plate sketch · 3 of 120 steps").
+    if (rt.store.get().call) rt.store.set({ call: { tool: ctx.tool, label: plan.part } });
+    // Watch pace with the window hidden or covered: the call runs without its animation, and says so.
+    const watchedHidden = () => rt.pace.get() === 'watch' && rt.pace.hidden();
+    let ranHidden = watchedHidden();
     const sel = rememberSelection(services);
     // A Stop, a stall or Back: back to the mark at once, before the rest of the call runs.
     const onAbort = () => {
@@ -199,7 +220,9 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
       wrote(s) {
         drafts.set(s, s.draft);
       },
+      quietly: (fn) => sel.quietly(fn),
       async checkpoint(o = {}) {
+        if (watchedHidden()) ranHidden = true;
         check();
         if (o.pace) await pacer.wait(o.pace);
         if (o.hold) await ctx.hold(o.hold);
@@ -214,7 +237,15 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
       const after = snapshotStates(doc.state.get());
       const v = verdict(before, after, plan);
       if (v.error) throw v.error;
-      // ("Ask each step" waits here for the person's Keep or Discard, with watch mode.)
+      // "Ask each step": the person keeps or discards the judged step before it is sealed.
+      if (rt.askEach.get()) {
+        const answer = await waitForApproval(ctx, rt, st, plan.part);
+        check();
+        if (answer !== 'keep') {
+          const message = answer === 'timeout' ? `The person did not answer in ${waitedWords(rt.waitCapMs)}: ${plan.part} was not kept.` : `The person declined this step: ${plan.part} was not kept.`;
+          throw new ToolError('step_declined', message, { detail: { why: answer === 'timeout' ? 'no_answer' : 'discard' } });
+        }
+      }
       check();
       const parts = [...rt.ledger.entries(ctx.key).map((e) => e.part), plan.part];
       st.seal(ctx.key, groupLabel(ctx.key, ctx.turn, parts));
@@ -226,7 +257,14 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
         else if (v.fixed.includes(f.name)) rt.brokenBy.delete(id);
       }
       tool.sealed?.(plan, ectx);
-      return tool.reply(plan, report({ before, after, plan, verdict: v, step: n, rev: rt.rev.current() }), ectx);
+      // The view frames again when the bodies left it (automatic, under the camera latch).
+      rt.camera.afterCall(ctx.key);
+      const reply = tool.reply(plan, report({ before, after, plan, verdict: v, step: n, rev: rt.rev.current() }), ectx);
+      if (ranHidden || watchedHidden()) {
+        const had = typeof reply.data.note === 'string' && reply.data.note ? `${reply.data.note}; ` : '';
+        reply.data = { ...reply.data, note: `${had}${HIDDEN_NOTE}` };
+      }
+      return reply;
     } catch (e) {
       ui.dropForAssistant(st);
       const rv = st.revert();
@@ -236,6 +274,7 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
       ctx.signal.removeEventListener('abort', onAbort);
       st.end();
       sel.restore();
+      rt.paced.set(ctx.call.call, (rt.paced.get(ctx.call.call) ?? 0) + pacer.spent());
     }
   }
 }

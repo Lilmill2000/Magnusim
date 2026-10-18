@@ -242,6 +242,8 @@ export function pauseNote(p: Pause): string | null {
 export interface SoftInput {
   /** How long an edit should still wait for quiet (ms), 0 when quiet. */
   quietIn(): number;
+  /** A pointer is held down in the frame now (the camera latch: no automatic turn under the person's hand). */
+  held(): boolean;
   subscribe(fn: () => void): () => void;
   dispose(): void;
 }
@@ -280,6 +282,7 @@ export function createSoftInput(doc: Document | null, now: () => number = () => 
       if (held) return SOFT_QUIET_MS;
       return Math.max(0, SOFT_QUIET_MS - (now() - last));
     },
+    held: () => held,
     subscribe(fn) {
       listeners.add(fn);
       return () => {
@@ -310,7 +313,8 @@ function hardWait(services: AppServices): EditWait | null {
   return personBlock(services);
 }
 
-const waitedWords = (ms: number) => {
+/** A wait in words ("10 minutes", "1.5 s"). */
+export const waitedWords = (ms: number) => {
   if (ms >= 60_000) {
     const m = Math.round(ms / 60_000);
     return `${m} minute${m === 1 ? '' : 's'}`;

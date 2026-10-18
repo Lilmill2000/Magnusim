@@ -99,9 +99,13 @@ const sketchTool: EditTool<Plan> = {
       support = { kind: 'feature', feature: plane };
     }
     const edit = plan.edit;
+    // The watch path draws each entity where the model put it, and names it by its kind.
+    const kinds: Record<string, string> = {};
+    for (const e of (Array.isArray(ctx.input.entities) ? ctx.input.entities : []) as EntityIn[]) if (e && typeof e.id === 'string') kinds[e.id] = String(e.kind);
+    const watch = { drawn: plan.compiled.draft, kinds };
     let id: FeatureId;
     if (!edit) {
-      id = await writeSketch(ctx, { target: { kind: 'new', support: support!, name: plan.name }, geometry: plan.solved.geometry }, plan.compiled.refOf);
+      id = await writeSketch(ctx, { target: { kind: 'new', support: support!, name: plan.name }, geometry: plan.solved.geometry, ...watch }, plan.compiled.refOf);
       runtimeOf(ctx.services)?.madeBy.add(id);
     } else {
       const patch: Partial<SketchFeature> = {};
@@ -111,7 +115,7 @@ const sketchTool: EditTool<Plan> = {
         const frame = sp.kind === 'keep' ? edit.plane : sp.frame;
         patch.plane = { origin: [...frame.origin], normal: [...frame.normal], xdir: [...frame.xdir] } as SketchFeature['plane'];
       }
-      id = await writeSketch(ctx, { target: { kind: 'edit', id: edit.id, name: plan.name, patch: Object.keys(patch).length ? patch : null }, geometry: plan.solved.geometry }, plan.compiled.refOf);
+      id = await writeSketch(ctx, { target: { kind: 'edit', id: edit.id, name: plan.name, patch: Object.keys(patch).length ? patch : null }, geometry: plan.solved.geometry, ...watch }, plan.compiled.refOf);
     }
     plan.made = id;
     plan.own = id;

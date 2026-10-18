@@ -25,6 +25,29 @@ export interface AssistantPageApi {
   autoCamera(reason: AutoCameraReason, sessionId: string | null): boolean;
   /** What the Assistant is doing in this Part (the dock chip and `.cad-app[data-assistant]` read it). */
   readonly state?: ReadonlyStateStore<AssistantUiState>;
+  /** What the chip's buttons do (watch mode). */
+  readonly actions?: AssistantActions;
+}
+
+/** The chip's buttons (CAD tools spec §8.3). */
+export interface AssistantActions {
+  /** Pause the Assistant's edits in this Part: they wait (reads still run) until Resume or the turn's end. */
+  pause(): void;
+  resume(): void;
+  /**
+   * Stop the running turn: its call reverts at once, any later call of it answers busy stopped, and
+   * the host ends the turn (only with the host's turn events).
+   */
+  stop(): void;
+  /** "Ask each step": the waiting step is kept, or discarded (reverted). */
+  keep(): void;
+  discard(): void;
+  /** Undo the ended turn's changes: its undo group, while that is the newest step (one Ctrl+Z). */
+  undo(): void;
+  /** The person's pace (ws.prefs). */
+  setPace(pace: 'watch' | 'fast'): void;
+  /** "Ask each step" on or off (ws.prefs). */
+  setAskEach(on: boolean): void;
 }
 
 /**
@@ -55,6 +78,12 @@ export interface AssistantUiState {
   call: { tool: string; label: string } | null;
   /** What the chip says while waiting or paused ("close the Fillet 2 panel"), or null. */
   note: string | null;
+  /** The person's pace (the chip's Fast / Watch). */
+  pace?: 'watch' | 'fast';
+  /** "Ask each step" is on. */
+  askEach?: boolean;
+  /** The host can stop a turn from this page (its turn events): the chip offers Stop. */
+  canStop?: boolean;
 }
 
 /** The facts the host tells of a turn bound to this tab (ws.assistant.onTurn), kept per turn id. */

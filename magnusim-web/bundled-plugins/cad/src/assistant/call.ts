@@ -2,7 +2,9 @@
 // its context, the tool's code from tools/index.ts (a tool not in this build answers not_ready
 // "not in this build yet"), the reply's revision and the person's changes since the key's last
 // call, an honest error with its reason, hint and detail, the turn log's summary, and the chip
-// and the test ledger kept up to date.
+// and the test ledger kept up to date. The call's signal is the SDK's merged with the chip's
+// Stop (a call of a key the person stopped answers busy stopped at once); the camera latch takes
+// the key's baseline at its first call when the host told of no turn.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantCall, AssistantResult } from '@magnusim/workspace';
@@ -18,6 +20,27 @@ export const TEXT_MAX = 200;
 export const SUMMARY_MAX = 160;
 
 const TOOLS = BUILT as unknown as Readonly<Record<string, ToolImpl | undefined>>;
+
+/** The person stopped the Assistant from the chip: what the call answers. */
+export const STOPPED_WORDS = 'The person stopped the Assistant in this Part. End your turn now.';
+
+/** One signal that aborts when either does (with the first one's reason); `off` drops the listeners. */
+function bothSignals(a: AbortSignal, b: AbortSignal): { signal: AbortSignal; off(): void } {
+  if (a.aborted) return { signal: a, off: () => undefined };
+  if (b.aborted) return { signal: b, off: () => undefined };
+  const c = new AbortController();
+  const fa = () => c.abort(a.reason);
+  const fb = () => c.abort(b.reason);
+  a.addEventListener('abort', fa, { once: true });
+  b.addEventListener('abort', fb, { once: true });
+  return {
+    signal: c.signal,
+    off() {
+      a.removeEventListener('abort', fa);
+      b.removeEventListener('abort', fb);
+    },
+  };
+}
 
 /** Whether `name` answers in this build. */
 export function isBuilt(name: string): boolean {
@@ -38,6 +61,13 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     const spec = toolNamed(call.tool);
     const label = spec?.title ?? call.tool;
     const changes = rt.rev.changesFor(key);
+    // The chip's Stop aborts this one here, at once (its step reverts synchronously).
+    const local = new AbortController();
+    const merged = bothSignals(call.signal, local.signal);
+    const signal = merged.signal;
+    rt.active.set(call.call, { key, turn: call.turn, stop: (reason) => local.abort(reason) });
+    rt.lastKey = key;
+    rt.camera.callStarts(key);
     rt.services.bus.emit('assistant:call', { turn: call.turn, call: call.call, tool: call.tool, phase: 'start' });
     rt.store.set({ call: { tool: call.tool, label } });
     const ctx: CallCtx = {
@@ -45,7 +75,7 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       call,
       tool: call.tool,
       input: call.input ?? {},
-      signal: call.signal,
+      signal,
       key,
       turn,
       budgets: rt.turns.budgets(key),
@@ -57,15 +87,16 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
           // A progress that could not go out changes nothing of the call.
         }
       },
-      hold: (point) => rt.holds.at(point, call.signal),
+      hold: (point) => rt.holds.at(point, signal),
       checkAbort: () => {
-        if (call.signal.aborted) throw new ToolError('stopped', 'The call was stopped.');
+        if (signal.aborted) throw new ToolError('stopped', 'The call was stopped.');
       },
     };
     let ok = false;
     let error: ToolError | null = null;
     try {
       if (!spec || !TOOL_NAMES.includes(call.tool)) throw new ToolError('bad_input', `No Part tool is called ${call.tool}.`);
+      if (rt.stopped.has(key)) throw new ToolError('stopped', STOPPED_WORDS);
       const impl = Object.prototype.hasOwnProperty.call(tools, call.tool) ? tools[call.tool] : undefined;
       if (!impl) throw new ToolError('not_built', `${call.tool} is not in this build yet.`, { detail: { tool: call.tool } });
       const reply: ToolReply = await impl.run(ctx);
@@ -79,13 +110,17 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
         ...(reply.images?.length ? { images: reply.images } : {}),
       };
     } catch (e) {
-      error = call.signal.aborted && !(e instanceof ToolError) ? new ToolError('stopped', 'The call was stopped.') : asToolError(e);
+      error = signal.aborted && !(e instanceof ToolError) ? new ToolError('stopped', 'The call was stopped.') : asToolError(e);
       if (changes.length) error.detail.user_changes = changes;
       throw sdkError(error, rt.hostKeepsHints);
     } finally {
+      merged.off();
+      rt.active.delete(call.call);
       rt.keys.ended(key);
       rt.rev.seen(key);
-      rt.calls.push({ call: call.call, turn: call.turn, key, tool: call.tool, ok, ...(error ? { code: error.code, reason: error.reason } : {}), ms: Date.now() - t0 });
+      const paced = rt.paced.get(call.call);
+      rt.paced.delete(call.call);
+      rt.calls.push({ call: call.call, turn: call.turn, key, tool: call.tool, ok, ...(error ? { code: error.code, reason: error.reason } : {}), ms: Date.now() - t0, ...(paced !== undefined ? { paced } : {}) });
       if (rt.calls.length > CALLS_KEPT) rt.calls.splice(0, rt.calls.length - CALLS_KEPT);
       rt.store.set({ call: null });
       rt.services.bus.emit('assistant:call', { turn: call.turn, call: call.call, tool: call.tool, phase: 'end', ok });

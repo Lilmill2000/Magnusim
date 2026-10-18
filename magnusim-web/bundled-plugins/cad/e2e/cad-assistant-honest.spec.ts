@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
 import { addSolid, historyNames, runCommand } from './helpers';
-import { cadFrame, chats, newProject, openNewPart, readRecord, recordShown, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
+import { cadFrame, chats, chipWords, newProject, openNewPart, readRecord, recordShown, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
 
 let host: AssistantHost;
 
@@ -126,7 +126,7 @@ test('cad:assistant-honest-params a set_params that would break the fillet chang
   expect(await label()).toBe('Assistant: Make the fillet 10 mm, and add a and b.');
   const chip = frame.locator('[data-chip="assistant"]');
   await expect(chip).toHaveAttribute('data-assistant-state', 'ended', STEP);
-  await expect(chip).toHaveText('Assistant: Make the fillet 10 mm, and add a and b. · done');
+  await expect(chipWords(frame)).toHaveText('Assistant: Make the fillet 10 mm, and add a and b. · done');
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
   await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').hover();

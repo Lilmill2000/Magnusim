@@ -198,10 +198,11 @@ opens, so a refused call changes nothing and no panel opens:
   back), `sketch_conflict` naming each constraint and its partner (a macro's own as
   `internal`), `sketch_unsolved`, `sketch_collapsed`, and the answer's `moved` and `free`.
 - `sketch/write.ts`: inside the step, through the person's paths: the offset plane's panel,
-  then `SketchMode.startSketch(support, {step})` (or the Edit panel), one `apply` of the
-  solution, the rebuild, `finish({step})`. Hold points `after-open`, `between-opens` (after
-  the plane), `sketch-step:1` (after the apply), `before-commit`. This is the fast path; the
-  watch path (drawing entity by entity) comes with watch mode.
+  then `SketchMode.startSketch(support, {step})` (or the Edit panel), the drawing, the
+  rebuild, `finish({step})`. At the fast pace the drawing is one `apply` of the solution
+  (`sketch-step:1` after it). At the watch pace it is drawn as a person would (see Watch mode
+  below), `sketch-step:<n>` after the n-th apply. Hold points `after-open`, `between-opens`
+  (after the plane), `sketch-step:<n>`, `before-commit`.
 - `sketch/describe.ts`: a stored sketch in the tool's input form (`get_model feature`,
   registered as the sketch type's `FeatureIo`): intact macros as macros, the rest as
   primitives by their stored ids, `infer` for the tool's own inferred relations; `inputs:
@@ -458,10 +459,57 @@ a gap, a Stop and a person's change at `between-opens`, the loft frustum); e2e
 
 ## The person's view
 
-The chip (`[data-chip="assistant"][data-assistant-state]`) and the frame's
+The chip (`[data-chip="assistant"][data-assistant-state]`, its words in
+`[data-assistant-text]`, its buttons `[data-assistant-action]`) and the frame's
 `.cad-app[data-assistant]` follow `state.ts`: `off`, `idle`, `thinking` (a turn runs, no
-call), `working` (a call runs: the tool's title), `ended` (for 120 s, or until the Part
-changes). Without the host's turn events the chip stays 10 s after the last call.
+call), `working` (a call runs: the tool's title, then the step it makes: "Sketch Plate
+sketch"), `waiting` (an edit waits for the person: what it asks), `approve` (Ask each step:
+"keep it?"), `paused`, `ended` (for 120 s, or until the Part changes). Without the host's turn
+events the chip stays 10 s after the last call.
+
+## Watch mode (`pace.ts`, `sketch/write.ts`, `camera.ts`, `approval.ts`, `health.ts`, the chip)
+
+- **The watch pace** (the default; the chip's Fast / Watch, `ws.prefs` `assistant.pace`): each
+  pace point waits (a panel opening 450 ms, a sketch entity's rubber band 120 ms and its add
+  60 ms, a relation 60 ms, a dimension 150 ms, a parameter row 150 ms, before the commit
+  250 ms), at most 6 s per call. `pace.watching()` (the watch pace, the window shown, the last
+  rebuild under 1.5 s, whatever the test scale) picks the drawing path; `pace.live()` (also a
+  scale above 0) says whether a wait waits.
+- **Watched sketches** (`sketch/write.ts` `drawSteps`, `drawAt`): what goes (a replace) in one
+  apply; each entity group (a macro with its own and inferred relations, ids `<id>__<part>`)
+  shown as a rubber band (`setPreview`), then applied and selected; then each of the model's
+  relations, then each dimension. Sketch mode solves every apply, so the dimensions pull the
+  sketch into shape and the DOF chip counts down. The entities are drawn where the model put
+  them unless the solution moves a point more than max(2 mm, 10% of the diagonal); then where
+  the solution has them. Last, when what is stored is not the headless solution (a partial
+  solve that took another path, or a refused intermediate apply, which only ends the drawing
+  early), one apply writes it exactly. Never a revert for the drawing itself.
+- **set_params** at the watch pace with no panel open shows the Assistant's own read-only
+  Parameters panel (a moment per row); it closes with the step. A Parameters panel the person
+  has open stays open and flashes the changed rows.
+- **The camera latch** (`camera.ts`): each key takes a baseline of
+  `ViewportHandle.userCameraMoves()` when its turn starts running (the host's turn events), else
+  at its first call. Once it moved, the automatic camera moves of the Assistant's sessions
+  (sketch entry, a reopened sketch's reframe, a new Extrude's Isometric) are off for the rest of
+  the key; also at the fast pace, while hidden and while a pointer is held. After a kept edit,
+  `refitIfOffScreen({auto: true})` under the same rule. `autoCamera` (the page API) answers it.
+- **Ask each step** (`approval.ts`, the chip's toggle, `ws.prefs` `assistant.ask_each`, off by
+  default): a judged edit waits before it is sealed (chip `approve`, progress `waiting`); Keep
+  goes on, Discard reverts (`busy` `step_declined`, `why: 'discard'`), no answer within the wait
+  is Discard (`why: 'no_answer'`), a change of the person's meanwhile ends the wait at once.
+- **The chip's buttons** (`AssistantActions`, `services.apis.assistant.actions`): Pause and
+  Resume (the pause of `busy.ts`, why `person`; it ends with the turn), Stop (only with the
+  host's turn events: the running call of the turn aborts here, its step reverts synchronously,
+  every later call of that turn answers `busy` `stopped`, and `ws.assistant.stop(turn)` asks the
+  host to end it), Keep and Discard, Fast / Watch, Ask each step, and Undo of an ended turn while
+  its group is the newest step (`doc.assistant.undoGroup`: one Ctrl+Z).
+- **The Part's health** at the end (`health.ts`): `data-assistant-health` ok, warn (amber:
+  under-defined sketches, features with a warning) or error (red: a failing feature, a failed
+  rebuild), with the words ("· Fillet 1 fails · 1 sketch under-defined"); a click selects the
+  first such tree row.
+- **A hidden or covered window**: no waits and no camera moves; an edit made at the watch pace
+  while hidden says so in its answer (`note`: "ran without animation: the window was hidden or
+  covered"). Pictures still work (no animation frame needed).
 
 ## Tests
 
@@ -478,12 +526,21 @@ changes). Without the host's turn events the chip stays 10 s after the last call
   `sketch-compile`, `sketch-solve`, `sketch-tool`, `regions` (`sketch-tools.ts` has the
   input builders and a block made from the tool's rectangle).
 - `window.__CAD__.assistant`: the tools, the chip's state, the calls answered (`calls`,
-  with each error's reason), the turns, the hold points, `setHoldS(s)` (the edits' wait for the
-  person), `setPace(pace, scale)`, `paused()`, and `setToolset('core')` for the eval's A/B
-  runs.
+  with each error's reason and, for edits, `paced`: the ms waited at pace points), the turns,
+  the hold points, `setHoldS(s)` (the edits' wait for the person), `setPace(pace, scale)`,
+  `setAskEach(on)` (neither written to the person's preferences), `approving()`, `paused()`,
+  and `setToolset('core')` for the eval's A/B runs.
+- Watch mode's vitest files: `sketch-write` (the watch path on the real solver: guesses then
+  the pull, the solution first when it moves far, the final exact apply on a forced other
+  branch, a forced refused apply, a replace's difference, `sketch-step:<n>`), `camera`, `watch`
+  (Ask each step, Stop, Pause, the hidden note, the Assistant's Parameters panel, Undo) and
+  `chip` (each phase's buttons, the health).
 - The edit tools' vitest files: `step`, `judge`, `busy`, `pace`, `ledger`, `tools-edit`
   (`parts.ts` makes the plate and its fillet as the person would).
 - E2E shard `assistant` (`npm run test:e2e:assistant`): each spec runs its own app
   server with the Assistant's test switches and the app's scripted model
   (`e2e/assistant-helpers.ts`); the app's turn helpers are vendor-neutral and take this
-  suite's `expect` (`setExpect`). Ports: `CAD_E2E_PORT_FROM` + 60, 70, 80, 90, 100.
+  suite's `expect` (`setExpect`). Ports: `CAD_E2E_PORT_FROM` + 60, 70, 80, 90, 100
+  (`cad-assistant-takeover.spec.ts` is +100). Assert the chip's words through
+  `chipWords(frame)` (`[data-assistant-text]`): the chip's text also holds its buttons. A held
+  answer of the scripted model stays released once released: give each hold its own name.

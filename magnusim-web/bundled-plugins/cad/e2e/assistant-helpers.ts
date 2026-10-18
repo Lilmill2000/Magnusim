@@ -160,6 +160,44 @@ export async function openNewPart(page: Page, request: APIRequestContext, h: Ass
 /** The Part's frame, for evaluate(). */
 export const cadFrame = (page: Page): Frame => workspaceFrame(page);
 
+/** The Assistant chip's words ("Assistant · thinking · 3 of 120 steps"), its buttons left out. */
+export const chipWords = (frame: FrameLocator) => frame.locator('[data-chip="assistant"] [data-assistant-text]');
+
+/** One of the Assistant chip's buttons (pause, resume, stop, pace, ask, keep, discard, undo). */
+export const chipButton = (frame: FrameLocator, id: string) => frame.locator(`[data-chip="assistant"] [data-assistant-action="${id}"]`);
+
+type HoldWindow = { __CAD__: { assistant: { hold(p: string): void; release(p: string): void; waiting(): string[]; setPace(p: string | null, scale?: number | null): void } } };
+
+/** Calls stop at the frame's hold point `point` from now on (src/assistant/testing.ts). */
+export const holdAt = (page: Page, point: string) => cadFrame(page).evaluate((p) => (window as unknown as HoldWindow).__CAD__.assistant.hold(p), point);
+/** Let the calls held at `point` go on (and hold it no more). */
+export const releaseHold = (page: Page, point: string) => cadFrame(page).evaluate((p) => (window as unknown as HoldWindow).__CAD__.assistant.release(p), point);
+/** A call waits at `point` now. */
+export const reachedHold = (page: Page, point: string) =>
+  expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as HoldWindow).__CAD__.assistant.waiting()), { message: `a call waits at ${point}`, timeout: STEP_MS * 2 }).toContain(point);
+/** The Assistant's pace whatever the person chose (null: theirs), and the scale of its delays. */
+export const forcePace = (page: Page, pace: 'watch' | 'fast' | null, scale: number | null = null) => cadFrame(page).evaluate(({ pace, scale }) => (window as unknown as HoldWindow).__CAD__.assistant.setPace(pace, scale), { pace, scale });
+
+/** The keyboard in the frame: a click on an empty corner of the view (it only looks, in a sketch too). */
+export async function keyboardInFrame(page: Page, frame: FrameLocator): Promise<void> {
+  const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+}
+
+/** A study's stored model (the Part's model.json on the server: its `doc`), or null before the first save. */
+export async function storedModel(request: APIRequestContext, h: AssistantHost, projectId: string, studyId: string): Promise<{ features: { name: string }[]; params: { name: string }[] } | null> {
+  const r = await request.post(`${h.base}/api/plugin-data/read`, { data: { project_id: projectId, plugin: 'cad', rel: `studies/${studyId}/model.json` } });
+  expect(r.ok()).toBe(true);
+  return ((await r.json()).doc as { doc?: { features: { name: string }[]; params: { name: string }[] } } | null)?.doc ?? null;
+}
+
+/** The open Part's study id (its workspace address). */
+export function studyOf(page: Page): string {
+  const m = /\/ws\/cad\/part\/([^/?#]+)/.exec(decodeURIComponent(page.url()));
+  if (!m) throw new Error(`not a Part workspace address: ${page.url()}`);
+  return m[1];
+}
+
 /**
  * Record, in the frame, every text and attribute value `selector`'s first match shows from now on
  * (a MutationObserver, so a state that lasts one frame is not missed); read them with readRecord.

@@ -7,13 +7,20 @@
 // The edits' state lives here too: the undo ledger, the person's pace, the person's input (the
 // soft wait), and the pause, which a take-over or the person's undo of the Assistant's steps
 // during a running turn starts, and the turn's end (or the next key) ends; the chip shows it.
+// Watch mode (§8): the camera latch (camera.ts) behind autoCamera, "Ask each step" (approval.ts),
+// and the chip's buttons (AssistantActions): Pause and Resume, Stop (the running call reverts at
+// once, later calls of the turn answer busy stopped, the host ends the turn), Keep and Discard,
+// Fast / Watch, Ask each step, and Undo of an ended turn's group while it is the newest step.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantRegistration } from '@magnusim/workspace';
 import type { AppServices } from '../types/app';
-import type { AssistantPageApi, TurnFacts } from '../types/assistant';
+import type { AssistantActions, AssistantPageApi, TurnFacts } from '../types/assistant';
+import { createApprovals, createAskEach } from './approval';
 import { createPause, createSoftInput, EDIT_WAIT_MS, pauseNote } from './busy';
 import { createCallHandler, isBuilt } from './call';
+import { createCameraLatch } from './camera';
+import { ToolError } from './errors';
 import { GUIDE } from './guide';
 import { createLedger } from './ledger';
 import { createPace } from './pace';
@@ -52,6 +59,9 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const pause = createPause();
   const pace = createPace({ doc: services.doc, prefs: services.bridge.prefs, document: doc });
   const soft = createSoftInput(doc, o.now);
+  const camera = createCameraLatch({ viewport: services.viewport, pace, soft });
+  const askEach = createAskEach({ prefs: services.bridge.prefs });
+  const approvals = createApprovals();
   let title = services.bridge.context.study?.title ?? '';
   const offs: (() => void)[] = [];
   offs.push(services.bridge.onStudy((s) => void (title = s.title ?? title)));
@@ -70,6 +80,13 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     pause,
     pace,
     soft,
+    camera,
+    askEach,
+    approvals,
+    active: new Map(),
+    stopped: new Set(),
+    lastKey: null,
+    paced: new Map(),
     waitCapMs: EDIT_WAIT_MS,
     seenKeys: new Set(),
     guideNoted: new Set(),
@@ -123,6 +140,18 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     if (store.get().turn?.end) store.set({ turn: null });
   };
   offs.push(turns.subscribe(showTurn));
+  // The camera latch's baseline: the person's camera moves when the turn starts running.
+  offs.push(
+    turns.subscribe((t) => {
+      if (t.state === 'running') camera.turnRuns(`turn:${t.id}`);
+    }),
+  );
+  // The chip's toggles show the person's choices.
+  store.set({ pace: pace.get(), askEach: askEach.get(), canStop: !!assistant?.stop });
+  offs.push(
+    pace.subscribe((p) => store.set({ pace: p })),
+    askEach.subscribe((on) => store.set({ askEach: on })),
+  );
 
   // ---- the pause: the chip shows it; it ends with its turn, or at the next key (busy.ts createPause)
   offs.push(
@@ -148,6 +177,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     () => {
       pace.dispose();
       soft.dispose();
+      askEach.dispose();
     },
   );
   // An ended turn's chip goes with the next change of the Part.
@@ -162,15 +192,49 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   );
 
   // ---- the page API
+  /** The running turn bound here (one turn per tab), else null. */
+  const runningTurn = () => turns.running()[0] ?? null;
+  const actions: AssistantActions = {
+    pause() {
+      const t = runningTurn();
+      const key = t ? `turn:${t.id}` : rt.lastKey;
+      if (key) pause.set('person', key, t?.id ?? null);
+    },
+    resume: () => pause.resume(),
+    stop() {
+      const t = runningTurn();
+      if (!t || !assistant?.stop) return;
+      const key = `turn:${t.id}`;
+      rt.stopped.add(key);
+      if (rt.stopped.size > 64) rt.stopped.delete(rt.stopped.values().next().value as string);
+      // The call running now goes back at once (its abort handler reverts the step synchronously).
+      const why = new ToolError('stopped', 'The person stopped the Assistant; nothing of this call was kept.');
+      for (const a of [...rt.active.values()]) if (a.key === key) a.stop(why);
+      void assistant.stop(t.id).catch((e) => console.warn('[cad] the Assistant could not be stopped', e));
+    },
+    keep: () => approvals.answer(true),
+    discard: () => approvals.answer(false),
+    undo() {
+      const t = store.get().turn;
+      if (!t?.end) return;
+      const r = services.doc.assistant.undoGroup(`turn:${t.id}`);
+      if (!r.ok) services.bridge.toast(`Undo: ${r.reason}`, 'error');
+    },
+    setPace: (p) => pace.set(p),
+    setAskEach: (on) => askEach.set(on),
+  };
   const api: AssistantPageApi = {
     autoCamera(_reason, sessionId) {
       const s = services.doc.session();
       const own = !!s && s.id === sessionId && !!s.owner;
       if (!own) return true;
-      // The Assistant's own session: never while the window is hidden (pace and the camera latch come with watch mode).
-      return !(doc?.hidden ?? false);
+      // The Assistant's own session: its call's key (the camera latch), watch pace, the window shown, no pointer held.
+      const callId = s.owner!.startsWith('assistant:') ? s.owner!.slice('assistant:'.length) : null;
+      const key = (callId ? rt.active.get(callId)?.key : null) ?? null;
+      return camera.allows(key);
     },
     state: store,
+    actions,
   };
   services.apis.set({ assistant: api });
 
@@ -244,6 +308,8 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       pace.force(p);
       pace.setScale(scale ?? null);
     },
+    setAskEach: (on) => askEach.force(on),
+    approving: () => approvals.pending(),
     paused: () => pause.get(),
     async setToolset(set) {
       offered = set === 'core' ? [...CORE_TOOLSET] : CAD_TOOLS.map((t) => t.name);

@@ -36,6 +36,8 @@ export type PacePoint = keyof typeof PACE_DELAYS;
 export const CALL_PACE_CAP_MS = 6000;
 /** A rebuild slower than this switches the waits off (big parts run at fast pace). */
 export const SLOW_REBUILD_MS = 1500;
+/** An edit's note when the person chose watch but the window was hidden or covered during the call. */
+export const HIDDEN_NOTE = 'ran without animation: the window was hidden or covered';
 
 export interface CallPacer {
   /**
@@ -60,6 +62,13 @@ export interface PaceControl {
   force(pace: Pace | null): void;
   /** Whether pace points wait now: watch pace, the window shown, the last rebuild quick, a scale above 0. */
   live(): boolean;
+  /**
+   * Whether the person watches the build now: watch pace, the window shown, the last rebuild quick
+   * (whatever the test scale). A sketch is drawn entity by entity then, and the camera may turn.
+   */
+  watching(): boolean;
+  /** The window is hidden or covered (Chromium on Windows reports a covered window as hidden). */
+  hidden(): boolean;
   /** The waits of one call. */
   forCall(signal: AbortSignal): CallPacer;
   subscribe(fn: (pace: Pace) => void): () => void;
@@ -112,7 +121,8 @@ export function createPace(o: PaceOptions): PaceControl {
     const ms = o.doc.state.get().rebuild.ms;
     return typeof ms === 'number' && ms > SLOW_REBUILD_MS;
   };
-  const live = () => now() === 'watch' && scale > 0 && !hidden() && !slow();
+  const watching = () => now() === 'watch' && !hidden() && !slow();
+  const live = () => watching() && scale > 0;
   return {
     get: now,
     set(next) {
@@ -133,6 +143,8 @@ export function createPace(o: PaceOptions): PaceControl {
       if (now() !== was) tell();
     },
     live,
+    watching,
+    hidden,
     forCall(signal) {
       let factor = 1;
       let spent = 0;
