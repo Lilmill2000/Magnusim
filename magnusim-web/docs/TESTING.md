@@ -343,7 +343,9 @@ No test reaches a real model provider or this PC's real Assistant files.
     `offeredTools(req)` lists a request's tools as `{name, strict}`; and
     `resultsIn(req)` the tool results it carries (a fake request or a function step's
     body). `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
-    it is hidden or shown, as the browser does.
+    it is hidden or shown, as the browser does. A suite that runs its own copy of
+    Playwright (CAD's) calls `setExpect(expect)` with its own first: a process loads
+    `@playwright/test` once.
   - A remote viewer: add the proxy header to the page's `/api/` requests with
     `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes
     the sandboxed frame's module script a cross-origin request with a preflight that

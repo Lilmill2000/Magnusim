@@ -7,8 +7,26 @@
 // touches this PC's real keys.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { expect } from './stress.js';
+
+/** The `expect` a bundled plugin's suite handed in (setExpect), or null for the app's. */
+let givenExpect = null;
+const requireHere = createRequire(import.meta.url);
+
+/**
+ * A bundled plugin whose suite runs its own copy of Playwright (CAD's) hands its `expect` here
+ * before it uses these helpers: one process loads @playwright/test once (a second copy refuses to
+ * load). Unset, the helpers assert with the app's own (the one support/stress.js re-exports).
+ */
+export function setExpect(e) {
+  givenExpect = e;
+}
+
+/** @playwright/test's expect, loaded on first use (the app's specs have it loaded already). */
+function expect(...args) {
+  return (givenExpect ?? requireHere('@playwright/test').expect)(...args);
+}
 
 /** The Assistant's pane in Settings. */
 export function assistantPane(page) {

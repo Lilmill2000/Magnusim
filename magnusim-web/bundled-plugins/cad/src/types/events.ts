@@ -49,6 +49,10 @@ export interface CadEvents {
   'assistant:person-undo': { tag: string | null; label: string | null; redo: boolean };
   /** An Assistant step ended (AssistantStep.end): a panel it showed with no session (its Parameters panel) goes with it. */
   'assistant:step-ended': { owner: string };
+
+  // ---- the Assistant's tools (ASSISTANT, src/assistant) ----
+  /** A tool call of the app's Assistant started, or ended (`ok` with the end). `turn` is AssistantCall.turn ('' for an outside client's). */
+  'assistant:call': { turn: string; call: string; tool: string; phase: 'start' | 'end'; ok?: boolean };
 }
 
 export type CadEventName = keyof CadEvents;

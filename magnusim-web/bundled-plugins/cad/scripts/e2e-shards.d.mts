@@ -1,6 +1,6 @@
 // Types for scripts/e2e-shards.mjs (its unit test imports the shards and the map).
 // SPDX-License-Identifier: GPL-3.0-or-later
-export const SHARDS: Record<'shell' | 'sketch' | 'solids' | 'step' | 'link' | 'big', string[]>;
+export const SHARDS: Record<'shell' | 'sketch' | 'solids' | 'step' | 'link' | 'assistant' | 'big', string[]>;
 export const SHARD_NAMES: string[];
 export const SMOKE_TAG: '@smoke';
 export const SERIAL_TAG: '@serial';

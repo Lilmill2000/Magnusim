@@ -7,9 +7,12 @@
 // refuses it with not_allowed, as the real one does.
 // Edit in CAD (host 1.7): pass `edit` for ws.context.geometry / launch and
 // ws.project.geometrySource / geometryFaces (with hostVersion "1.7").
+// The app's Assistant (unreleased 1.9): pass `assistant` for a scriptable ws.assistant
+// (tests/fakes/assistant-sdk.ts; `assistantFake` is it). Without it there is no ws.assistant.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import { FakeFiles, FakeFolder } from '../doc/fake-files';
+import { createFakeAssistant, type FakeAssistant, type FakeAssistantOptions } from './assistant-sdk';
 
 export const SDK_VERSION = '1.1.0';
 
@@ -28,6 +31,8 @@ export interface FakeWorkspace extends Workspace {
   readonly folder: FakeFolder;
   /** ws.files over that folder (set `refuse`, `failNext`, `hold` to script the host). */
   readonly files: FakeFiles;
+  /** ws.assistant when the fake was made with `assistant` (it is the same object), else null. */
+  readonly assistantFake: FakeAssistant | null;
   /** The JSON in a file of the folder (null when there is none). */
   json(rel: string): unknown;
   /** Answers for the next dialogs. */
@@ -71,9 +76,12 @@ export function createFakeWorkspace(
       source?: (o?: { signal?: AbortSignal; onProgress?(done: number, total: number): void }) => Promise<unknown>;
       faces?: () => Promise<unknown>;
     };
+    /** Unreleased 1.9: a scriptable ws.assistant (true for the defaults: turn events on). */
+    assistant?: FakeAssistantOptions | true;
   } = {},
 ): FakeWorkspace {
   let study = fakeStudy(opts.study);
+  const assistantFake = opts.assistant ? createFakeAssistant(opts.assistant === true ? {} : opts.assistant) : null;
   const listeners = { units: new Set<(v: UnitSystem) => void>(), study: new Set<(v: StudyRecord) => void>(), theme: new Set<(v: unknown) => void>() };
   const log: FakeWorkspace['log'] = { toasts: [], confirms: [], prompts: [], dataWrites: [], backs: 0, dirty: [] };
   const folder = opts.folder ?? new FakeFolder();
@@ -94,6 +102,8 @@ export function createFakeWorkspace(
     log,
     folder,
     files,
+    assistantFake,
+    ...(assistantFake ? { assistant: assistantFake } : {}),
     json: (rel: string) => folder.json(rel),
     answers: { confirm: true, prompt: null },
     async call() {

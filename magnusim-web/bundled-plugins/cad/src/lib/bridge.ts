@@ -2,9 +2,26 @@
 // API churn is absorbed here. Frozen shape (scaffold); INTEGRATE adds wrappers
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
 // connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
-// Edit in CAD: the geometry a Part edits, its source and its faces).
+// Edit in CAD: the geometry a Part edits, its source and its faces; unreleased 1.9:
+// ws.assistant, the tools the Part offers the app's Assistant).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { ConfirmOptions, LeaveHandler, LinkedGeometry, LinkOptions, LinkResult, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
+import type {
+  AssistantHandler,
+  AssistantRegistration,
+  AssistantStopAnswer,
+  AssistantTool,
+  AssistantTurn,
+  ConfirmOptions,
+  LeaveHandler,
+  LinkedGeometry,
+  LinkOptions,
+  LinkResult,
+  PromptOptions,
+  StudyRecord,
+  UnitSystem,
+  Workspace,
+  WorkspaceContext,
+} from '@magnusim/workspace';
 import type { WsFilesApi } from '../types/docstore';
 import type { EditedGeometry, EditLaunch, GeometryFaces, GeometrySource, OriginalNamesRef } from '../types/edit-geometry';
 
@@ -45,6 +62,23 @@ export interface EditApi {
   source(o?: { signal?: AbortSignal; onProgress?(done: number, total: number): void }): Promise<GeometrySource>;
   /** The geometry's face table now (before adoption: the original's). */
   faces(): Promise<GeometryFaces>;
+}
+
+/**
+ * The tools this page offers the app's Assistant (unreleased host API 1.9, `ws.assistant`). Null on
+ * a host whose SDK has no `ws.assistant`. A call's progress goes through the call itself
+ * (`call.progress(fraction, label, {waiting})`; an older host ignores `waiting`).
+ */
+export interface CadAssistantBridge {
+  /**
+   * Offer the tools (register([], null) withdraws them). An older host that refuses the call answers
+   * {available: false, reason: 'not_allowed'} instead of rejecting.
+   */
+  register(tools: readonly AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+  /** Hear this tab's turns (start, change, end); null on a host without turn events. */
+  onTurn: ((fn: (turn: AssistantTurn) => void) => () => void) | null;
+  /** Stop a turn this page was told of; null on a host without turn events. */
+  stop: ((turn: string) => Promise<AssistantStopAnswer>) | null;
 }
 
 export interface Bridge {
@@ -97,6 +131,8 @@ export interface Bridge {
    * older host, which has no exit hook (a 1.5 host also refuses the call with `not_allowed`).
    */
   onLeave: ((handler: LeaveHandler | null) => Promise<void>) | null;
+  /** The app's Assistant (unreleased 1.9, `ws.assistant`); null on a host whose SDK has none. */
+  assistant: CadAssistantBridge | null;
   /** The host's bridge API is at least `major.minor` (`hostVersion`, compared as numbers). */
   hostAtLeast(major: number, minor: number): boolean;
   spawnWorker(url: string | URL): Worker;
@@ -115,6 +151,32 @@ export function versionAtLeast(v: unknown, major: number, minor: number): boolea
   const p = parseHostVersion(v);
   if (!p) return false;
   return p[0] > major || (p[0] === major && p[1] >= minor);
+}
+
+/**
+ * `ws.assistant` when the SDK the host served has it (unreleased 1.9). Not gated on hostVersion:
+ * the host reports 1.8 until 1.9 is released, and the SDK it serves has `assistant` exactly when
+ * its bridge answers the calls. Its turn events (onTurn, stop) are feature-detected apart.
+ */
+export function assistantOf(ws: Workspace): CadAssistantBridge | null {
+  const a = (ws as unknown as { assistant?: Partial<NonNullable<Workspace['assistant']>> }).assistant;
+  if (!a || typeof a.register !== 'function') return null;
+  const register = a.register.bind(a);
+  const onTurn = typeof a.onTurn === 'function' ? a.onTurn.bind(a) : null;
+  const stop = typeof a.stop === 'function' ? a.stop.bind(a) : null;
+  return {
+    async register(tools, handler, opts) {
+      try {
+        return await register([...tools], handler, opts);
+      } catch (e) {
+        // A host whose bridge has no assistant.register refuses it.
+        if ((e as { code?: unknown } | null)?.code === 'not_allowed') return { available: false, accepted: [], refused: [], reason: 'not_allowed' };
+        throw e;
+      }
+    },
+    onTurn: onTurn ? (fn) => onTurn(fn) : null,
+    stop: stop ? (turn) => stop(turn) : null,
+  };
 }
 
 export function createBridge(ws: Workspace): Bridge {
@@ -172,6 +234,7 @@ export function createBridge(ws: Workspace): Bridge {
       : null;
   return {
     context: ws.context,
+    assistant: assistantOf(ws),
     studyId: ws.context.study.id,
     units: () => units,
     onUnits: (fn) => ws.on('units', fn),

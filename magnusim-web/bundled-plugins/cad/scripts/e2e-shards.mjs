@@ -109,6 +109,10 @@ export const SHARDS = {
     // Edit in CAD (host API 1.7): a project geometry opened in a Part, adopted on the first Back with a change (gate:l3-cad).
     'e2e/cad-edit-in-cad.spec.ts',
   ],
+  // The Part's tools for the app's Assistant, each spec on its own host with the Assistant's test
+  // switches and the scripted model (e2e/assistant-helpers.ts): the tools offered, watch mode,
+  // honest errors, the person first, take-overs, the eval set.
+  assistant: ['e2e/cad-assistant-watch.spec.ts'],
   // Opt-in: Daniel's 113 MB STEP (CAD_E2E_BIG_STEP); its tests skip without it.
   // Edit in CAD on the 113 MB STEP (CAD_KERNEL_BIG_STEP or CAD_E2E_BIG_STEP): its timings.
   big: ['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts'],
@@ -140,6 +144,7 @@ export const RULES = [
   ['test-results/', 'none', 'test output'],
   ['.cache/', 'none', 'local cache'],
   // The suite's own machinery.
+  ['e2e/assistant-helpers.ts', ['assistant'], "the Assistant specs' host and turns"],
   ['e2e/', ALL, 'e2e support (helpers, setup, config)'],
   ['scripts/gate-l2-cad.mjs', ['link'], 'gate:l2-cad'],
   ['scripts/gate-l2-cad.d.mts', ['link'], 'gate:l2-cad'],
@@ -152,8 +157,9 @@ export const RULES = [
   // Areas.
   ['src/link/', ['link'], 'LINK'],
   ['src/doc/source-record.ts', ['link'], "the study record's source_version"],
-  ['src/sketch/', ['sketch'], 'the sketcher'],
-  ['src/solver-worker/', ['sketch'], 'the sketch solver'],
+  // The Assistant's sketch tool draws through sketch mode and checks with the solver.
+  ['src/sketch/', ['sketch', 'assistant'], 'the sketcher'],
+  ['src/solver-worker/', ['sketch', 'assistant'], 'the sketch solver'],
   ['solver-build/', ['sketch'], 'the sketch solver'],
   // Every spec makes its solids from sketches and Extrudes (helpers addSketch, addSolid, drawBlock).
   ['src/features/sketch/', ALL, 'Sketch, the feature every solid starts from'],
@@ -179,6 +185,10 @@ export const RULES = [
   // P4b SELECT: the dock's selection count (the box selection's specs read it).
   [/^src\/features\/selectcount\/index\.tsx?$/, ['sketch', 'shell'], 'the selection count chip, its module'],
   ['src/features/selectcount/', ['sketch'], 'the selection count chip'],
+  // The Assistant's tools (src/assistant), their module (its chip: the dock), the eval harness.
+  ['src/assistant/', ['assistant'], 'the Assistant tools'],
+  [/^src\/features\/assistant\//, ['assistant', 'shell'], 'its module'],
+  ['eval/', ['assistant'], 'the eval harness'],
   // Shared code: every shard.
   ['src/', ALL, 'shared code'],
   ['kernel-build/', ALL, 'the kernel'],

@@ -44,6 +44,7 @@ export const H15_TESTS = [
   '__tests__/stop-targets.test.mjs',
   '__tests__/h15-test-roots.test.mjs',
   '__tests__/assistant-boundaries.test.mjs',
+  '__tests__/assistant-cad-tools.test.mjs',
 ];
 
 /** Code only (comments may mention imports). */

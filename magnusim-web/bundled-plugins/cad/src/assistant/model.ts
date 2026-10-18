@@ -1,0 +1,476 @@
+// The Part as text for the model (CAD tools spec §4, get_model): everything in `data` as compact
+// JSON (text whitespace collapses on the way), names first, values evaluated (mm, mm², mm³, deg),
+// every list capped with a count of the rest, within the reply budgets (§3.1):
+//   brief  names, states, sizes; older features collapse ({"earlier": 42, "states": {...}})
+//          above 80 features (30 on a local turn) or past the budget;
+//   full   also each feature's inputs in its tool's fields (inputs: null and a summary for a type
+//          no tool writes yet) and its expression fields; cut at the budget, the rest brief with
+//          "more": "get_model feature <name>";
+//   one feature  in full; a sketch with its plane, the solver's state now, all its regions (60),
+//          its open ends and dangling entities.
+// Owner: ASSISTANT.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
+import { toModel, ydirOf } from '../features/sketch/plane';
+import { userSelection } from '../lib/selection';
+import { describeFace, isCopyRole, splitMerged } from '../naming/names';
+import { statusOf } from '../sketch/dof';
+import { evaluateDimensions } from '../sketch/model';
+import type { AppServices } from '../types/app';
+import type { CallCtx, ReplyBudgets, ToolReply, TurnFacts } from '../types/assistant';
+import type { Feature, FeatureStatus, OriginRef, PlaneFrame, SketchFeature } from '../types/doc';
+import type { DocState, RebuildState } from '../types/doc-service';
+import type { BodyInfo } from '../types/kernel';
+import type { SelectionItem } from '../types/selection';
+import type { SketchOutput } from '../types/sketch';
+import { uiFor } from '../ui/controller';
+import { heartbeat, personBusy } from './busy';
+import { ToolError } from './errors';
+import { inputsOf, summaryOf, valuesOf } from './features-io';
+import { dir, jsonBytes, len, sig6, vec } from './numbers';
+import { runtimeOf } from './runtime';
+import { regionRows } from './sketch/regions';
+import { BRIEF_HARD_CAP } from './turn-info';
+
+/** Brief features keep at most this many regions per sketch. */
+export const BRIEF_REGIONS = 8;
+/** One sketch shows at most this many regions. */
+export const SKETCH_REGIONS = 60;
+/** Bodies listed (the rest counted). */
+export const BODIES_MAX = 50;
+/** Selection items in words. */
+export const SELECTION_MAX = 20;
+/** Names listed when a feature is not found. */
+export const NAMES_MAX = 30;
+/** Above this many faces a body's properties are not computed with every rebuild (measure gives them). */
+export const EAGER_FACES = 2000;
+/** The pointer to the CAD notes, on the first get_model of each key. */
+export const GUIDE_NOTE = 'If you have no notes from the CAD workspace, read help guide';
+
+type Row = Record<string, unknown>;
+
+const ORIGIN_WORD: Record<OriginRef, string> = {
+  'origin:point': 'origin',
+  'origin:top': 'Top',
+  'origin:front': 'Front',
+  'origin:right': 'Right',
+  'origin:x': 'X axis',
+  'origin:y': 'Y axis',
+  'origin:z': 'Z axis',
+};
+
+/** A feature's state in the model's words. */
+export function stateWord(st: FeatureStatus | undefined): string {
+  if (!st) return 'pending';
+  return st.state === 'rolled-back' ? 'rolled_back' : st.state;
+}
+
+const featureNamer = (s: DocState) => {
+  const names = new Map(s.doc.features.map((f) => [f.id, f.name]));
+  return (id: string) => names.get(id) ?? null;
+};
+
+const bodyName = (s: DocState, id: string) => s.rebuild.bodies.find((b) => b.id === id)?.name ?? s.doc.bodies[id]?.name ?? 'a removed body';
+
+/** Where a sketch lies, in words: Top, Front, Right, a construction plane's name, or a face. */
+export function supportWords(s: DocState, f: SketchFeature): string {
+  const sup = f.support;
+  if (sup.kind === 'plane') return ORIGIN_WORD[sup.plane] ?? sup.plane;
+  if (sup.kind === 'feature') return featureNamer(s)(sup.feature) ?? 'a deleted plane';
+  const body = s.rebuild.bodies.find((b) => b.id === sup.body);
+  return `${describeFace(sup.face.name, featureNamer(s), body?.names?.faces ?? null)} on ${bodyName(s, sup.body)}`;
+}
+
+/** "u runs +X, v runs -Z, origin (0, 0, 6)": a frame in model words. */
+export function frameWords(plane: PlaneFrame): string {
+  const axis = (v: readonly number[]) => {
+    const i = [0, 1, 2].reduce((best, k) => (Math.abs(v[k]) > Math.abs(v[best]) ? k : best), 0);
+    if (Math.abs(Math.abs(v[i]) - 1) > 1e-6) return `(${dir(v).join(', ')})`;
+    return `${v[i] > 0 ? '+' : '-'}${'XYZ'[i]}`;
+  };
+  const o = vec(plane.origin);
+  return `u runs ${axis(plane.xdir)}, v runs ${axis(ydirOf(plane))}, origin (${o.join(', ')})`;
+}
+
+/** The faces of the bodies that `featureId` named, counted by role ({start: 1, end: 1, side: 4}). */
+function faceRoles(bodies: readonly BodyInfo[], featureId: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const b of bodies) {
+    for (const name of b.names?.faces ?? []) {
+      for (const part of splitMerged(name)) {
+        const m = /^F:([^:]+):([^:#[]+)/.exec(part);
+        if (!m || m[1] !== featureId) continue;
+        const role = isCopyRole(m[2]) ? (m[2] === 'm' ? 'mirror' : 'copy') : m[2];
+        out[role] = (out[role] ?? 0) + 1;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** The bodies a feature makes, by name, among those built now. */
+function madeBodies(services: AppServices, s: DocState, f: Feature): string[] {
+  return s.rebuild.bodies.filter((b) => bodyMaker(services.doc.features, s.doc, b.id)?.id === f.id).map((b) => b.name);
+}
+
+/** One feature, brief. */
+export function briefFeature(services: AppServices, s: DocState, f: Feature): Row {
+  const st = s.rebuild.features[f.id];
+  const row: Row = { name: f.name, type: f.type, state: stateWord(st) };
+  if (st?.message) row.message = st.message;
+  if (st?.actions?.length) row.actions = [...st.actions];
+  if (runtimeOf(services)?.madeBy.has(f.id)) row.by = 'assistant';
+  if (f.type === 'sketch') {
+    const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
+    row.on = supportWords(s, f);
+    row.sketch = out?.source === 'stored-unsolved' ? 'unsolved' : f.solved.state;
+    row.dof = f.solved.dof;
+    if (out?.type === 'sketch') {
+      const regions = regionRows(out);
+      row.regions = regions.slice(0, BRIEF_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, holes: r.holes }));
+      if (regions.length > BRIEF_REGIONS) row.regions_more = regions.length - BRIEF_REGIONS;
+      if (out.open.length) row.open = out.open.length;
+    }
+  } else if (isBodyMaking(f)) {
+    row.op = f.op;
+    const made = madeBodies(services, s, f);
+    if (made.length) row.made = made;
+    const faces = faceRoles(s.rebuild.bodies, f.id);
+    if (Object.keys(faces).length) row.faces = faces;
+  }
+  return row;
+}
+
+/** One feature, full: brief plus its inputs (or a summary) and its expression fields. */
+export function fullFeature(services: AppServices, s: DocState, f: Feature): Row {
+  const row = briefFeature(services, s, f);
+  const inputs = inputsOf(f, services);
+  row.inputs = inputs;
+  if (!inputs) row.summary = summaryOf(f, services);
+  const values = valuesOf(f, services);
+  if (values.length) row.values = values.slice(0, 200);
+  return row;
+}
+
+/** A body: what it is, how big, where; null properties above EAGER_FACES (measure gives them). */
+export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): Promise<Row> {
+  let { volume, solids, shells } = b;
+  if ((volume === null || shells === null || shells === undefined) && b.faces <= EAGER_FACES) {
+    try {
+      const p = await services.doc.measure(b.id);
+      volume = p.volume;
+      solids = p.solids;
+      shells = p.shells;
+    } catch {
+      // Not measurable now (a rebuild came in between): the row says null.
+    }
+  }
+  const solidsN = typeof solids === 'number' ? solids : null;
+  const shellsN = typeof shells === 'number' ? shells : null;
+  const row: Row = {
+    name: b.name,
+    color: b.color,
+    valid: b.valid,
+    solids: solidsN,
+    shells: shellsN,
+    voids: solidsN !== null && shellsN !== null && solidsN > 0 ? Math.max(0, shellsN - solidsN) : null,
+    volume_mm3: typeof volume === 'number' ? sig6(volume) : null,
+    bbox_mm: [vec(b.bbox.slice(0, 3)), vec(b.bbox.slice(3, 6))],
+    faces: b.faces,
+    visible: b.visible,
+    simulation: s.doc.bodies[b.id]?.simulation !== false,
+  };
+  if (row.volume_mm3 === null && b.faces > EAGER_FACES) row.measure = 'use measure';
+  const maker = bodyMaker(services.doc.features, s.doc, b.id);
+  if (maker) row.made_by = maker.name;
+  const last = featureNamer(s)(b.feature);
+  if (last) row.last_changed_by = last;
+  return row;
+}
+
+/** A selected thing in words ("face End face of Plate on Body 1"). */
+export function selectionWords(s: DocState, item: SelectionItem): string {
+  const names = featureNamer(s);
+  switch (item.kind) {
+    case 'face': {
+      const b = s.rebuild.bodies.find((x) => x.id === item.body);
+      const n = b?.names?.faces?.[item.index];
+      return n ? `face ${describeFace(n, names, b?.names?.faces ?? null)} on ${bodyName(s, item.body)}` : `a face of ${bodyName(s, item.body)}`;
+    }
+    case 'edge':
+      return `an edge of ${bodyName(s, item.body)}`;
+    case 'vertex':
+      return `a vertex of ${bodyName(s, item.body)}`;
+    case 'body':
+      return `body ${bodyName(s, item.body)}`;
+    case 'feature':
+      return `feature ${names(item.feature) ?? 'a deleted feature'}`;
+    case 'origin':
+      if (item.ref === 'origin:point') return 'the origin';
+      return item.ref === 'origin:x' || item.ref === 'origin:y' || item.ref === 'origin:z' ? ORIGIN_WORD[item.ref] : `${ORIGIN_WORD[item.ref]} plane`;
+    case 'sketch':
+      return `a ${item.what} of ${names(item.feature) ?? 'a sketch'}`;
+    case 'region':
+      return `a region of ${names(item.feature) ?? 'a sketch'}`;
+  }
+}
+
+/** Collapse all but the newest `keep` features into one row of counts (errors named). */
+function collapse(rows: Row[], keep: number): Row[] {
+  if (keep >= rows.length) return rows;
+  const earlier = rows.slice(0, rows.length - keep);
+  const states: Record<string, number> = {};
+  for (const r of earlier) states[String(r.state)] = (states[String(r.state)] ?? 0) + 1;
+  const errors = earlier.filter((r) => r.state === 'error').map((r) => String(r.name));
+  return [{ earlier: earlier.length, states, ...(errors.length ? { errors: errors.slice(0, 20) } : {}) }, ...rows.slice(rows.length - keep)];
+}
+
+export interface ModelInput {
+  detail: 'brief' | 'full';
+  feature: string;
+}
+
+/** The Part-level facts every get_model has (everything but the features). */
+async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
+  const { services } = ctx;
+  const rt = runtimeOf(services);
+  const block = uiFor(services).editBlock();
+  const { rollback } = s.view;
+  const rolled = rollback !== null && rollback < s.doc.features.length ? { after: rollback > 0 ? (s.doc.features[rollback - 1]?.name ?? null) : null, count: s.doc.features.length - rollback } : null;
+  const bodies = await Promise.all(s.rebuild.bodies.slice(0, BODIES_MAX).map((b) => bodyRow(services, s, b)));
+  const sel = userSelection(services.selection.get()).items;
+  const out: Row = {
+    part: rt?.title() ?? services.bridge.context.study.title,
+    units: { length: s.doc.units.length, angle: s.doc.units.angle },
+    editable: block === null,
+    ...(block ? { why: block } : {}),
+    rolled_back: rolled,
+    person: personBusy(services),
+    undo: { label: s.history.undoLabel, your_steps: 0 },
+    params: s.doc.params.slice(0, 200).map((p) => {
+      const r = services.doc.units.evaluate(p.expr, p.quantity);
+      return {
+        name: p.name,
+        kind: p.quantity === 'scalar' ? 'number' : p.quantity,
+        expr: p.expr,
+        ...(r.ok ? { value: p.quantity === 'scalar' ? sig6(r.value) : len(r.value) } : { error: r.error }),
+        ...(p.comment ? { comment: p.comment } : {}),
+      };
+    }),
+    bodies,
+    ...(s.rebuild.bodies.length > BODIES_MAX ? { bodies_more: s.rebuild.bodies.length - BODIES_MAX } : {}),
+    selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i)),
+  };
+  if (s.rebuild.message) out.rebuild = s.rebuild.message;
+  // The pointer to help guide, on the first get_model of each key (a conversation may have kept another workspace's notes).
+  if (rt && !rt.guideNoted.has(ctx.key)) {
+    rt.guideNoted.add(ctx.key);
+    out.notes = GUIDE_NOTE;
+  }
+  const limits = limitsOf(ctx.turn);
+  if (limits) out.limits = limits;
+  return out;
+}
+
+/** What one feature's reply keeps of the Part's facts (its row is the point). */
+const FEATURE_BASE = ['part', 'units', 'editable', 'why', 'rolled_back', 'person', 'rebuild', 'notes', 'limits'];
+
+/**
+ * The Part's facts within `max` bytes: long lists of bodies, then of parameters, are halved (the
+ * rest counted), so the features keep the room.
+ */
+function fitBase(base: Row, max: number): Row {
+  let b = base;
+  for (let guard = 0; guard < 20 && jsonBytes(b) > max; guard++) {
+    const bodies = b.bodies as Row[];
+    const params = b.params as Row[];
+    if (bodies.length > 5) {
+      const keep = Math.ceil(bodies.length / 2);
+      b = { ...b, bodies: bodies.slice(0, keep), bodies_more: (Number(b.bodies_more) || 0) + bodies.length - keep };
+    } else if (params.length > 10) {
+      const keep = Math.ceil(params.length / 2);
+      b = { ...b, params: params.slice(0, keep), params_more: (Number(b.params_more) || 0) + params.length - keep };
+    } else break;
+  }
+  return b;
+}
+
+function limitsOf(turn: TurnFacts | null): Row | null {
+  if (!turn || turn.state !== 'running') return null;
+  const u = turn.used;
+  return { steps_left: Math.max(0, u.stepsCap - u.steps), usd_left: Math.max(0, Math.round((u.usdCap - u.usd) * 100) / 100) };
+}
+
+/** The whole Part, brief: the newest features kept while the reply is too large. */
+function fitBrief(facts: Row, rows: Row[], budgets: ReplyBudgets): Row {
+  const base = fitBase(facts, budgets.brief / 2);
+  let keep = Math.min(rows.length, budgets.briefCollapse);
+  let data: Row = { ...base, features: collapse(rows, keep) };
+  while (keep > 1 && jsonBytes(data) > budgets.brief) {
+    keep = Math.max(1, Math.floor(keep * 0.7));
+    data = { ...base, features: collapse(rows, keep) };
+  }
+  // The hard cap: the sketches' regions go (get_model feature <sketch> lists them).
+  if (jsonBytes(data) > BRIEF_HARD_CAP) {
+    data = {
+      ...data,
+      features: (data.features as Row[]).map((r) => {
+        if (!r.regions) return r;
+        const { regions: _r, regions_more: _m, ...rest } = r;
+        return rest;
+      }),
+    };
+  }
+  return data;
+}
+
+/** The whole Part, full: features in full while they fit, then brief with a pointer, then counted. */
+function fitFull(facts: Row, services: AppServices, s: DocState, budgets: ReplyBudgets): Row {
+  const features: Row[] = [];
+  const data: Row = { ...fitBase(facts, budgets.full / 3), features };
+  let size = jsonBytes(data);
+  const list = s.doc.features;
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    const full = fullFeature(services, s, f);
+    const fullBytes = jsonBytes(full) + 1;
+    if (size + fullBytes <= budgets.full) {
+      features.push(full);
+      size += fullBytes;
+      continue;
+    }
+    const brief = { ...briefFeature(services, s, f), more: `get_model feature ${f.name}` };
+    const briefBytes = jsonBytes(brief) + 1;
+    if (size + briefBytes <= budgets.full) {
+      features.push(brief);
+      size += briefBytes;
+      continue;
+    }
+    const rest = list.slice(i);
+    const states: Record<string, number> = {};
+    for (const g of rest) {
+      const w = stateWord(s.rebuild.features[g.id]);
+      states[w] = (states[w] ?? 0) + 1;
+    }
+    features.push({ later: rest.length, states, more: 'get_model detail brief, or get_model feature <name>' });
+    break;
+  }
+  return data;
+}
+
+/** One sketch in full: its plane, the solver's state now (headless), every region, open ends. */
+async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature): Promise<Row> {
+  const { services } = ctx;
+  const row = fullFeature(services, s, f);
+  const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
+  const plane = out?.type === 'sketch' ? out.plane : f.plane;
+  row.plane = { on: supportWords(s, f), origin_mm: vec(plane.origin), normal: dir(plane.normal), u: dir(plane.xdir), v: dir(ydirOf(plane)), words: frameWords(plane) };
+  row.solver = await solverNow(ctx, f);
+  row.entities = f.entities.length;
+  row.constraints = f.constraints.length;
+  if (f.links?.length || f.ties?.length || f.entities.some((e) => e.kind === 'spline')) {
+    row.unsupported = 'projected edges, splines or sketch patterns: sketch cannot replace it; edit_feature can change its dimension values';
+  }
+  if (out?.type === 'sketch') {
+    const regions = regionRows(out);
+    row.regions = regions.slice(0, SKETCH_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, at_mm: vec(toModel(plane, r.at)), holes: r.holes, depth: r.depth, bbox_uv: r.bbox_uv, bounded_by: r.entities.slice(0, 40) }));
+    if (regions.length > SKETCH_REGIONS) row.regions_more = regions.length - SKETCH_REGIONS;
+    row.open = out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: o.entity, point: o.point }));
+    row.dangling = out.dangling.slice(0, 40);
+    if (out.supportLost) row.support_lost = true;
+  }
+  // Within the sketch budget: the regions' boundaries go first, then regions themselves.
+  const budget = ctx.budgets.sketch;
+  if (jsonBytes(row) > budget && Array.isArray(row.regions)) row.regions = (row.regions as Row[]).map(({ bounded_by: _b, ...r }) => r);
+  while (jsonBytes(row) > budget && Array.isArray(row.regions) && (row.regions as Row[]).length > 1) {
+    const r = row.regions as Row[];
+    row.regions_more = (Number(row.regions_more) || 0) + Math.ceil(r.length / 2);
+    row.regions = r.slice(0, Math.floor(r.length / 2));
+  }
+  return row;
+}
+
+/** The sketch's definition now, from the solver apart from sketch mode; the stored state when the solver is not running. */
+async function solverNow(ctx: CallCtx, f: SketchFeature): Promise<Row> {
+  const solver = ctx.services.apis.get().solver;
+  const stored = { state: f.solved.state, dof: f.solved.dof, source: 'stored' };
+  if (!solver) return stored;
+  const ev = evaluateDimensions(f, ctx.services.doc.units);
+  if (Object.keys(ev.errors).length) return { ...stored, errors: ev.errors };
+  try {
+    const { solve, analysis } = await heartbeat(
+      ctx,
+      solver.ready().then(() => solver.analyzeFeature(f, ev.values)),
+      `Checking ${f.name}`,
+    );
+    const st = statusOf(solve, analysis);
+    const free = new Map<string, string[]>();
+    for (const p of analysis.dependentParams) {
+      const dot = p.lastIndexOf('.');
+      if (dot <= 0 || p.startsWith('#')) continue;
+      const of = p.slice(0, dot);
+      free.set(of, [...(free.get(of) ?? []), p.slice(dot + 1)]);
+    }
+    return {
+      state: st.state,
+      dof: st.dof,
+      free: [...free.entries()].slice(0, 40).map(([of, moves]) => ({ of, moves })),
+      conflicting: st.conflicting,
+      redundant: st.redundant,
+      source: 'solver',
+    };
+  } catch {
+    // The solver could not start or answer: what is stored, said as such.
+    return stored;
+  }
+}
+
+/** A feature by its name (any case) or its internal id. */
+export function featureByName(s: DocState, name: string): Feature | null {
+  const want = name.trim().toLowerCase();
+  return s.doc.features.find((f) => f.name.toLowerCase() === want) ?? s.doc.features.find((f) => f.id === name.trim()) ?? null;
+}
+
+/** get_model: the Part (or one feature) after the rebuild caught up. */
+export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolReply> {
+  const { services } = ctx;
+  const rebuild: RebuildState = await heartbeat(ctx, services.doc.settled(ctx.signal), 'Waiting for the rebuild');
+  await ctx.hold('after-settled');
+  ctx.checkAbort();
+  const s = services.doc.state.get();
+  const counts = (rows: readonly Feature[]) => {
+    const states: Record<string, number> = {};
+    for (const f of rows) {
+      const w = stateWord(s.rebuild.features[f.id]);
+      states[w] = (states[w] ?? 0) + 1;
+    }
+    return states;
+  };
+  if (input.feature.trim()) {
+    const f = featureByName(s, input.feature);
+    if (!f) {
+      const names = s.doc.features.map((g) => g.name);
+      throw new ToolError('not_found', `No feature is called "${input.feature.trim()}". Features: ${names.slice(0, NAMES_MAX).join(', ') || 'none yet'}.`, {
+        detail: { names: names.slice(0, NAMES_MAX), more: Math.max(0, names.length - NAMES_MAX) },
+      });
+    }
+    const facts = await partFacts(ctx, s);
+    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f) : fullFeature(services, s, f);
+    const data = { ...Object.fromEntries(FEATURE_BASE.filter((k) => k in facts).map((k) => [k, facts[k]])), feature: row };
+    const state = String(row.state);
+    return {
+      text: `${f.name} (${f.type}): ${state}${row.message ? ` · ${String(row.message)}` : ''}`,
+      data,
+      summary: `Read ${f.name}: ${state}`,
+    };
+  }
+  const base = await partFacts(ctx, s);
+  const data = input.detail === 'full' ? fitFull(base, services, s, ctx.budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), ctx.budgets);
+  const states = counts(s.doc.features);
+  const bad = (states.error ?? 0) + (states.warning ?? 0);
+  const nBodies = rebuild.bodies.length;
+  const word = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const text = `Part "${String(base.part)}": ${word(s.doc.features.length, 'feature', 'features')}${bad ? ` (${[states.error ? `${states.error} failing` : '', states.warning ? `${states.warning} with warnings` : ''].filter(Boolean).join(', ')})` : ''}, ${word(nBodies, 'body', 'bodies')}`;
+  return { text, data, summary: `Read the Part: ${word(s.doc.features.length, 'feature', 'features')}, ${word(nBodies, 'body', 'bodies')}` };
+}

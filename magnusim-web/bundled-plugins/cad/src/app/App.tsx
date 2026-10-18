@@ -3,6 +3,7 @@
 // host owns the 44 px header above the frame; this page never draws another.
 // Owner: INTEGRATE (scaffold version).
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { useAssistantPhase } from '../assistant/state';
 import { ServicesProvider } from '../lib/services';
 import { useStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
@@ -13,8 +14,10 @@ function Frame({ services }: { services: AppServices }) {
   const kernel = useStateStore(services.kernel.status, (s) => s.state);
   const doc = useStateStore(services.doc.state, (s) => s.status);
   const viewportReady = useStateStore(services.viewport, (s) => s.handle !== null);
+  // What the app's Assistant is doing in this Part (src/assistant/state.ts): off, idle, thinking, working, ...
+  const assistant = useAssistantPhase(services);
   return (
-    <div className="cad-app" data-cad-app="1" data-kernel={kernel} data-doc={doc} data-viewport={viewportReady ? 'ready' : 'none'}>
+    <div className="cad-app" data-cad-app="1" data-kernel={kernel} data-doc={doc} data-viewport={viewportReady ? 'ready' : 'none'} data-assistant={assistant}>
       <Toolbar />
       <div className="cad-stage">
         <ViewportView />

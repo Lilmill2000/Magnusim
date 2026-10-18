@@ -2,6 +2,8 @@
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ViewState } from '@magnusim/workspace';
+import { assistantTestHandle } from '../assistant/install';
+import type { AssistantTestHandle } from '../assistant/testing';
 import type { LinkController, LinkOutcome } from '../link/controller';
 import type { EditOpen } from '../link/edit-open';
 import type { AppServices } from '../types/app';
@@ -18,6 +20,8 @@ export interface CadTestHandle {
   leave: CadLeaveHandle;
   /** Edit in CAD (host API 1.7): the open flow of a Part opened on a project geometry. */
   edit?: EditOpen;
+  /** The Assistant's tools in this Part (src/assistant/testing.ts), or null when its module is not installed. */
+  readonly assistant: AssistantTestHandle | null;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;
@@ -46,6 +50,10 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
     services,
     link,
     leave,
+    // A getter: the modules (the Assistant's among them) install before this handle is exposed.
+    get assistant() {
+      return assistantTestHandle(services);
+    },
     snapshot() {
       const d = services.doc.state.get();
       return {

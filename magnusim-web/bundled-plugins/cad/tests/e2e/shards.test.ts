@@ -18,7 +18,10 @@ const specFiles = readdirSync(join(PLUGIN, 'e2e'))
   .filter((f) => /\.spec\.[jt]s$/.test(f))
   .map((f) => `e2e/${f}`)
   .sort();
+/** The areas every smoke run goes through. */
 const AREAS = ['shell', 'sketch', 'solids', 'step', 'link'];
+/** Every shard but the opt-in one: what shared code runs. */
+const ALL = [...AREAS, 'assistant'];
 const pkg = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8'));
 const HOST: string[] = pkg.magnusim.e2eHostPaths;
 
@@ -47,7 +50,9 @@ describe('shards', () => {
     const listed = Object.values(SHARDS).flat();
     expect(listed.filter((s) => !existsSync(join(PLUGIN, s))), 'listed specs that are not in e2e/').toEqual([]);
     expect(new Set(listed).size).toBe(listed.length);
-    expect(SHARD_NAMES).toEqual(['shell', 'sketch', 'solids', 'step', 'link', 'big']);
+    expect(SHARD_NAMES).toEqual(['shell', 'sketch', 'solids', 'step', 'link', 'assistant', 'big']);
+    // The Assistant's specs (CAD tools spec §12.3): each on its own host.
+    expect(SHARDS.assistant).toEqual(['e2e/cad-assistant-watch.spec.ts']);
     // The opt-in shard: Daniel's 113 MB part (P4b SELECT fix round 1 adds the box timed on it).
     expect(SHARDS.big).toEqual(['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts']);
     expect(specsOf(['link', 'solids'])).toEqual([...SHARDS.solids, ...SHARDS.link]);
@@ -62,11 +67,11 @@ describe('shards', () => {
 });
 
 describe('the file-to-shard map', () => {
-  const all = AREAS;
+  const all = ALL;
   const cases: [string, string[]][] = [
     // Areas.
-    ['src/sketch/mode.ts', ['sketch']],
-    ['src/solver-worker/solver-worker.mjs', ['sketch']],
+    ['src/sketch/mode.ts', ['sketch', 'assistant']],
+    ['src/solver-worker/solver-worker.mjs', ['sketch', 'assistant']],
     ['solver-build/build.sh', ['sketch']],
     ['src/link/controller.ts', ['link']],
     ['src/doc/source-record.ts', ['link']],
@@ -90,7 +95,16 @@ describe('the file-to-shard map', () => {
     ['e2e/cad-p4b-pattern.spec.ts', ['solids']],
     // P4b SELECT.
     ['src/features/selectcount/index.tsx', ['sketch', 'shell']],
-    ['src/sketch/project/source.ts', ['sketch']],
+    ['src/sketch/project/source.ts', ['sketch', 'assistant']],
+    // The Assistant's tools, their module (its chip is in the dock), the eval harness, its specs' helpers.
+    ['src/assistant/call.ts', ['assistant']],
+    ['src/assistant/tools/get_model.ts', ['assistant']],
+    ['src/features/assistant/index.tsx', ['assistant', 'shell']],
+    ['eval/run.mjs', ['assistant']],
+    ['eval/tasks/plate-holes.json', ['assistant']],
+    ['e2e/assistant-helpers.ts', ['assistant']],
+    ['e2e/cad-assistant-watch.spec.ts', ['assistant']],
+    ['src/types/assistant.ts', all],
     ['src/viewport/boxpick.ts', all],
     // Specs: their own shard.
     ['e2e/cad-p4a-solids.spec.ts', ['solids']],
@@ -154,8 +168,8 @@ describe('the file-to-shard map', () => {
 
   it('a set of changed files: the shards in order, the files behind each, the files that need none', () => {
     const r = shardsForFiles(['src/link/leave.ts', 'src/sketch/tools.ts', 'README.md', 'src/sketch/mode.ts'], HOST);
-    expect(r.shards).toEqual(['sketch', 'link']);
-    expect(r.why).toEqual({ sketch: ['src/sketch/tools.ts', 'src/sketch/mode.ts'], link: ['src/link/leave.ts'] });
+    expect(r.shards).toEqual(['sketch', 'link', 'assistant']);
+    expect(r.why).toEqual({ sketch: ['src/sketch/tools.ts', 'src/sketch/mode.ts'], link: ['src/link/leave.ts'], assistant: ['src/sketch/tools.ts', 'src/sketch/mode.ts'] });
     expect(r.none).toEqual([{ file: 'README.md', why: 'docs' }]);
   });
 });
@@ -173,8 +187,9 @@ describe('the runner', () => {
   it('plans the changed shards: some shards by their specs, every shard as the full suite, none as nothing', () => {
     const changed = (files: string[], extra: string[] = []) => planRun(parseArgs(['--changed', ...extra]), files, HOST);
     const some = changed(['src/sketch/mode.ts', 'src/features/revolve/build.ts']);
-    expect(some).toMatchObject({ shards: ['sketch', 'solids'], specs: [...SHARDS.sketch, ...SHARDS.solids], nothing: false });
-    expect(changed(['src/doc/service.ts'])).toMatchObject({ shards: AREAS, specs: null, nothing: false });
+    expect(some).toMatchObject({ shards: ['sketch', 'solids', 'assistant'], specs: [...SHARDS.sketch, ...SHARDS.solids, ...SHARDS.assistant], nothing: false });
+    expect(changed(['src/assistant/model.ts'])).toMatchObject({ shards: ['assistant'], specs: SHARDS.assistant, nothing: false });
+    expect(changed(['src/doc/service.ts'])).toMatchObject({ shards: ALL, specs: null, nothing: false });
     expect(changed(['README.md', 'tests/x.test.ts'])).toMatchObject({ shards: [], nothing: true });
     // A shard named with --shard is added to the changed ones.
     expect(changed(['src/link/leave.ts'], ['--shard', 'step']).shards).toEqual(['step', 'link']);
