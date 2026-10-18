@@ -91,10 +91,6 @@ export const CUSTOM_ID_RE = /^custom-[0-9a-f]{6}$/;
 /** A provider that is a coding agent: `agent:<id>`. */
 export type AgentProviderId = `agent:${string}`;
 
-export function agentProviderId(id: string): AgentProviderId {
-  return `agent:${id}`;
-}
-
 /** The agent id of an `agent:<id>` provider, or null. */
 export function agentIdOf(provider: unknown): string | null {
   if (typeof provider !== 'string' || !provider.startsWith('agent:')) return null;

@@ -555,6 +555,25 @@ describe('names', () => {
   });
 });
 
+describe("why the tool connection can't run", () => {
+  it('one text for every refusal (a turn, the agent Test), worded as Settings words it (AssistantStepMcp mcpReasonText): the package, or the reason and the port, "its port" with none', () => {
+    assert.equal(L.mcpUnavailableText('deps_missing', 4321), "Magnusim's tool-connection package isn't installed. Run Setup.bat again.");
+    assert.equal(L.mcpUnavailableText('deps_missing', 4321), sdk.MCP_DEPS_MISSING_TEXT);
+    assert.equal(
+      L.mcpUnavailableText('bind_failed', 49152),
+      "Magnusim couldn't open the connection its tools use (bind_failed). Restart Magnusim; if it keeps happening, another program may hold port 49152.",
+    );
+    assert.equal(
+      L.mcpUnavailableText('file_failed', null),
+      "Magnusim couldn't open the connection its tools use (file_failed). Restart Magnusim; if it keeps happening, another program may hold its port.",
+    );
+    assert.equal(
+      L.mcpUnavailableText(null, null),
+      "Magnusim couldn't open the connection its tools use (not running). Restart Magnusim; if it keeps happening, another program may hold its port.",
+    );
+  });
+});
+
 describe('tools/list', () => {
   const SLUG = 'abcdefghijklmnopqrstuvwx'; // 24 characters: kept as the slug
   const LONG1 = `k${'a'.repeat(31)}`; // 32 characters: a 58-character tool name
@@ -1848,6 +1867,17 @@ describe('the server', () => {
       assert.ok(!Number.isNaN(Date.parse(r.json.connections[0].since)));
       status = await app.get('/api/assistant/status');
       assert.deepEqual(status.json.mcp, { clients: true, running: true, reason: null, port: info.port, connected: 1 });
+      // The page has a type for every field of the status, mcp's too (src/assistant/wire.ts).
+      const wire = readFileSync(new URL('../../../src/assistant/wire.ts', import.meta.url), 'utf8');
+      const members = (name) => {
+        const start = wire.indexOf(`export interface ${name} {`);
+        assert.ok(start >= 0, `wire.ts has ${name}`);
+        return [...wire.slice(start, wire.indexOf('\n}', start)).matchAll(/^ {2}([a-z_]+)\??:/gm)].map((x) => x[1]);
+      };
+      const typed = members('AssistantStatus');
+      // (Test switches the status reports only with MAGNUSIM_TEST_ASSISTANT=1 aside.)
+      assert.deepEqual(Object.keys(status.json).filter((k) => !typed.includes(k) && !k.startsWith('test_')), [], 'every status field is in AssistantStatus');
+      assert.deepEqual(members('McpStatus').sort(), Object.keys(status.json.mcp).sort());
       const test = await app.get('/api/test/assistant/state');
       assert.deepEqual(test.json.mcp, { connections: 1, port: info.port });
       for (const answer of [r, status, test, on]) assert.ok(!answer.text.includes(info.token), 'never the token');

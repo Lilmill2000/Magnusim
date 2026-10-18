@@ -56,7 +56,7 @@ import type { FoundAgent } from './agents/session.ts';
 import { agentStartRefusal, rememberAgentSignIn, type AgentEntry, type AgentRow } from './agents/discover.ts';
 import { findAgentNow, foundAgentOf, signInView } from './agents/test.ts';
 import { appVersion } from './host-tools.ts';
-import { mcpLaunchTokenMatches, startMcpListener } from './mcp/listener.ts';
+import { mcpLaunchTokenMatches, mcpUnavailableText, startMcpListener } from './mcp/listener.ts';
 
 export type { TurnState, ModelTurnSettings } from './loop.ts';
 
@@ -607,12 +607,6 @@ export interface LaunchProof {
 }
 
 export const LAUNCH_PROOF_TEXT = 'Start a coding agent from the Magnusim window or with assistant-run on this account.';
-
-/** Why the agents' tool connection can't run, as a turn's refusal says it. */
-export function mcpUnavailableText(reason: string | null, port: number | null): string {
-  if (reason === 'deps_missing') return "Magnusim's tool-connection package isn't installed. Run Setup.bat again.";
-  return `Magnusim couldn't open the connection its tools use (${reason ?? 'not running'}). Restart Magnusim; if it keeps happening, another program may hold port ${port ?? 'it uses'}.`;
-}
 
 export interface TurnManagerDeps {
   settings(): Promise<AssistantSettings>;

@@ -1444,8 +1444,12 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
 
     // Removed: not while it runs; then with its choices.
     const remove = (id) => plainPost('/api/assistant/agents/custom/remove', { id });
-    assert.equal((await remove('custom-ffffff')).status, 404);
-    assert.equal((await remove('claude')).status, 404, 'a known agent is not removed');
+    // An unknown id: 404 agent_unknown, as /agents/allow and /agents/test answer it.
+    const gone = await remove('custom-ffffff');
+    assert.deepEqual([gone.status, gone.json.code, gone.json.error], [404, 'agent_unknown', 'No custom agent called custom-ffffff. Settings → Assistant lists them.']);
+    assert.equal((await browserPost('/api/assistant/agents/allow', { id: 'custom-ffffff', allow: false })).json.code, 'agent_unknown');
+    const known = await remove('claude');
+    assert.deepEqual([known.status, known.json.code], [404, 'agent_unknown'], 'a known agent is not removed');
     D.setAgentRunHooks({ running: (id) => id === row.id, stop: async () => {} });
     try {
       const busy = await remove(row.id);

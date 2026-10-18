@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { assistantGet } from '../../assistant/api';
 import { stepChange, writeStatus } from '../../assistant/status';
-import type { AssistantStatus } from '../../assistant/wire';
+import type { AssistantStatus, McpStatus } from '../../assistant/wire';
 
 const SETTINGS = '/api/assistant/settings';
 const MCP_PATH = '/api/assistant/mcp';
@@ -37,20 +37,11 @@ export const MCP_DEPS_TEXT = "Magnusim's tool-connection package isn't installed
 export const MCP_COPIED_TEXT = 'Copied.';
 export const MCP_COPY_FAILED_TEXT = "Couldn't copy it: select the text above and copy it.";
 
-/** Why the connection isn't running, as the person reads it. */
+/** Why the connection isn't running, as the person reads it (the server's refusals say the same: mcp/listener.ts mcpUnavailableText). */
 export function mcpReasonText(reason: string, port: number | null): string {
   if (reason === 'deps_missing') return MCP_DEPS_TEXT;
   const where = typeof port === 'number' ? `port ${port}` : 'its port';
   return `Magnusim couldn't open the connection its tools use (${reason}). Restart Magnusim; if it keeps happening, another program may hold ${where}.`;
-}
-
-/** The status's Other apps part. */
-interface McpStatusPart {
-  clients: boolean;
-  running: boolean;
-  reason: string | null;
-  port: number | null;
-  connected: number;
 }
 
 /** One connection as GET /api/assistant/mcp lists it. */
@@ -72,8 +63,9 @@ interface McpAnswer {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-function mcpPartOf(status: AssistantStatus): McpStatusPart | null {
-  const m = (status as unknown as { mcp?: unknown }).mcp;
+/** The status's Other apps part, each field checked as it arrived (none from a server without it). */
+function mcpPartOf(status: AssistantStatus): McpStatus | null {
+  const m: unknown = status.mcp;
   if (!isRecord(m) || typeof m.clients !== 'boolean') return null;
   return {
     clients: m.clients,
@@ -113,7 +105,7 @@ export function AssistantStepMcp({ status }: { status: AssistantStatus }) {
   return <McpBlock part={part} />;
 }
 
-function McpBlock({ part }: { part: McpStatusPart }) {
+function McpBlock({ part }: { part: McpStatus }) {
   const [pending, setPending] = useState<boolean | null>(null);
   const [error, setError] = useState('');
   const [answer, setAnswer] = useState<McpAnswer | null>(null);

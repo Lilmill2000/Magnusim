@@ -64,8 +64,8 @@
  *   POST /api/assistant/agents/custom   {name, command, keep_env?} → {ok, agent}: a custom agent (off
  *                                        until allowed); browser only (403 browser_only); 400
  *                                        bad_name, bad_command, bad_keep_env, cant_start_script, too_many
- *   POST /api/assistant/agents/custom/remove  {id} → {ok} (what it still runs is stopped); 404;
- *                                        409 agent_running
+ *   POST /api/assistant/agents/custom/remove  {id} → {ok} (what it still runs is stopped); 404
+ *                                        agent_unknown; 409 agent_running
  *   POST /api/assistant/agents/allow    {id, allow, fingerprint?} → {ok, agent}: the allow switch;
  *                                        browser only (403 browser_only). allow:false is always taken
  *                                        and stops that agent first, even when the switch can't be
@@ -80,7 +80,7 @@
  *                                        request closing stops it (assistant/agents/test.ts)
  *   POST /api/assistant/agents/sign-in  {id, method} → {ok, agent?} | {ok:false, code, error}: the
  *                                        agent signs in by itself (an `agent` method it listed);
- *                                        400 bad_method; 409 busy, agent_not_allowed
+ *                                        400 bad_method; 404 agent_unknown; 409 busy, agent_not_allowed
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory

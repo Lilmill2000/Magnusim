@@ -1365,10 +1365,12 @@ export async function addCustomAgentRequest(r: AgentRouteContext, body: Record<s
 export async function removeCustomAgentRequest(body: Record<string, unknown>): Promise<Answer> {
   const id = body.id;
   const settings = await loadSettings();
-  if (typeof id !== 'string' || !settings.custom_agents.some((c) => c.id === id)) return { status: 404, body: { ok: false, code: 'not_found', error: 'No custom agent with that id.' } };
+  // The same 404 as the other agent routes' (a known agent is no custom one either).
+  const unknown: Answer = { status: 404, body: { ok: false, code: 'agent_unknown', error: `No custom agent called ${cleanText(id, 40) || '(none)'}. Settings → Assistant lists them.` } };
+  if (typeof id !== 'string' || !settings.custom_agents.some((c) => c.id === id)) return unknown;
   const name = settings.custom_agents.find((c) => c.id === id)?.name ?? id;
   if (hooks().running(id)) return { status: 409, body: { ok: false, code: 'agent_running', error: `${name} is working on a message. Stop it first.` } };
-  if (!(await removeCustomAgent(id))) return { status: 404, body: { ok: false, code: 'not_found', error: 'No custom agent with that id.' } };
+  if (!(await removeCustomAgent(id))) return unknown;
   uncacheEntry(id);
   rememberAgentLast(id, null);
   rememberAgentSignIn(id, null);

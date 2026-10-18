@@ -112,15 +112,9 @@ export function privacyGate(o: { turn: string; project: ProjectInfo; provider: P
 }
 
 // ---------------------------------------------------------------- coding agents
-
-/**
- * A coding agent counts as off this PC: it sends what it reads to its own service under the
- * person's account (phase 3 spec 4.14). Its destination is `agent:<id>` (providers/index.ts
- * destinationOf), so a consent for one agent never covers another.
- */
-export function agentDestinationLabel(name: string): string {
-  return `${cleanText(name, 64) || 'The coding agent'} (your account)`;
-}
+// A coding agent counts as off this PC: it sends what it reads to its own service under the
+// person's account (phase 3 spec 4.14). Its destination is `agent:<id>` (providers/index.ts
+// destinationOf), so a consent for one agent never covers another.
 
 /** "Never send" with a project in the turn: refused at the start. */
 export function agentPrivacyDeniedText(name: string): string {
@@ -162,7 +156,6 @@ export function agentPrivacyGate(o: { turn: string; project: ProjectInfo; name: 
  * every app using Magnusim's tools, and the question says so.
  */
 export const MCP_DESTINATION = 'mcp';
-export const MCP_DESTINATION_LABEL = 'Other apps on this PC';
 export const MCP_PRIVACY_DENIED_TEXT =
   "Settings → Assistant is set to never send project data off this PC. Other apps (MCP) can't read this project.";
 

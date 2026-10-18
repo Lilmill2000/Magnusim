@@ -632,7 +632,41 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
       const b = await w.turn({ text: 'x', provider: 'agent:claude' });
       assert.equal(b.body.code, 'mcp_unavailable');
       assert.match(b.body.error, /^Magnusim couldn't open the connection its tools use \(bind_failed\)\. .* port 4321\.$/);
+      // No port bound or saved yet: "its port", as Settings says it.
+      assert.equal(w.m.state.settings.mcp.port, null);
+      w.m.deps.agents = { ...noToken, listener: async () => ({ running: false, reason: 'file_failed', port: null }) };
+      const c = await w.turn({ text: 'x', provider: 'agent:claude' });
+      assert.deepEqual(
+        [c.body.code, c.body.error],
+        ['mcp_unavailable', "Magnusim couldn't open the connection its tools use (file_failed). Restart Magnusim; if it keeps happening, another program may hold its port."],
+      );
     } finally {
+      await w.close();
+    }
+  });
+
+  it("the tool connection can't run: the agent Test refuses mcp_unavailable in the words every refusal uses, and starts nothing", async () => {
+    const w = await world();
+    const ST = await import('../assistant/settings.ts');
+    const AT = await import('../assistant/agents/test.ts');
+    await ST.addCustomAgent(customAgent());
+    const info = L.mcpInfoPath();
+    try {
+      await ST.setAgentAllowed(CUSTOM_ID, { fingerprint: await fingerprintOf(CUSTOM_ID, await ST.loadSettings()) });
+      // A folder holds the connection file's name: the listener can't write it, so it can't start.
+      await L.resetMcpListenerForTests();
+      mkdirSync(join(info, 'blocked'), { recursive: true });
+      const before = custom.records().length;
+      const r = await AT.agentTestRequest({ id: CUSTOM_ID, message: false }, { mcp: async () => ({ available: true, reason: null }) });
+      assert.equal(L.mcpListenerStatus().reason, 'file_failed');
+      const port = (await ST.loadSettings()).mcp.port;
+      assert.deepEqual([r.status, r.body.code, r.body.error], [409, 'mcp_unavailable', L.mcpUnavailableText('file_failed', port)]);
+      assert.match(r.body.error, /^Magnusim couldn't open the connection its tools use \(file_failed\)\. Restart Magnusim; if it keeps happening, another program may hold (port \d+|its port)\.$/);
+      assert.equal(custom.records().length, before, 'never started');
+    } finally {
+      await removeTree(info);
+      await L.resetMcpListenerForTests();
+      await ST.removeCustomAgent(CUSTOM_ID);
       await w.close();
     }
   });

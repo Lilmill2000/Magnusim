@@ -134,6 +134,22 @@ export interface AssistantStatus {
   agents_checked_at?: string | null;
   /** How an agent's whole tree is stopped on this PC ('best_effort': Windows PowerShell is blocked). */
   agents_tree_kill?: 'job' | 'group' | 'best_effort';
+  /** Other apps (MCP) and the tool connection coding agents use (absent from a server without them). */
+  mcp?: McpStatus;
+}
+
+/** The status's `mcp` (assistant-routes.ts mcpStatus). */
+export interface McpStatus {
+  /** Other apps may use Magnusim's tools (Settings → Assistant → Other apps (MCP)). */
+  clients: boolean;
+  /** The tool connection runs (other apps' and coding agents' alike). */
+  running: boolean;
+  /** Why it doesn't run ('deps_missing', 'bind_failed', ...); null while it runs or before it was started. */
+  reason: string | null;
+  /** The port it listens on, or the saved one while it doesn't run (null: none yet). */
+  port: number | null;
+  /** Connections now: other apps' and coding agents'. */
+  connected: number;
 }
 
 /** GET /api/assistant/models?provider=. */

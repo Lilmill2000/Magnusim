@@ -31,7 +31,7 @@ import { randomBytes } from 'node:crypto';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 import { appVersion } from '../host-tools.ts';
 import { alog } from '../log.ts';
-import { mcpListenerStatus, startMcpListener } from '../mcp/listener.ts';
+import { mcpListenerStatus, mcpUnavailableText, startMcpListener } from '../mcp/listener.ts';
 import { mintBinding } from '../mcp/sessions.ts';
 import { CONNECTION_CHECK } from '../provider-test.ts';
 import { cleanText } from '../sanitize.ts';
@@ -155,11 +155,6 @@ function testingSlot(): { running: boolean } {
   return s;
 }
 
-/** Whether a Test or connect runs now. */
-export function agentTestRunning(): boolean {
-  return testingSlot().running;
-}
-
 interface Prepared {
   settings: AssistantSettings;
   found: FoundAgent;
@@ -179,7 +174,7 @@ async function prepare(id: unknown, purpose: 'test' | 'connect' | 'sign_in', mcp
   if (purpose !== 'sign_in') {
     const l = mcpListenerStatus();
     if (!l.running) {
-      return refuse(409, 'mcp_unavailable', l.reason === 'deps_missing' ? "Magnusim's tool-connection package isn't installed. Run Setup.bat again." : `Magnusim couldn't open the connection its tools use (${l.reason ?? 'not running'}).`);
+      return refuse(409, 'mcp_unavailable', mcpUnavailableText(l.reason, l.port ?? settings.mcp.port));
     }
   }
   return { settings, found: foundAgentOf(found.entry, found.row), row: found.row };

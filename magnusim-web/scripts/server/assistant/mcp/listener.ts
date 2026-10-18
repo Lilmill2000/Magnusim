@@ -40,7 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { readJsonFile, writeFileAtomic } from '../files.ts';
 import { assistantDataDir } from '../home.ts';
 import { alog } from '../log.ts';
-import { loadMcpSdk } from '../providers/load-sdk.ts';
+import { loadMcpSdk, MCP_DEPS_MISSING_TEXT } from '../providers/load-sdk.ts';
 import { isPort, loadSettings, updateSettings } from '../settings.ts';
 import { MCP_SERVER_KEY } from './names.ts';
 import { BINDING_RE, newSessionId } from './sessions.ts';
@@ -199,6 +199,17 @@ export function mcpClientConfig(): { command: string; args: string[]; snippet: s
 export function mcpListenerStatus(): McpListenerStatus {
   const st = state();
   return { running: st.running, reason: st.running ? null : st.reason, port: st.running ? st.port : null, connected: st.conns.size };
+}
+
+/**
+ * Why the tool connection can't run, as every refusal on the server says it (spec 5.7;
+ * Settings words it the same: AssistantStepMcp.tsx mcpReasonText). `port` is the one it uses
+ * or would bind (the saved one), null when there is none yet.
+ */
+export function mcpUnavailableText(reason: string | null, port: number | null): string {
+  if (reason === 'deps_missing') return MCP_DEPS_MISSING_TEXT;
+  const where = typeof port === 'number' ? `port ${port}` : 'its port';
+  return `Magnusim couldn't open the connection its tools use (${reason ?? 'not running'}). Restart Magnusim; if it keeps happening, another program may hold ${where}.`;
 }
 
 /**
