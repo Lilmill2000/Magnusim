@@ -20,7 +20,9 @@
  * Always an async spawn, never spawnSync. Start-up takes 1-3 s (Add-Type compiles), so a keeper
  * is warmed ahead: each agent start whose keeper got ready warms the next one (warmKeeper, from
  * process.ts), which then waits without holding Node's event loop open (hold()), and the next
- * start (a turn's, a Test's or a discovery probe's) takes it (takeKeeper). A keeper that is
+ * start (a turn's, a Test's or a discovery probe's) takes it (takeKeeper). There is one per
+ * process, whichever copy of this module (a Vite restart loads it again) warmed it, and it ends
+ * when the Assistant shuts down. A keeper that is
  * blocked or gives no `ready` in 20 s counts as blocked: the agent then runs without a job, and
  * its tree kill is best effort (taskkill /T).
  * MAGNUSIM_TEST_ASSISTANT_JOB=blocked makes every keeper count as blocked (tests; honoured only
@@ -30,6 +32,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { redact } from '../redact.ts';
 import { alog } from '../log.ts';
 import { assistantHomeIsOverridden } from '../home.ts';
+import { assistantState, onAssistantShutdown } from '../state.ts';
 import { powershellPath } from '../secrets/dpapi.ts';
 
 /** The keeper. Exit 4: not in full language mode (blocked). */
@@ -147,16 +150,40 @@ export function jobTestSwitch(env: NodeJS.ProcessEnv = process.env): { blocked: 
 }
 
 let reportedSwitch = '';
-let lastOutcome: 'ok' | 'failed' | null = null;
+
+/**
+ * The keeper warmed ahead and what the last keeper said about this PC, one of each per process
+ * (on globalThis, as state.ts keeps the Assistant's state): a Vite restart loads this module
+ * again, and the turns stay on the first copy while Tests and probes move to the new one. Every
+ * copy takes the one warmed keeper and none warms a second while it waits, so a copy nothing
+ * reaches any more never leaves one running.
+ */
+interface WarmSlot {
+  keeper: JobKeeper | null;
+  /** Unregisters its drop at the Assistant's shutdown. */
+  off: (() => void) | null;
+  lastOutcome: 'ok' | 'failed' | null;
+}
+const WARM = Symbol.for('magnusim.assistant.agents.keeper');
+
+function slot(): WarmSlot {
+  const g = globalThis as unknown as Record<symbol, WarmSlot | undefined>;
+  let w = g[WARM];
+  if (!w) {
+    w = { keeper: null, off: null, lastOutcome: null };
+    g[WARM] = w;
+  }
+  return w;
+}
 
 /** The last keeper (or job assignment) worked or failed: what agentsTreeKill() reports. */
 export function noteKeeperOutcome(ok: boolean): void {
-  lastOutcome = ok ? 'ok' : 'failed';
+  slot().lastOutcome = ok ? 'ok' : 'failed';
 }
 
 /** Whether the tree kill is best effort on this PC: the test switch, or the last keeper failed. */
 export function keeperLooksBlocked(env: NodeJS.ProcessEnv = process.env): boolean {
-  return jobTestSwitch(env).blocked || lastOutcome === 'failed';
+  return jobTestSwitch(env).blocked || slot().lastOutcome === 'failed';
 }
 
 /** One job object for one agent, kept by a PowerShell process. */
@@ -349,17 +376,32 @@ export class JobKeeper {
   }
 }
 
-let warmed: JobKeeper | null = null;
+/** The warmed keeper, out of the slot (its drop at the Assistant's shutdown unregistered). */
+function unwarm(): JobKeeper | null {
+  const w = slot();
+  const k = w.keeper;
+  w.keeper = null;
+  w.off?.();
+  w.off = null;
+  return k;
+}
 
 /**
  * Starts a keeper ahead of the next agent start (process.ts calls it once a start's own keeper
  * got ready, so discovery's probes and every later start find one warming or ready). It waits
- * without holding Node's event loop open.
+ * without holding Node's event loop open, and ends when the Assistant shuts down (each lifetime
+ * registers its drop again, as shutdownAssistant clears its hooks). Once the Assistant has shut
+ * down (a start on its way then), nothing is warmed.
  */
 export function warmKeeper(o: KeeperOptions = {}): void {
-  if (process.platform !== 'win32' || warmed) return;
-  warmed = JobKeeper.start(o);
-  warmed.hold(false);
+  const w = slot();
+  if (process.platform !== 'win32' || w.keeper || assistantState().shutDown) return;
+  const k = JobKeeper.start(o);
+  k.hold(false);
+  w.keeper = k;
+  w.off = onAssistantShutdown(() => {
+    if (slot().keeper === k) dropWarmKeeper();
+  });
 }
 
 /**
@@ -367,8 +409,7 @@ export function warmKeeper(o: KeeperOptions = {}): void {
  * new one. Each agent gets its own.
  */
 export function takeKeeper(o: KeeperOptions = {}): JobKeeper {
-  const w = warmed;
-  warmed = null;
+  const w = unwarm();
   if (w && !w.error && !jobTestSwitch(o.env ?? process.env).blocked) {
     w.hold(true);
     return w;
@@ -377,8 +418,7 @@ export function takeKeeper(o: KeeperOptions = {}): JobKeeper {
   return JobKeeper.start(o);
 }
 
-/** Ends a warmed keeper nobody took (server shutdown, tests). */
+/** Ends a warmed keeper nobody took (the Assistant's shutdown, tests). */
 export function dropWarmKeeper(): void {
-  warmed?.close();
-  warmed = null;
+  unwarm()?.close();
 }

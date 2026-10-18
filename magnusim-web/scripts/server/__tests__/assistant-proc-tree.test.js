@@ -4,8 +4,9 @@
 // helper processes. On Windows: the job object (a helper whose parent already exited dies; a
 // program that starts helpers at its first instruction leaves none, thanks to the trampoline;
 // Magnusim killed outright takes the tree with it through the keeper's pipe) and the
-// best-effort taskkill fallback when PowerShell is blocked, and the keeper warmed ahead. On
-// POSIX: the process group (polite and stubborn agents, a leader that already ended, helpers
+// best-effort taskkill fallback when PowerShell is blocked, and the keeper warmed ahead (one per
+// process, whichever copy of the module warmed it, ended with the Assistant). On POSIX: the
+// process group (polite and stubborn agents, a leader that already ended, helpers
 // given their SIGTERM grace), Magnusim stopped by Ctrl+C, its terminal closing or SIGTERM taking
 // every group with it, and the pids.json sweep of groups a crashed Magnusim left behind, on
 // proof only (never an unrelated group, a group with a member older than its recorded leader, a
@@ -34,7 +35,7 @@ const agentProc = await import('../assistant/agents/process.ts');
 const jobWin = await import('../assistant/agents/job-win.ts');
 const rpc = await import('../assistant/agents/rpc.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
-const { resetAssistantState } = await import('../assistant/state.ts');
+const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { startFakeAcp, FAKE_ACP_AGENT } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
 const { AgentSession } = await import('../assistant/agents/session.ts');
@@ -641,6 +642,69 @@ describe('Windows: the job object', { ...LIMIT, skip: WIN ? false : 'Windows onl
       assert.deepEqual(await stillAlive(keepers()), [], 'every keeper has ended');
     } finally {
       spy.restore();
+    }
+  });
+
+  it('the keeper warmed ahead ends when the Assistant shuts down, and a start once it has shut down warms none', async () => {
+    jobWin.dropWarmKeeper();
+    const argv = [process.execPath, '-e', 'process.stdin.resume()'];
+    const spy = spyChildProcess();
+    const keepers = () => spy.children.filter((c) => /powershell\.exe$/i.test(c.program)).map((c) => c.child.pid);
+    try {
+      const a = await agentProc.startAgentProcess({ argv, label: 'warm-at-shutdown', tmp: ROOT });
+      made.add(a.pid);
+      cleanups.push(() => a.stop());
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(keepers().length, 2, 'its own keeper and one warmed ahead');
+      const warm = keepers()[1];
+      await a.stop();
+      assert.ok(alive(warm), 'the warmed keeper waits for the next start');
+      shutdownAssistant();
+      assert.deepEqual(await stillAlive([warm]), [], 'the warmed keeper ended with the Assistant');
+      // A start that ends after the shutdown (one on its way then) leaves no keeper waiting.
+      const b = await agentProc.startAgentProcess({ argv, label: 'after-shutdown', tmp: ROOT });
+      made.add(b.pid);
+      cleanups.push(() => b.stop());
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(keepers().length, 3, 'its own keeper, and none warmed');
+      await b.stop();
+      assert.deepEqual(await stillAlive(keepers()), [], 'every keeper has ended');
+    } finally {
+      spy.restore();
+      // A fresh Assistant for the tests after this one (the shut-down one warms nothing).
+      resetAssistantState();
+    }
+  });
+
+  it('a copy of the module loaded again (a Vite restart) shares the one warmed keeper and the keeper status with the first', async () => {
+    jobWin.dropWarmKeeper();
+    const copy = await import(`../assistant/agents/job-win.ts?copy=${process.pid}-${Date.now()}`);
+    assert.notEqual(copy.warmKeeper, jobWin.warmKeeper, 'a second copy of the module');
+    const spy = spyChildProcess();
+    const keepers = () => spy.children.filter((c) => /powershell\.exe$/i.test(c.program)).map((c) => c.child.pid);
+    try {
+      jobWin.warmKeeper();
+      copy.warmKeeper();
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(keepers().length, 1, 'one keeper warmed, whichever copy asks');
+      const taken = copy.takeKeeper();
+      assert.equal(taken.pid, keepers()[0], 'the other copy takes it');
+      taken.close();
+      // A keeper one copy warmed, the other drops.
+      copy.warmKeeper();
+      for (const pid of keepers()) made.add(pid);
+      assert.equal(keepers().length, 2);
+      jobWin.dropWarmKeeper();
+      assert.deepEqual(await stillAlive(keepers()), [], 'every keeper has ended');
+      // What one copy learnt about keepers on this PC, the other reports.
+      copy.noteKeeperOutcome(false);
+      assert.equal(jobWin.keeperLooksBlocked(), true);
+      jobWin.noteKeeperOutcome(true);
+      assert.equal(copy.keeperLooksBlocked(), false);
+    } finally {
+      spy.restore();
+      copy.dropWarmKeeper();
+      jobWin.dropWarmKeeper();
     }
   });
 
