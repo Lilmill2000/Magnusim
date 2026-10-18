@@ -44,7 +44,7 @@ function baseStatus(extra: Record<string, unknown> = {}): Record<string, unknown
     effort: 'default',
     privacy: 'ask',
     consents: 0,
-    caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
+    caps: { turn_usd: 8, day_usd: 15, steps: 120, turn_minutes: 60, turn_tokens: 10_000_000 },
     keys: { anthropic: NO_KEY, openai: NO_KEY, openai_compatible: NO_KEY },
     storage: { kind: 'file', reason: null, note: '' },
     keys_notice: null,

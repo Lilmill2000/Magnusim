@@ -103,7 +103,7 @@ function baseStatus(extra: Record<string, unknown> = {}): Record<string, unknown
     effort: 'default',
     privacy: 'ask',
     consents: 0,
-    caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
+    caps: { turn_usd: 8, day_usd: 15, steps: 120, turn_minutes: 60, turn_tokens: 10_000_000 },
     keys: { anthropic: NO_KEY, openai: NO_KEY, openai_compatible: NO_KEY },
     storage: { kind: 'file', reason: null, note: '' },
     keys_notice: null,
@@ -1309,8 +1309,11 @@ describe('Coding agents in the Default choice and the limits', () => {
     fireEvent.keyDown(changes, { key: 'Enter' });
     await waitFor(() => expect(posts('/api/assistant/settings')).toEqual([{ agent_caps: { changes: 30 } }]));
     await waitFor(() => expect(within(screen.getByRole('group', { name: 'Coding agents limits' })).getByLabelText('Changes per message')).toHaveValue(30));
-    // The API-key limits are their own group, and keep their four fields.
-    expect(screen.getByRole('group', { name: 'API keys limits' }).querySelectorAll('.wiz-assistant-cap input')).toHaveLength(4);
+    // The API-key limits are their own group, and keep their four fields, at a fresh server's defaults.
+    const keys = screen.getByRole('group', { name: 'API keys limits' });
+    expect(keys.querySelectorAll('.wiz-assistant-cap input')).toHaveLength(4);
+    const shown = (label: string) => (within(keys).getByLabelText(label) as HTMLInputElement).value;
+    expect(['$ per turn', '$ per day', 'Steps per turn', 'Minutes per turn'].map(shown)).toEqual(['8.00', '15.00', '120', '60']);
   });
 
   it("a refused agent limit says why under its field; a server without agent limits shows none", async () => {
