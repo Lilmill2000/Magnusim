@@ -14,6 +14,8 @@
  * 5. compute and destructive tools ask first (a confirm gate); a no, the timeout or Stop
  *    means it doesn't run (`declined`). An unknown risk counts as destructive. The question
  *    shows every field the call sent, in the schema's order, each cut on its own and marked.
+ *    Another app's call (MCP, `app`) is asked for as that app's, not the Assistant's.
+ *    Then the caller's last check (`beforeRun`; MCP reads privacy again) may stop it unrun.
  * 6. The tool runs with its stall window (reset by progress); Stop and the turn's
  *    minutes cap abort it through the call's signal (`stopped`, `capped`). An aborted tool
  *    has ABORT_GRACE_MS for its last answer: a result that finished (ok) is its result, as
@@ -67,6 +69,16 @@ export interface RunOptions {
   gateTimeoutMs?: number;
   /** Hears the tool's progress, as a turn's log does (MCP: the client's progress notifications). */
   onProgress?: (fraction: number | null, label: string) => void;
+  /**
+   * Who asks for the call when it isn't the Assistant (MCP: another app on this PC, as
+   * privacy.ts mcpAppText words it): its confirm question says so.
+   */
+  app?: string;
+  /**
+   * The caller's last check, after any question and right before the tool runs (MCP: the
+   * privacy rules read again): a result stops the call there, unrun.
+   */
+  beforeRun?: () => Promise<RunResult | null>;
 }
 
 export interface RunResult {
@@ -214,8 +226,11 @@ export function gateInputText(schema: unknown, input: Record<string, unknown>): 
   return `{${parts.join(',')}}`;
 }
 
-/** The confirm question for a compute or destructive tool. */
-export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null): GateRequest {
+/**
+ * The confirm question for a compute or destructive tool: the Assistant's, or (`app`, who
+ * asks in its stead) another app's.
+ */
+export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null, app?: string): GateRequest {
   const risk = riskOf(def) === 'compute' ? 'compute' : 'destructive';
   let sent = '';
   try {
@@ -230,11 +245,12 @@ export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: 
     detail = undefined;
   }
   const what = risk === 'compute' ? 'starts a computation' : "can't be undone";
+  const action = lowerFirst(cleanText(def.title || def.name, TEXT_CAPS.name));
   return {
     kind: 'confirm',
     turn,
-    title: `Allow the Assistant to ${lowerFirst(cleanText(def.title || def.name, TEXT_CAPS.name))}?`,
-    copy: `${sourceLabel(def.source)} · ${what}. What it sent: ${sent}. Nothing runs until you choose.`,
+    title: app ? `Allow an app on this PC to ${action}?` : `Allow the Assistant to ${action}?`,
+    copy: `${app ? `${app} asks for this. ` : ''}${sourceLabel(def.source)} · ${what}. What it sent: ${sent}. Nothing runs until you choose.`,
     yes: 'Allow',
     no: "Don't",
     ...(detail ? { detail } : {}),
@@ -306,13 +322,19 @@ export class ToolRunner {
       o.turn?.pause();
       let answer: 'allow' | 'deny';
       try {
-        answer = await this.gates.ask(confirmGate(def, input, o.turn?.id ?? null), o.owner, o.signal, { timeoutMs: o.gateTimeoutMs });
+        answer = await this.gates.ask(confirmGate(def, input, o.turn?.id ?? null, o.app), o.owner, o.signal, { timeoutMs: o.gateTimeoutMs });
       } finally {
         o.turn?.resume();
         o.turn?.setState('tools');
       }
       if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
       if (answer !== 'allow') return errorResult(call, 'declined', 'The user declined this call; it did not run. Accept it and say what you would have done.');
+    }
+    // 5b. The caller's last check (MCP: privacy, which may have changed while it asked).
+    if (o.beforeRun) {
+      const stop = await o.beforeRun();
+      if (stop) return stop;
+      if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
     }
     // 6. Run it.
     return this.execute(call, def, input, o);

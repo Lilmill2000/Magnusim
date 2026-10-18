@@ -14,9 +14,10 @@
 // that it waits; privacy Ask gives "Let other apps read project …?" once; the workspace
 // closing gives list_changed, and the old name then gives unavailable with the hint.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { existsSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { openAssistantStep } from './support/assistant.js';
-import { killTree, startHost } from './support/host-server.mjs';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 import { infoPathOf, resultJson, startMcpClient } from './support/mcp-client.mjs';
 import { expect, test } from './support/stress.js';
 
@@ -162,9 +163,13 @@ test('off by default: a fresh Magnusim (no Assistant settings yet) runs no liste
     await expect(pane.locator('[data-assistant-privacy]')).toHaveAttribute('data-assistant-privacy', 'allow');
     expect((await mcpNow()).running).toBe(false);
 
-    // Magnusim starts again: the settings file exists, so the listener starts with it.
-    killTree(fresh.pid);
-    fresh = await startHost({ name: 'assistant-mcp-fresh', tmp: fresh.tmp, projects: fresh.projects, pluginsDir: fresh.pluginsDir, env: ENV });
+    // Magnusim starts again: the settings file exists, so the listener starts with it. The first
+    // server is stopped for good (by its own stop, so no exit hook of it is left behind), and
+    // the next one starts on a copy of its Assistant folder (the settings file) in its own folder.
+    const next = e2eTemp('assistant-mcp-fresh');
+    cpSync(join(fresh.tmp, 'assistant'), join(next, 'assistant'), { recursive: true });
+    fresh.stop();
+    fresh = await startHost({ name: 'assistant-mcp-fresh', tmp: next, env: ENV });
     await expect.poll(async () => (await mcpNow()).running, { timeout: 30_000, message: 'the listener runs' }).toBe(true);
     mcp = await mcpNow();
     expect(mcp.clients).toBe(false);
@@ -254,7 +259,9 @@ test("a destructive tool asks as the app's own question in the tab with Don't fo
   const got = [];
   const declined = app.client.callTool({ name: `${PLUGIN}__reset`, arguments: {} }, { onprogress: (p) => got.push(p) });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  // Asked for another app, not the Assistant: the question says so, naming the app as it calls itself.
+  await expect(page.locator('#cf-heading')).toHaveText('Allow an app on this PC to reset the counter?');
+  await expect(page.locator('#cf-copy')).toContainText(`An app on this PC using Magnusim's tools ("${APP_NAME}", as it calls itself) asks for this.`);
   await expect(page.locator('#cf-confirm')).toHaveText('Allow');
   await expect(page.locator('#cf-cancel')).toHaveText("Don't");
   await expect(page.locator('#cf-cancel')).toBeFocused();

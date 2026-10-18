@@ -3,8 +3,9 @@
 // saved port, the challenge handshake both ways, connection limits), MCP sessions (external
 // apps with host tools, agent bindings, the Settings Test binding), the list (names of at
 // most 46 characters, hints, instructions, registration text withheld), calls (only what was
-// served, one at a time per connection, rates, project data refused for now), logging, and
-// the server's lifetime (the start rule, a Vite restart, the MCP package missing).
+// served, one at a time per connection, rates, project data under the privacy rules), the
+// open workspace (questions, privacy, progress, list changes), logging, and the server's
+// lifetime (the start rule, a Vite restart, the MCP package missing).
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -47,7 +48,6 @@ const { resetAssistantState } = await import('../assistant/state.ts');
 const sdk = await import('../assistant/providers/load-sdk.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
 const P = await import('../assistant/privacy.ts');
-const TM = await import('../assistant/turns.ts');
 const G = await import('../assistant/gates.ts');
 
 after(async () => {
@@ -69,10 +69,11 @@ const RULE_1 = SYSTEM_PROMPT.split('\n')[1];
 const GUIDE = 'The counter starts at 0. Read it with get_count.';
 
 /** A host tool that waits until the test releases it (or its call aborts): {def, calls}. */
-function holdTool(name, { risk = 'read' } = {}) {
+function holdTool(name, { risk = 'read', projectData = false } = {}) {
   const calls = [];
   const def = H.hostTool(name, {
     risk,
+    projectData,
     schema: N_SCHEMA,
     run: (input, rt) =>
       new Promise((resolve) => {
@@ -636,7 +637,9 @@ describe('tools/list', () => {
       assert.equal(r.isError, true);
       const body = M.resultJson(r);
       assert.equal(body.error.code, 'no_tool');
-      assert.match(body.error.hint, /More than one app tab/, 'the plain reason');
+      // The plain reason, worded for another app (never a turn's "name one of them").
+      assert.equal(body.error.hint, S.MANY_APP_TABS_TEXT);
+      assert.match(body.error.hint, /More than one app tab/);
     } finally {
       await w.close();
     }
@@ -691,6 +694,50 @@ describe('the Settings Test binding', () => {
       assert.equal(M.resultJson(r).error.code, 'stopped');
       assert.equal(M.resultJson(r).error.message, S.NOTHING_RUNS_TEXT);
       assert.equal(hold.calls.length, 0);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it("an agent binding's call gets progress as an app's does: while its turn's question waits (the dispatch says which questions are its own), and the tool's own", async () => {
+    // Half way, then it waits for the test (a result sent with its progress could overtake it).
+    let finish = null;
+    const halves = H.hostTool('halves', {
+      run: (_input, rt) =>
+        new Promise((resolve) => {
+          rt.progress(0.5, 'Half way');
+          finish = () => resolve({ ok: true, data: {}, summary: 'done' });
+        }),
+    });
+    const w = await world({ clients: false, hostTools: [H.hostTool('wipe_all', { risk: 'destructive' }), halves] });
+    try {
+      const ctx = { tab: null, projectId: null, simulationId: null, cloud: true, local: false };
+      const owner = { kind: 'turn', id: 't-agent', tab: null };
+      const dispatch = {
+        ctx: () => ctx,
+        // As the agent turn runs a call: its owner, its own wait, the progress passed on.
+        run: (call, o) => w.m.manager.runner.run(call, { owner, ctx, signal: o.signal, offered: o.offered, gateTimeoutMs: 240_000, onProgress: o.onProgress }),
+        owns: (gateOwner) => gateOwner.kind === 'turn' && gateOwner.id === 't-agent',
+      };
+      const b = B.mintBinding({ conversation: 'c-agent-progress', agent: 'fake', dispatch });
+      const c = await w.client({ binding: b.id });
+      const got = [];
+      const call = c.client.callTool({ name: 'wipe_all', arguments: {} }, { onprogress: (p) => got.push(p) });
+      await H.until(() => got.length === 1, 5000, 'the wait progress');
+      assert.deepEqual(got[0], { progress: 1, message: S.WAITING_TEXT });
+      const [view] = w.m.manager.gates.forTurn('t-agent');
+      assert.equal(view.title, 'Allow the Assistant to run wipe_all?', "the turn's own wording");
+      w.m.clock.advance(S.WAIT_PROGRESS_MS);
+      await H.until(() => got.length === 2, 5000, 'the wait progress after 15 s');
+      assert.equal(w.m.manager.gates.answer(view.id, true), 'ok');
+      assert.ok(!(await call).isError);
+      const prog = [];
+      const halfway = c.client.callTool({ name: 'halves', arguments: {} }, { onprogress: (p) => prog.push(p) });
+      await H.until(() => prog.length === 1, 5000, "the tool's progress");
+      finish();
+      assert.ok(!(await halfway).isError);
+      assert.deepEqual(prog, [{ progress: 50, total: 100, message: 'Half way' }]);
+      B.dropBinding(b.id);
     } finally {
       await w.close();
     }
@@ -758,6 +805,87 @@ describe('tools/call', () => {
     }
   });
 
+  it("before privacy allows the project, no answer gives away a tool's withheld values: a tool of a list that went (its tab hidden, its workspace closed) is unavailable before its input is read, under Ask and Never send; a bad value for a tool listed without its words is refused without them", async () => {
+    const SECRET = { type: 'object', properties: { body: { type: 'string', enum: ['Secret_Wing_Spar', 'Secret_Flap'] } }, required: ['body'], additionalProperties: false };
+    for (const privacy of ['ask', 'deny']) {
+      for (const how of ['hidden', 'closed']) {
+        const w = await world({ privacy });
+        try {
+          const tab = H.newTabId();
+          const link = 'a'.repeat(24);
+          registerDemo(w.m, tab, { link, tools: [{ name: 'pick', title: 'Pick', description: 'Picks a body.', inputSchema: SECRET, risk: 'edit' }] });
+          const c = await w.client();
+          const listed = (await c.client.listTools()).tools.find((t) => t.name === 'ai-demo__pick');
+          assert.deepEqual(listed.inputSchema.properties.body, { type: 'string' });
+          if (how === 'hidden') w.m.registry.setConnected(tab, link, false);
+          else w.m.registry.setWorkspace(tab, link, null);
+          const r = await c.client.callTool({ name: 'ai-demo__pick', arguments: { body: 'x' } });
+          assert.ok(!r.content[0].text.includes('Secret'), `${privacy}, ${how}: ${r.content[0].text}`);
+          assert.deepEqual([M.resultJson(r).error.code, M.resultJson(r).error.hint], ['unavailable', S.TOOLS_CHANGED_HINT], `${privacy}, ${how}`);
+          assert.equal(w.m.manager.gates.openCount(), 0);
+        } finally {
+          await w.close();
+        }
+      }
+    }
+    // Another plugin's tool that runs with no tab (and reads no project data): listed without its words.
+    const w = await world({ privacy: 'ask' });
+    const sourced = { ...H.hostTool('src_pick', { schema: SECRET }), description: 'Picks a body.', projectData: false, source: { kind: 'plugin', plugin: 'demo', method: 'pick', epoch: '1' } };
+    const off = w.m.registry.registerToolSource(() => [sourced]);
+    try {
+      const c = await w.client();
+      assert.deepEqual((await c.client.listTools()).tools.find((t) => t.name === 'src_pick').inputSchema.properties.body, { type: 'string' });
+      const bad = await c.client.callTool({ name: 'src_pick', arguments: { body: 'x' } });
+      assert.deepEqual(M.resultJson(bad).error, { code: 'invalid_input', message: S.WITHHELD_INPUT_TEXT });
+      // What the listed schema shows is said as ever.
+      const missing = M.resultJson(await c.client.callTool({ name: 'src_pick', arguments: {} })).error;
+      assert.equal(missing.code, 'invalid_input');
+      assert.notEqual(missing.message, S.WITHHELD_INPUT_TEXT);
+      assert.match(missing.message, /body/);
+      assert.ok(!JSON.stringify(missing).includes('Secret'));
+      // Once privacy allows it, the answer is the tool's own.
+      w.m.state.settings.privacy = 'allow';
+      assert.match(M.resultJson(await c.client.callTool({ name: 'src_pick', arguments: { body: 'x' } })).error.message, /Secret_Wing_Spar/);
+    } finally {
+      off();
+      await w.close();
+    }
+  });
+
+  it('privacy is read again right before the tool runs and before its result goes: Never send chosen while its question waits leaves it unrun; chosen while it runs keeps its result back (privacy_denied)', async () => {
+    const ran = [];
+    const crunch = H.hostTool('crunch', { risk: 'compute', projectData: true, run: async () => (ran.push('crunch'), { ok: true, data: { secret: 'Secret Wing results' }, summary: 'crunched' }) });
+    const hold = holdTool('peek_project', { projectData: true });
+    const shown = [];
+    const presenter = { present: (view, owner) => (shown.push({ view, owner }), true), withdraw: () => {} };
+    const w = await world({ hostTools: [crunch, hold.def], privacy: 'allow', presenter });
+    try {
+      const tab = H.newTabId();
+      registerDemo(w.m, tab);
+      const c = await w.client();
+      const asked = c.client.callTool({ name: 'crunch', arguments: {} });
+      await H.until(() => shown.length === 1, 5000, 'the question');
+      w.m.state.settings.privacy = 'deny';
+      assert.equal(w.m.manager.answerGate(shown[0].view.id, true, { kind: 'link', tab }).status, 200);
+      const r = await asked;
+      assert.deepEqual(M.resultJson(r).error, { code: 'privacy_denied', message: P.MCP_PRIVACY_DENIED_TEXT });
+      assert.deepEqual(ran, [], 'it never ran');
+      // Chosen while it runs: it ran, and its result stays here.
+      w.m.state.settings.privacy = 'allow';
+      const reading = c.client.callTool({ name: 'peek_project', arguments: { n: 7 } });
+      await H.until(() => hold.calls.length === 1, 5000, 'the call to run');
+      w.m.state.settings.privacy = 'deny';
+      hold.calls[0].release({ ok: true, data: { secret: 'Secret Wing data' }, images: [{ base64: PNG }], summary: 'read' });
+      const kept = await reading;
+      assert.equal(kept.isError, true);
+      assert.deepEqual(M.resultJson(kept).error, { code: 'privacy_denied', message: S.RESULT_KEPT_TEXT });
+      assert.equal(kept.content.length, 1, 'no picture either');
+      assert.ok(!kept.content[0].text.includes('Secret'));
+    } finally {
+      await w.close();
+    }
+  });
+
   it('project data, read live per call (destination mcp): Always allow runs the tools; Never send refuses them (privacy_denied) and never reaches the page; tools that read none run whatever the mode', async () => {
     const reads = H.hostTool('project_read', { projectData: true, available: (ctx) => (ctx.projectId ? true : 'No project.') });
     const w = await world({ hostTools: [reads, H.hostTool('app_info')], privacy: 'allow' });
@@ -799,7 +927,7 @@ describe('tools/call', () => {
       // No app tab: nobody could see the question.
       for (const name of ['wipe_all', 'crunch', 'odd']) {
         const r = await c.client.callTool({ name, arguments: {} });
-        assert.deepEqual(M.resultJson(r).error, { code: 'no_window', message: S.NO_WINDOW_TEXT, hint: TM.NO_TAB_TEXT }, name);
+        assert.deepEqual(M.resultJson(r).error, { code: 'no_window', message: S.NO_WINDOW_TEXT, hint: S.NO_APP_TAB_TEXT }, name);
       }
       for (const name of ['tweak', 'look']) assert.ok(!(await c.client.callTool({ name, arguments: {} })).isError, name);
       assert.deepEqual(ran, ['tweak', 'look']);
@@ -813,6 +941,9 @@ describe('tools/call', () => {
       const { view, owner } = shown[0];
       assert.deepEqual(owner, { kind: 'mcp', session, tab });
       assert.deepEqual([view.kind, view.turn, view.risk, view.tool], ['confirm', null, 'destructive', 'wipe_all']);
+      // Another app asks, not the Assistant: the question says so.
+      assert.equal(view.title, 'Allow an app on this PC to run wipe_all?');
+      assert.equal(view.copy, "An app on this PC using Magnusim's tools (\"socket-client\", as it calls itself) asks for this. Magnusim · can't be undone. What it sent: {}. Nothing runs until you choose.");
       // Ten minutes for an external app's question, whatever the broker's own wait (a minute here).
       assert.equal(S.MCP_GATE_TIMEOUT_MS, 10 * 60_000);
       assert.equal(view.expires_at, new Date(Date.parse(view.opened_at) + S.MCP_GATE_TIMEOUT_MS).toISOString(), 'ten minutes');
@@ -1055,7 +1186,12 @@ describe('in the open workspace: questions, privacy, progress and list changes',
       const call = c.client.callTool({ name: 'ai-demo__reset', arguments: {} }, { onprogress: (p) => got.push(p) });
       const gate = (await w.page.frame('gate')).gate;
       assert.deepEqual([gate.kind, gate.turn, gate.tool, gate.risk, gate.yes, gate.no], ['confirm', null, 'ai-demo__reset', 'destructive', 'Allow', "Don't"]);
-      assert.equal(gate.title, 'Allow the Assistant to reset the counter?');
+      // Asked for another app, not the Assistant: the question says so, naming it as it calls itself.
+      assert.equal(gate.title, 'Allow an app on this PC to reset the counter?');
+      assert.equal(
+        gate.copy,
+        "An app on this PC using Magnusim's tools (\"Desk App\", as it calls itself) asks for this. Workspace demo (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.",
+      );
       assert.equal(gate.expires_at, new Date(Date.parse(gate.opened_at) + 10 * 60_000).toISOString(), 'ten minutes');
       assert.equal(G.tabOf({ kind: 'mcp', session: 'm-x', tab: w.page.tab }), w.page.tab);
       await H.until(() => got.length === 1, 5000, 'the first wait progress');
@@ -1183,13 +1319,18 @@ describe('in the open workspace: questions, privacy, progress and list changes',
     }
   });
 
-  it('privacy Ask: a project-data tool asks "Let other apps read project …?" in the tab (the app\'s name in it; one answer for every app); Don\'t allow leaves it unrun; Allow is remembered for mcp, the list then shows the tools in full (list_changed once), a new connection gets the guide, and nothing asks again', async () => {
+  it('privacy Ask: a project-data tool asks "Let other apps read project …?" in the tab (the app\'s name in it; one answer for every app); Don\'t allow leaves it unrun and holds for every app a while (no question until then); Allow is remembered for mcp, every app\'s list then shows the tools in full (list_changed once, at an app that made no call too), a new connection gets the guide, and nothing asks again', async () => {
     const w = await appWorld({ privacy: 'ask' });
     try {
       const changes = listChanges();
       const c = await w.client({ name: 'Desk "App"‮', listChanged: changes.option });
+      // Another app that lists, and makes no call once the project is allowed.
+      const quiet = listChanges();
+      const watcher = await w.client({ name: 'Watcher', listChanged: quiet.option });
+      const WITHHELD = "A tool of the Workspace demo workspace; its details show once you allow this project's data.";
+      assert.equal((await watcher.client.listTools()).tools.find((t) => t.name === 'ai-demo__get_count').description, WITHHELD);
       let listed = Object.fromEntries((await c.client.listTools()).tools.map((t) => [t.name, t]));
-      assert.equal(listed['ai-demo__get_count'].description, "A tool of the Workspace demo workspace; its details show once you allow this project's data.");
+      assert.equal(listed['ai-demo__get_count'].description, WITHHELD);
       assert.ok(!c.client.getInstructions().includes('Notes from'), 'no guide before the project is allowed');
       // Don't allow: nothing read.
       const first = c.client.callTool({ name: 'ai-demo__get_count', arguments: {} });
@@ -1209,6 +1350,14 @@ describe('in the open workspace: questions, privacy, progress and list changes',
       assert.deepEqual(w.page.of('invoke'), [], 'nothing was read');
       assert.deepEqual(w.m.consents, []);
       assert.equal(changes.n, 0);
+      // The answer holds for every app a while: no question again until then.
+      const soon = await watcher.client.callTool({ name: 'ai-demo__get_count', arguments: {} });
+      assert.deepEqual(M.resultJson(soon).error, { code: 'declined', message: S.privacyHeldText(S.PRIVACY_DECLINE_HOLD_MS) });
+      w.m.clock.advance(S.PRIVACY_DECLINE_HOLD_MS - 60_000);
+      assert.match(M.resultJson(await c.client.callTool({ name: 'ai-demo__add', arguments: { by: 1 } })).error.message, /asks again in 1 minute\.$/);
+      assert.equal(w.page.of('gate').length, 1, 'not asked again');
+      assert.deepEqual(w.page.of('invoke'), [], 'nothing was read');
+      w.m.clock.advance(60_000);
       // Asked again; Allow: it runs and is remembered for other apps.
       const second = c.client.callTool({ name: 'ai-demo__get_count', arguments: {} });
       const again = (await w.page.frame('gate', 1)).gate;
@@ -1218,8 +1367,11 @@ describe('in the open workspace: questions, privacy, progress and list changes',
       await w.answer(0, { ok: true, result: { data: { count: 0 } } });
       assert.ok(!(await second).isError);
       assert.deepEqual(w.m.consents, [{ projectId: 'p1', createdAt: '2026-10-01T00:00:00.000Z', destination: 'mcp' }]);
-      // The list is the same tools with their own words now: announced once.
+      // The list is the same tools with their own words now: announced once, to the app that
+      // made no call since too.
       await H.until(() => changes.n === 1, 5000, 'list_changed');
+      await H.until(() => quiet.n === 1, 5000, 'list_changed at the app that made no call');
+      assert.equal((await watcher.client.listTools()).tools.find((t) => t.name === 'ai-demo__get_count').description, 'Reads the counter.');
       listed = Object.fromEntries((await c.client.listTools()).tools.map((t) => [t.name, t]));
       assert.equal(listed['ai-demo__get_count'].description, 'Reads the counter.');
       assert.equal(listed['ai-demo__add'].title, 'Add to the counter');
@@ -1234,6 +1386,49 @@ describe('in the open workspace: questions, privacy, progress and list changes',
       assert.equal(w.page.of('gate').length, 2, 'asked twice in all');
       await H.tick();
       assert.equal(changes.n, 1, 'once');
+      assert.equal(quiet.n, 1, 'once');
+    } finally {
+      await w.close();
+    }
+  });
+
+  it('privacy Ask, apps at once: one question for all of them (one answer covers every app); it closes when every call waiting on it has gone, and stays while one waits; Allow runs each and is remembered once', async () => {
+    const w = await appWorld({ privacy: 'ask' });
+    const stopped = () => logged.filter((l) => l.includes('mcp call') && l.includes('"code":"stopped"')).length;
+    try {
+      const a = await w.client({ name: 'App A' });
+      const b = await w.client({ name: 'App B' });
+      // Alone, A cancels: the question closes (stop), and nothing holds.
+      let ac = new AbortController();
+      const alone = a.client.callTool({ name: 'ai-demo__get_count', arguments: {} }, { signal: ac.signal });
+      alone.catch(() => {});
+      const first = (await w.page.frame('gate')).gate;
+      ac.abort('not now');
+      await assert.rejects(alone);
+      assert.deepEqual(await w.page.frame('gate_closed'), { gate: first.id, answer: 'deny', by: 'stop' });
+      // Both at once: B joins A's question (and hears that it waits).
+      const before = stopped();
+      ac = new AbortController();
+      const fromA = a.client.callTool({ name: 'ai-demo__get_count', arguments: {} }, { signal: ac.signal });
+      fromA.catch(() => {});
+      const gate = (await w.page.frame('gate', 1)).gate;
+      const gotB = [];
+      const fromB = b.client.callTool({ name: 'ai-demo__add', arguments: { by: 1 } }, { onprogress: (p) => gotB.push(p) });
+      await H.until(() => gotB.length === 1, 5000, "B's wait progress");
+      assert.deepEqual(gotB[0], { progress: 1, message: S.WAITING_TEXT });
+      assert.equal(w.page.of('gate').length, 2, 'one question for both');
+      // A goes: the question stays for B.
+      ac.abort('not now');
+      await assert.rejects(fromA);
+      await H.until(() => stopped() === before + 1, 5000, "A's call to end");
+      assert.equal(w.s.handle.turns.gates.openCount(), 1, 'still open for B');
+      assert.equal(w.page.of('gate_closed').length, 1);
+      // Allow: B's call runs, and the answer is remembered once.
+      assert.equal((await w.s.post('/api/assistant/relay/gate', { link: w.link, gate: gate.id, allow: true })).status, 200);
+      assert.equal((await w.answer(0)).tool, 'add');
+      assert.ok(!(await fromB).isError);
+      assert.deepEqual(w.m.consents, [{ projectId: 'p1', createdAt: '2026-10-01T00:00:00.000Z', destination: 'mcp' }]);
+      assert.equal(w.page.of('gate').length, 2);
     } finally {
       await w.close();
     }
@@ -1275,6 +1470,10 @@ describe('in the open workspace: questions, privacy, progress and list changes',
         const r = await c.client.callTool({ name: 'ai-demo__add', arguments: { by: 1 } });
         assert.equal(r.isError, true);
         assert.deepEqual(M.resultJson(r).error, { code: 'unavailable', message: 'Counter is no longer open.', hint: S.TOOLS_CHANGED_HINT });
+        // A tool that asks first, of the old list: the same answer (never no_window, whose advice can't work for it).
+        const stale = await c.client.callTool({ name: 'ai-demo__reset', arguments: {} });
+        assert.deepEqual(M.resultJson(stale).error, { code: 'unavailable', message: 'Counter is no longer open.', hint: S.TOOLS_CHANGED_HINT });
+        assert.equal(w.page.of('gate').length, 0, 'no question');
         // A source whose list changes with no registry event: the check around the next call sees it.
         const sourced = (name) => ({ ...H.hostTool(name), source: { kind: 'plugin', plugin: 'demo', method: name, epoch: w.m.registry.currentEpoch('demo') }, projectData: false });
         const off = w.m.registry.registerToolSource(() => (version === 1 ? [] : version === 2 ? [sourced('src_tool')] : [sourced('src_tool'), sourced('src_more')]));

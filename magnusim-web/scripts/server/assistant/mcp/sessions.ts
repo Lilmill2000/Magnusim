@@ -16,6 +16,7 @@
  *   agent host that mints them does).
  */
 import { randomBytes } from 'node:crypto';
+import type { GateOwner } from '../gates.ts';
 import type { ToolCtx, ToolDef } from '../registry.ts';
 import type { RunResult } from '../runner.ts';
 import type { ToolCallPart } from '../types.ts';
@@ -37,8 +38,20 @@ export interface AgentBinding {
 export interface AgentDispatch {
   /** The context the binding's tools are listed and run in: its turn's tab and project. */
   ctx(): ToolCtx;
-  /** Runs one call inside the running turn (the turn's owner, caps, log and signal). */
-  run(call: ToolCallPart, o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal }): Promise<RunResult>;
+  /**
+   * Runs one call inside the running turn (the turn's owner, caps, log and signal).
+   * `onProgress` (present when the request carried a progressToken) hears the tool's own
+   * progress: pass it on as RunOptions.onProgress.
+   */
+  run(
+    call: ToolCallPart,
+    o: { offered: ReadonlyMap<string, ToolDef>; signal: AbortSignal; onProgress?: (fraction: number | null, label: string) => void },
+  ): Promise<RunResult>;
+  /**
+   * Whether an open question is one this binding's call waits on (its turn's): while one
+   * is open, a request with a progressToken hears that it waits. Left out: none is.
+   */
+  owns?(owner: GateOwner): boolean;
 }
 
 interface BindingEntry {

@@ -124,14 +124,18 @@ export const MCP_PRIVACY_DENIED_TEXT =
   "Settings → Assistant is set to never send project data off this PC. Other apps (MCP) can't read this project.";
 
 /**
- * The question before an app on this PC reads a project's data. `client` is the name the
- * app gives itself (self-declared, cleaned and quoted like a title); without one the copy
- * leaves it out.
+ * Who asks, in an app's questions: `client` is the name the app gives itself (self-declared,
+ * cleaned and quoted like a title); without one the words leave it out.
  */
+export function mcpAppText(client: string): string {
+  const name = cleanText(client, 64).replace(QUOTES, "'");
+  return name ? `An app on this PC using Magnusim's tools ("${name}", as it calls itself)` : "An app on this PC using Magnusim's tools";
+}
+
+/** The question before an app on this PC reads a project's data. */
 export function mcpPrivacyGate(o: { project: ProjectInfo; client: string }): GateRequest {
   const title = quotedTitle(o.project.title, o.project.id);
-  const client = cleanText(o.client, 64).replace(QUOTES, "'");
-  const who = client ? `An app on this PC using Magnusim's tools ("${client}", as it calls itself)` : "An app on this PC using Magnusim's tools";
+  const who = mcpAppText(o.client);
   return {
     kind: 'privacy',
     turn: null,

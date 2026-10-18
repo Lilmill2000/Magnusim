@@ -24,18 +24,29 @@
  *   whatever their projectData flag, and their instructions carry no workspace guide: a
  *   registration's text can hold project names. Before a tool that reads project data runs,
  *   the mode is read live: Never send refuses it (`privacy_denied`); Ask opens the question
- *   in the tab ("Let other apps read project …?", one answer for every app), and Allow is
- *   remembered and the list changes (list_changed); Don't allow, the timeout or a cancel
- *   leave it unrun (`declined`, `stopped`).
+ *   in the tab ("Let other apps read project …?", one answer for every app: calls while it is
+ *   open wait on that same question, and it is withdrawn only when every call waiting on it
+ *   has gone), and Allow is remembered and every app's list changes (list_changed); Don't
+ *   allow, the timeout or a cancel leave it unrun (`declined`, `stopped`), and a Don't allow
+ *   holds for every app for 10 minutes (`declined` at once, no question). The mode is read
+ *   again right before the tool runs (after its own question) and before its result goes: a
+ *   result of a tool that ran while privacy turned against other apps stays here.
+ *   A call never quotes withheld text back: a tool that can't run here now is answered
+ *   before its input is read, and an input a tool listed without its words refuses is told
+ *   without the schema's enum or const values.
  * - Questions (spec 3.5): a compute or destructive tool asks first, as the Assistant's do: the
  *   gate's owner is {kind:'mcp', session, tab} (the tab the call runs in), the page relay
  *   shows it as the app's own dialog with No focused, and only that tab's link answers it:
- *   an MCP client never can (no elicitation, no answer key). It waits 10 minutes. With no tab
- *   to show it, the call is refused at once (`no_window`). While a question waits, a request
- *   that carried a progressToken gets notifications/progress at once and every 15 s ("Waiting
- *   for an answer in Magnusim", and "…its window is hidden or closed…" once its tab has had
- *   no live link for 15 s), which keeps clients that reset their timeout on progress waiting.
- *   A tool's own progress is passed on the same way.
+ *   an MCP client never can (no elicitation, no answer key). Its title says another app asks
+ *   ("Allow an app on this PC to …?", the app named as it calls itself), not the Assistant.
+ *   It waits 10 minutes. With no tab to show it, the call of a tool that can run tab-less is
+ *   refused at once (`no_window`); one of a list that went is `unavailable` with the hint to
+ *   list the tools again. While a question waits, a request that carried a progressToken
+ *   gets notifications/progress at once and every 15 s ("Waiting for an answer in Magnusim",
+ *   and "…its window is hidden or closed…" once its tab has had no live link for 15 s),
+ *   which keeps clients that reset their timeout on progress waiting.
+ *   A tool's own progress is passed on the same way. An agent binding's call gets both too:
+ *   its dispatch is handed the progress and says which of its turn's questions are its own.
  * - Cancellation: the client's notifications/cancelled is a Stop for that call (a question it
  *   waits on closes, `stopped`); a waiting call leaves the queue at once.
  * - List changes (spec 3.4): the registry's changes (registry.onChange), and a check before
@@ -58,17 +69,17 @@
  */
 import { createHash } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
-import { GATE_TIMEOUT_MS, realClock, type Clock, type GateBroker } from '../gates.ts';
+import { GATE_TIMEOUT_MS, realClock, type Clock, type GateAnswer, type GateBroker, type GateOwner } from '../gates.ts';
 import { appVersion } from '../host-tools.ts';
 import { alog } from '../log.ts';
-import { MCP_DESTINATION, MCP_PRIVACY_DENIED_TEXT, mcpPrivacyGate, privacyDecision, remember as rememberConsent, type ProjectInfo } from '../privacy.ts';
+import { MCP_DESTINATION, MCP_PRIVACY_DENIED_TEXT, mcpAppText, mcpPrivacyGate, privacyDecision, remember as rememberConsent, type ProjectInfo } from '../privacy.ts';
 import { guideBlock, SYSTEM_PROMPT } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
 import type { Registry, ToolCtx, ToolDef } from '../registry.ts';
-import { callAbortOf, errorResult, riskOf, STOPPED_BEFORE, stoppedText, type CallAbort, type RunResult, type ToolRunner } from '../runner.ts';
+import { callAbortOf, errorResult, riskOf, sourceLabel, STOPPED_BEFORE, stoppedText, type CallAbort, type RunResult, type ToolRunner } from '../runner.ts';
 import { cleanText, resultText } from '../sanitize.ts';
-import { emitSchema, validateInput } from '../schema.ts';
+import { emitSchema, stripNullOptionals, validateInput } from '../schema.ts';
 import type { AssistantSettings } from '../settings.ts';
 import { onAssistantShutdown } from '../state.ts';
 import type { Risk, ToolCallPart } from '../types.ts';
@@ -97,6 +108,28 @@ export const PROJECT_UNREADABLE_TEXT = "Magnusim couldn't read this project's ro
 export const NO_WINDOW_TEXT =
   'Magnusim asks the person before this tool runs, and only in its own window, but no app tab can show the question now. Show the Magnusim window with one workspace open, then call it again.';
 export const TOOLS_CHANGED_HINT = 'The tools changed. List the tools again.';
+/** Why an app's list has no tab's tools, worded for an app (a turn's words tell a person to name a tab). */
+export const NO_APP_TAB_TEXT = "No Magnusim tab has a workspace open, so only Magnusim's own tools are offered. Open a workspace in Magnusim, then list the tools again.";
+export const MANY_APP_TABS_TEXT =
+  "More than one app tab has a workspace open in Magnusim, so only Magnusim's own tools are offered. Leave one open, then list the tools again.";
+export const HIDDEN_APP_TAB_TEXT =
+  "The Magnusim window with a workspace open is in the background or covered, or it was closed, so only Magnusim's own tools are offered. Show it, then list the tools again.";
+const APP_TAB_TEXTS = new Map([
+  ['no_tab', NO_APP_TAB_TEXT],
+  ['ambiguous_tab', MANY_APP_TABS_TEXT],
+  ['tab_hidden', HIDDEN_APP_TAB_TEXT],
+]);
+/** A tool listed without its registration's words, given a value its full schema refuses (an enum's or a const's, which stay unsaid). */
+export const WITHHELD_INPUT_TEXT = "A value isn't one this tool takes. Its details show once you allow this project's data.";
+/** After "Don't allow", no app is asked about that project again for this long. */
+export const PRIVACY_DECLINE_HOLD_MS = 10 * 60_000;
+/** A call while a "Don't allow" holds: `ms` is how long it still holds. */
+export function privacyHeldText(ms: number): string {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
+  return `The person didn't allow other apps to read this project's data, so the tool did not run. Nothing was read. Magnusim asks again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+}
+/** A tool that ran while the privacy rules turned against other apps: its result stays here. */
+export const RESULT_KEPT_TEXT = 'Settings → Assistant changed while the tool ran, and other apps may not read this project now. It ran, but its result was not sent.';
 /** A project's row is read again after this long (the privacy rules need its created_at). */
 const PROJECT_KEEP_MS = 10_000;
 export const NOTHING_RUNS_TEXT = "Nothing runs between messages: the person hasn't sent one, or stopped it.";
@@ -233,6 +266,41 @@ function withHint(call: ToolCallPart, r: RunResult, hint: string): RunResult {
     /* the summary stands in */
   }
   return errorResult(call, r.code ?? 'failed', message, hint);
+}
+
+/**
+ * Why `input` doesn't fit a tool listed without its registration's words, saying only what
+ * the listed schema shows: its own words when that schema refuses it too, else the plain
+ * text (the full schema refused a value of an enum or a const).
+ */
+function withheldInputError(def: ToolDef, input: Record<string, unknown> | undefined): string {
+  try {
+    const schema = withheldSchema(def.schema) as Record<string, unknown>;
+    const valid = validateInput(schema, stripNullOptionals(schema, input ?? {}));
+    if (!valid.ok) return valid.error;
+  } catch {
+    /* the plain text */
+  }
+  return WITHHELD_INPUT_TEXT;
+}
+
+/** `p`'s value, or 'aborted' as soon as `signal` aborts (`p` goes on). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
+  if (signal.aborted) return Promise.resolve('aborted');
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve('aborted');
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }
 
 /** A call's progress notifications: only when its request carried a progressToken. */
@@ -389,6 +457,28 @@ interface Live {
   closed: boolean;
 }
 
+/** How an open privacy question ended, for every call that waited on it. */
+type PrivacyOutcome = 'allow' | 'declined' | 'privacy_denied' | 'stopped';
+
+/** An open "Let other apps read project …?" question: one per tab and project, shared by every app's calls. */
+interface PrivacyAsk {
+  /** Its gate's id. */
+  gate: string | null;
+  /** The calls waiting on it: the last one to go (cancelled, its connection closed) withdraws it. */
+  waiters: number;
+  stop: AbortController;
+  outcome: Promise<PrivacyOutcome>;
+}
+
+/** A running call's wait progress: the questions it waits on, each told at once and every 15 s. */
+interface Watch {
+  /** Starts telling of this open question (once per question). */
+  follow(gate: string): void;
+  stop(): void;
+}
+
+const NO_WATCH: Watch = Object.freeze({ follow: () => {}, stop: () => {} });
+
 export function createMcpService(d: McpServiceDeps): McpService {
   const clock = d.clock ?? realClock;
   const loadSdk = d.sdk ?? loadMcpSdk;
@@ -398,15 +488,22 @@ export function createMcpService(d: McpServiceDeps): McpService {
   const lives = new WeakMap<McpSession, Live>();
   /** Project rows read lately, per session (a client's calls in a row read it once). */
   const projectRows = new WeakMap<McpSession, Map<string, { row: ProjectInfo; at: number }>>();
+  /** Open privacy questions, by tab and project (as it is now). */
+  const privacyAsks = new Map<string, PrivacyAsk>();
+  /** "Don't allow" answers by project (as it is now): until when each holds, for every app. */
+  const declines = new Map<string, number>();
 
-  /** The context a session's tools are listed and run in now, and why it has no tab. */
+  /** The context a session's tools are listed and run in now, and why it has no tab (worded for an app). */
   function contextOf(session: McpSession): { ctx: ToolCtx; why: string | null } {
     if (session.kind === 'agent') {
       const dispatch = session.binding ? bindingEntry(session.binding.id)?.dispatch : null;
       return { ctx: dispatch ? dispatch.ctx() : TABLESS, why: null };
     }
     const t = d.resolveTab('auto');
-    if ('status' in t) return { ctx: TABLESS, why: typeof t.body.error === 'string' ? t.body.error : null };
+    if ('status' in t) {
+      const why = APP_TAB_TEXTS.get(String(t.body.code)) ?? (typeof t.body.error === 'string' ? t.body.error : null);
+      return { ctx: TABLESS, why };
+    }
     return { ctx: { tab: t.tab, projectId: t.projectId || null, simulationId: t.studyId || null, cloud: true, local: false }, why: null };
   }
 
@@ -555,63 +652,135 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return errorResult(call, 'stopped', stoppedText(false, callAbortOf(signal)?.server === true));
   }
 
-  /**
-   * The privacy rules before an external app's call of a tool that reads project data
-   * (spec 3.6), read live: null when it may run, else its answer.
-   */
-  async function requireProjectData(session: McpSession, call: ToolCallPart, def: ToolDef, ctx: ToolCtx, signal: AbortSignal): Promise<RunResult | null> {
-    if (session.kind !== 'external' || !def.projectData || !ctx.projectId) return null;
-    let available: true | string;
-    try {
-      available = def.available(ctx);
-    } catch {
-      available = 'unavailable';
-    }
-    // A tool that can't run here reads nothing: the runner says why.
-    if (available !== true) return null;
+  /** The privacy rules for an external app reading the project of `ctx` now, read live, with no question. */
+  async function privacyNow(session: McpSession, call: ToolCallPart, ctx: ToolCtx, signal: AbortSignal): Promise<{ ok: true } | { ok: false; r: RunResult } | { ok: 'ask'; project: ProjectInfo }> {
+    if (!ctx.projectId) return { ok: true };
     const s = await d.settings();
-    if (s.privacy === 'allow') return null;
-    if (s.privacy === 'deny') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
+    if (s.privacy === 'allow') return { ok: true };
+    if (s.privacy === 'deny') return { ok: false, r: errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT) };
     const project = await projectRow(session, ctx.projectId, signal);
-    if (signal.aborted) return stoppedBefore(call, signal);
-    if (!project) return errorResult(call, 'project_unreadable', PROJECT_UNREADABLE_TEXT);
+    if (signal.aborted) return { ok: false, r: stoppedBefore(call, signal) };
+    if (!project) return { ok: false, r: errorResult(call, 'project_unreadable', PROJECT_UNREADABLE_TEXT) };
     const verdict = privacyDecision(s, { cloud: true, destination: MCP_DESTINATION, projectId: project.id, createdAt: project.created_at });
-    if (verdict === 'allow') return null;
-    if (verdict === 'deny') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
-    const answer = await d.gates.ask(mcpPrivacyGate({ project, client: session.client.name }), { kind: 'mcp', session: session.id, tab: ctx.tab }, signal, {
-      timeoutMs: MCP_GATE_TIMEOUT_MS,
-    });
-    if (signal.aborted) return stoppedBefore(call, signal);
-    if (answer !== 'allow') return errorResult(call, 'declined', PRIVACY_DECLINED_TEXT);
-    // "Never send" chosen while the question was open wins over its Allow.
-    if ((await d.settings()).privacy === 'deny') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
-    await remember(project.id, project.created_at, MCP_DESTINATION);
-    // Every app's list shows the project's tools in full now.
-    recheckAll();
-    return null;
+    if (verdict === 'allow') return { ok: true };
+    if (verdict === 'deny') return { ok: false, r: errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT) };
+    return { ok: 'ask', project };
   }
 
   /**
-   * While one of this call's questions waits: progress at once and every 15 s, worded by
-   * whether its tab can show it. Returns the stop.
+   * The privacy rules before an external app's call of a tool that reads project data
+   * (spec 3.6), read live, before the tool runs (and again once its own question was
+   * answered): null when it may run, else its answer.
    */
-  function watchQuestions(session: McpSession, progress: ProgressSender): () => void {
+  async function requireProjectData(session: McpSession, call: ToolCallPart, def: ToolDef, ctx: ToolCtx, signal: AbortSignal, watch: Watch): Promise<RunResult | null> {
+    if (session.kind !== 'external' || !def.projectData || !ctx.projectId) return null;
+    const now = await privacyNow(session, call, ctx, signal);
+    if (now.ok === true) return null;
+    if (now.ok === false) return now.r;
+    return askPrivacy(session, call, ctx.tab, now.project, signal, watch);
+  }
+
+  /**
+   * Asks "Let other apps read project …?" in the tab, once for every app: a call while the
+   * project's question is open waits on that same question, and a "Don't allow" holds for
+   * every app for PRIVACY_DECLINE_HOLD_MS (no question, `declined` at once). Allow is
+   * remembered for destination mcp, and every app's list is checked again.
+   */
+  async function askPrivacy(session: McpSession, call: ToolCallPart, tab: string | null, project: ProjectInfo, signal: AbortSignal, watch: Watch): Promise<RunResult | null> {
+    const pkey = `${project.id}\n${project.created_at ?? ''}`;
+    const held = declines.get(pkey);
+    if (held !== undefined) {
+      if (clock.now() < held) return errorResult(call, 'declined', privacyHeldText(held - clock.now()));
+      declines.delete(pkey);
+    }
+    const key = `${tab ?? ''}\n${pkey}`;
+    const ask = privacyAsks.get(key) ?? openPrivacyAsk(key, pkey, session, tab, project);
+    ask.waiters += 1;
+    if (ask.gate) watch.follow(ask.gate);
+    let outcome: PrivacyOutcome | 'aborted';
+    try {
+      outcome = await untilAborted(ask.outcome, signal);
+    } finally {
+      ask.waiters -= 1;
+      // The last call waiting on it went: the question goes too (a call after asks again).
+      if (ask.waiters === 0 && signal.aborted) {
+        if (privacyAsks.get(key) === ask) privacyAsks.delete(key);
+        ask.stop.abort();
+      }
+    }
+    if (outcome === 'aborted' || outcome === 'stopped') return stoppedBefore(call, signal);
+    if (outcome === 'declined') return errorResult(call, 'declined', PRIVACY_DECLINED_TEXT);
+    if (outcome === 'privacy_denied') return errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT);
+    return null;
+  }
+
+  function openPrivacyAsk(key: string, pkey: string, session: McpSession, tab: string | null, project: ProjectInfo): PrivacyAsk {
+    const stop = new AbortController();
+    const owner: GateOwner = { kind: 'mcp', session: session.id, tab };
+    const ask: PrivacyAsk = { gate: null, waiters: 0, stop, outcome: Promise.resolve<PrivacyOutcome>('stopped') };
+    // The gate opens (its 'open' event) inside ask(): its id, for the calls that join it.
+    const off = d.gates.subscribe((e) => {
+      if (e.type === 'open' && e.owner === owner) ask.gate = e.view.id;
+    });
+    let asked: Promise<GateAnswer>;
+    try {
+      asked = d.gates.ask(mcpPrivacyGate({ project, client: session.client.name }), owner, stop.signal, { timeoutMs: MCP_GATE_TIMEOUT_MS });
+    } finally {
+      off();
+    }
+    ask.outcome = (async (): Promise<PrivacyOutcome> => {
+      try {
+        const answer = await asked;
+        if (answer !== 'allow') {
+          const by = ask.gate ? d.gates.closedAs(ask.gate)?.by : null;
+          if (by === 'stop') return 'stopped';
+          // The person's own "Don't allow" holds a while; a question that timed out unseen doesn't.
+          if (by === 'user') declines.set(pkey, clock.now() + PRIVACY_DECLINE_HOLD_MS);
+          return 'declined';
+        }
+        // "Never send" chosen while the question was open wins over its Allow.
+        if ((await d.settings()).privacy === 'deny') return 'privacy_denied';
+        await remember(project.id, project.created_at, MCP_DESTINATION);
+        // Every app's list shows the project's tools in full now.
+        recheckAll();
+        return 'allow';
+      } finally {
+        if (privacyAsks.get(key) === ask) privacyAsks.delete(key);
+      }
+    })();
+    // Its failure reaches the calls waiting on it; with none left, it is dropped quietly.
+    ask.outcome.catch(() => {});
+    privacyAsks.set(key, ask);
+    return ask;
+  }
+
+  /** Whether a question is one a session's running call waits on: an app's own, or (agent) its turn's, as its dispatch says. */
+  function ownsQuestion(session: McpSession, owner: GateOwner): boolean {
+    if (session.kind === 'external') return owner.kind === 'mcp' && owner.session === session.id;
+    const dispatch = session.binding ? bindingEntry(session.binding.id)?.dispatch : null;
+    try {
+      return dispatch?.owns?.(owner) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * While a question this call waits on is open: progress at once and every 15 s, worded by
+   * whether its tab can show it. `mine` says which questions are the call's own (as they
+   * open); a shared question it joins is followed by its id.
+   */
+  function watchQuestions(progress: ProgressSender, mine: (owner: GateOwner) => boolean): Watch {
     const waiting = new Map<string, { timer: unknown; stopped: boolean }>();
-    const stop = (id: string) => {
+    const end = (id: string) => {
       const w = waiting.get(id);
       if (!w) return;
       w.stopped = true;
       clock.clearTimeout(w.timer);
       waiting.delete(id);
     };
-    const off = d.gates.subscribe((e) => {
-      if (e.owner.kind !== 'mcp' || e.owner.session !== session.id) return;
-      const id = e.view.id;
-      if (e.type === 'closed') {
-        stop(id);
-        return;
-      }
-      if (e.type !== 'open' || waiting.has(id)) return;
+    const follow = (id: string) => {
+      if (waiting.has(id)) return;
       const w = { timer: null as unknown, stopped: false };
       waiting.set(id, w);
       const tick = () => {
@@ -622,14 +791,41 @@ export function createMcpService(d: McpServiceDeps): McpService {
       // After the question was offered to its tab: its unseen wait starts first, so a tick at
       // the same moment reads it.
       queueMicrotask(tick);
+    };
+    const off = d.gates.subscribe((e) => {
+      if (e.type === 'closed') end(e.view.id);
+      else if (e.type === 'open' && mine(e.owner)) follow(e.view.id);
     });
-    return () => {
-      off();
-      for (const id of [...waiting.keys()]) stop(id);
+    return {
+      follow: (id) => {
+        if (d.gates.lookup(id)?.open) follow(id);
+      },
+      stop: () => {
+        off();
+        for (const id of [...waiting.keys()]) end(id);
+      },
     };
   }
 
-  async function runOne(session: McpSession, call: ToolCallPart, signal: AbortSignal, progress: ProgressSender | null): Promise<{ r: RunResult; def: ToolDef | null }> {
+  /** The answer for a tool that can't run here now (its plugin off, or not available): null when it may. */
+  function unavailableNow(call: ToolCallPart, def: ToolDef, ctx: ToolCtx): RunResult | null {
+    if (d.registry.fenced(def.source)) return errorResult(call, 'plugin_off', `${sourceLabel(def.source)} was turned off or replaced.`);
+    let available: true | string;
+    try {
+      available = def.available(ctx);
+    } catch {
+      available = 'It is not available now.';
+    }
+    return available === true ? null : errorResult(call, 'unavailable', String(available));
+  }
+
+  /** `r` with how to recover when it is a tool of an earlier list (the tab registered again, or went). */
+  function changedHint(session: McpSession, call: ToolCallPart, def: ToolDef, r: RunResult): RunResult {
+    if (r.code !== 'unavailable' || [...listFor(session, contextOf(session).ctx, false).values()].includes(def)) return r;
+    return withHint(call, r, TOOLS_CHANGED_HINT);
+  }
+
+  async function runOne(session: McpSession, call: ToolCallPart, signal: AbortSignal, progress: ProgressSender | null, watch: Watch): Promise<{ r: RunResult; def: ToolDef | null }> {
     if (session.binding?.test) return { r: testCall(session, call), def: null };
     if (signal.aborted) return { r: stoppedBefore(call, signal), def: null };
     // Other apps turned off since this app connected (or since this call was queued).
@@ -642,30 +838,45 @@ export function createMcpService(d: McpServiceDeps): McpService {
       return { r, def: null };
     }
     const offered = new Map([[call.name, def]]);
+    const onProgress = progress ? { onProgress: (fraction: number | null, label: string) => progress.send(fraction, label) } : {};
     if (session.kind === 'agent') {
       const dispatch = session.binding ? bindingEntry(session.binding.id)?.dispatch : null;
       if (!dispatch) return { r: errorResult(call, 'stopped', NOTHING_RUNS_TEXT), def };
-      return { r: await dispatch.run(call, { offered, signal }), def };
+      return { r: await dispatch.run(call, { offered, signal, ...onProgress }), def };
     }
+    // A tool that can't run here now (of an earlier list, or its tab hidden or gone) is told so
+    // before its input is read: no answer quotes a schema's withheld values, and its advice is
+    // to list the tools again (no_window's could never work for it).
+    const gone = unavailableNow(call, def, ctx);
+    if (gone) return { r: changedHint(session, call, def, gone), def };
     const risk = riskOf(def);
     // Its question could reach nobody (no app tab shows it): refused at once rather than
     // declined after ten unseen minutes.
     if ((risk === 'compute' || risk === 'destructive') && !ctx.tab) return { r: errorResult(call, 'no_window', NO_WINDOW_TEXT, why ?? undefined), def };
     const rate = takeRate(clock.now(), risk);
     if (!rate.ok) return { r: errorResult(call, 'rate_limited', rate.text), def };
-    const refused = await requireProjectData(session, call, def, ctx, signal);
+    const refused = await requireProjectData(session, call, def, ctx, signal, watch);
     if (refused) return { r: refused, def };
+    const reads = def.projectData && !!ctx.projectId;
     let r = await d.runner.run(call, {
       owner: { kind: 'mcp', session: session.id, tab: ctx.tab },
       ctx,
       signal,
       offered,
       gateTimeoutMs: MCP_GATE_TIMEOUT_MS,
-      ...(progress ? { onProgress: (fraction: number | null, label: string) => progress.send(fraction, label) } : {}),
+      // Its question says another app asks, as it calls itself.
+      app: mcpAppText(session.client.name),
+      // Privacy read again once its question was answered (it may have changed meanwhile).
+      ...(reads ? { beforeRun: () => requireProjectData(session, call, def, ctx, signal, watch) } : {}),
+      ...onProgress,
     });
-    // A tool of an earlier list (the tab registered again, or went): say how to recover.
-    if (r.code === 'unavailable' && ![...listFor(session, contextOf(session).ctx, false).values()].includes(def)) r = withHint(call, r, TOOLS_CHANGED_HINT);
-    return { r, def };
+    // Privacy turned against other apps while it ran: its result stays here.
+    if (r.ok && reads && (await privacyNow(session, call, ctx, new AbortController().signal)).ok !== true) r = errorResult(call, 'privacy_denied', RESULT_KEPT_TEXT);
+    // A value of a schema it was listed without: said without the schema's withheld values.
+    if (r.code === 'invalid_input' && !call.inputError && def.source.kind !== 'host' && !(await projectOpen(session, ctx).catch(() => false))) {
+      r = errorResult(call, 'invalid_input', withheldInputError(def, call.input));
+    }
+    return { r: changedHint(session, call, def, r), def };
   }
 
   function noteClient(session: McpSession, conn: McpConnection, server: SdkServer, ctx: SdkContext): void {
@@ -706,14 +917,15 @@ export function createMcpService(d: McpServiceDeps): McpService {
     const queued = session.queue.run(
       signal,
       async () => {
-        // Its questions are watched only while it runs: one call at a time per connection.
-        const unwatch = progress ? watchQuestions(session, progress) : () => {};
+        // Its questions are watched only while it runs: one call at a time per connection. An
+        // app's are its session's; an agent binding's, those its dispatch says are its turn's.
+        const watch = progress ? watchQuestions(progress, (owner) => ownsQuestion(session, owner)) : NO_WATCH;
         try {
-          const out = await runOne(session, call, signal, progress);
+          const out = await runOne(session, call, signal, progress, watch);
           def = out.def;
           return out.r;
         } finally {
-          unwatch();
+          watch.stop();
         }
       },
       () => errorResult(call, 'stopped', STOPPED_BEFORE),
