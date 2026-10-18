@@ -4,7 +4,8 @@
 // words in every string, at most 2000 characters a string, a container at depth 8 of the reply
 // becomes null, at most 200 keys an object and 200 items a list, at most 32 KB in all, and
 // `truncated` when anything was cut. The CAD plugin cannot import the app's server code, so this
-// copy follows it line for line; keep the two the same.
+// copy follows it line for line; the app's host test (scripts/__tests__/assistant-cad-tools.test.mjs)
+// fails when its caps or its answers differ from the server's.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 const CONTROLS = /[\p{Cc}\u{2028}\u{2029}\u{200e}\u{200f}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu;
