@@ -29,6 +29,7 @@ const start = (o: HarnessOptions = {}) => assistantHarness({ kernel: new FakeKer
 const phase = (x: AssistantHarness) => runtimeOf(x.services)!.store.get().phase;
 
 const SWEEP = { edit: '', name: '', kind: 'sweep', profiles: ['Sketch 1'], path: 'Sketch 2', orientation: 'follow', ruled: false, op: 'new', bodies: [], body_name: '', color: '' };
+const HOLE = { name: '', face: 'Extrude 1.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' };
 
 describe('tools not in this build', () => {
   it('answer not_ready "not in this build yet", with the reason, its hint and the tool in detail', async () => {
@@ -50,8 +51,8 @@ describe('tools not in this build', () => {
 
   it('on a host without turn events the hint goes in the message', async () => {
     h = await start({ assistant: { turns: false } });
-    const r = await h.call('sweep_loft', SWEEP);
-    expect(r).toEqual({ ok: false, error: { code: 'not_ready', message: `not_built: sweep_loft is not in this build yet. Try: ${HINTS.not_built}` } });
+    const r = await h.call('hole', HOLE);
+    expect(r).toEqual({ ok: false, error: { code: 'not_ready', message: `not_built: hole is not in this build yet. Try: ${HINTS.not_built}` } });
   });
 });
 

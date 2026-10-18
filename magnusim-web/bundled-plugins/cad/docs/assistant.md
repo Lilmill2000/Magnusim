@@ -142,7 +142,8 @@ One string names faces, edges, vertices, bodies, planes, axes or sketch regions
 (`help selectors` lists every form; `selectors/parse.ts` has the grammar). The pieces:
 
 - `labels.ts`: a face's label from its stored name (`Base.end`, `Base.side(r.top)`,
-  `Pipe.side(o@a2)`, `Fillet 1.fillet(2)`, `Row.copy(3)`, ...). Faces that share one get
+  `Pipe.side(o@a2)`, `Fillet 1.fillet(2)`, `Row.copy(3)`, ...; a sweep's `Pipe.side(o)` is
+  every side swept from `o`, along each curve of its path). Faces that share one get
   `~1`, `~2` in a fixed order (`LabelIndex`); a split face's label warns. The parser reads
   back every label it writes (tests pin the round trip on real bodies).
 - `selectors/parse.ts`: pure; the Part's names come in as data, the longest known name
@@ -422,6 +423,38 @@ trips of `get_model full` inputs, refusals), `feature-tools.test.ts` (a Stop at
 `before-commit`, Escape at `after-open`, a person's panel or change at `between-opens` of the
 offset mirror), `offset-planes.test.ts` (a sketch and a mirror share one offset plane); e2e
 `cad:assistant-honest-fillet`.
+
+## Sweeps and lofts (`sweep_loft`, `tools/sweep_loft.ts`)
+
+One feature per call, or with `edit: "<name>"` that sweep's or loft's inputs replaced (the
+kind must be its type), through `fillFeature` as the tools above do:
+
+- sweep: `profiles` are regions of one sketch, as region selectors (`"<sketch>"` is its
+  even-odd regions: a ring of two circles is one region with a hole; `"<sketch> r2"`,
+  `"<sketch> at(u, v)"`). `path` is `"<sketch>"` (every curve of it that is not construction)
+  or `"<sketch>: l1, a2"`, read here, not by the selector grammar: the longest sketch name the
+  text starts with (or a quoted one), then the curves by the model's ids (`p.1`), or a macro's
+  id for all its pieces (`p`: a polyline's sides). The path's sketch is another one than the
+  profile's, and for an edit one made before it (`later_feature`).
+- loft: two or more profiles, one region each (`"<sketch>"` that has several regions is
+  refused, naming them), one per sketch, in order; `ruled`; `path` is `""`.
+- `op`, `bodies`, `body_name`, `color` follow extrude's rules (every problem in one
+  `bad_input`; a body name another body has is `name_taken`). The body's name and colour are
+  the Part's one-shot edits after the panel's Done, in the same step (a `between-opens`
+  checkpoint before them).
+- A shape the kernel refuses (a path with a gap, a loft profile with a hole, an invalid
+  result) is the call's `feature_failed` with CAD's own words; nothing changes.
+- The answer: `EditData` with `created` (`Pipe.start`, `Pipe.end`, `Pipe.side(o@a2)`;
+  `Loft 1.side(r.top)` by the first profile's parts), `kind`, `profiles` (sketch, region id,
+  area, holes) and a sweep's `path` (its sketch and curves).
+- `get_model full` writes them as this tool's input: regions as `"<sketch> at(u, v)"` (the
+  point inside the region now), the path as `"<sketch>: l1, a2"`. They have no expression
+  fields, so `edit_feature` only renames, suppresses or moves them.
+
+Tests: `sweep-loft.test.ts` (real kernel: the pipe elbow's volume by formula and its labels
+read back by find, a named and coloured body, a cut groove, round trips, refusals, a path with
+a gap, a Stop and a person's change at `between-opens`, the loft frustum); e2e
+`cad:assistant-honest-sweep`.
 
 ## The person's view
 

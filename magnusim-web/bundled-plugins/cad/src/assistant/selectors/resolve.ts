@@ -507,7 +507,9 @@ async function byRole(sc: Scene, sel: Extract<Sel, { t: 'role' }>): Promise<Face
     throw new ToolError('unknown_role', `${name} has no role "${sel.role}". Roles: ${LABEL_ROLES.join(', ')}; ${name} has ${left.join(', ') || 'no faces with a role'} now.`, { detail: { feature: name, roles: left } });
   }
   const prefix = `${sel.feature.id}\u0000${sel.role}\u0000`;
-  const members = sc.labels.select((key) => (sel.detail === null ? key.startsWith(prefix) : key === `${prefix}${sel.detail}`));
+  // side(o) of a sweep is every side swept from o (o@l1, o@a2, ...); side(o@a2) one of them.
+  const swept = sel.role === 'side' && sel.detail !== null && !sel.detail.includes('@') ? `${prefix}${sel.detail}@` : null;
+  const members = sc.labels.select((key) => (sel.detail === null ? key.startsWith(prefix) : key === `${prefix}${sel.detail}` || (swept !== null && key.startsWith(swept))));
   if (!members.length) {
     const left = rolesLeft();
     const near: Hit[] = [];

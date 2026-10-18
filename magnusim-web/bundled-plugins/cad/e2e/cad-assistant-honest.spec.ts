@@ -613,3 +613,67 @@ test('cad:assistant-honest-hole hole on the bracket\'s -X face lands where the m
   await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
   await expect.poll(() => treeNames(page), STEP).toEqual([]);
 });
+
+// T8: a sweep the kernel cannot make (its path has a gap) changes nothing: the model gets failed
+// feature_failed with CAD's own words, and the person's tree shows only the two sketches. Sent
+// with the whole path, the pipe elbow is made through the person's own Sweep panel (read-only,
+// the Assistant's): its row in the tree, the volume chip the ring's area times the path's length,
+// the faces it made as labels (Pipe.side(o@a2), the bend), and one Undo takes the turn back.
+const SWEEP = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'sweep', profiles: ['Ring'], path: 'Path', orientation: 'follow', ruled: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+const SKETCH = (name: string, on: string, entities: { id: string; kind: string; at: number[] }[]) => ({ edit: '', name, on, entities: entities.map((e) => ({ ...e, construction: false })), constraints: [], infer: false });
+
+test('cad:assistant-honest-sweep a sweep whose path has a gap changes nothing; the whole path makes the pipe', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest sweep');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  await recordShown(page, 'panel-owner', '[data-cad-panel="feature"]', 'data-panel-owner');
+  await recordShown(page, 'panel-title', '[data-cad-panel="feature"]', 'aria-label');
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: SKETCH('Ring', 'Top', [{ id: 'o', kind: 'circle', at: [0, 0, 10] }, { id: 'i', kind: 'circle', at: [0, 0, 8] }]) }] },
+    // On Front u is +X and v is +Z: 30 up, a R40 bend towards +X, 30 along.
+    {
+      tools: [
+        {
+          name: 'cad__sketch',
+          input: SKETCH('Path', 'Front', [
+            { id: 'l1', kind: 'line', at: [0, 0, 0, 30] },
+            { id: 'a2', kind: 'arc', at: [40, 30, 40, 90, 180] },
+            { id: 'l3', kind: 'line', at: [40, 70, 70, 70] },
+          ]),
+        },
+      ],
+    },
+    { tools: [{ name: 'cad__sweep_loft', input: SWEEP({ name: 'Pipe', path: 'Path: l1, l3' }) }] },
+    { tools: [{ name: 'cad__sweep_loft', input: SWEEP({ name: 'Pipe' }) }] },
+    { text: 'The bend was missing from the path; the pipe elbow is made.' },
+  );
+  const t = await startTurn(request, host, { text: 'A pipe elbow.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, , , afterGap, afterPipe] = chats(host).slice(before);
+  const [gap] = resultsIn(afterGap);
+  expect(gap).toMatchObject({
+    tool: 'cad__sweep_loft',
+    ok: false,
+    error: { code: 'failed', detail: { reason: 'feature_failed', feature: 'Pipe', message: 'Pipe failed: the path has a gap: its curves must join end to end in one chain' } },
+  });
+  const [pipe] = resultsIn(afterPipe);
+  expect(pipe).toMatchObject({ tool: 'cad__sweep_loft', ok: true, data: { feature: { name: 'Pipe', type: 'sweep', state: 'ok' }, path: { sketch: 'Path', curves: ['l1', 'a2', 'l3'] }, broke: [] } });
+  expect(pipe.data!.created).toEqual(expect.arrayContaining(['Pipe.start', 'Pipe.end', 'Pipe.side(o@a2)', 'Pipe.side(i@l1)']));
+  // What the person saw and sees: the Assistant's own Sweep panel, then the tree with no trace of
+  // the failed call, no panel left open, the pipe's volume.
+  expect(await readRecord(page, 'panel-owner')).toContain('assistant');
+  expect(await readRecord(page, 'panel-title')).toContain('Pipe');
+  // (The two sketches are drawn with no dimensions: under-defined, "(-)".)
+  await expect.poll(() => treeNames(page), STEP).toEqual(['(-) Ring', '(-) Path', 'Pipe']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  const PIPE = Math.PI * (100 - 64) * (60 + 20 * Math.PI);
+  const mm3 = async () => Number(await frame.locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3'));
+  await expect.poll(async () => Math.abs((await mm3()) / PIPE - 1), STEP).toBeLessThan(1e-3);
+  // The turn is one undo step, named after the request.
+  const label = () => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel);
+  expect(await label()).toBe('Assistant: A pipe elbow.');
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(() => treeNames(page), STEP).toEqual([]);
+});
