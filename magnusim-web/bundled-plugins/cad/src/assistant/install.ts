@@ -57,7 +57,8 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const keys = createSessionKeys({ committed: () => services.doc.committed(), now: o.now });
   const rev = createRevTracker({ doc: services.doc, bus: services.bus });
   const holds = createHoldPoints();
-  const pause = createPause();
+  // A turn the host said has ended takes no pause (it would outlive the turn: nothing ends it).
+  const pause = createPause({ isOver: (id) => turns.get(id)?.state === 'ended', sameSession: (a, b) => keys.sameSession(a, b) });
   const pace = createPace({ doc: services.doc, prefs: services.bridge.prefs, document: doc });
   const soft = createSoftInput(doc, o.now);
   const camera = createCameraLatch({ viewport: services.viewport, pace, soft });
@@ -106,8 +107,9 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     const s = store.get();
     const running = turns.running().length > 0;
     const lingering = !assistant?.onTurn && lastCallEnd > 0 && now() - lastCallEnd < LINGER_MS;
-    const phase = phaseOf(s, running, lingering);
-    if (phase !== s.phase) store.set({ phase });
+    const p = pause.get();
+    const phase = phaseOf(s, running, lingering, !!p);
+    if (phase !== s.phase) store.set(phase === 'paused' && p ? { phase, note: pauseNote(p) } : { phase });
   };
   offs.push(store.subscribe(refresh));
   const onCall = services.bus.on('assistant:call', (e) => {
@@ -157,23 +159,27 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   // ---- the pause: the chip shows it; it ends with its turn, or at the next key (busy.ts createPause)
   offs.push(
     pause.subscribe((p) => {
-      if (p) store.set({ phase: 'paused', note: pauseNote(p) });
-      else if (store.get().phase === 'paused') store.set({ phase: 'idle', note: null });
+      // A step asking "keep it?" keeps its question (its Keep or Discard ends it; then the chip says paused).
+      if (p) {
+        if (store.get().phase !== 'approve') store.set({ phase: 'paused', note: pauseNote(p) });
+      } else if (store.get().phase === 'paused') store.set({ phase: 'idle', note: null });
     }),
     turns.subscribe((t) => {
       if (t.state === 'ended') pause.turnEnded(t.id);
     }),
-    // The person's undo or redo of the Assistant's steps while its turn runs: it waits for them.
+    // The person's undo or redo of the Assistant's steps while its turn runs: it waits for them
+    // (the chip says which: "you undid its steps", "you redid its steps").
     services.bus.on('assistant:person-undo', (e) => {
       if (!e.tag) return;
+      const why = e.redo ? 'redo' : 'undo';
       const id = e.tag.startsWith('turn:') ? e.tag.slice('turn:'.length) : null;
       const facts = id ? turns.get(id) : null;
       if (facts) {
-        if (facts.state === 'running') pause.set('undo', e.tag, facts.id);
+        if (facts.state === 'running') pause.set(why, e.tag, facts.id);
         return;
       }
       // Without the host's turn events: while its calls still come (the chip's linger).
-      if (!assistant?.onTurn && lastCallEnd > 0 && now() - lastCallEnd < LINGER_MS) pause.set('undo', e.tag, null);
+      if (!assistant?.onTurn && lastCallEnd > 0 && now() - lastCallEnd < LINGER_MS) pause.set(why, e.tag, null);
     }),
     () => {
       pace.dispose();
@@ -198,8 +204,15 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const actions: AssistantActions = {
     pause() {
       const t = runningTurn();
-      const key = t ? `turn:${t.id}` : rt.lastKey;
-      if (key) pause.set('person', key, t?.id ?? null);
+      if (t) {
+        pause.set('person', `turn:${t.id}`, t.id);
+        return;
+      }
+      // No turn runs: the newest call's key, with its turn when the host told of it (one that
+      // has ended takes no pause: review, it outlived the turn), else none (the next key ends it).
+      const key = rt.lastKey;
+      if (!key) return;
+      pause.set('person', key, turns.forKey(key)?.id ?? null);
     },
     resume: () => pause.resume(),
     stop() {

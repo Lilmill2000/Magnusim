@@ -13,6 +13,9 @@
 // pauses the Assistant in this Part until the turn ends; the person's Ctrl+Z or Ctrl+Y between
 // the step's panels takes all of the step back at once (doc.assistant.undoTakesOver).
 // The person's selection comes back after the call, unless they changed it meanwhile.
+// The person's Pause while a step runs: the step waits at its next pace point (and before it is
+// judged), open and held, until Resume (busy.ts waitWhilePaused; review: it went on being drawn
+// and was kept under a chip that said paused); after the wait cap it answers busy paused.
 // Watch mode (§8): with "Ask each step" on, a judged step waits for the person's Keep or Discard
 // before it is sealed (approval.ts; Discard and no answer revert it: busy step_declined); a kept
 // step lets the view frame again (the camera latch, camera.ts); a call that ran at watch pace
@@ -29,7 +32,7 @@ import type { CadDoc, Feature } from '../types/doc';
 import type { Selection, SelectionItem } from '../types/selection';
 import { uiFor } from '../ui/controller';
 import { waitForApproval } from './approval';
-import { heartbeat, personBlock, waitedWords, waitForEdit } from './busy';
+import { heartbeat, personBlock, waitedWords, waitForEdit, waitWhilePaused } from './busy';
 import { asToolError, isToolError, ToolError } from './errors';
 import { report, snapshotStates, verdict, type JudgedPlan } from './judge';
 import { groupLabel } from './ledger';
@@ -237,6 +240,8 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
       }
       if (!st.clean) throw new ToolError('changed', `The Part changed while the call ran: ${keptWords(st, services).join('; ') || 'by someone else'}.`);
     };
+    // A pause pressed while the step runs: it waits here until Resume (a take-over or a change ends the wait; check says why).
+    const untilResumed = () => waitWhilePaused(ctx, rt, () => !!st.takenOver || !st.clean, plan.part);
     const ectx: EditCtx = {
       ...ctx,
       owner,
@@ -251,6 +256,7 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
         check();
         if (o.pace) await pacer.wait(o.pace);
         if (o.hold) await ctx.hold(o.hold);
+        await untilResumed();
         check();
         ctx.progress(o.fraction ?? null, o.label);
       },
@@ -258,6 +264,9 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
     try {
       await tool.apply(plan, ectx);
       await heartbeat(ctx, doc.settled(ctx.signal), 'Waiting for the rebuild');
+      check();
+      // Paused after its last pace point: judged and kept only once the person resumes.
+      await untilResumed();
       check();
       const after = snapshotStates(doc.state.get());
       const v = verdict(before, after, plan);

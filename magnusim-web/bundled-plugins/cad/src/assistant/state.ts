@@ -1,7 +1,9 @@
 // What the Assistant is doing in this Part, as the person sees it (CAD tools spec §8.3): one store
 // the dock chip and `.cad-app[data-assistant]` read. Its `phase` follows from the rest:
 //   off       the tools are not offered;
-//   working   a call runs (waiting, approve and paused come with the edit tools and watch mode);
+//   working   a call runs (waiting and approve come with the edit tools and watch mode);
+//   paused    the Assistant is paused in this Part (whatever else runs: review, "Ask each step"
+//             left a pause showing "working");
 //   thinking  a turn bound to this tab runs with no call (the host's turn events), or for a short
 //             while after a call on a host without them;
 //   ended     the turn ended: for ENDED_MS, or until the Part changes or the next turn starts;
@@ -27,12 +29,14 @@ export function createAssistantStore(): StateStore<AssistantUiState> {
 
 /**
  * The phase from the state's facts. `running`: a turn bound to this tab runs (the host said so);
- * `lingering`: on a host without turn events, within LINGER_MS of the last call.
+ * `lingering`: on a host without turn events, within LINGER_MS of the last call; `paused`: the
+ * pause is on (busy.ts).
  */
-export function phaseOf(s: Omit<AssistantUiState, 'phase'> & { phase?: AssistantPhase }, running: boolean, lingering: boolean): AssistantPhase {
+export function phaseOf(s: Omit<AssistantUiState, 'phase'> & { phase?: AssistantPhase }, running: boolean, lingering: boolean, paused = false): AssistantPhase {
   if (s.registration !== 'on') return 'off';
-  // The edit tools set these while a call waits; they hold until the call says otherwise.
-  if (s.phase === 'waiting' || s.phase === 'approve' || s.phase === 'paused') return s.phase;
+  // The edit tools set these while a call waits for the person; they hold until the call says otherwise.
+  if (s.phase === 'waiting' || s.phase === 'approve') return s.phase;
+  if (paused) return 'paused';
   if (s.call) return 'working';
   if (running || lingering) return 'thinking';
   if (s.turn?.end) return 'ended';

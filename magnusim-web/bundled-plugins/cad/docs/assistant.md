@@ -146,8 +146,14 @@ rebuild over 1.5 s, or at `fast`. Tests force the pace without writing the prefe
 
 **The pause** (`busy.ts` `createPause`): set by a take-over, by the person's undo or redo of
 the Assistant's steps while its turn runs, or by the chip's Pause; it ends with its turn (the
-host's turn events) or, without them, at the next key. The chip shows `paused` ("you took
-over", "you undid its steps").
+host's turn events) or, without them, at the next key. A turn the host said has ended takes no
+pause, and an outside client's key that went up only because the person changed the Part
+(`session-key.ts` `sameSession`) is no next key. The chip shows `paused` ("you took over", "you
+undid its steps", "you redid its steps") whatever else runs (`state.ts` `phaseOf`): after a
+"keep it?" too. A step already running when the person pauses waits at its next pace point,
+and before it is judged (`waitWhilePaused`): open, held (the stored Part stays the mark),
+progress `waiting`; Resume lets it go on, a take-over or Stop ends it, and after the wait cap it
+answers `busy` `paused` with nothing kept.
 
 ## Deleting (`delete`, `tools/delete.ts`)
 
@@ -528,9 +534,11 @@ events the chip stays 10 s after the last call.
 - **Ask each step** (`approval.ts`, the chip's toggle, `ws.prefs` `assistant.ask_each`, off by
   default): a judged edit waits before it is sealed (chip `approve`, progress `waiting`); Keep
   goes on, Discard reverts (`busy` `step_declined`, `why: 'discard'`), no answer within the wait
-  is Discard (`why: 'no_answer'`), a change of the person's meanwhile ends the wait at once.
+  is Discard (`why: 'no_answer'`), a change of the person's or a take-over (Escape on the
+  Assistant's Parameters panel too) ends the wait at once.
 - **The chip's buttons** (`AssistantActions`, `services.apis.assistant.actions`): Pause and
-  Resume (the pause of `busy.ts`, why `person`; it ends with the turn), Stop (only with the
+  Resume (the pause of `busy.ts`, why `person`; it ends with the turn; neither Pause nor Stop
+  shows once the turn has ended while its last call finishes), Stop (only with the
   host's turn events: the running call of the turn aborts here, its step reverts synchronously,
   every later call of that turn answers `busy` `stopped`, and `ws.assistant.stop(turn)` asks the
   host to end it), Keep and Discard, Fast / Watch, Ask each step, and Undo of an ended turn while

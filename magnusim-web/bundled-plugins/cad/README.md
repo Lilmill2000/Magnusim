@@ -499,7 +499,9 @@ says what it does:
 | Assistant: <your request> · done | Undo |
 
 - **Pause**: its edits wait until you Resume; it can still read the Part. A
-  pause ends with the request.
+  step it is making when you pause stops where it is (at its next pace) and
+  goes on at Resume; nothing of it is kept or saved until then. A pause ends
+  with the request.
 - **Stop** ends the request. The step it is on is not kept; its earlier steps
   stay, and Undo takes them back.
 - **Ask each step** (off by default; your choice is kept): each edit waits
@@ -526,7 +528,7 @@ says what it does:
   Finish sketch in its sketch takes the step over: it is discarded, nothing of
   it is kept, and the Assistant pauses in this Part until the request ends (the
   chip's Resume lets it go on). Undoing its steps while the request runs pauses
-  it the same way ("you undid its steps").
+  it the same way ("you undid its steps"; a redo: "you redid its steps").
 - **Looking is not taking over**: selecting, hovering and orbiting in the view,
   and clicks on the fields of its panel.
 - It is told to leave what you made alone unless you ask, and everything it

@@ -9,12 +9,14 @@
 //     most 10 s;
 //   - Pause: edits wait, Resume lets them go, 10 minutes is busy paused; the pause ends with its
 //     turn (the host's turn events) or at the next key without them; the person's undo of the
-//     Assistant's steps while its turn runs pauses it ("you undid its steps");
+//     Assistant's steps while its turn runs pauses it ("you undid its steps"), their redo too
+//     ("you redid its steps"); a turn that has ended takes no pause; an outside client's next
+//     key that came only from the person's own change of the Part does not end its pause;
 //   - another turn's call is busy other_turn; a Part being opened on a project geometry answers
 //     not_ready; reads never wait.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EDIT_WAIT_MS, personBlock, SOFT_MAX_MS } from '../../src/assistant/busy';
+import { createPause, EDIT_WAIT_MS, personBlock, SOFT_MAX_MS } from '../../src/assistant/busy';
 import { assistantTestHandle } from '../../src/assistant/install';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { registerPendingEdit } from '../../src/lib/pendingEdits';
@@ -259,6 +261,45 @@ describe('the pause', () => {
     // Redo after the turn: no pause.
     x.doc.redo();
     expect(rt.pause.get()).toBeNull();
+  });
+
+  it("the person's redo of the Assistant's steps while its turn runs pauses it as a redo: the chip and the model hear \"redid\"", async () => {
+    const { x } = await start();
+    const rt = runtimeOf(x.services)!;
+    x.fake.emitTurn({ id: 't-1', title: 'Params' });
+    await x.ok('set_params', PARAM('q', '3 mm'), { turn: 't-1' });
+    x.doc.undo();
+    expect(rt.store.get()).toMatchObject({ phase: 'paused', note: 'you undid its steps' });
+    // Resume, then the person changes their mind: Ctrl+Y brings the step back.
+    x.services.apis.get().assistant!.actions!.resume();
+    expect(rt.pause.get()).toBeNull();
+    x.doc.redo();
+    expect(params(x)).toEqual(['q']);
+    expect(rt.pause.get()).toEqual({ why: 'redo', key: 'turn:t-1', turn: 't-1' });
+    expect(rt.store.get()).toMatchObject({ phase: 'paused', note: 'you redid its steps' });
+    rt.waitCapMs = 50;
+    expect(await x.call('set_params', PARAM('r', '3 mm'), { turn: 't-1' })).toMatchObject({
+      ok: false,
+      error: { code: 'busy', message: expect.stringMatching(/^paused: The call waited [\d.]+ s: the person redid the Assistant's steps in this Part\.$/), detail: { reason: 'paused', why: 'redo' } },
+    });
+  });
+
+  it('a turn that has ended takes no pause; an outside session that went on because of the person keeps its pause', () => {
+    const over = new Set(['t-old']);
+    const same = (a: string, b: string) => a.startsWith('ext:') && b.startsWith('ext:') && a !== 'ext:9' && b !== 'ext:9';
+    const p = createPause({ isOver: (t) => over.has(t), sameSession: same });
+    p.set('person', 'turn:t-old', 't-old');
+    p.set('take_over', 'turn:t-old', 't-old');
+    expect(p.get()).toBeNull();
+    p.set('person', 'ext:1', null);
+    p.enterKey('ext:2');
+    expect(p.get()).toEqual({ why: 'person', key: 'ext:1', turn: null });
+    // Another session (5 idle minutes), or a turn's key: the next key, so the pause ends.
+    p.enterKey('ext:9');
+    expect(p.get()).toBeNull();
+    p.set('take_over', 'ext:1', null);
+    p.enterKey('turn:t-2');
+    expect(p.get()).toBeNull();
   });
 });
 

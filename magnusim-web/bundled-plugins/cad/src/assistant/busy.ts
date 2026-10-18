@@ -9,8 +9,11 @@
 // `waiting`, so the turn's minutes stop) and goes on the moment the person is done, checked again
 // on every change of the stores behind those signals; after 10 minutes it answers busy. A pointer
 // held in the frame, or input under 800 ms ago, is a soft wait: until 800 ms of quiet, at most 10 s.
-// The pause (Pause on the chip, a take-over, the person's undo of the Assistant's steps while a
-// turn runs) ends with its turn, or at the next key on a host without the turn events.
+// The pause (Pause on the chip, a take-over, the person's undo or redo of the Assistant's steps
+// while a turn runs) ends with its turn, or at the next key on a host without the turn events
+// (an outside client's session that went on only because the person changed the Part is the
+// same key for it). A turn that has ended takes no pause. A step already running when the
+// person pauses waits at its next pace point (waitWhilePaused) until they resume.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { pendingEditLabel, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
@@ -19,7 +22,7 @@ import type { AppServices } from '../types/app';
 import type { CallCtx, TurnFacts } from '../types/assistant';
 import { uiFor } from '../ui/controller';
 import { ToolError } from './errors';
-import { runtimeOf } from './runtime';
+import { runtimeOf, type AssistantRuntime } from './runtime';
 import { MIN_LOCAL_CONTEXT } from './turn-info';
 
 /** The longest a read waits for the Part to open and the kernel to start. */
@@ -174,8 +177,8 @@ export function editBlockError(services: AppServices): ToolError | null {
   return why ? new ToolError('opening_geometry', why) : null;
 }
 
-/** Who paused the Assistant in this Part: the person (the chip's Pause), a take-over, or the person's undo of its steps. */
-export type PauseWhy = 'person' | 'take_over' | 'undo';
+/** Who paused the Assistant in this Part: the person (the chip's Pause), a take-over, or the person's undo or redo of its steps. */
+export type PauseWhy = 'person' | 'take_over' | 'undo' | 'redo';
 
 export interface Pause {
   why: PauseWhy;
@@ -198,7 +201,14 @@ export interface PauseState {
   subscribe(fn: (p: Pause | null) => void): () => void;
 }
 
-export function createPause(): PauseState {
+export interface PauseOptions {
+  /** A turn the host said has ended: a pause of it is not taken (it would outlive its turn). */
+  isOver?: (turn: string) => boolean;
+  /** Two keys of one session (an outside client's that went on because the person changed the Part): no next key for a pause. */
+  sameSession?: (a: string, b: string) => boolean;
+}
+
+export function createPause(o: PauseOptions = {}): PauseState {
   let now: Pause | null = null;
   const listeners = new Set<(p: Pause | null) => void>();
   const tell = (next: Pause | null) => {
@@ -208,6 +218,7 @@ export function createPause(): PauseState {
   return {
     get: () => now,
     set(why, key, turn) {
+      if (turn && o.isOver?.(turn)) return;
       if (now && why !== 'take_over') return;
       if (now && now.why === why && now.key === key && now.turn === turn) return;
       tell({ why, key, turn });
@@ -216,7 +227,7 @@ export function createPause(): PauseState {
       if (now) tell(null);
     },
     enterKey(key) {
-      if (now && !now.turn && now.key !== key) tell(null);
+      if (now && !now.turn && now.key !== key && !o.sameSession?.(now.key, key)) tell(null);
     },
     turnEnded(id) {
       if (now && now.turn === id) tell(null);
@@ -232,8 +243,19 @@ export function createPause(): PauseState {
 
 /** The chip's words for a pause. */
 export function pauseNote(p: Pause): string | null {
-  return p.why === 'take_over' ? 'you took over' : p.why === 'undo' ? 'you undid its steps' : null;
+  return p.why === 'take_over' ? 'you took over' : p.why === 'undo' ? 'you undid its steps' : p.why === 'redo' ? 'you redid its steps' : null;
 }
+
+/** A pause in words, for the model ("the person took over a step"). */
+function pauseWords(p: Pause): string {
+  if (p.why === 'take_over') return 'the person took over a step';
+  if (p.why === 'undo') return "the person undid the Assistant's steps";
+  if (p.why === 'redo') return "the person redid the Assistant's steps";
+  return 'the person paused the Assistant';
+}
+
+/** Progress while an edit waits for a pause to end. */
+export const PAUSED_LABEL = 'Paused by the person';
 
 /**
  * The person's input in the frame, for the soft wait: a pointer held (pointerdown to pointerup) and
@@ -306,10 +328,7 @@ interface EditWait {
 
 function hardWait(services: AppServices): EditWait | null {
   const p = runtimeOf(services)?.pause.get() ?? null;
-  if (p) {
-    const words = p.why === 'take_over' ? 'the person took over a step' : p.why === 'undo' ? "the person undid the Assistant's steps" : 'the person paused the Assistant';
-    return { reason: 'paused', words, note: pauseNote(p), why: p.why };
-  }
+  if (p) return { reason: 'paused', words: pauseWords(p), note: pauseNote(p), why: p.why };
   return personBlock(services);
 }
 
@@ -370,7 +389,7 @@ export function waitUntilFree(ctx: CallCtx): Promise<void> {
     let softSince: number | null = null;
     let softTimer: ReturnType<typeof setTimeout> | null = null;
     let finished = false;
-    const label = (w: EditWait) => (w.reason === 'paused' ? 'Paused by the person' : `Waiting for the person: ${w.words}`);
+    const label = (w: EditWait) => (w.reason === 'paused' ? PAUSED_LABEL : `Waiting for the person: ${w.words}`);
     const unshow = () => {
       if (rt.store.get().phase === 'waiting') rt.store.set({ phase: 'working', note: null });
     };
@@ -444,5 +463,55 @@ export function waitUntilFree(ctx: CallCtx): Promise<void> {
       () => ctx.signal.removeEventListener('abort', abort),
     );
     check();
+  });
+}
+
+/**
+ * A step already running when the person pauses (CAD tools spec §8.3; review: the chip said
+ * paused while the step went on being drawn and was kept): it waits at its next pace point, its
+ * step open and held (the stored Part stays the mark), until the pause ends, `ended()` (a
+ * take-over, a change of the Part: the step's checkpoint answers why) or the call stops (rejects
+ * with the stop). The chip says paused meanwhile, and progress carries `waiting: true`, so the
+ * turn's minutes stop. After the wait cap (10 minutes) it rejects with busy paused: `part` was
+ * not kept.
+ */
+export function waitWhilePaused(ctx: CallCtx, rt: AssistantRuntime, ended: () => boolean, part: string): Promise<void> {
+  if (!rt.pause.get() || ended()) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const t0 = Date.now();
+    const offs: (() => void)[] = [];
+    let finished = false;
+    const finish = (err?: unknown) => {
+      if (finished) return;
+      finished = true;
+      for (const off of offs.splice(0)) off();
+      if (err) {
+        reject(err);
+        return;
+      }
+      // Not waiting any more: the turn's minutes run again.
+      ctx.progress(null, 'The person resumed: going on');
+      resolve();
+    };
+    const check = () => {
+      if (!finished && (!rt.pause.get() || ended())) finish();
+    };
+    offs.push(rt.pause.subscribe(check), ctx.services.doc.state.subscribe(check), ctx.services.bus.on('assistant:taken-over', check));
+    const cap = setTimeout(() => {
+      const p = rt.pause.get();
+      if (!p) finish();
+      else finish(new ToolError('paused', `The call waited ${waitedWords(Date.now() - t0)}: ${pauseWords(p)} in this Part; ${part} was not kept.`, { detail: { why: p.why } }));
+    }, rt.waitCapMs);
+    const beat = setInterval(() => ctx.progress(null, PAUSED_LABEL, { waiting: true }), HEARTBEAT_MS);
+    const abort = () => finish(ctx.signal.reason ?? new DOMException('The call was stopped', 'AbortError'));
+    ctx.signal.addEventListener('abort', abort, { once: true });
+    offs.push(
+      () => clearTimeout(cap),
+      () => clearInterval(beat),
+      () => ctx.signal.removeEventListener('abort', abort),
+    );
+    ctx.progress(null, PAUSED_LABEL, { waiting: true });
+    if (ctx.signal.aborted) abort();
+    else check();
   });
 }

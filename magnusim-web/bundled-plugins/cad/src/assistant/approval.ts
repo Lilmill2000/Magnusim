@@ -4,8 +4,9 @@
 // request's undo group: the chip says "Assistant: <step> · keep it?" with Keep and Discard, and
 // progress says `waiting` (the turn's minutes stop). Keep goes on; Discard reverts the step and
 // the call answers busy step_declined; no answer within the wait (10 minutes, the test handle's
-// setHoldS shortens it) counts as Discard. A take-over or a change of the person's while it waits
-// ends the wait at once (the step's checkpoint then answers why).
+// setHoldS shortens it) counts as Discard. A take-over (Escape on the Assistant's Parameters panel
+// too, which changes no model) or a change of the person's while it waits ends the wait at once
+// (the step's checkpoint then answers why). A pause on when it ends shows as paused (state.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PrefsApi } from '../lib/bridge';
@@ -160,11 +161,10 @@ export function waitForApproval(ctx: CallCtx, rt: AssistantRuntime, step: Assist
     offs.push(rt.approvals.open(ctx.call.call, part, (keep) => finish(keep ? 'keep' : 'discard')));
     rt.store.set({ phase: 'approve', call: { tool: ctx.tool, label: part }, note: null });
     ctx.progress(null, label, { waiting: true });
-    offs.push(
-      ctx.services.doc.state.subscribe(() => {
-        if (step.takenOver || !step.clean) finish('changed');
-      }),
-    );
+    const changed = () => {
+      if (step.takenOver || !step.clean) finish('changed');
+    };
+    offs.push(ctx.services.doc.state.subscribe(changed), ctx.services.bus.on('assistant:taken-over', changed));
     const cap = setTimeout(() => finish('timeout'), rt.waitCapMs);
     const beat = setInterval(() => ctx.progress(null, label, { waiting: true }), HEARTBEAT_MS);
     const abort = () => finish({ error: ctx.signal.reason ?? new DOMException('The call was stopped', 'AbortError') });

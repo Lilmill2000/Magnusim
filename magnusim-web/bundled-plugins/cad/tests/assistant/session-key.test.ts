@@ -3,7 +3,9 @@
 // turn's calls key by the turn; an outside client's calls with no turn share ext:<n> while they
 // keep coming within 5 minutes and the person changed nothing between them; a change by the person
 // or 5 idle minutes starts a new one; "mcp:<session>" turns key by their session; a new page starts
-// again. And the reply budgets by key (turn-info.ts): local turns get the smaller ones.
+// again; keys that went up only because the person changed the Part are one session for the pause
+// (sameSession), 5 idle minutes are not. And the reply budgets by key (turn-info.ts): local turns
+// get the smaller ones.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { createSessionKeys, EXTERNAL_IDLE_MS, keyKind } from '../../src/assistant/session-key';
@@ -67,6 +69,28 @@ describe('session keys', () => {
     k.ended(key);
     expect(key).toBe('ext:2');
     expect(call('')).toBe('ext:2');
+  });
+
+  it("keys that went up only because the person changed the Part are one session for the pause; 5 idle minutes start another", () => {
+    const { k, call, change, later } = keys();
+    expect(call('')).toBe('ext:1');
+    change();
+    expect(call('')).toBe('ext:2');
+    change();
+    expect(call('')).toBe('ext:3');
+    expect(k.sameSession('ext:1', 'ext:3')).toBe(true);
+    expect(k.sameSession('ext:2', 'ext:3')).toBe(true);
+    later(EXTERNAL_IDLE_MS + 1);
+    expect(call('')).toBe('ext:4');
+    expect(k.sameSession('ext:3', 'ext:4')).toBe(false);
+    change();
+    expect(call('')).toBe('ext:5');
+    expect(k.sameSession('ext:4', 'ext:5')).toBe(true);
+    expect(k.sameSession('ext:1', 'ext:5')).toBe(false);
+    // Turn keys, mcp keys and unknown ext keys are no session of an outside client's.
+    expect(k.sameSession('turn:t-1', 'turn:t-1')).toBe(false);
+    expect(k.sameSession('mcp:a', 'mcp:a')).toBe(false);
+    expect(k.sameSession('ext:9', 'ext:9')).toBe(false);
   });
 
   it('"mcp:<session>" turns key by their session; a new page starts at ext:1 again', () => {

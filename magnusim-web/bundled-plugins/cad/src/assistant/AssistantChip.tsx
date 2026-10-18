@@ -9,7 +9,8 @@
 //   approve   Keep, Discard
 //   paused    Resume, Stop
 //   ended     Undo, while the turn's undo group is the newest step
-// Stop shows only with the host's turn events. An ended turn also shows the Part's health
+// Stop shows only with the host's turn events. Pause and Stop do not show once the turn the chip
+// speaks of has ended (its last call may still be finishing). An ended turn also shows the Part's health
 // (health.ts: "· Fillet 1 fails", "· 1 sketch under-defined"; `data-assistant-health` ok, warn or
 // error, the chip amber or red when not ok), and a click on those words selects the first such
 // tree row. Nothing shows while the Assistant is off or idle.
@@ -62,13 +63,15 @@ export function chipButtons(s: AssistantUiState, undo: boolean): ChipButton[] {
   const pause: ChipButton = { id: 'pause', label: 'Pause', title: 'Pause: its edits wait until you resume (it can still read the Part)' };
   const ask: ChipButton = { id: 'ask', label: 'Ask each step', title: s.askEach ? 'Stop asking before each step is kept' : 'Ask before each step is kept (Keep or Discard)', pressed: !!s.askEach };
   const pace: ChipButton = s.pace === 'fast' ? { id: 'pace', label: 'Watch', title: 'Watch each step being made' } : { id: 'pace', label: 'Fast', title: 'Make each step at once, without waits' };
+  // The turn has ended while its last call finishes: nothing left to pause or stop.
+  const live = s.turn?.end ? [] : [pause, ...stop];
   switch (s.phase) {
     case 'thinking':
       return [pause, ...stop, ask];
     case 'working':
-      return [pause, ...stop, pace, ask];
+      return [...live, pace, ask];
     case 'waiting':
-      return [pause, ...stop];
+      return live;
     case 'approve':
       return [
         { id: 'keep', label: 'Keep', title: 'Keep this step' },

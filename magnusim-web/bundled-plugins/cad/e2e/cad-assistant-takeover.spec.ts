@@ -24,6 +24,9 @@
 //      The person's Ctrl+Z while the chip asks "Hole 1 · keep it?" (no panel open; the toolbar's
 //      Undo says it takes the step over) takes the whole hole back at once: no "Hole 1 sketch"
 //      left in the tree or the stored model, the history as before, the model hears taken_over.
+//   8. Pause while the Assistant draws a sketch (sketch-step:2) holds it where it is: the chip
+//      says paused with Resume, its read-only panel stays, nothing is stored; Resume finishes it,
+//      and with Ask each step on the chip then asks, and Keep keeps it.
 // The sketches are drawn at the watch pace with no delays (setPace('watch', 0)): every entity is
 // its own apply, so sketch-step:2 is a sketch half drawn.
 // Deviations from the spec's rows: sketch mode's ribbon has no Extrude, so row 2's Extrude takes
@@ -82,10 +85,10 @@ test.afterEach(() => {
 
 type W = {
   __CAD__: {
-    assistant: { setAskEach(on: boolean | null): void; calls: { tool: string; ok: boolean; reason?: string }[] };
+    assistant: { setAskEach(on: boolean | null): void; waiting(): string[]; calls: { tool: string; ok: boolean; reason?: string }[] };
     services: {
       commands: { get(id: string): { hint?: string } | undefined };
-      doc: { addParam(p: { name: string; expr: string; quantity: string }): unknown; state: { get(): { doc: { features: { id: string; name: string; type: string }[]; params: { name: string }[] }; history: { undoLabel: string | null } } } };
+      doc: { addParam(p: { name: string; expr: string; quantity: string }): unknown; assistant: { current(): unknown }; state: { get(): { doc: { features: { id: string; name: string; type: string }[]; params: { name: string }[] }; history: { undoLabel: string | null } } } };
       apis: { get(): { assistant: { actions: { setAskEach(on: boolean): void } } } };
     };
   };
@@ -488,6 +491,47 @@ test('cad:assistant-takeover-ask-each-undo Ctrl+Z while the chip asks to keep a 
     await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
     expect(await undoLabel(page)).toBe(label);
     await expect.poll(async () => (await storedModel(request, host, pid, sid))?.features.map((f) => f.name), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  } finally {
+    await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setAskEach(null));
+  }
+});
+
+test('cad:assistant-takeover-pause-mid-step Pause while the Assistant draws a sketch holds it where it is; Resume finishes it, then Ask each step asks', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant pause mid step');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  const sid = studyOf(page);
+  await forcePace(page, 'watch', 0);
+  const chip = frame.locator('[data-chip="assistant"]');
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setAskEach(true));
+  try {
+    await holdAt(page, 'sketch-step:2');
+    host.fake.reply({ tools: [sketchCall('Plate sketch')] }, { hold: 'paused-mid', text: 'The plate sketch is kept.' });
+    const t = await startTurn(request, host, { text: 'Sketch a plate with a hole.', tab });
+    await reachedHold(page, 'sketch-step:2');
+    const panel = frame.locator('[data-cad-panel="sketch"]');
+    await expect(panel).toHaveAttribute('data-panel-owner', 'assistant', STEP);
+    await chipButton(frame, 'pause').click();
+    await expect(chip).toHaveAttribute('data-assistant-state', 'paused', STEP);
+    await releaseHold(page, 'sketch-step:2');
+    // Held where it is: the chip says paused with Resume, its panel stays, nothing is stored.
+    await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.waiting().length), STEP).toBe(0);
+    await expect(chipWords(frame)).toHaveText('Assistant paused');
+    await expect(chipButton(frame, 'resume')).toBeVisible();
+    await expect(panel).toHaveAttribute('data-panel-owner', 'assistant');
+    expect(await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.assistant.current() !== null)).toBe(true);
+    expect((await storedModel(request, host, pid, sid))?.features.length ?? 0).toBe(0);
+    await expect(chip).toHaveAttribute('data-assistant-state', 'paused');
+    // Resume: the sketch is finished, then the chip asks; Keep keeps it.
+    await chipButton(frame, 'resume').click();
+    await expect(chip).toHaveAttribute('data-assistant-state', 'approve', STEP);
+    await expect(chipWords(frame)).toHaveText('Assistant: Sketch Plate sketch · keep it?');
+    await chipButton(frame, 'keep').click();
+    host.fake.release('paused-mid');
+    expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+    // Kept as drawn (its hole circle has no dimension: under-defined).
+    await expect(historyNames(frame)).toHaveText(['(-) Plate sketch'], STEP);
+    await expect.poll(async () => (await storedModel(request, host, pid, sid))?.features.map((f) => f.name), STEP).toEqual(['Plate sketch']);
   } finally {
     await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setAskEach(null));
   }
