@@ -1,0 +1,17 @@
+{
+  "id": "enclosure",
+  "tier": "L3",
+  "units": "mm",
+  "title": "Open-top enclosure",
+  "prompt": "Make an open-top enclosure 80 mm along X, 50 mm along Y and 30 mm high, centred on the origin on the Top plane and standing on z = 0. Round its four vertical outer edges R3 first, then shell it with 2 mm walls and floor, open at the top, keeping the outside size.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "bodies", "kind": "bodies", "count": 1, "solids": 1, "shells": 1, "voids": 0, "valid": true },
+    { "id": "volume", "kind": "volume", "expect": "(80*50 - (4 - pi)*3^2)*30 - (76*46 - (4 - pi)*1^2)*28", "rel": 0.005 },
+    { "id": "bbox", "kind": "bbox", "expect": [-40, -25, 0, 40, 25, 30], "abs": 0.01 },
+    { "id": "wall", "kind": "wall", "body": "*", "z": 15, "expect": 2, "abs": 0.01 },
+    { "id": "features_ok", "kind": "features_ok" },
+    { "id": "sketches_defined", "kind": "sketches_defined" }
+  ]
+}

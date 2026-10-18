@@ -21,6 +21,7 @@ import { createPause, createSoftInput, EDIT_WAIT_MS, pauseNote } from './busy';
 import { createCallHandler, isBuilt } from './call';
 import { createCameraLatch } from './camera';
 import { ToolError } from './errors';
+import { evalFacts, evalPicture, evalSetParam } from './eval-facts';
 import { GUIDE } from './guide';
 import { createLedger } from './ledger';
 import { createPace } from './pace';
@@ -316,6 +317,9 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       const v = await register();
       return { available: v.available, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) };
     },
+    evalFacts: (ask) => evalFacts(services, ask),
+    evalSetParam: (name, expr) => evalSetParam(services, name, expr),
+    evalPicture: () => evalPicture(services),
   });
 
   return () => {

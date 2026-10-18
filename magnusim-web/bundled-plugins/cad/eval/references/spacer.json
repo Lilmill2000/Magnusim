@@ -1,0 +1,56 @@
+{
+  "id": "spacer",
+  "about": "Two concentric circles on Top, dimensioned from parameters, extruded as one ring (all is even-odd: the bore stays open).",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "od", "kind": "length", "expr": "30 mm", "comment": "Outside diameter", "rename_to": "" },
+                { "name": "bore", "kind": "length", "expr": "12 mm", "comment": "Inside diameter", "rename_to": "" },
+                { "name": "t", "kind": "length", "expr": "5 mm", "comment": "Thickness", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Spacer sketch",
+              "on": "Top",
+              "entities": [
+                { "id": "o", "kind": "circle", "at": [0, 0, 15], "construction": false },
+                { "id": "i", "kind": "circle", "at": [0, 0, 6], "construction": false }
+              ],
+              "constraints": [
+                { "id": "co", "kind": "coincident", "refs": ["o.center", "origin"], "value": "" },
+                { "id": "dod", "kind": "diameter", "refs": ["o"], "value": "od" },
+                { "id": "did", "kind": "diameter", "refs": ["i"], "value": "bore" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Spacer", "sketch": "Spacer sketch", "regions": ["all"], "extent": "blind", "distance": "t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
+      { "text": "The spacer is a ring 30 mm across with a 12 mm bore, 5 mm thick: 2,968.8 mm3, one solid." }
+    ]
+  ]
+}

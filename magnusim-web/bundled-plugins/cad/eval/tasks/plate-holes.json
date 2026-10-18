@@ -1,0 +1,19 @@
+{
+  "id": "plate-holes",
+  "tier": "L1",
+  "units": "mm",
+  "title": "Plate with four holes",
+  "prompt": "Make a rectangular plate 100 mm long along X, 60 mm wide along Y and 8 mm thick, lying on the Top plane centred on the origin, from z = 0 up to z = 8 mm. Drill 4 through holes of 6.5 mm diameter, each centre 10 mm from the two nearest edges. Make it parametric: put the sizes in parameters, with the thickness parameter named t.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "bodies", "kind": "bodies", "count": 1, "solids": 1, "voids": 0, "valid": true },
+    { "id": "volume", "kind": "volume", "expect": "100*60*8 - 4*pi*3.25^2*8", "rel": 0.001 },
+    { "id": "bbox", "kind": "bbox", "expect": [-50, -30, 0, 50, 30, 8], "abs": 0.01 },
+    { "id": "holes", "kind": "holes", "radius": 3.25, "abs": 0.01, "count": 4, "at": [[40, 20, 0], [-40, 20, 0], [-40, -20, 0], [40, -20, 0]], "at_abs": 0.05 },
+    { "id": "features_ok", "kind": "features_ok" },
+    { "id": "sketches_defined", "kind": "sketches_defined" },
+    { "id": "params", "kind": "params", "min": 5 },
+    { "id": "walk_t", "kind": "walk", "param": "t", "steps": [{ "expr": "12 mm", "volume_ratio": 1.5 }, { "expr": "8 mm", "volume_ratio": 1 }], "rel": 0.001 }
+  ]
+}

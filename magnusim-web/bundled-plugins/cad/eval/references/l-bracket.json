@@ -1,0 +1,82 @@
+{
+  "id": "l-bracket",
+  "about": "The guide's L bracket: a closed polyline on Front with infer, extruded symmetric, the inner fillet, then one hole through each flange's outer face at its centre (hole works in model coordinates on the -Z and -X faces).",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "a", "kind": "length", "expr": "50 mm", "comment": "Base flange length", "rename_to": "" },
+                { "name": "b", "kind": "length", "expr": "40 mm", "comment": "Upright flange height", "rename_to": "" },
+                { "name": "t", "kind": "length", "expr": "5 mm", "comment": "Thickness", "rename_to": "" },
+                { "name": "wid", "kind": "length", "expr": "30 mm", "comment": "Width", "rename_to": "" },
+                { "name": "r", "kind": "length", "expr": "4 mm", "comment": "Inner fillet radius", "rename_to": "" },
+                { "name": "hd", "kind": "length", "expr": "6 mm", "comment": "Hole diameter", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "L profile",
+              "on": "Front",
+              "entities": [{ "id": "p", "kind": "polyline", "at": [0, 0, 50, 0, 50, 5, 5, 5, 5, 40, 0, 40, 0, 0], "construction": false }],
+              "constraints": [
+                { "id": "o", "kind": "coincident", "refs": ["p.p0", "origin"], "value": "" },
+                { "id": "da", "kind": "distance", "refs": ["p.1"], "value": "a" },
+                { "id": "db", "kind": "distance", "refs": ["p.6"], "value": "b" },
+                { "id": "t1", "kind": "distance", "refs": ["p.2"], "value": "t" },
+                { "id": "t2", "kind": "distance", "refs": ["p.5"], "value": "t" }
+              ],
+              "infer": true
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Bracket", "sketch": "L profile", "regions": ["all"], "extent": "symmetric", "distance": "wid", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__modify",
+            "input": { "edit": "", "name": "", "kind": "fillet", "targets": ["Bracket.side(p.3) & Bracket.side(p.4)"], "size": "r", "size2": "", "flip": false, "inward": false }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__hole",
+            "input": { "name": "Base hole", "face": "Bracket.side(p.1)", "centers": [{ "x": "a/2", "y": "0 mm", "z": "" }], "diameter": "hd", "depth": "through", "distance": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__hole",
+            "input": { "name": "Upright hole", "face": "Bracket.side(p.6)", "centers": [{ "x": "", "y": "0 mm", "z": "b/2" }], "diameter": "hd", "depth": "through", "distance": "" }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
+      { "text": "The L bracket is built: 50 by 40, 5 thick, 30 wide, the R4 inner fillet and a 6 mm hole centred in each flange; every feature ok and every sketch fully defined." }
+    ]
+  ]
+}

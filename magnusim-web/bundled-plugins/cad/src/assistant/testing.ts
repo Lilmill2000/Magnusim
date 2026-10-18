@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantUiState, TurnFacts } from '../types/assistant';
 import type { Pause } from './busy';
+import type { EvalAsk, EvalFacts } from './eval-types';
 import type { Pace } from './pace';
 
 /** One call as the page answered it (the test ledger; the eval harness counts errors by reason). */
@@ -106,4 +107,10 @@ export interface AssistantTestHandle {
   paused(): Pause | null;
   /** The eval's A/B runs: offer every tool, or the 13-tool core set (registers again). */
   setToolset(set: 'all' | 'core'): Promise<{ available: boolean; accepted: string[]; reason?: string }>;
+  /** The eval's facts of the Part now (eval-facts.ts), with what `ask` asks for. */
+  evalFacts(ask?: EvalAsk): Promise<EvalFacts>;
+  /** The eval's parameter walk: one parameter set as the person's Parameters panel sets it, the rebuild caught up. */
+  evalSetParam(name: string, expr: string): Promise<{ ok: boolean; reason?: string }>;
+  /** The eval run's last picture (iso, drawn off screen), or null without a 3D view. */
+  evalPicture(): Promise<{ mediaType: string; base64: string } | null>;
 }

@@ -1,0 +1,17 @@
+{
+  "id": "spacer",
+  "tier": "L1",
+  "units": "mm",
+  "title": "Round spacer",
+  "prompt": "Make a flat round spacer lying on the Top plane, centred on the origin, from z = 0: 30 mm outside diameter, a 12 mm bore through it, 5 mm thick. Put the sizes in parameters.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "bodies", "kind": "bodies", "count": 1, "solids": 1, "voids": 0, "valid": true },
+    { "id": "volume", "kind": "volume", "expect": "pi*(15^2 - 6^2)*5", "rel": 0.001 },
+    { "id": "bbox", "kind": "bbox", "expect": [-15, -15, 0, 15, 15, 5], "abs": 0.01 },
+    { "id": "bore", "kind": "holes", "radius": 6, "abs": 0.01, "count": 1, "at": [[0, 0, 0]], "at_abs": 0.05 },
+    { "id": "features_ok", "kind": "features_ok" },
+    { "id": "sketches_defined", "kind": "sketches_defined" }
+  ]
+}

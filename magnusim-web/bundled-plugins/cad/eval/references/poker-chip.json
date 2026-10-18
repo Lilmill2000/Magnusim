@@ -1,0 +1,179 @@
+{
+  "id": "poker-chip",
+  "about": "Red: the chip blank with a sealed pocket for the disc (a cut on an offset plane inside it). White: a ring buried at mid-thickness (Red above and below it) joined to six edge spots, ring pieces at the rim through the whole thickness, patterned all round. Red then loses White (combine cut, White kept), so the two bodies touch and never overlap.",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "chip_d", "kind": "length", "expr": "39 mm", "comment": "Chip diameter", "rename_to": "" },
+                { "name": "chip_t", "kind": "length", "expr": "3.3 mm", "comment": "Chip thickness", "rename_to": "" },
+                { "name": "disc_d", "kind": "length", "expr": "1.25 in", "comment": "Steel disc diameter", "rename_to": "" },
+                { "name": "disc_t", "kind": "length", "expr": "1 mm", "comment": "Steel disc thickness", "rename_to": "" },
+                { "name": "clr", "kind": "length", "expr": "0.3 mm", "comment": "Diametral clearance around the disc", "rename_to": "" },
+                { "name": "floor_t", "kind": "length", "expr": "(chip_t - disc_t)/2", "comment": "Material under the pocket", "rename_to": "" },
+                { "name": "ring_ri", "kind": "length", "expr": "16.6 mm", "comment": "Buried ring inner radius", "rename_to": "" },
+                { "name": "ring_ro", "kind": "length", "expr": "18 mm", "comment": "Buried ring outer radius", "rename_to": "" },
+                { "name": "ring_t", "kind": "length", "expr": "0.6 mm", "comment": "Buried ring thickness", "rename_to": "" },
+                { "name": "spot_ri", "kind": "length", "expr": "17.5 mm", "comment": "Edge spot inner radius", "rename_to": "" },
+                { "name": "spot_w", "kind": "angle", "expr": "20 deg", "comment": "Edge spot width", "rename_to": "" },
+                { "name": "n", "kind": "number", "expr": "6", "comment": "Edge spots", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Chip sketch",
+              "on": "Top",
+              "entities": [{ "id": "c", "kind": "circle", "at": [0, 0, 19.5], "construction": false }],
+              "constraints": [
+                { "id": "cc", "kind": "coincident", "refs": ["c.center", "origin"], "value": "" },
+                { "id": "cd", "kind": "diameter", "refs": ["c"], "value": "chip_d" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Chip", "sketch": "Chip sketch", "regions": ["all"], "extent": "blind", "distance": "chip_t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "Red", "color": "#b3261e" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Pocket sketch",
+              "on": "Top offset floor_t",
+              "entities": [{ "id": "p", "kind": "circle", "at": [0, 0, 16.025], "construction": false }],
+              "constraints": [
+                { "id": "pc", "kind": "coincident", "refs": ["p.center", "origin"], "value": "" },
+                { "id": "pd", "kind": "diameter", "refs": ["p"], "value": "disc_d + clr" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Pocket", "sketch": "Pocket sketch", "regions": ["all"], "extent": "blind", "distance": "disc_t", "distance2": "", "to": "", "flip": false, "op": "cut", "bodies": ["Red"], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Ring sketch",
+              "on": "Top offset (chip_t - ring_t)/2",
+              "entities": [
+                { "id": "a", "kind": "circle", "at": [0, 0, 16.6], "construction": false },
+                { "id": "b", "kind": "circle", "at": [0, 0, 18], "construction": false }
+              ],
+              "constraints": [
+                { "id": "rc", "kind": "coincident", "refs": ["a.center", "origin"], "value": "" },
+                { "id": "ra", "kind": "diameter", "refs": ["a"], "value": "2*ring_ri" },
+                { "id": "rb", "kind": "diameter", "refs": ["b"], "value": "2*ring_ro" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Ring", "sketch": "Ring sketch", "regions": ["all"], "extent": "blind", "distance": "ring_t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "White", "color": "#f2f2f2" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Spot sketch",
+              "on": "Top",
+              "entities": [{ "id": "s", "kind": "sector", "at": [0, 0, 17.5, 19.5, 80, 100], "construction": false }],
+              "constraints": [
+                { "id": "sc", "kind": "coincident", "refs": ["s.center", "origin"], "value": "" },
+                { "id": "si", "kind": "radius", "refs": ["s.inner"], "value": "spot_ri" },
+                { "id": "so", "kind": "radius", "refs": ["s.outer"], "value": "chip_d/2" },
+                { "id": "sw", "kind": "angle", "refs": ["s.start", "s.end"], "value": "spot_w" },
+                { "id": "sh", "kind": "horizontal", "refs": ["s.outer_start", "s.outer_end"], "value": "" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Spot", "sketch": "Spot sketch", "regions": ["all"], "extent": "blind", "distance": "chip_t", "distance2": "", "to": "", "flip": false, "op": "join", "bodies": ["White"], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__pattern",
+            "input": {
+              "edit": "",
+              "name": "Spots",
+              "kind": "circular",
+              "of": "features",
+              "items": ["Spot"],
+              "about": "Z axis",
+              "count": "n",
+              "spacing": "360 deg",
+              "symmetric": false,
+              "flip": false,
+              "about2": "",
+              "count2": "",
+              "spacing2": "",
+              "flip2": false,
+              "op": "source",
+              "bodies": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__combine",
+            "input": { "edit": "", "name": "Red minus White", "op": "cut", "targets": ["Red"], "tools": ["White"], "keep_tools": true }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Red", "White"], "section": "" } }] },
+      { "text": "The chip is built: Red and White are one solid each, they touch without overlapping, the disc pocket is sealed inside Red, and White's six edge spots are concentric with the chip and joined by a ring buried in Red." }
+    ]
+  ]
+}

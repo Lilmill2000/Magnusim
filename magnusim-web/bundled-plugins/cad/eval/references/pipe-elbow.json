@@ -1,0 +1,83 @@
+{
+  "id": "pipe-elbow",
+  "about": "A ring on Top swept along a path on Front: a straight leg up, a quarter bend tangent to it, a straight leg along X tangent to the bend.",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "od", "kind": "length", "expr": "20 mm", "comment": "Outside diameter", "rename_to": "" },
+                { "name": "bore", "kind": "length", "expr": "16 mm", "comment": "Inside diameter", "rename_to": "" },
+                { "name": "bend_r", "kind": "length", "expr": "40 mm", "comment": "Bend radius at the pipe's centre line", "rename_to": "" },
+                { "name": "leg", "kind": "length", "expr": "30 mm", "comment": "Each straight leg", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Ring",
+              "on": "Top",
+              "entities": [
+                { "id": "o", "kind": "circle", "at": [0, 0, 10], "construction": false },
+                { "id": "i", "kind": "circle", "at": [0, 0, 8], "construction": false }
+              ],
+              "constraints": [
+                { "id": "co", "kind": "coincident", "refs": ["o.center", "origin"], "value": "" },
+                { "id": "dod", "kind": "diameter", "refs": ["o"], "value": "od" },
+                { "id": "did", "kind": "diameter", "refs": ["i"], "value": "bore" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Path",
+              "on": "Front",
+              "entities": [
+                { "id": "l1", "kind": "line", "at": [0, 0, 0, 30], "construction": false },
+                { "id": "a2", "kind": "arc", "at": [40, 30, 40, 90, 180], "construction": false },
+                { "id": "l3", "kind": "line", "at": [40, 70, 70, 70], "construction": false }
+              ],
+              "constraints": [
+                { "id": "o", "kind": "coincident", "refs": ["l1.start", "origin"], "value": "" },
+                { "id": "t1", "kind": "tangent", "refs": ["l1", "a2"], "value": "" },
+                { "id": "t2", "kind": "tangent", "refs": ["a2", "l3"], "value": "" },
+                { "id": "dl1", "kind": "distance", "refs": ["l1"], "value": "leg" },
+                { "id": "dl3", "kind": "distance", "refs": ["l3"], "value": "leg" },
+                { "id": "rb", "kind": "radius", "refs": ["a2"], "value": "bend_r" }
+              ],
+              "infer": true
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sweep_loft",
+            "input": { "edit": "", "name": "Pipe", "kind": "sweep", "profiles": ["Ring"], "path": "Path", "orientation": "follow", "ruled": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
+      { "text": "The elbow is swept: 20 mm outside, 16 mm inside, an R40 bend between two 30 mm legs; one solid, about 13,892 mm3." }
+    ]
+  ]
+}

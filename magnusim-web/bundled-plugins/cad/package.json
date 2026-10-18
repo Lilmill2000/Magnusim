@@ -22,6 +22,7 @@
     "test:e2e:link": "node scripts/e2e.mjs --shard link",
     "test:e2e:assistant": "node scripts/e2e.mjs --shard assistant",
     "test:e2e:big": "node scripts/e2e.mjs --shard big",
+    "eval:assistant": "node eval/run.mjs",
     "test:gate:l2-cad": "node scripts/gate-l2-cad.mjs",
     "test:gate:l3-cad": "node scripts/gate-l3-cad.mjs",
     "test:gate:l3-cad:ci": "node scripts/gate-l3-cad.mjs --ci",

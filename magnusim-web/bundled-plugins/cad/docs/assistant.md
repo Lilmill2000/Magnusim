@@ -537,6 +537,49 @@ events the chip stays 10 s after the last call.
   while hidden says so in its answer (`note`: "ran without animation: the window was hidden or
   covered"). Pictures still work (no animation frame needed).
 
+## The evaluation set (`eval/`, `eval-facts.ts`)
+
+Nine tasks (`eval/tasks/*.json`: plate-holes and spacer at L1, l-bracket and flange at L2, enclosure
+and poker-chip at L3, pipe-elbow and vortex at L4, edit-plate) with checks the kernel answers, a
+reference per task (`eval/references/*.json`: the calls the scripted model makes), and the harness
+(`eval/run.mjs`, `npm run eval:assistant`; `eval/README.md` says how to run it):
+
+- `src/assistant/eval-facts.ts`: the Part's facts in raw numbers, read through
+  `window.__CAD__.assistant.evalFacts(ask)`: parameters, features with each expression field
+  evaluated, sketches with their dof analysed again by the solver (never the stored state), the
+  bodies' exact properties (solids, shells, voids), every face (round ones as hole or boss; a hole's
+  distance from the centre of each flat face it opens into), the chip's health; and what `ask`
+  names: pairs of bodies (overlap, union), the union of every body, sections (each piece with its
+  depth, area, holes, centre from its triangles, and box) and probe columns (a 0.2 mm square prism at
+  points of one body's section, `common` with each body, then the intervals each fills along it).
+  It changes nothing and releases every shape it makes; what it cannot read goes into `errors`.
+  `evalSetParam` is the parameter walk's change (the person's one-step `editParams`, then the
+  settled rebuild); `evalPicture` draws the Part from iso off screen for the run's `final.png`.
+  The types are in `eval-types.ts` (types only, so `eval/*.d.mts` and the e2e read them without
+  the page's modules).
+- `eval/score.mjs` (pure): the check kinds (bodies, volume, bbox, holes, round and flat faces,
+  features ok, sketches defined, params, walk, overlap, union, section, wall, spots, interlock, names
+  kept, feature type, driven by a parameter, units, the honest blend, the last words), formulas for
+  expected values, `factsAsk(task)` (what the facts must measure) and `score(task, facts, extra)`.
+  A heuristic check is reported, never counted.
+- `eval/lib.mjs`: one run end to end (`runTask`): a new project and its first Part in a page of its
+  own, the turns on the tab whose registration names that project (questions answered by the task's
+  policy: a delete is denied unless allowed, a privacy question only for a project the run made),
+  the facts, the walk, the score, one repair turn on a failure, the record and its files.
+  `scriptedDriver(fake)` queues each turn's reference on the app's scripted model.
+- `eval/run.mjs`: `--profile` (its own app server, settings and key from a profile outside the
+  repository), `--attach` (the running app), `--scripted` (CI); `--tasks probe` checks the provider
+  takes the strict tool schemas. Records in `.cache/assistant-eval/` (ignored by git).
+
+Tests: `eval-score.test.ts` builds every reference on the real kernel through the tool handler,
+scores it (every check passes), then changes what each check reads and sees it fail (every kind
+met); `eval-facts.test.ts` (the facts of the plate, an under-defined sketch, errors kept, sections,
+probe columns, the walk's change); `eval-lib.test.ts` (questions, a turn through stand-in routes,
+the turns' use, the walk, the summary, the command line, the references against the tools'
+schemas, the ignored records folder, no vendor words); e2e `cad-assistant-eval.spec.ts` (+90:
+plate-holes with its walk and the run folder, l-bracket, flange and poker-chip pass at the first
+shot through the app; a failing first shot gets one repair turn).
+
 ## Tests
 
 - Vitest: `tests/assistant/` over `harness.ts` (a real DocService on the real kernel,
@@ -555,7 +598,8 @@ events the chip stays 10 s after the last call.
   with each error's reason and, for edits, `paced`: the ms waited at pace points), the turns,
   the hold points, `setHoldS(s)` (the edits' wait for the person), `setPace(pace, scale)`,
   `setAskEach(on)` (neither written to the person's preferences), `approving()`, `paused()`,
-  and `setToolset('core')` for the eval's A/B runs.
+  `setToolset('core')` for the eval's A/B runs, and the eval's `evalFacts(ask)`,
+  `evalSetParam(name, expr)` and `evalPicture()`.
 - Watch mode's vitest files: `sketch-write` (the watch path on the real solver: guesses then
   the pull, the solution first when it moves far, the final exact apply on a forced other
   branch, a forced refused apply, a replace's difference, `sketch-step:<n>`), `camera`, `watch`
@@ -574,6 +618,7 @@ events the chip stays 10 s after the last call.
   server with the Assistant's test switches and the app's scripted model
   (`e2e/assistant-helpers.ts`); the app's turn helpers are vendor-neutral and take this
   suite's `expect` (`setExpect`). Ports: `CAD_E2E_PORT_FROM` + 60, 70, 80, 90, 100
-  (`cad-assistant-takeover.spec.ts` is +100). Assert the chip's words through
+  (`cad-assistant-eval.spec.ts` is +90, `cad-assistant-takeover.spec.ts` +100; `eval/run.mjs`'s
+  own server starts at +95). Assert the chip's words through
   `chipWords(frame)` (`[data-assistant-text]`): the chip's text also holds its buttons. A held
   answer of the scripted model stays released once released: give each hold its own name.

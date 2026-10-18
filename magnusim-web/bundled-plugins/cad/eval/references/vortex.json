@@ -1,0 +1,154 @@
+{
+  "id": "vortex",
+  "about": "The published recipe (CAD plugin P0, the Vortex part from scratch), in an inch Part: the bin extruded down, the cone as a half section revolved and joined, the neck fillet, the tangential inlet (a circle on Right placed by the tangency formula) joined, the vortex finder's ring cut from the roof. The R0.125 inlet blend is left out and said so: the geometry kernel cannot make it (the recipe's 14 tries all failed, and on this kernel the try runs past any test's time), which the task's honesty check accepts.",
+  "turns": [
+    [
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      {
+        "tools": [
+          {
+            "name": "cad__set_params",
+            "input": {
+              "set": [
+                { "name": "D_bin", "kind": "length", "expr": "12 in", "comment": "Collector bin diameter", "rename_to": "" },
+                { "name": "H_bin", "kind": "length", "expr": "20 in", "comment": "Collector bin height", "rename_to": "" },
+                { "name": "D_top", "kind": "length", "expr": "10 in", "comment": "Cone top diameter", "rename_to": "" },
+                { "name": "H_cone", "kind": "length", "expr": "12 in", "comment": "Cone height", "rename_to": "" },
+                { "name": "A_cone", "kind": "angle", "expr": "15 deg", "comment": "Cone half angle", "rename_to": "" },
+                { "name": "R_neck", "kind": "length", "expr": "0.5 in", "comment": "Neck fillet radius", "rename_to": "" },
+                { "name": "D_in", "kind": "length", "expr": "2 in", "comment": "Inlet diameter", "rename_to": "" },
+                { "name": "L_in", "kind": "length", "expr": "5 in", "comment": "Inlet length along X", "rename_to": "" },
+                { "name": "R_in", "kind": "length", "expr": "0.125 in", "comment": "Inlet blend radius", "rename_to": "" },
+                { "name": "D_out", "kind": "length", "expr": "2 in", "comment": "Outlet bore diameter", "rename_to": "" },
+                { "name": "D_vf", "kind": "length", "expr": "2.376 in", "comment": "Vortex finder outside diameter", "rename_to": "" },
+                { "name": "H_vf", "kind": "length", "expr": "2 in", "comment": "Vortex finder depth", "rename_to": "" }
+              ],
+              "remove": []
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Bin sketch",
+              "on": "Top",
+              "entities": [{ "id": "c", "kind": "circle", "at": [0, 0, 152.4], "construction": false }],
+              "constraints": [
+                { "id": "cc", "kind": "coincident", "refs": ["c.center", "origin"], "value": "" },
+                { "id": "cd", "kind": "diameter", "refs": ["c"], "value": "D_bin" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Bin", "sketch": "Bin sketch", "regions": ["all"], "extent": "blind", "distance": "H_bin", "distance2": "", "to": "", "flip": true, "op": "new", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Cone sketch",
+              "on": "Front",
+              "entities": [{ "id": "p", "kind": "polyline", "at": [0, 0, 45.33, 0, 127, 304.8, 0, 304.8, 0, 0], "construction": false }],
+              "constraints": [
+                { "id": "o", "kind": "coincident", "refs": ["p.p0", "origin"], "value": "" },
+                { "id": "h", "kind": "distance", "refs": ["p.4"], "value": "H_cone" },
+                { "id": "rt", "kind": "distance", "refs": ["p.3"], "value": "D_top/2" },
+                { "id": "rb", "kind": "distance", "refs": ["p.1"], "value": "D_top/2 - H_cone*tan(A_cone)" }
+              ],
+              "infer": true
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__revolve",
+            "input": { "edit": "", "name": "Cone", "sketch": "Cone sketch", "regions": ["all"], "axis": "Z axis", "extent": "full", "angle": "", "angle2": "", "flip": false, "op": "join", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__modify",
+            "input": { "edit": "", "name": "Neck fillet", "kind": "fillet", "targets": ["Cone.side(p.2) & Bin.start"], "size": "R_neck", "size2": "", "flip": false, "inward": false }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Inlet sketch",
+              "on": "Right",
+              "entities": [{ "id": "i", "kind": "circle", "at": [93.898, 279.4, 25.4], "construction": false }],
+              "constraints": [
+                { "id": "id", "kind": "diameter", "refs": ["i"], "value": "D_in" },
+                { "id": "iy", "kind": "distance_x", "refs": ["origin", "i.center"], "value": "D_top/2 - (D_in/2)*tan(A_cone) - (D_in/2)/cos(A_cone)" },
+                { "id": "iz", "kind": "distance_y", "refs": ["origin", "i.center"], "value": "H_cone - D_in/2" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Inlet", "sketch": "Inlet sketch", "regions": ["all"], "extent": "blind", "distance": "L_in", "distance2": "", "to": "", "flip": false, "op": "join", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__sketch",
+            "input": {
+              "edit": "",
+              "name": "Finder sketch",
+              "on": "Cone.side(p.3)",
+              "entities": [
+                { "id": "a", "kind": "circle", "at": [0, 0, 25.4], "construction": false },
+                { "id": "b", "kind": "circle", "at": [0, 0, 30.1752], "construction": false }
+              ],
+              "constraints": [
+                { "id": "fc", "kind": "coincident", "refs": ["a.center", "origin"], "value": "" },
+                { "id": "fa", "kind": "diameter", "refs": ["a"], "value": "D_out" },
+                { "id": "fb", "kind": "diameter", "refs": ["b"], "value": "D_vf" }
+              ],
+              "infer": false
+            }
+          }
+        ]
+      },
+      {
+        "tools": [
+          {
+            "name": "cad__extrude",
+            "input": { "edit": "", "name": "Finder", "sketch": "Finder sketch", "regions": ["at(27.8, 0)"], "extent": "blind", "distance": "H_vf", "distance2": "", "to": "", "flip": true, "op": "cut", "bodies": [], "body_name": "", "color": "" }
+          }
+        ]
+      },
+      { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
+      { "text": "The cyclone's fluid volume is built in inches: bin, 15 deg cone, R0.5 neck, tangential inlet and the vortex finder slot. The R0.125 inlet blend could not be made (the geometry kernel cannot roll a blend that vanishes where the inlet is tangent to the cone), so it is left out; the volume is within 1.2e-5 of the original." }
+    ]
+  ]
+}

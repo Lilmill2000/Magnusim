@@ -1,0 +1,17 @@
+{
+  "id": "pipe-elbow",
+  "tier": "L4",
+  "units": "mm",
+  "title": "Swept pipe elbow",
+  "prompt": "Make a pipe elbow by sweeping a tube 20 mm outside and 16 mm inside diameter: it starts on the Top plane at the origin and goes up +Z for a 30 mm straight leg, then bends 90 degrees towards +X with a 40 mm bend radius at the pipe's centre line, then runs a 30 mm straight leg along +X.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "bodies", "kind": "bodies", "count": 1, "solids": 1, "voids": 0, "valid": true },
+    { "id": "volume", "kind": "volume", "expect": "pi*(10^2 - 8^2)*(60 + pi*40/2)", "rel": 0.01 },
+    { "id": "bbox", "kind": "bbox", "expect": [-10, -10, 0, 70, 10, 80], "abs": 0.01 },
+    { "id": "ends", "kind": "flat_faces", "area": "pi*(10^2 - 8^2)", "rel": 0.01, "count": 2 },
+    { "id": "features_ok", "kind": "features_ok" },
+    { "id": "sketches_defined", "kind": "sketches_defined" }
+  ]
+}

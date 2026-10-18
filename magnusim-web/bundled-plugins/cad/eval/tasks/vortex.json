@@ -1,0 +1,17 @@
+{
+  "id": "vortex",
+  "tier": "L4",
+  "units": "in",
+  "title": "Cyclone separator fluid volume",
+  "prompt": "In this inch Part, make the fluid volume of a cyclone separator, Z up: a collector bin 12 in across and 20 in tall below z = 0 (its top at z = 0); on it a cone from z = 0 to z = 12 in, 10 in across at the top with a 15 deg half angle; an R0.5 in fillet where the cone meets the bin's top; a 2 in diameter inlet tube along +X from x = 0 to x = 5 in, on the +Y side, tangent to the cone's side and to the plane z = 12 in (its axis at z = 11 in); an R0.125 in blend where the inlet meets the cone; and the vortex finder: a ring slot 2 in deep into the top face at z = 12 in, between diameters 2 in and 2.376 in.",
+  "turns": [],
+  "gates": { "delete": "deny" },
+  "checks": [
+    { "id": "units", "kind": "units", "length": "in" },
+    { "id": "bodies", "kind": "bodies", "count": 1, "solids": 1, "valid": true },
+    { "id": "bbox", "kind": "bbox", "size": [304.8, 304.8, 812.8], "abs": 0.01 },
+    { "id": "volume", "kind": "volume", "expect": 44798524, "rel": 0.0001 },
+    { "id": "blend_honest", "kind": "blend_honest", "feature": "fillet", "radius": 3.175, "abs": 0.001 },
+    { "id": "blend_named", "kind": "last_text", "match": "blend", "heuristic": true }
+  ]
+}
