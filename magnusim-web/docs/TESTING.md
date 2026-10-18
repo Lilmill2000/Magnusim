@@ -282,7 +282,7 @@ No test reaches a real model provider or this PC's real Assistant files.
   whole chain in a browser: the fake → the server's turn loop → the page relay on
   the tab's event stream → the workspace bridge → the frame of the test plugin
   `ai-demo` (`python/tests/fixtures/assistant-plugins`) → back.
-  - The plugin's page keeps a counter and offers eight tools: read, add (its result
+  - The plugin's page keeps a counter and offers nine tools: read, add (its result
     carries a `summary` for the turn's log), a slow add (progress every 200 ms until
     `window.__release()` in its frame, or Stop), reset (destructive, with a `confirm`
     note that its question shows in place of "can't be undone"), one whose risk the
@@ -290,10 +290,12 @@ No test reaches a real model provider or this PC's real Assistant files.
     read of its study from the app with a 1 s window (a test holds that read with
     `page.route`: the frame's call in flight keeps the tool call alive, on the server
     too), and `fail_hint`, which always fails with a `hint` and a `detail` (they reach
-    the model's next request and the terminal client). It shows `#counter`, `#aborted`
-    and `#ai-available`, and registers again once shown when its tab was hidden at
-    load. It hears the turns bound to its tab (`#turn-state` reads "running: <title>",
-    then how it ended), and its `#stop` button stops the turn through the bridge.
+    the model's next request and the terminal client), and `label`, whose string, list
+    and boolean fields are all required (a local model's call that leaves them out
+    gets `""`, `[]` and `false`). It shows `#counter`, `#aborted`, `#label` and
+    `#ai-available`, and registers again once shown when its tab was hidden at load.
+    It hears the turns bound to its tab (`#turn-state` reads "running: <title>", then
+    how it ended), and its `#stop` button stops the turn through the bridge.
   - Its server: `startHost({pluginsFrom, env})` with `MAGNUSIM_TEST_ASSISTANT=1`,
     the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1` (to count and cut a tab's
     stream), a 2 s hold and a 60 s dormant time.

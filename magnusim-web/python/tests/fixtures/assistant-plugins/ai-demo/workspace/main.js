@@ -11,16 +11,17 @@
 // destructive, and its question says "can't be undone"), snap (read: a 64x64 PNG of the counter),
 // read_study (read, a 1 s stall window: it waits on the app's answer to ws.study.get(), which
 // keeps it alive however long that takes) and fail_hint (read: it always fails, with a hint
-// that says how to fix it and a detail the model can act on). A registration the app could
-// not take yet (not_connected) is made again when the page is shown. The page hears the
-// turns bound to its tab (ws.assistant.onTurn) and its Stop button stops the last one
-// (ws.assistant.stop).
+// that says how to fix it and a detail the model can act on). label {text, marks, loud}
+// (edit: every field required, with "", [] and false meaning unused; #label shows the input
+// it got). A registration the app could not take yet (not_connected) is made again when the
+// page is shown. The page hears the turns bound to its tab (ws.assistant.onTurn) and its Stop
+// button stops the last one (ws.assistant.stop).
 //
 // What the e2e reads: #counter, #slow, #aborted, #ai-available ("yes" or "no") with
-// #ai-reason, #calls (the tools run, in order), and window.__aiCalls; window.__register()
-// registers again. #turn-state reads "<state>: <title>" for the last turn heard (running, or
-// how it ended: done, stopped, failed, capped, or "ended" when the page did not hear how),
-// window.__turns every turn event; #stop stops that turn, #stop-answer says how
+// #ai-reason, #calls (the tools run, in order), #label, and window.__aiCalls;
+// window.__register() registers again. #turn-state reads "<state>: <title>" for the last turn
+// heard (running, or how it ended: done, stopped, failed, capped, or "ended" when the page did
+// not hear how), window.__turns every turn event; #stop stops that turn, #stop-answer says how
 // ("stopped", or "not stopped: <reason>"), and window.__stopTurn(id) stops any id.
 import { connect } from '@magnusim/workspace';
 
@@ -83,6 +84,17 @@ const TOOLS = [
     description: 'Tries to add 10 to the counter; it always fails, and says how to add instead.',
     inputSchema: obj({}),
     risk: 'read',
+  },
+  {
+    name: 'label',
+    title: 'Label the counter',
+    description: 'Put a label on the counter. Every field is required: send "" for no text, [] for no marks and false to keep the case.',
+    inputSchema: obj({
+      text: { type: 'string', maxLength: 40, description: 'The label ("" for none).' },
+      marks: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'Short marks after the label ([] for none).' },
+      loud: { type: 'boolean', description: 'The label in capitals (false: as written).' },
+    }),
+    risk: 'edit',
   },
 ];
 
@@ -182,6 +194,14 @@ async function handle(call) {
     }
     case 'fail_hint':
       throw Object.assign(new Error(FAIL_HINT.message), { code: FAIL_HINT.code, hint: FAIL_HINT.hint, detail: FAIL_HINT.detail });
+    case 'label': {
+      const { text, marks, loud } = call.input;
+      $('label').textContent = JSON.stringify(call.input);
+      const shown = [loud ? text.toUpperCase() : text, ...marks].filter(Boolean).join(' ');
+      return shown
+        ? { text: `The label reads ${shown}.`, data: { label: shown }, summary: `Labelled ${shown}` }
+        : { text: 'The label is empty.', data: { label: '' }, summary: 'Cleared the label' };
+    }
     default:
       throw Object.assign(new Error(`No tool named ${call.tool}.`), { code: 'invalid_input' });
   }

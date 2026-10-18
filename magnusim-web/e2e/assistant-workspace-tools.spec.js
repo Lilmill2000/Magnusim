@@ -1,11 +1,12 @@
 // Workspace tools for the Assistant, end to end (Foundation spec 8.4, 10.3): a scripted model
 // (support/fake-llm.mjs, the first cloud dialect) → the server's turn loop → the page relay on
 // the tab's event stream → the bridge → the plugin's frame → back. The test plugin ai-demo
-// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers eight tools:
+// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers nine tools:
 // get_count, add (its result names what it did in a summary), slow_add (progress every 200 ms
 // until window.__release() in the frame), reset (destructive, with a confirm note), mystery (a
 // risk the host does not know), snap (a 64x64 PNG), read_study (a 1 s window, waiting on the
-// app's answer to its read of the study) and fail_hint (it always fails, with a hint and a detail).
+// app's answer to its read of the study), fail_hint (it always fails, with a hint and a detail)
+// and label (a string, a list and a boolean, every one required; #label shows the input it got).
 //
 // Covered (spec 10.3's thirteen, then three more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
@@ -26,7 +27,8 @@
 // destructive tool's confirm note as its question's text, mystery's question saying "can't be
 // undone" without one (H10).
 // And one turn per tab: a second one while it works is refused 409 tab_busy (H4). And every
-// problem with a call's input in one result, the terminal showing them all (H9).
+// problem with a call's input in one result, the terminal showing them all (H9); a local
+// model's string, list and boolean fields left out filled with "", [] and false (H9).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -46,7 +48,7 @@ import { expect, test } from './support/stress.js';
 
 const PLUGIN = 'ai-demo';
 const PLUGIN_NAME = 'Workspace demo';
-const TOOLS = ['add', 'fail_hint', 'get_count', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+const TOOLS = ['add', 'fail_hint', 'get_count', 'label', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
 /** What fail_hint throws (the fixture's FAIL_HINT). */
 const FAIL = {
   code: 'invalid_input',
@@ -1149,4 +1151,35 @@ test('a call with several problems in its input hears them all at once: the mode
   expect([e.turn.state, e.turn.text_so_far]).toEqual(['done', 'the input is missing by.']);
   await expect(w.frame.locator('#counter')).toHaveText('2');
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add']);
+});
+
+test('a local model that leaves out a call\'s string, list and boolean fields has them filled: the page gets "", [] and false and runs it at once; the cloud model\'s same call is refused, naming them all', async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const call = { tools: [{ name: `${PLUGIN}__label`, input: { text: null } }] };
+  // The cloud model: nothing is filled. One result names every field, and the page never runs it.
+  fake.reply(call, (body) => ({ text: resultsIn(body)[0].error.message }));
+  const cloud = await startTurn(request, host.base, { text: 'Label the counter.', tab: w.tab });
+  const c = await cloud.ended();
+  expect([c.turn.state, c.turn.text_so_far]).toEqual(['done', 'the input is missing text (null), marks, loud (send "", [] or false when unused).']);
+  await expect(w.frame.locator('#label')).toHaveText('');
+  expect(await w.handle.evaluate(() => window.__aiCalls.length)).toBe(0);
+
+  // The local server: the same call runs at once, with "", [] and false, in one round.
+  await useScriptedModel(request, host.base, fake, 'local');
+  const before = chats().length;
+  fake.reply(call, { text: 'The label is cleared.' });
+  const t = await startTurn(request, host.base, { text: 'Label the counter.', tab: w.tab });
+  const e = await t.ended();
+  expect([e.turn.state, e.turn.text_so_far]).toEqual(['done', 'The label is cleared.']);
+  await expect(w.frame.locator('#label')).toHaveText('{"text":"","marks":[],"loud":false}');
+  await expect(w.frame.locator('#calls')).toHaveText('label');
+  expect(await w.handle.evaluate(() => window.__aiCalls.map(({ tool, input }) => ({ tool, input })))).toEqual([{ tool: 'label', input: { text: '', marks: [], loud: false } }]);
+  expect(chats().length - before).toBe(2);
+  expect(resultsIn(chats()[before + 1])).toEqual([{ tool: `${PLUGIN}__label`, ok: true, text: 'The label is empty.', data: { label: '' }, images: [] }]);
+  // The turn's log shows what the model sent, and the page's line for what the call did.
+  expect(ofType(e.events, 'tool_call')).toMatchObject([{ tool: `${PLUGIN}__label`, input_preview: '{"text":null}' }]);
+  expect(ofType(e.events, 'tool_result')).toMatchObject([{ ok: true, summary: 'Cleared the label' }]);
 });
