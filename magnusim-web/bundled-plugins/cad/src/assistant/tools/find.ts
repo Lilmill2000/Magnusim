@@ -3,7 +3,8 @@
 // "<sketch> r2"), the person's words, the label (Base.end), the body, the feature and role that
 // made it, its type, size, radius, centre, normal or axis, a point on it, hole or boss for a round
 // face, the faces an edge joins, and for a flat face the frame a sketch on it gets. The matches
-// flash in the person's view (the shown bodies only, and not while the window is hidden).
+// flash in the person's view at the watch pace (the shown bodies only, and not while the window is
+// hidden); at the fast pace nothing lights.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { splitMerged, splitSuffix } from '../../naming/names';
@@ -15,6 +16,7 @@ import { ydirOf } from '../../features/sketch/plane';
 import { modelId, parsePart } from '../labels';
 import { frameWords } from '../model';
 import { dir, jsonBytes, len, sig6, vec } from '../numbers';
+import { runtimeOf } from '../runtime';
 import { faceFrameRow, pointOnFace } from '../selectors/geometry';
 import {
   centreOf,
@@ -179,10 +181,11 @@ function flashItems(sc: Scene, hits: readonly Hit[]): SelectionItem[] {
 
 const flashing = new WeakMap<object, number>();
 
-/** Light the matches in the person's view for FLASH_MS (never while the window is hidden). */
+/** Light the matches in the person's view for FLASH_MS: at the watch pace only, never while the window is hidden. */
 function flash(ctx: CallCtx, items: SelectionItem[]): void {
   const handle = ctx.services.viewport.get().handle;
   if (!handle || !items.length) return;
+  if (runtimeOf(ctx.services)?.pace.get() === 'fast') return;
   if (typeof document !== 'undefined' && document.hidden) return;
   handle.flash(items);
   const token = (flashing.get(handle) ?? 0) + 1;

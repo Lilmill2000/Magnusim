@@ -18,6 +18,7 @@
 //   - a kernel restart while a selector is read: read once more; twice: busy/changed.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runtimeOf } from '../../src/assistant/runtime';
 import { axisRefOf, edgeRefOf, faceRefOf, planeRefOf, regionRefOf, targetRefOf } from '../../src/assistant/selectors/refs';
 import { applyFilters, echo, edgeLabel, selectAny, selectOne, selectSet, withScene, type AxisHit, type EdgeHit, type FaceHit, type PlaneHit, type RegionHit, type Scene } from '../../src/assistant/selectors/resolve';
 import { topoCacheOf } from '../../src/assistant/selectors/topo-cache';
@@ -384,10 +385,14 @@ describe('selectors on a real block', () => {
   );
 
   it(
-    "find lists rows with handles, labels, words, sizes, a point on the face, hole or boss, the frame; handles follow kinds; the matches flash",
+    "find lists rows with handles, labels, words, sizes, a point on the face, hole or boss, the frame; handles follow kinds; the matches flash at the watch pace only",
     async () => {
       const flashes: unknown[][] = [];
       h.services.viewport.set({ handle: { flash: (items: unknown[]) => flashes.push(items) } as never });
+      // The harness runs at the fast pace: nothing lights there.
+      await h.ok('find', { query: 'Twin.end(1)', limit: 10 }, { turn: 'find-0' });
+      expect(flashes).toEqual([]);
+      runtimeOf(h.services)!.pace.force('watch');
       try {
         const r = await h.ok('find', { query: 'Twin.end(1)', limit: 10 }, { turn: 'find-1' });
         expect(r.text).toBe('find "Twin.end(1)": 1 face (Twin.end(1))');
@@ -412,7 +417,7 @@ describe('selectors on a real block', () => {
         expect(p[2]).toBe(10);
         expect(p[0]).toBeGreaterThan(100);
         expect(p[0]).toBeLessThan(110);
-        // The matches flash in the person's view.
+        // At the watch pace the matches flash in the person's view.
         expect(flashes.at(-1)).toEqual([{ kind: 'face', body: bodyNamed(h, 'Body 2').id, index: faceNamed(bodyNamed(h, 'Body 2'), `F:${P.twin}:end:0`) }]);
         // The same face again: the same handle; the handle itself finds it.
         expect(((await h.ok('find', { query: '#f1', limit: 10 }, { turn: 'find-1' })).data.rows as Row[])[0]).toMatchObject({ handle: '#f1', label: 'Twin.end(1)' });
@@ -453,6 +458,7 @@ describe('selectors on a real block', () => {
         expect(bad).toMatchObject({ ok: false, error: { detail: { reason: 'bad_selector', column: 15 } } });
       } finally {
         h.services.viewport.set({ handle: null });
+        runtimeOf(h.services)!.pace.force('fast');
       }
     },
     REAL_KERNEL_MS,

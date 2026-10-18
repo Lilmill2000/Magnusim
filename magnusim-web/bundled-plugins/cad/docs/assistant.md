@@ -149,7 +149,8 @@ One string names faces, edges, vertices, bodies, planes, axes or sketch regions
   frame in words.
 
 `find` (`tools/find.ts`) lists the matches as `FindRow`s and lights them in the person's
-view for 1.5 s (the shown bodies only, never while the window is hidden).
+view for 1.5 s at the watch pace (the shown bodies only; never at the fast pace or while the
+window is hidden).
 
 ## Measuring (`measure`, `measure.ts`, `measure-targets.ts`)
 

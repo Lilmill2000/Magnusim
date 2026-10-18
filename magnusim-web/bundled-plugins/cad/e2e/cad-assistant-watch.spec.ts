@@ -231,6 +231,18 @@ test("cad:assistant-watch-find find lists the matches with handles and lights th
     ok: false,
     error: { code: 'invalid_input', message: 'selector_stale: #f1 is gone: Body 1 is not there now; call find again.', hint: 'That handle is gone after a change: call find again.', detail: { reason: 'selector_stale', handle: '#f1' } },
   });
+
+  // At the fast pace find answers the same way, and nothing lights in the person's view.
+  type Pace = { __CAD__: { assistant: { setPace(p: string | null, scale?: number | null): void; calls: { tool: string; ok: boolean }[] } } };
+  await cadFrame(page).evaluate(() => (window as unknown as Pace).__CAD__.assistant.setPace('fast'));
+  const lit = (await flashes(page)).length;
+  const fastFrom = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__find', input: { query: 'Sketch 1 regions', limit: 10 } }] }, { text: 'One region.' });
+  expect((await (await startTurn(request, host, { text: 'Find the sketch regions.', tab })).ended(STEP_MS * 2)).turn.state).toBe('done');
+  const [regions] = resultsIn(chats(host).slice(fastFrom)[1]);
+  expect(regions).toMatchObject({ tool: 'cad__find', ok: true, data: { query: 'Sketch 1 regions', kind: 'region', count: 1 } });
+  expect((await flashes(page)).length).toBe(lit);
+  await cadFrame(page).evaluate(() => (window as unknown as Pace).__CAD__.assistant.setPace(null));
 });
 
 test('cad:assistant-watch-measure measure gives a body its volume and voids, two separate bodies no overlap and two solids joined, a cut its area; the log reads them', async ({ page, request }) => {
