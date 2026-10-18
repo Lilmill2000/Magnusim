@@ -1249,7 +1249,9 @@ test("a destructive tool asks in the app with Don't focused: Enter answers Don't
   const t1 = await agentTurn(request, { text: 'Add 2, then reset the counter.', tab: w.tab, provider: 'agent:claude' }, token);
   await expect(dialog).toBeVisible({ timeout: 30_000 });
   await expect(counter).toHaveText('2');
-  await expect(page.locator('#cf-heading')).toContainText('reset the counter');
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  // The tool's own confirm note says what the call does, as for any turn's question.
+  await expect(page.locator('#cf-copy')).toContainText('· Sets the counter to 0; add can bring it back. What it sent: {}. Nothing runs until you choose.');
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(dialog).toBeHidden();

@@ -265,6 +265,8 @@ test("a destructive tool asks as the app's own question in the tab with Don't fo
   // Asked for another app, not the Assistant: the question says so, naming the app as it calls itself.
   await expect(page.locator('#cf-heading')).toHaveText('Allow an app on this PC to reset the counter?');
   await expect(page.locator('#cf-copy')).toContainText(`An app on this PC using Magnusim's tools ("${APP_NAME}", as it calls itself) asks for this.`);
+  // The tool's own confirm note says what the call does, as in the Assistant's questions.
+  await expect(page.locator('#cf-copy')).toContainText('· Sets the counter to 0; add can bring it back. What it sent: {}. Nothing runs until you choose.');
   await expect(page.locator('#cf-confirm')).toHaveText('Allow');
   await expect(page.locator('#cf-cancel')).toHaveText("Don't");
   await expect(page.locator('#cf-cancel')).toBeFocused();
