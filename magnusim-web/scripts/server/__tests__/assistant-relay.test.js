@@ -606,6 +606,11 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
       { turns: 0, hold_until: holdUntil },
     ]);
     assert.equal((await s.tabs())[0].hold_until, holdUntil);
+    // The test state route's row: what is left of the hold now, on the relay's own clock (a test
+    // times the hold on its own clock with it, never against hold_until).
+    const held = s.relay.snapshot()[tab];
+    assert.deepEqual([held.hold_until, held.hold_left_ms], [holdUntil, holdUntil - m.clock.now()]);
+    assert.ok(held.hold_left_ms > 0 && held.hold_left_ms <= ASSISTANT_HOLD_MS);
     // The link drops (a covered window's stream let go, a lost connection).
     first.page.serverDrop();
     await until(async () => (await s.tabs())[0]?.connected === false, 5000, 'the dormant registration');

@@ -510,9 +510,10 @@ describe('at the same time', () => {
     const picked = pickProtector({ env: { ...TEST_ENV, MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'slow:60' } });
     assert.equal(picked.test, 'slow:60');
     assert.equal(picked.protector.kind, 'file');
-    const t0 = Date.now();
+    // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+    const t0 = performance.now();
     const doc = await picked.protector.protect(Buffer.alloc(32, 1));
-    assert.ok(Date.now() - t0 >= 50);
+    assert.ok(performance.now() - t0 >= 50);
     assert.deepEqual(await picked.protector.unprotect(doc), Buffer.alloc(32, 1));
   });
 });

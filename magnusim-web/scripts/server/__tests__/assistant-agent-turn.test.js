@@ -2523,10 +2523,11 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       assert.deepEqual([row.auth_word, row.ready, row.reason], ['none', false, 'agent_signed_out']);
       // It says it reports its login and never does: the connect answers within the bound, its word not known.
       claude.configure({ authStatus: 'silent', authStatusHold: null });
-      const t0 = Date.now();
+      // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+      const t0 = performance.now();
       const s = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([s.json.ok, s.json.auth_status], [true, null]);
-      const took = Date.now() - t0;
+      const took = performance.now() - t0;
       assert.ok(took >= SES.AUTH_STATUS_WAIT_MS - 1_000 && took < T.AGENT_TEST_MS, `waited ${took} ms`);
       // Its login file decides (there): ready.
       const after = (await srv.get('/api/assistant/agents')).json.agents.find((a) => a.id === 'claude');

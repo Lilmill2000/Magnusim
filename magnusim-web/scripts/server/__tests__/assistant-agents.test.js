@@ -714,14 +714,15 @@ describe('the version probe (spec 4.3)', () => {
       npm_config_cache: 'never',
       HTTPS_PROXY: 'http://proxy.invalid:1',
     };
-    const t0 = Date.now();
+    // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+    const t0 = performance.now();
     const v = await D.probeVersion([process.execPath, script, '--version'], {
       env: { keyVars: ['ANTHROPIC_API_KEY'], envPrefixes: ['CLAUDE_', 'ANTHROPIC_'], searchFolders: [] },
       label: 'hang --version',
       baseEnv,
       tmp: TMP,
     });
-    const took = Date.now() - t0;
+    const took = performance.now() - t0;
     assert.equal(v, null);
     assert.ok(took >= D.PROBE_MS - 100, `it waited for the limit (${took} ms)`);
     // The limit, then the stop's two graces at most (a slow runner gets the ceiling on top).

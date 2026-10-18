@@ -481,12 +481,13 @@ test('Stop during a slow tool: its progress shows, the page aborts it, the count
   const t = await startTurn(request, { text: 'Add 5 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 5);
   expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 1 });
-  const stopAt = Date.now();
+  // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+  const stopAt = performance.now();
   const r = await postOk(request, `/api/assistant/turns/${t.id}/stop`, {});
   expect(r.turn.state).toBe('stopped');
   await expect(w.frame.locator('#aborted')).toHaveText('aborted');
   const { turn, events } = await t.ended();
-  expect(Date.now() - stopAt, 'stopped within the 10 s ceiling').toBeLessThan(10_000);
+  expect(performance.now() - stopAt, 'stopped within the 10 s ceiling').toBeLessThan(10_000);
   expect(turn).toMatchObject({ state: 'stopped', end_reason: 'user' });
   expect(ofType(events, 'tool_result').find((e) => e.call === call.call)).toMatchObject({ ok: false, code: 'stopped' });
   await expect(w.frame.locator('#counter')).toHaveText('0');
@@ -505,8 +506,9 @@ test("a call to the app in flight keeps a tool call alive past the server's stal
   });
   let heldAt = 0;
   const STUDY_READ = /\/api\/plugin-studies\/get\?/;
+  // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
   await page.route(STUDY_READ, async (route) => {
-    heldAt ||= Date.now();
+    heldAt ||= performance.now();
     await held;
     await route.continue();
   });
@@ -515,7 +517,7 @@ test("a call to the app in flight keeps a tool call alive past the server's stal
   page.on('request', (r) => {
     if (r.method() !== 'POST' || new URL(r.url()).pathname !== '/api/assistant/relay/progress') return;
     const body = r.postDataJSON();
-    if (!body.ack && body.label === undefined && body.fraction === null) bare.push(Date.now());
+    if (!body.ack && body.label === undefined && body.fraction === null) bare.push(performance.now());
   });
   try {
     fake.reply({ tools: [{ name: `${PLUGIN}__read_study`, input: {} }] }, { text: 'It is Counter 1.' });
@@ -525,7 +527,7 @@ test("a call to the app in flight keeps a tool call alive past the server's stal
     // The tool's own window is 1 s; the server's is 11 s (+10 s), and a stall there then waits
     // 2 s for the page's last answer before the call fails. Past all that, with the read held:
     const SERVER_STALL_FAILS_MS = 1000 + 10_000 + 2000;
-    await page.waitForTimeout(Math.max(0, heldAt + SERVER_STALL_FAILS_MS + 2000 - Date.now()));
+    await page.waitForTimeout(Math.max(0, heldAt + SERVER_STALL_FAILS_MS + 2000 - performance.now()));
     expect(ofType(await t.latest(), 'tool_result'), 'not stalled while its read is held').toEqual([]);
     expect((await relayState(request)).links[w.tab]).toMatchObject({ pending: 1 });
     expect(bare.length, 'signs of life went to the server').toBeGreaterThanOrEqual(2);
@@ -574,11 +576,12 @@ test('a reload during a tool call fails it as disconnected at once; the reloaded
   const tabOf = trackTab(page);
   // The clock runs from the reload to the failed call, with the wait started at the same time:
   // the old page's stream ends when the new document commits, long before the app loads again.
+  // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
   let failedAt = 0;
-  const reloadAt = Date.now();
+  const reloadAt = performance.now();
   const [result] = await Promise.all([
     t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the call fails', 10_000).then((e) => {
-      failedAt = Date.now();
+      failedAt = performance.now();
       return e;
     }),
     page.reload({ waitUntil: 'commit' }),
@@ -731,10 +734,18 @@ test('a hidden tab keeps its stream for a running call and for the hold after th
   // The turn ended: the hold keeps the stream 2 s, then the page's grace lets it go.
   const row = await tabRow(request, w.tab);
   expect(row).toMatchObject({ connected: true, active_turns: 0 });
-  expect(row.hold_until).toBeGreaterThan(Date.now() - 1000);
+  expect(typeof row.hold_until).toBe('number');
+  // Timed on this side's monotonic clock from what is left of the hold as the server reads it:
+  // never this clock against the server's hold_until (a wall clock can step back: WSL resyncs
+  // its clock under load). The server read it after `asked`, so the hold ends no earlier than
+  // asked + holdLeft here.
+  const asked = performance.now();
+  const holdLeft = (await relayState(request)).links[w.tab].hold_left_ms;
+  expect(holdLeft, 'the hold runs').toBeGreaterThan(0);
+  expect(holdLeft).toBeLessThanOrEqual(HOLD_MS);
   expect(await assistantChannels(), 'kept for the hold').toBe(1);
   await expect.poll(assistantChannels, { timeout: 15_000, intervals: [100], message: 'let go after the hold and the grace' }).toBe(0);
-  expect(Date.now(), 'not before the hold and the grace').toBeGreaterThanOrEqual(row.hold_until + HIDDEN_GRACE_MS - 500);
+  expect(performance.now() - asked, 'not before the hold and the grace').toBeGreaterThanOrEqual(holdLeft + HIDDEN_GRACE_MS - 500);
   await expect.poll(async () => (await tabRow(request, w.tab))?.connected).toBe(false);
   expect((await tabRow(request, w.tab)).tools).toEqual(TOOLS);
   const r = await request.post(api('/api/assistant/turns'), { data: { text: 'Read the counter.', tab: w.tab } });

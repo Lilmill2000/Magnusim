@@ -292,6 +292,19 @@ interface TabRec {
   holdTimer: unknown;
 }
 
+/** A tab as the test state route shows it (Relay.snapshot). */
+export interface RelayTabSnapshot {
+  connected: boolean;
+  dormant: boolean;
+  tools: number;
+  pending: number;
+  rev: number;
+  turns: number;
+  hold_until: number | null;
+  /** What is left of its hold now, on the relay's own clock (null: none). */
+  hold_left_ms: number | null;
+}
+
 /** One call of a page's tool, as the registry asks for it. */
 export interface InvokeCall {
   tool: string;
@@ -900,11 +913,16 @@ export class Relay {
     return { since: t.reg ? t.since : null, hold_until: this.liveHold(t) };
   }
 
-  /** The test state route: each tab the relay knows. */
-  snapshot(): Record<string, { connected: boolean; dormant: boolean; tools: number; pending: number; rev: number; turns: number; hold_until: number | null }> {
-    const out: Record<string, { connected: boolean; dormant: boolean; tools: number; pending: number; rev: number; turns: number; hold_until: number | null }> = {};
+  /**
+   * The test state route: each tab the relay knows. hold_left_ms is what is left of its hold now
+   * on the relay's own clock (a test times it on its own clock, never against hold_until).
+   */
+  snapshot(): Record<string, RelayTabSnapshot> {
+    const out: Record<string, RelayTabSnapshot> = {};
+    const now = this.clock.now();
     for (const t of this.tabs.values()) {
       const w = this.registry.workspaceOf(t.tab);
+      const hold = this.liveHold(t);
       out[t.tab] = {
         connected: !!t.link?.open && !t.link.silent,
         dormant: t.dormant,
@@ -912,7 +930,8 @@ export class Relay {
         pending: t.pending ? 1 : 0,
         rev: t.rev,
         turns: t.turns,
-        hold_until: this.liveHold(t),
+        hold_until: hold,
+        hold_left_ms: hold === null ? null : Math.max(0, hold - now),
       };
     }
     return out;

@@ -1015,6 +1015,11 @@ function followTurn(request, id) {
         await pull(Math.min(5000, until - Date.now()));
       }
     },
+    /** The events so far (asked now, without waiting for more). */
+    async latest() {
+      if (!ended) await pull(0);
+      return events;
+    },
     /** The turn's summary and events once it ended, within `ms`. */
     async ended(ms = 30_000) {
       const until = Date.now() + ms;
@@ -1323,10 +1328,13 @@ test('Stop during a tool on a stubborn agent: the page aborts the call, the turn
   expect(tree.map((p) => p.role).sort()).toEqual(['agent', 'helper', 'helper', 'mcp']);
   // Counted as the end check counts them (so its empty list means gone, not unrecognised).
   expect(runningRoles(tree).sort()).toEqual(['agent', 'helper', 'helper', 'mcp']);
-  const stopAt = Date.now();
+  // Monotonic: a wall clock can step back (WSL resyncs its clock under load).
+  const stopAt = performance.now();
   const r = await postOk(request, `/api/assistant/turns/${t.id}/stop`, {});
   await expect(w.frame.locator('#aborted')).toHaveText('aborted');
   const { turn, events } = await t.ended();
+  // Seen ended here no earlier than it ended on the server, which heard the Stop after stopAt.
+  const endedBy = performance.now() - stopAt;
   expect(turn).toMatchObject({ state: 'stopped', end_reason: 'user' });
   expect(r.turn?.state ?? 'stopping').toMatch(/^(stopped|stopping)$/);
   expect(ofType(events, 'tool_result').find((e) => e.call === call.call)).toMatchObject({ ok: false, code: 'stopped' });
@@ -1334,8 +1342,8 @@ test('Stop during a tool on a stubborn agent: the page aborts the call, the turn
   // It heard the cancel (it was there to hear it), ignored it, and its whole tree went after the wait.
   await fake.waitFor((rec) => rec.pid === pid && rec.dir === 'in' && rec.msg?.method === 'session/cancel', 10_000);
   await expect.poll(() => runningRoles(tree), { timeout: AGENT_CANCEL_MS + 10_000, message: 'the agent, its helpers and its bridge are gone' }).toEqual([]);
-  expect(Date.now() - stopAt, 'within the wait and the ceiling').toBeLessThan(AGENT_CANCEL_MS + 10_000);
-  expect(Date.parse(turn.ended_at) - stopAt, 'the kill waited for the agent to answer the cancel').toBeGreaterThanOrEqual(AGENT_CANCEL_MS - 1000);
+  expect(performance.now() - stopAt, 'within the wait and the ceiling').toBeLessThan(AGENT_CANCEL_MS + 10_000);
+  expect(endedBy, 'the kill waited for the agent to answer the cancel').toBeGreaterThanOrEqual(AGENT_CANCEL_MS - 1000);
   // The conversation keeps no process.
   const agents = (await getJson(request, '/api/test/assistant/state')).agents;
   expect(Object.values(agents).filter((a) => a.pid !== null)).toEqual([]);
@@ -1446,10 +1454,14 @@ test("a hidden tab keeps its link through an agent's tool call: past the page's 
   const call = await slowRunning(t, w);
   const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
   await setHidden(page, true);
-  const hiddenAt = Date.now();
+  // Monotonic, on this side only: a wall clock can step back (WSL resyncs its clock under load),
+  // and an event's `at` is the server's clock.
+  const hiddenAt = performance.now();
   try {
-    // Its progress goes on past the page's own grace (no sleep: the page's own reports are the clock).
-    await t.waitFor((e) => e.type === 'tool_progress' && e.call === call.call && e.at >= hiddenAt + HIDDEN_GRACE_MS + 1000, 'progress past the grace', 30_000);
+    // Its progress goes on past the page's own grace: one the server logs after that.
+    await new Promise((done) => setTimeout(done, Math.max(0, hiddenAt + HIDDEN_GRACE_MS + 1000 - performance.now())));
+    const pastGrace = (await t.latest()).at(-1).seq;
+    await t.waitFor((e) => e.type === 'tool_progress' && e.call === call.call && e.seq > pastGrace, 'progress past the grace', 30_000);
     expect(await assistantChannels(), 'kept while the call runs').toBe(1);
     expect(await w.handle.evaluate(() => window.__release())).toBe(true);
     const result = await t.waitFor((e) => e.type === 'tool_result' && e.call === call.call, 'the result', 15_000);

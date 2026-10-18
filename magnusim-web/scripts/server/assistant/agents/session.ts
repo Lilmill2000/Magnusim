@@ -276,7 +276,7 @@ export class AgentSession {
   authStatus: 'none' | 'signed_in' | null = null;
   /** Its `initialize` said it reports its login (`_meta.authStatus`). */
   authReports = false;
-  /** When `initialize` answered (waitAuthStatus counts from it). */
+  /** When `initialize` answered, on the monotonic clock (waitAuthStatus counts from it: a wall clock can step). */
   private initAt = 0;
   /** waitAuthStatus's wake-ups (its first word on its login). */
   private readonly authWaiters = new Set<() => void>();
@@ -373,7 +373,7 @@ export class AgentSession {
       throw new AgentRunError('agent_protocol', `${this.agent.name} speaks another version of the agent protocol (${pv ?? 'none'}); Magnusim speaks ${PROTOCOL_VERSION}.`);
     }
     const ai = agentInfo(init);
-    this.initAt = Date.now();
+    this.initAt = performance.now();
     this.authReports = reportsAuthStatus(init);
     this.info = {
       name: this.agent.name,
@@ -445,7 +445,7 @@ export class AgentSession {
    */
   async waitAuthStatus(signal: AbortSignal, ms: number = AUTH_STATUS_WAIT_MS): Promise<void> {
     if (!this.authReports || this.authStatus !== null || signal.aborted) return;
-    const left = this.initAt + ms - Date.now();
+    const left = this.initAt + ms - performance.now();
     if (left <= 0) return;
     let wake = () => {};
     let timer: ReturnType<typeof setTimeout> | undefined;
