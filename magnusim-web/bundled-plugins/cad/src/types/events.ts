@@ -47,6 +47,8 @@ export interface CadEvents {
    * applies: `tag` and `label` are that step's (`tag` null for the person's own steps).
    */
   'assistant:person-undo': { tag: string | null; label: string | null; redo: boolean };
+  /** An Assistant step ended (AssistantStep.end): a panel it showed with no session (its Parameters panel) goes with it. */
+  'assistant:step-ended': { owner: string };
 }
 
 export type CadEventName = keyof CadEvents;

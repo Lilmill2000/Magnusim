@@ -250,7 +250,10 @@ export interface AssistantStep {
    * and nothing changes. Idempotent: later calls, and calls after end(), return the first result.
    */
   revert(): EditResult;
-  /** Release the save hold (idempotent): a write follows when the model differs from what is stored. */
+  /**
+   * Release the save hold (idempotent): a write follows when the model differs from what is stored.
+   * 'assistant:step-ended' is emitted (once), so a panel the step showed with no session closes.
+   */
   end(): void;
 }
 

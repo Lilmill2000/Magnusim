@@ -54,14 +54,19 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     icon: ICONS.redo,
     shortcut: 'Ctrl+Y',
     get hint() {
+      // The Assistant's panel: Redo takes it over too, as Undo does (it goes; nothing is redone).
+      if (ui.state.get().panel?.owner === 'assistant') return 'Take over from the Assistant: its open panel is discarded';
       const l = services.doc.state.get().history.redoLabel;
       return l ? `Redo ${l}` : undefined;
     },
     enabled: () => {
       const h = services.doc.state.get().history;
-      return ui.editBlock() ?? (h.canRedo ? true : 'Nothing to redo');
+      return ui.editBlock() ?? (h.canRedo || ui.state.get().panel?.owner === 'assistant' ? true : 'Nothing to redo');
     },
-    run: () => services.doc.redo(),
+    run: () => {
+      if (ui.state.get().panel?.owner === 'assistant') ui.cancelPanel();
+      else services.doc.redo();
+    },
   };
   const params: CommandDef = {
     id: PARAMS_ID,

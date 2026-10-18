@@ -581,6 +581,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
       if (step === this) step = null;
       // The hold is released: one write when the model differs from what is stored.
       autosave?.modelChanged();
+      bus.emit('assistant:step-ended', { owner: this.owner });
     }
   }
 

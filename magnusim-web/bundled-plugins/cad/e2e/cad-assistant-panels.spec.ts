@@ -22,7 +22,7 @@ type CadDoc = {
   editParams(rows: { add: unknown[]; change: { id: string; patch: { expr: string } }[]; remove: string[] }): { ok: boolean };
   state: { get(): { doc: { features: { id: string; name: string; extent?: { distance: string } }[] }; history: { undoLabel: string | null } } };
 };
-type W = { __CAD__: { services: { doc: CadDoc } }; __step?: Step; __session?: Session };
+type W = { __CAD__: { services: { doc: CadDoc } }; __step?: Step; __session?: Session; __flashes?: string[] };
 
 /** The volume chip's one body, to the mm³ (the kernel's volume of a 20 mm cube is 7999.999999999998). */
 const volume = async (frame: FrameLocator) => Math.round(await singleVolume(frame));
@@ -171,6 +171,26 @@ test('cad:assistant-panel the person\'s Parameters panel stays open and theirs, 
   await runCommand(frame, 'modify.parameters');
   const panel = frame.locator('[data-cad-panel="params"]');
   await expect(panel.locator('[data-param-row]')).toHaveCount(2);
+  // A recorder in the frame, before the edit: every row that gains ("+w") or loses ("-w") the flash,
+  // whenever it happens. The flash lasts 1.5 s, so it is read from this log, never raced on a slow runner.
+  await cad(page, (() => {
+    const w = window as unknown as W;
+    const log: string[] = [];
+    w.__flashes = log;
+    const rowOf = (el: Element) => el.getAttribute('data-param-row') ?? '?';
+    new MutationObserver((records) => {
+      for (const r of records) {
+        if (r.type === 'attributes' && r.target instanceof Element) log.push(`${r.oldValue === null ? '+' : '-'}${rowOf(r.target)}`);
+        for (const n of Array.from(r.addedNodes)) {
+          if (!(n instanceof Element)) continue;
+          for (const el of [n, ...Array.from(n.querySelectorAll('[data-param-row]'))]) if (el.matches('[data-param-row][data-param-changed]')) log.push(`+${rowOf(el)}`);
+        }
+      }
+    }).observe(document.querySelector('[data-cad-panel="params"]')!, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-param-changed'], attributeOldValue: true });
+  }) as never);
+  /** The rows the log shows gaining (+) or losing (-) the flash, each once, sorted. */
+  const flashes = (sign: '+' | '-') =>
+    cad<string[]>(page, ((s: string) => [...new Set(((window as unknown as W).__flashes ?? []).filter((x) => x.startsWith(s)).map((x) => x.slice(1)))].sort()) as never, sign);
   await cad(
     page,
     ((w: string) => {
@@ -182,16 +202,16 @@ test('cad:assistant-panel the person\'s Parameters panel stays open and theirs, 
     }) as never,
     ids[0],
   );
-  // The new values at once, the changed rows flashed; the panel is still the person's.
+  // The changed rows flashed (w changed, h added; d did not), then the flash faded, each row's once.
+  await expect.poll(() => flashes('+'), { timeout: 15_000 }).toEqual(['h', 'w']);
+  await expect.poll(() => flashes('-'), { timeout: 15_000 }).toEqual(['h', 'w']);
+  await expect(panel.locator('[data-param-changed]')).toHaveCount(0);
+  expect(await flashes('+')).toEqual(['h', 'w']);
+  // The new values; the panel is still the person's, and stays open.
   await expect(panel.locator('[data-param-row="w"] [data-param-value]')).toHaveText('30 mm');
-  await expect(panel.locator('[data-param-changed]')).toHaveCount(2);
-  await expect(panel.locator('[data-param-row="w"]')).toHaveAttribute('data-param-changed', '1');
-  await expect(panel.locator('[data-param-row="h"]')).toHaveAttribute('data-param-changed', '1');
-  await expect(panel.locator('[data-param-row="d"]')).not.toHaveAttribute('data-param-changed', /.*/);
+  await expect(panel.locator('[data-param-row="h"] [data-param-value]')).toHaveText('8 mm');
   await expect(panel).not.toHaveAttribute('data-panel-owner', /.+/);
   await expect(panel.locator('[data-panel-done]')).not.toHaveAttribute('aria-disabled', 'true');
-  // The flash fades (1.5 s); the panel stays open.
-  await expect(panel.locator('[data-param-changed]')).toHaveCount(0, { timeout: 15_000 });
   await expect(panel).toBeVisible();
   await cad(page, (() => (window as unknown as W).__step!.end()) as never);
   expect(seen.csp, 'CSP violations').toEqual([]);

@@ -18,13 +18,23 @@
 import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isPersonEditing, type PersonEditing } from '../../src/doc';
-import combineModule from '../../src/features/combine';
-import filletModule from '../../src/features/fillet';
+import chamferModule, { CHAMFER_COMMAND } from '../../src/features/chamfer';
+import combineModule, { COMBINE_COMMAND } from '../../src/features/combine';
+import deleteFacesModule from '../../src/features/delete_faces';
+import enclosureModule, { ENCLOSURE_COMMAND } from '../../src/features/enclosure';
+import { HANDLES_TOOL_ID } from '../../src/features/enclosure/handles';
+import filletModule, { FILLET_COMMAND } from '../../src/features/fillet';
+import loftModule, { LOFT_COMMAND } from '../../src/features/loft';
 import measureModule from '../../src/features/measure';
-import refgeomModule from '../../src/features/refgeom';
+import patternModule, { PATTERN_COMMANDS } from '../../src/features/pattern';
+import pressPullModule from '../../src/features/press_pull';
+import refgeomModule, { CONSTRUCT_COMMANDS } from '../../src/features/refgeom';
 import { FIELD_TOOL_ID } from '../../src/features/refgeom/fields';
-import revolveModule from '../../src/features/revolve';
-import { selectItem } from '../../src/lib/selection';
+import revolveModule, { REVOLVE_COMMAND } from '../../src/features/revolve';
+import shellModule, { SHELL_COMMAND } from '../../src/features/shell';
+import splitModule, { SPLIT_COMMAND } from '../../src/features/split';
+import sweepModule, { SWEEP_COMMAND } from '../../src/features/sweep';
+import { selectItem, userItems } from '../../src/lib/selection';
 import type { CombineFeature, ExtrudeFeature, Feature, FeatureId, RevolveFeature, SketchFeature } from '../../src/types/doc';
 import type { AssistantStep, EditSession, TakeOverWhy } from '../../src/types/doc-service';
 import { WELL_KNOWN_COMMANDS, type CadModule } from '../../src/types/modules';
@@ -412,13 +422,28 @@ describe('openForAssistant gives way to the person', () => {
       const input = a.$<HTMLInputElement>(`[data-param-id="${w}"] [data-field="expr"] input`)!;
       act(() => void fireEvent.change(input, { target: { value: '30' } }));
     };
+    const menu = () => act(() => p.ui.showMenu(10, 10, [{ id: 'x', label: 'X', run() {} }]));
     const cases: [string, () => void, () => void, string, FeatureId | null][] = [
       ['a feature panel', () => act(() => p.ui.openEdit(base)), () => p.ui.closePanel(), 'The person is editing Extrude 1', base],
       ['a tool panel', () => act(() => p.ui.openTool(WELL_KNOWN_COMMANDS.measure)), () => p.ui.closePanel(), 'The person has the Measure panel open', null],
-      ['a menu', () => act(() => p.ui.showMenu(10, 10, [{ id: 'x', label: 'X', run() {} }])), () => p.ui.closeMenu(), 'The person has a menu open', null],
+      ['a menu', menu, () => p.ui.closeMenu(), 'The person has a menu open', null],
       ['a rename', () => act(() => p.ui.startRename('feature', base)), () => p.ui.endRename(), 'The person is renaming Extrude 1', base],
       ['a dialog', dialog, () => document.querySelector('dialog')?.remove(), 'The person has a dialog open', null],
+      // (Review: the Assistant's Parameters panel took an open Parameters panel as idle before asking these.)
       ['a value typed in the Parameters panel', typed, () => p.ui.closePanel(), 'The person is typing a value in the Parameters panel', null],
+      [
+        'a menu over an idle Parameters panel',
+        () => {
+          act(() => p.ui.openParams());
+          menu();
+        },
+        () => {
+          p.ui.closeMenu();
+          p.ui.closePanel();
+        },
+        'The person has a menu open',
+        null,
+      ],
     ];
     for (const [what, set, unset, words, feature] of cases) {
       set();
@@ -429,8 +454,8 @@ describe('openForAssistant gives way to the person', () => {
       const opens: [string, () => unknown][] = [
         ['new', () => p.ui.openForAssistant(step, 'extrude', { profiles: [PROFILE_B] } as Partial<Feature>)],
         ['edit', () => p.ui.openEditForAssistant(step, base)],
+        ['parameters', () => p.ui.openParamsForAssistant(step)],
       ];
-      if (ui0.panel?.kind !== 'params') opens.push(['parameters', () => p.ui.openParamsForAssistant(step)]);
       for (const [how, open] of opens) {
         const e = thrown(open);
         expect(isPersonEditing(e), `${what} (${how})`).toBe(true);
@@ -616,6 +641,46 @@ describe('the Assistant\'s Parameters panel', () => {
     await a.settle();
   });
 
+  it('closes when its step ends (a call that succeeded drops nothing): the person\'s next Ctrl+Z undoes the step, and the next step\'s panel is its own', async () => {
+    const p = await part({ bodies: 1 });
+    const { a } = p;
+    let w = '';
+    act(() => void (w = String(a.doc.addParam({ name: 'w', expr: '20 mm', quantity: 'length' }))));
+    const exprs = () => a.doc.state.get().doc.params.map((x) => x.expr);
+    const step = a.doc.assistant.begin('assistant:c1');
+    act(() => void expect(p.ui.openParamsForAssistant(step)).toBeNull());
+    act(() => void step.run(() => a.doc.editParams({ add: [], change: [{ id: w, patch: { expr: '30 mm' } }], remove: [] })));
+    expect(a.$('[data-cad-panel="params"]')!.getAttribute('data-panel-owner')).toBe('assistant');
+    // The call's success path: sealed and ended, with no drop.
+    act(() => {
+      step.seal('turn:t1', 'Assistant: width');
+      step.end();
+    });
+    expect(p.ui.state.get().panel).toBeNull();
+    expect(a.$('[data-cad-panel="params"]')).toBeNull();
+    expect(a.services.commands.get('edit.undo')!.hint).toBe('Undo Assistant: width');
+    key('z', { ctrlKey: true });
+    expect(exprs()).toEqual(['20 mm']);
+    expect(p.takeOvers).toEqual([]);
+    // The next step's Parameters panel names that step: Escape on it takes that step over.
+    const step2 = a.doc.assistant.begin('assistant:c2');
+    act(() => void expect(p.ui.openParamsForAssistant(step2)).toBeNull());
+    expect(p.ui.state.get().panel).toEqual({ kind: 'params', owner: 'assistant', by: 'assistant:c2' });
+    key('Escape');
+    expect(p.ui.state.get().panel).toBeNull();
+    expect(step2.takenOver).toBe('escape');
+    expect(p.takeOvers).toEqual(['escape']);
+    act(() => step2.end());
+    // A step's end leaves the person's own Parameters panel open (it was used as it is).
+    act(() => p.ui.openParams());
+    const step3 = a.doc.assistant.begin('assistant:c3');
+    expect(p.ui.openParamsForAssistant(step3)).toBeNull();
+    act(() => step3.end());
+    expect(p.ui.state.get().panel).toEqual({ kind: 'params', owner: 'person' });
+    act(() => p.ui.closePanel());
+    await a.settle();
+  });
+
   it('flashes the rows an Assistant step changes for FLASH_MS, in the person\'s open panel; the person\'s own changes do not flash', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
@@ -650,5 +715,185 @@ describe('the Assistant\'s Parameters panel', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Redo on the Assistant\'s panel', () => {
+  it('Ctrl+Y, Ctrl+Shift+Z or the toolbar\'s Redo take it over as Ctrl+Z does, with or without anything to redo, and redo nothing', async () => {
+    const p = await part({ bodies: 1 });
+    const { a } = p;
+    const base = p.extrudes[0];
+    act(() => void a.doc.addParam({ name: 'w', expr: '20 mm', quantity: 'length' }));
+    const history = () => a.doc.state.get().history;
+    const redo = a.services.commands.get('edit.redo')!;
+    const cases: [string, 'feature' | 'params', boolean, () => void][] = [
+      ['Ctrl+Y, nothing to redo, a feature panel', 'feature', false, () => key('y', { ctrlKey: true })],
+      ['Ctrl+Shift+Z, nothing to redo, a feature panel', 'feature', false, () => key('z', { ctrlKey: true, shiftKey: true })],
+      ['Ctrl+Y, nothing to redo, the Parameters panel', 'params', false, () => key('y', { ctrlKey: true })],
+      ['the toolbar Redo, something to redo, a feature panel', 'feature', true, () => act(() => void fireEvent.click(a.$('[data-command="edit.redo"]')!))],
+      ['Ctrl+Y, something to redo, the Parameters panel', 'params', true, () => key('y', { ctrlKey: true })],
+    ];
+    for (const [what, kind, redoable, press] of cases) {
+      p.takeOvers.length = 0;
+      if (redoable) {
+        // The person's own rename, undone: Redo has something to bring back.
+        act(() => void a.doc.rename(base, 'Base'));
+        act(() => a.doc.undo());
+      }
+      expect(history().canRedo, what).toBe(redoable);
+      const hist = history();
+      const committed = a.doc.state.get().doc;
+      const step = a.doc.assistant.begin(`assistant:${kind}-${redoable}`);
+      let s: EditSession | null = null;
+      if (kind === 'feature') s = openNew(p, step);
+      else act(() => void expect(p.ui.openParamsForAssistant(step), what).toBeNull());
+      await a.settle();
+      expect(a.services.commands.canRun('edit.redo'), what).toBe(true);
+      expect(redo.hint, what).toBe('Take over from the Assistant: its open panel is discarded');
+      press();
+      await a.settle();
+      expect(p.ui.state.get().panel, what).toBeNull();
+      expect(p.takeOvers, what).toEqual(['undo']);
+      expect(step.takenOver, what).toBe('undo');
+      if (s) expect(s.open, what).toBe(false);
+      // Nothing was redone, and nothing of the Assistant's panel was kept.
+      expect(history(), what).toEqual(hist);
+      expect(a.doc.state.get().doc, what).toBe(committed);
+      expect(names(a), what).toEqual(['Sketch 1', 'Extrude 1']);
+      revertAndEnd(step);
+      await a.settle();
+    }
+    // With no Assistant panel, Redo is the person's as always.
+    expect(redo.hint).toBe('Redo Rename Extrude 1');
+    key('y', { ctrlKey: true });
+    expect(names(a)).toEqual(['Sketch 1', 'Base']);
+    await a.settle();
+  });
+});
+
+describe('the person\'s Delete of the feature the Assistant fills', () => {
+  it('takes its panel over (\'command\'): an existing feature is then removed as the person\'s own step; a new one is just gone', async () => {
+    const p = await part({ bodies: 1 });
+    const { a } = p;
+    const base = p.extrudes[0];
+    const committed = a.doc.state.get().doc;
+    const step = a.doc.assistant.begin('assistant:c1');
+    const s = openEdit(p, step, base);
+    act(() => s.update({ extent: { kind: 'blind', distance: '9 mm' } } as Partial<Feature>));
+    await a.settle();
+    // The Assistant's panel selected its feature: the person's Delete key removes it.
+    expect(a.services.selection.get().items).toEqual([{ kind: 'feature', feature: base }]);
+    key('Delete');
+    await a.settle();
+    expect(s.open).toBe(false);
+    expect(p.takeOvers).toEqual(['command']);
+    expect(step.takenOver).toBe('command');
+    expect(p.ui.state.get().panel).toBeNull();
+    expect(names(a)).toEqual(['Sketch 1']);
+    // The person's own step, with nothing of the Assistant's draft in it.
+    expect(a.doc.state.get().history.undoLabel).toBe('Delete Extrude 1');
+    expect(a.doc.assistant.topGroup()).toBeNull();
+    // The person changed the Part: the call's revert keeps it as it is.
+    act(() => {
+      expect(step.revert().ok).toBe(false);
+      step.end();
+    });
+    act(() => a.doc.undo());
+    expect(a.doc.state.get().doc).toBe(committed);
+    await a.settle();
+    // A new feature the Assistant fills: the tree's Delete and the panel's Delete take it over, and remove nothing.
+    for (const how of ['the tree', 'the panel'] as const) {
+      p.takeOvers.length = 0;
+      const hist = a.doc.state.get().history;
+      const st = a.doc.assistant.begin(`assistant:${how}`);
+      const n = openNew(p, st);
+      await a.settle();
+      act(() => (how === 'the tree' ? p.ui.deleteFeature(n.feature) : p.ui.deletePanelFeature()));
+      await a.settle();
+      expect(n.open, how).toBe(false);
+      expect(p.takeOvers, how).toEqual(['command']);
+      expect(p.ui.state.get().panel, how).toBeNull();
+      expect(names(a), how).toEqual(['Sketch 1', 'Extrude 1']);
+      expect(a.doc.state.get().history, how).toEqual(hist);
+      expect(a.doc.state.get().doc, how).toBe(committed);
+      revertAndEnd(st);
+      await a.settle();
+    }
+  });
+});
+
+describe('a toolbar command takes over the Assistant\'s panel of its own type', () => {
+  it('each command opens the person\'s own panel of that type: the Assistant\'s is discarded (\'command\'); the Enclosure\'s arrows only on the person\'s', async () => {
+    const p = await part({
+      modules: [revolveModule, sweepModule, loftModule, filletModule, chamferModule, shellModule, patternModule, refgeomModule, combineModule, splitModule, pressPullModule, deleteFacesModule, enclosureModule],
+      bodies: 2,
+    });
+    const { a } = p;
+    // The CONSTRUCT overlay sizes its lines by the view's pixels (the fake view has none of its own).
+    Object.assign(a.vp.handle, { lineResolution: (): [number, number] => [1000, 1000] });
+    // Loft wants profiles in two sketches.
+    act(() => a.doc.beginNew('sketch', { ...twoRects(), id: 'f_sk2' } as Partial<Feature>).commit());
+    await a.settle();
+    const commands: [string, Feature['type']][] = [
+      [REVOLVE_COMMAND, 'revolve'],
+      [SWEEP_COMMAND, 'sweep'],
+      [LOFT_COMMAND, 'loft'],
+      [FILLET_COMMAND, 'fillet'],
+      [CHAMFER_COMMAND, 'chamfer'],
+      [SHELL_COMMAND, 'shell'],
+      [PATTERN_COMMANDS.linear, 'pattern_linear'],
+      [PATTERN_COMMANDS.circular, 'pattern_circular'],
+      [PATTERN_COMMANDS.mirror, 'mirror'],
+      [CONSTRUCT_COMMANDS.plane, 'ref_plane'],
+      [CONSTRUCT_COMMANDS.axis, 'ref_axis'],
+      [CONSTRUCT_COMMANDS.point, 'ref_point'],
+      [COMBINE_COMMAND, 'combine'],
+      [SPLIT_COMMAND, 'split'],
+      [WELL_KNOWN_COMMANDS.pressPull, 'press_pull'],
+      [WELL_KNOWN_COMMANDS.deleteFaces, 'delete_faces'],
+      [ENCLOSURE_COMMAND, 'enclosure'],
+    ];
+    const before = names(a);
+    for (const [id, type] of commands) {
+      p.takeOvers.length = 0;
+      const step = a.doc.assistant.begin(`assistant:${type}`);
+      const s = openNew(p, step, type, {});
+      await a.settle();
+      expect(p.ui.state.get().panel, id).toMatchObject({ kind: 'feature', type, owner: 'assistant' });
+      if (type === 'enclosure') expect(toolIds(a), id).not.toContain(HANDLES_TOOL_ID);
+      // The Assistant's draft may be shown selected, but only as the panel's highlight.
+      expect(userItems(a.services.selection).some((it) => it.kind === 'feature' && it.feature === s.feature), id).toBe(false);
+      // (Review: each command's "the new panel of my type stays open" check kept the Assistant's.)
+      expect(a.services.commands.canRun(id), id).toBe(true);
+      await act(async () => void (await a.services.commands.run(id)));
+      await a.settle();
+      expect(p.takeOvers, id).toEqual(['command']);
+      expect(step.takenOver, id).toBe('command');
+      expect(s.open, id).toBe(false);
+      expect(p.ui.state.get().panel, id).toMatchObject({ kind: 'feature', type, owner: 'person', isNew: true });
+      expect(panelEl(a)!.hasAttribute('data-panel-owner'), id).toBe(false);
+      // The person's own draft took nothing of the discarded one (no preselection of it).
+      expect(JSON.stringify(a.doc.session()!.draft), id).not.toContain(s.feature);
+      if (type === 'enclosure') expect(toolIds(a), id).toContain(HANDLES_TOOL_ID);
+      act(() => p.ui.deletePanelFeature());
+      revertAndEnd(step);
+      await a.settle();
+      expect(names(a), id).toEqual(before);
+    }
+    // Another type's command: the Assistant's Extrude, shown selected, is not the person's pattern's
+    // preselection (it was taken as "pattern this feature", then discarded under it).
+    p.takeOvers.length = 0;
+    const step = a.doc.assistant.begin('assistant:extrude');
+    const s = openNew(p, step);
+    await a.settle();
+    expect(a.services.selection.get().items).toEqual([{ kind: 'feature', feature: s.feature }]);
+    await act(async () => void (await a.services.commands.run(PATTERN_COMMANDS.linear)));
+    await a.settle();
+    expect(p.takeOvers).toEqual(['command']);
+    expect(p.ui.state.get().panel).toMatchObject({ kind: 'feature', type: 'pattern_linear', owner: 'person' });
+    expect(JSON.stringify(a.doc.session()!.draft)).not.toContain(s.feature);
+    act(() => p.ui.deletePanelFeature());
+    revertAndEnd(step);
+    await a.settle();
   });
 });

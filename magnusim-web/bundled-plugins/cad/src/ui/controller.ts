@@ -16,7 +16,7 @@ import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed
 import { isPersonEditing, PersonEditing } from '../doc/person-editing';
 import { openModal } from '../lib/modal';
 import { pendingEdits } from '../lib/pendingEdits';
-import { clearSelection, selectItem } from '../lib/selection';
+import { clearSelection, selectItem, showForPanel } from '../lib/selection';
 import { targetOfItem } from '../viewport/normal';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
@@ -136,8 +136,9 @@ export interface UiController {
   /** The Assistant's Edit of a feature: as openForAssistant, through beginEdit. */
   openEditForAssistant(step: AssistantStep, id: FeatureId): EditSession | string;
   /**
-   * The Assistant's read-only Parameters panel (watch pace), when no panel is open; null also when a
-   * Parameters panel is open already (it shows the new values live). Else why not; PersonEditing as openForAssistant.
+   * The Assistant's read-only Parameters panel (watch pace), when no panel is open; it closes when the
+   * step ends. Null also when an idle Parameters panel is open already (it shows the new values live).
+   * Else why not; PersonEditing as openForAssistant (a value typed in that panel included).
    */
   openParamsForAssistant(step: AssistantStep): string | null;
   /**
@@ -358,7 +359,9 @@ export function createUiController(services: AppServices): UiController {
       return `${action} failed: its panel closed at once`;
     }
     state.set({ panel: { kind: 'feature', session, type, feature: session.feature, isNew: session.isNew, owner: ownerOf(session) }, panelNote: null, renaming: null });
-    selectItem(services.selection, { kind: 'feature', feature: session.feature }, false);
+    // Shown selected as the panel's highlight, not the person's choice: the person's next command
+    // never takes the Assistant's draft as its preselection (it is discarded as that command takes over).
+    showForPanel(services.selection, [{ kind: 'feature', feature: session.feature }]);
     return session;
   }
 
@@ -740,12 +743,13 @@ export function createUiController(services: AppServices): UiController {
       if (step.ended) return ENDED;
       const block = editBlock();
       if (block) return block;
-      const p = state.get().panel;
-      // A Parameters panel already open (the person's, idle or not, or the Assistant's) shows the new values live.
-      if (p?.kind === 'params') return null;
-      if (p && p.owner === 'assistant') return `The Assistant's ${panelName(p)} panel is still open`;
+      // The person first, as openForAssistant: a menu, a rename, a dialog, a value typed in Parameters, a panel of theirs.
       const busy = personInTheWay();
       if (busy) throw busy;
+      const p = state.get().panel;
+      // A Parameters panel already open (the person's idle one, or the Assistant's) shows the new values live.
+      if (p?.kind === 'params') return null;
+      if (p && p.owner === 'assistant') return `The Assistant's ${panelName(p)} panel is still open`;
       state.set({ panel: { kind: 'params', owner: 'assistant', by: step.owner }, panelNote: null });
       return null;
     },
@@ -812,6 +816,16 @@ export function createUiController(services: AppServices): UiController {
           state.set({ panel: { kind: 'feature', session: open, type: open.draft.type, feature: open.feature, isNew: open.isNew, owner: ownerOf(open) }, panelNote: null });
         }
       }
+    }),
+  );
+  // The Assistant's Parameters panel (no session) goes when its step ends, as its feature panel goes
+  // with its session: never left open, read-only, after the call (review: it stayed after a success).
+  offs.push(
+    services.bus.on('assistant:step-ended', ({ owner }) => {
+      const p = state.get().panel;
+      if (p?.kind !== 'params' || p.owner !== 'assistant' || p.by !== owner) return;
+      state.set({ panel: null, panelNote: null });
+      giveBackParams();
     }),
   );
   // A rebuild that no longer makes a selected body (deleted, suppressed, rolled
