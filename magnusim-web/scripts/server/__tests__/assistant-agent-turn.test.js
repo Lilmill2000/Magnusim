@@ -13,7 +13,9 @@
 // while it starts, a mode it reports with the set_mode answer, the prompt's wait for its MCP
 // server's list (an agent that connects it after session/new), a call queued behind a stopped
 // message's call, overlapping own-tool questions, unanswered questions in a row, the tripwire
-// after a crashed turn and the adapter's nested _auth/status_update.
+// after a crashed turn and the adapter's nested _auth/status_update; a request for a Magnusim
+// tool that left the list (answered no at once, never asked as the agent's own tool), and a kept
+// agent that was never prompted (its next prompt is its first, with the notes).
 //
 // Every agent is the scripted fake (e2e/support/fake-acp-agent.mjs) through its controller,
 // found by discovery only in this test's folders and home (the test switches), started in this
@@ -1418,11 +1420,24 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
     }
   });
 
-  it('the list changes under a tools-off agent (its tab’s link drops): a call of a tool that left the list, its updates and its permission request are Magnusim’s, never the tripwire; nothing is recorded and the agent stays', async () => {
+  it('the list changes under a tools-off agent (its tab’s link drops): a call of a tool that left the list, its updates and its permission requests (in a prompt, between messages, while it starts) are Magnusim’s, never the tripwire; nothing is recorded and the agent stays', async () => {
     const w = await world();
     const ST = await import('../assistant/settings.ts');
+    const T = await import('../assistant/agents/turn.ts');
     const LINK = 'a'.repeat(24);
     const ours = (tool) => ({ claudeCode: { toolName: `mcp__magnusim__${tool}`, mcpServer: { name: 'magnusim', source: 'config' } } });
+    const options = [
+      { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+      { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+    ];
+    /** A permission request for a tool of Magnusim's server, as the adapter sends it. */
+    const askFor = (id, tool) => ({ method: 'session/request_permission', params: { toolCall: { toolCallId: id, title: `mcp__magnusim__${tool}`, kind: 'other', _meta: ours(tool) }, options } });
+    const NOT_OFFERED = "Claude Code asked to use a Magnusim tool that doesn't match one offered to it now (they change when a window's link drops or a workspace closes), so Magnusim said no.";
+    // Every question opened in this test (there must be none: these aren't the agent's own tools).
+    const asked = [];
+    const offAsked = w.m.manager.gates.subscribe((e) => {
+      if (e.type === 'open') asked.push(e.view.title);
+    });
     try {
       const r = await w.turn({ text: 'Count, then add.', provider: 'agent:claude', tab: 'tab-1' });
       assert.equal(r.status, 202, JSON.stringify(r.body));
@@ -1433,11 +1448,13 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
         { relist: true },
         // The model's call of a tool it had: its tool_call, the call (refused), its failed update.
         { call: { tool: 'ai-demo__add', args: { by: 1 } } },
-        // Its permission request for that tool: asked, never allowed without asking.
+        // Its permission requests for that tool: answered no at once, never asked as its own tool.
+        { askOurs: { tool: 'ai-demo__add' } },
         { askOurs: { tool: 'ai-demo__add' } },
         { say: 'done' },
-        // Between messages: a late update naming that tool, then a marker.
+        // Between messages: a late update naming that tool, its permission request, then a marker.
         { later: { hold: 'f4-later', update: { sessionUpdate: 'tool_call_update', toolCallId: 'late-1', status: 'completed', _meta: ours('ai-demo__add') } } },
+        { later: { request: askFor('late-2', 'ai-demo__add') } },
         { later: { update: { sessionUpdate: 'current_model_update', currentModelId: 'fake-small' } } },
       );
       await holding(claude, 'f4-link-drops');
@@ -1447,34 +1464,71 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
       claude.release('f4-link-drops');
       const relisted = await claude.waitFor((x) => x.event === 'mcp_tools' && x.relisted === true && claude.of(pid)(x), CEILING);
       assert.ok(!relisted.tools.includes('ai-demo__add'), JSON.stringify(relisted.tools));
-      const g = await gateOf(r.turn);
-      assert.equal(g.link_only, true);
-      // The link comes back; the person answers Don't.
-      w.m.registry.setConnected('tab-1', LINK, true);
-      byTab(w, g, false);
       await settledTurn(r.turn);
       const e = endOf(r.turn);
       assert.deepEqual([e.state, e.reason], ['done', 'end_turn'], e.message);
       const refused = claude.events('mcp_result', pid).find((x) => x.tool === 'ai-demo__add');
       assert.match(refused.result.content[0].text, /"code":"no_tool"/);
       assert.deepEqual(w.invoked.map((c) => c.tool), ['get_count'], 'the tool that left the list never ran');
-      assert.deepEqual(claude.events('permission_outcome', pid).at(-1).outcome, { outcome: 'selected', optionId: 'reject' });
-      // Between messages, the late update of that tool is Magnusim's too.
+      assert.deepEqual(
+        claude.events('permission_outcome', pid).map((x) => x.outcome),
+        [
+          { outcome: 'selected', optionId: 'reject' },
+          { outcome: 'selected', optionId: 'reject' },
+        ],
+      );
+      // Magnusim said no, and says why once; nothing asked the person about "its own tool".
+      assert.deepEqual(asked, [], 'no question');
+      const events = H.eventsOf(r.turn);
+      assert.deepEqual(
+        events.filter((x) => x.type === 'agent_permission').map((x) => [x.title, x.outcome, x.by]),
+        [
+          ['ai-demo__add', 'declined', 'magnusim'],
+          ['ai-demo__add', 'declined', 'magnusim'],
+        ],
+      );
+      assert.deepEqual(events.filter((x) => x.type === 'note').map((x) => x.text), [NOT_OFFERED]);
+      assert.equal(T.NOT_OFFERED_NOTE('Claude Code'), NOT_OFFERED);
+      // Between messages, the late update of that tool and its permission request are Magnusim's too.
       const session = host.sessionOf(r.body.conversation);
       claude.release('f4-later');
       await H.until(() => session.model === 'fake-small' || !session.alive, CEILING, 'the late updates');
       assert.equal(session.alive, true, 'no tripwire between messages either');
       assert.ok(alive(pid));
+      const late = claude.events('request_answer', pid).find((x) => x.method === 'session/request_permission');
+      assert.deepEqual(late?.answer?.result?.outcome, { outcome: 'cancelled' }, 'answered cancelled between messages');
       // Nothing recorded: the next message runs on the same agent, still with its own tools off.
-      const doc = existsSync(join(HOME, 'assistant', 'settings.json')) ? JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8')) : {};
-      assert.equal(doc.agents?.claude?.lockdown_failed ?? null, null, 'no tripwire record');
+      const recorded = () => (existsSync(join(HOME, 'assistant', 'settings.json')) ? JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8')) : {}).agents?.claude?.lockdown_failed ?? null;
+      assert.equal(recorded(), null, 'no tripwire record');
+      w.m.registry.setConnected('tab-1', LINK, true);
       const r2 = await w.turn({ text: 'Again.', provider: 'agent:claude', tab: 'tab-1', conversation: r.body.conversation });
       assert.equal(r2.status, 202, JSON.stringify(r2.body));
       claude.script({ relist: true }, { call: { tool: 'ai-demo__get_count', args: {} } }, { say: 'again' });
       await settledTurn(r2.turn);
       assert.deepEqual([endOf(r2.turn).state, endOf(r2.turn).reason], ['done', 'end_turn']);
       assert.equal(lastPid(claude), pid, 'the same agent');
+      // While it starts (a new conversation, from Home, whose list never had the workspace's
+      // tools): a request for a tool of Magnusim's server it isn't offered isn't the tripwire
+      // either; in its prompt the same request is answered no at once, without the Home note
+      // about its own tools.
+      claude.configure({ afterSessionNew: [{ request: askFor('start-1', 'ai-demo__add') }] });
+      const r3 = await w.turn({ text: 'From Home.', provider: 'agent:claude' });
+      assert.equal(r3.status, 202, JSON.stringify(r3.body));
+      claude.script({ askOurs: { tool: 'ai-demo__add' } }, { say: 'home' });
+      await settledTurn(r3.turn);
+      assert.deepEqual([endOf(r3.turn).state, endOf(r3.turn).reason], ['done', 'end_turn'], endOf(r3.turn).message);
+      const pid3 = lastPid(claude);
+      assert.notEqual(pid3, pid);
+      const started = claude.events('request_answer', pid3).find((x) => x.method === 'session/request_permission');
+      assert.deepEqual(started?.answer?.result?.outcome, { outcome: 'cancelled' }, 'answered cancelled while it started');
+      assert.deepEqual(claude.events('permission_outcome', pid3).map((x) => x.outcome), [{ outcome: 'selected', optionId: 'reject' }]);
+      assert.deepEqual(H.eventsOf(r3.turn).filter((x) => x.type === 'note').map((x) => x.text), [NOT_OFFERED]);
+      assert.deepEqual(asked, [], 'no question');
+      assert.equal(host.sessionOf(r3.body.conversation)?.alive, true);
+      assert.equal(recorded(), null, 'no tripwire record');
     } finally {
+      offAsked();
+      claude.configure({ afterSessionNew: null });
       claude.release('f4-link-drops');
       claude.release('f4-later');
       await ST.setAgentLockdownFailed('claude', null);
@@ -1871,6 +1925,49 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
       claude.configure({ mcpLate: null });
       await w.close();
       claude.release('f5-never');
+    }
+  });
+
+  it('a kept agent never prompted (its first message ended waiting for its tools, or was stopped then): the next message is its first prompt, with the agent note and the workspace notes', async () => {
+    const SESSION = await import('../assistant/agents/session.ts');
+    const { NOTE_PREFIX } = await import('../assistant/agents/acp.ts');
+    const { guideBlock } = await import('../assistant/prompt.ts');
+    for (const how of ['no_tools', 'stop']) {
+      const w = await world({ custom: true, allow: [CUSTOM_ID] });
+      const hold = `f5-first-${how}`;
+      custom.configure({ mcpLate: hold });
+      try {
+        const r = await w.turn({ text: 'One.', provider: `agent:${CUSTOM_ID}`, tab: 'tab-1' });
+        assert.equal(r.status, 202, JSON.stringify(r.body));
+        await holding(custom, hold);
+        const pid = lastPid(custom);
+        await H.until(() => host.sessionOf(r.body.conversation)?.awaitingTools === true, CEILING, 'the wait for its tools');
+        if (how === 'no_tools') w.m.clock.advance(SESSION.AGENT_TOOLS_MS);
+        else await w.m.manager.stop(r.turn.id, CEILING);
+        await settledTurn(r.turn);
+        assert.deepEqual([how, endOf(r.turn).state], [how, how === 'no_tools' ? 'failed' : 'stopped'], endOf(r.turn).message);
+        assert.ok(!methodsIn(custom, pid).includes('session/prompt'), 'never prompted');
+        // Its MCP server connects meanwhile; the next message goes to the same agent.
+        custom.release(hold);
+        await custom.waitFor((x) => x.event === 'mcp_tools' && custom.of(pid)(x), CEILING);
+        const r2 = await w.turn({ text: 'Two.', provider: `agent:${CUSTOM_ID}`, tab: 'tab-1', conversation: r.body.conversation });
+        assert.equal(r2.status, 202, JSON.stringify(r2.body));
+        custom.script({ say: 'two' });
+        await settledTurn(r2.turn);
+        assert.deepEqual([endOf(r2.turn).state, endOf(r2.turn).reason], ['done', 'end_turn'], how);
+        assert.equal(lastPid(custom), pid, `${how}: the same agent`);
+        const prompts = custom.received(pid).filter((m) => m.method === 'session/prompt');
+        assert.equal(prompts.length, 1, how);
+        const texts = prompts[0].params.prompt.map((b) => b.text);
+        assert.ok(texts[0].startsWith(`${NOTE_PREFIX} `), `${how}: the agent note first: ${texts[0].slice(0, 60)}`);
+        assert.equal(texts[1], guideBlock(GUIDE, 'Workspace demo'), `${how}: the workspace notes`);
+        assert.equal(texts[2], 'Two.');
+        assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'note' && x.text === GUIDE_CHANGED_NOTE), `${how}: no note that the workspace notes changed`);
+      } finally {
+        custom.configure({ mcpLate: null });
+        custom.release(hold);
+        await w.close();
+      }
     }
   });
 

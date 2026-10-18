@@ -260,6 +260,12 @@ export class AgentSession {
   offence: AgentOffence | null = null;
   /** A turn ended with the offence as its own end (the next turn needn't say it again). */
   offenceTold = false;
+  /**
+   * Prompts sent to it so far. A kept session may never have been prompted (its first turn
+   * ended before its prompt: its tools never listed, Stop during that wait): the next one is its
+   * first prompt, with the first prompt's blocks.
+   */
+  promptsSent = 0;
   proc: AgentProcess | null = null;
   private rpc: RpcPeer | null = null;
   private readonly o: AgentSessionOptions;
@@ -566,6 +572,7 @@ export class AgentSession {
     if (!this.alive || !this.sessionId || !this.rpc) throw new AgentRunError('agent_exited', STOPPED_UNEXPECTEDLY_TEXT(this.agent.name));
     this.handlers = h;
     this.state = 'prompting';
+    this.promptsSent += 1;
     try {
       const r = await this.rpc.request(ACP.prompt, promptParams(this.sessionId, blocks), { timeoutMs: 0 });
       return stopReasonOf(r);

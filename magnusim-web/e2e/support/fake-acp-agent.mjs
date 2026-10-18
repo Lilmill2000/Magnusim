@@ -75,6 +75,9 @@
 //   {update: {...}}                          a raw session/update
 //   {later: {update, hold?}}                 a raw session/update sent after this prompt's answer
 //                                            (between prompts), once release(hold) when given
+//   {later: {request: {method, params}, hold?}}  the same for a raw request to the client (the
+//                                            session id filled in); the next waits for its answer,
+//                                            which is recorded
 //   {request: {method, params}}              a raw request to the client; its answer is recorded
 // Without a {stop} the prompt ends end_turn after its last step; session/cancel ends it
 // cancelled. Unknown requests get -32601, and it sends fs/read_text_file once per session to
@@ -568,7 +571,12 @@ async function runPrompt(id, params) {
       await record({ event: 'holding', name: l.hold });
       await getJson(`/hold?name=${encodeURIComponent(l.hold)}`);
     }
-    sessionUpdate(sessionId, l.update);
+    if (l.request) {
+      // A request between prompts: the next one goes once it is answered (the answer recorded).
+      const method = l.request.method;
+      const answer = await requestClient(method, { sessionId, ...(l.request.params ?? {}) });
+      await record({ event: 'request_answer', method, answer });
+    } else sessionUpdate(sessionId, l.update);
   }
 }
 

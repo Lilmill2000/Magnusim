@@ -9,17 +9,20 @@
  *   the conversation's agent session (kept between messages, else started: "agent" event)
  *   its tools listed: the prompt waits (AGENT_TOOLS_MS at most, else failed/agent_no_tools)
  *              until the agent's Magnusim MCP server has listed them
- *   the prompt: [the agent note and the workspace notes, on a session's first prompt;
- *                the message; the app context]
+ *   the prompt: [the agent note and the workspace notes, on the first prompt the session gets
+ *                (a kept session whose earlier turn ended before its prompt too); the message;
+ *                the app context]
  *   model ─ while it runs:
  *     the agent's updates go to the log (text, plan, its own tools, its mode and model; our
  *       own tools' updates are not logged: the runner's tool_call / tool_result are their record)
  *     its MCP calls run here (AgentTurnRun.run): the turn's owner, tab, caps, log and signal; a
  *       call that arrived before this prompt went out (an earlier message's) answers `stopped`
  *     its permission requests: ours auto-allowed (allow_once only, a tool in the list served
- *       now), its own a question in the Magnusim window (4 minutes; AGENT_UNANSWERED_MAX in a row
- *       unanswered end the turn capped/unanswered), a tools-off agent's own one the lockdown
- *       tripwire (a tool of Magnusim's server, served now or not, never is)
+ *       now); ours otherwise (a tool that left that list) answered no at once with a note, never
+ *       asked as its own tool; its own a question in the Magnusim window (4 minutes;
+ *       AGENT_UNANSWERED_MAX in a row unanswered end the turn capped/unanswered), a tools-off
+ *       agent's own one the lockdown tripwire (a tool of Magnusim's server, served now or not,
+ *       never is)
  *     the state follows what is open (questions may overlap): syncState
  *   the stop reason gives the end (the table of spec 4.7)
  *
@@ -149,6 +152,9 @@ export function callsCapText(n: number): string {
 export const AGENT_CALLS_END_TEXT = (n: number) => `The agent went on calling tools past this message's ${n}-call limit, so Magnusim stopped it.`;
 export const PICTURE_NOTE = '(The agent showed a picture; the chat will show it.)';
 export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its own tool; answer such questions in a project's Magnusim window.`;
+/** A permission request for a tool of Magnusim's server that isn't allowed without asking now (it left the list served to the agent). */
+export const NOT_OFFERED_NOTE = (name: string) =>
+  `${name} asked to use a Magnusim tool that doesn't match one offered to it now (they change when a window's link drops or a workspace closes), so Magnusim said no.`;
 /** The agent's Magnusim MCP server never listed its tools before the prompt's wait ran out. */
 export const AGENT_NO_TOOLS_TEXT = (name: string, ms: number) =>
   `${name} didn't connect to Magnusim's tools within ${Math.round(ms / 1000)} s, so this message wasn't sent to it. Send it again; if this keeps happening, run its Test in Settings → Assistant.`;
@@ -249,6 +255,8 @@ class AgentTurnRun implements AgentDispatch {
   private callsOpen = 0;
   /** Own-tool questions in a row nobody answered (they timed out). */
   private unanswered = 0;
+  /** NOT_OFFERED_NOTE was said in this turn. */
+  private notOfferedNoted = false;
 
   constructor(t: AgentRunTurn, d: AgentTurnDeps, timings: AgentTimings) {
     this.t = t;
@@ -572,6 +580,17 @@ class AgentTurnRun implements AgentDispatch {
         return allow;
       }
       // No allow_once: never allow_always (it would allow the tool for good inside the agent). A question.
+    } else if (ourTool) {
+      // Magnusim's tool, but not one it may allow without asking now (it left the list served to
+      // the agent, whose MCP server refuses its call anyway; or the request doesn't name it):
+      // answered no at once. It isn't the agent's own tool, so it is never asked as one (nor
+      // counted as a question nobody answered).
+      if (!this.notOfferedNoted) {
+        this.notOfferedNoted = true;
+        t.note(NOT_OFFERED_NOTE(this.name));
+      }
+      t.emit({ type: 'agent_permission', title, outcome: 'declined', by: 'magnusim' });
+      return pickOption(view.options, REJECT_KINDS);
     }
     if (!t.tab) {
       t.note(HOME_OWN_TOOL_NOTE(this.name));
@@ -689,7 +708,6 @@ class AgentTurnRun implements AgentDispatch {
       if (this.stoppedNow()) return;
     }
 
-    let fresh: boolean;
     try {
       const agentId = t.settings.agent.id;
       const got = await d.host.acquire({
@@ -711,7 +729,6 @@ class AgentTurnRun implements AgentDispatch {
         },
       });
       this.session = got.session;
-      fresh = got.fresh;
       if (got.fresh) for (const n of got.session.notes) t.note(n);
       if (got.restarted) t.note(RESTARTED_TEXT(this.name));
       // Why the earlier agent was ended between messages.
@@ -765,7 +782,8 @@ class AgentTurnRun implements AgentDispatch {
         t.end('failed', offence, offence === 'agent_lockdown' ? LOCKDOWN_TEXT(this.name) : MODE_TEXT(this.name));
         return;
       }
-      const blocks = this.blocks(session, fresh);
+      // Its first prompt: the session's (one kept from a turn that ended before its prompt too).
+      const blocks = this.blocks(session, session.promptsSent === 0);
       this.prompted = true;
       this.syncState();
       // Its calls from now on are this message's (a call that arrived before is an earlier one's).
@@ -835,12 +853,12 @@ class AgentTurnRun implements AgentDispatch {
     return !!s && bindingServes(s.binding.id, name);
   }
 
-  /** The prompt's blocks (spec 4.7 step 5). */
-  private blocks(session: AgentSession, fresh: boolean): ContentBlock[] {
+  /** The prompt's blocks (spec 4.7 step 5); `first`: the session was never prompted. */
+  private blocks(session: AgentSession, first: boolean): ContentBlock[] {
     const t = this.t;
     const ws = t.tab ? this.d.registry.workspaceOf(t.tab) : null;
     const out: ContentBlock[] = [];
-    if (fresh) {
+    if (first) {
       if (!noteInSystemPrompt({ sessionMeta: policyOf(this.d.known).sessionMeta })) out.push(noteBlock());
       if (ws?.guide) {
         sessionGuides.set(session, ws.guide);
