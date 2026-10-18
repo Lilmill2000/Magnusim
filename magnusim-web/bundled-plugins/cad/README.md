@@ -708,6 +708,7 @@ as features land, and run `npm run gen:registry` in `magnusim-web` after.
 | `e2e/` | Playwright tests against the host app (`e2e/host-server.mjs` starts it with the app's `startHost()`). |
 | `fixtures/` | Synthetic STEP files and native reference values for the kernel tests. |
 | `scripts/` | `build.mjs` (page + workers), `e2e.mjs` (build + e2e under a lock), the shard map and the gates. |
+| `eval/` | The Assistant's evaluation set: the tasks, their reference calls, the scorer and `run.mjs` (`npm run eval:assistant`). See `eval/README.md`. Its records go to the gitignored `.cache/assistant-eval/`. |
 | `docs/` | `p2p3-plan.md`: the P2/P3 build plan (schema, kernel API 3, extension points). `assistant.md`: the Assistant's tools, for developers (how a call goes, each tool's pieces, adding and testing a tool). |
 | `ARCHITECTURE.md` | Areas, contracts and rules for anyone changing the code. |
 | `CHANGELOG.md` | What changed in each version, for users. |
@@ -732,6 +733,7 @@ npm run test:e2e       # build, start the host app on a free port, run every spe
 npm run test:e2e:smoke # the smoke set (@smoke): one path through every area, about 2 min
 npm run test:e2e:sketch   # one area shard (shell, sketch, solids, step, link, assistant, big): see "The e2e suite" below
 npm run test:e2e:assistant   # the Assistant's tools: each spec on its own app server with the app's scripted model (no provider is called)
+npm run eval:assistant -- --tasks all --scripted   # the Assistant's evaluation set with the scripted model; a real model needs --profile or --attach (eval/README.md)
 npm run test:e2e:changed  # only the shards the changed files need (git status)
 npm run test:e2e:changed -- --base origin/master   # ... and the files that differ from origin/master
 CAD_E2E_CHANNELS=chrome,msedge npm run test:e2e   # also real Chrome and Edge
@@ -825,7 +827,7 @@ suite once per phase.
   | solids | `test:e2e:solids` | P4a: the solid features, CONSTRUCT, edge names; P4b: patterns and mirror, Measure picks through a rebuild | `cad-p4a-solids`, `-construct`, `-fix1`, `-integrate`, `cad-p4b-pattern` |
   | step | `test:e2e:step` | STEP import and edit, Combine, Measure, Export, the Enclosure (P2 gate); P4b's exit gate (a sketch on an imported face with projected edges through an upstream Delete faces) | `cad-p2-step`, `cad-p2-features-step`, `cad-p2-kernel-ops`, `cad-sd-enclosure`, `cad-sd-review1`, `cad-sd-review2`, `cad-p4b-project-step` |
   | link | `test:e2e:link` | the Part as a project geometry (gate:l2-cad and gate:l3-cad's specs), the start actions | `cad-link*`, `cad-start` |
-  | assistant | `test:e2e:assistant` | the Part's tools for the app's Assistant: the tools offered, watch mode and the chip, honest errors, the person first, take-overs. Each spec runs its own app server on `CAD_E2E_PORT_FROM` + 60 to + 100 with the Assistant's test switches and the app's scripted model (`e2e/assistant-helpers.ts`) | `cad-assistant-watch`, `-honest`, `-coexist`, `-takeover` |
+  | assistant | `test:e2e:assistant` | the Part's tools for the app's Assistant: the tools offered, watch mode and the chip, honest errors, the person first, take-overs, the evaluation set's tasks replayed from their references. Each spec runs its own app server on `CAD_E2E_PORT_FROM` + 60 to + 100 with the Assistant's test switches and the app's scripted model (`e2e/assistant-helpers.ts`) | `cad-assistant-watch`, `-honest`, `-coexist`, `-takeover`, `-eval` |
   | big | `test:e2e:big` | opt-in: the 113 MB STEP (`CAD_E2E_BIG_STEP`; skipped without it) | `cad-large-step` |
 
   A new spec goes into the shard of the area it tests.

@@ -355,9 +355,10 @@ No test reaches a real model provider or this PC's real Assistant files.
   `docs/assistant.md` "Tests" there).
   - The browser shard `assistant` (`npm run test:e2e:assistant` in that folder, or
     `node scripts/e2e.mjs e2e/<spec>` for one spec): `cad-assistant-watch`, `-honest`,
-    `-coexist` and `-takeover`. Each spec starts its own app server with
+    `-coexist`, `-takeover` and `-eval` (the evaluation set's tasks replayed from their
+    references; `eval/README.md` there). Each spec starts its own app server with
     `startAssistantHost(name, offset)` from `e2e/assistant-helpers.ts`, on
-    `CAD_E2E_PORT_FROM` + 60, 70, 80 and 100 (+90 is the evaluation's), with the fake
+    `CAD_E2E_PORT_FROM` + 60, 70, 80, 90 (the evaluation's) and 100, with the fake
     provider, `MAGNUSIM_TEST_ASSISTANT=1`, the fake's address, `MAGNUSIM_TEST_EVENT_HUB=1`,
     a 2 s hold and no WSL. The helpers wrap the turn helpers above (`useScriptedModel`,
     `startTurn`, `offeredTools`, `resultsIn`) and add CAD's own: a project with a Part
