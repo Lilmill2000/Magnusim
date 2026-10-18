@@ -17,7 +17,7 @@
 // Magnusim uses with it); signing in (connect again hears the agent ask for it: the Sign in
 // block shows the terminal command the agent sent, as its program's name, and Copy puts it on
 // the clipboard; signed in, connect again connects; the Test calls Magnusim's test tool; the
-// Model and Mode the agent listed, the modes only those Magnusim uses); the Default choice
+// Model it listed saved, and no Mode select when Magnusim uses one mode); the Default choice
 // offering the agents found beside a saved API key (D-A), a coding agent as the default keeping
 // every key, and the coding agents' limits shown and saved; a custom agent added with a
 // variable to pass, a turn on it refused without the launch proof and while it is off (nothing
@@ -474,7 +474,7 @@ test('rows: each known agent found or missing, with its sign-in state; Claude Co
   expect(rows.find((r) => r.id === 'opencode').allowed_modes).toBe('initial');
 });
 
-test("signing in: connect again hears Claude Code ask for it, and the Sign in block shows its terminal command (Copy); signed in, it connects; the Test calls Magnusim's test tool; the Model and Mode it listed (only the modes Magnusim uses) are saved", async ({ page, request }) => {
+test("signing in: connect again hears Claude Code ask for it, and the Sign in block shows its terminal command (Copy); signed in, it connects; the Test calls Magnusim's test tool; the Model it listed is saved, and no Mode to choose (Magnusim uses only Default with it)", async ({ page, request }) => {
   test.setTimeout(180_000);
   await recordClipboard(page);
   // The agent's own way to sign in, as the real adapter sends it: Magnusim's Node, its own script and safe arguments.
@@ -530,11 +530,11 @@ test("signing in: connect again hears Claude Code ask for it, and the Sign in bl
   expect(connected.last.modes.map((m) => m.id)).toEqual(['default', 'plan']);
   expect(connected.last.models.map((m) => m.id)).toEqual(['fake-large', 'fake-small']);
 
-  // Model and Mode as it listed them: the modes only those Magnusim uses with it (not plan).
+  // Model as it listed them. Mode: of the modes it listed (default, plan) Magnusim uses only
+  // Default, which it sets at every start, so there is nothing to choose and no Mode select.
   const model = claude.locator('select[data-assistant-agent-model]');
-  const mode = claude.locator('select[data-assistant-agent-mode]');
   await expect(model.locator('option')).toHaveText(["The agent's own choice", 'Fake large', 'Fake small']);
-  await expect(mode.locator('option')).toHaveText(['The mode it starts in', 'Default']);
+  await expect(claude.locator('select[data-assistant-agent-mode]')).toHaveCount(0);
   await model.selectOption('fake-small');
   await expect.poll(async () => (await agentsNow(request)).find((r) => r.id === 'claude').model).toBe('fake-small');
   expect(settingsFile().agents.claude).toMatchObject({ model: 'fake-small', mode: null });

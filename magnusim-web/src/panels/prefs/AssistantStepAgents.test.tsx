@@ -29,6 +29,7 @@ import {
   NO_AGENT_TEST_TEXT,
   NO_SIGN_IN_TEXT,
   offeredModes,
+  modeChoice,
   OWN_TOOLS_OFF,
   OWN_TOOLS_ON,
   SIGNIN_AGENT_NOTE,
@@ -943,7 +944,7 @@ describe('Coding agents: model and mode', () => {
     expect(posts('/api/assistant/settings')[1]).toEqual({ agents: { claude: { model: null } } });
   });
 
-  it('Mode offers only the modes Magnusim uses with the agent: none for one kept in the mode it starts in, or when the server says nothing', async () => {
+  it('Mode offers only the modes Magnusim uses with the agent, "none" saying what Magnusim sets: no select with nothing to choose (one mode it sets anyway), for one kept in the mode it starts in, or when the server says nothing', async () => {
     const listed = [
       { id: 'default', name: 'Default' },
       { id: 'acceptEdits', name: 'Accept edits' },
@@ -957,12 +958,32 @@ describe('Coding agents: model and mode', () => {
       codex({ id: 'custom-0a0a0a', name: 'Mine', kind: 'custom', allowed: true, ready: true, reason: null, allowed_modes: 'initial', last }),
       row({ id: 'opencode', name: 'OpenCode', allowed_modes: 'initial', last }),
       row({ id: 'old', name: 'Old server', last }),
+      row({ id: 'two', name: 'Two', allowed_modes: ['acceptEdits', 'default'], last }),
+      row({ id: 'unlisted', name: 'Unlisted', allowed_modes: ['plan', 'default'], last }),
+      row({ id: 'stale', name: 'Stale', allowed_modes: ['default'], mode: 'acceptEdits', last }),
     ];
     await renderAgents();
-    const options = (id: string) => [...agent(id).querySelectorAll<HTMLOptionElement>('select[data-assistant-agent-mode] option')].map((o) => o.value);
-    expect(options('claude')).toEqual(['', 'default']);
-    expect(options('codex')).toEqual(['', 'read-only']);
-    for (const id of ['custom-0a0a0a', 'opencode', 'old']) expect(agent(id).querySelector('select[data-assistant-agent-mode]'), id).toBeNull();
+    const options = (id: string) => [...agent(id).querySelectorAll<HTMLOptionElement>('select[data-assistant-agent-mode] option')].map((o) => [o.value, o.textContent]);
+    // Only the mode Magnusim sets at every start anyway: nothing to choose.
+    for (const id of ['claude', 'codex', 'custom-0a0a0a', 'opencode', 'old']) expect(agent(id).querySelector('select[data-assistant-agent-mode]'), id).toBeNull();
+    // "None" is the first mode Magnusim uses (it sets it, over the person's own default).
+    expect(options('two')).toEqual([
+      ['', "Accept edits (Magnusim's choice)"],
+      ['default', 'Default'],
+      ['acceptEdits', 'Accept edits'],
+    ]);
+    // That one not listed by the agent: nothing is set, it stays in the mode it starts in.
+    expect(options('unlisted')).toEqual([
+      ['', 'The mode it starts in'],
+      ['default', 'Default'],
+    ]);
+    // A saved mode no longer offered still shows, beside the one Magnusim sets.
+    expect(options('stale')).toEqual([
+      ['', "Default (Magnusim's choice)"],
+      ['acceptEdits', 'acceptEdits'],
+      ['default', 'Default'],
+    ]);
+    expect(modeChoice(readAgentRow(row({ allowed_modes: ['default'], mode: 'default', last }))!)).toBeNull();
     expect(offeredModes(readAgentRow(row({ allowed_modes: ['plan'], last }))!)).toEqual([]);
     expect(readAgentRow(row({ allowed_modes: 'initial' }))!.allowed_modes).toBe('initial');
     expect(readAgentRow(row({ allowed_modes: ['a', 3, 'b'] }))!.allowed_modes).toEqual(['a', 'b']);
@@ -1111,9 +1132,18 @@ describe('Coding agents in the Default choice and the limits', () => {
     expect(q<HTMLInputElement>('[data-assistant-default-option="agent:claude"] input')!.checked).toBe(true);
   });
 
-  it('a saved default agent that is no longer found is still shown, chosen', async () => {
+  it("a saved default agent that is no longer found is still shown, chosen, under its name with why it can't run (its row, as the server sends it)", async () => {
     await renderAgents({ provider: 'agent:gemini' });
     expect(q<HTMLInputElement>('[data-assistant-default-option="agent:gemini"] input')!.checked).toBe(true);
+    cleanup();
+    resetStatusStore();
+    const missingRow = { label: 'Gemini CLI', kind: 'agent', ready: false, reason: 'agent_missing', billing: 'agent_account', detail: 'Not installed' };
+    await renderAgents({ provider: 'agent:gemini', ready: false, ready_reason: 'agent_missing', ...ready({}), providers_ready: { ...ready().providers_ready, 'agent:gemini': missingRow } });
+    const gemini = q('[data-assistant-default-option="agent:gemini"]')!;
+    expect(within(gemini as HTMLElement).getByRole('radio', { name: /^Gemini CLI \(coding agent\)/ })).toBeChecked();
+    expect(gemini.querySelector('[data-assistant-default-state]')).toHaveTextContent('Not installed');
+    expect(gemini.querySelector('[data-assistant-dot]')).toHaveAttribute('data-assistant-dot', 'not-ready');
+    expect(gemini.querySelector('[data-assistant-default-billing]')!.textContent).toBe(defaultBillingText('Gemini CLI'));
   });
 
   it("the limits: API keys' (with Spent today (API keys)) and coding agents' (changes, tool calls, minutes per message), each saved at once", async () => {

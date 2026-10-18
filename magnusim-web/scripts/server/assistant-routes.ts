@@ -336,7 +336,8 @@ function readiness(src: StatusSources): { ready: boolean; ready_reason: string |
   if (p === 'off') return { ready: false, ready_reason: 'provider_off' };
   if (isAgentProvider(p)) {
     // The coding agent's own row (from the discovery cache; not looked for yet: not_checked;
-    // looked for and not found: a known agent is missing, any other id unknown).
+    // looked for and not found: a known agent is missing, any other id unknown; the saved
+    // default always has one, the fallback below is the same rule).
     const row = agentReadyRows(src.agents)[p] as { ready?: boolean; reason?: string | null } | undefined;
     if (row) return { ready: row.ready === true, ready_reason: row.reason ?? null };
     const id = p.slice('agent:'.length);

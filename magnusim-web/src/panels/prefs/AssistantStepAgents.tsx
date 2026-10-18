@@ -109,6 +109,8 @@ export const removeTitle = (name: string) => `Remove ${name}?`;
 export const removeCopy = (name: string) => `Magnusim forgets ${name}'s command, its switch and its choices. You can add it again.`;
 export const MODEL_DEFAULT = "The agent's own choice";
 export const MODE_DEFAULT = 'The mode it starts in';
+/** No mode chosen when Magnusim sets one at every start (spec 4.6 step 6): the mode it sets. */
+export const magnusimModeText = (name: string) => `${name} (Magnusim's choice)`;
 export const MCP_UNAVAILABLE_TEXT = "Magnusim couldn't open the connection its tools use. Restart Magnusim; if it keeps happening, see Other apps (MCP) below.";
 
 const secs = (ms: number) => (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
@@ -948,9 +950,26 @@ export function offeredModes(row: Pick<AgentRow, 'last' | 'allowed_modes'>): Mod
   return (row.last?.modes ?? []).filter((m) => allowed.includes(m.id));
 }
 
+/**
+ * The Mode select, or null when there is nothing to choose. With no mode chosen Magnusim sets the
+ * first mode it uses with the agent at every start (over the person's own default; spec 4.6 step
+ * 6), so that is what "none" says; when the agent didn't list that one, nothing is set and it
+ * stays in the mode it starts in. Only that one mode offered (and none other saved): no select.
+ */
+export function modeChoice(row: Pick<AgentRow, 'last' | 'allowed_modes' | 'mode'>): { own: string; modes: ModeView[] } | null {
+  const modes = offeredModes(row);
+  const allowed = row.allowed_modes;
+  if (!modes.length || !Array.isArray(allowed)) return null;
+  const firstId = allowed[0];
+  const first = modes.find((m) => m.id === firstId) ?? null;
+  if (first && modes.length === 1 && (row.mode === null || row.mode === first.id)) return null;
+  return { own: first ? magnusimModeText(first.name || first.id) : MODE_DEFAULT, modes };
+}
+
 function ChoiceBlock({ row, onReload }: { row: AgentRow; onReload: () => void }) {
   const models = row.last?.models ?? [];
-  const modes = offeredModes(row);
+  const modeView = modeChoice(row);
+  const modes = modeView?.modes ?? [];
   const [error, setError] = useState('');
   const [pending, setPending] = useState<{ model?: string | null; mode?: string | null }>({});
   const errorId = useId();
@@ -995,7 +1014,7 @@ function ChoiceBlock({ row, onReload }: { row: AgentRow; onReload: () => void })
   return (
     <div className="wiz-assistant-agent-choices">
       {models.length ? select('model', 'Model', MODEL_DEFAULT, models, model) : null}
-      {modes.length ? select('mode', 'Mode', MODE_DEFAULT, modes, mode) : null}
+      {modeView ? select('mode', 'Mode', modeView.own, modes, mode) : null}
       {error ? (
         <p id={errorId} className="wiz-assistant-error" role="alert" data-assistant-agent-choice-error="1">
           {error}

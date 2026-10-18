@@ -1239,9 +1239,13 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
       assert.deepEqual([r.json.provider, r.json.default_provider, r.json.ready, r.json.ready_reason], ['agent:claude', 'agent:claude', true, null]);
       r = await plainPost('/api/assistant/settings', { provider: 'agent:codex' });
       assert.deepEqual([r.json.ready, r.json.ready_reason], [false, 'agent_not_allowed']);
-      // Looked for and not found: missing (not "not looked for yet").
+      // Looked for and not found: missing (not "not looked for yet"); its row names it and says why
+      // (Settings' Default choice shows it), though an agent not installed is otherwise not offered.
       r = await plainPost('/api/assistant/settings', { provider: 'agent:gemini' });
       assert.deepEqual([r.json.ready, r.json.ready_reason], [false, 'agent_missing']);
+      assert.deepEqual(r.json.providers_ready['agent:gemini'], { label: 'Gemini CLI', kind: 'agent', ready: false, reason: 'agent_missing', billing: 'agent_account', detail: 'Not installed' });
+      r = await plainPost('/api/assistant/settings', { provider: 'agent:claude' });
+      assert.equal(r.json.providers_ready['agent:gemini'], undefined, 'not the default: not offered');
     } finally {
       await plainPost('/api/assistant/settings', { provider: before });
     }

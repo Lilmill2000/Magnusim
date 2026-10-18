@@ -188,7 +188,8 @@ export interface AgentChoice {
 /**
  * The coding agents the Default choice offers: each `agent:<id>` row of `providers_ready`
  * (every found known agent and every custom agent, after the agents were looked for), in the
- * server's order, and the saved default when it is an agent with no row (not found now).
+ * server's order. The saved default is always among them: the server sends a row for it when
+ * it isn't found now (its name, and why it can't run); a server that sends none gets it by id.
  */
 export function agentChoices(status: AssistantStatus): AgentChoice[] {
   const out: AgentChoice[] = [];

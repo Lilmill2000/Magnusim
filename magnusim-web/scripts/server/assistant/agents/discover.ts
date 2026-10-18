@@ -1235,6 +1235,7 @@ const NOT_READY_DETAIL: Readonly<Record<string, string>> = Object.freeze({
   agent_signed_out: 'Not signed in',
   mcp_unavailable: "Magnusim's tool connection isn't available",
   not_checked: 'Not looked for yet',
+  agent_unknown: 'No such coding agent',
 });
 
 const LOGIN_SHORT: Readonly<Record<SignedIn, string>> = Object.freeze({ yes: 'Signed in', key: 'Key from the environment', no: 'Not signed in', unknown: 'Sign-in not known' });
@@ -1242,7 +1243,10 @@ const LOGIN_SHORT: Readonly<Record<SignedIn, string>> = Object.freeze({ yes: 'Si
 /**
  * The status' providers_ready rows of the coding agents (`agent:<id>`): every found known agent
  * and every custom agent of the last discovery (a custom agent not looked up since it was added:
- * not_checked). From the cache only: the status never starts a process.
+ * not_checked), and the saved default when it is an agent with no row of its own, so Settings
+ * names it and says why it can't run (not looked for yet; looked for and not found: a known
+ * agent agent_missing, any other id agent_unknown). From the cache only: the status never
+ * starts a process.
  */
 export function agentReadyRows(ctx: RowContext): Record<string, Record<string, unknown>> {
   const d = agentsCache();
@@ -1263,6 +1267,13 @@ export function agentReadyRows(ctx: RowContext): Record<string, Record<string, u
   for (const a of ctx.settings.custom_agents) {
     const e = cachedCustom(d, a);
     put(a.id, a.name, e ? agentRow(e, ctx) : null);
+  }
+  const saved: string = ctx.settings.provider;
+  if (saved.startsWith('agent:') && !Object.hasOwn(out, saved)) {
+    const id = saved.slice('agent:'.length);
+    const k = KNOWN_AGENTS.find((x) => x.id === id);
+    const reason = !d ? 'not_checked' : k ? 'agent_missing' : 'agent_unknown';
+    out[saved] = { label: k?.name ?? id, kind: 'agent', ready: false, reason, billing: 'agent_account', detail: NOT_READY_DETAIL[reason] };
   }
   return out;
 }
