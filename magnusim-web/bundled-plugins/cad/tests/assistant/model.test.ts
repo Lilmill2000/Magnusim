@@ -158,11 +158,16 @@ describe('get_model full and one feature', () => {
     async () => {
       h = await assistantHarness();
       await plate(h);
+      // A construction plane: no tool writes it.
+      await h.add('ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: 't', flip: false });
       const d = (await h.ok('get_model', { detail: 'full', feature: '' })).data;
       expect(bytes(d)).toBeLessThanOrEqual(24 * 1024);
-      const ex = (d.features as Row[])[1];
-      expect(ex).toMatchObject({ name: 'Extrude 1', inputs: null, summary: 'Extrude · op new' });
-      expect(ex.values).toContainEqual({ field: 'extent.distance', expr: 't' });
+      const [, ex, plane] = d.features as Row[];
+      expect(plane).toMatchObject({ name: 'Plane 1', inputs: null, summary: 'Plane · method offset' });
+      expect(plane.values).toContainEqual({ field: 'distance', expr: 't' });
+      // An extrude is written in the extrude tool's fields.
+      expect(ex).toMatchObject({ name: 'Extrude 1', inputs: { edit: 'Extrude 1', extent: 'blind', distance: 't' }, values: [{ field: 'distance', expr: 't' }] });
+      expect(ex.summary).toBeUndefined();
     },
     REAL_KERNEL_MS,
   );

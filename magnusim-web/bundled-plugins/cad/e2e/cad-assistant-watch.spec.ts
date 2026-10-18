@@ -103,12 +103,12 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   host.fake.reply(
     // The model is still answering: the chip says the Assistant thinks.
     { hold: 'think', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
-    { tools: [{ name: 'cad__extrude', input: { edit: '', name: '', sketch: 'Sketch 1', regions: ['all'], extent: 'blind', distance: '5 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
-    { text: 'The Part is empty, and I cannot extrude yet.' },
+    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Plate.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' } }] },
+    { text: 'The Part is empty, and I cannot drill yet.' },
   );
   // The read stops where the Part has settled, so the chip is seen working.
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { hold(p: string): void } } }).__CAD__.assistant.hold('after-settled'));
-  const t = await startTurn(request, host, { text: 'Read the Part, then extrude Sketch 1.', tab });
+  const t = await startTurn(request, host, { text: 'Read the Part, then drill a hole.', tab });
   await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
   await expect(chip).toHaveText(/^Assistant · thinking · \d+ of 120 steps$/, STEP);
   await expect(app).toHaveAttribute('data-assistant', 'thinking');
@@ -120,7 +120,7 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   const { turn } = await t.ended(STEP_MS * 2);
   expect(turn.state).toBe('done');
   await expect(chip).toHaveAttribute('data-assistant-state', 'ended', STEP);
-  await expect(chip).toHaveText('Assistant: Read the Part, then extrude Sketch 1. · done');
+  await expect(chip).toHaveText('Assistant: Read the Part, then drill a hole. · done');
   await expect(app).toHaveAttribute('data-assistant', 'ended');
   // Every phase the frame showed, in order (the second call answers at once: its working may not be drawn).
   const shown = await readRecord(page, 'phase');
@@ -129,7 +129,7 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   expect(shown.every((p) => ['idle', 'thinking', 'working', 'ended'].includes(p)), shown.join(' ')).toBe(true);
 
   // What the model got back.
-  const [, afterRead, afterExtrude] = chats(host).slice(before);
+  const [, afterRead, afterHole] = chats(host).slice(before);
   const [read] = resultsIn(afterRead);
   expect(read).toMatchObject({
     tool: 'cad__get_model',
@@ -137,17 +137,17 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
     data: { part: 'Part 1', units: { length: 'mm', angle: 'deg' }, editable: true, rolled_back: null, person: null, features: [], bodies: [], params: [], notes: 'If you have no notes from the CAD workspace, read help guide' },
   });
   expect(typeof read.data!.rev).toBe('number');
-  const [extrude] = resultsIn(afterExtrude);
-  expect(extrude).toMatchObject({
-    tool: 'cad__extrude',
+  const [hole] = resultsIn(afterHole);
+  expect(hole).toMatchObject({
+    tool: 'cad__hole',
     ok: false,
-    error: { code: 'not_ready', message: 'not_built: extrude is not in this build yet.', hint: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.', detail: { reason: 'not_built', tool: 'extrude' } },
+    error: { code: 'not_ready', message: 'not_built: hole is not in this build yet.', hint: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.', detail: { reason: 'not_built', tool: 'hole' } },
   });
   // The page's ledger: what the eval counts.
   const calls = await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { calls: { tool: string; ok: boolean; reason?: string; key: string }[] } } }).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null, key: c.key })));
   expect(calls).toEqual([
     { tool: 'get_model', ok: true, reason: null, key: `turn:${t.id}` },
-    { tool: 'extrude', ok: false, reason: 'not_built', key: `turn:${t.id}` },
+    { tool: 'hole', ok: false, reason: 'not_built', key: `turn:${t.id}` },
   ]);
 });
 

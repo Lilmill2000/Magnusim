@@ -15,6 +15,7 @@ export { tool as delete } from './delete';
 // edit_feature: Change a feature.
 export { tool as edit_feature } from './edit_feature';
 // extrude: Extrude.
+export { tool as extrude } from './extrude';
 // find: Find faces, edges or regions.
 export { tool as find } from './find';
 // get_model: Read the Part.
@@ -29,6 +30,7 @@ export { tool as modify } from './modify';
 // pattern: Pattern or mirror.
 export { tool as pattern } from './pattern';
 // revolve: Revolve.
+export { tool as revolve } from './revolve';
 // set_params: Set parameters.
 export { tool as set_params } from './set_params';
 // sketch: Sketch.

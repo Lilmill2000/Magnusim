@@ -397,3 +397,156 @@ test('cad:assistant-honest-pattern copies that miss their body change nothing; n
   // One body of three plates: the volume chip.
   await expect.poll(async () => Math.round(Number(await frame.locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3'))), STEP).toBe(3 * 7200);
 });
+
+// Honest 2 and 3 (T5): a join or a cut that meets nothing changes nothing and says which way it
+// missed. A boss sketched beside the person's plate and joined fails with CAD's own words
+// (feature_failed, detail.sub no_overlap); a pocket on the plate's top face cut away from it
+// answers wrong_side with the flip hint, and resent with flip true it cuts (the tree's row, the
+// volume chip). The L bracket the model builds (polyline, symmetric extrude): a hole sketched on
+// its -X face at v = +22.5 and cut through lies below it, so the answer is off_body with the face's
+// frame in words ("u runs +Y, v runs -Z"). Each time the person's tree, panels, volume and Undo are
+// as before the call.
+const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+/** A disc on `on`, fully defined: its centre at (u, v) from the sketch origin and its diameter (no (-) in the tree). */
+const DISC = (name: string, on: string, u: number, v: number, r: number) => ({
+  edit: '',
+  name,
+  on,
+  entities: [{ id: 'c', kind: 'circle', at: [u, v, r], construction: false }],
+  constraints: [
+    { id: 'cu', kind: 'distance_x', refs: ['origin', 'c.center'], value: `${u} mm` },
+    { id: 'cv', kind: 'distance_y', refs: ['origin', 'c.center'], value: `${v} mm` },
+    { id: 'cd', kind: 'diameter', refs: ['c'], value: `${2 * r} mm` },
+  ],
+  infer: false,
+});
+type MissCad = { __CAD__: { services: { doc: { state: { get(): { history: { undoLabel: string | null } } } } }; assistant: { setPace(p: string | null, scale?: number | null): void } } };
+const undoNow = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as MissCad).__CAD__.services.doc.state.get().history.undoLabel);
+const volumeNow = async (page: Page) => Math.round(Number(await cadFrame(page).locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3')));
+
+test('cad:assistant-honest-join a boss joined beside the plate changes nothing and answers no_overlap with CAD\'s words', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest join');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as MissCad).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 6] });
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  await expect.poll(() => volumeNow(page), STEP).toBe(7200);
+  const before = chats(host).length;
+  host.fake.reply(
+    // A disc 30 mm past the plate's end, joined: nothing to join.
+    { tools: [{ name: 'cad__sketch', input: DISC('Boss sketch', 'Top', 70, 15, 5) }] },
+    { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Boss', sketch: 'Boss sketch', distance: '6 mm', op: 'join' }) }] },
+    { text: 'The boss does not touch the plate.' },
+  );
+  const t = await startTurn(request, host, { text: 'Add a boss beside the plate.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, , afterJoin] = chats(host).slice(before);
+  const [join] = resultsIn(afterJoin);
+  expect(join).toMatchObject({
+    tool: 'cad__extrude',
+    ok: false,
+    error: {
+      code: 'failed',
+      hint: 'A join needs overlap: move the profile onto the body, or use op new and then combine.',
+      detail: { reason: 'feature_failed', feature: 'Boss', sub: 'no_overlap', message: 'Nothing to join: Boss shares no face with a body made before it', profile_bbox_mm: [[65, 10, 0], [75, 20, 0]], bodies: [{ body: 'Body 1', bbox_mm: [[0, 0, 0], [40, 30, 6]] }] },
+    },
+  });
+  expect(join.error!.message).toMatch(/^feature_failed: Boss fails: Nothing to join: Boss shares no face with a body made before it\. It touches no body\. /);
+  // What the person sees: the sketch the turn made, no Boss row, no panel, the volume as it was.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1', 'Boss sketch']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  await expect.poll(() => volumeNow(page), STEP).toBe(7200);
+  // The Undo is the turn's sketch, nothing of the refused join.
+  expect(await undoNow(page)).toBe('Assistant: Add a boss beside the plate.');
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+});
+
+test('cad:assistant-honest-miss a cut that points away answers wrong_side with the flip hint; resent with flip it cuts', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest miss');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as MissCad).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 6] });
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  await expect.poll(() => volumeNow(page), STEP).toBe(7200);
+
+  // A pocket on the plate's top face: cut along its normal (out of the plate), then with flip.
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: DISC('Pocket sketch', 'Extrude 1.end', 20, 15, 5) }] },
+    { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Pocket', sketch: 'Pocket sketch', distance: '3 mm', op: 'cut' }) }] },
+    { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Pocket', sketch: 'Pocket sketch', distance: '3 mm', flip: true, op: 'cut' }) }] },
+    { text: 'The pocket is cut 3 mm deep.' },
+  );
+  const t1 = await startTurn(request, host, { text: 'Cut a pocket in the plate.', tab });
+  expect((await t1.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, , afterAway, afterFlip] = chats(host).slice(before);
+  const [away] = resultsIn(afterAway);
+  expect(away).toMatchObject({
+    tool: 'cad__extrude',
+    ok: false,
+    error: { code: 'failed', hint: 'The cut points away from the body: set flip true, or use hole.', detail: { reason: 'feature_failed', feature: 'Pocket', sub: 'wrong_side', other_way: 'Body 1', frame: { words: 'u runs +X, v runs +Y, origin (0, 0, 6)' } } },
+  });
+  expect(away.error!.message).toMatch(/It points away from the body: with flip true it would cut Body 1\.$/);
+  const [cut] = resultsIn(afterFlip);
+  expect(cut).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Pocket', type: 'extrude', state: 'ok' }, broke: [] } });
+  expect(cut.text).toBe('Extrude Pocket ok · Body 1 7200 → 6964 mm³');
+  // The person's tree has the one Pocket that was kept, and the volume chip the cut.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1', 'Pocket sketch', 'Pocket']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  await expect.poll(() => volumeNow(page), STEP).toBe(Math.round(7200 - 75 * Math.PI));
+});
+
+test('cad:assistant-honest-offbody a hole cut beside the L bracket answers off_body with the face\'s frame in words; nothing changes', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  // The L bracket the model builds, then a hole on its -X face at v = +22.5: below the bracket (v runs -Z there).
+  const L = [0, 0, 50, 0, 50, 5, 5, 5, 5, 40, 0, 40, 0, 0];
+  const lProfile = {
+    edit: '',
+    name: 'L profile',
+    on: 'Front',
+    entities: [{ id: 'p', kind: 'polyline', at: L, construction: false }],
+    constraints: [
+      { id: 'o', kind: 'coincident', refs: ['p.p0', 'origin'], value: '' },
+      { id: 'a', kind: 'distance', refs: ['p.1'], value: '50 mm' },
+      { id: 'b', kind: 'distance', refs: ['p.6'], value: '40 mm' },
+      { id: 't1', kind: 'distance', refs: ['p.2'], value: '5 mm' },
+      { id: 't2', kind: 'distance', refs: ['p.5'], value: '5 mm' },
+    ],
+    infer: true,
+  };
+  const pid = await newProject(request, host, 'Assistant honest bracket');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as MissCad).__CAD__.assistant.setPace('fast', 0));
+  const next = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: lProfile }] },
+    { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Bracket', sketch: 'L profile', extent: 'symmetric', distance: '30 mm' }) }] },
+    { tools: [{ name: 'cad__sketch', input: DISC('Hole sketch', 'Bracket.side(p.6)', 0, 22.5, 3) }] },
+    { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Hole', sketch: 'Hole sketch', extent: 'through', flip: true, op: 'cut' }) }] },
+    { text: 'The hole missed the bracket: v runs -Z on that face.' },
+  );
+  const t2 = await startTurn(request, host, { text: 'An L bracket with a hole in its upright.', tab });
+  expect((await t2.ended(STEP_MS * 4)).turn.state).toBe('done');
+  const [, afterProfile, afterBracket, , afterHole] = chats(host).slice(next);
+  expect(resultsIn(afterProfile)[0]).toMatchObject({ tool: 'cad__sketch', ok: true, data: { solver: { state: 'fully', dof: 0 } } });
+  expect(resultsIn(afterBracket)[0]).toMatchObject({ tool: 'cad__extrude', ok: true, text: 'Extrude Bracket ok · Body 1 made (12750 mm³)' });
+  const [hole] = resultsIn(afterHole);
+  expect(hole).toMatchObject({
+    tool: 'cad__extrude',
+    ok: false,
+    error: {
+      code: 'failed',
+      hint: 'The profile lies beside the body: read detail.frame (where u and v point in model axes) and move the profile.',
+      detail: { reason: 'feature_failed', feature: 'Hole', sub: 'off_body', frame: { u: [0, 1, 0], v: [0, 0, -1], normal: [-1, 0, 0] }, profile_bbox_mm: [[0, -3, -25.5], [0, 3, -19.5]] },
+    },
+  });
+  expect((hole.error!.detail!.frame as { words: string }).words).toContain('u runs +Y, v runs -Z');
+  // The person's tree: the bracket and the hole's sketch, no Hole; the bracket's volume.
+  await expect.poll(() => treeNames(page), STEP).toEqual(['L profile', 'Bracket', 'Hole sketch']);
+  await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+  await expect.poll(() => volumeNow(page), STEP).toBe(12750);
+  expect(await undoNow(page)).toBe('Assistant: An L bracket with a hole in its upright.');
+});

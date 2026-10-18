@@ -43,7 +43,7 @@ function errorRows(): HelpRow[] {
   for (const code of Object.keys(REASONS) as ToolCode[]) {
     for (const reason of REASONS[code]) rows.push({ about: `${reason} (${code})`, text: HINTS[reason] });
   }
-  for (const sub of ['no_overlap', 'wrong_side', 'off_body'] as const) rows.push({ about: `${sub} (detail.sub)`, text: HINTS[sub] });
+  for (const sub of ['no_overlap', 'wrong_side', 'too_short', 'off_body'] as const) rows.push({ about: `${sub} (detail.sub)`, text: HINTS[sub] });
   return rows;
 }
 

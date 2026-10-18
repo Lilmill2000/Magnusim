@@ -143,7 +143,7 @@ describe('edit_feature', () => {
       expect(move).toMatchObject({ ok: false, error: { code: 'invalid_input', message: 'bad_input: move: Base uses Sketch 1: it cannot move above it.' } });
       const field = await h.call('edit_feature', EDIT('Base', { set: [{ field: 'height', value: '3 mm' }] }));
       expect(field).toMatchObject({ ok: false, error: { detail: { reason: 'bad_input' } } });
-      expect((field as { error: { message: string } }).error.message).toContain('Base has no field "height" (its fields: extent.distance)');
+      expect((field as { error: { message: string } }).error.message).toContain('Base has no field "height" (its fields: distance)');
       const sketch = await h.call('edit_feature', EDIT('Sketch 1', { set: [{ field: 'd1', value: '3 mm' }] }));
       // A sketch's fields are its dimension ids (sketch-tool.test.ts changes them); this one has none.
       expect(sketch).toMatchObject({ ok: false, error: { code: 'invalid_input', message: 'bad_input: set[0].field: Sketch 1 has no dimension "d1" (its dimensions: none).', detail: { reason: 'bad_input' } } });

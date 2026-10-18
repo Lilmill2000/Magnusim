@@ -215,6 +215,63 @@ opens, so a refused call changes nothing and no panel opens:
   output changed and whose region loops turned over, or whose two-point dimensions turned
   round.
 
+## Extrude and revolve (`extrude`, `revolve`, `region-tools.ts`, `diagnose.ts`)
+
+Each makes one feature from regions of one sketch, or with `edit: "<name>"` replaces that
+feature's inputs, as one edit call through the person's own panel (`fillFeature`, see below).
+What they share is in `region-tools.ts`:
+
+- `sketchFor`: the `sketch` field, a sketch by name or id (`not_found` lists the sketches); an
+  edit's sketch must come before the feature (`later_feature`).
+- `regionsOf`: region selectors in that sketch (`all` is even-odd, so a plate's holes stay open;
+  `r2`; `at(u, v)`; a region key; `<sketch> r2` of the same sketch), each naming at least one,
+  kept once each, as `RegionRef`s (`refOfRegion`). An open sketch answers `open_profile` with its
+  open ends, a missing region `region_not_found` with the regions.
+- `readOp`, `scopeOf`, `checkBodyName`: the op fields' rules, every problem in one `bad_input`
+  (`bodies` is `[]` with `new`; `body_name` and `color` only with `new`; `#rrggbb`); `bodies` are
+  body selectors; a `body_name` another body has is `name_taken` (a feature's name is fine).
+  `nameNewBody` names and colours the new body after the panel's Done, inside the step.
+- `fillSwept`: `fillFeature`, and when the feature fails because its operation met nothing (CAD's
+  own "Nothing to cut/join/intersect ...", or Through all finding nothing on its side), the
+  answer `feature_failed` carries the diagnosis.
+- `checkScoped`: after the Done of a cut or intersect on given bodies, a cut that cut nothing
+  away from any of them (volumes within 1e-9 relative) is `cut_removed_nothing`, an intersect
+  that would leave nothing of them `feature_failed`, each with the diagnosis; a body a cut did not
+  touch while it cut others is a warning. A kernel restart while the volumes are read is
+  `busy` `changed`.
+
+`diagnose.ts` (`diagnoseMiss`, only on failure, on copies; every shape it makes is released):
+`no_overlap` for a join; for a cut or intersect `wrong_side` when the same regions with `flip`
+the other way meet a body (`other_way`; the hint says `set flip false` when flip is already
+true, and a revolve's says to turn the other way), `too_short` when the whole sweep (through
+everything both ways, a full turn) meets one the extent does not reach (`in_line`), else
+`off_body`. Every answer has `detail.frame` (u, v and n in model axes, the origin, and the
+words "u runs +Y, v runs -Z, origin (0, 0, 0)"), `profile_bbox_mm` and each body's box. Its
+kernel calls are refused after a worker respawn (the shape ids died): the sub-reason is then
+left out and the message says the check could not be made.
+
+The tools:
+
+- `extrude` (`tools/extrude.ts`): blind and symmetric (`distance`), two (`distance` along the
+  sketch normal, `distance2` against it), through and through_both (`through_all`, keeping the
+  last blind distance), to (`to`: one flat face or one vertex; `distance` is the offset). Bare
+  numbers are stored with the Part's unit. `resolved.extent` says the direction in model axes
+  ("blind t (6 mm) along +Z"). A face extrude or one along a chosen direction has no form in
+  this tool: `inputs: null` in `get_model`, and an edit of one is refused.
+- `revolve` (`tools/revolve.ts`): `axis` is an axis selector (`Z axis`, `Profile.ax`, an edge,
+  `axis of <round face>`); full (`360 deg`), one, symmetric, two (`angle`, `angle2`). A profile
+  across the axis fails with CAD's words.
+
+Both register their `FeatureIo`: `get_model full` writes regions as `at(u, v)` (each kept
+region's inside point), the Up to target as a label (or `<body> vertex at (x, y, z)`), the axis as
+a selector and bodies by name, so the inputs resent with `edit` leave the feature as it was;
+`edit_feature` takes `distance`, `distance2`, `angle`, `angle2` (and the feature's own paths).
+
+Tests: `extrude.test.ts`, `diagnose.test.ts` (each miss, and races forced by holding the
+diagnosis's own kernel call: the person's Escape, a kernel restart), `features-io.test.ts`
+(round trips of features the person made), `guide-example.test.ts` (the guide's plate, bracket
+and flange up to their holes); e2e `cad:assistant-honest-join`, `-miss` and `-offbody`.
+
 ## Measuring (`measure`, `measure.ts`, `measure-targets.ts`)
 
 A read like `get_model`: it waits for the Part to open and the rebuild to catch up, then

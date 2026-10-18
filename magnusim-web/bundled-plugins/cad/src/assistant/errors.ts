@@ -49,7 +49,7 @@ export const REASONS = {
 
 export type Reason = (typeof REASONS)[ToolCode][number];
 /** The sub-reasons of feature_failed and cut_removed_nothing (detail.sub). */
-export type SubReason = 'no_overlap' | 'wrong_side' | 'off_body';
+export type SubReason = 'no_overlap' | 'wrong_side' | 'too_short' | 'off_body';
 
 /** Each reason's code. */
 export const REASON_CODE: Readonly<Record<Reason, ToolCode>> = Object.freeze(
@@ -115,6 +115,7 @@ export const HINTS: Readonly<Record<Reason | SubReason, string>> = Object.freeze
   not_built: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.',
   no_overlap: 'A join needs overlap: move the profile onto the body, or use op new and then combine.',
   wrong_side: 'The cut points away from the body: set flip true, or use hole.',
+  too_short: 'The cut stops before it reaches the body: make distance (or angle) larger, or use extent through (a revolve: full).',
   off_body: 'The profile lies beside the body: read detail.frame (where u and v point in model axes) and move the profile.',
 });
 
