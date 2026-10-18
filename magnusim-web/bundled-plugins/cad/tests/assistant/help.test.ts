@@ -143,8 +143,11 @@ describe('help', () => {
       'holes',
       'words',
       'calls',
+      'limits',
       'the person',
     ]);
+    const limits = HELP.traps.find((r) => r.about === 'limits')?.text ?? '';
+    for (const s of ['steps_left', 'usd_left when money is counted', 'changes_left', 'answers capped', 'reads (get_model, find, measure, view, help) still work', 'tell the person what is left']) expect(limits, s).toContain(s);
     const traps = HELP.traps.map((r) => r.text).join(' ');
     for (const s of [
       'needs flip true',

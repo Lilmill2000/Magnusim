@@ -80,6 +80,9 @@ export function createSessionKeys(o: { now?: () => number; committed: () => CadD
       const key = keyFor(t, s.n);
       given.delete(key);
       given.set(key, { source: t, n: s.n });
+      // Only the newest keys are remembered. A key evicted here no longer matches sameSession,
+      // so a pause tied to it would not hold for its session; that takes 256 newer outside keys
+      // first, far beyond any real use.
       if (given.size > ROOTS_KEPT * 4) given.delete(given.keys().next().value as string);
       return key;
     },

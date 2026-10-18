@@ -215,6 +215,7 @@ const trapRows = (): HelpRow[] => [
   { about: 'holes', text: 'hole needs a flat face facing along X, Y or Z, each centre on the face; a name is at most 33 characters. A tilted face: sketch on it, then extrude cut with flip true.' },
   { about: 'words', text: '"2 mm higher" may mean relative or absolute: say which you did.' },
   { about: 'calls', text: 'Calls are limited: one sketch call holds a whole sketch, one set_params call every parameter; read only what you need.' },
+  { about: 'limits', text: 'get_model limits says what is left of this request: steps_left (calls), usd_left when money is counted, changes_left when the request has a change limit. Past a limit an edit answers capped while reads (get_model, find, measure, view, help) still work: stop editing and tell the person what is left; they can send another message to carry on.' },
   { about: 'the person', text: 'Leave the person\'s features alone unless asked; never redo steps the person undid. delete asks the person; undo takes back only your own calls. busy: paused, stopped, taken_over and person_editing end your turn; step_declined: ask what to change; changed: get_model, then try again.' },
 ];
 
