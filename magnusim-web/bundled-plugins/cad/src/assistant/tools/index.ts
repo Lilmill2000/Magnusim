@@ -32,3 +32,4 @@ export { tool as set_params } from './set_params';
 // undo: Undo the Assistant's steps.
 export { tool as undo } from './undo';
 // view: Look at the Part.
+export { tool as view } from './view';

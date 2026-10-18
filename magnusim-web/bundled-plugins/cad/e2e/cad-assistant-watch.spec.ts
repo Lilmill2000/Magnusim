@@ -13,6 +13,7 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
+import { HINTS } from '../src/assistant/errors';
 import { GUIDE } from '../src/assistant/guide';
 import {
   cadFrame,
@@ -32,7 +33,8 @@ import {
   useScriptedModel,
   type AssistantHost,
 } from './assistant-helpers';
-import { addSolid } from './helpers';
+import { addSolid, countFileWrites, fileWrites } from './helpers';
+import { PNG, type Image } from './png';
 
 let host: AssistantHost;
 
@@ -282,4 +284,169 @@ test('cad:assistant-watch-measure measure gives a body its volume and voids, two
   expect(new Set(revs).size).toBe(1);
   expect(await features()).toMatchObject({ features: 4, bodies: 2 });
   await expect(chip).toHaveText('Assistant: Measure the blocks. · done', STEP);
+});
+
+// ---- view (spec §12.3 watch 5): pictures drawn off screen reach the model; the person's view stays.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Cad = { __CAD__: { services: any; assistant: { turns(): { id: string; images: boolean | null }[]; calls: { tool: string; ok: boolean; reason?: string }[] } } };
+
+/** The view as the person has it: the camera, the Part's saved camera, whether still framed, the count of camera moves. */
+const personView = (page: Page) =>
+  cadFrame(page).evaluate(() => {
+    const s = (window as unknown as Cad).__CAD__.services;
+    const h = s.viewport.get().handle;
+    return { camera: h.camera(), saved: s.doc.state.get().view.camera ?? null, framed: h.stats().framed, moves: h.userCameraMoves() };
+  });
+
+/** No transition, every picking structure built, no rebuild running, the Part saved, two more frames. */
+async function stillAndSaved(page: Page) {
+  const f = cadFrame(page);
+  await f.waitForFunction(
+    () => {
+      const s = (window as unknown as Cad).__CAD__.services;
+      const v = s.viewport.get().handle?.state.get();
+      return !!v && !v.animating && v.bvhPending === 0 && s.doc.state.get().rebuild.status !== 'running' && s.doc.state.get().save.state === 'saved';
+    },
+    null,
+    { timeout: 60_000 },
+  );
+  await f.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
+/** Each ws.data write from now on (the Part's view file; the model goes through ws.files). */
+async function countDataWrites(page: Page) {
+  await cadFrame(page).evaluate(() => {
+    const w = window as unknown as Cad & { __dataWrites?: string[] };
+    const data = w.__CAD__.services.bridge.data;
+    w.__dataWrites = [];
+    const write = data.write.bind(data);
+    data.write = (...a: unknown[]) => {
+      w.__dataWrites!.push(String(a[0]));
+      return write(...a);
+    };
+  });
+}
+
+/** An image block of the first cloud dialect, decoded. */
+function imageOf(block: unknown): { type: string; img: Image } {
+  const b = block as { type: string; source: { type: string; media_type: string; data: string } };
+  expect(b.type).toBe('image');
+  expect(b.source.type).toBe('base64');
+  return { type: b.source.media_type, img: PNG.decode(Buffer.from(b.source.data, 'base64')) };
+}
+
+/**
+ * What one tile of a 2 x 2 sheet shows (its name's corner, the triad's corner and the lines
+ * between tiles left out): the fraction that is not the view's background, and the fraction in
+ * the red body's colour family.
+ */
+function tileSeen(img: Image, tx: number, ty: number, tw: number, th: number) {
+  let n = 0;
+  let drawn = 0;
+  let red = 0;
+  for (let y = ty + 2; y < ty + th - 2; y++)
+    for (let x = tx + 2; x < tx + tw - 2; x++) {
+      if (x < tx + 90 && y < ty + 30) continue;
+      if (x >= tx + tw - 90 && y >= ty + th - 90) continue;
+      const [r, g, b] = PNG.at(img, x, y);
+      n++;
+      if (Math.abs(r - 0xf0) > 4 || Math.abs(g - 0xf2) > 4 || Math.abs(b - 0xf7) > 4) drawn++;
+      if (r > g + 60 && r > b + 60) red++;
+    }
+  return { drawn: drawn / n, red: red / n };
+}
+
+test("cad:assistant-watch-view view pictures the Part off screen: one image in the next request with the bodies in it, a hidden body left out, the person's view and files unchanged", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const pid = await newProject(request, host, 'Assistant view');
+  const { tab } = await openNewPart(page, request, host, pid);
+  // Two blocks: a grey one at the origin, a red one at +X.
+  const a = await addSolid(page, { size: [20, 20, 20] });
+  const b = await addSolid(page, { at: [40, 0, 0], size: [20, 20, 20] });
+  const f = cadFrame(page);
+  await f.evaluate((id) => (window as unknown as Cad).__CAD__.services.doc.setBodyColor(id, '#d02828'), b.body);
+  const names = await f.evaluate((ids) => ids.map((id) => (window as unknown as Cad).__CAD__.services.doc.state.get().rebuild.bodies.find((x: { id: string }) => x.id === id).name as string), [a.body!, b.body!]);
+  await stillAndSaved(page);
+  const before = await personView(page);
+  await countFileWrites(page);
+  await countDataWrites(page);
+
+  const input = (hide: string[]) => ({ views: ['iso', 'top'], hide, section: '', labels: 'none', size: 'small' });
+  const from = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__view', input: input([]) }] }, { tools: [{ name: 'cad__view', input: input([names[1]]) }] }, { text: 'Two blocks; the red one on the right.' });
+  const t = await startTurn(request, host, { text: 'Look at the Part.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterFirst, afterSecond] = chats(host).slice(from);
+
+  // The first picture: one image block, a 2 x 2 sheet 768 px wide, both blocks in it.
+  const [first] = resultsIn(afterFirst);
+  expect(first).toMatchObject({ tool: 'cad__view', ok: true, data: { views: [{ view: 'iso' }, { view: 'top' }], shown: names, hidden: [], section: null, labels: [] } });
+  expect(first.images).toHaveLength(1);
+  const one = imageOf(first.images[0]);
+  expect(one.type).toBe('image/png');
+  expect([one.img.width, one.img.height]).toEqual([768, 576]);
+  const iso = tileSeen(one.img, 0, 0, 384, 288);
+  const top = tileSeen(one.img, 384, 0, 384, 288);
+  expect(iso.drawn, 'the bodies in the iso picture').toBeGreaterThan(0.02);
+  expect(top.drawn, 'the bodies in the top picture').toBeGreaterThan(0.02);
+  expect(iso.red, 'the red block in the iso picture').toBeGreaterThan(0.005);
+  expect(top.red, 'the red block in the top picture').toBeGreaterThan(0.005);
+  // The empty half of the sheet is the view's background.
+  expect(tileSeen(one.img, 0, 288, 384, 288).drawn).toBeLessThan(0.001);
+  expect(tileSeen(one.img, 384, 288, 384, 288).drawn).toBeLessThan(0.001);
+
+  // The second, with the red block hidden: its colour is gone, the grey one still drawn.
+  const [second] = resultsIn(afterSecond);
+  expect(second).toMatchObject({ tool: 'cad__view', ok: true, data: { shown: [names[0]], hidden: [names[1]] } });
+  expect(second.images).toHaveLength(1);
+  const two = imageOf(second.images[0]).img;
+  const iso2 = tileSeen(two, 0, 0, 384, 288);
+  const top2 = tileSeen(two, 384, 0, 384, 288);
+  expect(iso2.red, 'the hidden body is left out of iso').toBeLessThan(iso.red * 0.05);
+  expect(top2.red, 'the hidden body is left out of top').toBeLessThan(top.red * 0.05);
+  expect(iso2.drawn).toBeGreaterThan(0.02);
+
+  // The person's view as it was: camera, saved camera, framing and the count of moves; nothing written.
+  await stillAndSaved(page);
+  expect(await personView(page)).toEqual(before);
+  expect(await fileWrites(page)).toEqual([]);
+  expect(await cadFrame(page).evaluate(() => [...((window as unknown as { __dataWrites?: string[] }).__dataWrites ?? [])])).toEqual([]);
+});
+
+test('cad:assistant-watch-view-no-images a local model that reads no images is told so in words, and no picture is drawn', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant view text only');
+  const { tab } = await openNewPart(page, request, host, pid);
+  await addSolid(page, { size: [20, 20, 20] });
+  const local = await useScriptedModel(request, host, 'local');
+  // The local server says its model is a text model (its row), with room for the CAD tools.
+  host.fake.models([{ id: local.model, context: 65_536, type: 'llm' }], 'compat');
+  try {
+    const from = chats(host).length;
+    const input = { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small' };
+    host.fake.reply({ hold: 'text-only-view', tools: [{ name: 'cad__view', input }] }, { text: 'I cannot see pictures here; I will measure instead.' });
+    const t = await startTurn(request, host, { text: 'Look at the Part.', tab });
+    // The page heard that this turn's model reads no images before the call comes.
+    await expect
+      .poll(() => cadFrame(page).evaluate((id) => (window as unknown as Cad).__CAD__.assistant.turns().find((x) => x.id === id)?.images ?? 'not told', t.id), { ...STEP, message: "the page hears the turn's model reads no images" })
+      .toBe(false);
+    host.fake.release('text-only-view');
+    expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+    const [, after] = chats(host).slice(from);
+    const [res] = resultsIn(after);
+    expect(res).toMatchObject({
+      tool: 'cad__view',
+      ok: false,
+      error: { code: 'not_ready', message: "no_images: This request's model does not read images, so no picture is drawn.", hint: HINTS.no_images, detail: { reason: 'no_images' } },
+    });
+    expect(HINTS.no_images).toBe("The model can't read images here: use measure and find.");
+    // No picture went to the model, and the page drew none.
+    expect(JSON.stringify(chats(host).slice(from).map((r) => r.body))).not.toContain('image_url');
+    const calls = await cadFrame(page).evaluate(() => (window as unknown as Cad).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null })));
+    expect(calls.at(-1)).toEqual({ tool: 'view', ok: false, reason: 'no_images' });
+  } finally {
+    // The scripted model listed again, with no row.
+    host.fake.models([local.model], 'compat');
+  }
 });

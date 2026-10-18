@@ -180,6 +180,33 @@ register with `registerSelectorResolver`; without one they answer `bad_selector`
 the forms that work. The section takes the same planes, `selection` with a flat face,
 and a face from that resolver.
 
+## Pictures (`view`, `view.ts`)
+
+`view` draws the Part off screen through `ViewportHandle.snapshot`: each picture has its
+own orthographic camera, so the person's camera, saved view, section view and count of
+camera moves never change, and nothing is written. One view fills the picture; 2 to 4
+make a 2 x 2 sheet with each tile's name. The long side is 768 px (`small`) or 1280 px
+(`large`; a local turn always gets small). The page encodes a PNG on an
+`OffscreenCanvas`, or a JPEG (quality 0.85) when the PNG is over 1.4 MB.
+
+- `hide` takes body names (any case) or ids; `section` is `""` or
+  `<Top|Front|Right> [offset <length>] [flip]` (parameters allowed), and the data says
+  what the cut keeps ("z <= 4 mm").
+- `labels: 'bodies'` writes each shown body's name at its box's centre; `'faces'` puts a
+  `#fN` handle on the 30 largest faces the picture shows, where the picture really sees
+  that face (`visibleFaceAt`), at the middle of what shows, else in a roomy triangle.
+  Each handle keeps the face's stored reference (`pickFace`), never an index.
+  `view-handles.ts` is the view tool's own handle table (one per call key, cleared when
+  the key changes); find and the selectors share one table with it once they are built.
+- The data lists the views and their mm per px, the shown and hidden bodies (and those
+  hidden in the tree), the cut, the labels, the shown sketches' dimension values
+  (pictures carry no HTML overlays), `software_renderer`, and a `note` when the person's
+  sketch or the rollback bar rolls later features back, or the window is hidden.
+- A turn whose model reads no images (the host's turn says `images: false`) answers
+  `not_ready` `no_images` and draws nothing; no 3D view, a view without `snapshot` or a
+  lost graphics context answers `not_ready` `no_viewport`.
+- Tests draw on a recording canvas (`setViewRaster`), since jsdom has none.
+
 ## The person's view
 
 The chip (`[data-chip="assistant"][data-assistant-state]`) and the frame's

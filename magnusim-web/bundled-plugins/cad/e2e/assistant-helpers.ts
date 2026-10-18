@@ -42,6 +42,8 @@ export interface FakeModel {
   requests(): FakeRequest[];
   pending(): number;
   release(name: string): void;
+  /** The model ids the models routes list (every dialect, or one); an entry may be a local server's row {id, context?, type?}. */
+  models(list: (string | { id: string; context?: number; max?: number; type?: string })[], dialect?: string): void;
   stop(): Promise<void>;
 }
 
