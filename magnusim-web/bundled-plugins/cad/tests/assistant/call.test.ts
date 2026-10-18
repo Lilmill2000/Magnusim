@@ -1,7 +1,8 @@
 // One call of a Part tool from the bridge to the reply (CAD tools spec §2.1 call.ts, §3.0, §3.1, §8.3),
 // over the fake host and a toy kernel:
-//   - a tool not in this build answers not_ready "not in this build yet", with its reason, hint and
-//     detail; on a host without turn events the hint is in the message;
+//   - this build answers all 18 tools; a build without one (a tools table without it) answers
+//     not_ready "not in this build yet", with its reason, hint and detail, and help features marks
+//     its row; on a host without turn events the hint is in the message;
 //   - every reply carries rev; a call's key, tool and outcome go to the ledger (__CAD__.assistant.calls)
 //     and the 'assistant:call' events;
 //   - a read waits for the kernel to start (a sign of life every 5 s) and answers not_ready after 30 s;
@@ -9,12 +10,16 @@
 //     (until the next change of the Part, or 120 s), idle; on a host without turn events, the chip
 //     stays 10 s after the last call.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import type { AssistantCall } from '@magnusim/workspace';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { READ_WAIT_MS } from '../../src/assistant/busy';
+import { createCallHandler, isBuilt } from '../../src/assistant/call';
 import { HINTS } from '../../src/assistant/errors';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { ENDED_MS, LINGER_MS } from '../../src/assistant/state';
 import { TOOL_NAMES } from '../../src/assistant/schemas';
+import * as BUILT from '../../src/assistant/tools';
+import type { ToolImpl } from '../../src/types/assistant';
 import { FakeKernel } from '../doc/fake-kernel';
 import { assistantHarness, type AssistantHarness, type HarnessOptions } from './harness';
 
@@ -31,28 +36,56 @@ const phase = (x: AssistantHarness) => runtimeOf(x.services)!.store.get().phase;
 const SWEEP = { edit: '', name: '', kind: 'sweep', profiles: ['Sketch 1'], path: 'Sketch 2', orientation: 'follow', ruled: false, op: 'new', bodies: [], body_name: '', color: '' };
 const HOLE = { name: '', face: 'Extrude 1.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' };
 
+/** This build's tools table without `name`: a build that tool has not reached yet. */
+const without = (name: string): Record<string, ToolImpl> => Object.fromEntries(Object.entries(BUILT as unknown as Record<string, ToolImpl>).filter(([k]) => k !== name));
+
+/** One call straight to a handler, as the bridge sends it; its error as the host reads it. */
+async function errorOf(handler: (c: AssistantCall) => Promise<unknown>, tool: string, input: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const call: AssistantCall = { call: 'c-1', turn: 't-test', tool, input, signal: new AbortController().signal, progress: () => {} };
+  try {
+    await handler(call);
+    return null;
+  } catch (e) {
+    const x = e as { code?: string; message?: string; hint?: string; detail?: unknown };
+    return { code: x.code, message: x.message, ...(x.hint !== undefined ? { hint: x.hint } : {}), ...(x.detail !== undefined ? { detail: x.detail } : {}) };
+  }
+}
+
 describe('tools not in this build', () => {
-  it('answer not_ready "not in this build yet", with the reason, its hint and the tool in detail', async () => {
+  it('this build answers all 18: help features marks none of them', async () => {
     h = await start();
-    const r = await h.call('sweep_loft', SWEEP);
-    expect(r).toEqual({
-      ok: false,
-      error: { code: 'not_ready', message: 'not_built: sweep_loft is not in this build yet.', hint: HINTS.not_built, detail: { reason: 'not_built', tool: 'sweep_loft' } },
-    });
-    // Every tool of the 18 is offered; the ones this build answers say so in help features.
+    for (const name of TOOL_NAMES) expect(isBuilt(name), name).toBe(true);
     const help = await h.ok('help', { topic: 'features' });
     const rows = (help.data as { rows: { about: string; text: string }[] }).rows;
     expect(rows.map((x) => x.about)).toEqual([...TOOL_NAMES]);
+    expect(rows.filter((x) => /Not in this build yet/.test(x.text)).map((x) => x.about)).toEqual([]);
+  });
+
+  it('a build without a tool answers not_ready "not in this build yet", with the reason, its hint and the tool in detail', async () => {
+    h = await start();
+    const rt = runtimeOf(h.services)!;
+    expect(await errorOf(createCallHandler(rt, without('sweep_loft')), 'sweep_loft', SWEEP)).toEqual({
+      code: 'not_ready',
+      message: 'not_built: sweep_loft is not in this build yet.',
+      hint: HINTS.not_built,
+      detail: { reason: 'not_built', tool: 'sweep_loft' },
+    });
+    // The ledger records it as any other call.
+    expect(rt.calls.at(-1)).toMatchObject({ tool: 'sweep_loft', ok: false, code: 'not_ready', reason: 'not_built' });
+    // help features marks the row of a tool the build does not answer, and only that one.
+    rt.isBuilt = (name) => name !== 'sweep_loft';
+    const help = await h.ok('help', { topic: 'features' });
+    const rows = (help.data as { rows: { about: string; text: string }[] }).rows;
     expect(rows.find((x) => x.about === 'sweep_loft')!.text).toMatch(/Not in this build yet\.$/);
-    expect(rows.find((x) => x.about === 'hole')!.text).not.toMatch(/Not in this build yet/);
-    expect(rows.find((x) => x.about === 'extrude')!.text).not.toMatch(/Not in this build yet/);
-    expect(rows.find((x) => x.about === 'get_model')!.text).not.toMatch(/Not in this build yet/);
+    expect(rows.filter((x) => /Not in this build yet/.test(x.text)).map((x) => x.about)).toEqual(['sweep_loft']);
   });
 
   it('on a host without turn events the hint goes in the message', async () => {
     h = await start({ assistant: { turns: false } });
-    const r = await h.call('hole', HOLE);
-    expect(r).toEqual({ ok: false, error: { code: 'not_ready', message: `not_built: hole is not in this build yet. Try: ${HINTS.not_built}` } });
+    expect(await errorOf(createCallHandler(runtimeOf(h.services)!, without('hole')), 'hole', HOLE)).toEqual({
+      code: 'not_ready',
+      message: `not_built: hole is not in this build yet. Try: ${HINTS.not_built}`,
+    });
   });
 });
 
@@ -65,17 +98,17 @@ describe('the reply and the ledger', () => {
     expect(r.data.rev).toBe(runtimeOf(h.services)!.rev.current());
     expect(r.text).toBe('help parameters: 4 rows');
     expect(r.summary).toBe('Read help parameters');
-    await h.call('sweep_loft', SWEEP, { turn: '' });
+    await h.call('help', { topic: 'nothing' }, { turn: '' });
     const calls = runtimeOf(h.services)!.calls;
     expect(calls.map(({ ms: _ms, call: _c, ...c }) => c)).toEqual([
       { turn: 't-7', key: 'turn:t-7', tool: 'help', ok: true },
-      { turn: '', key: 'ext:1', tool: 'sweep_loft', ok: false, code: 'not_ready', reason: 'not_built' },
+      { turn: '', key: 'ext:1', tool: 'help', ok: false, code: 'invalid_input', reason: 'bad_input' },
     ]);
     expect(events).toEqual([
       { turn: 't-7', call: 'c-1', tool: 'help', phase: 'start' },
       { turn: 't-7', call: 'c-1', tool: 'help', phase: 'end', ok: true },
-      { turn: '', call: 'c-2', tool: 'sweep_loft', phase: 'start' },
-      { turn: '', call: 'c-2', tool: 'sweep_loft', phase: 'end', ok: false },
+      { turn: '', call: 'c-2', tool: 'help', phase: 'start' },
+      { turn: '', call: 'c-2', tool: 'help', phase: 'end', ok: false },
     ]);
   });
 

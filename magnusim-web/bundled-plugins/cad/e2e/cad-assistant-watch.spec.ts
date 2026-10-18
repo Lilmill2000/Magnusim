@@ -2,8 +2,8 @@
 // §12.3 watch 1, T1): a Part open in its workspace offers its 18 tools on its tab; a turn there
 // offers 21 (the app's 3 first, then the Part's by name), the first 20 strict and cad__view not;
 // the system text holds the CAD notes; the tools go out byte for byte the same in the next turn.
-// get_model answers the model with the Part in data; a tool not in this build answers not_ready
-// "not in this build yet" with its hint. The dock's chip and the frame's data-assistant say what
+// get_model answers the model with the Part in data; a hole on the empty Part answers bad_selector
+// with its hint and the Part's names. The dock's chip and the frame's data-assistant say what
 // the Assistant does: thinking while the model answers, working while a call runs ("Read the
 // Part"), then "Assistant: <request> · done".
 // view's handles (the S2 integration): a picture's #f1 is the face find reads as #f1, and its #b1
@@ -100,7 +100,7 @@ test('cad:assistant-watch-registration the Part offers its 18 tools; a turn offe
   expect(JSON.stringify(second.body.tools)).toBe(JSON.stringify(first.body.tools));
 });
 
-test("cad:assistant-watch-get-model get_model reads the Part to the model; a tool not in this build says so; the chip and data-assistant follow the turn", async ({ page, request }) => {
+test("cad:assistant-watch-get-model get_model reads the Part to the model; a hole on the empty Part says why; the chip and data-assistant follow the turn", async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant get_model');
   const { frame, tab } = await openNewPart(page, request, host, pid);
@@ -114,8 +114,8 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   host.fake.reply(
     // The model is still answering: the chip says the Assistant thinks.
     { hold: 'think', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
-    { tools: [{ name: 'cad__sweep_loft', input: { edit: '', name: '', kind: 'sweep', profiles: ['Sketch 1'], path: 'Sketch 2', orientation: 'follow', ruled: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
-    { text: 'The Part is empty, and I cannot drill yet.' },
+    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Extrude 1.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' } }] },
+    { text: 'The Part is empty, so there is no face to drill yet.' },
   );
   // The read stops where the Part has settled, so the chip is seen working.
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { hold(p: string): void } } }).__CAD__.assistant.hold('after-settled'));
@@ -150,15 +150,20 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a too
   expect(typeof read.data!.rev).toBe('number');
   const [hole] = resultsIn(afterHole);
   expect(hole).toMatchObject({
-    tool: 'cad__sweep_loft',
+    tool: 'cad__hole',
     ok: false,
-    error: { code: 'not_ready', message: 'not_built: sweep_loft is not in this build yet.', hint: 'This tool is not in this build yet: use the tools that answer, and tell the person what is missing.', detail: { reason: 'not_built', tool: 'sweep_loft' } },
+    error: {
+      code: 'invalid_input',
+      message: 'bad_selector: face: no body starts here (column 1 of "Extrude 1.end").',
+      hint: HINTS.bad_selector,
+      detail: { reason: 'bad_selector', field: 'face', selector: 'Extrude 1.end', names: { features: [], bodies: [] } },
+    },
   });
   // The page's ledger: what the eval counts.
   const calls = await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { calls: { tool: string; ok: boolean; reason?: string; key: string }[] } } }).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null, key: c.key })));
   expect(calls).toEqual([
     { tool: 'get_model', ok: true, reason: null, key: `turn:${t.id}` },
-    { tool: 'sweep_loft', ok: false, reason: 'not_built', key: `turn:${t.id}` },
+    { tool: 'hole', ok: false, reason: 'bad_selector', key: `turn:${t.id}` },
   ]);
 });
 
