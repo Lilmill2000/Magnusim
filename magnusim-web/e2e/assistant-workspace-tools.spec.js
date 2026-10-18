@@ -214,7 +214,7 @@ const modal = (page) => page.locator('#modal-confirm');
 async function slowRunning(t, w, by) {
   const call = await t.waitFor((e) => e.type === 'tool_call' && e.tool === `${PLUGIN}__slow_add`, 'the slow call');
   const progress = await t.waitFor((e) => e.type === 'tool_progress' && e.call === call.call && e.label.startsWith(`Adding ${by}: step`), 'its progress label');
-  await expect(w.frame.locator('#slow')).toHaveText('running');
+  await expect(w.frame.locator('#slow')).toHaveText('running', STEP);
   return { call, progress };
 }
 
@@ -342,7 +342,7 @@ test("a destructive tool asks first with Don't focused, in its confirm note's wo
   await expect(dialog).toBeVisible();
   await expect(w.frame.locator('#counter')).toHaveText('2');
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
-  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · ${RESET_NOTE} What it sent: {}. Nothing runs until you choose.`);
+  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · ${RESET_NOTE} What it sent: {}. Nothing runs until you choose.`, STEP);
   await expect(page.locator('#cf-confirm')).toHaveText('Allow');
   await expect(page.locator('#cf-cancel')).toHaveText("Don't");
   await expect(page.locator('#cf-cancel')).toBeFocused();
@@ -370,7 +370,7 @@ test("a destructive tool asks first with Don't focused, in its confirm note's wo
   await expect(dialog).toBeVisible();
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?');
   // No confirm note: the question says it can't be undone.
-  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.`);
+  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.`, STEP);
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.locator('#cf-confirm').click();
   const e3 = await t3.ended();
@@ -854,7 +854,7 @@ test("the scripted model on the local server answers from the request: each step
   const t1 = await startTurn(request, host.base, { text: 'Add 3, then twice what the counter reads.', tab: w.tab });
   const e1 = await t1.ended();
   expect(e1.turn.state).toBe('done');
-  await expect(w.frame.locator('#counter')).toHaveText('9');
+  await expect(w.frame.locator('#counter')).toHaveText('9', STEP);
   expect(e1.turn.text_so_far).toBe('The counter is 9.');
   const sent = chats().slice(before);
   expect(sent.map((r) => r.dialect)).toEqual([model.dialect, model.dialect, model.dialect]);
@@ -868,27 +868,29 @@ test("the scripted model on the local server answers from the request: each step
   expect(resultsIn(sent[2])).toEqual([{ tool: `${PLUGIN}__add`, ok: true, text: 'The counter is 9.', data: { count: 9 }, images: [] }]);
 
   // Two questions in one answer, each answered through the route: the app's dialog shows
-  // each and closes after the second; the next answerGate takes the question after the one it
-  // answered, even before the log shows that one closed.
+  // reset's, then, once the route answered that one, mystery's, and closes after the second;
+  // the next answerGate takes the question after the one it answered.
   fake.reply(
     { tools: [{ name: `${PLUGIN}__reset`, input: {} }, { name: `${PLUGIN}__mystery`, input: {} }] },
     (body) => ({ text: resultsIn(body).map((r) => `${r.tool}: ${r.ok ? 'ok' : r.error.code}`).join('; ') }),
   );
   const t2 = await startTurn(request, host.base, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
-  await expect(modal(page)).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  await expect(modal(page)).toBeVisible(STEP);
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?', STEP);
   const first = await answerGate(request, host.base, t2, true, { kind: 'confirm', tool: `${PLUGIN}__reset` });
   expect(first).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__reset`, yes: 'Allow', no: "Don't" });
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?', STEP);
+  await expect(modal(page)).toBeVisible();
   const second = await answerGate(request, host.base, t2, false);
   expect(second).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__mystery` });
-  await expect(modal(page)).toBeHidden();
+  await expect(modal(page)).toBeHidden(STEP);
   const e2 = await t2.ended();
   expect(e2.turn.state).toBe('done');
   expect(ofType(e2.events, 'gate_closed').map((e) => [e.gate, e.answer, e.by])).toEqual([
     [first.id, 'allow', 'user'],
     [second.id, 'deny', 'user'],
   ]);
-  await expect(w.frame.locator('#counter')).toHaveText('0');
+  await expect(w.frame.locator('#counter')).toHaveText('0', STEP);
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['add', 'add', 'reset']);
   expect(chats().at(-1).step).toEqual({ text: `${PLUGIN}__reset: ok; ${PLUGIN}__mystery: declined` });
 });
@@ -919,7 +921,7 @@ test("a failed call says how to fix it: its hint and detail reach the model's ne
   } finally {
     cli.kill();
   }
-  await expect(w.frame.locator('#counter')).toHaveText('3');
+  await expect(w.frame.locator('#counter')).toHaveText('3', STEP);
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['fail_hint', 'add']);
   // What the model read after the failed call: the error, with how to fix it and what it refers to.
   expect(resultsIn(chats()[before + 1])).toEqual([{ tool: `${PLUGIN}__fail_hint`, ok: false, error: FAIL, images: [] }]);
@@ -941,12 +943,12 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
   const { caps } = await getJson(request, '/api/assistant/status');
   fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 5 } }] });
   const t = await startTurn(request, host.base, { text: 'Add 1, then 5 slowly.\nTake your time.', tab: w.tab });
-  await expect(w.frame.locator('#turn-state')).toHaveText('running: Add 1, then 5 slowly.');
+  await expect(w.frame.locator('#turn-state')).toHaveText('running: Add 1, then 5 slowly.', STEP);
   await slowRunning(t, w, 5);
-  await expect(w.frame.locator('#counter')).toHaveText('1');
+  await expect(w.frame.locator('#counter')).toHaveText('1', STEP);
   // The add's result moved its steps on; the frame has the turn's limits too.
   const lastOf = () => w.handle.evaluate((id) => window.__turns.filter((x) => x.id === id).at(-1), t.id);
-  await expect.poll(async () => (await lastOf()).used.steps, { message: "the add's step" }).toBe(1);
+  await expect.poll(async () => (await lastOf()).used.steps, { message: "the add's step", ...STEP }).toBe(1);
   expect(await lastOf()).toMatchObject({
     id: t.id,
     state: 'running',
@@ -959,13 +961,14 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
   // The frame's own Stop, while the slow call runs.
   const stopAt = Date.now();
   await w.frame.locator('#stop').click();
-  await expect(w.frame.locator('#stop-answer')).toHaveText('stopped');
+  // Its answer comes once the turn ended: the same 10 s ceiling, not Playwright's 5 s default.
+  await expect(w.frame.locator('#stop-answer')).toHaveText('stopped', { timeout: 10_000 });
   const { turn, events } = await t.ended();
   expect(Date.now() - stopAt, 'stopped within the 10 s ceiling').toBeLessThan(10_000);
   expect(turn).toMatchObject({ state: 'stopped', end_reason: 'user' });
-  await expect(w.frame.locator('#turn-state')).toHaveText('stopped: Add 1, then 5 slowly.');
-  await expect(w.frame.locator('#aborted')).toHaveText('aborted');
-  await expect(w.frame.locator('#counter')).toHaveText('1');
+  await expect(w.frame.locator('#turn-state')).toHaveText('stopped: Add 1, then 5 slowly.', STEP);
+  await expect(w.frame.locator('#aborted')).toHaveText('aborted', STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('1', STEP);
   expect(ofType(events, 'tool_result').map((e) => [e.ok, e.code ?? null])).toEqual([
     [true, null],
     [false, 'stopped'],

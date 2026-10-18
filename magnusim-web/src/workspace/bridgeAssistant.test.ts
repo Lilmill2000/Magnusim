@@ -999,24 +999,44 @@ describe("the assistant's turns and the page's Stop (1.9, unreleased)", () => {
     used: { steps: 1, stepsCap: 50, usd: 0.01, usdCap: 3 },
   };
 
-  it('assistantTurn() reaches the page as the event `assistantTurn`; nothing goes to a page not connected yet, or after its channel closed', async () => {
-    const t = await connected();
-    t.bridge.assistantTurn(TURN);
-    t.bridge.assistantTurn({ ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } });
-    await settle(() => of(t.events, 'assistantTurn').length === 2, 'the turn events');
-    expect(of(t.events, 'assistantTurn').map((e) => e.data)).toEqual([TURN, { ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } }]);
-    t.end();
-    t.bridge.assistantTurn(TURN);
-    // A bridge whose page never said hello.
-    const h = hooks();
-    const frame = document.createElement('iframe');
-    document.body.appendChild(frame);
-    const lone = new WorkspaceBridge(frame, new WorkspaceCalls(SCOPE, h), h);
-    lone.assistantTurn(TURN);
-    await Promise.resolve();
-    expect(of(t.events, 'assistantTurn')).toHaveLength(2);
-    expect(h.log).not.toHaveBeenCalled();
-    frame.remove();
+  it('assistantTurn() reaches the page as the event `assistantTurn`; nothing goes on a channel not welcomed yet (a new hello waiting for its context), or once there is none (detached, or no hello)', async () => {
+    // Every port the bridge handed an assistantTurn, in order (the bridge's own side of a channel).
+    const posts = vi.spyOn(FakePort.prototype, 'postMessage');
+    const turnPorts = () => posts.mock.calls.flatMap((c, i) => ((c[0] as { event?: unknown } | null)?.event === 'assistantTurn' ? [posts.mock.contexts[i]] : []));
+    try {
+      const t = await connected();
+      const first = t.port.other;
+      t.bridge.assistantTurn(TURN);
+      t.bridge.assistantTurn({ ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } });
+      await settle(() => of(t.events, 'assistantTurn').length === 2, 'the turn events');
+      expect(of(t.events, 'assistantTurn').map((e) => e.data)).toEqual([TURN, { ...TURN, state: 'ended', end: { state: 'done', reason: 'end_turn' } }]);
+      expect(turnPorts()).toEqual([first, first]);
+      // The page loads again: its hello replaces the channel at once, and the new one is not
+      // welcomed until the page has its context.
+      window.dispatchEvent(new MessageEvent('message', { data: { magnusim: 'hello', sdkVersion: '1.4.0', instance: 'i2' }, source: t.win }));
+      expect(t.bridge.connected()).toBe(false);
+      t.bridge.assistantTurn(TURN);
+      expect(turnPorts(), 'neither on the old channel nor on the new one before its welcome').toEqual([first, first]);
+      await vi.waitFor(() => expect(t.posted.length).toBe(2));
+      const next = (t.posted[1] as [unknown, unknown, FakePort[]])[2][0];
+      expect(t.bridge.connected()).toBe(true);
+      t.bridge.assistantTurn(TURN);
+      expect(turnPorts()).toEqual([first, first, next.other]);
+      // Detached: no channel.
+      t.end();
+      t.bridge.assistantTurn(TURN);
+      // A bridge whose page never said hello: none either.
+      const h = hooks();
+      const frame = document.createElement('iframe');
+      document.body.appendChild(frame);
+      const lone = new WorkspaceBridge(frame, new WorkspaceCalls(SCOPE, h), h);
+      lone.assistantTurn(TURN);
+      expect(turnPorts()).toHaveLength(3);
+      expect(h.log).not.toHaveBeenCalled();
+      frame.remove();
+    } finally {
+      posts.mockRestore();
+    }
   });
 
   it('assistant.stop {turn} asks hooks.assistantStop and answers {stopped} or {stopped:false, reason}; no hook: no_assistant; a hook that fails: failed; a turn that is no id: bad_request', async () => {

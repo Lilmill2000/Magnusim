@@ -812,6 +812,47 @@ describe('turns reach the page (CAD tools spec H3)', { timeout: 30_000 }, () => 
     assert.deepEqual([ct.pageView().local, ct.pageView().state, ct.pageView().end], [false, 'ended', { state: 'done', reason: 'end_turn' }]);
   });
 
+  it('an update still held back when the turn ends never goes: its end is its last `turn` frame, once', async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    const changes = [];
+    s.handle.turns.onTurnChange((t, change) => changes.push(change));
+    m.provider.script({ tools: [{ name: 'ai-demo__add', input: { by: 1 } }] }, { tools: [{ name: 'ai-demo__add', input: { by: 2 } }] }, { text: 'It reads 3.', hold: 'answer' });
+    const started = await s.post('/api/assistant/turns', { text: 'Add 1, then 2', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    for (const [n, text] of [
+      [0, 'Now 1'],
+      [1, 'Now 3'],
+    ]) {
+      const call = await page.frame('invoke', n);
+      await s.progress(link, call.call, { ack: true });
+      await s.result(link, call.call, { ok: true, result: { text } });
+    }
+    await m.provider.reached('answer');
+    // The first result's update went at once; the second's, in the same second, is held back.
+    assert.equal((await page.frame('turn', 1)).used.steps, 1);
+    m.clock.advance(999);
+    assert.deepEqual(changes, ['started', 'updated'], 'held until the second is up');
+    // The turn ends 1 ms before the held update is due, then the clock moves well past it.
+    m.provider.release('answer');
+    await settled(t);
+    m.clock.advance(1);
+    m.clock.advance(5000);
+    assert.deepEqual(changes, ['started', 'updated', 'ended'], 'nothing after its end');
+    const end = await page.frame('turn', 2);
+    assert.deepEqual([end.state, end.end, end.used.steps], ['ended', { state: 'done', reason: 'end_turn' }, 2]);
+    // What the page got, fenced by the channel opened again (its new link sends no turn: none runs).
+    const before = page.of('active').length;
+    await page.open();
+    await page.frame('active', before);
+    assert.deepEqual(
+      page.of('turn').map((x) => x.state),
+      ['running', 'running', 'ended'],
+      'one end, and no update after it',
+    );
+  });
+
   it("a new link hears the tab's running turns again right after `active` (as many as it says); another tab's page, and a turn with no tab, reach no page", async () => {
     const { m, s } = await setup();
     const A = await linkedPage(s);
