@@ -185,6 +185,10 @@ describe('get_model within its budget', () => {
       expect(d.params_cut).toMatch(/left out; get_model detail full lists every parameter/);
       const rows = d.features as Row[];
       expect(rows[0]).toMatchObject({ earlier: expect.any(Number), more: 'get_model detail full, or get_model feature <name>' });
+      // Where it points: full has every parameter with its expression and comment.
+      const full = (await h.ok('get_model', { detail: 'full', feature: '' }, { turn: 't-local' })).data;
+      expect(full.params_cut).toBeUndefined();
+      expect((full.params as Row[]).slice(0, chip.length).map((p) => [p.name, p.expr, p.comment])).toEqual(chip);
     },
     REAL_KERNEL_MS,
   );

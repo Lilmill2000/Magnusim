@@ -309,11 +309,12 @@ export const PARAMS_FULL = 'get_model detail full lists every parameter with its
 
 /**
  * The Part's facts within `max` bytes, so the features keep the room: a long list of bodies is
- * halved first; then the parameters' comments go, then their expressions (each keeps its name,
- * kind and value: the names are what set_params and every expression use); only a list whose
- * names alone do not fit is halved. What went is said (params_cut, params_more) with where to read it.
+ * halved first; then (a brief, `shed`) the parameters' comments go, then their expressions (each
+ * keeps its name, kind and value: the names are what set_params and every expression use), said
+ * in params_cut with where to read them; only a list whose names alone do not fit is halved (the
+ * rest counted in params_more). Full keeps every parameter whole while the list fits its room.
  */
-function fitBase(base: Row, max: number): Row {
+function fitBase(base: Row, max: number, shed: boolean): Row {
   let b = base;
   const cut = (what: string, extra: Row = {}) => ({ ...b, ...extra, params_cut: `${what}; ${PARAMS_FULL}` });
   for (let guard = 0; guard < 20 && jsonBytes(b) > max; guard++) {
@@ -322,13 +323,14 @@ function fitBase(base: Row, max: number): Row {
     if (bodies.length > 5) {
       const keep = Math.ceil(bodies.length / 2);
       b = { ...b, bodies: bodies.slice(0, keep), bodies_more: (Number(b.bodies_more) || 0) + bodies.length - keep };
-    } else if (params.some((p) => 'comment' in p)) {
+    } else if (shed && params.some((p) => 'comment' in p)) {
       b = cut('comments left out', { params: params.map(({ comment: _c, ...p }) => p) });
-    } else if (params.some((p) => 'expr' in p)) {
+    } else if (shed && params.some((p) => 'expr' in p)) {
       b = cut('expressions and comments left out', { params: params.map(({ expr: _e, ...p }) => p) });
     } else if (params.length > 10) {
       const keep = Math.ceil(params.length / 2);
-      b = cut('expressions and comments left out', { params: params.slice(0, keep), params_more: (Number(b.params_more) || 0) + params.length - keep });
+      const rest = { params: params.slice(0, keep), params_more: (Number(b.params_more) || 0) + params.length - keep };
+      b = shed ? cut('expressions and comments left out', rest) : { ...b, ...rest };
     } else break;
   }
   return b;
@@ -342,7 +344,7 @@ function limitsOf(turn: TurnFacts | null): Row | null {
 
 /** The whole Part, brief: the newest features kept while the reply is too large. */
 function fitBrief(facts: Row, rows: Row[], budgets: ReplyBudgets): Row {
-  const base = fitBase(facts, budgets.brief / 2);
+  const base = fitBase(facts, budgets.brief / 2, true);
   let keep = Math.min(rows.length, budgets.briefCollapse);
   let data: Row = { ...base, features: collapse(rows, keep) };
   while (keep > 1 && jsonBytes(data) > budgets.brief) {
@@ -366,7 +368,7 @@ function fitBrief(facts: Row, rows: Row[], budgets: ReplyBudgets): Row {
 /** The whole Part, full: features in full while they fit, then brief with a pointer, then counted. */
 async function fitFull(facts: Row, services: AppServices, s: DocState, budgets: ReplyBudgets): Promise<Row> {
   const features: Row[] = [];
-  const data: Row = { ...fitBase(facts, budgets.full / 3), features };
+  const data: Row = { ...fitBase(facts, budgets.full / 3, false), features };
   let size = jsonBytes(data);
   const list = s.doc.features;
   for (let i = 0; i < list.length; i++) {
