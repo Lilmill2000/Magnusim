@@ -536,6 +536,164 @@ describe("a study's create, reorder and delete", () => {
   }
 });
 
+describe("a project's own saves (move, rename, a modifier, a new project)", () => {
+  /** A seeded project whose teardrop carries one modifier, the active project. */
+  function seedWithModifier(pid) {
+    const dir = seedProject(pid);
+    editProject(dir, (doc) => {
+      doc.geometries[1].modifiers = [{ id: 'mod-1', name: 'Fin', translation: [0, 0, 0] }];
+    });
+    setActive(pid);
+    return dir;
+  }
+  const saved = (dir) => JSON.parse(readFileSync(join(dir, 'project.json'), 'utf8'));
+  const tearOf = (doc) => doc.geometries.find((g) => g.id === 'g-tear');
+
+  const routes = {
+    move: {
+      path: '/api/project/move',
+      body: { folder: 'Moved' },
+      check: (doc) => assert.equal(doc.folder, 'Moved'),
+    },
+    rename: {
+      path: '/api/project/update',
+      body: { title: 'Renamed' },
+      check: (doc) => assert.equal(doc.title, 'Renamed'),
+    },
+    'modifier transform': {
+      path: '/api/geometry/modifier',
+      body: { geometry_id: 'g-tear', modifier_id: 'mod-1', translation: [1, 2, 3] },
+      check: (doc) => assert.deepEqual(tearOf(doc).modifiers[0].translation, [1, 2, 3]),
+    },
+    'modifier remove': {
+      path: '/api/geometry/modifier',
+      body: { geometry_id: 'g-tear', modifier_id: 'mod-1', delete: true },
+      check: (doc) => assert.deepEqual(tearOf(doc).modifiers, []),
+    },
+  };
+
+  // Each saved project.json through a new Python process (spawnSync): the whole server,
+  // every tab's requests, waited over a second for each one.
+  for (const [what, route] of Object.entries(routes)) {
+    const slug = what.replace(/ /g, '-');
+    it(`${what}: saves project.json through the worker, and the server answers meanwhile`, { timeout: 120_000 }, async () => {
+      const pid = `own-${slug}-worker`;
+      const dir = seedWithModifier(pid);
+      const held = holdSaves(pid);
+      const saving = call('POST', route.path, { project_id: pid, ...route.body });
+      await held.saveHeld();
+
+      const meanwhile = await call('GET', `/api/project?project_id=${pid}`);
+      assert.equal(meanwhile.statusCode, 200, JSON.stringify(meanwhile.body));
+      held.release();
+      const done = await saving;
+      assert.equal(done.statusCode, 200, JSON.stringify(done.body));
+      route.check(saved(dir));
+    });
+
+    it(`${what}: answers that the project was deleted when it was deleted while the save waited`, { timeout: 120_000 }, async () => {
+      const pid = `own-${slug}-delete`;
+      const dir = seedWithModifier(pid);
+      const held = holdSaves(pid);
+      const saving = call('POST', route.path, { project_id: pid, ...route.body }).catch(asServerError);
+      await held.saveHeld();
+
+      const deleted = await call('POST', '/api/project/delete', { project_id: pid });
+      assert.equal(deleted.statusCode, 200, JSON.stringify(deleted.body));
+      held.release();
+      const done = await saving;
+      assert.equal(listing(dir), '', `the deleted project is back: ${dir}`);
+      assert.notEqual(activeId(), pid, 'the deleted project is the active project again');
+      assert.equal(done.statusCode, 404, JSON.stringify(done.body));
+      assert.equal(done.body.error, 'project deleted while it was saved');
+    });
+  }
+
+  it('a new project: saved through the worker, and the active project only once it is saved', { timeout: 120_000 }, async () => {
+    setActive('own-before-create');
+    let release;
+    const released = new Promise((r) => (release = r));
+    let held = null;
+    attachWorkerBridge((method, params) => {
+      if (method !== 'project.write_project' || !params.create) return null;
+      held = params;
+      return released.then(() => commitRpcSync(method, params));
+    });
+    const creating = call('POST', '/api/project', { title: 'Held new', category: 'Other', units: 'Metric' });
+    const by = Date.now() + 60_000;
+    while (!held && Date.now() < by) await new Promise((r) => setTimeout(r, 20));
+    assert.ok(held, 'the save was never sent to the worker');
+
+    const meanwhile = await call('GET', '/api/projects');
+    assert.equal(meanwhile.statusCode, 200, JSON.stringify(meanwhile.body));
+    assert.equal(activeId(), 'own-before-create', 'a project not saved yet is the active one');
+    release();
+    const made = await creating;
+    assert.equal(made.statusCode, 201, JSON.stringify(made.body));
+    assert.equal(basename(String(held.project_dir)), made.body.id);
+    assert.equal(saved(join(root, made.body.id)).title, 'Held new');
+    assert.equal(activeId(), made.body.id, 'a new project is the active one');
+  });
+});
+
+describe('a save a read or the mesh input makes, without waiting', () => {
+  /** Polls until `ok()` or 10 s. */
+  async function until(ok, what) {
+    const by = Date.now() + 10_000;
+    while (!ok() && Date.now() < by) await new Promise((r) => setTimeout(r, 20));
+    assert.ok(ok(), what);
+  }
+  const saved = (dir) => JSON.parse(readFileSync(join(dir, 'project.json'), 'utf8'));
+
+  // A read that repairs the geometry records (here: no active geometry) saves them. That
+  // save went through a new Python process, which held the whole server.
+  it('a read that repairs the geometry records answers at once; the repair is saved through the worker', { timeout: 120_000 }, async () => {
+    const pid = 'repair-on-read';
+    const dir = seedProject(pid);
+    editProject(dir, (doc) => {
+      delete doc.active_geometry_id;
+    });
+    const held = holdSaves(pid);
+    const read = await call('GET', `/api/project?project_id=${pid}`);
+    assert.equal(read.statusCode, 200, JSON.stringify(read.body));
+    await held.saveHeld();
+    assert.equal(read.body.project.active_geometry_id, 'g-round');
+    held.release();
+    await until(() => saved(dir).active_geometry_id === 'g-round', 'the repair was not saved');
+  });
+
+  it('a repair whose project was deleted while it waited does not make the project again', { timeout: 120_000 }, async () => {
+    const pid = 'repair-then-delete';
+    const dir = seedProject(pid);
+    editProject(dir, (doc) => {
+      delete doc.active_geometry_id;
+    });
+    const held = holdSaves(pid);
+    const read = await call('GET', `/api/project?project_id=${pid}`);
+    assert.equal(read.statusCode, 200, JSON.stringify(read.body));
+    await held.saveHeld();
+    const deleted = await call('POST', '/api/project/delete', { project_id: pid });
+    assert.equal(deleted.statusCode, 200, JSON.stringify(deleted.body));
+    held.release();
+    await settle();
+    assert.equal(listing(dir), '', `the deleted project is back: ${dir}`);
+  });
+
+  it("the mesh input's path is answered at once and saved through the worker", { timeout: 120_000 }, async () => {
+    const pid = 'mesh-input-path';
+    const dir = seedProject(pid);
+    const tear = partDir(dir, 'g-tear');
+    writeFileSync(join(tear, 'Body1.stl'), Buffer.alloc(4096, 1));
+    writeFileSync(join(tear, 'Body1.json'), JSON.stringify({ cad_quality: true, bounds: { ntri: 9000 } }));
+    const held = holdSaves(pid);
+    const ready = w16.ensureBody1Stl(pid);
+    assert.deepEqual([ready.ok, ready.cached, ready.path], [true, true, join(tear, 'Body1.stl')], JSON.stringify(ready));
+    await held.saveHeld();
+    held.release();
+    await until(() => saved(dir).geometry.stl_path === join(tear, 'Body1.stl'), 'the mesh input path was not saved');
+  });
+});
+
 describe('the active project', () => {
   it('is never a deleted one', async () => {
     const kept = await call('POST', '/api/project', { title: 'Kept', category: 'Other', units: 'Metric' });

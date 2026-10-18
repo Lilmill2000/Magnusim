@@ -28,7 +28,7 @@ const { fillSampleFolder, fillSampleText, namesAPlace, sampleProblem, sampleText
   '../project-sample.js'
 );
 const { sampleFromProject } = await import('../sample-from-project.mjs');
-const { attachWorkerBridge } = await import('../py-json.js');
+const { attachWorkerBridge, commitRpcSync } = await import('../py-json.js');
 const { createProjectFromSample, handleW16Api, sweepSampleStaging } = await import('../w16-project-geometry.js');
 
 after(() => {
@@ -325,6 +325,59 @@ describe('POST /api/project/sample (createProjectFromSample)', () => {
     const missing = await call(async () => ({ plugin: 'demo', sample: 'nope' }));
     assert.equal(missing.status, 404);
     assert.equal(missing.headers['X-CFD-Project-Id'], undefined);
+  });
+
+  // The copy's project.json was written by a new Python process (spawnSync), which held
+  // the whole server (every tab's requests) for over a second.
+  it("saves the copy's project.json through the worker, and the server answers meanwhile", async () => {
+    let release;
+    const released = new Promise((r) => (release = r));
+    let held = null;
+    attachWorkerBridge((method, params) => {
+      if (method !== 'project.write_project') return bridge(method, params);
+      held = params;
+      return released.then(() => commitRpcSync(method, params));
+    });
+    try {
+      const copying = createProjectFromSample({ plugin: 'demo', sample: 'box' });
+      const by = Date.now() + 60_000;
+      while (!held && Date.now() < by) await new Promise((r) => setTimeout(r, 20));
+      assert.ok(held, 'the save was never sent to the worker');
+      assert.match(String(held.project_dir), /\.sample-staging/, 'saved in the staging folder, before it is moved into place');
+
+      let listed = null;
+      await handleW16Api({ method: 'GET' }, { setHeader() {} }, new URL('http://x/api/projects'), ['api', 'projects'], {
+        readJsonBody: async () => ({}),
+        sendJson: (_res, status, body) => (listed = { status, body }),
+      });
+      assert.equal(listed && listed.status, 200, JSON.stringify(listed));
+      release();
+      const made = await copying;
+      assert.equal(made.status, 201, JSON.stringify(made.body));
+      assert.equal(JSON.parse(readFileSync(join(projects, made.body.id, 'project.json'), 'utf8')).id, made.body.id);
+    } finally {
+      attachWorkerBridge(bridge);
+    }
+  });
+
+  // The staging folder's name is no project id: the list threw "invalid project id" (a 400
+  // to Home) while any copy was being made.
+  it('the project list answers while a copy is staged, and does not list the copy', async () => {
+    const staging = join(projects, '.sample-staging', 'copy-on-its-way');
+    mkdirSync(staging, { recursive: true });
+    writeFileSync(join(staging, 'project.json'), json({ id: 'copy-on-its-way', title: 'Half made' }));
+    try {
+      let listed = null;
+      await handleW16Api({ method: 'GET' }, { setHeader() {} }, new URL('http://x/api/projects'), ['api', 'projects'], {
+        readJsonBody: async () => ({}),
+        sendJson: (_res, status, body) => (listed = { status, body }),
+      });
+      assert.equal(listed && listed.status, 200, JSON.stringify(listed));
+      assert.ok(Array.isArray(listed.body.projects) && listed.body.projects.length > 0, JSON.stringify(listed.body));
+      assert.equal(JSON.stringify(listed.body).includes('Half made'), false, 'the staged copy is listed');
+    } finally {
+      rmSync(join(projects, '.sample-staging'), { recursive: true, force: true });
+    }
   });
 
   it('a copy the app stopped in the middle of is swept from the staging folder after an hour', async () => {
