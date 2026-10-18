@@ -6,8 +6,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { startHost } from './support/host-server.mjs';
-import { assistantStatus, chooseProvider, openAssistantStep } from './support/assistant.js';
+import { e2eTemp, startHost } from './support/host-server.mjs';
+import { assistantStatus, chooseProvider, noAgentsHere, openAssistantStep } from './support/assistant.js';
 import { expect, test } from './support/stress.js';
 
 const BLOCKED_TEXT =
@@ -17,9 +17,12 @@ let host;
 
 test.beforeAll(async () => {
   test.setTimeout(180_000);
+  // The step looks for coding agents: only in empty folders of this server's own.
+  const tmp = e2eTemp('assistant-keys-off');
   host = await startHost({
     name: 'assistant-keys-off',
-    env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'blocked' },
+    tmp,
+    env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROTECTOR: 'blocked', ...noAgentsHere(tmp) },
   });
 });
 

@@ -19,7 +19,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { AssistantApiError, assistantGet, assistantPost, RemoteError, REMOTE_TEXT } from './api';
-import type { AssistantStatus, ProviderReady } from './wire';
+import type { AgentCaps, AgentProviderId, AssistantStatus, ProviderReady } from './wire';
 
 export type StatusSnapshot =
   | { state: 'loading' }
@@ -166,6 +166,54 @@ export function providerReady(status: AssistantStatus, id: string): ProviderRead
   if (id !== status.provider || typeof status.ready !== 'boolean') return null;
   const server = id === 'openai_compatible';
   return { label: id, kind: server ? 'server' : 'key', ready: status.ready, reason: status.ready_reason ?? null, billing: server ? 'free' : 'usd', detail: '' };
+}
+
+// ---------------------------------------------------------------- coding agents
+
+const AGENT_PROVIDER_RE = /^agent:[a-z][a-z0-9-]{0,39}$/;
+
+/** Whether a provider is a coding agent (`agent:<id>`). */
+export function isAgentProvider(p: unknown): p is AgentProviderId {
+  return typeof p === 'string' && AGENT_PROVIDER_RE.test(p);
+}
+
+/** A coding agent the Default choice offers (phase 3 spec 5.6). */
+export interface AgentChoice {
+  id: AgentProviderId;
+  name: string;
+  ready: boolean;
+  detail: string;
+}
+
+/**
+ * The coding agents the Default choice offers: each `agent:<id>` row of `providers_ready`
+ * (every found known agent and every custom agent, after the agents were looked for), in the
+ * server's order, and the saved default when it is an agent with no row (not found now).
+ */
+export function agentChoices(status: AssistantStatus): AgentChoice[] {
+  const out: AgentChoice[] = [];
+  const rows = status.providers_ready;
+  if (rows && typeof rows === 'object') {
+    for (const id of Object.keys(rows)) {
+      if (!isAgentProvider(id)) continue;
+      const r = providerReady(status, id);
+      if (r && r.kind === 'agent') out.push({ id, name: r.label === id ? id.slice('agent:'.length) : r.label, ready: r.ready, detail: r.detail });
+    }
+  }
+  const saved = status.provider;
+  if (isAgentProvider(saved) && !out.some((c) => c.id === saved)) out.push({ id: saved, name: saved.slice('agent:'.length), ready: false, detail: '' });
+  return out;
+}
+
+const AGENT_CAP_KEYS: ReadonlyArray<keyof AgentCaps> = ['changes', 'calls', 'turn_minutes'];
+
+/** The limits for agent turns as the status says them, or null when it has none (an older server). */
+export function agentCapsOf(status: AssistantStatus): AgentCaps | null {
+  const c = (status as { agent_caps?: unknown }).agent_caps;
+  if (!c || typeof c !== 'object') return null;
+  const caps = c as Record<string, unknown>;
+  if (!AGENT_CAP_KEYS.every((k) => typeof caps[k] === 'number' && Number.isFinite(caps[k]))) return null;
+  return { changes: caps.changes as number, calls: caps.calls as number, turn_minutes: caps.turn_minutes as number };
 }
 
 // ---------------------------------------------------------------- leaving the step

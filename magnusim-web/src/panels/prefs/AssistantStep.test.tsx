@@ -515,7 +515,7 @@ describe('AssistantStep cloud', () => {
     expect(q('[data-assistant-price]')).toHaveTextContent('$4.00 in · $20.00 out per million tokens (prices of 2026-10-16).');
     expect(q('[data-assistant-fallback-note]')).toHaveTextContent(FALLBACK_TEXT);
     expect(q('[data-assistant-shared-pc]')).toHaveTextContent(SHARED_PC_TEXT);
-    expect(q('[data-assistant-spent]')).toHaveTextContent('Spent today: $0.42 of $15.00');
+    expect(q('[data-assistant-spent]')).toHaveTextContent('Spent today (API keys): $0.42 of $15.00');
     expect(step()).toHaveTextContent('Limits are checked before each step; one step can go a little over.');
     const privacy = q('[data-assistant-privacy]')!;
     expect(within(privacy).getAllByRole('radio').map((r) => (r as HTMLInputElement).value)).toEqual(['ask', 'allow', 'deny']);
@@ -553,11 +553,11 @@ describe('AssistantStep cloud', () => {
   });
 
   it.each([
-    [0.4213, 'Spent today: $0.42 of $15.00'],
-    [0, 'Spent today: $0.00 of $15.00'],
-    [0.0021, 'Spent today: under $0.01 of $15.00'],
-    [0.006, 'Spent today: $0.01 of $15.00'],
-    [12.5, 'Spent today: $12.50 of $15.00'],
+    [0.4213, 'Spent today (API keys): $0.42 of $15.00'],
+    [0, 'Spent today (API keys): $0.00 of $15.00'],
+    [0.0021, 'Spent today (API keys): under $0.01 of $15.00'],
+    [0.006, 'Spent today (API keys): $0.01 of $15.00'],
+    [12.5, 'Spent today (API keys): $12.50 of $15.00'],
   ])("today's spend is in dollars and cents: %s", async (spent, text) => {
     await ready({ provider: 'anthropic', spent_today_usd: spent });
     expect(q('[data-assistant-spent]')!.textContent).toBe(text);
@@ -740,7 +740,7 @@ describe('AssistantStep models and Test', () => {
     await waitFor(() => expect(result).toHaveTextContent('Connected to claude-opus-5-5 in 1.4 s ($0.0021). Tool calling works.'));
     expect(result).toHaveAttribute('data-assistant-test-result', 'ok');
     await waitFor(() => expect(gets()).toBeGreaterThan(before));
-    await waitFor(() => expect(q('[data-assistant-spent]')).toHaveTextContent('Spent today: $0.42 of $15.00'));
+    await waitFor(() => expect(q('[data-assistant-spent]')).toHaveTextContent('Spent today (API keys): $0.42 of $15.00'));
   });
 
   it('Test says when the model did not call the tool, and shows an error as it came', async () => {
@@ -1057,7 +1057,7 @@ describe('AssistantStep limits as saved', () => {
     const day = q<HTMLInputElement>('[data-assistant-cap-day-usd]')!;
     expect(turn.value).toBe('0.125');
     expect(day.value).toBe('0.125');
-    expect(q('[data-assistant-spent]')!.textContent).toBe('Spent today: $0.10 of $0.125');
+    expect(q('[data-assistant-spent]')!.textContent).toBe('Spent today (API keys): $0.10 of $0.125');
     for (const el of [turn, day, q<HTMLInputElement>('[data-assistant-cap-steps]')!, q<HTMLInputElement>('[data-assistant-cap-minutes]')!]) {
       fireEvent.focus(el);
       fireEvent.blur(el);

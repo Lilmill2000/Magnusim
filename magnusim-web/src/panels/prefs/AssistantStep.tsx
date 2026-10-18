@@ -1,8 +1,9 @@
 /**
- * Settings → Assistant (Foundation spec 4.3; phase 3 spec 5.6): the default provider, then a
- * card for every provider, always listed whatever the default (each with its endpoint, key,
- * model, effort and connection Test, saved for that provider only), privacy, limits and
- * today's spend. A conversation may use any provider, so nothing is removed when the default
+ * Settings → Assistant (Foundation spec 4.3; phase 3 spec 5.6): the default provider (Off, the
+ * API-key providers and the coding agents found), then a card for every API-key provider,
+ * always listed whatever the default (each with its endpoint, key, model, effort and connection
+ * Test, saved for that provider only), the coding agents (AssistantStepAgents.tsx), other apps
+ * (AssistantStepMcp.tsx), privacy, the limits (API keys' and coding agents') and today's spend. A conversation may use any provider, so nothing is removed when the default
  * changes. The default's card starts open; the others open with Set up. Every change saves at once,
  * and every save answers with the whole status (src/assistant/status.ts). Leaving the step
  * saves a key pasted but not saved, and waits for the changes on their way (stepChange):
@@ -21,8 +22,20 @@
  */
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { AssistantApiError, assistantGet, assistantPost, REMOTE_TEXT } from '../../assistant/api';
-import { providerReady, refreshStatus, retryStatus, stepChange, stepHolder, useAssistantStatus, writeStatus } from '../../assistant/status';
+import {
+  agentCapsOf,
+  agentChoices,
+  isAgentProvider,
+  providerReady,
+  refreshStatus,
+  retryStatus,
+  stepChange,
+  stepHolder,
+  useAssistantStatus,
+  writeStatus,
+} from '../../assistant/status';
 import type {
+  AgentCaps,
   AssistantStatus,
   Caps,
   Effort,
@@ -38,6 +51,7 @@ import type {
 } from '../../assistant/wire';
 import type { IslandProps } from '../../islands';
 import { confirmAction } from '../../workbench/dialogs';
+import { AssistantStepAgents, defaultBillingText } from './AssistantStepAgents';
 import { AssistantStepMcp } from './AssistantStepMcp';
 
 const SETTINGS = '/api/assistant/settings';
@@ -59,7 +73,7 @@ const PROVIDERS: ReadonlyArray<{ id: ProviderId; title: string; copy: string }> 
 
 export const DEFAULT_COPY = 'The Assistant uses this unless a conversation picks another. Every provider below keeps its own settings.';
 export const PRIVACY_COPY =
-  "Cloud providers, and a local server that isn't on this PC, get your messages and what the Assistant reads from a project you ask about (names, settings, results and pictures of the open workspace). A local server on this PC keeps it here.";
+  "Cloud providers, coding agents, other apps (MCP) and a local server that isn't on this PC send project data off this PC: your messages and what the Assistant reads from a project you ask about (names, settings, results and pictures of the open workspace). A local server on this PC keeps it here.";
 
 const CLOUD_LABEL: Record<'anthropic' | 'openai', string> = { anthropic: 'Anthropic', openai: 'OpenAI' };
 
@@ -89,6 +103,8 @@ export const SERVER_PRICE_TEXT = "Magnusim doesn't know what this server charges
 export const FALLBACK_TEXT =
   "If the model declines a request, the provider may retry it on an older model of its own, at that model's price.";
 export const LIMITS_TEXT = 'Limits are checked before each step; one step can go a little over.';
+/** Under the coding agents' limits. */
+export const AGENT_LIMITS_TEXT = "Magnusim can't see what a coding agent spends on your account, so the $ limits don't apply to it; these do, for each message.";
 export const SHARED_PC_TEXT =
   "Anyone signed in to this PC can use the Assistant through Magnusim (they can't see your key); these limits apply to them too.";
 export const LOCAL_LIMITS_TEXT = 'Local servers cost nothing; the step and time limits still apply.';
@@ -194,7 +210,7 @@ function priceOf(s: AssistantStatus, provider: ProviderId): AssistantStatus['pri
 
 /** The price line of a provider's model (the default's without `provider`), or null when there is nothing honest to say. */
 export function priceLine(s: AssistantStatus, provider: ProviderChoice = s.provider): string | null {
-  if (provider === 'off') return null;
+  if (provider === 'off' || isAgentProvider(provider)) return null;
   if (provider === 'openai_compatible') return s.base_url_is_local ? LOCAL_PRICE_TEXT : SERVER_PRICE_TEXT;
   const p = priceOf(s, provider);
   if (!p) return null;
@@ -338,6 +354,7 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
           <ProviderCard key={p.id} p={p} status={status} />
         ))}
       </div>
+      <AssistantStepAgents status={status} />
       <AssistantStepMcp status={status} />
       <PrivacyBlock status={status} />
       <LimitsBlock status={status} />
@@ -376,11 +393,16 @@ function DefaultBlock({ status }: { status: AssistantStatus }) {
     return r.ok;
   };
   const shown = pending ?? status.provider;
+  // Off, the API-key providers, then each coding agent found (an agent not installed isn't offered).
+  const options: Array<{ id: ProviderChoice; title: string; billing: string | null }> = [
+    ...DEFAULTS.map((p) => ({ ...p, billing: null })),
+    ...agentChoices(status).map((a) => ({ id: a.id, title: `${a.name} (coding agent)`, billing: defaultBillingText(a.name) })),
+  ];
   return (
     <div className="wiz-assistant-block">
       <h3 className="wiz-assistant-h">Default provider</h3>
       <div className="wiz-assistant-options" role="radiogroup" aria-label="Default provider" data-assistant-default={status.provider}>
-        {DEFAULTS.map((p) => {
+        {options.map((p) => {
           const on = p.id === shown;
           const ready = p.id === 'off' ? null : providerReady(status, p.id);
           return (
@@ -392,6 +414,11 @@ function DefaultBlock({ status }: { status: AssistantStatus }) {
                   <span className="wiz-assistant-state" data-assistant-default-state={ready.ready ? 'ready' : 'not-ready'}>
                     <ReadyDot ready={ready.ready} />
                     {ready.detail}
+                  </span>
+                ) : null}
+                {p.billing ? (
+                  <span className="wiz-assistant-option-billing" data-assistant-default-billing="1">
+                    {p.billing}
                   </span>
                 ) : null}
               </span>
@@ -1024,36 +1051,73 @@ const CAP_HOOK: Record<CapKey, string> = {
   turn_minutes: 'data-assistant-cap-minutes',
   turn_tokens: 'data-assistant-cap-tokens',
 };
+const AGENT_CAP_HOOK: Record<keyof AgentCaps, string> = {
+  changes: 'data-assistant-agent-cap-changes',
+  calls: 'data-assistant-agent-cap-calls',
+  turn_minutes: 'data-assistant-agent-cap-minutes',
+};
 
-/** The limits hold for every provider a conversation may use: the $ ones for the cloud providers only. */
+/**
+ * The limits. API keys: $ (the cloud providers only), steps and minutes per turn, and today's
+ * spend. Coding agents (phase 3 spec 4.10): changes, tool calls and minutes per message, which
+ * a server without them in its status doesn't show. Magnusim can't see an agent's spend.
+ */
 function LimitsBlock({ status }: { status: AssistantStatus }) {
   const caps = status.caps;
+  const agentCaps = agentCapsOf(status);
   const field = (cap: CapKey, label: string, isMoney: boolean) => (
     // A new saved value starts the field afresh; a refused one keeps what was typed.
-    <CapField key={`${cap}:${caps[cap]}`} cap={cap} label={label} saved={caps[cap]} isMoney={isMoney} />
+    <CapField key={`${cap}:${caps[cap]}`} label={label} saved={caps[cap]} isMoney={isMoney} hook={CAP_HOOK[cap]} errorHook={cap} patch={(n) => ({ caps: { [cap]: n } })} />
+  );
+  const agentField = (caps: AgentCaps, cap: keyof AgentCaps, label: string) => (
+    <CapField
+      key={`${cap}:${caps[cap]}`}
+      label={label}
+      saved={caps[cap]}
+      isMoney={false}
+      hook={AGENT_CAP_HOOK[cap]}
+      errorHook={`agent_${cap}`}
+      patch={(n) => ({ agent_caps: { [cap]: n } })}
+    />
   );
   return (
-    <div className="wiz-assistant-block" data-assistant-limits="1">
+    <div className="wiz-assistant-block" data-assistant-limits-block="1">
       <h3 className="wiz-assistant-h">Limits</h3>
-      <div className="wiz-assistant-caps">
-        {field('turn_usd', '$ per turn', true)}
-        {field('day_usd', '$ per day', true)}
-        {field('steps', 'Steps per turn', false)}
-        {field('turn_minutes', 'Minutes per turn', false)}
+      <div className="wiz-assistant-group" role="group" aria-label="API keys limits" data-assistant-limits="1">
+        <h4 className="wiz-assistant-subh">API keys</h4>
+        <div className="wiz-assistant-caps">
+          {field('turn_usd', '$ per turn', true)}
+          {field('day_usd', '$ per day', true)}
+          {field('steps', 'Steps per turn', false)}
+          {field('turn_minutes', 'Minutes per turn', false)}
+        </div>
+        <p className="wiz-assistant-status" data-assistant-spent="1">
+          Spent today (API keys): {cents(Number(status.spent_today_usd))} of ${capText(caps.day_usd, true)}
+        </p>
+        <p className="wiz-assistant-meta">{LIMITS_TEXT}</p>
+        {status.base_url_is_local === false ? (
+          <p className="wiz-assistant-meta" data-assistant-server-limits="1">
+            {SERVER_LIMITS_TEXT}
+          </p>
+        ) : (
+          <p className="wiz-assistant-meta" data-assistant-local-limits="1">
+            {LOCAL_LIMITS_TEXT}
+          </p>
+        )}
       </div>
-      <p className="wiz-assistant-status" data-assistant-spent="1">
-        Spent today: {cents(Number(status.spent_today_usd))} of ${capText(caps.day_usd, true)}
-      </p>
-      <p className="wiz-assistant-meta">{LIMITS_TEXT}</p>
-      {status.base_url_is_local === false ? (
-        <p className="wiz-assistant-meta" data-assistant-server-limits="1">
-          {SERVER_LIMITS_TEXT}
-        </p>
-      ) : (
-        <p className="wiz-assistant-meta" data-assistant-local-limits="1">
-          {LOCAL_LIMITS_TEXT}
-        </p>
-      )}
+      {agentCaps ? (
+        <div className="wiz-assistant-group" role="group" aria-label="Coding agents limits" data-assistant-agent-limits="1">
+          <h4 className="wiz-assistant-subh">Coding agents</h4>
+          <div className="wiz-assistant-caps">
+            {agentField(agentCaps, 'changes', 'Changes per message')}
+            {agentField(agentCaps, 'calls', 'Tool calls per message')}
+            {agentField(agentCaps, 'turn_minutes', 'Minutes per message')}
+          </div>
+          <p className="wiz-assistant-meta" data-assistant-agent-limits-copy="1">
+            {AGENT_LIMITS_TEXT}
+          </p>
+        </div>
+      ) : null}
       <p className="wiz-assistant-meta" data-assistant-shared-pc="1">
         {SHARED_PC_TEXT}
       </p>
@@ -1061,7 +1125,24 @@ function LimitsBlock({ status }: { status: AssistantStatus }) {
   );
 }
 
-function CapField({ cap, label, saved, isMoney }: { cap: CapKey; label: string; saved: number; isMoney: boolean }) {
+function CapField({
+  label,
+  saved,
+  isMoney,
+  hook,
+  errorHook,
+  patch,
+}: {
+  label: string;
+  saved: number;
+  isMoney: boolean;
+  /** The field's own attribute (data-assistant-cap-steps). */
+  hook: string;
+  /** Its error line's data-assistant-cap-error value. */
+  errorHook: string;
+  /** The settings change that saves `n`. */
+  patch: (n: number) => Record<string, unknown>;
+}) {
   // The limit as it is enforced: a $ limit with a third decimal is not shown rounded.
   const shown = capText(saved, isMoney);
   const [draft, setDraft] = useState(shown);
@@ -1080,7 +1161,7 @@ function CapField({ cap, label, saved, isMoney }: { cap: CapKey; label: string; 
       setDraft(shown);
       return true;
     }
-    const r = await writeStatus(SETTINGS, { caps: { [cap]: n } });
+    const r = await writeStatus(SETTINGS, patch(n));
     if (r.ok) setError('');
     else setError(r.error.message);
     return r.ok;
@@ -1095,13 +1176,13 @@ function CapField({ cap, label, saved, isMoney }: { cap: CapKey; label: string; 
         inputMode={isMoney ? 'decimal' : 'numeric'}
         value={draft}
         {...described(error, errorId)}
-        {...{ [CAP_HOOK[cap]]: '1' }}
+        {...{ [hook]: '1' }}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => void stepChange(commit())}
         onKeyDown={blurOnEnter}
       />
       {error ? (
-        <span id={errorId} className="wiz-assistant-error" role="alert" data-assistant-cap-error={cap}>
+        <span id={errorId} className="wiz-assistant-error" role="alert" data-assistant-cap-error={errorHook}>
           {error}
         </span>
       ) : null}

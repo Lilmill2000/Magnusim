@@ -5223,6 +5223,39 @@ body.is-recording #viewport-gizmo {
 .wiz-assistant-card-body[hidden] { display: none; }
 .wiz-assistant-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--mg-text-muted); opacity: 0.5; }
 .wiz-assistant-dot.is-ready { background: var(--mg-success); opacity: 1; }
+/* Coding agents (AssistantStepAgents.tsx): one card per agent, its allow switch with the warning
+   beside it, the Sign in block, Model and Mode, and the custom agent form; the limits' groups. */
+.wiz-assistant-subh { margin: 0; font-size: var(--mg-text-sm); font-weight: var(--mg-weight-semibold); color: var(--mg-text-strong); }
+.wiz-assistant-group { display: flex; flex-direction: column; gap: var(--mg-space-1); }
+.wiz-assistant-group + .wiz-assistant-group { margin-top: var(--mg-space-2); }
+.wiz-assistant-agents { display: flex; flex-direction: column; gap: var(--mg-space-2); margin: 0; padding: 0; list-style: none; }
+.wiz-assistant-agent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-1);
+  padding: var(--mg-space-2) var(--mg-space-3);
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+}
+.wiz-assistant-agent:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+.wiz-assistant-agent[data-assistant-agent-state="missing"] { background: var(--mg-surface); }
+.wiz-assistant-agent-program { overflow-wrap: anywhere; }
+/* A Test or connect result: a live region, always there (empty, it takes no room). */
+.wiz-assistant-agent-result { min-width: 0; overflow-wrap: anywhere; }
+.wiz-assistant-agent code { font-size: var(--mg-text-sm); overflow-wrap: anywhere; user-select: text; }
+.wiz-assistant-allow { display: flex; flex-direction: column; gap: var(--mg-space-1); padding: var(--mg-space-2); border-left: 3px solid var(--mg-warning); background: var(--mg-surface); }
+.wiz-assistant-signin { display: flex; flex-direction: column; gap: var(--mg-space-1); padding: var(--mg-space-2); border: 1px dashed var(--mg-border-subtle); border-radius: var(--mg-radius-sm); }
+.wiz-assistant-signin-command { display: flex; flex-direction: column; gap: 2px; }
+.wiz-assistant-agent-choices { display: flex; flex-direction: column; gap: var(--mg-space-1); }
+.wiz-assistant-option-copy .wiz-assistant-option-billing { font-size: var(--mg-text-sm); color: var(--mg-text-muted); }
+.wiz-assistant-custom { display: flex; flex-direction: column; gap: var(--mg-space-1); padding: var(--mg-space-2) var(--mg-space-3); border: 1px solid var(--mg-control-border); border-radius: var(--mg-radius-md); }
+.wiz-assistant-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--mg-text-sm); color: var(--mg-text-muted); }
+.wiz-assistant-field .wiz-assistant-input { width: 100%; }
+.wiz-assistant-vars { display: flex; flex-direction: column; gap: var(--mg-space-1); margin: 0; padding: var(--mg-space-1) 0 0; border: 0; }
+.wiz-assistant-vars legend { padding: 0; font-size: var(--mg-text-sm); color: var(--mg-text-strong); }
+.wiz-assistant-vars > .home-btn { align-self: flex-start; }
+.wiz-assistant .home-btn[aria-disabled="true"] { opacity: 0.6; cursor: default; }
 
 /* Plugin studies (H11): project-level studies a plugin owns, below SIMULATIONS.
    Shown in every stage (an empty project too); the simulations section's rules are untouched. */

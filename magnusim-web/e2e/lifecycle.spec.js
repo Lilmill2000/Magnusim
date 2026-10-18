@@ -488,6 +488,8 @@ test('setup wizard: first launch walks every step to Finish; Settings reopens it
   await page.route('**/api/prefs/hardware-check', (route) =>
     route.fulfill({ json: { ok: true, hardware: { logical_cpus: 8, physical_cores: 4, ram_gb: 16, profile: 'desktop', n_procs: 3, notes: [] } } }),
   );
+  // The Assistant step looks for coding agents; this PC's own are not what this test is about (none is asked its version).
+  await page.route('**/api/assistant/agents*', (route) => route.fulfill({ json: { ok: true, checked_at: new Date().toISOString(), took_ms: 0, agents: [] } }));
   try {
     await request.post('/api/prefs', { data: { wizard_completed: false } });
     await page.goto('/#/');

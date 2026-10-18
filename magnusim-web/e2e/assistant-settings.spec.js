@@ -16,7 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startFakeLlm } from './support/fake-llm.mjs';
-import { startHost } from './support/host-server.mjs';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 import {
   appReady,
   assistantPane,
@@ -25,6 +25,7 @@ import {
   closeSettings,
   collectAnswers,
   filesHolding,
+  noAgentsHere,
   openAssistantStep,
   openCard,
   pressTest,
@@ -50,9 +51,12 @@ let fake;
 test.beforeAll(async () => {
   test.setTimeout(180_000);
   fake = await startFakeLlm();
+  // The step looks for coding agents: only in empty folders of this server's own.
+  const tmp = e2eTemp('assistant-settings');
   host = await startHost({
     name: 'assistant-settings',
-    env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base },
+    tmp,
+    env: { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base, ...noAgentsHere(tmp) },
   });
   // The server ignores the provider switch unless every condition for it holds, and then the
   // cloud providers are the real ones: stop here, before any test saves a key.
@@ -167,7 +171,7 @@ test('a local server: its address and models; Test says tool calling works, name
     expect(chats[0].body.tools.map((t) => t.function.name)).toEqual(['connection_check']);
     expect(chats[1].body.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: expect.any(String) });
     // A local server costs nothing: today's (cloud) spend is unchanged.
-    await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today: $0.00 of $15.00');
+    await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today (API keys): $0.00 of $15.00');
     expect((await assistantStatus(request, host.base)).spent_today_usd).toBe(0);
 
     // A model whose chat template has no tool calls writes the call as text.
@@ -340,7 +344,7 @@ test("a cloud Test: the result line, and today's spend counts it; a refused key 
   const pane = await openAssistantStep(page);
   await chooseProvider(page, 'anthropic');
   const spent = pane.locator('[data-assistant-spent]');
-  await expect(spent).toHaveText('Spent today: $0.00 of $15.00');
+  await expect(spent).toHaveText('Spent today (API keys): $0.00 of $15.00');
   await saveKey(page, `sk-ant-e2e${randomBytes(8).toString('hex')}5678`);
   // The model list read with the new key has come back (the refusal below is for the Test).
   await expect.poll(() => fake.requests().slice(from).filter((r) => r.path === '/anthropic/v1/models').length).toBeGreaterThan(0);
@@ -351,7 +355,7 @@ test("a cloud Test: the result line, and today's spend counts it; a refused key 
   const result = await pressTest(page);
   await expect(result).toHaveText(/^Connected to claude-opus-5-5 in \d+\.\d s \(\$0\.0320\)\. Tool calling works\.$/);
   await expect(result).toHaveAttribute('data-assistant-test-result', 'ok');
-  await expect(spent).toHaveText('Spent today: $0.03 of $15.00');
+  await expect(spent).toHaveText('Spent today (API keys): $0.03 of $15.00');
   expect((await assistantStatus(request, host.base)).spent_today_usd).toBeCloseTo(0.032, 6);
   // The four limits share one row (three and one left over before).
   const tops = await pane.locator('[data-assistant-limits] .wiz-assistant-cap input').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
@@ -363,7 +367,7 @@ test("a cloud Test: the result line, and today's spend counts it; a refused key 
   const refused = await pressTest(page);
   await expect(refused).toHaveText('Anthropic refused the key. Check it in Settings → Assistant.');
   await expect(refused).toHaveAttribute('data-assistant-test-result', 'failed');
-  await expect(spent).toHaveText('Spent today: $0.03 of $15.00');
+  await expect(spent).toHaveText('Spent today (API keys): $0.03 of $15.00');
   expect(await page.content()).not.toContain('sk-ant-leak');
 });
 
@@ -447,7 +451,7 @@ test('privacy and limits save at once and survive reopening and a reload; an inv
   await expect(pane.locator('[data-assistant-cap-error="day_usd"]')).toHaveText('This limit must be from $0.10 to $1000.00.');
   await expect(day).toHaveValue('0.01');
   expect((await assistantStatus(request, host.base)).caps.day_usd).toBe(15);
-  await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today: $0.00 of $15.00');
+  await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today (API keys): $0.00 of $15.00');
   await expect(pane.locator('[data-assistant-shared-pc]')).toHaveText(
     "Anyone signed in to this PC can use the Assistant through Magnusim (they can't see your key); these limits apply to them too.",
   );

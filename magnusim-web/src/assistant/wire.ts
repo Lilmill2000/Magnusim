@@ -9,7 +9,9 @@
  */
 
 export type ProviderId = 'anthropic' | 'openai' | 'openai_compatible';
-export type ProviderChoice = 'off' | ProviderId;
+/** A provider that is a coding agent (phase 3 spec 5.1): `agent:` and a known or custom agent's id. */
+export type AgentProviderId = `agent:${string}`;
+export type ProviderChoice = 'off' | ProviderId | AgentProviderId;
 export type Effort = 'default' | 'low' | 'medium' | 'high';
 export type PrivacyMode = 'ask' | 'allow' | 'deny';
 
@@ -126,6 +128,12 @@ export interface AssistantStatus {
   /** With the model adapters: whether a turn naming no provider (the default's) could start. */
   ready?: boolean;
   ready_reason?: string | null;
+  /** Limits for a turn on a coding agent (absent from a server without them in its status). */
+  agent_caps?: AgentCaps;
+  /** When the coding agents were last looked for (null: not since the server started). */
+  agents_checked_at?: string | null;
+  /** How an agent's whole tree is stopped on this PC ('best_effort': Windows PowerShell is blocked). */
+  agents_tree_kill?: 'job' | 'group' | 'best_effort';
 }
 
 /** GET /api/assistant/models?provider=. */
@@ -336,3 +344,120 @@ export interface RelayGateBody {
   gate: string;
   allow: boolean;
 }
+
+// ---------------------------------------------------------------- coding agents (phase 3 spec 4.12, 4.13, 5.4)
+
+/** Limits for a turn on a coding agent (spec 4.10): changes, tool calls and active minutes per message. */
+export interface AgentCaps {
+  /** Changes per message, 1–200. */
+  changes: number;
+  /** Tool calls per message, 10–2000. */
+  calls: number;
+  /** Active minutes per message, 1–240. */
+  turn_minutes: number;
+}
+
+/** A mode a coding agent listed at its last Test or connect: its raw id (sent back as is) and its cleaned name. */
+export interface ModeView {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** A model a coding agent listed at its last Test or connect. */
+export interface ModelView {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/**
+ * One way to sign in to a coding agent (spec 4.12), from its last connect's `auth_required`.
+ * - terminal: `command` is the line to show and copy, exactly; null when it must not be shown
+ *   (the server's four conditions: the page then says to sign in as the agent's documentation says);
+ * - agent: the agent signs in by itself (POST /api/assistant/agents/sign-in {id, method: id});
+ * - env_var: `vars`, the variables the person may set instead.
+ */
+export interface SignInMethodView {
+  id: string;
+  name: string;
+  description: string;
+  type: 'terminal' | 'agent' | 'env_var';
+  command: string | null;
+  vars: string[];
+}
+
+/** An agent's sign-in block (`AgentRow.sign_in`): its ways to sign in. */
+export interface SignInView {
+  methods: SignInMethodView[];
+}
+
+/** A coding agent as Settings shows it (GET /api/assistant/agents; spec 5.4). */
+export interface AgentRow {
+  id: string;
+  name: string;
+  kind: 'known' | 'custom';
+  found: boolean;
+  /** The install line when it isn't found. */
+  install: string | null;
+  /** The resolved program and script (shown in every row). */
+  program: string | null;
+  script: string | null;
+  version: string | null;
+  /** Resolved through the catalogue's own package at its checked version (the identity rule). */
+  verified_package: boolean;
+  /** From the login file's existence only ('key': one of its key variables is set). */
+  signed_in: 'yes' | 'key' | 'no' | 'unknown';
+  key_var: string | null;
+  lockdown: 'tools_off' | 'documented' | 'none';
+  own_tools: 'off' | 'on';
+  /** Its own tools can't be switched off: it works only once allowed (the allow switch, spec 4.9). */
+  needs_allow: boolean;
+  allowed: boolean;
+  /** Allowed for another command or program: asked again. */
+  allow_changed: boolean;
+  /** What POST /agents/allow {allow: true} must name: the command the row shows. */
+  fingerprint: string | null;
+  /** The saved choices (null: the agent's own). */
+  model: string | null;
+  mode: string | null;
+  /** What its last Test or connect listed (memory only). */
+  last: { modes: ModeView[]; models: ModelView[]; at: string } | null;
+  /** The sign-in block from its last `auth_required`. */
+  sign_in: SignInView | null;
+  ready: boolean;
+  /** The code a turn on it is refused with now (agent_missing, agent_not_allowed, ...). */
+  reason: string | null;
+  /** Why it can't be started, as the person reads it. */
+  error: string | null;
+}
+
+/** GET /api/assistant/agents. */
+export interface AgentsAnswer {
+  ok: true;
+  checked_at: string;
+  took_ms: number;
+  agents: AgentRow[];
+}
+
+/**
+ * POST /api/assistant/agents/test {id, message}: the agent Test (message: true, one short
+ * message) or the connect check (message: false, none). Its refusals (409 busy,
+ * agent_not_allowed, ...) carry the same {ok: false, code, error}.
+ */
+export type AgentTestAnswer =
+  | {
+      ok: true;
+      agent: string;
+      version: string | null;
+      ms: number;
+      signed_in: AgentRow['signed_in'];
+      own_tools: 'off' | 'on';
+      images: boolean;
+      modes: ModeView[];
+      models: ModelView[];
+      /** 'works': it called the test tool; 'not_used': it answered without; null: no message was sent. */
+      tools: 'works' | 'not_used' | null;
+      auth?: SignInMethodView[];
+    }
+  | { ok: false; code: string; error: string; auth?: SignInMethodView[] };

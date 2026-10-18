@@ -139,6 +139,19 @@ export async function assistantStatus(request, base) {
   return r.json();
 }
 
+/**
+ * Agent discovery's test switches (with MAGNUSIM_TEST_ASSISTANT=1) pointed at folders in a
+ * host's own temp folder `tmp` that hold no agent: Settings → Assistant looks for coding agents
+ * there only, never in this PC's PATH, npm folders or home, so no real agent is ever asked its
+ * version. For a spec that shows the Assistant step: startHost({tmp, env: {...noAgentsHere(tmp)}}).
+ */
+export function noAgentsHere(tmp) {
+  return {
+    MAGNUSIM_TEST_ASSISTANT_AGENT_PATHS: join(tmp, 'no-agents'),
+    MAGNUSIM_TEST_ASSISTANT_AGENT_HOME: join(tmp, 'no-agents-home'),
+  };
+}
+
 /** Forgets the Assistant's state and the test home's files (needs MAGNUSIM_TEST_ASSISTANT=1). */
 export async function resetAssistant(request, base) {
   const r = await request.post(`${base}/api/test/assistant/reset`, { data: { files: true } });

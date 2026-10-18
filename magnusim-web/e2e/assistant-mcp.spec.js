@@ -16,7 +16,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openAssistantStep } from './support/assistant.js';
+import { noAgentsHere, openAssistantStep } from './support/assistant.js';
 import { e2eTemp, startHost } from './support/host-server.mjs';
 import { infoPathOf, resultJson, startMcpClient } from './support/mcp-client.mjs';
 import { expect, test } from './support/stress.js';
@@ -61,7 +61,9 @@ async function getJson(request, path) {
 
 test.beforeAll(async ({ request }) => {
   test.setTimeout(240_000);
-  host = await startHost({ name: 'assistant-mcp', pluginsFrom: 'python/tests/fixtures/assistant-plugins', env: ENV });
+  // Settings → Assistant looks for coding agents: only in empty folders of each server's own.
+  const tmp = e2eTemp('assistant-mcp');
+  host = await startHost({ name: 'assistant-mcp', tmp, pluginsFrom: 'python/tests/fixtures/assistant-plugins', env: { ...ENV, ...noAgentsHere(tmp) } });
   const pj = await postOk(request, '/api/project', { title: PROJECT_TITLE, folder: 'My Projects', units: 'Metric', category: 'Other' });
   project = pj.id;
   study = (await postOk(request, '/api/plugin-studies/create', { project_id: project, plugin: PLUGIN, kind: 'counter_case', title: 'Counter 1' })).study.id;
@@ -134,7 +136,8 @@ const modal = (page) => page.locator('#modal-confirm');
 test('off by default: a fresh Magnusim (no Assistant settings yet) runs no listener, so an app hears the not-running text naming the switch; after a save in Settings and a restart it runs, and the app is refused with the Settings text', async ({ page }) => {
   // A server of its own, as it is on a PC that never used the Assistant (no settings file).
   test.setTimeout(360_000);
-  let fresh = await startHost({ name: 'assistant-mcp-fresh', env: ENV });
+  const freshTmp = e2eTemp('assistant-mcp-fresh');
+  let fresh = await startHost({ name: 'assistant-mcp-fresh', tmp: freshTmp, env: { ...ENV, ...noAgentsHere(freshTmp) } });
   try {
     const at = (path) => `${fresh.base}${path}`;
     const mcpNow = async () => (await page.request.get(at('/api/assistant/mcp'))).json();
@@ -169,7 +172,7 @@ test('off by default: a fresh Magnusim (no Assistant settings yet) runs no liste
     const next = e2eTemp('assistant-mcp-fresh');
     cpSync(join(fresh.tmp, 'assistant'), join(next, 'assistant'), { recursive: true });
     fresh.stop();
-    fresh = await startHost({ name: 'assistant-mcp-fresh', tmp: next, env: ENV });
+    fresh = await startHost({ name: 'assistant-mcp-fresh', tmp: next, env: { ...ENV, ...noAgentsHere(next) } });
     await expect.poll(async () => (await mcpNow()).running, { timeout: 30_000, message: 'the listener runs' }).toBe(true);
     mcp = await mcpNow();
     expect(mcp.clients).toBe(false);
