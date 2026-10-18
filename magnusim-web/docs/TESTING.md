@@ -328,7 +328,9 @@ No test reaches a real model provider or this PC's real Assistant files.
     the way such an agent says it isn't signed in on a connect. With `authStatusHold: name`
     that report goes after the `session/new` answer instead, once `fake.release(name)` (it
     records `{event: 'holding', name}` first), as that adapter's background read of its login
-    lands; `authStatus: 'silent'` says it reports its login and never does (a connect then
+    lands; with `authStatusAt: 'initialize'` it goes once, right after the `initialize`
+    answer, and never at `session/new`, as an adapter that probes its login at initialize
+    does. `authStatus: 'silent'` says it reports its login and never does (a connect then
     waits for it only within its bound). `fake.argvWith({helpersAtStart: n})` makes it
     start n helpers before it reads anything.
   - **Through agent discovery.** Discovery starts a package's bin as `[node, <script>,

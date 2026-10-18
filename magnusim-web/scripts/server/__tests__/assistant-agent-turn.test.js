@@ -669,7 +669,7 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
       await L.resetMcpListenerForTests();
       mkdirSync(join(info, 'blocked'), { recursive: true });
       const before = custom.records().length;
-      const r = await AT.agentTestRequest({ id: CUSTOM_ID, message: false }, { mcp: async () => ({ available: true, reason: null }) });
+      const r = await AT.agentTestRequest({ id: CUSTOM_ID, message: false }, { mcp: async () => ({ available: true, reason: null }), proven: () => true });
       assert.equal(L.mcpListenerStatus().reason, 'file_failed');
       const port = (await ST.loadSettings()).mcp.port;
       assert.deepEqual([r.status, r.body.code, r.body.error], [409, 'mcp_unavailable', L.mcpUnavailableText('file_failed', port)]);
@@ -2195,20 +2195,28 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     }
   });
 
-  it('connect again to an agent that says it isn’t signed in (its _auth/status_update, nested as the adapter sends it): signed_in no', async () => {
+  it('connect again to an agent that says it isn’t signed in right after its initialize answer (its _auth/status_update, nested as the adapter sends it): auth_status none, beside the login file’s signed_in', async () => {
     const { srv } = await serverWorld();
-    claude.configure({ authStatus: { kind: 'none', label: 'Not logged in' } });
+    claude.configure({ authStatus: 'none', authStatusAt: 'initialize' });
     try {
       const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
-      assert.deepEqual([c.status, c.json.ok, c.json.signed_in], [200, true, 'no'], JSON.stringify(c.json));
-      const sent = claude.sent(lastPid(claude)).find((m) => m.method === '_auth/status_update');
-      assert.deepEqual(sent.params, { authStatus: { kind: 'none', label: 'Not logged in' } });
+      // Its word in its own field; signed_in stays the login file's (there).
+      assert.deepEqual([c.status, c.json.ok, c.json.signed_in, c.json.auth_status], [200, true, 'yes', 'none'], JSON.stringify(c.json));
+      const out = claude.sent(lastPid(claude));
+      const said = out.filter((m) => m.method === '_auth/status_update');
+      assert.deepEqual(
+        said.map((m) => m.params),
+        [{ authStatus: { kind: 'none', label: 'Not logged in' } }],
+        'once, nested, and never again at session/new',
+      );
+      const init = out.findIndex((m) => m.result && typeof m.result.protocolVersion === 'number');
+      assert.equal(out.indexOf(said[0]), init + 1, 'right after its initialize answer');
       // Without it, the login file decides.
-      claude.configure({ authStatus: null });
+      claude.configure({ authStatus: null, authStatusAt: null });
       const again = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
-      assert.deepEqual([again.json.ok, again.json.signed_in], [true, 'yes']);
+      assert.deepEqual([again.json.ok, again.json.signed_in, again.json.auth_status], [true, 'yes', null]);
     } finally {
-      claude.configure({ authStatus: null });
+      claude.configure({ authStatus: null, authStatusAt: null });
       await srv.close();
     }
   });
@@ -2325,7 +2333,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     try {
       assert.equal((await srv.get('/api/assistant/agents?refresh=1')).json.agents.find((a) => a.id === 'claude').signed_in, 'no');
       // The session starts (as the adapter's does), and it says it isn't signed in.
-      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const c = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.equal(c.status, 200, JSON.stringify(c.json));
       assert.deepEqual([c.json.ok, c.json.tools, c.json.signed_in, c.json.auth_status], [true, null, 'no', 'none']);
       assert.deepEqual(c.json.auth.map((m) => [m.id, m.command]), [['console-login', 'claude-agent-acp --cli auth login']]);
@@ -2337,34 +2345,34 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       // Signed in since (its login file there now, the cached row older): the check reads the file
       // again, and the agent's word still comes through in its own field.
       writeFileSync(cred, '{}');
-      const f = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const f = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([f.json.ok, f.json.signed_in, f.json.auth_status], [true, 'yes', 'none']);
       // Its word wins over the login file (a stale file, a logout the file outlived): not ready, everywhere.
       assert.deepEqual(await readiness(), out);
       // Signed in by its own word (any other kind), with no login file: the block goes, and it is ready everywhere.
       unlinkSync(cred);
       claude.configure({ authStatus: 'account' });
-      const s = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const s = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([s.json.ok, s.json.signed_in, s.json.auth_status, s.json.auth], [true, 'no', 'signed_in', undefined]);
       assert.equal(await signInIds(), null);
       assert.deepEqual(await readiness(), { word: 'signed_in', ready: true, reason: null, status: [true, null], line: [true, null, 'Signed in · 0.85.1'] });
       // Nothing said (an agent that doesn't report its login), no login file: it starts, signed in or not isn't known (ready, as unknown is).
       claude.configure({ authStatus: null });
-      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'claude', message: false })).json.auth_status, null);
+      assert.equal((await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof())).json.auth_status, null);
       assert.deepEqual(await readiness(), { word: 'silent', ready: true, reason: null, status: [true, null], line: [true, null, 'Sign-in not known · 0.85.1'] });
       // A Test the agent answered: signed in, whatever it said (no block kept).
       claude.configure({ authStatus: 'none' });
-      await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual(await signInIds(), ['console-login']);
       claude.script({ say: 'done' });
-      const t = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      const t = await srv.post('/api/assistant/agents/test', { id: 'claude', message: true }, proof());
       assert.deepEqual([t.json.ok, t.json.tools, t.json.auth], [true, 'not_used', undefined]);
       assert.equal(await signInIds(), null);
       assert.deepEqual((await readiness()).ready, true);
       // A connect that hears auth_required (session/new refused): its word is 'none' again.
       claude.configure({ requireSignIn: true });
       claude.signOut();
-      const refused = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const refused = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.equal(refused.json.code, 'agent_signin');
       assert.deepEqual(await readiness(), out);
     } finally {
@@ -2384,7 +2392,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     claude.configure({ authStatus: 'none', authStatusHold: hold, authMethods: [{ id: 'console-login', name: 'Log in', type: 'terminal', args: ['--login'] }] });
     try {
       let settled = false;
-      const pending = srv.post('/api/assistant/agents/test', { id: 'claude', message: false }).finally(() => (settled = true));
+      const pending = srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof()).finally(() => (settled = true));
       // Its session started and answered; its word is held back.
       const held = await claude.waitFor((r) => r.event === 'holding' && r.name === hold, 30_000);
       assert.ok(claude.sent(held.pid).some((m) => m.result && typeof m.result.sessionId === 'string'), 'session/new answered before its word');
@@ -2398,7 +2406,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       // It says it reports its login and never does: the connect answers within the bound, its word not known.
       claude.configure({ authStatus: 'silent', authStatusHold: null });
       const t0 = Date.now();
-      const s = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false });
+      const s = await srv.post('/api/assistant/agents/test', { id: 'claude', message: false }, proof());
       assert.deepEqual([s.json.ok, s.json.auth_status], [true, null]);
       const took = Date.now() - t0;
       assert.ok(took >= SES.AUTH_STATUS_WAIT_MS - 1_000 && took < T.AGENT_TEST_MS, `waited ${took} ms`);
