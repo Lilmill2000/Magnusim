@@ -292,6 +292,43 @@ describe('each call of a step', () => {
     assert.deepEqual(ofType(r.turn, 'gate_closed').map((e) => [e.answer, e.by]), [['allow', 'user'], ['allow', 'user']]);
   });
 
+  it("a destructive workspace tool's confirm note is what its question says the call does (CAD tools spec H10); without one it can't be undone; a compute tool keeps starts a computation", async () => {
+    const m = mk({ provider: 'openai_compatible', projects: { p1: WING } });
+    const none = { type: 'object', properties: {}, additionalProperties: false };
+    const tool = (name, title, risk, confirm) => ({ name, title, description: `Does ${name}.`, inputSchema: none, risk, ...(confirm === undefined ? {} : { confirm }) });
+    const ran = [];
+    m.registry.setWorkspace('T1', 'L1', {
+      plugin: 'ai-demo',
+      pluginName: 'Workspace demo',
+      workspace: 'Counter',
+      projectId: 'p1',
+      studyId: 's1',
+      tools: [
+        tool('delete_rows', 'Delete rows', 'destructive', 'Deletes rows from the table; Ctrl+Z brings them back.'),
+        // No full stop of its own: the copy adds one.
+        tool('wipe', 'Wipe the table', 'destructive', 'Clears the table, and Undo brings it back'),
+        tool('reset', 'Reset the counter', 'destructive'),
+        tool('crunch', 'Run the crunch', 'compute', 'Crunches numbers; nothing to undo.'),
+      ],
+      invoke: async (c) => (ran.push(c.tool), { ok: true, data: { tool: c.tool }, summary: `${c.tool} ran` }),
+    });
+    const names = ['delete_rows', 'wipe', 'reset', 'crunch'];
+    m.provider.script({ tools: names.map((n) => ({ name: `ai-demo__${n}`, input: {} })) }, { text: 'ok' });
+    const r = await startTurn(m, { text: 'x', tab: 'T1' });
+    const gates = [];
+    answerGates(m, r.turn, (g) => (gates.push(g), true));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done');
+    assert.deepEqual(ran, names);
+    const sent = 'What it sent: {}. Nothing runs until you choose.';
+    assert.deepEqual(gates.map((g) => [g.risk, g.title, g.copy]), [
+      ['destructive', 'Allow the Assistant to delete rows?', `Workspace demo (Counter) · Deletes rows from the table; Ctrl+Z brings them back. ${sent}`],
+      ['destructive', 'Allow the Assistant to wipe the table?', `Workspace demo (Counter) · Clears the table, and Undo brings it back. ${sent}`],
+      ['destructive', 'Allow the Assistant to reset the counter?', `Workspace demo (Counter) · can't be undone. ${sent}`],
+      ['compute', 'Allow the Assistant to run the crunch?', `Workspace demo (Counter) · starts a computation. ${sent}`],
+    ]);
+  });
+
   it('the confirm question shows every field the call sent, in the schema’s order, each cut on its own and marked: a long field can’t hide another', async () => {
     const schema = {
       type: 'object',

@@ -711,6 +711,15 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     expect(results(posts)[1]).toEqual({ call: 'ai-2', ok: true, result: { text: 'Counter is 2' } });
   });
 
+  it("register sends a tool's confirm note (what the app's question says a destructive call does) only when it has one", async () => {
+    const { ws, posts } = await open(accepting);
+    const note = 'Sets the counter to 0; add can bring it back.';
+    await ws.assistant!.register([{ ...RESET, confirm: note }, ADD], vi.fn());
+    const sent = posts.find((p) => p.method === 'assistant.register')!.params.tools as Array<Record<string, unknown>>;
+    expect(sent[0]).toEqual({ ...RESET, confirm: note });
+    expect(Object.hasOwn(sent[1], 'confirm')).toBe(false);
+  });
+
   it('the handler gets the call, turn, tool, input, a signal and progress; its result goes back as {text, data, images}', async () => {
     const { ws, posts, push } = await open(accepting);
     const png = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });

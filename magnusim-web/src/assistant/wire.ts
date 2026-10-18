@@ -257,6 +257,8 @@ export interface RelayTool {
   inputSchema: Record<string, unknown>;
   risk: 'read' | 'edit' | 'compute' | 'destructive';
   timeoutS: number;
+  /** What the question before a destructive call says it does (CAD tools spec H10; absent when none). */
+  confirm?: string;
 }
 
 /** POST /api/assistant/relay/tools: `tools: []` unregisters. */

@@ -398,7 +398,7 @@ async function pump(r: Relay): Promise<void> {
 }
 
 function toolsOf(p: PublishedTools): RelayTool[] {
-  return p.tools.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, risk: t.risk, timeoutS: t.timeoutS }));
+  return p.tools.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, risk: t.risk, timeoutS: t.timeoutS, ...(t.confirm ? { confirm: t.confirm } : {}) }));
 }
 
 async function register(r: Relay, link: string, pub: PublishedTools): Promise<void> {

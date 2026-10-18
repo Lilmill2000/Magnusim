@@ -34,6 +34,8 @@ export const JSON_CAPS = Object.freeze({ depth: 8, keys: 200, items: 200, bytes:
 export const IMAGE_CAPS = Object.freeze({ perResult: 4, bytes: 1.5 * 1024 * 1024, side: 2000 });
 /** The most of a tool error's detail the model gets, as JSON (sanitizeJson's rules). */
 export const ERROR_DETAIL_BYTES = 4 * 1024;
+/** A tool's confirm note (characters): what the question before a destructive call says it does. */
+export const CONFIRM_NOTE_MAX = 120;
 
 /** Cut to `max` characters without splitting a surrogate pair. */
 function cut(s: string, max: number): string {

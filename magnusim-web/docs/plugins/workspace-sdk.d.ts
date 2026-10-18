@@ -498,6 +498,12 @@ declare module '@magnusim/workspace' {
       risk: AssistantRisk;
       /** Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit. */
       timeoutS?: number;
+      /**
+       * For a `destructive` tool: what the app's question before each call says the call does, in
+       * place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120
+       * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
+       */
+      confirm?: string;
   }
   /** One call of a tool, as the handler gets it (unreleased, 1.9). */
   export interface AssistantCall {

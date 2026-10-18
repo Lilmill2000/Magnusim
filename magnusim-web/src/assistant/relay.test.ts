@@ -341,6 +341,21 @@ describe('registrations', () => {
     expect(toolPosts()).toHaveLength(2);
   });
 
+  it("a tool's confirm note goes with it to the server (CAD tools spec H10); a tool without one sends none", async () => {
+    startAssistantRelay();
+    const note = 'Sets the counter to 0; add can bring it back.';
+    const pub = publishWorkspaceTools(SCOPE, 'frame-1', { tools: [{ ...tool('reset'), risk: 'destructive', confirm: note }, tool('add')], guide: '' }, invoke);
+    await settle(1000);
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    const post = take('/api/assistant/relay/tools');
+    const tools = post.body.tools as Array<Record<string, unknown>>;
+    expect(tools[0]).toEqual({ ...tool('reset'), risk: 'destructive', confirm: note });
+    expect(Object.hasOwn(tools[1], 'confirm')).toBe(false);
+    accept(post);
+    expect(await pub).toEqual({ available: true, accepted: ['reset', 'add'], refused: [] });
+  });
+
   it('a link that went before the POST arrived (409 no_channel): sent again on the next `linked`', async () => {
     startAssistantRelay();
     const verdict = register(['add']);

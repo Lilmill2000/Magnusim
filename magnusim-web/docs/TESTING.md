@@ -284,8 +284,9 @@ No test reaches a real model provider or this PC's real Assistant files.
   `ai-demo` (`python/tests/fixtures/assistant-plugins`) → back.
   - The plugin's page keeps a counter and offers eight tools: read, add (its result
     carries a `summary` for the turn's log), a slow add (progress every 200 ms until
-    `window.__release()` in its frame, or Stop), reset (destructive), one whose risk
-    the host doesn't know (counted as destructive), a 64×64 PNG of the counter, a
+    `window.__release()` in its frame, or Stop), reset (destructive, with a `confirm`
+    note that its question shows in place of "can't be undone"), one whose risk the
+    host doesn't know (counted as destructive), a 64×64 PNG of the counter, a
     read of its study from the app with a 1 s window (a test holds that read with
     `page.route`: the frame's call in flight keeps the tool call alive, on the server
     too), and `fail_hint`, which always fails with a `hint` and a `detail` (they reach

@@ -30,7 +30,7 @@
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
-import { capResult, checkImages, cleanText, TEXT_CAPS } from './sanitize.ts';
+import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
 import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
@@ -221,7 +221,11 @@ export function gateInputText(schema: unknown, input: Record<string, unknown>): 
   return `{${parts.join(',')}}`;
 }
 
-/** The confirm question for a compute or destructive tool. */
+/**
+ * The confirm question for a compute or destructive tool. A destructive tool's confirm note
+ * says what the call does in place of "can't be undone"; a compute tool's always "starts a
+ * computation".
+ */
 export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null): GateRequest {
   const risk = riskOf(def) === 'compute' ? 'compute' : 'destructive';
   let sent = '';
@@ -236,12 +240,13 @@ export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: 
   } catch {
     detail = undefined;
   }
-  const what = risk === 'compute' ? 'starts a computation' : "can't be undone";
+  const note = risk === 'destructive' ? cleanText(def.confirmNote, CONFIRM_NOTE_MAX) : '';
+  const what = risk === 'compute' ? 'starts a computation' : note || "can't be undone";
   return {
     kind: 'confirm',
     turn,
     title: `Allow the Assistant to ${lowerFirst(cleanText(def.title || def.name, TEXT_CAPS.name))}?`,
-    copy: `${sourceLabel(def.source)} · ${what}. What it sent: ${sent}. Nothing runs until you choose.`,
+    copy: `${sourceLabel(def.source)} · ${what}${/[.!?]$/.test(what) ? '' : '.'} What it sent: ${sent}. Nothing runs until you choose.`,
     yes: 'Allow',
     no: "Don't",
     ...(detail ? { detail } : {}),

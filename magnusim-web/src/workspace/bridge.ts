@@ -317,6 +317,8 @@ export interface CheckedTool {
   risk: AssistantRisk;
   /** The call's stall window in seconds (1 to 600, default 60). */
   timeoutS: number;
+  /** What the app's question before a destructive call says it does, cleaned, at most 120 characters (absent when the page gave none). */
+  confirm?: string;
 }
 
 /** A tool call's result as it leaves the page (1.9, unreleased): images as base64. */
@@ -394,6 +396,8 @@ export const ASSISTANT_IMAGE_BYTES = 1.5 * 1024 * 1024;
 export const ASSISTANT_HINT_MAX = 500;
 export const ASSISTANT_DETAIL_BYTES = 4 * 1024;
 export const ASSISTANT_SUMMARY_MAX = 160;
+/** A tool's confirm note (characters): what the question before a destructive call says it does. */
+export const ASSISTANT_CONFIRM_MAX = 120;
 /** A page error's message, at most this many characters (a note on a dropped detail included). */
 const ASSISTANT_MESSAGE_MAX = 2000;
 const ASSISTANT_GUIDE_MAX = 4000;
@@ -442,9 +446,9 @@ function assistantTimeoutS(v: unknown, fallback = ASSISTANT_TIMEOUT_S): number {
 /**
  * assistant.register's params checked (1.9, unreleased): `bad_request` for a list that is not one,
  * more than 32 tools, a tool that is not `{name, description, inputSchema, ...}` or an input schema
- * that is not plain JSON, a guide that is not text; `too_large` past 512 KB. Texts are cleaned and
- * capped, an unknown risk is `destructive`. Names and schemas are the app's to judge (its verdict
- * refuses a tool with the reason).
+ * that is not plain JSON, a title, confirm note or guide that is not text; `too_large` past 512 KB.
+ * Texts are cleaned and capped, an unknown risk is `destructive`. Names and schemas are the app's
+ * to judge (its verdict refuses a tool with the reason).
  */
 export function checkAssistantTools(params: Record<string, unknown>): { tools: CheckedTool[]; guide: string } {
   const list = params.tools;
@@ -456,8 +460,10 @@ export function checkAssistantTools(params: Record<string, unknown>): { tools: C
     if (typeof name !== 'string' || !name || name.length > 64) throw badParam(`${what}.name (text of 1 to 64 characters)`);
     if (typeof raw.description !== 'string') throw badParam(`${what}.description (text)`);
     if (raw.title !== undefined && raw.title !== null && typeof raw.title !== 'string') throw badParam(`${what}.title (text)`);
+    if (raw.confirm !== undefined && raw.confirm !== null && typeof raw.confirm !== 'string') throw badParam(`${what}.confirm (text)`);
     if (!isPlainObject(raw.inputSchema) || !isJsonData(raw.inputSchema)) throw badParam(`${what}.inputSchema (a JSON schema object)`);
     const risk = typeof raw.risk === 'string' && ASSISTANT_RISKS.has(raw.risk) ? (raw.risk as AssistantRisk) : 'destructive';
+    const confirm = cleanLine(raw.confirm, ASSISTANT_CONFIRM_MAX);
     return {
       name,
       title: cleanLine(raw.title, 200),
@@ -465,6 +471,7 @@ export function checkAssistantTools(params: Record<string, unknown>): { tools: C
       inputSchema: raw.inputSchema,
       risk,
       timeoutS: assistantTimeoutS(raw.timeoutS),
+      ...(confirm ? { confirm } : {}),
     };
   });
   const g = params.guide;

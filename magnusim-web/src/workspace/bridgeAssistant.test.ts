@@ -9,6 +9,7 @@ import { connect, type AssistantTool, type AssistantTurn, type StudyRecord } fro
 import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_ALIVE_MS,
+  ASSISTANT_CONFIRM_MAX,
   ASSISTANT_DATA_BYTES,
   ASSISTANT_DETAIL_BYTES,
   ASSISTANT_HINT_MAX,
@@ -246,6 +247,8 @@ describe('assistant.register (1.9, unreleased)', () => {
       { tools: [{ ...ADD, name: 7 }] },
       { tools: [{ ...ADD, description: undefined }] },
       { tools: [{ ...ADD, title: 3 }] },
+      { tools: [{ ...ADD, confirm: 3 }] },
+      { tools: [{ ...ADD, confirm: { text: 'Undoable.' } }] },
       { tools: [{ ...ADD, inputSchema: [SCHEMA] }] },
       { tools: [{ ...ADD, inputSchema: undefined }] },
       { tools: [{ ...ADD, inputSchema: { ...SCHEMA, made: new Date(0) } }] },
@@ -289,6 +292,31 @@ describe('assistant.register (1.9, unreleased)', () => {
     expect(checked.guide).toBe('Counter notes:\n- add moves it \n- reset sets 0');
     expect(checkAssistantTools({ tools: [] })).toEqual({ tools: [], guide: '' });
     expect(checkAssistantTools({ tools: [], guide: 'g'.repeat(5000) }).guide).toHaveLength(4000);
+  });
+
+  it("a tool's confirm note (CAD tools spec H10): text, cleaned and cut to 120 characters, handed to the app; absent when the page gave none or it cleans to nothing", async () => {
+    const RESET = { name: 'reset', title: 'Reset the counter', description: 'Sets the counter to 0.', inputSchema: SCHEMA, risk: 'destructive' };
+    const checked = checkAssistantTools({
+      tools: [
+        { ...RESET, confirm: `Sets the${LS} counter to 0;${RLO} add${BEL} brings it back.` },
+        { ...RESET, name: 'long', confirm: 'c'.repeat(300) },
+        { ...RESET, name: 'blank', confirm: ` ${BEL} ` },
+        { ...RESET, name: 'nulled', confirm: null },
+        { ...RESET, name: 'none' },
+      ],
+    });
+    expect(ASSISTANT_CONFIRM_MAX).toBe(120);
+    expect(checked.tools[0].confirm).toBe('Sets the counter to 0; add brings it back.');
+    expect(checked.tools[1].confirm).toBe('c'.repeat(ASSISTANT_CONFIRM_MAX));
+    for (const t of checked.tools.slice(2)) expect(Object.hasOwn(t, 'confirm'), t.name).toBe(false);
+    // It reaches the app with the rest of the tool.
+    const h = hooks();
+    const t = await connected(h);
+    const r = await t.call('assistant.register', { tools: [{ ...RESET, confirm: 'Sets the counter to 0; add brings it back.' }] });
+    expect(r.result).toEqual({ available: true, accepted: ['reset'], refused: [] });
+    const reg = h.assistantTools.mock.calls[0][0] as { tools: CheckedTool[] };
+    expect(reg.tools).toEqual([{ ...RESET, title: 'Reset the counter', timeoutS: 60, confirm: 'Sets the counter to 0; add brings it back.' }]);
+    t.end();
   });
 
   it("hands the checked list to the app and answers its verdict: only names the page offered, texts cleaned", async () => {

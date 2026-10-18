@@ -287,6 +287,32 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(await page.frame('active', 2), { turns: 0, hold_until: t.endedAt + ASSISTANT_HOLD_MS }, 'the hold after its last bound turn');
   });
 
+  it("a destructive tool's confirm note (its registration's `confirm`) is what the question on its tab says the call does; declined, nothing reaches the page", async () => {
+    const { m, s } = await setup();
+    const page = await s.page();
+    const link = await page.open();
+    const note = 'Sets the counter to 0; add can bring it back.';
+    const tools = demoTools().map((t) => (t.name === 'reset' ? { ...t, confirm: note } : t));
+    assert.equal((await s.register(link, 1, tools)).status, 200);
+    assert.equal(toolOf(m, page.tab, 'reset').confirmNote, note);
+    assert.equal(Object.hasOwn(toolOf(m, page.tab, 'add'), 'confirmNote'), false, 'none given, none kept');
+    m.provider.script({ tools: [{ name: 'ai-demo__reset', input: {} }] }, { text: 'Left as it was.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Reset the counter', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const { gate } = await page.frame('gate');
+    assert.deepEqual([gate.kind, gate.risk, gate.title, gate.copy], [
+      'confirm',
+      'destructive',
+      'Allow the Assistant to reset the counter?',
+      `Workspace demo (Counter) · ${note} What it sent: {}. Nothing runs until you choose.`,
+    ]);
+    assert.equal((await s.post(`/api/assistant/gates/${gate.id}`, { allow: false })).status, 200);
+    const t = s.handle.turns.get(started.json.turn);
+    await settled(t);
+    assert.equal(t.state, 'done');
+    assert.deepEqual(page.of('invoke'), [], 'declined: nothing reached the page');
+  });
+
   it('the page’s answer is checked: its error codes from the known lists, else failed; results capped as the bridge caps them', () => {
     assert.deepEqual(pageOutcome({ ok: false, error: { code: 'not_ready', message: 'Open a case first.' } }).error, { code: 'not_ready', message: 'Open a case first.' });
     assert.equal(pageOutcome({ ok: false, error: { code: 'plugin_off', message: 'x' } }).error.code, 'failed', 'a server code is not the page’s to give');

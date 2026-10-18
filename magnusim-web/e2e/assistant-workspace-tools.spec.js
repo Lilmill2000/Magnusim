@@ -3,9 +3,9 @@
 // the tab's event stream → the bridge → the plugin's frame → back. The test plugin ai-demo
 // (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers eight tools:
 // get_count, add (its result names what it did in a summary), slow_add (progress every 200 ms
-// until window.__release() in the frame), reset (destructive), mystery (a risk the host does not
-// know), snap (a 64x64 PNG), read_study (a 1 s window, waiting on the app's answer to its read of
-// the study) and fail_hint (it always fails, with a hint and a detail).
+// until window.__release() in the frame), reset (destructive, with a confirm note), mystery (a
+// risk the host does not know), snap (a 64x64 PNG), read_study (a 1 s window, waiting on the
+// app's answer to its read of the study) and fail_hint (it always fails, with a hint and a detail).
 //
 // Covered (spec 10.3's thirteen, then three more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
@@ -21,7 +21,8 @@
 // answering from the request, and questions answered through their route. And a failed call's
 // hint and detail reaching the model and the terminal, a result's summary only the log (H2).
 // And the turn bound to the tab reaching its frame (its title, what it used, its end), whose own
-// Stop ends it (H3).
+// Stop ends it (H3). And a destructive tool's confirm note as its question's text, mystery's
+// question saying "can't be undone" without one (H10).
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -50,6 +51,8 @@ const FAIL = {
   detail: { reason: 'step_too_big', field: 'by', allowed: [1, 2, 3] },
 };
 const GUIDE = 'The counter starts at 0 each time the workspace opens. Read it with get_count; add or slow_add change it; reset sets it to 0.';
+/** What reset's question says it does (the fixture's confirm note on reset). */
+const RESET_NOTE = 'Sets the counter to 0; add can bring it back.';
 const PROJECT_TITLE = 'Counter project';
 const HOLD_MS = 2000;
 /** The page's own grace before a hidden tab lets its stream go (src/api/eventHub.ts HIDDEN_GRACE_MS). */
@@ -322,7 +325,10 @@ test('an edit tool runs without asking: the counter reads 2 and the model gets i
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => [c.tool, c.turn]))).toEqual([['add', t.id]]);
 });
 
-test("a destructive tool asks first with Don't focused: Enter answers Don't, a click on Allow runs it; mystery asks too", async ({ page, request }) => {
+test("a destructive tool asks first with Don't focused, in its confirm note's words: Enter answers Don't, a click on Allow runs it; mystery asks too, saying it can't be undone", async ({
+  page,
+  request,
+}) => {
   const w = await openCounter(page, request);
   const dialog = modal(page);
   const before = chats().length;
@@ -332,7 +338,7 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
   await expect(dialog).toBeVisible();
   await expect(w.frame.locator('#counter')).toHaveText('2');
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
-  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.`);
+  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · ${RESET_NOTE} What it sent: {}. Nothing runs until you choose.`);
   await expect(page.locator('#cf-confirm')).toHaveText('Allow');
   await expect(page.locator('#cf-cancel')).toHaveText("Don't");
   await expect(page.locator('#cf-cancel')).toBeFocused();
@@ -359,6 +365,8 @@ test("a destructive tool asks first with Don't focused: Enter answers Don't, a c
   const t3 = await startTurn(request, host.base, { text: 'Do the mystery thing.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?');
+  // No confirm note: the question says it can't be undone.
+  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.`);
   await expect(page.locator('#cf-cancel')).toBeFocused();
   await page.locator('#cf-confirm').click();
   const e3 = await t3.ended();

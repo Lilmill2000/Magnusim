@@ -25,7 +25,7 @@
 import { createHash } from 'node:crypto';
 import { pluginEpoch as foamPluginEpoch } from '../../foam-runner.js';
 import { checkSchema } from './schema.ts';
-import { cleanGuide, cleanText, hasControls, TEXT_CAPS } from './sanitize.ts';
+import { cleanGuide, cleanText, CONFIRM_NOTE_MAX, hasControls, TEXT_CAPS } from './sanitize.ts';
 import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts';
 
 export type ToolSource =
@@ -89,6 +89,11 @@ export interface ToolDef {
   workerBacked: boolean;
   /** Higher stays when a request is over the tool cap (host tools; workspace tools always go first). */
   priority?: number;
+  /**
+   * What the confirm question says a destructive call does, in place of "can't be undone"
+   * (a workspace tool's `confirm`, cleaned, at most CONFIRM_NOTE_MAX characters; CAD tools spec H10).
+   */
+  confirmNote?: string;
   available(ctx: ToolCtx): true | string;
   describe?(input: Record<string, unknown>): { line: string; detail?: Array<{ label: string; value: string }> };
   run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome>;
@@ -316,6 +321,7 @@ export class Registry implements ToolRegistry {
     const timeoutS = Number.isFinite(t) ? Math.min(WORKSPACE_TIMEOUT_S.max, Math.max(WORKSPACE_TIMEOUT_S.min, Math.round(t))) : WORKSPACE_TIMEOUT_S.default;
     const localName = raw.name;
     const fullName = workspaceToolName(source.plugin, localName);
+    const confirmNote = cleanText(typeof raw.confirm === 'string' ? raw.confirm : '', CONFIRM_NOTE_MAX);
     const registry = this;
     return {
       name: fullName,
@@ -328,6 +334,7 @@ export class Registry implements ToolRegistry {
       projectData: true,
       stallMs: timeoutS * 1000,
       workerBacked: false,
+      ...(confirmNote ? { confirmNote } : {}),
       available(ctx: ToolCtx): true | string {
         return registry.workspaceAvailable(source, ctx);
       },

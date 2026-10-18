@@ -6,8 +6,9 @@
 // Tools: get_count (read), add {by} (edit; its result's summary names what it did, for the
 // turn's log), slow_add {by, steps?} (edit: progress every 200 ms, then adds after `steps`
 // ticks, or, with no steps, once the test calls window.__release(); Stop, a closed page or a
-// lost link aborts it and #aborted reads "aborted"), reset (destructive), mystery (a risk the
-// host does not know, so it counts as destructive), snap (read: a 64x64 PNG of the counter),
+// lost link aborts it and #aborted reads "aborted"), reset (destructive: its confirm note is what
+// the app's question says it does), mystery (a risk the host does not know, so it counts as
+// destructive, and its question says "can't be undone"), snap (read: a 64x64 PNG of the counter),
 // read_study (read, a 1 s stall window: it waits on the app's answer to ws.study.get(), which
 // keeps it alive however long that takes) and fail_hint (read: it always fails, with a hint
 // that says how to fix it and a detail the model can act on). A registration the app could
@@ -49,7 +50,15 @@ const TOOLS = [
     risk: 'edit',
     timeoutS: 30,
   },
-  { name: 'reset', title: 'Reset the counter', description: 'Set the counter to 0.', inputSchema: obj({}), risk: 'destructive' },
+  {
+    name: 'reset',
+    title: 'Reset the counter',
+    description: 'Set the counter to 0.',
+    inputSchema: obj({}),
+    risk: 'destructive',
+    // What the app's question says the call does, in place of "can't be undone".
+    confirm: 'Sets the counter to 0; add can bring it back.',
+  },
   {
     name: 'mystery',
     title: 'Do the mystery thing',

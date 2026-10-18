@@ -140,6 +140,27 @@ describe('a workspace registration', () => {
     assert.equal(a.projectData, true);
   });
 
+  it("keeps a tool's confirm note (CAD tools spec H10): cleaned and cut to 120 characters; one that is not text, or nothing once cleaned, is none", () => {
+    const r = createToolRegistry();
+    r.setWorkspace(
+      'T1',
+      'L1',
+      registration({
+        tools: [
+          wsTool('a', { risk: 'destructive', confirm: 'Deletes\u2028the rows;\u202e Ctrl+Z\u0007 brings them back.' }),
+          wsTool('b', { risk: 'destructive', confirm: 'x'.repeat(300) }),
+          wsTool('c', { risk: 'destructive', confirm: 5 }),
+          wsTool('d', { risk: 'destructive', confirm: ' \u0007\n ' }),
+          wsTool('e', { risk: 'destructive' }),
+        ],
+      }),
+    );
+    const byName = Object.fromEntries(r.toolsFor(ctx()).map((t) => [t.localName, t]));
+    assert.equal(byName.a.confirmNote, 'Deletes the rows; Ctrl+Z brings them back.');
+    assert.equal(byName.b.confirmNote, 'x'.repeat(120));
+    for (const n of ['c', 'd', 'e']) assert.equal(Object.hasOwn(byName[n], 'confirmNote'), false, n);
+  });
+
   it('cleans and caps the text inside a schema too, and refuses enum or const values and property names with controls', () => {
     const r = createToolRegistry();
     const dirty = `Body \u202espoof\u0007 ${'y'.repeat(3000)}`;
