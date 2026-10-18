@@ -1153,7 +1153,7 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
 // The tab an agent turn works in (CAD tools spec H3, H4)
 // ------------------------------------------------------------------------------------------------
 
-describe('an agent turn and its app tab: one turn per tab, and the page hears it (CAD tools spec H3, H4)', LIMIT, () => {
+describe('an agent turn and its app tab: one turn per tab, the page hears it, and its calls say how to fix them (CAD tools spec H2, H3, H4)', LIMIT, () => {
   it('one turn per app tab holds for agent turns: on a tab an API-key turn works in, an agent turn is 409 tab_busy and starts no agent; while an agent turn works there, an API-key turn and another agent turn are too; the tab is free once it ended', async () => {
     const w = await world({ provider: 'anthropic' });
     try {
@@ -1227,6 +1227,42 @@ describe('an agent turn and its app tab: one turn per tab, and the page hears it
     } finally {
       off();
       claude.release('after-add');
+      await w.close();
+    }
+  });
+
+  it("a page's error reaches the agent with its hint and detail, and the turn's log with its hint; a result's summary is the log's line only (CAD tools spec H2)", async () => {
+    const w = await world({
+      invoke: (call) =>
+        call.tool === 'add'
+          ? { ok: false, error: { code: 'invalid_input', message: 'The counter is locked.', hint: 'Unlock it first, then add.', detail: { locked: true, allowed: [] } }, summary: 'Locked' }
+          : { ok: true, data: { counter: 0 }, summary: 'Read the counter: 0' },
+    });
+    try {
+      claude.script({ call: { tool: 'ai-demo__add', args: { by: 2 } } }, { call: { tool: 'ai-demo__get_count', args: {} } }, { say: 'It is locked.' });
+      const r = await w.turn({ text: 'Add two.', tab: 'tab-1', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      const results = H.eventsOf(r.turn).filter((e) => e.type === 'tool_result');
+      assert.deepEqual(
+        results.map((e) => [e.ok, e.code ?? null, e.hint ?? null, e.summary]),
+        [
+          [false, 'invalid_input', 'Unlock it first, then add.', 'Locked'],
+          [true, null, null, 'Read the counter: 0'],
+        ],
+      );
+      const got = claude.events('mcp_result', lastPid(claude));
+      const failed = JSON.parse(got.find((x) => x.tool === 'ai-demo__add').result.content[0].text);
+      assert.deepEqual(failed, {
+        tool: 'ai-demo__add',
+        ok: false,
+        error: { code: 'invalid_input', message: 'The counter is locked.', hint: 'Unlock it first, then add.', detail: { locked: true, allowed: [] } },
+      });
+      const read = got.find((x) => x.tool === 'ai-demo__get_count').result;
+      assert.deepEqual(JSON.parse(read.content[0].text), { tool: 'ai-demo__get_count', ok: true, data: { counter: 0 } });
+      assert.ok(!JSON.stringify(got).includes('Read the counter: 0'), 'the summary stays the log line');
+    } finally {
       await w.close();
     }
   });

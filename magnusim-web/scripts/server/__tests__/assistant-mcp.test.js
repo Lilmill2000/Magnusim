@@ -870,6 +870,29 @@ describe('tools/call', () => {
     }
   });
 
+  it("a page's error reaches the app with its hint and detail, as the Assistant's model gets them; a result's summary is the log's line only and never reaches the app (CAD tools spec H2)", async () => {
+    const w = await appWorld();
+    try {
+      const c = await w.client();
+      const failing = c.client.callTool({ name: 'ai-demo__add', arguments: { by: 2 } });
+      await w.answer(0, { ok: false, error: { code: 'invalid_input', message: 'The counter is locked.', hint: 'Unlock it first, then add.', detail: { locked: true, allowed: [] } } });
+      const f = await failing;
+      assert.equal(f.isError, true);
+      assert.deepEqual(M.resultJson(f), {
+        tool: 'ai-demo__add',
+        ok: false,
+        error: { code: 'invalid_input', message: 'The counter is locked.', hint: 'Unlock it first, then add.', detail: { locked: true, allowed: [] } },
+      });
+      const ok = c.client.callTool({ name: 'ai-demo__add', arguments: { by: 2 } });
+      await w.answer(1, { ok: true, result: { data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
+      const r = await ok;
+      assert.deepEqual(M.resultJson(r), { tool: 'ai-demo__add', ok: true, data: { count: 2 } });
+      assert.ok(!JSON.stringify(r).includes('Added 2: the counter is 2'), 'the summary stays the log line');
+    } finally {
+      await w.close();
+    }
+  });
+
   it('a call resolves only in the list served on its connection: a name not served is no_tool; a tool of an earlier list is unavailable with the hint', async () => {
     let version = 1;
     const make = (v) =>
