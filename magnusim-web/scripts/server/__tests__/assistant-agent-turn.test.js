@@ -6,7 +6,9 @@
 // limits, Stop (open permission requests cancelled before session/cancel; a stubborn agent
 // tree-killed), a crash mid-tool, a mode outside the allowed ones, the lockdown tripwire, own-tool
 // questions (link_only), the idle end and a restarted session's note, conversation drops, a
-// server lifetime's end (a Vite restart) and the Settings Test, connect and sign-in routes.
+// server lifetime's end (a Vite restart) and the Settings Test, connect and sign-in routes; what
+// the agent does between prompts (a mode, its own tool), a crash after Stop, Stop or the switch
+// during the privacy question, and the switch going off while a start is checked.
 //
 // Every agent is the scripted fake (e2e/support/fake-acp-agent.mjs) through its controller,
 // found by discovery only in this test's folders and home (the test switches), started in this
@@ -14,8 +16,9 @@
 // the fakes started is checked gone at the end.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import http from 'node:http';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -69,13 +72,16 @@ after(async () => {
   await L.resetMcpListenerForTests();
   B.resetBindingsForTests();
   resetAssistantState();
-  // Nothing a fake started is left running.
+  // Nothing a fake started is left running. A pid the OS has given to another program since (the
+  // full suite starts many) is not a fake's: only a process whose command line is one of this
+  // file's fakes counts, and only those are ever signalled.
   const deadline = Date.now() + CEILING;
-  let left = pids.filter((p) => alive(p.pid));
+  let left = fakesOnly(pids.filter((p) => alive(p.pid)));
   while (left.length && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 100));
     left = left.filter((p) => alive(p.pid));
   }
+  left = fakesOnly(left);
   for (const p of left) {
     try {
       process.kill(p.pid, 'SIGKILL');
@@ -90,6 +96,60 @@ after(async () => {
   }
   assert.deepEqual(left, [], 'no process a fake agent started is left running');
 });
+
+/** The command lines of the running `pids` (pid → text), or null when the OS can't say. */
+function commandLines(pids) {
+  const out = new Map();
+  if (!pids.length) return out;
+  try {
+    if (process.platform === 'linux') {
+      for (const pid of pids) {
+        try {
+          out.set(pid, readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' '));
+        } catch {
+          /* gone */
+        }
+      }
+    } else if (WIN) {
+      const ps = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const filter = pids.map((pid) => `ProcessId=${Number(pid)}`).join(' OR ');
+      const text = execFileSync(ps, ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { [string]$_.ProcessId + [char]9 + $_.CommandLine }`], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: CEILING,
+      });
+      for (const line of text.split(/\r?\n/)) {
+        const tab = line.indexOf('\t');
+        if (tab > 0) out.set(Number(line.slice(0, tab)), line.slice(tab + 1));
+      }
+    } else {
+      for (const pid of pids) {
+        try {
+          out.set(pid, execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }));
+        } catch {
+          /* gone */
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return out;
+}
+
+/** Of the processes the fakes reported, those that are still one of this file's fakes (all of them when the OS can't say). */
+function fakesOnly(list) {
+  const lines = commandLines(list.map((p) => p.pid));
+  if (lines === null) return list;
+  const norm = (t) => t.toLowerCase().replace(/\\/g, '/');
+  // The agents' launchers and the bridges' --info sit under ROOT; a custom agent carries its
+  // controller's address; a helper is the fake's own one-line script.
+  const marks = [norm(ROOT), ...fakes.map((f) => norm(f.url)), 'setinterval(()=>{},1<<30)'];
+  return list.filter((p) => {
+    const line = lines.get(p.pid);
+    return typeof line === 'string' && marks.some((m) => norm(line).includes(m));
+  });
+}
 
 function alive(pid) {
   if (!pid) return false;
@@ -515,13 +575,100 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
   it('the tool connection unavailable: mcp_unavailable with the plain text', async () => {
     const w = await world();
     try {
-      w.m.deps.agents = { listener: async () => ({ running: false, reason: 'deps_missing', port: null }) };
+      // With the connection down there is no launch token (listener.ts): the CLI's proof fails too.
+      const noToken = { launchToken: () => false };
+      w.m.deps.agents = { ...noToken, listener: async () => ({ running: false, reason: 'deps_missing', port: null }) };
       const r = await w.turn({ text: 'x', provider: 'agent:claude' });
       assert.deepEqual([r.status, r.body.code, r.body.error], [400, 'mcp_unavailable', "Magnusim's tool-connection package isn't installed. Run Setup.bat again."]);
-      w.m.deps.agents = { listener: async () => ({ running: false, reason: 'bind_failed', port: 4321 }) };
+      w.m.deps.agents = { ...noToken, listener: async () => ({ running: false, reason: 'bind_failed', port: 4321 }) };
       const b = await w.turn({ text: 'x', provider: 'agent:claude' });
+      assert.equal(b.body.code, 'mcp_unavailable');
       assert.match(b.body.error, /^Magnusim couldn't open the connection its tools use \(bind_failed\)\. .* port 4321\.$/);
     } finally {
+      await w.close();
+    }
+  });
+
+  it('the allow switch going off while a start is checked: its checks run again and it is refused; nothing starts', async () => {
+    const w = await world({ custom: true, allow: [CUSTOM_ID] });
+    const AT = await import('../assistant/agents/test.ts');
+    let release = () => {};
+    try {
+      let enter;
+      const entered = new Promise((r) => (enter = r));
+      const gate = new Promise((r) => (release = r));
+      let finds = 0;
+      w.m.deps.agents = {
+        find: async (...args) => {
+          finds += 1;
+          if (finds === 1) {
+            enter();
+            await gate;
+          }
+          return AT.findAgentNow(...args);
+        },
+      };
+      const before = custom.records().length;
+      const pending = w.turn({ text: 'x', provider: `agent:${CUSTOM_ID}` });
+      await entered;
+      // What POST /agents/allow {allow:false} does: the switch saved off, then the agent stopped.
+      w.m.state.settings.agents = { ...w.m.state.settings.agents, [CUSTOM_ID]: { ...w.m.state.settings.agents[CUSTOM_ID], allowed: null } };
+      await host.stopAgent(CUSTOM_ID, 'Scripted was turned off in Settings.');
+      release();
+      const r = await pending;
+      assert.deepEqual([r.status, r.body.code], [400, 'agent_not_allowed'], JSON.stringify(r.body));
+      assert.equal(r.body.error, 'Scripted is off until you allow it in Settings → Assistant: its own tools can run commands and change files on this PC.');
+      assert.equal(finds, 2, 'checked again with the settings read again');
+      assert.equal(custom.records().length, before, 'never started');
+      assert.equal(host.count(), 0);
+    } finally {
+      release();
+      await w.close();
+    }
+  });
+
+  it('the allow switch going off while a Test, connect or sign-in is checked: its checks run again and it is refused; nothing starts', async () => {
+    const w = await world();
+    const S = await import('../assistant/settings.ts');
+    const AT = await import('../assistant/agents/test.ts');
+    await S.addCustomAgent(customAgent());
+    let release = () => {};
+    try {
+      const allow = async () => S.setAgentAllowed(CUSTOM_ID, { fingerprint: await fingerprintOf(CUSTOM_ID, await S.loadSettings()) });
+      const before = custom.records().length;
+      const runs = [
+        ['test', (o) => AT.agentTestRequest({ id: CUSTOM_ID, message: true }, o)],
+        ['connect', (o) => AT.agentTestRequest({ id: CUSTOM_ID, message: false }, o)],
+        ['sign-in', (o) => AT.agentSignInRequest({ id: CUSTOM_ID, method: 'browser' }, o)],
+      ];
+      for (const [name, run] of runs) {
+        await allow();
+        let enter;
+        const entered = new Promise((r) => (enter = r));
+        const gate = new Promise((r) => (release = r));
+        let checks = 0;
+        const mcp = async () => {
+          checks += 1;
+          if (checks === 1) {
+            enter();
+            await gate;
+          }
+          return { available: true, reason: null };
+        };
+        const pending = run({ mcp });
+        await entered;
+        await S.setAgentAllowed(CUSTOM_ID, null);
+        await host.stopAgent(CUSTOM_ID, 'Scripted was turned off in Settings.');
+        release();
+        const r = await pending;
+        assert.deepEqual([r.status, r.body.code], [409, 'agent_not_allowed'], `${name}: ${JSON.stringify(r.body)}`);
+        assert.equal(checks, 2, `${name}: checked again`);
+      }
+      assert.equal(custom.records().length, before, 'never started');
+      assert.equal(host.count(), 0);
+    } finally {
+      release();
+      await S.removeCustomAgent(CUSTOM_ID);
       await w.close();
     }
   });
@@ -634,6 +781,53 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
     }
   });
 
+  it('Stop while the privacy question is open: stopped as Stop says; the switch going off then: stopped with its text; no agent starts', async () => {
+    const w = await world({ privacy: 'ask', custom: true, allow: [CUSTOM_ID] });
+    try {
+      const before = claude.pids('agent').length;
+      const r = await w.turn({ text: 'Read.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await gateOf(r.turn);
+      await w.m.manager.stop(r.turn.id, CEILING);
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason, e.message], ['stopped', 'user', 'Stopped.']);
+      assert.equal(claude.pids('agent').length, before, 'no agent started');
+      const customBefore = custom.pids('agent').length;
+      const r2 = await w.turn({ text: 'Read.', provider: `agent:${CUSTOM_ID}`, tab: 'tab-1' });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      await gateOf(r2.turn);
+      // What POST /agents/allow {allow:false} does after saving the switch off.
+      await host.stopAgent(CUSTOM_ID, 'Scripted was turned off in Settings.');
+      await settledTurn(r2.turn);
+      const e2 = endOf(r2.turn);
+      assert.deepEqual([e2.state, e2.reason, e2.message], ['stopped', 'agent_off', 'Scripted was turned off in Settings.']);
+      assert.equal(custom.pids('agent').length, customBefore, 'no agent started');
+      assert.deepEqual(w.m.consents, []);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it('Ask, with a project but no app tab (a Home turn naming one): nobody could answer, so it ends at once, with no question and no agent', async () => {
+    const w = await world({ privacy: 'ask' });
+    try {
+      const before = claude.pids('agent').length;
+      const r = await w.turn({ text: 'Read.', provider: 'agent:claude', context: { project_id: 'p1' } });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await H.until(() => r.turn.ended || r.turn.summary().open_gates.length > 0, CEILING, 'the turn to end or ask');
+      assert.deepEqual(r.turn.summary().open_gates, [], 'no question that nobody can answer');
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason], ['stopped', 'privacy']);
+      assert.equal(e.message, "Sending this project to Claude Code needs your answer in the Magnusim window, so ask from the project's window. Nothing was sent.");
+      assert.ok(!typesOf(r.turn).includes('gate'));
+      assert.equal(claude.pids('agent').length, before, 'no agent started');
+    } finally {
+      await w.close();
+    }
+  });
+
   it('Always deny chosen mid-turn: the next project call is refused and the turn ends after it', async () => {
     const w = await world();
     try {
@@ -647,7 +841,7 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
       const e = endOf(r.turn);
       assert.deepEqual([e.state, e.reason, e.message], ['stopped', 'privacy', 'Nothing more was sent.']);
       assert.deepEqual(w.invoked.map((c) => c.tool), ['get_count'], 'the add never ran');
-      const result = claude.events('mcp_result').filter((x) => x.pid === lastPid(claude)).at(-1);
+      const result = claude.events('mcp_result', lastPid(claude)).at(-1);
       assert.match(result.result.content[0].text, /"code":"privacy_denied"/);
     } finally {
       await w.close();
@@ -670,7 +864,7 @@ describe('limits for agent turns (spec 4.10)', LIMIT, () => {
       await settledTurn(r.turn);
       assert.equal(endOf(r.turn).state, 'done');
       assert.deepEqual(w.invoked.map((c) => c.tool), ['add', 'add', 'get_count']);
-      const third = claude.events('mcp_result').filter((x) => x.pid === lastPid(claude) && x.tool === 'ai-demo__add')[2];
+      const third = claude.events('mcp_result', lastPid(claude)).filter((x) => x.tool === 'ai-demo__add')[2];
       assert.equal(third.result.isError, true);
       assert.match(third.result.content[0].text, /"code":"capped".*This message reached its 2-change limit\. Stop and tell the person what is left/);
     } finally {
@@ -691,7 +885,7 @@ describe('limits for agent turns (spec 4.10)', LIMIT, () => {
       assert.equal(w.invoked.length, 10);
       const pid = lastPid(claude);
       assert.ok(methodsIn(claude, pid).includes('session/cancel'));
-      const capped = claude.events('mcp_result').filter((x) => x.pid === pid && x.result?.isError && /"code":"capped"/.test(x.result.content[0].text));
+      const capped = claude.events('mcp_result', pid).filter((x) => x.result?.isError && /"code":"capped"/.test(x.result.content[0].text));
       assert.ok(capped.length >= 5);
     } finally {
       await w.close();
@@ -830,7 +1024,7 @@ describe('Stop and the tree kill (spec 4.11, 7.7)', LIMIT, () => {
       await H.until(() => methodsIn(claude, pid).includes('session/cancel'), CEILING, 'session/cancel');
       // The call it makes after Stop is refused, and never reaches the workspace.
       claude.release('stubborn');
-      await claude.waitFor((x) => x.event === 'mcp_result' && x.pid === pid, CEILING);
+      await claude.waitFor((x) => x.event === 'mcp_result' && claude.of(pid)(x), CEILING);
       assert.match(claude.events('mcp_result').at(-1).result.content[0].text, /"code":"stopped".*Stopped by the user before this ran\./);
       assert.deepEqual(w.invoked, []);
       await stop;
@@ -853,6 +1047,35 @@ describe('Stop and the tree kill (spec 4.11, 7.7)', LIMIT, () => {
       for (const h of helpers) await gone(h);
     } finally {
       claude.release('stubborn-2');
+      await w.close();
+    }
+  });
+
+  it('Stop, then the agent crashes instead of answering the cancel: the turn ends stopped, and its whole tree goes (helpers, job, working folder)', async () => {
+    const w = await world();
+    try {
+      const r = await w.turn({ text: 'Crash.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script('ignoreCancel', { spawnHelpers: 1 }, { hold: 'crash-after-stop' }, 'crash');
+      await holding(claude, 'crash-after-stop');
+      const pid = lastPid(claude);
+      const helper = claude.pids('helper').at(-1).pid;
+      const session = host.sessionOf(r.body.conversation);
+      assert.ok(session?.proc, 'its session');
+      const stop = w.m.manager.stop(r.turn.id, CEILING);
+      await H.until(() => methodsIn(claude, pid).includes('session/cancel'), CEILING, 'session/cancel');
+      claude.release('crash-after-stop');
+      await stop;
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason], ['stopped', 'user']);
+      await gone(pid);
+      await gone(helper);
+      if (session.proc.keeper?.pid) await gone(session.proc.keeper.pid);
+      await H.until(() => session.proc.stopped && !existsSync(session.proc.cwd), CEILING, 'the tree kill and its folder');
+      assert.equal(host.sessionOf(r.body.conversation), null);
+    } finally {
+      claude.release('crash-after-stop');
       await w.close();
     }
   });
@@ -899,6 +1122,120 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
     }
   });
 
+  it('a mode outside the allowed ones between messages: the agent ends at once, and the next message starts it again with a note why', async () => {
+    const w = await world();
+    try {
+      const r = await w.turn({ text: 'One.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ say: 'one' }, { later: { hold: 'mode-later', update: { sessionUpdate: 'current_mode_update', currentModeId: 'plan' } } });
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      const pid = lastPid(claude);
+      const session = host.sessionOf(r.body.conversation);
+      assert.deepEqual([session.alive, session.mode], [true, 'default']);
+      // After its answer, between prompts: it switches itself to plan.
+      claude.release('mode-later');
+      await H.until(() => !session.alive || session.mode === 'plan', CEILING, 'the mode update');
+      const r2 = await w.turn({ text: 'Two.', provider: 'agent:claude', conversation: r.body.conversation });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      claude.script({ say: 'two' });
+      await settledTurn(r2.turn);
+      assert.equal(endOf(r2.turn).state, 'done');
+      assert.notEqual(lastPid(claude), pid, 'a new agent: the one in plan is never prompted again');
+      assert.equal(claude.received(pid).filter((m) => m.method === 'session/prompt').length, 1);
+      const notes = H.eventsOf(r2.turn).filter((x) => x.type === 'note').map((x) => x.text);
+      assert.ok(notes.includes("Claude Code was started again, so it doesn't remember this conversation's earlier messages."), JSON.stringify(notes));
+      assert.ok(notes.includes('Claude Code switched itself to a mode that skips its questions, so Magnusim stopped it.'), JSON.stringify(notes));
+      await gone(pid);
+    } finally {
+      claude.release('mode-later');
+      await w.close();
+    }
+  });
+
+  it('a mode outside the allowed ones after its start, before its first prompt: the turn ends agent_mode and the agent is never prompted', async () => {
+    const w = await world();
+    const real = w.m.deps.settings;
+    let enter;
+    const entered = new Promise((r) => (enter = r));
+    let release;
+    const gate = new Promise((r) => (release = r));
+    // Holds the turn's settings read between its session's start and its prompt (its session ready).
+    w.m.deps.settings = async () => {
+      if (Object.values(host.snapshot()).some((x) => x.in_use && x.state === 'ready')) {
+        enter();
+        await gate;
+      }
+      return real();
+    };
+    try {
+      const r = await w.turn({ text: 'Plan.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await entered;
+      const session = host.sessionOf(r.body.conversation);
+      const pid = lastPid(claude);
+      // The agent's notification, as its pipe delivers it, while no prompt runs.
+      session['onNotification']('session/update', { sessionId: session.sessionId, update: { sessionUpdate: 'current_mode_update', currentModeId: 'plan' } });
+      release();
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason, e.message], ['failed', 'agent_mode', 'Claude Code switched itself to a mode that skips its questions, so Magnusim stopped it.']);
+      assert.ok(!methodsIn(claude, pid).includes('session/prompt'), 'never prompted');
+      await gone(pid);
+    } finally {
+      release();
+      w.m.deps.settings = real;
+      await w.close();
+    }
+  });
+
+  it('between messages, its own tool (own tools off) trips the lockdown: ended at once and recorded; a late update of Magnusim’s own tool does not', async () => {
+    const w = await world();
+    const S = await import('../assistant/settings.ts');
+    try {
+      const r = await w.turn({ text: 'Add.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script(
+        { call: { tool: 'ai-demo__add', args: { by: 1 } } },
+        // Its call's last update again, without the fields (the session remembers its id), then a marker.
+        { later: { hold: 'ours-later', update: { sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status: 'completed' } } },
+        { later: { update: { sessionUpdate: 'current_model_update', currentModelId: 'fake-small' } } },
+      );
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      const pid = lastPid(claude);
+      const session = host.sessionOf(r.body.conversation);
+      claude.release('ours-later');
+      await H.until(() => session.model === 'fake-small' || !session.alive, CEILING, 'the late updates');
+      assert.equal(session.alive, true, 'a late update of our own tool is no tripwire');
+      const r2 = await w.turn({ text: 'Again.', provider: 'agent:claude', tab: 'tab-1', conversation: r.body.conversation });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      claude.script({ say: 'again' }, { later: { hold: 'own-later', update: { sessionUpdate: 'tool_call', toolCallId: 'own-z', title: 'Bash rm -rf ~', kind: 'execute', status: 'pending' } } });
+      await settledTurn(r2.turn);
+      assert.equal(endOf(r2.turn).state, 'done');
+      assert.equal(lastPid(claude), pid, 'the same agent');
+      claude.release('own-later');
+      await gone(pid);
+      const saved = await H.until(() => {
+        const doc = JSON.parse(readFileSync(join(HOME, 'assistant', 'settings.json'), 'utf8'));
+        return doc.agents?.claude?.lockdown_failed ? doc : null;
+      }, CEILING, 'the tripwire record');
+      const row = D.agentRow(await D.resolveAgentNow('claude', saved), { settings: saved, mcp: { available: true, reason: null }, appVersion: saved.agents.claude.lockdown_failed.version });
+      assert.deepEqual([row.lockdown, row.needs_allow, row.reason], ['none', true, 'agent_not_allowed']);
+      // The next message (these settings don't have the record) says why its agent was started again.
+      const r3 = await w.turn({ text: 'Three.', provider: 'agent:claude', tab: 'tab-1', conversation: r.body.conversation });
+      assert.equal(r3.status, 202, JSON.stringify(r3.body));
+      claude.script({ say: 'three' });
+      await settledTurn(r3.turn);
+      assert.ok(H.eventsOf(r3.turn).some((x) => x.type === 'note' && x.text === "Claude Code's own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant."));
+    } finally {
+      claude.release('ours-later');
+      claude.release('own-later');
+      await S.setAgentLockdownFailed('claude', null);
+      await w.close();
+    }
+  });
+
   it('the lockdown tripwire: a tools-off agent asking for a tool that isn’t ours is answered reject_once, the turn ends agent_lockdown, and it needs its switch from then on', async () => {
     const w = await world();
     const S = await import('../assistant/settings.ts');
@@ -919,7 +1256,7 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
       const e = endOf(r.turn);
       assert.deepEqual([e.state, e.reason], ['failed', 'agent_lockdown']);
       assert.equal(e.message, "Claude Code's own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant.");
-      const answered = await claude.waitFor((x) => x.event === 'request_answer' && x.pid === pid, CEILING);
+      const answered = await claude.waitFor((x) => x.event === 'request_answer' && claude.of(pid)(x), CEILING);
       assert.deepEqual(answered.answer.result.outcome, { outcome: 'selected', optionId: 'reject' });
       await gone(pid);
       const saved = await H.until(() => {
@@ -1205,7 +1542,7 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
       assert.ok(Number.isInteger(t.json.ms) && t.json.ms >= 0);
       assert.deepEqual(t.json.modes.map((x) => x.id), ['default', 'plan']);
       assert.deepEqual(t.json.models.map((x) => x.id), ['fake-large', 'fake-small']);
-      const tools = claude.events('mcp_tools').filter((x) => x.pid === pid).at(-1);
+      const tools = claude.events('mcp_tools', pid).at(-1);
       assert.deepEqual(tools.tools, ['connection_check'], 'a Test binding lists only the test tool');
       const prompt = claude.received(pid).find((x) => x.method === 'session/prompt');
       assert.equal(prompt.params.prompt[0].text, 'Call the connection_check tool of the magnusim server with word "ok", then reply with the single word done.');
@@ -1346,6 +1683,28 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     }
   });
 
+  it('a Vite restart while a Settings Test runs: the old lifetime’s shutdown stops the Test and its agent', async () => {
+    const { m, srv } = await serverWorld();
+    let srv2 = null;
+    try {
+      claude.script({ hold: 'test-restart' });
+      const test = srv.post('/api/assistant/agents/test', { id: 'claude', message: true });
+      await holding(claude, 'test-restart');
+      const pid = lastPid(claude);
+      assert.equal(host.running('claude'), true);
+      srv2 = await H.relayServer(m);
+      srv.handle.shutdown();
+      await gone(pid);
+      const a = await test;
+      assert.deepEqual([a.status, a.json.ok], [200, false], JSON.stringify(a.json));
+      await H.until(() => !host.running('claude'), CEILING, 'the Test slot to free');
+    } finally {
+      claude.release('test-restart');
+      await srv.close();
+      await srv2?.close();
+    }
+  });
+
   it('the allow switch going off mid-turn stops that agent’s turn and ends its process before the route answers', async () => {
     const w = await world({ custom: true, allow: [CUSTOM_ID] });
     try {
@@ -1408,29 +1767,53 @@ describe('more of an agent turn’s start (spec 4.6, 5.1, 5.2, 7.1)', LIMIT, () 
     }
   });
 
-  it('the page proves it with its tab’s live relay link: that link starts it, another tab’s or a gone one doesn’t', async () => {
+  it('the page proves it with its tab’s live relay link: that link starts it; another tab’s live link, or a link its own tab had before, doesn’t', async () => {
     const { srv } = await serverWorld();
-    let page = null;
+    let a = null;
+    let b = null;
     try {
-      page = await srv.page();
-      const link = await page.open();
-      const reg = await srv.register(link, 1);
-      assert.equal(reg.status, 200, JSON.stringify(reg.json));
-      const wrong = await srv.post('/api/assistant/turns', { text: 'x', provider: 'agent:claude', tab: page.tab, link: 'c'.repeat(24) });
-      assert.deepEqual([wrong.status, wrong.json.code], [403, 'launch_proof']);
-      const noTab = await srv.post('/api/assistant/turns', { text: 'x', provider: 'agent:claude', link });
-      assert.deepEqual([noTab.status, noTab.json.code], [403, 'launch_proof']);
-      const ok = await srv.post('/api/assistant/turns', { text: 'x', provider: 'agent:claude', tab: page.tab, link });
+      a = await srv.page();
+      b = await srv.page();
+      const linkA = await a.open();
+      const linkB = await b.open();
+      for (const link of [linkA, linkB]) {
+        const reg = await srv.register(link, 1);
+        assert.equal(reg.status, 200, JSON.stringify(reg.json));
+      }
+      const before = claude.pids('agent').length;
+      const turn = (tab, link) => srv.post('/api/assistant/turns', { text: 'x', provider: 'agent:claude', ...(tab ? { tab } : {}), link });
+      // Each tab's live link, with the other tab: refused.
+      for (const [tab, link] of [
+        [b.tab, linkA],
+        [a.tab, linkB],
+      ]) {
+        const r = await turn(tab, link);
+        assert.deepEqual([r.status, r.json.code], [403, 'launch_proof'], `tab ${tab} with another tab's live link`);
+      }
+      // A link that is no tab's, and a live link with no tab.
+      assert.deepEqual([(await turn(a.tab, 'c'.repeat(24))).status, (await turn(null, linkA)).status], [403, 403]);
+      assert.equal(claude.pids('agent').length, before, 'nothing started');
+      const ok = await turn(a.tab, linkA);
       assert.equal(ok.status, 202, JSON.stringify(ok.json));
       claude.script({ say: 'by link' });
       await settledTurn(srv.handle.turns.get(ok.json.turn));
-      // The link of a tab that went proves nothing.
-      await page.unsubscribe();
-      await H.until(async () => !srv.relay.isLiveLinkOf(page.tab, link), CEILING, 'the link to go');
-      const late = await srv.post('/api/assistant/turns', { text: 'x', provider: 'agent:claude', tab: page.tab, link });
-      assert.equal(late.status === 202, false);
+      // Tab A gets a new link (its tools registered again under it): the one it had before proves nothing.
+      await a.unsubscribe();
+      const linkA2 = await a.open('assistant:2');
+      const again = await srv.register(linkA2, 2);
+      assert.equal(again.status, 200, JSON.stringify(again.json));
+      await H.until(() => !srv.relay.isLiveLinkOf(a.tab, linkA) && srv.relay.isLiveLinkOf(a.tab, linkA2), CEILING, 'the new link');
+      const started = claude.pids('agent').length;
+      const late = await turn(a.tab, linkA);
+      assert.deepEqual([late.status, late.json.code], [403, 'launch_proof'], JSON.stringify(late.json));
+      assert.equal(claude.pids('agent').length, started, 'nothing started');
+      const fresh = await turn(a.tab, linkA2);
+      assert.equal(fresh.status, 202, JSON.stringify(fresh.json));
+      claude.script({ say: 'by the new link' });
+      await settledTurn(srv.handle.turns.get(fresh.json.turn));
     } finally {
-      page?.close();
+      a?.close();
+      b?.close();
       await srv.close();
     }
   });
@@ -1476,5 +1859,36 @@ describe('more of an agent turn’s start (spec 4.6, 5.1, 5.2, 7.1)', LIMIT, () 
     assert.deepEqual([realHome.idleMs, realHome.ignored.length], [null, 3]);
     const bad = HOST.agentTimingSwitches({ MAGNUSIM_TEST_ASSISTANT_AGENT_IDLE_MS: '0', MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_ASSISTANT_HOME: HOME });
     assert.deepEqual([bad.idleMs, bad.ignored.length], [null, 1]);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// The scripted agent's own records (test support)
+// ------------------------------------------------------------------------------------------------
+
+describe('the scripted agent’s records (test support)', LIMIT, () => {
+  it('a reused pid: received(), events() and of() follow the last fake that reported it, not an earlier one', async () => {
+    // Not in `fakes`: the pid below is made up, and the end's sweep must never signal it.
+    const f = await startFakeAcp({ style: 'none' });
+    try {
+      const post = async (path, body) => {
+        const r = await fetch(`${f.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        assert.equal(r.status, 200);
+      };
+      const pid = 424242;
+      // An earlier fake with this pid: its permission reply and its event.
+      await post('/pids', { role: 'agent', pids: [pid], pid, instance: 'earlier' });
+      await post('/record', { seq: 1, pid, instance: 'earlier', dir: 'in', msg: { jsonrpc: '2.0', id: 'fake-1', result: { outcome: { outcome: 'selected', optionId: 'allow' } } } });
+      await post('/record', { seq: 2, pid, instance: 'earlier', event: 'permission_outcome', outcome: { outcome: 'selected', optionId: 'allow' } });
+      // The OS gave the same pid to a later one.
+      await post('/pids', { role: 'agent', pids: [pid], pid, instance: 'later' });
+      await post('/record', { seq: 1, pid, instance: 'later', dir: 'in', msg: { jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 's' } } });
+      assert.deepEqual(f.received(pid).map((m) => m.method ?? 'a reply'), ['session/cancel']);
+      assert.deepEqual(f.events('permission_outcome', pid), []);
+      assert.equal(f.records().filter(f.of(pid)).filter((r) => r.dir === 'in').length, 1);
+      assert.equal(f.received().length, 2, 'all fakes when no pid is given');
+    } finally {
+      await f.stop();
+    }
   });
 });

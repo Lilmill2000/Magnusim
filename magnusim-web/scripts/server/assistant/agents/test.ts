@@ -18,7 +18,10 @@
  * `initialize` (it signs in by itself, for example in a browser): a short-lived process gets
  * `initialize` then `authenticate` (10 minutes), and ends. Never started by Magnusim on its own.
  *
- * Both count toward the 2 agents at once (host.ts): a third is refused 409 `busy`.
+ * Both count toward the 2 agents at once (host.ts): a third is refused 409 `busy`. Each is
+ * tagged with the server lifetime (TurnManager) whose route started it, so that lifetime's
+ * shutdown stops it (host.ts endLifetime), and the checks run again when the agent's switch
+ * went off while they read the settings (host.ts offEpoch).
  *
  * The sign-in block (SignInView) is built from what the agent sent: a terminal command is shown
  * (with Copy) only when it is safe to paste into a shell (acp.ts terminalSignIn), otherwise the
@@ -35,7 +38,7 @@ import { cleanText } from '../sanitize.ts';
 import { agentPrefs, isAgentOf, loadSettings, type AssistantSettings } from '../settings.ts';
 import { OursMatcher, pickOption, REJECT_KINDS, terminalSignIn, type AuthMethodView, type ModelView, type ModeView } from './acp.ts';
 import { agentRow, agentStartRefusal, ensureAgents, rememberAgentLast, rememberAgentSignIn, resolveAgentNow, type AgentEntry, type AgentRow } from './discover.ts';
-import { agentHost, AGENTS_BUSY_TEXT } from './host.ts';
+import { agentHost, AGENTS_BUSY_TEXT, type Transient } from './host.ts';
 import { knownAgent, policyOf } from './known.ts';
 import { AgentRunError, AgentSession, agentErrorOf, type FoundAgent } from './session.ts';
 
@@ -223,30 +226,64 @@ function choicesOf(s: AgentSession): { modes: ModeView[]; models: ModelView[] } 
   return { modes, models };
 }
 
+/** How many times a run's checks run before an agent stopped every time is refused. */
+const PREPARE_ATTEMPTS = 3;
+
+/**
+ * The checks, then the run's agent slot, in one step: when the agent was stopped (its switch
+ * went off, it was removed) while the checks read the settings, they run again.
+ */
+async function prepareAndTake(id: unknown, purpose: 'test' | 'connect' | 'sign_in', o: RunOptions): Promise<{ p: Prepared; tr: Transient } | Answer> {
+  const host = agentHost();
+  for (let attempt = 1; ; attempt += 1) {
+    const epoch = host.offEpoch();
+    const p = await prepare(id, purpose, o.mcp);
+    if ('status' in p) return p;
+    // From here to the slot nothing awaits.
+    const off = host.offSince(p.found.id, epoch);
+    if (off) {
+      if (attempt < PREPARE_ATTEMPTS) continue;
+      return refuse(409, 'agent_not_allowed', off.text);
+    }
+    const tr = host.takeTransient(p.found.id, o.manager ?? null);
+    if (!tr) return refuse(409, 'busy', AGENTS_BUSY_TEXT);
+    return { p, tr };
+  }
+}
+
+/** What a Test, connect or sign-in run is given by its route. */
+export interface RunOptions {
+  mcp: () => Promise<{ available: boolean; reason: string | null }>;
+  /** The request went away. */
+  gone?: AbortSignal;
+  /** The server lifetime (TurnManager) whose route started it: its shutdown stops the run. */
+  manager?: object | null;
+  boundMs?: number;
+  promptMs?: number;
+}
+
 /**
  * POST /api/assistant/agents/test {id, message}: {ok:true, agent, version, ms, signed_in,
  * own_tools, images, modes, models, tools} or {ok:false, code, error, auth?} (spec 4.13).
  */
-export async function agentTestRequest(body: Record<string, unknown>, o: { mcp: () => Promise<{ available: boolean; reason: string | null }>; gone?: AbortSignal; boundMs?: number; promptMs?: number }): Promise<Answer> {
+export async function agentTestRequest(body: Record<string, unknown>, o: RunOptions): Promise<Answer> {
   if (body.message !== undefined && typeof body.message !== 'boolean') return refuse(400, 'bad_request', 'message must be true or false.');
   const message = body.message === true;
   const slot = testingSlot();
   if (slot.running) return refuse(409, 'busy', 'A test of a coding agent is already running.');
   slot.running = true;
   try {
-    const p = await prepare(body.id, message ? 'test' : 'connect', o.mcp);
-    if ('status' in p) return p;
-    return await runTest(p, message, o);
+    const got = await prepareAndTake(body.id, message ? 'test' : 'connect', o);
+    if ('status' in got) return got;
+    return await runTest(got.p, got.tr, message, o);
   } finally {
     slot.running = false;
   }
 }
 
-async function runTest(p: Prepared, message: boolean, o: { gone?: AbortSignal; boundMs?: number; promptMs?: number }): Promise<Answer> {
+async function runTest(p: Prepared, tr: Transient, message: boolean, o: RunOptions): Promise<Answer> {
   const { found, row, settings } = p;
   const host = agentHost();
-  const tr = host.takeTransient(found.id, null);
-  if (!tr) return refuse(409, 'busy', AGENTS_BUSY_TEXT);
   const t0 = Date.now();
   const bound = bounded(o.boundMs ?? AGENT_TEST_MS, o.gone);
   const signal = AbortSignal.any([bound.signal, tr.abort.signal]);
@@ -327,14 +364,14 @@ async function runTest(p: Prepared, message: boolean, o: { gone?: AbortSignal; b
 }
 
 /** POST /api/assistant/agents/sign-in {id, method}: {ok:true, agent} or {ok:false, code, error}. */
-export async function agentSignInRequest(body: Record<string, unknown>, o: { mcp: () => Promise<{ available: boolean; reason: string | null }>; gone?: AbortSignal; boundMs?: number }): Promise<Answer> {
+export async function agentSignInRequest(body: Record<string, unknown>, o: RunOptions): Promise<Answer> {
   if (typeof body.method !== 'string' || !body.method || body.method.length > 128) return refuse(400, 'bad_method', 'Name the way to sign in (a method the agent listed).');
-  const p = await prepare(body.id, 'sign_in', o.mcp);
-  if ('status' in p) return p;
+  const method = body.method;
+  const got = await prepareAndTake(body.id, 'sign_in', o);
+  if ('status' in got) return got;
+  const { p, tr } = got;
   const { found, settings } = p;
   const host = agentHost();
-  const tr = host.takeTransient(found.id, null);
-  if (!tr) return refuse(409, 'busy', AGENTS_BUSY_TEXT);
   const bound = bounded(o.boundMs ?? AGENT_SIGN_IN_MS, o.gone);
   const signal = AbortSignal.any([bound.signal, tr.abort.signal]);
   const prefs = agentPrefs(settings, found.id);
@@ -349,7 +386,7 @@ export async function agentSignInRequest(body: Record<string, unknown>, o: { mcp
   });
   tr.session = session;
   try {
-    await session.signIn(body.method, signal);
+    await session.signIn(method, signal);
     rememberAgentSignIn(found.id, null);
     // Its login file may be there now.
     const again = await resolveAgentNow(found.id, await loadSettings()).catch(() => null);
@@ -369,7 +406,7 @@ export async function agentSignInRequest(body: Record<string, unknown>, o: { mcp
 }
 
 /** For the provider Test (POST /api/assistant/test {provider:'agent:<id>'}): the agent Test with a message. */
-export function agentProviderTest(id: string, o: { mcp: () => Promise<{ available: boolean; reason: string | null }>; gone?: AbortSignal }): Promise<Answer> {
+export function agentProviderTest(id: string, o: RunOptions): Promise<Answer> {
   return agentTestRequest({ id, message: true }, o);
 }
 

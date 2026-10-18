@@ -22,9 +22,11 @@
  *   agents/turn.ts instead of the loop, in the same log, gates, relay and limits on how many
  *   run. Its start needs a proof of this account: the per-launch token (the CLI reads it from
  *   the owner-only mcp.json) or the tab's live relay link (the page). It is refused, in order:
- *   agent_unknown (400), launch_proof (403), the agent missing, not allowed or changed since it
- *   was allowed, its tool connection unavailable, privacy (400), and past 2 agents agents_busy
- *   (429). Its conversation is bound to it and keeps no messages (the agent keeps them).
+ *   agent_unknown (400), its tool connection unavailable (400 mcp_unavailable: there is no
+ *   launch token then), launch_proof (403), the agent missing, not allowed or changed since it
+ *   was allowed, privacy (400), and past 2 agents agents_busy (429). Its switch going off while
+ *   these are checked makes them run again. Its conversation is bound to it and keeps no
+ *   messages (the agent keeps them).
  *
  * Turns, conversations and questions live in the Assistant's state on globalThis. When Vite
  * restarts the server in this process, the old server's relay ends the running turns its
@@ -683,6 +685,9 @@ export const agentUnknownText = (id: string) => `No coding agent called ${cleanT
 
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 
+/** How many times a start is checked before an agent stopped every time is refused. */
+const START_ATTEMPTS = 3;
+
 /**
  * What answers a question: the turn's answer key, as its starter sent it (`key`), or the app
  * tab whose live relay link the relay found showing it (`link`; only the relay makes one).
@@ -844,7 +849,15 @@ export class TurnManager {
   }
 
   /** POST /api/assistant/turns: checked, then started detached (202). `launch`: the request's proof of this account (agent turns). */
-  async start(body: Record<string, unknown>, launch: LaunchProof = {}): Promise<Answer> {
+  start(body: Record<string, unknown>, launch: LaunchProof = {}): Promise<Answer> {
+    // No extra await around it: the 202 answers in the same step as the turn's launch.
+    return this.startOnce(body, launch, 1);
+  }
+
+  /** One pass of start()'s checks; an agent whose switch went off while they ran is checked again. */
+  private async startOnce(body: Record<string, unknown>, launch: LaunchProof, attempt: number): Promise<Answer> {
+    // Before the first await (the settings read): see agentHost().offSince().
+    const offEpoch = agentHost().offEpoch();
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) return refuse(400, 'bad_text', 'Write what the Assistant should do.');
     if (text.length > TURN_LIMITS.textMax) return refuse(400, 'bad_text', `A prompt is at most ${TURN_LIMITS.textMax.toLocaleString('en-US')} characters.`);
@@ -869,7 +882,20 @@ export class TurnManager {
     if (isAgentChoice(provider)) {
       const agentId = agentIdOf(provider);
       if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
-      return this.startAgent({ text, convId, tab, ctxProject, ctxStudy, link: body.link, provider, agentId, settings, launch });
+      return this.startAgent({
+        text,
+        convId,
+        tab,
+        ctxProject,
+        ctxStudy,
+        link: body.link,
+        provider,
+        agentId,
+        settings,
+        launch,
+        offEpoch,
+        again: attempt < START_ATTEMPTS ? () => this.startOnce(body, launch, attempt + 1) : null,
+      });
     }
     if ((await this.d.deps()) === 'missing') return refuse(400, 'deps_missing', "The Assistant's packages aren't installed. Run Setup.bat again.");
     const model = settings.models[provider];
@@ -967,13 +993,20 @@ export class TurnManager {
     agentId: string;
     settings: AssistantSettings;
     launch: LaunchProof;
+    /** agentHost().offEpoch() before the settings were read. */
+    offEpoch: number;
+    /** The start checked again (null: an agent stopped meanwhile is refused). */
+    again: (() => Promise<Answer>) | null;
   }): Promise<Answer> {
     const { settings, agentId: id, provider } = a;
     if (!isAgentOf(settings, id)) return refuse(400, 'agent_unknown', agentUnknownText(id));
     const ad = this.agentStart();
     // The tool connection first: a CLI that found no connection file (or a stale one) reads it
-    // again after this refusal.
+    // again after the launch_proof refusal. Without it there is no launch token to prove anything
+    // with (and no agent can run), so it is refused before the proof; /status says as much to
+    // any local caller anyway.
     const listener = await ad.listener();
+    if (!listener.running) return refuse(400, 'mcp_unavailable', mcpUnavailableText(listener.reason, listener.port ?? settings.mcp.port));
     let target: TabTarget | null = null;
     let tabRefusal: Answer | null = null;
     if (a.tab) {
@@ -990,7 +1023,6 @@ export class TurnManager {
     const { entry, row } = found;
     const refused = agentStartRefusal(row, 'turn');
     if (refused) return refuse(400, refused.code, refused.error);
-    if (!listener.running) return refuse(400, 'mcp_unavailable', mcpUnavailableText(listener.reason, listener.port ?? settings.mcp.port));
     if (tabRefusal) return tabRefusal;
     let boundTab: string | null = null;
     let projectId = a.ctxProject;
@@ -1009,6 +1041,11 @@ export class TurnManager {
     }
 
     // From here to the turn's start nothing awaits: the checks and the start are one step.
+    // Its switch went off (or it was removed) since the settings above were read: they are read
+    // again (the allow route saves first, then stops the agent; a turn admitted after this step
+    // is one that stop finds and ends).
+    const off = agentHost().offSince(id, a.offEpoch);
+    if (off) return a.again ? a.again() : refuse(400, 'agent_not_allowed', off.text);
     const model = agentPrefs(settings, id).model ?? '';
     const binding = { provider, model, projectId };
     let conv: Conversation | null = null;

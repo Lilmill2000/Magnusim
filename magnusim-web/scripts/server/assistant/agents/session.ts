@@ -24,7 +24,9 @@
  * Prompting (prompt()): session/prompt with no timeout of its own (the turn's limits bound it);
  * the session's updates and permission requests go to the turn's handlers while it runs.
  * Between prompts every permission request is answered `cancelled` at once and updates are
- * dropped.
+ * dropped, but they are still checked: a mode outside the allowed ones, or (an agent whose own
+ * tools are off) a tool or a permission request that isn't Magnusim's, is an offence
+ * (`offence`, onOffence): the host ends the agent at once, and a turn never prompts it again.
  *
  * cancel(): every open permission request is answered `cancelled` first, then session/cancel
  * goes out (ACP's order). end(): the tree kill, the working folder removed, the binding
@@ -43,7 +45,7 @@ import type { ContentBlock } from '@agentclientprotocol/sdk';
 import { ensurePrivateDir } from '../files.ts';
 import { alog } from '../log.ts';
 import { BRIDGE_SCRIPT, mcpInfoPath } from '../mcp/listener.ts';
-import { dropBinding, type AgentBinding } from '../mcp/sessions.ts';
+import { bindingServes, dropBinding, type AgentBinding } from '../mcp/sessions.ts';
 import { redact } from '../redact.ts';
 import { cleanText } from '../sanitize.ts';
 import { removeTree } from '../../../remove-tree.js';
@@ -59,6 +61,7 @@ import {
   loadsSessions,
   models as readModels,
   modes as readModes,
+  OursMatcher,
   permission as readPermission,
   permissionReply,
   promptParams,
@@ -187,11 +190,22 @@ export interface AgentSessionOptions {
   graceMs?: number;
   /** The process ended (any way): the host forgets the session. */
   onExit?: (s: AgentSession, info: ExitInfo) => void;
+  /** An offence between prompts (once): the host ends the agent. */
+  onOffence?: (s: AgentSession, o: AgentOffence) => void;
   /** An adapter's `_auth/status_update` (display only). */
   onAuthStatus?: (kind: string) => void;
 }
 
 export type SessionState = 'starting' | 'ready' | 'prompting' | 'cancelling' | 'ended';
+
+/**
+ * What the agent did between prompts that ends it (spec 4.7, 4.8): a mode outside the allowed
+ * ones (`agent_mode`), or, for an agent whose own tools are off, one of its own tools
+ * (`agent_lockdown`, the tripwire).
+ */
+export interface AgentOffence {
+  code: 'agent_mode' | 'agent_lockdown';
+}
 
 export class AgentSession {
   readonly conversation: string;
@@ -218,6 +232,10 @@ export class AgentSession {
   readonly notes: string[] = [];
   /** The agent's `_auth/status_update` said it isn't signed in (display only). */
   authNone = false;
+  /** What it did between prompts that ends it (the first one), or null. */
+  offence: AgentOffence | null = null;
+  /** A turn ended with the offence as its own end (the next turn needn't say it again). */
+  offenceTold = false;
   proc: AgentProcess | null = null;
   private rpc: RpcPeer | null = null;
   private readonly o: AgentSessionOptions;
@@ -226,6 +244,12 @@ export class AgentSession {
   private ending: Promise<void> | null = null;
   private extraDir: string | null = null;
   private permSerial = 0;
+  /**
+   * Which tool calls are Magnusim's, over the whole session (adapter-set fields only): a trailing
+   * update of one of ours between prompts is not the tripwire. The turn's own matcher decides
+   * while a prompt runs.
+   */
+  private readonly ours: OursMatcher;
 
   constructor(o: AgentSessionOptions) {
     this.o = o;
@@ -234,6 +258,7 @@ export class AgentSession {
     this.binding = o.binding;
     this.info.name = o.agent.name;
     this.info.version = o.agent.version;
+    this.ours = new OursMatcher(policyOf(o.known).ours, (name) => bindingServes(o.binding.id, name));
   }
 
   get alive(): boolean {
@@ -495,6 +520,10 @@ export class AgentSession {
     // being cancelled) the turn decides, and logs it.
     if (!h || (this.state !== 'prompting' && this.state !== 'cancelling') || (view.sessionId !== null && view.sessionId !== this.sessionId)) {
       this.rpc?.reply(id, permissionReply(null));
+      // Its own tool asked for between prompts, with its own tools off: the tripwire.
+      if (this.state === 'ready' && (view.sessionId === null || view.sessionId === this.sessionId) && this.agent.lockdown === 'tools_off' && this.ours.permission(view) === null) {
+        this.offend({ code: 'agent_lockdown' });
+      }
       return true;
     }
     this.open.set(`${(this.permSerial += 1)}`, p);
@@ -530,12 +559,15 @@ export class AgentSession {
       const { sessionId, update } = sessionUpdate(params);
       if (!update || (sessionId !== null && sessionId !== this.sessionId)) return;
       // The session's own record, prompt or not (a mode it switched to between prompts counts).
-      if (update.kind === 'mode') this.mode = update.mode;
+      let mode: string | null = null;
+      if (update.kind === 'mode') mode = this.mode = update.mode;
       else if (update.kind === 'config') {
         if (update.options.length) this.config = update.options;
-        if (update.mode !== null) this.mode = update.mode;
+        if (update.mode !== null) mode = this.mode = update.mode;
         if (update.model !== null) this.model = update.model;
       } else if (update.kind === 'model') this.model = update.model;
+      // Every tool update teaches the session's matcher (a later update may leave the fields out).
+      const ours = update.kind === 'tool' ? this.ours.tool(update) : null;
       const h = this.handlers;
       if (h && (this.state === 'prompting' || this.state === 'cancelling')) {
         try {
@@ -543,7 +575,12 @@ export class AgentSession {
         } catch (err) {
           alog('warn', 'an agent update could not be handled', { agent: this.agent.id, error: cleanText(String((err as Error)?.message ?? err), 200) });
         }
+        return;
       }
+      // Between prompts (after its start): nobody is asked, but it is still checked.
+      if (this.state !== 'ready') return;
+      if (mode !== null && !this.modeAllowed(mode)) this.offend({ code: 'agent_mode' });
+      else if (update.kind === 'tool' && ours === null && this.agent.lockdown === 'tools_off') this.offend({ code: 'agent_lockdown' });
       return;
     }
     if (method === '_auth/status_update') {
@@ -558,6 +595,18 @@ export class AgentSession {
   }
 
   // ------------------------------------------------------------ ending
+
+  /** An offence between prompts: recorded once, and the host told (it ends the agent). */
+  private offend(o: AgentOffence): void {
+    if (this.offence || this.state === 'ended') return;
+    this.offence = o;
+    alog('warn', 'agent offence between prompts', { agent: this.agent.id, code: o.code });
+    try {
+      this.o.onOffence?.(this, o);
+    } catch {
+      /* the host's bookkeeping never breaks the pipe */
+    }
+  }
 
   private onProcessExit(info: ExitInfo): void {
     const unexpected = this.state !== 'ended';

@@ -478,7 +478,7 @@ async function listModels(provider: ProviderId, settings: AssistantSettings): Pr
  * Test block started afresh): nobody waits for the result, so the test stops and the next
  * one may start at once.
  */
-async function connectionTest(asked: unknown, gone?: AbortSignal): Promise<Answer> {
+async function connectionTest(asked: unknown, gone: AbortSignal | undefined, manager: TurnManager): Promise<Answer> {
   const settings = await loadSettings();
   const refuse = (code: string, error: string, status = 400): Answer => ({ status, body: { ok: false, code, error } });
   // The provider named (each Settings card tests its own), else the default.
@@ -487,7 +487,7 @@ async function connectionTest(asked: unknown, gone?: AbortSignal): Promise<Answe
   const chosen = named === null ? settings.provider : (named as string);
   // A coding agent: its Test with one short message (spec 5.2).
   const agent = agentIdOf(chosen);
-  if (agent !== null) return agentProviderTest(agent, { mcp: mcpAvailability, gone });
+  if (agent !== null) return agentProviderTest(agent, { mcp: mcpAvailability, gone, manager });
   const provider = chosen as ProviderId | 'off';
   if (provider === 'off') return refuse('provider_off', 'Choose a provider first.');
   if ((await depsStatus()).state === 'missing') return refuse('deps_missing', DEPS_MISSING_TEXT);
@@ -711,8 +711,11 @@ export function browserOnly(ctx: RequestContext): boolean {
   return site === undefined || site === 'same-origin';
 }
 
-/** The coding agents' routes (assistant/agents/discover.ts does the work). */
-function registerAgentRoutes(router: Router): void {
+/**
+ * The coding agents' routes (assistant/agents/discover.ts does the work). `turns`: this server's
+ * lifetime, whose shutdown stops the Test and sign-in runs its routes started.
+ */
+function registerAgentRoutes(router: Router, turns: TurnManager): void {
   const r: AgentRouteContext = { mcp: mcpAvailability };
 
   router.get(
@@ -774,7 +777,7 @@ function registerAgentRoutes(router: Router): void {
     '/api/assistant/agents/test',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
-      await whileOpen(ctx, (gone) => agentTestRequest(body, { mcp: mcpAvailability, gone }));
+      await whileOpen(ctx, (gone) => agentTestRequest(body, { mcp: mcpAvailability, gone, manager: turns }));
     }),
   );
 
@@ -782,7 +785,7 @@ function registerAgentRoutes(router: Router): void {
     '/api/assistant/agents/sign-in',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
-      await whileOpen(ctx, (gone) => agentSignInRequest(body, { mcp: mcpAvailability, gone }));
+      await whileOpen(ctx, (gone) => agentSignInRequest(body, { mcp: mcpAvailability, gone, manager: turns }));
     }),
   );
 }
@@ -971,7 +974,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       };
       ctx.res.on('close', onClose);
       try {
-        const r = await connectionTest(body.provider, gone.signal);
+        const r = await connectionTest(body.provider, gone.signal, turns);
         if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.sendJson(r.status, r.body);
       } finally {
         ctx.res.off('close', onClose);
@@ -982,7 +985,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   registerTurnRoutes(router, turns);
   registerRelayRoutes(router, relay);
   registerMcpRoutes(router);
-  registerAgentRoutes(router);
+  registerAgentRoutes(router, turns);
 
   if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay);
 

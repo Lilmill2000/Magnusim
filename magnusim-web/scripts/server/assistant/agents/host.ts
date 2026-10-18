@@ -11,12 +11,20 @@
  *   same synchronous step as its other start checks (reserve()).
  * - An agent is always tree-killed when its conversation is forgotten, expires or is evicted
  *   (Conversations.onDrop), after 15 minutes idle, when its allow switch goes off or a custom
- *   agent is removed (the discovery hooks: stopAgent), when its session crashed or a start
- *   failed, and when the server lifetime that started it shuts down (AssistantHandle.shutdown()
- *   calls endLifetime(manager) explicitly, superseded lifetime or not: its turns end
- *   failed/shutdown) or the process stops (endAll, from an onAssistantShutdown hook).
+ *   agent is removed (the discovery hooks: stopAgent), when its session crashed (the moment its
+ *   process exits, a turn on it or not: its helpers and job go too) or a start failed, when it
+ *   switched itself to a mode outside the allowed ones or (own tools off) used its own tool
+ *   between prompts (AgentSession onOffence: at once; the tripwire is recorded), and when the
+ *   server lifetime that started it shuts down (AssistantHandle.shutdown() calls
+ *   endLifetime(manager) explicitly, superseded lifetime or not: its turns end failed/shutdown,
+ *   its Test and sign-in runs stop) or the process stops (endAll, from an onAssistantShutdown
+ *   hook).
  * - A conversation whose earlier agent ended (idle, a crash) gets a new session at its next
- *   turn, with a note that the agent doesn't remember the earlier messages.
+ *   turn, with a note that the agent doesn't remember the earlier messages (and why, when it
+ *   was an offence between prompts).
+ * - The allow switch going off (stopAgent) marks that agent at once (offEpoch / offSince): a
+ *   turn, Test or sign-in whose checks read the settings before it re-checks before it takes
+ *   its slot, so none starts on a switch that went off meanwhile.
  *
  * Test switches (honoured only with MAGNUSIM_TEST_ASSISTANT=1 in a test home, else ignored with
  * a log line): MAGNUSIM_TEST_ASSISTANT_AGENT_IDLE_MS, _AGENT_CANCEL_MS and _AGENT_GATE_MS (whole
@@ -33,7 +41,7 @@ import { errorResult, type RunResult } from '../runner.ts';
 import { assistantState } from '../state.ts';
 import type { KnownAgent } from './known.ts';
 import { agentTestSwitches, testHomeEnv } from './discover.ts';
-import { AgentSession, type FoundAgent } from './session.ts';
+import { AgentSession, type AgentOffence, type FoundAgent } from './session.ts';
 
 export const AGENT_MAX = 2;
 export const AGENT_IDLE_MS = 15 * 60_000;
@@ -127,9 +135,11 @@ interface Entry {
   inUse: boolean;
   idleTimer: unknown;
   since: number;
+  /** Records the lockdown tripwire for this agent (the turns' own recorder). */
+  onLockdownFailed: (() => void) | null;
 }
 
-interface Transient {
+export interface Transient {
   agentId: string;
   manager: object | null;
   session: AgentSession | null;
@@ -148,6 +158,8 @@ export interface SessionStart {
   /** The turn's dispatch: set before session/new, so the agent's first list is the turn's tools. */
   dispatch: AgentDispatch;
   signal: AbortSignal;
+  /** Records the lockdown tripwire for this agent when it fires between prompts. */
+  onLockdownFailed?: () => void;
 }
 
 export interface Acquired {
@@ -156,6 +168,8 @@ export interface Acquired {
   restarted: boolean;
   /** A new process was started for this turn. */
   fresh: boolean;
+  /** The earlier agent was ended for an offence between prompts no turn reported (a note says so). */
+  offence: AgentOffence['code'] | null;
 }
 
 /** What tests set (their own temp folder, shorter timings); null each: the default. */
@@ -172,6 +186,11 @@ export class AgentHost {
   private readonly transients = new Set<Transient>();
   /** Conversations that had an agent: a new one says it doesn't remember. */
   private readonly hadAgent = new Set<string>();
+  /** Conversations whose agent was ended for an offence between prompts no turn reported. */
+  private readonly offended = new Map<string, AgentOffence['code']>();
+  /** Bumped (synchronously) by every stopAgent: see offEpoch(). */
+  private offCount = 0;
+  private readonly offAt = new Map<string, { epoch: number; text: string }>();
   private test: AgentHostTestOptions = {};
   private reported = new Set<string>();
 
@@ -244,12 +263,25 @@ export class AgentHost {
       if (!idle) return false;
       this.endEntry(idle, 'evicted');
     }
-    this.entries.set(conversation, { conversation, agentId, manager, clock, session: null, dispatch: new SessionDispatch(), inUse: true, idleTimer: null, since: clock.now() });
+    this.entries.set(conversation, {
+      conversation,
+      agentId,
+      manager,
+      clock,
+      session: null,
+      dispatch: new SessionDispatch(),
+      inUse: true,
+      idleTimer: null,
+      since: clock.now(),
+      onLockdownFailed: null,
+    });
     return true;
   }
 
   /** The conversation's session for its turn: the one kept (same command), else a new one, started. */
   async acquire(o: SessionStart): Promise<Acquired> {
+    // A turn stopped while it got here starts nothing.
+    if (o.signal.aborted) throw o.signal.reason ?? new Error('aborted');
     let e = this.entries.get(o.conversation);
     if (!e) {
       // Its slot went meanwhile (a drop or a lifetime's end): take one again, or none.
@@ -257,14 +289,22 @@ export class AgentHost {
       e = this.entries.get(o.conversation) as Entry;
     }
     e.dispatch.setCurrent(o.dispatch);
+    e.onLockdownFailed = o.onLockdownFailed ?? null;
     const kept = e.session;
-    // Kept only when it is ready for a message: one still answering a cancel (or starting) is replaced.
-    if (kept && kept.alive && kept.agent.fingerprint === o.agent.fingerprint && kept.state === 'ready') {
-      return { session: kept, restarted: false, fresh: false };
+    // Kept only when it is ready for a message (one still answering a cancel, or starting, is
+    // replaced) and did nothing between prompts that ends it (a mode it isn't allowed in).
+    if (kept && kept.alive && kept.agent.fingerprint === o.agent.fingerprint && kept.state === 'ready' && !kept.offence && kept.modeAllowed(kept.mode)) {
+      return { session: kept, restarted: false, fresh: false, offence: null };
     }
-    if (kept) void kept.end(kept.alive ? 'command_changed' : 'ended');
+    if (kept) {
+      if (kept.alive && !kept.offence && !kept.modeAllowed(kept.mode)) this.offended.set(o.conversation, 'agent_mode');
+      else if (kept.offence && !kept.offenceTold) this.offended.set(o.conversation, kept.offence.code);
+      void kept.end(kept.alive ? 'command_changed' : 'ended');
+    }
     const restarted = this.hadAgent.has(o.conversation);
     this.hadAgent.add(o.conversation);
+    const offence = this.offended.get(o.conversation) ?? null;
+    this.offended.delete(o.conversation);
     const binding = mintBinding({ conversation: o.conversation, agent: o.agent.id, dispatch: e.dispatch });
     setBindingDispatch(binding.id, e.dispatch);
     const where = this.placement();
@@ -279,10 +319,11 @@ export class AgentHost {
       ...(where.tmp ? { tmp: where.tmp } : {}),
       ...(this.test.graceMs ? { graceMs: this.test.graceMs } : {}),
       onExit: (s) => this.sessionExited(s),
+      onOffence: (s, off) => this.sessionOffended(s, off),
     });
     e.session = session;
     await session.start(o.signal);
-    return { session, restarted, fresh: true };
+    return { session, restarted, fresh: true, offence };
   }
 
   /** The turn on `conversation` ended: its session stays for the next message, until the idle end. */
@@ -292,8 +333,15 @@ export class AgentHost {
     if (dispatch && e.dispatch.current === dispatch) e.dispatch.setCurrent(null);
     e.inUse = false;
     e.since = e.clock.now();
-    if (!e.session || !e.session.alive) {
+    const s = e.session;
+    if (!s || !s.alive || s.offence) {
       this.entries.delete(conversation);
+      if (s) {
+        if (s.offence && !s.offenceTold) this.offended.set(conversation, s.offence.code);
+        // Ended or not, the tree kill (idempotent): an agent that exited by itself leaves its
+        // helpers, its job and its working folder otherwise.
+        void s.end(s.offence ? s.offence.code : 'exited');
+      }
       return;
     }
     e.clock.clearTimeout(e.idleTimer);
@@ -305,11 +353,35 @@ export class AgentHost {
   }
 
   private sessionExited(s: AgentSession): void {
-    for (const e of this.entries.values()) {
+    for (const e of [...this.entries.values()]) {
       if (e.session !== s) continue;
-      // While a turn runs on it, the turn ends it (agent_exited) and frees the slot.
-      if (!e.inUse) this.endEntry(e, 'exited');
+      // While a turn runs on it, the turn ends (agent_exited) and frees the slot.
+      if (!e.inUse) void this.endEntry(e, 'exited');
     }
+    // The tree kill whatever runs on it: its helpers and job (POSIX: its group), its folder.
+    void s.end('exited');
+  }
+
+  /**
+   * The agent did something between prompts that ends it (session.ts AgentOffence): the tree
+   * kill at once, and the tripwire recorded. A turn holding it ends with it before its prompt;
+   * otherwise the conversation's next turn says why its agent was started again.
+   */
+  private sessionOffended(s: AgentSession, off: AgentOffence): void {
+    for (const e of [...this.entries.values()]) {
+      if (e.session !== s) continue;
+      if (off.code === 'agent_lockdown') {
+        try {
+          e.onLockdownFailed?.();
+        } catch {
+          /* recorded best effort; the agent still ends */
+        }
+      }
+      if (e.inUse) continue;
+      this.offended.set(e.conversation, off.code);
+      void this.endEntry(e, off.code);
+    }
+    void s.end(off.code);
   }
 
   private endEntry(e: Entry, why: string): Promise<void> {
@@ -332,6 +404,7 @@ export class AgentHost {
   /** The conversation was forgotten, expired or evicted: its agent ends. */
   endConversation(conversation: string, why: string): void {
     this.hadAgent.delete(conversation);
+    this.offended.delete(conversation);
     const e = this.entries.get(conversation);
     if (e) void this.endEntry(e, why);
   }
@@ -370,10 +443,28 @@ export class AgentHost {
   }
 
   /**
+   * A mark taken before a start's first await (a turn's settings read, a Test's prepare): with
+   * offSince(), whether that agent was stopped (its switch went off, it was removed) since, so a
+   * start whose checks read the old settings re-checks before it takes its slot.
+   */
+  offEpoch(): number {
+    return this.offCount;
+  }
+
+  /** Whether stopAgent ran for `agentId` after `epoch` (its text), or null. */
+  offSince(agentId: string, epoch: number): { text: string } | null {
+    const o = this.offAt.get(agentId);
+    return o && o.epoch > epoch ? { text: o.text } : null;
+  }
+
+  /**
    * That agent's running turns stop (`stopped`, with `text`), its Test or sign-in runs end, and
    * every process of it is tree-killed, kept sessions included; resolves once they are gone.
    */
   async stopAgent(agentId: string, text: string): Promise<void> {
+    // Synchronously, before anything awaits: a start between its checks and its slot sees it.
+    this.offCount += 1;
+    this.offAt.set(agentId, { epoch: this.offCount, text });
     const stops: Array<Promise<void>> = [];
     for (const t of runningTurns()) if (t.agentId === agentId) t.turn.stop('agent_off', text, 'stopped');
     for (const tr of [...this.transients]) {
@@ -411,6 +502,7 @@ export class AgentHost {
       if (tr.session) void tr.session.end(why);
     }
     this.hadAgent.clear();
+    this.offended.clear();
   }
 
   /** The test state route: each conversation's agent (pid, state, how its tree is stopped). */

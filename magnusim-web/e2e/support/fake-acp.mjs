@@ -23,12 +23,15 @@
 //                                 fake-acp-agent.mjs lists them)
 //   script(...steps)              queues one prompt's steps (one call = one prompt, in order)
 //   release(name)                 lets a `hold` step go (before or after it is reached)
-//   records()                     everything the fakes recorded: {seq, pid, dir:'in'|'out', msg}
-//                                 or {seq, pid, event, ...}, in each fake's order
-//   received(pid?) / sent(pid?)   the messages a fake got / sent (all fakes when pid is left out)
-//   events(name?)                 the fakes' own events (mcp_tools, mcp_result, permission_outcome,
-//                                 holding, fs_answer, env, exit, ...)
-//   pids(role?)                   [{pid, role: 'agent'|'helper'|'mcp', agent}] the fakes reported
+//   records()                     everything the fakes recorded: {seq, pid, instance, dir:'in'|'out',
+//                                 msg} or {seq, pid, instance, event, ...}, in each fake's order
+//                                 (instance: the fake process's own random id)
+//   received(pid?) / sent(pid?)   the messages a fake got / sent (all fakes when pid is left out);
+//                                 a pid means the last fake that reported it (the OS reuses pids)
+//   events(name?, pid?)           the fakes' own events (mcp_tools, mcp_result, permission_outcome,
+//                                 holding, fs_answer, env, exit, ...), of that fake when pid is given
+//   of(pid)                       a record predicate: the last fake that reported that pid
+//   pids(role?)                   [{pid, role: 'agent'|'helper'|'mcp', agent, instance}] the fakes reported
 //   waitFor(pred, ms?)            resolves with the first record pred accepts (earlier ones
 //                                 included); rejects after ms (default 10 s)
 //   signIn() / signOut()          the sign-in marker file that requireSignIn checks
@@ -101,13 +104,13 @@ export async function startFakeAcp(options = {}) {
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/pids') {
-      for (const pid of body.pids || []) pidList.push({ pid, role: body.role, agent: body.pid, atStart: !!body.atStart });
-      add({ seq: null, pid: body.pid, event: 'pids', role: body.role, pids: body.pids || [] });
+      for (const pid of body.pids || []) pidList.push({ pid, role: body.role, agent: body.pid, instance: body.instance ?? null, atStart: !!body.atStart });
+      add({ seq: null, pid: body.pid, instance: body.instance ?? null, event: 'pids', role: body.role, pids: body.pids || [] });
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/prompt') {
       const steps = prompts.shift() || [];
-      add({ seq: null, pid: body.pid, event: 'prompt', sessionId: body.sessionId, prompt: body.prompt, steps });
+      add({ seq: null, pid: body.pid, instance: body.instance ?? null, event: 'prompt', sessionId: body.sessionId, prompt: body.prompt, steps });
       return json(res, 200, { steps });
     }
     return json(res, 404, { ok: false });
@@ -116,7 +119,17 @@ export async function startFakeAcp(options = {}) {
   const url = `http://127.0.0.1:${server.address().port}`;
   const argv = [process.execPath, FAKE_ACP_AGENT, '--control', url];
 
-  const byPid = (pid) => (r) => pid == null || r.pid === pid;
+  /** The instance of the last fake that reported `pid` as its own (null: none reported it). */
+  const instanceOf = (pid) => {
+    for (let i = pidList.length - 1; i >= 0; i -= 1) if (pidList[i].role === 'agent' && pidList[i].pid === pid) return pidList[i].instance;
+    return null;
+  };
+  /** That fake's records only: the pid, and the instance of the last fake that had it. */
+  const byPid = (pid) => {
+    if (pid == null) return () => true;
+    const instance = instanceOf(pid);
+    return (r) => r.pid === pid && (instance == null || r.instance === instance);
+  };
 
   return {
     url,
@@ -156,9 +169,10 @@ export async function startFakeAcp(options = {}) {
       for (const w of h.waiters.splice(0)) w();
     },
     records: () => [...all],
-    received: (pid) => all.filter((r) => r.dir === 'in' && byPid(pid)(r)).map((r) => r.msg),
-    sent: (pid) => all.filter((r) => r.dir === 'out' && byPid(pid)(r)).map((r) => r.msg),
-    events: (name) => all.filter((r) => r.event && (!name || r.event === name)),
+    received: (pid) => all.filter(byPid(pid)).filter((r) => r.dir === 'in').map((r) => r.msg),
+    sent: (pid) => all.filter(byPid(pid)).filter((r) => r.dir === 'out').map((r) => r.msg),
+    events: (name, pid) => all.filter(byPid(pid)).filter((r) => r.event && (!name || r.event === name)),
+    of: (pid) => byPid(pid),
     pids: (role) => pidList.filter((p) => !role || p.role === role),
     waitFor(pred, ms = 10_000) {
       const found = all.find(pred);

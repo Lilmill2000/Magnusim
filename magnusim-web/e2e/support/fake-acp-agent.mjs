@@ -57,11 +57,14 @@
 //   {stop: reason}                           ends the prompt (end_turn, ..., 'error')
 //   {error: {code, message}}                 session/prompt answers with this error
 //   {update: {...}}                          a raw session/update
+//   {later: {update, hold?}}                 a raw session/update sent after this prompt's answer
+//                                            (between prompts), once release(hold) when given
 //   {request: {method, params}}              a raw request to the client; its answer is recorded
 // Without a {stop} the prompt ends end_turn after its last step; session/cancel ends it
 // cancelled. Unknown requests get -32601, and it sends fs/read_text_file once per session to
 // check that the client refuses it.
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { join } from 'node:path';
@@ -162,9 +165,12 @@ function control(method, path, body) {
 
 let seq = 0;
 let posting = Promise.resolve();
+// This process's own id on every record: the OS reuses pids, so a pid alone can merge two fakes'
+// records.
+const INSTANCE = randomBytes(8).toString('hex');
 /** POSTs in order, one at a time. */
 function post(path, body) {
-  const payload = { ...body, pid: process.pid };
+  const payload = { ...body, pid: process.pid, instance: INSTANCE };
   posting = posting.then(() => control('POST', path, payload)).catch(() => {});
   return posting;
 }
@@ -474,6 +480,9 @@ async function runStep(p, raw) {
     case 'update':
       sessionUpdate(p.sessionId, v);
       return;
+    case 'later':
+      p.later.push(v);
+      return;
     case 'request': {
       const answer = await requestClient(v.method, v.params ?? {});
       record({ event: 'request_answer', method: v.method, answer });
@@ -488,7 +497,7 @@ async function runPrompt(id, params) {
   const sessionId = params?.sessionId;
   if (!sessions.has(sessionId)) return replyError(id, -32602, `unknown session ${sessionId}`);
   if (current) return replyError(id, -32603, 'a prompt is already running');
-  const p = { id, sessionId, cancelled: false, ignoreCancel: false, cancelWaiters: [], stopReason: null, error: null, ownSeen: new Set() };
+  const p = { id, sessionId, cancelled: false, ignoreCancel: false, cancelWaiters: [], stopReason: null, error: null, ownSeen: new Set(), later: [] };
   current = p;
   try {
     const { steps } = await postJson('/prompt', { sessionId, prompt: params.prompt });
@@ -501,14 +510,22 @@ async function runPrompt(id, params) {
     log(`prompt failed: ${err?.message || err}`);
   }
   current = null;
-  if (p.error) return replyError(id, p.error.code ?? -32603, p.error.message ?? 'error');
-  if (p.cancelled && !p.ignoreCancel) return reply(id, { stopReason: 'cancelled' });
-  reply(id, { stopReason: p.stopReason || 'end_turn' });
+  if (p.error) replyError(id, p.error.code ?? -32603, p.error.message ?? 'error');
+  else if (p.cancelled && !p.ignoreCancel) reply(id, { stopReason: 'cancelled' });
+  else reply(id, { stopReason: p.stopReason || 'end_turn' });
+  // Between prompts: what it sends after its answer.
+  for (const l of p.later) {
+    if (l.hold) {
+      await record({ event: 'holding', name: l.hold });
+      await getJson(`/hold?name=${encodeURIComponent(l.hold)}`);
+    }
+    sessionUpdate(sessionId, l.update);
+  }
 }
 
 async function postJson(path, body) {
   await posting;
-  return control('POST', path, { ...body, pid: process.pid });
+  return control('POST', path, { ...body, pid: process.pid, instance: INSTANCE });
 }
 
 function sessionModes() {

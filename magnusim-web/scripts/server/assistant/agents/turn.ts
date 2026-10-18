@@ -146,6 +146,9 @@ export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its ow
 export const LOCKDOWN_TEXT = (name: string) => `${name}'s own tools were not off as expected, so Magnusim stopped it. It now needs Allow this agent in Settings → Assistant.`;
 export const AGENT_PRIVACY_DENIED_CALL_TEXT = 'Settings → Assistant is set to never send project data off this PC now, so this tool did not run. Nothing more was sent.';
 export const AGENT_PRIVACY_DECLINED_TEXT = "The person didn't allow this project's data to be sent, so the tool did not run. Nothing more was sent.";
+/** A turn with no app tab can't ask (only the Magnusim window answers an agent's privacy question). */
+export const AGENT_PRIVACY_NO_WINDOW_TEXT = (name: string, nothing: string) =>
+  `Sending this project to ${name} needs your answer in the Magnusim window, so ask from the project's window. ${nothing}`;
 
 /** The stop reason's end (spec 4.7). */
 export function stopReasonEnd(reason: string | null, name: string): EndInfo {
@@ -312,6 +315,12 @@ class AgentTurnRun implements AgentDispatch {
       this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: nothing });
       return false;
     }
+    // The question is link_only: with no tab nobody could see or answer it (a Home turn that
+    // names a project, the CLI's --project), so it isn't asked.
+    if (!t.tab) {
+      this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, nothing) });
+      return false;
+    }
     const prev = t.state;
     t.setState('awaiting_consent');
     t.pause();
@@ -354,9 +363,9 @@ class AgentTurnRun implements AgentDispatch {
       this.halt({ state: 'stopped', reason: 'privacy', message: NOTHING_MORE_SENT }, false);
       return errorResult(call, 'privacy_denied', AGENT_PRIVACY_DENIED_CALL_TEXT);
     }
-    // An answer forgotten mid-turn asks again.
+    // An answer forgotten mid-turn asks again (in the window; with no tab the turn ends).
     if (await this.requirePrivacy(false)) return null;
-    return errorResult(call, 'declined', AGENT_PRIVACY_DECLINED_TEXT);
+    return errorResult(call, 'declined', this.t.tab ? AGENT_PRIVACY_DECLINED_TEXT : AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, NOTHING_MORE_SENT));
   }
 
   // ------------------------------------------------------------ ending early
@@ -406,7 +415,15 @@ class AgentTurnRun implements AgentDispatch {
 
   private onUpdate(u: AgentUpdate): void {
     const t = this.t;
-    if (t.ended) return;
+    if (t.ended) {
+      // The turn is over but its prompt is still out (a crash of the turn, the cancel wait):
+      // nothing more is logged, but the agent is still checked.
+      if (u.kind === 'tool') {
+        if (this.matcher.tool(u) === null && t.settings.agent.lockdown === 'tools_off') this.tripwire();
+      } else if (u.kind === 'mode') this.modeSeen(u.mode);
+      else if (u.kind === 'config' && u.mode !== null) this.modeSeen(u.mode);
+      return;
+    }
     switch (u.kind) {
       case 'text':
         t.onStream(1 + t.calls, { kind: 'text', text: u.text });
@@ -480,11 +497,18 @@ class AgentTurnRun implements AgentDispatch {
   private async onPermission(view: PermissionView): Promise<string | null> {
     const t = this.t;
     const title = cleanText(redact(view.title), 200) || cleanText(view.kind ?? '', 64) || 'a tool';
+    const ours = this.matcher.permission(view);
+    if (!ours && t.settings.agent.lockdown === 'tools_off') {
+      // The tripwire, stopping or not: answered at once (before the tree kill answers it `cancelled`).
+      const reject = pickOption(view.options, ['reject_once']);
+      this.session?.answerNow(view, reject);
+      this.tripwire();
+      return reject;
+    }
     if (t.ended || t.signal.aborted || this.pendingEnd) {
       if (!t.ended) t.emit({ type: 'agent_permission', title, outcome: 'cancelled', by: 'stop' });
       return null;
     }
-    const ours = this.matcher.permission(view);
     if (ours) {
       const allow = pickOption(view.options, ['allow_once']);
       if (allow) {
@@ -492,12 +516,6 @@ class AgentTurnRun implements AgentDispatch {
         return allow;
       }
       // No allow_once: never allow_always (it would allow the tool for good inside the agent). A question.
-    } else if (t.settings.agent.lockdown === 'tools_off') {
-      // The tripwire: answered at once (before the tree kill answers it `cancelled`).
-      const reject = pickOption(view.options, ['reject_once']);
-      this.session?.answerNow(view, reject);
-      this.tripwire();
-      return reject;
     }
     if (!t.tab) {
       t.note(HOME_OWN_TOOL_NOTE(this.name));
@@ -586,27 +604,41 @@ class AgentTurnRun implements AgentDispatch {
         return;
       }
       // Before the session: the agent never lists the project's tools without consent.
-      if (!(await this.requirePrivacy(true))) return;
+      if (!(await this.requirePrivacy(true))) {
+        // Stop, or the allow switch going off, while it asked: as that stop says.
+        this.stoppedNow();
+        return;
+      }
       if (this.stoppedNow()) return;
     }
 
     let fresh: boolean;
     try {
+      const agentId = t.settings.agent.id;
       const got = await d.host.acquire({
         conversation: t.conv.id,
         agent: t.settings.agent,
         known: d.known,
-        prefs: { model: t.settings.model || null, mode: (await d.settings()).agents[t.settings.agent.id]?.mode ?? null },
+        prefs: { model: t.settings.model || null, mode: (await d.settings()).agents[agentId]?.mode ?? null },
         version: await d.version(),
         manager: d.manager,
         clock: d.clock,
         dispatch: this,
         signal: t.signal,
+        // The tripwire between prompts is recorded as the turn's own is.
+        onLockdownFailed: () => {
+          void d
+            .version()
+            .then((v) => d.lockdownFailed(agentId, v))
+            .catch(() => {});
+        },
       });
       this.session = got.session;
       fresh = got.fresh;
       if (got.fresh) for (const n of got.session.notes) t.note(n);
       if (got.restarted) t.note(RESTARTED_TEXT(this.name));
+      // Why the earlier agent was ended between messages.
+      if (got.offence) t.note(got.offence === 'agent_lockdown' ? LOCKDOWN_TEXT(this.name) : MODE_TEXT(this.name));
     } catch (err) {
       if (this.stoppedNow()) return;
       if ((err as { code?: unknown } | null)?.code === 'agents_busy') {
@@ -638,6 +670,15 @@ class AgentTurnRun implements AgentDispatch {
     let promptP: Promise<{ r: string | null } | { e: unknown }> | null = null;
     try {
       if (this.stoppedNow()) return;
+      // What it did since its last prompt (or its start): checked after the last await, so nothing
+      // lands between this and the prompt's handlers.
+      const offence = session.offence?.code ?? (session.alive && !session.modeAllowed(session.mode) ? 'agent_mode' : null);
+      if (offence) {
+        session.offenceTold = true;
+        void d.host.endSession(t.conv.id, session, offence);
+        t.end('failed', offence, offence === 'agent_lockdown' ? LOCKDOWN_TEXT(this.name) : MODE_TEXT(this.name));
+        return;
+      }
       const blocks = this.blocks(session, fresh);
       t.setState('model');
       this.promptPending = true;
@@ -747,6 +788,12 @@ export async function runAgentTurn(t: AgentRunTurn, d: AgentTurnDeps): Promise<v
   const run = new AgentTurnRun(t, d, d.host.timings());
   try {
     await run.main();
+    // A turn stopped on a path that returned without ending it ends as its Stop says (never
+    // "ended without an answer").
+    if (!t.ended && t.signal.aborted) {
+      const s = t.stopEnd();
+      t.end(s.state, s.reason, s.message);
+    }
   } finally {
     run.close();
     d.host.release(t.conv.id, run);
