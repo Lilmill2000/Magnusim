@@ -8,18 +8,19 @@
 // Covered: the rows (Claude Code found through its own package at its checked version, so its
 // own tools are off, and signed out until its login file exists, then ready after Refresh;
 // Codex found and signed in, but its own tools stay on, so it is off until allowed; the others
-// missing, with their install line and Copy); the Default choice offering the agents found
-// beside a saved API key (D-A); a custom agent added with a variable to pass, its allow switch
-// (the question with Don't focused, Enter answering Don't, Allow, off with no question), the
-// allow routes refused without the page's Origin, the switch asked again once the program's
-// path changed (Turn off clearing the old allow), and Remove. No agent is ever started for a message here (the Test and agent
-// turns are the next commit's): the fake's controller records none, and every launcher start
-// (discovery's --version probes, which never reach the controller) writes its pid, each one
-// ended by the time the spec does.
-//
-// A server with agent turns (its POST /api/assistant/agents/test answers anything but the
-// router's bare 404) must also: carry the agent limits in its status (shown under Limits),
-// take a coding agent as the default, and say in each row which modes Magnusim uses with it.
+// missing, with their install line and Copy; each row says which modes Magnusim uses with it);
+// signing in (connect again hears the agent ask for it: the Sign in block shows the terminal
+// command the agent sent, as its program's name, and Copy puts it on the clipboard; signed in,
+// connect again connects; the Test calls Magnusim's test tool; the Model and Mode the agent
+// listed, the modes only those Magnusim uses); the Default choice offering the agents found
+// beside a saved API key (D-A), a coding agent as the default keeping every key, and the
+// coding agents' limits shown and saved; a custom agent added with a variable to pass, its
+// allow switch (the question with Don't focused, Enter answering Don't, Allow, off with no
+// question), the allow routes refused without the page's Origin, the switch asked again once
+// the program's path changed (Turn off clearing the old allow), and Remove. Every launcher
+// start (discovery's --version probes, which never reach the controller, and each agent
+// started) writes its pid; every one, and every process an agent reported to the controller
+// (itself, its MCP bridge), has ended by the time the spec does.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
@@ -55,8 +56,8 @@ let home;
 let pidsFile;
 let launchers;
 let launcherCount = 0;
-/** This server runs coding agents' turns (its Test route is there). */
-let agentTurns = false;
+/** What the scripted agent says it is (the Test's line names its version). */
+const CLAUDE_FAKE = Object.freeze({ style: 'tool_name_meta', agentInfo: { name: 'claude-agent-acp', title: 'Claude Code', version: CLAUDE.version }, requireSignIn: false, authMethods: [] });
 
 const api = (path) => `${host.base}${path}`;
 
@@ -104,15 +105,9 @@ function isRunning(pid) {
   }
 }
 
-/**
- * Whether the server runs coding agents' turns: its Test route answers anything but the router's
- * bare 404 (no code). The probe names no agent, so nothing is started.
- */
-async function hasAgentTurns() {
-  const r = await fetch(api('/api/assistant/agents/test'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'zz-no-such-agent', message: false }) });
-  const body = await r.json().catch(() => ({}));
-  return r.status !== 404 || typeof body?.code === 'string';
-}
+/** Every process an agent reported to the controller (itself, its MCP bridge, its helpers) and every launcher start. */
+const everyPid = () => [...new Set([...fake.pids().map((p) => p.pid), ...(existsSync(pidsFile) ? launcherPids() : [])])];
+
 const winRel = (...parts) => parts.join('/').split('/').join('\\');
 
 /** npm's Windows shim for a script inside <dir>/node_modules (what discovery parses, never runs). */
@@ -177,8 +172,9 @@ function settingsFile() {
   return JSON.parse(readFileSync(file, 'utf8'));
 }
 
-async function agentsNow(request) {
-  const r = await request.get(api('/api/assistant/agents'));
+/** The agents' rows (refresh: looked for again, each version and login file read anew). */
+async function agentsNow(request, refresh = false) {
+  const r = await request.get(api(`/api/assistant/agents${refresh ? '?refresh=1' : ''}`));
   expect(r.status()).toBe(200);
   return (await r.json()).agents;
 }
@@ -204,7 +200,7 @@ async function recordClipboard(page) {
 
 test.beforeAll(async () => {
   test.setTimeout(240_000);
-  fake = await startFakeAcp({ style: 'tool_name_meta' });
+  fake = await startFakeAcp(CLAUDE_FAKE);
   llm = await startFakeLlm();
   const tmp = e2eTemp('assistant-agents');
   const prefix = join(tmp, 'npm');
@@ -235,33 +231,37 @@ test.beforeAll(async () => {
   // The switches hold (else discovery would look at this PC's own agents): stop here.
   const status = await (await fetch(api('/api/assistant/status'))).json();
   expect(status.test_provider, 'the cloud providers go to the fake').toBe(true);
-  agentTurns = await hasAgentTurns();
 });
 
 test.beforeEach(async ({ request }) => {
-  // Each test from the start: no settings, keys, custom agents or switches; Claude Code not
-  // signed in; the custom program only where the npm prefix is.
+  // Each test from the start: no settings, keys, custom agents, switches or agents running;
+  // Claude Code not signed in; the custom program only where the npm prefix is; the scripted
+  // agent as it starts by default.
   await resetAssistant(request, host.base);
+  fake.configure(CLAUDE_FAKE);
+  fake.signOut();
   removeTreeSync(join(home, '.claude'));
   removeTreeSync(first);
   mkdirSync(first, { recursive: true });
 });
 
+test.afterEach(async ({ request }) => {
+  // The reset ends every agent: nothing an agent or a launcher started is left running.
+  await resetAssistant(request, host.base);
+  await expect.poll(() => everyPid().filter(isRunning), { timeout: 15_000, message: 'no agent, bridge or launcher process left running' }).toEqual([]);
+});
+
 test.afterAll(async () => {
   // Read before the host goes (it removes its temp folder, the pids file with it).
   const started = pidsFile && existsSync(pidsFile) ? launcherPids() : [];
+  const reported = fake ? fake.pids().map((p) => p.pid) : [];
   if (host) host.stop();
   if (llm) await llm.stop();
   try {
-    if (fake) {
-      // Nothing here starts an agent for a message or a connect: the controller heard from none.
-      expect(fake.pids(), 'no agent process reported to the controller').toEqual([]);
-      expect(fake.records(), 'no agent talked to the controller').toEqual([]);
-    }
     if (host) {
-      // Every launcher start (discovery's --version probes) has ended: none left running.
+      // Every launcher start (discovery's --version probes, each agent started) has ended.
       expect(started.length, 'the launcher wrote the pids of the probes it ran').toBeGreaterThan(0);
-      await expect.poll(() => started.filter(isRunning), { timeout: 15_000, message: 'no launcher process left running' }).toEqual([]);
+      await expect.poll(() => [...started, ...reported].filter(isRunning), { timeout: 15_000, message: 'no agent or launcher process left running' }).toEqual([]);
     }
   } finally {
     if (fake) await fake.stop();
@@ -335,11 +335,92 @@ test('rows: each known agent found or missing, with its sign-in state; Claude Co
   await expect(defaults.locator('[data-assistant-default-option="agent:claude"] [data-assistant-dot]')).toHaveAttribute('data-assistant-dot', 'ready');
   const rows = await agentsNow(request);
   expect(rows.find((r) => r.id === 'claude')).toMatchObject({ found: true, verified_package: true, lockdown: 'tools_off', signed_in: 'yes', ready: true });
-  if (agentTurns) {
-    // Each row says which modes Magnusim uses with the agent (the Mode select offers only those).
-    expect(rows.find((r) => r.id === 'claude').allowed_modes).toContain('default');
-    expect(rows.find((r) => r.id === 'codex').allowed_modes).toEqual(['read-only']);
-  }
+  // Each row says which modes Magnusim uses with the agent (the Mode select offers only those).
+  expect(rows.find((r) => r.id === 'claude').allowed_modes).toEqual(['default']);
+  expect(rows.find((r) => r.id === 'codex').allowed_modes).toEqual(['read-only']);
+  expect(rows.find((r) => r.id === 'opencode').allowed_modes).toBe('initial');
+});
+
+test("signing in: connect again hears Claude Code ask for it, and the Sign in block shows its terminal command (Copy); signed in, it connects; the Test calls Magnusim's test tool; the Model and Mode it listed (only the modes Magnusim uses) are saved", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await recordClipboard(page);
+  // The agent's own way to sign in, as the real adapter sends it: Magnusim's Node, its own script and safe arguments.
+  const listed = (await agentsNow(request)).find((r) => r.id === 'claude');
+  expect(listed.script, 'the resolved script').toBeTruthy();
+  fake.configure({
+    requireSignIn: true,
+    authMethods: [
+      {
+        id: 'claude-login',
+        name: 'Log in with your account',
+        type: 'terminal',
+        args: ['--cli', 'auth', 'login'],
+        _meta: { 'terminal-auth': { command: process.execPath, args: [listed.script, '--cli', 'auth', 'login'], label: 'Log in' } },
+      },
+    ],
+  });
+  await page.goto(`${host.base}/#/`);
+  await openAssistantStep(page);
+  const claude = rowOf(page, 'claude');
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'signed_out', { timeout: 30_000 });
+  const signIn = claude.getByRole('group', { name: 'Sign in to Claude Code' });
+  // Nothing heard from the agent yet: its own documentation, no command.
+  await expect(signIn.locator('[data-assistant-agent-signin-docs]')).toHaveText('Sign in to Claude Code the way its own documentation says.');
+  await expect(signIn.locator('[data-assistant-agent-signin-command]')).toHaveCount(0);
+
+  // Connect again: the agent says it isn't signed in; the block shows the command it sent, as the program's name.
+  await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
+  await expect(claude.locator('[data-assistant-agent-result="failed"]')).toHaveText("Claude Code isn't signed in. Settings → Assistant shows how to sign in.");
+  const command = signIn.locator('[data-assistant-agent-signin-command="claude-login"]');
+  await expect(command).toHaveText(`${CLAUDE.program} --cli auth login`);
+  await signIn.locator('[data-assistant-agent-signin-copy="claude-login"]').click();
+  await expect(signIn.locator('[data-assistant-agent-signin-copied]')).toHaveText('Copied.');
+  expect(await page.evaluate(() => window.__copied)).toEqual([`${CLAUDE.program} --cli auth login`]);
+  // The server keeps the agent's ways to sign in on its row (sign_in), the command exactly as shown.
+  const asked = (await agentsNow(request)).find((r) => r.id === 'claude');
+  expect(asked.sign_in.methods).toEqual([expect.objectContaining({ id: 'claude-login', type: 'terminal', command: `${CLAUDE.program} --cli auth login` })]);
+  const startsBefore = fake.pids('agent').length;
+  expect(startsBefore, 'the connect check started the agent').toBeGreaterThan(0);
+  // It got no message: a connect check sends none.
+  expect(fake.received().filter((m) => m.method === 'session/prompt')).toEqual([]);
+
+  // Signed in (its own marker, and the login file): connect again connects.
+  fake.signIn();
+  signInClaude();
+  await signIn.getByRole('button', { name: "I've signed in: connect again" }).click();
+  await expect(claude.locator('[data-assistant-agent-result="ok"]')).toHaveText(`Connected to Claude Code ${CLAUDE.version}.`);
+  await expect(claude).toHaveAttribute('data-assistant-agent-state', 'ready');
+  await expect(claude.locator('[data-assistant-agent-line]')).toHaveText(`Claude Code ${CLAUDE.version} · ${LOGIN_YES} · ${OWN_TOOLS_OFF}`);
+  await expect(claude.locator('[data-assistant-agent-signin]')).toHaveCount(0);
+  const connected = (await agentsNow(request)).find((r) => r.id === 'claude');
+  expect(connected.sign_in).toBeNull();
+  expect(connected.last.modes.map((m) => m.id)).toEqual(['default', 'plan']);
+  expect(connected.last.models.map((m) => m.id)).toEqual(['fake-large', 'fake-small']);
+
+  // Model and Mode as it listed them: the modes only those Magnusim uses with it (not plan).
+  const model = claude.locator('select[data-assistant-agent-model]');
+  const mode = claude.locator('select[data-assistant-agent-mode]');
+  await expect(model.locator('option')).toHaveText(["The agent's own choice", 'Fake large', 'Fake small']);
+  await expect(mode.locator('option')).toHaveText(['The mode it starts in', 'Default']);
+  await model.selectOption('fake-small');
+  await expect.poll(async () => (await agentsNow(request)).find((r) => r.id === 'claude').model).toBe('fake-small');
+  expect(settingsFile().agents.claude).toMatchObject({ model: 'fake-small', mode: null });
+
+  // Test: one short message; the agent calls Magnusim's test tool, then answers.
+  fake.script({ call: { tool: 'connection_check', args: { word: 'ok' } } }, { say: 'done' });
+  await claude.getByRole('button', { name: 'Test' }).click();
+  await expect(claude.locator('[data-assistant-agent-result="ok"]')).toHaveText(
+    new RegExp(`^Claude Code ${CLAUDE.version.replace(/\./g, '\\.')} answered in \\d+\\.\\d s and called Magnusim's test tool\\. ${OWN_TOOLS_OFF.replace(/\./g, '\\.')}$`),
+    { timeout: 60_000 },
+  );
+  // The Test's session took the saved model, and its one prompt is the test message.
+  const testPid = fake.pids('agent').at(-1).pid;
+  const got = fake.received(testPid);
+  expect(got.find((m) => m.method === 'session/set_config_option' && m.params.configId === 'model')?.params.value).toBe('fake-small');
+  expect(got.filter((m) => m.method === 'session/prompt')).toHaveLength(1);
+  expect(fake.events('mcp_result', testPid)).toEqual([expect.objectContaining({ tool: 'connection_check', error: null })]);
+  // Each check ended its agent (the tree kill): none runs now.
+  await expect.poll(() => fake.pids().filter((p) => isRunning(p.pid)).map((p) => p.pid), { timeout: 15_000 }).toEqual([]);
 });
 
 /** Claude Code signed in: its login file exists (discovery only checks that it does). */
@@ -366,29 +447,37 @@ test('Default and keys side by side (D-A): an API key saved and the agents found
     "Billed to your Claude Code account; Magnusim's $ limits don't apply to it.",
   );
   await expect(pane.locator('[data-assistant-spent]')).toHaveText('Spent today (API keys): $0.00 of $15.00');
+  // The coding agents' limits (spec 4.10, the defaults after a reset): in the status, shown, and saved.
   const agentLimits = pane.getByRole('group', { name: 'Coding agents limits' });
-  if (agentTurns) {
-    // A server with agent turns carries their limits in its status (spec 4.10, the defaults after a reset), and they show.
-    expect(status.agent_caps, 'the status carries the agent limits').toEqual({ changes: 24, calls: 400, turn_minutes: 60 });
-    await expect(agentLimits.getByLabel('Changes per message')).toHaveValue('24');
-    await expect(agentLimits.getByLabel('Tool calls per message')).toHaveValue('400');
-    await expect(agentLimits.getByLabel('Minutes per message')).toHaveValue('60');
-  } else {
-    // A server without agent turns has no agent limits in its status, and the page shows none.
-    expect(status.agent_caps).toBeUndefined();
-    await expect(agentLimits).toHaveCount(0);
-  }
+  expect(status.agent_caps, 'the status carries the agent limits').toEqual({ changes: 24, calls: 400, turn_minutes: 60 });
+  await expect(agentLimits.getByLabel('Changes per message')).toHaveValue('24');
+  await expect(agentLimits.getByLabel('Tool calls per message')).toHaveValue('400');
+  await expect(agentLimits.getByLabel('Minutes per message')).toHaveValue('60');
+  await agentLimits.getByLabel('Changes per message').fill('30');
+  await agentLimits.getByLabel('Changes per message').press('Enter');
+  await expect.poll(async () => (await assistantStatus(request, host.base)).agent_caps).toEqual({ changes: 30, calls: 400, turn_minutes: 60 });
+  await expect(agentLimits.getByLabel('Changes per message')).toHaveValue('30');
+  expect(settingsFile().agent_caps).toEqual({ changes: 30, calls: 400, turn_minutes: 60 });
+  // Out of bounds: refused with the bounds, and nothing saved.
+  await agentLimits.getByLabel('Tool calls per message').fill('5');
+  await agentLimits.getByLabel('Tool calls per message').press('Enter');
+  await expect(agentLimits.locator('[data-assistant-cap-error="agent_calls"]')).toHaveText('This limit must be a whole number from 10 to 2,000.');
+  expect((await assistantStatus(request, host.base)).agent_caps.calls).toBe(400);
 });
 
 test('Default and keys side by side (D-A): the agent as the default keeps every key; back again, nothing is lost', async ({ page, request }) => {
   test.setTimeout(120_000);
-  // Keyed on the agent turns being there (not on the refusal's text): with them, this must run.
-  test.skip(!agentTurns, 'This server has no agent turns (no Test route), so it takes no coding agent as the default.');
-  const probe = await request.post(api('/api/assistant/settings'), { data: { provider: 'agent:claude' } });
-  const refusal = probe.ok() ? null : await probe.json();
-  expect(probe.status(), JSON.stringify(refusal)).toBe(200);
-  await request.post(api('/api/assistant/settings'), { data: { provider: 'anthropic' } });
   signInClaude();
+  // A coding agent as the default: the status' readiness is that agent's.
+  await agentsNow(request, true);
+  const asDefault = await request.post(api('/api/assistant/settings'), { data: { provider: 'agent:claude' } });
+  expect(asDefault.status(), JSON.stringify(await asDefault.json())).toBe(200);
+  expect(await asDefault.json()).toMatchObject({ provider: 'agent:claude', default_provider: 'agent:claude', ready: true, ready_reason: null });
+  removeTreeSync(join(home, '.claude'));
+  await agentsNow(request, true);
+  expect(await assistantStatus(request, host.base)).toMatchObject({ ready: false, ready_reason: 'agent_signed_out' });
+  signInClaude();
+  await request.post(api('/api/assistant/settings'), { data: { provider: 'anthropic' } });
   await page.goto(`${host.base}/#/`);
   let pane = await openAssistantStep(page);
   await expect(rowOf(page, 'claude')).toHaveAttribute('data-assistant-agent-state', 'ready', { timeout: 30_000 });
@@ -445,7 +534,7 @@ test("a custom agent: added with a variable to pass, off until allowed; the allo
   // Only this window may add or allow one: without the page's Origin, both are refused.
   const listed = (await agentsNow(request)).find((r) => r.id === id);
   expect(listed).toMatchObject({ kind: 'custom', needs_allow: true, allowed: false, ready: false, reason: 'agent_not_allowed' });
-  if (agentTurns) expect(listed.allowed_modes, 'a custom agent stays in the mode it starts in').toBe('initial');
+  expect(listed.allowed_modes, 'a custom agent stays in the mode it starts in').toBe('initial');
   const noOrigin = await request.post(api('/api/assistant/agents/allow'), { data: { id, allow: true, fingerprint: listed.fingerprint } });
   expect(noOrigin.status()).toBe(403);
   expect(await noOrigin.json()).toMatchObject({ code: 'browser_only' });

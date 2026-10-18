@@ -1211,6 +1211,42 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     assert.equal(key.json.providers_ready['agent:claude'].ready, true);
   });
 
+  it('the status and every settings answer carry the agent limits; each row says which modes Magnusim uses with it; an agent default says why it can’t run', async () => {
+    const DEFAULT_CAPS = { changes: 24, calls: 400, turn_minutes: 60 };
+    assert.deepEqual((await get('/api/assistant/status')).json.agent_caps, DEFAULT_CAPS);
+    const saved = await plainPost('/api/assistant/settings', { agent_caps: { changes: 30 } });
+    assert.equal(saved.status, 200, JSON.stringify(saved.json));
+    assert.deepEqual(saved.json.agent_caps, { ...DEFAULT_CAPS, changes: 30 }, 'the settings answer is the status, with the new limit');
+    assert.deepEqual((await get('/api/assistant/status')).json.agent_caps, { ...DEFAULT_CAPS, changes: 30 });
+    const back = await plainPost('/api/assistant/settings', { agent_caps: { changes: 24 } });
+    assert.deepEqual(back.json.agent_caps, DEFAULT_CAPS);
+    const key = await plainPost('/api/assistant/key', { provider: 'anthropic', key: 'sk-ant-api03-TEST-agents-0123456789abcdefXYZ' });
+    assert.deepEqual(key.json.agent_caps, DEFAULT_CAPS, 'a key answer is the status too');
+
+    // The catalogue's allowedModes on each row (the page's Mode select offers only these).
+    const rows = await rowsOf();
+    assert.deepEqual(rows.claude.allowed_modes, ['default']);
+    assert.deepEqual(rows.codex.allowed_modes, ['read-only']);
+    assert.deepEqual(rows.gemini.allowed_modes, ['default']);
+    assert.equal(rows.opencode.allowed_modes, 'initial');
+    assert.equal(rows.grok.allowed_modes, 'initial');
+
+    // A coding agent as the default: the status' ready and ready_reason are that agent's.
+    const before = (await get('/api/assistant/status')).json.provider;
+    try {
+      let r = await plainPost('/api/assistant/settings', { provider: 'agent:claude' });
+      assert.equal(r.status, 200, JSON.stringify(r.json));
+      assert.deepEqual([r.json.provider, r.json.default_provider, r.json.ready, r.json.ready_reason], ['agent:claude', 'agent:claude', true, null]);
+      r = await plainPost('/api/assistant/settings', { provider: 'agent:codex' });
+      assert.deepEqual([r.json.ready, r.json.ready_reason], [false, 'agent_not_allowed']);
+      // Looked for and not found: missing (not "not looked for yet").
+      r = await plainPost('/api/assistant/settings', { provider: 'agent:gemini' });
+      assert.deepEqual([r.json.ready, r.json.ready_reason], [false, 'agent_missing']);
+    } finally {
+      await plainPost('/api/assistant/settings', { provider: before });
+    }
+  });
+
   it('the allow switch: browser only, the row’s fingerprint, and never a settings field', async () => {
     const before = await rowsOf();
     const fp = before.codex.fingerprint;

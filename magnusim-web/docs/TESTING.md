@@ -359,6 +359,41 @@ No test reaches a real model provider or this PC's real Assistant files.
     status field `agents_tree_kill`) says `best_effort`. Every agent the test starts
     passes `tmp` (its own temp folder), so its working folders, and the start's sweep of
     old ones, never touch the system temp folder.
+- **Agent turns.** With `MAGNUSIM_TEST_ASSISTANT=1` in a test home, three switches shorten
+  an agent turn's timers (whole milliseconds from 1 to 3600000; otherwise ignored with a log
+  line):
+  - `MAGNUSIM_TEST_ASSISTANT_AGENT_IDLE_MS=<ms>`: how long a conversation's agent is kept
+    between its messages (15 minutes otherwise);
+  - `MAGNUSIM_TEST_ASSISTANT_AGENT_CANCEL_MS=<ms>`: how long Stop waits for the agent to
+    answer its cancel before the tree kill (3 s otherwise);
+  - `MAGNUSIM_TEST_ASSISTANT_AGENT_GATE_MS=<ms>`: how long an agent turn's questions wait
+    (4 minutes otherwise).
+
+  A turn on a coding agent needs this account's proof. A test reads the launch token from
+  the test home's `mcp.json` (its path is the `--info` argument in the `bridge.args` of
+  `GET /api/assistant/mcp`) and sends it in the `x-magnusim-launch` header; the terminal
+  client finds the same file when it runs with the server's `MAGNUSIM_ASSISTANT_HOME`.
+  `GET /api/test/assistant/state` lists each conversation's agent (pid, state, how its tree
+  is stopped), and every `POST /api/test/assistant/reset` ends them all.
+  `scripts/server/__tests__/assistant-agent-turn.test.js` runs agent turns with the real
+  bridge and listener; `e2e/assistant-agents.spec.js` runs Settings → Assistant → Coding
+  agents in a browser, the agents the fake installed through discovery's switches, and checks
+  that every process a fake or a launcher reported has ended.
+- **Other apps (MCP).** Two clients reach the MCP listener as another app on this PC would;
+  neither reads this PC's own `mcp.json`.
+  - `scripts/server/__tests__/assistant-mcp-harness.js` (not a test itself; imported
+    dynamically after the temp paths are set): `handshake(port, token)` (a raw socket through
+    the greeting, both directions recorded), `socketClient(port, token, {era})` (the MCP
+    SDK's own client over such a socket) and `bridgeClient({info, era})` (the SDK's client
+    with a stdio transport that starts the real bridge, `scripts/assistant-mcp.mjs`).
+    `era: 'legacy'` is the client's default protocol version and `'modern'` pins the newer
+    one; the interop cases run in both.
+  - `e2e/support/mcp-client.mjs`, for browser tests: `startMcpClient({info, name, era})`
+    starts the bridge with the server's `mcp.json` (`infoPathOf()` of the
+    `GET /api/assistant/mcp` answer) and connects the SDK's client, giving
+    `{client, changes, stderr(), close()}`. It rejects with the bridge's stderr when the
+    bridge ends first (Magnusim not running, or a refusal). `resultJson(result)` reads a
+    tool result's JSON. `e2e/assistant-mcp.spec.js` uses it.
 
 ## A bundled plugin's own suite
 

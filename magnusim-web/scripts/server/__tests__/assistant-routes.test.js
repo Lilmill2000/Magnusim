@@ -488,6 +488,18 @@ describe('status, settings and keys', () => {
     const s = await get('/api/assistant/status');
     assert.equal(s.json.keys.openai.set, true, 'a reset without files keeps them');
   });
+
+  it('every test reset ends the coding agents, not only the first (their hook went with the old state)', async () => {
+    const { agentHost } = await import('../assistant/agents/host.ts');
+    const { realClock } = await import('../assistant/gates.ts');
+    const host = agentHost();
+    for (const n of [1, 2, 3]) {
+      assert.equal(host.reserve(`conv-reset-${n}`, 'claude', {}, realClock), true);
+      assert.deepEqual(Object.keys(host.snapshot()), [`conv-reset-${n}`]);
+      assert.equal((await post('/api/test/assistant/reset', {})).status, 200);
+      assert.deepEqual(host.snapshot(), {}, `reset ${n} ended the agent's slot`);
+    }
+  });
 });
 
 // The turn routes over HTTP, with the real adapters against the fake provider.

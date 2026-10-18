@@ -128,7 +128,7 @@ import {
 import { agentsTreeKill } from './assistant/agents/process.ts';
 import { agentHost } from './assistant/agents/host.ts';
 import { agentProviderTest, agentSignInRequest, agentTestRequest } from './assistant/agents/test.ts';
-import { agentIdOf } from './assistant/agents/known.ts';
+import { agentIdOf, knownAgent } from './assistant/agents/known.ts';
 import { setAgentRunHooks } from './assistant/agents/discover.ts';
 import { appVersion } from './assistant/host-tools.ts';
 import { mcpSdkInstalled } from './assistant/providers/load-sdk.ts';
@@ -234,6 +234,8 @@ const STATUS_PARTS: StatusPart[] = [
     /** Projects with an answer remembered ("Forget project answers (N)"). */
     consents: consentCount(s),
     caps: s.caps,
+    /** A coding agent's turn's limits (changes, tool calls, active minutes per message; spec 4.10). */
+    agent_caps: s.agent_caps,
   }),
   ({ store }) => ({ keys: store.status(), storage: store.storage(), keys_notice: store.notice() }),
   ({ ledger }) => ({ spent_today_usd: round4(ledger.spentToday()) }),
@@ -333,9 +335,12 @@ function readiness(src: StatusSources): { ready: boolean; ready_reason: string |
   const p = src.settings.provider;
   if (p === 'off') return { ready: false, ready_reason: 'provider_off' };
   if (isAgentProvider(p)) {
-    // The coding agent's own row (from the discovery cache; not looked for yet: not_checked).
+    // The coding agent's own row (from the discovery cache; not looked for yet: not_checked;
+    // looked for and not found: a known agent is missing, any other id unknown).
     const row = agentReadyRows(src.agents)[p] as { ready?: boolean; reason?: string | null } | undefined;
-    return { ready: row?.ready === true, ready_reason: row ? (row.reason ?? null) : 'not_checked' };
+    if (row) return { ready: row.ready === true, ready_reason: row.reason ?? null };
+    const id = p.slice('agent:'.length);
+    return { ready: false, ready_reason: !agentsCache() ? 'not_checked' : knownAgent(id) ? 'agent_missing' : 'agent_unknown' };
   }
   const r = providerReadiness(p, src);
   return { ready: r.ready, ready_reason: r.reason };
@@ -582,6 +587,8 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         return;
       }
       resetAssistantState();
+      // The hooks went with the old state: the next reset (or stop) ends the agents too.
+      endAgentsAtShutdown();
       if (files) {
         const data = assistantDataDir();
         const secrets = secretsDir();
@@ -592,6 +599,14 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
       ctx.sendJson(200, { ok: true, boot: assistantState().bootId });
     }),
   );
+}
+
+/**
+ * Every coding agent ends when the Assistant shuts down (a real stop, or a test reset). A hook
+ * lives in the Assistant's state, which a test reset replaces: the reset route adds it again.
+ */
+function endAgentsAtShutdown(): void {
+  onAssistantShutdown(() => agentHost().endAll('shutdown'));
 }
 
 /** The turn machinery as the server runs it: the app's settings, keys, ledger and projects. */
@@ -874,7 +889,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   const host = agentHost();
   setAgentRunHooks({ running: (id) => host.running(id), stop: (id, text) => host.stopAgent(id, text) });
   // A real stop of the process (or a test reset): every agent ends.
-  onAssistantShutdown(() => host.endAll('shutdown'));
+  endAgentsAtShutdown();
   router.get(
     '/api/assistant/status',
     local(async (ctx) => {

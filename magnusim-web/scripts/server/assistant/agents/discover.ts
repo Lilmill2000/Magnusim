@@ -91,7 +91,7 @@ import {
 } from '../settings.ts';
 import { assistantState } from '../state.ts';
 import { splitCommand, type ModelView, type ModeView } from './acp.ts';
-import { KNOWN_AGENTS, knownAgent, type KnownAgent, type Lockdown, type LoginSpec } from './known.ts';
+import { KNOWN_AGENTS, knownAgent, policyOf, type KnownAgent, type Lockdown, type LoginSpec } from './known.ts';
 import { startAgentProcess, type AgentEnvSpec, type AgentProcess } from './process.ts';
 
 /** A discovery older than this is run again at a turn's start. */
@@ -1124,6 +1124,11 @@ export interface AgentRow {
   fingerprint: string | null;
   model: string | null;
   mode: string | null;
+  /**
+   * The modes Magnusim uses with it (the catalogue's allowedModes, spec 4.2): their ids, or
+   * 'initial' (only the mode it starts in; a custom command too). The Mode select offers only these.
+   */
+  allowed_modes: string[] | 'initial';
   last: AgentLast | null;
   sign_in: Record<string, unknown> | null;
   ready: boolean;
@@ -1152,6 +1157,7 @@ export function agentRow(e: AgentEntry, ctx: RowContext): AgentRow {
   const allowed = !!prefs.allowed && !!e.fingerprint && prefs.allowed.fingerprint === e.fingerprint;
   const allowChanged = !!prefs.allowed && !allowed;
   const c = cacheOf();
+  const modes = policyOf(e.kind === 'known' ? knownAgent(e.id) : null).allowedModes;
   const row: AgentRow = {
     id: e.id,
     name: e.name,
@@ -1172,6 +1178,7 @@ export function agentRow(e: AgentEntry, ctx: RowContext): AgentRow {
     fingerprint: e.fingerprint,
     model: prefs.model,
     mode: prefs.mode,
+    allowed_modes: modes === 'initial' ? 'initial' : [...modes],
     last: c.last.get(e.id) ?? null,
     sign_in: c.signIn.get(e.id) ?? null,
     ready: false,
