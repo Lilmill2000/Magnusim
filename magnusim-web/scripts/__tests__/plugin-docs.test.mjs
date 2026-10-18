@@ -303,6 +303,24 @@ describe('the handwritten guides', () => {
     checkFreeze(text.replace(/\n/g, '\r\n'));
   });
 
+  test("authoring.md's strict budget and tools per request are the assistant's", () => {
+    // Read from the sources (the provider file that holds the strict limits is found by them).
+    const providers = join(WEB_ROOT, 'scripts', 'server', 'assistant', 'providers');
+    const limitsRe = /export const STRICT_LIMITS = Object\.freeze\(\{ tools: (\d+), optional: (\d+), unions: (\d+) \}\)/;
+    const limits = readdirSync(providers)
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => limitsRe.exec(app('scripts', 'server', 'assistant', 'providers', f)))
+      .filter(Boolean);
+    assert.equal(limits.length, 1, 'one provider file holds the strict limits');
+    const [, tools, optional, unions] = limits[0];
+    const caps = /export const REQUEST_MAX_TOOLS = Object\.freeze\(\{ cloud: (\d+), local: (\d+) \}\)/.exec(app('scripts', 'server', 'assistant', 'registry.ts'));
+    assert.ok(caps, 'REQUEST_MAX_TOOLS in registry.ts');
+    const authoring = read('authoring.md');
+    assert.ok(authoring.includes(`${tools} tools, ${optional} optional properties and ${unions} properties of more than one type`), 'the strict budget');
+    assert.ok(authoring.includes(`at most ${caps[1]} tools with a cloud provider and ${caps[2]} with a local server`), 'the tools per request');
+    assert.ok(authoring.includes(`When you offer more than ${caps[2]},`), 'the local cap again');
+  });
+
   test("GUIDE.md's startHost options are the ones host-server.mjs takes", () => {
     const src = app('e2e', 'support', 'host-server.mjs');
     const fn = src.slice(src.indexOf('export async function startHost('));
