@@ -23,8 +23,10 @@
  *    may not have finished". Then the runner stops waiting and says so on the call's
  *    `released` signal (the relay frees the tab before the next call can start).
  *    A progress that says the call waits for the person (`waiting`) pauses the turn's minutes
- *    once, until the next progress without it or the call's end; every progress still resets
- *    the stall window.
+ *    once, until the next progress without it or the call's end, for WAIT_PAUSE_MAX_MS of the
+ *    call's waits at most: then they run again, and the turn's log says so (a page that says
+ *    it waits for ever can't hold a turn past its minutes). Every progress still resets the
+ *    stall window.
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
  *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
  *    A failed call's hint and detail go with its error, and the hint to the log's tool_result
@@ -52,6 +54,8 @@ export interface RunnerTurn {
   /** Gate waits, and a call's waits for the person, don't count toward the turn's minutes. */
   pause(): void;
   resume(): void;
+  /** A line for the turn's log. */
+  note?(text: string): void;
 }
 
 /** Why a call's signal aborted: Stop, the turn's minutes cap, or no progress for too long. */
@@ -85,6 +89,14 @@ export interface RunResult {
 const RISKS: readonly Risk[] = ['read', 'edit', 'compute', 'destructive'];
 /** How long an aborted tool may take to give its last answer. */
 export const ABORT_GRACE_MS = 2_000;
+/**
+ * The most of one call's waits for the person (progress `waiting`) that the turn's minutes
+ * leave out. CAD's longest call waits twice, up to 10 minutes each (for the person, then for
+ * their Keep or Discard); past this its waiting counts toward the turn's minutes.
+ */
+export const WAIT_PAUSE_MAX_MS = 20 * 60_000;
+/** The log's line when a call's waits used WAIT_PAUSE_MAX_MS. */
+export const WAITED_TOO_LONG_NOTE = `A call has waited for you ${WAIT_PAUSE_MAX_MS / 60_000} minutes: from now on its waiting counts toward the turn's minutes.`;
 /** A workspace tool's stall window on the server: its own plus the relay's margin. */
 export const WORKSPACE_STALL_MARGIN_MS = 10_000;
 const PREVIEW = 200;
@@ -360,14 +372,30 @@ export class ToolRunner {
       }, stallMs);
     };
     arm();
-    // The call waits for the person (its last progress said so): the turn's minutes are paused.
+    // The call waits for the person (its last progress said so): the turn's minutes are paused,
+    // for WAIT_PAUSE_MAX_MS of the call's waits at most.
     let waiting = false;
+    let waitedMs = 0;
+    let waitFrom = 0;
+    let waitTimer: unknown = null;
     let finished = false;
     const wait = (on: boolean) => {
-      if (on === waiting) return;
+      if (on === waiting || (on && waitedMs >= WAIT_PAUSE_MAX_MS)) return;
       waiting = on;
-      if (on) o.turn?.pause();
-      else o.turn?.resume();
+      if (on) {
+        waitFrom = clock.now();
+        o.turn?.pause();
+        waitTimer = clock.setTimeout(() => {
+          waitTimer = null;
+          wait(false);
+          o.turn?.note?.(WAITED_TOO_LONG_NOTE);
+        }, WAIT_PAUSE_MAX_MS - waitedMs);
+        return;
+      }
+      clock.clearTimeout(waitTimer);
+      waitTimer = null;
+      waitedMs += Math.max(0, clock.now() - waitFrom);
+      o.turn?.resume();
     };
     const progress = (fraction: number | null, label: string, opts?: ProgressOptions) => {
       if (signal.aborted || finished) return;

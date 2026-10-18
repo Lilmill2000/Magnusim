@@ -25,6 +25,7 @@ const { TURN_LIMITS, TAB_HIDDEN_TEXT, createTurnManager } = await import('../ass
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
 const { createToolRegistry, REQUEST_MAX_TOOLS } = await import('../assistant/registry.ts');
+const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
 after(() => {
   resetAssistantState();
@@ -588,6 +589,76 @@ describe('the token and minute caps', () => {
     await settled(t);
     assert.deepEqual([t.state, t.endReason], ['capped', 'turn_minutes']);
     assert.deepEqual(codes(lastResults(t.conv)), ['stalled', 'capped']);
+  });
+
+  it('minutes: a page that says it waits for ever is left out of them for 20 minutes only; then they run, the log says so once, and the cap stops it', async () => {
+    assert.equal(WAIT_PAUSE_MAX_MS, 20 * 60_000);
+    const m = mk({ caps: { turn_minutes: 60 } });
+    const ask = steeredTool('ask', { stallMs: 30_000 });
+    m.registry.addHostTool(ask.def);
+    m.provider.script({ tools: [{ name: 'ask' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    m.clock.advance(10_000);
+    /** The page's heartbeat: a waiting progress every 5 s, for `ms`. */
+    const waitFor = (ms) => {
+      for (let i = 0; i < ms / 5_000; i += 1) {
+        ask.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+        m.clock.advance(5_000);
+      }
+    };
+    waitFor(15 * 60_000);
+    await tick();
+    assert.equal(t.activeMs(), 10_000, 'fifteen minutes of waiting: none of it counts');
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), []);
+    waitFor(5 * 60_000);
+    await tick();
+    assert.equal(t.activeMs(), 10_000, 'twenty minutes: still none');
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), [WAITED_TOO_LONG_NOTE], 'the minutes run again, and the log says why');
+    waitFor(10 * 60_000);
+    await tick();
+    assert.equal(t.state, 'tools');
+    assert.equal(t.activeMs(), 10_000 + 10 * 60_000, 'past the twenty, its waiting counts');
+    // Still waiting, as it says, until the cap: 60 minutes of the turn's time, 80 of the clock's.
+    waitFor(50 * 60_000 - 10_000 - 5_000);
+    await tick();
+    assert.equal(t.state, 'tools', 'just under the cap');
+    waitFor(5_000);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['capped', 'turn_minutes', 'Stopped after 60 minutes of work.']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['capped']);
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), [WAITED_TOO_LONG_NOTE], 'said once');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it("minutes: the 20 minutes are a call's: its waits add up (15, then 10: 5 count), and the next call's waits have 20 of their own", async () => {
+    const m = mk({ caps: { turn_minutes: 60 } });
+    const ask = steeredTool('ask');
+    const again = steeredTool('again');
+    m.registry.addHostTool(ask.def);
+    m.registry.addHostTool(again.def);
+    m.provider.script({ tools: [{ name: 'ask' }, { name: 'again' }] }, { text: 'Done.' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    ask.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+    m.clock.advance(15 * 60_000);
+    // The person closed the panel: ten seconds of work, then it waits for them again.
+    ask.ctl.rt.progress(0.5, 'Building');
+    m.clock.advance(10_000);
+    ask.ctl.rt.progress(null, 'Waiting for you again', { waiting: true });
+    m.clock.advance(10 * 60_000);
+    assert.equal(t.activeMs(), 10_000 + 5 * 60_000, 'five of its second wait counted');
+    assert.equal(ofType(t, 'note').length, 1);
+    ask.ctl.end();
+    await until(() => again.ctl.rt);
+    const before = t.activeMs();
+    again.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+    m.clock.advance(20 * 60_000 - 1);
+    assert.equal(t.activeMs(), before, 'the next call: its own twenty minutes');
+    again.ctl.end();
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason], ['done', 'end_turn']);
+    assert.equal(ofType(t, 'note').length, 1, 'the second call never used its twenty');
   });
 });
 

@@ -82,8 +82,8 @@ export interface ToolDef {
   /**
    * A STALL window: the call fails `stalled` after this long with no progress and no page
    * call in flight. No absolute limit while progress keeps arriving; the turn's
-   * turn_minutes cap bounds the whole call. Host default 30 s; workspace timeoutS 1–600
-   * (default 60).
+   * turn_minutes cap bounds the whole call (its waits for the person count past
+   * WAIT_PAUSE_MAX_MS, runner.ts). Host default 30 s; workspace timeoutS 1–600 (default 60).
    */
   stallMs: number;
   workerBacked: boolean;
