@@ -1,8 +1,9 @@
 /**
  * Settings → Assistant (Foundation spec 4.3; phase 3 spec 5.6): the default provider (Off, the
  * API-key providers and the coding agents found), then a card for every API-key provider,
- * always listed whatever the default (each with its endpoint, key, model, effort and connection
- * Test, saved for that provider only), the coding agents (AssistantStepAgents.tsx), other apps
+ * always listed whatever the default (each with its endpoint, key, model and connection Test,
+ * saved for that provider only) and below them the one Effort both cloud providers use (a
+ * single setting, so it is shown once and says so), the coding agents (AssistantStepAgents.tsx), other apps
  * (AssistantStepMcp.tsx), privacy, the limits (API keys' and coding agents') and today's spend. A conversation may use any provider, so nothing is removed when the default
  * changes. The default's card starts open; the others open with Set up. Every change saves at once,
  * and every save answers with the whole status (src/assistant/status.ts). Leaving the step
@@ -72,6 +73,8 @@ const PROVIDERS: ReadonlyArray<{ id: ProviderId; title: string; copy: string }> 
 ];
 
 export const DEFAULT_COPY = 'The Assistant uses this unless a conversation picks another. Every provider below keeps its own settings.';
+/** Effort is one setting (settings.effort) that every cloud turn uses, whichever of the two providers it runs on. */
+export const EFFORT_SHARED_TEXT = "One setting for both cloud providers: Anthropic and OpenAI turns both use it. A local server doesn't.";
 export const PRIVACY_COPY =
   "Cloud providers, coding agents, other apps (MCP) and a local server that isn't on this PC send project data off this PC: your messages and what the Assistant reads from a project you ask about (names, settings, results and pictures of the open workspace). A local server on this PC keeps it here.";
 
@@ -122,8 +125,6 @@ export const NOT_USED_TEXT = "But the model didn't call the test tool, so it may
 const NO_TEST_TEXT = "This copy of Magnusim can't test the connection yet.";
 
 const NO_KEY: KeyStatus = { set: false, last4: null, set_at: null, state: 'none' };
-
-const isCloud = (p: ProviderChoice): p is 'anthropic' | 'openai' => p === 'anthropic' || p === 'openai';
 
 /** Which key the provider would use (none, or the one saved at that time: a new save is another key), and whether it opens. */
 function keyStamp(status: AssistantStatus, provider: ProviderId): string {
@@ -353,6 +354,7 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
         {PROVIDERS.map((p) => (
           <ProviderCard key={p.id} p={p} status={status} />
         ))}
+        <EffortBlock status={status} />
       </div>
       <AssistantStepAgents status={status} />
       <AssistantStepMcp status={status} />
@@ -506,7 +508,6 @@ function ProviderCard({ p, status }: { p: (typeof PROVIDERS)[number]; status: As
           {local ? <EndpointBlock status={status} /> : null}
           <KeyBlock status={status} slot={id} />
           <ModelBlock status={status} provider={id} />
-          {isCloud(id) ? <EffortBlock status={status} /> : null}
           {/* A result is about one provider, model, address and key: a change starts the block afresh. */}
           <TestBlock key={testKey(status, id)} provider={id} />
           {!local && hasFallback(status, id) ? (
@@ -914,18 +915,21 @@ function ModelIdField({
 
 // ---------------------------------------------------------------- effort
 
+/** The one Effort both cloud providers use (not a card's own: shown once, below the cards). */
 function EffortBlock({ status }: { status: AssistantStatus }) {
   const [error, setError] = useState('');
   const errorId = useId();
+  const noteId = useId();
   return (
-    <div className="wiz-assistant-block">
+    <div className="wiz-assistant-block" data-assistant-effort-block="1">
       <label className="wiz-assistant-row">
-        <span className="wiz-assistant-h">Effort</span>
+        <span className="wiz-assistant-h">Effort (Anthropic and OpenAI)</span>
         <select
           className="wiz-assistant-input"
           data-assistant-effort={status.effort}
           value={status.effort}
-          {...described(error, errorId)}
+          aria-describedby={error ? `${noteId} ${errorId}` : noteId}
+          {...(error ? { 'aria-invalid': true } : {})}
           onChange={(e) => {
             setError('');
             void stepChange(
@@ -943,6 +947,9 @@ function EffortBlock({ status }: { status: AssistantStatus }) {
           ))}
         </select>
       </label>
+      <p id={noteId} className="wiz-assistant-meta" data-assistant-effort-shared="1">
+        {EFFORT_SHARED_TEXT}
+      </p>
       <ErrorLine id={errorId} text={error} hook={{ 'data-assistant-effort-error': '1' }} />
     </div>
   );

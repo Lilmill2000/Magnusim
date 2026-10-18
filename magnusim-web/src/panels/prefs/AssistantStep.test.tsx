@@ -7,6 +7,7 @@ import {
   AssistantStep,
   DEFAULT_COPY,
   DEPS_TEXT,
+  EFFORT_SHARED_TEXT,
   FALLBACK_TEXT,
   LOCAL_LIMITS_TEXT,
   LOCAL_PRICE_TEXT,
@@ -529,6 +530,25 @@ describe('AssistantStep cloud', () => {
     expect(posts('/api/assistant/settings').at(-1)!.body).toEqual({ forget_consents: true });
     fireEvent.change(q('[data-assistant-effort]')!, { target: { value: 'high' } });
     await waitFor(() => expect(q('[data-assistant-effort]')).toHaveAttribute('data-assistant-effort', 'high'));
+  });
+
+  it('Effort is one setting for both cloud providers: shown once, outside every card, and says so (the cards keep their own settings)', async () => {
+    await ready({ provider: 'anthropic' });
+    fireEvent.click(q('[data-assistant-card-toggle="openai"]')!);
+    await waitFor(() => expect(q('[data-assistant-card="openai"]')).toHaveAttribute('data-open', '1'));
+    expect(document.querySelectorAll('[data-assistant-effort]')).toHaveLength(1);
+    expect(q('[data-assistant-card] [data-assistant-effort]')).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'Effort (Anthropic and OpenAI)' })).toBe(q('[data-assistant-effort]'));
+    expect(q('[data-assistant-effort-shared]')!.textContent).toBe(EFFORT_SHARED_TEXT);
+    expect(EFFORT_SHARED_TEXT).toBe("One setting for both cloud providers: Anthropic and OpenAI turns both use it. A local server doesn't.");
+    fireEvent.change(q('[data-assistant-effort]')!, { target: { value: 'high' } });
+    await waitFor(() => expect(q('[data-assistant-effort]')).toHaveAttribute('data-assistant-effort', 'high'));
+    expect(posts('/api/assistant/settings').at(-1)!.body).toEqual({ effort: 'high' });
+    cleanup();
+    resetStatusStore();
+    // With no card open (the default Off), it is there all the same.
+    await ready();
+    expect(document.querySelectorAll('[data-assistant-effort]')).toHaveLength(1);
   });
 
   it("says when Magnusim doesn't know the model's price; no fallback note without the status saying so", async () => {
