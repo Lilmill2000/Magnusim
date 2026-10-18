@@ -151,6 +151,35 @@ One string names faces, edges, vertices, bodies, planes, axes or sketch regions
 `find` (`tools/find.ts`) lists the matches as `FindRow`s and lights them in the person's
 view for 1.5 s (the shown bodies only, never while the window is hidden).
 
+## Measuring (`measure`, `measure.ts`, `measure-targets.ts`)
+
+A read like `get_model`: it waits for the Part to open and the rebuild to catch up, then
+measures the bodies built now (the rollback bar's, said in `note` when it is not at the
+end). `measure.ts` gives the raw numbers, which the tool rounds and the eval's facts can
+read as they are:
+
+- one body: `DocService.measure` (volume, area, centre of mass, bounding box, solids,
+  shells); `voids` is shells minus solids for closed solids, null for a surface body;
+- one face, edge or vertex: kernel `measure {a}` (plus `topo` for a curved face's axis
+  point), a point on a face from its largest-inradius triangle, a round edge's
+  circumference or arc angle;
+- two targets: kernel `measure {a, b}`; two bodies also `boolean common` then `props`
+  (the overlap; empty is 0) and `boolean fuse` then `props` (the union's solids and
+  voids), each made shape released;
+- one body with `section`: kernel `section`, its loops as sketch curves, `sketch_regions`;
+  the material is the regions at even depth.
+
+When the model, the rebuild or the kernel's worker changes while it measures, it measures
+again once; a second change is `busy`/`changed`.
+
+Targets (`measure-targets.ts`): a body's name or id (a name is the body's first), `(x, y,
+z)`, `selection` (one selected thing), Top/Front/Right (XY/XZ/YZ) with `offset <length>`
+and `flip`, X/Y/Z axis, origin, and construction planes, axes and points by name. Other
+selectors (faces, edges and vertices, handles) go to the resolver find's selectors
+register with `registerSelectorResolver`; without one they answer `bad_selector` naming
+the forms that work. The section takes the same planes, `selection` with a flat face,
+and a face from that resolver.
+
 ## The person's view
 
 The chip (`[data-chip="assistant"][data-assistant-state]`) and the frame's

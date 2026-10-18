@@ -3,8 +3,8 @@
 // every container at most 6 deep in the reply, as the app hands them to the model.
 // This is the skeleton: `guide` (the CAD notes themselves), `errors` (every reason with its fix),
 // `features` (each tool's fields), `parameters` and `selectors` (every form of the selector
-// language) are filled; the topics whose tools come later
-// say so, and are filled with them.
+// language) are filled, `checks` starts with how to read measure's numbers; the topics whose
+// tools come later say so, and are filled with them.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { FUNCTION_NAMES, UNIT_NAMES } from '../doc/expr';
@@ -125,12 +125,32 @@ const selectorRows = (): HelpRow[] => [
 
 const later = (what: string): HelpRow[] => [{ about: 'not in this build yet', text: `${what} comes with the tools it describes. Until then each tool's own description says what its fields take.` }];
 
+/** How to read measure's numbers (CAD tools spec §9.3); the rest of the checks come with their tools. */
+const measureChecks = (): HelpRow[] => [
+  {
+    about: 'volumes and areas',
+    text: "measure gives the geometry kernel's exact numbers: plan the volume and size by hand first, then compare (within 0.1%). On free-form (B-spline) faces the volume is good to about 1.5e-7 of itself. Pictures cannot check sizes.",
+  },
+  {
+    about: 'voids',
+    text: 'voids = shells - solids for a body of closed solids: voids 1 is one sealed inner void. shells alone cannot tell, because two separate solids also give shells 2 (and voids 0). The kernel counts shells over the whole body. A surface body (solids 0) has no volume and voids null.',
+  },
+  {
+    about: 'overlap and union',
+    text: 'measure two bodies: overlap_mm3 above 0 means they interfere (0: they do not; touching says whether they meet); union_solids 1 means they would join into one piece; union_voids counts the sealed voids the two would close together. Neither body changes.',
+  },
+  {
+    about: 'sections',
+    text: 'measure one body with section "Top offset 4 mm", a construction plane or a flat face (with offset): the area of material in that plane, its loops, holes and pieces. A plane that misses the body gives area 0.',
+  },
+];
+
 export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
   sketch: later('The sketch reference (entity kinds, macros and their parts, relations and dimensions with their refs)'),
   selectors: selectorRows(),
   features: featureRows(),
   parameters: parameterRows(),
-  checks: later('The list of checks'),
+  checks: [...measureChecks(), ...later('The rest of the list of checks')],
   traps: later('The list of traps'),
   errors: errorRows(),
   examples: later('The worked examples'),

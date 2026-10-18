@@ -21,6 +21,7 @@ export { tool as get_model } from './get_model';
 export { tool as help } from './help';
 // hole: Holes.
 // measure: Measure.
+export { tool as measure } from './measure';
 // modify: Fillet, chamfer or shell.
 // pattern: Pattern or mirror.
 // revolve: Revolve.

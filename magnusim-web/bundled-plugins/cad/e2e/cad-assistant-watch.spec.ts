@@ -6,6 +6,9 @@
 // "not in this build yet" with its hint. The dock's chip and the frame's data-assistant say what
 // the Assistant does: thinking while the model answers, working while a call runs ("Read the
 // Part"), then "Assistant: <request> · done".
+// measure (watch 6, T10): the chip says "Measure" while it runs; the model gets a block's volume
+// and no voids, two separate blocks' distance, no overlap and two solids joined, and a cut's area;
+// the turn's log reads each measurement; nothing in the Part changes.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -226,4 +229,57 @@ test("cad:assistant-watch-find find lists the matches with handles and lights th
     ok: false,
     error: { code: 'invalid_input', message: 'selector_stale: #f1 is gone: Body 1 is not there now; call find again.', hint: 'That handle is gone after a change: call find again.', detail: { reason: 'selector_stale', handle: '#f1' } },
   });
+});
+
+test('cad:assistant-watch-measure measure gives a body its volume and voids, two separate bodies no overlap and two solids joined, a cut its area; the log reads them', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant measure');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  // Two 20 mm blocks, 20 mm apart along X (made as the person makes them: a sketch, then Extrude).
+  await addSolid(page);
+  await addSolid(page, { at: [40, 0, 0] });
+  const chip = frame.locator('[data-chip="assistant"]');
+  const features = () => cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { snapshot(): { doc: { features: number; bodies: number } } } }).__CAD__.snapshot().doc);
+  expect(await features()).toMatchObject({ features: 4, bodies: 2 });
+
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__measure', input: { targets: ['Body 1'], section: '' } }] },
+    { tools: [{ name: 'cad__measure', input: { targets: ['Body 1', 'Body 2'], section: '' } }] },
+    { tools: [{ name: 'cad__measure', input: { targets: ['Body 2'], section: 'Top offset 10 mm' } }] },
+    { text: 'Two separate blocks of 8000 mm3.' },
+  );
+  // The first measure stops once the Part has settled: the chip says what runs.
+  await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { hold(p: string): void } } }).__CAD__.assistant.hold('after-settled'));
+  const t = await startTurn(request, host, { text: 'Measure the blocks.', tab });
+  await expect(chip).toHaveAttribute('data-assistant-state', 'working', STEP);
+  await expect(chip).toHaveText(/^Assistant · Measure · \d+ of 120 steps$/);
+  await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { release(p: string): void } } }).__CAD__.assistant.release('after-settled'));
+  const { turn, events } = await t.ended(STEP_MS * 2);
+  expect(turn.state).toBe('done');
+
+  // The turn's log reads each measurement.
+  expect(events.filter((e) => e.type === 'tool_result').map((e) => ({ ok: e.ok, summary: e.summary }))).toEqual([
+    { ok: true, summary: 'Measured Body 1: volume 8000 mm3, 1 solid, 0 voids' },
+    { ok: true, summary: 'Measured Body 1 to Body 2: distance 20 mm, overlap 0 mm3, joined 2 solids and 0 voids' },
+    { ok: true, summary: 'Measured Body 2 cut at Top offset 10 mm: area 400 mm2 in 1 piece, 0 holes' },
+  ]);
+
+  // What the model got back.
+  const [, afterBody, afterPair, afterSection] = chats(host).slice(before);
+  const [body] = resultsIn(afterBody);
+  expect(body).toMatchObject({
+    tool: 'cad__measure',
+    ok: true,
+    data: { target: 'Body 1', kind: 'body', volume_mm3: 8000, area_mm2: 2400, solids: 1, shells: 1, voids: 0, faces: 6, valid: true, bbox_mm: [[0, 0, 0], [20, 20, 20]] },
+  });
+  const [pair] = resultsIn(afterPair);
+  expect(pair).toMatchObject({ tool: 'cad__measure', ok: true, data: { distance_mm: 20, delta_mm: [20, 0, 0], overlap_mm3: 0, touching: false, union_solids: 2, union_voids: 0 } });
+  const [section] = resultsIn(afterSection);
+  expect(section).toMatchObject({ tool: 'cad__measure', ok: true, data: { body: 'Body 2', section: { plane: 'Top offset 10 mm', area_mm2: 400, loops: 1, holes: 0, regions: [{ area_mm2: 400, holes: 0 }] } } });
+  // A read: the Part is as it was (the same revision in every answer, no feature added).
+  const revs = [body, pair, section].map((r) => r.data!.rev);
+  expect(new Set(revs).size).toBe(1);
+  expect(await features()).toMatchObject({ features: 4, bodies: 2 });
+  await expect(chip).toHaveText('Assistant: Measure the blocks. · done', STEP);
 });
