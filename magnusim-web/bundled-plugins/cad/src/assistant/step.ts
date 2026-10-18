@@ -12,13 +12,14 @@
 // The person's selection comes back after the call, unless they changed it meanwhile.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { storedBodyName } from '../doc/features/body-ids';
 import { isPersonEditing } from '../doc/person-editing';
 import { isPanelHighlight } from '../lib/selection';
 import type { AppServices } from '../types/app';
 import type { CallCtx, EditData, ToolReply } from '../types/assistant';
 import type { AssistantStep, EditSession, TakeOverWhy } from '../types/doc-service';
 import type { Feature } from '../types/doc';
-import type { Selection } from '../types/selection';
+import type { Selection, SelectionItem } from '../types/selection';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBlock, waitForEdit } from './busy';
 import { asToolError, isToolError, ToolError } from './errors';
@@ -90,6 +91,20 @@ function turnOfKey(rt: AssistantRuntime, key: string): string | null {
   return rt.turns.forKey(key)?.id ?? null;
 }
 
+/**
+ * `sel` without what is gone (a feature the call deleted, a body it removed: neither in the model
+ * nor built), or `sel` itself.
+ */
+function stillThere(services: AppServices, sel: Selection): Selection {
+  const { doc, rebuild } = services.doc.state.get();
+  const has = (it: SelectionItem) => {
+    if ('feature' in it) return doc.features.some((f) => f.id === it.feature);
+    if ('body' in it) return storedBodyName(doc, it.body) !== null || rebuild.bodies.some((b) => b.id === it.body);
+    return true;
+  };
+  return sel.items.every(has) ? sel : { ...sel, items: sel.items.filter(has) };
+}
+
 /** The person's selection now, to put back after the call unless they changed it meanwhile. */
 function rememberSelection(services: AppServices): { restore(): void } {
   const store = services.selection;
@@ -104,7 +119,7 @@ function rememberSelection(services: AppServices): { restore(): void } {
       off();
       if (theirs) return;
       const now = store.get();
-      if (now !== start && (isPanelHighlight(now) || !now.items.length)) store.set(() => start);
+      if (now !== start && (isPanelHighlight(now) || !now.items.length)) store.set(() => stillThere(services, start));
     },
   };
 }

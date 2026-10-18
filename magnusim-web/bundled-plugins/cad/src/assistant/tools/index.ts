@@ -10,6 +10,7 @@
 export { tool as body } from './body';
 // combine: Combine bodies.
 // delete: Delete features.
+export { tool as delete } from './delete';
 // edit_feature: Change a feature.
 export { tool as edit_feature } from './edit_feature';
 // extrude: Extrude.

@@ -116,6 +116,25 @@ the Assistant's steps while its turn runs, or by the chip's Pause; it ends with 
 host's turn events) or, without them, at the next key. The chip shows `paused` ("you took
 over", "you undid its steps").
 
+## Deleting (`delete`, `tools/delete.ts`)
+
+`delete` is the one destructive tool: the app asks the person before the call reaches the
+page ("Allow the Assistant to delete features?", with its confirm note "Deletes features from
+the Part; Ctrl+Z brings them back." in place of "can't be undone"), so a declined call never
+runs here. The plan resolves every name (any case, or its id; a name given twice or not in the
+Part is refused, every problem at once), then finds every feature outside the list that uses
+one in it: its parents, or the makers of the bodies it names (`dependencies` in
+`doc/features/hooks.ts`, the Part's own rule; `removeBlock` names only the first). Any user
+refuses the call with nothing changed: `in_use`, the message naming every user and the body it
+uses it through, `detail.users` one row per `{feature, uses, via}`. The apply checks the Part
+again as it is then (the person may have changed it while the call planned: `in_use`, or
+`changed` for a listed feature already gone), then runs the Part's own `remove` for each, newest
+first, inside the step, so the list's own users go before what they use; the hold point
+`before-commit` follows. A delete is structural: features that fail afterwards are kept and
+listed in `broke`. The deleted features leave the person's selection, as the person's own
+Delete does, and the step's selection restore never brings back a feature or body that is gone.
+The answer's `data` adds `deleted` (the names, in history order).
+
 ## Selectors (`selectors/`, `labels.ts`, `find`)
 
 One string names faces, edges, vertices, bodies, planes, axes or sketch regions

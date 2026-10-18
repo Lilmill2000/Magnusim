@@ -8,6 +8,10 @@
 // anything opens: invalid_input sketch_conflict naming both (the model's h1 and "r's own horizontal
 // on r.top"); the person's tree, panels and Undo stay as they were. Resent without it, the sketch
 // is made through the person's sketch panel, fully defined, and one Undo takes it back.
+// delete (honest 7, T9) asks the person first in the app's dialog ("Allow the Assistant to delete
+// features?", its copy saying Ctrl+Z brings them back, Don't focused): Enter answers Don't, the
+// model gets declined and the Part never hears the call; a click on Allow deletes the feature the
+// tree shows, and one Ctrl+Z brings it back.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -223,4 +227,80 @@ test('cad:assistant-honest-conflict a sketch that says one thing twice is refuse
   await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
   expect(await label()).toBe(undoBefore);
+});
+
+type DeleteCad = {
+  __CAD__: {
+    services: { doc: { state: { get(): { doc: { features: { name: string }[] }; rebuild: { status: string; bodies: { name: string }[] } } } } };
+    assistant: { setPace(p: string | null, scale?: number | null): void; calls: { tool: string; ok: boolean }[] };
+  };
+};
+
+test("cad:assistant-honest-delete delete asks the person first: Don't keeps the feature, Allow deletes it, Ctrl+Z brings it back", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest delete');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as DeleteCad).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 6] });
+  const rows = frame.locator('[data-cad-tree] [data-feature-row] > .tree-row .tl');
+  await expect(rows).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  const built = () =>
+    cadFrame(page).evaluate(() => {
+      const s = (window as unknown as DeleteCad).__CAD__.services.doc.state.get();
+      return s.rebuild.status === 'done' ? s.rebuild.bodies.map((b) => b.name) : null;
+    });
+  await expect.poll(built, STEP).toEqual(['Body 1']);
+  const deleteCalls = () => cadFrame(page).evaluate(() => (window as unknown as DeleteCad).__CAD__.assistant.calls.filter((c) => c.tool === 'delete').map((c) => c.ok));
+  // The app's own question, over the whole window (not the Part's frame).
+  const dialog = page.locator('#modal-confirm');
+
+  // Don't (Enter, the focused answer): the model hears declined, the Part never hears the call.
+  const before = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__delete', input: { features: ['Extrude 1'] } }] }, { text: 'The extrude stays.' });
+  const t1 = await startTurn(request, host, { text: 'Delete the extrude.', tab });
+  await expect(dialog).toBeVisible(STEP);
+  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to delete features?');
+  await expect(page.locator('#cf-copy')).toContainText('Deletes features from the Part; Ctrl+Z brings them back.');
+  await expect(page.locator('#cf-copy')).toContainText('What it sent: {"features":["Extrude 1"]}. Nothing runs until you choose.');
+  await expect(page.locator('#cf-confirm')).toHaveText('Allow');
+  await expect(page.locator('#cf-cancel')).toHaveText("Don't");
+  await expect(page.locator('#cf-cancel')).toBeFocused();
+  // Nothing happened yet: the feature is still in the tree while the question is open.
+  await expect(rows).toHaveText(['Sketch 1', 'Extrude 1']);
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeHidden(STEP);
+  expect((await t1.ended(STEP_MS * 2)).turn.state).toBe('done');
+  const [declined] = resultsIn(chats(host)[before + 1]);
+  expect(declined).toMatchObject({ tool: 'cad__delete', ok: false, error: { code: 'declined' } });
+  await expect(rows).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  expect(await built()).toEqual(['Body 1']);
+  expect(await deleteCalls()).toEqual([]);
+
+  // Allow (a click): the feature and its body are gone from the tree and the Part.
+  const before2 = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__delete', input: { features: ['Extrude 1'] } }] }, { text: 'Deleted the extrude.' });
+  const t2 = await startTurn(request, host, { text: 'Delete the extrude now.', tab });
+  await expect(dialog).toBeVisible(STEP);
+  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await page.locator('#cf-confirm').click();
+  await expect(dialog).toBeHidden(STEP);
+  expect((await t2.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect(rows).toHaveText(['Sketch 1'], STEP);
+  const [deleted] = resultsIn(chats(host)[before2 + 1]);
+  expect(deleted).toMatchObject({
+    tool: 'cad__delete',
+    ok: true,
+    text: 'Deleted Extrude 1 · Body 1 removed',
+    data: { deleted: ['Extrude 1'], bodies: { removed: ['Body 1'] }, broke: [], step: 1 },
+  });
+  expect(await deleteCalls()).toEqual([true]);
+  await expect.poll(built, STEP).toEqual([]);
+  // The person's Undo names the request, and one Ctrl+Z brings the extrude and its body back.
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').hover();
+  await expect(frame.locator('[data-cad-tip]')).toContainText('Undo Assistant: Delete the extrude now.', STEP);
+  const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  await page.keyboard.press('Control+z');
+  await expect(rows).toHaveText(['Sketch 1', 'Extrude 1'], STEP);
+  await expect.poll(built, STEP).toEqual(['Body 1']);
 });
