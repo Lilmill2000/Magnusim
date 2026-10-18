@@ -11,7 +11,9 @@
 //                (Ctrl+Z / Ctrl+Y, inside the sketch); VIEW: Look at.
 // Escape cancels the tool's step, then the tool, then the selection, and
 // never finishes the sketch (also in a field). Ctrl+Shift+Z redoes inside the
-// sketch. Only commands that work end to end are registered.
+// sketch. Only commands that work end to end are registered. In a sketch the
+// Assistant draws, Escape, Undo, Redo and Finish sketch take it over, and the
+// tools and edits are refused with the reason (SketchMode).
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
@@ -348,6 +350,8 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
   });
 
   // ---- Finish sketch (primary), Delete, Undo / Redo, Look at
+  // In a sketch the Assistant draws, Finish, Undo and Redo take it over (SketchMode): always offered, and they say so.
+  const TAKE_OVER = 'Take over from the Assistant: its sketch is discarded';
   reg({
     id: WELL_KNOWN_COMMANDS.sketchFinish,
     label: 'Finish sketch',
@@ -355,9 +359,13 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     mode: 'sketch',
     icon: SKETCH_ICONS.finish,
     shortcut: 'Enter',
-    hint: 'Leave the sketch (the whole sketch session is one undo step)',
+    get hint() {
+      return mode.byAssistant ? TAKE_OVER : 'Leave the sketch (the whole sketch session is one undo step)';
+    },
     primary: true,
-    run: () => mode.finish(),
+    run: async () => {
+      await mode.finish();
+    },
   });
   reg({
     id: 'sketch.delete',
@@ -378,8 +386,10 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     mode: 'sketch',
     icon: SKETCH_ICONS.undo,
     shortcut: 'Ctrl+Z',
-    hint: 'Undo the last change in this sketch',
-    enabled: () => (mode.undoDepth > 0 ? true : 'Nothing to undo in this sketch'),
+    get hint() {
+      return mode.byAssistant ? TAKE_OVER : 'Undo the last change in this sketch';
+    },
+    enabled: () => (mode.byAssistant || mode.undoDepth > 0 ? true : 'Nothing to undo in this sketch'),
     run: () => mode.undo(),
   });
   reg({
@@ -388,8 +398,10 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     mode: 'sketch',
     icon: SKETCH_ICONS.redo,
     shortcut: 'Ctrl+Y',
-    hint: 'Redo in this sketch',
-    enabled: () => (mode.redoDepth > 0 ? true : 'Nothing to redo in this sketch'),
+    get hint() {
+      return mode.byAssistant ? TAKE_OVER : 'Redo in this sketch';
+    },
+    enabled: () => (mode.byAssistant || mode.redoDepth > 0 ? true : 'Nothing to redo in this sketch'),
     run: () => mode.redo(),
   });
   reg({

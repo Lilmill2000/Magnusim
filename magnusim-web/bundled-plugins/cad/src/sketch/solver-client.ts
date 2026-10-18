@@ -5,12 +5,12 @@
 // newest is solved). A worker that does not start, or stops answering, is
 // ended; the next call starts a fresh one (the caller loads its sketch again:
 // sketch mode loads before every solve). The rebuild's re-solve
-// (solveFeature) runs on the worker's second solver instance and never
-// disturbs the sketch being edited.
+// (solveFeature) and the headless analysis (analyzeFeature) run on the
+// worker's second solver instance and never disturb the sketch being edited.
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchFeature, Vec2 } from '../types/doc';
-import type { SketchSolverClient, SolverAnalysis, SolverSketch, SolverSolveResult, SolverValues } from '../types/sketch';
+import type { SketchSolverClient, SolverAnalysis, SolverFeatureAnalysis, SolverSketch, SolverSolveResult, SolverValues } from '../types/sketch';
 import { toSolverSketch } from './model';
 
 export const SOLVER_WORKER_PATH = 'solver/solver-worker.js';
@@ -158,6 +158,9 @@ export function createSolverClient(opts: SolverClientOptions): SolverClient {
     ready: () => start(),
     solveFeature(f: SketchFeature, values: Record<string, number>) {
       return call<SolverSolveResult>('solveOnce', toSolverSketch(f, values));
+    },
+    analyzeFeature(f: SketchFeature, values: Record<string, number>) {
+      return call<SolverFeatureAnalysis>('analyzeOnce', toSolverSketch(f, values));
     },
     load: (sketch: SolverSketch) => call('load', sketch),
     solve: () => call<SolverSolveResult>('solve'),

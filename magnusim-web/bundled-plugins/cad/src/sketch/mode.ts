@@ -6,12 +6,17 @@
 // the solver worker first and then stored with session.update (one sketch
 // undo step; the whole session is one document undo step). Drags run in the
 // solver (coalesced moves) and are stored once, at the end.
+// A sketch the Assistant draws (its session has an owner, opened by
+// startSketch(support, {step})) takes edits only from that step (apply's `by`):
+// the person's tools, edits and drags are refused with ASSISTANT_SKETCH, and
+// the person's Escape, Ctrl+Z, Ctrl+Y or Finish takes it over (discarded,
+// never kept; doc.assistant.takeOver).
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createStateStore } from '../lib/store';
 import { clearSelection } from '../lib/selection';
 import type { AppServices } from '../types/app';
-import type { DocState, EditSession } from '../types/doc-service';
+import type { AssistantStep, DocState, EditSession, TakeOverWhy } from '../types/doc-service';
 import { ORIGIN_PLANES, type FeatureId, type PlaneFrame, type SketchConstraint, type SketchFeature, type SketchSupport, type Vec2, type Vec3 } from '../types/doc';
 import type { SelectionItem } from '../types/selection';
 import type { SketchModeApi, SketchModeState, SketchOutput, SketchToolId, SolverAnalysis, SolverSolveResult } from '../types/sketch';
@@ -177,9 +182,18 @@ export interface ApplyOptions {
   optional?: readonly string[];
   /** Keep the result even when the solver cannot satisfy it (never used for user edits). */
   noUndo?: boolean;
+  /** The Assistant step whose sketch this is: a sketch the Assistant draws takes edits only from it. */
+  by?: AssistantStep;
 }
 
-export type ApplyResult = { ok: true; draft: SketchFeature } | { ok: false; reason: string; over?: boolean };
+/**
+ * An edit refused for over-defining the sketch names the constraints the solver found conflicting
+ * and redundant (stored ids, statusOf: collinear halves merged, solver-only ids left out).
+ */
+export type ApplyResult = { ok: true; draft: SketchFeature } | { ok: false; reason: string; over?: boolean; conflicting?: string[]; redundant?: string[] };
+
+/** Why the person's tools and edits are refused in a sketch the Assistant draws (the panel's foot). */
+export const ASSISTANT_SKETCH = 'The Assistant is drawing this sketch · Esc takes over';
 
 const EMPTY_PREVIEW: SketchPreview = { lines: [], arcs: [], points: [], guides: [], glyphs: [], doomed: [], window: null, boxes: [], dimension: null };
 export function emptyPreview(): SketchPreview {
@@ -296,6 +310,28 @@ export class SketchMode implements SketchModeApi {
 
   plane(): PlaneFrame | null {
     return this.view.get().plane ?? this.stored()?.plane ?? null;
+  }
+
+  /** The Assistant draws the open sketch (its session was opened by an Assistant step). */
+  get byAssistant(): boolean {
+    return !!this.session?.open && !!this.session.owner;
+  }
+
+  /**
+   * Why an edit of the open sketch from these hands is refused, or null: a sketch the Assistant
+   * draws takes edits only from its own step; the step takes none in the person's sketch.
+   */
+  private handsOff(s: EditSession, by: AssistantStep | undefined): string | null {
+    if (s.owner) return by && by.owner === s.owner ? null : ASSISTANT_SKETCH;
+    return by ? `The person is drawing ${this.stored()?.name ?? 'this sketch'}` : null;
+  }
+
+  /** The person takes over the sketch the Assistant draws: it goes, nothing of it kept (its panel's path when it has one). */
+  private takeOver(why: TakeOverWhy) {
+    const ui = uiFor(this.services);
+    const p = ui.state.get().panel;
+    if (p?.kind === 'feature' && p.owner === 'assistant' && p.session === this.session) ui.closePanel({ why });
+    else this.services.doc.assistant.takeOver(why);
   }
 
   private syncSession() {
@@ -415,9 +451,12 @@ export class SketchMode implements SketchModeApi {
   /**
    * A new sketch on an origin plane, or on a planar face given by its stored
    * reference (resolved on its body now) or by a pick (body + face index: the
-   * reference is made here, the one re-anchoring point).
+   * reference is made here, the one re-anchoring point). With the Assistant's
+   * `step`: opened on the person's path for it (UiController.openForAssistant),
+   * read-only for the person; rejects with PersonEditing while the person has a
+   * panel, a menu, a rename or a dialog open.
    */
-  async startSketch(support: SketchSupport | { kind: 'pick'; body: string; index: number }): Promise<true | string> {
+  async startSketch(support: SketchSupport | { kind: 'pick'; body: string; index: number }, opts: { step?: AssistantStep } = {}): Promise<true | string> {
     const ui = uiFor(this.services);
     const block = ui.editBlock();
     if (block) return block;
@@ -461,7 +500,12 @@ export class SketchMode implements SketchModeApi {
         return err instanceof Error ? err.message : String(err);
       }
     }
-    ui.openNew('sketch', { support: sup, plane } as Partial<SketchFeature>);
+    const init = { support: sup, plane } as Partial<SketchFeature>;
+    if (opts.step) {
+      const r = ui.openForAssistant(opts.step, 'sketch', init);
+      return typeof r === 'string' ? r : true;
+    }
+    ui.openNew('sketch', init);
     return true;
   }
 
@@ -469,24 +513,46 @@ export class SketchMode implements SketchModeApi {
     uiFor(this.services).openEdit(feature);
   }
 
-  /** Finish sketch (Done, Enter): the edits still being solved are stored first, then the session closes. */
-  finish(): Promise<void> {
+  /**
+   * Finish sketch (Done, Enter): the edits still being solved are stored first, then the session
+   * closes (kept). The person's Finish on a sketch the Assistant draws takes it over ('enter'). With
+   * the Assistant's `step`: its honest Done (UiController.doneForAssistant, no flush): null when the
+   * sketch was kept, else why not.
+   */
+  finish(opts: { step?: AssistantStep } = {}): Promise<string | null> {
     const session = this.session;
-    if (!session) return Promise.resolve();
+    const step = opts.step;
+    if (!session || !session.open) return Promise.resolve(step ? 'The sketch is closed' : null);
+    if (!step && session.owner) {
+      this.takeOver('enter');
+      return Promise.resolve(null);
+    }
+    if (step && session.owner !== step.owner) return Promise.resolve(this.handsOff(session, step));
     this.tool?.cancel();
     return this.idle().then(() => {
-      if (this.session !== session || !session.open) return;
-      // The plane the support resolved to is the sketch's snapshot from now on (§4.5 point 5).
-      const d = this.stored();
-      const p = this.view.get().plane;
-      if (d && p && !samePlane(p, d.plane)) session.update({ plane: { origin: [...p.origin] as Vec3, normal: [...p.normal] as Vec3, xdir: [...p.xdir] as Vec3 } } as Partial<SketchFeature>);
+      if (this.session !== session || !session.open) return step ? 'The sketch is closed' : null;
+      this.storePlaneSnapshot(session);
+      if (step) return uiFor(this.services).doneForAssistant(step);
       uiFor(this.services).closePanel();
+      return null;
     });
+  }
+
+  /** The plane the support resolved to is the sketch's snapshot from now on (§4.5 point 5). */
+  private storePlaneSnapshot(session: EditSession) {
+    const d = this.stored();
+    const p = this.view.get().plane;
+    if (d && p && !samePlane(p, d.plane)) session.update({ plane: { origin: [...p.origin] as Vec3, normal: [...p.normal] as Vec3, xdir: [...p.xdir] as Vec3 } } as Partial<SketchFeature>);
   }
 
   setTool(tool: SketchToolId): void {
     if (!this.session) return;
     if (this.tool?.id === tool) return;
+    // A sketch the Assistant draws keeps Select (it never draws with the pointer tools).
+    if (tool !== 'select' && this.byAssistant) {
+      this.note(ASSISTANT_SKETCH);
+      return;
+    }
     this.tool?.cancel();
     this.tool?.dispose?.();
     this.tool = this.makeTool(this, tool);
@@ -512,10 +578,18 @@ export class SketchMode implements SketchModeApi {
 
   setDrawConstruction(on: boolean) {
     if (!this.session || this.drawConstruction === on) return;
+    if (this.byAssistant) {
+      this.note(ASSISTANT_SKETCH);
+      return;
+    }
     this.state.set({ drawConstruction: on });
   }
 
-  /** Escape: the tool's step, then the tool, then the selection. Never finishes the sketch. */
+  /**
+   * Escape: the tool's step, then the tool, then the selection. Never finishes the sketch. In a
+   * sketch the Assistant draws: an open question or value box first, else the person takes it
+   * over ('escape': the sketch goes, nothing of it kept).
+   */
   escape(): void {
     const v = this.view.get();
     if (v.prompt) {
@@ -524,6 +598,10 @@ export class SketchMode implements SketchModeApi {
     }
     if (v.editing) {
       this.view.set({ editing: null });
+      return;
+    }
+    if (this.byAssistant) {
+      this.takeOver('escape');
       return;
     }
     if (this.tool?.cancel()) {
@@ -612,8 +690,10 @@ export class SketchMode implements SketchModeApi {
   /**
    * One sketch edit: `make` builds the next geometry from the stored draft; the
    * solver solves it; a new over-definition drops `optional` constraints first,
-   * then refuses (or reports, for "Make it driven?"); the solved draft is stored
-   * (one sketch undo step) and analysed for the colours.
+   * then refuses naming the constraints (or reports, for "Make it driven?"); the
+   * solved draft is stored (one sketch undo step) and analysed for the colours.
+   * A sketch the Assistant draws takes it only with its step (`by`); the person's
+   * is refused with ASSISTANT_SKETCH, checked when the edit's turn comes.
    */
   apply(label: string, make: (d: SketchFeature) => EditOutcome | SketchDraft | null, opts: ApplyOptions = {}): Promise<ApplyResult> {
     // ux010 (DRAW): construction drawing, as it is when the shape is placed (a shape begun before X counts too).
@@ -622,6 +702,11 @@ export class SketchMode implements SketchModeApi {
       const s = this.session;
       const before = this.stored();
       if (!s || !s.open || !before) return { ok: false, reason: 'The sketch is closed' };
+      const refused = this.handsOff(s, opts.by);
+      if (refused) {
+        if (!opts.by) this.note(refused);
+        return { ok: false, reason: refused };
+      }
       let out: EditOutcome | SketchDraft | null;
       try {
         out = make(before);
@@ -640,6 +725,8 @@ export class SketchMode implements SketchModeApi {
       // P4b fu2 (SKETCH): a pattern whose source this edit deleted starts from its next copy.
       const promoted = promoteTies(before, { ...before, ...draft });
       const r = await this.solveEdit(promoted.draft, optional);
+      // Closed while it was being solved (taken over, Finish): nothing is stored, and it says so.
+      if (this.session !== s || !s.open) return { ok: false, reason: 'The sketch is closed' };
       if (!r.ok) {
         const reason = r.reason;
         if (opts.over === 'report' && r.over) return r;
@@ -678,7 +765,7 @@ export class SketchMode implements SketchModeApi {
         attempt = { ...attempt, constraints: attempt.constraints.filter((c) => c.id !== id) };
         continue;
       }
-      if (fresh.length) return { ok: false, reason: 'would over-define the sketch', over: true };
+      if (fresh.length) return { ok: false, reason: 'would over-define the sketch', over: true, conflicting: st.conflicting, redundant: st.redundant };
       if (!r.solved) return { ok: false, reason: 'cannot be solved: the constraints cannot all hold' };
       const solved = withSolved(attempt, r.values);
       // A solution that shrinks a line, a circle or an arc to nothing is not one (vertical on a horizontal line).
@@ -769,7 +856,12 @@ export class SketchMode implements SketchModeApi {
     await this.analyze();
   }
 
+  /** Undo inside the sketch. In a sketch the Assistant draws: the person takes it over ('undo'). */
   undo(): void {
+    if (this.byAssistant) {
+      this.takeOver('undo');
+      return;
+    }
     // ux010 (DRAW): not in the middle of a drag (its release stores it; Escape cancels it).
     if (this.view.get().dragging) return;
     void this.enqueue(async () => {
@@ -786,7 +878,12 @@ export class SketchMode implements SketchModeApi {
     });
   }
 
+  /** Redo inside the sketch. In a sketch the Assistant draws: the person takes it over ('undo'). */
   redo(): void {
+    if (this.byAssistant) {
+      this.takeOver('undo');
+      return;
+    }
     if (this.view.get().dragging) return;
     void this.enqueue(async () => {
       const next = this.redoStack.pop();
@@ -969,6 +1066,11 @@ export class SketchMode implements SketchModeApi {
     return this.enqueue(async () => {
       const d = this.stored();
       if (!d || !this.session?.open) return false;
+      // A sketch the Assistant draws: the person's drag would change its draft.
+      if (this.byAssistant) {
+        this.note(ASSISTANT_SKETCH);
+        return false;
+      }
       try {
         const ev = evaluateDimensions(d, this.services.doc.units);
         await this.solver.load(toSolverSketch(d, ev.values));

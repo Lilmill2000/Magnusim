@@ -67,6 +67,8 @@ export const SHARDS = {
     'e2e/cad-ux010-cursors.spec.ts',
     // ux010 DRAW: relation glyphs for the selection only, Show relations (Shift+R), a conflict always shows.
     'e2e/cad-ux010-relations.spec.ts',
+    // A sketch the Assistant draws: the person's tools refused with the reason, Escape, Ctrl+Z and Enter take it over.
+    'e2e/cad-assistant-sketch.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.
