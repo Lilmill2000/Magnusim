@@ -17,8 +17,10 @@ model reads.
    listens to the host's turns (`turn-info.ts`), then registers **once** for the page's
    life: every tool of `schemas.ts` and `GUIDE` (`guide.ts`). After a `not_connected`
    answer it registers again when the tab shows; after `remote`, `no_assistant` or
-   `not_allowed` never. A tool whose code is not in this build is still offered: the
-   grammar and the prompt cache stay the same while tools are added.
+   `not_allowed` never. This build answers all 18 tools. A build without one's code still
+   offers it, and the call answers `not_ready` `not_built` (`call.ts`; tests make such a
+   build with `createCallHandler(rt, tools)`): the grammar and the prompt cache stay the same
+   while tools are added.
 3. Each call runs `createCallHandler` (`call.ts`): its key (`session-key.ts`:
    `turn:<id>`, `mcp:<session>`, or `ext:<n>` for an outside client's calls), its
    context (`CallCtx` in `src/types/assistant.ts`), the tool's code from
