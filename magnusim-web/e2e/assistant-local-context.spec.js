@@ -3,7 +3,8 @@
 // GET /api/v0/models/<id> does, and the person runs turns from the terminal client
 // (scripts/assistant-run.mjs) against the app's server.
 // - A model loaded with too small a context: the terminal says so, with the number and the
-//   fix, and nothing is sent to the model.
+//   fix, and nothing is sent to the model. Loaded again with room, the person's next try
+//   goes through at once (the failed turn made the server forget the row it kept).
 // - Loaded with room: each answer may run to 8192 tokens, and the conversation is full at 80%
 //   of the model's own context, not of the 128K assumed for a server that reports none (the
 //   next turn is refused, and the terminal says so).
@@ -74,15 +75,26 @@ async function terminal(args) {
   }
 }
 
-test('a local model loaded with a 3K context: the terminal says the context is too small, with the fix, and nothing reaches the model', async () => {
+test('a local model loaded with a 3K context: the terminal says the context is too small, with the fix, and nothing reaches the model; loaded again with 32K, the next try goes through at once', async () => {
   fake.models([{ id: MODEL, context: 3072, type: 'llm' }], 'compat');
   const before = chats().length;
   const from = rowReads().length;
-  const { code, out } = await terminal(['How do I start a bracket?']);
+  let { code, out } = await terminal(['How do I start a bracket?']);
   expect(code, out).toBe(1);
   expect(out).toContain(`[failed] ${SMALL_TEXT}\n`);
   expect(chats().length, 'nothing sent to the model').toBe(before);
   expect(rowReads().slice(from).map((r) => `${r.method} ${r.path}`)).toEqual([`GET /compat/api/v0/models/${MODEL}`]);
+
+  // The person loads the model again with a longer context and asks again, well within the
+  // minute the server keeps a row: the server asks the local server again, and the answer comes.
+  fake.models([{ id: MODEL, context: 32768, type: 'llm' }], 'compat');
+  fake.reply({ text: 'Start with a plate, then cut the holes.' });
+  ({ code, out } = await terminal(['How do I start a bracket?']));
+  expect(code, out).toBe(0);
+  expect(out).toContain('Start with a plate, then cut the holes.');
+  expect(out).not.toContain(SMALL_TEXT);
+  expect(chats().slice(before).map((r) => r.body.max_tokens)).toEqual([8192]);
+  expect(rowReads().slice(from).map((r) => `${r.method} ${r.path}`)).toEqual([`GET /compat/api/v0/models/${MODEL}`, `GET /compat/api/v0/models/${MODEL}`]);
 });
 
 test("loaded with room: the answer may run to 8192 tokens, and the conversation is full at 80% of the model's context", async () => {

@@ -72,6 +72,8 @@ export interface ProviderAdapter {
   send(req: ProviderRequest, signal: AbortSignal, onEvent: (e: StreamEvent) => void): Promise<ProviderResult>;
   /** The local server's row for `model` (null when it offers none); only the local-server adapter has one. Never throws. */
   modelRow?(model: string, signal: AbortSignal): Promise<ModelRow | null>;
+  /** Drops the kept row for `model`: the next modelRow() asks the server again (the model may have been loaded anew). */
+  forgetRow?(model: string): void;
   /**
    * Whether `model` reads images, as far as the adapter knows: its kept row's type, or the
    * server's refusal of images remembered; null when nothing says. Only the local-server

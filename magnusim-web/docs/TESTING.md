@@ -223,12 +223,14 @@ No test reaches a real model provider or this PC's real Assistant files.
   - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
     the next list wait until `fake.release(name)` (a server that never answers).
   - An entry of `fake.models(list, 'compat')` may be a model row,
-    `{id, context, max, type, server}`: the local server then answers the app's read of
-    that model's context and type (`GET <root>/api/v0/models/<id>`, or with
-    `server: 'ollama'` `POST <root>/api/show`) in the shapes of `LOCAL_SERVER_ROWS`,
-    which the file exports with where each shape came from. The app keeps a row 60 s;
-    a test reset forgets it. `e2e/assistant-local-context.spec.js` runs turns from the
-    terminal client against a small and a larger context.
+    `{id, context, max, type, route}`: the local server then answers the app's read of
+    that model's context and type at the first row route (`GET <root>/api/v0/models/<id>`;
+    a row with `max` and no `context` is a model not loaded yet), or with `route: 'show'`
+    at the second (`POST <root>/api/show`), in the shapes of `LOCAL_SERVER_ROWS`, which
+    the file exports with where each shape came from. The app keeps a row 60 s (a not
+    loaded model's only until its next read), drops it when a turn ends failed for the
+    context, and a test reset forgets it. `e2e/assistant-local-context.spec.js` runs
+    turns from the terminal client against a small and a larger context.
   - `fake.textOnly(...ids)` makes the local server refuse (400, `TEXT_ONLY_REFUSAL`) a
     request for one of those models that carries an image, as a server whose model
     can't read images does; `fake.textOnly()` clears it. The workspace tools spec runs a

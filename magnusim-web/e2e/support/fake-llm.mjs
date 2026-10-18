@@ -10,11 +10,12 @@
 //   GET /compat/api/v0/models/<id>     POST /compat/api/show      (a local server's model row)
 //
 // The model rows (CAD tools spec H5) are served for models(list) entries that are rows,
-// `{id, context?, max?, type?, server?: 'lmstudio' | 'ollama'}`, in the shapes of
-// LOCAL_SERVER_ROWS: an LM Studio row (`context` loaded, `max` its maximum, `type` llm |
-// vlm | embeddings) at the first route, an Ollama one (`context` as num_ctx, `max` as the
-// model's context length, vision for vlm) at the second; anything else is 404. They take
-// no failNext and no hold, and the log calls them `kind: 'model_row'`.
+// `{id, context?, max?, type?, route?: 'models' | 'show'}`, in the shapes of
+// LOCAL_SERVER_ROWS: by default an LM Studio row at the first route (`context` loaded, so
+// state `loaded`; `max` its maximum, alone state `not-loaded`; `type` llm | vlm |
+// embeddings), with `route: 'show'` an Ollama one at the second (`context` as num_ctx, `max`
+// as the model's context length, vision for vlm); anything else is 404. They take no
+// failNext and no hold, and the log calls them `kind: 'model_row'`.
 // textOnly(...ids) makes the local server refuse (400, TEXT_ONLY_REFUSAL) a chat request
 // for one of those models that carries an image, as a server whose model can't read images
 // does (CAD tools spec H6); textOnly() with no ids clears it.
@@ -86,8 +87,12 @@ export const TEXT_ONLY_REFUSAL = 'Model does not support images. Please use a mo
  * - `lmstudio`, `lmstudioLoaded`: LM Studio's `GET /api/v0/models/<id>`. The fields and the
  *   first row are its REST API v0 docs' (lmstudio.ai/docs/developer/rest/endpoints, read
  *   2026-10-17), whose example model is not loaded. `loaded_context_length` is not in those
- *   docs: the second row is a loaded model's as an LM Studio 0.3.17 user reported it. Both
- *   come from documents, not from a live server: still to be checked against one.
+ *   docs: the second row is a loaded model's as an LM Studio 0.3.17 user reported it. The
+ *   names match the row LM Studio 0.4.24 builds (its app on this PC, read on 2026-10-17
+ *   without starting it): id, object, type, publisher, arch, compatibility_type,
+ *   quantization, state, max_context_length, loaded_context_length and capabilities. No
+ *   answer of a running server is recorded yet: the spec asks for one (a loaded model, one
+ *   not loaded, an id with / or @), and it is owed before the phase merges.
  * - `ollama`: Ollama's `POST /api/show {"model": "qwen2.5:7b"}`, recorded from Ollama 0.34.4
  *   on 2026-10-17, cut to the fields around the ones read (license, modelfile, template,
  *   system and most of model_info left out). That model sets no num_ctx, so there is no
@@ -693,7 +698,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
           /* not an id */
         }
         const row = modelRows.get(id);
-        if (!row || (row.server ?? 'lmstudio') !== (lmRoute ? 'lmstudio' : 'ollama')) return json(404, { error: `model '${id}' not found` });
+        if (!row || (row.route ?? 'models') !== (lmRoute ? 'models' : 'show')) return json(404, { error: `model '${id}' not found` });
         return json(200, lmRoute ? lmStudioRowOf(row) : ollamaShowOf(row));
       }
       if (req.method === 'GET' && /\/v1\/models$/.test(url.pathname) && dialect) {
@@ -785,7 +790,7 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     },
     /**
      * The model ids the models routes list (every dialect, or one: 'anthropic' | 'openai' |
-     * 'compat'). An entry may be a row, `{id, context?, max?, type?, server?}`: the local
+     * 'compat'). An entry may be a row, `{id, context?, max?, type?, route?}`: the local
      * server's model routes answer for it (see the top), and a later list replaces the rows.
      */
     models(list, dialect) {

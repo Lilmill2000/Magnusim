@@ -8,7 +8,8 @@
  *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
  *       before this request, forgotten answers ask again
  *     a local server's model row (its context, kept 60 s): the answer gets the room the
- *       prompt leaves; too little → failed (context) before this request
+ *       prompt leaves; too little → failed (context) before this request, and the row
+ *       is read again next turn
  *     whether the model reads images (cloud: yes; a local server: its row's type, or a
  *       refusal remembered); the adapter's notes on how a request went, each once a turn
  *     model: one request with this step's tools (computed by the host, every step)
@@ -423,8 +424,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     // A local server's word on the model's context (cached 60 s): the turn knows it from now on.
     const row = adapter.modelRow ? await adapter.modelRow(model, t.signal) : null;
     if (stoppedNow(t)) return;
-    const contextTokens = row?.context ?? t.contextTokens ?? conv.contextTokens;
-    if (contextTokens) t.contextTokens = conv.contextTokens = contextTokens;
+    // What the conversation knew counts only for the server that said it (the address may have changed).
+    const contextTokens = row?.context ?? t.contextTokens ?? conv.contextAt(t.settings.base_url);
+    if (contextTokens) {
+      t.contextTokens = conv.contextTokens = contextTokens;
+      conv.contextBaseUrl = t.settings.base_url;
+    }
     learnImages();
 
     // The spend estimate and the day's reservation (cloud only; a local server costs nothing).
@@ -451,7 +456,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         contextTokens: t.contextTokens,
       });
     let est = estimate(Math.min(turnRoom, dayRoom));
-    if (est.noRoom && t.contextTokens) return t.end('failed', 'context', contextText(t.contextTokens));
+    if (est.noRoom && t.contextTokens) {
+      // The person may load the model with a longer context: the next turn asks the server again.
+      adapter.forgetRow?.(model);
+      conv.contextTokens = null;
+      return t.end('failed', 'context', contextText(t.contextTokens));
+    }
     if (priced && est.capped) {
       const reason: CapReason = turnRoom <= dayRoom ? 'turn_usd' : 'day_usd';
       return t.end('capped', reason, capText(reason, caps));

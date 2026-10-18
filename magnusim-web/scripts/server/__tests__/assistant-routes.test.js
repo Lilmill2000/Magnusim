@@ -574,7 +574,7 @@ describe('turns', () => {
     await until(async () => (await post(`/api/assistant/conversations/${r.json.conversation}/forget`, {})).json.forgotten === true, 5000, 'the forget');
   });
 
-  it("a local server that reports its model's context: too small ends the turn failed (context) with nothing sent; with room the answer may run to 8192 tokens (CAD tools spec H5)", async () => {
+  it("a local server that reports its model's context: too small ends the turn failed (context) with nothing sent; loaded again with room, the next turn of that conversation (within the row's 60 s) is read afresh and its answers may run to 8192 tokens (CAD tools spec H5)", async () => {
     const chats = () => fake.requests().filter((x) => x.kind === 'chat' && x.dialect === 'compat');
     const rowReads = () => fake.requests().filter((x) => x.kind === 'model_row');
     // A reset forgets the rows kept from earlier tests (a row is kept 60 s).
@@ -593,12 +593,11 @@ describe('turns', () => {
       );
       assert.equal(chats().length, chatsBefore, 'nothing sent');
       assert.deepEqual(rowReads().slice(rowsBefore).map((x) => [x.method, x.path]), [['GET', '/compat/api/v0/models/qwen3.8-27b']]);
-      // Loaded again with a longer context (and the kept row forgotten): each answer may run to 8192 tokens.
-      await post('/api/test/assistant/reset', {});
-      assert.equal((await localServer()).status, 200);
+      // The person loads the model again with a longer context and tries again at once, in the
+      // same conversation: the failed turn dropped the kept row, so the server is asked again.
       fake.models([{ id: 'qwen3.8-27b', context: 32768, type: 'llm' }], 'compat');
       fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
-      r = await post('/api/assistant/turns', { text: 'How is the app?' });
+      r = await post('/api/assistant/turns', { text: 'How is the app?', conversation: r.json.conversation });
       assert.equal(r.status, 202, r.text);
       ({ turn } = await follow(r.json.turn));
       assert.equal(turn.state, 'done', turn.message);

@@ -770,7 +770,7 @@ describe("a local server's context (CAD tools spec H5)", () => {
   const textChars = (parts) => parts.reduce((n, p) => n + (p.type === 'text' || p.type === 'tool_result' ? p.text.length : 0), 0);
   const look = () => hostTool('look', { run: async () => ({ ok: true, data: { seen: true }, summary: 'looked' }) });
 
-  it('a context too small for the prompt: the turn ends failed (context) with its number, before any request; the turn and the conversation keep it', async () => {
+  it('a context too small for the prompt: the turn ends failed (context) with its number, before any request; the turn keeps it (the conversation forgets it, below)', async () => {
     const m = localMk({ context: 3072, type: 'llm' });
     const r = await startTurn(m, 'Build a bracket.');
     await settled(r.turn);
@@ -781,7 +781,7 @@ describe("a local server's context (CAD tools spec H5)", () => {
     );
     assert.equal(m.provider.requests.length, 0, 'nothing sent');
     assert.deepEqual(m.provider.rows, ['local-model']);
-    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [3072, 3072]);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [3072, null]);
     checkInvariants(assert, r.turn.conv, m.provider.requests);
   });
 
@@ -847,6 +847,54 @@ describe("a local server's context (CAD tools spec H5)", () => {
     r = await startTurn(m, { text: 'y', conversation: r.body.conversation });
     await settled(r.turn);
     assert.equal(r.turn.contextTokens, 30_000, "the conversation's, when the server gives no row");
+  });
+
+  it("a turn that ends failed (context) forgets the row and the conversation's context: loaded again with a longer context, the next turn of that conversation goes through at once", async () => {
+    const rows = [{ context: 3072, type: 'llm' }, { context: 32768, type: 'llm' }];
+    const m = localMk(() => rows.shift() ?? null);
+    m.provider.forgot = [];
+    m.provider.forgetRow = (model) => m.provider.forgot.push(model);
+    let r = await startTurn(m, 'Build a bracket.');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', contextText(3072)]);
+    assert.deepEqual(m.provider.forgot, ['local-model'], 'the adapter drops its kept row');
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [3072, null], 'the turn says what it met; the conversation forgets it');
+    m.provider.script({ text: 'Start with a plate.' });
+    r = await startTurn(m, { text: 'Build a bracket.', conversation: r.body.conversation });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    assert.deepEqual(m.provider.rows, ['local-model', 'local-model']);
+    assert.equal(m.provider.requests[0].req.maxOutputTokens, 8192);
+    assert.deepEqual([r.turn.contextTokens, r.turn.conv.contextTokens], [32768, 32768]);
+    assert.deepEqual(m.provider.forgot, ['local-model'], 'a turn that fits forgets nothing');
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a context one server reported is not another's: after the address changes, a server that reports none gets the defaults (8192 out, full at 80% of 128K)", async () => {
+    const A = 'http://127.0.0.1:1234/v1';
+    const B = 'http://127.0.0.1:5678/v1';
+    const rows = [{ context: 30_000, type: 'llm' }];
+    const m = localMk(() => rows.shift() ?? null, { settings: { base_url: A } });
+    m.provider.script({ text: 'one', usage: { input: 25_000 } });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    const conversation = r.body.conversation;
+    assert.deepEqual([r.turn.state, r.turn.conv.contextTokens, r.turn.conv.contextBaseUrl], ['done', 30_000, A]);
+    // 25,000 is past 80% of the 30,000 server A reported.
+    r = await startTurn(m, { text: 'y', conversation });
+    assert.deepEqual([r.status, r.body.code], [409, 'conversation_full']);
+    // Server B (it reports no row) is not held to A's context.
+    m.state.settings.base_url = B;
+    m.provider.script({ text: 'two' });
+    r = await startTurn(m, { text: 'y', conversation });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    assert.equal(r.turn.contextTokens, null, "server A's context is not server B's");
+    assert.equal(m.provider.requests.at(-1).req.maxOutputTokens, 8192);
+    assert.equal(r.turn.conv.contextAt(A), 30_000, "A's word is kept for A");
+    assert.equal(r.turn.conv.contextAt(B), null);
   });
 
   it('Stop while the row is read: the turn ends stopped and nothing is sent', async () => {

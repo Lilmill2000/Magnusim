@@ -819,7 +819,7 @@ export class TurnManager {
       const field = conv.mismatch(binding);
       if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
-      if (conv.fullReason()) return refuse(409, 'conversation_full', FULL_TEXT);
+      if (conv.fullReason(settings.base_url)) return refuse(409, 'conversation_full', FULL_TEXT);
     }
     if (boundTab && this.activeForTab(boundTab) > 0) return refuse(409, 'tab_busy', TAB_BUSY_TEXT);
     if (this.running().length >= TURN_LIMITS.running) {

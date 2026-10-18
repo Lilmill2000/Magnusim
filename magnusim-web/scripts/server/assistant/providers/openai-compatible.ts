@@ -19,6 +19,9 @@
  *   (`<root>` is the base URL without `/v1`), else Ollama's `POST <root>/api/show {model}`.
  *   It gives the context the model was loaded with (else its maximum) and its type; kept
  *   60 s per base URL and model, a miss too (a test reset or a server start forgets it).
+ *   A row whose state says the model is not loaded yet is read again each time (its first
+ *   request loads it, often with less than its maximum); forgetRow() and a context error
+ *   from the server drop a kept row, so a model loaded anew is read again at once.
  * - Images only for a model that reads them (CAD tools spec H6). A row whose type is `llm`
  *   (or `embeddings`) means it doesn't: each image goes as IMAGE_LEFT_OUT instead. With no
  *   such word, images go; a refusal of a request that carries them (a 400, or a server
@@ -249,6 +252,15 @@ export function lmStudioRow(j: unknown): ModelRow | null {
 }
 
 /**
+ * Whether an LM Studio-style row's context is the one the model runs with: its `state` is
+ * `loaded`, or it names no state. A model not loaded yet gives only its maximum, and its first
+ * request loads it, often with less.
+ */
+export function lmStudioSettled(j: unknown): boolean {
+  return !isObj(j) || j.state === undefined || j.state === 'loaded';
+}
+
+/**
  * An Ollama-style row (`POST <root>/api/show {model}`): `num_ctx` from its parameters (what
  * the model runs with), else the model's own `<architecture>.context_length` (its maximum;
  * the server's default may be smaller); `vlm` when its capabilities list vision.
@@ -297,8 +309,12 @@ async function jsonOf(res: Response): Promise<unknown> {
   }
 }
 
-/** Rows read, by boot id, base URL and model (a test reset or a server start begins afresh). */
-const ROWS = new Map<string, { at: number; row: ModelRow | null }>();
+/**
+ * Rows read, by boot id, base URL and model (a test reset or a server start begins afresh).
+ * `settled`: the row's context is the loaded one (or there is no row); an unsettled row is
+ * kept only for its type and read again by the next modelRow().
+ */
+const ROWS = new Map<string, { at: number; row: ModelRow | null; settled: boolean }>();
 /** Models whose server refused their images, by the same key: for the process (a test reset or a server start forgets them). */
 const TEXT_ONLY = new Set<string>();
 
@@ -359,14 +375,18 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
     return new Ctor(openAiClientOptions(key, o.baseURL, fetch, env, 0)) as unknown as Client;
   }
 
-  /** The row from the server: LM Studio's route first, then Ollama's; null when neither answers with one. */
-  async function readRow(token: string | null, model: string, signal: AbortSignal): Promise<ModelRow | null> {
+  /**
+   * The row from the server: LM Studio's route first, then Ollama's; null when neither answers
+   * with one. `settled` is false for a row of a model not loaded yet.
+   */
+  async function readRow(token: string | null, model: string, signal: AbortSignal): Promise<{ row: ModelRow | null; settled: boolean }> {
     const fetch = guardedFetch({ origin: o.baseURL, allowHeaders: COMPAT_HEADERS, pin: { authorization: `Bearer ${token || 'local'}` }, label: LABEL });
     const root = serverRoot(o.baseURL);
     const path = idPath(model);
     if (path) {
-      const row = lmStudioRow(await jsonOf(await fetch(`${root}/api/v0/models/${path}`, { headers: { accept: 'application/json' }, signal })));
-      if (row) return row;
+      const j = await jsonOf(await fetch(`${root}/api/v0/models/${path}`, { headers: { accept: 'application/json' }, signal }));
+      const row = lmStudioRow(j);
+      if (row) return { row, settled: lmStudioSettled(j) };
     }
     const show = await fetch(`${root}/api/show`, {
       method: 'POST',
@@ -374,7 +394,7 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
       body: JSON.stringify({ model }),
       signal,
     });
-    return ollamaRow(await jsonOf(show));
+    return { row: ollamaRow(await jsonOf(show)), settled: true };
   }
 
   return {
@@ -428,6 +448,8 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
             return result;
           } catch (err) {
             const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
+            // The server's own context is smaller than the kept row said: the next turn reads it again.
+            if (mapped.code === 'context') ROWS.delete(keyOf(req.model));
             if (withImages && pictures && !acc.started && !signal.aborted && refusedImages(err, mapped)) throw new ImagesRefused(mapped);
             throw mapped;
           } finally {
@@ -451,18 +473,22 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
       for (const [k, v] of ROWS) if (t - v.at >= MODEL_ROW_TTL_MS || t < v.at) ROWS.delete(k);
       const key = keyOf(model);
       const kept = ROWS.get(key);
-      if (kept) return kept.row;
+      if (kept?.settled) return kept.row;
       const timeoutMs = Math.min(MODEL_ROW_TIMEOUT_MS, o.watchdog?.firstByteMs ?? MODEL_ROW_TIMEOUT_MS);
-      let row: ModelRow | null = null;
+      let read: { row: ModelRow | null; settled: boolean } = { row: null, settled: true };
       try {
-        row = await o.borrowKey((token) => readRow(token, model, AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])));
+        read = await o.borrowKey((token) => readRow(token, model, AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])));
       } catch {
         // Unreachable, refused, too slow, a token kept for another address: no row.
-        row = null;
+        read = { row: null, settled: true };
       }
       // A turn stopped mid-read learns nothing about the server.
-      if (!signal.aborted) ROWS.set(key, { at: now(), row });
-      return row;
+      if (!signal.aborted) ROWS.set(key, { at: now(), ...read });
+      return read.row;
+    },
+
+    forgetRow(model) {
+      ROWS.delete(keyOf(model));
     },
 
     readsImages,

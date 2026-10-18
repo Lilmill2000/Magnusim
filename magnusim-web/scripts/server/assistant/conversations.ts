@@ -61,6 +61,8 @@ export class Conversation {
   promptTokens = 0;
   /** The local server's context for this conversation's model, once its model row said (tokens). */
   contextTokens: number | null = null;
+  /** The base URL of the server that said contextTokens (another server's model may differ). */
+  contextBaseUrl: string | null = null;
   private readonly list: Message[] = [];
   private imageCount = 0;
   private byteCount = 0;
@@ -132,13 +134,19 @@ export class Conversation {
     return open.length;
   }
 
-  /** Why no more turns fit (null while they do). */
-  fullReason(): string | null {
+  /** The context the server at `baseUrl` reported for this conversation's model (null when none did, or another server). */
+  contextAt(baseUrl: string): number | null {
+    return this.contextBaseUrl === baseUrl ? this.contextTokens : null;
+  }
+
+  /** Why no more turns fit (null while they do); with `baseUrl`, a context only that server reported counts. */
+  fullReason(baseUrl?: string): string | null {
     const L = CONVERSATION_LIMITS;
     if (this.list.length >= L.messages) return 'messages';
     if (this.imageCount >= L.images) return 'images';
     if (this.byteCount >= L.bytes) return 'bytes';
-    const window = this.provider === 'openai_compatible' ? (this.contextTokens ?? CONTEXT_TOKENS.local) : CONTEXT_TOKENS.cloud;
+    const context = baseUrl === undefined ? this.contextTokens : this.contextAt(baseUrl);
+    const window = this.provider === 'openai_compatible' ? (context ?? CONTEXT_TOKENS.local) : CONTEXT_TOKENS.cloud;
     if (this.promptTokens >= L.fullFraction * window) return 'context';
     return null;
   }

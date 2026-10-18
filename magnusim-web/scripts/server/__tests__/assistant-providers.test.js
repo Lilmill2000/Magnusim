@@ -36,7 +36,7 @@ const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE } = await import('.
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
-const { lmStudioRow, ollamaRow, serverRoot, MODEL_ROW_TTL_MS, IMAGE_LEFT_OUT, IMAGES_REFUSED_NOTE, IMAGES_LEFT_OUT_NOTE, imagesOfType } = await import(
+const { lmStudioRow, lmStudioSettled, ollamaRow, serverRoot, MODEL_ROW_TTL_MS, IMAGE_LEFT_OUT, IMAGES_REFUSED_NOTE, IMAGES_LEFT_OUT_NOTE, imagesOfType } = await import(
   '../assistant/providers/openai-compatible.ts'
 );
 const prices = await import('../assistant/prices.ts');
@@ -1065,7 +1065,7 @@ describe("a local server's model row (CAD tools spec H5)", () => {
   });
 
   it("the adapter asks the server: LM Studio's route first, then Ollama's; an id with / and : in the path; the server token only; a server with neither gives null", async () => {
-    fake.models([{ id: 'lab/qwen3:8b', context: 16384, type: 'vlm' }, { id: 'ol-model', max: 40960, server: 'ollama' }, 'plain-model'], 'compat');
+    fake.models([{ id: 'lab/qwen3:8b', context: 16384, type: 'vlm' }, { id: 'ol-model', max: 40960, route: 'show' }, 'plain-model'], 'compat');
     try {
       const from = fake.requests().length;
       const a = adapterFor('openai_compatible');
@@ -1113,6 +1113,69 @@ describe("a local server's model row (CAD tools spec H5)", () => {
       fake.models([{ id: 'kept-model', context: 4096 }], 'compat');
       resetAssistantState();
       assert.deepEqual(await a.modelRow('kept-model', sig()), { context: 4096, type: 'llm' }, 'a reset forgets');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it("a model not loaded yet: its row gives the maximum and the type, and is read again each time (its type still says images) until the server says it is loaded; then kept", async () => {
+    assert.deepEqual(
+      [LOCAL_SERVER_ROWS.lmstudio, LOCAL_SERVER_ROWS.lmstudioLoaded, { state: 'loaded' }, { type: 'llm' }, null].map(lmStudioSettled),
+      [false, false, true, true, true],
+      'not-loaded and loading are not settled; loaded, or no state, is',
+    );
+    let now = 7_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'jit-model', max: 131072, type: 'llm' }], 'compat');
+    try {
+      const a = adapterFor('openai_compatible', clock);
+      let n = rowReads().length;
+      assert.deepEqual(await a.modelRow('jit-model', sig()), { context: 131072, type: 'llm' });
+      assert.equal(a.readsImages('jit-model'), false, 'the type counts at once');
+      now += 1000;
+      assert.deepEqual(await a.modelRow('jit-model', sig()), { context: 131072, type: 'llm' });
+      assert.equal(rowReads().length, n + 2, 'read again: not loaded yet');
+      // Its first request loaded it, with less than its maximum.
+      fake.models([{ id: 'jit-model', context: 4096, max: 131072, type: 'llm' }], 'compat');
+      assert.deepEqual(await a.modelRow('jit-model', sig()), { context: 4096, type: 'llm' });
+      n = rowReads().length;
+      now += 1000;
+      assert.deepEqual(await adapterFor('openai_compatible', clock).modelRow('jit-model', sig()), { context: 4096, type: 'llm' });
+      assert.equal(rowReads().length, n, 'loaded: kept');
+    } finally {
+      fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
+    }
+  });
+
+  it("forgetRow, and the server's own context error, drop a kept row: the next read within the 60 s asks the server (a model loaded anew with a longer context)", async () => {
+    let now = 8_000_000;
+    const clock = { now: () => now };
+    fake.models([{ id: 'reload-model', context: 3072, type: 'llm' }], 'compat');
+    try {
+      const a = adapterFor('openai_compatible', clock);
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 3072, type: 'llm' });
+      fake.models([{ id: 'reload-model', context: 32768, type: 'llm' }], 'compat');
+      now += 1000;
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 3072, type: 'llm' }, 'kept');
+      // Each turn makes its own adapter: what one forgets, the next one reads again.
+      adapterFor('openai_compatible', clock).forgetRow('reload-model');
+      let n = rowReads().length;
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 32768, type: 'llm' }, 'read again at once');
+      assert.equal(rowReads().length, n + 1);
+      assert.equal(adapterFor('anthropic').forgetRow, undefined);
+
+      // The server says the request is past its context: the row it kept is dropped too.
+      fake.models([{ id: 'reload-model', context: 8192, type: 'llm' }], 'compat');
+      fake.failNext({ status: 400, body: { error: { message: "This model's maximum context length is 8192 tokens.", type: 'invalid_request_error' } }, dialect: 'compat' });
+      await assert.rejects(a.send(request('openai_compatible', [userText('a long one')], { model: 'reload-model' }), sig(), () => {}), (e) => e.code === 'context');
+      n = rowReads().length;
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 8192, type: 'llm' });
+      assert.equal(rowReads().length, n + 1, 'read again after the context error');
+      // Another error keeps it.
+      fake.models([{ id: 'reload-model', context: 65536, type: 'llm' }], 'compat');
+      fake.failNext({ status: 500, dialect: 'compat' });
+      await assert.rejects(a.send(request('openai_compatible', [userText('again')], { model: 'reload-model' }), sig(), () => {}), (e) => e.code === 'server');
+      assert.deepEqual(await a.modelRow('reload-model', sig()), { context: 8192, type: 'llm' }, 'a server error is no news about the context');
     } finally {
       fake.models(['qwen3.8-27b', 'gemma-4-31b'], 'compat');
     }
@@ -1240,7 +1303,7 @@ ${IMAGE_LEFT_OUT}` });
     assert.deepEqual(['vlm', 'llm', 'embeddings', null, 'other'].map(imagesOfType), [true, false, false, null, null]);
     let now = 9_000_000;
     const clock = { now: () => now };
-    fake.models([{ id: 'eyes', context: 32768, type: 'vlm' }, { id: 'words', context: 32768, type: 'llm' }, { id: 'ol-eyes', type: 'vlm', server: 'ollama' }, 'no-row'], 'compat');
+    fake.models([{ id: 'eyes', context: 32768, type: 'vlm' }, { id: 'words', context: 32768, type: 'llm' }, { id: 'ol-eyes', type: 'vlm', route: 'show' }, 'no-row'], 'compat');
     try {
       const a = local(clock);
       const ids = ['eyes', 'words', 'ol-eyes', 'no-row'];
