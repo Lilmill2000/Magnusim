@@ -288,6 +288,8 @@ export interface RelayProgressBody {
   /** 0 to 1, or null when the page said none; absent only on the ack. */
   fraction?: number | null;
   label?: string;
+  /** The call waits for the person (only then): the turn's minutes stop until a progress without it. */
+  waiting?: true;
 }
 
 /**

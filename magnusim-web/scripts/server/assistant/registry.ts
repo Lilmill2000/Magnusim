@@ -56,11 +56,16 @@ export interface ToolOutcome {
   summary: string;
 }
 
+/** What else a progress says: the call waits for the person (the turn's minutes stop meanwhile). */
+export interface ProgressOptions {
+  waiting?: boolean;
+}
+
 export interface ToolRunContext {
   signal: AbortSignal;
   ctx: ToolCtx;
   turn: string | null;
-  progress(fraction: number | null, label: string): void;
+  progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   /** Aborts when the runner stops waiting for this call (it was aborted and its grace ran out). */
   released?: AbortSignal;
 }
@@ -111,7 +116,7 @@ export interface WorkspaceRegistration {
     signal: AbortSignal;
     released?: AbortSignal;
     turn: string | null;
-    progress(f: number | null, label: string): void;
+    progress(f: number | null, label: string, opts?: ProgressOptions): void;
   }): Promise<ToolOutcome>;
   /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
   ready?(): true | string;

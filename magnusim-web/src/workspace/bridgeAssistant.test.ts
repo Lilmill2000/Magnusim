@@ -594,6 +594,33 @@ describe('invokeTool (1.9, unreleased)', () => {
     t.end();
   });
 
+  it('a progress that waits for the person reaches the caller as onProgress(…, {waiting: true}), only for waiting true; it resets the stall window too', async () => {
+    const t = await connected();
+    await t.call('assistant.register', { tools: [SLOW] });
+    fakeTimers();
+    const heard: unknown[][] = [];
+    const a = invoke(t, { tool: 'slow_add', timeoutS: 2, onProgress: (...args: unknown[]) => void heard.push(args) });
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(1500);
+      await t.call('assistant.progress', { call: 'ai-1', fraction: null, label: 'Waiting for you', waiting: true });
+    }
+    // 9 s of waiting, four times the window: never stalled.
+    expect(a.state.out).toBeNull();
+    expect(of(t.events, 'assistantAbort')).toHaveLength(0);
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.5, label: 'Adding', waiting: 'yes' });
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.6, label: 'Adding', waiting: false });
+    await t.call('assistant.progress', { call: 'ai-1', fraction: 0.7 });
+    expect(heard).toEqual([
+      ...Array.from({ length: 6 }, () => [null, 'Waiting for you', { waiting: true }]),
+      [0.5, 'Adding'],
+      [0.6, 'Adding'],
+      [0.7, ''],
+    ]);
+    await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'added' } });
+    expect(await outcomeOf(a)).toEqual({ ok: true, result: { text: 'added' } });
+    t.end();
+  });
+
   it("a call of the page in flight holds the window open, and it restarts once answered; the assistant's own messages do not", async () => {
     const h = hooks();
     let release: (v: boolean) => void = () => undefined;

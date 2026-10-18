@@ -34,7 +34,7 @@
  *                   rev is taken again, e.g. on a new link), plugin_changed (the frame's pinned
  *                   epoch is no longer its plugin's), plugin_off (a fresh frame, no epoch,
  *                   while the live registry says the plugin is not loaded); 400.
- *   /relay/progress {link, call, ack?, fraction?, label?} → {ok} | {ok, stale:true}
+ *   /relay/progress {link, call, ack?, fraction?, label?, waiting?} → {ok} | {ok, stale:true}
  *   /relay/result   {link, call, ok, result? | error?}    → {ok} | {ok, stale:true}
  *
  * - Registrations go into the tool registry (one per tab), so a turn bound to the tab is
@@ -57,8 +57,9 @@
  *   turn on it 409 tab_hidden, its questions unseen) until any POST on it shows the page is
  *   there, or it ends (dormant for the hold). The stall window is the runner's (runner.ts),
  *   reset by progress: a bare one ({fraction: null}) is the page's sign of life while its
- *   frame waits on a call to the app (the bridge's onAlive). Stop sends `abort` and waits up
- *   to 2 s for the page's last answer; the runner giving up on the call (its `released`)
+ *   frame waits on a call to the app (the bridge's onAlive); `waiting: true` says the call
+ *   waits for the person (the runner stops the turn's minutes until a progress without it).
+ *   Stop sends `abort` and waits up to 2 s for the page's last answer; the runner giving up on the call (its `released`)
  *   frees the tab at once.
  * - The page withdraws its tools (tools []) after a call's result; a withdrawal that finds a
  *   call still running gives its result 2 s (then `closed`). A channel or stream that just
@@ -83,7 +84,7 @@ import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
 import { realClock, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
-import type { Registry, ToolOutcome } from './registry.ts';
+import type { ProgressOptions, Registry, ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
@@ -257,7 +258,7 @@ interface Pending {
   pluginName: string;
   epoch: string;
   workspace: string;
-  progress(fraction: number | null, label: string): void;
+  progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   resolve(o: ToolOutcome): void;
   acked: boolean;
   aborted: boolean;
@@ -302,7 +303,7 @@ export interface InvokeCall {
   /** The runner stopped waiting for the call (runner.ts): the tab is free at once. */
   released?: AbortSignal;
   turn: string | null;
-  progress(fraction: number | null, label: string): void;
+  progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
 }
 
 export interface RelayOptions {
@@ -773,7 +774,7 @@ export class Relay {
     this.heard(rec);
     const p = this.pendingFor(rec, body.call);
     if (!p) return ok({ stale: true });
-    const moved = body.fraction !== undefined || body.label !== undefined;
+    const moved = body.fraction !== undefined || body.label !== undefined || body.waiting === true;
     if (body.ack === true || moved) {
       p.acked = true;
       this.clock.clearTimeout(p.ackTimer);
@@ -782,7 +783,8 @@ export class Relay {
     if (moved && !p.aborted) {
       const f = typeof body.fraction === 'number' && Number.isFinite(body.fraction) ? Math.min(1, Math.max(0, body.fraction)) : null;
       try {
-        p.progress(f, cleanText(body.label, 120));
+        if (body.waiting === true) p.progress(f, cleanText(body.label, 120), { waiting: true });
+        else p.progress(f, cleanText(body.label, 120));
       } catch {
         /* the turn's log never breaks the page's call */
       }

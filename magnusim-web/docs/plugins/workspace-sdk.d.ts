@@ -511,8 +511,18 @@ declare module '@magnusim/workspace' {
       input: Record<string, unknown>;
       /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
       signal: AbortSignal;
-      /** Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. */
-      progress(fraction: number | null, label?: string): void;
+      /**
+       * Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+       * `{waiting: true}` says the call waits for the person (a panel of theirs open, their
+       * answer): that time doesn't count toward the turn's minutes, until the next progress
+       * without it or the call's end. Keep calling it while you wait, every few seconds.
+       */
+      progress(fraction: number | null, label?: string, opts?: AssistantProgressOptions): void;
+  }
+  /** What else a call's progress says (unreleased, 1.9). */
+  export interface AssistantProgressOptions {
+      /** The call waits for the person (only while it does). */
+      waiting?: boolean;
   }
   /** A picture in a tool's result (unreleased, 1.9): at most 4 per result, each at most 1.5 MB and 2000 px a side (more fails the call with code "too_large"). */
   export interface AssistantImage {

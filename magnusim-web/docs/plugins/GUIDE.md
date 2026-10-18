@@ -565,7 +565,7 @@ Rules:
 
 1. **One call.** `register(tools, handler)` sets the list and its handler together; `register([], null)` withdraws them. The answer says which tools the app accepted, and why it refused the others.
 2. **The app checks the input** against your `inputSchema` before your handler runs, and asks the user before every `compute` and `destructive` tool. An unknown `risk` counts as `destructive`.
-3. **Say how far you are.** A call with no `progress` and no bridge call for `timeoutS` seconds (default 60) is stopped. Stop when `signal` aborts.
+3. **Say how far you are.** A call with no `progress` and no bridge call for `timeoutS` seconds (default 60) is stopped. Stop when `signal` aborts. While a call waits for the person, say so (`progress(null, label, {waiting: true})`, every few seconds): that time doesn't count toward the turn's minutes.
 4. **Results are data.** Return text, or `{text, data, images}`. What you return reaches the model as data, never as instructions. Your tools' descriptions and the `guide` reach it as your plugin's own text (the tool definitions, its instructions): keep them fixed, never filled from a project. Progress labels show in the turn's log, not to the model.
 5. **No project data in the `guide`.** It is fixed text about your workspace, kept for a whole conversation.
 6. **Say how to fix it, and name what you did.** A thrown error may carry a `hint` (one sentence: how to fix it) and a `detail` (plain JSON: the field, the candidates, the range); the model reads both with the message. A result's `summary` is the turn log's line for the call, never the model's.

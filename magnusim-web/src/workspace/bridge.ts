@@ -54,8 +54,9 @@
  * page hears `not_connected` and that list is abandoned). invokeTool runs one call at a time: the
  * event `assistantInvoke`, then the page's assistant.progress (each resets the call's stall
  * window, as do the page's calls in flight, which the caller hears as onAlive so that its own
- * window waits too) and its assistant.result, checked and capped here (images read to base64
- * in this page). `assistantAbort` stops it: on Stop (the page's answer is
+ * window waits too; `waiting: true` goes on to the caller: the call waits for the person, and
+ * the turn's minutes stop meanwhile) and its assistant.result, checked and capped here (images
+ * read to base64 in this page). `assistantAbort` stops it: on Stop (the page's answer is
  * awaited for 2 s), on a stall, when a leave begins (`leaving`) and when the channel ends
  * (`closed`, after which hooks.assistantTools(null) withdraws the tools). The assistant's turns
  * bound to this tab reach the page as the event `assistantTurn` (assistantTurn(), from the page
@@ -208,8 +209,8 @@ interface InvokeRun {
   id: string;
   /** Calls of the page that began during this call and are not answered yet: its stall window waits for them. */
   inFlight: number;
-  /** The page said how far it is (assistant.progress), or its calls in flight changed. */
-  activity(a: { kind: 'progress'; fraction: number | null; label: string } | { kind: 'calls' }): void;
+  /** The page said how far it is (assistant.progress; `waiting`: it waits for the person), or its calls in flight changed. */
+  activity(a: { kind: 'progress'; fraction: number | null; label: string; waiting?: boolean } | { kind: 'calls' }): void;
   /** The page's answer (assistant.result), checked. */
   done(out: AssistantCallOutcome): void;
   /** End it now with this code (the page is told `assistantAbort`). */
@@ -344,7 +345,8 @@ export interface AssistantInvoke {
   /** Its stall window in seconds (1 to 600; else the tool's own). */
   timeoutS: number;
   signal: AbortSignal;
-  onProgress(fraction: number | null, label: string): void;
+  /** `opts.waiting`: the call waits for the person (the page said so; absent otherwise). */
+  onProgress(fraction: number | null, label: string, opts?: { waiting?: boolean }): void;
   /**
    * The call is alive though its page sends no progress: a call of the page (a host read, a
    * link, a file) started or ended, and every ASSISTANT_ALIVE_MS while one is in flight. Such a
@@ -1313,7 +1315,7 @@ export class WorkspaceCalls {
         if (inv && params.call === inv.id) {
           const f = params.fraction;
           const fraction = typeof f === 'number' && Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : null;
-          inv.activity({ kind: 'progress', fraction, label: cleanDirtyMessage(params.label) });
+          inv.activity({ kind: 'progress', fraction, label: cleanDirtyMessage(params.label), ...(params.waiting === true ? { waiting: true } : {}) });
         }
         return { ok: true };
       }
@@ -2423,7 +2425,8 @@ export class WorkspaceBridge {
           if (settled) return;
           if (a.kind === 'progress' && !stopping) {
             try {
-              req.onProgress(a.fraction, a.label);
+              if (a.waiting) req.onProgress(a.fraction, a.label, { waiting: true });
+              else req.onProgress(a.fraction, a.label);
             } catch (e) {
               this.hooks.log('assistant call: progress listener failed', e);
             }

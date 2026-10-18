@@ -19,6 +19,9 @@
  *    the page's bridge keeps it (the tool did its work); anything else is the abort, "may or
  *    may not have finished". Then the runner stops waiting and says so on the call's
  *    `released` signal (the relay frees the tab before the next call can start).
+ *    A progress that says the call waits for the person (`waiting`) pauses the turn's minutes
+ *    once, until the next progress without it or the call's end; every progress still resets
+ *    the stall window.
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
  *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
  *    A failed call's hint and detail go with its error, and the hint to the log's tool_result
@@ -26,7 +29,7 @@
  */
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import type { ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
+import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
 import { capResult, checkImages, cleanText, TEXT_CAPS } from './sanitize.ts';
 import { stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
@@ -43,7 +46,7 @@ export interface RunnerTurn {
   readonly step: number;
   emit(e: RunnerEvent): void;
   setState(s: 'tools' | 'awaiting_confirmation'): void;
-  /** Gate waits don't count toward the turn's minutes. */
+  /** Gate waits, and a call's waits for the person, don't count toward the turn's minutes. */
   pause(): void;
   resume(): void;
 }
@@ -347,9 +350,19 @@ export class ToolRunner {
       }, stallMs);
     };
     arm();
-    const progress = (fraction: number | null, label: string) => {
-      if (signal.aborted) return;
+    // The call waits for the person (its last progress said so): the turn's minutes are paused.
+    let waiting = false;
+    let finished = false;
+    const wait = (on: boolean) => {
+      if (on === waiting) return;
+      waiting = on;
+      if (on) o.turn?.pause();
+      else o.turn?.resume();
+    };
+    const progress = (fraction: number | null, label: string, opts?: ProgressOptions) => {
+      if (signal.aborted || finished) return;
       arm();
+      wait(opts?.waiting === true);
       const f = typeof fraction === 'number' && Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : null;
       const text = cleanText(label, 120);
       // A bare sign of life (a workspace page waiting on a call to the app, or its progress()
@@ -387,6 +400,8 @@ export class ToolRunner {
     try {
       outcome = await Promise.race([ran, gaveUp]);
     } finally {
+      finished = true;
+      wait(false);
       clock.clearTimeout(stallTimer);
       clock.clearTimeout(graceTimer);
       if (onAbort) signal.removeEventListener('abort', onAbort);

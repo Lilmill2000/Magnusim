@@ -587,6 +587,48 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual((await s.result(link, inv.call, { ok: true })).json, { ok: true, stale: true });
   });
 
+  it('a progress that waits for the person (waiting: true) stops the bound turn’s minutes until one without it, and still resets the stall window', async () => {
+    const { m, s } = await setup({ manager: { caps: { turn_minutes: 1 } } });
+    const { page, link } = await linkedPage(s);
+    m.provider.script({ tools: [{ name: 'ai-demo__slow_add', input: { by: 1 } }] }, { text: 'Done.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Add 1', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    const inv = await page.frame('invoke', 0);
+    assert.equal(inv.timeout_s, 30, 'a 40 s stall window on the server');
+    await s.progress(link, inv.call, { ack: true });
+    m.clock.advance(10_000);
+    assert.equal(t.activeMs(), 10_000);
+    assert.deepEqual((await s.progress(link, inv.call, { fraction: null, label: 'Waiting for you', waiting: true })).json, { ok: true });
+    m.clock.advance(30_000);
+    // Signs of life while it waits (the page relay sends them waiting too): the wait goes on.
+    await s.progress(link, inv.call, { fraction: null, waiting: true });
+    m.clock.advance(30_000);
+    await s.progress(link, inv.call, { fraction: null, waiting: true });
+    m.clock.advance(30_000);
+    assert.equal(t.activeMs(), 10_000, 'ninety seconds of waiting for the person did not count');
+    assert.equal(t.state, 'tools');
+    assert.deepEqual(
+      eventsOf(t).filter((e) => e.type === 'tool_progress').map((e) => e.label),
+      ['Waiting for you'],
+      'the waiting label is a row; the bare ones are not',
+    );
+    // Only true waits: the minutes run again.
+    await s.progress(link, inv.call, { fraction: 0.5, label: 'Adding', waiting: 'yes' });
+    m.clock.advance(20_000);
+    assert.equal(t.activeMs(), 30_000, 'the minutes run again');
+    // waiting alone is progress too: it waits, and resets the window.
+    await s.progress(link, inv.call, { waiting: true });
+    m.clock.advance(35_000);
+    assert.equal(t.activeMs(), 30_000);
+    assert.deepEqual(page.of('abort'), [], 'never stalled: each progress reset the window');
+    assert.deepEqual((await s.result(link, inv.call, { ok: true, result: { text: 'Now 1' } })).json, { ok: true });
+    await settled(t);
+    assert.equal(t.state, 'done');
+    m.clock.advance(5_000);
+    assert.equal(t.activeMs(), 35_000, 'the call ended while it waited: nothing stays paused');
+  });
+
   it('Stop: abort {call} goes to the page; its last answer within 2 s ends the call, else the tab is free after 2 s', async () => {
     const { m, s } = await setup();
     const { page, link } = await linkedPage(s);

@@ -58,6 +58,24 @@ function waitingTool(name, clock, { ms = null, risk = 'read' } = {}) {
   });
 }
 
+/**
+ * A tool the test steers from outside: `ctl.rt` is its run context once it runs (its progress),
+ * `ctl.end()` ends it; an abort ends it as aborted.
+ */
+function steeredTool(name, { stallMs = 60 * 60_000 } = {}) {
+  const ctl = { rt: null, end: null };
+  const def = hostTool(name, {
+    stallMs,
+    run: (_input, rt) =>
+      new Promise((resolve) => {
+        ctl.rt = rt;
+        ctl.end = () => resolve({ ok: true, data: { done: true }, summary: 'done' });
+        rt.signal.addEventListener('abort', () => resolve({ ok: false, error: { code: 'aborted', message: 'Stopped.' }, summary: 'aborted' }), { once: true });
+      }),
+  });
+  return { def, ctl };
+}
+
 describe('a turn from start to end', () => {
   it('text only: starting → model → done, text_so_far, one usage event, the system prompt and the context block', async () => {
     const m = mk();
@@ -444,6 +462,95 @@ describe('the token and minute caps', () => {
     assert.match(res[2].error.message, /^Not run: /);
     assert.equal(m.provider.requests.length, 1);
     checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('minutes: a call waiting for the person (progress waiting) does not spend them: a 2-minute wait under a 1-minute cap is not capped; its next progress without waiting starts them again', async () => {
+    const m = mk({ caps: { turn_minutes: 1 } });
+    const ask = steeredTool('ask', { stallMs: 30_000 });
+    m.registry.addHostTool(ask.def);
+    m.provider.script({ tools: [{ name: 'ask' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    m.clock.advance(10_000);
+    assert.equal(t.activeMs(), 10_000, 'ten seconds of work');
+    // The page waits for the person and says so every 5 s (its heartbeat), for two minutes.
+    for (let i = 0; i < 24; i += 1) {
+      ask.ctl.rt.progress(null, 'Waiting for you to close the Extrude panel', { waiting: true });
+      m.clock.advance(5_000);
+    }
+    await tick();
+    assert.equal(t.state, 'tools', 'two minutes of waiting for the person: not capped, and not stalled (each progress reset the 30 s window)');
+    assert.equal(t.activeMs(), 10_000, 'the wait did not count');
+    assert.deepEqual(
+      ofType(t, 'tool_progress').map((e) => e.label),
+      Array(24).fill('Waiting for you to close the Extrude panel'),
+      'each waiting progress is a row of the log',
+    );
+    // The person closed the panel: the call goes on, and the minutes run again from here.
+    ask.ctl.rt.progress(0.5, 'Building');
+    m.clock.advance(25_000);
+    ask.ctl.rt.progress(0.8, 'Still building');
+    m.clock.advance(24_999);
+    await tick();
+    assert.equal(t.state, 'tools', 'under a minute of work so far');
+    assert.equal(t.activeMs(), 59_999);
+    m.clock.advance(1);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['capped', 'turn_minutes', 'Stopped after 1 minute of work.']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['capped']);
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('minutes: a wait for the person pauses them once however many waiting progresses come, ends with its call, and a progress after the end changes nothing', async () => {
+    const m = mk({ caps: { turn_minutes: 1 } });
+    const ask = steeredTool('ask');
+    const build = steeredTool('build');
+    m.registry.addHostTool(ask.def);
+    m.registry.addHostTool(build.def);
+    m.provider.script({ tools: [{ name: 'ask' }, { name: 'build' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    for (let i = 0; i < 3; i += 1) ask.ctl.rt.progress(null, '', { waiting: true });
+    m.clock.advance(5 * 60_000);
+    assert.equal(t.activeMs(), 0, 'five minutes of waiting: none of it counts');
+    // It ends while it waits: the minutes run again (one resume undoes the three waiting progresses).
+    const late = ask.ctl.rt;
+    ask.ctl.end();
+    await until(() => build.ctl.rt);
+    late.progress(null, 'too late', { waiting: true });
+    m.clock.advance(59_999);
+    await tick();
+    assert.equal(t.state, 'tools');
+    assert.equal(t.activeMs(), 59_999, 'a progress after its call ended paused nothing');
+    assert.ok(!ofType(t, 'tool_progress').some((e) => e.label === 'too late'), 'and is no row of the log');
+    m.clock.advance(1);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason], ['capped', 'turn_minutes']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['ok', 'capped']);
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('minutes: a waiting call that stops saying so stalls as any other, and the minutes run again', async () => {
+    const m = mk({ caps: { turn_minutes: 1 } });
+    const ask = steeredTool('ask', { stallMs: 30_000 });
+    const peek = steeredTool('peek');
+    m.registry.addHostTool(ask.def);
+    m.registry.addHostTool(peek.def);
+    m.provider.script({ tools: [{ name: 'ask' }, { name: 'peek' }] }, { text: 'never' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    ask.ctl.rt.progress(null, 'Waiting for you', { waiting: true });
+    m.clock.advance(29_999);
+    await tick();
+    assert.equal(t.state, 'tools');
+    m.clock.advance(1);
+    await until(() => peek.ctl.rt);
+    assert.equal(ofType(t, 'tool_result')[0].code, 'stalled');
+    assert.equal(t.activeMs(), 0, 'the wait up to the stall did not count');
+    m.clock.advance(60_000);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason], ['capped', 'turn_minutes']);
+    assert.deepEqual(codes(lastResults(t.conv)), ['stalled', 'capped']);
   });
 });
 

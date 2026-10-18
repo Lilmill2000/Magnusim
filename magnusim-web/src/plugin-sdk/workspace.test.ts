@@ -742,6 +742,29 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     expect(results(posts)).toHaveLength(2);
   });
 
+  it('progress(…, {waiting: true}) says the call waits for the person: assistant.progress carries waiting only then', async () => {
+    const { ws, posts, push } = await open(accepting);
+    await ws.assistant!.register([ADD], async (c) => {
+      c.progress(null, 'Waiting for you to close the panel', { waiting: true });
+      c.progress(null, '', { waiting: true });
+      c.progress(0.5, 'Adding', { waiting: false });
+      c.progress(0.6, 'Adding', { waiting: 'yes' } as never);
+      c.progress(0.7, 'Adding', null as never);
+      c.progress(0.8);
+      return 'Counter is 2';
+    });
+    invoke(push, 'ai-1');
+    await vi.waitFor(() => expect(results(posts)).toHaveLength(1));
+    expect(posts.filter((p) => p.method === 'assistant.progress').map((p) => p.params)).toEqual([
+      { call: 'ai-1', fraction: null, label: 'Waiting for you to close the panel', waiting: true },
+      { call: 'ai-1', fraction: null, waiting: true },
+      { call: 'ai-1', fraction: 0.5, label: 'Adding' },
+      { call: 'ai-1', fraction: 0.6, label: 'Adding' },
+      { call: 'ai-1', fraction: 0.7, label: 'Adding' },
+      { call: 'ai-1', fraction: 0.8 },
+    ]);
+  });
+
   it('assistantAbort aborts the signal; progress after it is not sent', async () => {
     const { ws, posts, push } = await open(accepting);
     let signal: AbortSignal | null = null;

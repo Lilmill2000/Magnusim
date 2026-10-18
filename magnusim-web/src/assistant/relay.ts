@@ -24,6 +24,9 @@
  * (the server's ack window catches a connection that is only half open), its progress goes
  * on at most 4 times a second (and, while the frame waits on a call to the app, a bare
  * progress as a sign of life: the server's stall window waits too), its end as the result;
+ * a progress that waits for the person goes `waiting: true` (CAD tools spec H7), and so
+ * does each sign of life after it until a progress that doesn't wait (the turn's minutes stop
+ * meanwhile);
  * `abort` stops it. When the list goes while a call runs, that call's result is sent first
  * (at most 3 s), then `tools: []`, then the channel closes. A dropped stream ends this page's calls on the server at once, so
  * they are stopped here too.
@@ -517,13 +520,18 @@ function resultsFirst(r: Relay): Promise<void> {
 
 /**
  * Progress of one call, at most 4 a second: the newest waits for its turn. `alive` is a bare
- * one (a call of the frame in flight), sent unless a progress waits to go anyway.
+ * one (a call of the frame in flight), sent unless a progress waits to go anyway. `waiting`
+ * is the frame's last progress's (it waits for the person): a sign of life keeps it.
  */
-function progressSender(link: string, call: string): { push(fraction: number | null, label: string): void; alive(): void; stop(): void } {
+function progressSender(
+  link: string,
+  call: string,
+): { push(fraction: number | null, label: string, opts?: { waiting?: boolean }): void; alive(): void; stop(): void } {
   let last = Number.NEGATIVE_INFINITY;
-  let pending: { fraction: number | null; label: string } | null = null;
+  let pending: { fraction: number | null; label: string; waiting: boolean } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let ended = false;
+  let waiting = false;
   const send = () => {
     timer = null;
     if (ended || !pending) return;
@@ -532,22 +540,27 @@ function progressSender(link: string, call: string): { push(fraction: number | n
     last = Date.now();
     // `fraction` always goes, null when the page gave none: a bare progress() is a sign of life
     // too, and the server counts as progress only a POST that carries a fraction or a label.
-    const body: RelayProgressBody = { link, call, fraction: p.fraction, ...(p.label ? { label: p.label } : {}) };
+    const body: RelayProgressBody = { link, call, fraction: p.fraction, ...(p.label ? { label: p.label } : {}), ...(p.waiting ? { waiting: true as const } : {}) };
     void post(PROGRESS_PATH, body);
   };
-  const push = (fraction: number | null, label: string) => {
-    if (ended) return;
-    pending = { fraction: typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : null, label: typeof label === 'string' ? label : '' };
+  const queue = (fraction: number | null, label: string) => {
+    pending = { fraction: typeof fraction === 'number' && Number.isFinite(fraction) ? fraction : null, label: typeof label === 'string' ? label : '', waiting };
     if (timer) return;
     const wait = last + PROGRESS_INTERVAL_MS - Date.now();
     if (wait <= 0) send();
     else timer = setTimeout(send, wait);
   };
+  const push = (fraction: number | null, label: string, opts?: { waiting?: boolean }) => {
+    if (ended) return;
+    waiting = opts?.waiting === true;
+    queue(fraction, label);
+  };
   return {
     push,
     alive() {
-      // A progress that waits to go is a sign of life too, and says more.
-      if (!ended && !pending) push(null, '');
+      // A progress that waits to go is a sign of life too, and says more. One while the frame
+      // waits for the person waits too: only the frame's own progress says it stopped waiting.
+      if (!ended && !pending) queue(null, '');
     },
     stop() {
       ended = true;

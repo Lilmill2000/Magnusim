@@ -745,6 +745,44 @@ describe('tool calls', () => {
     await settle();
   });
 
+  it('a progress that waits for the person goes waiting: true, and so does each sign of life after it, until a progress that does not wait', async () => {
+    await registered();
+    channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });
+    const run = running[0];
+    const progress = () => sent.filter((s) => s.path === '/api/assistant/relay/progress' && !s.body.ack).map((s) => s.body);
+    const at = { link: LINK_A, call: 'call-1' };
+    run.req.onProgress(null, 'Waiting for you', { waiting: true });
+    await settle();
+    expect(progress()).toEqual([{ ...at, fraction: null, label: 'Waiting for you', waiting: true }]);
+    // A call of the frame in flight meanwhile: its sign of life waits too (the turn's minutes stay stopped).
+    await settle(PROGRESS_INTERVAL_MS);
+    run.req.onAlive?.();
+    await settle();
+    expect(progress().at(-1)).toEqual({ ...at, fraction: null, waiting: true });
+    // A progress that does not wait ends it. Within the 4 a second the newest goes: a waiting
+    // one replaced by one that does not wait goes without it.
+    await settle(PROGRESS_INTERVAL_MS);
+    run.req.onProgress(0.1, 'Building');
+    run.req.onProgress(0.15, 'Waiting again', { waiting: true });
+    run.req.onProgress(0.2, 'Building on');
+    await settle(PROGRESS_INTERVAL_MS);
+    // And the signs of life after it do not wait either.
+    await settle(PROGRESS_INTERVAL_MS);
+    run.req.onAlive?.();
+    await settle();
+    expect(progress()).toEqual([
+      { ...at, fraction: null, label: 'Waiting for you', waiting: true },
+      { ...at, fraction: null, waiting: true },
+      { ...at, fraction: 0.1, label: 'Building' },
+      { ...at, fraction: 0.2, label: 'Building on' },
+      { ...at, fraction: null },
+    ]);
+    run.end({ ok: true, result: { text: 'Counter is 2.' } });
+    await settle();
+    take('/api/assistant/relay/result').answer(200, { ok: true });
+    await settle();
+  });
+
   it('abort stops the call in the frame; its end goes back as the result', async () => {
     await registered();
     channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });

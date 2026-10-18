@@ -216,7 +216,7 @@ One call of a tool, as the handler gets it (unreleased, 1.9).
 - `tool: string`: The tool's name, as registered.
 - `input: Record<string, unknown>`: The input, already checked against the tool's inputSchema.
 - `signal: AbortSignal`: Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more.
-- `progress(fraction: number | null, label?: string | undefined): void`: Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window.
+- `progress(fraction: number | null, label?: string | undefined, opts?: AssistantProgressOptions | undefined): void`: Say how far it is (0 to 1, or null) and what it does. Each call resets the stall window. `{waiting: true}` says the call waits for the person (a panel of theirs open, their answer): that time doesn't count toward the turn's minutes, until the next progress without it or the call's end. Keep calling it while you wait, every few seconds.
 
 #### AssistantImage
 
@@ -242,6 +242,16 @@ An object in a tool's input schema (unreleased, 1.9): the tool's whole input is 
 - `properties: Record<string, AssistantSchema>`
 - `required?: string[] | undefined`
 - `additionalProperties: false`
+
+#### AssistantProgressOptions
+
+```ts
+interface AssistantProgressOptions
+```
+
+What else a call's progress says (unreleased, 1.9).
+
+- `waiting?: boolean | undefined`: The call waits for the person (only while it does).
 
 #### AssistantRegistration
 
