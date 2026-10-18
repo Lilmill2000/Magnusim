@@ -87,7 +87,7 @@ test.afterEach(() => {
 
 type W = {
   __CAD__: {
-    assistant: { setAskEach(on: boolean | null): void; waiting(): string[]; calls: { tool: string; ok: boolean; reason?: string }[] };
+    assistant: { setAskEach(on: boolean | null): void; waiting(): string[]; calls: { tool: string; ok: boolean; reason?: string }[]; state(): { call: { tool: string } | null } };
     services: {
       commands: { get(id: string): { hint?: string } | undefined };
       doc: { addParam(p: { name: string; expr: string; quantity: string }): unknown; assistant: { current(): unknown }; state: { get(): { doc: { features: { id: string; name: string; type: string }[]; params: { name: string }[] }; history: { undoLabel: string | null } } } };
@@ -441,7 +441,11 @@ test("cad:assistant-takeover-person-undo the person's Ctrl+Z between two calls p
   // The read answers, and tells the model what the person did; the edit then waits.
   const [read] = resultsIn(await nthRequest(3, before));
   expect(read).toMatchObject({ tool: 'cad__get_model', ok: true, data: { user_changes: expect.arrayContaining(['the person undid your steps (Assistant: Add a, then b.); do not redo them unless asked']) } });
-  await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.calls.length), STEP).toBeGreaterThanOrEqual(2);
+  // The edit has reached the page and the pause holds it (its progress says so in the turn's log),
+  // not merely on its way: nothing of it reached the model or the Part.
+  await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.state().call?.tool ?? null), STEP).toBe('set_params');
+  await t.waitFor((e) => e.type === 'tool_progress' && e.label === 'Paused by the person', 'set_params b waits at the pause');
+  expect(chats(host).length).toBe(before + 3);
   await expect(frame.locator('[data-chip="assistant"]')).toHaveAttribute('data-assistant-state', 'paused');
   expect(await params(page)).toEqual([]);
   // Resume: the edit runs and the turn goes on.

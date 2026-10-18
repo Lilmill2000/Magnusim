@@ -8,6 +8,9 @@
 // reason and the first shot. The run folder holds runs.jsonl, the turn's events, the calls, the
 // facts and the final picture (a PNG of the Part). A run whose first shot fails a check gets one
 // repair turn naming the failed checks, and a refused call is counted by its reason.
+// Each test may take the suite's 240 s like the shard's other tests (a fresh page, the Part, the
+// kernel, the turn, the walk and the picture on CI's two slow cores; 120 s was never measured on
+// Linux), the repair test two turns' ceiling and a minute, the poker chip 300 s.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -40,9 +43,11 @@ test.afterEach(() => {
   expect(host.fake.pending(), 'scripted answers left unused').toBe(0);
 });
 
-/** One task's run with the scripted model and its reference, fast pace, each turn within 100 s. */
+/** A turn's ceiling here. */
+const TURN_MS = 100_000;
+/** One task's run with the scripted model and its reference, fast pace, each turn within TURN_MS. */
 const scripted = (page: Page, id: string, out: string | null = null, driver: EvalDriver = scriptedDriver(host.fake)): Promise<RunRecord> =>
-  runTask({ base: host.base, page, driver, out }, loadTask(id), { label: 'e2e', pace: 'fast', turnMs: 100_000 });
+  runTask({ base: host.base, page, driver, out }, loadTask(id), { label: 'e2e', pace: 'fast', turnMs: TURN_MS });
 
 /** A first-shot pass on every counted check, with the record's step, error and first-shot fields. */
 function expectPass(r: RunRecord, id: string): void {
@@ -61,7 +66,7 @@ function expectPass(r: RunRecord, id: string): void {
 }
 
 test('cad:assistant-eval-plate-holes the plate scores pass at the first shot, its walk of t keeps it working; the run folder holds its records and a picture', async ({ page }, info) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const out = info.outputPath('eval');
   const r = await scripted(page, 'plate-holes', out);
   expectPass(r, 'plate-holes');
@@ -88,7 +93,7 @@ test('cad:assistant-eval-plate-holes the plate scores pass at the first shot, it
 });
 
 test('cad:assistant-eval-l-bracket the L bracket scores pass at the first shot: its fillet face and a hole centred on each flange', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const r = await scripted(page, 'l-bracket');
   expectPass(r, 'l-bracket');
   expect(r.checks.find((c) => c.id === 'holes')).toMatchObject({ pass: true });
@@ -96,7 +101,7 @@ test('cad:assistant-eval-l-bracket the L bracket scores pass at the first shot: 
 });
 
 test('cad:assistant-eval-flange the flange scores pass at the first shot: six bolt holes on the 60 mm circle and the bore', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const r = await scripted(page, 'flange');
   expectPass(r, 'flange');
   expect((r.checks.find((c) => c.id === 'bolt_holes')!.got as unknown[]).length).toBe(6);
@@ -112,7 +117,7 @@ test('cad:assistant-eval-poker-chip the poker chip scores pass at the first shot
 });
 
 test('cad:assistant-eval-repair a first shot that fails gets one repair turn naming the failed checks; a refused call is counted by its reason', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(2 * TURN_MS + 60_000);
   // The spacer's reference with a call to a face that is not there first, and without its extrude:
   // the first shot ends with no body; the repair turn makes it.
   const steps = fakeSteps(loadReference('spacer'), 0);

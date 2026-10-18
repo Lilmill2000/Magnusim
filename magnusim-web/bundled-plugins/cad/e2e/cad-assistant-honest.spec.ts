@@ -16,6 +16,10 @@
 // which builds on it with no warning and moves with it when the person changes its distance. A
 // plate with a keyhole (a circle and an overlapping slot) extruded as "all": the hole stays open
 // (the volume chip shows the plate less the keyhole, not a solid plate).
+// Honest 8: with the person's rollback bar above the end, the Assistant's edit waits (the chip reads
+// "Assistant waits for you: move the rollback bar to the end", nothing changes) while its read
+// answers with where the bar is; the person's drag of the bar to the end lets the edit finish, as
+// one undo step.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -782,4 +786,62 @@ test('cad:assistant-honest-plane a sketch the model moves onto an offset plane: 
   });
   await expect.poll(originZ, STEP).toBeCloseTo(30, 6);
   await expect(sketchRow).toHaveAttribute('data-state', 'ok', STEP);
+});
+
+test('cad:assistant-honest-rolled-back with the rollback bar above the end the edit waits and the read answers; the person dragging the bar to the end lets it finish', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant honest rolled back');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 6] });
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
+  const tree = frame.locator('[data-cad-tree]');
+  const bar = tree.locator('[data-rollback-bar]');
+  const extrudeRow = tree.locator('[data-feature-row]').filter({ has: frame.locator('> .tree-row .tl', { hasText: /^Extrude 1$/ }) }).locator('> .tree-row');
+  /** The person drags the rollback bar to page height `y`. */
+  const dragBarTo = async (y: number) => {
+    const b = (await bar.boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, y, { steps: 8 });
+    await page.mouse.up();
+  };
+  const paramNames = () => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().doc.params.map((p) => p.name));
+  // The person rolls back above Extrude 1.
+  await dragBarTo((await extrudeRow.boundingBox())!.y + 2);
+  await expect(bar).toHaveAttribute('aria-valuenow', '1', STEP);
+  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(1);
+  const undo0 = await undoNow(page);
+
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
+    { tools: [{ name: 'cad__set_params', input: { set: [row('w', '40 mm')], remove: [] } }] },
+    { text: 'w is set.' },
+  );
+  const t = await startTurn(request, host, { text: 'Add w.', tab });
+  // The edit waits: the chip asks the person to move the bar, the turn's log says why, nothing changes.
+  const chip = frame.locator('[data-chip="assistant"]');
+  await expect(chip).toHaveAttribute('data-assistant-state', 'waiting', STEP);
+  await expect(chipWords(frame)).toHaveText('Assistant waits for you: move the rollback bar to the end');
+  await t.waitFor((e) => e.type === 'tool_progress' && e.label === 'Waiting for the person: the rollback bar is after Sketch 1, not at the end', 'set_params waits for the rollback bar');
+  // The read before it answered, saying where the bar is.
+  const [read] = resultsIn(chats(host)[before + 1]);
+  expect(read).toMatchObject({ tool: 'cad__get_model', ok: true, data: { rolled_back: { after: 'Sketch 1', count: 1 }, person: 'the rollback bar is after Sketch 1, not at the end' } });
+  expect(chats(host).length).toBe(before + 2);
+  expect(await paramNames()).toEqual([]);
+  expect(await undoNow(page)).toBe(undo0);
+  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(1);
+  // The person drags the bar to the end: the edit goes on, and is one undo step of its own.
+  const ex = (await extrudeRow.boundingBox())!;
+  await dragBarTo(ex.y + ex.height + 4);
+  await expect(bar).toHaveAttribute('aria-valuenow', '2', STEP);
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  expect(resultsIn(chats(host)[before + 2])[0]).toMatchObject({ tool: 'cad__set_params', ok: true, data: { params: [{ name: 'w', value: 40 }] } });
+  expect(await paramNames()).toEqual(['w']);
+  await expect(tree.locator('[data-feature-row][data-rolled-back]')).toHaveCount(0);
+  expect(await undoNow(page)).toBe('Assistant: Add w.');
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(paramNames, STEP).toEqual([]);
+  await expect.poll(() => treeNames(page), STEP).toEqual(['Sketch 1', 'Extrude 1']);
 });

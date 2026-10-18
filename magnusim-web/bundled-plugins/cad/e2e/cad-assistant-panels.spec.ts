@@ -83,7 +83,7 @@ async function keyboardInFrame(page: Page, frame: FrameLocator) {
   await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
 }
 
-test('cad:assistant-panel a panel the Assistant fills is read-only and badged, follows its draft live, and Escape takes it over keeping nothing', async ({ page, request }) => {
+test('cad:assistant-panel-escape a panel the Assistant fills is read-only and badged, follows its draft live, and Escape takes it over keeping nothing', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const made = await addSolid(page);
   await expect.poll(() => volume(frame), { timeout: 30_000 }).toBe(8000);
@@ -132,7 +132,7 @@ test('cad:assistant-panel a panel the Assistant fills is read-only and badged, f
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:assistant-panel Ctrl+Z on the Assistant\'s panel takes it over and undoes nothing; the toolbar\'s Extrude takes it over for the person\'s own', async ({ page, request }) => {
+test('cad:assistant-panel-undo Ctrl+Z on the Assistant\'s panel takes it over and undoes nothing; the toolbar\'s Extrude takes it over for the person\'s own', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const made = await addSolid(page);
   const panel = frame.locator('[data-cad-panel="feature"]');
@@ -245,7 +245,7 @@ test("cad:assistant-panel-rail the collapsed Sketch panel of the Assistant's ske
   }
 });
 
-test('cad:assistant-panel the person\'s Parameters panel stays open and theirs, and flashes the rows an Assistant step changes', async ({ page, request }) => {
+test('cad:assistant-panel-params-flash the person\'s Parameters panel stays open and theirs, and flashes the rows an Assistant step changes', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const ids = await cad<string[]>(page, (() => {
     const doc = (window as unknown as W).__CAD__.services.doc;

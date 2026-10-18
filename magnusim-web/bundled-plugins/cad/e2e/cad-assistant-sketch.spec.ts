@@ -113,7 +113,7 @@ async function gone(page: Page, frame: FrameLocator) {
   expect(await featureNames(page)).toEqual([]);
 }
 
-test('cad:assistant-sketch a sketch the Assistant draws refuses the person\'s Line with the reason, and Escape takes it over keeping nothing', async ({ page, request }) => {
+test('cad:assistant-sketch-escape a sketch the Assistant draws refuses the person\'s Line with the reason, and Escape takes it over keeping nothing', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const tb = frame.locator('[data-cad-toolbar]');
   const tip = frame.locator('[data-cad-tip]');
@@ -153,7 +153,7 @@ test('cad:assistant-sketch a sketch the Assistant draws refuses the person\'s Li
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:assistant-sketch Ctrl+Z and Enter in a sketch the Assistant draws take it over and undo nothing; its own Finish keeps it; the solver analyses a sketch apart', async ({ page, request }) => {
+test('cad:assistant-sketch-undo-enter Ctrl+Z and Enter in a sketch the Assistant draws take it over and undo nothing; its own Finish keeps it; the solver analyses a sketch apart', async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   const undoLabel = () => cad<string | null>(page, (() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel) as never);
   const before = await undoLabel();

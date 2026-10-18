@@ -19,7 +19,7 @@
 // back and Ctrl+Shift+Z brings it again. The person's open Parameters panel during set_params: no
 // wait, the new values and the flash, still open. The camera latch: a drag or a tree menu's Normal
 // to during the turn keeps the view where the person put it; with no move the sketch turns the
-// view to its plane. The chip after the turn: Undo is one Ctrl+Z of the request; the Part's health
+// view to its plane (a plane the view was not facing: Front after the person's Normal to on Top). The chip after the turn: Undo is one Ctrl+Z of the request; the Part's health
 // says "· 1 sketch under-defined" (amber) or "· Fillet 1 fails" (red; a click selects its row).
 // The guide's plate, watched (watch 2 as the spec has it, the S4 integration once extrude and hole
 // were built): the Assistant's Parameters panel, its plate sketch going to fully defined, its
@@ -776,10 +776,17 @@ test('cad:assistant-watch-camera the camera latch: a drag or a tree menu Normal 
         await frame.locator('[data-menu-item="normal-to"]').click();
       },
     ],
-    ['Top', 'none', null],
+    // The view looks down -Z now (turn 2's Normal to on Top): Front's sketch must turn it.
+    ['Front', 'none', null],
   ];
-  for (const [on, how, look] of turns) {
-    host.fake.reply({ hold: `look-${how}`, tools: [sketchOf(`On ${on}`, on)] }, { text: 'Sketched.' });
+  /** Where the camera looks (a unit vector). */
+  const facing = (c: { position: number[]; target: number[] }) => {
+    const d = c.target.map((v, i) => v - c.position[i]);
+    const n = Math.hypot(...d);
+    return d.map((v) => v / n);
+  };
+  for (const [i, [on, how, look]] of turns.entries()) {
+    host.fake.reply({ hold: `look-${how}`, tools: [sketchOf(`Turn ${i + 1} on ${on}`, on)] }, { text: 'Sketched.' });
     const t = await startTurn(request, host, { text: `Sketch on ${on}.`, tab });
     await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
     const m0 = await moves();
@@ -795,10 +802,11 @@ test('cad:assistant-watch-camera the camera latch: a drag or a tree menu Normal 
       // Latched: the sketch's entry left the view where the person put it.
       expect(after, `${how}: the camera stays`).toEqual(seen);
     } else {
-      // No move in the turn: the view turned to look straight at Top (down -Z).
-      const d = after.target.map((v, i) => v - after.position[i]);
-      const n = Math.hypot(...d);
-      expect(d[2] / n).toBeLessThan(-0.999);
+      // No move in the turn: the view turned from where it was (down -Z, the person's Normal to
+      // on Top in turn 2) to look straight at Front (along +Y).
+      expect(facing(seen)[2], 'the view faced Top before the turn').toBeLessThan(-0.999);
+      expect(after, 'the sketch turned the view').not.toEqual(seen);
+      expect(facing(after)[1]).toBeGreaterThan(0.999);
     }
   }
 });

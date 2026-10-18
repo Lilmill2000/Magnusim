@@ -4,6 +4,8 @@
 //   - every spec of e2e/ is in exactly one shard, and every shard's spec exists;
 //   - a changed file maps to the shards that test it (shared code to every shard);
 //   - the smoke set is 10-15 tests, one path through every area, none of them @serial;
+//   - every test has an id of its own (the first word of its title: -g "<id> " and the serial
+//     list name one test);
 //   - package.json has a script per shard, smoke and changed.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -244,6 +246,20 @@ describe('the smoke and serial tags', () => {
       const known = taggedTests(f).reduce((n, t) => n + t.tags.filter((x) => x === SMOKE_TAG || x === SERIAL_TAG).length, 0);
       expect(all, `${f}: every @smoke / @serial is a test's { tag }`).toBe(known);
     }
+  });
+
+  it('every test has an id of its own: the first word of its title, cad:<id> (an id made in a loop counts once)', () => {
+    const ids = specFiles.flatMap((f) => {
+      const src = readFileSync(join(PLUGIN, f), 'utf8');
+      const all = src.match(/\btest(?:\.(?:skip|fixme|only|fail))?\(\s*['"`]/g) ?? [];
+      const named = [...src.matchAll(/\btest(?:\.(?:skip|fixme|only|fail))?\(\s*(['"`])(cad:[^\s'"`]+)/g)].map((m) => m[2]);
+      expect(named.length, `${f}: every test's title starts with cad:<id>`).toBe(all.length);
+      return named.map((id) => `${id} (${f})`);
+    });
+    expect(ids.length).toBeGreaterThan(400);
+    const seen = new Map<string, number>();
+    for (const x of ids) seen.set(x.split(' ')[0], (seen.get(x.split(' ')[0]) ?? 0) + 1);
+    expect(ids.filter((x) => seen.get(x.split(' ')[0])! > 1), 'ids two tests share').toEqual([]);
   });
 
   it('@serial marks only the tests that change or read what every test on the server sees, or time the server or the browser', () => {
