@@ -9,6 +9,7 @@
  * project data goes, so only the Assistant's own local-only routes change it.
  */
 import { join } from 'node:path';
+import { AGENT_ID_RE, CUSTOM_ID_RE, knownAgent, modeAllowed } from './agents/known.ts';
 import { readJsonFile, writeFileAtomic } from './files.ts';
 import { assistantDataDir } from './home.ts';
 import { alog } from './log.ts';
@@ -45,6 +46,38 @@ export interface McpSettings {
   ask_in_client: false;
 }
 
+/**
+ * A coding agent's saved choices (phase 3 spec 5.1). `allowed` (the allow switch, with the
+ * fingerprint of the command it was given for) and `lockdown_failed` (the lockdown tripwire
+ * fired, with Magnusim's version) change only through setAgentAllowed() and
+ * setAgentLockdownFailed(), never through a settings save.
+ */
+export interface AgentPrefs {
+  model: string | null;
+  mode: string | null;
+  allowed: { fingerprint: string; at: string } | null;
+  lockdown_failed: { version: string; at: string } | null;
+}
+
+/** A coding agent the person added as a command (its own routes add and remove it). */
+export interface CustomAgent {
+  /** custom-<6 hex>. */
+  id: string;
+  /** 1–40 characters, cleaned. */
+  name: string;
+  /** The program and its arguments: 1–32 parts, each at most 1024 characters. Never run through a shell. */
+  argv: string[];
+  /** At most 8 more variable names it gets (^[A-Za-z_][A-Za-z0-9_]{0,63}$). */
+  keep_env: string[];
+}
+
+/** Limits for a turn on a coding agent: changes, tool calls and active minutes per message. */
+export interface AgentCaps {
+  changes: number;
+  calls: number;
+  turn_minutes: number;
+}
+
 /** One project's answer: its created_at when asked, and each destination it may go to (with when). */
 export interface Consent {
   created_at: string | null;
@@ -65,6 +98,11 @@ export interface AssistantSettings {
   caps: Caps;
   consents: Record<string, Consent>;
   mcp: McpSettings;
+  /** Each coding agent's saved choices, by agent id (known or custom). */
+  agents: Record<string, AgentPrefs>;
+  /** At most 8. */
+  custom_agents: CustomAgent[];
+  agent_caps: AgentCaps;
 }
 
 export const PROVIDER_IDS: readonly ProviderId[] = Object.freeze(['anthropic', 'openai', 'openai_compatible']);
@@ -80,6 +118,20 @@ export const CAP_BOUNDS: Readonly<Record<keyof Caps, { min: number; max: number;
   turn_tokens: { min: 10_000, max: 50_000_000, integer: true },
 });
 
+export const AGENT_CAP_BOUNDS: Readonly<Record<keyof AgentCaps, { min: number; max: number }>> = Object.freeze({
+  changes: { min: 1, max: 200 },
+  calls: { min: 10, max: 2000 },
+  turn_minutes: { min: 1, max: 240 },
+});
+
+export const CUSTOM_AGENTS_MAX = 8;
+export const CUSTOM_NAME_MAX = 40;
+export const CUSTOM_ARGV_MAX = 32;
+export const CUSTOM_ARG_CHARS = 1024;
+export const KEEP_ENV_MAX = 8;
+export const KEEP_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
+
 const MODEL_RE = /^[A-Za-z0-9._:/-]{1,128}$/;
 const BASE_URL_MAX = 300;
 
@@ -94,6 +146,9 @@ const DEFAULTS: AssistantSettings = {
   caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
   consents: {},
   mcp: { clients: false, port: null, ask_in_client: false },
+  agents: {},
+  custom_agents: [],
+  agent_caps: { changes: 24, calls: 400, turn_minutes: 60 },
 };
 
 /** A fresh copy of the defaults. */
@@ -187,6 +242,45 @@ function normalizeConsents(raw: unknown): Record<string, Consent> {
   return out;
 }
 
+function shortText(v: unknown, max: number): v is string {
+  return typeof v === 'string' && v.length > 0 && v.length <= max;
+}
+
+/** A custom agent as stored, or null when it breaks a rule. */
+export function normalizeCustomAgent(raw: unknown): CustomAgent | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || !CUSTOM_ID_RE.test(raw.id)) return null;
+  if (typeof raw.name !== 'string' || !raw.name || raw.name.length > CUSTOM_NAME_MAX || /\p{Cc}/u.test(raw.name)) return null;
+  const argv = raw.argv;
+  if (!Array.isArray(argv) || argv.length < 1 || argv.length > CUSTOM_ARGV_MAX) return null;
+  if (!argv.every((a) => typeof a === 'string' && a.length <= CUSTOM_ARG_CHARS && !a.includes('\0')) || !argv[0]) return null;
+  const keep = Array.isArray(raw.keep_env) ? raw.keep_env : [];
+  if (keep.length > KEEP_ENV_MAX || !keep.every((k) => typeof k === 'string' && KEEP_ENV_RE.test(k))) return null;
+  return { id: raw.id, name: raw.name, argv: [...(argv as string[])], keep_env: [...new Set(keep as string[])] };
+}
+
+function normalizeAgentPrefs(raw: unknown): AgentPrefs {
+  const p: AgentPrefs = { model: null, mode: null, allowed: null, lockdown_failed: null };
+  if (!isRecord(raw)) return p;
+  if (typeof raw.model === 'string' && MODEL_RE.test(raw.model)) p.model = raw.model;
+  if (typeof raw.mode === 'string' && MODEL_RE.test(raw.mode)) p.mode = raw.mode;
+  const a = raw.allowed;
+  if (isRecord(a) && typeof a.fingerprint === 'string' && FINGERPRINT_RE.test(a.fingerprint) && shortText(a.at, 40)) p.allowed = { fingerprint: a.fingerprint, at: a.at };
+  const l = raw.lockdown_failed;
+  if (isRecord(l) && typeof l.version === 'string' && l.version.length <= 40 && shortText(l.at, 40)) p.lockdown_failed = { version: l.version, at: l.at };
+  return p;
+}
+
+/** Whether `id` is a coding agent of these settings: a known one, or one of its custom agents. */
+export function isAgentOf(s: Pick<AssistantSettings, 'custom_agents'>, id: unknown): id is string {
+  if (typeof id !== 'string' || !AGENT_ID_RE.test(id)) return false;
+  return !!knownAgent(id) || s.custom_agents.some((c) => c.id === id);
+}
+
+/** That agent's saved choices (the defaults when none were saved). */
+export function agentPrefs(s: Pick<AssistantSettings, 'agents'>, id: string): AgentPrefs {
+  return structuredClone(ownValue(s.agents, id) ?? { model: null, mode: null, allowed: null, lockdown_failed: null });
+}
+
 /** A settings file as read: each field that is missing or invalid takes its default. */
 export function normalizeSettings(raw: unknown): AssistantSettings {
   const s = defaultSettings();
@@ -223,7 +317,28 @@ export function normalizeSettings(raw: unknown): AssistantSettings {
     if (typeof raw.mcp.clients === 'boolean') s.mcp.clients = raw.mcp.clients;
     if (isPort(raw.mcp.port)) s.mcp.port = raw.mcp.port;
   }
+  if (Array.isArray(raw.custom_agents)) {
+    for (const c of raw.custom_agents) {
+      const agent = normalizeCustomAgent(c);
+      if (agent && s.custom_agents.length < CUSTOM_AGENTS_MAX && !s.custom_agents.some((x) => x.id === agent.id)) s.custom_agents.push(agent);
+    }
+  }
+  // Agent ids come from the file: own properties only, and only agents these settings know.
+  if (isRecord(raw.agents)) {
+    for (const [id, p] of Object.entries(raw.agents)) if (isAgentOf(s, id)) setOwn(s.agents, id, normalizeAgentPrefs(p));
+  }
+  if (isRecord(raw.agent_caps)) {
+    for (const key of Object.keys(AGENT_CAP_BOUNDS) as Array<keyof AgentCaps>) {
+      const v = raw.agent_caps[key];
+      if (agentCapValid(key, v)) s.agent_caps[key] = v;
+    }
+  }
   return s;
+}
+
+function agentCapValid(key: keyof AgentCaps, v: unknown): v is number {
+  const b = AGENT_CAP_BOUNDS[key];
+  return typeof v === 'number' && Number.isInteger(v) && v >= b.min && v <= b.max;
 }
 
 /** A TCP port a listener may bind (1–65535). */
@@ -257,7 +372,7 @@ export type PatchResult =
   | { ok: true; settings: AssistantSettings }
   | { ok: false; status: 400 | 409; error: string; field?: string; needs_confirm?: 'base_url' };
 
-const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents', 'mcp']);
+const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents', 'mcp', 'agents', 'agent_caps', 'custom_agents']);
 
 const MODEL_TEXT = 'A model id is 1–128 letters, digits and . _ : / -.';
 
@@ -355,7 +470,56 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
       next.mcp.clients = patch.mcp.clients;
     }
   }
+  if ('custom_agents' in patch) return refuse('Custom agents are added and removed in Settings → Assistant, one at a time.', 'custom_agents');
+  if ('agents' in patch) {
+    const r = applyAgentsPatch(next, patch.agents);
+    if (r) return r;
+  }
+  if ('agent_caps' in patch) {
+    if (!isRecord(patch.agent_caps)) return refuse('Coding agent limits must be an object.', 'agent_caps');
+    for (const [key, v] of Object.entries(patch.agent_caps)) {
+      if (!Object.hasOwn(AGENT_CAP_BOUNDS, key)) return refuse(`Unknown limit "${key.slice(0, 40)}".`, `agent_caps.${key.slice(0, 40)}`);
+      const k = key as keyof AgentCaps;
+      const b = AGENT_CAP_BOUNDS[k];
+      if (!agentCapValid(k, v)) return refuse(`This limit must be a whole number from ${b.min.toLocaleString('en-US')} to ${b.max.toLocaleString('en-US')}.`, `agent_caps.${k}`);
+      next.agent_caps[k] = v;
+    }
+  }
   return { ok: true, settings: next };
+}
+
+/**
+ * `agents: {<id>: {model?, mode?}}` applied to `next`, or the refusal. The allow switch and the
+ * lockdown record are never a settings field (spec 4.9): any `allowed` or `lockdown_failed`
+ * is refused, whatever else the patch holds. A mode must be one the agent may use.
+ */
+function applyAgentsPatch(next: AssistantSettings, raw: unknown): PatchResult | null {
+  if (!isRecord(raw)) return refuse('agents must be an object of agent id and its choices.', 'agents');
+  const entries = Object.entries(raw);
+  for (const [, p] of entries) {
+    if (!isRecord(p)) continue;
+    if (Object.hasOwn(p, 'allowed')) return refuse('An agent is allowed only with its own switch in Settings → Assistant, in the Magnusim window.', 'agents.allowed');
+    if (Object.hasOwn(p, 'lockdown_failed')) return refuse('That record is kept by Magnusim itself.', 'agents.lockdown_failed');
+  }
+  for (const [id, p] of entries) {
+    const shown = id.slice(0, 40);
+    if (!isAgentOf(next, id)) return refuse(`Unknown coding agent "${shown}".`, `agents.${shown}`);
+    if (!isRecord(p)) return refuse("An agent's choices must be an object.", `agents.${shown}`);
+    const prefs = agentPrefs(next, id);
+    for (const [key, v] of Object.entries(p)) {
+      if (key === 'model') {
+        if (v !== null && (typeof v !== 'string' || !MODEL_RE.test(v))) return refuse(MODEL_TEXT, 'agents.model');
+        prefs.model = v as string | null;
+      } else if (key === 'mode') {
+        if (v !== null && (typeof v !== 'string' || !modeAllowed(knownAgent(id), v))) return refuse('Magnusim does not use that mode for this agent.', 'agents.mode');
+        prefs.mode = v as string | null;
+      } else {
+        return refuse(`Unknown setting "agents.${key.slice(0, 40)}".`, `agents.${key.slice(0, 40)}`);
+      }
+    }
+    setOwn(next.agents, id, prefs);
+  }
+  return null;
 }
 
 /** Runs `op` after every save queued before it (one queue, so no save is lost). */
@@ -378,6 +542,59 @@ export function saveSettings(patch: unknown): Promise<PatchResult> {
     const result = validatePatch(await loadSettings(), patch);
     if (result.ok) await write(result.settings);
     return result;
+  });
+}
+
+// ---------------------------------------------------------------- coding agents (their own routes)
+
+/**
+ * The allow switch (spec 4.9): `{fingerprint}` turns it on for the command with that
+ * fingerprint; null turns it off. Only the allow route calls this.
+ */
+export function setAgentAllowed(id: string, allowed: { fingerprint: string; at?: string } | null): Promise<AssistantSettings> {
+  return updateSettings((s) => {
+    if (!isAgentOf(s, id)) return s;
+    const p = agentPrefs(s, id);
+    p.allowed = allowed ? { fingerprint: allowed.fingerprint, at: allowed.at ?? new Date().toISOString() } : null;
+    setOwn(s.agents, id, p);
+    return s;
+  });
+}
+
+/** The lockdown tripwire fired (spec 4.7) under Magnusim `version`; null clears it. */
+export function setAgentLockdownFailed(id: string, version: string | null): Promise<AssistantSettings> {
+  return updateSettings((s) => {
+    if (!isAgentOf(s, id)) return s;
+    const p = agentPrefs(s, id);
+    p.lockdown_failed = version === null ? null : { version: version.slice(0, 40), at: new Date().toISOString() };
+    setOwn(s.agents, id, p);
+    return s;
+  });
+}
+
+/** Adds a custom agent (checked by normalizeCustomAgent), or says why not. */
+export function addCustomAgent(agent: CustomAgent): Promise<{ ok: true; settings: AssistantSettings } | { ok: false; code: 'too_many' | 'bad_command' }> {
+  return enqueue(async () => {
+    const s = await loadSettings();
+    const c = normalizeCustomAgent(agent);
+    if (!c || s.custom_agents.some((x) => x.id === c.id)) return { ok: false as const, code: 'bad_command' as const };
+    if (s.custom_agents.length >= CUSTOM_AGENTS_MAX) return { ok: false as const, code: 'too_many' as const };
+    s.custom_agents.push(c);
+    const next = normalizeSettings(s);
+    await write(next);
+    return { ok: true as const, settings: structuredClone(next) };
+  });
+}
+
+/** Removes a custom agent and its saved choices; false when there is none with that id. */
+export function removeCustomAgent(id: string): Promise<boolean> {
+  return enqueue(async () => {
+    const s = await loadSettings();
+    if (!s.custom_agents.some((c) => c.id === id)) return false;
+    s.custom_agents = s.custom_agents.filter((c) => c.id !== id);
+    if (Object.hasOwn(s.agents, id)) delete s.agents[id];
+    await write(normalizeSettings(s));
+    return true;
   });
 }
 

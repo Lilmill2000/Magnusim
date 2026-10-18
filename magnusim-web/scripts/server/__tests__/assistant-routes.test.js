@@ -152,6 +152,10 @@ describe('only on this PC: the remote census', () => {
   it('every Assistant route, every method, every forwarding variant and the tunnel host: 403 remote, nothing read or written', async () => {
     const paths = [...new Set(router.list().map((r) => r.path))].filter((p) => p.startsWith('/api/assistant') || p.startsWith('/api/test/assistant'));
     assert.deepEqual(paths.sort(), [
+      '/api/assistant/agents',
+      '/api/assistant/agents/allow',
+      '/api/assistant/agents/custom',
+      '/api/assistant/agents/custom/remove',
       '/api/assistant/conversations/:id/forget',
       '/api/assistant/gates/:id',
       '/api/assistant/key',

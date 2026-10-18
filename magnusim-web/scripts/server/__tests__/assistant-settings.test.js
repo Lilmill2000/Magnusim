@@ -50,6 +50,9 @@ describe('defaults and bounds', () => {
       caps: { turn_usd: 3, day_usd: 15, steps: 50, turn_minutes: 30, turn_tokens: 3_000_000 },
       consents: {},
       mcp: { clients: false, port: null, ask_in_client: false },
+      agents: {},
+      custom_agents: [],
+      agent_caps: { changes: 24, calls: 400, turn_minutes: 60 },
     });
     assert.deepEqual(S.DEFAULT_SETTINGS, s);
     assert.equal(existsSync(join(ROOT, 'home')), false);

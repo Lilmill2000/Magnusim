@@ -53,6 +53,18 @@
  *                                        bridge:{command, args}, snippet, connections:[{id, kind,
  *                                        name, since, calls}]} (never the token; the MCP connection
  *                                        itself is a loopback socket, assistant/mcp/listener.ts)
+ *   GET  /api/assistant/agents          ?refresh=1 → {ok, checked_at, took_ms, agents:[AgentRow]}: the
+ *                                        coding agents on this PC (assistant/agents/discover.ts; it
+ *                                        runs each found agent's --version; Refresh asks again)
+ *   POST /api/assistant/agents/custom   {name, command, keep_env?} → {ok, agent}: a custom agent (off
+ *                                        until allowed); browser only (403 browser_only); 400
+ *                                        bad_name, bad_command, bad_keep_env, cant_start_script, too_many
+ *   POST /api/assistant/agents/custom/remove  {id} → {ok}; 404; 409 agent_running
+ *   POST /api/assistant/agents/allow    {id, allow, fingerprint?} → {ok, agent}: the allow switch;
+ *                                        browser only (403 browser_only). allow:false is always taken
+ *                                        and stops that agent first; allow:true needs the row's
+ *                                        fingerprint (409 fingerprint_changed) and is refused while
+ *                                        the agent runs (409 agent_running); 404 agent_unknown
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory
@@ -87,6 +99,19 @@ import { createTurnManager, type TurnManager, type TurnManagerDeps } from './ass
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
 import { createMcpService } from './assistant/mcp/server.ts';
+import {
+  addCustomAgentRequest,
+  agentReadyRows,
+  agentsCache,
+  allowAgentRequest,
+  listAgents,
+  removeCustomAgentRequest,
+  type AgentRouteContext,
+  type RowContext,
+} from './assistant/agents/discover.ts';
+import { agentsTreeKill } from './assistant/agents/process.ts';
+import { appVersion } from './assistant/host-tools.ts';
+import { mcpSdkInstalled } from './assistant/providers/load-sdk.ts';
 
 export { TURN_HEADER };
 
@@ -169,6 +194,8 @@ interface StatusSources {
   ledger: SpendLedger;
   /** Whether the provider packages are installed. */
   deps: 'ok' | 'missing';
+  /** What the coding agents' rows are read with (the last discovery is read from its cache). */
+  agents: RowContext;
 }
 
 /** One part of the status (STATUS_PARTS lists them all). */
@@ -225,10 +252,24 @@ const STATUS_PARTS: StatusPart[] = [
     /** The provider a turn uses when it names none (= `provider`, kept for older pages). */
     default_provider: src.settings.provider,
     /** Each provider's readiness: a turn or the Test may name any of them, whatever the default. */
-    providers_ready: perProvider((id) => providerRow(id, src)),
+    providers_ready: { ...perProvider((id) => providerRow(id, src)), ...agentReadyRows(src.agents) },
   }),
   ({ settings: s }) => ({ mcp: mcpStatus(s) }),
+  () => ({
+    /** When the coding agents were last looked for (null: not since the server started; GET /agents looks). */
+    agents_checked_at: agentsCache()?.checked_at ?? null,
+    /** How an agent's whole tree is stopped on this PC. */
+    agents_tree_kill: agentsTreeKill(),
+  }),
 ];
+
+/** Whether the connection coding agents use can run: the listener isn't refused, its package is there. */
+async function mcpAvailability(): Promise<RowContext['mcp']> {
+  const l = mcpListenerStatus();
+  if (!l.running && l.reason) return { available: false, reason: l.reason };
+  if (!(await mcpSdkInstalled())) return { available: false, reason: 'deps_missing' };
+  return { available: true, reason: null };
+}
 
 /** Other apps (MCP): the switch, and whether the connection runs (and why not). */
 function mcpStatus(s: AssistantSettings): { clients: boolean; running: boolean; reason: string | null; port: number | null; connected: number } {
@@ -317,8 +358,8 @@ function providerRow(id: ProviderId, src: StatusSources): Record<string, unknown
 /** What GET /api/assistant/status answers. Reads files; never runs a helper. */
 export async function assistantStatus(): Promise<Record<string, unknown>> {
   const store = secretStore();
-  const [settings, ledger, , deps] = await Promise.all([loadSettings(), spendLedger(), store.load(), depsStatus()]);
-  const sources: StatusSources = { settings, store, ledger, deps: deps.state };
+  const [settings, ledger, , deps, mcp, version] = await Promise.all([loadSettings(), spendLedger(), store.load(), depsStatus(), mcpAvailability(), appVersion()]);
+  const sources: StatusSources = { settings, store, ledger, deps: deps.state, agents: { settings, mcp, appVersion: version } };
   const out: Record<string, unknown> = { ok: true, available: true };
   for (const part of STATUS_PARTS) Object.assign(out, part(sources));
   return out;
@@ -616,6 +657,73 @@ function registerMcpRoutes(router: Router): void {
 }
 
 /**
+ * Browser only (spec 4.9): the request carries an Origin that is the app's own (the Host it was
+ * sent to), and `sec-fetch-site: same-origin` when it carries that header. The CLI, a script or
+ * an agent's own shell sends no Origin. (Any program on this PC can forge one: this keeps a
+ * prompt-injected one-liner out, it is not an account boundary.)
+ */
+export function browserOnly(ctx: RequestContext): boolean {
+  const origin = ctx.req.headers.origin;
+  if (typeof origin !== 'string' || !origin) return false;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== origin.toLowerCase().replace(/\/$/, '')) return false;
+  const host = String(ctx.req.headers.host || '').trim().toLowerCase();
+  if (!host || url.host !== host) return false;
+  const site = ctx.req.headers['sec-fetch-site'];
+  return site === undefined || site === 'same-origin';
+}
+
+/** The coding agents' routes (assistant/agents/discover.ts does the work). */
+function registerAgentRoutes(router: Router): void {
+  const r: AgentRouteContext = { mcp: mcpAvailability };
+
+  router.get(
+    '/api/assistant/agents',
+    local(async (ctx) => {
+      const a = await listAgents(r, { refresh: ctx.url.searchParams.get('refresh') === '1' });
+      ctx.sendJson(a.status, a.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/agents/custom',
+    local(async (ctx) => {
+      if (!browserOnly(ctx)) {
+        ctx.sendJson(403, { ok: false, code: 'browser_only', error: 'Add a custom agent from Settings → Assistant in the Magnusim window.' });
+        return;
+      }
+      const a = await addCustomAgentRequest(r, await ctx.readJsonBody());
+      ctx.sendJson(a.status, a.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/agents/custom/remove',
+    local(async (ctx) => {
+      const a = await removeCustomAgentRequest(await ctx.readJsonBody());
+      ctx.sendJson(a.status, a.body);
+    }),
+  );
+
+  router.post(
+    '/api/assistant/agents/allow',
+    local(async (ctx) => {
+      if (!browserOnly(ctx)) {
+        ctx.sendJson(403, { ok: false, code: 'browser_only', error: 'Allow an agent from Settings → Assistant in the Magnusim window.' });
+        return;
+      }
+      const a = await allowAgentRequest(r, await ctx.readJsonBody());
+      ctx.sendJson(a.status, a.body);
+    }),
+  );
+}
+
+/**
  * The MCP listener starts with the server when the Assistant's settings file exists (it was
  * used here), whatever Other apps says: coding agents use it too, and an external app is
  * then refused with the Settings text, not "not running". Never at module load, and never
@@ -803,6 +911,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   registerTurnRoutes(router, turns);
   registerRelayRoutes(router, relay);
   registerMcpRoutes(router);
+  registerAgentRoutes(router);
 
   if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay);
 

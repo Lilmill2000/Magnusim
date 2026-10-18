@@ -153,6 +153,48 @@ The tests also use the SDK's client package, `@modelcontextprotocol/client` 2.3.
 These licenses are compatible with Magnusim's GPL-3.0-or-later license. Each
 package's license text is in its folder under `node_modules`.
 
+## The Assistant's coding agents
+
+The Assistant can work through a coding agent the user has installed and signed
+in to on their own (Settings → Assistant lists the ones Magnusim knows). Those
+agents are separate programs under their own licenses and terms: Magnusim never
+ships one, never depends on one, and starts only what the user installed.
+
+The tests check Magnusim's side of the Agent Client Protocol against the
+protocol's own schema with `@agentclientprotocol/sdk` 1.7.0 (Apache-2.0), a
+development dependency the app never runs.
+
+`splitCommand()` in `magnusim-web/scripts/server/assistant/agents/acp.ts`, which
+splits a custom agent's command into its program and arguments without a command
+shell, is ported from SolidCraft's agent chat
+(<https://github.com/bherbruck/solidcraft>,
+`crates/ui-egui/src/agent_chat/acp.rs`, `split_command`) under the MIT License:
+
+> Copyright (c) 2026 SolidCraft contributors
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+The MIT License is compatible with Magnusim's GPL-3.0-or-later license. Other
+parts of the coding-agent support (its search folders, process stop order and
+protocol handling) follow SolidCraft's design, as their module headers say; that
+code is Magnusim's own.
+
 ## Other dependencies
 
 The JavaScript dependency inventory is recorded in `magnusim-web/package-lock.json`;

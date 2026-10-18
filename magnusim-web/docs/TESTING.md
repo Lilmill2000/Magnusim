@@ -324,6 +324,15 @@ No test reaches a real model provider or this PC's real Assistant files.
     Its `--version` prints `fake-acp-agent <version>` and exits without the controller, as
     discovery's version probe expects. Started without `--control` (and without a
     launcher), the fake exits 2.
+  - **Discovery's test switches.** With `MAGNUSIM_TEST_ASSISTANT=1` in a test home,
+    `MAGNUSIM_TEST_ASSISTANT_AGENT_PATHS=<folder>` (several joined by the path delimiter)
+    makes agent discovery search exactly those folders, never PATH or the npm folders, and
+    `MAGNUSIM_TEST_ASSISTANT_AGENT_HOME=<folder>` is the home its login files and home
+    folders are looked up in (its `tmp` folder then holds the version probes' working
+    folders). Otherwise they are ignored with a log line.
+    `scripts/server/__tests__/assistant-agents.test.js` lays out npm prefixes as npm does on
+    Windows (a `.cmd` shim beside `node_modules/<package>/package.json`): plain files, so
+    the same layout runs on Linux with `platform: 'win32'` passed to discovery.
   - It records every message it receives and sends, in order: `fake.received()`,
     `fake.sent()`, `fake.events()` (tool lists, call results, permission outcomes) and
     `fake.pids()` (itself, its MCP server, its helpers). `fake.waitFor(pred)` waits for a
