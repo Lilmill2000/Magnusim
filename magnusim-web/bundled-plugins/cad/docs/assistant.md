@@ -37,7 +37,10 @@ A tool returns `ToolReply` `{text, data, summary?, images?}`:
   container at most 6 deep inside `data` (the app turns depth 8 into null, and cuts
   every string at 2000 characters and newlines into spaces);
 - `call.ts` adds `rev` to every `data`, and `user_changes` when the person changed the
-  committed Part since the key's last call (`rev.ts`).
+  committed Part since the key's last call (`rev.ts`), worked out as the call answers: what
+  the person did while it ran (an edit waits for them up to 10 minutes) is in that answer, the
+  call's own kept step left out (`rev.own`, from its mark to the model after it), and the
+  person's undo of the Assistant's steps that came meanwhile too. Each change is told once.
 
 A refusal or failure is thrown as `ToolError(reason, message, {hint?, detail?})`
 (`errors.ts`). The reason fixes the code (`invalid_input`, `failed`, `busy`,

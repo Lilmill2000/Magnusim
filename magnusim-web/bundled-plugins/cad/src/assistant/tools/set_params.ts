@@ -6,8 +6,11 @@
 // anything changes, naming its row (set[2].expr, remove[0]). A value edit: a feature that built
 // and fails after the change, or a scoped cut (a hole) it moves off its body, reverts the call
 // (broke_downstream). The answer gives each row's
-// value evaluated, what was removed, how the features rebuilt, and the sketches the change turned
-// over (`flipped`: a dimension driven through zero mirrors its sketch; sketch/flip.ts).
+// value evaluated (whether the row added or changed it, and what a changed one was), what was
+// removed, how the features rebuilt, and the sketches the change turned over (`flipped`: a
+// dimension driven through zero mirrors its sketch; sketch/flip.ts).
+// A row that changes a parameter the Part has keeps its comment when comment is "" (a value
+// change never loses the person's note); "-" removes it.
 // At the watch pace with no panel open, the Assistant's own Parameters panel (read-only) shows the
 // rows change, a moment per row, and closes with the step; a Parameters panel the person has open
 // stays open and flashes the rows that changed.
@@ -41,6 +44,8 @@ interface Plan extends EditPlan {
   where: Record<string, { at: string; renames: boolean }>;
   /** The parameters the set rows leave, by their final names, in row order. */
   names: string[];
+  /** Each set row's parameter as it was (its expression), or null for one it adds; in row order. */
+  was: (string | null)[];
   removed: string[];
   /** The sketches' outputs before (the flip check). */
   sketches: ReturnType<typeof sketchOutputs>;
@@ -53,6 +58,8 @@ const UNIT_OF: Record<Quantity, string> = { length: 'mm', angle: 'deg', scalar: 
 const NAME_WORDS = /^(Enter a name|A name can have at most|A name starts with|"[^"]*" is a unit or function name|There is already a parameter called)/;
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
+/** The comment that removes a changed parameter's comment ("" keeps it). */
+export const CLEAR_COMMENT = '-';
 
 /** editParams' refusal as the tool's error, naming the tool's row. */
 function rowError(r: { reason: string; row?: string }, plan: Pick<Plan, 'where'>, names: readonly string[]): ToolError {
@@ -83,6 +90,7 @@ const setParams: EditTool<Plan> = {
     const rows: ParamRows = { add: [], change: [], remove: [] };
     const where: Plan['where'] = {};
     const names: string[] = [];
+    const was: (string | null)[] = [];
     const seen = new Map<string, number>();
     const problems: string[] = [];
     set.forEach((row, i) => {
@@ -96,8 +104,10 @@ const setParams: EditTool<Plan> = {
       if (!quantity) problems.push(`${at}.kind: length, angle or number`);
       if (!expr) problems.push(`${at}.expr: enter a value with units ("40 mm", "w/2", "15 deg")`);
       const old = byName.get(name);
+      const comment = str(row?.comment).trim();
       if (old) {
-        const patch: Partial<Omit<Param, 'id'>> = { expr, ...(quantity ? { quantity } : {}), comment: str(row?.comment) };
+        // "" keeps the comment the parameter has; "-" removes it.
+        const patch: Partial<Omit<Param, 'id'>> = { expr, ...(quantity ? { quantity } : {}), ...(comment === CLEAR_COMMENT ? { comment: '' } : comment ? { comment } : {}) };
         if (renameTo && renameTo !== name) {
           const problem = paramNameProblem(renameTo, [], old.id);
           if (problem) throw new ToolError('bad_name', `${at}.rename_to: ${problem}.`, { detail: { field: `${at}.rename_to` } });
@@ -106,6 +116,7 @@ const setParams: EditTool<Plan> = {
         where[`change[${rows.change.length}]`] = { at, renames: !!patch.name };
         rows.change.push({ id: old.id, patch });
         names.push(patch.name ?? name);
+        was.push(old.expr);
       } else {
         const problem = paramNameProblem(name, [], undefined);
         if (problem) throw new ToolError('bad_name', `${at}.name: ${problem}.`, { detail: { field: `${at}.name` } });
@@ -113,8 +124,9 @@ const setParams: EditTool<Plan> = {
           problems.push(`${at}.rename_to: the Part has no parameter ${name} to rename; give a new one its name in name and "" here`);
         }
         where[`add[${rows.add.length}]`] = { at, renames: false };
-        rows.add.push({ name, expr, quantity: quantity ?? 'length', ...(str(row?.comment) ? { comment: str(row?.comment) } : {}) });
+        rows.add.push({ name, expr, quantity: quantity ?? 'length', ...(comment && comment !== CLEAR_COMMENT ? { comment } : {}) });
         names.push(name);
+        was.push(null);
       }
     });
     const removedNames: string[] = [];
@@ -143,6 +155,7 @@ const setParams: EditTool<Plan> = {
       rows,
       where,
       names,
+      was,
       removed: removedNames,
       sketches: sketchOutputs(doc.state.get()),
       resolved: { ...(names.length ? { set: listOfNames(names) } : {}), ...(removedNames.length ? { remove: listOfNames(removedNames) } : {}) },
@@ -174,18 +187,29 @@ const setParams: EditTool<Plan> = {
   reply(plan, data: EditData, ctx): ToolReply {
     const s = ctx.services.doc.state.get();
     const params = new Map(s.doc.params.map((p) => [p.name, p] as const));
-    const rows = plan.names.map((name) => {
+    const rows = plan.names.map((name, i) => {
       const p = params.get(name);
-      if (!p) return { name, kind: null, expr: null, value: null, unit: null };
+      const before = plan.was[i];
+      const row = before === null ? 'added' : 'changed';
+      if (!p) return { name, row, kind: null, expr: null, value: null, unit: null };
       const r = ctx.services.doc.units.evaluate(p.expr, p.quantity);
-      return { name, kind: KIND_WORD[p.quantity], expr: p.expr, value: r.ok ? (p.quantity === 'scalar' ? sig6(r.value) : len(r.value)) : null, unit: UNIT_OF[p.quantity], ...(r.ok ? {} : { error: r.error }) };
+      return {
+        name,
+        row,
+        kind: KIND_WORD[p.quantity],
+        expr: p.expr,
+        ...(before !== null && before !== p.expr ? { was: before } : {}),
+        value: r.ok ? (p.quantity === 'scalar' ? sig6(r.value) : len(r.value)) : null,
+        unit: UNIT_OF[p.quantity],
+        ...(r.ok ? {} : { error: r.error }),
+      };
     });
     const rebuilt: Record<string, number> = { ok: 0, warning: 0, error: 0 };
     for (const f of s.doc.features) {
       const st = s.rebuild.features[f.id]?.state;
       if (st === 'ok' || st === 'warning' || st === 'error') rebuilt[st] += 1;
     }
-    const shown = rows.slice(0, 3).map((r) => `${r.name} = ${r.value ?? '?'}${r.unit ? ` ${r.unit}` : ''}`);
+    const shown = rows.slice(0, 3).map((r) => `${r.name} = ${r.value ?? '?'}${r.unit ? ` ${r.unit}` : ''}${'was' in r ? ` (was ${r.was})` : ''}`);
     const more = rows.length > 3 ? ` (+${rows.length - 3} more)` : '';
     const gone = plan.removed.length ? `${shown.length ? '; ' : ''}removed ${listOfNames(plan.removed)}` : '';
     const text = `Parameters set: ${shown.join(', ')}${more}${gone}${data.broke.length ? ` · ${data.broke.length} feature${data.broke.length === 1 ? '' : 's'} broke` : ''}`;

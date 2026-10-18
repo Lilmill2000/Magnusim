@@ -1,7 +1,8 @@
 // One call of a Part tool, as the app's bridge hands it (CAD tools spec §2.1 call.ts): its key,
 // its context, the tool's code from tools/index.ts (a tool not in this build answers not_ready
 // "not in this build yet"), the reply's revision and the person's changes since the key's last
-// call, an honest error with its reason, hint and detail, the turn log's summary, and the chip
+// call (worked out as the call answers: what they did while it ran is told too), an honest error
+// with its reason, hint and detail, the turn log's summary, and the chip
 // and the test ledger kept up to date. The call's signal is the SDK's merged with the chip's
 // Stop (a call of a key the person stopped answers busy stopped at once); the camera latch takes
 // the key's baseline at its first call when the host told of no turn.
@@ -60,7 +61,7 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     rt.seenKeys.add(key);
     const spec = toolNamed(call.tool);
     const label = spec?.title ?? call.tool;
-    const changes = rt.rev.changesFor(key);
+    rt.rev.begin(key);
     // The chip's Stop aborts this one here, at once (its step reverts synchronously).
     const local = new AbortController();
     const merged = bothSignals(call.signal, local.signal);
@@ -102,6 +103,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       const reply: ToolReply = await impl.run(ctx);
       ok = true;
       const data: Record<string, unknown> = { rev: rt.rev.current(), ...reply.data };
+      // Now, not when the call began: an edit waits for the person, who may change the Part meanwhile.
+      const changes = rt.rev.changesFor(key);
       if (changes.length) data.user_changes = changes;
       return {
         text: oneLine(reply.text, TEXT_MAX),
@@ -111,6 +114,7 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       };
     } catch (e) {
       error = signal.aborted && !(e instanceof ToolError) ? new ToolError('stopped', 'The call was stopped.') : asToolError(e);
+      const changes = rt.rev.changesFor(key);
       if (changes.length) error.detail.user_changes = changes;
       throw sdkError(error, rt.hostKeepsHints);
     } finally {

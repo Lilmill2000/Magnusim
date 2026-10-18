@@ -77,7 +77,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
     'linear: about an axis or edge, spacing a positive pitch (flip for the other way). circular: spacing the angle from the original to the last copy, "360 deg" evenly all round. mirror: about a plane (with offset: a construction plane in the same step), count and spacing "". features with op source repeat each one\'s own operation; bodies with op new make "<body> (Instance k)". Copies are <Name>.copy(k), mirrors <Name>.mirror.',
   revolve: 'axis: "X axis", "Y axis", "Z axis", a sketch line ("Profile.ax"), a straight edge, or "axis of <round face>". The profile may not cross the axis. Faces made: <Name>.side(<entity>) per profile edge.',
   set_params:
-    'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
+    'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. A change keeps the comment the parameter has (comment "-" removes it); each answer row says added or changed, and was. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
   sketch:
     'on "<plane> offset <length>" makes "<sketch> plane", or uses one made for the same plane and offset. Replace: edit "<name>" with every input (get_model feature <name> gives them). Reply: plane (origin, u, v in model axes, words), solver (state, dof, free, moved, dropped_inferred), regions (id, area, at, holes), open ends. help sketch has every kind and signature.',
   sweep_loft:

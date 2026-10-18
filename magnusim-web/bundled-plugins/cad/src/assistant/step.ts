@@ -320,6 +320,8 @@ export async function runEdit<P extends EditPlan>(ctx: CallCtx, tool: EditTool<P
       const parts = [...rt.ledger.entries(ctx.key).map((e) => e.part), plan.part];
       st.seal(ctx.key, groupLabel(ctx.key, ctx.turn, parts));
       const committed = doc.committed();
+      // The call's own change: never told back to it as the person's (user_changes).
+      rt.rev.own(ctx.key, st.mark.doc, committed);
       const n = plan.noLedger || committed === st.mark.doc ? 0 : rt.ledger.add(ctx.key, { call: ctx.call.call, part: plan.part, mark: st.mark, after: committed });
       // get_model marks what this kept edit turned red, while it fails.
       for (const [id, f] of after.features) {
@@ -362,6 +364,8 @@ function failure(e: unknown, rv: { ok: true } | { ok: false; reason: string }, s
     // A take-over the person's own change made: the chip names what of the step stayed (review: it said only "you took over").
     const left = step.left();
     if (err.reason === 'taken_over' && left.length) rt.pause.stayed(left.length === 1 ? left[0] : `${left[0]} and ${left.length - 1} more`);
+    // What stayed is told in detail.kept, not again as the person's changes.
+    rt.rev.own(ctx.key, step.mark.doc, services.doc.committed());
   }
   return err;
 }

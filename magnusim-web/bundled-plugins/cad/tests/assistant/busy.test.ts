@@ -12,6 +12,9 @@
 //     Assistant's steps while its turn runs pauses it ("you undid its steps"), their redo too
 //     ("you redid its steps"); a turn that has ended takes no pause; an outside client's next
 //     key that came only from the person's own change of the Part does not end its pause;
+//   - what the person does while a call runs (their Done and a rename while an edit waits for
+//     them, their undo of the Assistant's steps while a read is held) is told in that call's
+//     user_changes, the call's own step left out, and not again;
 //   - another turn's call is busy other_turn; a Part being opened on a project geometry answers
 //     not_ready; reads never wait.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -20,6 +23,7 @@ import { createPause, EDIT_WAIT_MS, pauseNote, personBlock, SOFT_MAX_MS } from '
 import { assistantTestHandle } from '../../src/assistant/install';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { registerPendingEdit } from '../../src/lib/pendingEdits';
+import type { Feature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
 import { block, BlockKernel } from '../doc/blocks';
 import { assistantHarness, type AssistantHarness, type HarnessOptions } from './harness';
@@ -314,6 +318,41 @@ describe('the pause', () => {
     p.set('take_over', 'ext:1', null);
     p.enterKey('turn:t-2');
     expect(p.get()).toBeNull();
+  });
+});
+
+describe('what the person does while a call runs', () => {
+  it("is told in that call's answer, never in a later one: the person's Done and rename while an edit waits for them", async () => {
+    const { x, made } = await start();
+    const rt = runtimeOf(x.services)!;
+    const ui = uiFor(x.services);
+    await x.ok('get_model', { detail: 'brief', feature: '' });
+    ui.openEdit(made.extrude);
+    const r = x.call('set_params', PARAM('q', '3 mm'));
+    await vi.waitFor(() => expect(rt.store.get()).toMatchObject({ phase: 'waiting', note: 'close the Extrude 1 panel' }));
+    // The person changes the extrude and clicks Done, and renames it, while the edit waits.
+    x.doc.session()!.update({ extent: { kind: 'blind', distance: '30 mm' } } as Partial<Feature>);
+    ui.closePanel();
+    x.doc.rename(made.extrude, 'Base');
+    const done = await r;
+    expect(done).toMatchObject({ ok: true, result: { data: { user_changes: ['renamed Extrude 1 to Base', 'changed Base'] } } });
+    // The call's own parameter is not the person's; and what was told is told once.
+    expect(JSON.stringify(done)).not.toContain('added parameter q');
+    expect((await x.ok('get_model', { detail: 'brief', feature: '' })).data.user_changes).toBeUndefined();
+  });
+
+  it("the person's undo of the Assistant's steps during a read is told in that read's answer", async () => {
+    const { x } = await start();
+    const rt = runtimeOf(x.services)!;
+    x.fake.emitTurn({ id: 't-1', title: 'Params' });
+    await x.ok('set_params', PARAM('q', '3 mm'), { turn: 't-1' });
+    rt.holds.hold('after-settled');
+    const read = x.call('get_model', { detail: 'brief', feature: '' }, { turn: 't-1' });
+    await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['after-settled']));
+    x.doc.undo();
+    rt.holds.release('after-settled');
+    expect(await read).toMatchObject({ ok: true, result: { data: { user_changes: ['the person undid your steps (Assistant: Params); do not redo them unless asked', 'deleted parameter q'] } } });
+    expect((await x.ok('get_model', { detail: 'brief', feature: '' }, { turn: 't-1' })).data.user_changes).toBeUndefined();
   });
 });
 

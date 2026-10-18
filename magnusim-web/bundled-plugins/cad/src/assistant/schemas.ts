@@ -155,14 +155,14 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Add, change, rename or remove parameters in one step. set rows: name (a letter or _, then letters, digits, _), kind length, angle or number, expr with units ("40 mm", "w/2", "15 deg"; number: "6"), comment ("" for none), rename_to ("" keeps the name; a rename updates every use). remove: names to delete. Rows may come in any order: all apply together. Nothing changes when an expression is bad, a removed parameter is still used, or a feature that built would fail after the change; the error names the row or the feature. Returns each value evaluated and what rebuilt.',
+      'Add, change, rename or remove parameters in one step. set rows: name (a letter or _, then letters, digits, _), kind length, angle or number, expr with units ("40 mm", "w/2", "15 deg"; number: "6"), comment ("" for none; on a parameter the Part has, "" keeps its comment and "-" removes it), rename_to ("" keeps the name; a rename updates every use). remove: names to delete. Rows may come in any order: all apply together. Nothing changes when an expression is bad, a removed parameter is still used, or a feature that built would fail after the change; the error names the row or the feature. Returns each value evaluated (row added or changed, and was: the expression a changed one had) and what rebuilt.',
     schema: obj({
       set: arr(
         obj({
           name: str(64, 'Parameter name', 1),
           kind: en(['length', 'angle', 'number'], 'Quantity'),
           expr: str(200, 'Value with units', 1),
-          comment: str(200, '"" for none'),
+          comment: str(200, '"" for none; on a parameter the Part has, "" keeps its comment, "-" removes it'),
           rename_to: str(64, '"" keeps the name'),
         }),
         0,

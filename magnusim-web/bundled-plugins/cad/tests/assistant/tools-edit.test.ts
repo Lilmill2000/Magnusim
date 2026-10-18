@@ -1,7 +1,8 @@
 // The first edit tools on the REAL kernel, through the page's tool handler (CAD tools spec §3.2.6,
 // §3.2.14-16, §7.6-7.9):
 //   - set_params: rows in any order in one step (one undo entry), renames rewrite every use, each
-//     value evaluated in the answer; a bad name, a bad expression (with the parameters there are),
+//     value evaluated in the answer (added or changed, and what a changed one was); a value change
+//     keeps the parameter's comment ("-" removes it); a bad name, a bad expression (with the parameters there are),
 //     a removal still used and an unknown name answer before anything changes, naming the row;
 //   - body: rename, colour and simulation in one step; a clash, a bad colour and nothing to change
 //     refused;
@@ -60,6 +61,29 @@ describe('set_params', () => {
       expect(params(h)).toEqual([]);
       h.doc.redo();
       expect(params(h)).toEqual(['floor_t=(chip_t - disc) / 2', 'chip_t=disc * 3.3', 'disc=1 mm']);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a value change keeps the parameter's comment (\"\" keeps it, \"-\" removes it), and each row says whether it added or changed one",
+    async () => {
+      h = await assistantHarness();
+      await h.ok('set_params', { set: [row('t', '6 mm', 'length', { comment: 'sheet stock, do not change' }), row('w', '40 mm')], remove: [] });
+      const comments = () => Object.fromEntries(h!.doc.state.get().doc.params.map((p) => [p.name, p.comment ?? null]));
+      const r = await h.ok('set_params', { set: [row('t', '8 mm'), row('n', '4', 'number')], remove: [] });
+      expect(comments()).toEqual({ t: 'sheet stock, do not change', w: null, n: null });
+      expect(r.data.params).toEqual([
+        { name: 't', row: 'changed', kind: 'length', expr: '8 mm', was: '6 mm', value: 8, unit: 'mm' },
+        { name: 'n', row: 'added', kind: 'number', expr: '4', value: 4, unit: '' },
+      ]);
+      expect(r.text).toBe('Parameters set: t = 8 mm (was 6 mm), n = 4');
+      // A new comment replaces it; "-" removes it.
+      await h.ok('set_params', { set: [row('t', '8 mm', 'length', { comment: 'from the drawing' })], remove: [] });
+      expect(comments().t).toBe('from the drawing');
+      const same = await h.ok('set_params', { set: [row('t', '8 mm', 'length', { comment: '-' })], remove: [] });
+      expect(comments().t).toBeNull();
+      expect((same.data.params as Row[])[0]).toEqual({ name: 't', row: 'changed', kind: 'length', expr: '8 mm', value: 8, unit: 'mm' });
     },
     REAL_KERNEL_MS,
   );
