@@ -11,7 +11,8 @@
 //   - section "<Top|Front|Right> [offset <length>] [flip]" (parameters allowed), bad_section;
 //   - labels bodies (names at their boxes' centres, #b handles) and faces (#f handles on the
 //     largest faces the picture really sees, at most 30, kept by their stored references, the
-//     same handle for the same face in one key, a new table for a new key);
+//     same handle for the same face in one key, a new table for a new key); the handles are the
+//     key's one table, so find reads them and goes on numbering after them, and body takes #b;
 //   - not_ready no_images for a model that reads no images (nothing drawn), no_viewport without a
 //     3D view, without pictures or with its graphics context lost;
 //   - notes for the person's sketch, the rollback bar and a hidden window; the shown sketches'
@@ -32,7 +33,7 @@ import {
   type Ctx2D,
   type Raster,
 } from '../../src/assistant/view';
-import { handlesFor } from '../../src/assistant/view-handles';
+import { currentHandles } from '../../src/assistant/selectors/handles';
 import type { BodyId, RegionRef, Vec3 } from '../../src/types/doc';
 import type { SketchOutput } from '../../src/types/sketch';
 import type { SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../../src/types/viewport';
@@ -446,7 +447,7 @@ describe('view', () => {
       expect(names[0].x).toBeLessThan(names[1].x);
       expect(Math.abs(names[0].y - names[1].y)).toBeLessThan(2);
       expect(fv.shots).toHaveLength(1);
-      expect(handlesFor(h.services, 'turn:t-test').get('#b1')).toEqual({ kind: 'body', body: a.body, ref: null, label: 'Body 1' });
+      expect(currentHandles(h.services, 'turn:t-test')!.get('#b1')).toEqual({ kind: 'body', body: a.body, bodyName: 'Body 1', ref: null, label: 'Body 1', words: 'Body 1' });
     },
     REAL_KERNEL_MS,
   );
@@ -468,9 +469,10 @@ describe('view', () => {
         { handle: '#f2', words: 'End face of Extrude 2 on Body 2' },
       ]);
       expect(drawn[0].texts.map((t) => t.text).sort()).toEqual(['#f1', '#f2']);
-      const t1 = handlesFor(h.services, 'turn:t-test');
+      const t1 = currentHandles(h.services, 'turn:t-test')!;
       const e1 = t1.get('#f1')!;
-      expect(e1).toMatchObject({ kind: 'face', body: a.body, label: null });
+      // The key's one table (find's and the selectors'): the face's label and words with its reference.
+      expect(e1).toMatchObject({ kind: 'face', body: a.body, bodyName: 'Body 1', label: 'Extrude 1.end', words: 'End face of Extrude 1' });
       expect(e1.ref!.name).toMatch(/:end$/);
       // Front: only the first block's front face shows (the second is behind it); iso: the first's
       // three faces and what the second shows; the end faces keep their handles.
@@ -486,7 +488,39 @@ describe('view', () => {
       expect(frontFace.ref!.name).not.toBe(e1.ref!.name);
       const next = await h.ok('view', { ...VIEW, views: ['front'], labels: 'faces' }, { turn: 't-next' });
       expect((next.data.labels as { handle: string }[]).map((l) => l.handle)).toEqual(['#f1']);
-      expect(handlesFor(h.services, 'turn:t-next').get('#f1')).toEqual(frontFace);
+      expect(currentHandles(h.services, 'turn:t-next')!.get('#f1')).toEqual(frontFace);
+      expect(currentHandles(h.services, 'turn:t-test')).toBeNull();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a picture's handles are the request's own: find and body read them, and find's numbers go on after them",
+    async () => {
+      h = await assistantHarness();
+      const a = await block(h, 40, 20, 20);
+      fakeViewport(h);
+      recordingRaster();
+      const top = await h.ok('view', { ...VIEW, views: ['top'], labels: 'faces' });
+      expect(top.data.labels).toEqual([{ handle: '#f1', words: 'End face of Extrude 1 on Body 1' }]);
+      // find reads the picture's handle: the same face.
+      const found = (await h.ok('find', { query: '#f1', limit: 10 })).data.rows as Row[];
+      expect(found).toEqual([expect.objectContaining({ handle: '#f1', label: 'Extrude 1.end', body: 'Body 1', normal: [0, 0, 1] })]);
+      // find's own listing: the end face keeps #f1, the other five go on from #f2.
+      const all = (await h.ok('find', { query: 'Body 1 faces', limit: 10 })).data.rows as Row[];
+      expect(all.find((r) => r.label === 'Extrude 1.end')?.handle).toBe('#f1');
+      expect(all.map((r) => r.handle).sort()).toEqual(['#f1', '#f2', '#f3', '#f4', '#f5', '#f6']);
+      // A picture's body handle names its body in the body tool.
+      const named = await h.ok('view', { ...VIEW, views: ['top'], labels: 'bodies' });
+      expect(named.data.labels).toEqual([{ handle: '#b1', words: 'Body 1' }]);
+      const renamed = await h.ok('body', { body: '#b1', rename_to: 'Plate', color: '', simulation: 'keep' });
+      expect(renamed.data).toMatchObject({ body: { name: 'Plate' } });
+      expect(bodyOf(h, a.body).name).toBe('Plate');
+      // A face handle is no body; a handle this request never gave is stale.
+      expect(await h.call('body', { body: '#f1', rename_to: 'Slab', color: '', simulation: 'keep' })).toMatchObject({ ok: false, error: { message: 'bad_selector: body: #f1 is a face, not a body.', detail: { reason: 'bad_selector', field: 'body' } } });
+      expect(await h.call('body', { body: '#b9', rename_to: 'Slab', color: '', simulation: 'keep' })).toMatchObject({ ok: false, error: { detail: { reason: 'selector_stale', handle: '#b9' } } });
+      expect(await h.call('body', { body: '#b1', rename_to: 'Slab', color: '', simulation: 'keep' }, { turn: 't-other' })).toMatchObject({ ok: false, error: { detail: { reason: 'selector_stale' } } });
+      expect(bodyOf(h, a.body).name).toBe('Plate');
     },
     REAL_KERNEL_MS,
   );

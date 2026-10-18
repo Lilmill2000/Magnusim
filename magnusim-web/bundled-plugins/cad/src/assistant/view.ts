@@ -31,9 +31,10 @@ import { VIEWPORT_BG } from '../viewport/colors';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
 import { heartbeat, waitForRead } from './busy';
 import { ToolError } from './errors';
+import { faceWords, LabelIndex } from './labels';
 import { len, sig6 } from './numbers';
 import { VIEW_DIRECTIONS } from './schemas';
-import { handlesFor } from './view-handles';
+import { handlesOf } from './selectors/handles';
 
 /** The picture's long side (px) by size; its short side is 3/4 of it. */
 export const SHEET_LONG_PX = Object.freeze({ small: 768, large: 1280 });
@@ -550,7 +551,8 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
 
   const marks = titleMarks(layout, input.views, font);
   const notes = notesNow(services, s);
-  const handles = handlesFor(services, ctx.key);
+  // The key's one handle table, shared with find and the selectors (a #f3 here names the same face there).
+  const handles = handlesOf(services, ctx.key);
   const labels: { handle: string; words: string }[] = [];
   const labelled = new Map<string, string>();
 
@@ -566,8 +568,8 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
         if (addMark(marks, mark)) placed.push(mark);
       });
       if (!placed.length) continue;
-      const handle = handles.add({ kind: 'body', body: b.id, ref: null, label: b.name });
-      if (handle) labels.push({ handle, words: b.name });
+      const handle = handles.give({ kind: 'body', body: b.id, bodyName: b.name, ref: null, label: b.name, words: b.name });
+      labels.push({ handle, words: b.name });
     }
   } else if (input.labels === 'faces') {
     const triangles = shown.reduce((n, b) => n + (b.tess ? b.tess.indices.length / 3 : 0), 0) * shots.length;
@@ -592,6 +594,8 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
       }
       // Each face's handle, kept by its stored reference (what a handle names, never an index).
       const names = (fid: string) => s.doc.features.find((f) => f.id === fid)?.name ?? null;
+      // Labels over every body built now, as find numbers them (~k across the bodies).
+      const labelIndex = new LabelIndex(bodies, { featureName: names });
       const name = await heartbeat(
         ctx,
         (async () => {
@@ -603,7 +607,18 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
               out.set(id, null);
               continue;
             }
-            out.set(id, handles.add({ kind: 'face', body: c.body.id, ref: picked.ref, label: null }));
+            const faceName = c.body.names?.faces?.[c.face] ?? null;
+            out.set(
+              id,
+              handles.give({
+                kind: 'face',
+                body: c.body.id,
+                bodyName: c.body.name,
+                ref: picked.ref,
+                label: labelIndex.of(bodies.indexOf(c.body), c.face).label,
+                words: faceWords(faceName, { featureName: names }, c.body.names?.faces ?? null),
+              }),
+            );
           }
           return out;
         })(),

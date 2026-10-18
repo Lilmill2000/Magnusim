@@ -142,7 +142,8 @@ One string names faces, edges, vertices, bodies, planes, axes or sketch regions
   body's `not_named`.
 - `selectors/handles.ts`: `#f3`, `#e7`, `#v2`, `#b1`, per key (cleared when the key
   changes, at most 2000); each keeps the stored reference and is resolved again on use
-  (`moved: check` when it moved, `selector_stale` when it is gone).
+  (`moved: check` when it moved, `selector_stale` when it is gone). find, view and the
+  selectors share the key's one table, and the body tool takes a `#b` handle.
 - `selectors/topo-cache.ts`: one `topo` call per shape (the 32 newest kept, chunks with
   progress above 2000 faces, dropped on a kernel restart); it is also a `NamingLookup`.
 - `selectors/geometry.ts`: a point on a face, hole or boss for round faces, a flat face's
@@ -196,9 +197,9 @@ make a 2 x 2 sheet with each tile's name. The long side is 768 px (`small`) or 1
 - `labels: 'bodies'` writes each shown body's name at its box's centre; `'faces'` puts a
   `#fN` handle on the 30 largest faces the picture shows, where the picture really sees
   that face (`visibleFaceAt`), at the middle of what shows, else in a roomy triangle.
-  Each handle keeps the face's stored reference (`pickFace`), never an index.
-  `view-handles.ts` is the view tool's own handle table (one per call key, cleared when
-  the key changes); find and the selectors share one table with it once they are built.
+  Each handle keeps the face's stored reference (`pickFace`), never an index, with its
+  label, in the key's one table (`selectors/handles.ts`): find and every selector read a
+  picture's `#f3`, and find numbers on after it.
 - The data lists the views and their mm per px, the shown and hidden bodies (and those
   hidden in the tree), the cut, the labels, the shown sketches' dimension values
   (pictures carry no HTML overlays), `software_renderer`, and a `note` when the person's

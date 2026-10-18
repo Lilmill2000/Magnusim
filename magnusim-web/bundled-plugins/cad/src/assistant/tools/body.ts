@@ -1,14 +1,17 @@
 // body: rename a body, set its colour, or say whether it goes into the project's simulation
 // geometry, in one step (CAD tools spec §3.2.14). "" (or keep) leaves a field as it is. The body
-// is named by its name (any case) or its id. Each change is the Part's own one-shot edit
+// is named by its name (any case), its id, or a body handle of this request (#b2, from find or
+// view). Each change is the Part's own one-shot edit
 // (renameBody, setBodyColor, setBodyInSimulation), with its refusal words as the message; all of
 // them are one step, so a refused second change takes the first back too.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { EditData, ToolImpl, ToolReply } from '../../types/assistant';
+import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
 import type { BodyId } from '../../types/doc';
 import type { EditResult } from '../../types/doc-service';
+import type { BodyInfo } from '../../types/kernel';
 import { ToolError } from '../errors';
+import { currentHandles } from '../selectors/handles';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 
 interface Plan extends EditPlan {
@@ -29,12 +32,22 @@ function refused(field: string, r: EditResult): ToolError {
   return new ToolError('bad_input', `${field}: ${reason}.`, { detail: { field } });
 }
 
+/** The body a handle of this request names (find's or view's #b2), or its selector_stale / bad_selector. */
+function byHandle(ctx: CallCtx, handle: string): BodyInfo {
+  const e = currentHandles(ctx.services, ctx.key)?.get(handle) ?? null;
+  if (!e) throw new ToolError('selector_stale', `body: ${handle} is not a handle of this request: call find, then use the handles it gives.`, { detail: { field: 'body', handle } });
+  if (e.kind !== 'body') throw new ToolError('bad_selector', `body: ${handle} is a ${e.kind}, not a body.`, { detail: { field: 'body', handle } });
+  const b = ctx.services.doc.state.get().rebuild.bodies.find((x) => x.id === e.body);
+  if (!b) throw new ToolError('selector_stale', `body: ${handle} is gone: ${e.bodyName} is not there now; call find again.`, { detail: { field: 'body', handle, was: e.bodyName } });
+  return b;
+}
+
 const bodyTool: EditTool<Plan> = {
   async plan(ctx) {
     const s = ctx.services.doc.state.get();
     const want = str(ctx.input.body);
     const bodies = s.rebuild.bodies;
-    const b = bodies.find((x) => x.name.toLowerCase() === want.toLowerCase()) ?? bodies.find((x) => x.id === want);
+    const b = want.startsWith('#') ? byHandle(ctx, want) : (bodies.find((x) => x.name.toLowerCase() === want.toLowerCase()) ?? bodies.find((x) => x.id === want));
     if (!b) {
       const names = bodies.map((x) => x.name);
       throw new ToolError('not_found', `No body is called "${want}". Bodies: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'body', names: names.slice(0, 30) } });

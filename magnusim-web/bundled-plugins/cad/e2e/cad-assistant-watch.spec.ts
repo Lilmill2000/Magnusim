@@ -6,6 +6,8 @@
 // "not in this build yet" with its hint. The dock's chip and the frame's data-assistant say what
 // the Assistant does: thinking while the model answers, working while a call runs ("Read the
 // Part"), then "Assistant: <request> · done".
+// view's handles (the S2 integration): a picture's #f1 is the face find reads as #f1, and its #b1
+// renames the block through body, as the person's tree shows.
 // measure (watch 6, T10): the chip says "Measure" while it runs; the model gets a block's volume
 // and no voids, two separate blocks' distance, no overlap and two solids joined, and a cut's area;
 // the turn's log reads each measurement; nothing in the Part changes.
@@ -424,6 +426,36 @@ test("cad:assistant-watch-view view pictures the Part off screen: one image in t
   expect(await personView(page)).toEqual(before);
   expect(await fileWrites(page)).toEqual([]);
   expect(await cadFrame(page).evaluate(() => [...((window as unknown as { __dataWrites?: string[] }).__dataWrites ?? [])])).toEqual([]);
+});
+
+test("cad:assistant-watch-view-handles a picture's handles are the request's own: find names its #f1, and body renames the block by its #b1 in the person's tree", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant view handles');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  const made = await addSolid(page, { size: [40, 30, 10] });
+  const view = (labels: string) => ({ views: ['top'], hide: [], section: '', labels, size: 'small' });
+  const from = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__view', input: view('faces') }] },
+    { tools: [{ name: 'cad__find', input: { query: '#f1', limit: 10 } }] },
+    { tools: [{ name: 'cad__view', input: view('bodies') }] },
+    { tools: [{ name: 'cad__body', input: { body: '#b1', rename_to: 'Plate', color: '', simulation: 'keep' } }] },
+    { text: 'The block is called Plate now.' },
+  );
+  const t = await startTurn(request, host, { text: 'Name the block Plate.', tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterFaces, afterFind, afterBodies, afterBody] = chats(host).slice(from);
+  // The picture's face handle is the one find reads: the top face.
+  const [faces] = resultsIn(afterFaces);
+  expect(faces).toMatchObject({ tool: 'cad__view', ok: true, data: { labels: [{ handle: '#f1', words: 'End face of Extrude 1 on Body 1' }] } });
+  const [found] = resultsIn(afterFind);
+  expect(found).toMatchObject({ tool: 'cad__find', ok: true, data: { query: '#f1', kind: 'face', count: 1, rows: [{ handle: '#f1', label: 'Extrude 1.end', normal: [0, 0, 1] }] } });
+  // The picture's body handle names the block in body: the person's tree shows its new name.
+  const [bodies] = resultsIn(afterBodies);
+  expect(bodies).toMatchObject({ tool: 'cad__view', ok: true, data: { labels: [{ handle: '#b1', words: 'Body 1' }] } });
+  const [renamed] = resultsIn(afterBody);
+  expect(renamed).toMatchObject({ tool: 'cad__body', ok: true, data: { body: { name: 'Plate' } } });
+  await expect(frame.locator(`[data-body-row="${made.body}"]`)).toContainText('Plate', STEP);
 });
 
 test('cad:assistant-watch-view-no-images a local model that reads no images is told so in words, and no picture is drawn', async ({ page, request }) => {
