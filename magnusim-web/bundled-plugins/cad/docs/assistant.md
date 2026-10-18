@@ -533,6 +533,9 @@ events the chip stays 10 s after the last call.
   (sketch entry, a reopened sketch's reframe, a new Extrude's Isometric) are off for the rest of
   the key; also at the fast pace, while hidden and while a pointer is held. After a kept edit,
   `refitIfOffScreen({auto: true})` under the same rule. `autoCamera` (the page API) answers it.
+  The view's own framing of what an Assistant step brings (its first bodies and a size change,
+  `setBodies(.., {frame: false})`; its finished sketch past the view, bind.ts) asks `autoFrame`:
+  off once the key is latched or while the window is hidden, at any pace.
 - **Ask each step** (`approval.ts`, the chip's toggle, `ws.prefs` `assistant.ask_each`, off by
   default): a judged edit waits before it is sealed (chip `approve`, progress `waiting`); Keep
   goes on, Discard reverts (`busy` `step_declined`, `why: 'discard'`), no answer within the wait

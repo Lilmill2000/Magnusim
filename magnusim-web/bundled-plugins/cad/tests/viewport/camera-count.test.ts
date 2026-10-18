@@ -7,7 +7,9 @@
 //     and reports no camera change); with `auto` none of them counts;
 //   - a drag counts once (orbit, pan, zoom), a wheel step once; a click and a box selection never;
 //   - the app's own moves in bind.ts (a Part's camera put back on open, the refit after sketch
-//     mode) pass `auto` (sketch entry, the reopened sketch's reframe and the new extrude's turn
+//     mode) pass `auto`; what an Assistant step brings (its first body, its finished sketch past
+//     the view) is framed only as the Assistant's autoFrame allows (the camera latch, a hidden
+//     window), the person's own always (sketch entry, the reopened sketch's reframe and the new extrude's turn
 //     to Isometric: tests/sketch/auto-camera.test.ts, tests/features/extrude/auto-camera.test.tsx;
 //     the banana's refit: tests/features/scale/auto-camera.test.ts; each automatic call in the
 //     real app, with its options: e2e/cad-viewport-snapshot.spec.ts);
@@ -371,6 +373,61 @@ describe('userCameraMoves', () => {
     mode.set({ mode: 'model' });
     vi.advanceTimersByTime(3000);
     expect(h.camera().target).not.toEqual(before.target);
+    expect(moves(h)).toBe(0);
+  });
+
+  it("what an Assistant step brings is framed only as autoFrame allows: its first body and its finished sketch; the person's always", () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance'] });
+    const rebuild = { status: 'done', seq: 1, features: {}, bodies: [] as unknown[], outputs: {}, ms: null, message: null };
+    const docState = createStateStore({ status: 'ready', rebuild, view: { rollback: null, hiddenBodies: [], expanded: [] } } as unknown as ReturnType<AppServices['doc']['state']['get']>);
+    const mode = createStateStore<{ mode: Mode }>({ mode: 'model' });
+    let allow = false;
+    const asked: (string | null)[] = [];
+    // The open step and the open session: the Assistant's, until the test says the person's.
+    let owner: string | null = 'assistant:c1';
+    const apis = createStateStore({ assistant: { autoCamera: () => true, autoFrame: (o: string | null) => (asked.push(o), allow) } });
+    const services = {
+      doc: { state: docState, setCamera: () => {}, setPlanes: () => {}, assistant: { current: () => (owner ? { owner } : null) }, session: () => ({ owner: owner ?? undefined }) },
+      selection: createSelectionStore(),
+      bus: createBus<CadEvents>(),
+      kernel: { call: async () => ({ result: { faces: [], edges: [], vertices: [] } }) },
+      mode,
+      apis,
+    } as unknown as AppServices;
+    const { h } = viewport(services);
+    const cube = (id: string, at: Vec3, s: number) => ({ id, color: '#bdc9db', visible: true, tessKey: `${id}:${s}`, tess: cubeTess(at, s), feature: 'f_1', bbox: null });
+    const build = (bodies: unknown[]) => docState.set((st) => ({ ...st, rebuild: { ...st.rebuild, seq: st.rebuild.seq + 1, bodies } }) as typeof st);
+    // The Assistant's first body, the person having moved the camera in its request: not framed.
+    const start = h.camera();
+    build([cube('b_1', [500, 500, 0], 10)]);
+    expect(asked.at(-1)).toBe('assistant:c1');
+    expect(h.camera()).toEqual(start);
+    // Allowed: the next first body is framed.
+    build([]);
+    allow = true;
+    build([cube('b_1', [500, 500, 0], 10)]);
+    expect(h.camera().target).not.toEqual(start.target);
+    // Its finished sketch past the view: the refit waits for autoFrame too, asked as sketch mode ends.
+    allow = false;
+    h.fit({ animate: false, auto: true });
+    const far = h.addLayer('far', { frame: true });
+    const m = new Mesh(new BoxGeometry(1, 1, 1));
+    m.position.set(0, 4000, 0);
+    far.group.add(m);
+    const framed = h.camera();
+    mode.set({ mode: 'sketch' });
+    mode.set({ mode: 'model' });
+    vi.advanceTimersByTime(3000);
+    expect(h.camera()).toEqual(framed);
+    expect(asked.at(-1)).toBe('assistant:c1');
+    // The person's own sketch (no owner, no step): refit as always, autoFrame not asked.
+    owner = null;
+    const n = asked.length;
+    mode.set({ mode: 'sketch' });
+    mode.set({ mode: 'model' });
+    vi.advanceTimersByTime(3000);
+    expect(h.camera().target).not.toEqual(framed.target);
+    expect(asked).toHaveLength(n);
     expect(moves(h)).toBe(0);
   });
 });

@@ -23,6 +23,13 @@ export interface AssistantPageApi {
    * during the turn, while the window is hidden, or when the pace is fast.
    */
   autoCamera(reason: AutoCameraReason, sessionId: string | null): boolean;
+  /**
+   * Whether the view may frame what a change of `owner`'s brings (the first bodies, a size
+   * change, bodies or a finished sketch past the view) now. True for the person's own changes
+   * (owner null). For an Assistant step's: not once the person moved the camera during its
+   * request (the latch: "it leaves your view alone"), nor while the window is hidden or covered.
+   */
+  autoFrame?(owner: string | null): boolean;
   /** What the Assistant is doing in this Part (the dock chip and `.cad-app[data-assistant]` read it). */
   readonly state?: ReadonlyStateStore<AssistantUiState>;
   /** What the chip's buttons do (watch mode). */

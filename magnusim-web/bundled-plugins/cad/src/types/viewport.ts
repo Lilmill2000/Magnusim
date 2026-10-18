@@ -226,8 +226,13 @@ export interface SnapshotResult {
  */
 export interface ViewportHandle {
   readonly state: ReadonlyStateStore<ViewportState>;
-  /** Replace the bodies drawn. A body whose tessKey is unchanged keeps its GPU mesh and picking structure. */
-  setBodies(bodies: ViewportBody[]): void;
+  /**
+   * Replace the bodies drawn. A body whose tessKey is unchanged keeps its GPU mesh and picking
+   * structure. `frame: false`: the view frames nothing for them (the first bodies, a size change,
+   * bodies past a framed view): an Assistant step's bodies once the person moved the camera
+   * during its request, or while the window is hidden.
+   */
+  setBodies(bodies: ViewportBody[], o?: { frame?: boolean }): void;
   /** Show or hide one body now (the next setBodies carries the document's value again). */
   setVisibility(id: BodyId, visible: boolean): void;
   /** B-rep vertex positions for a body (kernel order), when they arrive after its tessellation. */

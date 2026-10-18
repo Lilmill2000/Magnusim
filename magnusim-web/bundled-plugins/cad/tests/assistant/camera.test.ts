@@ -4,13 +4,16 @@
 // turn takes a new baseline when it starts running (the host's turn events) or at its first call
 // (an outside client). Off at the fast pace, while the window is hidden and while a pointer is
 // held; always on for the person's own sessions. After a kept edit the view frames again when
-// bodies left it (refitIfOffScreen with auto), under the same rule. On the REAL kernel and solver
-// through sketch mode, with a recording viewport handle.
+// bodies left it (refitIfOffScreen with auto), under the same rule. autoFrame (what the view may
+// frame of an Assistant step: its bodies, its finished sketch) says no once the person moved the
+// camera in the request or while the window is hidden, at any pace; always yes for the person's.
+// On the REAL kernel and solver through sketch mode, with a recording viewport handle.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCameraLatch } from '../../src/assistant/camera';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { createStateStore } from '../../src/lib/store';
+import { block, BlockKernel } from '../doc/blocks';
 import type { ViewportHandle } from '../../src/types/viewport';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { C, E, SK } from './sketch-tools';
@@ -45,6 +48,51 @@ function recordingHandle() {
 
 const square = (name: string) =>
   SK({ name, entities: [E('r', 'center_rect', [0, 0, 20, 20])], constraints: [C('c0', 'coincident', ['r.center', 'origin']), C('dw', 'distance', ['r.bottom'], '20 mm'), C('dh', 'distance', ['r.left'], '20 mm')] });
+
+describe('autoFrame', () => {
+  it("says no for an Assistant step's once the person moved the camera in its request, or while the window is hidden; yes for the person's", async () => {
+    h = await assistantHarness({ kernel: new BlockKernel(), solver: false });
+    block(h.doc);
+    await h.settle();
+    const vh = recordingHandle();
+    h.services.viewport.set({ handle: vh as unknown as ViewportHandle });
+    const rt = runtimeOf(h.services)!;
+    const api = h.services.apis.get().assistant!;
+    const PARAM = (name: string) => ({ set: [{ name, kind: 'length', expr: '3 mm', comment: '', rename_to: '' }], remove: [] });
+    h.fake.emitTurn({ id: 't1', title: 'Frame' });
+    rt.holds.hold('before-commit');
+    const r = h.call('set_params', PARAM('a'), { turn: 't1' });
+    await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['before-commit']), { timeout: 30_000 });
+    const owner = h.doc.assistant.current()!.owner;
+    // At the fast pace too (the view frames what is there; only the latch and a hidden window stop it).
+    expect(rt.pace.get()).toBe('fast');
+    expect(api.autoFrame!(owner)).toBe(true);
+    vh.moves += 1;
+    expect(api.autoFrame!(owner)).toBe(false);
+    expect(api.autoFrame!(null)).toBe(true);
+    rt.holds.release('before-commit');
+    expect((await r).ok).toBe(true);
+    // A new request, the window hidden.
+    h.fake.emitTurn({ id: 't1', title: 'Frame', state: 'ended', end: { state: 'done', reason: 'done' } });
+    h.fake.emitTurn({ id: 't2', title: 'Hidden' });
+    rt.holds.hold('before-commit');
+    const r2 = h.call('set_params', PARAM('b'), { turn: 't2' });
+    await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['before-commit']), { timeout: 30_000 });
+    const owner2 = h.doc.assistant.current()!.owner;
+    expect(api.autoFrame!(owner2)).toBe(true);
+    const d = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    try {
+      expect(api.autoFrame!(owner2)).toBe(false);
+      expect(api.autoFrame!(null)).toBe(true);
+    } finally {
+      delete (document as unknown as Record<string, unknown>).hidden;
+      if (d) Object.defineProperty(Document.prototype, 'hidden', d);
+    }
+    rt.holds.release('before-commit');
+    expect((await r2).ok).toBe(true);
+  });
+});
 
 describe('the latch on a sketch the Assistant draws', () => {
   it(

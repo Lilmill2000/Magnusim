@@ -247,6 +247,13 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       const key = (callId ? rt.active.get(callId)?.key : null) ?? null;
       return camera.allows(key);
     },
+    autoFrame(owner) {
+      if (!owner) return true;
+      if (pace.hidden()) return false;
+      const callId = owner.startsWith('assistant:') ? owner.slice('assistant:'.length) : null;
+      const key = (callId ? rt.active.get(callId)?.key : null) ?? null;
+      return !(key !== null && camera.latched(key));
+    },
     state: store,
     actions,
   };

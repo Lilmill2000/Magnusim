@@ -803,6 +803,48 @@ test('cad:assistant-watch-camera the camera latch: a drag or a tree menu Normal 
   }
 });
 
+test("cad:assistant-watch-camera-big a view button in the turn latches it: the Assistant's sketch far past the view leaves the camera where the person put it, through Finish sketch", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant camera big sketch');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.assistant.setPace('watch', 0));
+  const chip = frame.locator('[data-chip="assistant"]');
+  const moves = () => cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.viewport.get().handle.userCameraMoves());
+  // A 2 m x 1.5 m plate on Front: far past the view of an empty Part.
+  const big = { name: 'cad__sketch', input: { edit: '', name: 'Big plate', on: 'Front', entities: [SE('r', 'center_rect', [0, 0, 2000, 1500])], constraints: [SC('c0', 'coincident', ['r.center', 'origin'])], infer: false } };
+  host.fake.reply({ hold: 'look-view-big', tools: [big] }, { text: 'Sketched.' });
+  const t = await startTurn(request, host, { text: 'Sketch a big plate on Front.', tab });
+  await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
+  // The person picks the Front view from the view menu: a framing of theirs (the view stays framed).
+  const m0 = await moves();
+  await frame.locator('[data-vp-opens="views"]').click();
+  await frame.locator('[data-view="front"]').click();
+  await expect.poll(moves, STEP).toBeGreaterThan(m0);
+  const seen = await cameraNow(page);
+  // When sketch mode ends, in the page's clock (bind.ts refits 60 ms after it, once the view is still).
+  await cadFrame(page).evaluate(() => {
+    const w = window as unknown as { __sketchEnd?: number | null; __CAD__: { services: { mode: { get(): { mode: string }; subscribe(fn: (m: { mode: string }) => void): () => void } } } };
+    const mode = w.__CAD__.services.mode;
+    let was = mode.get().mode;
+    w.__sketchEnd = null;
+    mode.subscribe((m) => {
+      if (was === 'sketch' && m.mode !== 'sketch') w.__sketchEnd = performance.now();
+      was = m.mode;
+    });
+  });
+  host.fake.release('look-view-big');
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect(watchHistory(frame)).toHaveText([/Big plate$/], STEP);
+  // Past the moment the refit after Finish sketch would run (60 ms after, the view not animating: 400 ms is ample).
+  await expect
+    .poll(() => cadFrame(page).evaluate(() => {
+      const end = (window as unknown as { __sketchEnd?: number | null }).__sketchEnd;
+      return typeof end === 'number' && performance.now() - end > 400;
+    }), STEP)
+    .toBe(true);
+  expect(await cameraNow(page), 'the camera stays where the view button put it').toEqual(seen);
+});
+
 test("cad:assistant-watch-chip-end the chip after the turn: Undo is one Ctrl+Z of the request; the Part's health names an under-defined sketch, then a failing fillet (a click selects its row)", async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant chip at the end');

@@ -592,7 +592,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     else refitCheck(held.radius);
   }
 
-  function setBodies(list: ViewportBody[]) {
+  function setBodies(list: ViewportBody[], o: { frame?: boolean } = {}) {
+    const frame = o.frame !== false;
     const t0 = performance.now();
     const hadVisible = [...bodies.values()].some(visibleOf);
     const radiusBefore = hadVisible ? framedSphere(true).radius : 0;
@@ -648,8 +649,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     stats.lastSetBodiesMs = performance.now() - t0;
     // The first bodies of a part are framed (like the core on a new import); so
     // is a part whose size changed many times over (a 1e6 mm box typed back to
-    // 20 mm must not stay a dot).
-    const hasVisible = [...bodies.values()].some(visibleOf);
+    // 20 mm must not stay a dot). Bodies the view may not frame now (an Assistant step's under the
+    // camera latch, or while hidden: `frame` false) leave it as it is.
+    const hasVisible = frame && [...bodies.values()].some(visibleOf);
     if (captured && hasVisible) {
       // A tool holds the pointer (an extrude arrow being dragged): the view waits for the release.
       if (!refitHeld) refitHeld = { radius: radiusBefore, first: !hadVisible };
