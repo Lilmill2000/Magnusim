@@ -286,9 +286,6 @@ export interface TurnSummary {
   log_dropped?: boolean;
 }
 
-/** A turn as the turn channel's `summary` frames carry it (the snapshot's adds `prompt`). */
-export type SlimSummary = Omit<TurnSummary, 'text_so_far' | 'prompt'>;
-
 /** GET /api/assistant/turns/:id?since&wait_ms: the long-poll's answer. */
 export interface TurnPollAnswer {
   ok: true;
@@ -298,16 +295,26 @@ export interface TurnPollAnswer {
   ended: boolean;
 }
 
+/** A turn's summary as the turn channel's `summary` frames carry it: without text_so_far and prompt. */
+export type SlimTurnSummary = Omit<TurnSummary, 'text_so_far' | 'prompt'>;
+/** The dock's name for SlimTurnSummary until it reads the server's own names. */
+export type SlimSummary = SlimTurnSummary;
+
 /**
- * What the turn channel sends (phase 4 spec 5.1; hub kind `assistant`, params {role:'turn',
- * turn, since}): `snapshot` first with the events after `since` (at most 500; `more` when
- * `events` frames follow at once), then `events` as they come and `summary` when the turn
- * changes. The server ends the channel once the `end` event went out.
+ * A window following a turn on its tab's event stream: hub kind `assistant`, params
+ * {role:'turn', turn, since} (openChannel('/api/assistant/events?role=turn&turn=<id>&since=<seq>')).
+ * Refused 403 (not this PC), 400 (a bad turn id or since), 404 (not kept), 429 (a ninth of the
+ * tab). Each frame is an event of the channel named by its type, with this data; after the turn's
+ * `end` event went out comes a last `summary`, then the server ends the channel (`_closed`); an
+ * ended turn's channel ends right after its snapshot.
  */
 export interface TurnChannelFrameData {
-  snapshot: { turn: SlimSummary & { prompt?: string }; events: TurnEvent[]; next: number; ended: boolean; more: boolean };
+  /** First: the full summary, the events after `since` (at most 500; more:true when `events` frames follow at once). */
+  snapshot: { turn: TurnSummary; events: TurnEvent[]; next: number; ended: boolean; more: boolean };
+  /** Events logged since (at most 500 a frame, at most every 100 ms); `next` is the last one's seq. */
   events: { events: TurnEvent[]; next: number };
-  summary: { turn: SlimSummary };
+  /** The turn changed as its tab's page hears it (at most once a second), and once after its end. */
+  summary: { turn: SlimTurnSummary };
 }
 
 /**

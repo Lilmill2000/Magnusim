@@ -4,7 +4,8 @@
  *
  * A tab's page opens one channel of kind `assistant` on its event stream (event-hub.ts),
  * params {role:'relay'}, from this PC only: 403 when the stream or the subscribe came from
- * elsewhere, 400 for another role. Frames to the page:
+ * elsewhere, 400 for another role. (Role 'turn' is a window following one turn's events:
+ * turn-channel.ts, dispatched from open.) Frames to the page:
  *   linked {link}                  always the channel's first frame: 24 random hex, new at
  *                                  each open. Every relay POST carries it (the page never
  *                                  needs its tab id), and the page registers again on each.
@@ -100,6 +101,7 @@ import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
 import { NOT_SHOWN_TEXT, type Turn, type TurnManager } from './turns.ts';
+import { openTurnChannel } from './turn-channel.ts';
 import type { ImagePart } from './types.ts';
 
 export const LINK_RE = /^[0-9a-f]{24}$/;
@@ -413,7 +415,9 @@ export class Relay {
   open(params: Record<string, unknown>, send: ChannelSend, done: () => void, meta: ChannelMeta): ChannelOpened {
     // Both the tab's stream and this subscribe, through the Assistant's one access predicate.
     if (!assistantAccess(meta.streamReq) || !assistantAccess(meta.req)) return { ok: false, status: 403, error: REMOTE_MESSAGE };
-    if (params.role !== 'relay') return { ok: false, status: 400, error: "The assistant channel's role must be 'relay'." };
+    // A window following a turn (turn-channel.ts): its own checks, its own frames.
+    if (params.role === 'turn') return openTurnChannel(this.turns, params, send, done, meta);
+    if (params.role !== 'relay') return { ok: false, status: 400, error: "The assistant channel's role must be 'relay' or 'turn'." };
     if (this.closed) return { ok: false, status: 503, error: 'The Assistant is stopping.' };
     // A newer channel of the same tab takes over from an older one still open.
     const old = this.tabs.get(meta.tab)?.link;
