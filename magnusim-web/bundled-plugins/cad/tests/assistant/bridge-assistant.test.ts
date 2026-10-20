@@ -17,6 +17,7 @@ import { createCallHandler } from '../../src/assistant/call';
 import { GUIDE, guideWithout, notOfferedLine } from '../../src/assistant/guide';
 import { HELP, HELP_TOPIC_BYTES, NOT_OFFERED } from '../../src/assistant/help';
 import { assistantTestHandle } from '../../src/assistant/install';
+import { REVIEW_PROMPT } from '../../src/assistant/review';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { CORE_TOOLSET, TOOL_NAMES } from '../../src/assistant/schemas';
 import { assistantOf } from '../../src/lib/bridge';
@@ -75,10 +76,22 @@ describe('the registration', () => {
     const reg = h.fake.registrations[0];
     expect(reg.tools.map((t) => t.name)).toEqual([...TOOL_NAMES]);
     expect(reg.guide).toBe(GUIDE);
+    // The review rounds the app runs at the end of a turn that edited the Part.
+    expect(reg.review).toEqual({ rounds: 3, prompt: REVIEW_PROMPT });
     expect(stateOf(h)).toMatchObject({ registration: 'on', reason: null, phase: 'idle' });
     h.fake.emitTurn({ id: 't-9', title: 'Plate' });
     expect(runtimeOf(h.services)!.turns.get('t-9')?.title).toBe('Plate');
     expect(stateOf(h).phase).toBe('thinking');
+  });
+
+  it('the eval can leave the review rounds out (setReview(false)) and ask for them again', async () => {
+    h = await start();
+    const handle = assistantTestHandle(h.services)!;
+    expect(await handle.setReview(false)).toMatchObject({ available: true });
+    expect(h.fake.registrations.at(-1)!.review).toBeUndefined();
+    expect(h.fake.registrations.at(-1)!.guide).toBe(GUIDE);
+    expect(await handle.setReview(true)).toMatchObject({ available: true });
+    expect(h.fake.registrations.at(-1)!.review).toEqual({ rounds: 3, prompt: REVIEW_PROMPT });
   });
 
   it("an older host's refusal leaves the Assistant off, for good", async () => {

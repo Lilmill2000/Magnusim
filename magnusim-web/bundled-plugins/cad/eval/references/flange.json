@@ -88,7 +88,8 @@
         ]
       },
       { "tools": [{ "name": "cad__find", "input": { "query": "Body 1 faces hole radius 3.25 mm", "limit": 10 } }] },
-      { "text": "The flange is built: 80 x 8 with a 20 mm bore, the 30 mm hub 10 mm high, and 6 holes of 6.5 mm on a 60 mm bolt circle." }
+      { "text": "The flange is built: 80 x 8 with a 20 mm bore, the 30 mm hub 10 mm high, and 6 holes of 6.5 mm on a 60 mm bolt circle." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

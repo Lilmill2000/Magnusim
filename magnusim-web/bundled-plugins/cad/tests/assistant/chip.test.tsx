@@ -38,6 +38,11 @@ describe('chipText', () => {
     expect(chipText({ ...base, phase: 'thinking', turn: agentTurn() })).toBe('Assistant · thinking · 3 of 24 changes');
     expect(chipText({ ...base, phase: 'working', turn: agentTurn(), call: { tool: 'extrude', label: 'Extrude Boss' } })).toBe('Assistant · Extrude Boss · 3 of 24 changes');
     expect(chipText({ ...base, phase: 'ended', turn: turn('done') })).toBe('Assistant: Plate with four holes · done');
+    // A review round the app asked for: what the turn does now, until it ends.
+    const reviewing = { ...turn(), review: { round: 1, of: 3 } };
+    expect(chipText({ ...base, phase: 'thinking', turn: reviewing })).toBe('Assistant · reviewing (round 1 of 3) · 3 of 120 steps');
+    expect(chipText({ ...base, phase: 'working', turn: reviewing, call: { tool: 'view', label: 'Look at the Part' } })).toBe('Assistant · reviewing (round 1 of 3) · Look at the Part · 3 of 120 steps');
+    expect(chipText({ ...base, phase: 'ended', turn: { ...turn('done'), review: { round: 2, of: 3 } } })).toBe('Assistant: Plate with four holes · done');
     expect(chipText({ ...base, phase: 'ended', turn: turn('capped') })).toBe('Assistant: Plate with four holes · stopped at its limits');
     expect(chipText({ ...base, phase: 'ended', turn: turn('ended') })).toBe('Assistant: Plate with four holes · ended');
     expect(chipText({ ...base, phase: 'waiting', note: 'close the Fillet 2 panel' })).toBe('Assistant waits for you: close the Fillet 2 panel');

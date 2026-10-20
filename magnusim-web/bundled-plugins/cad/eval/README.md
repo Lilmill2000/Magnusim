@@ -65,7 +65,10 @@ help features marks those 5),
 `--pace watch` (the default is fast), `--headed` (show the browser), `--tab <id>` (attach: bind
 the turns to that tab; it must show the project the run made, else the task, or the probe,
 stops before its first turn; by default the tab whose registration names it, never "auto"),
-`--no-repair`, `--out <dir>`, `--port-from <n>`, `--turn-minutes <n>`.
+`--no-repair`, `--out <dir>`, `--port-from <n>`, `--turn-minutes <n>`, `--reference <file>`
+(a PNG, JPEG or WebP picture kept **outside the repository**, up to 4, sent with each task's first
+request as the person's reference picture; `runs.jsonl` records only its path and SHA-256), and
+`--review off` (the Part asks for no review rounds: an A/B against the default `on`).
 
 `--tasks probe` sends one request with the Part's full tool set (the app's 3 tools and the Part's
 18) and records how many strict schemas the provider took (`probe.json`: `strict` is
@@ -81,7 +84,11 @@ and the turn's log in
 1. A new project and its first Part (the header's CAD menu, as the person makes one; Imperial for
    an inch task); the app tab whose registration names that project.
 2. Each request of the task as a turn on that tab, followed to its end. A delete is denied unless
-   the task's `gates` allow it.
+   the task's `gates` allow it. The first one carries the `--reference` pictures. The Part asks
+   for review rounds: when the model ends a turn that edited the Part, the app sends it the
+   Part's review prompt (look at the whole Part, compare with the request and the reference,
+   fix what differs) up to 3 times, until a round changes nothing. A scripted reference ends
+   each turn that edits with the round's answer "Review: no changes".
 3. The Part's facts (`window.__CAD__.assistant.evalFacts`, `src/assistant/eval-facts.ts`) scored by
    `score.mjs`, with the parameter walk (each walk check's parameter set as the person sets it,
    the first value put back).
@@ -95,7 +102,9 @@ Records go to `.cache/assistant-eval/<stamp>-<label>/` (ignored by git):
   it failed, the steps, the calls by tool, the errors by reason (the page's) and by code (the
   turn log's), the `invalid_input` count, the images sent, the notes (images left out, the strict
   fallback), the largest request in tokens, the local model's context when known, the money, the
-  tokens, the wall time, each turn's end and the Part's health;
+  tokens, the wall time, each turn's end and the Part's health, whether review was on, the
+  review rounds the app ran (`reviews`: turn, round, of) and the reference pictures (`references`:
+  path and SHA-256);
 - `<task>-<run>/`: `events.jsonl` (every turn's log), `calls.json` (the page's calls),
   `facts.json`, `final.png`;
 - `summary.md`, a table to copy into the plans;

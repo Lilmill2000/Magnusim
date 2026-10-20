@@ -1,7 +1,8 @@
 // The Assistant's chip in the dock (CAD tools spec §8.3): `[data-chip="assistant"]` with
 // `data-assistant-state` the phase, its words in `[data-assistant-text]` ("Assistant · thinking ·
 // 12 of 120 steps", "Assistant · Sketch Plate sketch · 12 of 120 steps", a coding agent's turn
-// "... · 3 of 24 changes", "Assistant waits for you: close the Fillet 2 panel", "Assistant:
+// "... · 3 of 24 changes", in a review round the app asked for "Assistant · reviewing (round 1 of
+// 3) · 14 of 120 steps" (a call's label after it), "Assistant waits for you: close the Fillet 2 panel", "Assistant:
 // Extrude Boss · keep it?", "Assistant paused · you took over", "Assistant: <request> · done"),
 // and its buttons (`data-assistant-action`):
 //   thinking  Pause, Stop, Ask each step
@@ -45,11 +46,13 @@ export function chipText(s: AssistantUiState): string | null {
       : t.steps !== null && t.stepsCap
         ? ` · ${t.steps} of ${t.stepsCap} steps`
         : '';
+  // A review round of the running turn (the app checks the Part with the model at its end).
+  const review = t?.review && !t.end ? `reviewing (round ${t.review.round} of ${t.review.of})` : null;
   switch (s.phase) {
     case 'thinking':
-      return `Assistant · thinking${steps}`;
+      return `Assistant · ${review ?? 'thinking'}${steps}`;
     case 'working':
-      return `Assistant · ${s.call?.label ?? 'working'}${steps}`;
+      return `Assistant · ${review ? `${review} · ` : ''}${s.call?.label ?? 'working'}${steps}`;
     case 'waiting':
       return `Assistant waits for you${s.note ? `: ${s.note}` : ''}`;
     case 'approve':

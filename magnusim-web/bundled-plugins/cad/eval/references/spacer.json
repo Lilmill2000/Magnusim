@@ -50,7 +50,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
-      { "text": "The spacer is a ring 30 mm across with a 12 mm bore, 5 mm thick: 2,968.8 mm3, one solid." }
+      { "text": "The spacer is a ring 30 mm across with a 12 mm bore, 5 mm thick: 2,968.8 mm3, one solid." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

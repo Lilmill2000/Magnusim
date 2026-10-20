@@ -74,6 +74,12 @@ export interface RunRecord {
   tab: string;
   pace: string | null;
   toolset: string;
+  /** The Part asked for its review rounds. */
+  review: boolean;
+  /** The run's reference pictures (sent with the first request): their files and digests. */
+  references: { path: string; sha256: string }[];
+  /** The review rounds the app ran, by turn (1-based). */
+  reviews: { turn: number; repair: boolean; round: number; of: number }[];
   first_shot: { pass: boolean; passed: number; counted: number; failed: string[] };
   final: { pass: boolean; passed: number; counted: number; failed: string[] };
   repaired: boolean;
@@ -120,6 +126,18 @@ export interface RunOptions {
   title?: string;
   /** Draw the final picture into the run folder (true by default). */
   picture?: boolean;
+  /** The Part asks for its review rounds (true by default). */
+  review?: boolean;
+  /** Reference pictures for the first request (readReference), recorded by path and digest. */
+  references?: EvalReferencePicture[];
+}
+
+/** A reference picture of a run (run.mjs readReference): its file, digest, type and bytes as base64. */
+export interface EvalReferencePicture {
+  path: string;
+  sha256: string;
+  media_type: 'image/png' | 'image/jpeg' | 'image/webp';
+  data: string;
 }
 
 export function taskIds(): string[];
@@ -138,8 +156,10 @@ export function newPart(page: Page, base: string, o: { title: string; units?: 'm
 export function factsOf(frame: Frame, ask: EvalAsk): Promise<EvalFacts>;
 export function setParamOf(frame: Frame, name: string, expr: string): Promise<{ ok: boolean; reason?: string }>;
 export function runWalks(task: Pick<EvalTask, 'checks'>, io: { facts(ask: EvalAsk): Promise<EvalFacts>; setParam(name: string, expr: string): Promise<{ ok: boolean; reason?: string }> }): Promise<Record<string, WalkResult>>;
-export function runTurn(base: string, body: { text: string; tab?: string; conversation?: string }, o?: { answer?: (gate: EvalGate) => boolean | null | undefined; ms?: number; log?: (line: string) => void }): Promise<TurnRun>;
+export function runTurn(base: string, body: { text: string; tab?: string; conversation?: string; images?: { media_type: string; data: string }[] }, o?: { answer?: (gate: EvalGate) => boolean | null | undefined; ms?: number; log?: (line: string) => void }): Promise<TurnRun>;
+export const REVIEW_CONFIRMED: RegExp;
 export function lastText(events: TurnEvent[]): string;
+export function reviewRounds(turns: { events: TurnEvent[]; repair?: boolean }[]): { turn: number; repair: boolean; round: number; of: number }[];
 export function turnUse(turns: { events: TurnEvent[] }[]): {
   steps: number;
   calls_by_tool: Record<string, number>;

@@ -3,6 +3,7 @@
 //                     (--profile <file> | --attach <url> | --scripted)
 //                     [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean]
 //                     [--out <dir>] [--no-repair] [--port-from <n>] [--turn-minutes <n>]
+//                     [--reference <file>]... [--review on|off]
 //   --tasks      task ids (eval/tasks/*.json), "all", or "probe": one request with the Part's full
 //                tool set, to see how many of its strict schemas the provider takes (probeStrict)
 //   --profile    a JSON file OUTSIDE the repository: {provider, model, effort?, base_url?,
@@ -16,6 +17,10 @@
 //                (also when the run stops early).
 //                A privacy question is answered Send only for a project this run made.
 //   --scripted   the app's scripted model with each task's reference (what the e2e runs).
+//   --reference  a picture (PNG, JPEG or WebP, at most 1.5 MB and 2000 px a side; up to 4) OUTSIDE the
+//                repository, sent with each task's first request as the person's reference; runs.jsonl
+//                records its path and SHA-256 only.
+//   --review     on (default): the Part asks for its review rounds; off: it does not (an A/B).
 //   --tab        attach: the tab to bind turns to (it must show the project the run made, the
 //                probe's too); by default the tab whose registration names that project, never
 //                "auto".
@@ -26,6 +31,7 @@
 // output) and debug/provider.jsonl (every model request and answer: MAGNUSIM_ASSISTANT_DEBUG_LOG),
 // kept after the server is removed; --attach says how to get the same from the running app.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -61,11 +67,11 @@ const PROBE_STEPS = [{ tools: [{ name: 'cad__get_model', input: { detail: 'brief
 
 const USAGE = `node eval/run.mjs --tasks <ids|all|probe> [--runs N] [--label text] (--profile <file> | --attach <url> | --scripted)
   [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean] [--out <dir>] [--no-repair]
-  [--port-from <n>] [--turn-minutes <n>]`;
+  [--port-from <n>] [--turn-minutes <n>] [--reference <file>]... [--review on|off]`;
 
-/** The command line, checked: {tasks, runs, label, driver, profile, attach, tab, toolset, pace, headed, clean, out, repair, portFrom, turnMs}. */
+/** The command line, checked: {tasks, runs, label, driver, profile, attach, tab, toolset, pace, headed, clean, out, repair, portFrom, turnMs, references, review}. */
 export function parseArgs(argv) {
-  const o = { tasks: 'all', runs: 1, label: '', driver: null, profile: null, attach: null, tab: null, toolset: 'all', pace: 'fast', headed: false, clean: false, out: null, repair: true, portFrom: null, turnMs: TURN_MS, help: false };
+  const o = { tasks: 'all', runs: 1, label: '', driver: null, profile: null, attach: null, tab: null, toolset: 'all', pace: 'fast', headed: false, clean: false, out: null, repair: true, portFrom: null, turnMs: TURN_MS, references: [], review: true, help: false };
   const drivers = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -134,6 +140,16 @@ export function parseArgs(argv) {
         o.turnMs = n * 60_000;
         break;
       }
+      case '--reference':
+        o.references.push(value());
+        if (o.references.length > REFERENCES_MAX) throw new Error(`at most ${REFERENCES_MAX} --reference pictures`);
+        break;
+      case '--review': {
+        const v = value();
+        if (v !== 'on' && v !== 'off') throw new Error('--review is on or off');
+        o.review = v === 'on';
+        break;
+      }
       case '--help':
       case '-h':
         o.help = true;
@@ -152,14 +168,39 @@ export function parseArgs(argv) {
   return o;
 }
 
+/** The most reference pictures a run sends (the app takes 4 with a request). */
+export const REFERENCES_MAX = 4;
+const PICTURE_TYPES = Object.freeze({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' });
+
+/** Whether `real` (a real path) is inside the repository at `repoTop`. */
+function insideRepo(real, repoTop) {
+  const rel = relative(realpathSync(repoTop), real);
+  return !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * A reference picture, read and checked: it lives outside the repository (the person's own
+ * picture), and is a .png, .jpg, .jpeg or .webp file (the app checks what it holds). Its path and
+ * SHA-256 go into the records, its bytes only to the app.
+ */
+export function readReference(file, repoTop) {
+  const path = resolve(file);
+  if (!existsSync(path)) throw new Error(`no reference picture at ${path}`);
+  const real = realpathSync(path);
+  if (insideRepo(real, repoTop)) throw new Error(`the reference picture ${path} is inside the repository: keep it outside`);
+  const ext = (/\.[^./\\]+$/.exec(path)?.[0] ?? '').toLowerCase();
+  const media_type = PICTURE_TYPES[ext];
+  if (!media_type) throw new Error(`the reference picture ${path} is not a .png, .jpg, .jpeg or .webp file`);
+  const bytes = readFileSync(real);
+  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), media_type, data: bytes.toString('base64') };
+}
+
 /** A profile file, read and checked: it lives outside the repository (provider names stay out of it). */
 export function readProfile(file, repoTop) {
   const path = resolve(file);
   if (!existsSync(path)) throw new Error(`no profile file at ${path}`);
   const real = realpathSync(path);
-  const top = realpathSync(repoTop);
-  const rel = relative(top, real);
-  if (!rel.startsWith('..') && !isAbsolute(rel)) throw new Error(`the profile ${path} is inside the repository: keep profiles (and keys) outside it`);
+  if (insideRepo(real, repoTop)) throw new Error(`the profile ${path} is inside the repository: keep profiles (and keys) outside it`);
   const p = JSON.parse(readFileSync(path, 'utf8'));
   if (!p || typeof p !== 'object') throw new Error('a profile is a JSON object');
   if (typeof p.provider !== 'string' || !p.provider) throw new Error('the profile names no provider');
@@ -211,6 +252,13 @@ async function main(argv) {
   }
   const probe = o.tasks === 'probe';
   const tasks = probe ? [] : loadTasks(o.tasks);
+  let references;
+  try {
+    references = o.references.map((f) => readReference(f, REPO_TOP));
+  } catch (e) {
+    console.error(e.message);
+    return 2;
+  }
   const { chromium, expect, request: pwRequest } = await import('@playwright/test');
   const stops = [];
   let base = o.attach;
@@ -311,9 +359,9 @@ async function main(argv) {
         for (let run = 1; run <= o.runs; run++) {
           say(`${task.id} (${task.tier}), run ${run} of ${o.runs}`);
           try {
-            const r = await runTask(env, task, { label: o.label, run, pace: o.pace, toolset: o.toolset, repair: o.repair, turnMs: o.turnMs, tab: o.tab });
+            const r = await runTask(env, task, { label: o.label, run, pace: o.pace, toolset: o.toolset, repair: o.repair, turnMs: o.turnMs, tab: o.tab, review: o.review, references });
             records.push(r);
-            say(`${task.id}: first shot ${r.first_shot.pass ? 'pass' : 'fail'}, final ${r.final.pass ? 'pass' : 'fail'} (${r.final.passed}/${r.final.counted}), ${r.steps} steps, $${r.usd}, ${r.wall_s} s`);
+            say(`${task.id}: first shot ${r.first_shot.pass ? 'pass' : 'fail'}, final ${r.final.pass ? 'pass' : 'fail'} (${r.final.passed}/${r.final.counted}), ${r.steps} steps, ${r.review ? `${r.reviews.length} review rounds` : 'review off'}, ${r.usd}, ${r.wall_s} s`);
           } catch (e) {
             say(`${task.id}: the run stopped: ${e instanceof Error ? e.message : String(e)}`);
             writeFileSync(join(out, `${task.id}-${run}.error.txt`), `${e instanceof Error ? e.stack : String(e)}\n`);

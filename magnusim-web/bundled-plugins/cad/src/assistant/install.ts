@@ -5,7 +5,9 @@
 // answered per call). It registers again on visibilitychange after "not_connected" (a tab opened
 // in the background), and stops for good on "remote", "no_assistant" or "not_allowed". The eval's
 // A/B (the test handle's setToolset('core')) registers its 13 tools with a guide that names only
-// them (guide.ts guideWithout); help's guide and features topics follow (rt.offered).
+// them (guide.ts guideWithout); help's guide and features topics follow (rt.offered). The
+// registration asks for review rounds (review.ts CAD_REVIEW: the app checks the Part with the model
+// at the end of a turn that edited it); the eval can leave them out (setReview(false)).
 // The edits' state lives here too: the undo ledger, the person's pace, the person's input (the
 // soft wait), and the pause, which a take-over or the person's undo of the Assistant's steps
 // during a running turn starts, and the turn's end (or the next key) ends; the chip shows it.
@@ -28,6 +30,7 @@ import { guideWithout } from './guide';
 import { createLedger } from './ledger';
 import { createPace } from './pace';
 import { createRevTracker } from './rev';
+import { CAD_REVIEW } from './review';
 import { setRuntime, type AssistantRuntime } from './runtime';
 import { CAD_TOOLS, CORE_TOOLSET, TOOL_NAMES } from './schemas';
 import { createSessionKeys } from './session-key';
@@ -97,6 +100,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     title: () => title,
     isBuilt,
     offered: TOOL_NAMES,
+    review: true,
     hostKeepsHints: !!assistant?.onTurn,
   };
   setRuntime(services, rt);
@@ -139,6 +143,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       stepsCap: t.used.stepsCap || null,
       changes: t.used.changesCap ? t.used.changes : null,
       changesCap: t.used.changesCap || null,
+      ...(t.review ? { review: { ...t.review } } : {}),
     };
     if (t.state === 'running') {
       store.set({ turn: { ...facts, end: null } });
@@ -295,7 +300,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     const guide = guideWithout(TOOL_NAMES.filter((n) => !offered.includes(n)));
     let verdict: AssistantRegistration;
     try {
-      verdict = await assistant.register(tools, handler, { guide });
+      verdict = await assistant.register(tools, handler, rt.review ? { guide, review: { ...CAD_REVIEW } } : { guide });
     } catch (e) {
       verdict = { available: false, accepted: [], refused: [], reason: 'failed' };
       console.warn('[cad] the Assistant tools could not be offered', e);
@@ -348,6 +353,11 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     paused: () => pause.get(),
     async setToolset(set) {
       rt.offered = set === 'core' ? CORE_TOOLSET : TOOL_NAMES;
+      const v = await register();
+      return { available: v.available, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) };
+    },
+    async setReview(on) {
+      rt.review = on;
       const v = await register();
       return { available: v.available, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) };
     },

@@ -173,7 +173,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Red", "White"], "section": "" } }] },
-      { "text": "The chip is built: Red and White are one solid each, they touch without overlapping, the disc pocket is sealed inside Red, and White's six edge spots are concentric with the chip and joined by a ring buried in Red." }
+      { "text": "The chip is built: Red and White are one solid each, they touch without overlapping, the disc pocket is sealed inside Red, and White's six edge spots are concentric with the chip and joined by a ring buried in Red." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

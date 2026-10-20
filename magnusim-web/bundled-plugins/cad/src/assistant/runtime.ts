@@ -67,6 +67,8 @@ export interface AssistantRuntime {
    * setToolset). The guide registered and help's guide and features topics follow it.
    */
   offered: readonly string[];
+  /** The registration asks for review rounds (review.ts CAD_REVIEW); the eval may turn them off (testing.ts setReview). */
+  review: boolean;
   /**
    * The host passes a page error's hint and detail to the model (H2). True with the host's turn
    * events (H3 came after H2); without them the hint goes into the message.

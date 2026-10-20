@@ -50,6 +50,17 @@ describe('turn info', () => {
     expect(t.all().map((f) => f.id)).toEqual([...Array.from({ length: 16 }, (_, i) => `t-${i + 4}`), 't-run']);
   });
 
+  it('keeps the review round the host tells (absent before the first; one out of shape is left out)', () => {
+    const t = createTurnInfo();
+    t.take(turn({ id: 't-r' }));
+    expect(Object.hasOwn(t.get('t-r')!, 'review')).toBe(false);
+    t.take(turn({ id: 't-r', review: { round: 2, of: 3 } }));
+    expect(t.get('t-r')!.review).toEqual({ round: 2, of: 3 });
+    for (const review of [{ round: 0, of: 3 }, { round: 4, of: 3 }, { round: 1.5, of: 3 }, 'x']) {
+      expect(factsOf({ ...turn({ id: 't-q' }), review } as unknown as AssistantTurn).review, JSON.stringify(review)).toBeUndefined();
+    }
+  });
+
   it('reads odd or missing fields as unknown', () => {
     const f = factsOf({ id: 't-x', state: 'ended', title: 7, used: null, contextTokens: 'big', images: 'yes', end: { state: 'gone' } } as unknown as AssistantTurn);
     expect(f).toEqual({ id: 't-x', state: 'ended', title: '', local: false, contextTokens: null, images: null, used: { steps: 0, stepsCap: 0, changes: 0, changesCap: 0, usd: 0, usdCap: 0 }, end: null });

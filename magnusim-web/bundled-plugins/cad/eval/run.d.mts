@@ -17,6 +17,10 @@ export interface RunArgs {
   repair: boolean;
   portFrom: number | null;
   turnMs: number;
+  /** --reference files, as given (read with readReference). */
+  references: string[];
+  /** --review on (default) or off. */
+  review: boolean;
   help: boolean;
 }
 
@@ -43,6 +47,8 @@ export const ATTACH_MIN_STEPS: number;
 export const PROBE_TEXT: string;
 export function parseArgs(argv: string[]): RunArgs;
 export function readProfile(file: string, repoTop: string): Profile;
+export const REFERENCES_MAX: number;
+export function readReference(file: string, repoTop: string): { path: string; sha256: string; media_type: 'image/png' | 'image/jpeg' | 'image/webp'; data: string };
 export function profileSettings(p: Profile): { provider: string; model: string; effort?: string; base_url?: string; confirm_remote?: true; privacy: 'allow'; caps: Caps };
 export function capsWords(c: Caps | null | undefined): string;
 export const DEBUG_LOG_ENV: string;

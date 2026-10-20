@@ -1,6 +1,6 @@
 // What the host tells this page of the Assistant's turns bound to its tab (ws.assistant.onTurn,
 // CAD tools spec H3): each turn's title, whether it runs on a local server, its model's context
-// and image reading, what it used and how it ended, kept per turn id. And the reply budgets of a
+// and image reading, what it used, its review round and how it ended, kept per turn id. And the reply budgets of a
 // call (§3.1): smaller on a local turn; external calls (no turn) and hosts without turn events
 // count as cloud.
 // Owner: ASSISTANT.
@@ -53,7 +53,17 @@ export function factsOf(t: AssistantTurn): TurnFacts {
     images: typeof t.images === 'boolean' ? t.images : null,
     used: { steps: num(u.steps), stepsCap: num(u.stepsCap), changes: num(u.changes), changesCap: num(u.changesCap), usd: num(u.usd), usdCap: num(u.usdCap) },
     end: end && ['done', 'stopped', 'failed', 'capped'].includes(end.state) ? { state: end.state, reason: String(end.reason ?? '') } : null,
+    ...reviewOf(t.review),
   };
+}
+
+/** A turn event's review round, kept only when it reads as one (1 <= round <= of). */
+function reviewOf(v: unknown): { review?: { round: number; of: number } } {
+  const r = v && typeof v === 'object' ? (v as { round?: unknown; of?: unknown }) : null;
+  if (!r || !Number.isInteger(r.round) || !Number.isInteger(r.of)) return {};
+  const round = r.round as number;
+  const of = r.of as number;
+  return round >= 1 && round <= of ? { review: { round, of } } : {};
 }
 
 export function createTurnInfo(): TurnInfo {

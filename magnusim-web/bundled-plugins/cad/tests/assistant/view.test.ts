@@ -28,6 +28,7 @@ import {
   JPEG_QUALITY,
   keepsWords,
   parseSection,
+  sectionAtMiddle,
   sheetLayout,
   setViewRaster,
   type Ctx2D,
@@ -259,7 +260,16 @@ describe('the sheet, the cut and the faces a picture shows', () => {
     expect(parseSection('front', units)).toEqual({ plane: 'front', offset: 0, flip: false });
     expect(parseSection('YZ offset w/2', units)).toEqual({ plane: 'right', offset: 15, flip: false });
     expect(parseSection('XY flip', units)).toEqual({ plane: 'top', offset: 0, flip: true });
-    for (const bad of ['Side', 'Top 4', 'Top offset', 'Top offset banana', 'Front offset 3 mm sideways']) {
+    expect(parseSection('Front middle', units)).toEqual({ plane: 'front', offset: 0, flip: false, middle: true });
+    expect(parseSection('top MIDDLE flip', units)).toEqual({ plane: 'top', offset: 0, flip: true, middle: true });
+    // Through the middle of the shown bodies' box along the normal (Front's points at -Y).
+    const boxes = [[0, 10, 0, 20, 30, 4], [-5, 20, 2, 5, 50, 12]];
+    expect(sectionAtMiddle(parseSection('Top middle', units), boxes)).toEqual({ plane: 'top', offset: 6, flip: false, middle: true });
+    expect(sectionAtMiddle(parseSection('Front middle', units), boxes)).toEqual({ plane: 'front', offset: -30, flip: false, middle: true });
+    expect(sectionAtMiddle(parseSection('Right middle', units), [])).toEqual({ plane: 'right', offset: 0, flip: false, middle: true });
+    expect(sectionAtMiddle(parseSection('Top offset 4 mm', units), boxes)).toEqual({ plane: 'top', offset: 4, flip: false });
+    expect(sectionAtMiddle(null, boxes)).toBeNull();
+    for (const bad of ['Side', 'Top 4', 'Top offset', 'Top offset banana', 'Front offset 3 mm sideways', 'Top middle offset 2 mm', 'middle']) {
       expect(() => parseSection(bad, units), bad).toThrow(/^bad_section: /);
     }
     // What each cut keeps, in model words (Front's normal points at -Y).
