@@ -341,8 +341,8 @@ No test reaches a real model provider or this PC's real Assistant files.
     stream), a 2 s hold and a 60 s dormant time.
   - Turns start with `request.post('/api/assistant/turns', {text, tab})`, the tab
     being the page's own (its `/api/events?tab=` request) as `/api/assistant/tabs`
-    lists it. The Assistant's questions are the app's own confirm dialog with its
-    No button focused.
+    lists it. The Assistant's questions are cards in the app's Assistant panel (the
+    dock), never the app's confirm dialog, with their No button focused.
   - One turn runs in a tab at a time: another turn on it is refused 409 `tab_busy`
     until the first has ended, so a test waits for `ended()` before its next turn
     there. A question open across a change (the plugin turned off) belongs to the
@@ -359,13 +359,42 @@ No test reaches a real model provider or this PC's real Assistant files.
     answers the turn's next question as a click would: with the turn's answer key (only
     the program that started a turn holds it; `startTurn` keeps it from the 202), or, for
     a question only the window answers (`link_only`) or a turn followed without its key,
-    in `page`'s own dialog;
+    on `page`'s question card in the dock (it checks the app's confirm dialog stays
+    hidden);
     `offeredTools(req)` lists a request's tools as `{name, strict}`; and
     `resultsIn(req)` the tool results it carries (a fake request or a function step's
     body). `setHidden()` (`e2e/support/link-streams.js`) makes a tab say
     it is hidden or shown, as the browser does. A suite that runs its own copy of
     Playwright (CAD's) calls `setExpect(expect)` with its own first: a process loads
     `@playwright/test` once.
+  - **The dock in tests.** The same file has the chat dock's helpers: `openDock(page)`
+    (the header button the window shows), `dockSend(page, text, {pictures})` (types the
+    text in the composer, each `\n` as Shift+Enter, attaches `pictures` as
+    `[{name, mimeType, buffer}]`, sends with Enter and resolves to the turn's id from
+    the 202), `dockGate(page)` (the oldest open question card; its parts are
+    `.dock-gate-title`, `.dock-gate-copy` and `[data-gate-answer="no"|"yes"]`; Yes is
+    disabled for its first 500 ms, which a Playwright click waits out) and
+    `dockTurn(page)` (the newest request's block: `[data-dock-step]`,
+    `[data-dock-phase]`, `[data-dock-counters]`, `[data-turn-end=<state>]`).
+    `e2e/assistant-dock.spec.js` covers the dock with the fake and the ai-demo
+    workspace; a request started with `startTurn` and bound to the page's tab shows in
+    it too (read-only under "Elsewhere" when its conversation isn't the one shown).
+    - A hidden tab: `setHidden(page, true)`; while a request the dock follows runs, its
+      turn channel keeps the tab's stream (the server counts them in
+      `GET /api/test/assistant/state` `turn_channels`, by tab), and once it ended and
+      the hold is over the stream goes after the page's grace. A test that counts a
+      tab's relay channels takes the turn channels from the hub's `assistant` count.
+    - A reload: the dock keeps the conversation shown and the answer key of a request
+      it started in `sessionStorage`; after `page.reload()` the conversation list
+      comes back, the transcript replays, and a running request's open question shows
+      again as a card in the reloaded page (POST `/turns/:id/show`). Another page
+      (`context.newPage()`) has its own `sessionStorage`: it reads the conversation,
+      and the request says its question shows in the window that started it.
+    - The dock opens itself for a question and stays open over the bottom right: a
+      test that then clicks a workspace view's bottom-right corner closes it first
+      (`[data-dock-close]`; CAD's `keyboardInFrame` does).
+    - `DOCK_SHOTS=<folder>` makes the dock specs (core and CAD) save screenshots of the
+      main states there, for a person to look at; nothing compares them.
   - A remote viewer: add the proxy header to the page's `/api/` requests with
     `context.route()`. A header the browser adds itself (`extraHTTPHeaders`) makes
     the sandboxed frame's module script a cross-origin request with a preflight that

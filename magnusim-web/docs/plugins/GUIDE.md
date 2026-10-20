@@ -455,6 +455,7 @@ The groups of calls (API.md, section 2, has each one):
 | `ws.project` | Project info, `linkGeometry`, `linkedGeometry` | 1.1, 1.5 |
 | `ws.on` | `units`, `theme`, `study`, `geometry` events | 1.1, 1.5 |
 | `ws.assistant` | Tools the app's assistant may call while the workspace is open | 1.9 (unreleased) |
+| `ws.assistant.docked`, `setUndo`, `onUndo` | The app's Assistant panel: its Stop and "Undo these changes" for a turn, and Ctrl+/ from the page | 1.9 (unreleased) |
 | `ws.spawnWorker` | A worker running your module | 1.1 |
 
 Rules:

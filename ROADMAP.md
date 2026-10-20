@@ -27,7 +27,11 @@ September 2026 readiness audit. This list preserves the intended work.
   their own account, can work for the Assistant beside the API keys: its own
   shell, file and web tools are switched off where Magnusim can do that, and
   otherwise it runs only once the person allows it; what it does is billed to
-  their account with that agent. A turn starts from the terminal client
+  their account with that agent. The app's Assistant panel (its chat dock, at
+  the bottom right of every page, Ctrl+/) is where the person types to it,
+  attaches reference pictures, picks the provider of a conversation, follows
+  each request as it streams, answers its questions, stops it and undoes its
+  changes in a workspace. A turn starts from the terminal client
   (`scripts/assistant-run.mjs`) until the chat panel lands. CAD's tools are
   built too: an open Part offers 18 (read the Part, find faces and edges,
   measure, look at pictures, help, set parameters, sketch, extrude, revolve,

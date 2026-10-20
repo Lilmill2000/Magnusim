@@ -152,7 +152,12 @@ below).
 
 The Assistant's questions are answered only by the app tab that shows them,
 through that tab's own connection to the app, or by the program that started
-the turn, with a key the app gave it when the turn started. Another program, an
+the turn, with a key the app gave it when the turn started. A request typed in
+the app's Assistant panel shows its questions in the window that started it
+(as cards in that panel, never the app's confirm dialog); that window keeps the
+request's key in its own session storage only to show the open questions again
+after it reloads, never to answer them: the answer still goes through the
+window's connection. Another program, an
 app or a coding agent using Magnusim's tools, and the model itself can't answer
 them. A question meant for the Magnusim window only (such as a coding agent
 asking to use one of its own tools) is answered only in the window. This raises
@@ -190,9 +195,9 @@ can't check that it does. What a tool returns reaches the model only as data.
 A call's progress goes to the turn's log, which the terminal client shows; it is
 not sent to the model. A plugin turned off, replaced or reset loses its tools at
 once, and a call it was running ends. The frame never sees the Assistant's
-questions and can't answer them: they are the app's own dialog, outside the
-frame, with No focused, so Enter or Escape (a key typed for the workspace)
-answers No. A tool whose risk the page doesn't name as one the app knows is
+questions and can't answer them: they are cards in the app's Assistant panel,
+outside the frame, and each takes the keyboard on its No, so Enter or Escape (a
+key typed for the workspace) answers No. A tool whose risk the page doesn't name as one the app knows is
 asked about like one that can't be undone. To keep a turn reachable while its
 window is covered, a tab that ran the Assistant keeps its connection to the app
 for 10 minutes after the last turn, even while hidden; then it lets go like any
@@ -233,8 +238,8 @@ Protocol. It is off until the owner turns it on.
   owner runs.
 - An app gets the tools of the one connected app tab (only the app-wide tools
   with no tab or several), with the same questions and privacy rules as the
-  Assistant. A question shows in that tab as the app's own dialog, saying that
-  an app on this PC asks and naming it as it names itself (its own claim). Only
+  Assistant. A question shows in that tab as a card in the app's Assistant
+  panel, saying that an app on this PC asks and naming it as it names itself (its own claim). Only
   that tab answers it, never the app; it waits 10 minutes, and with no tab to
   show it the call is refused.
 - Every app counts as sending data off this PC. Under "Ask" the first call
