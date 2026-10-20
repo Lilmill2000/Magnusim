@@ -14,6 +14,10 @@
  * 100 images and 20 MB each, and "full" at 80% of the model's context (a local server's
  * model: the context its server reported, else 128K tokens). Nothing is written to disk.
  *
+ * It also lists its turns (their ids, at most 200, oldest first) and takes its first turn's
+ * title as its own (phase 4 spec 9.3): the turn manager keeps its newest 50 turns while it
+ * lives (turns.ts sweep), so a window that reloads replays it.
+ *
  * A conversation on a coding agent (provider `agent:<id>`, phase 3 spec 4.7) keeps no
  * messages: the agent keeps the history, so its list stays empty and repair() has nothing to
  * do. Whatever drops a conversation (forget, the 2-hour expiry, the eviction past 20) tells
@@ -32,6 +36,8 @@ export const CONVERSATION_LIMITS = Object.freeze({
   images: 100,
   bytes: 20 * 1024 * 1024,
   fullFraction: 0.8,
+  /** Turn ids it lists (the oldest go first past it, counted in turnsDropped). */
+  turns: 200,
 });
 
 /** Context windows, in tokens: a local model's when its server reports none, and a safe 200K for cloud models. */
@@ -69,6 +75,12 @@ export class Conversation {
   contextTokens: number | null = null;
   /** The base URL of the server that said contextTokens (another server's model may differ). */
   contextBaseUrl: string | null = null;
+  /** Its turns' ids, oldest first (at most CONVERSATION_LIMITS.turns). */
+  readonly turns: string[] = [];
+  /** Turn ids that went past CONVERSATION_LIMITS.turns. */
+  turnsDropped = 0;
+  /** Its first turn's title ('' before any). */
+  title = '';
   private readonly list: Message[] = [];
   private imageCount = 0;
   private byteCount = 0;
@@ -92,6 +104,16 @@ export class Conversation {
 
   get bytes(): number {
     return this.byteCount;
+  }
+
+  /** A turn started in it: listed, and its title is the conversation's when it is the first. */
+  addTurn(id: string, title: string): void {
+    this.turns.push(id);
+    if (!this.title) this.title = title;
+    while (this.turns.length > CONVERSATION_LIMITS.turns) {
+      this.turns.shift();
+      this.turnsDropped += 1;
+    }
   }
 
   /** Adds a message at the end (the only way messages change). Frozen, so nothing edits it later. */
@@ -256,5 +278,11 @@ export class Conversations {
 
   size(): number {
     return this.map().size;
+  }
+
+  /** Every conversation now (those idle for 2 hours dropped first). */
+  all(): Conversation[] {
+    this.sweep();
+    return [...this.map().values()];
   }
 }

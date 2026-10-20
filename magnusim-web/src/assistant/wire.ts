@@ -282,7 +282,7 @@ export interface TurnSummary {
   used?: TurnUsed;
   /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
   prompt_images?: ImageRef[];
-  /** The turn's log and pictures are no longer kept (its record stays). */
+  /** Its log and pictures are no longer kept (past the server's 200 newest ended turns): this summary is all there is. */
   log_dropped?: boolean;
 }
 
@@ -310,44 +310,47 @@ export interface TurnChannelFrameData {
   summary: { turn: SlimSummary };
 }
 
-/** A turn of a conversation as GET /api/assistant/conversations lists it (oldest first). */
-export interface ConversationTurnRow {
+/**
+ * GET /api/assistant/conversations[?project=<id>|home]: the conversations this server holds
+ * (memory only: a restart clears them), newest use first.
+ */
+export interface ConversationsAnswer {
+  ok: true;
+  conversations: ConversationRow[];
+}
+
+export interface ConversationRow {
+  id: string;
+  /** Its provider for good: an API-key provider's id, or agent:<id>. */
+  provider: string;
+  /** How the person reads it: the provider's label, or the coding agent's name (server data). */
+  label: string;
+  billing: 'usd' | 'free' | 'agent_account';
+  model: string;
+  project_id: string | null;
+  /** The project's title, when it could be read (null for Home, or when it couldn't). */
+  project_title: string | null;
+  created_at: string;
+  last_used_at: string;
+  /** The turn running in it, or null. */
+  running: string | null;
+  /** Why no more turns fit ('messages', 'images', 'bytes', 'context'), or null. */
+  full: string | null;
+  /** Its first turn's title ('' before any). */
+  title: string;
+  /** Its turns the server still keeps, oldest first (a turn's events: GET /api/assistant/turns/:id or the turn channel). */
+  turns: ConversationTurn[];
+  /** Its turns no longer kept (older than its newest 50 once an hour passed, or past 200). */
+  dropped_turns: number;
+}
+
+export interface ConversationTurn {
   id: string;
   title: string;
   state: TurnState;
   started_at: string;
   ended_at: string | null;
   started_by: 'window' | 'program';
-}
-
-/** A conversation as GET /api/assistant/conversations lists it (phase 4 spec 9.3). */
-export interface ConversationRow {
-  id: string;
-  provider: string;
-  /** Its provider's label, or the coding agent's name. */
-  label: string;
-  billing: 'usd' | 'free' | 'agent_account';
-  model: string;
-  project_id: string | null;
-  project_title: string | null;
-  created_at: string;
-  last_used_at: string;
-  /** The turn running in it, if any. */
-  running: string | null;
-  /** Why it takes no more messages, if so. */
-  full: string | null;
-  /** Its first turn's title. */
-  title: string;
-  /** The turns it keeps, oldest first. */
-  turns: ConversationTurnRow[];
-  /** Its turns no longer kept. */
-  dropped_turns: number;
-}
-
-/** GET /api/assistant/conversations[?project=<id>|home]: newest use first. */
-export interface ConversationsAnswer {
-  ok: true;
-  conversations: ConversationRow[];
 }
 
 /**

@@ -54,6 +54,11 @@
  *                                        answers its question with the 202's answer_key; 403
  *                                        answer_key (missing or wrong), not_shown (a question for
  *                                        the window only); 409 {already} (the first answer wins); 404
+ *   GET  /api/assistant/conversations   ?project=<id>|home → {ok, conversations:[{id, provider, label,
+ *                                        billing, model, project_id, project_title, created_at,
+ *                                        last_used_at, running, full, title, turns:[{id, title, state,
+ *                                        started_at, ended_at, started_by}], dropped_turns}]}: this
+ *                                        server's conversations (memory only), newest use first; 400
  *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
  *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools):
  *                                        {ok, tabs:[{tab, connected, since, workspace, tools, refused,
@@ -727,6 +732,14 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
       const body = await ctx.readJsonBody();
       // Only the program that started the turn holds its answer key (the page answers through /relay/gate).
       const r = turns.answerGate(ctx.params.id, body.allow, { kind: 'key', key: body.answer_key });
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.get(
+    '/api/assistant/conversations',
+    local(async (ctx) => {
+      const r = await turns.conversationsView(ctx.url.searchParams.get('project'));
       ctx.sendJson(r.status, r.body);
     }),
   );

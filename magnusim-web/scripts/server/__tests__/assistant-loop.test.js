@@ -2139,6 +2139,8 @@ describe('the pictures a turn keeps for the window (phase 4 spec 9.4)', () => {
   });
 
   it('across the process: past 96 MB the oldest ended turns lose their pictures first, oldest first; running turns keep theirs', async () => {
+    // Only this test's turns count toward the process's budget.
+    resetAssistantState();
     const m = mk();
     const shot = png(1.4 * MB);
     const ended = [];

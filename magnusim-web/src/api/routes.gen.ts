@@ -11,6 +11,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/assistant/agents/custom/remove' },
   { method: 'POST', path: '/api/assistant/agents/sign-in' },
   { method: 'POST', path: '/api/assistant/agents/test' },
+  { method: 'GET', path: '/api/assistant/conversations' },
   { method: 'POST', path: '/api/assistant/conversations/:id/forget' },
   { method: 'POST', path: '/api/assistant/gates/:id' },
   { method: 'POST', path: '/api/assistant/key' },

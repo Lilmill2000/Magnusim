@@ -6,7 +6,9 @@
  *   and a crash inside it ends it `failed` through t.crash(), logged redacted, never
  *   rethrown. It keeps a log of events numbered by `seq` (≤ 4000; notes go first when
  *   it is full, and text_so_far keeps the text), read with GET …/turns/:id?since=N.
- *   Ended turns are kept for an hour.
+ *   An ended turn is kept for an hour, and longer while it is among its conversation's newest
+ *   50 and that conversation lives (then for an hour from when it no longer is); at most 200
+ *   ended turns keep their logs and pictures, the rest only their summary (log_dropped).
  * - At most one turn runs in a conversation (409), one in an app tab (409 tab_busy) and
  *   three in all (429), checked and set in one synchronous step (admitRefusal, for a turn on a
  *   coding agent too).
@@ -52,7 +54,7 @@ import { cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
-import { isCloud } from './providers/index.ts';
+import { isCloud, PROVIDER_LABELS } from './providers/index.ts';
 import { ProviderError, type ImagePart, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
 import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agents/known.ts';
@@ -138,6 +140,8 @@ export interface TurnSummary {
   used: TurnUsed;
   /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
   prompt_images: ImageRef[];
+  /** Its log and pictures are no longer kept (past the 200 newest ended turns): only this summary is. */
+  log_dropped: boolean;
 }
 
 /**
@@ -168,6 +172,10 @@ export const TURN_LIMITS = Object.freeze({
   stopMs: 5_000,
   /** The person's prompt, in characters. */
   textMax: 20_000,
+  /** A conversation that lives keeps its newest this many turns past keepMs. */
+  keptPerConversation: 50,
+  /** Ended turns that keep their logs and pictures in all; older ones keep only their summary. */
+  keptEnded: 200,
 });
 
 /**
@@ -331,6 +339,10 @@ export class Turn implements AnyTurn {
   private imageSerial = 0;
   private imageBytes = 0;
   private promptRefs: ImageRef[] = [];
+  /** When its conversation stopped keeping it (forgotten, expired, or past its newest 50); null while it does. */
+  releasedAt: number | null = null;
+  /** Its log and pictures were dropped (past TURN_LIMITS.keptEnded): only its summary is kept. */
+  logDropped = false;
 
   constructor(o: TurnInit) {
     this.id = o.id;
@@ -590,6 +602,15 @@ export class Turn implements AnyTurn {
     return this.imageBytes;
   }
 
+  /** Its log, its text and its pictures go (past TURN_LIMITS.keptEnded ended turns); its summary stays. */
+  dropLog(): void {
+    if (!this.ended || this.logDropped) return;
+    this.logDropped = true;
+    this.log.length = 0;
+    this.stepText.clear();
+    this.dropImages();
+  }
+
   /** Drops every picture it keeps (the process budget; a turn whose log goes). */
   dropImages(): void {
     this.kept.clear();
@@ -820,6 +841,7 @@ export class Turn implements AnyTurn {
       started_by: this.startedBy,
       used: this.usedNow(),
       prompt_images: this.promptRefs.map((r) => ({ ...r })),
+      log_dropped: this.logDropped,
     };
   }
 
@@ -1018,6 +1040,9 @@ export const agentUnknownText = (id: string) => `No coding agent called ${cleanT
 
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 
+/** How long the conversation list keeps a project's title. */
+const PROJECT_TITLE_MS = 60_000;
+
 /** How many times a start is checked before an agent stopped every time is refused. */
 const START_ATTEMPTS = 3;
 
@@ -1072,6 +1097,8 @@ export class TurnManager {
   private readonly turnListeners = new Set<(t: Turn, change: TurnChange) => void>();
   private tabInfo: ((tab: string) => TabInfo | null) | null = null;
   private linkCheck: ((link: unknown) => boolean) | null = null;
+  /** Project titles for the conversation list, by id (PROJECT_TITLE_MS). */
+  private readonly titleCache = new Map<string, { title: string | null; at: number }>();
 
   constructor(d: TurnManagerDeps) {
     this.d = d;
@@ -1083,6 +1110,11 @@ export class TurnManager {
     this.gates.subscribe((e) => this.onGate(e));
     // A conversation dropped (forgotten, expired, evicted): the coding agent working for it ends.
     this.conversations.onDrop((id) => agentHost().endConversation(id, 'conversation_dropped'));
+    // Its turns are kept an hour from now (sweep).
+    this.conversations.onDrop((id) => {
+      const now = this.clock.now();
+      for (const t of this.turns().values()) if (t.conv.id === id) t.releasedAt ??= now;
+    });
   }
 
   /** The relay says whether a link is an app tab's live link now (the page's launch proof). */
@@ -1157,11 +1189,37 @@ export class TurnManager {
     return [...this.turns().values()].filter((t) => !t.settled);
   }
 
+  /**
+   * An ended turn is kept for TURN_LIMITS.keepMs, and while its conversation lives and lists it
+   * among its newest keptPerConversation (then for keepMs from when it no longer does); past the
+   * newest keptEnded ended turns, a kept one keeps only its summary (dropLog).
+   */
   private sweep(): void {
     const now = this.clock.now();
+    // Conversations idle for 2 hours go first (their turns are released then).
+    this.conversations.sweep();
+    const convs = assistantState().conversations as Map<string, Conversation>;
+    const kept: Turn[] = [];
     for (const [id, t] of this.turns()) {
-      if (t.settled && t.endedAt !== null && now - t.endedAt > TURN_LIMITS.keepMs) this.turns().delete(id);
+      if (!t.settled || t.endedAt === null) continue;
+      if (convs.get(t.conv.id) === t.conv && t.conv.turns.slice(-TURN_LIMITS.keptPerConversation).includes(t.id)) {
+        kept.push(t);
+        continue;
+      }
+      // Not released by anything this manager heard (another server's drop): its hour from its end.
+      if (now - Math.max(t.endedAt, t.releasedAt ?? t.endedAt) > TURN_LIMITS.keepMs) this.turns().delete(id);
+      else kept.push(t);
     }
+    const withLogs = kept.filter((t) => !t.logDropped).sort((a, b) => (b.endedAt as number) - (a.endedAt as number));
+    for (const t of withLogs.slice(TURN_LIMITS.keptEnded)) t.dropLog();
+  }
+
+  /** A turn starts in `conv`: listed there; the turn that falls out of its newest kept ones is released. */
+  private listInConversation(conv: Conversation, t: Turn): void {
+    conv.addTurn(t.id, t.title());
+    const out = conv.turns[conv.turns.length - 1 - TURN_LIMITS.keptPerConversation];
+    const old = out ? this.turns().get(out) : undefined;
+    if (old) old.releasedAt ??= this.clock.now();
   }
 
   /** Running turns bound to a tab. */
@@ -1217,6 +1275,8 @@ export class TurnManager {
 
   /** POST /api/assistant/turns: checked, then started detached (202). `launch`: the request's proof of this account (agent turns). */
   start(body: Record<string, unknown>, launch: LaunchProof = {}): Promise<Answer> {
+    // What ended turns no longer need goes first (a server nobody polls still lets it go).
+    this.sweep();
     // No extra await around it: the 202 answers in the same step as the turn's launch.
     return this.startOnce(body, launch, 1);
   }
@@ -1341,6 +1401,7 @@ export class TurnManager {
     conv.running = id;
     conv.lastUsed = this.clock.now();
     this.turns().set(id, t);
+    this.listInConversation(conv, t);
     this.started.add(t);
     this.turnChanged(t, 'started');
     this.launch(t, secrets);
@@ -1449,6 +1510,7 @@ export class TurnManager {
     conv.running = tid;
     conv.lastUsed = this.clock.now();
     this.turns().set(tid, t);
+    this.listInConversation(conv, t);
     this.started.add(t);
     this.turnChanged(t, 'started');
     this.launch(t, this.d.secrets());
@@ -1587,6 +1649,73 @@ export class TurnManager {
       if (t && keyMatches(proof.key, t.answerKey)) return null;
     }
     return refuse(403, 'answer_key', ANSWER_KEY_TEXT);
+  }
+
+  /**
+   * GET /api/assistant/conversations[?project=<id>|home] (phase 4 spec 9.3): each conversation
+   * this server holds, newest use first, with its kept turns (oldest first) and how many are no
+   * longer kept. `project`: only that project's ('home': those with none).
+   */
+  async conversationsView(project: string | null): Promise<Answer> {
+    if (project !== null && project !== 'home' && !ID_RE.test(project)) return refuse(400, 'bad_project', 'project is a project id, or home.');
+    this.sweep();
+    const settings = await this.d.settings();
+    const convs = this.conversations
+      .all()
+      .filter((c) => project === null || (project === 'home' ? c.projectId === null : c.projectId === project))
+      .sort((a, b) => b.lastUsed - a.lastUsed);
+    const titles = new Map<string, string | null>();
+    await Promise.all([...new Set(convs.map((c) => c.projectId).filter((id): id is string => !!id))].map(async (id) => titles.set(id, await this.projectTitle(id))));
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const conversations = convs.map((c) => {
+      const kept = c.turns.map((id) => this.turns().get(id)).filter((t): t is Turn => !!t && t.conv === c);
+      const agent = isAgentChoice(c.provider) ? agentIdOf(c.provider) : null;
+      return {
+        id: c.id,
+        provider: c.provider,
+        label: this.conversationLabel(c, kept, settings),
+        billing: agent !== null ? 'agent_account' : c.provider === 'openai_compatible' ? 'free' : 'usd',
+        model: c.model,
+        project_id: c.projectId,
+        project_title: c.projectId ? (titles.get(c.projectId) ?? null) : null,
+        created_at: iso(c.createdAt),
+        last_used_at: iso(c.lastUsed),
+        running: c.running,
+        full: c.fullReason(settings.base_url),
+        title: c.title,
+        turns: kept.map((t) => ({ id: t.id, title: t.title(), state: t.state, started_at: iso(t.startedAt), ended_at: t.endedAt === null ? null : iso(t.endedAt), started_by: t.startedBy })),
+        dropped_turns: c.turnsDropped + (c.turns.length - kept.length),
+      };
+    });
+    return { status: 200, body: { ok: true, conversations } };
+  }
+
+  /** How the person reads a conversation's provider: its label, or its coding agent's name. */
+  private conversationLabel(c: Conversation, kept: Turn[], settings: AssistantSettings): string {
+    if (!isAgentChoice(c.provider)) return PROVIDER_LABELS[c.provider as ProviderId] ?? c.provider;
+    for (let i = kept.length - 1; i >= 0; i -= 1) {
+      const s = kept[i].settings;
+      if (isAgentSettings(s)) return s.agent.name;
+    }
+    const id = c.provider.slice('agent:'.length);
+    const name = settings.custom_agents.find((a) => a.id === id)?.name ?? knownAgent(id)?.name ?? id;
+    return cleanText(name, 64) || id;
+  }
+
+  /** A project's title for the conversation list (the project lookup turns use), kept a minute; null when it can't be read. */
+  private async projectTitle(id: string): Promise<string | null> {
+    const now = this.clock.now();
+    const hit = this.titleCache.get(id);
+    if (hit && now - hit.at < PROJECT_TITLE_MS) return hit.title;
+    let title: string | null = null;
+    try {
+      title = (await this.d.projects(id, { signal: AbortSignal.timeout(5_000), turn: `conversations:${id}` }))?.title ?? null;
+    } catch {
+      title = null;
+    }
+    this.titleCache.set(id, { title, at: this.clock.now() });
+    if (this.titleCache.size > 200) this.titleCache.delete(this.titleCache.keys().next().value as string);
+    return title;
   }
 
   /** POST /api/assistant/conversations/:id/forget. */
