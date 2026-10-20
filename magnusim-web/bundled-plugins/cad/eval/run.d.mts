@@ -48,3 +48,6 @@ export function capsWords(c: Caps | null | undefined): string;
 export const DEBUG_LOG_ENV: string;
 /** Where the run's own server left its logs, one line each. */
 export function logLines(logs: { server: string; debug: string }): string[];
+
+/** What the probe's turn notes say of its strict tools: accepted, reduced: N of M strict (unchecked: ...), refused: all unchecked. */
+export function probeStrict(notes: readonly string[]): string;

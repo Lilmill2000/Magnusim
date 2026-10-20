@@ -62,6 +62,10 @@
 // `output` tokens, 40 by default) comes first, then the fallback block, then the answer.
 // `emptyText` adds a text block that stays empty (an empty answer, with no other step field).
 // holdModels(name, dialect?) makes the next model list wait until release(name).
+// strictBudget(bytes, dialect = 'anthropic') refuses (400, GRAMMAR_TOO_LARGE) a chat request
+// whose strict tools' schemas come to more than `bytes` (each schema's JSON in UTF-8, all
+// strict tools of the request together), as the first cloud dialect refuses a strict set too
+// big to compile; strictBudget(null, dialect) clears it.
 import http from 'node:http';
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -74,6 +78,18 @@ const DEFAULT_MODELS = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The first cloud dialect's refusal of a strict tool set too big to compile (strictBudget()),
+ * recorded from its answer to a CAD turn's 21 tools on 2026-10-20 (HTTP 400,
+ * invalid_request_error).
+ */
+export const GRAMMAR_TOO_LARGE = 'The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools.';
+
+/** Every strict tool schema of a request together, in bytes (strictBudget()). */
+function strictBytes(schemas) {
+  return schemas.reduce((sum, s) => sum + Buffer.byteLength(JSON.stringify(s ?? null), 'utf8'), 0);
+}
 
 /**
  * The local server's refusal of an image for a model that can't read one (textOnly()). The
@@ -274,6 +290,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   const modelRows = new Map();
   /** Local-server models that can't read images (textOnly()). */
   const textOnlyModels = new Set();
+  /** Strict schema bytes a request may carry, by dialect (strictBudget()). */
+  const strictBudgets = new Map();
   const emitted = { thinking: new Map(), fallback: new Set(), reasoning: new Map() };
   let disconnects = 0;
   let n = 0;
@@ -345,6 +363,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         strict.unions += w.unions;
       }
     });
+    const budget = strictBudgets.get('anthropic');
+    if (budget !== undefined && strictBytes((body.tools || []).filter((t) => t.strict).map((t) => t.input_schema)) > budget) throw new Refusal(GRAMMAR_TOO_LARGE);
     if (Object.keys(STRICT_LIMITS).some((k) => strict[k] > STRICT_LIMITS[k])) {
       throw new Refusal(
         `Schema is too complex for compilation. (${strict.tools} strict tools, ${strict.optional} optional and ${strict.unions} union-type parameters; at most ${STRICT_LIMITS.tools}, ${STRICT_LIMITS.optional} and ${STRICT_LIMITS.unions})`,
@@ -399,6 +419,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         if (p.length) throw new Refusal(`Invalid schema for function '${t.name}': ${p[0]}`);
       }
     });
+    const budget = strictBudgets.get('openai');
+    if (budget !== undefined && strictBytes((body.tools || []).filter((t) => t.type === 'function' && t.strict).map((t) => t.parameters)) > budget) throw new Refusal(GRAMMAR_TOO_LARGE);
     const input = Array.isArray(body.input) ? body.input : [];
     const outputs = new Set(input.filter((it) => it && it.type === 'function_call_output').map((it) => it.call_id));
     const calls = new Set();
@@ -828,6 +850,11 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     textOnly(...ids) {
       textOnlyModels.clear();
       for (const id of ids) textOnlyModels.add(id);
+    },
+    /** Refuses (400, GRAMMAR_TOO_LARGE) a chat request of `dialect` whose strict schemas pass `bytes` in all; null clears it. */
+    strictBudget(bytes, dialect = 'anthropic') {
+      if (bytes === null || bytes === undefined) strictBudgets.delete(dialect);
+      else strictBudgets.set(dialect, bytes);
     },
     /** The next model list (of a dialect, or any) waits until release(name), or until the client closes. */
     holdModels(name, dialect) {

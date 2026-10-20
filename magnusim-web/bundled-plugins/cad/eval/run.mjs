@@ -4,7 +4,7 @@
 //                     [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean]
 //                     [--out <dir>] [--no-repair] [--port-from <n>] [--turn-minutes <n>]
 //   --tasks      task ids (eval/tasks/*.json), "all", or "probe": one request with the Part's full
-//                tool set, to see the provider take its strict schemas (no fallback note)
+//                tool set, to see how many of its strict schemas the provider takes (probeStrict)
 //   --profile    a JSON file OUTSIDE the repository: {provider, model, effort?, base_url?,
 //                confirm_remote?, key_env?, caps?}. The run gets its own app server (a temp
 //                projects root and Assistant home), sets those settings with privacy allow and
@@ -39,6 +39,21 @@ export const ATTACH_MIN_STEPS = 120;
 /** The probe's request: one read call and an answer, with every tool offered. */
 export const PROBE_TEXT = 'Call cad__get_model once with detail brief, then say in one sentence how many features the Part has.';
 const STRICT_FALLBACK = /could not compile these tools strictly/;
+/** The app's note when it sent fewer tools strict (scripts/server/assistant/providers/common.ts strictReducedNote). */
+const STRICT_REDUCED = /could not compile all these tools strictly.*: (\d+) of (\d+) are checked by the provider, the rest are sent unchecked \(([^()]*)\); the app still checks every input\.$/;
+
+/**
+ * What the probe's turn notes say of its strict tools: "accepted"; "reduced: N of M strict
+ * (unchecked: <tool names>)" when the app sent fewer of them strict; "refused: all unchecked"
+ * when it sent the Part's tools unchecked by the provider.
+ */
+export function probeStrict(notes) {
+  for (const n of notes) {
+    const m = STRICT_REDUCED.exec(String(n));
+    if (m) return `reduced: ${m[1]} of ${m[2]} strict (unchecked: ${m[3]})`;
+  }
+  return notes.some((n) => STRICT_FALLBACK.test(String(n))) ? 'refused: all unchecked' : 'accepted';
+}
 /** The server switch that keeps every model request and answer (scripts/server/assistant/debug-log.ts). */
 export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
 /** The scripted model's answers to the probe: the read it asks for, then its sentence. */
@@ -283,7 +298,7 @@ async function main(argv) {
         when: new Date().toISOString(),
         model: { provider: status.provider ?? null, model: status.models?.[status.provider] ?? null, served_by: t.turn?.served_by ?? null },
         tools: (await api(base, '/api/assistant/tabs')).body?.tabs?.find((r) => r.tab === tab)?.tools.length ?? null,
-        strict: notes.some((n) => STRICT_FALLBACK.test(n)) ? 'refused: sent again unchecked by the provider' : 'accepted',
+        strict: probeStrict(notes),
         end,
         notes,
         calls: calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null })),

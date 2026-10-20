@@ -13,9 +13,10 @@
  * - Tools are strict, with schemas from emitSchema('anthropic'), while the request stays
  *   within the provider's limits on strict tools (STRICT_LIMITS), in the order offered;
  *   the rest go without strict (validateInput still checks every input). tool_choice is auto.
- *   A 400 that says the strict schemas can't be compiled (STRICT_REFUSED_WORDS) is sent once
- *   more with the workspace's tools not strict, the host's still strict, and that tool set
- *   goes so from then on (CAD tools spec H8, common.ts sendStrictOrLoose).
+ *   A 400 that says the strict schemas can't be compiled (STRICT_REFUSED_WORDS) is sent again
+ *   with fewer tools strict (the smallest kept) when its words say the set is too big, else
+ *   with the workspace's tools not strict, the host's still strict; that tool set goes so
+ *   from then on (CAD tools spec H8, common.ts sendStrictOrLoose).
  * - Cache breakpoints: the last tool, the last cached system block, and the last block
  *   of the last message.
  * - An answer that came back empty is never sent back: the API refuses an empty assistant
@@ -49,7 +50,7 @@ import {
   type UserPart,
 } from '../types.ts';
 import { debugCall, type DebugCall } from '../debug-log.ts';
-import { newWatchdog, parseToolInput, requestMessages, SAID_MAX, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
+import { newWatchdog, parseToolInput, requestMessages, SAID_MAX, schemaBytes, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions, type StrictPlan } from './common.ts';
 import { mapProviderError, providerSaid, strictSchemaRefusal } from './errors.ts';
 import { envHeaderNulls, guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
 import { loadSdkClass } from './load-sdk.ts';
@@ -197,8 +198,11 @@ function assistantContent(m: Extract<Message, { role: 'assistant' }>): Json[] {
   return out;
 }
 
-/** The request body (without `stream`), as sent; with `loose` the workspace's tools go without strict (H8). */
-export function anthropicBody(req: ProviderRequest, o: { loose?: boolean } = {}): Json {
+/**
+ * The request body (without `stream`), as sent; with `loose` the workspace's tools go without
+ * strict, with `strict` exactly those tools go strict (H8).
+ */
+export function anthropicBody(req: ProviderRequest, o: { loose?: boolean; strict?: readonly boolean[] } = {}): Json {
   const fallback = usesFallback(req.model);
   const sys = req.system.filter((s) => s.text);
   let lastCached = -1;
@@ -221,7 +225,7 @@ export function anthropicBody(req: ProviderRequest, o: { loose?: boolean } = {})
     }
   }
   const schemas = req.tools.map((t) => emitSchema('anthropic', t.schema));
-  const strict = strictOf(req.tools, schemas, !!o.loose);
+  const strict = o.strict ?? strictOf(req.tools, schemas, !!o.loose);
   const tools = req.tools.map(
     (t, i): Json => ({
       name: t.name,
@@ -478,17 +482,15 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
 
     async send(req, signal, onEvent) {
       await loadSdkClass('@anthropic-ai/sdk', 'Anthropic');
-      const strictBody = anthropicBody(req);
-      const sent = (strictBody.tools ?? []) as Json[];
-      // Only a workspace tool sent strict makes a loose request differ (H8).
-      const canLoosen = req.tools.some((t, i) => t.workspace && sent[i]?.strict === true);
-      const attempt = (loose: boolean, reason: string | null) =>
+      const schemas = req.tools.map((t) => emitSchema('anthropic', t.schema));
+      const sets = { strict: strictOf(req.tools, schemas, false), loose: strictOf(req.tools, schemas, true), bytes: schemas.map(schemaBytes) };
+      const attempt = (plan: StrictPlan) =>
         o.borrowKey(async (key) => {
-          const body = { ...(loose ? anthropicBody(req, { loose: true }) : strictBody), stream: true };
+          const body = { ...anthropicBody(req, { strict: plan.strict }), stream: true };
           const wd = newWatchdog(o, false);
           const sig = AbortSignal.any([signal, wd.signal]);
           const acc = new MessageAccumulator(onEvent);
-          const dbg = debugCall({ dialect: 'anthropic', model: req.model, attempt: loose ? 'loose' : 'strict', reason, body });
+          const dbg = debugCall({ dialect: 'anthropic', model: req.model, attempt: plan.kind, reason: plan.reason, strict: { count: plan.count, of: plan.of }, body });
           try {
             const c = await client(String(key), wd, usesFallback(req.model) ? FALLBACK_BETA : null, dbg);
             const stream = await c.beta.messages.create(body, { signal: sig });
@@ -505,7 +507,7 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
           } catch (err) {
             const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
             dbg?.failed(err, mapped);
-            if (!loose && canLoosen && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS)) {
+            if (plan.kind !== 'loose' && plan.count > 0 && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS)) {
               throw new StrictRefused(mapped, providerSaid(err, SAID_MAX));
             }
             throw mapped;
@@ -513,7 +515,7 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
             wd.done();
           }
         });
-      return sendStrictOrLoose('anthropic', req, canLoosen, attempt);
+      return sendStrictOrLoose('anthropic', req, sets, attempt);
     },
   };
 }

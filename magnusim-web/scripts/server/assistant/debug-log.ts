@@ -5,8 +5,9 @@
  * costs anything (debugCall() returns null).
  *
  * A row: time, turn and step (debugScoped, from the loop), dialect, model, attempt (strict,
- * loose; for a local server no_images, with_images, without_images) and why it went so (a strict
- * refusal, images refused, an overload resend), the whole request body as sent, every HTTP answer's status, request id
+ * reduced, loose; for a local server no_images, with_images, without_images), for a cloud request
+ * its strict tools (`strict: {count, of}`), and why it went so (a strict refusal: strict_reduced,
+ * strict_refused and their _earlier forms; images refused, an overload resend), the whole request body as sent, every HTTP answer's status, request id
  * header and time (the SDK may retry), the duration, and then either the result (stop reason,
  * usage, the model that served it, notes, and a compact list of its blocks: text, thinking's
  * length, tool calls with their inputs) or the error (its text, type, code and status, and each
@@ -87,10 +88,12 @@ export function debugScoped(adapter: ProviderAdapter, s: Scope): ProviderAdapter
 export interface DebugCallInfo {
   dialect: ProviderId;
   model: string;
-  /** strict | loose (a cloud provider); no_images | with_images | without_images (a local server) */
+  /** strict | reduced | loose (a cloud provider); no_images | with_images | without_images (a local server) */
   attempt: string;
   /** Why the request went so: null for a first try. */
   reason?: string | null;
+  /** A cloud request's strict tools: `count` of the `of` it offers. */
+  strict?: { count: number; of: number };
   /** The request body exactly as sent. */
   body: unknown;
 }
@@ -224,6 +227,7 @@ export function debugCall(info: DebugCallInfo): DebugCall | null {
         model: info.model,
         attempt: info.attempt,
         reason: info.reason ?? null,
+        ...(info.strict ? { strict: { count: info.strict.count, of: info.strict.of } } : {}),
         ...(ctx.resend ? { resend: ctx.resend } : {}),
         ms,
         http,

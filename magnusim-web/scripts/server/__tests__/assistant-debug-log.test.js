@@ -26,7 +26,7 @@ const fake = await startFakeLlm();
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
 
 const { createAdapter } = await import('../assistant/providers/index.ts');
-const { STRICT_FALLBACK_NOTE } = await import('../assistant/providers/common.ts');
+const { STRICT_FALLBACK_NOTE, strictReducedNote } = await import('../assistant/providers/common.ts');
 const { debugCall, debugLogDir, flushDebugLog, resetDebugLogForTests, withDebugScope, DEBUG_LOG_FILE, DEBUG_LOG_ENV } = await import('../assistant/debug-log.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
@@ -99,8 +99,15 @@ after(async () => {
 });
 
 describe('the provider debug log', () => {
-  it('a strict refusal, then the loose resend: two rows, the refused one with the whole request, its status, request id and the whole error body, the resend with its reason and the result', async () => {
+  it('a strict refusal, then the resend (fewer strict for a set too big, else loose): two rows, the refused one with the whole request, its status, request id, strict count and the whole error body, the resend with its reason, strict count and the result', async () => {
+    // The first dialect's words say the set is too big: the 2 smallest of 3 stay strict (demo__add,
+    // the biggest, goes unchecked); the second's name one schema: the workspace's tools go unchecked.
+    const RESEND = {
+      anthropic: { attempt: 'reduced', reason: 'strict_reduced', earlier: 'strict_reduced_earlier', strict: { count: 2, of: 3 } },
+      openai: { attempt: 'loose', reason: 'strict_refused', earlier: 'strict_refused_earlier', strict: { count: 1, of: 3 } },
+    };
     for (const provider of CLOUD) {
+      const want = RESEND[provider];
       fake.failNext({ status: 400, body: REFUSED[provider], headers: { 'request-id': `req-${provider}-1` }, dialect: DIALECT[provider] });
       fake.reply({ text: 'All set.', tools: [{ name: 'demo__reset', input: {} }] });
       let r;
@@ -108,7 +115,8 @@ describe('the provider debug log', () => {
         r = await withDebugScope({ turn: `turn-${provider}`, step: 1 }, () => send(provider, request(provider, [userText('go')])));
       });
       assert.equal(r.notes.length, 1);
-      assert.ok(r.notes[0].startsWith(`${STRICT_FALLBACK_NOTE} The provider said: `), provider);
+      if (provider === 'anthropic') assert.equal(r.notes[0], strictReducedNote(REFUSED.anthropic.error.message, 2, 3, ['demo__add']));
+      else assert.ok(r.notes[0].startsWith(`${STRICT_FALLBACK_NOTE} The provider said: `), provider);
       assert.equal(added.length, 2, provider);
       const [refused, resent] = added;
       const sent = fake.requests().filter((q) => q.kind === 'chat' && q.dialect === DIALECT[provider]).slice(-2);
@@ -119,6 +127,7 @@ describe('the provider debug log', () => {
       assert.equal(refused.step, 1);
       assert.equal(refused.attempt, 'strict');
       assert.equal(refused.reason, null);
+      assert.deepEqual(refused.strict, { count: 3, of: 3 }, provider);
       assert.equal(refused.ok, false);
       assert.ok(Number.isFinite(Date.parse(refused.time)));
       assert.ok(refused.ms >= 0);
@@ -132,8 +141,9 @@ describe('the provider debug log', () => {
       assert.equal(refused.mapped.code, 'bad_request');
       assert.equal(refused.error.status, 400);
 
-      assert.equal(resent.attempt, 'loose');
-      assert.equal(resent.reason, 'strict_refused');
+      assert.equal(resent.attempt, want.attempt, provider);
+      assert.equal(resent.reason, want.reason, provider);
+      assert.deepEqual(resent.strict, want.strict, provider);
       assert.equal(resent.turn, `turn-${provider}`);
       assert.equal(resent.ok, true);
       assert.deepEqual(bodyOf(resent.request), sent[1].body, provider);
@@ -149,11 +159,12 @@ describe('the provider debug log', () => {
         ],
         provider,
       );
-      // The set remembered: the next request goes loose at once, and says why.
+      // The set remembered: the next request goes so at once, and says why.
       fake.reply({ text: 'again' });
       const [again] = await rowsOf(() => send(provider, request(provider, [userText('again')])));
-      assert.equal(again.attempt, 'loose');
-      assert.equal(again.reason, 'strict_refused_earlier');
+      assert.equal(again.attempt, want.attempt, provider);
+      assert.equal(again.reason, want.earlier, provider);
+      assert.deepEqual(again.strict, want.strict, provider);
       assert.equal(again.turn, null);
     }
   });

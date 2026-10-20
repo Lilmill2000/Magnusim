@@ -68,9 +68,11 @@ stops before its first turn; by default the tab whose registration names it, nev
 `--no-repair`, `--out <dir>`, `--port-from <n>`, `--turn-minutes <n>`.
 
 `--tasks probe` sends one request with the Part's full tool set (the app's 3 tools and the Part's
-18) and records whether the provider took the strict schemas (`probe.json`: `strict` is
-`accepted`, or `refused` when the app had to send the tools again unchecked; its `notes` then
-carry the provider's own words after "The provider said:"), and the turn's log in
+18) and records how many strict schemas the provider took (`probe.json`: `strict` is
+`accepted`; `reduced: N of M strict (unchecked: <tool names>)` when the provider could not
+compile them all and the app sent the smallest N strict; or `refused: all unchecked` when the
+app had to send the Part's tools unchecked; its `notes` then carry the provider's own words),
+and the turn's log in
 `probe-1/events.jsonl`. Run it once per cloud provider before the first real eval. With
 `--scripted` the scripted model answers it (a read, then a sentence).
 
@@ -108,10 +110,13 @@ Records go to `.cache/assistant-eval/<stamp>-<label>/` (ignored by git):
 ### Logs
 
 `provider.jsonl` is for reading exact causes, not guessing. Each row has `time`, `turn` and
-`step`, `dialect`, `model`, `attempt` (`strict` or `loose` for a cloud provider; `no_images`,
-`with_images` or `without_images` for a local server), `reason` (null for a first try; `strict_refused` for
-the resend after the provider refused the strict tools, `strict_refused_earlier` when that
-tool set was refused before; `images_refused`, `images_left_out`), `resend: "overloaded"` for
+`step`, `dialect`, `model`, `attempt` (`strict`, `reduced` or `loose` for a cloud provider;
+`no_images`, `with_images` or `without_images` for a local server), `strict` (a cloud request's
+strict tools: `{count, of}`), `reason` (null for a first try; `strict_reduced` for a resend with
+fewer tools strict after the provider said the strict set was too big, `strict_reduced_earlier`
+when that smaller set was taken before; `strict_refused` for the resend with the Part's tools
+unchecked, `strict_refused_earlier` when that tool set went so before; `images_refused`,
+`images_left_out`), `resend: "overloaded"` for
 the one resend after an overload, `ms`, `http` (each answer's `status`, `request_id` header and
 time; a failed answer's whole `body` text), `ok`, then `result` (stop reason, the model that
 served it, usage, notes, the blocks: text, thinking by length, tool calls with their inputs) or
