@@ -381,6 +381,8 @@ class AgentTurnRun implements AgentDispatch {
       resume: () => t.resume(),
       // The runner's lines for the turn's log (a call that waited its 20 minutes for the person).
       note: (text) => t.note(text),
+      // Its result's pictures, kept for the window (the dock shows them in the call's step).
+      keepImages: (images) => t.keepImages?.(images) ?? [],
     };
     // The turn may end while this call is open (its agent exited, Stop on an agent that answered
     // the cancel without waiting for its call, the server stopping, Magnusim ending its agent),

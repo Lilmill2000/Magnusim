@@ -217,17 +217,6 @@ export interface TurnStarted {
   answer_key: string;
 }
 
-/**
- * A picture a turn keeps (phase 4 spec 9.4): the person's (`n` "p1".."p4") or a tool result's
- * ("1", "2", ...), read with GET /api/assistant/turns/:id/images/:n (404 image_gone once dropped).
- */
-export interface ImageRef {
-  n: string;
-  media_type: string;
-  width: number;
-  height: number;
-}
-
 /** One entry of a turn's log (GET /api/assistant/turns/:id), numbered by `seq`. */
 export type TurnEvent = { seq: number; at: number } & (
   | { type: 'state'; state: TurnState }
@@ -239,8 +228,9 @@ export type TurnEvent = { seq: number; at: number } & (
   /** `waiting`: the call waits for the person in its workspace (its page said so), e.g. CAD's Pause or Keep/Discard. */
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
   /**
-   * `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's line;
-   * `images`: the result's pictures the turn keeps (phase 4 spec 9.4; one per CAD edit).
+   * `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's
+   * line; `images`: the result's pictures the turn keeps for the window (refs; the bytes from
+   * GET /api/assistant/turns/:id/images/:n).
    */
   | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] }
   | { type: 'gate'; gate: GateView }
@@ -290,7 +280,7 @@ export interface TurnSummary {
   started_by?: 'window' | 'program';
   /** What it used of its limits (the same numbers RelayTurnFrame.used carries), its active time and its minutes. */
   used?: TurnUsed;
-  /** The person's pictures. */
+  /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
   prompt_images?: ImageRef[];
   /** The turn's log and pictures are no longer kept (its record stays). */
   log_dropped?: boolean;
@@ -358,6 +348,19 @@ export interface ConversationRow {
 export interface ConversationsAnswer {
   ok: true;
   conversations: ConversationRow[];
+}
+
+/**
+ * A picture a turn keeps for the window: GET /api/assistant/turns/:id/images/:n serves its bytes
+ * while it is kept (404 {code:'image_gone'} after: a turn keeps at most 64 pictures and 24 MB,
+ * and the oldest ended turns' pictures go first past 96 MB in all).
+ */
+export interface ImageRef {
+  /** Its id in the turn: "1", "2", ... for tool results; "p1".."p4" for the person's own. */
+  n: string;
+  media_type: string;
+  width: number;
+  height: number;
 }
 
 /**

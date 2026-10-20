@@ -439,6 +439,59 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(partOf(2).images, [{ type: 'image', mediaType: 'image/png', base64: png(64, 48), width: 64, height: 48 }]);
   });
 
+  it("a page's pictures are kept for the window (phase 4 spec 9.4): refs on the log's tool_result, the bytes from the image route with nosniff, no-store and CSP; a refused image keeps none; 404 image_gone; remote 403", async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    const png = (w, h, pad = 0) => {
+      const b = Buffer.alloc(33 + pad, 7);
+      Buffer.from('89504e470d0a1a0a', 'hex').copy(b, 0);
+      b.writeUInt32BE(13, 8);
+      b.write('IHDR', 12, 'ascii');
+      b.writeUInt32BE(w, 16);
+      b.writeUInt32BE(h, 20);
+      return b.toString('base64');
+    };
+    m.provider.script({ tools: [{ name: 'ai-demo__get_count', input: {} }] }, { tools: [{ name: 'ai-demo__get_count', input: {} }] }, { text: 'Done.' });
+    const started = await s.post('/api/assistant/turns', { text: 'Picture the counter', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const id = started.json.turn;
+    const t = s.handle.turns.get(id);
+    const bad = await page.frame('invoke', 0);
+    await s.progress(link, bad.call, { ack: true });
+    await s.result(link, bad.call, { ok: true, result: { images: [{ mediaType: 'image/png', data: png(2400, 10) }] } });
+    const snap = await page.frame('invoke', 1);
+    await s.progress(link, snap.call, { ack: true });
+    const one = png(64, 48, 100);
+    const two = png(32, 16);
+    await s.result(link, snap.call, { ok: true, result: { text: 'Two views.', images: [{ mediaType: 'image/png', data: one }, { mediaType: 'image/png', data: two }] } });
+    await settled(t);
+    const results = eventsOf(t).filter((e) => e.type === 'tool_result');
+    assert.equal('images' in results[0], false, 'a refused image is not kept');
+    assert.deepEqual(results[1].images, [
+      { n: '1', media_type: 'image/png', width: 64, height: 48 },
+      { n: '2', media_type: 'image/png', width: 32, height: 16 },
+    ]);
+    const r = await fetch(`${s.base}/api/assistant/turns/${id}/images/1`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(
+      ['content-type', 'x-content-type-options', 'cache-control', 'content-security-policy'].map((h) => r.headers.get(h)),
+      ['image/png', 'nosniff', 'no-store', "default-src 'none'"],
+    );
+    assert.deepEqual(Buffer.from(await r.arrayBuffer()), Buffer.from(one, 'base64'), 'the bytes as the page sent them');
+    assert.deepEqual(Buffer.from(await (await fetch(`${s.base}/api/assistant/turns/${id}/images/2`)).arrayBuffer()), Buffer.from(two, 'base64'));
+    for (const path of [`${id}/images/3`, `${id}/images/p1`, `${id}/images/..%2f1`, `t-nope-00000000/images/1`]) {
+      const gone = await s.get(`/api/assistant/turns/${path}`);
+      assert.equal(gone.status, 404, path);
+      assert.deepEqual(gone.json, { ok: false, code: 'image_gone', error: 'That picture is no longer kept.' }, path);
+    }
+    // A dropped picture's ref stays in the log; its route answers 404.
+    t.dropImages();
+    assert.equal((await s.get(`/api/assistant/turns/${id}/images/1`)).status, 404);
+    assert.deepEqual(eventsOf(t).filter((e) => e.type === 'tool_result')[1].images.length, 2);
+    const remote = await s.get(`/api/assistant/turns/${id}/images/2`, { 'x-forwarded-for': '203.0.113.9' });
+    assert.deepEqual([remote.status, remote.json.reason], [403, 'remote']);
+  });
+
   it('a stream dropped mid-call fails it at once (tab_disconnected), before any later event; the registration goes dormant', async () => {
     const { m, s } = await setup();
     const { page, link } = await linkedPage(s);

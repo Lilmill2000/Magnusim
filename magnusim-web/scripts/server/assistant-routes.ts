@@ -44,6 +44,11 @@
  *                                        mcp_unavailable (no token yet)
  *   GET  /api/assistant/turns/:id       ?since=N&wait_ms=0..25000 → {ok, turn, events, next, ended}
  *                                        (a long-poll: waits for an event after `since`)
+ *   GET  /api/assistant/turns/:id/images/:n   a picture the turn keeps for the window (a tool
+ *                                        result's, the log's tool_result.images; the person's own,
+ *                                        prompt_images "p1".."p4"): the bytes with their checked type,
+ *                                        nosniff, no-store and CSP default-src 'none'; 404 image_gone
+ *                                        once it is no longer kept (or never was)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
  *   POST /api/assistant/gates/:id       {allow, answer_key} → {ok}: the program that started the turn
  *                                        answers its question with the 202's answer_key; 403
@@ -120,7 +125,7 @@ import { createToolRegistry, type Registry } from './assistant/registry.ts';
 import { defaultHostTools } from './assistant/host-tools.ts';
 import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
-import { createTurnManager, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
+import { createTurnManager, IMAGE_GONE_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
 import { createMcpService } from './assistant/mcp/server.ts';
@@ -683,6 +688,27 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
       } finally {
         ctx.res.off('close', onClose);
       }
+    }),
+  );
+
+  router.get(
+    '/api/assistant/turns/:id/images/:n',
+    local(async (ctx) => {
+      const n = String(ctx.params.n ?? '');
+      const im = /^p?[0-9]{1,6}$/.test(n) ? (turns.get(ctx.params.id)?.imageOf(n) ?? null) : null;
+      if (!im) {
+        ctx.sendJson(404, { ok: false, code: 'image_gone', error: IMAGE_GONE_TEXT });
+        return;
+      }
+      // Its own checked type, never sniffed, never cached, and nothing it could load or run.
+      ctx.res.writeHead(200, {
+        'Content-Type': im.mediaType,
+        'Content-Length': String(im.bytes.length),
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'",
+      });
+      ctx.res.end(im.bytes);
     }),
   );
 

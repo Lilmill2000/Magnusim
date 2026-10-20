@@ -47,13 +47,13 @@ import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts'
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
 import type { Registry } from './registry.ts';
-import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
+import { ToolRunner, type CallAbort, type ImageRef, type RunnerEvent } from './runner.ts';
 import { cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
 import { isCloud } from './providers/index.ts';
-import { ProviderError, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
+import { ProviderError, type ImagePart, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
 import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agents/known.ts';
 import { runAgentTurn, type AgentEvent, type AgentRunTurn, type AgentTurnDeps, type AgentTurnSettings } from './agents/turn.ts';
@@ -65,6 +65,7 @@ import { appVersion } from './host-tools.ts';
 import { mcpLaunchTokenMatches, mcpUnavailableText, startMcpListener } from './mcp/listener.ts';
 
 export type { TurnState, ModelTurnSettings } from './loop.ts';
+export type { ImageRef } from './runner.ts';
 
 /**
  * What a turn fixed when it started: a model provider's (loop.ts runs it) or a coding agent's
@@ -91,7 +92,7 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number }
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
@@ -135,6 +136,8 @@ export interface TurnSummary {
   started_by: 'window' | 'program';
   /** What it used of its limits (as its tab's page hears them), and its active time against its minutes. */
   used: TurnUsed;
+  /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
+  prompt_images: ImageRef[];
 }
 
 /**
@@ -166,6 +169,24 @@ export const TURN_LIMITS = Object.freeze({
   /** The person's prompt, in characters. */
   textMax: 20_000,
 });
+
+/**
+ * The pictures turns keep for the window (phase 4 spec 9.4): per turn at most `perTurn` and
+ * `turnBytes` (its oldest results' pictures go first, the person's own last), and across the
+ * process `allBytes`, the oldest ended turns' pictures going first. A dropped picture's ref stays
+ * in the log; its route answers 404 image_gone.
+ */
+export const IMAGE_KEEP = Object.freeze({ perTurn: 64, turnBytes: 24 * 1024 * 1024, allBytes: 96 * 1024 * 1024 });
+
+export const IMAGE_GONE_TEXT = 'That picture is no longer kept.';
+
+/** A kept picture: its checked type and size, and its bytes. */
+interface KeptImage {
+  mediaType: ImagePart['mediaType'];
+  width: number;
+  height: number;
+  bytes: Buffer;
+}
 
 /** A turn's changes (each call's result, a fact of its model) are heard at most this often (TurnChange 'updated'). */
 export const TURN_UPDATE_MS = 1000;
@@ -305,6 +326,11 @@ export class Turn implements AnyTurn {
   private limits: PageLimits;
   /** A coding agent's calls and changes as its run counts them against `limits` (setUsed). */
   private agentCounts = { calls: 0, changes: 0 };
+  /** The pictures it keeps for the window, oldest first ("1", "2", ...; the person's "p1".."p4"). */
+  private readonly kept = new Map<string, KeptImage>();
+  private imageSerial = 0;
+  private imageBytes = 0;
+  private promptRefs: ImageRef[] = [];
 
   constructor(o: TurnInit) {
     this.id = o.id;
@@ -510,6 +536,72 @@ export class Turn implements AnyTurn {
       this.waiters.add(done);
       signal?.addEventListener('abort', done, { once: true });
     });
+  }
+
+  // ------------------------------------------------------------ pictures
+
+  /** Keeps a tool result's pictures (checked by the runner) for the window; their refs. */
+  keepImages(images: ImagePart[]): ImageRef[] {
+    const refs = images.map((im) => this.keepOne(String(++this.imageSerial), im));
+    fitImageBudget();
+    return refs;
+  }
+
+  /**
+   * Keeps the person's own pictures sent with the request ("p1".."p4", the summary's
+   * prompt_images): the start of a turn that takes them calls this once, before the turn runs.
+   */
+  keepPromptImages(images: ImagePart[]): ImageRef[] {
+    this.promptRefs = images.slice(0, 4).map((im, i) => this.keepOne(`p${i + 1}`, im));
+    fitImageBudget();
+    return [...this.promptRefs];
+  }
+
+  private keepOne(n: string, im: ImagePart): ImageRef {
+    const bytes = Buffer.from(im.base64, 'base64');
+    const ref: ImageRef = { n, media_type: im.mediaType, width: im.width, height: im.height };
+    this.kept.set(n, { mediaType: im.mediaType, width: im.width, height: im.height, bytes });
+    this.imageBytes += bytes.length;
+    // Its own budget: the oldest results' pictures go first, the person's own last.
+    while (this.kept.size > IMAGE_KEEP.perTurn || this.imageBytes > IMAGE_KEEP.turnBytes) {
+      const keys = [...this.kept.keys()];
+      const victim = keys.find((k) => !k.startsWith('p')) ?? keys[0];
+      if (victim === undefined) break;
+      this.dropImage(victim);
+    }
+    return ref;
+  }
+
+  private dropImage(n: string): void {
+    const im = this.kept.get(n);
+    if (!im) return;
+    this.kept.delete(n);
+    this.imageBytes -= im.bytes.length;
+  }
+
+  /** A kept picture, or null when it never was or is no longer kept. */
+  imageOf(n: string): { mediaType: string; bytes: Buffer } | null {
+    const im = this.kept.get(String(n));
+    return im ? { mediaType: im.mediaType, bytes: im.bytes } : null;
+  }
+
+  /** The bytes of the pictures it keeps now. */
+  keptImageBytes(): number {
+    return this.imageBytes;
+  }
+
+  /** Drops every picture it keeps (the process budget; a turn whose log goes). */
+  dropImages(): void {
+    this.kept.clear();
+    this.imageBytes = 0;
+  }
+
+  /** Drops its oldest kept picture (the process budget); false when it keeps none. */
+  dropOldestImage(): boolean {
+    const first = this.kept.keys().next();
+    if (first.done) return false;
+    this.dropImage(first.value);
+    return true;
   }
 
   // ------------------------------------------------------------ time and calls
@@ -727,6 +819,7 @@ export class Turn implements AnyTurn {
       title: this.title(),
       started_by: this.startedBy,
       used: this.usedNow(),
+      prompt_images: this.promptRefs.map((r) => ({ ...r })),
     };
   }
 
@@ -763,6 +856,26 @@ export class Turn implements AnyTurn {
       used: this.pageUsed(),
       ...(ended ? { end: { state: this.state as EndState, reason: this.endReason ?? this.state } } : {}),
     };
+  }
+}
+
+/**
+ * The process's budget for kept pictures (IMAGE_KEEP.allBytes): past it, the oldest ended turns'
+ * pictures go first, oldest picture first. Running turns stay within it on their own (at most
+ * TURN_LIMITS.running of them, each within IMAGE_KEEP.turnBytes).
+ */
+export function fitImageBudget(): void {
+  const all = [...(assistantState().turns as Map<string, Turn>).values()];
+  let total = all.reduce((sum, t) => sum + t.keptImageBytes(), 0);
+  if (total <= IMAGE_KEEP.allBytes) return;
+  const ended = all.filter((t) => t.ended && t.endedAt !== null && t.keptImageBytes() > 0).sort((a, b) => (a.endedAt as number) - (b.endedAt as number));
+  for (const t of ended) {
+    while (total > IMAGE_KEEP.allBytes && t.keptImageBytes() > 0) {
+      const before = t.keptImageBytes();
+      if (!t.dropOldestImage()) break;
+      total -= before - t.keptImageBytes();
+    }
+    if (total <= IMAGE_KEEP.allBytes) return;
   }
 }
 

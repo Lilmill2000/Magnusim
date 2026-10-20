@@ -33,7 +33,8 @@
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
  *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
  *    A failed call's hint and detail go with its error, and the hint to the log's tool_result
- *    too; a result's summary is the log's line only.
+ *    too; a result's summary is the log's line only. A turn keeps the result's images for the
+ *    window (keepImages): the log's tool_result names them (`images`, refs, never the bytes).
  */
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
@@ -41,12 +42,24 @@ import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from 
 import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
-import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
+import type { ImagePart, Risk, ToolCallPart, ToolResultPart } from './types.ts';
 
 export type RunnerEvent =
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number };
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] };
+
+/**
+ * A picture a turn keeps for the window (phase 4 spec 9.4), as its log names it: `n` is its id in
+ * the turn ("1", "2", ...; the person's own "p1".."p4"), served by GET
+ * /api/assistant/turns/:id/images/:n while it is kept.
+ */
+export interface ImageRef {
+  n: string;
+  media_type: string;
+  width: number;
+  height: number;
+}
 
 /** What a turn lends the runner (absent for MCP). */
 export interface RunnerTurn {
@@ -59,6 +72,8 @@ export interface RunnerTurn {
   resume(): void;
   /** A line for the turn's log. */
   note?(text: string): void;
+  /** Keeps a result's pictures for the window (already checked); their refs go on the log's tool_result. */
+  keepImages?(images: ImagePart[]): ImageRef[];
 }
 
 /** Why a call's signal aborted: Stop, the turn's minutes cap, or no progress for too long. */
@@ -348,6 +363,15 @@ export class ToolRunner {
     const def = o.offered.get(call.name) ?? null;
     o.turn?.emit(toolCallEvent(call, def, o.turn.step));
     const r = await this.runResolved(call, def, o);
+    // Its pictures (checked: the model gets the same ones) are kept for the window, by reference.
+    let images: ImageRef[] = [];
+    if (r.part.images.length && o.turn?.keepImages) {
+      try {
+        images = o.turn.keepImages(r.part.images);
+      } catch {
+        images = [];
+      }
+    }
     o.turn?.emit({
       type: 'tool_result',
       call: call.callId,
@@ -356,6 +380,7 @@ export class ToolRunner {
       ...(r.hint ? { hint: r.hint } : {}),
       summary: r.summary,
       ms: Math.max(0, this.clock.now() - started),
+      ...(images.length ? { images } : {}),
     });
     return r;
   }

@@ -2077,3 +2077,98 @@ describe("the dock's summary of a turn (phase 4 spec 9.1, 9.5)", () => {
     assert.ok(!('waiting' in ofType(t, 'tool_progress')[2]), 'no waiting key once the page goes on');
   });
 });
+
+describe('the pictures a turn keeps for the window (phase 4 spec 9.4)', () => {
+  /** A PNG's signature and IHDR (all checkImage reads), padded to `bytes`. */
+  const png = (bytes, w = 64, h = 48) => {
+    const b = Buffer.alloc(Math.max(33, bytes), 1);
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(b, 0);
+    b.writeUInt32BE(13, 8);
+    b.write('IHDR', 12, 'ascii');
+    b.writeUInt32BE(w, 16);
+    b.writeUInt32BE(h, 20);
+    return { type: 'image', mediaType: 'image/png', base64: b.toString('base64'), width: w, height: h };
+  };
+  const MB = 1024 * 1024;
+  /** A turn held at its first request (its model never answers until Stop). */
+  async function heldTurn(m, name) {
+    m.provider.script({ hold: name });
+    const { turn } = await startTurn(m, name);
+    await m.provider.reached(name);
+    return turn;
+  }
+  const kept = (t, ns) => ns.map((n) => t.imageOf(n) !== null);
+
+  it('a tool result with pictures: refs on the log, the bytes kept; the person\'s own as p1..p4 in prompt_images', async () => {
+    const shot = png(200, 640, 480);
+    const m = mk({ hostTools: [hostTool('snap', { run: async () => ({ ok: true, images: [shot, png(50, 32, 32)], summary: 'snapped' }) })] });
+    m.provider.script({ tools: [{ name: 'snap' }] }, { text: 'Here.' });
+    const { turn: t } = await startTurn(m, 'Show me');
+    assert.deepEqual(t.keepPromptImages([png(40, 10, 20)]), [{ n: 'p1', media_type: 'image/png', width: 10, height: 20 }]);
+    await settled(t);
+    const r = ofType(t, 'tool_result')[0];
+    assert.deepEqual(r.images, [
+      { n: '1', media_type: 'image/png', width: 640, height: 480 },
+      { n: '2', media_type: 'image/png', width: 32, height: 32 },
+    ]);
+    assert.deepEqual(t.imageOf('1'), { mediaType: 'image/png', bytes: Buffer.from(shot.base64, 'base64') });
+    assert.deepEqual(t.summary().prompt_images, [{ n: 'p1', media_type: 'image/png', width: 10, height: 20 }]);
+    assert.equal(t.imageOf('3'), null);
+  });
+
+  it("per turn: at most 64 pictures and 24 MB, the oldest results' going first and the person's own last", async () => {
+    const m = mk();
+    const t = await heldTurn(m, 'count');
+    t.keepPromptImages([png(100), png(100)]);
+    for (let i = 0; i < 62; i += 1) t.keepImages([png(100)]);
+    assert.deepEqual(kept(t, ['p1', 'p2', '1', '62']), [true, true, true, true], '64 pictures: all kept');
+    const refs = t.keepImages([png(100)]);
+    assert.deepEqual(refs.map((r) => r.n), ['63'], 'the ref is given whatever goes');
+    assert.deepEqual(kept(t, ['p1', 'p2', '1', '2', '63']), [true, true, false, true, true], "the 65th: the oldest result goes, not the person's");
+    const big = await heldTurn(m, 'bytes');
+    const shot = png(1.4 * MB);
+    for (let i = 0; i < 17; i += 1) big.keepImages([shot]);
+    assert.deepEqual(kept(big, ['1', '17']), [true, true], '23.8 MB: all kept');
+    big.keepImages([shot]);
+    assert.deepEqual(kept(big, ['1', '2', '18']), [false, true, true], 'past 24 MB the oldest goes');
+    assert.ok(big.keptImageBytes() <= 24 * MB);
+    t.stop();
+    big.stop();
+    await settled(t);
+    await settled(big);
+  });
+
+  it('across the process: past 96 MB the oldest ended turns lose their pictures first, oldest first; running turns keep theirs', async () => {
+    const m = mk();
+    const shot = png(1.4 * MB);
+    const ended = [];
+    for (const name of ['a', 'b', 'c']) {
+      const t = await heldTurn(m, name);
+      for (let i = 0; i < 16; i += 1) t.keepImages([shot]);
+      t.stop();
+      await settled(t);
+      m.clock.advance(1000);
+      ended.push(t);
+    }
+    const [a, b, c] = ended;
+    const d = await heldTurn(m, 'd');
+    for (let i = 0; i < 16; i += 1) d.keepImages([shot]);
+    const e = await heldTurn(m, 'e');
+    for (let i = 0; i < 4; i += 1) e.keepImages([shot]);
+    assert.deepEqual(kept(a, ['1', '16']), [true, true], '95.2 MB in all: nothing goes');
+    e.keepImages([shot]);
+    assert.deepEqual(kept(a, ['1', '2', '16']), [false, true, true], 'past 96 MB: the oldest ended turn loses its oldest picture');
+    assert.deepEqual([kept(b, ['1'])[0], kept(c, ['1'])[0], kept(d, ['1'])[0], kept(e, ['1', '5'])], [true, true, true, [true, true]], 'nobody else lost one');
+    const size = Buffer.from(shot.base64, 'base64').length;
+    const f = await heldTurn(m, 'f');
+    for (let i = 0; i < 16; i += 1) f.keepImages([shot]);
+    assert.deepEqual([a.keptImageBytes(), kept(b, ['1', '2', '16']), c.keptImageBytes()], [0, [false, true, true], 16 * size], "a third running turn's sixteen: the rest of a's go, then b's oldest");
+    assert.deepEqual([d, e, f].map((t) => t.keptImageBytes()), [16 * size, 5 * size, 16 * size], 'running turns keep all of their own');
+    f.stop();
+    await settled(f);
+    d.stop();
+    e.stop();
+    await settled(d);
+    await settled(e);
+  });
+});
