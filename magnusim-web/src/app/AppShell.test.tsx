@@ -24,9 +24,9 @@ vi.mock('../assistant/dock/content', () => ({ useDockContent: () => null }));
 // The Assistant's page relay (its own tests: src/assistant/relay.test.ts).
 const relay = vi.hoisted(() => {
   const stop = vi.fn();
-  return { stop, start: vi.fn(() => stop) };
+  return { stop, start: vi.fn(() => stop), presenter: vi.fn() };
 });
-vi.mock('../assistant/relay', () => ({ startAssistantRelay: relay.start }));
+vi.mock('../assistant/relay', () => ({ startAssistantRelay: relay.start, setGatePresenter: relay.presenter }));
 // The key a workspace frame forwards (its own tests: src/assistant/dock/toggle.test.ts).
 const toggle = vi.hoisted(() => ({ shortcut: vi.fn(() => true) }));
 vi.mock('../assistant/dock/toggle', async (actual) => ({ ...(await actual<typeof import('../assistant/dock/toggle')>()), dockShortcut: toggle.shortcut }));

@@ -155,9 +155,17 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
           </button>
         </header>
         {shell ? (
-          <div className="assistant-dock-body assistant-dock-state">
-            <ShellBody state={shell} />
-          </div>
+          <>
+            {/* A question shows whatever the dock's state (another app's, with the Assistant off). */}
+            {shell !== 'remote' && content && content.questions ? (
+              <div className="assistant-dock-questions" data-dock-questions="1">
+                {content.questions}
+              </div>
+            ) : null}
+            <div className="assistant-dock-body assistant-dock-state">
+              <ShellBody state={shell} />
+            </div>
+          </>
         ) : (
           <>
             {content && content.questions ? (

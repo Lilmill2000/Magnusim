@@ -1,7 +1,8 @@
 // Helpers for the Assistant's browser tests: Settings → Assistant, its status, a test
 // home's files, and turns against the scripted model (support/fake-llm.mjs): pointing the
 // app at it, starting and following turns, the tab a page links as, what a request offered
-// and carried back, and answering the turn's questions. The core's specs and the bundled
+// and carried back, and answering the turn's questions; the chat dock (opening it, sending
+// from it, its newest request and its question card). The core's specs and the bundled
 // plugins' suites share them, so a plugin's spec never names a provider. The specs run
 // their own server (startHost) with the Assistant's test switches they choose; nothing here
 // touches this PC's real keys.
@@ -389,13 +390,68 @@ export async function answerGate(request, base, t, allow, { kind, tool, ms = 30_
   }
   // No answer key answers this one: only the window that shows it does.
   const why = gate.link_only ? 'only the Magnusim window answers this question (link_only)' : 'this turn has no answer key (start it with startTurn)';
-  if (!page) throw new Error(`answerGate: ${why}: pass {page} to answer it in the app's dialog. Question: ${JSON.stringify(gate.title)}`);
+  if (!page) throw new Error(`answerGate: ${why}: pass {page} to answer it in the dock's card. Question: ${JSON.stringify(gate.title)}`);
   mine.add(gate.id);
-  await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: ms });
-  await expect(page.locator('#cf-heading')).toHaveText(gate.title, { timeout: ms });
-  await page.locator(allow ? '#cf-confirm' : '#cf-cancel').click();
+  // The one place a window shows the Assistant's questions: the dock's card (never the app's dialog).
+  const card = page.locator(`#assistant-dock [data-gate="${gate.id}"]`);
+  await expect(card).toBeVisible({ timeout: ms });
+  await expect(card.locator('.dock-gate-title')).toHaveText(gate.title, { timeout: ms });
+  await expect(page.locator('#modal-confirm'), "an Assistant question never shows as the app's dialog").toBeHidden();
+  // Yes takes a click once its guard let it go (it is disabled for its first moment).
+  await card.locator(`[data-gate-answer="${allow ? 'yes' : 'no'}"]`).click({ timeout: ms });
   await t.waitFor((e) => e.type === 'gate_closed' && e.gate === gate.id, `question ${gate.id} closed by the window's answer`, ms);
   return gate;
+}
+
+// ---------------------------------------------------------------- the chat dock (phase 4)
+
+/** The dock's panel. */
+export const dockPanel = (page) => page.locator('#assistant-dock');
+
+/**
+ * The dock's open question card: the oldest when several (its parts: '.dock-gate-title',
+ * '.dock-gate-copy', '[data-gate-answer="no"]', '[data-gate-answer="yes"]').
+ */
+export function dockGate(page) {
+  return page.locator('#assistant-dock [data-gate]').first();
+}
+
+/** The newest request's block in the dock's transcript. */
+export function dockTurn(page) {
+  return page.locator('#assistant-dock [data-dock-turn]').last();
+}
+
+/** Opens the dock with the header button the window shows (Home's, or the workbench's a workspace borrows). */
+export async function openDock(page) {
+  if (await dockPanel(page).isVisible()) return;
+  await appReady(page);
+  await page.locator('#wb-assistant:visible, #home-assistant:visible').first().click();
+  await expect(dockPanel(page)).toBeVisible();
+}
+
+/**
+ * Types `text` in the dock's composer (each "\n" as Shift+Enter), attaches `pictures` first
+ * ([{name, mimeType, buffer}]) and sends it with Enter; resolves to the started turn's id.
+ */
+export async function dockSend(page, text, { pictures = [] } = {}) {
+  await openDock(page);
+  const box = dockPanel(page).getByRole('textbox', { name: 'Message to the Assistant' });
+  if (pictures.length) {
+    await dockPanel(page).locator('[data-dock-file]').setInputFiles(pictures);
+    await expect(dockPanel(page).locator('[data-dock-picture-chip]')).toHaveCount(pictures.length);
+  }
+  await box.click();
+  const lines = text.split('\n');
+  for (const [i, l] of lines.entries()) {
+    if (i) await page.keyboard.press('Shift+Enter');
+    await page.keyboard.type(l);
+  }
+  const started = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/turns' && r.request().method() === 'POST');
+  await page.keyboard.press('Enter');
+  const r = await started;
+  const j = await r.json();
+  expect(r.status(), JSON.stringify(j)).toBe(202);
+  return j.turn;
 }
 
 /** A fake.requests() entry's body, or `req` itself when it is a body (what a function step gets). */

@@ -177,6 +177,13 @@ describe('the dock copy', () => {
     expect(copy.QUESTION_ELSEWHERE).toBe('Its question shows in the window that started it.');
   });
 
+  it('the question card', () => {
+    expect([copy.ANSWER_HERE_ONLY, copy.PROJECT_DATA, copy.PRIVACY_SETTINGS, copy.ASKED_BY_APP]).toEqual(['Answer here only', 'Project data', 'Privacy settings', 'Asked by another app on this PC.']);
+    expect(copy.askedOutside('Add 7')).toBe('Asked by a request started outside this window: "Add 7"');
+    expect([copy.closesIn(0), copy.closesIn(9)]).toEqual(['Closes in under a minute', 'Closes in 9 min']);
+    expect(copy.gateHelp("Don't", 'Allow')).toBe("Enter or Escape answers “Don't”. “Allow” takes a click, or Tab then Space.");
+  });
+
   it('questions in the transcript and the live region', () => {
     expect(copy.gateAsked('Reset?')).toBe('Asked: Reset?');
     expect([

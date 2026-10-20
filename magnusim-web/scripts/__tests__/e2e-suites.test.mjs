@@ -97,6 +97,7 @@ test('a core change outside the host paths a plugin depends on does not run its 
     'src/workspace/bridge.ts',
     'src/plugin-ui/panels/Toast.tsx',
     'src/workbench/dialogs.ts',
+    'src/workbench/guardedYes.ts',
     'scripts/server/plugin-files.ts',
     'python/cfddesk/registry/plugin_data.py',
     'python/cfddesk/project/scope.py',

@@ -116,6 +116,21 @@ describe('the dock frame', () => {
     expect(panel().querySelector('textarea, [role="log"]')).toBeNull();
   });
 
+  it('a question shows in the Assistant off too (another app asks), never over remote access', async () => {
+    const content = { state: 'empty' as const, questions: <section data-gate="g-1">Reset?</section> };
+    const { unmount } = render(<DockShell content={content} />);
+    act(() => openDock());
+    await waitFor(() => expect(panel()).toHaveAttribute('data-assistant-dock-state', 'off'));
+    expect(panel().querySelector('[data-dock-questions] [data-gate="g-1"]')).not.toBeNull();
+    expect($('[data-dock-open-settings]')).toBeTruthy();
+    unmount();
+    resetStatusStore();
+    answers = [() => json(403, { ok: false, available: false, reason: 'remote', error: REMOTE })];
+    render(<DockShell content={content} />);
+    await waitFor(() => expect(panel()).toHaveAttribute('data-assistant-dock-state', 'remote'));
+    expect(panel().querySelector('[data-gate]')).toBeNull();
+  });
+
   it("with a provider ready, a conversation's parts fill it; empty without one", async () => {
     answers = [() => json(200, READY)];
     const view = render(<DockShell />);

@@ -525,6 +525,8 @@ export function watchTurn(id: string, o: WatchOptions = {}): void {
   const sink: FollowSink = {
     data: (d) => onData(id, d.events, d.summary),
     stopped: (why) => {
+      // A record the server no longer keeps: its key is of no more use.
+      if (why === 'gone') dropAnswerKey(id);
       if (why === 'gone' && turns[id]) {
         setTurn(id, markGone(turns[id]));
         publish();

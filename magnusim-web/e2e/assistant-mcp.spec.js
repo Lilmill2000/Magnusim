@@ -16,7 +16,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { noAgentsHere, openAssistantStep } from './support/assistant.js';
+import { dockGate, noAgentsHere, openAssistantStep } from './support/assistant.js';
 import { e2eTemp, startHost } from './support/host-server.mjs';
 import { infoPathOf, resultJson, startMcpClient } from './support/mcp-client.mjs';
 import { expect, test } from './support/stress.js';
@@ -129,7 +129,6 @@ async function openCounter(page, request) {
   return { frame, tab };
 }
 
-const modal = (page) => page.locator('#modal-confirm');
 
 // ---------------------------------------------------------------- tests
 
@@ -244,7 +243,7 @@ test("another app's call reaches the open workspace: the counter reads 2, and GE
   expect(r.isError, JSON.stringify(r)).toBeFalsy();
   expect(resultJson(r)).toMatchObject({ tool: `${PLUGIN}__add`, ok: true, data: { count: 2 } });
   await expect(w.frame.locator('#counter')).toHaveText('2');
-  await expect(modal(page)).toBeHidden();
+  await expect(dockGate(page)).toBeHidden();
   const mcp = await getJson(request, '/api/assistant/mcp');
   expect(mcp.connections).toEqual([expect.objectContaining({ kind: 'external', name: APP_NAME, calls: 1 })]);
   expect((await getJson(request, '/api/assistant/status')).mcp).toMatchObject({ clients: true, running: true, connected: 1 });
@@ -254,7 +253,7 @@ test("a destructive tool asks as the app's own question in the tab with Don't fo
   const info = await appsOn(request, 'allow');
   const w = await openCounter(page, request);
   const counter = w.frame.locator('#counter');
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   const app = await connect(info);
   expect((await app.client.callTool({ name: `${PLUGIN}__add`, arguments: { by: 2 } })).isError).toBeFalsy();
   await expect(counter).toHaveText('2');
@@ -263,13 +262,13 @@ test("a destructive tool asks as the app's own question in the tab with Don't fo
   const declined = app.client.callTool({ name: `${PLUGIN}__reset`, arguments: {} }, { onprogress: (p) => got.push(p) });
   await expect(dialog).toBeVisible();
   // Asked for another app, not the Assistant: the question says so, naming the app as it calls itself.
-  await expect(page.locator('#cf-heading')).toHaveText('Allow an app on this PC to reset the counter?');
-  await expect(page.locator('#cf-copy')).toContainText(`An app on this PC using Magnusim's tools ("${APP_NAME}", as it calls itself) asks for this.`);
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow an app on this PC to reset the counter?');
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText(`An app on this PC using Magnusim's tools ("${APP_NAME}", as it calls itself) asks for this.`);
   // The tool's own confirm note says what the call does, as in the Assistant's questions.
-  await expect(page.locator('#cf-copy')).toContainText('· Sets the counter to 0; add can bring it back. What it sent: {}. Nothing runs until you choose.');
-  await expect(page.locator('#cf-confirm')).toHaveText('Allow');
-  await expect(page.locator('#cf-cancel')).toHaveText("Don't");
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText('· Sets the counter to 0; add can bring it back. What it sent: {}. Nothing runs until you choose.');
+  await expect(dockGate(page).locator('[data-gate-answer="yes"]')).toHaveText('Allow');
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toHaveText("Don't");
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
   // The client is told it waits for an answer in Magnusim.
   await expect.poll(() => got.length, { timeout: 10_000 }).toBeGreaterThan(0);
   expect(got[0]).toMatchObject({ message: WAITING_TEXT });
@@ -282,8 +281,8 @@ test("a destructive tool asks as the app's own question in the tab with Don't fo
 
   const allowed = app.client.callTool({ name: `${PLUGIN}__reset`, arguments: {} });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-cancel')).toBeFocused();
-  await page.locator('#cf-confirm').click();
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
   await expect(dialog).toBeHidden();
   const yes = await allowed;
   expect(yes.isError, JSON.stringify(yes)).toBeFalsy();
@@ -293,7 +292,7 @@ test("a destructive tool asks as the app's own question in the tab with Don't fo
 test('privacy Ask: the first read of the project asks "Let other apps read project …?" once, naming the app; Allow is remembered for every app', async ({ page, request }) => {
   const info = await appsOn(request, 'ask');
   const w = await openCounter(page, request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   const app = await connect(info);
   // Before the project is allowed, the workspace's tools come without their own words.
   const before = Object.fromEntries((await app.client.listTools()).tools.map((t) => [t.name, t]));
@@ -301,13 +300,13 @@ test('privacy Ask: the first read of the project asks "Let other apps read proje
 
   const first = app.client.callTool({ name: `${PLUGIN}__get_count`, arguments: {} });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText(`Let other apps read project "${PROJECT_TITLE}"?`);
-  await expect(page.locator('#cf-copy')).toContainText(`("${APP_NAME}", as it calls itself)`);
-  await expect(page.locator('#cf-copy')).toContainText("This answer covers every app using Magnusim's tools.");
-  await expect(page.locator('#cf-confirm')).toHaveText('Allow');
-  await expect(page.locator('#cf-cancel')).toHaveText("Don't allow");
-  await expect(page.locator('#cf-cancel')).toBeFocused();
-  await page.locator('#cf-confirm').click();
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText(`Let other apps read project "${PROJECT_TITLE}"?`);
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText(`("${APP_NAME}", as it calls itself)`);
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText("This answer covers every app using Magnusim's tools.");
+  await expect(dockGate(page).locator('[data-gate-answer="yes"]')).toHaveText('Allow');
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toHaveText("Don't allow");
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
   await expect(dialog).toBeHidden();
   const r = await first;
   expect(r.isError, JSON.stringify(r)).toBeFalsy();

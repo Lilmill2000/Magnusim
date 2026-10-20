@@ -7,9 +7,10 @@
 // (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks allow 2 px (fonts
 // differ under Linux); no pixel snapshots; races are held by the fake, never slept.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { appReady, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
+import { answerGate, dockGate, dockSend, dockTurn, openDock, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm, userImagesOf } from './support/fake-llm.mjs';
 import { startHost } from './support/host-server.mjs';
+import { serverStream, setHidden } from './support/link-streams.js';
 import { expect, test } from './support/stress.js';
 
 const PLUGIN = 'ai-demo';
@@ -46,6 +47,7 @@ test.beforeAll(async ({ request }) => {
       MAGNUSIM_TEST_ASSISTANT: '1',
       MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base,
       MAGNUSIM_TEST_EVENT_HUB: '1',
+      MAGNUSIM_TEST_ASSISTANT_HOLD_MS: '2000',
     },
   });
   const status = await getJson(request, '/api/assistant/status');
@@ -72,8 +74,6 @@ test.afterEach(() => {
 // ---------------------------------------------------------------- the page
 
 const dock = (page) => page.locator('#assistant-dock');
-/** The newest request's block in the dock. */
-const dockTurn = (page) => dock(page).locator('[data-dock-turn]').last();
 
 /** Opens the counter workspace and waits until its tools reached the server: {frame, tab}. */
 async function openCounter(page, request) {
@@ -104,26 +104,6 @@ async function shot(page, name) {
 const chats = () => fake.requests().filter((r) => r.kind === 'chat');
 const composer = (page) => dock(page).getByRole('textbox', { name: 'Message to the Assistant' });
 
-/**
- * Types `text` in the dock's composer (each "\n" as Shift+Enter) and sends it with Enter;
- * resolves to the started turn's id (from the 202).
- */
-async function dockSend(page, text) {
-  const box = composer(page);
-  await box.click();
-  const lines = text.split('\n');
-  for (const [i, l] of lines.entries()) {
-    if (i) await page.keyboard.press('Shift+Enter');
-    await page.keyboard.type(l);
-  }
-  const started = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/turns' && r.request().method() === 'POST');
-  await page.keyboard.press('Enter');
-  const r = await started;
-  const j = await r.json();
-  expect(r.status(), JSON.stringify(j)).toBe(202);
-  return j.turn;
-}
-
 /** A PNG of w × h drawn in the page, as a Buffer. */
 async function pngOf(page, w, h, label = '') {
   const b64 = await page.evaluate(
@@ -144,14 +124,6 @@ async function pngOf(page, w, h, label = '') {
     [w, h, label],
   );
   return Buffer.from(b64, 'base64');
-}
-
-/** Opens the dock with its header button (the workbench's, borrowed by a workspace). */
-async function openDock(page) {
-  if (await dock(page).isVisible()) return;
-  await appReady(page);
-  await page.locator('#wb-assistant:visible, #home-assistant:visible').first().click();
-  await expect(dock(page)).toBeVisible();
 }
 
 // ---------------------------------------------------------------- tests
@@ -199,6 +171,7 @@ test('sent from the dock: Enter sends, Shift+Enter makes a newline, the text str
   page.on('request', (r) => {
     if (new URL(r.url()).pathname === '/api/assistant/turns' && r.method() === 'POST') sent.push(r.postDataJSON());
   });
+  const before = chats().length;
   fake.reply({ text: 'Adding two to the counter now.', chunkMs: 40, hold: 'stream', tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'Done: it reads 2.' });
   const id = await dockSend(page, 'Add two\nplease');
   expect(sent[0]).toMatchObject({ text: 'Add two\nplease', tab: 'link' });
@@ -217,7 +190,7 @@ test('sent from the dock: Enter sends, Shift+Enter makes a newline, the text str
   await expect(turn.locator('[data-turn-end="done"]')).toBeVisible(STEP);
   await expect(turn.locator('[data-dock-text]').last()).toHaveText('Done: it reads 2.');
   await expect(dock(page).locator('[data-dock-send]')).toBeVisible();
-  expect(JSON.stringify(chats()[0].body.messages)).toContain('Add two\\nplease');
+  expect(JSON.stringify(chats()[before].body.messages)).toContain('Add two\\nplease');
   await shot(page, 'ended');
 });
 
@@ -340,4 +313,141 @@ test('the provider picker: the default first, a provider with no key disabled wi
   await dockSend(page, 'Hello');
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
   await expect(dock(page).locator('[data-dock-provider-locked]')).toHaveAttribute('title', 'A conversation keeps its provider. Start a new one to use another.');
+});
+
+// ---------------------------------------------------------------- questions (spec 4)
+
+test("a question shows as a card in the dock with No focused, the frame's keyboard taken; Enter answers No; Yes is guarded; the app's dialog never shows", async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  const handle = page.frames().find((f) => f.url().includes(`/plugins/${PLUGIN}/workspace/`));
+  await openDock(page);
+  // The dock closed again, the keyboard in the workspace's page.
+  await dock(page).locator('[data-dock-close]').click();
+  await page.locator('#workspace-frame').click({ position: { x: 300, y: 300 } });
+  expect(await handle.evaluate(() => document.hasFocus())).toBe(true);
+  fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'I left it.' });
+  const id = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w.tab }).then((t) => t.id);
+  const card = dockGate(page);
+  await expect(card).toBeVisible(STEP);
+  await expect(dock(page)).toBeVisible();
+  await expect(card).toHaveAttribute('role', 'alertdialog');
+  await expect(card.locator('.dock-gate-title')).toHaveText('Allow the Assistant to reset the counter?');
+  await expect(card.locator('[data-gate-badge]')).toHaveText(["Can't be undone"]);
+  await expect(card.locator('.dock-gate-help')).toHaveText('Enter or Escape answers “Don\'t”. “Allow” takes a click, or Tab then Space.');
+  await expect(card.locator('.dock-gate-footer')).toHaveText(/^Asked by a request started outside this window: "Reset the counter\." · Closes in \d+ min$/);
+  await expect(card.locator('[data-gate-answer="no"]')).toBeFocused();
+  await expect(page.locator('#modal-confirm')).toBeHidden();
+  await expect(page.locator('[data-assistant-pill]')).toBeHidden();
+  await shot(page, 'question-card');
+  await page.keyboard.press('Enter');
+  await expect(card).toBeHidden(STEP);
+  await expect.poll(async () => (await getJson(request, `/api/assistant/turns/${id}`)).turn.state, STEP).toBe('done');
+  const log = (await getJson(request, `/api/assistant/turns/${id}?since=0`)).events;
+  expect(log.filter((e) => e.type === 'gate_closed').map((e) => [e.answer, e.by])).toEqual([['deny', 'user']]);
+  await expect(dock(page).locator('[data-gate-answer-record="deny/user"]')).toHaveText("You chose “Don't”: Allow the Assistant to reset the counter?", STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('0');
+
+  // Again: Yes is off at first; a fast double-click on it never allows; a deliberate click does.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset.' });
+  const second = await dockSend(page, 'Add two, then reset it');
+  await expect(card).toBeVisible(STEP);
+  const yes = card.locator('[data-gate-answer="yes"]');
+  await expect(yes).toBeDisabled();
+  await expect(yes).toBeEnabled();
+  const box = await yes.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+  await expect(card).toBeVisible();
+  expect((await getJson(request, `/api/assistant/turns/${second}?since=0`)).events.filter((e) => e.type === 'gate_closed')).toEqual([]);
+  await yes.click();
+  await expect(card).toBeHidden(STEP);
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('0');
+  await expect(dockTurn(page).locator('[data-gate-answer-record="allow/user"]')).toHaveText('You chose “Allow”: Allow the Assistant to reset the counter?');
+  await expect(page.locator('#modal-confirm')).toBeHidden();
+});
+
+test("a project's first cloud request asks the privacy question as a card: Don't send ends it, nothing was sent", async ({ page, request }) => {
+  await postOk(request, '/api/assistant/settings', { privacy: 'ask', forget_consents: true });
+  await page.goto(api(`/#/p/${project}`));
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
+  await openDock(page);
+  await expect(dock(page).locator('[data-dock-context]')).toHaveText(`Project: ${PROJECT_TITLE}`);
+  const before = chats().length;
+  const sent = [];
+  page.on('request', (r) => {
+    if (new URL(r.url()).pathname === '/api/assistant/turns' && r.method() === 'POST') sent.push(r.postDataJSON());
+  });
+  await dockSend(page, 'What is in this project?');
+  expect(sent[0].context).toMatchObject({ project_id: project });
+  expect(sent[0].tab).toBeUndefined();
+  const card = dockGate(page);
+  await expect(card).toHaveAttribute('data-gate-kind', 'privacy', STEP);
+  await expect(card.locator('[data-gate-badge]')).toHaveText(['Project data']);
+  await expect(card.locator('[data-gate-privacy-settings]')).toHaveText('Privacy settings');
+  await expect(card.locator('[data-gate-answer="no"]')).toHaveText("Don't send");
+  await expect(card.locator('[data-gate-answer="no"]')).toBeFocused();
+  // The card sits under its request.
+  await expect(dockTurn(page).locator('[data-gate]')).toHaveCount(1);
+  await card.locator('[data-gate-answer="no"]').click();
+  await expect(dockTurn(page).locator('[data-turn-end="stopped"]')).toContainText('Nothing was sent.', STEP);
+  expect(chats().length).toBe(before);
+});
+
+test('reload: the conversation and its transcript come back, a running request shows its open question here again and is answered; another tab reads it without the question', async ({ page, request, context }) => {
+  const w = await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { text: 'Added one.' });
+  await dockSend(page, 'Add one');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset done.' });
+  const held = await dockSend(page, 'Now reset it');
+  await expect(dockGate(page)).toBeVisible(STEP);
+  await expect(dockTurn(page).locator('[data-dock-step]')).toHaveCount(1, STEP);
+  const rowsBefore = await dock(page).locator('[data-dock-turn]').evaluateAll((els) => els.map((e) => [e.getAttribute('data-dock-turn'), e.querySelectorAll('[data-dock-step]').length]));
+
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
+  await expect(w.frame.locator('#ai-available')).toHaveText('yes', { timeout: 30_000 });
+  // The question comes back on the new page's link (the dock opens for it), as one card.
+  await expect(dockGate(page)).toBeVisible({ timeout: 30_000 });
+  await expect(dock(page).locator('[data-gate]')).toHaveCount(1);
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
+  await expect.poll(() => dock(page).locator('[data-dock-turn]').evaluateAll((els) => els.map((e) => [e.getAttribute('data-dock-turn'), e.querySelectorAll('[data-dock-step]').length])), STEP).toEqual(rowsBefore);
+  await expect(dock(page).locator('[data-dock-turn]').first().locator('[data-turn-end="done"]')).toBeVisible();
+
+  // Another tab on the project: the conversation, the request read-only, its question elsewhere.
+  const other = await context.newPage();
+  try {
+    await other.goto(api(`/#/p/${project}`));
+    await other.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
+    await openDock(other);
+    await expect(other.locator(`#assistant-dock [data-dock-turn="${held}"] [data-dock-elsewhere-note]`)).toHaveText(/^Its questions? shows? in the window that started it\.$/, STEP);
+    await expect(other.locator('#assistant-dock [data-gate]')).toHaveCount(0);
+  } finally {
+    await other.close();
+  }
+
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('0');
+});
+
+test('a hidden tab: the request goes on streaming into the dock; once ended, the tab lets its stream go', async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 2, steps: 15 } }] }, { text: 'Added two slowly.' });
+  await dockSend(page, 'Add two slowly');
+  await expect(w.frame.locator('#slow')).toHaveText('running', STEP);
+  await setHidden(page, true);
+  // The server still follows the turn on this tab's stream while hidden.
+  await expect.poll(async () => Object.values((await getJson(request, '/api/test/assistant/state')).turn_channels || {}).reduce((a, b) => a + b, 0), STEP).toBe(1);
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeAttached({ timeout: 30_000 });
+  await expect(dockTurn(page).locator('[data-dock-text]').last()).toHaveText('Added two slowly.');
+  // Ended, and the hold after it over: the hidden tab lets its stream go after its grace.
+  await expect.poll(() => serverStream(request, host, w.tab), { timeout: 30_000, message: 'the stream goes' }).toBeNull();
+  await setHidden(page, false);
+  await expect(dockTurn(page).locator('[data-dock-step]')).toHaveCount(1);
+  await expect(dockTurn(page).locator('[data-dock-result]')).toHaveText(/^✓ /);
 });

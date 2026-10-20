@@ -63,6 +63,8 @@ export const HOST_PATHS = {
     'src/wizard/',
     'src/theme/',
     'src/workbench/dialogs.ts',
+    // The guarded Yes the app's dialog and the dock's question card share.
+    'src/workbench/guardedYes.ts',
     'scripts/server/',
     'scripts/prefs.js',
     'scripts/e2e-suites.mjs',

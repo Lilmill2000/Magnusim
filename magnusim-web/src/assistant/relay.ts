@@ -31,10 +31,11 @@
  * (at most 3 s), then `tools: []`, then the channel closes. A dropped stream ends this page's calls on the server at once, so
  * they are stopped here too.
  *
- * Questions (`gate`): out of the workspace's full screen, then the app's own confirm dialog
- * with No focused (Enter and Escape answer No: a key meant for the workspace never allows)
- * and Allow guarded (a deliberate click only: never the second click of a double-click on the
- * dialog before it, which a model can ask right after another), then POST
+ * Questions (`gate`): out of the workspace's full screen, then shown by the presenter the
+ * dock set (setGatePresenter: its question card, chat dock spec 4.1), else the app's own
+ * confirm dialog; either way with No focused (Enter and Escape answer No: a key meant for the
+ * workspace never allows) and Allow guarded (a deliberate click only: never the second click of
+ * a double-click on the question before it, which a model can ask right after another), then POST
  * /api/assistant/relay/gate {link, gate, allow} on the link it was shown on: the server takes
  * a tab's answer only through its live link, and only for a question sent on it (the turn's
  * answer key is for the program that started the turn, which this page is not). `gate_closed`
@@ -61,7 +62,12 @@
  * Test, connect and sign-in, a custom agent added, an allow switch turned on; phase 4's dock
  * starts agent turns with it, from Home too). A tab no workspace offers tools in opens its
  * channel for that alone (after the status says this PC), waits up to 5 s for `linked`, and
- * keeps the channel while the request is out and a minute after; it is not pinned.
+ * keeps the channel while the request is out and a minute after; it is not pinned. The dock
+ * holds the channel (holdAssistantLink) while a request it started runs, since that request's
+ * questions come on it; a hold pins it too.
+ *
+ * The dock reads the running turns bound to this tab (relayTurnsSnapshot, subscribeRelayTurns):
+ * a request of the command line here shows in it, and its composer knows the tab is busy.
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import type { AssistantRegistration, AssistantStopAnswer, AssistantTurn } from '../plugin-sdk/workspace';
@@ -108,6 +114,49 @@ export const PROOF_KEEP_MS = 60_000;
 /** How many ended turns this page remembers (a Stop of one answers `ended`). */
 const TURNS_ENDED_KEPT = 16;
 const TURN_END_STATES: ReadonlySet<string> = new Set(['done', 'stopped', 'failed', 'capped']);
+
+/**
+ * Shows a question and resolves with the person's answer, or null when it closed unanswered
+ * (`signal`: answered elsewhere, timed out, stopped, or a new link that didn't show it again).
+ */
+export type GatePresenter = (g: GateView, o: { signal: AbortSignal }) => Promise<boolean | null>;
+
+let presenter: GatePresenter | null = null;
+
+/**
+ * The dock shows this tab's questions (one place for them, chat dock spec 4.1); null: the app's
+ * confirm dialog again (a page without the dock, unit tests). Answers go through the relay either way.
+ */
+export function setGatePresenter(fn: GatePresenter | null): void {
+  presenter = fn;
+}
+
+/** The running turns bound to this tab change: the dock hears it. */
+const turnListeners = new Set<() => void>();
+let turnsSnap: readonly AssistantTurn[] = Object.freeze([]);
+
+function turnsChanged(r: Relay | null): void {
+  turnsSnap = Object.freeze(r ? [...r.turnsRunning.values()] : []);
+  for (const fn of [...turnListeners]) {
+    try {
+      fn();
+    } catch (e) {
+      console.warn('[CFD] assistant turns', e);
+    }
+  }
+}
+
+/** The turns bound to this tab that the server says run (a request of the command line here too). */
+export function relayTurnsSnapshot(): readonly AssistantTurn[] {
+  return turnsSnap;
+}
+
+export function subscribeRelayTurns(fn: () => void): () => void {
+  turnListeners.add(fn);
+  return () => {
+    turnListeners.delete(fn);
+  };
+}
 
 /** What the frame hears for an empty list, or when nothing of this page is on the server. */
 const NOTHING_HELD: AssistantRegistration = { available: true, accepted: [], refused: [] };
@@ -174,6 +223,8 @@ interface Relay {
   proofTimer: ReturnType<typeof setTimeout> | null;
   /** Told whenever the link or the mode may have changed (linkFor). */
   linkWaiters: Set<() => void>;
+  /** The dock's holds (holdAssistantLink): the channel stays, pinned, while any is. */
+  keeps: number;
 }
 
 let R: Relay | null = null;
@@ -266,8 +317,9 @@ function runOnce(r: Relay): void {
         return;
       }
     }
-    // A request needs the window's proof: the status first (a page from another PC opens nothing).
-    if (r.proofs > 0) void checkStatus(r);
+    // A request needs the window's proof, or the dock holds the link: the status first (a page
+    // from another PC opens nothing).
+    if (r.proofs > 0 || r.keeps > 0) void checkStatus(r);
     return;
   }
   if (r.mode === 'checking') return;
@@ -275,7 +327,7 @@ function runOnce(r: Relay): void {
   if (r.ch && r.ch.readyState === r.ch.CLOSED) channelGone(r, cur);
   if (cur && !cur.settled && cur.tools.length === 0 && !r.maybeHeld && !r.pumping) settleWorkspaceTools(cur.rev, NOTHING_HELD);
   // Opened for a list to offer, or for the window's proof (once per request: a refused channel isn't asked again in a loop).
-  const forProof = r.proofs > 0 && r.proofOpenedFor < r.proofEpoch;
+  const forProof = (r.proofs > 0 || r.keeps > 0) && r.proofOpenedFor < r.proofEpoch;
   if (!r.ch && ((cur && live(cur) && cur.rev > r.refusedRev) || forProof)) {
     r.proofOpenedFor = r.proofEpoch;
     openRelay(r);
@@ -703,8 +755,12 @@ function onGate(r: Relay, d: RelayFrameData['gate']): void {
     try {
       await exitFrameFullscreen();
       // Every assistant question is safe (No has the focus, Enter and Escape answer No) and
-      // guarded: Allow takes a deliberate click only, never the second of a double-click.
-      const allow = await confirmAction({ title: g.title, copy: gateCopy(g), yes: g.yes, no: g.no, safe: true, guard: true, signal: ctl.signal });
+      // guarded: Allow takes a deliberate click only, never the second of a double-click. The
+      // dock's card when it set itself (one place for questions), else the app's dialog.
+      const show = presenter;
+      const allow = show
+        ? await show(g, { signal: ctl.signal })
+        : await confirmAction({ title: g.title, copy: gateCopy(g), yes: g.yes, no: g.no, safe: true, guard: true, signal: ctl.signal });
       // Closed on the server meanwhile (answered elsewhere, timed out, stopped): nothing to send.
       if (ctl.signal.aborted) return;
       // Through the link it was (last) shown on: the server takes this tab's answer only there.
@@ -786,6 +842,7 @@ function onTurn(r: Relay, d: RelayFrameData['turn']): void {
   }
   r.turnsRunning.set(turn.id, turn);
   r.relink?.seen.add(turn.id);
+  turnsChanged(r);
   // A page not told yet hears every running one now (this one too); a page told hears this one.
   if (!tellNewFrame(r)) tellTurn(r, turn);
   checkRelink(r);
@@ -793,6 +850,7 @@ function onTurn(r: Relay, d: RelayFrameData['turn']): void {
 
 function turnEnded(r: Relay, turn: AssistantTurn): void {
   r.turnsRunning.delete(turn.id);
+  turnsChanged(r);
   r.turnsEnded = [...r.turnsEnded.filter((id) => id !== turn.id), turn.id].slice(-TURNS_ENDED_KEPT);
   tellTurn(r, turn);
 }
@@ -878,7 +936,7 @@ function updatePin(r: Relay): void {
       if (R === r) updatePin(r);
     }, r.holdUntil - now);
   }
-  const want = r.turns > 0 || holding || r.invokes.size > 0 || r.gates.size > 0;
+  const want = r.turns > 0 || holding || r.invokes.size > 0 || r.gates.size > 0 || r.keeps > 0;
   if (r.ch && want !== r.pinned) {
     r.pinned = want;
     r.ch.pin(want);
@@ -887,7 +945,7 @@ function updatePin(r: Relay): void {
 
 /** Nothing offered, nothing on the server, nothing open, no proof wanted: the channel goes (the relay is idle again). */
 function maybeClose(r: Relay): void {
-  if (!r.ch || r.pumping || r.maybeHeld || r.gates.size || r.proofs > 0 || Date.now() < r.proofUntil) return;
+  if (!r.ch || r.pumping || r.maybeHeld || r.gates.size || r.proofs > 0 || r.keeps > 0 || Date.now() < r.proofUntil) return;
   const cur = workspaceToolsSnapshot().current;
   if (wanted(cur) || (cur && !cur.settled)) return;
   const ch = r.ch;
@@ -939,6 +997,7 @@ export function startAssistantRelay(): () => void {
       proofUntil: 0,
       proofTimer: null,
       linkWaiters: new Set(),
+      keeps: 0,
     };
     R = r;
     r.unsubscribe = subscribeWorkspaceTools(kick);
@@ -1001,6 +1060,30 @@ export async function withAssistantLink<T>(use: (link: string | null) => Promise
   }
 }
 
+/**
+ * The dock holds this tab's relay channel while a request it started runs (its questions come on
+ * it): open (once the status says this PC) and pinned while any hold is. Answers its release
+ * (once; later calls change nothing).
+ */
+export function holdAssistantLink(): () => void {
+  const r = R;
+  if (!r) return () => undefined;
+  r.keeps += 1;
+  // A hold opens the channel as the window's proof does (the status first), once per hold.
+  r.proofEpoch += 1;
+  kick();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    r.keeps = Math.max(0, r.keeps - 1);
+    if (R === r) {
+      updatePin(r);
+      kick();
+    }
+  };
+}
+
 /** Stops the relay: its channel closes, its questions close unanswered, its calls stop. */
 export function stopAssistantRelay(): void {
   const r = R;
@@ -1022,4 +1105,5 @@ export function stopAssistantRelay(): void {
   if (r.gateCheck) clearTimeout(r.gateCheck);
   r.ch?.close();
   r.ch = null;
+  turnsChanged(null);
 }

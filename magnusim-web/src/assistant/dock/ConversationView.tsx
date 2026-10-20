@@ -3,25 +3,50 @@
  * It keeps the conversation store in step with where the person is (context.ts), reads the
  * conversation list when the dock opens and after each request ends, follows the shown
  * conversation's newest requests (10, "Show earlier requests" for 10 more), and builds the
- * header's menu and the transcript.
+ * header's menu, the transcript and the composer.
+ *
+ * Questions (spec 4): a card of a request shown here sits under it; any other card in the
+ * questions strip at the top. Requests of other origins bound to this tab (the command line),
+ * and those whose card shows here, show read-only under "Elsewhere". After a reload, a running
+ * request this tab started (its answer key kept) shows its open questions here again (POST
+ * /turns/:id/show). While a request this tab started runs, the relay's link is held.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { holdAssistantLink, relayTurnsSnapshot, subscribeRelayTurns } from '../relay';
 import { useAssistantStatus } from '../status';
 import type { ConversationRow, ConversationTurn } from '../wire';
 import { Composer } from './Composer';
-import { INTRO_HOME, INTRO_PROJECT, introCad, introWorkspace, NEW_CONVERSATION, OPEN_PROJECT, readOnlyConversation } from './copy';
+import {
+  ASKED_BY_APP,
+  askedOutside,
+  INTRO_HOME,
+  INTRO_PROJECT,
+  introCad,
+  introWorkspace,
+  NEW_CONVERSATION,
+  OPEN_PROJECT,
+  QUESTION_ELSEWHERE,
+  QUESTIONS_ELSEWHERE,
+  readOnlyConversation,
+  STOP_THAT_REQUEST,
+  tabBusy,
+} from './copy';
 import { useDockPlace, type DockPlace } from './context';
 import { ConversationMenu } from './ConversationMenu';
 import { useDock } from './dockState';
 import type { DockContent } from './DockShell';
 import { setShownTurn } from './follow';
-import { stopDockTurn } from './send';
-import { keptTurns, localPicturesOf, refreshConversations, retainTurns, setDockContext, setTurnStopper, showConversation, useDockStore, watchTurn } from './store';
+import { GateCard } from './GateCard';
+import { useGateCards, type OpenCard } from './gates';
+import { showHere, startedHere, stopDockTurn } from './send';
+import { answerKeyOf, keptTurns, localPicturesOf, refreshConversations, retainTurns, setDockContext, setTurnStopper, showConversation, useDockStore, watchTurn } from './store';
 import { Transcript, type TranscriptTurn } from './Transcript';
 import { emptyTurnView, isEnded } from './turnView';
 
 /** Requests shown at first, and added by each "Show earlier requests". */
 export const TURNS_PAGE = 10;
+/** Requests of other origins shown under "Elsewhere" at most. */
+export const ELSEWHERE_MAX = 3;
 
 const TERMINAL: ReadonlySet<string> = new Set(['done', 'stopped', 'failed', 'capped']);
 
@@ -86,14 +111,53 @@ export function useDockContent(): DockContent | null {
     ...mine.filter((id) => !listed.some((t) => t.id === id)).map((id) => ({ id, state: 'starting' as const, title: '' as const, started_at: '' as const, ended_at: null, started_by: 'window' as const })),
   ];
   const visible = rows.slice(-page);
-  const visibleKey = visible.map((t) => `${t.id}:${TERMINAL.has(t.state) ? 1 : 0}`).join(',');
+  const visibleIds = new Set(visible.map((t) => t.id));
 
+  // Requests bound to this tab from elsewhere, and the requests of cards not shown here.
+  const relayTurns = useSyncExternalStore(subscribeRelayTurns, relayTurnsSnapshot, relayTurnsSnapshot);
+  const cards = useGateCards();
+  const [elsewhere, setElsewhere] = useState<string[]>([]);
+  useEffect(() => setElsewhere([]), [store.shown, place.projectId]);
+  const wantElsewhere = [...relayTurns.map((t) => t.id), ...cards.map((c) => c.gate.turn ?? '')].filter((id) => id && !visibleIds.has(id));
+  const wantKey = wantElsewhere.join(',');
+  useEffect(() => {
+    if (!wantKey) return;
+    setElsewhere((had) => {
+      const next = [...had.filter((id) => !wantKey.split(',').includes(id)), ...wantKey.split(',')];
+      return next.slice(-ELSEWHERE_MAX);
+    });
+  }, [wantKey]);
+  const elsewhereShown = elsewhere.filter((id) => !visibleIds.has(id));
+
+  const visibleKey = visible.map((t) => `${t.id}:${TERMINAL.has(t.state) ? 1 : 0}`).join(',');
+  const elsewhereKey = elsewhereShown.join(',');
+  const keptKey = keptTurns().join(',');
   // Follow what is shown (an ended request only for its snapshot); stop following the rest.
   useEffect(() => {
     for (const t of visible) watchTurn(t.id, { ended: TERMINAL.has(t.state) });
-    // This tab's own running requests stay followed (the pill shows them) in another conversation too.
-    retainTurns([...visible.map((t) => t.id), ...keptTurns()]);
-  }, [visibleKey]);
+    for (const id of elsewhereShown) watchTurn(id);
+    // This tab's own running requests stay followed (the pill shows them) in another conversation
+    // too, and until their end lets their key (and the link's hold) go.
+    for (const id of keptTurns()) watchTurn(id);
+    retainTurns([...visible.map((t) => t.id), ...elsewhereShown, ...keptTurns()]);
+  }, [visibleKey, elsewhereKey, keptKey]);
+
+  // While a request this tab started runs, its questions come on the relay's link: held.
+  useEffect(() => (keptKey ? holdAssistantLink() : undefined), [keptKey]);
+
+  // After a reload: a running request this tab started shows its open questions here again.
+  const showTried = useRef(new Set<string>());
+  useEffect(() => {
+    for (const r of list) {
+      for (const t of r.turns) {
+        if (TERMINAL.has(t.state) || showTried.current.has(t.id) || startedHere(t.id)) continue;
+        const key = answerKeyOf(t.id);
+        if (!key) continue;
+        showTried.current.add(t.id);
+        void showHere(t.id, key);
+      }
+    }
+  }, [list]);
 
   const turns: TranscriptTurn[] = visible.map((t) => ({ id: t.id, row: t.started_at ? t : null, view: store.turns[t.id] ?? emptyTurnView(t.id) }));
   const running = turns.filter((t) => !isEnded(t.view) && !(t.row && TERMINAL.has(t.row.state) && !t.view.summary && t.view.lastSeq === 0));
@@ -109,17 +173,45 @@ export function useDockContent(): DockContent | null {
     if (endedKey) void refreshConversations();
   }, [endedKey]);
 
-  if (status.state !== 'ready') return null;
-
   const state: DockContent['state'] = store.questions.length ? 'question' : running.length ? 'running' : turns.length ? 'ready' : 'empty';
   const onNew = () => showConversation(null);
   const elsewhereProject = !!row && (row.project_id ?? null) !== place.projectId;
+
+  // Who asks a card's question: a request of another origin, another app, or (none) this window.
+  const whoOf = (c: OpenCard): string | null => {
+    if (!c.gate.turn) return ASKED_BY_APP;
+    const v = store.turns[c.gate.turn];
+    if (v?.summary?.started_by !== 'program') return null;
+    const title = v.summary.title || relayTurns.find((t) => t.id === c.gate.turn)?.title || '';
+    return askedOutside(title);
+  };
+  const cardList = (list: readonly OpenCard[]) => (list.length ? list.map((c) => <GateCard key={c.gate.id} card={c} who={whoOf(c)} />) : null);
+  // The status not read, the server not answering, or the Assistant off: the shell shows its
+  // own state, and a question of another app (MCP) that runs here still shows as a card.
+  if (status.state !== 'ready') return { state: 'empty', questions: cardList(cards) };
+  const strip = cards.filter((c) => !c.gate.turn || !visibleIds.has(c.gate.turn));
+  // A running request another window started: its questions show there.
+  const noteFor = (turn: string): string | null => {
+    const v = store.turns[turn];
+    if (!v || isEnded(v) || answerKeyOf(turn) || cards.some((c) => c.gate.turn === turn)) return null;
+    if (v.summary?.started_by !== 'window') return null;
+    return v.openGates.length ? QUESTION_ELSEWHERE : QUESTIONS_ELSEWHERE;
+  };
+  // Another request works in this workspace (tab_busy): wait for it, or stop it.
+  const ws = place.workspace;
+  const other = ws && ws.state === 'tools' ? relayTurns.find((t) => t.id !== newestRunning && !visibleIds.has(t.id)) : undefined;
+  const busy = other && ws ? { line: tabBusy(ws.name), onStop: () => void stopDockTurn(other.id), stopLabel: STOP_THAT_REQUEST } : null;
+  const elsewhereTurns: TranscriptTurn[] = elsewhereShown.map((id) => ({ id, row: null, view: store.turns[id] ?? emptyTurnView(id) }));
   return {
     state,
     header: <ConversationMenu list={list} shown={row} projectId={place.projectId} onPick={(id) => showConversation(id)} onNew={onNew} />,
+    questions: cardList(strip),
     log: (
       <Transcript
         turns={turns}
+        elsewhere={elsewhereTurns}
+        cardsFor={(turn) => cardList(cards.filter((c) => c.gate.turn === turn && visibleIds.has(turn)))}
+        noteFor={noteFor}
         hasEarlier={rows.length > visible.length}
         onEarlier={() => setPage((n) => n + TURNS_PAGE)}
         intro={introOf(place)}
@@ -133,7 +225,7 @@ export function useDockContent(): DockContent | null {
       elsewhereProject && row ? (
         <ReadOnly row={row} onNew={onNew} />
       ) : (
-        <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} />
+        <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} busy={busy} />
       ),
   };
 }

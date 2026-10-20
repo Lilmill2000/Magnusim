@@ -21,9 +21,13 @@ import {
   PROOF_WAIT_MS,
   RELAY_CHANNEL_URL,
   RESULT_BEFORE_UNREGISTER_MS,
+  holdAssistantLink,
+  relayTurnsSnapshot,
+  setGatePresenter,
   startAssistantRelay,
   stopAnnouncedTurn,
   stopAssistantRelay,
+  subscribeRelayTurns,
 } from './relay';
 import { allowAgent, checkAgent, RemoteError } from './api';
 import { resetStatusStore } from './status';
@@ -1492,5 +1496,102 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
       ['t-2', 'ended'],
       ['t-4', 'running'],
     ]);
+  });
+});
+
+describe("the dock's place in the relay (chat dock spec 4.1, 5.3, 5.6)", () => {
+  const gate = (over: Partial<GateView> = {}): GateView => ({
+    id: 'g-1',
+    kind: 'confirm',
+    turn: 'turn-1',
+    title: 'Allow the Assistant to Reset the counter?',
+    copy: "Workspace demo · can't be undone. Nothing runs until you choose.",
+    yes: 'Allow',
+    no: "Don't",
+    risk: 'destructive',
+    opened_at: '2026-10-16T10:00:00Z',
+    expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    ...over,
+  });
+  afterEach(() => setGatePresenter(null));
+
+  it('with a presenter set, the dialog never shows: the presenter answers, and the answer goes on the link it was shown on; closed unanswered, nothing goes', async () => {
+    const shown: Array<{ g: GateView; signal: AbortSignal; answer: (v: boolean | null) => void }> = [];
+    setGatePresenter((g, o) => new Promise((answer) => shown.push({ g, signal: o.signal, answer })));
+    await registered();
+    channel().frame('gate', { gate: gate() });
+    channel().frame('gate', { gate: gate() });
+    await settle();
+    expect(confirmAction).not.toHaveBeenCalled();
+    expect(shown.map((s) => s.g.id)).toEqual(['g-1']);
+    expect(channel().pinned).toBe(true);
+    shown[0].answer(true);
+    await settle();
+    expect(gateAnswers().map((a) => [a.path, a.body])).toEqual([['/api/assistant/relay/gate', { link: LINK_A, gate: 'g-1', allow: true }]]);
+    // gate_closed: its signal aborts; the presenter's null sends nothing.
+    channel().frame('gate', { gate: gate({ id: 'g-2' }) });
+    await settle();
+    channel().frame('gate_closed', { gate: 'g-2', answer: 'deny', by: 'timeout' });
+    await settle();
+    expect(shown[1].signal.aborted).toBe(true);
+    shown[1].answer(null);
+    await settle();
+    expect(gateAnswers()).toHaveLength(1);
+    expect(confirmAction).not.toHaveBeenCalled();
+    // Without one, the app's dialog again.
+    setGatePresenter(null);
+    channel().frame('gate', { gate: gate({ id: 'g-3' }) });
+    await settle();
+    expect(confirmAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('holdAssistantLink opens the channel for a tab with no workspace (the status first) and keeps it pinned; released, it goes as usual', async () => {
+    startAssistantRelay();
+    await settle();
+    expect(channels).toHaveLength(0);
+    const release = holdAssistantLink();
+    await settle();
+    expect(sent.map((s) => s.path)).toEqual(['/api/assistant/status']);
+    expect(channels.map((c) => c.url)).toEqual([RELAY_CHANNEL_URL]);
+    const ch = channel();
+    ch.frame('linked', { link: LINK_A });
+    await settle(PROOF_KEEP_MS * 2);
+    expect(ch.closed).toBe(false);
+    expect(ch.pinned).toBe(true);
+    // A second hold, then both released (each once).
+    const second = holdAssistantLink();
+    release();
+    release();
+    await settle();
+    expect(ch.pinned).toBe(true);
+    second();
+    await settle();
+    expect(ch.pinned).toBe(false);
+    await settle(PROOF_KEEP_MS);
+    expect(ch.closed).toBe(true);
+  });
+
+  it("relayTurnsSnapshot: the running turns bound to this tab, as they start and end; its listeners hear each change", async () => {
+    await registered();
+    const heard: string[][] = [];
+    const off = subscribeRelayTurns(() => heard.push(relayTurnsSnapshot().map((t) => t.id)));
+    const frame = (id: string, state: 'running' | 'ended') => ({
+      id,
+      state,
+      title: 'Add',
+      local: false,
+      context_tokens: null,
+      images: null,
+      used: { steps: 0, steps_cap: 120, changes: 0, changes_cap: 0, usd: 0, usd_cap: 8 },
+      ...(state === 'ended' ? { end: { state: 'done', reason: 'done' } } : {}),
+    });
+    channel().frame('turn', frame('t-1', 'running'));
+    channel().frame('turn', frame('t-2', 'running'));
+    channel().frame('turn', frame('t-1', 'ended'));
+    expect(heard).toEqual([['t-1'], ['t-1', 't-2'], ['t-2']]);
+    expect(relayTurnsSnapshot().map((t) => [t.id, t.title])).toEqual([['t-2', 'Add']]);
+    off();
+    stopAssistantRelay();
+    expect(relayTurnsSnapshot()).toEqual([]);
   });
 });

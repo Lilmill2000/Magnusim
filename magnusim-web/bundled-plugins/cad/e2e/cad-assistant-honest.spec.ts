@@ -259,24 +259,27 @@ test("cad:assistant-honest-delete delete asks the person first: Don't keeps the 
     });
   await expect.poll(built, STEP).toEqual(['Body 1']);
   const deleteCalls = () => cadFrame(page).evaluate(() => (window as unknown as DeleteCad).__CAD__.assistant.calls.filter((c) => c.tool === 'delete').map((c) => c.ok));
-  // The app's own question, over the whole window (not the Part's frame).
-  const dialog = page.locator('#modal-confirm');
+  // The app's own question, in its Assistant panel over the whole window (not the Part's frame;
+  // never the app's confirm dialog).
+  const dialog = page.locator('#assistant-dock [data-gate]').first();
+  const part = (sel: string) => dialog.locator(sel);
 
   // Don't (Enter, the focused answer): the model hears declined, the Part never hears the call.
   const before = chats(host).length;
   host.fake.reply({ tools: [{ name: 'cad__delete', input: { features: ['Extrude 1'] } }] }, { text: 'The extrude stays.' });
   const t1 = await startTurn(request, host, { text: 'Delete the extrude.', tab });
   await expect(dialog).toBeVisible(STEP);
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to delete features?');
-  await expect(page.locator('#cf-copy')).toContainText('Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.');
-  await expect(page.locator('#cf-copy')).toContainText('What it sent: {"features":["Extrude 1"]}. Nothing runs until you choose.');
-  await expect(page.locator('#cf-confirm')).toHaveText('Allow');
-  await expect(page.locator('#cf-cancel')).toHaveText("Don't");
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(part('.dock-gate-title')).toHaveText('Allow the Assistant to delete features?');
+  await expect(part('.dock-gate-copy')).toContainText('Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.');
+  await expect(part('.dock-gate-copy')).toContainText('What it sent: {"features":["Extrude 1"]}. Nothing runs until you choose.');
+  await expect(part('[data-gate-answer="yes"]')).toHaveText('Allow');
+  await expect(part('[data-gate-answer="no"]')).toHaveText("Don't");
+  await expect(part('[data-gate-answer="no"]')).toBeFocused();
   // Nothing happened yet: the feature is still in the tree while the question is open.
   await expect(rows).toHaveText(['Sketch 1', 'Extrude 1']);
   await page.keyboard.press('Enter');
   await expect(dialog).toBeHidden(STEP);
+  await expect(page.locator('#modal-confirm')).toBeHidden();
   expect((await t1.ended(STEP_MS * 2)).turn.state).toBe('done');
   const [declined] = resultsIn(chats(host)[before + 1]);
   expect(declined).toMatchObject({ tool: 'cad__delete', ok: false, error: { code: 'declined' } });
@@ -289,8 +292,8 @@ test("cad:assistant-honest-delete delete asks the person first: Don't keeps the 
   host.fake.reply({ tools: [{ name: 'cad__delete', input: { features: ['Extrude 1'] } }] }, { text: 'Deleted the extrude.' });
   const t2 = await startTurn(request, host, { text: 'Delete the extrude now.', tab });
   await expect(dialog).toBeVisible(STEP);
-  await expect(page.locator('#cf-cancel')).toBeFocused();
-  await page.locator('#cf-confirm').click();
+  await expect(part('[data-gate-answer="no"]')).toBeFocused();
+  await part('[data-gate-answer="yes"]').click();
   await expect(dialog).toBeHidden(STEP);
   expect((await t2.ended(STEP_MS * 2)).turn.state).toBe('done');
   await expect(rows).toHaveText(['Sketch 1'], STEP);
@@ -306,6 +309,8 @@ test("cad:assistant-honest-delete delete asks the person first: Don't keeps the 
   // The person's Undo names the request, and one Ctrl+Z brings the extrude and its body back.
   await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').hover();
   await expect(frame.locator('[data-cad-tip]')).toContainText('Undo Assistant: Delete the extrude now.', STEP);
+  // The app's Assistant panel opened for the question and covers the view's corner: closed first.
+  await page.locator('#assistant-dock [data-dock-close]').click();
   const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
   await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
   await page.keyboard.press('Control+z');

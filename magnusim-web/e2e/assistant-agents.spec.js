@@ -64,7 +64,7 @@ import { removeTreeSync } from '../scripts/remove-tree.js';
 import { e2eTemp, startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { infoPathOf } from './support/mcp-client.mjs';
-import { answerGate, assistantPane, assistantStatus, openAssistantStep, openCard, resetAssistant, saveKey } from './support/assistant.js';
+import { answerGate, assistantPane, dockGate, assistantStatus, openAssistantStep, openCard, resetAssistant, saveKey } from './support/assistant.js';
 import { expect, test } from './support/stress.js';
 
 const WIN = process.platform === 'win32';
@@ -1161,7 +1161,7 @@ test("a turn on Claude Code (its own tools off) works in the open workspace thro
     usd: 0,
   });
   await expect(w.frame.locator('#counter')).toHaveText('2');
-  await expect(modal(page)).toBeHidden();
+  await expect(dockGate(page)).toBeHidden();
   expect(ofType(events, 'agent')).toEqual([expect.objectContaining({ name: 'Claude Code', version: CLAUDE.version, own_tools: 'off' })]);
   expect(ofType(events, 'plan')).toEqual([expect.objectContaining({ entries: [{ content: 'Add 2 to the counter', status: 'in_progress', priority: 'high' }] })]);
   // Its permission request for Magnusim's tool: allowed by Magnusim (its own question covers it), never asked.
@@ -1245,15 +1245,15 @@ test("a destructive tool asks in the app with Don't focused: Enter answers Don't
   const token = await launchToken(request);
   const w = await openCounter(page, request);
   const counter = w.frame.locator('#counter');
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   fake.script({ call: { tool: `${PLUGIN}__add`, args: { by: 2 } } }, { call: { tool: `${PLUGIN}__reset` } }, { say: 'It was not reset.' });
   const t1 = await agentTurn(request, { text: 'Add 2, then reset the counter.', tab: w.tab, provider: 'agent:claude' }, token);
   await expect(dialog).toBeVisible({ timeout: 30_000 });
   await expect(counter).toHaveText('2');
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to reset the counter?');
   // The tool's own confirm note says what the call does, as for any turn's question.
-  await expect(page.locator('#cf-copy')).toContainText('· Sets the counter to 0; add can bring it back. What it sent: {}. Nothing runs until you choose.');
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText('· Sets the counter to 0; add can bring it back. What it sent: {}. Nothing runs until you choose.');
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(dialog).toBeHidden();
   const e1 = await t1.ended(60_000);
@@ -1268,8 +1268,8 @@ test("a destructive tool asks in the app with Don't focused: Enter answers Don't
   fake.script({ call: { tool: `${PLUGIN}__reset` } }, { say: 'Reset.' });
   const t2 = await agentTurn(request, { text: 'Reset it now.', conversation: t1.conversation, tab: w.tab }, token);
   await expect(dialog).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator('#cf-cancel')).toBeFocused();
-  await page.locator('#cf-confirm').click();
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
   await expect(dialog).toBeHidden();
   const e2 = await t2.ended(60_000);
   expect(e2.turn).toMatchObject({ state: 'done', provider: 'agent:claude' });
@@ -1284,18 +1284,18 @@ test("the agent's own tool: a custom agent's request is a question only the app'
   const w = await openCounter(page, request);
   const id = await addCustom(page, { allow: true });
   const token = await launchToken(request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   customFake.script({ askOwn: { title: 'Run the build script', kind: 'execute', rawInput: { command: 'npm run build' } } }, { say: 'I did not run it.' });
   const t = await agentTurn(request, { text: 'Build it.', tab: w.tab, provider: `agent:${id}` }, token);
   const gate = (await t.waitFor((e) => e.type === 'gate', 'the question')).gate;
   expect(gate).toMatchObject({ kind: 'confirm', link_only: true, title: `Let ${CUSTOM_NAME} use its own tool (execute)?`, yes: 'Allow once', no: "Don't", source: `${CUSTOM_NAME} (its own tool)` });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText(`Let ${CUSTOM_NAME} use its own tool (execute)?`);
-  await expect(page.locator('#cf-copy')).toContainText(`${CUSTOM_NAME} asks to use one of its own tools. Magnusim can't see or check what it does on this PC. As the agent describes it: Run the build script.`);
-  await expect(page.locator('#cf-copy')).toContainText('npm run build');
-  await expect(page.locator('#cf-confirm')).toHaveText('Allow once');
-  await expect(page.locator('#cf-cancel')).toHaveText("Don't");
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText(`Let ${CUSTOM_NAME} use its own tool (execute)?`);
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText(`${CUSTOM_NAME} asks to use one of its own tools. Magnusim can't see or check what it does on this PC. As the agent describes it: Run the build script.`);
+  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText('npm run build');
+  await expect(dockGate(page).locator('[data-gate-answer="yes"]')).toHaveText('Allow once');
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toHaveText("Don't");
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
   // The program that started the turn holds its answer key, but this question is the window's only.
   const byKey = await request.post(api(`/api/assistant/gates/${gate.id}`), { data: { allow: true, answer_key: t.answerKey } });
   expect(byKey.status()).toBe(403);
@@ -1321,17 +1321,17 @@ test("privacy Ask for destination agent:claude: the question shows in the app be
   await postOk(request, '/api/assistant/settings', { privacy: 'ask', forget_consents: true });
   const token = await launchToken(request);
   const w = await openCounter(page, request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   const starts = fake.pids('agent').length;
   const t1 = await agentTurn(request, { text: 'Read the counter.', tab: w.tab, provider: 'agent:claude' }, token);
   const gate = (await t1.waitFor((e) => e.type === 'gate', 'the privacy question')).gate;
   expect(gate).toMatchObject({ kind: 'privacy', link_only: true, title: `Send project "${PROJECT_TITLE}" to Claude Code?`, yes: 'Send', no: "Don't send" });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText(`Send project "${PROJECT_TITLE}" to Claude Code?`);
-  await expect(page.locator('#cf-copy')).toHaveText(
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText(`Send project "${PROJECT_TITLE}" to Claude Code?`);
+  await expect(dockGate(page).locator('.dock-gate-copy')).toHaveText(
     "The Assistant's coding agent, Claude Code, is about to read this project's names, settings, results and pictures of the open workspace and send them to its own service under your account. Settings → Assistant can change this.",
   );
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
   expect(fake.pids('agent').length, 'no agent started before the answer').toBe(starts);
   const byKey = await request.post(api(`/api/assistant/gates/${gate.id}`), { data: { allow: true, answer_key: t1.answerKey } });
   expect(byKey.status()).toBe(403);
@@ -1403,7 +1403,7 @@ test("Stop while the agent's own question is open: the question goes, the agent 
   const w = await openCounter(page, request);
   const id = await addCustom(page, { allow: true });
   const token = await launchToken(request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   // After its question it waits (a cancel ends the wait): nothing it says comes between the cancelled answer and the cancel.
   customFake.script({ askOwn: { title: 'Delete the build folder', kind: 'delete', rawInput: { path: 'build' } } }, { hold: 'after-the-question' }, { say: 'Never said.' });
   const t = await agentTurn(request, { text: 'Clean up.', tab: w.tab, provider: `agent:${id}` }, token);
@@ -1500,7 +1500,13 @@ test("a hidden tab keeps its link through an agent's tool call: past the page's 
   fake.script({ call: { tool: `${PLUGIN}__slow_add`, args: { by: 4 } } }, { say: 'Added 4.' });
   const t = await agentTurn(request, { text: 'Add 4 slowly.', tab: w.tab, provider: 'agent:claude' }, token);
   const call = await slowRunning(t, w);
-  const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
+  // The tab's relay channel: its channels of kind assistant less the turn channels the app's
+  // Assistant panel opens to show the request bound to the tab.
+  const assistantChannels = async () => {
+    const all = ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
+    const turns = ((await (await request.get(api('/api/test/assistant/state'))).json()).turn_channels || {})[w.tab] || 0;
+    return all - turns;
+  };
   await setHidden(page, true);
   // Monotonic, on this side only: a wall clock can step back (WSL resyncs its clock under load),
   // and an event's `at` is the server's clock.

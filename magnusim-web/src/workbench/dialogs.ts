@@ -7,6 +7,7 @@
  * when its turn comes; true drops it unseen (confirm false, prompt null).
  * A key press answers one dialog only: Enter and Escape are handled once.
  */
+import { guardYes, YES_GUARD_MS } from './guardedYes';
 
 /** What every dialog takes besides its text. */
 export interface DialogOpts {
@@ -40,8 +41,8 @@ export interface ConfirmOpts extends DialogOpts {
   guard?: boolean;
 }
 
-/** How long a guarded dialog's Yes stays disabled once it is shown. */
-export const YES_GUARD_MS = 500;
+/** How long a guarded dialog's Yes stays disabled once it is shown (guardedYes.ts, shared with the dock's question card). */
+export { YES_GUARD_MS };
 
 export interface PromptOpts extends DialogOpts {
   title?: string;
@@ -163,24 +164,11 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
   modal.hidden = false;
   return new Promise<boolean>((resolve) => {
     // A guarded Yes: disabled at first; then only a press that began on it once it was enabled.
-    const yesButton = guard && yes instanceof HTMLButtonElement ? yes : null;
-    let armed = !guard;
-    let pressed = false;
-    let armTimer: ReturnType<typeof setTimeout> | null = null;
-    if (guard) {
-      if (yesButton) yesButton.disabled = true;
-      armTimer = setTimeout(() => {
-        armTimer = null;
-        armed = true;
-        if (yesButton) yesButton.disabled = false;
-      }, YES_GUARD_MS);
-    }
+    const guarded = guard ? guardYes(yes instanceof HTMLButtonElement ? yes : null) : null;
     const done = (ok: boolean) => {
       modal.hidden = true;
-      if (armTimer) clearTimeout(armTimer);
       // The same button serves the next dialog.
-      if (yesButton) yesButton.disabled = false;
-      yes?.removeEventListener('pointerdown', onPress);
+      guarded?.dispose();
       if (no) {
         no.hidden = false;
         no.textContent = NO_LABEL;
@@ -192,14 +180,9 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
       o.signal?.removeEventListener('abort', onNo);
       resolve(ok);
     };
-    const onPress = () => {
-      pressed = armed;
-    };
     const onYes = (e?: MouseEvent) => {
-      // Guarded: not before it is enabled, not a click whose press began before that (a key on it,
-      // detail 0, has no press; Enter has no click), and never the second click of a double-click.
-      const detail = e?.detail ?? 0;
-      if (guard && (!armed || detail > 1 || (detail > 0 && !pressed))) return;
+      // Guarded (guardedYes.ts): a deliberate click only; Enter has no click here.
+      if (guarded && !guarded.accepts(e)) return;
       done(true);
     };
     const onNo = () => done(false);
@@ -213,7 +196,6 @@ function showConfirm(o: ConfirmOpts): Promise<boolean> {
       if (e.key === 'Escape' || safe) onNo();
       else onYes();
     };
-    yes?.addEventListener('pointerdown', onPress);
     yes?.addEventListener('click', onYes);
     no?.addEventListener('click', onNo);
     backdrop?.addEventListener('click', onNo);

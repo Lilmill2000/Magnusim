@@ -434,6 +434,10 @@ describe('what this tab started', () => {
     channels[0].frame('events', { events: [ev({ type: 'end', state: 'done', reason: 'done', message: null })], next: 2 });
     expect(answerKeyOf('t1')).toBeNull();
     expect(keptTurns()).toEqual(['t2']);
+    // A record the server no longer keeps lets its key go too.
+    watchTurn('t2');
+    channels[1].refuse(404);
+    expect(keptTurns()).toEqual([]);
   });
 
   it('a Stop sent says Stopping… on the pill too; the provider pick is kept per context', () => {

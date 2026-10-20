@@ -47,7 +47,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { answerGate, followTurn, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
+import { answerGate, dockGate, followTurn, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { GRAMMAR_TOO_LARGE, LLAMA_SERVER, startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
 import { startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
@@ -207,6 +207,16 @@ async function relayState(request) {
   return getJson(request, '/api/test/assistant/state');
 }
 
+/**
+ * The tab's relay channels on the server: its channels of kind `assistant` less the turn
+ * channels the app's Assistant panel opens to show a request bound to the tab.
+ */
+async function relayChannels(request, tab) {
+  const all = ((await serverStream(request, host, tab)) || { kinds: {} }).kinds.assistant || 0;
+  const turns = ((await relayState(request)).turn_channels || {})[tab] || 0;
+  return all - turns;
+}
+
 // ---------------------------------------------------------------- turns
 // (startTurn, followTurn, resultsIn, offeredTools and answerGate: support/assistant.js)
 
@@ -221,7 +231,6 @@ function refusedKeywords(schema, path = '') {
   return out;
 }
 
-const modal = (page) => page.locator('#modal-confirm');
 
 /** A slow call runs in the page: its progress reached the turn and the page shows it running. */
 async function slowRunning(t, w, by) {
@@ -278,16 +287,16 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
 test('cloud privacy is asked once per project: Enter sends nothing, Send runs and is remembered, Never send refuses the turn', async ({ page, request }) => {
   await postOk(request, '/api/assistant/settings', { privacy: 'ask', forget_consents: true });
   const w = await openCounter(page, request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   const before = chats().length;
 
   // Enter on the question: Don't send.
   const t1 = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText(`Send project "${PROJECT_TITLE}" to Anthropic?`);
-  await expect(page.locator('#cf-confirm')).toHaveText('Send');
-  await expect(page.locator('#cf-cancel')).toHaveText("Don't send");
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText(`Send project "${PROJECT_TITLE}" to Anthropic?`);
+  await expect(dockGate(page).locator('[data-gate-answer="yes"]')).toHaveText('Send');
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toHaveText("Don't send");
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(dialog).toBeHidden();
   const e1 = await t1.ended();
@@ -300,7 +309,7 @@ test('cloud privacy is asked once per project: Enter sends nothing, Send runs an
   fake.reply({ text: 'The counter is 0.' });
   const t2 = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
-  await page.locator('#cf-confirm').click();
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
   await expect(dialog).toBeHidden();
   expect((await t2.ended()).turn.state).toBe('done');
   expect(chats().length).toBe(before + 1);
@@ -330,7 +339,7 @@ test('an edit tool runs without asking: the counter reads 2 and the model gets i
   const { turn, events } = await t.ended();
   expect(turn.state).toBe('done');
   await expect(w.frame.locator('#counter')).toHaveText('2');
-  await expect(modal(page)).toBeHidden();
+  await expect(dockGate(page)).toBeHidden();
   expect(ofType(events, 'gate')).toEqual([]);
   // The person reads the workspace's title, the model its key.
   expect(ofType(events, 'tool_call')[0]).toMatchObject({ tool: `${PLUGIN}__add`, risk: 'edit', source: `${PLUGIN_NAME} (Counter)` });
@@ -347,18 +356,18 @@ test("a destructive tool asks first with Don't focused, in its confirm note's wo
   request,
 }) => {
   const w = await openCounter(page, request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   const before = chats().length;
 
   fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'I left it at 2.' });
   const t1 = await startTurn(request, host.base, { text: 'Add 2, then reset the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
   await expect(w.frame.locator('#counter')).toHaveText('2');
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
-  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · ${RESET_NOTE} What it sent: {}. Nothing runs until you choose.`, STEP);
-  await expect(page.locator('#cf-confirm')).toHaveText('Allow');
-  await expect(page.locator('#cf-cancel')).toHaveText("Don't");
-  await expect(page.locator('#cf-cancel')).toBeFocused();
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to reset the counter?');
+  await expect(dockGate(page).locator('.dock-gate-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · ${RESET_NOTE} What it sent: {}. Nothing runs until you choose.`, STEP);
+  await expect(dockGate(page).locator('[data-gate-answer="yes"]')).toHaveText('Allow');
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toHaveText("Don't");
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(dialog).toBeHidden();
   const e1 = await t1.ended();
@@ -372,8 +381,8 @@ test("a destructive tool asks first with Don't focused, in its confirm note's wo
   fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset.' });
   const t2 = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w.tab });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-cancel')).toBeFocused();
-  await page.locator('#cf-confirm').click();
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
   expect((await t2.ended()).turn.state).toBe('done');
   await expect(w.frame.locator('#counter')).toHaveText('0');
 
@@ -381,11 +390,11 @@ test("a destructive tool asks first with Don't focused, in its confirm note's wo
   fake.reply({ tools: [{ name: `${PLUGIN}__mystery`, input: {} }] }, { text: 'Nothing happened.' });
   const t3 = await startTurn(request, host.base, { text: 'Do the mystery thing.', tab: w.tab });
   await expect(dialog).toBeVisible();
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?');
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to do the mystery thing?');
   // No confirm note: the question says it can't be undone.
-  await expect(page.locator('#cf-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.`, STEP);
-  await expect(page.locator('#cf-cancel')).toBeFocused();
-  await page.locator('#cf-confirm').click();
+  await expect(dockGate(page).locator('.dock-gate-copy')).toHaveText(`${PLUGIN_NAME} (Counter) · can't be undone. What it sent: {}. Nothing runs until you choose.`, STEP);
+  await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
+  await dockGate(page).locator('[data-gate-answer="yes"]').click();
   const e3 = await t3.ended();
   expect(e3.turn.state).toBe('done');
   expect(ofType(e3.events, 'gate')[0].gate).toMatchObject({ risk: 'destructive', tool: `${PLUGIN}__mystery` });
@@ -407,21 +416,21 @@ test("a destructive tool asks first with Don't focused, in its confirm note's wo
 
 test('a double-click on Allow answers one question only: the one asked right behind it, under the pointer, stays open until a click of its own', async ({ page, request }) => {
   const w = await openCounter(page, request);
-  const dialog = modal(page);
+  const dialog = dockGate(page);
   const before = chats().length;
   fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }, { name: `${PLUGIN}__mystery`, input: {} }] }, { text: 'Reset; the mystery thing is not done.' });
   const t = await startTurn(request, host.base, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to reset the counter?');
   // Allow is off for its first moment on screen.
-  await expect(page.locator('#cf-confirm')).toBeEnabled();
+  await expect(dockGate(page).locator('[data-gate-answer="yes"]')).toBeEnabled();
   const centre = async () => {
-    const box = await page.locator('#cf-confirm').boundingBox();
+    const box = await dockGate(page).locator('[data-gate-answer="yes"]').boundingBox();
     return [box.x + box.width / 2, box.y + box.height / 2];
   };
   // A double-click: its first click allows reset ...
   await page.mouse.click(...(await centre()));
   // ... the next question opens in its place, and the double-click's second click lands on its Allow.
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?');
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to do the mystery thing?');
   await page.mouse.move(...(await centre()));
   await page.mouse.down({ clickCount: 2 });
   await page.mouse.up({ clickCount: 2 });
@@ -429,7 +438,7 @@ test('a double-click on Allow answers one question only: the one asked right beh
   expect(ofType(await t.latest(), 'gate_closed').map((e) => e.answer)).toEqual(['allow']);
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => c.tool))).toEqual(['reset']);
   // Only a click of its own answers it (the press may have taken the focus from Don't; Enter answers Don't anyway).
-  await page.locator('#cf-cancel').click();
+  await dockGate(page).locator('[data-gate-answer="no"]').click();
   await expect(dialog).toBeHidden();
   const { turn, events } = await t.ended();
   expect(turn.state).toBe('done');
@@ -603,7 +612,7 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     };
   });
   const w = await openCounter(page, request);
-  const assistantChannels = async (tab) => ((await serverStream(request, host, tab)) || { kinds: {} }).kinds.assistant || 0;
+  const assistantChannels = (tab) => relayChannels(request, tab);
   const registerAgain = (x) => x.handle.evaluate(() => window.__register());
   // Every list a page sends after its plugin went off: none may be, until a new page.
   let listsSent = [];
@@ -666,13 +675,13 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     // keeps no channel for a page with nothing to offer.)
     fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'I left it.' });
     const asking = await startTurn(request, host.base, { text: 'Reset the counter.', tab: w2.tab });
-    await expect(modal(page)).toBeVisible();
-    await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?');
+    await expect(dockGate(page)).toBeVisible();
+    await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to reset the counter?');
     await turnOff();
     await expect.poll(() => tabRow(request, w2.tab), { message: 'its tools go' }).toBeNull();
     expect((await relayState(request)).links[w2.tab]).toMatchObject({ pending: 0, tools: 0 });
     expect(await assistantChannels(w2.tab), 'kept for the open question').toBe(1);
-    await expect(modal(page)).toBeVisible();
+    await expect(dockGate(page)).toBeVisible();
 
     // The stream drops and comes back: on the new link the page sends nothing of the dead frame,
     // and the server lists nothing of it.
@@ -684,9 +693,9 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     expect(await tabRow(request, w2.tab)).toBeNull();
     expect(listsSent, 'no list sent on the new link').toEqual([]);
     // The question came back on the new link: still one dialog, answered there.
-    await expect(modal(page)).toBeVisible();
-    await page.locator('#cf-cancel').click();
-    await expect(modal(page)).toBeHidden();
+    await expect(dockGate(page)).toBeVisible();
+    await dockGate(page).locator('[data-gate-answer="no"]').click();
+    await expect(dockGate(page)).toBeHidden();
     expect((await asking.ended()).turn.state).toBe('done');
     await expect(w2.frame.locator('#counter')).toHaveText('0');
     // With nothing of this page left on the server, its channel goes; the frame registering
@@ -712,7 +721,7 @@ test('a hidden tab keeps its stream for a running call and for the hold after th
   fake.reply({ tools: [{ name: `${PLUGIN}__slow_add`, input: { by: 4 } }] }, { text: 'Added 4.' });
   const t = await startTurn(request, host.base, { text: 'Add 4 slowly.', tab: w.tab });
   const { call } = await slowRunning(t, w, 4);
-  const assistantChannels = async () => ((await serverStream(request, host, w.tab)) || { kinds: {} }).kinds.assistant || 0;
+  const assistantChannels = () => relayChannels(request, w.tab);
 
   // Hidden while the call runs: past the page's own grace, the channel is still there.
   await setHidden(page, true);
@@ -768,14 +777,14 @@ test('two tabs: a turn bound to one changes only that one', async ({ page, reque
     // A question of a turn bound to B shows in B only.
     fake.reply({ tools: [{ name: `${PLUGIN}__reset`, input: {} }] }, { text: 'Reset.' });
     const t = await startTurn(request, host.base, { text: 'Reset the counter.', tab: b.tab });
-    await expect(modal(other)).toBeVisible();
-    await expect(other.locator('#cf-cancel')).toBeFocused();
-    await expect(modal(page)).toBeHidden();
-    await other.locator('#cf-confirm').click();
+    await expect(dockGate(other)).toBeVisible();
+    await expect(dockGate(other).locator('[data-gate-answer="no"]')).toBeFocused();
+    await expect(dockGate(page)).toBeHidden();
+    await dockGate(other).locator('[data-gate-answer="yes"]').click();
     expect((await t.ended()).turn.state).toBe('done');
     await expect(b.frame.locator('#counter')).toHaveText('0');
     await expect(a.frame.locator('#counter')).toHaveText('3');
-    await expect(modal(page)).toBeHidden();
+    await expect(dockGate(page)).toBeHidden();
     expect(await a.handle.evaluate(() => window.__aiCalls.length)).toBe(1);
     expect(await b.handle.evaluate(() => window.__aiCalls.length)).toBe(2);
   } finally {
@@ -817,7 +826,7 @@ test('one turn per app tab: a second one while it works is refused (409 tab_busy
   expect((await relayState(request)).running).toBe(1);
   expect(await w.handle.evaluate(() => window.__aiCalls.map((c) => [c.tool, c.turn]))).toEqual([['slow_add', t.id]]);
   await expect(w.frame.locator('#slow')).toHaveText('running');
-  await expect(modal(page)).toBeHidden();
+  await expect(dockGate(page)).toBeHidden();
   // Let go, the first turn ends as its own.
   expect(await w.handle.evaluate(() => window.__release())).toBe(true);
   expect((await t.ended()).turn.state).toBe('done');
@@ -1184,11 +1193,11 @@ test('the terminal client binds a turn to the only connected tab (--tab auto); i
   cli.stderr.on('data', (b) => (out += b));
   const exited = new Promise((done) => cli.once('exit', done));
   try {
-    await expect(modal(page)).toBeVisible({ timeout: 30_000 });
+    await expect(dockGate(page)).toBeVisible({ timeout: 30_000 });
     await expect(w.frame.locator('#counter')).toHaveText('7');
-    await expect(page.locator('#cf-cancel')).toBeFocused();
+    await expect(dockGate(page).locator('[data-gate-answer="no"]')).toBeFocused();
     await expect.poll(() => out, { message: 'the terminal asks too' }).toContain('waiting for an answer in the app; you can also answer here');
-    await page.locator('#cf-confirm').click();
+    await dockGate(page).locator('[data-gate-answer="yes"]').click();
     expect(await exited, out).toBe(0);
   } finally {
     cli.kill();
@@ -1238,15 +1247,15 @@ test("the scripted model on the local server answers from the request: each step
     (body) => ({ text: resultsIn(body).map((r) => `${r.tool}: ${r.ok ? 'ok' : r.error.code}`).join('; ') }),
   );
   const t2 = await startTurn(request, host.base, { text: 'Reset the counter, then do the mystery thing.', tab: w.tab });
-  await expect(modal(page)).toBeVisible(STEP);
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to reset the counter?', STEP);
+  await expect(dockGate(page)).toBeVisible(STEP);
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to reset the counter?', STEP);
   const first = await answerGate(request, host.base, t2, true, { kind: 'confirm', tool: `${PLUGIN}__reset` });
   expect(first).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__reset`, yes: 'Allow', no: "Don't" });
-  await expect(page.locator('#cf-heading')).toHaveText('Allow the Assistant to do the mystery thing?', STEP);
-  await expect(modal(page)).toBeVisible();
+  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to do the mystery thing?', STEP);
+  await expect(dockGate(page)).toBeVisible();
   const second = await answerGate(request, host.base, t2, false);
   expect(second).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__mystery` });
-  await expect(modal(page)).toBeHidden(STEP);
+  await expect(dockGate(page)).toBeHidden(STEP);
   const e2 = await t2.ended();
   expect(e2.turn.state).toBe('done');
   expect(ofType(e2.events, 'gate_closed').map((e) => [e.gate, e.answer, e.by])).toEqual([
@@ -1269,14 +1278,14 @@ test("the shared answerGate answers as the app takes answers: with the turn's an
   const j = await r.json();
   expect(r.status(), JSON.stringify(j)).toBe(202);
   const t = followTurn(request, host.base, j.turn);
-  await expect(modal(page)).toBeVisible(STEP);
+  await expect(dockGate(page)).toBeVisible(STEP);
   await expect(w.frame.locator('#counter')).toHaveText('4', STEP);
   await expect(answerGate(request, host.base, t, true)).rejects.toThrow(/this turn has no answer key/);
-  await expect(modal(page)).toBeVisible();
+  await expect(dockGate(page)).toBeVisible();
   expect(ofType(await t.latest(), 'gate_closed'), 'still open: nothing was sent').toEqual([]);
   const gate = await answerGate(request, host.base, t, true, { page });
   expect(gate).toMatchObject({ kind: 'confirm', tool: `${PLUGIN}__reset` });
-  await expect(modal(page)).toBeHidden(STEP);
+  await expect(dockGate(page)).toBeHidden(STEP);
   const { turn, events } = await t.ended();
   expect(turn.state).toBe('done');
   expect(ofType(events, 'gate_closed').map((e) => [e.gate, e.answer, e.by])).toEqual([[gate.id, 'allow', 'user']]);

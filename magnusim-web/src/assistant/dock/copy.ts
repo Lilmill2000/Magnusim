@@ -236,6 +236,16 @@ export const LOG_DROPPED = "This request's details are no longer kept.";
 export const QUESTIONS_ELSEWHERE = 'Its questions show in the window that started it.';
 export const QUESTION_ELSEWHERE = 'Its question shows in the window that started it.';
 
+// ---------------------------------------------------------------- the question card (4.3, 4.6)
+
+export const ANSWER_HERE_ONLY = 'Answer here only';
+export const PROJECT_DATA = 'Project data';
+export const PRIVACY_SETTINGS = 'Privacy settings';
+export const askedOutside = (title: string): string => `Asked by a request started outside this window: "${title}"`;
+export const ASKED_BY_APP = 'Asked by another app on this PC.';
+export const closesIn = (minutes: number): string => (minutes < 1 ? 'Closes in under a minute' : `Closes in ${minutes} min`);
+export const gateHelp = (no: string, yes: string): string => `Enter or Escape answers “${no}”. “${yes}” takes a click, or Tab then Space.`;
+
 // ---------------------------------------------------------------- questions in the transcript (4.5)
 
 export const gateAsked = (title: string): string => `Asked: ${title}`;

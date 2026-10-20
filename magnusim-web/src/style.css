@@ -5930,6 +5930,51 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 .dock-readonly { display: flex; flex-direction: column; gap: var(--mg-space-2); }
 .dock-readonly p { margin: 0; }
 .dock-readonly-actions { display: flex; flex-wrap: wrap; gap: var(--mg-space-2); }
+/* ---- The Assistant's questions in the dock (phase 4, 4.3): one card per question ---- */
+.assistant-dock-questions {
+  flex-shrink: 0;
+  max-height: 60%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-2);
+  padding: var(--mg-space-2) var(--mg-space-3);
+  border-bottom: 1px solid var(--mg-divider);
+}
+.dock-gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mg-space-1);
+  padding: var(--mg-space-3);
+  border: 1px solid var(--mg-warning);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-warning-bg);
+}
+.dock-gate-badges { display: flex; flex-wrap: wrap; gap: var(--mg-space-1); }
+.dock-gate-title { margin: 0; font-size: var(--mg-text-md); font-weight: var(--mg-weight-semibold); color: var(--mg-text-strong); overflow-wrap: anywhere; }
+.dock-gate-copy { margin: 0; color: var(--mg-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dock-gate-detail { display: grid; grid-template-columns: max-content 1fr; gap: 2px var(--mg-space-2); margin: 0; font-size: var(--mg-text-sm); }
+.dock-gate-detail > div { display: contents; }
+.dock-gate-detail dt { color: var(--mg-text-muted); }
+.dock-gate-detail dd { margin: 0; overflow-wrap: anywhere; }
+.dock-gate-footer, .dock-gate-help { margin: 0; font-size: var(--mg-text-xs); }
+.dock-gate-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--mg-space-2); margin-top: var(--mg-space-1); }
+.dock-gate-no, .dock-gate-yes {
+  min-height: 28px;
+  padding: 0 var(--mg-space-3);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  font: inherit;
+  font-size: var(--mg-text-sm);
+  cursor: pointer;
+}
+.dock-gate-yes { border-color: var(--mg-primary); background: var(--mg-primary); color: var(--mg-primary-text); }
+.dock-gate-yes:hover:not(:disabled) { background: var(--mg-primary-hover); }
+.dock-gate-yes:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
+.dock-gate-no:focus-visible, .dock-gate-yes:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 2px; }
+.dock-gate-no:focus { outline: 2px solid var(--mg-focus); outline-offset: 2px; }
 .ws-menu-host:empty { display: none; }
 .ws-menu { position: relative; }
 .ws-menu-list {

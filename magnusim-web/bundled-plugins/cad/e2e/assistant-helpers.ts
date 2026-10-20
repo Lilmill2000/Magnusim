@@ -189,6 +189,8 @@ export const forcePace = (page: Page, pace: 'watch' | 'fast' | null, scale: numb
 
 /** The keyboard in the frame: a click on an empty corner of the view (it only looks, in a sketch too). */
 export async function keyboardInFrame(page: Page, frame: FrameLocator): Promise<void> {
+  // The app's Assistant panel (it opens for a question) may cover the view's corner: closed first.
+  if (await page.locator('#assistant-dock').isVisible()) await page.locator('#assistant-dock [data-dock-close]').click();
   const box = (await frame.locator('[data-cad-viewport] canvas').boundingBox())!;
   await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
 }

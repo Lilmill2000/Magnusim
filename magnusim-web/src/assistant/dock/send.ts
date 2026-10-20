@@ -14,9 +14,16 @@ import { withAssistantLink } from '../relay';
 import type { TurnStarted, TurnSummary } from '../wire';
 import type { DockPlace } from './context';
 import type { PreparedPicture } from './pictures';
-import { addLocalTurn, keepAnswerKey, keepTurn, markStopSent, refreshConversations, setLocalPictures, showConversation, watchTurn } from './store';
+import { addLocalTurn, dropAnswerKey, keepAnswerKey, keepTurn, markStopSent, refreshConversations, setLocalPictures, showConversation, watchTurn } from './store';
 
 export const TURNS_PATH = '/api/assistant/turns';
+
+/** Turns this page started (since it loaded): their questions show here already. */
+const started = new Set<string>();
+
+export function startedHere(turn: string): boolean {
+  return started.has(turn);
+}
 
 export interface DockSend {
   text: string;
@@ -68,14 +75,32 @@ export async function postTurn(body: Record<string, unknown>): Promise<TurnStart
  * followed and announced, its pictures as this tab's own copies, the list read again.
  */
 export async function startDockTurn(s: DockSend): Promise<TurnStarted> {
-  const started = await postTurn(turnBody(s));
-  keepAnswerKey(started.turn, started.answer_key);
-  if (s.pictures.length) setLocalPictures(started.turn, s.pictures.map((p) => URL.createObjectURL(p.blob)));
-  addLocalTurn(started.conversation, started.turn);
-  if (!s.conversation) showConversation(started.conversation);
-  watchTurn(started.turn, { announce: true });
+  const got = await postTurn(turnBody(s));
+  started.add(got.turn);
+  keepAnswerKey(got.turn, got.answer_key);
+  if (s.pictures.length) setLocalPictures(got.turn, s.pictures.map((p) => URL.createObjectURL(p.blob)));
+  addLocalTurn(got.conversation, got.turn);
+  if (!s.conversation) showConversation(got.conversation);
+  watchTurn(got.turn, { announce: true });
   void refreshConversations();
-  return started;
+  return got;
+}
+
+/**
+ * After a reload: a running request this tab started (its answer key kept) shows its open
+ * questions in this tab again, on its live link (POST /turns/:id/show). The key only proves who
+ * started it; the questions are answered through the relay as always. A key the server refuses,
+ * or a request that ended, is forgotten; one shown in another window stays there.
+ */
+export async function showHere(turn: string, answerKey: string): Promise<void> {
+  try {
+    await withAssistantLink(async (link) => {
+      if (!link) return null;
+      return assistantPost(`${TURNS_PATH}/${encodeURIComponent(turn)}/show`, { link, answer_key: answerKey });
+    });
+  } catch (err) {
+    if (err instanceof AssistantApiError && (err.code === 'answer_key' || err.code === 'ended' || err.status === 404)) dropAnswerKey(turn);
+  }
 }
 
 /**
