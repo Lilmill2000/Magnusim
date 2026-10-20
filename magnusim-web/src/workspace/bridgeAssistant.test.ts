@@ -1316,10 +1316,13 @@ describe("undo from the app's Assistant panel, and its key (1.9, unreleased)", (
     t.end();
   });
 
-  it("refused leaving while the page's exit hook runs", async () => {
+  it("refused busy while the frame is covered, and leaving while the page's exit hook runs", async () => {
     const t = await connected(undoHooks());
     t.bridge.assistantTurn(ENDED);
     await t.call('assistant.undoable', { turn: 't-1', label: 'Assistant: add 2' });
+    t.frame.inert = true;
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'busy' });
+    t.frame.inert = false;
     await t.call('nav.leaveHook', { on: true });
     void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: () => undefined });
     await settle(() => of(t.events, 'leave').length === 1, 'the leave');

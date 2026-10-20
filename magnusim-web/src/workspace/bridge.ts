@@ -2704,13 +2704,15 @@ export class WorkspaceBridge {
    * The app's Assistant panel asks the page to undo a turn's changes (1.9, unreleased): the event
    * `assistantUndo {req, turn}`, then the page's assistant.undone. Refused at once, with nothing
    * sent, when there is no page (`closed`) or calls.undoRefusal says why (`not_offered`, `leaving`,
-   * `busy`); `no_answer` after ASSISTANT_UNDO_WAIT_MS, `closed` when the channel ends first.
+   * `busy`), and `busy` while the frame is covered (the app's dialog over it: the page may be in
+   * the middle of something); `no_answer` after ASSISTANT_UNDO_WAIT_MS, `closed` when the channel
+   * ends first.
    */
   assistantUndo(turn: string): Promise<AssistantUndoAnswer> {
     const ch = this.channel;
     if (!ch || !ch.welcomed) return Promise.resolve({ undone: false, reason: 'closed' });
     const id = String(turn);
-    const why = this.calls.undoRefusal(id);
+    const why = this.calls.undoRefusal(id) ?? (this.frame.inert ? 'busy' : null);
     if (why) return Promise.resolve({ undone: false, reason: why });
     const req = `undo-${++this.undoSerial}`;
     const answer = this.calls.beginUndo(req, id);
