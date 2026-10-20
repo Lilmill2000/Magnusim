@@ -67,11 +67,11 @@ const PROBE_STEPS = [{ tools: [{ name: 'cad__get_model', input: { detail: 'brief
 
 const USAGE = `node eval/run.mjs --tasks <ids|all|probe> [--runs N] [--label text] (--profile <file> | --attach <url> | --scripted)
   [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean] [--out <dir>] [--no-repair]
-  [--port-from <n>] [--turn-minutes <n>] [--reference <file>]... [--review on|off]`;
+  [--port-from <n>] [--turn-minutes <n>] [--reference <file>]... [--review on|off] [--keep-open]`;
 
-/** The command line, checked: {tasks, runs, label, driver, profile, attach, tab, toolset, pace, headed, clean, out, repair, portFrom, turnMs, references, review}. */
+/** The command line, checked: {tasks, runs, label, driver, profile, attach, tab, toolset, pace, headed, clean, out, repair, keepOpen, portFrom, turnMs, references, review}. */
 export function parseArgs(argv) {
-  const o = { tasks: 'all', runs: 1, label: '', driver: null, profile: null, attach: null, tab: null, toolset: 'all', pace: 'fast', headed: false, clean: false, out: null, repair: true, portFrom: null, turnMs: TURN_MS, references: [], review: true, help: false };
+  const o = { tasks: 'all', runs: 1, label: '', driver: null, profile: null, attach: null, tab: null, toolset: 'all', pace: 'fast', headed: false, clean: false, out: null, repair: true, keepOpen: false, portFrom: null, turnMs: TURN_MS, references: [], review: true, help: false };
   const drivers = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -127,6 +127,9 @@ export function parseArgs(argv) {
         break;
       case '--no-repair':
         o.repair = false;
+        break;
+      case '--keep-open':
+        o.keepOpen = true;
         break;
       case '--port-from': {
         const n = Number(value());
@@ -388,6 +391,17 @@ async function main(argv) {
           say(`could not remove project ${id}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
+    }
+    // --keep-open: leave the window and its app server up until the person presses Enter here.
+    if (o.keepOpen && stops.length && process.stdin.isTTY) {
+      say('done: the window stays open. Press Enter here to close it and stop the app server.');
+      await new Promise((done) => {
+        process.stdin.resume();
+        process.stdin.once('data', () => {
+          process.stdin.pause();
+          done();
+        });
+      });
     }
     for (const stop of stops) {
       try {

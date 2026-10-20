@@ -67,8 +67,9 @@ the turns to that tab; it must show the project the run made, else the task, or 
 stops before its first turn; by default the tab whose registration names it, never "auto"),
 `--no-repair`, `--out <dir>`, `--port-from <n>`, `--turn-minutes <n>`, `--reference <file>`
 (a PNG, JPEG or WebP picture kept **outside the repository**, up to 4, sent with each task's first
-request as the person's reference picture; `runs.jsonl` records only its path and SHA-256), and
-`--review off` (the Part asks for no review rounds: an A/B against the default `on`).
+request as the person's reference picture; `runs.jsonl` records only its path and SHA-256),
+`--review off` (the Part asks for no review rounds: an A/B against the default `on`) and
+`--keep-open` (at the end, leave the window and the run's app server up until Enter is pressed in the terminal).
 
 `--tasks probe` sends one request with the Part's full tool set (the app's 3 tools and the Part's
 18) and records how many strict schemas the provider took (`probe.json`: `strict` is

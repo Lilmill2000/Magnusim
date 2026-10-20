@@ -375,6 +375,8 @@ describe('the command line', () => {
     expect(parseArgs(['--scripted', '--tasks', 'plate-holes,flange', '--runs', '2', '--label', 'ci'])).toMatchObject({ driver: 'scripted', tasks: 'plate-holes,flange', runs: 2, label: 'ci', pace: 'fast', toolset: 'all', repair: true });
     expect(parseArgs(['--attach=http://127.0.0.1:8082/', '--tab', 'tab-1', '--clean', '--toolset', 'core', '--pace', 'watch', '--no-repair'])).toMatchObject({ driver: 'attach', attach: 'http://127.0.0.1:8082', tab: 'tab-1', clean: true, toolset: 'core', pace: 'watch', repair: false });
     expect(parseArgs(['--profile', 'x.json', '--headed', '--turn-minutes', '45'])).toMatchObject({ driver: 'profile', profile: 'x.json', headed: true, turnMs: 45 * 60_000 });
+    expect(parseArgs(['--profile', 'x.json', '--headed', '--keep-open'])).toMatchObject({ headed: true, keepOpen: true });
+    expect(parseArgs(['--scripted']).keepOpen).toBe(false);
     expect(() => parseArgs(['--tasks', 'all'])).toThrow(/choose one driver: --profile, --attach, --scripted/);
     expect(() => parseArgs(['--scripted', '--attach', 'http://127.0.0.1:1'])).toThrow(/choose one driver/);
     expect(() => parseArgs(['--scripted', '--tab', 't'])).toThrow(/--tab goes with --attach/);

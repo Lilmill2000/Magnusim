@@ -15,6 +15,7 @@ export interface RunArgs {
   clean: boolean;
   out: string | null;
   repair: boolean;
+  keepOpen: boolean;
   portFrom: number | null;
   turnMs: number;
   /** --reference files, as given (read with readReference). */
