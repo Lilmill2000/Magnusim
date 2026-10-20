@@ -373,3 +373,25 @@ test.describe('the dock', () => {
     }
   });
 });
+
+test("Home's header keeps every button in the window from 720 to 1000 px wide, the Assistant button included", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${host.base}/#/`);
+  await appReady(page);
+  for (const width of [720, 740, 760, 790, 820, 900, 1000]) {
+    await page.setViewportSize({ width, height: 800 });
+    const why = `at ${width}px`;
+    for (const sel of ['#home-new-project', '#home-new-folder', '#home-prefs', '#home-assistant', '#home-mark']) {
+      await expect(page.locator(sel), `${sel} ${why}`).toBeInViewport({ ratio: 1 });
+    }
+    const top = await page.locator('.home-top').evaluate((el) => [el.scrollWidth, el.clientWidth]);
+    expect(top[0], why).toBeLessThanOrEqual(top[1]);
+    const search = await page.locator('.home-search-wrap').boundingBox();
+    const actions = await page.locator('.home-top-actions').boundingBox();
+    expect(search.x + search.width, why).toBeLessThanOrEqual(actions.x);
+    expect(search.width, why).toBeGreaterThanOrEqual(120);
+    // Nothing in the actions runs into the next (a start button cut short stays in its place).
+    const boxes = await page.locator('.home-top-actions > button:visible, #home-start-host [data-home-start], #home-sample-host button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]).sort((a, b) => a[0] - b[0]));
+    for (let i = 1; i < boxes.length; i += 1) expect(boxes[i][0], `${why}: ${JSON.stringify(boxes)}`).toBeGreaterThanOrEqual(boxes[i - 1][1] - 0.5);
+  }
+});
