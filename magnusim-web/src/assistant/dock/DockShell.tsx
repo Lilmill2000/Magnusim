@@ -7,13 +7,16 @@
  * - `#assistant-dock` is always in the page; `hidden` while the dock isn't open (the
  *   workspace overlay watches that attribute to give the frame its keyboard back, HOST_UI).
  * - Escape inside the panel closes it, unless something inside used the key first
- *   (`preventDefault`: a question card answers No, a menu or the picture viewer closes).
+ *   (`preventDefault`: a question card answers No, a menu or the picture viewer closes); an
+ *   Escape that closed it goes no further (the workbench's own Escape keys, an armed pick).
+ * - Opening ends the workspace frame's full screen, where the dock can't be seen.
  * - Opening gives the keyboard to the entry: a `[data-dock-autofocus]` element, else the
  *   composer's text field, else the first button of the body, else the panel.
  * - The status is read again each time the dock opens.
  */
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { openSetupWizard } from '../../wizard/controller';
+import { exitFrameFullscreen } from '../../workspace/leaveGuard';
 import { refreshStatus, retryStatus, providerReady, useAssistantStatus, type StatusSnapshot } from '../status';
 import { ASSISTANT_SETTINGS, CLOSE_DOCK, DOCK_TITLE, OPEN_SETTINGS, REMOTE_TEXT, STATE_ERROR, STATE_LOADING, STATE_OFF, STOP, STOP_LABEL, TRY_AGAIN } from './copy';
 import { closeDock, openDock, useDock } from './dockState';
@@ -93,9 +96,11 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
   const shell = dockShellState(status);
   const state: DockState = shell ?? (content ? content.state : 'empty');
 
-  // Each opening reads the status again (a provider set up meanwhile, the server back).
+  // Each opening reads the status again and ends the frame's full screen.
   useEffect(() => {
-    if (dock.open) void refreshStatus();
+    if (!dock.open) return;
+    void refreshStatus();
+    void exitFrameFullscreen();
   }, [dock.open]);
 
   // The keyboard goes to the entry when asked (opening, Ctrl+/ from elsewhere)...
@@ -113,6 +118,7 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
     if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
     e.preventDefault();
+    e.stopPropagation();
     closeDock();
   };
 

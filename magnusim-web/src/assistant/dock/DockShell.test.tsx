@@ -7,6 +7,8 @@ import { DockShell, dockShellState } from './DockShell';
 
 const wizard = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('../../wizard/controller', () => ({ openSetupWizard: wizard.open }));
+const fullscreen = vi.hoisted(() => ({ exit: vi.fn(async () => undefined) }));
+vi.mock('../../workspace/leaveGuard', () => ({ exitFrameFullscreen: fullscreen.exit }));
 
 const REMOTE = 'The Assistant and its API keys can only be set up and used on the PC running Magnusim. Over remote access it is off.';
 
@@ -204,11 +206,48 @@ describe('the dock frame', () => {
     expect(dockSnapshot().open).toBe(false);
   });
 
-  it('reads the status again each time it opens', async () => {
+  it("an Escape that closed it goes no further; one used inside does (the workbench's own Escape keys)", async () => {
+    const heard = vi.fn();
+    window.addEventListener('keydown', heard);
+    try {
+      const used = (e: ReactKeyboardEvent) => {
+        if (e.key === 'Escape') e.preventDefault();
+      };
+      render(
+        <DockShell
+          content={{
+            state: 'ready',
+            questions: (
+              <button type="button" onKeyDown={used}>
+                Menu
+              </button>
+            ),
+            composer: <textarea aria-label="Message to the Assistant" />,
+          }}
+        />,
+      );
+      answers = [() => json(200, READY)];
+      act(() => openDock());
+      await waitFor(() => expect(panel()).toHaveAttribute('data-assistant-dock-state', 'ready'));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Menu' }), { key: 'Escape' });
+      expect(heard).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+      expect(dockSnapshot().open).toBe(false);
+      expect(heard).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', heard);
+    }
+  });
+
+  it("reads the status again each time it opens, and ends a workspace frame's full screen", async () => {
+    fullscreen.exit.mockClear();
     render(<DockShell />);
+    expect(fullscreen.exit).not.toHaveBeenCalled();
     await act(async () => openDock());
+    expect(fullscreen.exit).toHaveBeenCalledTimes(1);
     await act(async () => closeDock());
     await act(async () => openDock());
+    expect(fullscreen.exit).toHaveBeenCalledTimes(2);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url) === '/api/assistant/status')).toBe(true);
   });
