@@ -64,7 +64,8 @@ test.afterAll(async () => {
 test.beforeEach(async ({ request, page }) => {
   await postOk(request, '/api/test/assistant/reset', {});
   await useScriptedModel(request, host.base, fake, 'cloud');
-  await page.setViewportSize({ width: 1280, height: 800 });
+  // DOCK_WIDTH: another window width (the screenshots at 760 px); 1280 by default.
+  await page.setViewportSize({ width: Number(process.env.DOCK_WIDTH) || 1280, height: 800 });
 });
 
 test.afterEach(() => {
@@ -153,7 +154,8 @@ test('a request bound to this window shows in the dock as it streams: its text, 
   await expect(img).toHaveAttribute('alt', 'Picture 1 of 1 from Picture the counter', STEP);
   await expect.poll(() => img.evaluate((el) => el.naturalWidth), STEP).toBe(64);
   await shot(page, 'tool-step-picture');
-  await expect(turn.locator('[data-turn-end="done"]')).toHaveText(/^2 steps · \$\d+\.\d\d$/, STEP);
+  // The usage line (the workspace's Undo these changes follows it in the end block).
+  await expect(turn.locator('[data-turn-end="done"] > p').first()).toHaveText(/^2 steps · \$\d+\.\d\d$/, STEP);
   await expect(turn.locator('[data-dock-text]').last()).toHaveText('The counter is 2.');
   await expect(turn.locator('[data-dock-text] strong')).toHaveText('2');
   await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'ready');
@@ -164,6 +166,7 @@ test('sent from the dock: Enter sends, Shift+Enter makes a newline, the text str
   await openCounter(page, request);
   await openDock(page);
   await expect(composer(page)).toBeFocused();
+  await shot(page, 'empty');
   await expect(dock(page).locator('[data-dock-intro]')).toHaveText(/^Tell the Assistant what to do in .+\.$/);
   await expect(dock(page).locator('[data-dock-context]')).toHaveAttribute('data-dock-context', 'tools');
   await expect(dock(page).locator('[data-dock-context]')).toContainText(`in ${PROJECT_TITLE}`);

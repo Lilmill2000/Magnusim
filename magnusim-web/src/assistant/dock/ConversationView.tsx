@@ -186,7 +186,7 @@ export function useDockContent(): DockContent | null {
     const title = v.summary.title || relayTurns.find((t) => t.id === c.gate.turn)?.title || '';
     return askedOutside(title);
   };
-  const cardList = (list: readonly OpenCard[]) => (list.length ? list.map((c) => <GateCard key={c.gate.id} card={c} who={whoOf(c)} />) : null);
+  const cardList = (list: readonly OpenCard[]) => (list.length ? list.map((c) => <GateCard key={c.gate.id} card={c} who={whoOf(c)} first={c === cards[0]} />) : null);
   // The status not read, the server not answering, or the Assistant off: the shell shows its
   // own state, and a question of another app (MCP) that runs here still shows as a card.
   if (status.state !== 'ready') return { state: 'empty', questions: cardList(cards) };

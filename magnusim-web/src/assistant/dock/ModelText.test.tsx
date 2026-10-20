@@ -36,6 +36,9 @@ describe('ModelText', () => {
     const el = html('Working on it', true);
     expect(el.getAttribute('aria-busy')).toBe('true');
     expect(el.querySelector('.dock-caret')?.textContent).toBe('▍');
+    // At the end of the text it streams, on its line.
+    expect(el.querySelector('p:last-of-type > .dock-caret')).not.toBeNull();
+    expect(html('```\ncode', true).querySelector('pre + .dock-caret')).not.toBeNull();
     const done = html('Done');
     expect(done.getAttribute('aria-busy')).toBeNull();
     expect(done.querySelector('.dock-caret')).toBeNull();

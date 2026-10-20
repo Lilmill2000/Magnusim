@@ -32,7 +32,7 @@ function Dock() {
   return (
     <aside id="assistant-dock">
       {cards.map((c) => (
-        <GateCard key={c.gate.id} card={c} who={c.gate.turn ? null : 'Asked by another app on this PC.'} />
+        <GateCard key={c.gate.id} card={c} first={c === cards[0]} who={c.gate.turn ? null : 'Asked by another app on this PC.'} />
       ))}
       <footer className="assistant-dock-composer">
         <textarea aria-label="Message to the Assistant" />
@@ -195,6 +195,8 @@ describe('a question card', () => {
     await frames();
     expect(document.activeElement).toBe(btn('no', 'g-1'));
     expect(document.title).toBe('(2) Magnusim');
+    // Opening the dock gives the keyboard to the oldest card's No (DockShell's marked entry).
+    expect([btn('no', 'g-1').dataset.dockAutofocus, btn('no', 'g-2').dataset.dockAutofocus]).toEqual(['1', undefined]);
     await act(async () => {
       fireEvent.click(btn('no', 'g-1'));
     });

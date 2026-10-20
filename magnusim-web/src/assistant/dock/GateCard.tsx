@@ -27,7 +27,7 @@ export function minutesLeft(expiresAt: string, now = Date.now()): number | null 
   return Math.max(0, Math.floor((t - now) / 60_000));
 }
 
-export function GateCard({ card, who }: { card: OpenCard; who?: string | null }) {
+export function GateCard({ card, who, first = false }: { card: OpenCard; who?: string | null; /** The oldest card: opening the dock gives its No the keyboard. */ first?: boolean }) {
   const g = card.gate;
   const id = useId();
   const yes = useRef<HTMLButtonElement>(null);
@@ -109,7 +109,7 @@ export function GateCard({ card, who }: { card: OpenCard; who?: string | null })
         </p>
       ) : null}
       <div className="dock-gate-buttons">
-        <button type="button" className="dock-gate-no" data-gate-answer="no" onClick={() => card.answer(false)}>
+        <button type="button" className="dock-gate-no" data-gate-answer="no" data-dock-autofocus={first ? '1' : undefined} onClick={() => card.answer(false)}>
           {g.no}
         </button>
         <button type="button" ref={yes} className="dock-gate-yes" data-gate-answer="yes" onClick={onYes}>

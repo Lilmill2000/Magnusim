@@ -102,8 +102,17 @@ function lines(list: string[], key: string): ReactNode[] {
   return out;
 }
 
+const caret = (
+  <span className="dock-caret" aria-hidden="true">
+    ▍
+  </span>
+);
+
 export function ModelText({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const blocks = parseBlocks(text);
+  const last = blocks.length - 1;
+  // The caret ends the text where it streams: in its last paragraph or list item, else after it.
+  const caretInside = streaming && last >= 0 && blocks[last].kind !== 'code';
   return (
     <div className="dock-model-text" data-dock-text="1" aria-busy={streaming ? 'true' : undefined}>
       {blocks.map((b, i) => {
@@ -119,7 +128,10 @@ export function ModelText({ text, streaming = false }: { text: string; streaming
           return (
             <ul key={key}>
               {b.items.map((it, j) => (
-                <li key={j}>{lines(it.split('\n'), `${key}i${j}`)}</li>
+                <li key={j}>
+                  {lines(it.split('\n'), `${key}i${j}`)}
+                  {caretInside && i === last && j === b.items.length - 1 ? caret : null}
+                </li>
               ))}
             </ul>
           );
@@ -128,18 +140,22 @@ export function ModelText({ text, streaming = false }: { text: string; streaming
           return (
             <ol key={key} start={b.start}>
               {b.items.map((it, j) => (
-                <li key={j}>{lines(it.split('\n'), `${key}i${j}`)}</li>
+                <li key={j}>
+                  {lines(it.split('\n'), `${key}i${j}`)}
+                  {caretInside && i === last && j === b.items.length - 1 ? caret : null}
+                </li>
               ))}
             </ol>
           );
         }
-        return <p key={key}>{lines(b.lines, key)}</p>;
+        return (
+          <p key={key}>
+            {lines(b.lines, key)}
+            {caretInside && i === last ? caret : null}
+          </p>
+        );
       })}
-      {streaming ? (
-        <span className="dock-caret" aria-hidden="true">
-          ▍
-        </span>
-      ) : null}
+      {streaming && !caretInside ? caret : null}
     </div>
   );
 }
