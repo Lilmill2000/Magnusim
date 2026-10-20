@@ -14,8 +14,6 @@
 // A mapping is one of:
 //   reach(tool, field, value?)    the Assistant reaches it now (field: a property path of the tool's
 //                                 input, "entities[].kind"; value: the enum value, when one);
-//   pending(lane, tool, field)    added by the sketch or features lane of the same program (the
-//                                 names they register; the integrator makes them exist or renames);
 //   auto(why)                     not a person action: automatic, internal, or only a pointer's way
 //                                 to something mapped elsewhere (the why says which).
 // Not imported by the app (tests and typecheck only).
@@ -30,14 +28,11 @@ import type { UiController } from '../ui/controller';
 import type { Rails } from '../ui/left-rails';
 import type { ToolbarPrefs } from '../ui/toolbar-layout';
 
-export type Lane = 'sketch' | 'features';
 export type Reach =
   | { kind: 'reach'; tool: string; field: string; value?: string }
-  | { kind: 'pending'; lane: Lane; tool: string; field: string; value?: string }
   | { kind: 'auto'; why: string };
 
 export const reach = (tool: string, field: string, value?: string): Reach => ({ kind: 'reach', tool, field, ...(value !== undefined ? { value } : {}) });
-export const pending = (lane: Lane, tool: string, field: string, value?: string): Reach => ({ kind: 'pending', lane, tool, field, ...(value !== undefined ? { value } : {}) });
 export const auto = (why: string): Reach => ({ kind: 'auto', why });
 
 const W = (action: string) => reach('workspace', 'action', action);
@@ -45,11 +40,13 @@ const ENTITY = (kind: string) => reach('sketch', 'entities[].kind', kind);
 const TIE = (kind: string) => reach('sketch', 'constraints[].kind', kind);
 const MODIFY = (kind: string) => reach('modify', 'kind', kind);
 const PATTERN = (kind: string) => reach('pattern', 'kind', kind);
-// The other lanes' tools as their briefs name them (CAD parity gaps, 2026-10-20).
-const CONSTRUCT = (what: string) => pending('features', 'construct', 'kind', what);
-const DIRECT = (what: string) => pending('features', 'direct', 'kind', what);
-const SKETCH_OP = (what: string) => pending('sketch', 'sketch', 'ops[].kind', what);
-const REPAIR = pending('features', 'edit_feature', 'action', 'repair');
+// Construction geometry (construct), direct edits, the enclosure, repair and retry (direct), and
+// the person's sketch tools (sketch's constraint rows: trim, offset, the patterns, project...).
+const CONSTRUCT = (field: string, value?: string) => reach('construct', field, value);
+const DIRECT = (kind: string) => reach('direct', 'kind', kind);
+const DIRECT_FIELD = (field: string) => reach('direct', field);
+const SKETCH_OP = (kind: string) => TIE(kind);
+const REPAIR = DIRECT('repair');
 
 // ------------------------------------------------------------------ commands, by id
 
@@ -73,10 +70,10 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'modify.delete-faces': DIRECT('delete_faces'),
   'modify.press-pull': DIRECT('press_pull'),
   'modify.split': DIRECT('split'),
-  'inspect.check': pending('features', 'measure', 'check'),
+  'inspect.check': reach('measure', 'targets'),
   'inspect.mass': reach('measure', 'targets'),
   'inspect.measure': reach('measure', 'targets'),
-  'cfd.enclosure': CONSTRUCT('enclosure'),
+  'cfd.enclosure': DIRECT('enclosure'),
   'file.export-step': W('export_step'),
   'file.import-step': W('import_step'),
   'solid.extrude': reach('extrude', 'extent'),
@@ -86,9 +83,9 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'pattern.linear': PATTERN('linear'),
   'pattern.circular': PATTERN('circular'),
   'pattern.mirror': PATTERN('mirror'),
-  'construct.plane': CONSTRUCT('plane'),
-  'construct.axis': CONSTRUCT('axis'),
-  'construct.point': CONSTRUCT('point'),
+  'construct.plane': CONSTRUCT('method', 'offset'),
+  'construct.axis': CONSTRUCT('method', 'two_points'),
+  'construct.point': CONSTRUCT('method', 'vertex'),
   'scale.banana': W('banana_show'),
   'scale.sketch-banana': W('banana_show'),
   'sketch.new': reach('sketch', 'on'),
@@ -112,23 +109,23 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'sketch.symmetric': TIE('symmetric'),
   'sketch.concentric': TIE('concentric'),
   'sketch.collinear': TIE('collinear'),
-  'sketch.fix': pending('sketch', 'sketch', 'constraints[].kind', 'fix'),
+  'sketch.fix': TIE('fix'),
   'sketch.dimension': TIE('distance'),
   'sketch.trim': SKETCH_OP('trim'),
   'sketch.extend': SKETCH_OP('extend'),
   'sketch.finish': auto('the sketch tool finishes the sketch it makes; the person finishes their own'),
   'sketch.delete': reach('sketch', 'entities'),
-  'sketch.undo': pending('sketch', 'sketch', 'undo'),
-  'sketch.redo': pending('sketch', 'sketch', 'undo'),
+  'sketch.undo': reach('undo', 'action', 'undo'),
+  'sketch.redo': reach('undo', 'action', 'redo'),
   'view.sketch-look': W('normal_to'),
-  'view.sketch-relations': pending('sketch', 'sketch', 'show_relations'),
+  'view.sketch-relations': reach('get_model', 'feature'),
   'sketch.project': SKETCH_OP('project'),
   'sketch.intersect': SKETCH_OP('intersect'),
-  'sketch.spline': pending('sketch', 'sketch', 'entities[].kind', 'spline'),
-  'sketch.spline-control': pending('sketch', 'sketch', 'entities[].kind', 'spline_control'),
+  'sketch.spline': ENTITY('spline'),
+  'sketch.spline-control': ENTITY('control_spline'),
   'sketch.mirror': SKETCH_OP('mirror'),
-  'sketch.pattern-linear': SKETCH_OP('pattern_linear'),
-  'sketch.pattern-circular': SKETCH_OP('pattern_circular'),
+  'sketch.pattern-linear': SKETCH_OP('linear_pattern'),
+  'sketch.pattern-circular': SKETCH_OP('circular_pattern'),
   'sketch.offset': SKETCH_OP('offset'),
   'sketch.fillet': SKETCH_OP('fillet'),
   'sketch.chamfer': SKETCH_OP('chamfer'),
@@ -160,7 +157,7 @@ const PATTERN_COMMON = {
   op: reach('pattern', 'op'),
   creates: auto('op new names its body Body N; body rename_to names it'),
   scope: reach('pattern', 'bodies'),
-  skip: pending('features', 'pattern', 'skip'),
+  skip: reach('pattern', 'skip'),
   repair: REPAIR,
 };
 
@@ -177,7 +174,7 @@ export const FEATURE_FIELDS: FeatureFields = {
     constraints: reach('sketch', 'constraints'),
     solved: auto("the solver's state (get_model reads it)"),
     links: SKETCH_OP('project'),
-    ties: SKETCH_OP('pattern_linear'),
+    ties: SKETCH_OP('linear_pattern'),
   },
   extrude: {
     ...BASE,
@@ -185,8 +182,8 @@ export const FEATURE_FIELDS: FeatureFields = {
     profiles: reach('extrude', 'regions'),
     extent: reach('extrude', 'extent'),
     flip: reach('extrude', 'flip'),
-    face: pending('features', 'extrude', 'face'),
-    direction: pending('features', 'extrude', 'direction'),
+    face: reach('extrude', 'face'),
+    direction: reach('extrude', 'direction'),
   },
   revolve: {
     ...BASE,
@@ -231,46 +228,46 @@ export const FEATURE_FIELDS: FeatureFields = {
     diagnostics: auto('what the heal found (get_model full reads it)'),
     origin: auto('Edit in CAD: the project geometry the Part was opened on'),
   },
-  delete_faces: { ...BASE, body: DIRECT('delete_faces'), faces: DIRECT('delete_faces'), repair: REPAIR },
-  press_pull: { ...BASE, body: DIRECT('press_pull'), faces: DIRECT('press_pull'), distance: reach('edit_feature', 'set'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
-  split: { ...BASE, targets: DIRECT('split'), tool: DIRECT('split'), repair: REPAIR },
+  delete_faces: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), repair: REPAIR },
+  press_pull: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), distance: DIRECT_FIELD('distance'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
+  split: { ...BASE, targets: DIRECT_FIELD('bodies'), tool: DIRECT_FIELD('tool'), repair: REPAIR },
   enclosure: {
     ...BASE,
-    shape: CONSTRUCT('enclosure'),
-    axis: CONSTRUCT('enclosure'),
-    bodies: CONSTRUCT('enclosure'),
-    padding: CONSTRUCT('enclosure'),
-    percent: CONSTRUCT('enclosure'),
-    distance: CONSTRUCT('enclosure'),
-    sides: CONSTRUCT('enclosure'),
-    creates: CONSTRUCT('enclosure'),
+    shape: DIRECT_FIELD('shape'),
+    axis: reach('direct', 'shape', 'cylinder_z'),
+    bodies: DIRECT_FIELD('bodies'),
+    padding: DIRECT_FIELD('padding'),
+    percent: DIRECT_FIELD('distance'),
+    distance: DIRECT_FIELD('distance'),
+    sides: DIRECT_FIELD('sides'),
+    creates: auto('the body it makes, fixed when made (body rename_to names it)'),
   },
   ref_plane: {
     ...BASE,
-    method: CONSTRUCT('plane'),
-    plane: reach('sketch', 'on'),
-    plane2: CONSTRUCT('plane'),
-    axis: CONSTRUCT('plane'),
-    points: CONSTRUCT('plane'),
-    edge: CONSTRUCT('plane'),
-    distance: reach('sketch', 'on'),
-    angle: CONSTRUCT('plane'),
-    percent: CONSTRUCT('plane'),
-    flip: CONSTRUCT('plane'),
+    method: CONSTRUCT('method'),
+    plane: CONSTRUCT('refs'),
+    plane2: CONSTRUCT('refs'),
+    axis: CONSTRUCT('refs'),
+    points: CONSTRUCT('refs'),
+    edge: CONSTRUCT('refs'),
+    distance: CONSTRUCT('value'),
+    angle: CONSTRUCT('value'),
+    percent: CONSTRUCT('value'),
+    flip: CONSTRUCT('flip'),
   },
-  ref_axis: { ...BASE, method: CONSTRUCT('axis'), points: CONSTRUCT('axis'), face: CONSTRUCT('axis'), edge: CONSTRUCT('axis'), planes: CONSTRUCT('axis'), flip: CONSTRUCT('axis') },
+  ref_axis: { ...BASE, method: CONSTRUCT('method'), points: CONSTRUCT('refs'), face: CONSTRUCT('refs'), edge: CONSTRUCT('refs'), planes: CONSTRUCT('refs'), flip: CONSTRUCT('flip') },
   ref_point: {
     ...BASE,
-    method: CONSTRUCT('point'),
-    vertex: CONSTRUCT('point'),
-    edge: CONSTRUCT('point'),
-    face: CONSTRUCT('point'),
-    plane: CONSTRUCT('point'),
-    along: CONSTRUCT('point'),
-    distance: CONSTRUCT('point'),
-    percent: CONSTRUCT('point'),
-    fromEnd: CONSTRUCT('point'),
-    xyz: CONSTRUCT('point'),
+    method: CONSTRUCT('method'),
+    vertex: CONSTRUCT('refs'),
+    edge: CONSTRUCT('refs'),
+    face: CONSTRUCT('refs'),
+    plane: CONSTRUCT('refs'),
+    along: CONSTRUCT('value'),
+    distance: CONSTRUCT('value'),
+    percent: CONSTRUCT('value'),
+    fromEnd: CONSTRUCT('from_end'),
+    xyz: CONSTRUCT('xyz'),
   },
   pattern_linear: { ...BASE, ...PATTERN_COMMON, dir1: reach('pattern', 'about'), dir2: reach('pattern', 'about2') },
   pattern_circular: {
@@ -281,7 +278,7 @@ export const FEATURE_FIELDS: FeatureFields = {
     count: reach('pattern', 'count'),
     mode: reach('pattern', 'spacing'),
     angle: reach('pattern', 'spacing'),
-    symmetric: reach('pattern', 'symmetric'),
+    symmetric: reach('pattern', 'options', 'symmetric'),
   },
   mirror: { ...BASE, ...PATTERN_COMMON, plane: reach('pattern', 'about') },
 };
@@ -293,7 +290,7 @@ export const SKETCH_ENTITIES: { readonly [K in SketchEntity['kind']]: Reach } = 
   line: ENTITY('line'),
   circle: ENTITY('circle'),
   arc: ENTITY('arc'),
-  spline: pending('sketch', 'sketch', 'entities[].kind', 'spline'),
+  spline: ENTITY('spline'),
 };
 
 export const SKETCH_CONSTRAINTS: { readonly [K in SketchRelationKind | SketchDimensionKind]: Reach } = {
@@ -310,7 +307,7 @@ export const SKETCH_CONSTRAINTS: { readonly [K in SketchRelationKind | SketchDim
   point_on_circle: TIE('point_on'),
   concentric: TIE('concentric'),
   collinear: TIE('collinear'),
-  fix: pending('sketch', 'sketch', 'constraints[].kind', 'fix'),
+  fix: TIE('fix'),
   distance: TIE('distance'),
   distance_x: TIE('distance_x'),
   distance_y: TIE('distance_y'),
@@ -332,11 +329,11 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   dimension: TIE('distance'),
   trim: SKETCH_OP('trim'),
   extend: SKETCH_OP('extend'),
-  'spline-fit': pending('sketch', 'sketch', 'entities[].kind', 'spline'),
-  'spline-control': pending('sketch', 'sketch', 'entities[].kind', 'spline_control'),
+  'spline-fit': ENTITY('spline'),
+  'spline-control': ENTITY('control_spline'),
   mirror: SKETCH_OP('mirror'),
-  'pattern-linear': SKETCH_OP('pattern_linear'),
-  'pattern-circular': SKETCH_OP('pattern_circular'),
+  'pattern-linear': SKETCH_OP('linear_pattern'),
+  'pattern-circular': SKETCH_OP('circular_pattern'),
   offset: SKETCH_OP('offset'),
   fillet: SKETCH_OP('fillet'),
   chamfer: SKETCH_OP('chamfer'),
@@ -413,7 +410,7 @@ export const DOC: { readonly [K in keyof DocService]: Reach } = {
   undo: reach('undo', 'action', 'undo'),
   redo: reach('undo', 'action', 'redo'),
   repair: REPAIR,
-  retry: pending('features', 'edit_feature', 'action', 'retry'),
+  retry: DIRECT('retry'),
   setRollback: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
   setExpanded: W('expand'),

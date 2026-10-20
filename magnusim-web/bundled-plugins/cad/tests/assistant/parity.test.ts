@@ -7,10 +7,8 @@
 // toolbar layout and the project link. Each must have a row in src/assistant/parity.ts (whose
 // type-keyed tables also fail the typecheck on any feature field, entity kind, sketch tool or
 // method left out), and every row must name a tool and a field (and an enum value) that exist in
-// schemas.ts, or say why it is no person action.
-// Rows marked pending are the sketch and features lanes' tools and fields, added by their branches:
-// the last test fails in this lane on those alone, and lists them; once the lanes are merged it is
-// green (the integrator renames a row whose lane chose another name).
+// schemas.ts, or say why it is no person action. No row waits for a later tool: each is reached
+// now or is automatic or internal with its reason.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -109,13 +107,12 @@ describe('parity: every person-facing capability has an Assistant tool and field
     // Summary of the table (printed for the report).
     const all = rows();
     const count = (k: Reach['kind']) => all.filter((x) => x.r.kind === k).length;
-    const lanes = (l: string) => all.filter((x) => x.r.kind === 'pending' && x.r.lane === l).length;
-    console.log(`[parity] ${all.length} rows: ${count('reach')} reached now, ${count('pending')} pending (sketch lane ${lanes('sketch')}, features lane ${lanes('features')}), ${count('auto')} automatic or internal; ${services.commands.all().length} commands, ${services.doc.features.all().length} feature types`);
+    expect(count('reach') + count('auto')).toBe(all.length);
+    console.log(`[parity] ${all.length} rows: ${count('reach')} reached, ${count('auto')} automatic or internal; ${services.commands.all().length} commands, ${services.doc.features.all().length} feature types`);
   });
 
-  it('every row that is reached now names a tool, field and value that exist in schemas.ts', () => {
+  it('every row names a tool, field and value that exist in schemas.ts, or is automatic with a reason', () => {
     const bad = rows()
-      .filter((x) => x.r.kind !== 'pending')
       .map((x) => ({ ...x, why: problem(x.r) }))
       .filter((x) => x.why)
       .map((x) => `${x.table} ${x.key}: ${x.why}`);
@@ -131,14 +128,16 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(COMMANDS['scale.banana']).toMatchObject({ tool: 'workspace', value: 'banana_show' });
   });
 
-  // Fails in the workspace lane on the sketch and features lanes' rows only (their tools and fields
-  // come with their branches); green once they are merged.
-  it("the sketch and features lanes' rows name tools and fields that exist (pending until their merge)", () => {
-    const open = rows()
-      .filter((x) => x.r.kind === 'pending')
-      .map((x) => ({ ...x, why: problem(x.r) }))
-      .filter((x) => x.why)
-      .map((x) => `${x.r.kind === 'pending' ? x.r.lane : ''} lane: ${x.table} ${x.key}: ${x.why}`);
-    expect(open).toEqual([]);
+  it("the sketch and features tools reach what those lanes added: the person's sketch tools, construct, direct, repair and retry, the pattern's options", () => {
+    expect(COMMANDS['sketch.trim']).toEqual({ kind: 'reach', tool: 'sketch', field: 'constraints[].kind', value: 'trim' });
+    expect(COMMANDS['sketch.pattern-linear']).toMatchObject({ tool: 'sketch', value: 'linear_pattern' });
+    expect(COMMANDS['sketch.spline-control']).toMatchObject({ tool: 'sketch', field: 'entities[].kind', value: 'control_spline' });
+    expect(COMMANDS['construct.plane']).toMatchObject({ tool: 'construct', field: 'method' });
+    expect(COMMANDS['modify.press-pull']).toEqual({ kind: 'reach', tool: 'direct', field: 'kind', value: 'press_pull' });
+    expect(COMMANDS['cfd.enclosure']).toMatchObject({ tool: 'direct', value: 'enclosure' });
+    expect(DOC.repair).toMatchObject({ tool: 'direct', value: 'repair' });
+    expect(DOC.retry).toMatchObject({ tool: 'direct', value: 'retry' });
+    expect(FEATURE_FIELDS.pattern_circular.symmetric).toMatchObject({ tool: 'pattern', field: 'options', value: 'symmetric' });
+    expect(FEATURE_FIELDS.extrude.face).toMatchObject({ tool: 'extrude', field: 'face' });
   });
 });
