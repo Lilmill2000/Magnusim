@@ -5975,6 +5975,22 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 .dock-gate-yes:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
 .dock-gate-no:focus-visible, .dock-gate-yes:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 2px; }
 .dock-gate-no:focus { outline: 2px solid var(--mg-focus); outline-offset: 2px; }
+/* Undo these changes (phase 4, 8.3): on an ended request whose workspace offers it. */
+.dock-undo { display: flex; flex-direction: column; align-items: flex-start; gap: var(--mg-space-1); margin-top: var(--mg-space-2); }
+.dock-undo-button {
+  min-height: 28px;
+  padding: 0 var(--mg-space-3);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  font: inherit;
+  font-size: var(--mg-text-sm);
+  cursor: pointer;
+}
+.dock-undo-button:hover:not(:disabled) { background: var(--mg-surface-muted); }
+.dock-undo-button:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
+.dock-undo-button:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
 .ws-menu-host:empty { display: none; }
 .ws-menu { position: relative; }
 .ws-menu-list {

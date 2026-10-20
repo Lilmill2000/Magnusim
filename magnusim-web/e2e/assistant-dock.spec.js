@@ -451,3 +451,31 @@ test('a hidden tab: the request goes on streaming into the dock; once ended, the
   await expect(dockTurn(page).locator('[data-dock-step]')).toHaveCount(1);
   await expect(dockTurn(page).locator('[data-dock-result]')).toHaveText(/^✓ /);
 });
+
+// ---------------------------------------------------------------- Undo these changes (spec 8.3)
+
+test("Undo these changes: the workspace's offer shows on the ended request, undoes it as one step and says how to redo; the page's own change withdraws a newer offer", async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'Added two.' });
+  await dockSend(page, 'Add two');
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('2');
+  const undo = turn.locator('[data-dock-undo]');
+  await expect(undo).toHaveText('Undo these changes', STEP);
+  await expect(undo).toHaveAttribute('title', /^Undo the Assistant's changes of this request in .+ \(one step\)$/);
+  await shot(page, 'undo');
+  await undo.click();
+  await expect(w.frame.locator('#counter')).toHaveText('0', STEP);
+  await expect(turn.locator('[data-dock-undo-said]')).toHaveText(/^Undone\. Redo \(Ctrl\+Y\) in .+ brings them back\.$/);
+  await expect(undo).toHaveCount(0);
+
+  // A newer request's offer goes once the person changes the counter in the page.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { text: 'Added one.' });
+  await dockSend(page, 'Add one');
+  await expect(dockTurn(page).locator('[data-dock-undo]')).toBeVisible(STEP);
+  await w.frame.locator('#bump').click();
+  await expect(dockTurn(page).locator('[data-dock-undo]')).toHaveCount(0, STEP);
+  await expect(w.frame.locator('#counter')).toHaveText('2');
+});

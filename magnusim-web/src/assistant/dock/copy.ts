@@ -246,6 +246,18 @@ export const ASKED_BY_APP = 'Asked by another app on this PC.';
 export const closesIn = (minutes: number): string => (minutes < 1 ? 'Closes in under a minute' : `Closes in ${minutes} min`);
 export const gateHelp = (no: string, yes: string): string => `Enter or Escape answers “${no}”. “${yes}” takes a click, or Tab then Space.`;
 
+// ---------------------------------------------------------------- Undo these changes (8.3)
+
+export const UNDO_CHANGES = 'Undo these changes';
+export const undoTitle = (workspace: string): string => `Undo the Assistant's changes of this request in ${workspace} (one step)`;
+export const UNDO_WAIT = 'Wait for the running request to end.';
+export const undone = (workspace: string): string => `Undone. Redo (Ctrl+Y) in ${workspace} brings them back.`;
+export const undoNotNewest = (workspace: string): string =>
+  `Something changed after this request, so its changes can't be undone as one step here. Use Undo in ${workspace}.`;
+export const undoBusy = (workspace: string): string => `${workspace} is busy; try again in a moment.`;
+export const undoNoAnswer = (workspace: string): string => `${workspace} didn't answer. Its own Undo still works.`;
+export const UNDO_WHILE_OPEN = 'Undo lasts while the Part stays open.';
+
 // ---------------------------------------------------------------- questions in the transcript (4.5)
 
 export const gateAsked = (title: string): string => `Asked: ${title}`;

@@ -41,6 +41,7 @@ import { useGateCards, type OpenCard } from './gates';
 import { showHere, startedHere, stopDockTurn } from './send';
 import { answerKeyOf, keptTurns, localPicturesOf, refreshConversations, retainTurns, setDockContext, setTurnStopper, showConversation, useDockStore, watchTurn } from './store';
 import { Transcript, type TranscriptTurn } from './Transcript';
+import { UndoChanges } from './Undo';
 import { emptyTurnView, isEnded } from './turnView';
 
 /** Requests shown at first, and added by each "Show earlier requests". */
@@ -212,6 +213,7 @@ export function useDockContent(): DockContent | null {
         elsewhere={elsewhereTurns}
         cardsFor={(turn) => cardList(cards.filter((c) => c.gate.turn === turn && visibleIds.has(turn)))}
         noteFor={noteFor}
+        endExtraFor={(turn) => (store.turns[turn] ? <UndoChanges view={store.turns[turn]} /> : null)}
         hasEarlier={rows.length > visible.length}
         onEarlier={() => setPage((n) => n + TURNS_PAGE)}
         intro={introOf(place)}

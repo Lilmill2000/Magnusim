@@ -184,6 +184,15 @@ describe('the dock copy', () => {
     expect(copy.gateHelp("Don't", 'Allow')).toBe("Enter or Escape answers “Don't”. “Allow” takes a click, or Tab then Space.");
   });
 
+  it('Undo these changes', () => {
+    expect([copy.UNDO_CHANGES, copy.UNDO_WAIT, copy.UNDO_WHILE_OPEN]).toEqual(['Undo these changes', 'Wait for the running request to end.', 'Undo lasts while the Part stays open.']);
+    expect(copy.undoTitle('CAD')).toBe("Undo the Assistant's changes of this request in CAD (one step)");
+    expect(copy.undone('CAD')).toBe('Undone. Redo (Ctrl+Y) in CAD brings them back.');
+    expect(copy.undoNotNewest('CAD')).toBe("Something changed after this request, so its changes can't be undone as one step here. Use Undo in CAD.");
+    expect(copy.undoBusy('CAD')).toBe('CAD is busy; try again in a moment.');
+    expect(copy.undoNoAnswer('CAD')).toBe("CAD didn't answer. Its own Undo still works.");
+  });
+
   it('questions in the transcript and the live region', () => {
     expect(copy.gateAsked('Reset?')).toBe('Asked: Reset?');
     expect([
