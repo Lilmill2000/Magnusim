@@ -94,6 +94,8 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   // matches its faces; the link adopts that geometry on the first Back with a change.
   const editOpen = createEditOpen(services);
   const link = createLinkController({ bridge, doc, kernel, adopt: { ready: () => editOpen.ready(), geometryName: () => editOpen.geometry?.name ?? editOpen.removed?.name ?? null, noteUnverified: (n) => editOpen.noteUnverified(n), onLinked: (r) => editOpen.onLinked(r) } });
+  // The Assistant's workspace tool sends the Part to the project through it (send_to_simulation).
+  apis.set({ link });
   const leave = exposeTestHandle(services, PLUGIN_VERSION, link);
   if (window.__CAD__) window.__CAD__.edit = editOpen;
   void installLeaveHook({

@@ -1,9 +1,9 @@
-// The CAD Part's 20 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
+// The CAD Part's 21 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 23 tools (its 3, then the Part's
-// 20 by name), the first 20 strict on the first cloud dialect and the last 3 not; no CAD property
-// is optional; 23 is within the local server's 24 and nothing is cut; each CAD schema's size is
+// sent only the keywords they take; in a CAD turn the app offers 24 tools (its 3, then the Part's
+// 21 by name), the first 20 strict on the first cloud dialect and the last 4 not; no CAD property
+// is optional; 24 is within the local server's 24 and nothing is cut; each CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
 // the system prompt) is at most 52,000 characters, its estimated tokens printed.
@@ -55,7 +55,7 @@ function offered({ local = false } = {}) {
   const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: CAD_TOOLS.map((t) => ({ ...t })), guide: GUIDE };
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
-  assert.equal(verdict.accepted.length, 20);
+  assert.equal(verdict.accepted.length, 21);
   return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local });
 }
 
@@ -69,7 +69,7 @@ function walk(node, path = '(root)', out = []) {
 
 describe("the CAD Part's tools by the app's rules", () => {
   it('every schema passes the app\'s check', () => {
-    assert.equal(CAD_TOOLS.length, 20);
+    assert.equal(CAD_TOOLS.length, 21);
     for (const t of CAD_TOOLS) assert.deepEqual(checkSchema(t.inputSchema), { ok: true }, t.name);
   });
 
@@ -84,21 +84,21 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it('a CAD turn offers 23: the app\'s 3, then the Part\'s 20 by name; the first 20 strict on the first cloud dialect, the last 3 not', () => {
+  it('a CAD turn offers 24: the app\'s 3, then the Part\'s 21 by name; the first 20 strict on the first cloud dialect, the last 4 not', () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
     assert.deepEqual(names, ['app_status', 'explain_ready', 'project_summary', ...CAD_TOOLS.map((t) => `cad__${t.name}`)]);
     const flags = strictFlags(providerTools(tools).map((t) => emitSchema('anthropic', t.schema)));
-    const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view'];
+    const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view', 'cad__workspace'];
     assert.deepEqual(flags, names.map((n) => !loose.includes(n)));
     // The budget is exactly full: 20 strict tools; the host tools' one optional parameter.
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it("23 is within the local server's 24: nothing is cut", () => {
+  it("24 is within the local server's 24: nothing is cut", () => {
     const { tools, dropped } = offered({ local: true });
-    assert.equal(tools.length, 23);
+    assert.equal(tools.length, 24);
     assert.ok(tools.length <= REQUEST_MAX_TOOLS.local);
     assert.deepEqual(dropped, []);
   });

@@ -91,6 +91,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   sweep_loft:
     "sweep: profiles are regions of one sketch; draw them on a plane through the path's start, square to it; path curves run end to end. loft: one region per sketch, in order, none with a hole. Faces: <Name>.side(<profile entity>@<path entity>) (<Name>.side(o): every side swept from o), <Name>.start, <Name>.end.",
   undo: 'steps n: your newest n calls of this request, back to before the oldest. previous_turn true (steps 0): the whole previous request, while it is the newest change. not_own_step when the person changed the Part after one of them.',
+  workspace: 'help workspace has every action. Only reheal is an undo step; the rest is view or session state and says so (undo_step false). The person\'s view moves only with person_asked true or while they have not moved it.',
   view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
@@ -234,6 +235,23 @@ const exampleRows = (topic: string): HelpRow[] => {
   return [{ about: 'the part', text: p.part }, ...p.calls.map((c) => ({ about: c.about, text: c.text, tool: c.tool, input: c.input, result: c.result })), { about: 'checks', text: p.checks }];
 };
 
+/** The workspace tool: every action, what it takes and what it does (none of them but reheal is an undo step). */
+const workspaceRows = (): HelpRow[] => [
+  { about: 'fields', text: 'action names what to do; target, value and items carry what it needs ("" and [] when unused); person_asked true only when the person asked in this request for a change of their view. Every answer says what changed; data.undo_step false: view or session state, not an undo step (only reheal is one).' },
+  { about: 'roll_back_to, roll_to_end', text: 'target: a feature; the bar goes just after it and later features roll back (not built). While the bar is not at the end your edits answer rolled_back at once: call roll_to_end first. roll_to_end takes no target.' },
+  { about: 'show, hide', text: "target: a sketch, a construction plane, axis or point, or a body: the tree\'s eye. A sketch is shown until a later feature uses it, unless shown on purpose. body visibility does the same for bodies." },
+  { about: 'origin_planes, rename_part', text: 'origin_planes value auto (drawn on an empty part and while one is selected or hovered) or always. rename_part value: the new name of the Part (the study title, as the tree\'s Rename part; at most 120 characters).' },
+  { about: 'select, selection_filter', text: 'select items: selectors (help selectors), feature names, Top, Front, Right, X axis, Y axis, Z axis or origin; [] clears the selection. The person sees it selected; "selection" in later selectors reads it. selection_filter items: face, edge, vertex, body, feature, origin, sketch, region; [] lets everything be picked.' },
+  { about: 'expand, collapse', text: 'target origin or bodies (the tree folders), tree (the design tree card; in a sketch for that sketch only), sketch_panel (the Sketch panel), sketch_details (its Details).' },
+  { about: 'toolbar_show, toolbar_hide, toolbar_move, toolbar_reset', text: 'target: a toolbar command id (solid.extrude, modify.shell, sketch.spline, ...). show puts it on the bar, hide in its group\'s More menu; move value "before <command id of the same group>" or end. toolbar_reset value model, sketch or "" (both). The layout is the person\'s, in every project.' },
+  { about: 'banana_show, banana_hide, banana_place', text: 'The banana for scale: never a body, never in the simulation. banana_place value "x, y, z[, rot deg]" (mm; its underside at z). With target a sketch: that sketch\'s taped banana picture (seen while the sketch is edited), banana_place value "u, v" mm.' },
+  { about: 'reload, keep_mine, retry_save, retry_kernel', text: 'reload: after another tab saved (the save chip); when this tab has a change of its own the person confirms first, as it is lost. keep_mine: this tab\'s version over the other tab\'s save; the person confirms. retry_save: a save that failed, now. retry_kernel: the geometry kernel that failed to start.' },
+  { about: 'import_step, reheal', text: 'import_step: the file picker is the person\'s, so they are asked to pick the STEP (Import STEP in FILE, or a drop on the Part); call get_model after. reheal target: an Imported STEP; value the heal tolerance ("0.01 mm"; "" keeps it); items ["knit"] knits loose faces into solids, [] does not. One undo step, as Heal all in its panel.' },
+  { about: 'export_step', text: 'target AP214 or AP242 ("": AP214); value the file name ("": the Part\'s name); items the bodies ([]: every shown body). The person\'s Export STEP panel opens filled in and they click Export: the download is theirs. Refused while they have a panel open.' },
+  { about: 'send_to_simulation', text: 'Save, then link the bodies included in the simulation into the project\'s geometry, as the app\'s Back does (body simulation include or exclude chooses them). Outcomes: linked, unchanged (the geometry has this design), nothing (no body included), kept-editing (the person answered the app\'s question with Keep editing), not-now; a refusal is link_failed with the app\'s words. value leave: after a send that went through, the Part closes as Back: no Part tool answers after it.' },
+  { about: "the person\'s view", text: 'fit; standard_view value front, back, left, right, top, bottom, iso or home; normal_to target a flat face, a plane or a sketch; orbit_pivot target center, origin, "(x, y, z)" or a selector; section value off or "<Top|Front|Right> [offset <length> | middle] [flip]"; projection value perspective or orthographic; display value shaded_edges, shaded or wireframe. These move what the person sees: only with person_asked true, or while they have not moved the view in this request (else busy view_latched). Pictures (view) never move it.' },
+];
+
 /** The index of the worked parts: what each one is, its calls and its topic. */
 const exampleIndex = (): HelpRow[] =>
   WORKED_PARTS.map((p) => ({ about: p.topic, text: `${p.title}. ${p.calls.length} calls: ${[...new Set(p.calls.map((c) => c.tool))].join(', ')}. help ${p.topic} has every input whole.` }));
@@ -351,6 +369,7 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   guide: guideRows(),
   sketch_tools: sketchToolRows(),
   details: detailRows(),
+  workspace: workspaceRows(),
 });
 
 export const isHelpTopic = (t: unknown): t is HelpTopic => typeof t === 'string' && (HELP_TOPICS as readonly string[]).includes(t);

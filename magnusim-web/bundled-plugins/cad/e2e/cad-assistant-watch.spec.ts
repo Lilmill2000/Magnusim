@@ -1,6 +1,6 @@
 // The Part's tools for the app's Assistant, as the person and the model meet them (CAD tools spec
-// §12.3 watch 1, T1): a Part open in its workspace offers its 20 tools on its tab; a turn there
-// offers 23 (the app's 3 first, then the Part's by name), the first 20 strict and the last 3 not;
+// §12.3 watch 1, T1): a Part open in its workspace offers its 21 tools on its tab; a turn there
+// offers 24 (the app's 3 first, then the Part's by name), the first 20 strict and the last 4 not;
 // the system text holds the CAD notes; the tools go out byte for byte the same in the next turn.
 // get_model answers the model with the Part in data; a hole on the empty Part answers bad_selector
 // with its hint and the Part's names. The dock's chip and the frame's data-assistant say what
@@ -81,11 +81,11 @@ test.afterEach(() => {
   expect(host.fake.pending(), 'scripted answers left unused').toBe(0);
 });
 
-/** The Part's 20 tools by name, as the app names them (src/assistant/schemas.ts). */
-const CAD = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view'].map((n) => `cad__${n}`);
+/** The Part's 21 tools by name, as the app names them (src/assistant/schemas.ts). */
+const CAD = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace'].map((n) => `cad__${n}`);
 const HOST_TOOLS = ['app_status', 'explain_ready', 'project_summary'];
 
-test('cad:assistant-watch-registration the Part offers its 20 tools; a turn offers 23, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
+test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 24, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant registration');
   const { tab } = await openNewPart(page, request, host, pid);
@@ -100,8 +100,8 @@ test('cad:assistant-watch-registration the Part offers its 20 tools; a turn offe
   const t2 = await startTurn(request, host, { text: 'Say hello again.', tab });
   expect((await t2.ended(STEP_MS)).turn.state).toBe('done');
   const [first, second] = chats(host).slice(before);
-  // The app's own tools first (by name), then the Part's by name: 23, the first 20 strict (the provider's budget).
-  const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view'];
+  // The app's own tools first (by name), then the Part's by name: 24, the first 20 strict (the provider's budget).
+  const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view', 'cad__workspace'];
   expect(offeredTools(first)).toEqual([...HOST_TOOLS, ...CAD].map((name) => ({ name, strict: !loose.includes(name) })));
   // The CAD notes are the second system block, line breaks kept.
   const system = (first.body.system as { text: string }[]).map((s) => s.text).join('\n');
@@ -417,7 +417,7 @@ test("cad:assistant-watch-view view pictures the Part off screen: one image in t
   await countFileWrites(page);
   await countDataWrites(page);
 
-  const input = (hide: string[]) => ({ views: ['iso', 'top'], hide, section: '', labels: 'none', size: 'small' });
+  const input = (hide: string[]) => ({ views: ['iso', 'top'], hide, section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic' });
   const from = chats(host).length;
   host.fake.reply({ tools: [{ name: 'cad__view', input: input([]) }] }, { tools: [{ name: 'cad__view', input: input([names[1]]) }] }, { text: 'Two blocks; the red one on the right.' });
   const t = await startTurn(request, host, { text: 'Look at the Part.', tab });
@@ -464,13 +464,13 @@ test("cad:assistant-watch-view-handles a picture's handles are the request's own
   const pid = await newProject(request, host, 'Assistant view handles');
   const { frame, tab } = await openNewPart(page, request, host, pid);
   const made = await addSolid(page, { size: [40, 30, 10] });
-  const view = (labels: string) => ({ views: ['top'], hide: [], section: '', labels, size: 'small' });
+  const view = (labels: string) => ({ views: ['top'], hide: [], section: '', labels, size: 'small', display: 'shaded_edges', projection: 'orthographic' });
   const from = chats(host).length;
   host.fake.reply(
     { tools: [{ name: 'cad__view', input: view('faces') }] },
     { tools: [{ name: 'cad__find', input: { query: '#f1', limit: 10 } }] },
     { tools: [{ name: 'cad__view', input: view('bodies') }] },
-    { tools: [{ name: 'cad__body', input: { body: '#b1', rename_to: 'Plate', color: '', simulation: 'keep' } }] },
+    { tools: [{ name: 'cad__body', input: { body: '#b1', rename_to: 'Plate', color: '', simulation: 'keep', visibility: 'keep' } }] },
     { text: 'The block is called Plate now.' },
   );
   const t = await startTurn(request, host, { text: 'Name the block Plate.', tab });
@@ -499,7 +499,7 @@ test('cad:assistant-watch-view-no-images a local model that reads no images is t
   host.fake.models([{ id: local.model, context: 65_536, type: 'llm' }], 'compat');
   try {
     const from = chats(host).length;
-    const input = { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small' };
+    const input = { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic' };
     host.fake.reply({ hold: 'text-only-view', tools: [{ name: 'cad__view', input }] }, { text: 'I cannot see pictures here; I will measure instead.' });
     const t = await startTurn(request, host, { text: 'Look at the Part.', tab });
     // The page heard that this turn's model reads no images before the call comes.

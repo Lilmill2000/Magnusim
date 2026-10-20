@@ -63,7 +63,7 @@ export const GUIDE_TOOL_WORDS: readonly (readonly [tool: string, words: string, 
 ] as const);
 
 /** The line that names the tools a Part does not offer now. */
-export const notOfferedLine = (tools: readonly string[]) => `Tools not offered now: ${tools.join(', ')}.`;
+export const notOfferedLine = (tools: readonly string[]) => `Not offered now: ${tools.join(', ')}.`;
 
 /** The tools of `tools` the guide names as words (the not-offered line names only those: the guide never mentions the others). */
 export const namedInGuide = (tools: readonly string[]) => tools.filter((t) => new RegExp(`(^|[^\\w])${t}([^\\w]|$)`).test(GUIDE));

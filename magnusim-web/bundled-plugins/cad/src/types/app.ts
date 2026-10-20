@@ -9,6 +9,7 @@ import type { DocService } from './doc-service';
 import type { CadEvents } from './events';
 import type { FileTransfer } from './files';
 import type { KernelAdapter } from './kernel';
+import type { LinkController } from '../link/controller';
 import type { ModuleRegistry } from './modules';
 import type { Selection } from './selection';
 import type { SketchModeApi, SketchSolverClient } from './sketch';
@@ -26,6 +27,8 @@ export interface AreaApis {
   files: FileTransfer | null;
   /** The Assistant's page API (one writer: ASSISTANT). Optional, so it is absent where nothing installs it. */
   assistant?: AssistantPageApi | null;
+  /** LINK: the project-link controller (save, then link: what the app's Back runs), set by bootstrap; absent in tests that make none. */
+  link?: LinkController | null;
 }
 
 export interface AppServices {

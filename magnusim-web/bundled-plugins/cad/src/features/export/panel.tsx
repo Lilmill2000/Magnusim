@@ -16,6 +16,7 @@ import { filesFor } from '../../files/transfer';
 import { formatBytes } from '../../files/words';
 import { withStepHeader } from './header';
 import { userSelection } from '../../lib/selection';
+import { takeExportPrefill } from './prefill';
 
 export type StepSchema = 'AP214' | 'AP242';
 
@@ -36,14 +37,17 @@ export function ExportPanel({ close }: ToolPanelProps) {
   const services = useServices();
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
   const title = String(services.bridge.context.study?.title ?? 'Part');
+  // Filled in for the person (the Assistant's export_step), once.
+  const [prefill] = useState(() => takeExportPrefill(services));
   const [chosen, setChosen] = useState<Set<BodyId>>(() => {
+    if (prefill) return new Set(prefill.bodies);
     const sel = selectedBodies(userSelection(services.selection.get()));
     const built = services.doc.state.get().rebuild.bodies;
     const picked = built.filter((b) => sel.has(b.id)).map((b) => b.id);
     return new Set(picked.length ? picked : built.filter((b) => b.visible).map((b) => b.id));
   });
-  const [schema, setSchema] = useState<StepSchema>('AP214');
-  const [name, setName] = useState(`${title}.step`);
+  const [schema, setSchema] = useState<StepSchema>(prefill?.schema ?? 'AP214');
+  const [name, setName] = useState(prefill?.name || `${title}.step`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);

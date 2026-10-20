@@ -8,11 +8,17 @@
 //                    person changed the Part.
 //   previous_turn    the whole previous request, when its undo group is still the newest step:
 //                    one Undo (doc.assistant.undoGroup), so the person's Redo brings it back.
+//   action undo|redo the person's own Undo (Ctrl+Z) or Redo (Ctrl+Y), `steps` times, whoever made
+//                    those steps (the person, or an Assistant request's group): each goes through
+//                    doc.undo / doc.redo inside the call's step, so one Redo (or Undo) of the
+//                    person's brings it back. The answer names every step and whose it was.
 // The undo itself goes into no ledger.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { EditData, ToolImpl, ToolReply } from '../../types/assistant';
+import type { CadDoc } from '../../types/doc';
 import type { DocMark } from '../../types/doc-service';
+import type { UndoEntry } from '../../types/undo';
 import { ToolError } from '../errors';
 import { runtimeOf } from '../runtime';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
@@ -87,7 +93,61 @@ const undoTool: EditTool<Plan> = {
   },
 };
 
+/** One step of the history as the answer names it: its label and whose it is. */
+interface StepWords {
+  label: string;
+  by: 'person' | 'assistant';
+}
+
+interface AnyPlan extends EditPlan {
+  redo: boolean;
+  taken: StepWords[];
+}
+
+const wordsOf = (e: UndoEntry<CadDoc>): StepWords => ({ label: e.label, by: e.tag ? 'assistant' : 'person' });
+const whose = (w: StepWords) => `${w.label} (${w.by === 'person' ? "the person's" : 'an Assistant request'})`;
+
+/** The person's Undo or Redo, n times, of anyone's steps. */
+const anyTool: EditTool<AnyPlan> = {
+  async plan(ctx) {
+    const { doc } = ctx.services;
+    const redo = ctx.input.action === 'redo';
+    if (ctx.input.previous_turn === true) throw new ToolError('bad_input', 'previous_turn goes with action own.', { detail: { field: 'previous_turn' } });
+    const steps = typeof ctx.input.steps === 'number' && Number.isInteger(ctx.input.steps) ? ctx.input.steps : 0;
+    if (steps < 1) throw new ToolError('bad_input', `steps: how many steps to ${redo ? 'redo' : 'undo'} (1 or more).`, { detail: { field: 'steps' } });
+    const h = doc.assistant.mark().history;
+    const list = redo ? [...h.undone].reverse() : [...h.done].reverse();
+    if (!list.length) throw new ToolError('nothing_to_undo', redo ? 'Nothing to redo.' : 'Nothing to undo.');
+    if (steps > list.length) throw new ToolError('bad_input', `steps: ${list.length} step${list.length === 1 ? '' : 's'} can be ${redo ? 'redone' : 'undone'}, not ${steps}.`, { detail: { field: 'steps', range: [1, list.length] } });
+    const taken = list.slice(0, steps).map(wordsOf);
+    const verb = redo ? 'Redo' : 'Undo';
+    return { part: `${verb} ${taken[0].label}`, value: false, noLedger: true, redo, taken, resolved: { [redo ? 'redo' : 'undo']: taken.map(whose).join(', ') } };
+  },
+
+  async apply(plan, ctx: EditCtx) {
+    const { doc } = ctx.services;
+    await ctx.checkpoint({ label: `${plan.redo ? 'Redo' : 'Undo'} ${plan.taken.length} step${plan.taken.length === 1 ? '' : 's'}` });
+    for (const w of plan.taken) {
+      const before = doc.assistant.mark().history.version;
+      ctx.step.run(() => (plan.redo ? doc.redo() : doc.undo()));
+      if (doc.assistant.mark().history.version === before) throw new ToolError('changed', `${w.label} could not be ${plan.redo ? 'redone' : 'undone'} now: nothing was changed.`);
+    }
+    await ctx.checkpoint({ pace: 'commit' });
+  },
+
+  reply(plan, data: EditData): ToolReply {
+    const verb = plan.redo ? 'Redid' : 'Undid';
+    const text = `${verb} ${plan.taken.map(whose).join(', ')}`;
+    return { text, data: { ...data, [plan.redo ? 'redone' : 'undone']: plan.taken }, summary: text };
+  },
+};
+
 export const tool: ToolImpl = {
   kind: 'edit',
-  run: (ctx) => runEdit(ctx, undoTool),
+  run(ctx) {
+    const action = ctx.input.action ?? 'own';
+    if (action === 'undo' || action === 'redo') return runEdit(ctx, anyTool);
+    if (action !== 'own') throw new ToolError('bad_input', 'action: own, undo or redo.', { detail: { field: 'action' } });
+    return runEdit(ctx, undoTool);
+  },
 };

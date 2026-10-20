@@ -112,7 +112,7 @@ export const SHARDS = {
   // The Part's tools for the app's Assistant, each spec on its own host with the Assistant's test
   // switches and the scripted model (e2e/assistant-helpers.ts): the tools offered, watch mode,
   // honest errors, the person first, take-overs, the eval set.
-  assistant: ['e2e/cad-assistant-watch.spec.ts', 'e2e/cad-assistant-honest.spec.ts', 'e2e/cad-assistant-coexist.spec.ts', 'e2e/cad-assistant-takeover.spec.ts', 'e2e/cad-assistant-eval.spec.ts', 'e2e/cad-assistant-sketch-tools.spec.ts', 'e2e/cad-assistant-features.spec.ts'],
+  assistant: ['e2e/cad-assistant-watch.spec.ts', 'e2e/cad-assistant-honest.spec.ts', 'e2e/cad-assistant-coexist.spec.ts', 'e2e/cad-assistant-takeover.spec.ts', 'e2e/cad-assistant-eval.spec.ts', 'e2e/cad-assistant-sketch-tools.spec.ts', 'e2e/cad-assistant-features.spec.ts', 'e2e/cad-assistant-workspace.spec.ts'],
   // Opt-in: Daniel's 113 MB STEP (CAD_E2E_BIG_STEP); its tests skip without it.
   // Edit in CAD on the 113 MB STEP (CAD_KERNEL_BIG_STEP or CAD_E2E_BIG_STEP): its timings.
   big: ['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts'],

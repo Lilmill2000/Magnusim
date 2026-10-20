@@ -131,7 +131,7 @@ describe('the registration', () => {
     h = await start();
     const handle = assistantTestHandle(h.services)!;
     const missing = TOOL_NAMES.filter((n) => !CORE_TOOLSET.includes(n));
-    expect(missing).toEqual(['body', 'construct', 'delete', 'direct', 'edit_feature', 'sweep_loft', 'view']);
+    expect(missing).toEqual(['body', 'construct', 'delete', 'direct', 'edit_feature', 'sweep_loft', 'view', 'workspace']);
     expect(await handle.setToolset('core')).toMatchObject({ available: true });
     const reg = h.fake.registrations.at(-1)!;
     expect(reg.tools.map((t) => t.name)).toEqual(TOOL_NAMES.filter((n) => CORE_TOOLSET.includes(n)));

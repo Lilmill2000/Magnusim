@@ -7,7 +7,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Plane, Vector3, type Camera, type Sphere } from 'three';
 import type { Vec3 } from '../types/doc';
-import type { SectionState, SnapshotOptions, SnapshotView } from '../types/viewport';
+import type { Projection, SectionState, SnapshotOptions, SnapshotView } from '../types/viewport';
 import { CameraRig, VIEW_DIRS } from './camera';
 import { TRIAD_PX } from './colors';
 import { sectionPlane } from './section';
@@ -45,13 +45,15 @@ export function snapshotSize(o: Pick<SnapshotOptions, 'width' | 'height'>, gpuMa
  * `sphere` already carries the framing margin. The caller sets `scene` (near and far) to all that
  * is drawn.
  */
-export function snapshotRig(view: SnapshotView, sphere: Sphere, width: number, height: number): CameraRig {
+export function snapshotRig(view: SnapshotView, sphere: Sphere, width: number, height: number, projection: Projection = 'orthographic'): CameraRig {
   const d = SNAPSHOT_DIRS[view];
   const rig = new CameraRig();
   rig.projection = 'orthographic';
   rig.orient(d.dir, d.up);
   rig.frame(sphere);
   if (width < height) rig.orthoHeight *= height / width;
+  // Perspective (the Assistant's pictures may ask for it): the same apparent size at the centre.
+  if (projection === 'perspective') rig.setProjection('perspective');
   rig.scene.copy(sphere);
   return rig;
 }

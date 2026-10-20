@@ -93,7 +93,9 @@ const ALL_VALUES = new Set([...VALUES.values()].flatMap((s) => [...s]));
 const value = (at: string, v: string) => expect(VALUES.get(at), at).toContain(v);
 
 /** Reply keys the guide and help name (each one a key the tools' replies carry). */
-const REPLY_KEYS = ['volume_mm3', 'area_mm2', 'bbox_mm', 'at_mm', 'problem_total', 'problem_counts', 'dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut', 'steps_left', 'usd_left', 'changes_left'];
+const REPLY_KEYS = ['volume_mm3', 'area_mm2', 'bbox_mm', 'at_mm', 'problem_total', 'problem_counts', 'dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut', 'steps_left', 'usd_left', 'changes_left',
+  // The workspace tool: its answers' undo_step, and the targets of expand and collapse.
+  'undo_step', 'sketch_panel', 'sketch_details'];
 
 /** Every text of help, and the guide. */
 const helpTexts = () => Object.values(HELP).flatMap((rows) => rows.flatMap((r) => [r.about, r.text]));
@@ -237,8 +239,8 @@ describe("the guide of a Part that offers only some of its tools (the eval's cor
     const lines = g.split('\n');
     expect(lines[0]).toBe(GUIDE.split('\n')[0]);
     expect(lines[1]).toBe(notOfferedLine(namedInGuide(missing)));
-    // Only the tools the guide names: body, construct, direct and sweep_loft are never in it.
-    expect(lines[1]).toBe('Tools not offered now: delete, edit_feature, view.');
+    // Only the tools the guide names: body, construct, direct, sweep_loft and workspace are never in it.
+    expect(lines[1]).toBe('Not offered now: delete, edit_feature, view.');
     const rest = lines.filter((_, i) => i !== 1).join('\n');
     for (const t of missing) expect(names(rest, t), t).toBe(false);
     for (const t of CORE_TOOLSET) expect(names(rest, t), t).toBe(names(GUIDE, t));

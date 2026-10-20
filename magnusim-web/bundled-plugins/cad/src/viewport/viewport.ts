@@ -1449,7 +1449,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const sphere = box.getBoundingSphere(new Sphere());
     if (!(sphere.radius > 1e-6)) sphere.radius = 1;
     sphere.radius *= FIT_MARGIN;
-    const snapRig = snapshotRig(o.view, sphere, w, h);
+    const snapRig = snapshotRig(o.view, sphere, w, h, o.projection ?? 'orthographic');
+    const display = o.display ?? 'shaded-edges';
     snapRig.scene.copy(sceneSphere());
     const cam = snapRig.apply(w / h);
     const cut = o.section ? snapshotClip(o.section) : null;
@@ -1477,8 +1478,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         plainCall(l.plain, true);
       }
       for (const b of bodies.values()) {
-        b.mesh.visible = drawn(b);
-        b.edges.visible = drawn(b) && b.data.drawEdges.length >= 6;
+        b.mesh.visible = drawn(b) && display !== 'wireframe';
+        b.edges.visible = drawn(b) && display !== 'shaded' && b.data.drawEdges.length >= 6;
       }
       for (const l of layers.values()) if (SNAPSHOT_HIDDEN_LAYERS.has(l.layer.id)) l.group.visible = false;
       const planes = cut ? [cut] : null;
@@ -1535,7 +1536,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       rgba: rowsTopDown(pixels, w, h),
       width: w,
       height: h,
-      mmPerPx: snapRig.orthoHeight / h,
+      mmPerPx: snapRig.viewHeightAtTarget() / h,
       project: (p) => projectToPicture(cam, w, h, p),
       visibleFaceAt(body, x, y) {
         // The bodies as drawn in the picture; their picking structures as they are now (built since, maybe).

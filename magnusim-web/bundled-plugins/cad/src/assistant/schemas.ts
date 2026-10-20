@@ -1,4 +1,4 @@
-// The Part's 20 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
+// The Part's 21 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
 // windows, descriptions and input schemas, in the schema subset the app accepts
 // (scripts/server/assistant/schema.ts): type, description, enum, properties, required,
 // additionalProperties false, items, min/max lengths, values and items; never $ref, unions,
@@ -54,6 +54,7 @@ export const HELP_TOPICS = [
   'guide',
   'sketch_tools',
   'details',
+  'workspace',
 ] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
@@ -70,6 +71,43 @@ export const PATTERN_OPTIONS = ['symmetric', 'flip2', 'symmetric2', 'extent', 'e
 
 /** The view directions (the view tool's enum). */
 export const VIEW_DIRECTIONS = ['iso', 'iso_back', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
+
+/** The workspace tool's actions (its enum; tools/workspace.ts answers each). */
+export const WORKSPACE_ACTIONS = [
+  'roll_back_to',
+  'roll_to_end',
+  'show',
+  'hide',
+  'origin_planes',
+  'rename_part',
+  'select',
+  'selection_filter',
+  'expand',
+  'collapse',
+  'toolbar_show',
+  'toolbar_hide',
+  'toolbar_move',
+  'toolbar_reset',
+  'banana_show',
+  'banana_hide',
+  'banana_place',
+  'reload',
+  'keep_mine',
+  'retry_save',
+  'retry_kernel',
+  'import_step',
+  'reheal',
+  'export_step',
+  'send_to_simulation',
+  'fit',
+  'standard_view',
+  'normal_to',
+  'orbit_pivot',
+  'section',
+  'projection',
+  'display',
+] as const;
+export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
 
 /** The sketch entity kinds and relation/dimension kinds (the sketch tool's enums). */
 export const SKETCH_ENTITY_KINDS = ['point', 'line', 'centerline', 'polyline', 'circle', 'arc', 'rect', 'center_rect', 'slot', 'polygon', 'sector', 'spline', 'control_spline'] as const;
@@ -146,13 +184,15 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, returned as one image (2 to 4 as a labelled sheet), orthographic. hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length> | middle] [flip]" to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). Pictures show shape, not sizes, and sketch dimension values are not drawn: use measure for numbers. If the model cannot read images, the call says so instead. Use at milestones and at the end.',
+      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, returned as one image (2 to 4 as a labelled sheet), orthographic. hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length> | middle] [flip]" to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). display: shaded_edges, shaded or wireframe; projection: orthographic, or perspective (mm_per_px then holds at the middle only). Pictures show shape, not sizes, and sketch dimension values are not drawn: use measure for numbers. If the model cannot read images, the call says so instead. Use at milestones and at the end. To move the person\'s own view use workspace.',
     schema: obj({
       views: arr(en(VIEW_DIRECTIONS, 'A direction'), 1, 4, 'Directions.'),
       hide: arr(str(80, 'A body name'), 0, 32, 'Bodies to leave out.'),
       section: str(120, '"" or "<Top|Front|Right> [offset <length> | middle] [flip]".'),
       labels: en(['none', 'bodies', 'faces'], 'What to write on the picture.'),
       size: en(['small', 'large'], 'Long side 768 or 1280 px.'),
+      display: en(['shaded_edges', 'shaded', 'wireframe'], 'How the bodies are drawn.'),
+      projection: en(['orthographic', 'perspective'], 'orthographic keeps mm_per_px true everywhere.'),
     }),
   },
   {
@@ -161,7 +201,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 30,
     description:
-      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project), details (construct methods and refs, direct kinds, edit_feature choice fields, extrude face and direction, pattern options and keys, measure totals and checks). Read it when unsure instead of guessing.',
+      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project), details (construct methods and refs, direct kinds, edit_feature choice fields, extrude face and direction, pattern options and keys, measure totals and checks), workspace (every action of the workspace tool). Read it when unsure instead of guessing.',
     schema: obj({ topic: en(HELP_TOPICS, 'Topic') }),
   },
   {
@@ -354,16 +394,17 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'body',
-    title: 'Name or colour a body',
+    title: 'Name, colour or show a body',
     risk: 'edit',
     timeoutS: 60,
     description:
-      'Rename a body, set its colour (#rrggbb), or say whether it goes into the project\'s simulation geometry. "" or keep leaves a field as it is. One step.',
+      "Rename a body, set its colour (#rrggbb), say whether it goes into the project's simulation geometry, or show or hide it in the person's view (the tree's eye: saved view state, not an undo step). \"\" or keep leaves a field as it is. One step.",
     schema: obj({
       body: str(80, 'The body', 1),
       rename_to: str(40, '"" keeps it'),
       color: str(7, '"#rrggbb" or ""'),
       simulation: en(['keep', 'include', 'exclude'], 'In the simulation geometry'),
+      visibility: en(['keep', 'show', 'hide'], "In the person's view"),
     }),
   },
   {
@@ -383,12 +424,16 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'undo',
-    title: "Undo the Assistant's steps",
+    title: 'Undo or redo',
     risk: 'edit',
     timeoutS: 120,
     description:
-      "Take back your own calls in this request, newest first (steps: how many), or with previous_turn true the whole previous Assistant request when it is still the newest change in the Part. It never undoes the person's changes: it stops and says so.",
-    schema: obj({ steps: int(0, 20, "How many of this request's calls; 0 with previous_turn"), previous_turn: bool('Undo the previous Assistant request instead') }),
+      "action own: take back your own calls in this request, newest first (steps: how many), or with previous_turn true the whole previous Assistant request when it is still the newest change in the Part; it never undoes the person's changes. action undo or redo: the person's own Undo (Ctrl+Z) or Redo (Ctrl+Y), steps times, whoever made those steps; the result names each step and whose it was (person or an Assistant request). Use undo or redo only when the person asked for it.",
+    schema: obj({
+      action: en(['own', 'undo', 'redo'], 'own: your calls; undo, redo: the newest steps of anyone'),
+      steps: int(0, 20, "How many; own: of this request's calls, 0 with previous_turn"),
+      previous_turn: bool('own: undo the previous Assistant request instead'),
+    }),
   },
   {
     name: 'delete',
@@ -460,6 +505,21 @@ const SPECS: ToolSpec[] = [
       distance: EXPR('blind: the depth; through: ""'),
     }),
   },
+  {
+    name: 'workspace',
+    title: 'Workspace and view',
+    risk: 'edit',
+    timeoutS: 180,
+    description:
+      "Things the person controls around the model, one action per call (target, value, items: \"\" or [] when unused; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, construction feature or body), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (asks the person to pick the file), reheal (an import: the one undo step here), export_step (opens the person's Export STEP panel filled in; they click Export), send_to_simulation (save, then link into the project's geometry as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset. Banana for scale: banana_show, banana_hide, banana_place. The person's own view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or while they have not moved it in this request. Each result says what changed.",
+    schema: obj({
+      action: en(WORKSPACE_ACTIONS, 'What to do'),
+      target: str(300, 'What it acts on, or ""'),
+      value: str(200, 'The value, or ""'),
+      items: arr(str(300, 'A selector, name or kind'), 0, 40, 'Lists: selection, filter, export bodies; else []'),
+      person_asked: bool('The person asked for this view change in this request'),
+    }),
+  },
 ];
 
 const toTool = (s: ToolSpec): AssistantTool => ({
@@ -472,7 +532,7 @@ const toTool = (s: ToolSpec): AssistantTool => ({
   ...(s.confirm ? { confirm: s.confirm } : {}),
 });
 
-/** The 20 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
+/** The 21 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
 export const CAD_TOOLS: readonly AssistantTool[] = Object.freeze(SPECS.map(toTool).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
 
 /** The tools' names, by name. */

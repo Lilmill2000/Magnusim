@@ -30,11 +30,12 @@ afterEach(() => {
   setViewRaster(null);
 });
 
-const EDITS = CAD_TOOLS.filter((t) => t.risk !== 'read').map((t) => t.name);
+// The workspace tool's answers are view and session state (undo_step false): no picture (the last test).
+const EDITS = CAD_TOOLS.filter((t) => t.risk !== 'read' && t.name !== 'workspace').map((t) => t.name);
 const READS = CAD_TOOLS.filter((t) => t.risk === 'read').map((t) => t.name);
 
 /** Every tool answers ok at once with a line of its own (the edit tools' work is not what is tested here). */
-const STUBS: Record<string, ToolImpl> = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, { kind: t.risk === 'read' ? 'read' : 'edit', run: async () => ({ text: `${t.name} ok`, data: { did: t.name } }) } as ToolImpl]));
+const STUBS: Record<string, ToolImpl> = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, { kind: t.risk === 'read' ? 'read' : 'edit', run: async () => ({ text: `${t.name} ok`, data: { did: t.name, ...(t.name === 'workspace' ? { undo_step: false } : {}) } }) } as ToolImpl]));
 
 interface FakeView {
   shots: SnapshotOptions[];
@@ -99,6 +100,16 @@ const start = async (images: boolean | null = true) => {
 };
 
 describe('a picture after every edit', () => {
+  it('an answer that changed no model (the workspace tool's undo_step false) carries none', async () => {
+    h = await start(true);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    const r = await call(h, 'workspace');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.result.images).toBeUndefined();
+    expect(fv.shots).toHaveLength(0);
+  });
+
   it('each edit tool that answers ok carries one iso picture, 640 x 480 PNG, with its line in data; reads carry none', async () => {
     h = await start(true);
     const fv = fakeViewport(h);

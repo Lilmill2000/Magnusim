@@ -46,3 +46,5 @@ export { tool as sweep_loft } from './sweep_loft';
 export { tool as undo } from './undo';
 // view: Look at the Part.
 export { tool as view } from './view';
+// workspace: Workspace and view.
+export { tool as workspace } from './workspace';
