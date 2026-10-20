@@ -7,14 +7,21 @@
 // and poker-chip each score pass at the first shot; each record holds the steps, the errors by
 // reason and the first shot. The run folder holds runs.jsonl, the turn's events, the calls, the
 // facts and the final picture (a PNG of the Part). A run whose first shot fails a check gets one
-// repair turn naming the failed checks, and a refused call is counted by its reason.
+// repair turn naming the failed checks, and a refused call is counted by its reason. The Part asks
+// for review rounds: each reference turn that edits ends with the round's "Review: no changes", and
+// the record names the round; a live round shows on the chip ("Assistant · reviewing (round 1 of
+// 3)") with the Part's review prompt as the model's next message, and --review off asks for none.
 // The command line (eval/run.mjs, as `npm run eval:assistant` runs it, in a temp folder of its
 // own): --scripted starts its own app server and scripted model and records the run in runs.jsonl,
 // its folder and summary.md; --profile reads the key from the environment variable the profile
 // names, and the model gets it as its bearer token while no output or record holds it, and the
 // run's temp projects root and Assistant home are gone after it; --attach --clean removes only the
 // projects the run made (the person's of the same title stays), and a --tab of the person's own
-// Part stops the task and the probe before any turn, the person's Part untouched.
+// Part stops the task and the probe before any turn, the person's Part untouched (and the run
+// says how to keep an attached app's logs); a --reference picture goes with the first request and
+// the record keeps only its path and SHA-256. --scripted and --profile keep their own server's
+// output (server.log) and a row per model request (debug/provider.jsonl) in the run folder after
+// the server is gone; --scripted --tasks probe runs the probe's turn and keeps its events.
 // Each test may take the suite's 240 s like the shard's other tests (a fresh page, the Part, the
 // kernel, the turn, the walk and the picture on CI's two slow cores; 120 s was never measured on
 // Linux), the repair test two turns' ceiling and a minute, the poker chip 300 s.
@@ -23,14 +30,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error the app's host helper is plain JavaScript
 import { killTree } from '../../../e2e/support/host-server.mjs';
 import { fakeSteps, loadReference, loadTask, PLUGIN_DIR, referenceCalls, runTask, scriptedDriver, type EvalDriver, type RunRecord } from '../eval/lib.mjs';
-import { cadFrame, chats, newProject, openNewPart, resetAssistant, startAssistantHost, tabRow, useScriptedModel, type AssistantHost } from './assistant-helpers';
+import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, tabRow, useScriptedModel, type AssistantHost } from './assistant-helpers';
+import { REVIEW_PROMPT } from '../src/assistant/review';
 import { PNG } from './png';
 
 let host: AssistantHost;
@@ -61,6 +69,9 @@ const TURN_MS = 100_000;
 const scripted = (page: Page, id: string, out: string | null = null, driver: EvalDriver = scriptedDriver(host.fake)): Promise<RunRecord> =>
   runTask({ base: host.base, page, driver, out }, loadTask(id), { label: 'e2e', pace: 'fast', turnMs: TURN_MS });
 
+/** The Part's read tools (schemas.ts risk 'read'): their answers carry no picture of the Part. */
+const READ_TOOLS = new Set(['get_model', 'find', 'measure', 'view', 'help']);
+
 /** A first-shot pass on every counted check, with the record's step, error and first-shot fields. */
 function expectPass(r: RunRecord, id: string): void {
   const failed = r.checks.filter((c) => !c.pass && !c.heuristic).map((c) => `${c.id}: ${c.why}`);
@@ -75,6 +86,12 @@ function expectPass(r: RunRecord, id: string): void {
   expect(r).toMatchObject({ task: id, driver: 'scripted', label: 'e2e', run: 1, end: [{ state: 'done' }], health: { health: 'ok' }, fact_errors: [] });
   // The scripted model sent the tools strict: no fallback note.
   expect(r.notes).toEqual([]);
+  // The app's one review round after the build, which the reference answers with no change.
+  expect([r.review, r.reviews, r.references]).toEqual([true, [{ turn: 1, repair: false, round: 1, of: 3 }], []]);
+  // With review on, the record's images still count each edit's picture (the references call no view).
+  const edits = referenceCalls(loadReference(id), 0).filter((c) => !READ_TOOLS.has(c.tool) && c.expect === 'ok').length;
+  expect(edits, `${id}: the reference edits`).toBeGreaterThan(0);
+  expect(r.images, `${id}: one picture per edit`).toBe(edits);
 }
 
 test('cad:assistant-eval-plate-holes the plate scores pass at the first shot, its walk of t keeps it working; the run folder holds its records and a picture', async ({ page }, info) => {
@@ -137,8 +154,8 @@ test('cad:assistant-eval-repair a first shot that fails gets one repair turn nam
   const bad = { tools: [{ name: 'cad__hole', input: { name: '', face: 'Spacer.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '3 mm', depth: 'through', distance: '' } }] };
   const driver: EvalDriver = {
     kind: 'scripted',
-    beforeTurn: () => host.fake.reply(bad, ...steps.slice(0, extrude), { text: 'The spacer sketch is ready.' }),
-    beforeRepair: () => host.fake.reply(steps[extrude], { text: 'The spacer is extruded now.' }),
+    beforeTurn: () => host.fake.reply(bad, ...steps.slice(0, extrude), { text: 'The spacer sketch is ready.' }, { text: 'Review: no changes' }),
+    beforeRepair: () => host.fake.reply(steps[extrude], { text: 'The spacer is extruded now.' }, { text: 'Review: no changes' }),
   };
   const before = chats(host).length;
   const r = await scripted(page, 'spacer', null, driver);
@@ -151,6 +168,10 @@ test('cad:assistant-eval-repair a first shot that fails gets one repair turn nam
   expect(r.invalid_input).toBe(1);
   expect(r.steps).toBe(1 + extrude + 1);
   expect(r.end.map((e) => e.state)).toEqual(['done', 'done']);
+  expect(r.reviews).toEqual([
+    { turn: 1, repair: false, round: 1, of: 3 },
+    { turn: 2, repair: true, round: 1, of: 3 },
+  ]);
   // The repair turn's request names the failed checks.
   const asked = chats(host)
     .slice(before)
@@ -158,6 +179,49 @@ test('cad:assistant-eval-repair a first shot that fails gets one repair turn nam
     .find((m) => m.includes('These checks fail:'));
   expect(asked).toContain('bodies (0 bodies, not 1)');
   expect(asked).toContain('Fix the Part.');
+});
+
+test('cad:assistant-eval-review a turn that edited the Part gets the review prompt: a round with an edit gets the next one, the chip says reviewing (round 2 of 3) while it runs, and the turn ends on a round with none', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant review');
+  const { frame, tab } = await openNewPart(page, request, host, pid, 'Part 1', { review: true });
+  const set = (expr: string) => ({ tools: [{ name: 'cad__set_params', input: { set: [{ name: 't', kind: 'length', expr, comment: '', rename_to: '' }], remove: [] } }] });
+  const before = chats(host).length;
+  host.fake.reply(set('8 mm'), { text: 'Set t.' }, set('9 mm'), { text: 'Made t 9 mm.' }, { text: 'Review: no changes', hold: 'review-2' });
+  const t = await startTurn(request, host, { text: 'Add a thickness parameter.', tab });
+  await expect(chipWords(frame)).toHaveText(/^Assistant · reviewing \(round 2 of 3\)/, { timeout: 60_000 });
+  host.fake.release('review-2');
+  const e = await t.ended(60_000);
+  expect(e.turn.state).toBe('done');
+  expect(e.events.filter((x) => x.type === 'review').map((x) => [x.round, x.of])).toEqual([
+    [1, 3],
+    [2, 3],
+  ]);
+  // The Part's review prompt is the model's next message after each answer that ended a round.
+  const lastUser = (i: number) => {
+    const m = chats(host)[before + i].body.messages.at(-1);
+    return m.role === 'user' ? (m.content as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text).join('\n') : '';
+  };
+  expect(lastUser(2)).toBe(`Review round 1 of 3: ${REVIEW_PROMPT}`);
+  expect(lastUser(4)).toBe(`Review round 2 of 3: ${REVIEW_PROMPT}`);
+  // An edit made in a review round still carries its picture of the Part, as one before it does.
+  for (const i of [1, 3]) {
+    const [set] = resultsIn(chats(host)[before + i]);
+    expect(set, `the edit answered in request ${i}`).toMatchObject({ tool: 'cad__set_params', ok: true, data: { picture: expect.stringMatching(/^Picture: iso view/) } });
+    expect(set.images).toHaveLength(1);
+  }
+  expect(chats(host).length - before).toBe(5);
+  // The turn ended: the chip says how, not the round.
+  await expect(chipWords(frame)).toHaveText(/^Assistant: Add a thickness parameter\. · done/, { timeout: 30_000 });
+});
+
+test('cad:assistant-eval-review-off with review off (setReview(false), the eval\'s --review off) the same edit ends the turn with its own answer', async ({ page }) => {
+  test.setTimeout(240_000);
+  const steps = fakeSteps(loadReference('spacer'), 0).filter((x) => x.text !== 'Review: no changes');
+  const driver: EvalDriver = { kind: 'scripted', beforeTurn: () => host.fake.reply(...steps) };
+  const r = await runTask({ base: host.base, page, driver, out: null }, loadTask('spacer'), { label: 'e2e', pace: 'fast', turnMs: TURN_MS, review: false });
+  expect(r.final.pass).toBe(true);
+  expect([r.review, r.reviews]).toEqual([false, []]);
 });
 
 // ---- The command line (eval/run.mjs), as a person runs it.
@@ -219,20 +283,63 @@ const filesUnder = (dir: string): string[] =>
   readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((d) => d.isFile())
     .map((d) => join(d.parentPath, d.name));
+/** The provider log's rows (debug/provider.jsonl in a run folder). */
+const providerRows = (out: string): Array<Record<string, unknown> & { turn: string | null; dialect: string; attempt: string; ok: boolean; request: { tools?: unknown[] } }> =>
+  readFileSync(join(out, 'debug', 'provider.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l));
+/**
+ * The logs a run's own server leaves in its folder, kept after the server is gone: server.log (its
+ * whole output) and debug/provider.jsonl (a row per model request), both named at the end.
+ */
+function expectServerLogs(out: string, r: { out: string }, requests: number): void {
+  const server = readFileSync(join(out, 'server.log'), 'utf8');
+  expect(server).toMatch(/VITE|Local:|\[assistant\]/);
+  const rows = providerRows(out);
+  expect(rows.length, 'a row per model request').toBe(requests);
+  for (const row of rows) {
+    expect(row).toMatchObject({ ok: true, attempt: expect.any(String) });
+    expect(typeof row.turn, 'each row names its turn').toBe('string');
+    expect(Array.isArray(row.request.tools), 'the whole request, its tools too').toBe(true);
+  }
+  expect(r.out).toContain(`[eval] server log: ${join(out, 'server.log')}`);
+  expect(r.out).toContain(`[eval] provider log: ${join(out, 'debug', 'provider.jsonl')}`);
+}
 /** The projects --clean says it removed: [{id, status}]. */
 const removedIn = (out: string) => [...out.matchAll(/\[eval\] removed project (\S+): (\d+)/g)].map((m) => ({ id: m[1], status: Number(m[2]) }));
 
 test('cad:assistant-eval-cli-scripted the command line with --scripted: its own app server and scripted model, the run in runs.jsonl, its folder and summary.md; the server and its temp folder gone after', async ({}, info) => {
   test.setTimeout(420_000);
   const out = info.outputPath('cli');
-  const r = await evalCli(['--scripted', '--tasks', 'spacer', '--label', 'cli', '--out', out, '--port-from', String(CLI_PORT)], { ms: 360_000 });
+  // The person's reference picture, outside the repository.
+  const picDir = mkdtempSync(join(tmpdir(), 'cad-eval-ref-'));
+  const pic = join(picDir, 'spacer.png');
+  // A PNG's signature and IHDR (8 x 8; all the app reads of it), 6 KB in all: the provider log keeps
+  // base64 that long as a marker.
+  const png = Buffer.alloc(6000);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+  png.writeUInt32BE(13, 8);
+  png.write('IHDR', 12, 'ascii');
+  png.writeUInt32BE(8, 16);
+  png.writeUInt32BE(8, 20);
+  writeFileSync(pic, png);
+  const r = await evalCli(['--scripted', '--tasks', 'spacer', '--label', 'cli', '--out', out, '--port-from', String(CLI_PORT), '--reference', pic], { ms: 360_000 });
   try {
     expect(r.code, `${r.out}\n${r.err}`).toBe(0);
     expect(r.out).toContain('[eval] starting an app server of its own');
     const [rec, ...more] = recordsIn(out, r);
     expect(more).toEqual([]);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'scripted', label: 'cli', first_shot: { pass: true }, final: { pass: true }, repaired: false, end: [{ state: 'done' }] });
+    // The reference picture: its path and digest in the record, its bytes only in the first request.
+    expect(rec.references).toEqual([{ path: pic, sha256: createHash('sha256').update(png).digest('hex') }]);
+    expect(rec.reviews).toEqual([{ turn: 1, repair: false, round: 1, of: 3 }]);
+    expect(readFileSync(join(out, 'runs.jsonl'), 'utf8')).not.toContain(png.toString('base64'));
+    const first = providerRows(out)[0];
+    expect(JSON.stringify(first.request)).toMatch(/\[base64 data, \d+ bytes\]/);
+    expect(JSON.stringify(first.request)).not.toContain(png.toString('base64'));
     for (const f of ['events.jsonl', 'calls.json', 'facts.json', 'final.png']) expect(existsSync(join(out, 'spacer-1', f)), f).toBe(true);
+    expectServerLogs(out, r, fakeSteps(loadReference('spacer'), 0).length);
     const md = readFileSync(join(out, 'summary.md'), 'utf8');
     expect(md).toContain('# Assistant CAD eval: cli');
     expect(md).toContain('Driver: scripted');
@@ -245,6 +352,7 @@ test('cad:assistant-eval-cli-scripted the command line with --scripted: its own 
     expect(readdirSync(r.tmp).filter((n) => n.startsWith(HOST_TEMP))).toEqual([]);
   } finally {
     rmSync(r.tmp, { recursive: true, force: true, maxRetries: 3 });
+    rmSync(picDir, { recursive: true, force: true });
   }
 });
 
@@ -272,8 +380,9 @@ test("cad:assistant-eval-cli-profile --profile: the key named by key_env reaches
     // ... and nothing else holds it: not the output, not a record.
     expect(r.out).not.toContain(token);
     expect(r.err).not.toContain(token);
+    expectServerLogs(out, r, asked.length);
     const files = filesUnder(out);
-    expect(files.length).toBeGreaterThanOrEqual(6);
+    expect(files.length).toBeGreaterThanOrEqual(8);
     for (const f of files) expect(readFileSync(f).includes(token), f).toBe(false);
     // The run's own app server (its projects root and the Assistant's home, where the key was saved) is gone.
     expect(r.hostTemps.length).toBe(1);
@@ -281,6 +390,32 @@ test("cad:assistant-eval-cli-profile --profile: the key named by key_env reaches
   } finally {
     rmSync(r.tmp, { recursive: true, force: true, maxRetries: 3 });
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('cad:assistant-eval-cli-probe --scripted --tasks probe: the turn takes every tool strict and calls the read; probe.json, probe-1/events.jsonl, server.log and the provider log of that turn are kept', async ({}, info) => {
+  test.setTimeout(420_000);
+  const out = info.outputPath('probe');
+  const r = await evalCli(['--scripted', '--tasks', 'probe', '--out', out, '--port-from', String(CLI_PORT)], { ms: 360_000 });
+  try {
+    expect(r.code, `${r.out}\n${r.err}`).toBe(0);
+    const probe = JSON.parse(readFileSync(join(out, 'probe.json'), 'utf8'));
+    expect(probe).toMatchObject({ strict: 'accepted', end: { state: 'done' }, notes: [] });
+    expect(probe.calls).toMatchObject([{ ok: true }]);
+    const events = readFileSync(join(out, 'probe-1', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(events.at(-1)).toMatchObject({ type: 'end', state: 'done' });
+    const turn = events[0].turn;
+    expect(typeof turn).toBe('string');
+    expectServerLogs(out, r, 2);
+    const rows = providerRows(out);
+    expect(rows.map((x) => [x.turn, x.attempt, x.reason])).toEqual([
+      [turn, 'strict', null],
+      [turn, 'strict', null],
+    ]);
+    // Every tool the Part offered is in the request as sent (with the app's own).
+    expect(rows[0].request.tools!.length).toBeGreaterThanOrEqual(probe.tools);
+  } finally {
+    rmSync(r.tmp, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
@@ -299,6 +434,9 @@ test("cad:assistant-eval-cli-attach --attach --clean removes only the projects t
     const r1 = await evalCli(['--attach', host.base, '--tasks', 'spacer', '--clean', '--out', out1]);
     temps.push(r1.tmp);
     expect(r1.code, `${r1.out}\n${r1.err}`).toBe(0);
+    // An attached app's logs are its own: the run says how to keep them.
+    expect(r1.out).toContain('start the app with MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder>');
+    expect(existsSync(join(out1, 'server.log'))).toBe(false);
     const [rec] = recordsIn(out1, r1);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'attach', final: { pass: true } });
     expect(rec.project).not.toBe(mine);

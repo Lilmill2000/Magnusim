@@ -83,7 +83,7 @@ export function readViewInput(input: Record<string, unknown>): ViewInput {
   const hide = input.hide ?? [];
   if (!Array.isArray(hide) || hide.length > 32 || hide.some((h) => typeof h !== 'string')) throw bad('hide', 'hide must list at most 32 body names.');
   const section = input.section ?? '';
-  if (typeof section !== 'string') throw bad('section', 'section must be "" or "<Top|Front|Right> [offset <length>] [flip]".');
+  if (typeof section !== 'string') throw bad('section', 'section must be "" or "<Top|Front|Right> [offset <length> | middle] [flip]".');
   const labels = input.labels ?? 'none';
   if (!LABELS.includes(labels as ViewLabels)) throw bad('labels', `labels must be one of ${LABELS.join(', ')}.`);
   const size = input.size ?? 'small';
@@ -95,11 +95,16 @@ export function readViewInput(input: Record<string, unknown>): ViewInput {
 
 export type SectionPlane = 'top' | 'front' | 'right';
 
-/** A cut parallel to an origin plane, as the snapshot takes it: `offset` mm along the plane's normal. */
+/**
+ * A cut parallel to an origin plane, as the snapshot takes it: `offset` mm along the plane's normal.
+ * `middle`: asked as "<plane> middle", the offset is the middle of the shown bodies' box along that
+ * normal (sectionAtMiddle), 0 until it is known.
+ */
 export interface SectionChoice {
   plane: SectionPlane;
   offset: number;
   flip: boolean;
+  middle?: true;
 }
 
 const PLANE_WORDS: Readonly<Record<string, SectionPlane>> = { top: 'top', xy: 'top', front: 'front', xz: 'front', right: 'right', yz: 'right' };
@@ -107,13 +112,13 @@ const PLANE_NAMES: Readonly<Record<SectionPlane, string>> = { top: 'Top', front:
 /** The axis of each plane's normal and its sign (Front's normal points at -Y: ORIGIN_PLANES). */
 const PLANE_AXIS: Readonly<Record<SectionPlane, { axis: 'x' | 'y' | 'z'; sign: 1 | -1 }>> = { top: { axis: 'z', sign: 1 }, front: { axis: 'y', sign: -1 }, right: { axis: 'x', sign: 1 } };
 
-const SECTION_FORM = '"" or "<Top|Front|Right> [offset <length>] [flip]"';
+const SECTION_FORM = '"" or "<Top|Front|Right> [offset <length> | middle] [flip]"';
 
 /** `section` read: null for "", else the cut; bad_section in words when it is neither. */
 export function parseSection(text: string, evaluate: (expr: string) => EvalResult): SectionChoice | null {
   const t = text.trim();
   if (!t) return null;
-  const m = /^(\S+)(?:\s+offset\s+(.+?))?(\s+flip)?$/i.exec(t);
+  const m = /^(\S+)(?:\s+offset\s+(.+?)|\s+(middle))?(\s+flip)?$/i.exec(t);
   const plane = m ? PLANE_WORDS[m[1].toLowerCase()] : undefined;
   if (!m || !plane) throw new ToolError('bad_section', `"${t}" is not a section: write ${SECTION_FORM}.`, { detail: { section: t } });
   let offset = 0;
@@ -122,7 +127,23 @@ export function parseSection(text: string, evaluate: (expr: string) => EvalResul
     if (!r.ok) throw new ToolError('bad_section', `The offset "${m[2]}" of "${t}" is not a length: ${r.error}`, { detail: { section: t, field: 'offset' } });
     offset = r.value;
   }
-  return { plane, offset, flip: !!m[3] };
+  return { plane, offset, flip: !!m[4], ...(m[3] ? { middle: true as const } : {}) };
+}
+
+/**
+ * A "<plane> middle" cut at the middle of `boxes` (the shown bodies' [xmin, ymin, zmin, xmax, ymax,
+ * zmax]) along the plane's normal; any other cut as it is. No box: through the origin.
+ */
+export function sectionAtMiddle(c: SectionChoice | null, boxes: readonly (readonly number[])[]): SectionChoice | null {
+  if (!c || !c.middle) return c;
+  const { axis, sign } = PLANE_AXIS[c.plane];
+  const i = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+  const ok = boxes.filter((b) => b.length >= 6 && Number.isFinite(b[i]) && Number.isFinite(b[i + 3]));
+  if (!ok.length) return { ...c, offset: 0 };
+  const lo = Math.min(...ok.map((b) => b[i]));
+  const hi = Math.max(...ok.map((b) => b[i + 3]));
+  // The offset is along the plane's normal: Front's points at -Y.
+  return { ...c, offset: (sign * (lo + hi)) / 2 };
 }
 
 /** What a cut keeps, in model words ("z <= 4 mm", "y >= -10 mm"). */
@@ -135,7 +156,7 @@ export function keepsWords(c: SectionChoice): string {
 
 /** The cut as the data gives it. */
 export function sectionData(c: SectionChoice | null): Record<string, unknown> | null {
-  return c ? { plane: PLANE_NAMES[c.plane], offset_mm: len(c.offset), flip: c.flip, keeps: keepsWords(c) } : null;
+  return c ? { plane: PLANE_NAMES[c.plane], offset_mm: len(c.offset), flip: c.flip, ...(c.middle ? { middle: true } : {}), keeps: keepsWords(c) } : null;
 }
 
 // ------------------------------------------------------------ the sheet
@@ -537,7 +558,12 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
   const bodies = s.rebuild.bodies;
   const hidden = bodiesToHide(input.hide, bodies);
   const hideIds = new Set(hidden.map((b) => b.id));
-  const section = parseSection(input.section, (e) => services.doc.units.evaluate(e, 'length'));
+  // "<plane> middle": through the middle of what is drawn.
+  const drawn = bodies.filter((b) => b.visible && !!b.tess && !hideIds.has(b.id));
+  const section = sectionAtMiddle(
+    parseSection(input.section, (e) => services.doc.units.evaluate(e, 'length')),
+    drawn.map((b) => b.bbox),
+  );
   const size: ViewSize = ctx.budgets.viewSize === 'small' ? 'small' : input.size;
   const layout = sheetLayout(input.views.length, SHEET_LONG_PX[size]);
   const font = LABEL_FONT_PX[size];
@@ -546,7 +572,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
   ctx.progress(0, `Drawing ${input.views.join(', ')}`);
   const snapOpts = (view: SnapshotView, t: Tile): SnapshotOptions => ({ view, width: t.w, height: t.h, hide: [...hideIds], section: section ? { ...section } : null });
   const shots = input.views.map((view, i) => snap(handle, snapOpts(view, layout.tiles[i])));
-  const shown = bodies.filter((b) => b.visible && !!b.tess && !hideIds.has(b.id));
+  const shown = drawn;
   const inTree = bodies.filter((b) => !b.visible && !hideIds.has(b.id));
 
   const marks = titleMarks(layout, input.views, font);

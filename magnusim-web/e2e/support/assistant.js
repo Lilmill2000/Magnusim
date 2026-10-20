@@ -290,11 +290,12 @@ export async function startTurn(request, base, body, opts = {}) {
 
 /**
  * The words of the app's note when a cloud provider refused to compile a request's strict
- * tools and the request went again with the workspace's tools not strict (CAD tools spec H8).
+ * tools and the request went again with fewer of them strict, or with the workspace's tools
+ * not strict (CAD tools spec H8).
  * Against the fake that means a strict schema broke one of its rules (a limit keyword, the
  * strict budget): the turn still ends well, so ended() fails it unless the test expects it.
  */
-const STRICT_FALLBACK = /could not compile these tools strictly/;
+const STRICT_FALLBACK = /could not compile (all )?these tools strictly/;
 
 /**
  * Follows turn `id`'s event log through the long-poll (GET /api/assistant/turns/:id).

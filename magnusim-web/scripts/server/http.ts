@@ -39,13 +39,15 @@ export const JSON_BODY_LIMIT = 2 * 1024 * 1024;
 export const PLUGIN_DATA_BODY_LIMIT = 9 * 1024 * 1024;
 
 /**
- * The Assistant's bodies are small, but for a workspace tool's result (images) and the
- * tool list a workspace offers; a key is a few hundred bytes.
+ * The Assistant's bodies are small, but for a workspace tool's result (images), a turn's
+ * reference pictures and the tool list a workspace offers; a key is a few hundred bytes.
  */
 export const ASSISTANT_BODY_LIMITS: Readonly<Record<string, number>> = Object.freeze({
   '/api/assistant/relay/result': 10 * 1024 * 1024,
   '/api/assistant/relay/tools': 512 * 1024,
   '/api/assistant/key': 16 * 1024,
+  // A turn's start: its prompt and up to 4 reference pictures (each at most 1.5 MB, as base64).
+  '/api/assistant/turns': 10 * 1024 * 1024,
 });
 /** Every other Assistant route (the test-only ones too). */
 export const ASSISTANT_BODY_LIMIT = 64 * 1024;

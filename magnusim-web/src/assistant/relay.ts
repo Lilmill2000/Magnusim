@@ -455,6 +455,7 @@ async function register(r: Relay, link: string, pub: PublishedTools): Promise<vo
     workspace: { ...pub.scope },
     tools: toolsOf(pub),
     ...(pub.guide ? { guide: pub.guide } : {}),
+    ...(pub.review ? { review: { rounds: pub.review.rounds, prompt: pub.review.prompt } } : {}),
   };
   // What the server had answered last: a refusal leaves it as it was.
   const before = r.postedOn;
@@ -763,7 +764,17 @@ function turnOf(d: unknown): AssistantTurn | null {
     images: typeof x.images === 'boolean' ? x.images : null,
     used: { steps: count(used.steps), stepsCap: count(used.steps_cap), changes: count(used.changes), changesCap: count(used.changes_cap), usd: count(used.usd), usdCap: count(used.usd_cap) },
     ...(end ? { end: { state: end.state, reason: typeof end.reason === 'string' ? end.reason.slice(0, 80) : '' } } : {}),
+    ...reviewOf(x.review),
   };
+}
+
+/** A turn frame's review round, kept only when it reads as one (1 <= round <= of <= 5). */
+function reviewOf(v: unknown): { review?: { round: number; of: number } } {
+  const r = v && typeof v === 'object' ? (v as { round?: unknown; of?: unknown }) : null;
+  if (!r || !Number.isInteger(r.round) || !Number.isInteger(r.of)) return {};
+  const round = r.round as number;
+  const of = r.of as number;
+  return round >= 1 && round <= of && of <= 5 ? { review: { round, of } } : {};
 }
 
 function onTurn(r: Relay, d: RelayFrameData['turn']): void {

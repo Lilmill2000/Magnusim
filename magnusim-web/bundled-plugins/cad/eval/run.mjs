@@ -3,8 +3,9 @@
 //                     (--profile <file> | --attach <url> | --scripted)
 //                     [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean]
 //                     [--out <dir>] [--no-repair] [--port-from <n>] [--turn-minutes <n>]
+//                     [--reference <file>]... [--review on|off]
 //   --tasks      task ids (eval/tasks/*.json), "all", or "probe": one request with the Part's full
-//                tool set, to see the provider take its strict schemas (no fallback note)
+//                tool set, to see how many of its strict schemas the provider takes (probeStrict)
 //   --profile    a JSON file OUTSIDE the repository: {provider, model, effort?, base_url?,
 //                confirm_remote?, key_env?, caps?}. The run gets its own app server (a temp
 //                projects root and Assistant home), sets those settings with privacy allow and
@@ -16,14 +17,22 @@
 //                (also when the run stops early).
 //                A privacy question is answered Send only for a project this run made.
 //   --scripted   the app's scripted model with each task's reference (what the e2e runs).
+//   --reference  a picture (PNG, JPEG or WebP, at most 1.5 MB and 2000 px a side; up to 4) OUTSIDE the
+//                repository, sent with each task's first request as the person's reference; runs.jsonl
+//                records its path and SHA-256 only.
+//   --review     on (default): the Part asks for its review rounds; off: it does not (an A/B).
 //   --tab        attach: the tab to bind turns to (it must show the project the run made, the
 //                probe's too); by default the tab whose registration names that project, never
 //                "auto".
 // Each run opens its Part in a browser page of its own (--headed shows it). The records go to
 // .cache/assistant-eval/<stamp>-<label>/ (gitignored): runs.jsonl, a folder per run (events.jsonl,
-// calls.json, facts.json, final.png) and summary.md.
+// calls.json, facts.json, final.png) and summary.md; the probe writes probe.json and probe-1/events.jsonl.
+// With --profile and --scripted the run's own app server also leaves there server.log (its whole
+// output) and debug/provider.jsonl (every model request and answer: MAGNUSIM_ASSISTANT_DEBUG_LOG),
+// kept after the server is removed; --attach says how to get the same from the running app.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { api, cadFrameOf, loadTasks, newPart, PLUGIN_DIR, runFolder, runTask, runTurn, scriptedDriver, summaryMd, tabShowing, TURN_MS } from './lib.mjs';
@@ -36,14 +45,33 @@ export const ATTACH_MIN_STEPS = 120;
 /** The probe's request: one read call and an answer, with every tool offered. */
 export const PROBE_TEXT = 'Call cad__get_model once with detail brief, then say in one sentence how many features the Part has.';
 const STRICT_FALLBACK = /could not compile these tools strictly/;
+/** The app's note when it sent fewer tools strict (scripts/server/assistant/providers/common.ts strictReducedNote). */
+const STRICT_REDUCED = /could not compile all these tools strictly.*: (\d+) of (\d+) are checked by the provider, the rest are sent unchecked \(([^()]*)\); the app still checks every input\.$/;
+
+/**
+ * What the probe's turn notes say of its strict tools: "accepted"; "reduced: N of M strict
+ * (unchecked: <tool names>)" when the app sent fewer of them strict; "refused: all unchecked"
+ * when it sent the Part's tools unchecked by the provider.
+ */
+export function probeStrict(notes) {
+  for (const n of notes) {
+    const m = STRICT_REDUCED.exec(String(n));
+    if (m) return `reduced: ${m[1]} of ${m[2]} strict (unchecked: ${m[3]})`;
+  }
+  return notes.some((n) => STRICT_FALLBACK.test(String(n))) ? 'refused: all unchecked' : 'accepted';
+}
+/** The server switch that keeps every model request and answer (scripts/server/assistant/debug-log.ts). */
+export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
+/** The scripted model's answers to the probe: the read it asks for, then its sentence. */
+const PROBE_STEPS = [{ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] }, { text: 'The Part has no features yet.' }];
 
 const USAGE = `node eval/run.mjs --tasks <ids|all|probe> [--runs N] [--label text] (--profile <file> | --attach <url> | --scripted)
   [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean] [--out <dir>] [--no-repair]
-  [--port-from <n>] [--turn-minutes <n>]`;
+  [--port-from <n>] [--turn-minutes <n>] [--reference <file>]... [--review on|off] [--keep-open]`;
 
-/** The command line, checked: {tasks, runs, label, driver, profile, attach, tab, toolset, pace, headed, clean, out, repair, portFrom, turnMs}. */
+/** The command line, checked: {tasks, runs, label, driver, profile, attach, tab, toolset, pace, headed, clean, out, repair, keepOpen, portFrom, turnMs, references, review}. */
 export function parseArgs(argv) {
-  const o = { tasks: 'all', runs: 1, label: '', driver: null, profile: null, attach: null, tab: null, toolset: 'all', pace: 'fast', headed: false, clean: false, out: null, repair: true, portFrom: null, turnMs: TURN_MS, help: false };
+  const o = { tasks: 'all', runs: 1, label: '', driver: null, profile: null, attach: null, tab: null, toolset: 'all', pace: 'fast', headed: false, clean: false, out: null, repair: true, keepOpen: false, portFrom: null, turnMs: TURN_MS, references: [], review: true, help: false };
   const drivers = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -100,6 +128,9 @@ export function parseArgs(argv) {
       case '--no-repair':
         o.repair = false;
         break;
+      case '--keep-open':
+        o.keepOpen = true;
+        break;
       case '--port-from': {
         const n = Number(value());
         if (!Number.isInteger(n) || n < 1024 || n > 65000) throw new Error('--port-from is a port number');
@@ -110,6 +141,16 @@ export function parseArgs(argv) {
         const n = Number(value());
         if (!(n > 0 && n <= 240)) throw new Error('--turn-minutes is from 1 to 240');
         o.turnMs = n * 60_000;
+        break;
+      }
+      case '--reference':
+        o.references.push(value());
+        if (o.references.length > REFERENCES_MAX) throw new Error(`at most ${REFERENCES_MAX} --reference pictures`);
+        break;
+      case '--review': {
+        const v = value();
+        if (v !== 'on' && v !== 'off') throw new Error('--review is on or off');
+        o.review = v === 'on';
         break;
       }
       case '--help':
@@ -130,14 +171,39 @@ export function parseArgs(argv) {
   return o;
 }
 
+/** The most reference pictures a run sends (the app takes 4 with a request). */
+export const REFERENCES_MAX = 4;
+const PICTURE_TYPES = Object.freeze({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' });
+
+/** Whether `real` (a real path) is inside the repository at `repoTop`. */
+function insideRepo(real, repoTop) {
+  const rel = relative(realpathSync(repoTop), real);
+  return !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * A reference picture, read and checked: it lives outside the repository (the person's own
+ * picture), and is a .png, .jpg, .jpeg or .webp file (the app checks what it holds). Its path and
+ * SHA-256 go into the records, its bytes only to the app.
+ */
+export function readReference(file, repoTop) {
+  const path = resolve(file);
+  if (!existsSync(path)) throw new Error(`no reference picture at ${path}`);
+  const real = realpathSync(path);
+  if (insideRepo(real, repoTop)) throw new Error(`the reference picture ${path} is inside the repository: keep it outside`);
+  const ext = (/\.[^./\\]+$/.exec(path)?.[0] ?? '').toLowerCase();
+  const media_type = PICTURE_TYPES[ext];
+  if (!media_type) throw new Error(`the reference picture ${path} is not a .png, .jpg, .jpeg or .webp file`);
+  const bytes = readFileSync(real);
+  return { path, sha256: createHash('sha256').update(bytes).digest('hex'), media_type, data: bytes.toString('base64') };
+}
+
 /** A profile file, read and checked: it lives outside the repository (provider names stay out of it). */
 export function readProfile(file, repoTop) {
   const path = resolve(file);
   if (!existsSync(path)) throw new Error(`no profile file at ${path}`);
   const real = realpathSync(path);
-  const top = realpathSync(repoTop);
-  const rel = relative(top, real);
-  if (!rel.startsWith('..') && !isAbsolute(rel)) throw new Error(`the profile ${path} is inside the repository: keep profiles (and keys) outside it`);
+  if (insideRepo(real, repoTop)) throw new Error(`the profile ${path} is inside the repository: keep profiles (and keys) outside it`);
   const p = JSON.parse(readFileSync(path, 'utf8'));
   if (!p || typeof p !== 'object') throw new Error('a profile is a JSON object');
   if (typeof p.provider !== 'string' || !p.provider) throw new Error('the profile names no provider');
@@ -189,21 +255,32 @@ async function main(argv) {
   }
   const probe = o.tasks === 'probe';
   const tasks = probe ? [] : loadTasks(o.tasks);
+  let references;
+  try {
+    references = o.references.map((f) => readReference(f, REPO_TOP));
+  } catch (e) {
+    console.error(e.message);
+    return 2;
+  }
   const { chromium, expect, request: pwRequest } = await import('@playwright/test');
   const stops = [];
   let base = o.attach;
   let driver = null;
+  let fake = null;
   const created = new Set();
+  const out = o.out ? resolve(o.out) : runFolder(o.label || `${o.driver}${probe ? '-probe' : ''}`);
+  const logs = o.driver === 'attach' ? null : { server: join(out, 'server.log'), debug: join(out, 'debug') };
   try {
+    mkdirSync(out, { recursive: true });
+    say(`records in ${out}`);
     if (o.driver === 'scripted' || o.driver === 'profile') {
       const { startHost } = await import('../../../e2e/support/host-server.mjs');
-      let fake = null;
       if (o.driver === 'scripted') {
         const { startFakeLlm } = await import('../../../e2e/support/fake-llm.mjs');
         fake = await startFakeLlm();
         stops.push(() => fake.stop());
       }
-      const env = { MAGNUSIM_E2E_WSL: null, MAGNUSIM_WSL_PRUNE: '0' };
+      const env = { MAGNUSIM_E2E_WSL: null, MAGNUSIM_WSL_PRUNE: '0', [DEBUG_LOG_ENV]: logs.debug };
       if (fake) Object.assign(env, { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base, MAGNUSIM_TEST_EVENT_HUB: '1' });
       say('starting an app server of its own (a temp projects root and Assistant home)');
       const host = await startHost({
@@ -213,6 +290,7 @@ async function main(argv) {
         viteCacheDir: join(PLUGIN_DIR, '.cache', 'host-vite-cad-eval'),
         portFrom: o.portFrom ?? Number(process.env.CAD_E2E_PORT_FROM || 8170) + 95,
         env,
+        logFile: logs.server,
         timeoutMs: 240_000,
       });
       stops.unshift(() => host.stop());
@@ -240,6 +318,7 @@ async function main(argv) {
         driver = { kind: 'profile' };
       }
     } else {
+      say(`the server's own log and every model request are not kept from an attached app; to keep them, start the app with ${DEBUG_LOG_ENV}=<folder> (provider.jsonl goes there) and keep its console output`);
       const status = (await api(base, '/api/assistant/status')).body;
       if (!status?.ok) throw new Error(`no app answers at ${base}`);
       say(`the app's limits: ${capsWords(status.caps)}`);
@@ -251,25 +330,26 @@ async function main(argv) {
     const browser = await chromium.launch({ headless: !o.headed });
     stops.unshift(() => browser.close());
     const page = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage();
-    const out = o.out ? resolve(o.out) : runFolder(o.label || `${o.driver}${probe ? '-probe' : ''}`);
-    mkdirSync(out, { recursive: true });
-    say(`records in ${out}`);
     const env = { base, page, driver, out, created, log: (l) => say(l) };
 
     if (probe) {
       const part = await newPart(page, base, { title: 'Eval · probe', log: env.log });
       created.add(part.projectId);
       const tab = o.tab ? await tabShowing(base, o.tab, part.projectId, 'Eval · probe') : part.tab;
+      if (fake) fake.reply(...PROBE_STEPS);
       const t = await runTurn(base, { text: PROBE_TEXT, tab }, { answer: () => null, ms: o.turnMs, log: env.log });
       const notes = t.events.filter((e) => e.type === 'note').map((e) => e.text);
       const end = t.events.find((e) => e.type === 'end') ?? null;
       const calls = await cadFrameOf(page).evaluate(() => window.__CAD__.assistant.calls);
+      const dir = join(out, 'probe-1');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'events.jsonl'), t.events.map((e) => JSON.stringify({ turn: t.id, ...e })).join('\n') + '\n');
       const status = (await api(base, '/api/assistant/status')).body ?? {};
       const result = {
         when: new Date().toISOString(),
         model: { provider: status.provider ?? null, model: status.models?.[status.provider] ?? null, served_by: t.turn?.served_by ?? null },
         tools: (await api(base, '/api/assistant/tabs')).body?.tabs?.find((r) => r.tab === tab)?.tools.length ?? null,
-        strict: notes.some((n) => STRICT_FALLBACK.test(n)) ? 'refused: sent again unchecked by the provider' : 'accepted',
+        strict: probeStrict(notes),
         end,
         notes,
         calls: calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null })),
@@ -282,9 +362,9 @@ async function main(argv) {
         for (let run = 1; run <= o.runs; run++) {
           say(`${task.id} (${task.tier}), run ${run} of ${o.runs}`);
           try {
-            const r = await runTask(env, task, { label: o.label, run, pace: o.pace, toolset: o.toolset, repair: o.repair, turnMs: o.turnMs, tab: o.tab });
+            const r = await runTask(env, task, { label: o.label, run, pace: o.pace, toolset: o.toolset, repair: o.repair, turnMs: o.turnMs, tab: o.tab, review: o.review, references });
             records.push(r);
-            say(`${task.id}: first shot ${r.first_shot.pass ? 'pass' : 'fail'}, final ${r.final.pass ? 'pass' : 'fail'} (${r.final.passed}/${r.final.counted}), ${r.steps} steps, $${r.usd}, ${r.wall_s} s`);
+            say(`${task.id}: first shot ${r.first_shot.pass ? 'pass' : 'fail'}, final ${r.final.pass ? 'pass' : 'fail'} (${r.final.passed}/${r.final.counted}), ${r.steps} steps, ${r.review ? `${r.reviews.length} review rounds` : 'review off'}, ${r.usd}, ${r.wall_s} s`);
           } catch (e) {
             say(`${task.id}: the run stopped: ${e instanceof Error ? e.message : String(e)}`);
             writeFileSync(join(out, `${task.id}-${run}.error.txt`), `${e instanceof Error ? e.stack : String(e)}\n`);
@@ -312,6 +392,17 @@ async function main(argv) {
         }
       }
     }
+    // --keep-open: leave the window and its app server up until the person presses Enter here.
+    if (o.keepOpen && stops.length && process.stdin.isTTY) {
+      say('done: the window stays open. Press Enter here to close it and stop the app server.');
+      await new Promise((done) => {
+        process.stdin.resume();
+        process.stdin.once('data', () => {
+          process.stdin.pause();
+          done();
+        });
+      });
+    }
     for (const stop of stops) {
       try {
         await stop();
@@ -319,7 +410,26 @@ async function main(argv) {
         // Going anyway.
       }
     }
+    if (logs) for (const line of logLines(logs)) say(line);
   }
+}
+
+/** Where the run's own server left its logs, in words (only the ones there). */
+export function logLines(logs) {
+  const lines = [];
+  const size = (f) => {
+    try {
+      return statSync(f).size;
+    } catch {
+      return null;
+    }
+  };
+  const server = size(logs.server);
+  if (server !== null) lines.push(`server log: ${logs.server} (${server} bytes)`);
+  const provider = size(join(logs.debug, 'provider.jsonl'));
+  if (provider !== null) lines.push(`provider log: ${join(logs.debug, 'provider.jsonl')} (${provider} bytes, a row per model request)`);
+  else lines.push(`provider log: none in ${logs.debug} (no model request was sent)`);
+  return lines;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

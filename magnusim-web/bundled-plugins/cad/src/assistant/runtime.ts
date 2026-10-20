@@ -13,6 +13,7 @@ import type { PauseState, SoftInput } from './busy';
 import type { CameraLatch } from './camera';
 import type { Ledger } from './ledger';
 import type { PaceControl } from './pace';
+import type { PicturesControl } from './pictures';
 import type { RevTracker } from './rev';
 import type { SessionKeys } from './session-key';
 import type { CallRecord, HoldPoints } from './testing';
@@ -44,6 +45,8 @@ export interface AssistantRuntime {
   /** "Ask each step", the person's choice, and the step waiting for their answer (approval.ts). */
   readonly askEach: AskEach;
   readonly approvals: Approvals;
+  /** A picture of the Part after each edit, the person's choice (pictures.ts). */
+  readonly pictures: PicturesControl;
   /** The calls running now, by call id: their key and turn, and the chip's Stop of each. */
   readonly active: Map<string, ActiveCall>;
   /** Keys the person stopped from the chip: every later call of them answers busy stopped. */
@@ -67,6 +70,8 @@ export interface AssistantRuntime {
    * setToolset). The guide registered and help's guide and features topics follow it.
    */
   offered: readonly string[];
+  /** The registration asks for review rounds (review.ts CAD_REVIEW); the eval may turn them off (testing.ts setReview). */
+  review: boolean;
   /**
    * The host passes a page error's hint and detail to the model (H2). True with the host's turn
    * events (H3 came after H2); without them the hint goes into the message.

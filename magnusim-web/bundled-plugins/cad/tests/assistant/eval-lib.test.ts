@@ -10,7 +10,8 @@
 // folder ignored by git, and no vendor word in any of the harness's files.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -19,12 +20,14 @@ import {
   EVAL_DIR,
   fakeSteps,
   gateAnswer,
+  imagesSent,
   lastText,
   loadReference,
   loadTask,
   PLUGIN_DIR,
   referenceCalls,
   RESULTS_DIR,
+  reviewRounds,
   runFolder,
   runTurn,
   runWalks,
@@ -36,7 +39,7 @@ import {
   type RunRecord,
   type TurnEvent,
 } from '../../eval/lib.mjs';
-import { capsWords, parseArgs, PROFILE_CAPS, profileSettings, readProfile } from '../../eval/run.mjs';
+import { capsWords, DEBUG_LOG_ENV, logLines, parseArgs, probeStrict, PROFILE_CAPS, profileSettings, readProfile, readReference, REFERENCES_MAX } from '../../eval/run.mjs';
 import { CAD_TOOLS } from '../../src/assistant/schemas';
 import type { EvalFacts } from '../../src/assistant/eval-types';
 import { namesVendor } from './vendor';
@@ -221,6 +224,45 @@ describe("what a run's turns used", () => {
     expect(lastText([{ type: 'text', step: 1, text: 'Building.' }, { type: 'text', step: 3, text: 'Done ' }, { type: 'text', step: 3, text: 'now.' }])).toBe('Done now.');
     expect(lastText([{ type: 'text', step: 1, text: 'Kept.' }, { type: 'text', step: 2, text: 'Gone.' }, { type: 'discard', step: 2 }])).toBe('Kept.');
     expect(lastText([])).toBe('');
+    // A review round's bare confirmation is not the turn's last words; a review round that said more is.
+    expect(lastText([{ type: 'text', step: 4, text: 'Built the chip.' }, { type: 'review', round: 1, of: 3 }, { type: 'text', step: 5, text: 'Review: no changes' }])).toBe('Built the chip.');
+    expect(lastText([{ type: 'text', step: 4, text: 'Built.' }, { type: 'text', step: 6, text: 'Moved the spots in by 1 mm.' }])).toBe('Moved the spots in by 1 mm.');
+  });
+
+  it("the review rounds the app ran, by turn", () => {
+    const turns = [
+      { events: [{ type: 'text', step: 1, text: 'x' }, { type: 'review', round: 1, of: 3 }, { type: 'review', round: 2, of: 3 }] },
+      { events: [{ type: 'end', state: 'done' }] },
+      { repair: true, events: [{ type: 'review', round: 1, of: 3 }] },
+    ];
+    expect(reviewRounds(turns)).toEqual([
+      { turn: 1, repair: false, round: 1, of: 3 },
+      { turn: 1, repair: false, round: 2, of: 3 },
+      { turn: 3, repair: true, round: 1, of: 3 },
+    ]);
+  });
+
+  it('every reference turn that edits the Part ends with the review round\'s "Review: no changes"', () => {
+    const reads = new Set(['cad__get_model', 'cad__find', 'cad__measure', 'cad__view', 'cad__help']);
+    for (const id of taskIds()) {
+      const ref = loadReference(id);
+      ref.turns.forEach((steps, i) => {
+        const edits = steps.some((x) => (x.tools ?? []).some((t) => !reads.has(t.name)));
+        if (edits) expect(steps.at(-1), `${id} turn ${i}`).toEqual({ text: 'Review: no changes' });
+      });
+    }
+  });
+
+  it('counts the images the tool results carried: views and edits alike, failed calls none', () => {
+    const calls = [
+      { tool: 'get_model', ok: true },
+      { tool: 'sketch', ok: true, images: 1 },
+      { tool: 'extrude', ok: false, images: 1 },
+      { tool: 'view', ok: true, images: 1 },
+      { tool: 'extrude', ok: true, images: 1 },
+    ];
+    expect(imagesSent(calls)).toBe(3);
+    expect(imagesSent([])).toBe(0);
   });
 });
 
@@ -308,11 +350,33 @@ describe('the records', () => {
   });
 });
 
+describe("the probe's strict record", () => {
+  // The app's notes (scripts/server/assistant/providers/common.ts strictReducedNote, strictFallbackNote).
+  const SAID = 'The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools.';
+  const reduced = (said: string) =>
+    `The cloud provider could not compile all these tools strictly${said ? ` (it said: ${said})` : ''}: 15 of 21 are checked by the provider, the rest are sent unchecked (cad__extrude, cad__pattern, cad__revolve, cad__sketch, cad__sweep_loft, cad__view); the app still checks every input.`;
+  const loose = `The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input. The provider said: ${SAID}`;
+
+  it('accepted with no strict note; reduced with the count and the unchecked tools; refused when all went unchecked', () => {
+    expect(probeStrict([])).toBe('accepted');
+    expect(probeStrict(['Left out 1 picture.'])).toBe('accepted');
+    const want = 'reduced: 15 of 21 strict (unchecked: cad__extrude, cad__pattern, cad__revolve, cad__sketch, cad__sweep_loft, cad__view)';
+    expect(probeStrict([reduced(SAID)])).toBe(want);
+    expect(probeStrict([reduced('')])).toBe(want);
+    // Words with brackets and colons of their own are still read from the end.
+    expect(probeStrict([reduced('tools (a): too large: 3 of 4 are checked by the provider')])).toBe(want);
+    expect(probeStrict([loose])).toBe('refused: all unchecked');
+    expect(probeStrict(['The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.'])).toBe('refused: all unchecked');
+  });
+});
+
 describe('the command line', () => {
   it('takes one driver and checks its options', () => {
     expect(parseArgs(['--scripted', '--tasks', 'plate-holes,flange', '--runs', '2', '--label', 'ci'])).toMatchObject({ driver: 'scripted', tasks: 'plate-holes,flange', runs: 2, label: 'ci', pace: 'fast', toolset: 'all', repair: true });
     expect(parseArgs(['--attach=http://127.0.0.1:8082/', '--tab', 'tab-1', '--clean', '--toolset', 'core', '--pace', 'watch', '--no-repair'])).toMatchObject({ driver: 'attach', attach: 'http://127.0.0.1:8082', tab: 'tab-1', clean: true, toolset: 'core', pace: 'watch', repair: false });
     expect(parseArgs(['--profile', 'x.json', '--headed', '--turn-minutes', '45'])).toMatchObject({ driver: 'profile', profile: 'x.json', headed: true, turnMs: 45 * 60_000 });
+    expect(parseArgs(['--profile', 'x.json', '--headed', '--keep-open'])).toMatchObject({ headed: true, keepOpen: true });
+    expect(parseArgs(['--scripted']).keepOpen).toBe(false);
     expect(() => parseArgs(['--tasks', 'all'])).toThrow(/choose one driver: --profile, --attach, --scripted/);
     expect(() => parseArgs(['--scripted', '--attach', 'http://127.0.0.1:1'])).toThrow(/choose one driver/);
     expect(() => parseArgs(['--scripted', '--tab', 't'])).toThrow(/--tab goes with --attach/);
@@ -323,6 +387,37 @@ describe('the command line', () => {
     expect(() => parseArgs(['--scripted', '--pace', 'slow'])).toThrow(/--pace is fast or watch/);
     expect(() => parseArgs(['--scripted', '--label'])).toThrow(/--label needs a value/);
     expect(() => parseArgs(['--scripted', '--nope'])).toThrow(/unknown option --nope/);
+    // Reference pictures (repeatable, at most 4) and the review switch.
+    expect(parseArgs(['--scripted'])).toMatchObject({ references: [], review: true });
+    expect(parseArgs(['--scripted', '--reference', 'a.png', '--reference=b.jpg', '--review', 'off'])).toMatchObject({ references: ['a.png', 'b.jpg'], review: false });
+    expect(REFERENCES_MAX).toBe(4);
+    expect(() => parseArgs(['--scripted', ...Array.from({ length: 5 }, (_, i) => ['--reference', `${i}.png`]).flat()])).toThrow(/at most 4 --reference pictures/);
+    expect(() => parseArgs(['--scripted', '--review', 'maybe'])).toThrow(/--review is on or off/);
+  });
+
+  it('reads a reference picture only from outside the repository: its path, SHA-256, type and bytes', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cad-eval-repo-'));
+    const outside = mkdtempSync(join(tmpdir(), 'cad-eval-pic-'));
+    try {
+      const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+      writeFileSync(join(repo, 'chip.png'), bytes);
+      expect(() => readReference(join(repo, 'chip.png'), repo)).toThrow(/is inside the repository: keep it outside/);
+      writeFileSync(join(outside, 'chip.PNG'), bytes);
+      expect(readReference(join(outside, 'chip.PNG'), repo)).toEqual({
+        path: join(outside, 'chip.PNG'),
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        media_type: 'image/png',
+        data: bytes.toString('base64'),
+      });
+      writeFileSync(join(outside, 'chip.jpeg'), bytes);
+      expect(readReference(join(outside, 'chip.jpeg'), repo).media_type).toBe('image/jpeg');
+      writeFileSync(join(outside, 'chip.gif'), bytes);
+      expect(() => readReference(join(outside, 'chip.gif'), repo)).toThrow(/is not a \.png, \.jpg, \.jpeg or \.webp file/);
+      expect(() => readReference(join(outside, 'none.png'), repo)).toThrow(/no reference picture/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('run as a person runs it: --help prints the usage (exit 0); a bad line says why (exit 2) before anything starts', () => {
@@ -340,6 +435,21 @@ describe('the command line', () => {
       expect(r.status, args.join(' ')).toBe(2);
       expect(r.stderr, args.join(' ')).toMatch(why);
       expect(r.stdout, args.join(' ')).not.toContain('[eval] starting');
+    }
+  });
+
+  it("names the logs its own server left: the server's output and the provider log, with their sizes", () => {
+    expect(DEBUG_LOG_ENV).toBe('MAGNUSIM_ASSISTANT_DEBUG_LOG');
+    const dir = mkdtempSync(join(tmpdir(), 'cad-eval-logs-'));
+    try {
+      const logs = { server: join(dir, 'server.log'), debug: join(dir, 'debug') };
+      expect(logLines(logs)).toEqual([`provider log: none in ${logs.debug} (no model request was sent)`]);
+      writeFileSync(logs.server, 'abc');
+      mkdirSync(logs.debug);
+      writeFileSync(join(logs.debug, 'provider.jsonl'), '{}\n');
+      expect(logLines(logs)).toEqual([`server log: ${logs.server} (3 bytes)`, `provider log: ${join(logs.debug, 'provider.jsonl')} (3 bytes, a row per model request)`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

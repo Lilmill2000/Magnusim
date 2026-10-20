@@ -66,7 +66,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "Top offset 15 mm" } }] },
-      { "text": "The enclosure is 80 x 50 x 30 with 2 mm walls, an open top and R3 vertical outer edges: one solid, one shell." }
+      { "text": "The enclosure is 80 x 50 x 30 with 2 mm walls, an open top and R3 vertical outer edges: one solid, one shell." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

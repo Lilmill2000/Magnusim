@@ -144,9 +144,12 @@ export async function tabRow(request: APIRequestContext, h: AssistantHost, tab: 
 
 /**
  * Open project `pid` in `page`, make its first Part (the header's CAD menu, as the person does)
- * and wait until the Part's tools are offered on the page's tab: {frame, tab}.
+ * and wait until the Part's tools are offered on the page's tab: {frame, tab}. Without
+ * `review: true` the Part asks for no review rounds (the test handle's setReview(false)): a
+ * scripted turn that edits ends with its own last answer, as these specs write them; the eval
+ * spec runs the rounds.
  */
-export async function openNewPart(page: Page, request: APIRequestContext, h: AssistantHost, pid: string, title = 'Part 1'): Promise<{ frame: FrameLocator; tab: string }> {
+export async function openNewPart(page: Page, request: APIRequestContext, h: AssistantHost, pid: string, title = 'Part 1', o: { review?: boolean } = {}): Promise<{ frame: FrameLocator; tab: string }> {
   const tabOf = core.trackTab(page) as () => string;
   await page.goto(`${h.base}/#/p/${pid}`);
   await page.waitForFunction((id) => (window as unknown as { __CFD_PROJECT_READY__?: string }).__CFD_PROJECT_READY__ === id, pid, { timeout: 90_000 });
@@ -156,6 +159,10 @@ export async function openNewPart(page: Page, request: APIRequestContext, h: Ass
   await expect.poll(tabOf, { message: "the page's event stream names its tab", timeout: STEP_MS }).not.toBe('');
   const tab = tabOf();
   await expect.poll(async () => (await tabRow(request, h, tab))?.tools.length ?? 0, { message: "the Part's tools are offered on its tab", timeout: 60_000 }).toBe(18);
+  if (!o.review) {
+    const v = await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { setReview(on: boolean): Promise<{ available: boolean }> } } }).__CAD__.assistant.setReview(false));
+    expect(v.available, 'the Part offers its tools again without review rounds').toBe(true);
+  }
   return { frame, tab };
 }
 

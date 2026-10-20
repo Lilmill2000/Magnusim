@@ -55,6 +55,8 @@ export interface AssistantActions {
   setPace(pace: 'watch' | 'fast'): void;
   /** "Ask each step" on or off (ws.prefs). */
   setAskEach(on: boolean): void;
+  /** A picture of the Part after each edit ('each') or none ('off') (ws.prefs). */
+  setPictures(v: 'each' | 'off'): void;
 }
 
 /**
@@ -82,8 +84,18 @@ export interface AssistantUiState {
   /**
    * The turn the chip speaks of: the running one, or the one that just ended. `changes` and
    * `changesCap`: a coding agent's turn's changes of its change limit (null for any other turn).
+   * `review`: the review round it is in, absent before the first.
    */
-  turn: { id: string; title: string; steps: number | null; stepsCap: number | null; changes: number | null; changesCap: number | null; end: AssistantTurnEnd | 'ended' | null } | null;
+  turn: {
+    id: string;
+    title: string;
+    steps: number | null;
+    stepsCap: number | null;
+    changes: number | null;
+    changesCap: number | null;
+    end: AssistantTurnEnd | 'ended' | null;
+    review?: { round: number; of: number };
+  } | null;
   /** The call running now: its tool and what it does ("Read the Part"). */
   call: { tool: string; label: string } | null;
   /** What the chip says while waiting or paused ("close the Fillet 2 panel"), or null. */
@@ -92,6 +104,8 @@ export interface AssistantUiState {
   pace?: 'watch' | 'fast';
   /** "Ask each step" is on. */
   askEach?: boolean;
+  /** A picture of the Part after each edit (the chip's Pictures): 'each' or 'off'. */
+  pictures?: 'each' | 'off';
   /** The host can stop a turn from this page (its turn events): the chip offers Stop. */
   canStop?: boolean;
   /** The app shows its own Assistant panel (the dock), which offers Stop and Undo: the chip leaves them out. */
@@ -111,6 +125,8 @@ export interface TurnFacts {
   /** Its limits as they are in force; `changesCap` 0: no change limit (only a coding agent's turn has one). */
   used: { steps: number; stepsCap: number; changes: number; changesCap: number; usd: number; usdCap: number };
   end: { state: AssistantTurnEnd; reason: string } | null;
+  /** The review round it is in (the host's turn events), absent before the first. */
+  review?: { round: number; of: number };
 }
 
 /** Reply budgets for one call (bytes of `data` as JSON), by turn kind (CAD tools spec §3.1). */

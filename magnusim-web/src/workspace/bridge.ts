@@ -305,7 +305,7 @@ export interface BridgeHooks {
    * ASSISTANT_REGISTER_MS and then calls `abandon()`: that list must never reach the assistant,
    * and is withdrawn if its verdict comes late. No hook: the page hears `no_assistant`.
    */
-  assistantTools?(reg: { tools: CheckedTool[]; guide: string } | null): AssistantPublication;
+  assistantTools?(reg: CheckedAssistantTools | null): AssistantPublication;
   /**
    * The page's assistant.stop (1.9, unreleased): stop that turn of the app's assistant, only when
    * it was told to this tab (else `not_this_tab`). No hook: the page hears `no_assistant`.
@@ -342,6 +342,19 @@ export interface CheckedTool {
   timeoutS: number;
   /** What the app's question before a destructive call says it does, cleaned, at most 120 characters (absent when the page gave none). */
   confirm?: string;
+}
+
+/** Review rounds as the host passes them on (1.9, unreleased): 1 to 5 rounds, the prompt cleaned (its lines kept), at most 1500 characters. */
+export interface CheckedReview {
+  rounds: number;
+  prompt: string;
+}
+
+/** assistant.register's params as the host passes them on: `review` absent when the page asked for none. */
+export interface CheckedAssistantTools {
+  tools: CheckedTool[];
+  guide: string;
+  review?: CheckedReview;
 }
 
 /** A tool call's result as it leaves the page (1.9, unreleased): images as base64. */
@@ -432,6 +445,9 @@ export const ASSISTANT_CONFIRM_MAX = 120;
 /** A page error's message, at most this many characters (a note on a dropped detail included). */
 const ASSISTANT_MESSAGE_MAX = 2000;
 const ASSISTANT_GUIDE_MAX = 4000;
+/** A review's most rounds, and its prompt's most characters. */
+export const ASSISTANT_REVIEW_ROUNDS_MAX = 5;
+export const ASSISTANT_REVIEW_PROMPT_MAX = 1500;
 const ASSISTANT_RISKS = new Set<string>(['read', 'edit', 'compute', 'destructive']);
 const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 /**
@@ -477,11 +493,12 @@ function assistantTimeoutS(v: unknown, fallback = ASSISTANT_TIMEOUT_S): number {
 /**
  * assistant.register's params checked (1.9, unreleased): `bad_request` for a list that is not one,
  * more than 32 tools, a tool that is not `{name, description, inputSchema, ...}` or an input schema
- * that is not plain JSON, a title, confirm note or guide that is not text; `too_large` past 512 KB.
+ * that is not plain JSON, a title, confirm note or guide that is not text, a review that is not
+ * `{rounds: 1 to 5, prompt: text}` (its prompt not empty once cleaned); `too_large` past 512 KB.
  * Texts are cleaned and capped, an unknown risk is `destructive`. Names and schemas are the app's
  * to judge (its verdict refuses a tool with the reason).
  */
-export function checkAssistantTools(params: Record<string, unknown>): { tools: CheckedTool[]; guide: string } {
+export function checkAssistantTools(params: Record<string, unknown>): CheckedAssistantTools {
   const list = params.tools;
   if (!Array.isArray(list) || list.length > ASSISTANT_TOOLS_MAX) throw badParam(`tools (a list of at most ${ASSISTANT_TOOLS_MAX} tools)`);
   const tools = list.map((raw: unknown, i): CheckedTool => {
@@ -508,15 +525,34 @@ export function checkAssistantTools(params: Record<string, unknown>): { tools: C
   const g = params.guide;
   if (g !== undefined && g !== null && typeof g !== 'string') throw badParam('guide (text)');
   // The guide keeps its lines; other controls go.
-  const guide = String(g ?? '')
+  const guide = keepLines(g, ASSISTANT_GUIDE_MAX);
+  const review = checkReview(params.review);
+  if (utf8Bytes(JSON.stringify({ tools, guide, review })) > ASSISTANT_TOOLS_BYTES) {
+    throw new BridgeError(`The tools take more than ${ASSISTANT_TOOLS_BYTES / 1024} KB: offer fewer, or shorter ones.`, 'too_large');
+  }
+  return review ? { tools, guide, review } : { tools, guide };
+}
+
+/** Text that keeps its lines (CR LF and CR as LF) and tabs, other controls as spaces, trimmed, at most `max` characters. */
+function keepLines(raw: unknown, max: number): string {
+  return String(raw ?? '')
     .replace(/\r\n?/g, '\n')
     .replace(DIRTY_MESSAGE_CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ' '))
     .trim()
-    .slice(0, ASSISTANT_GUIDE_MAX);
-  if (utf8Bytes(JSON.stringify({ tools, guide })) > ASSISTANT_TOOLS_BYTES) {
-    throw new BridgeError(`The tools take more than ${ASSISTANT_TOOLS_BYTES / 1024} KB: offer fewer, or shorter ones.`, 'too_large');
-  }
-  return { tools, guide };
+    .slice(0, max);
+}
+
+/** assistant.register's `review`: absent (undefined or null) for none, else `{rounds: 1 to 5, prompt}`, or `bad_request`. */
+function checkReview(raw: unknown): CheckedReview | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const what = `review ({rounds: 1 to ${ASSISTANT_REVIEW_ROUNDS_MAX}, prompt: text of at most ${ASSISTANT_REVIEW_PROMPT_MAX} characters})`;
+  if (!isPlainObject(raw)) throw badParam(what);
+  const rounds = raw.rounds;
+  if (typeof rounds !== 'number' || !Number.isInteger(rounds) || rounds < 1 || rounds > ASSISTANT_REVIEW_ROUNDS_MAX) throw badParam(what);
+  if (typeof raw.prompt !== 'string' || raw.prompt.length > ASSISTANT_REVIEW_PROMPT_MAX) throw badParam(what);
+  const prompt = keepLines(raw.prompt, ASSISTANT_REVIEW_PROMPT_MAX);
+  if (!prompt) throw badParam(what);
+  return { rounds, prompt };
 }
 
 /** The app's verdict as the page gets it: only names the page offered, texts cleaned. */

@@ -69,7 +69,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
-      { "text": "The plate is 100 x 60 x 8 mm with four 6.5 mm holes 10 mm from the edges: every feature is ok, every sketch fully defined, volume 46,938 mm3." }
+      { "text": "The plate is 100 x 60 x 8 mm with four 6.5 mm holes 10 mm from the edges: every feature is ok, every sketch fully defined, volume 46,938 mm3." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

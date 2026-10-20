@@ -76,7 +76,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
-      { "text": "The L bracket is built: 50 by 40, 5 thick, 30 wide, the R4 inner fillet and a 6 mm hole centred in each flange; every feature ok and every sketch fully defined." }
+      { "text": "The L bracket is built: 50 by 40, 5 thick, 30 wide, the R4 inner fillet and a 6 mm hole centred in each flange; every feature ok and every sketch fully defined." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

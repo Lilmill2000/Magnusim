@@ -948,3 +948,88 @@ test("cad:assistant-watch-help help's worked plate reaches the model whole, and 
   await expect(watchHistory(frame)).toHaveCount(0, STEP);
   expect(await paramsNow(page)).toEqual([]);
 });
+
+// ---- A picture after every edit (pictures.ts): the model's next request carries it; the chip's Pictures turns it off.
+
+type PicsWindow = Cad & { __CAD__: { services: { apis: { get(): { assistant: { actions: { setPictures(v: string): void } } } }; bridge: { prefs: { get(k: string): Promise<unknown> } } } } };
+
+test("cad:assistant-watch-pictures each edit's result carries one iso picture of the Part in the model's next request; the chip's Pictures turns them off and on", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const pid = await newProject(request, host, 'Assistant pictures');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  const chip = frame.locator('[data-chip="assistant"]');
+  try {
+    const from = chats(host).length;
+    host.fake.reply(
+      { tools: [sketchOf('Plate sketch', 'Top')] },
+      { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: '6 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
+      { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
+      { text: 'The plate is made.' },
+    );
+    const t = await startTurn(request, host, { text: 'A plate.', tab });
+    expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+    const [, afterSketch, afterExtrude, afterRead] = chats(host).slice(from);
+    // The sketch's result: one picture (no body yet: the sketch framed), its line in data.
+    const [sketch] = resultsIn(afterSketch);
+    expect(sketch).toMatchObject({ tool: 'cad__sketch', ok: true, data: { picture: expect.stringMatching(/^Picture: iso view of the Part framed on the shown sketches/) } });
+    expect(sketch.images).toHaveLength(1);
+    // The extrude's: one 640 x 480 PNG with the plate in it (coarse: a software renderer draws it on CI).
+    const [extrude] = resultsIn(afterExtrude);
+    expect(extrude).toMatchObject({ tool: 'cad__extrude', ok: true, data: { picture: expect.stringMatching(/^Picture: iso view of the Part framed on all 1 shown body, 640x480/) } });
+    expect(extrude.images).toHaveLength(1);
+    const pic = imageOf(extrude.images[0]);
+    expect(pic.type).toBe('image/png');
+    expect([pic.img.width, pic.img.height]).toEqual([640, 480]);
+    expect(tileSeen(pic.img, 0, 0, 640, 480).drawn, 'the plate in the picture').toBeGreaterThan(0.02);
+    // A read carries none.
+    const [read] = resultsIn(afterRead);
+    expect(read).toMatchObject({ tool: 'cad__get_model', ok: true });
+    expect(read.images).toEqual([]);
+    expect(read.data).not.toHaveProperty('picture');
+    // The page's ledger counts them (the eval's record adds them up).
+    const ledger = await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { calls: { tool: string; images?: number }[] } } }).__CAD__.assistant.calls.slice(-3).map((c) => [c.tool, c.images ?? 0]));
+    expect(ledger).toEqual([
+      ['sketch', 1],
+      ['extrude', 1],
+      ['get_model', 0],
+    ]);
+
+    // The chip's Pictures (on, pressed): the person turns it off while the model thinks; the next edit carries none.
+    const from2 = chats(host).length;
+    host.fake.reply({ hold: 'pics-off', tools: [SETP('w', '30 mm')] }, { text: 'w is set.' });
+    const t2 = await startTurn(request, host, { text: 'Set w.', tab });
+    await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
+    await expect(chip).toHaveAttribute('data-assistant-pictures', 'each');
+    await expect(chipButton(frame, 'pictures')).toHaveAttribute('aria-pressed', 'true');
+    await chipButton(frame, 'pictures').click();
+    await expect(chip).toHaveAttribute('data-assistant-pictures', 'off', STEP);
+    await expect(chipButton(frame, 'pictures')).toHaveAttribute('aria-pressed', 'false');
+    // The person's choice is kept for the plugin (ws.prefs).
+    await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as PicsWindow).__CAD__.services.bridge.prefs.get('assistant.pictures')), STEP).toBe('off');
+    host.fake.release('pics-off');
+    expect((await t2.ended(STEP_MS * 2)).turn.state).toBe('done');
+    const [setp] = resultsIn(chats(host).slice(from2)[1]);
+    expect(setp).toMatchObject({ tool: 'cad__set_params', ok: true });
+    expect(setp.images).toEqual([]);
+    expect(setp.data).not.toHaveProperty('picture');
+
+    // On again: the next edit carries its picture.
+    const from3 = chats(host).length;
+    host.fake.reply({ hold: 'pics-on', tools: [SETP('w', '32 mm')] }, { text: 'w is set again.' });
+    const t3 = await startTurn(request, host, { text: 'Set w again.', tab });
+    await expect(chip).toHaveAttribute('data-assistant-state', 'thinking', STEP);
+    await chipButton(frame, 'pictures').click();
+    await expect(chip).toHaveAttribute('data-assistant-pictures', 'each', STEP);
+    host.fake.release('pics-on');
+    expect((await t3.ended(STEP_MS * 2)).turn.state).toBe('done');
+    const [again] = resultsIn(chats(host).slice(from3)[1]);
+    expect(again).toMatchObject({ tool: 'cad__set_params', ok: true, data: { picture: expect.stringMatching(/^Picture: iso view/) } });
+    expect(again.images).toHaveLength(1);
+  } finally {
+    // The person's choice back to the default for the tests after this one.
+    await cadFrame(page)
+      .evaluate(() => (window as unknown as PicsWindow).__CAD__.services.apis.get().assistant.actions.setPictures('each'))
+      .catch(() => undefined);
+  }
+});

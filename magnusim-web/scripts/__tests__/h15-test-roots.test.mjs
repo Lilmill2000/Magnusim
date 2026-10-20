@@ -23,6 +23,7 @@ export const H15_TESTS = [
   'server/__tests__/assistant-dpapi.test.js',
   'server/__tests__/assistant-routes.test.js',
   'server/__tests__/assistant-providers.test.js',
+  'server/__tests__/assistant-debug-log.test.js',
   'server/__tests__/assistant-schema.test.js',
   'server/__tests__/assistant-registry.test.js',
   'server/__tests__/assistant-tools.test.js',

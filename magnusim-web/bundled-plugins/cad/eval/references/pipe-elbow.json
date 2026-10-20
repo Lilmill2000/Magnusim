@@ -77,7 +77,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
-      { "text": "The elbow is swept: 20 mm outside, 16 mm inside, an R40 bend between two 30 mm legs; one solid, about 13,892 mm3." }
+      { "text": "The elbow is swept: 20 mm outside, 16 mm inside, an R40 bend between two 30 mm legs; one solid, about 13,892 mm3." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

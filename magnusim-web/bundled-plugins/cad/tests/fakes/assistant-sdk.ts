@@ -33,11 +33,11 @@ export interface FakeProgress {
 export type FakeOutcome = { ok: true; result: Record<string, unknown> } | { ok: false; error: { code: string; message: string; hint?: string; detail?: unknown } };
 
 export interface FakeAssistant {
-  register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+  register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; review?: { rounds: number; prompt: string } }): Promise<AssistantRegistration>;
   onTurn?(fn: (turn: AssistantTurn) => void): () => void;
   stop?(turn: string): Promise<AssistantStopAnswer>;
-  /** Every register call: its tools, guide and the verdict it got. */
-  readonly registrations: { tools: AssistantTool[]; guide: string | undefined; verdict: AssistantRegistration }[];
+  /** Every register call: its tools, guide, review and the verdict it got. */
+  readonly registrations: { tools: AssistantTool[]; guide: string | undefined; review?: { rounds: number; prompt: string }; verdict: AssistantRegistration }[];
   /** Verdicts for the next register calls, oldest first (else available, every tool accepted). */
   readonly verdicts: AssistantRegistration[];
   /** The tools and handler the last available register kept. */
@@ -98,7 +98,7 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
     async register(tools, h, opts) {
       if (o.refuse) throw Object.assign(new Error('This version of Magnusim has no such call'), { code: o.refuse });
       const verdict = fake.verdicts.shift() ?? verdictFor(tools);
-      fake.registrations.push({ tools: [...tools], guide: opts?.guide, verdict });
+      fake.registrations.push({ tools: [...tools], guide: opts?.guide, review: opts?.review, verdict });
       if (verdict.available) {
         handler = tools.length ? h : null;
         accepted = new Set(tools.length ? verdict.accepted : []);

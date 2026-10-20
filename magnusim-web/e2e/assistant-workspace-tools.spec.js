@@ -34,7 +34,8 @@
 // problem with a call's input in one result, the terminal showing them all (H9); a local
 // model's string, list and boolean fields left out filled with "", [] and false (H9).
 // And a cloud provider that can't compile the tools strictly: sent again unchecked by it (H8),
-// and the shared turn helper failing a turn that got that note unless the test expects it.
+// and the shared turn helper failing a turn that got that note unless the test expects it; one
+// that can't compile them all (a strict set too big): sent again with the smallest strict.
 // Each test asserts what the user sees (the counter, the app's dialog and its focus, the
 // page's markers) and the protocol facts (the fake's requests, /tabs, the test state route).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys); the
@@ -47,7 +48,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { answerGate, followTurn, offeredTools, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
-import { LLAMA_SERVER, startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
+import { GRAMMAR_TOO_LARGE, LLAMA_SERVER, startFakeLlm, TEXT_ONLY_REFUSAL } from './support/fake-llm.mjs';
 import { startHost, WEB_ROOT } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { expect, test } from './support/stress.js';
@@ -986,9 +987,10 @@ test("a cloud provider that can't compile the tools strictly: the request goes a
   request,
 }) => {
   // What the person reads (the cloud adapters' note, CAD tools spec H8), and the provider's
-  // refusal (the first cloud dialect's words and error shape).
-  const NOTE = 'The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.';
-  const COMPILE_REFUSAL = { type: 'error', error: { type: 'invalid_request_error', message: 'Schema is too complex for compilation.' } };
+  // refusal (the first cloud dialect's error shape, its words naming one schema: a set too big
+  // is the next test's).
+  const COMPILE_REFUSAL = { type: 'error', error: { type: 'invalid_request_error', message: 'tools.3.input_schema: strict tools do not support "minimum"' } };
+  const NOTE = `The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input. The provider said: ${COMPILE_REFUSAL.error.message}`;
   /** One turn in the terminal client on this tab: what the person reads (stdout and stderr), once it exits 0. */
   const terminal = async (text) => {
     const cli = spawn(process.execPath, [join(WEB_ROOT, 'scripts', 'assistant-run.mjs'), '--port', String(host.port), '--tab', w.tab, text], {
@@ -1057,6 +1059,59 @@ test("a cloud provider that can't compile the tools strictly: the request goes a
   const { turn, events } = await expected.ended();
   expect(turn.state).toBe('done');
   expect(events.filter((e) => e.type === 'note').map((e) => e.text)).toContain(NOTE);
+});
+
+test("a cloud provider that can't compile all the tools strictly (a set too big): the request goes again with the smallest still strict, the turn says how many and which are unchecked, and the next turn sends that set at once", async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const model = await useScriptedModel(request, host.base, fake, 'cloud');
+  // A first turn with every tool strict, to read the schemas as sent.
+  let before = chats().length;
+  fake.reply({ text: 'The counter is 0.' });
+  await (await startTurn(request, host.base, { text: 'What is the counter?', tab: w.tab })).ended();
+  const first = chats().slice(before);
+  const toolsOf = (r) => r.body.tools.map((t) => ({ name: t.name ?? t.function?.name, strict: t.strict === true, bytes: Buffer.byteLength(JSON.stringify(t.input_schema ?? t.parameters), 'utf8') }));
+  const offered = toolsOf(first[0]);
+  expect(offered.every((t) => t.strict)).toBe(true);
+  expect(offered.filter((t) => t.name.startsWith(`${PLUGIN}__`)).map((t) => t.name)).toEqual(TOOLS);
+  const all = offered.reduce((sum, t) => sum + t.bytes, 0);
+  // The provider takes any strict set but the whole one: 4 in 5 of them stay strict, the smallest.
+  fake.strictBudget(all - 1, model.dialect);
+  try {
+    const keep = Math.floor((offered.length * 4) / 5);
+    const smallest = offered
+      .map((t, i) => ({ ...t, i }))
+      .sort((a, b) => a.bytes - b.bytes || a.i - b.i)
+      .slice(0, keep)
+      .map((t) => t.name);
+    const unchecked = offered.map((t) => t.name).filter((n) => !smallest.includes(n));
+    const NOTE = `The cloud provider could not compile all these tools strictly (it said: ${GRAMMAR_TOO_LARGE}): ${keep} of ${offered.length} are checked by the provider, the rest are sent unchecked (${unchecked.join(', ')}); the app still checks every input.`;
+    before = chats().length;
+    fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'Added 2.' });
+    let ended = await (await startTurn(request, host.base, { text: 'Add 2 to the counter.', tab: w.tab }, { strictFallback: true })).ended();
+    expect(ended.turn.state).toBe('done');
+    // The turn went on: the counter reads 2, and the turn's log says how many are checked and which are not.
+    await expect(w.frame.locator('#counter')).toHaveText('2');
+    expect(ended.events.filter((e) => e.type === 'note').map((e) => e.text)).toEqual([NOTE]);
+    let sent = chats().slice(before);
+    const strictOf = (r) => toolsOf(r).filter((t) => t.strict).map((t) => t.name);
+    // Refused whole (no step), then the smallest strict, and the turn's next request the same way.
+    expect(sent.map((r) => r.refused ?? null)).toEqual([GRAMMAR_TOO_LARGE, null, null]);
+    expect(sent[0].step).toBeUndefined();
+    expect(sent.map(strictOf)).toEqual([offered.map((t) => t.name), offered.map((t) => t.name).filter((n) => smallest.includes(n)), offered.map((t) => t.name).filter((n) => smallest.includes(n))]);
+
+    // The next turn: that set from its first request; the shared turn helper fails it unless the test expects the note.
+    before = chats().length;
+    fake.reply({ text: 'Still 2.' });
+    const unexpected = await startTurn(request, host.base, { text: 'What is the counter now?', tab: w.tab });
+    await expect(unexpected.ended()).rejects.toThrow(`the provider refused this turn's strict tools and the app sent them again unchecked by it (note: "${NOTE}")`);
+    sent = chats().slice(before);
+    expect(sent.map(strictOf)).toEqual([offered.map((t) => t.name).filter((n) => smallest.includes(n))]);
+  } finally {
+    fake.strictBudget(null, model.dialect);
+  }
 });
 
 test('a remote viewer: the page hears its tools are not available, and nothing registers', async ({ browser, request }) => {
@@ -1490,4 +1545,58 @@ test('a local model that leaves out a call\'s string, list and boolean fields ha
   // The turn's log shows what the model sent, and the page's line for what the call did.
   expect(ofType(e.events, 'tool_call')).toMatchObject([{ tool: `${PLUGIN}__label`, input_preview: '{"text":null}' }]);
   expect(ofType(e.events, 'tool_result')).toMatchObject([{ ok: true, summary: 'Cleared the label' }]);
+});
+
+test('review rounds the workspace asks for: after its edit the model gets the review prompt, round i of n; a round with no edit ends the turn; the frame hears the round; a reference picture goes with the prompt', async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const prompt = 'Read the counter with get_count. If it is right, reply "Review: no changes" without calling add.';
+  const reg = await w.handle.evaluate((p) => window.__register({ review: { rounds: 3, prompt: p } }), prompt);
+  expect(reg).toMatchObject({ available: true });
+  const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const before = chats().length;
+  fake.reply(
+    { tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] },
+    { text: 'Added 2.' },
+    { tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] },
+    { text: 'Made it 3.' },
+    { tools: [{ name: `${PLUGIN}__get_count`, input: {} }] },
+    { text: 'Review: no changes' },
+  );
+  const t = await startTurn(request, host.base, { text: 'Make the counter 3, like the picture.', tab: w.tab, images: [{ media_type: 'image/png', data: PNG_1x1 }] });
+  const e = await t.ended();
+  expect([e.turn.state, e.turn.end_reason]).toEqual(['done', 'end_turn']);
+  // What the person sees: the counter the edits and the review made.
+  await expect(w.frame.locator('#counter')).toHaveText('3');
+  await expect(w.frame.locator('#calls')).toHaveText('add add get_count');
+  expect(ofType(e.events, 'review').map((x) => [x.round, x.of])).toEqual([
+    [1, 3],
+    [2, 3],
+  ]);
+  const sent = chats().slice(before);
+  expect(sent).toHaveLength(6);
+  // The review prompt is the newest user text of the request after each answer that ended a round.
+  const lastUserText = (r) => {
+    const m = r.body.messages.at(-1);
+    return m.role === 'user' ? m.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n') : '';
+  };
+  expect(lastUserText(sent[2])).toBe(`Review round 1 of 3: ${prompt}\nThe request came with a reference picture (in its first message): compare the result with it too.`);
+  expect(lastUserText(sent[4])).toMatch(/^Review round 2 of 3: /);
+  // The person's picture went with the prompt, in every request of the turn.
+  for (const r of sent) expect(r.userImages).toEqual([{ media_type: 'image/png', data: PNG_1x1 }]);
+  // The frame heard the round in the turn's frames.
+  await expect
+    .poll(() => w.handle.evaluate(() => window.__turns.filter((x) => x.review).map((x) => `${x.review.round}/${x.review.of}`).at(-1)), STEP)
+    .toBe('2/3');
+
+  // Without the review the same edit ends the turn at once.
+  await w.handle.evaluate(() => window.__register({ review: null }));
+  await expect.poll(async () => (await tabRow(request, w.tab))?.tools.length).toBe(TOOLS.length);
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { text: 'Added 1.' });
+  const t2 = await startTurn(request, host.base, { text: 'Add 1.', tab: w.tab });
+  const e2 = await t2.ended();
+  expect([e2.turn.state, ofType(e2.events, 'review').length]).toEqual(['done', 0]);
+  await expect(w.frame.locator('#counter')).toHaveText('4');
 });

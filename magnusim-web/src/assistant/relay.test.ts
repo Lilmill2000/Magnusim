@@ -1277,6 +1277,30 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     expect(Object.hasOwn(turns[3], 'end')).toBe(false);
   });
 
+  it('a review round goes to the frame as `review {round, of}`; one out of shape is left out', async () => {
+    const turns = await heard();
+    const ch = channel();
+    ch.frame('turn', turnFrame('t-1', { review: { round: 2, of: 3 } }));
+    for (const review of [{ round: 0, of: 3 }, { round: 4, of: 3 }, { round: 1, of: 6 }, { round: 1.5, of: 3 }, 'x']) ch.frame('turn', turnFrame('t-1', { review } as never));
+    expect(turns).toEqual([told('t-1', { review: { round: 2, of: 3 } }), ...Array.from({ length: 5 }, () => told('t-1'))]);
+    expect(Object.hasOwn(turns[1], 'review')).toBe(false);
+  });
+
+  it("a frame's review rounds go with its tools; none asked for, none sent", async () => {
+    startAssistantRelay();
+    const pub = publishWorkspaceTools(SCOPE, 'frame-1', { tools: [tool('add')], guide: 'Counter notes', review: { rounds: 3, prompt: 'Look again.' } }, invoke);
+    await settle();
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    const first = take('/api/assistant/relay/tools');
+    expect(first.body).toMatchObject({ guide: 'Counter notes', review: { rounds: 3, prompt: 'Look again.' } });
+    accept(first);
+    expect(await pub).toMatchObject({ available: true });
+    void register(['add']);
+    await settle();
+    expect(Object.hasOwn(take('/api/assistant/relay/tools').body, 'review')).toBe(false);
+  });
+
   it('a new frame hears the running turns once as it offers its tools; a dead frame hears nothing', async () => {
     const turns = await heard();
     const ch = channel();

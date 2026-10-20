@@ -23,6 +23,8 @@ export interface CallRecord {
   ms: number;
   /** An edit call: how long it waited at its pace points (ms; 0 at the fast pace or with the window hidden). */
   paced?: number;
+  /** The images its answer carried (a view's picture, an edit's picture), when any. */
+  images?: number;
 }
 
 export interface HoldPoints {
@@ -101,12 +103,16 @@ export interface AssistantTestHandle {
   setPace(pace: Pace | null, scale?: number | null): void;
   /** "Ask each step" whatever the person chose (never written to their preferences; null: theirs). */
   setAskEach(on: boolean | null): void;
+  /** The edits' pictures whatever the person chose (never written to their preferences; null: theirs). */
+  setPictures(v: 'each' | 'off' | null): void;
   /** The step waiting for the person's Keep or Discard ("Ask each step"), or null. */
   approving(): { call: string; part: string } | null;
   /** The pause in this Part, or null. */
   paused(): Pause | null;
   /** The eval's A/B runs: offer every tool, or the 13-tool core set (registers again). */
   setToolset(set: 'all' | 'core'): Promise<{ available: boolean; accepted: string[]; reason?: string }>;
+  /** The eval's runs (and the e2e) with or without the review rounds the Part asks for (registers again). */
+  setReview(on: boolean): Promise<{ available: boolean; accepted: string[]; reason?: string }>;
   /** The eval's facts of the Part now (eval-facts.ts), with what `ask` asks for. */
   evalFacts(ask?: EvalAsk): Promise<EvalFacts>;
   /** The eval's parameter walk: one parameter set as the person's Parameters panel sets it, the rebuild caught up. */

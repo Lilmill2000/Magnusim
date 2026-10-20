@@ -92,6 +92,24 @@ export function strictSchemaRefusal(err: unknown, words: RegExp, codes: readonly
   return words.test(providerText(err)) || errorTypes(err).some((t) => codes.includes(t));
 }
 
+/**
+ * The provider's own words for a failure, redacted and capped at `max` characters: the message
+ * in its error body (`{error: {message}}` or `{message}`), else the error's text.
+ */
+export function providerSaid(err: unknown, max: number): string {
+  let words = '';
+  for (const e of causes(err)) {
+    const inner = field(e, 'error');
+    const m = [field(field(inner, 'error'), 'message'), field(inner, 'message')].find((v) => typeof v === 'string' && v.trim());
+    if (typeof m === 'string') {
+      words = m.trim();
+      break;
+    }
+  }
+  const text = redact(words || providerText(err)).replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 /** The ProviderError for anything a provider call threw; logs the provider's own text, redacted. */
 export function mapProviderError(err: unknown, ctx: ErrorContext): ProviderError {
   const mapped = classify(err, ctx);

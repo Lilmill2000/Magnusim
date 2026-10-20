@@ -5,14 +5,16 @@
 // answered per call). It registers again on visibilitychange after "not_connected" (a tab opened
 // in the background), and stops for good on "remote", "no_assistant" or "not_allowed". The eval's
 // A/B (the test handle's setToolset('core')) registers its 13 tools with a guide that names only
-// them (guide.ts guideWithout); help's guide and features topics follow (rt.offered).
+// them (guide.ts guideWithout); help's guide and features topics follow (rt.offered). The
+// registration asks for review rounds (review.ts CAD_REVIEW: the app checks the Part with the model
+// at the end of a turn that edited it); the eval can leave them out (setReview(false)).
 // The edits' state lives here too: the undo ledger, the person's pace, the person's input (the
 // soft wait), and the pause, which a take-over or the person's undo of the Assistant's steps
 // during a running turn starts, and the turn's end (or the next key) ends; the chip shows it.
 // Watch mode (§8): the camera latch (camera.ts) behind autoCamera, "Ask each step" (approval.ts),
 // and the chip's buttons (AssistantActions): Pause and Resume, Stop (the running call reverts at
 // once, later calls of the turn answer busy stopped, the host ends the turn), Keep and Discard,
-// Fast / Watch, Ask each step, and Undo of an ended turn's group while it is the newest step.
+// Fast / Watch, Ask each step, Pictures (pictures.ts), and Undo of an ended turn's group while it is the newest step.
 // With the app's own Assistant panel (docked) the chip leaves Stop and Undo to it: the page offers
 // the panel the undo of an ended turn while its group is the newest step (setUndo, withdrawn
 // once it is not), and the panel's ask undoes that group (onUndo; not_newest otherwise).
@@ -30,7 +32,9 @@ import { evalFacts, evalPicture, evalSetParam } from './eval-facts';
 import { guideWithout } from './guide';
 import { createLedger } from './ledger';
 import { createPace } from './pace';
+import { createPictures } from './pictures';
 import { createRevTracker } from './rev';
+import { CAD_REVIEW } from './review';
 import { setRuntime, type AssistantRuntime } from './runtime';
 import { CAD_TOOLS, CORE_TOOLSET, TOOL_NAMES } from './schemas';
 import { createSessionKeys } from './session-key';
@@ -69,6 +73,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const camera = createCameraLatch({ viewport: services.viewport, pace, soft });
   const askEach = createAskEach({ prefs: services.bridge.prefs });
   const approvals = createApprovals();
+  const pictures = createPictures({ prefs: services.bridge.prefs });
   let title = services.bridge.context.study?.title ?? '';
   const offs: (() => void)[] = [];
   offs.push(services.bridge.onStudy((s) => void (title = s.title ?? title)));
@@ -90,6 +95,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     camera,
     askEach,
     approvals,
+    pictures,
     active: new Map(),
     stopped: new Set(),
     lastKey: null,
@@ -100,6 +106,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     title: () => title,
     isBuilt,
     offered: TOOL_NAMES,
+    review: true,
     hostKeepsHints: !!assistant?.onTurn,
   };
   setRuntime(services, rt);
@@ -142,6 +149,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       stepsCap: t.used.stepsCap || null,
       changes: t.used.changesCap ? t.used.changes : null,
       changesCap: t.used.changesCap || null,
+      ...(t.review ? { review: { ...t.review } } : {}),
     };
     if (t.state === 'running') {
       store.set({ turn: { ...facts, end: null } });
@@ -164,10 +172,11 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     }),
   );
   // The chip's toggles show the person's choices.
-  store.set({ pace: pace.get(), askEach: askEach.get(), canStop: !!assistant?.stop, docked: !!assistant?.docked });
+  store.set({ pace: pace.get(), askEach: askEach.get(), pictures: pictures.get(), canStop: !!assistant?.stop, docked: !!assistant?.docked });
   offs.push(
     pace.subscribe((p) => store.set({ pace: p })),
     askEach.subscribe((on) => store.set({ askEach: on })),
+    pictures.subscribe((v) => store.set({ pictures: v })),
   );
 
   // ---- the pause: the chip shows it; it ends with its turn, or at the next key (busy.ts createPause)
@@ -200,6 +209,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       pace.dispose();
       soft.dispose();
       askEach.dispose();
+      pictures.dispose();
     },
   );
   // An ended turn's chip goes with the next change of the Part.
@@ -251,6 +261,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     },
     setPace: (p) => pace.set(p),
     setAskEach: (on) => askEach.set(on),
+    setPictures: (v) => pictures.set(v),
   };
   const api: AssistantPageApi = {
     autoCamera(_reason, sessionId) {
@@ -334,7 +345,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     const guide = guideWithout(TOOL_NAMES.filter((n) => !offered.includes(n)));
     let verdict: AssistantRegistration;
     try {
-      verdict = await assistant.register(tools, handler, { guide });
+      verdict = await assistant.register(tools, handler, rt.review ? { guide, review: { ...CAD_REVIEW } } : { guide });
     } catch (e) {
       verdict = { available: false, accepted: [], refused: [], reason: 'failed' };
       console.warn('[cad] the Assistant tools could not be offered', e);
@@ -383,10 +394,16 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       pace.setScale(scale ?? null);
     },
     setAskEach: (on) => askEach.force(on),
+    setPictures: (v) => pictures.force(v),
     approving: () => approvals.pending(),
     paused: () => pause.get(),
     async setToolset(set) {
       rt.offered = set === 'core' ? CORE_TOOLSET : TOOL_NAMES;
+      const v = await register();
+      return { available: v.available, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) };
+    },
+    async setReview(on) {
+      rt.review = on;
       const v = await register();
       return { available: v.available, accepted: v.accepted, ...(v.reason ? { reason: v.reason } : {}) };
     },

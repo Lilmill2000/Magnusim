@@ -34,7 +34,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { AssistantRegistration, AssistantTurn, AssistantUndoAnswer } from '../plugin-sdk/workspace';
-import type { AssistantCallOutcome, AssistantInvoke, AssistantPublication, CheckedTool } from './bridge';
+import type { AssistantCallOutcome, AssistantInvoke, AssistantPublication, CheckedAssistantTools, CheckedReview, CheckedTool } from './bridge';
 
 /** The workspace a list belongs to, from the host's route (and its title from the host's plugin row). */
 export interface WorkspaceToolsScope {
@@ -64,6 +64,8 @@ export interface PublishedTools {
   readonly scope: WorkspaceToolsScope;
   readonly tools: readonly CheckedTool[];
   readonly guide: string;
+  /** The review rounds the frame asked for (null: none). */
+  readonly review: CheckedReview | null;
   readonly invoke: ToolInvoke;
   /** Tells its frame of the assistant's turns bound to this tab (the page relay calls it); null: none. */
   readonly tellTurn: TurnTell | null;
@@ -228,7 +230,7 @@ export function nextWorkspaceToolsRev(): number {
 export function publishWorkspaceTools(
   scope: WorkspaceToolsScope,
   frameId: string,
-  reg: { tools: CheckedTool[]; guide: string } | null,
+  reg: CheckedAssistantTools | null,
   invoke: ToolInvoke,
   tellTurn: TurnTell | null = null,
 ): AssistantPublication {
@@ -258,6 +260,7 @@ export function publishWorkspaceTools(
       }),
       tools: Object.freeze([...reg.tools]),
       guide: typeof reg.guide === 'string' ? reg.guide : '',
+      review: reg.review ? Object.freeze({ rounds: reg.review.rounds, prompt: reg.review.prompt }) : null,
       invoke,
       tellTurn,
       abandoned: false,

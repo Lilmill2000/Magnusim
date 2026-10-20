@@ -270,10 +270,10 @@ describe('the chip: Pause and Resume', () => {
     rt.holds.hold('before-commit');
     const r = h.call('set_params', PARAM('a', '3 mm'), { turn: 't1' });
     await vi.waitFor(() => expect(rt.holds.waiting()).toEqual(['before-commit']), { timeout: 30_000 });
-    expect(buttonsOf(h)).toEqual(['pause', 'stop', 'pace', 'ask']);
+    expect(buttonsOf(h)).toEqual(['pause', 'stop', 'pace', 'ask', 'pictures']);
     h.fake.emitTurn({ id: 't1', title: 'Cap me', state: 'ended', end: { state: 'capped', reason: 'minutes' } });
     expect(rt.store.get().phase).toBe('working');
-    expect(buttonsOf(h)).toEqual(['pace', 'ask']);
+    expect(buttonsOf(h)).toEqual(['pace', 'ask', 'pictures']);
     actionsOf(h).pause();
     expect(rt.pause.get()).toBeNull();
     rt.holds.release('before-commit');

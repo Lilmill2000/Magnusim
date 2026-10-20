@@ -2,7 +2,9 @@
  * One turn of the Assistant (Foundation spec 6.1, 6.2, 6.6): the steps between the
  * person's prompt and the model's last answer.
  *
- *   starting ─ privacy (cloud turns with a project: allowed, remembered, or a question)
+ *   starting ─ privacy (cloud turns with a project: allowed, remembered, or a question);
+ *     then the prompt, its reference pictures (none for a local model known not to read
+ *     images) and the app context, as one user message
  *   for each step:
  *     the caps (minutes, tokens; then the spend estimate and the day's reservation)
  *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
@@ -14,6 +16,11 @@
  *       refusal remembered); the adapter's notes on how a request went, each once a turn
  *     model: one request with this step's tools (computed by the host, every step)
  *       refusal → failed · context → failed · max_tokens → capped · no calls → done
+ *       no calls, the turn's workspace asked for review (registry.ts WorkspaceReview) and
+ *         its edit or destructive tools succeeded since the turn began or the last round →
+ *         a `review` event and the review prompt as the next user message, round i of n;
+ *         a round with no such success, or the n-th, ends the turn done; a round counts
+ *         against the caps as any step (a turn already at a cap ends done with a note)
  *     tools: each call in order, through the runner (only this step's tools resolve)
  *       a cap reached → this and every later call is answered `capped`
  *       a call declined → every later call `skipped`
@@ -30,11 +37,13 @@
  *
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
-import { contextBlock, guideBlock, SYSTEM_PROMPT } from './prompt.ts';
+import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
+import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
+import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import { destinationHost, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
-import { providerTools, type ToolCtx, type ToolDef, type WorkspaceRegistration } from './registry.ts';
+import { providerTools, type ToolCtx, type ToolDef, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
 import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
 import type { Caps, AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
@@ -49,6 +58,7 @@ import {
   type ProviderId,
   type ProviderRequest,
   type ProviderResult,
+  type ImagePart,
   type StreamEvent,
   type ToolCallPart,
   type ToolResultPart,
@@ -92,6 +102,8 @@ export interface PageLimits {
 /** The turn as the loop drives it (turns.ts). */
 export interface LoopTurn extends RunnerTurn {
   readonly prompt: string;
+  /** The person's reference pictures with the prompt (checked at the start; the first user message carries them). */
+  readonly promptImages: readonly ImagePart[];
   readonly tab: string | null;
   /** The tab that shows its questions: the window that started it, else its bound tab (phase 4 spec 9.1). */
   readonly showTab: string | null;
@@ -116,6 +128,8 @@ export interface LoopTurn extends RunnerTurn {
   /** The limits in force for this step: its tab's page hears them with the step's next result. */
   setUsed(limits: PageLimits): void;
   setState(s: TurnState): void;
+  /** A review round starts: logged (`review`) and its tab's page hears it. */
+  setReview(round: number, of: number): void;
   end(state: EndState, reason: string, message: string | null): void;
   note(text: string): void;
   onStream(step: number, e: StreamEvent): void;
@@ -133,7 +147,7 @@ export interface LoopTurn extends RunnerTurn {
 
 export interface LoopRegistry {
   selectTools(ctx: ToolCtx): { tools: ToolDef[]; dropped: string[] };
-  workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string } | null;
+  workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string; review?: WorkspaceReview | null } | null;
 }
 
 export interface LoopDeps {
@@ -242,6 +256,19 @@ function freshOf(messages: readonly Message[]): { chars: number; images: Array<{
 }
 
 const isCall = (p: { type: string }): p is ToolCallPart => p.type === 'tool_call';
+
+/** A tool of the turn's own tab's workspace that changes something (edit or destructive): what review rounds count. */
+function isWorkspaceEdit(def: ToolDef | undefined, tab: string | null): boolean {
+  return !!def && !!tab && def.source.kind === 'workspace' && def.source.tab === tab && (def.risk === 'edit' || def.risk === 'destructive');
+}
+
+/** A review round was due, but the turn had reached a limit (its tool calls, minutes or tokens). */
+export const REVIEW_NO_ROOM_NOTE = 'No review round: this turn has reached its limits.';
+
+/** The review a turn's workspace asks for: only while its link is connected. */
+function reviewAsk(ws: { connected: boolean; review?: WorkspaceReview | null } | null): WorkspaceReview | null {
+  return ws && ws.connected && ws.review ? ws.review : null;
+}
 
 export const CRASH_DURING = 'The Assistant hit an error while handling this call; it may or may not have run.';
 export const CRASH_BEFORE = 'Not run: the Assistant hit an error before this call.';
@@ -378,10 +405,20 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   // The conversation's system blocks are fixed by its first request.
   const fixed = conv.messages.length > 0;
   syncGuide(t, ws, fixed);
+  const notedByAdapter = new Set<string>();
+  // The person's reference pictures go after the prompt, only once privacy allowed the turn. A
+  // local model known not to read images gets none (the adapter's note says so, once a turn).
+  let pictures: readonly ImagePart[] = t.promptImages ?? [];
+  if (pictures.length && adapter.id === 'openai_compatible' && adapter.readsImages?.(t.settings.model) === false) {
+    pictures = [];
+    notedByAdapter.add(IMAGES_LEFT_OUT_NOTE);
+    t.note(IMAGES_LEFT_OUT_NOTE);
+  }
   conv.append({
     role: 'user',
     parts: [
       { type: 'text', text: t.prompt },
+      ...pictures.map((p) => ({ ...p })),
       {
         type: 'text',
         text: contextBlock({
@@ -401,7 +438,11 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   let prev: EstimateInput['prev'] = null;
   let counted = 0;
   const notedDrops = new Set<string>();
-  const notedByAdapter = new Set<string>();
+  // Review rounds (the turn's workspace asked for them): its edit tools that succeeded since the
+  // turn began or the last round started, and the rounds started (`of` fixed by the first).
+  let editedSinceReview = false;
+  let reviewRound = 0;
+  let reviewOf = 0;
   // Cloud models read images; a local server's model as its adapter knows (null: not known yet).
   const learnImages = () => {
     const known = adapter.id === 'openai_compatible' ? (adapter.readsImages?.(model) ?? null) : true;
@@ -527,7 +568,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     let costEstimated = false;
     try {
       out = await sendWithOneResend(
-        adapter,
+        // The provider debug log's rows name the turn and the step.
+        debugScoped(adapter, { turn: t.id, step }),
         { ...req, maxOutputTokens: est.maxOut },
         t.signal,
         (e) => {
@@ -621,6 +663,23 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     conv.append(out.message);
     if (!calls.length) {
       if (finalStep) return t.end('capped', 'steps', capText('steps', caps));
+      // The turn's workspace asked for review and its edits went through since the last round:
+      // the next round (within the turn's usual caps, checked at the next step).
+      const ask = editedSinceReview ? reviewAsk(workspaceNow()) : null;
+      if (ask && reviewRound < (reviewOf || ask.rounds)) {
+        if (stoppedNow(t)) return;
+        // A turn already at its limits ends with the answer it has: a round could only be cut short.
+        if (callCap(t, caps)) {
+          t.note(REVIEW_NO_ROOM_NOTE);
+          return t.end('done', 'end_turn', null);
+        }
+        reviewOf ||= ask.rounds;
+        reviewRound += 1;
+        editedSinceReview = false;
+        t.setReview(reviewRound, reviewOf);
+        conv.append({ role: 'user', parts: [{ type: 'text', text: reviewText(reviewRound, reviewOf, ask.prompt, t.images === false ? 0 : pictures.length) }] });
+        continue;
+      }
       return t.end('done', 'end_turn', null);
     }
 
@@ -662,6 +721,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           t.callDone();
         }
         if (r.code === 'declined') declined = true;
+        if (r.ok && isWorkspaceEdit(offered.get(call.name), t.tab)) editedSinceReview = true;
         // The minutes timer aborted this call (the step it used doesn't make this the steps cap).
         if (callAbortOf(signal)?.code === 'capped') capped = { reason: 'turn_minutes', text: capText('turn_minutes', caps) };
         results.push(r.part);

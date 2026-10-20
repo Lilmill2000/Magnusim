@@ -10,9 +10,10 @@
  *   `encrypted_content` that `include: ['reasoning.encrypted_content']` asks for.
  * - Tools are strict, with schemas from emitSchema('openai') (every field required,
  *   optional ones nullable); tool_choice auto, parallel calls allowed. A 400 that refuses
- *   a strict schema (STRICT_REFUSED_WORDS, or code invalid_function_parameters) is sent once
- *   more with the workspace's tools `strict: false`, the host's still strict, and that tool
- *   set goes so from then on (CAD tools spec H8, common.ts sendStrictOrLoose).
+ *   a strict schema (STRICT_REFUSED_WORDS, or code invalid_function_parameters) is sent again
+ *   with fewer tools strict (the smallest kept) when its words say the set is too big, else
+ *   with the workspace's tools `strict: false`, the host's still strict; that tool set goes
+ *   so from then on (CAD tools spec H8, common.ts sendStrictOrLoose).
  * - Tool results go back as `function_call_output` items, with images as input_image
  *   parts.
  * - Requests stream and are accumulated here; each output item is taken from its
@@ -33,8 +34,9 @@ import {
   type StreamEvent,
   type Usage,
 } from '../types.ts';
-import { dataUrl, emptyUsage, newWatchdog, parseToolInput, requestMessages, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
-import { mapProviderError, strictSchemaRefusal } from './errors.ts';
+import { debugCall, type DebugCall } from '../debug-log.ts';
+import { dataUrl, emptyUsage, newWatchdog, parseToolInput, requestMessages, SAID_MAX, schemaBytes, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions, type StrictPlan } from './common.ts';
+import { mapProviderError, providerSaid, strictSchemaRefusal } from './errors.ts';
 import { envHeaderNulls, guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
 import { loadSdkClass } from './load-sdk.ts';
 
@@ -111,18 +113,21 @@ function toInput(messages: readonly Message[]): Json[] {
   return out;
 }
 
-/** The request body (without `stream`), as sent; with `loose` the workspace's tools go `strict: false` (H8). */
-export function responsesBody(req: ProviderRequest, o: { loose?: boolean } = {}): Json {
+/**
+ * The request body (without `stream`), as sent; with `loose` the workspace's tools go
+ * `strict: false`, with `strict` exactly those tools go strict (H8).
+ */
+export function responsesBody(req: ProviderRequest, o: { loose?: boolean; strict?: readonly boolean[] } = {}): Json {
   const instructions = req.system
     .map((s) => s.text)
     .filter(Boolean)
     .join('\n\n');
-  const tools = req.tools.map((t): Json => ({
+  const tools = req.tools.map((t, i): Json => ({
     type: 'function',
     name: t.name,
     description: t.description,
     parameters: emitSchema('openai', t.schema),
-    strict: !(o.loose && t.workspace),
+    strict: o.strict ? !!o.strict[i] : !(o.loose && t.workspace),
   }));
   return {
     model: req.model,
@@ -254,15 +259,16 @@ export function openAiAdapter(o: AdapterOptions): ProviderAdapter {
     streamed,
   });
 
-  async function client(key: string, wd: Watchdog): Promise<Client> {
+  async function client(key: string, wd: Watchdog, dbg: DebugCall | null = null): Promise<Client> {
     const Ctor = await loadSdkClass<OpenAiCtor>('openai', 'OpenAI');
-    const fetch = guardedFetch({
+    const guarded = guardedFetch({
       origin: o.baseURL,
       allowHeaders: OPENAI_HEADERS,
       pin: { authorization: `Bearer ${key}`, 'openai-organization': null, 'openai-project': null },
       watchdog: wd,
       label: LABEL,
     });
+    const fetch = dbg ? dbg.fetch(guarded) : guarded;
     return new Ctor(openAiClientOptions(key, o.baseURL, fetch, env, 2));
   }
 
@@ -296,36 +302,43 @@ export function openAiAdapter(o: AdapterOptions): ProviderAdapter {
 
     async send(req, signal, onEvent) {
       await loadSdkClass('openai', 'OpenAI');
-      // Every tool goes strict: a workspace tool makes a loose request differ (H8).
-      const canLoosen = req.tools.some((t) => t.workspace);
-      const attempt = (loose: boolean) =>
+      // Every tool goes strict on the first try; a loose one leaves the workspace's out (H8).
+      const sets = {
+        strict: req.tools.map(() => true),
+        loose: req.tools.map((t) => !t.workspace),
+        bytes: req.tools.map((t) => schemaBytes(emitSchema('openai', t.schema))),
+      };
+      const attempt = (plan: StrictPlan) =>
         o.borrowKey(async (key) => {
-          const body = responsesBody(req, { loose });
+          const body = { ...responsesBody(req, { strict: plan.strict }), stream: true };
           const wd = newWatchdog(o, false);
           const sig = AbortSignal.any([signal, wd.signal]);
           const acc = new ResponseAccumulator(onEvent);
+          const dbg = debugCall({ dialect: 'openai', model: req.model, attempt: plan.kind, reason: plan.reason, strict: { count: plan.count, of: plan.of }, body });
           try {
-            const c = await client(String(key), wd);
-            const stream = await c.responses.create({ ...body, stream: true }, { signal: sig });
+            const c = await client(String(key), wd, dbg);
+            const stream = await c.responses.create(body, { signal: sig });
             for await (const ev of stream) {
               acc.add(ev);
               if (sig.aborted) break;
             }
             if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
             const result = acc.result(req.model);
+            dbg?.done(result);
             onEvent({ kind: 'usage', usage: result.usage });
             return result;
           } catch (err) {
             const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
-            if (!loose && canLoosen && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS, STRICT_REFUSED_CODES)) {
-              throw new StrictRefused(mapped);
+            dbg?.failed(err, mapped);
+            if (plan.kind !== 'loose' && plan.count > 0 && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS, STRICT_REFUSED_CODES)) {
+              throw new StrictRefused(mapped, providerSaid(err, SAID_MAX));
             }
             throw mapped;
           } finally {
             wd.done();
           }
         });
-      return sendStrictOrLoose('openai', req, canLoosen, attempt);
+      return sendStrictOrLoose('openai', req, sets, attempt);
     },
   };
 }

@@ -102,6 +102,16 @@ export interface ToolDef {
   run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome>;
 }
 
+/**
+ * Review rounds a workspace asked for (loop.ts): when the model ends its answer after at least one
+ * of this workspace's edit or destructive tools succeeded, the turn goes on with `prompt`, at most
+ * `rounds` times. Cleaned here (cleanGuide), so the prompt keeps its lines.
+ */
+export interface WorkspaceReview {
+  rounds: number;
+  prompt: string;
+}
+
 /** What a workspace page registered (after the relay's checks), with the call that reaches it. */
 export interface WorkspaceRegistration {
   plugin: string;
@@ -116,6 +126,8 @@ export interface WorkspaceRegistration {
   epoch?: string;
   tools: unknown[];
   guide?: string;
+  /** The review rounds it asked for (the relay checked their shape): see WorkspaceReview. */
+  review?: WorkspaceReview | null;
   /** Runs one call in the page (the relay); a registration without it can't run anything. */
   invoke?(call: {
     tool: string;
@@ -148,6 +160,9 @@ export const REGISTRATION_MAX_TOOLS = 32;
 export const REGISTRATION_MAX_BYTES = 512 * 1024;
 export const REQUEST_MAX_TOOLS = Object.freeze({ cloud: 40, local: 24 });
 export const GUIDE_MAX = 4000;
+/** A review's most rounds and its prompt's most characters. */
+export const REVIEW_ROUNDS_MAX = 5;
+export const REVIEW_PROMPT_MAX = 1500;
 export const HOST_STALL_MS = 30_000;
 export const WORKSPACE_TIMEOUT_S = Object.freeze({ min: 1, max: 600, default: 60 });
 
@@ -183,6 +198,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** A registration's review, cleaned: null when it asked for none, or for one out of shape (1 to 5 rounds, a prompt). */
+export function reviewOf(raw: unknown): WorkspaceReview | null {
+  if (!isRecord(raw)) return null;
+  const rounds = raw.rounds;
+  if (typeof rounds !== 'number' || !Number.isInteger(rounds) || rounds < 1 || rounds > REVIEW_ROUNDS_MAX) return null;
+  const prompt = cleanGuide(raw.prompt, REVIEW_PROMPT_MAX);
+  return prompt ? { rounds, prompt } : null;
+}
+
 /** The memo of provider definitions: equal content gives the same object, so the same bytes. */
 const definitions = new Map<string, ProviderTool>();
 
@@ -211,6 +235,7 @@ interface TabEntry {
   tools: ToolDef[];
   refused: Refusal[];
   guide: string;
+  review: WorkspaceReview | null;
   connected: boolean;
 }
 
@@ -312,7 +337,7 @@ export class Registry implements ToolRegistry {
     const list = Array.isArray(reg.tools) ? reg.tools : [];
     let size = Infinity;
     try {
-      size = Buffer.byteLength(JSON.stringify({ tools: list, guide: reg.guide ?? '' }), 'utf8');
+      size = Buffer.byteLength(JSON.stringify({ tools: list, guide: reg.guide ?? '', review: reg.review ?? null }), 'utf8');
     } catch {
       /* not JSON: refused below */
     }
@@ -327,7 +352,7 @@ export class Registry implements ToolRegistry {
       }
     }
     tools.sort(byName);
-    this.tabs.set(tab, { tab, link, source, reg, epoch, tools, refused, guide: cleanGuide(reg.guide ?? '', GUIDE_MAX), connected: true });
+    this.tabs.set(tab, { tab, link, source, reg, epoch, tools, refused, guide: cleanGuide(reg.guide ?? '', GUIDE_MAX), review: reviewOf(reg.review), connected: true });
     this.changed(tab);
     return { accepted: tools.map((t) => t.localName), refused };
   }
@@ -410,10 +435,10 @@ export class Registry implements ToolRegistry {
   }
 
   /** What a tab registered (for /tabs and diagnostics). */
-  workspaceOf(tab: string): { link: string; connected: boolean; reg: WorkspaceRegistration; epoch: string; tools: string[]; refused: Refusal[]; guide: string } | null {
+  workspaceOf(tab: string): { link: string; connected: boolean; reg: WorkspaceRegistration; epoch: string; tools: string[]; refused: Refusal[]; guide: string; review: WorkspaceReview | null } | null {
     const e = this.tabs.get(tab);
     if (!e) return null;
-    return { link: e.link, connected: e.connected, reg: e.reg, epoch: e.epoch, tools: e.tools.map((t) => t.name), refused: e.refused, guide: e.guide };
+    return { link: e.link, connected: e.connected, reg: e.reg, epoch: e.epoch, tools: e.tools.map((t) => t.name), refused: e.refused, guide: e.guide, review: e.review };
   }
 
   tabIds(): string[] {

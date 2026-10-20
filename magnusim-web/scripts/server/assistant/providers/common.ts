@@ -4,6 +4,7 @@
  * the cloud adapters' fallback for strict tools their provider can't compile.
  */
 import { createHash } from 'node:crypto';
+import { alog } from '../log.ts';
 import { assistantState } from '../state.ts';
 import type { ImagePart, Message, ProviderError, ProviderId, ProviderRequest, ProviderResult, ProviderTool, ToolResultPart, Usage, UserMessage, UserPart } from '../types.ts';
 import { Watchdog, type WatchdogOptions } from './guarded-fetch.ts';
@@ -90,56 +91,206 @@ export function parseToolInput(raw: string): { input: Record<string, unknown>; e
 /** The note when a cloud request went with the workspace's tools not strict (CAD tools spec H8). */
 export const STRICT_FALLBACK_NOTE = 'The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.';
 
-/**
- * Tool sets a cloud provider could not compile strictly, by boot id, dialect and the
- * tools' hash: for the process (a test reset or a server start forgets them).
- */
-const LOOSE = new Set<string>();
-const LOOSE_MAX = 200;
+/** The longest part of the provider's words a note keeps. */
+export const SAID_MAX = 600;
 
-function looseKey(dialect: ProviderId, tools: readonly ProviderTool[]): string {
+/** The note for a loose request: STRICT_FALLBACK_NOTE, and the provider's words when it gave any. */
+export function strictFallbackNote(said: string): string {
+  return said ? `${STRICT_FALLBACK_NOTE} The provider said: ${said}` : STRICT_FALLBACK_NOTE;
+}
+
+/**
+ * The note for a request sent with fewer tools strict: how many of the request's tools the
+ * provider checks, the ones it does not (in the order offered), and the provider's words.
+ */
+export function strictReducedNote(said: string, count: number, of: number, unchecked: readonly string[]): string {
+  const words = said ? ` (it said: ${said})` : '';
+  return `The cloud provider could not compile all these tools strictly${words}: ${count} of ${of} are checked by the provider, the rest are sent unchecked (${unchecked.join(', ')}); the app still checks every input.`;
+}
+
+/**
+ * A strict refusal in these words says the strict set is too big (a grammar too large or too
+ * complex, a compile that timed out, too many strict tools), not that one schema is wrong:
+ * a smaller strict set may still compile.
+ */
+export const STRICT_SIZE_WORDS = /too (large|complex|many)|timed out|number of strict/i;
+
+/** At most this many requests for one answer: the first, the smaller strict sets, and the loose one. */
+export const STRICT_MAX_ATTEMPTS = 6;
+
+/**
+ * What the provider said about a tool set: `k` of its strict tools compiled (the smallest)
+ * and `refused` of them did not, or (`k` null) only the loose request goes; with the
+ * provider's words.
+ */
+interface StrictMemo {
+  k: number | null;
+  refused: number;
+  said: string;
+}
+
+/**
+ * Tool sets by boot id, dialect and the tools' hash: for the process (a test reset or a
+ * server start forgets them).
+ */
+const MEMO = new Map<string, StrictMemo>();
+const MEMO_MAX = 200;
+
+function memoKey(dialect: ProviderId, tools: readonly ProviderTool[]): string {
   const hash = createHash('sha256')
     .update(JSON.stringify(tools.map((t) => [t.name, t.description, t.schema, !!t.workspace])))
     .digest('hex');
   return [assistantState().bootId, dialect, hash].join(' ');
 }
 
-/** A cloud provider refused the request's strict tool schemas, before anything streamed. */
+function remember(key: string, m: StrictMemo): void {
+  const boot = `${assistantState().bootId} `;
+  for (const k of MEMO.keys()) if (!k.startsWith(boot)) MEMO.delete(k);
+  if (MEMO.size >= MEMO_MAX && !MEMO.has(key)) MEMO.clear();
+  MEMO.set(key, m);
+}
+
+/**
+ * A cloud provider refused the request's strict tool schemas, before anything streamed.
+ * `said`: the provider's own words (errors.ts providerSaid: redacted and capped).
+ */
 export class StrictRefused extends Error {
   readonly mapped: ProviderError;
-  constructor(mapped: ProviderError) {
+  readonly said: string;
+  constructor(mapped: ProviderError, said = '') {
     super(mapped.message);
     this.mapped = mapped;
+    this.said = said;
   }
 }
 
 /**
+ * Why an attempt goes as it does: null (the first try); `strict_reduced` (fewer tools strict,
+ * after a refusal just now), `strict_reduced_earlier` (the smaller set remembered);
+ * `strict_refused` (the workspace's tools not strict, after a refusal just now),
+ * `strict_refused_earlier` (a loose set remembered).
+ */
+export type StrictReason = 'strict_reduced' | 'strict_reduced_earlier' | 'strict_refused' | 'strict_refused_earlier' | null;
+
+/** One attempt's tools: which go strict, by index of the request's tools. */
+export interface StrictPlan {
+  /** strict (the first try), reduced (the `count` smallest of the first try's strict tools), loose (the workspace's not strict). */
+  kind: 'strict' | 'reduced' | 'loose';
+  reason: StrictReason;
+  strict: boolean[];
+  /** How many tools go strict, of `of` the request offers. */
+  count: number;
+  of: number;
+}
+
+/** The request's tools as an adapter sends them. */
+export interface StrictSets {
+  /** The first try's strict tools (within the provider's own limits). */
+  strict: readonly boolean[];
+  /** The loose request's: the workspace's tools not strict. */
+  loose: readonly boolean[];
+  /** Each tool's schema as sent, in bytes. */
+  bytes: readonly number[];
+}
+
+/** A schema's size as sent: its JSON's UTF-8 bytes. */
+export function schemaBytes(schema: unknown): number {
+  return Buffer.byteLength(JSON.stringify(schema ?? null), 'utf8');
+}
+
+/**
+ * The strict count the next try sends after `hi` strict tools were refused, with `left` tries
+ * still to go before the loose one: what is below `hi` split evenly by the tries left, the
+ * largest first. An accepted try is the answer (and is billed), so the search only goes down;
+ * with one try left it halves. Null: no try left, or nothing smaller to try.
+ */
+export function nextStrictCount(hi: number, left: number): number | null {
+  if (left < 1 || hi < 2) return null;
+  return Math.max(1, Math.floor((hi * left) / (left + 1)));
+}
+
+/**
+ * The first try's strict tools, smallest schema first (ties in the order offered): a reduced
+ * try keeps the first k of them strict.
+ */
+export function strictOrder(sets: StrictSets): number[] {
+  return sets.strict
+    .map((on, i) => (on ? i : -1))
+    .filter((i) => i >= 0)
+    .sort((a, b) => sets.bytes[a] - sets.bytes[b] || a - b);
+}
+
+/**
  * One cloud request whose strict tools the provider may refuse to compile (CAD tools spec
- * H8). `attempt(loose)` sends it, with the workspace's tools not strict when `loose`, and
- * throws StrictRefused for that refusal. Refused, the tool set is remembered and the
- * request goes once more loose; a set remembered goes loose from the start. An answer to a
- * loose request carries STRICT_FALLBACK_NOTE. `canLoosen`: some workspace tool would go
- * strict (else loose is the same request, and nothing is sent again).
+ * H8). `attempt(plan)` sends it with `plan.strict` and throws StrictRefused for that refusal
+ * (before anything streamed: no output, and no step).
+ * - Refused in words that say the set is too big (STRICT_SIZE_WORDS), it goes again with only
+ *   the k smallest of the first try's strict tools strict (the host's counted like any
+ *   other), k from nextStrictCount, lower after each refusal until one is accepted. In other
+ *   words, or once STRICT_MAX_ATTEMPTS - 1 requests were refused, it goes loose
+ *   (`sets.loose`: the workspace's tools not strict).
+ * - The accepted k (with the smallest refused) is remembered for the tool set, and a loose set
+ *   too, so a later request with it goes straight there (one warn line per refusal); a
+ *   remembered k refused again searches below it.
+ * - A reduced answer carries strictReducedNote, a loose one strictFallbackNote, each with the
+ *   provider's words. A refused loose request is the error, and so is a refusal when no
+ *   smaller strict set differs (no workspace tool strict, one strict tool or none).
  */
 export async function sendStrictOrLoose(
   dialect: ProviderId,
   req: ProviderRequest,
-  canLoosen: boolean,
-  attempt: (loose: boolean) => Promise<ProviderResult>,
+  sets: StrictSets,
+  attempt: (plan: StrictPlan) => Promise<ProviderResult>,
 ): Promise<ProviderResult> {
-  const noted = (r: ProviderResult): ProviderResult => ({ ...r, notes: [...(r.notes ?? []), STRICT_FALLBACK_NOTE] });
-  const key = canLoosen ? looseKey(dialect, req.tools) : '';
-  const loose = canLoosen && LOOSE.has(key);
-  try {
-    const r = await attempt(loose);
-    return loose ? noted(r) : r;
-  } catch (err) {
-    if (!(err instanceof StrictRefused)) throw err;
-    if (loose || !canLoosen) throw err.mapped;
+  const of = req.tools.length;
+  const order = strictOrder(sets);
+  const top = order.length;
+  const canLoosen = sets.strict.some((on, i) => on && !sets.loose[i]);
+  const canReduce = top >= 2;
+  const plan = (kind: StrictPlan['kind'], reason: StrictReason, k = 0): StrictPlan => {
+    let strict: boolean[];
+    if (kind === 'strict') strict = [...sets.strict];
+    else if (kind === 'loose') strict = [...sets.loose];
+    else {
+      const keep = new Set(order.slice(0, k));
+      strict = sets.strict.map((_, i) => keep.has(i));
+    }
+    return { kind, reason, strict, count: strict.filter(Boolean).length, of };
+  };
+  const noted = (r: ProviderResult, p: StrictPlan, said: string): ProviderResult => {
+    if (p.kind === 'strict') return r;
+    const unchecked = req.tools.filter((_, i) => !p.strict[i]).map((t) => t.name);
+    const note = p.kind === 'loose' ? strictFallbackNote(said) : strictReducedNote(said, p.count, of, unchecked);
+    return { ...r, notes: [...(r.notes ?? []), note] };
+  };
+  const key = canLoosen || canReduce ? memoKey(dialect, req.tools) : '';
+  const memo = key ? MEMO.get(key) : undefined;
+  let hi = memo ? memo.refused : top;
+  let said = memo?.said ?? '';
+  let p: StrictPlan;
+  if (!memo) p = plan('strict', null);
+  else if (memo.k === null) p = plan('loose', 'strict_refused_earlier');
+  else p = plan('reduced', 'strict_reduced_earlier', memo.k);
+  for (let tries = 1; ; tries++) {
+    try {
+      const r = await attempt(p);
+      if (p.reason === 'strict_reduced') remember(key, { k: p.count, refused: hi, said });
+      return noted(r, p, said);
+    } catch (err) {
+      if (!(err instanceof StrictRefused)) throw err;
+      if (p.kind === 'loose' || !key) throw err.mapped;
+      said = err.said;
+      hi = p.kind === 'strict' ? top : p.count;
+      const k = canReduce && STRICT_SIZE_WORDS.test(err.said) ? nextStrictCount(hi, STRICT_MAX_ATTEMPTS - tries - 1) : null;
+      if (k !== null) {
+        alog('warn', 'the provider refused the strict tools; sending them again with fewer strict', { provider: dialect, refused: hi, strict: k, said });
+        p = plan('reduced', 'strict_reduced', k);
+        continue;
+      }
+      if (!canLoosen) throw err.mapped;
+      alog('warn', 'the provider refused the strict tools; sending them again unchecked by the provider', { provider: dialect, said });
+      remember(key, { k: null, refused: hi, said });
+      p = plan('loose', 'strict_refused');
+    }
   }
-  const boot = `${assistantState().bootId} `;
-  for (const k of LOOSE) if (!k.startsWith(boot)) LOOSE.delete(k);
-  if (LOOSE.size >= LOOSE_MAX) LOOSE.clear();
-  LOOSE.add(key);
-  return noted(await attempt(true));
 }

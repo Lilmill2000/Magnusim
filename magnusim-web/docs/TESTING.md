@@ -218,8 +218,15 @@ No test reaches a real model provider or this PC's real Assistant files.
   - `fake.failNext({status, body, headers, times})` answers the next request(s) with
     an error; add `'x-should-retry': 'false'` to stop the client's own retries. A 400
     whose body says the strict tool schemas can't be compiled makes a cloud adapter send
-    the request once more with the workspace's tools not strict; the workspace tools spec
-    runs a turn through that from the terminal client.
+    the request again: with fewer tools strict (the smallest) when its words say the set
+    is too big, else with the workspace's tools not strict; the workspace tools spec
+    runs a turn through each (the loose one from the terminal client).
+  - `fake.strictBudget(bytes, dialect)` (the first cloud dialect by default) refuses
+    (400, `GRAMMAR_TOO_LARGE`, that dialect's words) a request whose strict tool schemas
+    pass `bytes` in all (each schema's JSON in UTF-8), as a provider refuses a strict set
+    too big to compile; `fake.strictBudget(null, dialect)` clears it. The providers' node tests drive the
+    smaller-strict search with it (which k is taken, the order by size, what is kept per
+    tool set, the cap of 6 requests).
   - `fake.models(list)` sets what the model lists answer; `fake.holdModels(name)` makes
     the next list wait until `fake.release(name)` (a server that never answers).
   - An entry of `fake.models(list, 'compat')` may be a model row,
@@ -245,8 +252,8 @@ No test reaches a real model provider or this PC's real Assistant files.
     reasoning item without its encrypted content. So a test that passes against it
     has sent what the real service accepts, with one catch: a cloud request whose strict
     workspace tool breaks a schema rule (a limit keyword, the strict budget) is sent
-    again by the app with the workspace's tools not strict, and the turn goes on with
-    a note. `followTurn`'s `ended()` (and so `startTurn`'s) fails a turn that got that
+    again by the app with fewer tools strict or the workspace's tools not strict, and
+    the turn goes on with a note. `followTurn`'s `ended()` (and so `startTurn`'s) fails a turn that got that
     note unless the test passes `{strictFallback: true}`; a test that follows a turn
     another way (the terminal client) checks for the note itself.
 - **Pointing the app at it.** Both cloud adapters go to the fake with
@@ -273,6 +280,16 @@ No test reaches a real model provider or this PC's real Assistant files.
   `POST /api/test/assistant/reset` (`{files: true}` also removes the test home's
   files; a reset leaves the tabs' links, so open pages stay linked). `run.bat` and
   the setup scripts set none of them, and a test checks that.
+- **The provider debug log.** `MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder>` (no test switch
+  needed; it works in normal runs too, off when unset, read once) makes the server
+  append a row per model request to `<folder>/provider.jsonl`, a local file only: the
+  turn, the dialect and model, the attempt (strict, reduced or loose, with its strict
+  count; with or without images) and why, the whole request body as sent, each HTTP answer's status and request id,
+  the time taken, and the result (stop reason, usage, the blocks with their tool
+  calls) or the error with the provider's whole answer. Rows are redacted, never hold
+  a header or a key, and image data is a marker with its size.
+  `scripts/server/__tests__/assistant-debug-log.test.js` checks it; the CAD eval
+  harness sets it for the servers it starts (`bundled-plugins/cad/eval/README.md`).
 - **Home isolation.** The Assistant keeps its keys, settings and spend in
   `MAGNUSIM_ASSISTANT_HOME`, else beside `MAGNUSIM_LOCAL_JSON` (`local.json` →
   `local.assistant/`). Every node test sets both to temp paths before its first app

@@ -38,6 +38,11 @@ describe('chipText', () => {
     expect(chipText({ ...base, phase: 'thinking', turn: agentTurn() })).toBe('Assistant · thinking · 3 of 24 changes');
     expect(chipText({ ...base, phase: 'working', turn: agentTurn(), call: { tool: 'extrude', label: 'Extrude Boss' } })).toBe('Assistant · Extrude Boss · 3 of 24 changes');
     expect(chipText({ ...base, phase: 'ended', turn: turn('done') })).toBe('Assistant: Plate with four holes · done');
+    // A review round the app asked for: what the turn does now, until it ends.
+    const reviewing = { ...turn(), review: { round: 1, of: 3 } };
+    expect(chipText({ ...base, phase: 'thinking', turn: reviewing })).toBe('Assistant · reviewing (round 1 of 3) · 3 of 120 steps');
+    expect(chipText({ ...base, phase: 'working', turn: reviewing, call: { tool: 'view', label: 'Look at the Part' } })).toBe('Assistant · reviewing (round 1 of 3) · Look at the Part · 3 of 120 steps');
+    expect(chipText({ ...base, phase: 'ended', turn: { ...turn('done'), review: { round: 2, of: 3 } } })).toBe('Assistant: Plate with four holes · done');
     expect(chipText({ ...base, phase: 'ended', turn: turn('capped') })).toBe('Assistant: Plate with four holes · stopped at its limits');
     expect(chipText({ ...base, phase: 'ended', turn: turn('ended') })).toBe('Assistant: Plate with four holes · ended');
     expect(chipText({ ...base, phase: 'waiting', note: 'close the Fillet 2 panel' })).toBe('Assistant waits for you: close the Fillet 2 panel');
@@ -49,9 +54,9 @@ describe('chipText', () => {
 describe('chipButtons', () => {
   it("gives each phase its buttons; Stop only with the host's turn events; Undo only while the group is the newest", () => {
     const ids = (s: Partial<AssistantUiState>, undo = false) => chipButtons({ ...base, ...s }, undo).map((b) => b.id);
-    expect(ids({ phase: 'thinking', canStop: true })).toEqual(['pause', 'stop', 'ask']);
-    expect(ids({ phase: 'thinking' })).toEqual(['pause', 'ask']);
-    expect(ids({ phase: 'working', canStop: true })).toEqual(['pause', 'stop', 'pace', 'ask']);
+    expect(ids({ phase: 'thinking', canStop: true })).toEqual(['pause', 'stop', 'ask', 'pictures']);
+    expect(ids({ phase: 'thinking' })).toEqual(['pause', 'ask', 'pictures']);
+    expect(ids({ phase: 'working', canStop: true })).toEqual(['pause', 'stop', 'pace', 'ask', 'pictures']);
     expect(ids({ phase: 'waiting', canStop: true })).toEqual(['pause', 'stop']);
     expect(ids({ phase: 'approve', canStop: true })).toEqual(['keep', 'discard']);
     expect(ids({ phase: 'paused', canStop: true })).toEqual(['resume', 'stop']);
@@ -112,7 +117,7 @@ function Phase() {
 let current: AppServices | null = null;
 
 function actionsSpy(): AssistantActions & Record<string, ReturnType<typeof vi.fn>> {
-  return { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), keep: vi.fn(), discard: vi.fn(), undo: vi.fn(), setPace: vi.fn(), setAskEach: vi.fn() } as never;
+  return { pause: vi.fn(), resume: vi.fn(), stop: vi.fn(), keep: vi.fn(), discard: vi.fn(), undo: vi.fn(), setPace: vi.fn(), setAskEach: vi.fn(), setPictures: vi.fn() } as never;
 }
 
 describe('the chip in the dock', () => {
@@ -173,7 +178,20 @@ describe('the chip in the dock', () => {
     const click = (id: string) => fireEvent.click(view.container.querySelector(`[data-assistant-action="${id}"]`)!);
     const labels = () => [...view.container.querySelectorAll('[data-assistant-action]')].map((b) => b.textContent);
     act(() => store.set({ ...base, phase: 'working', turn: turn(), call: { tool: 'sketch', label: 'Sketch Plate sketch' }, pace: 'watch', askEach: false, canStop: true }));
-    expect(labels()).toEqual(['Pause', 'Stop', 'Fast', 'Ask each step']);
+    expect(labels()).toEqual(['Pause', 'Stop', 'Fast', 'Ask each step', 'Pictures ✓']);
+    // Pictures: on by default (each edit's picture), pressed; the chip says which.
+    const chipEl = () => view.container.querySelector('[data-chip="assistant"]')!;
+    expect(chipEl().getAttribute('data-assistant-pictures')).toBe('each');
+    expect(view.container.querySelector('[data-assistant-action="pictures"]')!.getAttribute('aria-pressed')).toBe('true');
+    click('pictures');
+    expect(actions.setPictures).toHaveBeenCalledWith('off');
+    act(() => store.set({ pictures: 'off' }));
+    expect(chipEl().getAttribute('data-assistant-pictures')).toBe('off');
+    expect(view.container.querySelector('[data-assistant-action="pictures"]')!.getAttribute('aria-pressed')).toBe('false');
+    expect(labels()).toEqual(['Pause', 'Stop', 'Fast', 'Ask each step', 'Pictures']);
+    click('pictures');
+    expect(actions.setPictures).toHaveBeenLastCalledWith('each');
+    act(() => store.set({ pictures: 'each' }));
     click('pause');
     click('stop');
     click('pace');
@@ -184,7 +202,7 @@ describe('the chip in the dock', () => {
     expect(actions.setAskEach).toHaveBeenCalledWith(true);
     // On: pressed, with its check mark; at the fast pace the toggle says Watch.
     act(() => store.set({ pace: 'fast', askEach: true }));
-    expect(labels()).toEqual(['Pause', 'Stop', 'Watch', 'Ask each step ✓']);
+    expect(labels()).toEqual(['Pause', 'Stop', 'Watch', 'Ask each step ✓', 'Pictures ✓']);
     expect(view.container.querySelector('[data-assistant-action="ask"]')!.getAttribute('aria-pressed')).toBe('true');
     click('pace');
     click('ask');

@@ -685,6 +685,7 @@ The browser test reaches the app's test harness through one module: `e2e/support
 | `lock` | None | A file naming a live server to reuse; written when this call starts one |
 | `timeoutMs` | 120000 | How long to wait for the server |
 | `log` | None | `(line) => void` for its progress lines |
+| `logFile` | None | A file the server's whole output is appended to as it comes; `stop()` leaves it (give one outside `tmp` to keep it) |
 
 It returns `{base, port, pid, reused, tmp, projects, prefs, pluginsDir, log(), stop()}`. `base` is the server's URL, `log()` its output so far, and `stop()` ends it and removes `tmp`.
 

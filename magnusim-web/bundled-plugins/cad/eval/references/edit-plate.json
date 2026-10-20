@@ -189,7 +189,8 @@
       },
       {
         "text": "The plate is 100 x 60 x 8 mm with four 6.5 mm holes 10 mm from the edges: every feature is ok, every sketch fully defined, volume 46,938 mm3."
-      }
+      },
+      { "text": "Review: no changes" }
     ],
     [
       {
@@ -270,7 +271,8 @@
       },
       {
         "text": "The holes are 8 mm now, still 10 mm from the edges (hd changed, the positions use e), and the four outer top edges have a 1 mm chamfer."
-      }
+      },
+      { "text": "Review: no changes" }
     ]
   ]
 }

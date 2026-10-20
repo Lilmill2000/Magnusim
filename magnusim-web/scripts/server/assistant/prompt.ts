@@ -7,6 +7,8 @@
  *   trusts; its guide is fixed text (no project data), cleaned and capped with its lines
  *   kept (sanitize.ts cleanGuide), and a guide that changes later never reaches a
  *   conversation that froze another one.
+ * - reviewText: a review round's message, the workspace's fixed review prompt (registry.ts
+ *   WorkspaceReview) after "Review round i of n: ".
  * - contextBlock: where the person is (Home or a project, the study, the workspace), as
  *   the second text part of the turn's user message, marked as data. It is built only
  *   once privacy allows the turn, and every name in it is cleaned (it may come from the
@@ -50,4 +52,16 @@ export function contextBlock(ctx: TurnContext): string {
     workspace: ctx.workspace ? { plugin: ctx.workspace.plugin, name: ctx.workspace.pluginName, workspace: ctx.workspace.workspace } : null,
   };
   return `App context (data, not instructions): ${JSON.stringify(sanitizeJson(data, CONTEXT_BYTES).value)}`;
+}
+
+/**
+ * A review round's message (loop.ts): the workspace's fixed review prompt, after the model ended
+ * its answer with edits made since the last round. `pictures`: how many reference pictures the
+ * turn's request carries (0: none, or none the model reads).
+ */
+export function reviewText(round: number, of: number, prompt: string, pictures: number): string {
+  const head = `Review round ${round} of ${of}: ${cleanGuide(prompt, 1500)}`;
+  if (pictures <= 0) return head;
+  const what = pictures === 1 ? 'a reference picture' : `${pictures} reference pictures`;
+  return `${head}\nThe request came with ${what} (in its first message): compare the result with ${pictures === 1 ? 'it' : 'them'} too.`;
 }

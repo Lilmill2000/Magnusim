@@ -21,7 +21,7 @@ process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const { startFakeLlm, LOCAL_SERVER_ROWS, LLAMA_SERVER, TEXT_ONLY_REFUSAL } = await import('../../../e2e/support/fake-llm.mjs');
+const { startFakeLlm, GRAMMAR_TOO_LARGE, LOCAL_SERVER_ROWS, LLAMA_SERVER, TEXT_ONLY_REFUSAL } = await import('../../../e2e/support/fake-llm.mjs');
 const fake = await startFakeLlm();
 // Read once, at the first cloud request: both cloud adapters talk to the fake.
 process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
@@ -32,7 +32,7 @@ const { mapProviderError } = await import('../assistant/providers/errors.ts');
 const { resolveTestProviderUrl, cloudBaseUrl } = await import('../assistant/providers/endpoints.ts');
 const { sdkInstalled, depsStatus, setSdkSpecifierForTests, loadSdkClass, DEPS_MISSING_TEXT } = await import('../assistant/providers/load-sdk.ts');
 const { anthropicClientOptions, MessageAccumulator } = await import('../assistant/providers/anthropic.ts');
-const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE } = await import('../assistant/providers/common.ts');
+const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE, STRICT_MAX_ATTEMPTS, SAID_MAX, nextStrictCount, strictFallbackNote, strictOrder, strictReducedNote } = await import('../assistant/providers/common.ts');
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
@@ -340,6 +340,36 @@ describe('the adapters against the fake, in every dialect', () => {
         assert.deepEqual(user.content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${PNG_1x1}` } });
       }
     }
+  });
+
+  it("the person's reference picture in their message reaches each dialect beside the prompt (and the fake records it as the user's)", async () => {
+    const img = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 1, height: 1 };
+    for (const provider of PROVIDERS) {
+      fake.reply({ text: 'A round chip.' });
+      const ctx = { type: 'text', text: 'App context (data, not instructions): {}' };
+      await send(provider, request(provider, [{ role: 'user', parts: [{ type: 'text', text: 'Like this one' }, img, ctx] }]));
+      const r = lastChat(DIALECT[provider]);
+      assert.deepEqual(r.userImages, [{ media_type: 'image/png', data: PNG_1x1 }], provider);
+      const body = r.body;
+      if (provider === 'anthropic') {
+        assert.deepEqual(body.messages[0].content.map((b) => b.type), ['text', 'image', 'text']);
+        assert.deepEqual(body.messages[0].content[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_1x1 } });
+      } else if (provider === 'openai') {
+        const user = body.input.find((it) => it.role === 'user');
+        assert.deepEqual(user.content.map((c) => c.type), ['input_text', 'input_image', 'input_text']);
+        assert.deepEqual(user.content[1], { type: 'input_image', image_url: `data:image/png;base64,${PNG_1x1}`, detail: 'auto' });
+      } else {
+        const user = body.messages.find((m) => m.role === 'user');
+        assert.deepEqual(user.content.map((c) => c.type), ['text', 'image_url', 'text']);
+        assert.deepEqual(user.content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${PNG_1x1}` } });
+      }
+    }
+    // A tool result's picture is not the person's.
+    fake.reply({ tools: [{ name: 'snap', input: {} }] }, { text: 'Seen.' });
+    const first = [userText('look')];
+    const r1 = await send('openai_compatible', request('openai_compatible', first));
+    await send('openai_compatible', request('openai_compatible', [...first, r1.message, resultFor(r1, '{"tool":"snap","ok":true}', [img])]));
+    assert.deepEqual(lastChat('compat').userImages, []);
   });
 
   it('a request is built with tool results first, cache breakpoints, effort, and no forced tool choice', async () => {
@@ -1412,9 +1442,12 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
   const workspace = (tools, plugin = 'ai-demo') => tools.map((t) => ({ ...t, name: `${plugin}__${t.name}`, workspace: true }));
   const WS = workspace(DEMO_TOOLS.slice(0, 4));
   const TOOLS = [...HOST, ...WS];
-  /** Each dialect's refusal of a strict set it can't compile, as the provider words it. */
+  /**
+   * Each dialect's refusal of a strict schema it can't take, as the provider words it: one
+   * schema named, so the set goes loose (a set too big is the reduced search's, below).
+   */
   const REFUSED = {
-    anthropic: { type: 'error', error: { type: 'invalid_request_error', message: 'Schema is too complex for compilation.' } },
+    anthropic: { type: 'error', error: { type: 'invalid_request_error', message: 'tools.3.input_schema: strict tools do not support "minimum"' } },
     openai: {
       error: {
         message: "Invalid schema for function 'ai-demo__add': In context=('properties', 'by'), 'minimum' is not permitted.",
@@ -1425,6 +1458,11 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     },
   };
   const CLOUD = ['anthropic', 'openai'];
+  /** The note a loose answer carries: the fallback note and the provider's own words. */
+  const NOTE = {
+    anthropic: `${STRICT_FALLBACK_NOTE} The provider said: ${REFUSED.anthropic.error.message}`,
+    openai: `${STRICT_FALLBACK_NOTE} The provider said: ${REFUSED.openai.error.message}`,
+  };
   /** Each tool of a request as [name, strict]. */
   const strictness = (r) => r.body.tools.map((t) => [t.name, t.strict === true]);
   const allStrict = (tools) => tools.map((t) => [t.name, true]);
@@ -1446,7 +1484,7 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         r = await send(provider, request(provider, [userText('tools')], { tools: TOOLS }));
       });
       assert.equal(r.stop, 'end_turn', provider);
-      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(r.notes, [NOTE[provider]], provider);
       assert.deepEqual(sent.map(strictness), [allStrict(TOOLS), hostStrict(TOOLS)], provider);
       assert.equal(sent[0].step, undefined, `${provider}: the refused request took no step`);
       // The same tools both times: only `strict` differs (the second dialect says false, the first leaves it out).
@@ -1455,12 +1493,12 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
       if (provider === 'openai') assert.deepEqual(sent[1].body.tools.map((t) => t.strict), [true, true, false, false, false, false]);
       else assert.ok(sent[1].body.tools.slice(HOST.length).every((t) => !('strict' in t)), provider);
 
-      // Another turn's adapter, the same tools: not strict from the start, one request, the note again.
+      // Another turn's adapter, the same tools: not strict from the start, one request, the note (with the words remembered) again.
       fake.reply({ text: 'again' });
       sent = await sentBy(dialect, async () => {
         r = await send(provider, request(provider, [userText('again')], { tools: TOOLS }));
       });
-      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(r.notes, [NOTE[provider]], provider);
       assert.deepEqual(sent.map(strictness), [hostStrict(TOOLS)], provider);
 
       // Another tool set is still tried strict.
@@ -1502,7 +1540,7 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     const two = await sentBy('anthropic', async () => {
       r = await send('anthropic', request('anthropic', [userText('cad')], { tools: cad }));
     });
-    assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE]);
+    assert.deepEqual(r.notes, [NOTE.anthropic]);
     assert.deepEqual(two.map((q) => q.body.tools.map((t) => t.strict === true)), [
       [...Array(20).fill(true), false],
       [true, true, true, ...Array(18).fill(false)],
@@ -1550,6 +1588,244 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     fake.reply({ text: 'ok' });
     const sent = await sentBy('openai', () => send('openai', request('openai', [userText('x')], { tools })));
     assert.deepEqual(sent.map(strictness), [allStrict(tools), hostStrict(tools)]);
+  });
+
+  it("the note keeps the provider's words: redacted, on one line, capped; with no words, the plain note", async () => {
+    assert.equal(strictFallbackNote(''), STRICT_FALLBACK_NOTE);
+    assert.equal(
+      strictReducedNote('', 2, 5, ['a', 'b', 'c']),
+      'The cloud provider could not compile all these tools strictly: 2 of 5 are checked by the provider, the rest are sent unchecked (a, b, c); the app still checks every input.',
+    );
+    for (const [words, start, loose] of [
+      [`tools.2.input_schema: strict tools do not support "minimum".\n Key ${KEYS.anthropic} here. ${'x'.repeat(2000)}`, 'tools.2.input_schema: strict tools do not support "minimum". Key [redacted] here. xxx', true],
+      [`Schema is too complex for compilation.\n Key ${KEYS.anthropic} here. ${'x'.repeat(2000)}`, 'Schema is too complex for compilation. Key [redacted] here. xxx', false],
+    ]) {
+      fake.failNext({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: words } }, dialect: 'anthropic' });
+      fake.reply({ text: 'ok' });
+      const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), `said${loose ? 'L' : 'R'}`)];
+      const r = await send('anthropic', request('anthropic', [userText('x')], { tools }));
+      const [note, ...more] = r.notes;
+      assert.deepEqual(more, []);
+      assert.ok(!note.includes(KEYS.anthropic));
+      assert.ok(!note.includes('\n'));
+      if (loose) {
+        assert.ok(note.startsWith(`${STRICT_FALLBACK_NOTE} The provider said: ${start}`), note);
+        assert.equal(note.length, `${STRICT_FALLBACK_NOTE} The provider said: `.length + SAID_MAX + 1);
+        assert.ok(note.endsWith('…'));
+      } else {
+        // Too big: 3 of the 4 stay strict, the biggest (add) is named unchecked.
+        const said = note.slice(note.indexOf('(it said: ') + '(it said: '.length, note.indexOf('…') + 1);
+        assert.ok(said.startsWith(start), note);
+        assert.equal(said.length, SAID_MAX + 1);
+        assert.equal(note, strictReducedNote(said, 3, 4, ['saidR__add']));
+      }
+    }
+  });
+
+  describe('a strict set too big to compile: the smallest stay strict', () => {
+    /** An object schema of about `n` bytes (an enum of padded words). */
+    const sized = (n) => obj({ pick: { type: 'string', enum: Array.from({ length: Math.max(1, Math.round(n / 12)) }, (_, i) => `w${String(i).padStart(8, '0')}`) } });
+    /**
+     * 3 host tools and 10 workspace ones, offered out of size order; the host's `big` is bigger
+     * than most of the workspace's, and w_tie_a and w_tie_b are the same size.
+     */
+    const SET = (plugin) => [
+      { name: 'h_small', description: 'Host.', schema: obj({}) },
+      { name: 'h_big', description: 'Host.', schema: sized(900) },
+      { name: 'h_mid', description: 'Host.', schema: sized(200) },
+      ...workspace(
+        [
+          { name: 'w_huge', description: 'W.', schema: sized(2400) },
+          { name: 'w_100', description: 'W.', schema: sized(100) },
+          { name: 'w_tie_a', description: 'W.', schema: sized(500) },
+          { name: 'w_300', description: 'W.', schema: sized(300) },
+          { name: 'w_1500', description: 'W.', schema: sized(1500) },
+          { name: 'w_tie_b', description: 'W.', schema: sized(500) },
+          { name: 'w_400', description: 'W.', schema: sized(400) },
+          { name: 'w_2000', description: 'W.', schema: sized(2000) },
+          { name: 'w_700', description: 'W.', schema: sized(700) },
+          { name: 'w_50', description: 'W.', schema: sized(50) },
+        ],
+        plugin,
+      ),
+    ];
+    const bytesOf = (t) => Buffer.byteLength(JSON.stringify(t.input_schema), 'utf8');
+    /** The strict tools' names of a request. */
+    const strictNames = (q) => q.body.tools.filter((t) => t.strict === true).map((t) => t.name);
+    /** The names of a request's tools smallest first (ties in the order offered), as sent. */
+    const bySize = (q) =>
+      q.body.tools
+        .map((t, i) => ({ name: t.name, b: bytesOf(t), i }))
+        .sort((a, b) => a.b - b.b || a.i - b.i)
+        .map((t) => t.name);
+    /** The budget that lets exactly the `k` smallest of request `q`'s tools compile. */
+    const budgetFor = (q, k) => {
+      const names = bySize(q).slice(0, k);
+      return q.body.tools.filter((t) => names.includes(t.name)).reduce((s, t) => s + bytesOf(t), 0);
+    };
+    /** Sends `tools` once, with nothing refused, to read them as sent. */
+    const asSent = async (tools) => {
+      fake.reply({ text: 'sizes' });
+      const [q] = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('sizes')], { tools })));
+      return q;
+    };
+
+    it('the search: tries fewer strict, the largest first, until the provider takes one; the k smallest (host tools like any) stay strict; ties go in the order offered; refused tries take no step and no usage', async () => {
+      resetAssistantState();
+      const tools = SET('size');
+      const probe = await asSent(tools);
+      assert.equal(strictNames(probe).length, 13);
+      const order = bySize(probe);
+      // The tie sits at the cut: w_tie_a (offered first) is the 7th smallest, w_tie_b the 8th.
+      assert.deepEqual(order.slice(6, 8), ['size__w_tie_a', 'size__w_tie_b']);
+      assert.equal(bytesOf(probe.body.tools.find((t) => t.name === 'size__w_tie_a')), bytesOf(probe.body.tools.find((t) => t.name === 'size__w_tie_b')));
+      assert.ok(order.indexOf('h_big') > 7, 'the host tool that is big goes unchecked like any other');
+      resetAssistantState();
+      fake.strictBudget(budgetFor(probe, 7));
+      try {
+        fake.reply({ text: 'ok' });
+        const usage = [];
+        let r;
+        const sent = await sentBy('anthropic', async () => {
+          r = await adapterFor('anthropic').send(request('anthropic', [userText('go')], { tools }), new AbortController().signal, (e) => {
+            if (e.kind === 'usage') usage.push(e);
+          });
+        });
+        // 13 refused, 10 refused, then 7 (nextStrictCount) taken.
+        assert.deepEqual(sent.map((q) => strictNames(q).length), [13, 10, 7]);
+        assert.deepEqual(sent.map((q) => q.refused ?? null), [GRAMMAR_TOO_LARGE, GRAMMAR_TOO_LARGE, null]);
+        assert.deepEqual(sent.map((q) => q.step !== undefined), [false, false, true], 'only the taken request used a step');
+        assert.equal(usage.length, 1, 'only the taken request reported usage');
+        assert.deepEqual(new Set(strictNames(sent[2])), new Set(order.slice(0, 7)));
+        assert.deepEqual(new Set(strictNames(sent[1])), new Set(order.slice(0, 10)));
+        // The same tools every time: only `strict` differs.
+        const bare = (q) => q.body.tools.map((t) => ({ ...t, strict: null }));
+        assert.deepEqual(bare(sent[2]), bare(sent[0]));
+        const unchecked = tools.map((t) => t.name).filter((n) => !order.slice(0, 7).includes(n));
+        assert.deepEqual(r.notes, [strictReducedNote(GRAMMAR_TOO_LARGE, 7, 13, unchecked)]);
+        assert.ok(unchecked.includes('h_big') && unchecked.includes('size__w_tie_b') && !unchecked.includes('size__w_tie_a'));
+
+        // Remembered for the tool set: the next request goes straight to those 7, with the note.
+        fake.reply({ text: 'again' });
+        const again = await sentBy('anthropic', async () => {
+          r = await send('anthropic', request('anthropic', [userText('again')], { tools }));
+        });
+        assert.deepEqual(again.map((q) => strictNames(q)), [strictNames(sent[2])]);
+        assert.deepEqual(r.notes, [strictReducedNote(GRAMMAR_TOO_LARGE, 7, 13, unchecked)]);
+
+        // Another tool set is tried strict first (and searched for itself).
+        const other = SET('other');
+        fake.reply({ text: 'other' });
+        const others = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('other')], { tools: other })));
+        assert.deepEqual(others.map((q) => strictNames(q).length), [13, 10, 7]);
+
+        // A remembered set refused again (the provider took less this time): searched below it.
+        fake.strictBudget(budgetFor(probe, 4));
+        fake.reply({ text: 'less' });
+        const less = await sentBy('anthropic', async () => {
+          r = await send('anthropic', request('anthropic', [userText('less')], { tools }));
+        });
+        assert.deepEqual(less.map((q) => strictNames(q).length), [7, nextStrictCount(7, STRICT_MAX_ATTEMPTS - 2), 3]);
+        assert.deepEqual(new Set(strictNames(less[2])), new Set(order.slice(0, 3)));
+        assert.equal(r.notes.length, 1);
+        assert.ok(r.notes[0].includes(': 3 of 13 are checked by the provider'), r.notes[0]);
+        fake.reply({ text: 'remembered' });
+        const rem = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('rem')], { tools })));
+        assert.deepEqual(rem.map((q) => strictNames(q).length), [3]);
+      } finally {
+        fake.strictBudget(null);
+      }
+      // A test reset (as a server start) forgets it: strict again.
+      resetAssistantState();
+      fake.reply({ text: 'fresh' });
+      const fresh = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('fresh')], { tools })));
+      assert.deepEqual(fresh.map((q) => strictNames(q).length), [13]);
+    });
+
+    it(`at most ${STRICT_MAX_ATTEMPTS} requests: the first, four smaller sets, then the workspace's tools unchecked (as before); that set then goes loose at once`, async () => {
+      resetAssistantState();
+      // One host tool of middle size and many small workspace tools: every reduced set holds two
+      // or more tools, so a budget of the host tool alone refuses them all but the loose request.
+      const tools = [
+        { name: 'h_only', description: 'Host.', schema: sized(400) },
+        ...workspace(Array.from({ length: 12 }, (_, i) => ({ name: `t${i}`, description: 'W.', schema: sized(250 + i) })), 'cap'),
+      ];
+      const probe = await asSent(tools);
+      resetAssistantState();
+      fake.strictBudget(bytesOf(probe.body.tools[0]));
+      try {
+        fake.reply({ text: 'ok' });
+        let r;
+        const sent = await sentBy('anthropic', async () => {
+          r = await send('anthropic', request('anthropic', [userText('cap')], { tools }));
+        });
+        assert.equal(sent.length, STRICT_MAX_ATTEMPTS);
+        assert.deepEqual(sent.map((q) => strictNames(q).length), [13, 10, 7, 4, 2, 1]);
+        assert.deepEqual(strictNames(sent.at(-1)), ['h_only']);
+        assert.deepEqual(sent.map((q) => q.refused ?? null), [...Array(5).fill(GRAMMAR_TOO_LARGE), null]);
+        assert.deepEqual(r.notes, [strictFallbackNote(GRAMMAR_TOO_LARGE)]);
+        fake.reply({ text: 'again' });
+        const again = await sentBy('anthropic', async () => {
+          r = await send('anthropic', request('anthropic', [userText('again')], { tools }));
+        });
+        assert.deepEqual(again.map((q) => strictNames(q)), [['h_only']]);
+        assert.deepEqual(r.notes, [strictFallbackNote(GRAMMAR_TOO_LARGE)]);
+      } finally {
+        fake.strictBudget(null);
+      }
+    });
+
+    it('only words that say the set is too big search; other strict refusals go loose at once, other 400s are the error at once', async () => {
+      resetAssistantState();
+      const tools = SET('words');
+      fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
+      fake.reply({ text: 'ok' });
+      let sent = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('x')], { tools })));
+      assert.deepEqual(sent.map((q) => strictNames(q).length), [13, 3]);
+      const other = SET('other400');
+      fake.failNext({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'The prompt is too large for this model.' } }, dialect: 'anthropic' });
+      sent = await sentBy('anthropic', () => assert.rejects(send('anthropic', request('anthropic', [userText('x')], { tools: other })), (e) => e.code === 'bad_request'));
+      assert.equal(sent.length, 1);
+      // The words that mean "too big", each searched (one refusal, then 10 of 13 taken).
+      for (const [i, words] of [
+        'Schema is too complex for compilation.',
+        'Grammar compilation timed out.',
+        GRAMMAR_TOO_LARGE,
+        'Too many strict tools: at most 20.',
+      ].entries()) {
+        fake.failNext({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: words } }, dialect: 'anthropic' });
+        fake.reply({ text: 'ok' });
+        sent = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('x')], { tools: SET(`w${i}`) })));
+        assert.deepEqual(sent.map((q) => strictNames(q).length), [13, 10], words);
+      }
+    });
+
+    it('the second dialect searches the same way on its words for a set too big', async () => {
+      resetAssistantState();
+      const tools = SET('second');
+      fake.failNext({ status: 400, body: { error: { message: "Invalid schema for function 'second__w_huge': the strict grammar is too large.", type: 'invalid_request_error', param: null, code: 'invalid_function_parameters' } }, dialect: 'openai' });
+      fake.reply({ text: 'ok' });
+      const sent = await sentBy('openai', () => send('openai', request('openai', [userText('x')], { tools })));
+      assert.deepEqual(sent.map((q) => q.body.tools.filter((t) => t.strict === true).length), [13, 10]);
+      assert.equal(sent[1].body.tools.find((t) => t.name === 'second__w_huge').strict, false);
+    });
+
+    it('nextStrictCount and strictOrder', () => {
+      // 20 refused with 4 tries left before the loose one: 16, 12, 8, 4, then loose.
+      const seq = [];
+      for (let hi = 20, left = 4; ; left--) {
+        const k = nextStrictCount(hi, left);
+        if (k === null) break;
+        seq.push(k);
+        hi = k;
+      }
+      assert.deepEqual(seq, [16, 12, 8, 4]);
+      assert.equal(nextStrictCount(8, 1), 4);
+      assert.equal(nextStrictCount(1, 4), null);
+      assert.equal(nextStrictCount(10, 0), null);
+      assert.equal(nextStrictCount(2, 1), 1);
+      assert.deepEqual(strictOrder({ strict: [true, true, false, true, true], loose: [], bytes: [50, 10, 1, 50, 5] }), [4, 1, 0, 3]);
+    });
   });
 
   it('the local server dialect is never strict, so it has no such second request', async () => {

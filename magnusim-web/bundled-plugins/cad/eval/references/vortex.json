@@ -148,7 +148,8 @@
         ]
       },
       { "tools": [{ "name": "cad__measure", "input": { "targets": ["Body 1"], "section": "" } }] },
-      { "text": "The cyclone's fluid volume is built in inches: bin, 15 deg cone, R0.5 neck, tangential inlet and the vortex finder slot. The R0.125 inlet blend could not be made (the geometry kernel cannot roll a blend that vanishes where the inlet is tangent to the cone), so it is left out; the volume is within 1.2e-5 of the original." }
+      { "text": "The cyclone's fluid volume is built in inches: bin, 15 deg cone, R0.5 neck, tangential inlet and the vortex finder slot. The R0.125 inlet blend could not be made (the geometry kernel cannot roll a blend that vanishes where the inlet is tangent to the cone), so it is left out; the volume is within 1.2e-5 of the original." },
+      { "text": "Review: no changes" }
     ]
   ]
 }

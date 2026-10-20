@@ -4,7 +4,9 @@
 //      an Imperial project for an inch task), and the app tab whose registration names that project;
 //   2. each of the task's requests as a turn on that tab (POST /api/assistant/turns), followed to its
 //      end, its questions answered by the task's policy (gateAnswer: a delete is denied unless the
-//      task allows it; a privacy question only for a project this run made);
+//      task allows it; a privacy question only for a project this run made); the first turn carries
+//      the run's reference pictures, if any; the Part asks for its review rounds unless the run
+//      turns them off (review: false), and each round the app ran is recorded;
 //   3. the Part's facts (window.__CAD__.assistant.evalFacts) scored (score.mjs), with the parameter
 //      walk (each walk check's parameter set as the person sets it, the volume read at each value,
 //      the first value put back);
@@ -272,6 +274,7 @@ export async function runTurn(base, body, { answer = () => null, ms = TURN_MS, l
       if (e.type === 'tool_call') log(`  ${e.tool} ${e.input_preview ?? ''}`.slice(0, 160));
       else if (e.type === 'tool_result' && !e.ok) log(`    -> ${e.code}: ${e.summary}`.slice(0, 200));
       else if (e.type === 'note') log(`  note: ${e.text}`);
+      else if (e.type === 'review') log(`  review: round ${e.round} of ${e.of}`);
     }
     for (const e of events) {
       if (e.type !== 'gate' || answered.has(e.gate.id) || events.some((c) => c.type === 'gate_closed' && c.gate === e.gate.id)) continue;
@@ -290,7 +293,10 @@ export async function runTurn(base, body, { answer = () => null, ms = TURN_MS, l
   return { id, conversation: start.body.conversation ?? null, events, turn };
 }
 
-/** The last words of a turn: the text of its last step that said something. */
+/** A review round's answer that only confirms the Part ("Review: no changes"): not the turn's last words. */
+export const REVIEW_CONFIRMED = /^review:\s*no changes\.?$/i;
+
+/** The last words of a turn: the text of its last step that said something (a review's bare confirmation left out). */
 export function lastText(events) {
   const byStep = new Map();
   for (const e of events) {
@@ -298,7 +304,18 @@ export function lastText(events) {
     else if (e.type === 'discard') byStep.delete(e.step);
   }
   const steps = [...byStep.keys()].sort((a, b) => a - b);
-  return steps.length ? byStep.get(steps[steps.length - 1]).trim() : '';
+  const said = steps.map((s) => byStep.get(s).trim()).filter((t) => t && !REVIEW_CONFIRMED.test(t));
+  return said.length ? said[said.length - 1] : '';
+}
+
+/** The review rounds the app ran in each turn: [{turn (1-based, in order), repair, round, of}]. */
+export function reviewRounds(turns) {
+  return turns.flatMap((t, i) => t.events.filter((e) => e.type === 'review').map((e) => ({ turn: i + 1, repair: !!t.repair, round: e.round, of: e.of })));
+}
+
+/** The images the page's answers carried (view's pictures and the edits' pictures), from its call ledger. */
+export function imagesSent(calls) {
+  return calls.reduce((n, c) => n + (c.ok && Number.isInteger(c.images) ? c.images : 0), 0);
 }
 
 /** What a run's turns used: steps, money, tokens, the largest request, notes, end states. */
@@ -352,6 +369,14 @@ export async function runTask(env, task, o = {}) {
     await frame.evaluate(() => window.__CAD__.assistant.setToolset('core'));
     await waitFor(`the ${CORE_TOOLS} core tools are offered`, 60_000, async () => (await tabOfProject(env.base, part.projectId))?.tools.length === CORE_TOOLS);
   }
+  // The review rounds the Part asks for: on unless the run turns them off.
+  const review = o.review !== false;
+  if (!review) {
+    const v = await frame.evaluate(() => window.__CAD__.assistant.setReview(false));
+    if (!v.available) throw new Error(`the Part could not offer its tools without review rounds: ${v.reason ?? 'unavailable'}`);
+  }
+  // The person's reference pictures go with the first request only.
+  const pictures = (o.references ?? []).map((r) => ({ media_type: r.media_type, data: r.data }));
   const answer = (gate) => (env.driver.answer ? env.driver.answer(gate, task, created) : gateAnswer(gate, task, created));
   const names = [];
   const turns = [];
@@ -361,7 +386,7 @@ export async function runTask(env, task, o = {}) {
   for (const [i, text] of texts.entries()) {
     await env.driver.beforeTurn?.(task, i);
     log(`turn ${i + 1}/${texts.length}: ${text.slice(0, 80)}`);
-    const t = await runTurn(env.base, { text, tab, ...(conversation ? { conversation } : {}) }, { answer, ms: o.turnMs ?? TURN_MS, log });
+    const t = await runTurn(env.base, { text, tab, ...(conversation ? { conversation } : {}), ...(i === 0 && pictures.length ? { images: pictures } : {}) }, { answer, ms: o.turnMs ?? TURN_MS, log });
     conversation = t.conversation ?? conversation;
     turns.push({ ...t, repair: false });
     names.push(await namesNow());
@@ -400,6 +425,10 @@ export async function runTask(env, task, o = {}) {
     tab,
     pace: o.pace ?? null,
     toolset: o.toolset ?? 'all',
+    review,
+    // What the run's reference pictures were: their files and digests, never their bytes.
+    references: (o.references ?? []).map((r) => ({ path: r.path, sha256: r.sha256 })),
+    reviews: reviewRounds(turns),
     first_shot: { pass: first.pass, passed: first.passed, counted: first.counted, failed: first.checks.filter((c) => !c.pass && !c.heuristic).map((c) => c.id) },
     final: { pass: final.pass, passed: final.passed, counted: final.counted, failed: final.checks.filter((c) => !c.pass && !c.heuristic).map((c) => c.id) },
     repaired: turns.some((t) => t.repair),
@@ -409,7 +438,7 @@ export async function runTask(env, task, o = {}) {
     errors_by_reason: errorsByReason,
     errors_by_code: use.errors_by_code,
     invalid_input: use.errors_by_code.invalid_input ?? 0,
-    images: calls.filter((c) => c.tool === 'view' && c.ok).length,
+    images: imagesSent(calls),
     notes: use.notes,
     max_request_tokens: use.max_request_tokens,
     context_tokens: pageTurns.map((t) => t.contextTokens).find((n) => typeof n === 'number') ?? null,
@@ -453,12 +482,12 @@ export function summaryMd(records, meta = {}) {
   if (model) lines.push(`Model: ${[model.provider, model.model, model.effort].filter(Boolean).join(' / ')}`);
   if (meta.caps) lines.push(`Limits: ${meta.caps}`);
   lines.push('');
-  lines.push('| task | tier | run | first shot | final | steps | invalid input | errors by reason | usd | tokens | largest request | wall s | health |');
-  lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  lines.push('| task | tier | run | first shot | final | steps | invalid input | errors by reason | usd | tokens | largest request | wall s | health | review rounds |');
+  lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const r of records) {
     const errors = Object.entries(r.errors_by_reason).map(([k, v]) => `${k} ${v}`).join(', ') || '-';
     lines.push(
-      `| ${r.task} | ${r.tier} | ${r.run} | ${r.first_shot.pass ? 'pass' : 'fail'} ${r.first_shot.passed}/${r.first_shot.counted} | ${r.final.pass ? 'pass' : 'fail'} ${r.final.passed}/${r.final.counted} | ${r.steps} | ${r.invalid_input} | ${errors} | ${r.usd} | ${r.tokens} | ${r.max_request_tokens} | ${r.wall_s} | ${r.health?.health ?? '-'}${r.health?.words?.length ? `: ${r.health.words.join(', ')}` : ''} |`,
+      `| ${r.task} | ${r.tier} | ${r.run} | ${r.first_shot.pass ? 'pass' : 'fail'} ${r.first_shot.passed}/${r.first_shot.counted} | ${r.final.pass ? 'pass' : 'fail'} ${r.final.passed}/${r.final.counted} | ${r.steps} | ${r.invalid_input} | ${errors} | ${r.usd} | ${r.tokens} | ${r.max_request_tokens} | ${r.wall_s} | ${r.health?.health ?? '-'}${r.health?.words?.length ? `: ${r.health.words.join(', ')}` : ''} | ${r.review === false ? 'off' : (r.reviews ?? []).length} |`,
     );
   }
   const passed = records.filter((r) => r.final.pass).length;

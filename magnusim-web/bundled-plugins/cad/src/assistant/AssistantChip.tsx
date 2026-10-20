@@ -1,11 +1,14 @@
 // The Assistant's chip in the dock (CAD tools spec §8.3): `[data-chip="assistant"]` with
 // `data-assistant-state` the phase, its words in `[data-assistant-text]` ("Assistant · thinking ·
 // 12 of 120 steps", "Assistant · Sketch Plate sketch · 12 of 120 steps", a coding agent's turn
-// "... · 3 of 24 changes", "Assistant waits for you: close the Fillet 2 panel", "Assistant:
+// "... · 3 of 24 changes", in a review round the app asked for "Assistant · reviewing (round 1 of
+// 3) · 14 of 120 steps" (a call's label after it), "Assistant waits for you: close the Fillet 2 panel", "Assistant:
 // Extrude Boss · keep it?", "Assistant paused · you took over", "Assistant: <request> · done"),
 // and its buttons (`data-assistant-action`):
-//   thinking  Pause, Stop, Ask each step
-//   working   Pause, Stop, Fast (or Watch), Ask each step
+//   thinking  Pause, Stop, Ask each step, Pictures
+//   working   Pause, Stop, Fast (or Watch), Ask each step, Pictures
+// (Pictures, pressed while on: a picture of the Part after each edit for the model; the chip's
+// `data-assistant-pictures` says each or off.)
 //   waiting   Pause, Stop
 //   approve   Keep, Discard
 //   paused    Resume, Stop
@@ -46,11 +49,13 @@ export function chipText(s: AssistantUiState): string | null {
       : t.steps !== null && t.stepsCap
         ? ` · ${t.steps} of ${t.stepsCap} steps`
         : '';
+  // A review round of the running turn (the app checks the Part with the model at its end).
+  const review = t?.review && !t.end ? `reviewing (round ${t.review.round} of ${t.review.of})` : null;
   switch (s.phase) {
     case 'thinking':
-      return `Assistant · thinking${steps}`;
+      return `Assistant · ${review ?? 'thinking'}${steps}`;
     case 'working':
-      return `Assistant · ${s.call?.label ?? 'working'}${steps}`;
+      return `Assistant · ${review ? `${review} · ` : ''}${s.call?.label ?? 'working'}${steps}`;
     case 'waiting':
       return `Assistant waits for you${s.note ? `: ${s.note}` : ''}`;
     case 'approve':
@@ -65,7 +70,7 @@ export function chipText(s: AssistantUiState): string | null {
 }
 
 export interface ChipButton {
-  id: 'pause' | 'resume' | 'stop' | 'pace' | 'ask' | 'keep' | 'discard' | 'undo';
+  id: 'pause' | 'resume' | 'stop' | 'pace' | 'ask' | 'pictures' | 'keep' | 'discard' | 'undo';
   label: string;
   title: string;
   pressed?: boolean;
@@ -79,14 +84,21 @@ export function chipButtons(s: AssistantUiState, undo: boolean, docked = false):
   const stop: ChipButton[] = s.canStop && !docked ? [{ id: 'stop', label: 'Stop', title: 'Stop the request: the step it is on now is not kept' }] : [];
   const pause: ChipButton = { id: 'pause', label: 'Pause', title: 'Pause: its edits wait until you resume (it can still read the Part)' };
   const ask: ChipButton = { id: 'ask', label: 'Ask each step', title: s.askEach ? 'Stop asking before each step is kept' : 'Ask before each step is kept (Keep or Discard)', pressed: !!s.askEach };
+  const picturesOn = s.pictures !== 'off';
+  const pictures: ChipButton = {
+    id: 'pictures',
+    label: 'Pictures',
+    title: picturesOn ? 'Stop sending the Assistant a picture of the Part after each edit' : 'Send the Assistant a picture of the Part after each edit, so it sees what it made',
+    pressed: picturesOn,
+  };
   const pace: ChipButton = s.pace === 'fast' ? { id: 'pace', label: 'Watch', title: 'Watch each step being made' } : { id: 'pace', label: 'Fast', title: 'Make each step at once, without waits' };
   // The turn has ended while its last call finishes: nothing left to pause or stop.
   const live = s.turn?.end ? [] : [pause, ...stop];
   switch (s.phase) {
     case 'thinking':
-      return [pause, ...stop, ask];
+      return [pause, ...stop, ask, pictures];
     case 'working':
-      return [...live, pace, ask];
+      return [...live, pace, ask, pictures];
     case 'waiting':
       return live;
     case 'approve':
@@ -120,6 +132,9 @@ function run(actions: AssistantActions | undefined, b: ChipButton, s: AssistantU
       break;
     case 'ask':
       actions.setAskEach(!s.askEach);
+      break;
+    case 'pictures':
+      actions.setPictures(s.pictures === 'off' ? 'each' : 'off');
       break;
     case 'keep':
       actions.keep();
@@ -155,7 +170,7 @@ export function AssistantChip() {
   const cls = ['cad-chip', 'cad-assistant-chip', ended && end.health === 'error' ? 'is-error' : '', ended && end.health === 'warn' ? 'is-warning' : ''].filter(Boolean).join(' ');
   const first = end.first;
   return (
-    <div className={cls} data-chip="assistant" data-assistant-state={s.phase} data-assistant-health={ended ? end.health : undefined}>
+    <div className={cls} data-chip="assistant" data-assistant-state={s.phase} data-assistant-pictures={s.pictures ?? 'each'} data-assistant-health={ended ? end.health : undefined}>
       {busy ? <span className="tree-spin cad-chip-spin" aria-hidden="true" /> : null}
       <span className="cad-chip-v" data-assistant-text="" role="status" aria-busy={busy || undefined}>
         {text}

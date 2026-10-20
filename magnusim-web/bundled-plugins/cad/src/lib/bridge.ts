@@ -76,7 +76,7 @@ export interface CadAssistantBridge {
    * Offer the tools (register([], null) withdraws them). An older host that refuses the call answers
    * {available: false, reason: 'not_allowed'} instead of rejecting.
    */
-  register(tools: readonly AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+  register(tools: readonly AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; review?: { rounds: number; prompt: string } }): Promise<AssistantRegistration>;
   /** Hear this tab's turns (start, change, end); null on a host without turn events. */
   onTurn: ((fn: (turn: AssistantTurn) => void) => () => void) | null;
   /** Stop a turn this page was told of; null on a host without turn events. */

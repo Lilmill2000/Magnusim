@@ -296,6 +296,19 @@ describe('assistant.register (1.9, unreleased)', () => {
     expect(checkAssistantTools({ tools: [], guide: 'g'.repeat(5000) }).guide).toHaveLength(4000);
   });
 
+  it('a review (1.9, unreleased): {rounds 1 to 5, prompt}, its prompt keeps its lines; absent when none; any other shape is bad_request', () => {
+    expect(checkAssistantTools({ tools: [], review: { rounds: 3, prompt: ' Look again.\r\n\u0007Fix it. ', extra: 1 } })).toEqual({
+      tools: [],
+      guide: '',
+      review: { rounds: 3, prompt: 'Look again.\n Fix it.' },
+    });
+    expect(checkAssistantTools({ tools: [], review: null })).toEqual({ tools: [], guide: '' });
+    expect(checkAssistantTools({ tools: [], review: { rounds: 5, prompt: 'p'.repeat(1500) } }).review?.prompt).toHaveLength(1500);
+    for (const review of ['look', [], { rounds: 0, prompt: 'x' }, { rounds: 6, prompt: 'x' }, { rounds: 2.5, prompt: 'x' }, { rounds: '2', prompt: 'x' }, { rounds: 2 }, { rounds: 2, prompt: '  ' }, { rounds: 2, prompt: 'p'.repeat(1501) }]) {
+      expect(() => checkAssistantTools({ tools: [], review }), JSON.stringify(review)).toThrow(expect.objectContaining({ code: 'bad_request' }));
+    }
+  });
+
   it("a tool's confirm note (CAD tools spec H10): text, cleaned and cut to 120 characters, handed to the app; absent when the page gave none or it cleans to nothing", async () => {
     const RESET = { name: 'reset', title: 'Reset the counter', description: 'Sets the counter to 0.', inputSchema: SCHEMA, risk: 'destructive' };
     const checked = checkAssistantTools({

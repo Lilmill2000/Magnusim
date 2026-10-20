@@ -569,6 +569,18 @@ declare module '@magnusim/workspace' {
    * says so. All three reach the model with the code.
    */
   export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
+  /**
+   * Review rounds a page asks for when it registers its tools (unreleased, 1.9): when the model ends
+   * its answer in a turn bound to this tab after at least one of this page's `edit` or `destructive`
+   * tools succeeded, the app sends it `prompt` ("Review round 1 of 3: <prompt>") and the turn goes on.
+   * The turn ends when a round makes no successful edit, when `rounds` are used up, or at the turn's
+   * usual limits. `rounds`: 1 to 5. `prompt`: fixed text with no project data, at most 1500
+   * characters (its lines kept), like the guide.
+   */
+  export interface AssistantReview {
+      rounds: number;
+      prompt: string;
+  }
   /** The app's answer to ws.assistant.register (unreleased, 1.9). */
   export interface AssistantRegistration {
       /** False when the app's assistant could not take the tools now (`reason` says why); nothing changed then. */
@@ -622,6 +634,11 @@ declare module '@magnusim/workspace' {
           state: 'done' | 'stopped' | 'failed' | 'capped';
           reason: string;
       };
+      /** The review round it is in (the page's `review` at registration): absent before its first round. */
+      review?: {
+          round: number;
+          of: number;
+      };
   }
   /**
    * ws.assistant.stop's answer (unreleased, 1.9). `reason` when not stopped: "not_this_tab" (no turn of
@@ -657,6 +674,7 @@ declare module '@magnusim/workspace' {
       /**
        * Set this page's tools and their handler in one step; register([], null) withdraws them.
        * `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation).
+       * `review`: review rounds at the end of a turn that edited through these tools (AssistantReview).
        * Resolves once the app has the list. available:false with reason 'not_connected' means the app could not
        * reach the assistant from this tab yet (for example the tab opened in the background): call register again
        * later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay.
@@ -664,6 +682,7 @@ declare module '@magnusim/workspace' {
        */
       register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: {
           guide?: string;
+          review?: AssistantReview;
       }): Promise<AssistantRegistration>;
       /**
        * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen

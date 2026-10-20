@@ -711,6 +711,15 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     expect(results(posts)[1]).toEqual({ call: 'ai-2', ok: true, result: { text: 'Counter is 2' } });
   });
 
+  it('register sends a review (rounds and prompt only) when asked for one, and none otherwise', async () => {
+    const { ws, posts } = await open(accepting);
+    await ws.assistant!.register([ADD], vi.fn(), { guide: 'g', review: { rounds: 3, prompt: 'Look again.', extra: true } as unknown as { rounds: number; prompt: string } });
+    await ws.assistant!.register([ADD], vi.fn(), { guide: 'g' });
+    const sent = posts.filter((p) => p.method === 'assistant.register').map((p) => p.params);
+    expect(sent[0].review).toEqual({ rounds: 3, prompt: 'Look again.' });
+    expect(Object.hasOwn(sent[1], 'review')).toBe(false);
+  });
+
   it("register sends a tool's confirm note (what the app's question says a destructive call does) only when it has one", async () => {
     const { ws, posts } = await open(accepting);
     const note = 'Sets the counter to 0; add can bring it back.';

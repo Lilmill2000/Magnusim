@@ -137,6 +137,11 @@ describe('the channel', { timeout: 30_000 }, () => {
       ['no workspace name', { link, rev: 1, workspace: { ...DEMO_WORKSPACE, workspace: '' }, tools: demoTools() }],
       ['a guide that is not text', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), guide: 5 }],
       ['an epoch that is not a token', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), epoch: 'x' }],
+      ['a review that is not one', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), review: 'look again' }],
+      ['a review of 0 rounds', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), review: { rounds: 0, prompt: 'Look.' } }],
+      ['a review of 6 rounds', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), review: { rounds: 6, prompt: 'Look.' } }],
+      ['a review with no prompt', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), review: { rounds: 2, prompt: ' ' } }],
+      ['a review prompt too long', { link, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools(), review: { rounds: 2, prompt: 'x'.repeat(1501) } }],
       ['a link that is not text', { link: 5, rev: 1, workspace: DEMO_WORKSPACE, tools: demoTools() }],
     ]) {
       const r = await s.post('/api/assistant/relay/tools', body);
@@ -178,7 +183,11 @@ describe('registrations', { timeout: 30_000 }, () => {
       hold_until: null,
     });
     assert.equal(m.registry.workspaceOf(page.tab).guide, 'Counter notes.');
-    const off = await s.register(link, 2, []);
+    assert.equal(m.registry.workspaceOf(page.tab).review, null, 'no review asked for');
+    const reviewed = await s.register(link, 2, demoTools(), { review: { rounds: 3, prompt: 'Look again.\r\nFix it.' } });
+    assert.equal(reviewed.status, 200);
+    assert.deepEqual(m.registry.workspaceOf(page.tab).review, { rounds: 3, prompt: 'Look again.\nFix it.' });
+    const off = await s.register(link, 3, []);
     assert.deepEqual([off.status, off.json.accepted, off.json.refused], [200, [], []]);
     assert.deepEqual(await s.tabs(), []);
     assert.equal(m.registry.toolsFor(ctx(page.tab)).length, 0);

@@ -131,11 +131,11 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, returned as one image (2 to 4 as a labelled sheet), orthographic. hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length>] [flip]" to cut the model there and cap the cut. labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). Pictures show shape, not sizes, and sketch dimension values are not drawn: use measure for numbers. If the model cannot read images, the call says so instead. Use at milestones and at the end.',
+      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, returned as one image (2 to 4 as a labelled sheet), orthographic. hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length> | middle] [flip]" to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). Pictures show shape, not sizes, and sketch dimension values are not drawn: use measure for numbers. If the model cannot read images, the call says so instead. Use at milestones and at the end.',
     schema: obj({
       views: arr(en(VIEW_DIRECTIONS, 'A direction'), 1, 4, 'Directions.'),
       hide: arr(str(80, 'A body name'), 0, 32, 'Bodies to leave out.'),
-      section: str(120, '"" or "<Top|Front|Right> [offset <length>] [flip]".'),
+      section: str(120, '"" or "<Top|Front|Right> [offset <length> | middle] [flip]".'),
       labels: en(['none', 'bodies', 'faces'], 'What to write on the picture.'),
       size: en(['small', 'large'], 'Long side 768 or 1280 px.'),
     }),

@@ -266,6 +266,17 @@ The app's answer to ws.assistant.register (unreleased, 1.9).
 - `refused: { name: string; code: string; message: string; }[]`: The tools it refused, each with why.
 - `reason?: string | undefined`: Why not available: "not_connected" (try again later), "no_assistant", "remote", …
 
+#### AssistantReview
+
+```ts
+interface AssistantReview
+```
+
+Review rounds a page asks for when it registers its tools (unreleased, 1.9): when the model ends its answer in a turn bound to this tab after at least one of this page's `edit` or `destructive` tools succeeded, the app sends it `prompt` ("Review round 1 of 3: <prompt>") and the turn goes on. The turn ends when a round makes no successful edit, when `rounds` are used up, or at the turn's usual limits. `rounds`: 1 to 5. `prompt`: fixed text with no project data, at most 1500 characters (its lines kept), like the guide.
+
+- `rounds: number`
+- `prompt: string`
+
 #### AssistantStopAnswer
 
 ```ts
@@ -315,6 +326,7 @@ A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what t
 - `used.usd: number`
 - `used.usdCap: number`
 - `end?: { … }`: How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then).
+- `review?: { … }`: The review round it is in (the page's `review` at registration): absent before its first round.
 
 #### AssistantUndoAnswer
 
@@ -826,7 +838,7 @@ interface WorkspaceAssistant
 
 Tools this page offers to the app's assistant (unreleased, next host minor 1.9).
 
-- `register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; } | undefined): Promise<AssistantRegistration>`: Set this page's tools and their handler in one step; register([], null) withdraws them. `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation). Resolves once the app has the list. available:false with reason 'not_connected' means the app could not reach the assistant from this tab yet (for example the tab opened in the background): call register again later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay. Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
+- `register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; review?: AssistantReview; } | undefined): Promise<AssistantRegistration>`: Set this page's tools and their handler in one step; register([], null) withdraws them. `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation). `review`: review rounds at the end of a turn that edited through these tools (AssistantReview). Resolves once the app has the list. available:false with reason 'not_connected' means the app could not reach the assistant from this tab yet (for example the tab opened in the background): call register again later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay. Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
 - `onTurn(fn: (turn: AssistantTurn) => void): () => void`: Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen before register: the turns already running are told to a page once it offers tools. Returns a function that stops listening.
 - `stop(turn: string): Promise<AssistantStopAnswer>`: Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
 - `docked: boolean`: The app shows its own Assistant panel (its dock), with Stop and "Undo these changes" for each turn: a page that has its own Stop and Undo for a turn leaves them out then, so no control shows twice. False on an older host, and on a host without the panel. Read once, as the page connects. While docked, Ctrl+/ (Cmd+/ on macOS) typed in the page goes to the app's panel, as it does in the app, unless a keydown handler of the page calls preventDefault() for it.
