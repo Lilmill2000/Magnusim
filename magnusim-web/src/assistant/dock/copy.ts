@@ -36,6 +36,35 @@ export const OPEN_PROJECT = 'Open project';
 // ---------------------------------------------------------------- the person's message (2.4)
 
 export const FROM_PROGRAM = 'From the command line or another program';
+export const NEW_SHORT = 'New';
+export const CONVERSATIONS_LABEL = 'Conversations';
+export const WORKING_DOT = 'working';
+/** A time of day as the conversation rows show it: "09:41". */
+export const hhmm = (iso: string): string => {
+  const t = new Date(iso);
+  if (!Number.isFinite(t.getTime())) return '';
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(t.getHours())}:${two(t.getMinutes())}`;
+};
+export const yourPictureAlt = (i: number, n: number): string => `Your picture ${i} of ${n}`;
+
+// ---------------------------------------------------------------- the transcript (5.4, 4.7, 10.4)
+
+export const SHOW_EARLIER = 'Show earlier requests';
+export const NEW_MESSAGES = 'New messages ↓';
+export const ELSEWHERE = 'Elsewhere';
+export const PICTURE_VIEWER = 'Picture viewer';
+export const CLOSE_PICTURE = 'Close the picture';
+export const PREVIOUS_PICTURE = 'Previous picture';
+export const NEXT_PICTURE = 'Next picture';
+
+// ---------------------------------------------------------------- the intro of an empty conversation (7)
+
+export const INTRO_HOME = 'Ask about Magnusim and your projects. To have the Assistant build a part, open a project and a CAD Part, then ask here.';
+export const INTRO_PROJECT = 'The Assistant can read this project. Open a CAD Part to have it build or change one.';
+export const introCad = (workspace: string): string =>
+  `Tell the Assistant what to model in ${workspace}. You can watch each step, pause or take over in the Part, and stop it here.`;
+export const introWorkspace = (workspace: string): string => `Tell the Assistant what to do in ${workspace}.`;
 
 // ---------------------------------------------------------------- tool steps (2.6)
 

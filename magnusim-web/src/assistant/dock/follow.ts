@@ -22,9 +22,11 @@
  * - **At most MAX_TURN_CHANNELS** turn channels are open at once (the server refuses the ninth
  *   of a tab); a follower waits for a free one in turn.
  * - **The end.** An `end` event, a snapshot or long-poll answer saying `ended`, or a 404 ends the
- *   follower: its channel closes and its slot is free. A summary that says the turn ended while
- *   its `end` event hasn't come is followed, after END_GRACE_MS, by one read that doesn't wait
- *   (the server ends the channel without a frame the page hears).
+ *   follower: its channel closes and its slot is free. On a channel the `end` event is followed
+ *   by the turn's last summary (its final counters and cost): the follower, unpinned, waits for
+ *   it (at most END_GRACE_MS) unless a summary that said the end came already. A summary that
+ *   says the turn ended while its `end` event hasn't come is followed, after END_GRACE_MS, by
+ *   one read that doesn't wait (the server ends the channel without a frame the page hears).
  */
 import { openChannel, type ChannelHandle } from '../../api/eventHub';
 import { AssistantApiError, assistantGet } from '../api';
@@ -158,6 +160,10 @@ class Follower implements TurnFollower {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private pinnedNow = false;
+  /** A summary that says the turn ended came (its last one, or near it). */
+  private endSummary = false;
+  /** The `end` event came on the channel: its last summary is waited for. */
+  private awaitingLast = false;
 
   constructor(
     readonly id: string,
@@ -315,15 +321,35 @@ class Follower implements TurnFollower {
     this.sink.data(summary && typeof summary === 'object' ? { events: list, summary } : { events: list });
     // The sink may have stopped following it.
     if ((this.mode as FollowMode) === 'done') return;
-    if (list.some((e) => e && e.type === 'end')) {
+    const terminal = !!summary && TERMINAL.has(summary.state);
+    if (terminal) this.endSummary = true;
+    if (this.awaitingLast && summary) {
       this.ended();
       return;
     }
-    if (summary && TERMINAL.has(summary.state)) this.endingWithoutEnd();
+    if (list.some((e) => e && e.type === 'end')) {
+      // On a channel the turn's last summary follows its end: wait for it (not when one came).
+      if (this.mode === 'channel' && !this.endSummary) this.awaitLastSummary();
+      else this.ended();
+      return;
+    }
+    if (terminal) this.endingWithoutEnd();
     else if (summary && !this.running) {
       this.running = true;
       this.updatePin();
     }
+  }
+
+  /** The `end` event came: unpinned, the turn's last summary is waited for, at most END_GRACE_MS. */
+  private awaitLastSummary(): void {
+    this.running = false;
+    this.awaitingLast = true;
+    this.updatePin();
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+      this.ended();
+    }, END_GRACE_MS);
   }
 
   /** A summary said the turn ended before its `end` event came: read what is left in a moment. */

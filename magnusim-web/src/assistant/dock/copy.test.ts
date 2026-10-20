@@ -17,6 +17,19 @@ describe('the dock copy', () => {
     expect(copy.FROM_PROGRAM).toBe('From the command line or another program');
   });
 
+  it('the menu, the transcript and the intros', () => {
+    expect([copy.NEW_SHORT, copy.CONVERSATIONS_LABEL, copy.WORKING_DOT]).toEqual(['New', 'Conversations', 'working']);
+    expect(copy.hhmm('2026-10-20T09:05:00')).toBe('09:05');
+    expect(copy.hhmm('not a date')).toBe('');
+    expect(copy.yourPictureAlt(1, 2)).toBe('Your picture 1 of 2');
+    expect([copy.SHOW_EARLIER, copy.NEW_MESSAGES, copy.ELSEWHERE]).toEqual(['Show earlier requests', 'New messages ↓', 'Elsewhere']);
+    expect([copy.PICTURE_VIEWER, copy.CLOSE_PICTURE, copy.PREVIOUS_PICTURE, copy.NEXT_PICTURE]).toEqual(['Picture viewer', 'Close the picture', 'Previous picture', 'Next picture']);
+    expect(copy.INTRO_HOME).toBe('Ask about Magnusim and your projects. To have the Assistant build a part, open a project and a CAD Part, then ask here.');
+    expect(copy.INTRO_PROJECT).toBe('The Assistant can read this project. Open a CAD Part to have it build or change one.');
+    expect(copy.introCad('Part 1')).toBe('Tell the Assistant what to model in Part 1. You can watch each step, pause or take over in the Part, and stop it here.');
+    expect(copy.introWorkspace('Counter')).toBe('Tell the Assistant what to do in Counter.');
+  });
+
   it('tool steps', () => {
     expect((['read', 'edit', 'compute', 'destructive'] as const).map(copy.riskBadge)).toEqual(['Reads', 'Changes', 'Runs a computation', "Can't be undone"]);
     expect(copy.WHAT_IT_SENT).toBe('What it sent');

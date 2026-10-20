@@ -19,6 +19,8 @@ vi.mock('../viewer/index', () => ({ bindLegacyViewer: () => undefined }));
 vi.mock('../wizard/SetupWizard', () => ({ SetupWizard: () => null }));
 vi.mock('../workspace/WorkspaceOverlay', () => ({ WorkspaceOverlay: () => null }));
 vi.mock('../workspace/WorkspacesMenu', () => ({ WorkspacesMenu: () => null }));
+// The dock's frame only: its conversation is tested on its own (src/assistant/dock).
+vi.mock('../assistant/dock/content', () => ({ useDockContent: () => null }));
 // The Assistant's page relay (its own tests: src/assistant/relay.test.ts).
 const relay = vi.hoisted(() => {
   const stop = vi.fn();

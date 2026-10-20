@@ -1,12 +1,7 @@
 /**
  * What the shown conversation puts in the dock: DockShell's `content` (its conversation menu,
- * question cards, transcript and composer; chat dock spec 2-4, 8.3). The conversation's parts
- * come with the next commits and read the conversation store (store.ts, useDockStore). Until
- * then there is none, and the shell shows its own states (loading, error, remote, off) or an
- * empty panel.
+ * question cards, transcript and composer; chat dock spec 2-4, 8.3). ConversationView builds
+ * it from the conversation store (store.ts, useDockStore); while the status isn't read (or the
+ * Assistant is off or remote) there is none and the shell shows its own states.
  */
-import type { DockContent } from './DockShell';
-
-export function useDockContent(): DockContent | null {
-  return null;
-}
+export { useDockContent } from './ConversationView';

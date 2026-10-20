@@ -7,6 +7,8 @@ import { dockSnapshot, resetDockForTests, setDockPill } from './dockState';
 import { dockShortcut, installDockToggle, isDockKey } from './toggle';
 
 vi.mock('../../wizard/controller', () => ({ openSetupWizard: vi.fn() }));
+// The frame and the keys only: no conversation (its store sets the pill itself).
+vi.mock('./content', () => ({ useDockContent: () => null }));
 
 const $ = (sel: string) => document.querySelector(sel) as HTMLElement;
 

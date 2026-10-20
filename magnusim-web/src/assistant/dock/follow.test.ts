@@ -178,12 +178,29 @@ describe('the turn channel', () => {
     ]);
     expect(f.lastSeq).toBe(3);
     expect(ch.pinned).toBe(true);
+    // The end: unpinned at once; its last summary (the final counters and cost) still comes.
     ch.frame('events', { events: [END(4)], next: 4 });
-    expect(stopped).toEqual(['ended']);
     expect(ch.pinned).toBe(false);
+    expect(stopped).toEqual([]);
+    ch.frame('summary', { turn: { ...slim('t1', 'done'), usd: 0.42 } });
+    expect(data.at(-1)?.summary).toMatchObject({ state: 'done', usd: 0.42 });
+    expect(stopped).toEqual(['ended']);
     expect(ch.closed).toBe(true);
     expect(f.mode).toBe('done');
     expect(followState().channels).toBe(0);
+  });
+
+  it('after the end event, a last summary that never comes: ended after END_GRACE_MS, with no read', async () => {
+    const { sink, stopped } = sinkLog();
+    followTurn('t1', sink);
+    const ch = channels[0];
+    ch.frame('snapshot', { turn: summary('t1', 'model'), events: [ev(1, { type: 'state', state: 'model' })], next: 1, ended: false, more: false });
+    ch.frame('events', { events: [END(2)], next: 2 });
+    expect(stopped).toEqual([]);
+    await vi.advanceTimersByTimeAsync(END_GRACE_MS);
+    expect(stopped).toEqual(['ended']);
+    expect(ch.closed).toBe(true);
+    expect(sent).toHaveLength(0);
   });
 
   it('an ended turn: its snapshot only, never pinned', () => {
