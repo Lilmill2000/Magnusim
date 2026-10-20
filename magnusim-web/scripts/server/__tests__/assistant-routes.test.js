@@ -577,7 +577,7 @@ describe('turns', () => {
     const tabs = await get('/api/assistant/tabs');
     assert.deepEqual(tabs.json, { ok: true, tabs: [] }, 'no page registers tools before the relay');
     const state = await get('/api/test/assistant/state');
-    assert.deepEqual([state.json.running, state.json.gates], [0, 0]);
+    assert.deepEqual([state.json.running, state.json.gates, state.json.turn_channels], [0, 0, {}]);
   });
 
   it('Stop while the provider streams: the socket closes, no further request, the turn ends stopped', async () => {

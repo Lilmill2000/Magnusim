@@ -110,7 +110,8 @@
  *                                        400 bad_method; 403 launch_proof; 404 agent_unknown; 409 busy, agent_not_allowed
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
- *   GET  /api/test/assistant/state      what the Assistant holds in memory
+ *   GET  /api/test/assistant/state      what the Assistant holds in memory (turn_channels: the turn
+ *                                        channels open, by tab)
  *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files)
  */
 import { access, rm } from 'node:fs/promises';
@@ -140,6 +141,7 @@ import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, IMAGE_GONE_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
+import { turnChannelsOpen } from './assistant/turn-channel.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
 import { createMcpService } from './assistant/mcp/server.ts';
 import {
@@ -603,6 +605,8 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         ack_ms: relay.ackMs,
         dormant_ms: relay.dormantMs,
         mcp: { connections: mcpConnections().length, port: mcpListenerStatus().port },
+        // Windows following a turn (the hub's turn channels), by tab.
+        turn_channels: turnChannelsOpen(),
         agents: agentHost().snapshot(),
       });
     }),
