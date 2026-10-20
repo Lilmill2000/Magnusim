@@ -90,7 +90,7 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'note'; text: string }
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
-  | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
+  | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
   | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
@@ -127,6 +127,30 @@ export interface TurnSummary {
   billing: 'usd' | 'free' | 'agent_account';
   /** The coding agent it runs on (null for an API-key provider). */
   agent: { id: string; name: string; version: string | null } | null;
+  /** The person's request, as stored (≤ 20,000 characters). */
+  prompt: string;
+  /** Its first line, cleaned, ≤ 60 characters (as its tab's page hears it). */
+  title: string;
+  /** Started from a Magnusim window (with its live relay link), or by a program (the CLI, a script). */
+  started_by: 'window' | 'program';
+  /** What it used of its limits (as its tab's page hears them), and its active time against its minutes. */
+  used: TurnUsed;
+}
+
+/**
+ * A turn's counters for the dock (TurnPageView's `used`, plus its minutes): active_ms leaves out
+ * the time questions and a call's waits for the person held it; minutes_cap is its minutes per
+ * message in force.
+ */
+export interface TurnUsed {
+  steps: number;
+  steps_cap: number;
+  changes: number;
+  changes_cap: number;
+  usd: number;
+  usd_cap: number;
+  active_ms: number;
+  minutes_cap: number;
 }
 
 export const TURN_LIMITS = Object.freeze({
@@ -203,6 +227,8 @@ interface TurnInit {
   settings: TurnSettings;
   clock: Clock;
   gates: GateBroker;
+  /** Who started it: a Magnusim window (its live relay link) or a program; 'program' when left out. */
+  startedBy?: 'window' | 'program';
   onEnded?: (t: Turn) => void;
   /**
    * What its tab's page shows changed (at most once a TURN_UPDATE_MS; never after its end).
@@ -229,6 +255,7 @@ export class Turn implements AnyTurn {
   readonly simulationId: string | null;
   readonly settings: TurnSettings;
   readonly startedAt: number;
+  readonly startedBy: 'window' | 'program';
   state: TurnState = 'starting';
   step = 0;
   calls = 0;
@@ -287,6 +314,7 @@ export class Turn implements AnyTurn {
     this.projectId = o.projectId;
     this.simulationId = o.simulationId;
     this.settings = o.settings;
+    this.startedBy = o.startedBy ?? 'program';
     // A cloud model reads images: its tab's page hears that with the turn's start, not as a change.
     // A coding agent's model is its own: whether it reads them is not known (null).
     if (isModelSettings(o.settings) && o.settings.provider !== 'openai_compatible') this.images = true;
@@ -695,23 +723,44 @@ export class Turn implements AnyTurn {
       provider: this.settings.provider,
       billing: isAgentSettings(this.settings) ? 'agent_account' : this.settings.provider === 'openai_compatible' ? 'free' : 'usd',
       agent: isAgentSettings(this.settings) ? { id: this.settings.agent.id, name: this.settings.agent.name, version: this.agentVersion ?? this.settings.agent.version } : null,
+      prompt: this.prompt,
+      title: this.title(),
+      started_by: this.startedBy,
+      used: this.usedNow(),
     };
+  }
+
+  /** Its title: the first line of the person's request, cleaned, at most TURN_TITLE_MAX characters. */
+  title(): string {
+    return cleanText(this.prompt.split(/\r\n?|\n/)[0], TURN_TITLE_MAX);
+  }
+
+  /** What its tab's page hears it used (pageView's `used`). */
+  private pageUsed(): TurnPageView['used'] {
+    const l = this.limits;
+    return isAgentSettings(this.settings)
+      ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
+      : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd };
+  }
+
+  /** The summary's counters: the page's, its active time and its minutes in force (as armed; its start's before). */
+  private usedNow(): TurnUsed {
+    const armed = this.minutes.limitMs;
+    const minutesCap = Number.isFinite(armed) ? armed / 60_000 : this.settings.caps.turn_minutes;
+    return { ...this.pageUsed(), active_ms: Math.floor(this.activeMs()), minutes_cap: minutesCap };
   }
 
   /** The turn as its tab's page hears it (the relay's `turn` frame). */
   pageView(): TurnPageView {
     const ended = this.ended;
-    const l = this.limits;
     return {
       id: this.id,
       state: ended ? 'ended' : 'running',
-      title: cleanText(this.prompt.split(/\r\n?|\n/)[0], TURN_TITLE_MAX),
+      title: this.title(),
       local: this.settings.provider === 'openai_compatible',
       context_tokens: this.contextTokens,
       images: this.images,
-      used: isAgentSettings(this.settings)
-        ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
-        : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd },
+      used: this.pageUsed(),
       ...(ended ? { end: { state: this.state as EndState, reason: this.endReason ?? this.state } } : {}),
     };
   }

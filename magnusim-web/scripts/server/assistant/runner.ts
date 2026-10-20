@@ -29,7 +29,7 @@
  *    once, until the next progress without it or the call's end, for WAIT_PAUSE_MAX_MS of the
  *    call's waits at most: then they run again, and the turn's log says so (a page that says
  *    it waits for ever can't hold a turn past its minutes). Every progress still resets the
- *    stall window.
+ *    stall window. The log's tool_progress carries `waiting: true` while the page says so.
  * 7. What it returns reaches the model only as cleaned, capped JSON text (sanitize.ts), with
  *    its images checked: one the model can't be sent fails the call (`too_large`, `bad_result`).
  *    A failed call's hint and detail go with its error, and the hint to the log's tool_result
@@ -45,7 +45,7 @@ import type { Risk, ToolCallPart, ToolResultPart } from './types.ts';
 
 export type RunnerEvent =
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
-  | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
+  | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
   | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number };
 
 /** What a turn lends the runner (absent for MCP). */
@@ -457,7 +457,9 @@ export class ToolRunner {
       // A bare sign of life (a workspace page waiting on a call to the app, or its progress()
       // with nothing) holds the window open and has nothing to show: no row in the log.
       if (f === null && !text) return;
-      o.turn?.emit({ type: 'tool_progress', call: call.callId, fraction: f, label: text });
+      // `waiting`: the page says this call waits for the person (the dock says where), even past
+      // WAIT_PAUSE_MAX_MS, when its waits count toward the turn's minutes again.
+      o.turn?.emit({ type: 'tool_progress', call: call.callId, fraction: f, label: text, ...(opts?.waiting === true ? { waiting: true as const } : {}) });
       try {
         o.onProgress?.(f, text);
       } catch {

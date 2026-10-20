@@ -2026,3 +2026,54 @@ describe('property: random scripts keep both invariants', () => {
     assert.ok(cappedSeen > 10 && stoppedSeen > 10 && declinedSeen > 10, `the scripts reached caps (${cappedSeen}), Stop (${stoppedSeen}) and declines (${declinedSeen})`);
   });
 });
+
+describe("the dock's summary of a turn (phase 4 spec 9.1, 9.5)", () => {
+  it('prompt, title, started_by and used: steps of the cap in force, dollars, active time without the question, and the minutes', async () => {
+    const m = mk({ caps: { steps: 7, turn_minutes: 3 }, hostTools: [hostTool('wipe', { risk: 'destructive' })] });
+    const peek = steeredTool('peek');
+    m.registry.addHostTool(peek.def);
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 1000, output: 20 } }, { tools: [{ name: 'wipe' }] }, { text: 'Done.' });
+    const { turn: t } = await startTurn(m, '  Build a bracket\nwith two holes\n');
+    const before = t.summary();
+    assert.deepEqual(
+      [before.prompt, before.title, before.started_by],
+      ['Build a bracket\nwith two holes', 'Build a bracket', 'program'],
+      'the request as stored, its first line, and a program (no window) started it',
+    );
+    await until(() => peek.ctl.rt);
+    m.clock.advance(10_000);
+    peek.ctl.end();
+    await until(() => t.summary().open_gates.length === 1);
+    // A question doesn't count toward the minutes.
+    m.clock.advance(90_000);
+    m.manager.answerGate(t.summary().open_gates[0].id, true, { kind: 'key', key: t.answerKey });
+    await settled(t);
+    const s = t.summary();
+    assert.equal(s.state, 'done');
+    assert.deepEqual(s.used, { ...t.pageView().used, active_ms: 10_000, minutes_cap: 3 });
+    assert.deepEqual([s.used.steps, s.used.steps_cap, s.used.changes, s.used.changes_cap, s.used.usd_cap], [2, 7, 0, 0, 8]);
+    assert.ok(s.used.usd > 0 && s.used.usd === s.usd, 'the dollars it used, as the summary counts them');
+    assert.equal(s.title, t.pageView().title, 'the same title its tab hears');
+  });
+
+  it("tool_progress says waiting while the page waits for the person, and not after", async () => {
+    const m = mk();
+    const ask = steeredTool('ask');
+    m.registry.addHostTool(ask.def);
+    m.provider.script({ tools: [{ name: 'ask' }] }, { text: 'ok' });
+    const { turn: t } = await startTurn(m, 'x');
+    await until(() => ask.ctl.rt);
+    ask.ctl.rt.progress(0.2, 'Sketching');
+    ask.ctl.rt.progress(null, 'Paused by the person', { waiting: true });
+    ask.ctl.rt.progress(0.6, 'Extruding');
+    ask.ctl.end();
+    await settled(t);
+    const rows = ofType(t, 'tool_progress').map(({ label, fraction, waiting }) => ({ label, fraction, waiting }));
+    assert.deepEqual(rows, [
+      { label: 'Sketching', fraction: 0.2, waiting: undefined },
+      { label: 'Paused by the person', fraction: null, waiting: true },
+      { label: 'Extruding', fraction: 0.6, waiting: undefined },
+    ]);
+    assert.ok(!('waiting' in ofType(t, 'tool_progress')[2]), 'no waiting key once the page goes on');
+  });
+});

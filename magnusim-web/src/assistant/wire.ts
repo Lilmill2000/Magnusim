@@ -236,7 +236,7 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'note'; text: string }
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: 'read' | 'edit' | 'compute' | 'destructive'; source: string; input_preview: string }
-  /** `waiting`: the call waits for the person in its workspace (phase 4 spec 9.5). */
+  /** `waiting`: the call waits for the person in its workspace (its page said so), e.g. CAD's Pause or Keep/Discard. */
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
   /**
    * `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's line;
@@ -282,15 +282,14 @@ export interface TurnSummary {
   billing?: 'usd' | 'free' | 'agent_account';
   /** The coding agent the turn runs on (null for an API-key provider). */
   agent?: { id: string; name: string; version: string | null } | null;
-  // Phase 4 (spec 9.1, 9.7); absent from an older server.
-  /** The person's text (at most 20,000 characters, as stored). */
+  /** The person's request, as stored (phase 4; absent from an older server). */
   prompt?: string;
-  /** The first line of the person's text (at most 60 characters). */
+  /** Its first line, cleaned, at most 60 characters (as RelayTurnFrame.title). */
   title?: string;
-  /** 'window': started in an app window (its live link); 'program': the command line or another program. */
+  /** Started from a Magnusim window (with its live relay link), or by a program (the CLI, a script). */
   started_by?: 'window' | 'program';
-  /** What the turn used of its limits now: the counters its tab's page shows, and its active minutes. */
-  used?: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number; active_ms: number; minutes_cap: number };
+  /** What it used of its limits (the same numbers RelayTurnFrame.used carries), its active time and its minutes. */
+  used?: TurnUsed;
   /** The person's pictures. */
   prompt_images?: ImageRef[];
   /** The turn's log and pictures are no longer kept (its record stays). */
@@ -359,6 +358,22 @@ export interface ConversationRow {
 export interface ConversationsAnswer {
   ok: true;
   conversations: ConversationRow[];
+}
+
+/**
+ * A turn's counters (TurnSummary.used): RelayTurnFrame's `used` in the server's names, plus
+ * active_ms (questions and a call's waits for the person don't count) and minutes_cap (its
+ * minutes per message in force). An agent turn's steps are its tool calls; its usd and usd_cap 0.
+ */
+export interface TurnUsed {
+  steps: number;
+  steps_cap: number;
+  changes: number;
+  changes_cap: number;
+  usd: number;
+  usd_cap: number;
+  active_ms: number;
+  minutes_cap: number;
 }
 
 /**

@@ -565,7 +565,7 @@ describe('turns', () => {
     assert.ok(sent[0].body.tools.some((t) => t.function.name === 'app_status'));
     assert.ok(!sent[0].body.tools.some((t) => t.function.name === 'connection_check'));
     assert.deepEqual(Object.keys(turn).sort(), [
-      'agent', 'billing', 'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'message', 'open_gates', 'project_id', 'provider', 'served_by', 'started_at', 'state', 'step', 'tab', 'text_so_far', 'usd',
+      'agent', 'billing', 'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'message', 'open_gates', 'project_id', 'prompt', 'provider', 'served_by', 'started_at', 'started_by', 'state', 'step', 'tab', 'text_so_far', 'title', 'usd', 'used',
     ]);
     // Who pays (phase 3 spec 4.15): a local server is not priced, and no coding agent runs it.
     assert.deepEqual([turn.provider, turn.billing, turn.agent], ['openai_compatible', 'free', null]);
