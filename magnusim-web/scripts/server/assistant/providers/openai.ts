@@ -33,8 +33,9 @@ import {
   type StreamEvent,
   type Usage,
 } from '../types.ts';
-import { dataUrl, emptyUsage, newWatchdog, parseToolInput, requestMessages, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
-import { mapProviderError, strictSchemaRefusal } from './errors.ts';
+import { debugCall, type DebugCall } from '../debug-log.ts';
+import { dataUrl, emptyUsage, newWatchdog, parseToolInput, requestMessages, SAID_MAX, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
+import { mapProviderError, providerSaid, strictSchemaRefusal } from './errors.ts';
 import { envHeaderNulls, guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
 import { loadSdkClass } from './load-sdk.ts';
 
@@ -254,15 +255,16 @@ export function openAiAdapter(o: AdapterOptions): ProviderAdapter {
     streamed,
   });
 
-  async function client(key: string, wd: Watchdog): Promise<Client> {
+  async function client(key: string, wd: Watchdog, dbg: DebugCall | null = null): Promise<Client> {
     const Ctor = await loadSdkClass<OpenAiCtor>('openai', 'OpenAI');
-    const fetch = guardedFetch({
+    const guarded = guardedFetch({
       origin: o.baseURL,
       allowHeaders: OPENAI_HEADERS,
       pin: { authorization: `Bearer ${key}`, 'openai-organization': null, 'openai-project': null },
       watchdog: wd,
       label: LABEL,
     });
+    const fetch = dbg ? dbg.fetch(guarded) : guarded;
     return new Ctor(openAiClientOptions(key, o.baseURL, fetch, env, 2));
   }
 
@@ -298,27 +300,30 @@ export function openAiAdapter(o: AdapterOptions): ProviderAdapter {
       await loadSdkClass('openai', 'OpenAI');
       // Every tool goes strict: a workspace tool makes a loose request differ (H8).
       const canLoosen = req.tools.some((t) => t.workspace);
-      const attempt = (loose: boolean) =>
+      const attempt = (loose: boolean, reason: string | null) =>
         o.borrowKey(async (key) => {
-          const body = responsesBody(req, { loose });
+          const body = { ...responsesBody(req, { loose }), stream: true };
           const wd = newWatchdog(o, false);
           const sig = AbortSignal.any([signal, wd.signal]);
           const acc = new ResponseAccumulator(onEvent);
+          const dbg = debugCall({ dialect: 'openai', model: req.model, attempt: loose ? 'loose' : 'strict', reason, body });
           try {
-            const c = await client(String(key), wd);
-            const stream = await c.responses.create({ ...body, stream: true }, { signal: sig });
+            const c = await client(String(key), wd, dbg);
+            const stream = await c.responses.create(body, { signal: sig });
             for await (const ev of stream) {
               acc.add(ev);
               if (sig.aborted) break;
             }
             if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
             const result = acc.result(req.model);
+            dbg?.done(result);
             onEvent({ kind: 'usage', usage: result.usage });
             return result;
           } catch (err) {
             const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
+            dbg?.failed(err, mapped);
             if (!loose && canLoosen && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS, STRICT_REFUSED_CODES)) {
-              throw new StrictRefused(mapped);
+              throw new StrictRefused(mapped, providerSaid(err, SAID_MAX));
             }
             throw mapped;
           } finally {

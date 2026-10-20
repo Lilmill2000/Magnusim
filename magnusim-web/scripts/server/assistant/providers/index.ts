@@ -8,6 +8,7 @@
  * environment or from a profile file.
  */
 import { isAgentProvider, isLoopbackUrl, serverOrigin, type AssistantSettings } from '../settings.ts';
+import { withDebugScope } from '../debug-log.ts';
 import { ProviderError, type ProviderAdapter, type ProviderId, type ProviderRequest, type ProviderResult, type StreamEvent } from '../types.ts';
 import { KeyError, type KeySlot, type KeyStatus } from '../secrets/store.ts';
 import { anthropicAdapter } from './anthropic.ts';
@@ -152,6 +153,7 @@ export async function sendWithOneResend(
       };
       signal.addEventListener('abort', onAbort, { once: true });
     });
-    return adapter.send(o.resendRequest ? await o.resendRequest(req) : req, signal, onEvent);
+    const again = o.resendRequest ? await o.resendRequest(req) : req;
+    return withDebugScope({ resend: 'overloaded' }, () => adapter.send(again, signal, onEvent));
   }
 }

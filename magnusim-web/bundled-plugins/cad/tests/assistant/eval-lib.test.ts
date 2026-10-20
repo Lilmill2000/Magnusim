@@ -10,7 +10,7 @@
 // folder ignored by git, and no vendor word in any of the harness's files.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -36,7 +36,7 @@ import {
   type RunRecord,
   type TurnEvent,
 } from '../../eval/lib.mjs';
-import { capsWords, parseArgs, PROFILE_CAPS, profileSettings, readProfile } from '../../eval/run.mjs';
+import { capsWords, DEBUG_LOG_ENV, logLines, parseArgs, PROFILE_CAPS, profileSettings, readProfile } from '../../eval/run.mjs';
 import { CAD_TOOLS } from '../../src/assistant/schemas';
 import type { EvalFacts } from '../../src/assistant/eval-types';
 import { namesVendor } from './vendor';
@@ -340,6 +340,21 @@ describe('the command line', () => {
       expect(r.status, args.join(' ')).toBe(2);
       expect(r.stderr, args.join(' ')).toMatch(why);
       expect(r.stdout, args.join(' ')).not.toContain('[eval] starting');
+    }
+  });
+
+  it("names the logs its own server left: the server's output and the provider log, with their sizes", () => {
+    expect(DEBUG_LOG_ENV).toBe('MAGNUSIM_ASSISTANT_DEBUG_LOG');
+    const dir = mkdtempSync(join(tmpdir(), 'cad-eval-logs-'));
+    try {
+      const logs = { server: join(dir, 'server.log'), debug: join(dir, 'debug') };
+      expect(logLines(logs)).toEqual([`provider log: none in ${logs.debug} (no model request was sent)`]);
+      writeFileSync(logs.server, 'abc');
+      mkdirSync(logs.debug);
+      writeFileSync(join(logs.debug, 'provider.jsonl'), '{}\n');
+      expect(logLines(logs)).toEqual([`server log: ${logs.server} (3 bytes)`, `provider log: ${join(logs.debug, 'provider.jsonl')} (3 bytes, a row per model request)`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

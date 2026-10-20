@@ -48,8 +48,9 @@ import {
   type Usage,
   type UserPart,
 } from '../types.ts';
-import { newWatchdog, parseToolInput, requestMessages, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
-import { mapProviderError, strictSchemaRefusal } from './errors.ts';
+import { debugCall, type DebugCall } from '../debug-log.ts';
+import { newWatchdog, parseToolInput, requestMessages, SAID_MAX, SDK_TIMEOUT_MS, sendStrictOrLoose, StrictRefused, tokenCount, type AdapterOptions } from './common.ts';
+import { mapProviderError, providerSaid, strictSchemaRefusal } from './errors.ts';
 import { envHeaderNulls, guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
 import { loadSdkClass } from './load-sdk.ts';
 
@@ -436,15 +437,16 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
     streamed,
   });
 
-  async function client(key: string, wd: Watchdog, beta: string | null): Promise<Client> {
+  async function client(key: string, wd: Watchdog, beta: string | null, dbg: DebugCall | null = null): Promise<Client> {
     const Ctor = await loadSdkClass<ClientCtor>('@anthropic-ai/sdk', 'Anthropic');
-    const fetch = guardedFetch({
+    const guarded = guardedFetch({
       origin: o.baseURL,
       allowHeaders: ANTHROPIC_HEADERS,
       pin: { 'x-api-key': key, authorization: null, 'anthropic-version': ANTHROPIC_VERSION, 'anthropic-beta': beta },
       watchdog: wd,
       label: LABEL,
     });
+    const fetch = dbg ? dbg.fetch(guarded) : guarded;
     return new Ctor(anthropicClientOptions(key, o.baseURL, fetch, env));
   }
 
@@ -480,15 +482,16 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
       const sent = (strictBody.tools ?? []) as Json[];
       // Only a workspace tool sent strict makes a loose request differ (H8).
       const canLoosen = req.tools.some((t, i) => t.workspace && sent[i]?.strict === true);
-      const attempt = (loose: boolean) =>
+      const attempt = (loose: boolean, reason: string | null) =>
         o.borrowKey(async (key) => {
-          const body = loose ? anthropicBody(req, { loose: true }) : strictBody;
+          const body = { ...(loose ? anthropicBody(req, { loose: true }) : strictBody), stream: true };
           const wd = newWatchdog(o, false);
           const sig = AbortSignal.any([signal, wd.signal]);
           const acc = new MessageAccumulator(onEvent);
+          const dbg = debugCall({ dialect: 'anthropic', model: req.model, attempt: loose ? 'loose' : 'strict', reason, body });
           try {
-            const c = await client(String(key), wd, usesFallback(req.model) ? FALLBACK_BETA : null);
-            const stream = await c.beta.messages.create({ ...body, stream: true }, { signal: sig });
+            const c = await client(String(key), wd, usesFallback(req.model) ? FALLBACK_BETA : null, dbg);
+            const stream = await c.beta.messages.create(body, { signal: sig });
             for await (const ev of stream) {
               acc.add(ev);
               if (sig.aborted) break;
@@ -496,12 +499,14 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
             // The SDK ends the iteration quietly on an abort: never return a partial answer.
             if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
             const result = acc.result(req.model);
+            dbg?.done(result);
             onEvent({ kind: 'usage', usage: result.usage });
             return result;
           } catch (err) {
             const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
+            dbg?.failed(err, mapped);
             if (!loose && canLoosen && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS)) {
-              throw new StrictRefused(mapped);
+              throw new StrictRefused(mapped, providerSaid(err, SAID_MAX));
             }
             throw mapped;
           } finally {

@@ -273,6 +273,16 @@ No test reaches a real model provider or this PC's real Assistant files.
   `POST /api/test/assistant/reset` (`{files: true}` also removes the test home's
   files; a reset leaves the tabs' links, so open pages stay linked). `run.bat` and
   the setup scripts set none of them, and a test checks that.
+- **The provider debug log.** `MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder>` (no test switch
+  needed; it works in normal runs too, off when unset, read once) makes the server
+  append a row per model request to `<folder>/provider.jsonl`, a local file only: the
+  turn, the dialect and model, the attempt (strict or loose, with or without images)
+  and why, the whole request body as sent, each HTTP answer's status and request id,
+  the time taken, and the result (stop reason, usage, the blocks with their tool
+  calls) or the error with the provider's whole answer. Rows are redacted, never hold
+  a header or a key, and image data is a marker with its size.
+  `scripts/server/__tests__/assistant-debug-log.test.js` checks it; the CAD eval
+  harness sets it for the servers it starts (`bundled-plugins/cad/eval/README.md`).
 - **Home isolation.** The Assistant keeps its keys, settings and spend in
   `MAGNUSIM_ASSISTANT_HOME`, else beside `MAGNUSIM_LOCAL_JSON` (`local.json` →
   `local.assistant/`). Every node test sets both to temp paths before its first app

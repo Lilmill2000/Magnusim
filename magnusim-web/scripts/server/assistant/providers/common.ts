@@ -4,6 +4,7 @@
  * the cloud adapters' fallback for strict tools their provider can't compile.
  */
 import { createHash } from 'node:crypto';
+import { alog } from '../log.ts';
 import { assistantState } from '../state.ts';
 import type { ImagePart, Message, ProviderError, ProviderId, ProviderRequest, ProviderResult, ProviderTool, ToolResultPart, Usage, UserMessage, UserPart } from '../types.ts';
 import { Watchdog, type WatchdogOptions } from './guarded-fetch.ts';
@@ -90,11 +91,20 @@ export function parseToolInput(raw: string): { input: Record<string, unknown>; e
 /** The note when a cloud request went with the workspace's tools not strict (CAD tools spec H8). */
 export const STRICT_FALLBACK_NOTE = 'The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.';
 
+/** The longest part of the provider's words a note keeps. */
+export const SAID_MAX = 600;
+
+/** The note for a loose request: STRICT_FALLBACK_NOTE, and the provider's words when it gave any. */
+export function strictFallbackNote(said: string): string {
+  return said ? `${STRICT_FALLBACK_NOTE} The provider said: ${said}` : STRICT_FALLBACK_NOTE;
+}
+
 /**
  * Tool sets a cloud provider could not compile strictly, by boot id, dialect and the
- * tools' hash: for the process (a test reset or a server start forgets them).
+ * tools' hash, each with the provider's words: for the process (a test reset or a server
+ * start forgets them).
  */
-const LOOSE = new Set<string>();
+const LOOSE = new Map<string, string>();
 const LOOSE_MAX = 200;
 
 function looseKey(dialect: ProviderId, tools: readonly ProviderTool[]): string {
@@ -104,42 +114,55 @@ function looseKey(dialect: ProviderId, tools: readonly ProviderTool[]): string {
   return [assistantState().bootId, dialect, hash].join(' ');
 }
 
-/** A cloud provider refused the request's strict tool schemas, before anything streamed. */
+/**
+ * A cloud provider refused the request's strict tool schemas, before anything streamed.
+ * `said`: the provider's own words (errors.ts providerSaid: redacted and capped).
+ */
 export class StrictRefused extends Error {
   readonly mapped: ProviderError;
-  constructor(mapped: ProviderError) {
+  readonly said: string;
+  constructor(mapped: ProviderError, said = '') {
     super(mapped.message);
     this.mapped = mapped;
+    this.said = said;
   }
 }
 
+/** Why an attempt goes as it does: null (the first try), `strict_refused` (just now), `strict_refused_earlier` (a set remembered). */
+export type LooseReason = 'strict_refused' | 'strict_refused_earlier' | null;
+
 /**
  * One cloud request whose strict tools the provider may refuse to compile (CAD tools spec
- * H8). `attempt(loose)` sends it, with the workspace's tools not strict when `loose`, and
- * throws StrictRefused for that refusal. Refused, the tool set is remembered and the
- * request goes once more loose; a set remembered goes loose from the start. An answer to a
- * loose request carries STRICT_FALLBACK_NOTE. `canLoosen`: some workspace tool would go
- * strict (else loose is the same request, and nothing is sent again).
+ * H8). `attempt(loose, reason)` sends it, with the workspace's tools not strict when `loose`, and
+ * throws StrictRefused for that refusal. Refused, the tool set is remembered with the
+ * provider's words (one warn line) and the request goes once more loose; a set remembered goes
+ * loose from the start. An answer to a loose request carries strictFallbackNote(words).
+ * `canLoosen`: some workspace tool would go strict (else loose is the same request, and
+ * nothing is sent again).
  */
 export async function sendStrictOrLoose(
   dialect: ProviderId,
   req: ProviderRequest,
   canLoosen: boolean,
-  attempt: (loose: boolean) => Promise<ProviderResult>,
+  attempt: (loose: boolean, reason: LooseReason) => Promise<ProviderResult>,
 ): Promise<ProviderResult> {
-  const noted = (r: ProviderResult): ProviderResult => ({ ...r, notes: [...(r.notes ?? []), STRICT_FALLBACK_NOTE] });
+  const noted = (r: ProviderResult, said: string): ProviderResult => ({ ...r, notes: [...(r.notes ?? []), strictFallbackNote(said)] });
   const key = canLoosen ? looseKey(dialect, req.tools) : '';
-  const loose = canLoosen && LOOSE.has(key);
+  const remembered = canLoosen ? LOOSE.get(key) : undefined;
+  const loose = remembered !== undefined;
+  let said = '';
   try {
-    const r = await attempt(loose);
-    return loose ? noted(r) : r;
+    const r = await attempt(loose, loose ? 'strict_refused_earlier' : null);
+    return loose ? noted(r, remembered) : r;
   } catch (err) {
     if (!(err instanceof StrictRefused)) throw err;
     if (loose || !canLoosen) throw err.mapped;
+    said = err.said;
   }
+  alog('warn', 'the provider refused the strict tools; sending them again unchecked by the provider', { provider: dialect, said });
   const boot = `${assistantState().bootId} `;
-  for (const k of LOOSE) if (!k.startsWith(boot)) LOOSE.delete(k);
+  for (const k of LOOSE.keys()) if (!k.startsWith(boot)) LOOSE.delete(k);
   if (LOOSE.size >= LOOSE_MAX) LOOSE.clear();
-  LOOSE.add(key);
-  return noted(await attempt(true));
+  LOOSE.set(key, said);
+  return noted(await attempt(true, 'strict_refused'), said);
 }

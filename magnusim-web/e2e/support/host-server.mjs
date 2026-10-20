@@ -29,12 +29,14 @@
 //   lock            a file naming a live server to reuse; written when this call starts one
 //   timeoutMs       how long to wait for the server (default 120 s)
 //   log             (line) => void for progress lines
+//   logFile         a file the server's whole stdout and stderr are appended to as they come
+//                   (stop() leaves it, so give one outside tmp to keep it)
 // It returns {base, port, pid, reused, tmp, projects, prefs, pluginsDir, log(), stop()}:
 // log() is the server's whole output so far; stop() ends the server's process tree
 // and removes the temp folder (and the lock it wrote). A worker that exits stops it too.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -197,6 +199,7 @@ export async function startHost(options = {}) {
     lock = null,
     timeoutMs = 120_000,
     log = () => {},
+    logFile = null,
   } = options;
   const live = await readLiveLock(lock);
   if (live) {
@@ -222,6 +225,7 @@ export async function startHost(options = {}) {
 
   let child = null;
   let out = '';
+  if (logFile) mkdirSync(dirname(logFile), { recursive: true });
   let lockWritten = false;
   let stopped = false;
   const stop = () => {
@@ -284,8 +288,19 @@ export async function startHost(options = {}) {
       detached: process.platform !== 'win32',
       windowsHide: true,
     });
-    child.stdout.on('data', (d) => (out += d));
-    child.stderr.on('data', (d) => (out += d));
+    const take = (d) => {
+      out += d;
+      if (logFile) {
+        try {
+          // Written at once, so a run that exits right after keeps the server's last lines.
+          appendFileSync(logFile, d);
+        } catch {
+          /* the log is a help, never a reason to fail */
+        }
+      }
+    };
+    child.stdout.on('data', take);
+    child.stderr.on('data', take);
     const base = `http://127.0.0.1:${port}`;
     const exited = new Promise((r) => child.once('exit', () => r(false)));
     const up = await Promise.race([waitUp(`${base}/api/registry`, timeoutMs), exited]);

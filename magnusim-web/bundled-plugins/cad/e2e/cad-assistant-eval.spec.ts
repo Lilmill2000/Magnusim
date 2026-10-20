@@ -14,7 +14,10 @@
 // names, and the model gets it as its bearer token while no output or record holds it, and the
 // run's temp projects root and Assistant home are gone after it; --attach --clean removes only the
 // projects the run made (the person's of the same title stays), and a --tab of the person's own
-// Part stops the task and the probe before any turn, the person's Part untouched.
+// Part stops the task and the probe before any turn, the person's Part untouched (and the run
+// says how to keep an attached app's logs). --scripted and --profile keep their own server's
+// output (server.log) and a row per model request (debug/provider.jsonl) in the run folder after
+// the server is gone; --scripted --tasks probe runs the probe's turn and keeps its events.
 // Each test may take the suite's 240 s like the shard's other tests (a fresh page, the Part, the
 // kernel, the turn, the walk and the picture on CI's two slow cores; 120 s was never measured on
 // Linux), the repair test two turns' ceiling and a minute, the poker chip 300 s.
@@ -219,6 +222,29 @@ const filesUnder = (dir: string): string[] =>
   readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((d) => d.isFile())
     .map((d) => join(d.parentPath, d.name));
+/** The provider log's rows (debug/provider.jsonl in a run folder). */
+const providerRows = (out: string): Array<Record<string, unknown> & { turn: string | null; dialect: string; attempt: string; ok: boolean; request: { tools?: unknown[] } }> =>
+  readFileSync(join(out, 'debug', 'provider.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l));
+/**
+ * The logs a run's own server leaves in its folder, kept after the server is gone: server.log (its
+ * whole output) and debug/provider.jsonl (a row per model request), both named at the end.
+ */
+function expectServerLogs(out: string, r: { out: string }, requests: number): void {
+  const server = readFileSync(join(out, 'server.log'), 'utf8');
+  expect(server).toMatch(/VITE|Local:|\[assistant\]/);
+  const rows = providerRows(out);
+  expect(rows.length, 'a row per model request').toBe(requests);
+  for (const row of rows) {
+    expect(row).toMatchObject({ ok: true, attempt: expect.any(String) });
+    expect(typeof row.turn, 'each row names its turn').toBe('string');
+    expect(Array.isArray(row.request.tools), 'the whole request, its tools too').toBe(true);
+  }
+  expect(r.out).toContain(`[eval] server log: ${join(out, 'server.log')}`);
+  expect(r.out).toContain(`[eval] provider log: ${join(out, 'debug', 'provider.jsonl')}`);
+}
 /** The projects --clean says it removed: [{id, status}]. */
 const removedIn = (out: string) => [...out.matchAll(/\[eval\] removed project (\S+): (\d+)/g)].map((m) => ({ id: m[1], status: Number(m[2]) }));
 
@@ -233,6 +259,7 @@ test('cad:assistant-eval-cli-scripted the command line with --scripted: its own 
     expect(more).toEqual([]);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'scripted', label: 'cli', first_shot: { pass: true }, final: { pass: true }, repaired: false, end: [{ state: 'done' }] });
     for (const f of ['events.jsonl', 'calls.json', 'facts.json', 'final.png']) expect(existsSync(join(out, 'spacer-1', f)), f).toBe(true);
+    expectServerLogs(out, r, fakeSteps(loadReference('spacer'), 0).length);
     const md = readFileSync(join(out, 'summary.md'), 'utf8');
     expect(md).toContain('# Assistant CAD eval: cli');
     expect(md).toContain('Driver: scripted');
@@ -272,8 +299,9 @@ test("cad:assistant-eval-cli-profile --profile: the key named by key_env reaches
     // ... and nothing else holds it: not the output, not a record.
     expect(r.out).not.toContain(token);
     expect(r.err).not.toContain(token);
+    expectServerLogs(out, r, asked.length);
     const files = filesUnder(out);
-    expect(files.length).toBeGreaterThanOrEqual(6);
+    expect(files.length).toBeGreaterThanOrEqual(8);
     for (const f of files) expect(readFileSync(f).includes(token), f).toBe(false);
     // The run's own app server (its projects root and the Assistant's home, where the key was saved) is gone.
     expect(r.hostTemps.length).toBe(1);
@@ -281,6 +309,32 @@ test("cad:assistant-eval-cli-profile --profile: the key named by key_env reaches
   } finally {
     rmSync(r.tmp, { recursive: true, force: true, maxRetries: 3 });
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('cad:assistant-eval-cli-probe --scripted --tasks probe: the turn takes every tool strict and calls the read; probe.json, probe-1/events.jsonl, server.log and the provider log of that turn are kept', async ({}, info) => {
+  test.setTimeout(420_000);
+  const out = info.outputPath('probe');
+  const r = await evalCli(['--scripted', '--tasks', 'probe', '--out', out, '--port-from', String(CLI_PORT)], { ms: 360_000 });
+  try {
+    expect(r.code, `${r.out}\n${r.err}`).toBe(0);
+    const probe = JSON.parse(readFileSync(join(out, 'probe.json'), 'utf8'));
+    expect(probe).toMatchObject({ strict: 'accepted', end: { state: 'done' }, notes: [] });
+    expect(probe.calls).toMatchObject([{ ok: true }]);
+    const events = readFileSync(join(out, 'probe-1', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(events.at(-1)).toMatchObject({ type: 'end', state: 'done' });
+    const turn = events[0].turn;
+    expect(typeof turn).toBe('string');
+    expectServerLogs(out, r, 2);
+    const rows = providerRows(out);
+    expect(rows.map((x) => [x.turn, x.attempt, x.reason])).toEqual([
+      [turn, 'strict', null],
+      [turn, 'strict', null],
+    ]);
+    // Every tool the Part offered is in the request as sent (with the app's own).
+    expect(rows[0].request.tools!.length).toBeGreaterThanOrEqual(probe.tools);
+  } finally {
+    rmSync(r.tmp, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
@@ -299,6 +353,9 @@ test("cad:assistant-eval-cli-attach --attach --clean removes only the projects t
     const r1 = await evalCli(['--attach', host.base, '--tasks', 'spacer', '--clean', '--out', out1]);
     temps.push(r1.tmp);
     expect(r1.code, `${r1.out}\n${r1.err}`).toBe(0);
+    // An attached app's logs are its own: the run says how to keep them.
+    expect(r1.out).toContain('start the app with MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder>');
+    expect(existsSync(join(out1, 'server.log'))).toBe(false);
     const [rec] = recordsIn(out1, r1);
     expect(rec).toMatchObject({ task: 'spacer', driver: 'attach', final: { pass: true } });
     expect(rec.project).not.toBe(mine);

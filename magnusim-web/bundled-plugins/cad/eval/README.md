@@ -49,7 +49,9 @@ Exactly one driver:
   model (privacy allow) and sets the limits 150 steps, $8 a turn, 60 minutes and $50 a day,
   under the profile's own `caps`.
 - `--attach <url>`: the person's running app, with its own settings, keys and limits (printed;
-  below 120 steps a warning). Projects `Eval · <task>` are made there and kept; `--clean` deletes
+  below 120 steps a warning). Its logs stay the app's own: to keep every model request, start
+  the app with `MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder>` (see "Logs" below) and keep its console
+  output; the run prints a line saying so. Projects `Eval · <task>` are made there and kept; `--clean` deletes
   the ones this run made (by id, never by title), after their turns, also when the run stops
   early. A privacy question is answered only for a project this run made; any other question is
   left to the person.
@@ -67,8 +69,10 @@ stops before its first turn; by default the tab whose registration names it, nev
 
 `--tasks probe` sends one request with the Part's full tool set (the app's 3 tools and the Part's
 18) and records whether the provider took the strict schemas (`probe.json`: `strict` is
-`accepted`, or `refused` when the app had to send the tools again unchecked). Run it once per
-cloud provider before the first real eval.
+`accepted`, or `refused` when the app had to send the tools again unchecked; its `notes` then
+carry the provider's own words after "The provider said:"), and the turn's log in
+`probe-1/events.jsonl`. Run it once per cloud provider before the first real eval. With
+`--scripted` the scripted model answers it (a read, then a sentence).
 
 ## A run
 
@@ -92,7 +96,31 @@ Records go to `.cache/assistant-eval/<stamp>-<label>/` (ignored by git):
   tokens, the wall time, each turn's end and the Part's health;
 - `<task>-<run>/`: `events.jsonl` (every turn's log), `calls.json` (the page's calls),
   `facts.json`, `final.png`;
-- `summary.md`, a table to copy into the plans.
+- `summary.md`, a table to copy into the plans;
+- the probe: `probe.json` and `probe-1/events.jsonl`;
+- with `--profile` and `--scripted`, the logs of the run's own app server (kept after that
+  server and its temp folder are removed; the run prints their paths at the end):
+  - `server.log`: the server's whole output (stdout and stderr) from its start, written as it
+    comes;
+  - `debug/provider.jsonl`: one JSON row per model request (the server runs with
+    `MAGNUSIM_ASSISTANT_DEBUG_LOG=<record dir>/debug`).
+
+### Logs
+
+`provider.jsonl` is for reading exact causes, not guessing. Each row has `time`, `turn` and
+`step`, `dialect`, `model`, `attempt` (`strict` or `loose` for a cloud provider; `no_images`,
+`with_images` or `without_images` for a local server), `reason` (null for a first try; `strict_refused` for
+the resend after the provider refused the strict tools, `strict_refused_earlier` when that
+tool set was refused before; `images_refused`, `images_left_out`), `resend: "overloaded"` for
+the one resend after an overload, `ms`, `http` (each answer's `status`, `request_id` header and
+time; a failed answer's whole `body` text), `ok`, then `result` (stop reason, the model that
+served it, usage, notes, the blocks: text, thinking by length, tool calls with their inputs) or
+`error` (its message, type, code, status and body) with `mapped` (the app's error code), and
+`request`: the whole body as the SDK got it, tools with their schemas and `strict` flags, the
+system text and the messages. A row never holds a header or a key and passes through the
+app's redaction; image data is a marker with its size, and a row is at most 4 MB (a bigger
+request body is cut and says so). The file holds the project's data as sent to the model: keep
+it as private as the project.
 
 ## Adding a task
 

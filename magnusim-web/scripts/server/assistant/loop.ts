@@ -31,6 +31,7 @@
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
 import { contextBlock, guideBlock, SYSTEM_PROMPT } from './prompt.ts';
+import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import { destinationHost, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
@@ -525,7 +526,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     let costEstimated = false;
     try {
       out = await sendWithOneResend(
-        adapter,
+        // The provider debug log's rows name the turn and the step.
+        debugScoped(adapter, { turn: t.id, step }),
         { ...req, maxOutputTokens: est.maxOut },
         t.signal,
         (e) => {

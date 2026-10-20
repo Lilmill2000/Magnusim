@@ -45,3 +45,6 @@ export function parseArgs(argv: string[]): RunArgs;
 export function readProfile(file: string, repoTop: string): Profile;
 export function profileSettings(p: Profile): { provider: string; model: string; effort?: string; base_url?: string; confirm_remote?: true; privacy: 'allow'; caps: Caps };
 export function capsWords(c: Caps | null | undefined): string;
+export const DEBUG_LOG_ENV: string;
+/** Where the run's own server left its logs, one line each. */
+export function logLines(logs: { server: string; debug: string }): string[];

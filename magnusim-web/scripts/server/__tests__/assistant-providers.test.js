@@ -32,7 +32,7 @@ const { mapProviderError } = await import('../assistant/providers/errors.ts');
 const { resolveTestProviderUrl, cloudBaseUrl } = await import('../assistant/providers/endpoints.ts');
 const { sdkInstalled, depsStatus, setSdkSpecifierForTests, loadSdkClass, DEPS_MISSING_TEXT } = await import('../assistant/providers/load-sdk.ts');
 const { anthropicClientOptions, MessageAccumulator } = await import('../assistant/providers/anthropic.ts');
-const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE } = await import('../assistant/providers/common.ts');
+const { CLOUD_WATCHDOG, LOCAL_WATCHDOG, STRICT_FALLBACK_NOTE, SAID_MAX, strictFallbackNote } = await import('../assistant/providers/common.ts');
 const { runConnectionTest } = await import('../assistant/provider-test.ts');
 const { STORAGE_NOTES, UNLOCK_NOTES, TOKEN_BLOCKED_NOTE, TOKEN_BLOCKED_TEXT, KeyError } = await import('../assistant/secrets/store.ts');
 const { openAiClientOptions } = await import('../assistant/providers/openai.ts');
@@ -1425,6 +1425,11 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     },
   };
   const CLOUD = ['anthropic', 'openai'];
+  /** The note a loose answer carries: the fallback note and the provider's own words. */
+  const NOTE = {
+    anthropic: `${STRICT_FALLBACK_NOTE} The provider said: ${REFUSED.anthropic.error.message}`,
+    openai: `${STRICT_FALLBACK_NOTE} The provider said: ${REFUSED.openai.error.message}`,
+  };
   /** Each tool of a request as [name, strict]. */
   const strictness = (r) => r.body.tools.map((t) => [t.name, t.strict === true]);
   const allStrict = (tools) => tools.map((t) => [t.name, true]);
@@ -1446,7 +1451,7 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         r = await send(provider, request(provider, [userText('tools')], { tools: TOOLS }));
       });
       assert.equal(r.stop, 'end_turn', provider);
-      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(r.notes, [NOTE[provider]], provider);
       assert.deepEqual(sent.map(strictness), [allStrict(TOOLS), hostStrict(TOOLS)], provider);
       assert.equal(sent[0].step, undefined, `${provider}: the refused request took no step`);
       // The same tools both times: only `strict` differs (the second dialect says false, the first leaves it out).
@@ -1455,12 +1460,12 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
       if (provider === 'openai') assert.deepEqual(sent[1].body.tools.map((t) => t.strict), [true, true, false, false, false, false]);
       else assert.ok(sent[1].body.tools.slice(HOST.length).every((t) => !('strict' in t)), provider);
 
-      // Another turn's adapter, the same tools: not strict from the start, one request, the note again.
+      // Another turn's adapter, the same tools: not strict from the start, one request, the note (with the words remembered) again.
       fake.reply({ text: 'again' });
       sent = await sentBy(dialect, async () => {
         r = await send(provider, request(provider, [userText('again')], { tools: TOOLS }));
       });
-      assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE], provider);
+      assert.deepEqual(r.notes, [NOTE[provider]], provider);
       assert.deepEqual(sent.map(strictness), [hostStrict(TOOLS)], provider);
 
       // Another tool set is still tried strict.
@@ -1502,7 +1507,7 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     const two = await sentBy('anthropic', async () => {
       r = await send('anthropic', request('anthropic', [userText('cad')], { tools: cad }));
     });
-    assert.deepEqual(r.notes, [STRICT_FALLBACK_NOTE]);
+    assert.deepEqual(r.notes, [NOTE.anthropic]);
     assert.deepEqual(two.map((q) => q.body.tools.map((t) => t.strict === true)), [
       [...Array(20).fill(true), false],
       [true, true, true, ...Array(18).fill(false)],
@@ -1550,6 +1555,22 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     fake.reply({ text: 'ok' });
     const sent = await sentBy('openai', () => send('openai', request('openai', [userText('x')], { tools })));
     assert.deepEqual(sent.map(strictness), [allStrict(tools), hostStrict(tools)]);
+  });
+
+  it("the note keeps the provider's words: redacted, on one line, capped; with no words, the plain note", async () => {
+    assert.equal(strictFallbackNote(''), STRICT_FALLBACK_NOTE);
+    const words = `Schema is too complex for compilation.\n Key ${KEYS.anthropic} here. ${'x'.repeat(2000)}`;
+    fake.failNext({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: words } }, dialect: 'anthropic' });
+    fake.reply({ text: 'ok' });
+    const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), 'said')];
+    const r = await send('anthropic', request('anthropic', [userText('x')], { tools }));
+    const [note, ...more] = r.notes;
+    assert.deepEqual(more, []);
+    assert.ok(note.startsWith(`${STRICT_FALLBACK_NOTE} The provider said: Schema is too complex for compilation. Key [redacted] here. xxx`), note);
+    assert.ok(!note.includes(KEYS.anthropic));
+    assert.ok(!note.includes('\n'));
+    assert.equal(note.length, `${STRICT_FALLBACK_NOTE} The provider said: `.length + SAID_MAX + 1);
+    assert.ok(note.endsWith('…'));
   });
 
   it('the local server dialect is never strict, so it has no such second request', async () => {

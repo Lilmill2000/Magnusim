@@ -44,6 +44,7 @@ import {
   type StreamEvent,
   type Usage,
 } from '../types.ts';
+import { debugCall, type DebugCall } from '../debug-log.ts';
 import { dataUrl, emptyUsage, looksLikeToolCallText, newWatchdog, parseToolInput, requestMessages, tokenCount, type AdapterOptions } from './common.ts';
 import { mapProviderError } from './errors.ts';
 import { guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
@@ -379,10 +380,11 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
     streamed,
   });
 
-  async function client(token: string | null, wd: Watchdog): Promise<Client> {
+  async function client(token: string | null, wd: Watchdog, dbg: DebugCall | null = null): Promise<Client> {
     const Ctor = await loadSdkClass<OpenAiCtor>('openai', 'OpenAI');
     const key = token || 'local';
-    const fetch = guardedFetch({ origin: o.baseURL, allowHeaders: COMPAT_HEADERS, pin: { authorization: `Bearer ${key}` }, watchdog: wd, label: LABEL });
+    const guarded = guardedFetch({ origin: o.baseURL, allowHeaders: COMPAT_HEADERS, pin: { authorization: `Bearer ${key}` }, watchdog: wd, label: LABEL });
+    const fetch = dbg ? dbg.fetch(guarded) : guarded;
     return new Ctor(openAiClientOptions(key, o.baseURL, fetch, env, 0)) as unknown as Client;
   }
 
@@ -440,25 +442,28 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
       const toolNames = req.tools.map((t) => t.name);
       const pictures = carriesImages(req);
       const leaveOut = pictures && readsImages(req.model) === false;
-      const attempt = (withImages: boolean) =>
+      const attempt = (withImages: boolean, reason: string | null) =>
         o.borrowKey(async (token) => {
-          const body = compatBody(req, { images: withImages });
+          const body = { ...compatBody(req, { images: withImages }), stream: true };
           const wd = newWatchdog(o, true);
           const sig = AbortSignal.any([signal, wd.signal]);
           const acc = new ChunkAccumulator(onEvent);
+          const dbg = debugCall({ dialect: 'openai_compatible', model: req.model, attempt: !pictures ? 'no_images' : withImages ? 'with_images' : 'without_images', reason, body });
           try {
-            const c = await client(token, wd);
-            const stream = await c.chat.completions.create({ ...body, stream: true }, { signal: sig });
+            const c = await client(token, wd, dbg);
+            const stream = await c.chat.completions.create(body, { signal: sig });
             for await (const chunk of stream) {
               acc.add(chunk);
               if (sig.aborted) break;
             }
             if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
             const result = acc.result(req.model, toolNames);
+            dbg?.done(result);
             onEvent({ kind: 'usage', usage: result.usage });
             return result;
           } catch (err) {
             const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
+            dbg?.failed(err, mapped);
             // The server's own context is smaller than the kept row said: the next turn reads it again.
             if (mapped.code === 'context') ROWS.delete(keyOf(req.model));
             if (withImages && pictures && !acc.started && !signal.aborted && refusedImages(err, mapped)) throw new ImagesRefused(mapped);
@@ -468,13 +473,13 @@ export function openAiCompatibleAdapter(o: AdapterOptions & { cloud: boolean; de
           }
         });
       try {
-        const result = await attempt(!leaveOut);
+        const result = await attempt(!leaveOut, leaveOut ? 'images_left_out' : null);
         return leaveOut ? { ...result, notes: [IMAGES_LEFT_OUT_NOTE] } : result;
       } catch (err) {
         if (!(err instanceof ImagesRefused)) throw err;
       }
       // Once more, each image as words; answered, this model is text-only from now on.
-      const result = await attempt(false);
+      const result = await attempt(false, 'images_refused');
       rememberTextOnly(req.model);
       return { ...result, notes: [IMAGES_REFUSED_NOTE] };
     },

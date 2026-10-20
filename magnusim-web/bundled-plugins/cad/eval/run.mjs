@@ -21,9 +21,12 @@
 //                "auto".
 // Each run opens its Part in a browser page of its own (--headed shows it). The records go to
 // .cache/assistant-eval/<stamp>-<label>/ (gitignored): runs.jsonl, a folder per run (events.jsonl,
-// calls.json, facts.json, final.png) and summary.md.
+// calls.json, facts.json, final.png) and summary.md; the probe writes probe.json and probe-1/events.jsonl.
+// With --profile and --scripted the run's own app server also leaves there server.log (its whole
+// output) and debug/provider.jsonl (every model request and answer: MAGNUSIM_ASSISTANT_DEBUG_LOG),
+// kept after the server is removed; --attach says how to get the same from the running app.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { api, cadFrameOf, loadTasks, newPart, PLUGIN_DIR, runFolder, runTask, runTurn, scriptedDriver, summaryMd, tabShowing, TURN_MS } from './lib.mjs';
@@ -36,6 +39,10 @@ export const ATTACH_MIN_STEPS = 120;
 /** The probe's request: one read call and an answer, with every tool offered. */
 export const PROBE_TEXT = 'Call cad__get_model once with detail brief, then say in one sentence how many features the Part has.';
 const STRICT_FALLBACK = /could not compile these tools strictly/;
+/** The server switch that keeps every model request and answer (scripts/server/assistant/debug-log.ts). */
+export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
+/** The scripted model's answers to the probe: the read it asks for, then its sentence. */
+const PROBE_STEPS = [{ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] }, { text: 'The Part has no features yet.' }];
 
 const USAGE = `node eval/run.mjs --tasks <ids|all|probe> [--runs N] [--label text] (--profile <file> | --attach <url> | --scripted)
   [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean] [--out <dir>] [--no-repair]
@@ -193,17 +200,21 @@ async function main(argv) {
   const stops = [];
   let base = o.attach;
   let driver = null;
+  let fake = null;
   const created = new Set();
+  const out = o.out ? resolve(o.out) : runFolder(o.label || `${o.driver}${probe ? '-probe' : ''}`);
+  const logs = o.driver === 'attach' ? null : { server: join(out, 'server.log'), debug: join(out, 'debug') };
   try {
+    mkdirSync(out, { recursive: true });
+    say(`records in ${out}`);
     if (o.driver === 'scripted' || o.driver === 'profile') {
       const { startHost } = await import('../../../e2e/support/host-server.mjs');
-      let fake = null;
       if (o.driver === 'scripted') {
         const { startFakeLlm } = await import('../../../e2e/support/fake-llm.mjs');
         fake = await startFakeLlm();
         stops.push(() => fake.stop());
       }
-      const env = { MAGNUSIM_E2E_WSL: null, MAGNUSIM_WSL_PRUNE: '0' };
+      const env = { MAGNUSIM_E2E_WSL: null, MAGNUSIM_WSL_PRUNE: '0', [DEBUG_LOG_ENV]: logs.debug };
       if (fake) Object.assign(env, { MAGNUSIM_TEST_ASSISTANT: '1', MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base, MAGNUSIM_TEST_EVENT_HUB: '1' });
       say('starting an app server of its own (a temp projects root and Assistant home)');
       const host = await startHost({
@@ -213,6 +224,7 @@ async function main(argv) {
         viteCacheDir: join(PLUGIN_DIR, '.cache', 'host-vite-cad-eval'),
         portFrom: o.portFrom ?? Number(process.env.CAD_E2E_PORT_FROM || 8170) + 95,
         env,
+        logFile: logs.server,
         timeoutMs: 240_000,
       });
       stops.unshift(() => host.stop());
@@ -240,6 +252,7 @@ async function main(argv) {
         driver = { kind: 'profile' };
       }
     } else {
+      say(`the server's own log and every model request are not kept from an attached app; to keep them, start the app with ${DEBUG_LOG_ENV}=<folder> (provider.jsonl goes there) and keep its console output`);
       const status = (await api(base, '/api/assistant/status')).body;
       if (!status?.ok) throw new Error(`no app answers at ${base}`);
       say(`the app's limits: ${capsWords(status.caps)}`);
@@ -251,19 +264,20 @@ async function main(argv) {
     const browser = await chromium.launch({ headless: !o.headed });
     stops.unshift(() => browser.close());
     const page = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage();
-    const out = o.out ? resolve(o.out) : runFolder(o.label || `${o.driver}${probe ? '-probe' : ''}`);
-    mkdirSync(out, { recursive: true });
-    say(`records in ${out}`);
     const env = { base, page, driver, out, created, log: (l) => say(l) };
 
     if (probe) {
       const part = await newPart(page, base, { title: 'Eval · probe', log: env.log });
       created.add(part.projectId);
       const tab = o.tab ? await tabShowing(base, o.tab, part.projectId, 'Eval · probe') : part.tab;
+      if (fake) fake.reply(...PROBE_STEPS);
       const t = await runTurn(base, { text: PROBE_TEXT, tab }, { answer: () => null, ms: o.turnMs, log: env.log });
       const notes = t.events.filter((e) => e.type === 'note').map((e) => e.text);
       const end = t.events.find((e) => e.type === 'end') ?? null;
       const calls = await cadFrameOf(page).evaluate(() => window.__CAD__.assistant.calls);
+      const dir = join(out, 'probe-1');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'events.jsonl'), t.events.map((e) => JSON.stringify({ turn: t.id, ...e })).join('\n') + '\n');
       const status = (await api(base, '/api/assistant/status')).body ?? {};
       const result = {
         when: new Date().toISOString(),
@@ -319,7 +333,26 @@ async function main(argv) {
         // Going anyway.
       }
     }
+    if (logs) for (const line of logLines(logs)) say(line);
   }
+}
+
+/** Where the run's own server left its logs, in words (only the ones there). */
+export function logLines(logs) {
+  const lines = [];
+  const size = (f) => {
+    try {
+      return statSync(f).size;
+    } catch {
+      return null;
+    }
+  };
+  const server = size(logs.server);
+  if (server !== null) lines.push(`server log: ${logs.server} (${server} bytes)`);
+  const provider = size(join(logs.debug, 'provider.jsonl'));
+  if (provider !== null) lines.push(`provider log: ${join(logs.debug, 'provider.jsonl')} (${provider} bytes, a row per model request)`);
+  else lines.push(`provider log: none in ${logs.debug} (no model request was sent)`);
+  return lines;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
