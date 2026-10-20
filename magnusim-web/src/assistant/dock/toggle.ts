@@ -5,8 +5,8 @@
  * this document: the SDK forwards Ctrl+/ through the bridge, which calls dockShortcut().
  *
  * installDockToggle() wires them and mirrors the dock's state onto the page: each button's
- * aria-expanded and data-assistant-badge, and body.assistant-dock-open (style.css: toasts
- * above the bottom sheet of a narrow window).
+ * aria-expanded and data-assistant-badge, and body.assistant-dock-open / .assistant-dock-pill
+ * (style.css: toasts keep clear of the panel and of the pill).
  */
 import { closeDock, dockSnapshot, focusDock, focusInDock, openDock, subscribeDock, toggleDock } from './dockState';
 
@@ -63,6 +63,7 @@ function sync(): void {
     else el.removeAttribute('data-assistant-badge');
   }
   document.body.classList.toggle('assistant-dock-open', s.size === 'open');
+  document.body.classList.toggle('assistant-dock-pill', s.size === 'pill');
 }
 
 /** Wires the buttons and the key, and keeps the page in step with the dock; returns how to undo it. */
@@ -82,6 +83,6 @@ export function installDockToggle(): () => void {
     off();
     window.removeEventListener('keydown', onKeyDown, true);
     for (const [el, onClick] of wired) el.removeEventListener('click', onClick);
-    document.body.classList.remove('assistant-dock-open');
+    document.body.classList.remove('assistant-dock-open', 'assistant-dock-pill');
   };
 }

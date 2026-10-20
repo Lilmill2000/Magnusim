@@ -146,12 +146,20 @@ describe('the header buttons and Ctrl+/', () => {
     expect(badges()).toEqual([null, null]);
     act(() => setDockPill({ kind: 'question', text: 'Assistant asks: Reset?' }));
     expect(badges()).toEqual(['question', 'question']);
+    // The pill shows: the toasts keep clear of it (style.css).
+    expect(document.body).toHaveClass('assistant-dock-pill');
+    act(() => $('#home-assistant').click());
+    expect(document.body).not.toHaveClass('assistant-dock-pill');
+    expect(document.body).toHaveClass('assistant-dock-open');
+    act(() => $('#home-assistant').click());
+    expect(document.body).toHaveClass('assistant-dock-pill');
     act(() => setDockPill({ kind: 'running', text: 'Assistant · Thinking…' }));
     expect(badges()).toEqual(['working', 'working']);
     act(() => setDockPill({ kind: 'done', text: 'Assistant: done' }));
     expect(badges()).toEqual(['done', 'done']);
     act(() => setDockPill(null));
     expect(badges()).toEqual([null, null]);
+    expect(document.body).not.toHaveClass('assistant-dock-pill');
   });
 
   it('unmounting unwires the buttons and the key', async () => {

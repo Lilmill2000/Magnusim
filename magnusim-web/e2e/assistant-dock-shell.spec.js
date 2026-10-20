@@ -252,12 +252,64 @@ test.describe('the dock', () => {
     await expect(page.locator('#top-header .top-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
   });
 
-  test('with the dock open, a toast and the dock do not overlap', async ({ page }) => {
+  test('with the dock open, a toast and the dock do not overlap, down to 720 px wide', async ({ page }) => {
     await openFromHome(page);
-    await page.mouse.move(640, 10);
-    const t = await rect(await appToast(page, 'Saved beside the dock'));
-    expect(overlap(t, await rect(dock(page)))).toBe(false);
-    expect(t.left).toBeLessThanOrEqual(16 + 1);
+    for (const width of [1280, 760, 720]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.mouse.move(width / 2, 5);
+      const t = await rect(await appToast(page, `A long message beside the dock at ${width} px wide, which wraps when it must`));
+      expect(overlap(t, await rect(dock(page))), `at ${width} px`).toBe(false);
+      expect(t.left).toBeLessThanOrEqual(16 + 1);
+      await page.locator('.app-toasts .mgk-toast-close').first().click();
+      await expect(page.locator('.app-toasts .mgk-toast')).toHaveCount(0);
+    }
+  });
+
+  test('the pill: a toast keeps clear of it, beside it or above it in a narrow window', async ({ page }) => {
+    await page.goto(`${host.base}/#/`);
+    await appReady(page);
+    const pill = page.locator('[data-assistant-pill]');
+    // The pill as a running request shows it (the dock's store, as the app's own module).
+    await page.evaluate(() =>
+      import('/src/assistant/dock/dockState.ts').then((m) =>
+        m.setDockPill({ kind: 'running', text: 'Assistant · Working: Extrude the sketch · 3 of 120 steps', onStop: () => undefined }),
+      ),
+    );
+    await expect(pill).toBeVisible();
+    await expect(pill).toHaveAttribute('data-pill', 'running');
+    await expect(page.locator('#home-assistant')).toHaveAttribute('data-assistant-badge', 'working');
+    await expect(pill.getByRole('button', { name: 'Stop the Assistant' })).toBeVisible();
+    for (const width of [760, 600]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.mouse.move(width / 2, 5);
+      const t = await rect(await appToast(page, `A long message while the pill shows at ${width} px, which wraps when it must`));
+      expect(overlap(t, await rect(pill)), `at ${width} px`).toBe(false);
+      await page.locator('.app-toasts .mgk-toast-close').first().click();
+      await expect(page.locator('.app-toasts .mgk-toast')).toHaveCount(0);
+    }
+    // Its words open the dock; the pill goes while it is open.
+    await pill.getByRole('button', { name: /^Assistant · Working/ }).click();
+    await expect(dock(page)).toBeVisible();
+    await expect(pill).toBeHidden();
+    await page.evaluate(() => import('/src/assistant/dock/dockState.ts').then((m) => m.setDockPill(null)));
+  });
+
+  test("a narrow window over a workspace: the page's toast and the app's go above the open sheet", async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 800 });
+    const frame = await openWorkspace(page);
+    await page.locator('#workspace-overlay #wb-assistant').click();
+    await expect(dock(page)).toBeVisible();
+    await page.mouse.move(300, 5);
+    await frame.evaluate(() => window.__ws.ui.toast('From the page'));
+    const wsToast = page.locator('#workspace-overlay [data-ws-toast]');
+    await expect(wsToast).toBeVisible();
+    const sheet = await rect(dock(page));
+    const ws = await rect(wsToast);
+    expect(ws.bottom, "the page's toast is above the sheet").toBeLessThanOrEqual(sheet.top);
+    expect(await onTop(wsToast)).toBe(true);
+    const app = await rect(await appToast(page, 'App toast above both'));
+    expect(overlap(app, ws)).toBe(false);
+    expect(app.bottom).toBeLessThanOrEqual(ws.top);
   });
 
   test('a narrow window: a bottom sheet with the toasts above it; a short one: the full height under the header', async ({ page }) => {

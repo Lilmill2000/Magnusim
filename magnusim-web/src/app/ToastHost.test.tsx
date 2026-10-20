@@ -210,9 +210,27 @@ describe('the app toast region in style.css', () => {
     expect(ruleProps(appCss, 'body.workspace-open .app-toasts')).toEqual({ bottom: 'calc(136px + var(--ws-toast-reserve, 0px))' });
   });
 
-  it('in a narrow window with the dock open: above the bottom sheet', () => {
-    const narrow = cssRules(appCss).filter((r) => r.selectors.includes('body.assistant-dock-open .app-toasts'));
-    expect(narrow.map((r) => r.props)).toEqual([{ bottom: 'calc(min(70vh, 100vh - 60px) + 16px)' }]);
-    expect(appCss.replace(/\r\n/g, '\n')).toContain('@media (max-width: 719px) {\n  body.assistant-dock-open .app-toasts {');
+  it('in a narrow window: above the open bottom sheet (and the page toast above it), or above the pill', () => {
+    const css = appCss.replace(/\r\n/g, '\n');
+    const at = css.indexOf('@media (max-width: 719px) {\n  body.assistant-dock-open .app-toasts {');
+    expect(at).toBeGreaterThan(0);
+    const block = cssRules(css.slice(at, css.indexOf('\n}\n', at) + 3));
+    expect(block.map((r) => [r.selectors.join(', '), r.props])).toEqual([
+      ['body.assistant-dock-open .app-toasts', { bottom: 'calc(min(70vh, 100vh - 60px) + 16px + var(--ws-toast-reserve, 0px))' }],
+      ['body.assistant-dock-open .ws-toast-slot', { bottom: 'calc(min(70vh, 100vh - 60px) + 16px)' }],
+      // Over a workspace they are 136 px up already, above the pill.
+      ['body.assistant-dock-pill:not(.workspace-open) .app-toasts', { bottom: '52px' }],
+    ]);
+  });
+
+  it('in a wider window: left of the open dock or of the pill', () => {
+    const css = appCss.replace(/\r\n/g, '\n');
+    const at = css.indexOf('@media (min-width: 720px) {\n  body.assistant-dock-open .app-toasts,');
+    expect(at).toBeGreaterThan(0);
+    const block = cssRules(css.slice(at, css.indexOf('\n}\n', at) + 3));
+    expect(block.map((r) => [r.selectors.join(', '), r.props])).toEqual([
+      ['body.assistant-dock-open .app-toasts, body.assistant-dock-open .ws-toast-slot', { 'max-width': 'min(420px, calc(100vw - 448px))' }],
+      ['body.assistant-dock-pill .app-toasts', { 'max-width': 'min(420px, calc(100vw - 368px))' }],
+    ]);
   });
 });
