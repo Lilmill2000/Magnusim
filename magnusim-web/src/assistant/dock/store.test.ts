@@ -1,17 +1,16 @@
-// The dock's store (phase 4 spec 1.3, 2.2, 5.2-5.4, 6.1): a fake hub channel per turn, a fetch
-// whose answers each test hands out, on fake timers.
+// The dock's conversation store (phase 4 spec 1.3, 2.2, 4.4, 5.2-5.4, 6.1), and how it opens the
+// dock and sets its pill through dockState: a fake hub channel per turn, a fetch whose answers
+// each test hands out, on fake timers.
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationRow, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
+import { closeDock, DOCK_OPEN_KEY, dockSnapshot as dock, DONE_PILL_MS, openDock, resetDockForTests } from './dockState';
 import { resetFollowForTests } from './follow';
 import {
   chooseConversation,
-  closeDock,
-  DONE_PILL_MS,
-  dockSnapshot,
+  dockStoreSnapshot,
   draftOf,
   keepTurn,
-  openDock,
   questionClosed,
   questionShown,
   refreshConversations,
@@ -19,12 +18,12 @@ import {
   retainTurns,
   setDockContext,
   setDraft,
+  setTurnStopper,
   showConversation,
   STORAGE_KEYS,
-  subscribeDock,
-  toggleDock,
+  subscribeDockStore,
   unwatchTurn,
-  useDock,
+  useDockStore,
   watchTurn,
 } from './store';
 
@@ -145,6 +144,7 @@ const live = () => document.getElementById('assistant-dock-live')?.textContent ?
 beforeEach(() => {
   vi.useFakeTimers();
   resetDockStoreForTests();
+  resetDockForTests();
   resetFollowForTests();
   channels.length = 0;
   sent = [];
@@ -170,6 +170,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   resetDockStoreForTests();
+  resetDockForTests();
   resetFollowForTests();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -178,51 +179,81 @@ afterEach(() => {
 });
 
 describe('open, pill and closed', () => {
-  it('closed with nothing worth seeing; the pill while a turn runs; a question opens it; an end keeps the pill 120 s', () => {
-    expect(dockSnapshot()).toMatchObject({ size: 'closed', pill: null });
+  it('closed with nothing worth seeing; the pill follows a running turn; a question opens the dock; an end keeps the pill 120 s', () => {
+    expect(dock()).toMatchObject({ size: 'closed', pill: null });
     watchTurn('t1');
-    expect(dockSnapshot()).toMatchObject({ size: 'pill', pill: 'running' });
-    channels[0].frame('snapshot', { turn: summary('t1', 'model'), events: [ev({ type: 'state', state: 'model' })], next: 1, ended: false, more: false });
-    questionShown('g1');
-    expect(dockSnapshot()).toMatchObject({ size: 'open', pill: null, questions: ['g1'] });
-    questionShown('g1');
-    expect(dockSnapshot().questions).toEqual(['g1']);
+    expect(dock()).toMatchObject({ size: 'pill', pill: { kind: 'running', text: 'Assistant · Starting…' }, badge: 'working' });
+    expect(dock().pill?.onStop).toBeUndefined();
+    const used = { steps: 3, steps_cap: 120, changes: 0, changes_cap: 0, usd: 0, usd_cap: 0, active_ms: 125_000, minutes_cap: 30 };
+    channels[0].frame('snapshot', { turn: { ...summary('t1', 'model'), used }, events: [ev({ type: 'state', state: 'model' })], next: 1, ended: false, more: false });
+    expect(dock().pill).toMatchObject({ kind: 'running', text: 'Assistant · Thinking… · 3 of 120 steps · 2 of 30 min' });
+    // With a way to stop it, the pill's Stop ends that turn.
+    const stop = vi.fn();
+    setTurnStopper(stop);
+    dock().pill?.onStop?.();
+    expect(stop).toHaveBeenCalledWith('t1');
+    // A question opens the dock, without taking the keyboard or counting as the person's choice.
+    questionShown('g1', 'Reset the counter to zero before the next step?');
+    expect(dock()).toMatchObject({ size: 'open', focusSeq: 0, pill: { kind: 'question', text: 'Assistant asks: Reset the counter to zero before the nex…' }, badge: 'question' });
+    expect(dockStoreSnapshot().questions).toEqual(['g1']);
+    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBeNull();
+    questionShown('g1', 'Reset the counter to zero before the next step?');
+    expect(dockStoreSnapshot().questions).toEqual(['g1']);
+    // Closed while it waits: the pill asks it.
+    closeDock();
+    expect(dock()).toMatchObject({ size: 'pill', pill: { kind: 'question' } });
     questionClosed('g1');
-    expect(dockSnapshot()).toMatchObject({ size: 'pill', pill: 'running', questions: [] });
+    expect(dock()).toMatchObject({ size: 'pill', pill: { kind: 'running' } });
+    expect(dockStoreSnapshot().questions).toEqual([]);
     channels[0].frame('events', { events: [ev({ type: 'end', state: 'done', reason: 'done', message: null })], next: 2 });
-    expect(dockSnapshot()).toMatchObject({ size: 'pill', pill: 'done', unseenEnd: { turn: 't1', state: 'done' } });
+    expect(dock()).toMatchObject({ size: 'pill', pill: { kind: 'done', text: 'Assistant: done' }, badge: 'done' });
     vi.advanceTimersByTime(DONE_PILL_MS - 1);
-    expect(dockSnapshot().pill).toBe('done');
+    expect(dock().pill?.kind).toBe('done');
     vi.advanceTimersByTime(1);
-    expect(dockSnapshot()).toMatchObject({ size: 'closed', pill: null, unseenEnd: null });
+    expect(dock()).toMatchObject({ size: 'closed', pill: null, badge: null });
+    // Nothing the store says later brings it back.
+    showConversation('c1');
+    expect(dock().pill).toBeNull();
   });
 
-  it('opening counts the end as seen; an end while open shows no pill; open or closed is remembered', () => {
+  it('opening counts the end as seen; an end while open shows no pill; an end behind a question shows after it', () => {
     watchTurn('t1');
     channels[0].frame('events', { events: [ev({ type: 'state', state: 'model' }), ev({ type: 'end', state: 'stopped', reason: 'user', message: 'Stopped.' })], next: 2 });
-    expect(dockSnapshot().pill).toBe('done');
+    expect(dock().pill).toMatchObject({ kind: 'done', text: 'Assistant: stopped' });
     openDock();
-    expect(dockSnapshot()).toMatchObject({ size: 'open', unseenEnd: null });
-    expect(localStorage.getItem(STORAGE_KEYS.open)).toBe('open');
+    expect(dock()).toMatchObject({ size: 'open', pill: null });
     closeDock();
-    expect(dockSnapshot()).toMatchObject({ size: 'closed' });
-    expect(localStorage.getItem(STORAGE_KEYS.open)).toBe('closed');
+    expect(dock().size).toBe('closed');
     // An end that came while the dock was open was seen.
     openDock();
     watchTurn('t2');
+    expect(dock()).toMatchObject({ size: 'open', pill: { kind: 'running' } });
     channels[1].frame('events', { events: [ev({ type: 'state', state: 'model' }), ev({ type: 'end', state: 'done', reason: 'done', message: null })], next: 4 });
+    expect(dock().pill).toBeNull();
     closeDock();
-    expect(dockSnapshot().size).toBe('closed');
-    // A fresh page reads the choice.
-    toggleDock();
-    resetDockStoreForTests();
-    localStorage.setItem(STORAGE_KEYS.open, 'open');
-    expect(dockSnapshot().size).toBe('open');
+    expect(dock().size).toBe('closed');
+    // An end while a question waits: the question first, then the end.
+    watchTurn('t3');
+    questionShown('g1', 'Go on?');
+    closeDock();
+    channels[2].frame('events', { events: [ev({ type: 'state', state: 'model' }), ev({ type: 'end', state: 'failed', reason: 'error', message: 'Boom.' })], next: 6 });
+    expect(dock().pill).toMatchObject({ kind: 'question', text: 'Assistant asks: Go on?' });
+    questionClosed('g1');
+    expect(dock().pill).toMatchObject({ kind: 'done', text: "Assistant: didn't finish" });
+    // ...unless the dock was opened meanwhile.
+    watchTurn('t4');
+    questionShown('g2', 'Again?');
+    closeDock();
+    channels[3].frame('events', { events: [ev({ type: 'state', state: 'model' }), ev({ type: 'end', state: 'done', reason: 'done', message: null })], next: 8 });
+    openDock();
+    closeDock();
+    questionClosed('g2');
+    expect(dock()).toMatchObject({ size: 'closed', pill: null });
   });
 
   it('a turn watched as ended is not running; its snapshot is not announced, nor is a running turn\'s past', () => {
     watchTurn('old', { ended: true });
-    expect(dockSnapshot().size).toBe('closed');
+    expect(dock().size).toBe('closed');
     channels[0].frame('snapshot', {
       turn: summary('old', 'done'),
       events: [ev({ type: 'state', state: 'starting' }), ev({ type: 'end', state: 'done', reason: 'done', message: null })],
@@ -230,7 +261,7 @@ describe('open, pill and closed', () => {
       ended: true,
       more: false,
     });
-    expect(dockSnapshot()).toMatchObject({ size: 'closed', unseenEnd: null });
+    expect(dock()).toMatchObject({ size: 'closed', pill: null });
     watchTurn('run');
     channels[1].frame('snapshot', {
       turn: summary('run', 'tools'),
@@ -250,19 +281,19 @@ describe('open, pill and closed', () => {
     const start = [ev({ type: 'state', state: 'starting' }), ev({ type: 'text', step: 1, text: 'Hi' })];
     channels[0].frame('snapshot', { turn: summary('t1', 'model'), events: start, next: 2, ended: false, more: false });
     expect(live()).toBe('The Assistant is working.');
-    const before = dockSnapshot().turns.t1;
+    const before = dockStoreSnapshot().turns.t1;
     channels[0].drop();
     expect(channels[1].url).toBe('/api/assistant/events?role=turn&turn=t1&since=2');
     channels[1].frame('snapshot', { turn: summary('t1', 'model'), events: start, next: 2, ended: false, more: false });
-    expect(dockSnapshot().turns.t1.items).toBe(before.items);
-    expect(dockSnapshot().turns.t1.items).toHaveLength(1);
+    expect(dockStoreSnapshot().turns.t1.items).toBe(before.items);
+    expect(dockStoreSnapshot().turns.t1.items).toHaveLength(1);
     // Nor does it render: the same snapshot object, no listener called.
     const heard = vi.fn();
-    const off = subscribeDock(heard);
+    const off = subscribeDockStore(heard);
     channels[1].frame('events', { events: start, next: 2 });
     channels[1].frame('summary', { turn: slim('t1', 'model') });
     expect(heard).not.toHaveBeenCalled();
-    expect(dockSnapshot().turns.t1).toBe(before);
+    expect(dockStoreSnapshot().turns.t1).toBe(before);
     off();
   });
 
@@ -275,13 +306,13 @@ describe('open, pill and closed', () => {
       ended: false,
       more: false,
     });
-    const v = dockSnapshot().turns.t1;
+    const v = dockStoreSnapshot().turns.t1;
     expect(v.prompt).toBe('Make a box');
     expect(v.summary).not.toHaveProperty('text_so_far');
     expect(v.items.map((it) => it.kind)).toEqual(['earlier_text', 'text']);
     channels[0].frame('summary', { turn: slim('t1', 'tools') });
-    expect(dockSnapshot().turns.t1.prompt).toBe('Make a box');
-    expect(dockSnapshot().turns.t1.items.map((it) => it.kind)).toEqual(['earlier_text', 'text']);
+    expect(dockStoreSnapshot().turns.t1.prompt).toBe('Make a box');
+    expect(dockStoreSnapshot().turns.t1.items.map((it) => it.kind)).toEqual(['earlier_text', 'text']);
   });
 
   it('keepTurn pins the channel; unwatching drops the view and the channel; retainTurns keeps only those named', () => {
@@ -295,11 +326,11 @@ describe('open, pill and closed', () => {
     expect(keepTurn('nope')).toBeTypeOf('function');
     unwatchTurn('a');
     expect(channels[0].closed).toBe(true);
-    expect(Object.keys(dockSnapshot().turns)).toEqual(['b', 'c']);
+    expect(Object.keys(dockStoreSnapshot().turns)).toEqual(['b', 'c']);
     retainTurns(['c']);
     expect(channels[1].closed).toBe(true);
     expect(channels[2].closed).toBe(false);
-    expect(Object.keys(dockSnapshot().turns)).toEqual(['c']);
+    expect(Object.keys(dockStoreSnapshot().turns)).toEqual(['c']);
     // Watching twice is one follower.
     watchTurn('c');
     expect(channels).toHaveLength(3);
@@ -308,15 +339,15 @@ describe('open, pill and closed', () => {
   it('a record gone (404) marks the view', () => {
     watchTurn('t1');
     channels[0].refuse(404);
-    expect(dockSnapshot().turns.t1.gone).toBe(true);
-    expect(dockSnapshot().size).toBe('closed');
+    expect(dockStoreSnapshot().turns.t1.gone).toBe(true);
+    expect(dock()).toMatchObject({ size: 'closed', pill: null });
   });
 
-  it('useDock re-renders on each publish', () => {
-    const { result } = renderHook(() => useDock());
-    expect(result.current.size).toBe('closed');
-    act(() => openDock());
-    expect(result.current.size).toBe('open');
+  it('useDockStore re-renders on each publish', () => {
+    const { result } = renderHook(() => useDockStore());
+    expect(result.current.shown).toBeNull();
+    act(() => showConversation('c1'));
+    expect(result.current.shown).toBe('c1');
   });
 });
 
@@ -336,26 +367,26 @@ describe('the conversation per context', () => {
     sessionStorage.setItem(STORAGE_KEYS.conv, 'h-old');
     const reading = refreshConversations();
     expect(sent.map((s) => s.url)).toEqual(['/api/assistant/conversations']);
-    expect(dockSnapshot().conversations.state).toBe('loading');
+    expect(dockStoreSnapshot().conversations.state).toBe('loading');
     await sent[0].answer(200, { ok: true, conversations: [...list, { nope: true }] });
     await reading;
-    expect(dockSnapshot().conversations).toMatchObject({ state: 'ready', error: null });
-    expect(dockSnapshot().conversations.list.map((r) => r.id)).toEqual(['h-old', 'p1-new', 'h-new', 'p1-old']);
-    expect(dockSnapshot().shown).toBe('h-old');
+    expect(dockStoreSnapshot().conversations).toMatchObject({ state: 'ready', error: null });
+    expect(dockStoreSnapshot().conversations.list.map((r) => r.id)).toEqual(['h-old', 'p1-new', 'h-new', 'p1-old']);
+    expect(dockStoreSnapshot().shown).toBe('h-old');
     setDockContext({ project_id: 'p1', workspace: 'CAD' });
-    expect(dockSnapshot()).toMatchObject({ shown: 'p1-new', context: { project_id: 'p1', workspace: 'CAD' } });
+    expect(dockStoreSnapshot()).toMatchObject({ shown: 'p1-new', context: { project_id: 'p1', workspace: 'CAD' } });
     expect(sessionStorage.getItem(STORAGE_KEYS.conv)).toBe('p1-new');
     showConversation(null);
-    expect(dockSnapshot().shown).toBeNull();
+    expect(dockStoreSnapshot().shown).toBeNull();
     expect(sessionStorage.getItem(STORAGE_KEYS.conv)).toBeNull();
     // A new list keeps the person's pick in this context.
     const again = refreshConversations();
     await sent[1].answer(200, { ok: true, conversations: list });
     await again;
-    expect(dockSnapshot().shown).toBeNull();
+    expect(dockStoreSnapshot().shown).toBeNull();
     // Another context chooses again.
     setDockContext({ project_id: null, workspace: null });
-    expect(dockSnapshot().shown).toBe('h-new');
+    expect(dockStoreSnapshot().shown).toBe('h-new');
   });
 
   it('the newest answer wins; a failure keeps the list; remote access says so', async () => {
@@ -364,16 +395,16 @@ describe('the conversation per context', () => {
     await sent[1].answer(200, { ok: true, conversations: [list[1]] });
     await sent[0].answer(200, { ok: true, conversations: list });
     await Promise.all([first, second]);
-    expect(dockSnapshot().conversations.list.map((r) => r.id)).toEqual(['p1-new']);
+    expect(dockStoreSnapshot().conversations.list.map((r) => r.id)).toEqual(['p1-new']);
     const failing = refreshConversations();
     await sent[2].answer(500, { ok: false, error: 'boom' });
     await failing;
-    expect(dockSnapshot().conversations).toMatchObject({ state: 'error', error: 'boom' });
-    expect(dockSnapshot().conversations.list).toHaveLength(1);
+    expect(dockStoreSnapshot().conversations).toMatchObject({ state: 'error', error: 'boom' });
+    expect(dockStoreSnapshot().conversations.list).toHaveLength(1);
     const remote = refreshConversations();
     await sent[3].answer(403, { ok: false, reason: 'remote' });
     await remote;
-    expect(dockSnapshot().conversations).toMatchObject({ state: 'remote', list: [] });
+    expect(dockStoreSnapshot().conversations).toMatchObject({ state: 'remote', list: [] });
   });
 });
 
@@ -402,17 +433,17 @@ describe('storage that throws', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(boom);
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(boom);
     vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(boom);
-    expect(dockSnapshot().size).toBe('closed');
+    expect(dock().size).toBe('closed');
     openDock();
     closeDock();
-    expect(dockSnapshot().size).toBe('closed');
+    expect(dock().size).toBe('closed');
     setDraft('c1', 'kept in memory');
     expect(draftOf('c1')).toBe('kept in memory');
     expect(draftOf('c2')).toBe('');
     showConversation('c1');
-    expect(dockSnapshot().shown).toBe('c1');
+    expect(dockStoreSnapshot().shown).toBe('c1');
     setDockContext({ project_id: 'p9', workspace: null });
-    expect(dockSnapshot().shown).toBeNull();
+    expect(dockStoreSnapshot().shown).toBeNull();
   });
 
   it('even when the storage objects themselves are out of reach', () => {
@@ -423,7 +454,7 @@ describe('storage that throws', () => {
       throw new DOMException('blocked', 'SecurityError');
     });
     openDock();
-    expect(dockSnapshot().size).toBe('open');
+    expect(dock().size).toBe('open');
     setDraft(null, 'x');
     expect(draftOf(null)).toBe('x');
   });

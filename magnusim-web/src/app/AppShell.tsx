@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useLayoutEffect } from 'react';
 import { RequiredPluginError } from './RequiredPluginError';
 import { ToastHost } from './ToastHost';
 import ReactDOM from 'react-dom/client';
 import { AssistantDock } from '../assistant/dock/AssistantDock';
+import { dockShortcut } from '../assistant/dock/toggle';
 import { startAssistantRelay } from '../assistant/relay';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
@@ -16,10 +17,15 @@ import { registerAllIslands } from '../panels/register';
 import { useProjectStore } from '../store/project';
 import { bindLegacyViewer } from '../viewer/index';
 import { SetupWizard } from '../wizard/SetupWizard';
+import { setWorkspaceDock } from '../workspace/assistantTools';
 import { WorkspaceOverlay } from '../workspace/WorkspaceOverlay';
 import { WorkspacesMenu } from '../workspace/WorkspacesMenu';
 
 export function AppShell() {
+  // The dock registers with the workspaces before any opens (a layout effect runs before every
+  // component's effects): a frame's welcome says it is docked, and its Ctrl+/ (assistant.dock)
+  // is the same key in the app's page.
+  useLayoutEffect(() => setWorkspaceDock({ key: () => dockShortcut() }), []);
   useEffect(() => {
     registerAllIslands();
     window.__CFD_PLUGIN_UI__ = pluginUi;

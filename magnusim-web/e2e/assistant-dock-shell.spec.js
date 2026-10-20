@@ -252,6 +252,21 @@ test.describe('the dock', () => {
     await expect(page.locator('#top-header .top-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
   });
 
+  test('in a workspace: its page is docked, and Ctrl+/ typed in its frame opens the dock; typed in the dock, it closes and gives the frame the keyboard back', async ({ page }) => {
+    await openWorkspace(page);
+    const ws = page.frameLocator('#workspace-frame');
+    await expect(ws.locator('#docked')).toHaveText('yes');
+    await ws.locator('#counter').click();
+    await expect(page.locator('#workspace-frame')).toBeFocused();
+    // The key never reaches the app's page: the frame's SDK sends it as assistant.dock.
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeVisible();
+    await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('#assistant-dock'))).toBe(true);
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeHidden();
+    await expect(page.locator('#workspace-frame')).toBeFocused();
+  });
+
   test('with the dock open, a toast and the dock do not overlap, down to 720 px wide', async ({ page }) => {
     await openFromHome(page);
     for (const width of [1280, 760, 720]) {

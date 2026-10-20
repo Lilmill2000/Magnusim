@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDock, DONE_PILL_MS, dockSnapshot, focusDock, openDock, resetDockForTests, setDockPill, subscribeDock, toggleDock } from './dockState';
+import { closeDock, DOCK_OPEN_KEY, DONE_PILL_MS, dockSnapshot, focusDock, openDock, resetDockForTests, setDockPill, subscribeDock, toggleDock } from './dockState';
 
 const $ = (sel: string) => document.querySelector(sel) as HTMLElement;
 
@@ -83,6 +83,60 @@ describe("the dock's place: open, pill, closed", () => {
     expect(seq()).toBe(2);
     openDock({ focus: false });
     expect(seq()).toBe(2);
+  });
+});
+
+describe('open or closed is remembered for this viewer', () => {
+  /** A reload: the module's state goes, localStorage stays. */
+  function reload(kept: string | null): void {
+    resetDockForTests();
+    if (kept) localStorage.setItem(DOCK_OPEN_KEY, kept);
+  }
+
+  it("the person's open and close are kept, and a reload opens it again without taking the keyboard", () => {
+    openDock();
+    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBe('open');
+    closeDock();
+    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBe('closed');
+    toggleDock();
+    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBe('open');
+    reload('open');
+    expect(dockSnapshot()).toMatchObject({ open: true, size: 'open', focusSeq: 0 });
+    reload('closed');
+    expect(dockSnapshot()).toMatchObject({ open: false, size: 'closed' });
+    reload(null);
+    expect(dockSnapshot().open).toBe(false);
+  });
+
+  it("an opening that isn't the person's choice (a question) is not kept", () => {
+    openDock({ focus: false, remember: false });
+    expect(dockSnapshot().open).toBe(true);
+    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBeNull();
+  });
+
+  it('works without storage', () => {
+    const boom = () => {
+      throw new DOMException('blocked', 'SecurityError');
+    };
+    const spies = [
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(boom),
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(boom),
+      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(boom),
+    ];
+    reload(null);
+    expect(dockSnapshot().open).toBe(false);
+    openDock();
+    expect(dockSnapshot().open).toBe(true);
+    closeDock();
+    expect(dockSnapshot().open).toBe(false);
+    for (const s of spies) s.mockRestore();
+    const gone = vi.spyOn(globalThis, 'localStorage', 'get').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    reload(null);
+    toggleDock();
+    expect(dockSnapshot().open).toBe(true);
+    gone.mockRestore();
   });
 });
 

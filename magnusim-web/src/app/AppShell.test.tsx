@@ -25,7 +25,11 @@ const relay = vi.hoisted(() => {
   return { stop, start: vi.fn(() => stop) };
 });
 vi.mock('../assistant/relay', () => ({ startAssistantRelay: relay.start }));
+// The key a workspace frame forwards (its own tests: src/assistant/dock/toggle.test.ts).
+const toggle = vi.hoisted(() => ({ shortcut: vi.fn(() => true) }));
+vi.mock('../assistant/dock/toggle', async (actual) => ({ ...(await actual<typeof import('../assistant/dock/toggle')>()), dockShortcut: toggle.shortcut }));
 
+import { workspaceDock } from '../workspace/assistantTools';
 import { AppShell } from './AppShell';
 
 describe("AppShell and the Assistant's page relay", () => {
@@ -56,6 +60,18 @@ describe("AppShell and the Assistant's dock", () => {
     expect(document.getElementById('assistant-dock')).toBe(dock);
     view.unmount();
     expect(document.getElementById('assistant-dock')).toBeNull();
+  });
+
+  it("registers with the workspaces at mount: a frame's Ctrl+/ is the dock's key; it goes with the shell", () => {
+    expect(workspaceDock()).toBeNull();
+    const view = render(<AppShell />);
+    const dock = workspaceDock();
+    expect(dock).not.toBeNull();
+    toggle.shortcut.mockClear();
+    dock?.key();
+    expect(toggle.shortcut).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(workspaceDock()).toBeNull();
   });
 
   it('uses the root main.tsx made', () => {

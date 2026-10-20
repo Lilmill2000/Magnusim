@@ -1,10 +1,15 @@
 /**
- * The dock's state (phase 4 spec 1.3, 2.2, 5.2-5.5, 6.1), one module store read with
- * useSyncExternalStore as the Assistant's status is (status.ts). A publish replaces the snapshot.
+ * What the dock shows (phase 4 spec 1.3, 2.2, 4.4, 5.2-5.5, 6.1): the questions shown in this
+ * tab, the conversations, the turns watched, where the person is, and the drafts. One module
+ * store read with useSyncExternalStore as the Assistant's status is (status.ts). A publish
+ * replaces the snapshot.
  *
- * - **Size.** `open` while the person has it open (or a question opened it); else `pill` while
- *   something is worth seeing (a question shown in this tab, a running turn it follows, or an
- *   end not yet seen: DONE_PILL_MS, or until the dock opens); else `closed`.
+ * - **Open, pill or closed** belong to dockState.ts, the one owner; this store only asks it.
+ *   A question shown in this tab opens the dock (without taking the keyboard: its card does,
+ *   spec 4.4); closed while it waits, the pill asks it. Else the pill follows the newest
+ *   running turn watched, with its Stop when one is set (setTurnStopper); else an end that
+ *   came while the dock was closed shows `done` until dockState lets it go (120 s, or the
+ *   dock opens). The pill's words are pill.ts's.
  * - **Conversations.** The list is the server's (GET /api/assistant/conversations), read again on
  *   request; the newest answer wins. The dock shows the conversation the person picked, else the
  *   one this tab showed last in this context (sessionStorage), else the context's newest, else
@@ -15,19 +20,18 @@
  *   watch (its snapshot, the turn's past) is announced only for a turn this dock just started.
  *   An unwatched turn's view is dropped.
  * - **What the page keeps** (per viewer, never needed for correctness; every read and write in
- *   try/catch): open or closed (localStorage), the conversation shown and each conversation's
- *   draft (sessionStorage).
+ *   try/catch): the conversation shown and each conversation's draft (sessionStorage). Open or
+ *   closed is dockState's (localStorage).
  */
 import { useSyncExternalStore } from 'react';
 import { assistantGet, RemoteError } from '../api';
 import type { ConversationRow, ConversationsAnswer, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
-import { LIVE_ITS_WORKSPACE } from './copy';
+import { LIVE_ITS_WORKSPACE, pillDone, pillQuestion, pillRunning } from './copy';
+import { dockSnapshot, openDock, setDockPill, subscribeDock, type DockPill } from './dockState';
 import { followTurn, type FollowSink, type TurnFollower } from './follow';
 import { createAnnouncer, liveMessagesOf, type Announcer } from './live';
-import { applyEvents, applySummary, emptyTurnView, fillDroppedText, isEnded, markGone, type EndState, type TurnView } from './turnView';
-
-export type DockSize = 'open' | 'pill' | 'closed';
-export type PillKind = 'question' | 'running' | 'done';
+import { countersOf, footerWords } from './pill';
+import { applyEvents, applySummary, emptyTurnView, fillDroppedText, isEnded, markGone, turnPhase, type EndState, type TurnView } from './turnView';
 
 /** Where the person is: a project (or Home, null) and the workspace open in this tab, by name. */
 export interface DockContext {
@@ -41,14 +45,9 @@ export interface ConversationsState {
   error: string | null;
 }
 
-export interface DockSnapshot {
-  size: DockSize;
-  /** What the pill shows while `size` is 'pill' (null otherwise). */
-  pill: PillKind | null;
+export interface DockStoreSnapshot {
   /** Questions shown as cards in this tab, oldest first (their gate ids). */
   questions: readonly string[];
-  /** The newest end the person hasn't seen (the pill's "done"). */
-  unseenEnd: { turn: string; state: EndState } | null;
   context: DockContext;
   conversations: ConversationsState;
   /** The conversation shown; null: a new one. */
@@ -57,35 +56,31 @@ export interface DockSnapshot {
   turns: Readonly<Record<string, TurnView>>;
 }
 
-/** How long an end not yet seen keeps the pill. */
-export const DONE_PILL_MS = 120_000;
 export const CONVERSATIONS_PATH = '/api/assistant/conversations';
 export const STORAGE_KEYS = Object.freeze({
-  open: 'mg.assistant.dock.open',
   conv: 'mg.assistant.dock.conv',
   draftPrefix: 'mg.assistant.dock.draft.',
 });
 
 // ---------------------------------------------------------------- storage (a convenience only)
 
-type Area = 'local' | 'session';
-function area(which: Area): Storage | null {
+function session(): Storage | null {
   try {
-    return which === 'local' ? globalThis.localStorage ?? null : globalThis.sessionStorage ?? null;
+    return globalThis.sessionStorage ?? null;
   } catch {
     return null;
   }
 }
-function readKey(which: Area, key: string): string | null {
+function readKey(key: string): string | null {
   try {
-    return area(which)?.getItem(key) ?? null;
+    return session()?.getItem(key) ?? null;
   } catch {
     return null;
   }
 }
-function writeKey(which: Area, key: string, value: string | null): void {
+function writeKey(key: string, value: string | null): void {
   try {
-    const s = area(which);
+    const s = session();
     if (!s) return;
     if (value === null) s.removeItem(key);
     else s.setItem(key, value);
@@ -105,10 +100,16 @@ interface Watch {
   knownEnded: boolean;
 }
 
-let personOpen = false;
 let questions: string[] = [];
-let unseenEnd: DockSnapshot['unseenEnd'] = null;
-let unseenTimer: ReturnType<typeof setTimeout> | null = null;
+/** Each question's title, for the pill. */
+const questionTitles = new Map<string, string>();
+/** An end that came while the dock was closed, waiting for a question or a running turn to go. */
+let unseenEnd: { turn: string; state: EndState } | null = null;
+/** Ends a running turn (the pill's Stop); none: the pill has no Stop. */
+let stopper: ((turn: string) => void) | null = null;
+/** The pill this store last gave dockState, and what it said (so an unchanged one isn't sent again). */
+let lastPill: { key: string; pill: DockPill } | null = null;
+let offDock: (() => void) | null = null;
 let context: DockContext = { project_id: null, workspace: null };
 let conversations: ConversationsState = { state: 'idle', list: [], error: null };
 let shown: string | null = null;
@@ -122,7 +123,7 @@ let announcer: Announcer | null = null;
 let started = false;
 
 const listeners = new Set<() => void>();
-let snap: DockSnapshot = build();
+let snap: DockStoreSnapshot = build();
 
 function running(id: string): boolean {
   const v = turns[id];
@@ -131,77 +132,114 @@ function running(id: string): boolean {
   return !w.knownEnded || v.lastSeq > 0 || v.summary !== null;
 }
 
-function build(): DockSnapshot {
-  const anyRunning = Object.keys(turns).some(running);
-  const pill: PillKind | null = questions.length ? 'question' : anyRunning ? 'running' : unseenEnd ? 'done' : null;
-  const size: DockSize = personOpen || questions.length ? 'open' : pill ? 'pill' : 'closed';
-  return { size, pill: size === 'pill' ? pill : null, questions, unseenEnd, context, conversations, shown, turns };
+function build(): DockStoreSnapshot {
+  return { questions, context, conversations, shown, turns };
 }
 
 function publish(): void {
   snap = build();
+  syncPill();
   for (const fn of [...listeners]) fn();
 }
 
-/** The open/closed choice remembered for this viewer, read once. */
+/** Starts listening to dockState: an opened dock has seen the end it would have shown. */
 function start(): void {
   if (started) return;
   started = true;
-  personOpen = readKey('local', STORAGE_KEYS.open) === 'open';
+  offDock = subscribeDock(() => {
+    if (dockSnapshot().open) unseenEnd = null;
+  });
   snap = build();
 }
 
-export function dockSnapshot(): DockSnapshot {
+export function dockStoreSnapshot(): DockStoreSnapshot {
   start();
   return snap;
 }
 
-export function subscribeDock(fn: () => void): () => void {
+export function subscribeDockStore(fn: () => void): () => void {
   listeners.add(fn);
   return () => {
     listeners.delete(fn);
   };
 }
 
-export function useDock(): DockSnapshot {
-  return useSyncExternalStore(subscribeDock, dockSnapshot, dockSnapshot);
+export function useDockStore(): DockStoreSnapshot {
+  return useSyncExternalStore(subscribeDockStore, dockStoreSnapshot, dockStoreSnapshot);
 }
 
-// ---------------------------------------------------------------- open, pill, closed
+// ---------------------------------------------------------------- the pill (dockState shows it)
 
-function clearUnseen(): void {
-  if (unseenTimer) clearTimeout(unseenTimer);
-  unseenTimer = null;
-  unseenEnd = null;
+/** The newest running turn watched, if any. */
+function newestRunning(): string | null {
+  const ids = Object.keys(turns);
+  for (let i = ids.length - 1; i >= 0; i -= 1) if (running(ids[i])) return ids[i];
+  return null;
 }
 
-/** The person opens the dock: it stays open, and an end shown by the pill counts as seen. */
-export function openDock(): void {
+/**
+ * What the pill should say now: the oldest question, else the newest running turn, else an
+ * end not yet shown; undefined: leave dockState's pill as it is (a `done` it times out itself).
+ */
+function wantedPill(): { key: string; pill: DockPill } | null | undefined {
+  if (questions.length) {
+    const title = questionTitles.get(questions[0]) ?? '';
+    return { key: `question\n${questions[0]}\n${title}`, pill: { kind: 'question', text: pillQuestion(title) } };
+  }
+  const id = newestRunning();
+  if (id) {
+    const v = turns[id];
+    const text = pillRunning(footerWords(turnPhase(v), workspaceName()), countersOf(v));
+    const stop = stopper;
+    return {
+      key: `running\n${id}\n${text}\n${stop ? 'stop' : ''}`,
+      pill: stop ? { kind: 'running', text, onStop: () => stop(id) } : { kind: 'running', text },
+    };
+  }
+  if (unseenEnd) {
+    const end = unseenEnd;
+    unseenEnd = null;
+    return { key: `done\n${end.turn}\n${end.state}`, pill: { kind: 'done', text: pillDone(end.state) } };
+  }
+  return dockSnapshot().pill?.kind === 'done' ? undefined : null;
+}
+
+function syncPill(): void {
+  const want = wantedPill();
+  if (want === undefined) return;
+  const current = dockSnapshot().pill;
+  if (want === null) {
+    lastPill = null;
+    if (current) setDockPill(null);
+    return;
+  }
+  if (lastPill && lastPill.key === want.key && current === lastPill.pill) return;
+  lastPill = want;
+  setDockPill(want.pill);
+}
+
+/**
+ * How the pill's Stop ends a running turn (the composer's Stop, the same request); null: the
+ * pill shows no Stop.
+ */
+export function setTurnStopper(fn: ((turn: string) => void) | null): void {
   start();
-  personOpen = true;
-  clearUnseen();
-  writeKey('local', STORAGE_KEYS.open, 'open');
+  stopper = fn;
   publish();
 }
 
-/** The person closes the dock: the pill while something is worth seeing, else nothing. */
-export function closeDock(): void {
-  start();
-  personOpen = false;
-  writeKey('local', STORAGE_KEYS.open, 'closed');
-  publish();
-}
+// ---------------------------------------------------------------- questions
 
-export function toggleDock(): void {
-  if (dockSnapshot().size === 'open') closeDock();
-  else openDock();
-}
-
-/** A question card shows in this tab: the dock opens for it. */
-export function questionShown(gate: string): void {
+/**
+ * A question card shows in this tab (`title`: its GateView title, for the pill): the dock
+ * opens for it, without taking the keyboard (the card does) or counting as the person's choice.
+ */
+export function questionShown(gate: string, title: string): void {
   start();
   if (questions.includes(gate)) return;
   questions = [...questions, gate];
+  questionTitles.set(gate, title);
+  if (!dockSnapshot().open) openDock({ focus: false, remember: false });
   publish();
 }
 
@@ -209,18 +247,13 @@ export function questionShown(gate: string): void {
 export function questionClosed(gate: string): void {
   if (!questions.includes(gate)) return;
   questions = questions.filter((g) => g !== gate);
+  questionTitles.delete(gate);
   publish();
 }
 
-function endSeen(turn: string, state: EndState): void {
-  if (snap.size === 'open') return;
-  clearUnseen();
-  unseenEnd = { turn, state };
-  unseenTimer = setTimeout(() => {
-    unseenTimer = null;
-    unseenEnd = null;
-    publish();
-  }, DONE_PILL_MS);
+/** A watched turn ended: seen when the dock is open, else the pill says so. */
+function endCame(turn: string, state: EndState): void {
+  unseenEnd = dockSnapshot().open ? null : { turn, state };
 }
 
 // ---------------------------------------------------------------- context and conversations
@@ -241,10 +274,10 @@ export function chooseConversation(list: readonly ConversationRow[], ctx: DockCo
 
 function choose(): void {
   if (picked) return;
-  const next = chooseConversation(conversations.list, context, readKey('session', STORAGE_KEYS.conv));
+  const next = chooseConversation(conversations.list, context, readKey(STORAGE_KEYS.conv));
   if (next !== shown) {
     shown = next;
-    if (next) writeKey('session', STORAGE_KEYS.conv, next);
+    if (next) writeKey(STORAGE_KEYS.conv, next);
   }
 }
 
@@ -267,7 +300,7 @@ export function showConversation(id: string | null): void {
   start();
   picked = true;
   shown = id;
-  writeKey('session', STORAGE_KEYS.conv, id);
+  writeKey(STORAGE_KEYS.conv, id);
   publish();
 }
 
@@ -308,14 +341,14 @@ export function draftOf(conv: string | null): string {
   const k = draftKey(conv);
   const mem = drafts.get(k);
   if (mem !== undefined) return mem;
-  return readKey('session', k) ?? '';
+  return readKey(k) ?? '';
 }
 
 export function setDraft(conv: string | null, text: string): void {
   const k = draftKey(conv);
   if (text) drafts.set(k, text);
   else drafts.delete(k);
-  writeKey('session', k, text || null);
+  writeKey(k, text || null);
 }
 
 // ---------------------------------------------------------------- turns
@@ -357,7 +390,7 @@ function onData(id: string, events: TurnEvent[], summary?: SlimTurnSummary | Tur
   // A replay (events it has, a summary it had) changes nothing: no render.
   if (v === before) return;
   setTurn(id, v);
-  if (wasRunning && isEnded(v) && v.end) endSeen(id, v.end.state);
+  if (wasRunning && isEnded(v) && v.end) endCame(id, v.end.state);
   publish();
 }
 
@@ -405,16 +438,20 @@ export function keepTurn(id: string): () => void {
   return w ? w.follower.keep() : () => undefined;
 }
 
-/** Tests only: a fresh page. */
+/** Tests only: a fresh page (dockState has its own, resetDockForTests). */
 export function resetDockStoreForTests(): void {
   for (const w of watches.values()) w.follower.close();
   watches.clear();
   drafts.clear();
-  clearUnseen();
+  offDock?.();
+  offDock = null;
+  unseenEnd = null;
+  stopper = null;
+  lastPill = null;
   announcer?.dispose();
   announcer = null;
-  personOpen = false;
   questions = [];
+  questionTitles.clear();
   context = { project_id: null, workspace: null };
   conversations = { state: 'idle', list: [], error: null };
   shown = null;

@@ -1326,8 +1326,8 @@ test("the frame offers to undo a turn that changed the counter: the app holds th
       return [...m.workspaceToolsSnapshot().undo.values()].map((o) => [o.turn, o.label, o.scope.workspace]);
     });
   const undo = (id) => page.evaluate(async (turn) => (await import('/src/workspace/assistantTools.ts')).undoWorkspaceTurn(turn), id);
-  // No panel in the app yet: the page is not docked.
-  await expect(w.frame.locator('#docked')).toHaveText('no');
+  // The app has its Assistant panel: the page is docked.
+  await expect(w.frame.locator('#docked')).toHaveText('yes');
   // A turn that only reads: nothing to undo.
   fake.reply({ tools: [{ name: `${PLUGIN}__get_count`, input: {} }] }, { text: 'It is 0.' });
   const read = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });

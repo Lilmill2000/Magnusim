@@ -1,6 +1,8 @@
 /**
- * The dock's place on screen (chat dock spec 1.3, 2.9): open, a pill, or closed, and what the
- * pill says. One module store, read with useSyncExternalStore; a publish replaces the snapshot.
+ * The dock's place on screen (chat dock spec 1.3, 2.9, 6.1): open, a pill, or closed, and what
+ * the pill says. The one owner of these: the conversation store (store.ts) opens the dock for a
+ * question and sets the pill through openDock and setDockPill. One module store, read with
+ * useSyncExternalStore; a publish replaces the snapshot.
  *
  * - `open`: the person opened it (a toggle button, Ctrl+/, the pill), or a question arrived.
  * - `pill`: closed while something is worth seeing (setDockPill): a running request, a
@@ -8,6 +10,9 @@
  * - `closed`: nothing on screen; the header button is the way in.
  *
  * The pill also drives the toggle buttons' badge (toggle.ts), open or not.
+ *
+ * Open or closed is remembered for this viewer (localStorage DOCK_OPEN_KEY, read once, every
+ * read and write in try/catch): a reload opens it again, without taking the keyboard.
  *
  * Focus: opening remembers where the keyboard was (the opener) and asks the shell to focus
  * the dock's entry (DockShell: a `[data-dock-autofocus]` element, else the composer, else
@@ -41,6 +46,8 @@ export interface DockSnapshot {
 
 /** How long a `done` pill stays when the dock isn't opened (2.9). */
 export const DONE_PILL_MS = 120_000;
+/** Where this viewer's open or closed is kept (6.1): 'open' or 'closed'. */
+export const DOCK_OPEN_KEY = 'mg.assistant.dock.open';
 
 const BADGE: Record<DockPillKind, DockBadge> = { running: 'working', question: 'question', done: 'done' };
 
@@ -51,7 +58,38 @@ function make(open: boolean, pill: DockPill | null, focusSeq: number): DockSnaps
 let snap: DockSnapshot = make(false, null, 0);
 let opener: HTMLElement | null = null;
 let doneTimer: ReturnType<typeof setTimeout> | null = null;
+let started = false;
 const listeners = new Set<() => void>();
+
+function storage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps the person's choice; blocked or full storage changes nothing else. */
+function remember(open: boolean): void {
+  try {
+    storage()?.setItem(DOCK_OPEN_KEY, open ? 'open' : 'closed');
+  } catch {
+    /* the dock works without it */
+  }
+}
+
+/** The choice remembered for this viewer, read once. */
+function start(): void {
+  if (started) return;
+  started = true;
+  let kept: string | null = null;
+  try {
+    kept = storage()?.getItem(DOCK_OPEN_KEY) ?? null;
+  } catch {
+    kept = null;
+  }
+  if (kept === 'open' && !snap.open) snap = make(true, snap.pill, snap.focusSeq);
+}
 
 function publish(next: DockSnapshot): void {
   snap = next;
@@ -59,6 +97,7 @@ function publish(next: DockSnapshot): void {
 }
 
 export function dockSnapshot(): DockSnapshot {
+  start();
   return snap;
 }
 
@@ -100,9 +139,13 @@ function rememberOpener(from?: HTMLElement | null): void {
 /**
  * Opens the dock and gives it the keyboard. `from`: the control that opened it (a toggle
  * button), when the browser may not have focused it on click; else wherever the keyboard is.
+ * `focus: false`: the keyboard stays (a question's card takes it itself). `remember: false`:
+ * not the person's choice (a question opened it), so a reload doesn't open it again.
  */
-export function openDock(opts: { from?: HTMLElement | null; focus?: boolean } = {}): void {
+export function openDock(opts: { from?: HTMLElement | null; focus?: boolean; remember?: boolean } = {}): void {
+  start();
   rememberOpener(opts.from);
+  if (opts.remember !== false) remember(true);
   // A done pill is seen once the dock opens.
   const pill = snap.pill && snap.pill.kind === 'done' ? null : snap.pill;
   if (!pill) clearDoneTimer();
@@ -111,6 +154,7 @@ export function openDock(opts: { from?: HTMLElement | null; focus?: boolean } = 
 
 /** The dock is open and the keyboard is elsewhere: it goes to the dock's entry. */
 export function focusDock(from?: HTMLElement | null): void {
+  start();
   if (!snap.open) {
     openDock({ from });
     return;
@@ -141,7 +185,9 @@ function visibleToggle(): HTMLElement | null {
  * overlay, which gives it to the frame once the panel hides.
  */
 export function closeDock(): void {
+  start();
   if (!snap.open) return;
+  remember(false);
   if (focusInDock()) {
     const back = canTakeFocus(opener) ? opener : document.body.classList.contains('workspace-open') ? null : visibleToggle();
     if (back) back.focus({ preventScroll: true });
@@ -152,6 +198,7 @@ export function closeDock(): void {
 
 /** A toggle button's click: open, or close when open. */
 export function toggleDock(from?: HTMLElement | null): void {
+  start();
   if (snap.open) closeDock();
   else openDock({ from });
 }
@@ -161,6 +208,7 @@ export function toggleDock(from?: HTMLElement | null): void {
  * closed, and as the toggle buttons' badge. A `done` pill goes by itself after 120 s.
  */
 export function setDockPill(pill: DockPill | null): void {
+  start();
   clearDoneTimer();
   if (pill && pill.kind === 'done') {
     doneTimer = setTimeout(() => {
@@ -171,9 +219,15 @@ export function setDockPill(pill: DockPill | null): void {
   publish(make(snap.open, pill, snap.focusSeq));
 }
 
-/** Tests only: closed, no pill, no opener. */
+/** Tests only: a fresh page with nothing remembered (closed, no pill, no opener). */
 export function resetDockForTests(): void {
   clearDoneTimer();
   opener = null;
+  try {
+    storage()?.removeItem(DOCK_OPEN_KEY);
+  } catch {
+    /* nothing kept */
+  }
+  started = false;
   publish(make(false, null, 0));
 }
