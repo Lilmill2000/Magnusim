@@ -48,12 +48,12 @@ import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwne
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
 import type { Registry } from './registry.ts';
 import { ToolRunner, type CallAbort, type RunnerEvent } from './runner.ts';
-import { cleanText } from './sanitize.ts';
+import { checkPromptImages, cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
 import { isCloud } from './providers/index.ts';
-import { ProviderError, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
+import { ProviderError, type ImagePart, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
 import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agents/known.ts';
 import { runAgentTurn, type AgentEvent, type AgentRunTurn, type AgentTurnDeps, type AgentTurnSettings } from './agents/turn.ts';
@@ -96,6 +96,8 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
   | { type: 'end'; state: EndState; reason: string; message: string | null }
+  // A review round starts (loop.ts): the workspace's review prompt went to the model.
+  | { type: 'review'; round: number; of: number }
   // A coding agent's turn (phase 3 spec 5.5): the agent once ready, its plan, its own tools,
   // its permission requests, its mode and model.
   | AgentEvent
@@ -167,6 +169,8 @@ export interface TurnPageView {
   images: boolean | null;
   used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
   end?: { state: EndState; reason: string };
+  /** The review round it is in, once one started (loop.ts). */
+  review?: { round: number; of: number };
 }
 
 const STOPPED_TEXT = 'Stopped.';
@@ -189,6 +193,9 @@ export function plainModelText(text: string): string {
   return text.replace(STREAM_CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ''));
 }
 
+/** A coding agent's turn takes no pictures (its agent reads its own files). */
+export const AGENT_IMAGES_TEXT = "A coding agent's request can't carry pictures: send it without them.";
+
 export function newTurnId(now: number): string {
   return `t-${Math.max(0, Math.floor(now)).toString(36)}-${randomBytes(4).toString('hex')}`;
 }
@@ -196,6 +203,8 @@ export function newTurnId(now: number): string {
 interface TurnInit {
   id: string;
   prompt: string;
+  /** Its reference pictures, checked (sanitize.ts checkPromptImages); none when left out. */
+  promptImages?: readonly ImagePart[];
   conv: Conversation;
   tab: string | null;
   projectId: string | null;
@@ -223,12 +232,15 @@ export class Turn implements AnyTurn {
    */
   readonly answerKey: string = randomBytes(16).toString('hex');
   readonly prompt: string;
+  readonly promptImages: readonly ImagePart[];
   readonly conv: Conversation;
   readonly tab: string | null;
   readonly projectId: string | null;
   readonly simulationId: string | null;
   readonly settings: TurnSettings;
   readonly startedAt: number;
+  /** The review round it is in (setReview), null before the first. */
+  review: { round: number; of: number } | null = null;
   state: TurnState = 'starting';
   step = 0;
   calls = 0;
@@ -282,6 +294,7 @@ export class Turn implements AnyTurn {
   constructor(o: TurnInit) {
     this.id = o.id;
     this.prompt = o.prompt;
+    this.promptImages = Object.freeze([...(o.promptImages ?? [])]);
     this.conv = o.conv;
     this.tab = o.tab;
     this.projectId = o.projectId;
@@ -413,6 +426,14 @@ export class Turn implements AnyTurn {
 
   note(text: string): void {
     this.push({ type: 'note', text: cleanText(text, 500) });
+  }
+
+  /** A review round starts: logged, and its tab's page hears it (pageView's `review`). */
+  setReview(round: number, of: number): void {
+    if (this.ended) return;
+    this.review = { round, of };
+    this.push({ type: 'review', round, of });
+    this.changed();
   }
 
   setState(s: TurnState): void {
@@ -713,6 +734,7 @@ export class Turn implements AnyTurn {
         ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
         : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd },
       ...(ended ? { end: { state: this.state as EndState, reason: this.endReason ?? this.state } } : {}),
+      ...(this.review ? { review: { ...this.review } } : {}),
     };
   }
 }
@@ -1066,6 +1088,9 @@ export class TurnManager {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) return refuse(400, 'bad_text', 'Write what the Assistant should do.');
     if (text.length > TURN_LIMITS.textMax) return refuse(400, 'bad_text', `A prompt is at most ${TURN_LIMITS.textMax.toLocaleString('en-US')} characters.`);
+    // Reference pictures: checked as a tool result's images; they reach the model only once privacy allows the turn (loop.ts).
+    const pictures = checkPromptImages(body.images);
+    if (!pictures.ok) return refuse(400, pictures.code, pictures.message);
     const convId = optionalId(body.conversation);
     const tab = optionalId(body.tab);
     if (convId === false) return refuse(400, 'bad_conversation', 'That is not a conversation id.');
@@ -1085,6 +1110,7 @@ export class TurnManager {
     const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? settings.provider;
     if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
     if (isAgentChoice(provider)) {
+      if (pictures.images.length) return refuse(400, 'bad_images', AGENT_IMAGES_TEXT);
       const agentId = agentIdOf(provider);
       if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
       return this.startAgent({
@@ -1166,6 +1192,7 @@ export class TurnManager {
     const t = new Turn({
       id,
       prompt: text,
+      promptImages: pictures.images,
       conv,
       tab: boundTab,
       projectId: projectId || null,

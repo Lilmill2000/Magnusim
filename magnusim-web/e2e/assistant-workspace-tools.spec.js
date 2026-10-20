@@ -1496,3 +1496,57 @@ test('a local model that leaves out a call\'s string, list and boolean fields ha
   expect(ofType(e.events, 'tool_call')).toMatchObject([{ tool: `${PLUGIN}__label`, input_preview: '{"text":null}' }]);
   expect(ofType(e.events, 'tool_result')).toMatchObject([{ ok: true, summary: 'Cleared the label' }]);
 });
+
+test('review rounds the workspace asks for: after its edit the model gets the review prompt, round i of n; a round with no edit ends the turn; the frame hears the round; a reference picture goes with the prompt', async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  const prompt = 'Read the counter with get_count. If it is right, reply "Review: no changes" without calling add.';
+  const reg = await w.handle.evaluate((p) => window.__register({ review: { rounds: 3, prompt: p } }), prompt);
+  expect(reg).toMatchObject({ available: true });
+  const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const before = chats().length;
+  fake.reply(
+    { tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] },
+    { text: 'Added 2.' },
+    { tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] },
+    { text: 'Made it 3.' },
+    { tools: [{ name: `${PLUGIN}__get_count`, input: {} }] },
+    { text: 'Review: no changes' },
+  );
+  const t = await startTurn(request, host.base, { text: 'Make the counter 3, like the picture.', tab: w.tab, images: [{ media_type: 'image/png', data: PNG_1x1 }] });
+  const e = await t.ended();
+  expect([e.turn.state, e.turn.end_reason]).toEqual(['done', 'end_turn']);
+  // What the person sees: the counter the edits and the review made.
+  await expect(w.frame.locator('#counter')).toHaveText('3');
+  await expect(w.frame.locator('#calls')).toHaveText('add add get_count');
+  expect(ofType(e.events, 'review').map((x) => [x.round, x.of])).toEqual([
+    [1, 3],
+    [2, 3],
+  ]);
+  const sent = chats().slice(before);
+  expect(sent).toHaveLength(6);
+  // The review prompt is the newest user text of the request after each answer that ended a round.
+  const lastUserText = (r) => {
+    const m = r.body.messages.at(-1);
+    return m.role === 'user' ? m.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n') : '';
+  };
+  expect(lastUserText(sent[2])).toBe(`Review round 1 of 3: ${prompt}\nThe request came with a reference picture (in its first message): compare the result with it too.`);
+  expect(lastUserText(sent[4])).toMatch(/^Review round 2 of 3: /);
+  // The person's picture went with the prompt, in every request of the turn.
+  for (const r of sent) expect(r.userImages).toEqual([{ media_type: 'image/png', data: PNG_1x1 }]);
+  // The frame heard the round in the turn's frames.
+  await expect
+    .poll(() => w.handle.evaluate(() => window.__turns.filter((x) => x.review).map((x) => `${x.review.round}/${x.review.of}`).at(-1)), STEP)
+    .toBe('2/3');
+
+  // Without the review the same edit ends the turn at once.
+  await w.handle.evaluate(() => window.__register({ review: null }));
+  await expect.poll(async () => (await tabRow(request, w.tab))?.tools.length).toBe(TOOLS.length);
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }] }, { text: 'Added 1.' });
+  const t2 = await startTurn(request, host.base, { text: 'Add 1.', tab: w.tab });
+  const e2 = await t2.ended();
+  expect([e2.turn.state, ofType(e2.events, 'review').length]).toEqual(['done', 0]);
+  await expect(w.frame.locator('#counter')).toHaveText('4');
+});

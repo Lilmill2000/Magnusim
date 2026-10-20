@@ -4,7 +4,7 @@
  * turn in the Magnusim app on this PC and prints what happens.
  *
  *   node scripts/assistant-run.mjs [--port N] [--provider <id> | --agent <id>] [--tab auto|<id>]
- *                                  [--project <id>] [--conversation <id>] [--json] "prompt"
+ *                                  [--project <id>] [--conversation <id>] [--image <file>]... [--json] "prompt"
  *
  * It talks to the app's own routes over loopback (POST /api/assistant/turns, then the
  * long-poll GET /api/assistant/turns/:id). `--provider` goes to the app as it is: the app
@@ -26,6 +26,9 @@
  * An answer carries the turn's answer key (from the start's 202): only the program that
  * started a turn, or the app tab that shows its question, may answer it. A question for the
  * Magnusim window only (link_only) is shown here but answered there.
+ * `--image <file>` (up to 4) sends a PNG, JPEG or WebP reference picture with the prompt; the app
+ * checks it (at most 1.5 MB and 2000 px a side) and its privacy rules hold for it as for the prompt.
+ * A review round the workspace asked for prints as `review: round i of n`.
  * `--tab auto` is resolved by the app (the only connected tab). Ctrl+C stops the turn
  * (twice: leave at once).
  *
@@ -37,7 +40,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--provider <id> | --agent <id>] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--json] "prompt"
+export const HELP = `Usage: node scripts/assistant-run.mjs [--port N] [--provider <id> | --agent <id>] [--tab auto|<id>] [--project <id>] [--conversation <id>] [--image <file>]... [--json] "prompt"
 
 Runs one Assistant turn in the Magnusim app on this PC and prints what happens: the
 answer, each tool call (→) and its result (✓ or ✗, with the tool's hint under a failed
@@ -53,6 +56,8 @@ Ctrl+C stops the turn.
   --tab auto|<id>      bind the turn to an app tab's workspace (auto: the only connected one)
   --project <id>       the project the turn is about (without a tab)
   --conversation <id>  continue a conversation (its id is printed at the end)
+  --image <file>       a reference picture (PNG, JPEG or WebP, at most 1.5 MB and 2000 px
+                       a side) sent with the prompt; up to 4
   --json               print each event as one line of JSON
 
 Keep the Magnusim window visible when you start a turn. It may then be covered for up to 10 minutes between turns.
@@ -107,7 +112,7 @@ async function provenToken(port) {
 }
 
 export function parseArgs(argv) {
-  const o = { port: null, provider: null, tab: null, project: null, conversation: null, json: false, help: false, words: [], error: null };
+  const o = { port: null, provider: null, tab: null, project: null, conversation: null, images: [], json: false, help: false, words: [], error: null };
   const value = (i, name) => {
     const v = argv[i + 1];
     if (v === undefined || v.startsWith('--')) {
@@ -120,7 +125,12 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--json') o.json = true;
-    else if (a === '--port' || a === '--provider' || a === '--agent' || a === '--tab' || a === '--project' || a === '--conversation') {
+    else if (a === '--image') {
+      const v = value(i, a);
+      if (v === null) break;
+      i += 1;
+      o.images.push(v);
+    } else if (a === '--port' || a === '--provider' || a === '--agent' || a === '--tab' || a === '--project' || a === '--conversation') {
       const v = value(i, a);
       if (v === null) break;
       i += 1;
@@ -142,6 +152,29 @@ export function parseArgs(argv) {
     } else o.words.push(a);
   }
   return o;
+}
+
+/** The most pictures a turn carries (the app checks each one). */
+export const IMAGES_MAX = 4;
+const IMAGE_TYPES = Object.freeze({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' });
+
+/** `--image` files as the start's `images` ({media_type, data}), or {error} in words. The app checks what they hold. */
+export function readImages(files) {
+  if (files.length > IMAGES_MAX) return { error: `At most ${IMAGES_MAX} --image files go with a request.` };
+  const images = [];
+  for (const f of files) {
+    const ext = (/\.[^./\\]+$/.exec(f)?.[0] ?? '').toLowerCase();
+    const type = IMAGE_TYPES[ext];
+    if (!type) return { error: `${f}: --image takes a .png, .jpg, .jpeg or .webp file.` };
+    let bytes;
+    try {
+      bytes = readFileSync(f);
+    } catch (e) {
+      return { error: `${f} could not be read (${e?.code || e?.message || e}).` };
+    }
+    images.push({ media_type: type, data: bytes.toString('base64') });
+  }
+  return { images };
 }
 
 /** The app's port, picked as the app picks it (prefs.js listenPort: the saved port, then MAGNUSIM_PORT, then 8082). */
@@ -293,6 +326,11 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
     err(`${o.error || 'Write what the Assistant should do.'}\n\n${HELP}\n`);
     return 1;
   }
+  const pictures = readImages(o.images);
+  if (pictures.error) {
+    err(`${pictures.error}\n`);
+    return 1;
+  }
   const port = o.port ?? (await defaultPort());
   const api = (method, path, body) => call(port, method, path, body);
 
@@ -304,6 +342,7 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
     ...(o.provider ? { provider: o.provider } : {}),
     ...(tab ? { tab } : {}),
     ...(o.project ? { context: { project_id: o.project } } : {}),
+    ...(pictures.images.length ? { images: pictures.images } : {}),
   };
   // A coding agent's turn carries this account's proof (the app's per-launch token), only to an
   // app that proved it holds that token (never to whatever else answers on the port).
@@ -446,6 +485,9 @@ export async function main(argv = process.argv.slice(2), io = { stdin: process.s
             break;
           case 'note':
             if (!o.json) line(`note: ${e.text}`);
+            break;
+          case 'review':
+            if (!o.json) line(`review: round ${e.round} of ${e.of}`);
             break;
           case 'fallback':
             if (!o.json) line(`note: answered by ${e.to} instead of ${e.from}`);

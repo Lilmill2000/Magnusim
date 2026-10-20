@@ -45,7 +45,11 @@ let resets = 0;
 
 before(async () => {
   const router = new Router();
-  handle = routes.registerAssistantRoutes(router, { port: () => port });
+  // One project the tab tests bind to (the app's project list is not served here).
+  handle = routes.registerAssistantRoutes(router, {
+    port: () => port,
+    turns: { projects: async (id) => (id === 'p1' ? { id: 'p1', title: 'Counter project', created_at: '2026-10-01T10:00:00Z' } : null) },
+  });
   router.get('/api/compute-queue', (ctx) => ctx.sendJson(200, { ok: true, busy: false, items: [] }));
   handle.registry.addHostTool(hostTool('reset_all', { risk: 'destructive', title: 'Reset every counter', run: async () => ((resets += 1), { ok: true, summary: 'All counters reset' }) }));
   handle.registry.addHostTool(
@@ -197,6 +201,48 @@ describe('assistant-run.mjs', () => {
     // The rule lives on the server (resolveTab, for MCP too): the CLI keeps no copy of it.
     const src = readFileSync(CLI, 'utf8');
     assert.ok(!src.includes(TAB_HIDDEN_TEXT) && !src.includes('/api/assistant/tabs'), 'no copy of the tab rule');
+  });
+
+  it('--image sends the picture with the prompt (checked by the app); a review round prints "review: round i of n"', async () => {
+    const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    const dir = mkdtempSync(join(ROOT, 'pics-'));
+    const pic = join(dir, 'chip.png');
+    writeFileSync(pic, Buffer.from(PNG_1x1, 'base64'));
+    const none = { type: 'object', properties: {}, additionalProperties: false };
+    handle.registry.setWorkspace('T1', 'L1', {
+      plugin: 'ai-demo',
+      pluginName: 'Workspace demo',
+      workspace: 'Counter',
+      projectId: 'p1',
+      studyId: 's1',
+      tools: [{ name: 'add', title: 'Add', description: 'Adds one.', inputSchema: none, risk: 'edit' }],
+      review: { rounds: 2, prompt: 'Check the counter.' },
+      invoke: async () => ({ ok: true, data: { n: 1 }, summary: 'Added 1' }),
+    });
+    try {
+      fake.reply({ tools: [{ name: 'ai-demo__add', input: {} }] }, { text: 'Added.' }, { text: 'Review: no changes' });
+      const before = fake.requests().filter((x) => x.kind === 'chat').length;
+      const r = await cli(['--tab', 'T1', '--image', pic, 'Make it like this.']);
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /→ ai-demo__add \{\}\n✓ Added 1\nAdded\.\nreview: round 1 of 2\nReview: no changes\n$/);
+      const sent = fake.requests().filter((x) => x.kind === 'chat').slice(before);
+      assert.equal(sent.length, 3);
+      for (const x of sent) assert.deepEqual(x.userImages, [{ media_type: 'image/png', data: PNG_1x1 }]);
+    } finally {
+      handle.registry.setWorkspace('T1', 'L1', null);
+    }
+    // The file's kind, and how many: refused here; what it holds: refused by the app.
+    const gif = join(dir, 'chip.gif');
+    writeFileSync(gif, 'GIF89a');
+    let r = await cli(['--image', gif, 'x']);
+    assert.deepEqual([r.code, r.stderr.trim()], [1, `${gif}: --image takes a .png, .jpg, .jpeg or .webp file.`]);
+    r = await cli(['--image', pic, '--image', pic, '--image', pic, '--image', pic, '--image', pic, 'x']);
+    assert.deepEqual([r.code, r.stderr.trim()], [1, 'At most 4 --image files go with a request.']);
+    const fakePng = join(dir, 'text.png');
+    writeFileSync(fakePng, 'not a picture');
+    r = await cli(['--image', fakePng, 'x']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /^Picture 1 of 1: Only PNG, JPEG and WebP images can be sent\./);
   });
 
   it('--json prints one event per line; --help names the hold; bad options exit 1', async () => {

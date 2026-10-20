@@ -17,7 +17,8 @@
  *   so the model reads how to fix it; a result's summary is the log's, never the model's.
  * - checkImage: PNG, JPEG or WebP by their first bytes, ≤ 1.5 MB, ≤ 2000 px a side;
  *   checkImages: a result's images, ≤ 4: one that fails makes the call fail with why
- *   (`too_large` or `bad_result`), never dropped quietly.
+ *   (`too_large` or `bad_result`), never dropped quietly; checkPromptImages: a turn start's
+ *   reference pictures, ≤ 4, each as checkImage and of the type it declares.
  */
 import type { ImagePart, ToolResultPart } from './types.ts';
 
@@ -319,4 +320,39 @@ export function checkImages(
 /** A tool result part for the next user message (text as resultText, images already checked). */
 export function capResult(callId: string, tool: string, r: ResultBody, images: ImagePart[] = []): ToolResultPart {
   return { type: 'tool_result', callId, isError: !r.ok, text: resultText(tool, r), images: images.slice(0, IMAGE_CAPS.perResult) };
+}
+
+/** The media types a turn's reference picture may declare. */
+const PROMPT_IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const BASE64_TEXT = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/**
+ * A turn start's reference pictures (POST /api/assistant/turns `images`): at most 4 of
+ * `{media_type: 'image/png'|'image/jpeg'|'image/webp', data: <base64>}`, each checked as a tool
+ * result's (checkImage: its first bytes, ≤ 1.5 MB, ≤ 2000 px a side) and of the type it says.
+ * Absent (undefined or null) is none. Refused with `bad_images` or `images_too_large` and why.
+ */
+export function checkPromptImages(raw: unknown): { ok: true; images: ImagePart[] } | { ok: false; code: 'bad_images' | 'images_too_large'; message: string } {
+  if (raw === undefined || raw === null) return { ok: true, images: [] };
+  if (!Array.isArray(raw)) return { ok: false, code: 'bad_images', message: 'images is a list of {media_type, data}.' };
+  if (raw.length > IMAGE_CAPS.perResult) return { ok: false, code: 'images_too_large', message: `At most ${IMAGE_CAPS.perResult} pictures go with a request.` };
+  const images: ImagePart[] = [];
+  for (const [i, img] of raw.entries()) {
+    const what = `Picture ${i + 1} of ${raw.length}`;
+    const r = img && typeof img === 'object' && !Array.isArray(img) ? (img as { media_type?: unknown; data?: unknown }) : null;
+    if (!r || typeof r.media_type !== 'string' || !PROMPT_IMAGE_TYPES.has(r.media_type)) {
+      return { ok: false, code: 'bad_images', message: `${what}: media_type is image/png, image/jpeg or image/webp.` };
+    }
+    // Base64 of 1.5 MB is about 2 MB of text: anything longer is too large before it is decoded.
+    if (typeof r.data !== 'string' || !r.data) return { ok: false, code: 'bad_images', message: `${what}: data is the image as base64.` };
+    if (r.data.length > Math.ceil(IMAGE_CAPS.bytes / 3) * 4 + 4) {
+      return { ok: false, code: 'images_too_large', message: `${what}: the image is larger than ${IMAGE_CAPS.bytes / (1024 * 1024)} MB.` };
+    }
+    if (r.data.length % 4 !== 0 || !BASE64_TEXT.test(r.data)) return { ok: false, code: 'bad_images', message: `${what}: data is not base64.` };
+    const c = checkImage(Buffer.from(r.data, 'base64'));
+    if (!c.ok) return { ok: false, code: c.code === 'too_large' ? 'images_too_large' : 'bad_images', message: `${what}: ${c.error}` };
+    if (c.mediaType !== r.media_type) return { ok: false, code: 'bad_images', message: `${what}: it is ${c.mediaType}, not ${r.media_type}.` };
+    images.push({ type: 'image', mediaType: c.mediaType, base64: r.data, width: c.width, height: c.height });
+  }
+  return { ok: true, images };
 }

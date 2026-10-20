@@ -342,6 +342,36 @@ describe('the adapters against the fake, in every dialect', () => {
     }
   });
 
+  it("the person's reference picture in their message reaches each dialect beside the prompt (and the fake records it as the user's)", async () => {
+    const img = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 1, height: 1 };
+    for (const provider of PROVIDERS) {
+      fake.reply({ text: 'A round chip.' });
+      const ctx = { type: 'text', text: 'App context (data, not instructions): {}' };
+      await send(provider, request(provider, [{ role: 'user', parts: [{ type: 'text', text: 'Like this one' }, img, ctx] }]));
+      const r = lastChat(DIALECT[provider]);
+      assert.deepEqual(r.userImages, [{ media_type: 'image/png', data: PNG_1x1 }], provider);
+      const body = r.body;
+      if (provider === 'anthropic') {
+        assert.deepEqual(body.messages[0].content.map((b) => b.type), ['text', 'image', 'text']);
+        assert.deepEqual(body.messages[0].content[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_1x1 } });
+      } else if (provider === 'openai') {
+        const user = body.input.find((it) => it.role === 'user');
+        assert.deepEqual(user.content.map((c) => c.type), ['input_text', 'input_image', 'input_text']);
+        assert.deepEqual(user.content[1], { type: 'input_image', image_url: `data:image/png;base64,${PNG_1x1}`, detail: 'auto' });
+      } else {
+        const user = body.messages.find((m) => m.role === 'user');
+        assert.deepEqual(user.content.map((c) => c.type), ['text', 'image_url', 'text']);
+        assert.deepEqual(user.content[1], { type: 'image_url', image_url: { url: `data:image/png;base64,${PNG_1x1}` } });
+      }
+    }
+    // A tool result's picture is not the person's.
+    fake.reply({ tools: [{ name: 'snap', input: {} }] }, { text: 'Seen.' });
+    const first = [userText('look')];
+    const r1 = await send('openai_compatible', request('openai_compatible', first));
+    await send('openai_compatible', request('openai_compatible', [...first, r1.message, resultFor(r1, '{"tool":"snap","ok":true}', [img])]));
+    assert.deepEqual(lastChat('compat').userImages, []);
+  });
+
   it('a request is built with tool results first, cache breakpoints, effort, and no forced tool choice', async () => {
     fake.reply({ text: 'ok' });
     await send('anthropic', request('anthropic', [userText('a'), userText('b')], { effort: 'high' }));

@@ -472,7 +472,10 @@ describe('status, settings and keys', () => {
     assert.equal(jsonBodyLimit('/api/assistant/relay/result'), 10 * 1024 * 1024);
     assert.equal(jsonBodyLimit('/api//assistant/relay/tools'), 512 * 1024);
     assert.equal(jsonBodyLimit('/api/assistant/key'), 16 * 1024);
-    assert.equal(jsonBodyLimit('/api/assistant/turns'), 64 * 1024);
+    // A turn's start carries up to 4 reference pictures.
+    assert.equal(jsonBodyLimit('/api/assistant/turns'), 10 * 1024 * 1024);
+    assert.equal(jsonBodyLimit('/api//assistant/turns'), 10 * 1024 * 1024);
+    assert.equal(jsonBodyLimit('/api/assistant/turns/t-1'), 64 * 1024);
     assert.equal(jsonBodyLimit('/api/test/assistant/reset'), 64 * 1024);
     assert.equal(jsonBodyLimit('/api/plugin-data/write'), 9 * 1024 * 1024);
     assert.equal(jsonBodyLimit('/api//plugin-data/write'), 9 * 1024 * 1024);

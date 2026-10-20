@@ -27,7 +27,10 @@
  *                                        cost_usd} or {ok:false, code, error}; 400 when it can't
  *                                        start; 409 while one runs. For agent:<id>: the agent Test
  *                                        with a message (as /agents/test, with its launch proof)
- *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?}
+ *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
+ *                                        images?:[{media_type, data}]} (images: ≤ 4 PNG, JPEG or WebP
+ *                                        reference pictures as base64, each ≤ 1.5 MB and 2000 px a
+ *                                        side; 400 bad_images / images_too_large; none on an agent:<id>)
  *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
  *                                        an app tab's id, or 'auto' for the only connected one.

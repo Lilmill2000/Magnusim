@@ -34,7 +34,8 @@
  *                                  must not register again (a new frame may)
  * POSTs from the page (assistant-routes.ts; each 409 no_channel without a live link):
  *   /relay/tools    {link, rev, epoch?, workspace:{project_id, plugin, workspace, title?, study_id},
- *                   tools, guide?} → {ok, available:true, accepted, refused, epoch}; tools []
+ *                   tools, guide?, review?:{rounds 1-5, prompt ≤ 1500}} → {ok, available:true,
+ *                   accepted, refused, epoch}; tools []
  *                   withdraws them. 409 stale_rev (a lower rev than the tab's last; the same
  *                   rev is taken again, e.g. on a new link), plugin_changed (the frame's pinned
  *                   epoch is no longer its plugin's), plugin_off (a fresh frame, no epoch,
@@ -95,7 +96,7 @@ import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
 import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
-import type { ProgressOptions, Registry, ToolOutcome } from './registry.ts';
+import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type ProgressOptions, type Registry, type ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
@@ -617,6 +618,11 @@ export class Relay {
     if (typeof rev !== 'number' || !Number.isSafeInteger(rev) || rev < 1) return refuse(400, 'bad_request', 'rev is a whole number from 1.');
     if (!Array.isArray(body.tools)) return refuse(400, 'bad_request', 'tools is a list ([] withdraws them).');
     if (body.guide !== undefined && body.guide !== null && typeof body.guide !== 'string') return refuse(400, 'bad_request', 'guide is text.');
+    // A review the page's bridge checked: {rounds 1-5, prompt}, the prompt text of at most 1500 characters.
+    const askedReview = body.review !== undefined && body.review !== null;
+    const rawPrompt = askedReview && typeof body.review === 'object' ? (body.review as { prompt?: unknown }).prompt : undefined;
+    const review = askedReview && typeof rawPrompt === 'string' && rawPrompt.length <= REVIEW_PROMPT_MAX ? reviewOf(body.review) : null;
+    if (askedReview && !review) return refuse(400, 'bad_request', `review is {rounds: 1 to ${REVIEW_ROUNDS_MAX}, prompt: text of at most ${REVIEW_PROMPT_MAX} characters}.`);
     if (body.epoch !== undefined && body.epoch !== null && typeof body.epoch !== 'string') return refuse(400, 'bad_request', 'epoch is the token an earlier answer gave.');
     const t = this.tabRec(rec.tab);
     if (rev < t.rev) return refuse(409, 'stale_rev', 'A newer list of this page was already received.', { rev: t.rev });
@@ -664,6 +670,7 @@ export class Relay {
       epoch: current,
       tools: body.tools,
       guide: typeof body.guide === 'string' ? body.guide : '',
+      review,
       invoke: (c) => this.invoke(tab, link, id, c),
       ready: () => {
         const r = this.regReady(tab, id);

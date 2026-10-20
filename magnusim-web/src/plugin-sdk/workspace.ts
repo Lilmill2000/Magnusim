@@ -554,6 +554,19 @@ export type AssistantResult = string | { text?: string; data?: unknown; images?:
  */
 export type AssistantHandler = (call: AssistantCall) => AssistantResult | Promise<AssistantResult>;
 
+/**
+ * Review rounds a page asks for when it registers its tools (unreleased, 1.9): when the model ends
+ * its answer in a turn bound to this tab after at least one of this page's `edit` or `destructive`
+ * tools succeeded, the app sends it `prompt` ("Review round 1 of 3: <prompt>") and the turn goes on.
+ * The turn ends when a round makes no successful edit, when `rounds` are used up, or at the turn's
+ * usual limits. `rounds`: 1 to 5. `prompt`: fixed text with no project data, at most 1500
+ * characters (its lines kept), like the guide.
+ */
+export interface AssistantReview {
+  rounds: number;
+  prompt: string;
+}
+
 /** The app's answer to ws.assistant.register (unreleased, 1.9). */
 export interface AssistantRegistration {
   /** False when the app's assistant could not take the tools now (`reason` says why); nothing changed then. */
@@ -594,6 +607,8 @@ export interface AssistantTurn {
   used: { steps: number; stepsCap: number; changes: number; changesCap: number; usd: number; usdCap: number };
   /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
   end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
+  /** The review round it is in (the page's `review` at registration): absent before its first round. */
+  review?: { round: number; of: number };
 }
 
 /**
@@ -611,12 +626,13 @@ export interface WorkspaceAssistant {
   /**
    * Set this page's tools and their handler in one step; register([], null) withdraws them.
    * `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation).
+   * `review`: review rounds at the end of a turn that edited through these tools (AssistantReview).
    * Resolves once the app has the list. available:false with reason 'not_connected' means the app could not
    * reach the assistant from this tab yet (for example the tab opened in the background): call register again
    * later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay.
    * Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
    */
-  register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string }): Promise<AssistantRegistration>;
+  register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; review?: AssistantReview }): Promise<AssistantRegistration>;
   /**
    * Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen
    * before register: the turns already running are told to a page once it offers tools. Returns a
@@ -1453,6 +1469,11 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         });
         const params: Record<string, unknown> = { tools: wire };
         if (opts && opts.guide !== undefined) params.guide = String(opts.guide);
+        // Only its two fields go; the host checks them.
+        if (opts && opts.review !== undefined && opts.review !== null) {
+          const r = opts.review as Partial<AssistantReview>;
+          params.review = { rounds: r.rounds, prompt: r.prompt };
+        }
         // Only a list that reached the host is the last one: the host counts each register it got
         // (one it refused too), and one that could not be copied never got there.
         let serial = 0;

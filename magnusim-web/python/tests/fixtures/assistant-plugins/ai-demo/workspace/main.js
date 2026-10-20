@@ -19,7 +19,8 @@
 //
 // What the e2e reads: #counter, #slow, #aborted, #ai-available ("yes" or "no") with
 // #ai-reason, #calls (the tools run, in order), #label, and window.__aiCalls;
-// window.__register() registers again. #turn-state reads "<state>: <title>" for the last turn
+// window.__register() registers again (window.__register({review}) with review rounds from then
+// on: {rounds, prompt}, or null for none; none at first). #turn-state reads "<state>: <title>" for the last turn
 // heard (running, or how it ended: done, stopped, failed, capped, or "ended" when the page did
 // not hear how), window.__turns every turn event; #stop stops that turn, #stop-answer says how
 // ("stopped", or "not stopped: <reason>"), and window.__stopTurn(id) stops any id.
@@ -208,6 +209,8 @@ async function handle(call) {
 }
 
 let lastReason = '';
+/** The review rounds this page asks for (window.__register({review})); none at first. */
+let review = null;
 async function register() {
   if (!ws.assistant) {
     $('ai-available').textContent = 'no';
@@ -216,7 +219,7 @@ async function register() {
   }
   let reg;
   try {
-    reg = await ws.assistant.register(TOOLS, handle, { guide: GUIDE });
+    reg = await ws.assistant.register(TOOLS, handle, review ? { guide: GUIDE, review } : { guide: GUIDE });
   } catch (e) {
     reg = { available: false, accepted: [], refused: [], reason: (e && e.code) || 'failed' };
   }
@@ -227,7 +230,10 @@ async function register() {
   return reg;
 }
 // The e2e registers again through this, as the page would on its own.
-window.__register = register;
+window.__register = (o) => {
+  if (o && Object.hasOwn(o, 'review')) review = o.review;
+  return register();
+};
 
 // The app could not reach its assistant from this tab yet (it opened in the background): again once shown.
 document.addEventListener('visibilitychange', () => {

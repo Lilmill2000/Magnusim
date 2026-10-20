@@ -314,6 +314,8 @@ export interface RelayTurnFrame {
   images: boolean | null;
   used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
   end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
+  /** The review round it is in (the workspace's review at registration); absent before its first. */
+  review?: { round: number; of: number };
 }
 
 export type RelayFrameType = keyof RelayFrameData;
@@ -353,6 +355,8 @@ export interface RelayToolsBody {
   workspace: RelayWorkspace;
   tools: RelayTool[];
   guide?: string;
+  /** The review rounds the workspace asked for (1 to 5, a prompt of at most 1500 characters). */
+  review?: { rounds: number; prompt: string };
 }
 
 /** Its 200 answer; refusals are 409 {code:'no_channel'|'stale_rev'|'plugin_off'|'plugin_changed'} or 400. */
