@@ -309,4 +309,35 @@ describe('reference pictures', () => {
     await settled(r2.turn);
     assert.deepEqual(u.provider.requests[0].req.messages[0].parts.map((p) => p.type), ['text', 'image', 'text']);
   });
+
+  it("they are kept for the request's window from its start: prompt_images p1..p4 on its summary, the bytes on the turn; none without", async () => {
+    const m = mk();
+    m.provider.script({ hold: 'h' });
+    const one = png(40, 30, 64);
+    const two = png(20, 10);
+    const heard = [];
+    const off = m.manager.onTurnChange((t, kind) => kind === 'started' && heard.push(t.summary().prompt_images));
+    const r = await startTurn(m, { text: 'Like these', images: [{ media_type: 'image/png', data: one }, { media_type: 'image/png', data: two }] });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    const refs = [
+      { n: 'p1', media_type: 'image/png', width: 40, height: 30 },
+      { n: 'p2', media_type: 'image/png', width: 20, height: 10 },
+    ];
+    assert.deepEqual(r.turn.summary().prompt_images, refs);
+    assert.deepEqual(heard, [refs], 'already on the summary its start announces');
+    assert.deepEqual(r.turn.imageOf('p1').bytes, Buffer.from(one, 'base64'));
+    assert.deepEqual(r.turn.imageOf('p2').bytes, Buffer.from(two, 'base64'));
+    assert.equal(r.turn.imageOf('p3'), null);
+    await m.provider.reached('h');
+    r.turn.stop();
+    await settled(r.turn);
+    off();
+
+    const plain = mk();
+    plain.provider.script({ text: 'Done.' });
+    const p = await startTurn(plain, { text: 'No pictures' });
+    await settled(p.turn);
+    assert.deepEqual(p.turn.summary().prompt_images, []);
+    assert.equal(p.turn.imageOf('p1'), null);
+  });
 });

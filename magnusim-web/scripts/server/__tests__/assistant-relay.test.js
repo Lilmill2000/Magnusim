@@ -501,6 +501,48 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual([remote.status, remote.json.reason], [403, 'remote']);
   });
 
+  it("a request's own pictures (POST images) show in its window: the summary's prompt_images p1.., their bytes from the image route; p3 404 image_gone", async () => {
+    const { m, s } = await setup();
+    const png = (w, h, pad = 0) => {
+      const b = Buffer.alloc(33 + pad, 5);
+      Buffer.from('89504e470d0a1a0a', 'hex').copy(b, 0);
+      b.writeUInt32BE(13, 8);
+      b.write('IHDR', 12, 'ascii');
+      b.writeUInt32BE(w, 16);
+      b.writeUInt32BE(h, 20);
+      return b.toString('base64');
+    };
+    const one = png(64, 48, 200);
+    const two = png(16, 8);
+    m.provider.script({ text: 'Like that.' });
+    const started = await s.post('/api/assistant/turns', {
+      text: 'Make it look like these',
+      images: [
+        { media_type: 'image/png', data: one },
+        { media_type: 'image/png', data: two },
+      ],
+    });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const id = started.json.turn;
+    await settled(s.handle.turns.get(id));
+    const poll = await s.get(`/api/assistant/turns/${id}`);
+    assert.equal(poll.status, 200, JSON.stringify(poll.json));
+    assert.deepEqual(poll.json.turn.prompt_images, [
+      { n: 'p1', media_type: 'image/png', width: 64, height: 48 },
+      { n: 'p2', media_type: 'image/png', width: 16, height: 8 },
+    ]);
+    const r = await fetch(`${s.base}/api/assistant/turns/${id}/images/p1`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(
+      ['content-type', 'x-content-type-options', 'cache-control'].map((h) => r.headers.get(h)),
+      ['image/png', 'nosniff', 'no-store'],
+    );
+    assert.deepEqual(Buffer.from(await r.arrayBuffer()), Buffer.from(one, 'base64'), 'the bytes as the person sent them');
+    assert.deepEqual(Buffer.from(await (await fetch(`${s.base}/api/assistant/turns/${id}/images/p2`)).arrayBuffer()), Buffer.from(two, 'base64'));
+    const gone = await s.get(`/api/assistant/turns/${id}/images/p3`);
+    assert.deepEqual([gone.status, gone.json.code], [404, 'image_gone']);
+  });
+
   it('a stream dropped mid-call fails it at once (tab_disconnected), before any later event; the registration goes dormant', async () => {
     const { m, s } = await setup();
     const { page, link } = await linkedPage(s);

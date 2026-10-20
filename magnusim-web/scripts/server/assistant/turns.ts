@@ -1474,6 +1474,9 @@ export class TurnManager {
       onEnded: (ended) => this.turnChanged(ended, 'ended'),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
+    // The person's pictures, kept for the window before anyone hears of the turn: its summary's
+    // prompt_images (p1..p4) and the image route serve them.
+    if (pictures.images.length) t.keepPromptImages(pictures.images);
     conv.running = id;
     conv.lastUsed = this.clock.now();
     this.turns().set(id, t);

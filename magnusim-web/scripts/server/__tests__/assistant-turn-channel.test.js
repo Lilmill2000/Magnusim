@@ -237,6 +237,41 @@ describe('the turn channel', () => {
     assert.deepEqual(b.events().map((e) => [e.seq, e.type]), all);
   });
 
+  it("a review round reaches the window as {type:'review', round, of} (the dock's turnView reads that shape)", async () => {
+    const m = mk();
+    const t = await heldTurn(m);
+    const ch = channel(m, { role: 'turn', turn: t.id, since: t.lastSeq() });
+    t.setReview(1, 3);
+    await flush(m);
+    t.setReview(2, 3);
+    await flush(m);
+    const reviews = ch.events().filter((e) => e.type === 'review');
+    assert.deepEqual(
+      reviews.map(({ seq, at, ...rest }) => (assert.equal(typeof seq, 'number'), assert.equal(typeof at, 'number'), rest)),
+      [
+        { type: 'review', round: 1, of: 3 },
+        { type: 'review', round: 2, of: 3 },
+      ],
+    );
+  });
+
+  it("a request's own pictures are on its snapshot's summary (prompt_images p1..), for the window's transcript", async () => {
+    const m = mk();
+    const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    m.provider.script({ hold: 'h' });
+    const r = await startTurn(m, { text: 'Like this', images: [{ media_type: 'image/png', data: PNG }] });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    const t = r.turn;
+    await m.provider.reached('h');
+    cleanups.push(async () => {
+      t.stop();
+      await settled(t);
+    });
+    const ch = channel(m, { role: 'turn', turn: t.id, since: 0 });
+    const [snap] = ch.of('snapshot');
+    assert.deepEqual(snap.turn.prompt_images, [{ n: 'p1', media_type: 'image/png', width: 1, height: 1 }]);
+  });
+
   it('through the hub and the relay: role turn on the `assistant` kind, for this PC only; another role 400', async () => {
     const m = mk();
     const s = await relayServer(m);
