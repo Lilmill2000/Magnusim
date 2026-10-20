@@ -20,9 +20,11 @@ function toastKind(kind: unknown): ToastKind {
 }
 
 /**
- * The app's toasts, bottom right, newest last: a plugin UI that failed to load
+ * The app's toasts, bottom left, newest last: a plugin UI that failed to load
  * (cfd:plugin-toast) and in-page plugin toasts (pluginUi.toast, cfd:toast).
- * Workspace toasts stay in the workspace overlay.
+ * The Assistant's dock has the bottom right. With a workspace open they sit above
+ * its chips' band and above the workspace's own toast (style.css, --ws-toast-reserve);
+ * workspace toasts stay in the workspace overlay.
  */
 export function ToastHost() {
   const [toasts, setToasts] = useState<AppToast[]>([]);

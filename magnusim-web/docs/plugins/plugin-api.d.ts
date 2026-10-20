@@ -689,7 +689,7 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/public' {
       kit: typeof Kit;
       /** What a kit PanelChrome's Done calls in the page (it closes the flyout). API 1.3. */
       panelDone: () => void;
-      /** An app toast, bottom right. An unknown kind is info. API 1.3. */
+      /** An app toast, bottom left. An unknown kind is info. API 1.3. */
       toast: (message: string, opts?: {
           kind?: PluginToastKind;
       }) => void;

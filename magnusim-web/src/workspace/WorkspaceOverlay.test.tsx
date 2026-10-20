@@ -921,11 +921,71 @@ describe('the workspace overlay', () => {
       await waitFor(() => expect(shown()).toHaveLength(0));
     });
 
-    it("keeps the old toast's place in style.css; the look is the kit's", () => {
+    it("sits bottom left above the chips' band in style.css; the look is the kit's", () => {
       const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
-      expect(ruleProps(appCss, '.ws-toast-slot')).toEqual({ position: 'absolute', right: '16px', bottom: '16px' });
+      expect(ruleProps(appCss, '.ws-toast-slot')).toEqual({ position: 'absolute', left: '16px', right: 'auto', bottom: '136px' });
       const old = cssRules(appCss).flatMap((r) => r.selectors).filter((s) => /\.ws-toast(?!-slot)/.test(s));
       expect(old).toEqual([]);
+    });
+
+    describe('the room app toasts leave for it (--ws-toast-reserve on body)', () => {
+      const reserve = () => document.body.style.getPropertyValue('--ws-toast-reserve');
+      /** A ResizeObserver jsdom lacks: the test resizes what it watches. */
+      let resize: (() => void) | null = null;
+      let height = 48;
+      beforeEach(() => {
+        height = 48;
+        resize = null;
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+          const h = this.classList.contains('ws-toast-slot') ? height : 0;
+          return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: h, width: 0, height: h, toJSON: () => ({}) } as DOMRect;
+        });
+        vi.stubGlobal(
+          'ResizeObserver',
+          class {
+            constructor(fn: () => void) {
+              resize = fn;
+            }
+            observe() {}
+            disconnect() {
+              resize = null;
+            }
+          },
+        );
+      });
+      afterEach(() => {
+        document.body.style.removeProperty('--ws-toast-reserve');
+      });
+
+      it("is the page toast's height + 8 px while it shows, follows its size, and goes when it closes", async () => {
+        const { frame } = await open();
+        const port = await connect(frame);
+        expect(reserve()).toBe('');
+        await call(port, 'ui.toast', { message: 'Saved the polar' });
+        await waitFor(() => expect(shown()).toHaveLength(1));
+        expect(reserve()).toBe('56px');
+        // A longer message wraps to two lines.
+        height = 70;
+        act(() => resize?.());
+        expect(reserve()).toBe('78px');
+        // A second message replaces the first: still one toast's room.
+        await call(port, 'ui.toast', { message: 'Second' });
+        await waitFor(() => expect(shown()[0]).toHaveTextContent('Second'));
+        expect(reserve()).toBe('78px');
+        (shown()[0].querySelector('.mgk-toast-close') as HTMLElement).click();
+        await waitFor(() => expect(shown()).toHaveLength(0));
+        expect(reserve()).toBe('');
+        expect(resize).toBeNull();
+      });
+
+      it('goes with the workspace while a toast shows', async () => {
+        const { view, frame } = await open();
+        const port = await connect(frame);
+        await call(port, 'ui.toast', { message: 'Saved' });
+        await waitFor(() => expect(reserve()).toBe('56px'));
+        view.unmount();
+        expect(reserve()).toBe('');
+      });
     });
 
     it('closing the overlay removes it', async () => {

@@ -1705,7 +1705,7 @@ The API object a plugin's register(host) gets as host.pluginUi. Everything regis
 - `panelsFor: (place: PanelPlace) => RegisterPanelOpts[]`: The panels registered for a place.
 - `kit: typeof Kit`: The plugin UI kit, the page's own copy (the same code a workspace imports as '@magnusim/plugin-ui'). API 1.3.
 - `panelDone: () => void`: What a kit PanelChrome's Done calls in the page (it closes the flyout). API 1.3.
-- `toast: (message: string, opts?: { kind?: PluginToastKind; }) => void`: An app toast, bottom right. An unknown kind is info. API 1.3.
+- `toast: (message: string, opts?: { kind?: PluginToastKind; }) => void`: An app toast, bottom left. An unknown kind is info. API 1.3.
 - `unitSystem: () => "metric" | "imperial"`: The units the open project shows (else the Settings choice). API 1.3.
 
 #### PluginUiModule

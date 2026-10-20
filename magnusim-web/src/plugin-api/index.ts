@@ -318,7 +318,7 @@ function registerBcSectionFor(owner: string, name: string, Component: ComponentT
 
 export type PluginToastKind = 'info' | 'success' | 'error';
 
-/** An app toast (the app's toast layer, bottom right). An unknown kind is info, as in ws.ui.toast. */
+/** An app toast (the app's toast layer, bottom left). An unknown kind is info, as in ws.ui.toast. */
 function pluginToast(message: string, opts?: { kind?: PluginToastKind }): void {
   const asked = opts?.kind;
   const kind: PluginToastKind = asked === 'success' || asked === 'error' ? asked : 'info';

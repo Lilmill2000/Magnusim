@@ -5393,23 +5393,27 @@ body.is-recording #viewport-gizmo {
 .ws-error h2 { margin: 0 0 var(--mg-space-2); font-size: var(--mg-text-xl); color: var(--mg-text-strong); }
 .ws-error p { margin: 0 0 var(--mg-space-4); color: var(--mg-text-muted); line-height: var(--mg-line); }
 .ws-error-actions { display: flex; gap: var(--mg-space-2); }
-/* The page's toast is the kit Toast (one at a time); this is only its place. */
-.ws-toast-slot {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-}
-/* App toasts (ToastHost): bottom right, newest last, above an open workspace. */
+/* App toasts (ToastHost): bottom left, newest last, above an open workspace (the dock has the bottom right). */
 .app-toasts {
   position: fixed;
-  right: var(--mg-space-4);
+  left: var(--mg-space-4);
   bottom: var(--mg-space-4);
   z-index: var(--mg-z-toast);
   display: flex;
   flex-direction: column;
   gap: var(--mg-space-2);
-  align-items: flex-end;
+  align-items: flex-start;
+  max-width: min(420px, calc(100vw - 32px));
   pointer-events: none;
+}
+/* A workspace's bottom-left 660 x 110 px belongs to its own status chips (CAD's .cad-dock):
+   toasts go above it, and above the workspace's own toast when one shows. */
+body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0px)); }
+/* The workspace page's toast (one at a time): bottom left, above the chips' band. */
+.ws-toast-slot { position: absolute; left: 16px; right: auto; bottom: 136px; }
+/* A narrow window with the dock open: toasts go above the bottom sheet. */
+@media (max-width: 719px) {
+  body.assistant-dock-open .app-toasts { bottom: calc(min(70vh, 100vh - 60px) + 16px); }
 }
 .ws-menu-host:empty { display: none; }
 .ws-menu { position: relative; }

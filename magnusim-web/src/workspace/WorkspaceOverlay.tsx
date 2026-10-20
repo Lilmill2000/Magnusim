@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useHashRoute } from '../app/routes';
 import { stopAnnouncedTurn } from '../assistant/relay';
@@ -120,6 +120,32 @@ function borrowHeaderControls(ids: string[], into: HTMLElement): () => void {
   };
 }
 
+/** The body property app toasts stack above (style.css: body.workspace-open .app-toasts). */
+export const TOAST_RESERVE = '--ws-toast-reserve';
+
+/**
+ * While the page's toast shows, its height + 8 px as --ws-toast-reserve on body, kept as it
+ * changes size, so the app's toasts sit above it; removed when it closes and with the workspace.
+ */
+function useToastReserve(slot: RefObject<HTMLDivElement | null>, shown: boolean): void {
+  useLayoutEffect(() => {
+    const body = document.body;
+    const el = slot.current;
+    if (!shown || !el) {
+      body.style.removeProperty(TOAST_RESERVE);
+      return undefined;
+    }
+    const measure = () => body.style.setProperty(TOAST_RESERVE, `${Math.ceil(el.getBoundingClientRect().height) + 8}px`);
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(el);
+    return () => {
+      observer?.disconnect();
+      body.style.removeProperty(TOAST_RESERVE);
+    };
+  }, [slot, shown]);
+}
+
 /** Make the workbench under the overlay inert (no Tab, no clicks); returns how to undo it. */
 function coverWorkbench(): () => void {
   const app = document.getElementById('app');
@@ -208,6 +234,8 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   // The page's toast, one at a time: each message gets a new id, so it replaces the one showing.
   const [toast, setToast] = useState<{ id: number; text: string; kind: ToastKind } | null>(null);
   const toastSerial = useRef(0);
+  const toastSlotRef = useRef<HTMLDivElement>(null);
+  useToastReserve(toastSlotRef, !!toast);
   const [unsaved, setUnsaved] = useState({ dirty: false, message: '' });
   const [fullscreen, setFullscreen] = useState(false);
   const name = (row && row.name) || (listed && listed.pluginName) || route.plugin;
@@ -791,7 +819,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         ) : null}
         {/* The kit Toast closes itself (3.8 s, errors 9 s); a new message remounts it (key). */}
         {toast ? (
-          <div className="ws-toast-slot">
+          <div className="ws-toast-slot" ref={toastSlotRef}>
             <Toast key={toast.id} message={toast.text} kind={toast.kind} onClose={() => setToast(null)} attrs={{ 'data-ws-toast': '1' }} />
           </div>
         ) : null}

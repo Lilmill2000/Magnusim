@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ruleProps } from '../test/kitCss';
+import { cssRules, ruleProps } from '../test/kitCss';
 import { ToastHost } from './ToastHost';
 
 function pluginFailed(message: string) {
@@ -35,7 +35,7 @@ describe('ToastHost', () => {
     vi.useRealTimers();
   });
 
-  it('is the app toast region, bottom right (style.css), empty at first', () => {
+  it('is the app toast region, bottom left (style.css), empty at first', () => {
     render(<ToastHost />);
     expect(region()).toHaveClass('app-toasts');
     expect(region().children).toHaveLength(0);
@@ -191,17 +191,28 @@ describe('ToastHost', () => {
 describe('the app toast region in style.css', () => {
   const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'style.css'), 'utf8');
 
-  it('sits fixed at the bottom right, above the workspace overlay, and lets clicks through between toasts', () => {
+  it('sits fixed at the bottom left (the dock has the bottom right), above the workspace overlay, and lets clicks through between toasts', () => {
     expect(ruleProps(appCss, '.app-toasts')).toEqual({
       position: 'fixed',
-      right: 'var(--mg-space-4)',
+      left: 'var(--mg-space-4)',
       bottom: 'var(--mg-space-4)',
       'z-index': 'var(--mg-z-toast)',
       display: 'flex',
       'flex-direction': 'column',
       gap: 'var(--mg-space-2)',
-      'align-items': 'flex-end',
+      'align-items': 'flex-start',
+      'max-width': 'min(420px, calc(100vw - 32px))',
       'pointer-events': 'none',
     });
+  });
+
+  it("with a workspace open: above its chips' 660 x 110 band (136 px) and above the workspace's own toast", () => {
+    expect(ruleProps(appCss, 'body.workspace-open .app-toasts')).toEqual({ bottom: 'calc(136px + var(--ws-toast-reserve, 0px))' });
+  });
+
+  it('in a narrow window with the dock open: above the bottom sheet', () => {
+    const narrow = cssRules(appCss).filter((r) => r.selectors.includes('body.assistant-dock-open .app-toasts'));
+    expect(narrow.map((r) => r.props)).toEqual([{ bottom: 'calc(min(70vh, 100vh - 60px) + 16px)' }]);
+    expect(appCss.replace(/\r\n/g, '\n')).toContain('@media (max-width: 719px) {\n  body.assistant-dock-open .app-toasts {');
   });
 });

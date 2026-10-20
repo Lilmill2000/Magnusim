@@ -150,7 +150,7 @@ test('@plugins gate:h5-broken-plugin surfaces a thrown UI and the workbench stay
   test.setTimeout(90_000);
   await page.goto('/');
   await page.waitForFunction(() => typeof window.__CFD_LOAD_PLUGIN_UI__ === 'function');
-  // The app's toast layer, bottom right: an error toast marked as a plugin failure.
+  // The app's toast layer, bottom left: an error toast marked as a plugin failure.
   const toast = page.locator('.app-toasts .mgk-toast.mgk-toast--error[data-plugin-toast]');
   await loadBrokenUi(page);
   await expect(toast).toHaveCount(1);
