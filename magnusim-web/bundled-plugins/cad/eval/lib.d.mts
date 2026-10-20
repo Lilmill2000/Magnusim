@@ -89,6 +89,7 @@ export interface RunRecord {
   errors_by_reason: Record<string, number>;
   errors_by_code: Record<string, number>;
   invalid_input: number;
+  /** The images sent to the model in tool results (view's pictures and the edits' pictures). */
   images: number;
   notes: string[];
   max_request_tokens: number;
@@ -160,6 +161,7 @@ export function runTurn(base: string, body: { text: string; tab?: string; conver
 export const REVIEW_CONFIRMED: RegExp;
 export function lastText(events: TurnEvent[]): string;
 export function reviewRounds(turns: { events: TurnEvent[]; repair?: boolean }[]): { turn: number; repair: boolean; round: number; of: number }[];
+export function imagesSent(calls: { ok: boolean; images?: number }[]): number;
 export function turnUse(turns: { events: TurnEvent[] }[]): {
   steps: number;
   calls_by_tool: Record<string, number>;

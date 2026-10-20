@@ -14,7 +14,7 @@
 // Watch mode (§8): the camera latch (camera.ts) behind autoCamera, "Ask each step" (approval.ts),
 // and the chip's buttons (AssistantActions): Pause and Resume, Stop (the running call reverts at
 // once, later calls of the turn answer busy stopped, the host ends the turn), Keep and Discard,
-// Fast / Watch, Ask each step, and Undo of an ended turn's group while it is the newest step.
+// Fast / Watch, Ask each step, Pictures (pictures.ts), and Undo of an ended turn's group while it is the newest step.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantRegistration } from '@magnusim/workspace';
@@ -29,6 +29,7 @@ import { evalFacts, evalPicture, evalSetParam } from './eval-facts';
 import { guideWithout } from './guide';
 import { createLedger } from './ledger';
 import { createPace } from './pace';
+import { createPictures } from './pictures';
 import { createRevTracker } from './rev';
 import { CAD_REVIEW } from './review';
 import { setRuntime, type AssistantRuntime } from './runtime';
@@ -69,6 +70,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const camera = createCameraLatch({ viewport: services.viewport, pace, soft });
   const askEach = createAskEach({ prefs: services.bridge.prefs });
   const approvals = createApprovals();
+  const pictures = createPictures({ prefs: services.bridge.prefs });
   let title = services.bridge.context.study?.title ?? '';
   const offs: (() => void)[] = [];
   offs.push(services.bridge.onStudy((s) => void (title = s.title ?? title)));
@@ -90,6 +92,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     camera,
     askEach,
     approvals,
+    pictures,
     active: new Map(),
     stopped: new Set(),
     lastKey: null,
@@ -166,10 +169,11 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     }),
   );
   // The chip's toggles show the person's choices.
-  store.set({ pace: pace.get(), askEach: askEach.get(), canStop: !!assistant?.stop });
+  store.set({ pace: pace.get(), askEach: askEach.get(), pictures: pictures.get(), canStop: !!assistant?.stop });
   offs.push(
     pace.subscribe((p) => store.set({ pace: p })),
     askEach.subscribe((on) => store.set({ askEach: on })),
+    pictures.subscribe((v) => store.set({ pictures: v })),
   );
 
   // ---- the pause: the chip shows it; it ends with its turn, or at the next key (busy.ts createPause)
@@ -202,6 +206,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       pace.dispose();
       soft.dispose();
       askEach.dispose();
+      pictures.dispose();
     },
   );
   // An ended turn's chip goes with the next change of the Part.
@@ -253,6 +258,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     },
     setPace: (p) => pace.set(p),
     setAskEach: (on) => askEach.set(on),
+    setPictures: (v) => pictures.set(v),
   };
   const api: AssistantPageApi = {
     autoCamera(_reason, sessionId) {
@@ -349,6 +355,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
       pace.setScale(scale ?? null);
     },
     setAskEach: (on) => askEach.force(on),
+    setPictures: (v) => pictures.force(v),
     approving: () => approvals.pending(),
     paused: () => pause.get(),
     async setToolset(set) {

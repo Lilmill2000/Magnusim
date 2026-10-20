@@ -190,12 +190,15 @@ const measureChecks = (): HelpRow[] => [
 /** What to verify while building and at the end (CAD tools spec §10.2 checks). */
 const buildChecks = (): HelpRow[] => [
   { about: 'plan first', text: 'Before the first edit, write down the parameters, the features in order and the expected volume, box, solids and voids, from a hand calculation (each example topic starts with one).' },
-  { about: 'after each feature', text: 'Its state ok; the sign of the body change (a cut lowers the volume, a join raises it: no change means it missed); solids 1 unless you meant pieces; warnings read and acted on.' },
+  { about: 'after each feature', text: 'Its state ok; the sign of the body change (a cut lowers the volume, a join raises it: no change means it missed); solids 1 unless you meant pieces; warnings read and acted on; its picture looked at.' },
   { about: 'sketches', text: 'Every sketch dof 0 (get_model lists dof, free says what still moves). An under-defined sketch is kept, but its shape can move when a parameter changes.' },
   { about: 'the end', text: 'measure each body: volume within 0.1% of the plan, the box to 0.01 mm, solids and voids as planned; two bodies meant to be apart: overlap_mm3 0; pieces meant to be one: union_solids 1. find "<body> faces hole radius <r>" counts holes of a size.' },
   { about: 'parameter walk', text: 'Change each driving parameter by +10%, check that the volume moves as the formula says and every feature stays ok (no flipped), then set it back.' },
   { about: 'symmetry', text: "A symmetric part's centroid_mm (measure) lies on its planes of symmetry." },
-  { about: 'pictures', text: 'End with view iso, plus top, a section or labels faces for inner features. Pictures show shape, never sizes.' },
+  {
+    about: 'pictures',
+    text: 'An edit that answers ok carries one small picture of the Part (iso, framed on every shown body, their own colours) when the model reads images and the person has Pictures on; data.picture says what it shows, data.picture_note why there is none. Look at it after each step: a feature missing, in the wrong place, the wrong way round or the wrong size shows there; fix it before going on. End with view iso, plus top, a section or labels faces for inner features. Pictures show shape, never sizes.',
+  },
   { about: 'files', text: 'There is no export tool: tell the person to use Export STEP for a file.' },
 ];
 

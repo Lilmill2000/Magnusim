@@ -23,6 +23,8 @@ export interface CallRecord {
   ms: number;
   /** An edit call: how long it waited at its pace points (ms; 0 at the fast pace or with the window hidden). */
   paced?: number;
+  /** The images its answer carried (a view's picture, an edit's picture), when any. */
+  images?: number;
 }
 
 export interface HoldPoints {
@@ -101,6 +103,8 @@ export interface AssistantTestHandle {
   setPace(pace: Pace | null, scale?: number | null): void;
   /** "Ask each step" whatever the person chose (never written to their preferences; null: theirs). */
   setAskEach(on: boolean | null): void;
+  /** The edits' pictures whatever the person chose (never written to their preferences; null: theirs). */
+  setPictures(v: 'each' | 'off' | null): void;
   /** The step waiting for the person's Keep or Discard ("Ask each step"), or null. */
   approving(): { call: string; part: string } | null;
   /** The pause in this Part, or null. */

@@ -55,6 +55,8 @@ export interface AssistantActions {
   setPace(pace: 'watch' | 'fast'): void;
   /** "Ask each step" on or off (ws.prefs). */
   setAskEach(on: boolean): void;
+  /** A picture of the Part after each edit ('each') or none ('off') (ws.prefs). */
+  setPictures(v: 'each' | 'off'): void;
 }
 
 /**
@@ -102,6 +104,8 @@ export interface AssistantUiState {
   pace?: 'watch' | 'fast';
   /** "Ask each step" is on. */
   askEach?: boolean;
+  /** A picture of the Part after each edit (the chip's Pictures): 'each' or 'off'. */
+  pictures?: 'each' | 'off';
   /** The host can stop a turn from this page (its turn events): the chip offers Stop. */
   canStop?: boolean;
 }

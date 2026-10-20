@@ -313,6 +313,11 @@ export function reviewRounds(turns) {
   return turns.flatMap((t, i) => t.events.filter((e) => e.type === 'review').map((e) => ({ turn: i + 1, repair: !!t.repair, round: e.round, of: e.of })));
 }
 
+/** The images the page's answers carried (view's pictures and the edits' pictures), from its call ledger. */
+export function imagesSent(calls) {
+  return calls.reduce((n, c) => n + (c.ok && Number.isInteger(c.images) ? c.images : 0), 0);
+}
+
 /** What a run's turns used: steps, money, tokens, the largest request, notes, end states. */
 export function turnUse(turns) {
   let steps = 0;
@@ -433,7 +438,7 @@ export async function runTask(env, task, o = {}) {
     errors_by_reason: errorsByReason,
     errors_by_code: use.errors_by_code,
     invalid_input: use.errors_by_code.invalid_input ?? 0,
-    images: calls.filter((c) => c.tool === 'view' && c.ok).length,
+    images: imagesSent(calls),
     notes: use.notes,
     max_request_tokens: use.max_request_tokens,
     context_tokens: pageTurns.map((t) => t.contextTokens).find((n) => typeof n === 'number') ?? null,

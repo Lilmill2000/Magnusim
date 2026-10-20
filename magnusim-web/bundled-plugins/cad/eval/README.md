@@ -100,7 +100,8 @@ Records go to `.cache/assistant-eval/<stamp>-<label>/` (ignored by git):
 - `runs.jsonl`: per run the task, the label, the model (from the app's status), `first_shot` and
   `final` (pass, passed of counted, the failed check ids), every check with what it got and why
   it failed, the steps, the calls by tool, the errors by reason (the page's) and by code (the
-  turn log's), the `invalid_input` count, the images sent, the notes (images left out, the strict
+  turn log's), the `invalid_input` count, `images` (the images the tool results carried: view's
+  pictures and the picture after each edit), the notes (images left out, the strict
   fallback), the largest request in tokens, the local model's context when known, the money, the
   tokens, the wall time, each turn's end and the Part's health, whether review was on, the
   review rounds the app ran (`reviews`: turn, round, of) and the reference pictures (`references`:

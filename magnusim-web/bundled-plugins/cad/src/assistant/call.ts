@@ -12,6 +12,7 @@ import type { AssistantCall, AssistantResult } from '@magnusim/workspace';
 import type { CallCtx, ToolImpl, ToolReply } from '../types/assistant';
 import { asToolError, sdkError, ToolError } from './errors';
 import { oneLine } from './numbers';
+import { editPicture, wantsPicture } from './pictures';
 import { CALLS_KEPT, type AssistantRuntime } from './runtime';
 import { toolNamed, TOOL_NAMES } from './schemas';
 import * as BUILT from './tools';
@@ -95,6 +96,7 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     };
     let ok = false;
     let error: ToolError | null = null;
+    let images = 0;
     try {
       if (!spec || !TOOL_NAMES.includes(call.tool)) throw new ToolError('bad_input', `No Part tool is called ${call.tool}.`);
       if (rt.stopped.has(key)) throw new ToolError('stopped', STOPPED_WORDS);
@@ -102,6 +104,15 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       if (!impl) throw new ToolError('not_built', `${call.tool} is not in this build yet.`, { detail: { tool: call.tool } });
       const reply: ToolReply = await impl.run(ctx);
       ok = true;
+      // An edit that answered ok: one picture of the Part as it is now (pictures.ts); never a failure.
+      if (!reply.images?.length && wantsPicture(ctx, rt.pictures.get())) {
+        const pic = await editPicture(ctx);
+        if (pic && 'image' in pic) {
+          reply.images = [pic.image];
+          reply.data = { ...reply.data, picture: pic.caption };
+        } else if (pic) reply.data = { ...reply.data, picture_note: pic.note };
+      }
+      images = reply.images?.length ?? 0;
       const data: Record<string, unknown> = { rev: rt.rev.current(), ...reply.data };
       // Now, not when the call began: an edit waits for the person, who may change the Part meanwhile.
       const changes = rt.rev.changesFor(key);
@@ -124,7 +135,7 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       rt.rev.seen(key);
       const paced = rt.paced.get(call.call);
       rt.paced.delete(call.call);
-      rt.calls.push({ call: call.call, turn: call.turn, key, tool: call.tool, ok, ...(error ? { code: error.code, reason: error.reason } : {}), ms: Date.now() - t0, ...(paced !== undefined ? { paced } : {}) });
+      rt.calls.push({ call: call.call, turn: call.turn, key, tool: call.tool, ok, ...(error ? { code: error.code, reason: error.reason } : {}), ms: Date.now() - t0, ...(paced !== undefined ? { paced } : {}), ...(images ? { images } : {}) });
       if (rt.calls.length > CALLS_KEPT) rt.calls.splice(0, rt.calls.length - CALLS_KEPT);
       rt.store.set({ call: null });
       rt.services.bus.emit('assistant:call', { turn: call.turn, call: call.call, tool: call.tool, phase: 'end', ok });

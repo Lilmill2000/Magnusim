@@ -20,6 +20,7 @@ import {
   EVAL_DIR,
   fakeSteps,
   gateAnswer,
+  imagesSent,
   lastText,
   loadReference,
   loadTask,
@@ -250,6 +251,18 @@ describe("what a run's turns used", () => {
         if (edits) expect(steps.at(-1), `${id} turn ${i}`).toEqual({ text: 'Review: no changes' });
       });
     }
+  });
+
+  it('counts the images the tool results carried: views and edits alike, failed calls none', () => {
+    const calls = [
+      { tool: 'get_model', ok: true },
+      { tool: 'sketch', ok: true, images: 1 },
+      { tool: 'extrude', ok: false, images: 1 },
+      { tool: 'view', ok: true, images: 1 },
+      { tool: 'extrude', ok: true, images: 1 },
+    ];
+    expect(imagesSent(calls)).toBe(3);
+    expect(imagesSent([])).toBe(0);
   });
 });
 
