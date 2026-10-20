@@ -196,16 +196,17 @@ describe('get_model within its budget', () => {
 
 describe('get_model full and one feature', () => {
   it(
-    'full: inputs null with a summary while no tool writes the type, and the expression fields',
+    'full: a construction plane as construct input, its expression fields and its choices',
     async () => {
       h = await assistantHarness();
       await plate(h);
-      // A construction plane: no tool writes it.
+      // A construction plane the person made: written as construct input.
       await h.add('ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: 't', flip: false });
       const d = (await h.ok('get_model', { detail: 'full', feature: '' })).data;
       expect(bytes(d)).toBeLessThanOrEqual(24 * 1024);
       const [, ex, plane] = d.features as Row[];
-      expect(plane).toMatchObject({ name: 'Plane 1', inputs: null, summary: 'Plane · method offset' });
+      expect(plane).toMatchObject({ name: 'Plane 1', inputs: { edit: 'Plane 1', name: '', method: 'offset', refs: ['Top'], value: 't', xyz: [], flip: false, from_end: false }, choices: { method: 'offset', flip: 'false' } });
+      expect(plane.summary).toBeUndefined();
       expect(plane.values).toContainEqual({ field: 'distance', expr: 't' });
       // An extrude is written in the extrude tool's fields.
       expect(ex).toMatchObject({ name: 'Extrude 1', inputs: { edit: 'Extrude 1', extent: 'blind', distance: 't' }, values: [{ field: 'distance', expr: 't' }] });

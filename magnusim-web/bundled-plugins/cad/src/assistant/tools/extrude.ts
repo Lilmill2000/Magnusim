@@ -12,6 +12,10 @@
 // changes nothing and answers feature_failed with CAD's words and which way it missed
 // (region-tools.ts, diagnose.ts); a cut on given bodies that cuts nothing away answers
 // cut_removed_nothing.
+// face: one flat face of a body extruded with no sketch (the person's Extrude of a selected face;
+// sketch "" and regions []), along its outward normal. direction: an axis to go along instead of
+// the normal (the panel's Along: an origin or construction axis, a sketch line, an edge, "normal of
+// <plane>"), "" for the normal.
 // get_model full shows extrudes as this tool's input (registerFeatureIo), regions as "at(u, v)";
 // edit_feature sets distance (an Up to's offset) and distance2.
 // Owner: ASSISTANT.
@@ -20,17 +24,18 @@ import { DEFAULT_DISTANCE } from '../../features/extrude/def';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
 import type { BodyRef, ExtrudeExtentDef, ExtrudeFeature, Feature, FeatureId, SketchFeature } from '../../types/doc';
+import type { AxisRef } from '../../types/references';
 import type { SketchOutput } from '../../types/sketch';
 import { axisWords } from '../diagnose';
 import { ToolError } from '../errors';
-import { bodyText, createdLabels, editTarget, faceText, nameFor, partOf, pathIn, str, strings, type RefBodies } from '../feature-tools';
+import { axisText, bodyText, createdLabels, editTarget, faceText, nameFor, partOf, pathIn, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo } from '../features-io';
 import { bodyWords } from '../judge';
 import { len } from '../numbers';
 import { checkBodyName, checkScoped, fillSwept, nameNewBody, opWords, readOp, regionsOf, regionTexts, scopeOf, scopeTexts, sketchFor, type Op } from '../region-tools';
 import { runtimeOf } from '../runtime';
-import { targetRefOf } from '../selectors/refs';
-import { candidates, evaluate, faceLabel, hitWords, parseFor, withScene, type Hit, type Scene } from '../selectors/resolve';
+import { axisRefOf, faceRefOf, targetRefOf } from '../selectors/refs';
+import { candidates, evaluate, faceLabel, hitWords, parseFor, selectOne, withScene, type AxisHit, type FaceHit, type Hit, type Scene } from '../selectors/resolve';
 import { storeExpr } from '../sketch/compile';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 
@@ -47,6 +52,8 @@ interface Plan extends EditPlan {
   bodyName: string;
   color: string;
   sketchName: string;
+  /** The face extruded (no sketch), in words, or "". */
+  faceWords: string;
   warnings: string[];
   /** Warnings found after the Done (bodies a scoped cut did not touch). */
   late: string[];
@@ -81,6 +88,23 @@ async function targetOf(sc: Scene, text: string): Promise<{ ref: BodyRef; words:
   return { ref, words: h.kind === 'face' ? (faceLabel(sc, h) ?? hitWords(sc, h)) : hitWords(sc, h), warnings: sel.warnings };
 }
 
+/** The one flat face an extrude of a face takes, as the person's Extrude keeps it. */
+async function faceOf(sc: Scene, text: string): Promise<{ ref: BodyRef; words: string; normal: number[] | null; warnings: string[] }> {
+  const { hit } = await selectOne(sc, text, 'face', 'face');
+  const h = hit as FaceHit;
+  const words = faceLabel(sc, h) ?? hitWords(sc, h);
+  if (h.topo.type !== 'plane') throw new ToolError('not_flat', `face: ${words} is curved: extrude takes a flat face or sketch regions.`, { detail: { field: 'face' } });
+  const r = await faceRefOf(sc, h);
+  return { ref: { body: r.body, ref: r.ref }, words, normal: (h.topo.normal as number[] | undefined) ?? null, warnings: h.warnings };
+}
+
+/** The axis an extrude goes along (the panel's Along). */
+async function directionOf(sc: Scene, text: string): Promise<{ ref: AxisRef; words: string; dir: number[] }> {
+  const { hit } = await selectOne(sc, text, 'axis', 'direction');
+  const a = hit as AxisHit;
+  return { ref: await axisRefOf(sc, a), words: a.words, dir: [...a.dir] };
+}
+
 /** Where the extrude goes, in words ("blind 6 mm along +Z"). */
 function extentWords(services: AppServices, plan: { extent: Extent; distance: string; distance2: string; flip: boolean; toWords: string }, n: readonly number[] | null): string {
   const along = n ? axisWords(plan.flip ? n.map((x) => -x) : n) : 'the normal';
@@ -113,9 +137,17 @@ const extrudeTool: EditTool<Plan> = {
     const distance2 = str(input.distance2);
     const to = str(input.to);
     const regions = strings(input.regions);
+    const faceSel = str(input.face);
+    const dirSel = str(input.direction);
     const problems: string[] = [];
     if (!EXTENTS.includes(extent)) problems.push('extent: blind, symmetric, two, through, through_both or to');
-    if (!regions.length) problems.push('regions: at least one ("all", "r1" or "at(u, v)")');
+    if (faceSel) {
+      if (str(input.sketch)) problems.push('sketch: "" with face (the face is the profile)');
+      if (regions.length) problems.push('regions: [] with face');
+    } else {
+      if (!str(input.sketch)) problems.push('sketch: the sketch (or face: a flat face to extrude with no sketch)');
+      if (!regions.length) problems.push('regions: at least one ("all", "r1" or "at(u, v)")');
+    }
     if (regions.length > REGIONS_MAX) problems.push(`regions: at most ${REGIONS_MAX}`);
     regions.forEach((t, i) => {
       if (!t) problems.push(`regions[${i}]: a region, not ""`);
@@ -130,19 +162,19 @@ const extrudeTool: EditTool<Plan> = {
     if (problems.length) throw new ToolError('bad_input', `${problems.join('; ')}.`, { detail: { problems } });
 
     const editing = editTarget(services, input.edit, ['extrude'], 'extrude') as ExtrudeFeature | null;
-    if (editing?.face) throw new ToolError('bad_input', `edit: ${editing.name} extrudes a face of a body, which this tool does not write: change its values with edit_feature.`, { detail: { field: 'edit' } });
-    if (editing?.direction) throw new ToolError('bad_input', `edit: ${editing.name} goes along a chosen direction, which this tool does not write: change its values with edit_feature.`, { detail: { field: 'edit' } });
     const name = nameFor(services, input.name, editing);
-    const sketch = sketchFor(services, input.sketch, editing);
+    const sketch = faceSel ? null : sketchFor(services, input.sketch, editing);
     const own = editing && editing.op === 'new' ? editing.creates : null;
     checkBodyName(services, op.bodyName, own);
 
     const self = editing?.id ?? null;
-    const r = await withScene(ctx, { before: self, sketch: sketch.id, self }, async (sc) => {
-      const reg = await regionsOf(sc, sketch, regions, 'extrude');
+    const r = await withScene(ctx, { before: self, sketch: sketch?.id ?? null, self }, async (sc) => {
+      const reg = sketch ? await regionsOf(sc, sketch, regions, 'extrude') : { refs: [], words: '' };
+      const face = faceSel ? await faceOf(sc, faceSel) : null;
+      const direction = dirSel ? await directionOf(sc, dirSel) : null;
       const scope = op.op === 'new' ? { ids: [], words: '' } : await scopeOf(sc, op.bodies);
       const target = extent === 'to' ? await targetOf(sc, to) : null;
-      return { reg, scope, target };
+      return { reg, face, direction, scope, target };
     });
 
     const units = services.doc.units;
@@ -156,20 +188,23 @@ const extrudeTool: EditTool<Plan> = {
     else if (extent === 'through' || extent === 'through_both') ext = { kind: 'through_all', both: extent === 'through_both', distance: keep };
     else ext = { kind: 'to', target: r.target!.ref, offset: d || '0 mm', distance: keep };
     const fields: Partial<ExtrudeFeature> = { profiles: r.reg.refs, extent: ext, flip: input.flip === true, op: op.op, scope: r.scope.ids };
+    // A face and a direction are written only when given, or to clear the ones an edit's feature has (the person's records have none otherwise).
+    if (r.face || editing?.face) fields.face = r.face?.ref ?? null;
+    if (r.direction || editing?.direction) fields.direction = r.direction?.ref ?? null;
     // The dry run: the extrude as its type checks it (a bad distance is refused before anything changes).
     const def = services.doc.features.get('extrude')!;
     const draft = { ...(editing ?? def.create(s.doc, {})), ...fields } as Feature;
     const why = def.incomplete(draft, units);
     if (why) throw extentError(why);
 
-    const out = s.rebuild.outputs[sketch.id] as SketchOutput | undefined;
-    const n = out?.type === 'sketch' ? out.plane.normal : null;
+    const out = sketch ? (s.rebuild.outputs[sketch.id] as SketchOutput | undefined) : undefined;
+    const n = r.direction?.dir ?? (r.face ? r.face.normal : out?.type === 'sketch' ? out.plane.normal : null);
     const resolved: Record<string, string> = {
-      sketch: sketch.name,
-      regions: r.reg.words,
+      ...(sketch ? { sketch: sketch.name, regions: r.reg.words } : { face: r.face!.words }),
       extent: extentWords(services, { extent, distance: d, distance2: d2, flip: input.flip === true, toWords: r.target?.words ?? '' }, n),
       op: opWords(op.op, r.scope.words),
     };
+    if (r.direction) resolved.direction = r.direction.words;
     if (r.target) resolved.to = r.target.words;
     if (editing) resolved.edit = editing.name;
     return {
@@ -184,8 +219,9 @@ const extrudeTool: EditTool<Plan> = {
       op: op.op,
       bodyName: op.bodyName,
       color: op.color,
-      sketchName: sketch.name,
-      warnings: [...(r.target?.warnings ?? [])],
+      sketchName: sketch?.name ?? '',
+      faceWords: r.face?.words ?? '',
+      warnings: [...(r.face?.warnings ?? []), ...(r.target?.warnings ?? [])],
       late: [],
     };
   },
@@ -246,11 +282,10 @@ registerFeatureIo('extrude', {
   refs: true,
   inputsOf(f, services, at = null) {
     const g = f as ExtrudeFeature;
-    // A face extruded with no sketch, or one along a chosen direction, has no form in this tool.
-    if (g.face || g.direction || !g.profiles.length || g.profiles.length > REGIONS_MAX) return null;
+    if ((!g.face && !g.profiles.length) || g.profiles.length > REGIONS_MAX) return null;
     const s = services.doc.state.get();
-    const sketch = s.doc.features.find((x) => x.id === g.profiles[0].sketch) as SketchFeature | undefined;
-    if (!sketch) return null;
+    const sketch = g.face ? null : (s.doc.features.find((x) => x.id === g.profiles[0].sketch) as SketchFeature | undefined);
+    if (!g.face && !sketch) return null;
     const e = g.extent;
     const base = { distance: '', distance2: '', to: '' };
     const extent =
@@ -264,8 +299,10 @@ registerFeatureIo('extrude', {
     return {
       edit: g.name,
       name: '',
-      sketch: sketch.name,
-      regions: regionTexts(s, g.profiles),
+      sketch: sketch?.name ?? '',
+      regions: g.face ? [] : regionTexts(s, g.profiles),
+      face: g.face ? faceText(s, g.face.body, g.face.ref, at) : '',
+      direction: g.direction ? axisText(s, g.direction, at) : '',
       ...extent,
       flip: !!g.flip,
       op: g.op,

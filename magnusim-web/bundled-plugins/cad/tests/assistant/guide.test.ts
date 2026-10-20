@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import { HINTS, REASONS } from '../../src/assistant/errors';
 import { WORKED_PARTS } from '../../src/assistant/examples';
-import { GUIDE, GUIDE_TOOL_WORDS, guideWithout, notOfferedLine } from '../../src/assistant/guide';
+import { GUIDE, GUIDE_TOOL_WORDS, guideWithout, namedInGuide, notOfferedLine } from '../../src/assistant/guide';
 import { HELP } from '../../src/assistant/help';
 import { CAD_TOOLS, CORE_TOOLSET, HELP_TOPICS, TOOL_NAMES, toolNamed } from '../../src/assistant/schemas';
 import { parseSelector, type KnownNames, type Want } from '../../src/assistant/selectors/parse';
@@ -93,7 +93,7 @@ const ALL_VALUES = new Set([...VALUES.values()].flatMap((s) => [...s]));
 const value = (at: string, v: string) => expect(VALUES.get(at), at).toContain(v);
 
 /** Reply keys the guide and help name (each one a key the tools' replies carry). */
-const REPLY_KEYS = ['dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut', 'steps_left', 'usd_left', 'changes_left'];
+const REPLY_KEYS = ['volume_mm3', 'area_mm2', 'bbox_mm', 'at_mm', 'problem_total', 'problem_counts', 'dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut', 'steps_left', 'usd_left', 'changes_left'];
 
 /** Every text of help, and the guide. */
 const helpTexts = () => Object.values(HELP).flatMap((rows) => rows.flatMap((r) => [r.about, r.text]));
@@ -236,8 +236,9 @@ describe("the guide of a Part that offers only some of its tools (the eval's cor
     expect(bridgeClean(g)).toBe(g);
     const lines = g.split('\n');
     expect(lines[0]).toBe(GUIDE.split('\n')[0]);
-    expect(lines[1]).toBe(notOfferedLine(missing));
-    expect(lines[1]).toBe('Tools not offered now: body, delete, edit_feature, sweep_loft, view.');
+    expect(lines[1]).toBe(notOfferedLine(namedInGuide(missing)));
+    // Only the tools the guide names: body, construct, direct and sweep_loft are never in it.
+    expect(lines[1]).toBe('Tools not offered now: delete, edit_feature, view.');
     const rest = lines.filter((_, i) => i !== 1).join('\n');
     for (const t of missing) expect(names(rest, t), t).toBe(false);
     for (const t of CORE_TOOLSET) expect(names(rest, t), t).toBe(names(GUIDE, t));
@@ -250,6 +251,12 @@ describe("the guide of a Part that offers only some of its tools (the eval's cor
 
   it("each tool the core set leaves out, left out alone, is named only in that line", () => {
     for (const t of TOOL_NAMES.filter((x) => !CORE_TOOLSET.includes(x))) {
+      // A tool the guide never names needs no line: the guide is unchanged.
+      if (!namedInGuide([t]).length) {
+        expect(guideWithout([t]), t).toBe(GUIDE);
+        expect(names(GUIDE, t), t).toBe(false);
+        continue;
+      }
       const lines = guideWithout([t]).split('\n');
       expect(lines[1], t).toBe(notOfferedLine([t]));
       expect(names(lines.filter((_, i) => i !== 1).join('\n'), t), t).toBe(false);

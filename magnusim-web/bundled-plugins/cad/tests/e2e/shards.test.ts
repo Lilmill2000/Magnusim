@@ -54,7 +54,7 @@ describe('shards', () => {
     expect(new Set(listed).size).toBe(listed.length);
     expect(SHARD_NAMES).toEqual(['shell', 'sketch', 'solids', 'step', 'link', 'assistant', 'big']);
     // The Assistant's specs (CAD tools spec §12.3): each on its own host.
-    expect(SHARDS.assistant).toEqual(['e2e/cad-assistant-watch.spec.ts', 'e2e/cad-assistant-honest.spec.ts', 'e2e/cad-assistant-coexist.spec.ts', 'e2e/cad-assistant-takeover.spec.ts', 'e2e/cad-assistant-eval.spec.ts', 'e2e/cad-assistant-sketch-tools.spec.ts']);
+    expect(SHARDS.assistant).toEqual(['e2e/cad-assistant-watch.spec.ts', 'e2e/cad-assistant-honest.spec.ts', 'e2e/cad-assistant-coexist.spec.ts', 'e2e/cad-assistant-takeover.spec.ts', 'e2e/cad-assistant-eval.spec.ts', 'e2e/cad-assistant-sketch-tools.spec.ts', 'e2e/cad-assistant-features.spec.ts']);
     // The opt-in shard: Daniel's 113 MB part (P4b SELECT fix round 1 adds the box timed on it).
     expect(SHARDS.big).toEqual(['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts']);
     expect(specsOf(['link', 'solids'])).toEqual([...SHARDS.solids, ...SHARDS.link]);

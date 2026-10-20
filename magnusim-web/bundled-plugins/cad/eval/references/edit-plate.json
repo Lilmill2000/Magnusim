@@ -125,6 +125,8 @@
               "regions": [
                 "all"
               ],
+              "face": "",
+              "direction": "",
               "extent": "blind",
               "distance": "t",
               "distance2": "",

@@ -103,7 +103,7 @@ describe('a picture after every edit', () => {
     h = await start(true);
     const fv = fakeViewport(h);
     const { sizes } = fakeRaster();
-    expect(EDITS.sort()).toEqual(['body', 'combine', 'delete', 'edit_feature', 'extrude', 'hole', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo']);
+    expect(EDITS.sort()).toEqual(['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'hole', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo']);
     for (const tool of EDITS) {
       const r = await call(h, tool);
       expect(r.ok, tool).toBe(true);

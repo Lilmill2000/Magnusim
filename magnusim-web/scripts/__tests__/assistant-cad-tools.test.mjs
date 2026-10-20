@@ -1,9 +1,10 @@
-// The CAD Part's 18 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
+// The CAD Part's 20 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 21 tools (its 3, then the Part's
-// 18 by name), the first 20 strict on the first cloud dialect and cad__view not; no CAD property
-// is optional; 21 is within the local server's 24 and nothing is cut; the registration is within
+// sent only the keywords they take; in a CAD turn the app offers 23 tools (its 3, then the Part's
+// 20 by name), the first 20 strict on the first cloud dialect and the last 3 not; no CAD property
+// is optional; 23 is within the local server's 24 and nothing is cut; each CAD schema's size is
+// printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
 // the system prompt) is at most 52,000 characters, its estimated tokens printed.
 // The CAD suite's hand copies of the app's rules stay the app's: tests/assistant/sanitize-copy.ts
@@ -54,7 +55,7 @@ function offered({ local = false } = {}) {
   const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: CAD_TOOLS.map((t) => ({ ...t })), guide: GUIDE };
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
-  assert.equal(verdict.accepted.length, 18);
+  assert.equal(verdict.accepted.length, 20);
   return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local });
 }
 
@@ -68,7 +69,7 @@ function walk(node, path = '(root)', out = []) {
 
 describe("the CAD Part's tools by the app's rules", () => {
   it('every schema passes the app\'s check', () => {
-    assert.equal(CAD_TOOLS.length, 18);
+    assert.equal(CAD_TOOLS.length, 20);
     for (const t of CAD_TOOLS) assert.deepEqual(checkSchema(t.inputSchema), { ok: true }, t.name);
   });
 
@@ -83,22 +84,29 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it('a CAD turn offers 21: the app\'s 3, then the Part\'s 18 by name; the first 20 strict on the first cloud dialect, cad__view not', () => {
+  it('a CAD turn offers 23: the app\'s 3, then the Part\'s 20 by name; the first 20 strict on the first cloud dialect, the last 3 not', () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
     assert.deepEqual(names, ['app_status', 'explain_ready', 'project_summary', ...CAD_TOOLS.map((t) => `cad__${t.name}`)]);
     const flags = strictFlags(providerTools(tools).map((t) => emitSchema('anthropic', t.schema)));
-    assert.deepEqual(flags, names.map((n) => n !== 'cad__view'));
+    const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view'];
+    assert.deepEqual(flags, names.map((n) => !loose.includes(n)));
     // The budget is exactly full: 20 strict tools; the host tools' one optional parameter.
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it("21 is within the local server's 24: nothing is cut", () => {
+  it("23 is within the local server's 24: nothing is cut", () => {
     const { tools, dropped } = offered({ local: true });
-    assert.equal(tools.length, 21);
+    assert.equal(tools.length, 23);
     assert.ok(tools.length <= REQUEST_MAX_TOOLS.local);
     assert.deepEqual(dropped, []);
+  });
+
+  it('each CAD schema as sent is within the app\'s 16 KB (sizes printed)', () => {
+    const sizes = CAD_TOOLS.map((t) => [t.name, Buffer.byteLength(JSON.stringify(t.inputSchema), 'utf8'), Buffer.byteLength(JSON.stringify(emitSchema('anthropic', t.inputSchema)), 'utf8')]);
+    console.log(`[assistant-cad-tools] schema bytes (as registered, as sent strict): ${sizes.map(([n, a, b]) => `${n} ${a}/${b}`).join(', ')}`);
+    for (const [n, a] of sizes) assert.ok(a <= 16 * 1024, `${n} ${a} bytes`);
   });
 
   it('the registration is within 512 KB', () => {

@@ -4,7 +4,7 @@
 import type { AssistantHarness } from './harness';
 import type { Row } from './sketch-tools';
 
-export const EXTRUDE = (o: Row = {}): Row => ({ edit: '', name: '', sketch: '', regions: ['all'], extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+export const EXTRUDE = (o: Row = {}): Row => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
 export const REVOLVE = (o: Row = {}): Row => ({ edit: '', name: '', sketch: '', regions: ['all'], axis: 'Z axis', extent: 'full', angle: '', angle2: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
 
 export type ToolErr = { code: string; message: string; hint: string; detail: Row };

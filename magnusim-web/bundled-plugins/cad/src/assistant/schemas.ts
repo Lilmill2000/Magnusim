@@ -1,4 +1,4 @@
-// The Part's 18 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
+// The Part's 20 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
 // windows, descriptions and input schemas, in the schema subset the app accepts
 // (scripts/server/assistant/schema.ts): type, description, enum, properties, required,
 // additionalProperties false, items, min/max lengths, values and items; never $ref, unions,
@@ -53,8 +53,20 @@ export const HELP_TOPICS = [
   'example_chip',
   'guide',
   'sketch_tools',
+  'details',
 ] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
+
+/** The construct tool's methods (plane, then axis, then point). */
+export const CONSTRUCT_METHOD_NAMES = ['offset', 'angle', 'three_points', 'midplane', 'normal_to_curve', 'two_points', 'cylinder', 'edge', 'two_planes', 'vertex', 'center', 'on_edge', 'edge_plane', 'coordinates'] as const;
+const CONSTRUCT_METHODS = CONSTRUCT_METHOD_NAMES;
+
+/** The direct tool's kinds. */
+export const DIRECT_KIND_NAMES = ['press_pull', 'delete_faces', 'split', 'enclosure', 'repair', 'retry'] as const;
+const DIRECT_KINDS = DIRECT_KIND_NAMES;
+
+/** The pattern tool's options (on/off choices beyond flip). */
+export const PATTERN_OPTIONS = ['symmetric', 'flip2', 'symmetric2', 'extent', 'extent2'] as const;
 
 /** The view directions (the view tool's enum). */
 export const VIEW_DIRECTIONS = ['iso', 'iso_back', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
@@ -122,9 +134,9 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 120,
     description:
-      'Exact numbers from the geometry kernel in mm, mm2, mm3 and degrees. One body: volume, area, centre of mass, bounding box, solids, shells, voids (shells minus solids: sealed inner voids), faces, edges, valid. One face or edge: type, area or length, radius, centre, normal or axis. Two targets: minimum distance with both points and their delta, angle, centre distance; two bodies also give their overlap volume (0 means no interference) and the solids and voids of their union. section: "" or a plane ("Top offset 4 mm", a flat face): the one target body\'s cross-section there (area, loops, holes). Pictures cannot check sizes; this can.',
+      'Exact numbers from the geometry kernel in mm, mm2, mm3 and degrees. One body: volume, area, centre of mass, bounding box, solids, shells, voids (shells minus solids: sealed inner voids), faces, edges, valid, and when not valid the Check list of problems with where each is. One face or edge: type, area or length, radius, centre, normal or axis. Two targets: minimum distance with both points and their delta, angle, centre distance; two bodies also give their overlap volume (0 means no interference), the solids and voids of their union, and their total. Three to 32 bodies: their mass properties total (volume, area, centre of mass, bounding box) and each body\'s volume and validity. section: "" or a plane ("Top offset 4 mm", a flat face): the one target body\'s cross-section there (area, loops, holes). Pictures cannot check sizes; this can.',
     schema: obj({
-      targets: arr(SEL('A body, a face, edge or vertex selector, or "(x, y, z)"'), 1, 2, 'One or two targets.'),
+      targets: arr(SEL('A body, a face, edge or vertex selector, or "(x, y, z)"'), 1, 32, 'One or two targets, or 3 to 32 bodies for their total.'),
       section: str(200, '"" for none, or a plane selector.'),
     }),
   },
@@ -149,7 +161,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 30,
     description:
-      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project). Read it when unsure instead of guessing.',
+      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project), details (construct methods and refs, direct kinds, edit_feature choice fields, extrude face and direction, pattern options and keys, measure totals and checks). Read it when unsure instead of guessing.',
     schema: obj({ topic: en(HELP_TOPICS, 'Topic') }),
   },
   {
@@ -217,12 +229,14 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Extrude regions of one sketch (edit "" makes one; edit: a name replaces that extrude\'s inputs). regions: ["all"] (every hole stays open), region ids ["r2"], or ["at(u, v)"]. extent: blind (distance along the sketch normal; flip for the other way), symmetric (distance in all, half each side), two (distance along, distance2 against), through or through_both (past every body), to (up to the face or vertex in to; distance is an extra offset or ""). op new makes a body (body_name, color #rrggbb, or ""); join, cut and intersect change bodies ([] = every body it meets): cut and intersect need overlap, join overlap or a shared face. On a face the normal points out of the part: a cut into it needs flip true (or use hole). Returns the state, body changes (volume, bounding box, solids), the faces it made (Name.start, .end, .side(...)) and warnings. A failure, or a cut that removes nothing, changes nothing and says which way it missed.',
+      'Extrude regions of one sketch (edit "" makes one; edit: a name replaces its inputs). regions: ["all"] (every hole stays open), region ids ["r2"], or ["at(u, v)"]. face: a flat face extruded with no sketch (sketch "", regions []), along its normal. direction: "" for the normal, or an axis to go along ("X axis", an edge, "normal of Top"). extent: blind (distance; flip for the other way), symmetric (distance in all, half each side), two (distance along, distance2 against), through or through_both (past every body), to (up to the face or vertex in to; distance is an extra offset or ""). op new makes a body (body_name, color #rrggbb, or ""); join, cut and intersect change bodies ([] = every body it meets): cut and intersect need overlap, join overlap or a shared face. On a face the normal points out of the part: a cut into it needs flip true (or use hole). Returns body changes and the faces made (Name.start, .end, .side(...)). A failure, or a cut that removes nothing, changes nothing and says which way it missed.',
     schema: obj({
       edit: EDIT,
       name: NAME,
-      sketch: str(80, 'The sketch', 1),
-      regions: REGIONS,
+      sketch: str(80, 'The sketch; "" with face'),
+      regions: arr(str(80, '"all", a region id ("r2") or "at(u, v)" in mm'), 0, 40, 'Regions of the sketch; [] with face.'),
+      face: SEL('"" or one flat face to extrude with no sketch'),
+      direction: SEL('"" for the normal, or an axis to go along'),
       extent: en(['blind', 'symmetric', 'two', 'through', 'through_both', 'to'], 'How far'),
       distance: EXPR('blind, symmetric, two: a length; to: an offset or ""; through: ""'),
       distance2: EXPR('two: the length against the normal; else ""'),
@@ -302,7 +316,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 240,
     description:
-      'Repeat features, bodies or faces (edit "" or a name). linear: copies along about, count copies (the original included) spacing apart; about2, count2, spacing2 add a second direction ("" for none); flip and flip2 reverse each direction; symmetric puts copies on both sides. circular: about is the axis, count copies over spacing as the total angle ("360 deg" spreads them evenly). mirror: about is the plane; count and spacing "". of features: items are feature names (op source keeps each feature\'s own operation); bodies: body names; faces: face selectors on one body. Copies that miss the body fail by name: then use op new and combine.',
+      'Repeat features, bodies or faces (edit "" or a name). linear: copies along about, count copies (the original included) spacing apart; about2, count2, spacing2 add a second direction ("" for none); flip reverses the first. circular: about is the axis, count copies over spacing as the total angle ("360 deg" spreads them evenly). mirror: about is the plane; count and spacing "". options: symmetric (copies on both sides of the first direction, or of a circular one), flip2 and symmetric2 (the second direction), extent and extent2 (spacing is from the original to the last copy, not between neighbours). skip: copies left out by key ("2"; "1.3" along both directions; "-1" on the other side; the reply lists the keys). of features: items are feature names (op source keeps each feature\'s own operation); bodies: body names; faces: face selectors on one body. Copies that miss the body fail by name: then use op new and combine.',
     schema: obj({
       edit: EDIT,
       name: NAME,
@@ -311,13 +325,13 @@ const SPECS: ToolSpec[] = [
       items: arr(str(200, 'Feature, body or face'), 1, 40, 'What to copy.'),
       about: SEL('Axis (linear, circular) or plane (mirror)'),
       count: EXPR('Copies, a whole number 2 or more; mirror ""'),
-      spacing: EXPR('linear: pitch; circular: total angle; mirror ""'),
-      symmetric: bool('Copies on both sides'),
+      spacing: EXPR('linear: pitch (extent: the whole length); circular: total angle; mirror ""'),
       flip: bool('Reverse the first direction'),
       about2: SEL('linear: second direction or ""'),
       count2: EXPR('"" or count'),
       spacing2: EXPR('"" or pitch'),
-      flip2: bool('Reverse the second direction'),
+      options: arr(en(PATTERN_OPTIONS, 'An option'), 0, 5, 'Choices that are on; [] for none.'),
+      skip: arr(str(12, 'A copy key'), 0, 60, 'Copies left out; [] for none.'),
       op: en(['source', 'new', 'join', 'cut', 'intersect'], 'Operation'),
       bodies: BODIES,
     }),
@@ -358,10 +372,10 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A value change that makes a working feature fail changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason.',
+      'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", padding "fixed", shape "cylinder", axis "Z", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason. To Try repair or Retry a failed feature use direct.',
     schema: obj({
       feature: str(80, 'The feature', 1),
-      set: arr(obj({ field: str(40, 'Field', 1), value: EXPR('Expression') }), 0, 20, 'Values to change.'),
+      set: arr(obj({ field: str(40, 'Field', 1), value: EXPR('An expression, or a choice field\'s word ("true", "false" for on/off)') }), 0, 20, 'Values to change.'),
       rename_to: str(40, '"" keeps it'),
       suppress: en(['keep', 'suppress', 'unsuppress'], 'Suppression'),
       move: str(120, '"", "end", "before X" or "after X"'),
@@ -385,6 +399,45 @@ const SPECS: ToolSpec[] = [
     description:
       'Delete features by name. The person is asked first. Refused, with nothing changed, while a feature not in the list uses one of them: the error names every user. Features that fail afterwards are listed. The person can bring them back with Undo, which takes back the whole request with them. To take back your own recent calls use undo instead (no question).',
     schema: obj({ features: arr(str(80, 'Feature name'), 1, 20, 'Features to delete.') }),
+  },
+  {
+    name: 'construct',
+    title: 'Construction geometry',
+    risk: 'edit',
+    timeoutS: 180,
+    description:
+      'Make a construction plane, axis or point (edit "" makes one; edit: a name replaces its inputs). method, then refs in order: planes offset [plane] (value the distance), angle [plane, axis] (value the angle), three_points [p1, p2, p3], midplane [plane, plane2], normal_to_curve [curve] (value the position "50 %") or [curve, point]; axes two_points [p1, p2], cylinder [round face], edge [straight or round edge], two_planes [plane, plane2]; points vertex [point], center [round edge or spherical face], on_edge [curve] (value "25 %" or a length along it; from_end from its other end), edge_plane [edge, plane], coordinates (refs [], xyz three lengths). A plane: Top, Front, Right, a construction plane or a flat face; an axis: X axis, a construction axis, a sketch line ("Sk.l1"), an edge or "axis of <round face>"; a point: origin, a construction point, a vertex or "<sketch>.<id>[.start|.end|.center]"; a curve: an edge or "<sketch>.<id>". flip reverses a plane or an axis. Returns where it was built.',
+    schema: obj({
+      edit: EDIT,
+      name: NAME,
+      method: en(CONSTRUCT_METHODS, 'How it is made (plane, axis or point methods)'),
+      refs: arr(SEL('A plane, axis, point, curve, edge or face selector'), 0, 3, 'What it is made from, in the method\'s order.'),
+      value: EXPR('offset: a length; angle: an angle; normal_to_curve, on_edge: "50 %" or (on_edge) a length; else ""'),
+      xyz: arr(EXPR('A length'), 0, 3, 'coordinates: x, y, z; else [].'),
+      flip: bool('Reverse a plane or an axis'),
+      from_end: bool('on_edge: measured from the other end'),
+    }),
+  },
+  {
+    name: 'direct',
+    title: 'Direct edits and enclosure',
+    risk: 'edit',
+    timeoutS: 240,
+    description:
+      'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.',
+    schema: obj({
+      edit: EDIT,
+      name: NAME,
+      kind: en(DIRECT_KINDS, 'What to do'),
+      faces: arr(SEL('A face selector'), 0, 60, 'press_pull, delete_faces: faces of one body; else [].'),
+      distance: EXPR('press_pull: the distance; split by Top, Front, Right: the offset; enclosure percent or fixed: the padding; else ""'),
+      bodies: arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; else [].'),
+      tool: SEL('split: Top, Front, Right, a flat face or a body; else ""'),
+      keep_tool: bool('split by a body: keep the tool body'),
+      shape: en(['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'], 'enclosure: box or a cylinder about X, Y, Z; else box'),
+      padding: en(['zero', 'percent', 'fixed'], 'enclosure: how far the sides sit out; else zero'),
+      sides: arr(obj({ side: en(['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'], 'A side'), value: EXPR('A length out from the part', 1) }), 0, 9, 'enclosure: sides set on their own; else [].'),
+    }),
   },
   {
     name: 'hole',
@@ -419,7 +472,7 @@ const toTool = (s: ToolSpec): AssistantTool => ({
   ...(s.confirm ? { confirm: s.confirm } : {}),
 });
 
-/** The 18 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
+/** The 20 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
 export const CAD_TOOLS: readonly AssistantTool[] = Object.freeze(SPECS.map(toTool).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
 
 /** The tools' names, by name. */

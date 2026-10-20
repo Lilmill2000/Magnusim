@@ -321,7 +321,7 @@ test('cad:assistant-takeover-looking clicks and a drag in the view, and a click 
 });
 
 /** The plate (PLATE, its hole beside the centre) extruded 5 mm: its even-odd region, the plate less the hole. */
-const EXTRUDE_PLATE = { name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: '5 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } };
+const EXTRUDE_PLATE = { name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '5 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } };
 
 test("cad:assistant-takeover-looking-extrude clicks on the sketch's regions and a drag on the arrow, at the Assistant's extrude, take nothing over: it is kept as asked", async ({ page, request }) => {
   test.setTimeout(240_000);

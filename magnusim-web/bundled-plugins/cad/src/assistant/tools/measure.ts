@@ -7,7 +7,12 @@
 //   two targets             minimum distance, both points and their delta, angle, centre distance;
 //   two bodies              also their overlap volume (0: no interference), whether they touch,
 //                           and the solids and voids of their union;
-//   one body and section    the cut there: material area, loops, holes and each piece.
+//   one body and section    the cut there: material area, loops, holes and each piece;
+//   a body that is not valid  also the Check panel's list (the kernel's check): each problem's
+//                           status, the sub-shape it is on and a point there;
+//   two bodies, 3-32 bodies the Mass properties panel's total of them (volumes and areas add, the
+//                           centre of mass weighted by volume, one box round all), and for 3 or
+//                           more each body's volume and validity.
 // A read: it never waits for the person, and runs on the bodies built now after the rebuild
 // caught up. When the Part changes while it measures (the person edits, the kernel restarts),
 // it measures again once; a second change answers busy/changed.
@@ -22,6 +27,8 @@ import { bodyFacts, entityFacts, overlapFacts, pairFacts, planeOfFace, sectionFa
 import { selectorTargets } from '../measure-selectors';
 import { registerSelectorResolver, resolveSectionPlane, resolveTarget, type Entity, type SectionPlane } from '../measure-targets';
 import { dir, len, sig6, vec } from '../numbers';
+import { topoCacheOf } from '../selectors/topo-cache';
+import type { CheckProblem } from '../../types/kernel-protocol';
 
 type Row = Record<string, unknown>;
 
@@ -44,11 +51,67 @@ const sameStamp = (a: Stamp, b: Stamp) => a.doc === b.doc && a.seq === b.seq && 
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** The most bodies a total takes (the schema's maxItems). */
+const TOTAL_MAX = 32;
+/** The most problems a body's check lists (the Check panel's). */
+const PROBLEMS_MAX = 40;
+
+/** The total of several bodies, as the Mass properties panel adds them (surface bodies add area and box only). */
+function totalOf(list: readonly BodyFacts[]): Row {
+  let volume = 0;
+  let area = 0;
+  const c = [0, 0, 0];
+  let weighted = 0;
+  let box: number[] | null = null;
+  for (const f of list) {
+    if (f.volume !== null) volume += f.volume;
+    area += f.area;
+    if (f.volume !== null && f.centroid && f.volume > 0) {
+      for (let k = 0; k < 3; k++) c[k] += f.centroid[k] * f.volume;
+      weighted += f.volume;
+    }
+    const b = f.bbox;
+    box = box ? [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.min(box[2], b[2]), Math.max(box[3], b[3]), Math.max(box[4], b[4]), Math.max(box[5], b[5])] : [...b];
+  }
+  return {
+    bodies: list.length,
+    volume_mm3: sig6(volume),
+    area_mm2: sig6(area),
+    centroid_mm: weighted > 0 ? vec(c.map((x) => x / weighted)) : null,
+    bbox_mm: box ? [vec(box.slice(0, 3)), vec(box.slice(3, 6))] : null,
+  };
+}
+
+/** A body's problems as the Check panel lists them, each with a point on the sub-shape it is on. */
+async function problemsOf(ctx: CallCtx, b: BodyInfo): Promise<{ problems: Row[]; total: number; counts: Record<string, number> }> {
+  const { services } = ctx;
+  const r = (await services.kernel.call('check', { id: b.shape, max_problems: PROBLEMS_MAX })).result;
+  const list: CheckProblem[] = r.problems ?? [];
+  let topo: Awaited<ReturnType<ReturnType<typeof topoCacheOf>['topo']>> | null = null;
+  try {
+    if (list.some((p) => p.type === 'face' || p.type === 'edge' || p.type === 'vertex' || p.in)) topo = await topoCacheOf(services).topo(b.shape, { faces: b.faces, signal: ctx.signal });
+  } catch {
+    topo = null;
+  }
+  const pointOf = (type: string, i: number): number[] | null => {
+    if (!topo) return null;
+    if (type === 'face') return topo.faceAt.get(i)?.centroid ?? null;
+    if (type === 'edge') return topo.edgeAt.get(i)?.mid ?? null;
+    if (type === 'vertex') return topo.vertexAt.get(i)?.p ?? null;
+    return null;
+  };
+  const problems = list.map((p) => {
+    const at = pointOf(p.type, p.index) ?? (p.in ? pointOf(p.in.type, p.in.index) : null);
+    return { status: p.status, on: `${p.type} ${p.index + 1}${p.in ? ` of ${p.in.type} ${p.in.index + 1}` : ''}`, ...(at ? { at_mm: vec(at) } : {}) };
+  });
+  return { problems, total: r.problem_total ?? list.length, counts: { ...(r.problem_counts ?? {}) } };
+}
+
 /** The input as the schema gives it (the app checks it; a direct call is checked here too). */
 function inputOf(ctx: CallCtx): { targets: string[]; section: string } {
   const { targets, section } = ctx.input;
   const problems: string[] = [];
-  if (!Array.isArray(targets) || targets.length < 1 || targets.length > 2 || !targets.every((t) => typeof t === 'string')) problems.push('targets must hold one or two selectors');
+  if (!Array.isArray(targets) || targets.length < 1 || targets.length > TOTAL_MAX || !targets.every((t) => typeof t === 'string')) problems.push(`targets must hold one or two selectors, or 3 to ${TOTAL_MAX} bodies`);
   if (typeof section !== 'string') problems.push('section must be "" or a plane selector');
   if (problems.length) throw new ToolError('bad_input', `${problems.join('; ')}.`, { detail: { field: problems.length === 1 && problems[0].startsWith('section') ? 'section' : 'targets' } });
   return { targets: targets as string[], section: section as string };
@@ -194,6 +257,25 @@ async function measureOnce(ctx: CallCtx, targets: string[], section: string): Pr
   const rolled = rolledBack(s);
   const withNote = (data: Row): Row => (rolled ? { ...data, rolled_back: rolled.rolled, note: data.note ? `${String(data.note)} ${rolled.note}` : rolled.note } : data);
 
+  if (ents.length > 2) {
+    if (section.trim()) throw new ToolError('bad_section', 'A section takes one body: give one target with section, or section "" for a total.', { detail: { field: 'section' } });
+    const other = ents.findIndex((e) => e.kind !== 'body');
+    if (other >= 0) throw new ToolError('bad_input', `targets[${other}]: ${ents[other].words} is not a body: three or more targets are bodies, added up.`, { detail: { field: `targets[${other}]` } });
+    const bodies = ents.map((e) => (e as Extract<Entity, { kind: 'body' }>).body);
+    const ids = new Set(bodies.map((b) => b.id));
+    if (ids.size !== bodies.length) throw new ToolError('bad_input', 'targets: a body is named twice: name each body once.', { detail: { field: 'targets' } });
+    const facts: BodyFacts[] = [];
+    for (const b of bodies) {
+      facts.push(await bodyFacts(services, b));
+      ctx.checkAbort();
+    }
+    const total = totalOf(facts);
+    const rows: Row[] = facts.map((f, i) => ({ body: f.body, volume_mm3: f.volume === null ? null : sig6(f.volume), valid: f.valid, target: targets[i] }));
+    const bad = facts.filter((f) => !f.valid).map((f) => f.body);
+    const text = `${facts.length} bodies: volume ${String(total.volume_mm3)} mm3, area ${String(total.area_mm2)} mm2${bad.length ? `; not valid: ${bad.join(', ')}` : ''}`;
+    return { text, data: withNote({ kind: 'total', total, bodies: rows, ...(bad.length ? { not_valid: bad, note: 'measure one of them alone for its problems.' } : {}) }), summary: `Measured ${text}` };
+  }
+
   if (section.trim()) {
     if (ents.length !== 1) throw new ToolError('bad_section', 'A section takes one body: give one target with section, or section "" for two targets.', { detail: { field: 'section' } });
     const e = ents[0];
@@ -210,7 +292,13 @@ async function measureOnce(ctx: CallCtx, targets: string[], section: string): Pr
     if (e.kind === 'body') {
       const f = await bodyFacts(services, e.body);
       const text = bodyText(f);
-      return { text, data: withNote(bodyRow(targets[0], f)), summary: `Measured ${text}` };
+      const row = bodyRow(targets[0], f);
+      // Not valid: the Check panel's list of what is wrong and where.
+      if (!f.valid) {
+        const c = await problemsOf(ctx, e.body);
+        Object.assign(row, { problems: c.problems, problem_total: c.total, problem_counts: c.counts });
+      }
+      return { text, data: withNote(row), summary: `Measured ${text}` };
     }
     const f = await entityFacts(services, e);
     const text = entityText(e, f);
@@ -224,7 +312,10 @@ async function measureOnce(ctx: CallCtx, targets: string[], section: string): Pr
   let o: OverlapFacts | null = null;
   if (a.kind === 'body' && b.kind === 'body') o = await overlapFacts(services, a.body, b.body, { a: await solidsOf(ctx, a.body), b: await solidsOf(ctx, b.body) });
   const text = pairText(a, b, p, o);
-  return { text, data: withNote(pairRow(targets, a, b, p, o)), summary: `Measured ${text}` };
+  const row = pairRow(targets, a, b, p, o);
+  // Two bodies: their mass properties total too (the Mass properties panel's).
+  if (a.kind === 'body' && b.kind === 'body') row.total = totalOf([await bodyFacts(services, a.body), await bodyFacts(services, b.body)]);
+  return { text, data: withNote(row), summary: `Measured ${text}` };
 }
 
 export const tool: ToolImpl = {

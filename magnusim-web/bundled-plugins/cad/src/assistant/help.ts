@@ -61,12 +61,16 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   body: 'One step. A body name is unique among bodies; it may equal a feature name. exclude leaves the body out of the geometry the project simulates.',
   combine:
     'targets keep the result; tools go unless keep_tools. Entries: a body name, "bodies of <feature>" (a pattern\'s copies), "all bodies"; repeats are dropped and a target is taken out of tools. A join of bodies that do not touch is one body of several solids (a warning).',
+  construct:
+    'Methods, refs: help details. Its name is a plane, axis or point for other tools.',
+  direct:
+    'Kinds, fields: help details.',
   delete:
     'The person is asked first. in_use (detail.users) while a feature not listed uses one: list those too, or change them first. One step; what fails afterwards is in broke. The person gets them back with Ctrl+Z; for your own calls use undo.',
   edit_feature:
-    'set: the fields get_model detail full lists for the feature (distance, size, count...) or a sketch dimension id (d, h1x): a value edit, refused (broke_downstream) when a working feature would fail; flipped names a sketch a dimension mirrored. rename_to, suppress and move ("before X", "after X", "end") go in the same step.',
+    'set: the fields get_model detail full lists for the feature (values; choices: help details) or a sketch dimension id (d, h1x): a value edit, refused (broke_downstream) when a working feature would fail; flipped names a sketch a dimension mirrored. rename_to, suppress and move ("before X", "after X", "end") go in the same step.',
   extrude:
-    'Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
+    'face, direction: help details. Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
   find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets. count is every match, limit only cuts rows.',
   get_model:
     "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit; a hole's sketch and cut show made_by hole and are edited as sketch and extrude. user_changes: what the person changed since your last call (while this one ran too). A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. editable false says why.",
@@ -74,11 +78,11 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   hole:
     'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
   measure:
-    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. One body: volume, area, centroid, bbox, solids, shells, voids. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. section (one body): area, loops, holes, regions.',
+    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. One body: volume, area, centroid, bbox, solids, shells, voids. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
   modify:
     'fillet, chamfer: a face (or "edges of <face>") is kept as the face, a live set; an edge ("A & B", #e3) a fixed set; kept_as says which. size2 "" is an equal chamfer; flip swaps. shell: targets are the faces taken off; inward true keeps the outer size. One body per call. Faces made: <Name>.fillet(k), <Name>.chamfer(k), <Name>.inner(<face>).',
   pattern:
-    'linear: about an axis or edge, spacing a positive pitch (flip for the other way). circular: spacing the angle from the original to the last copy, "360 deg" evenly all round. mirror: about a plane (with offset: a construction plane in the same step), count and spacing "". features with op source repeat each one\'s own operation; bodies with op new make "<body> (Instance k)". Copies are <Name>.copy(k), mirrors <Name>.mirror.',
+    'linear: about an axis or edge, spacing a positive pitch (flip for the other way). options, skip: help details. circular: spacing the angle from the original to the last copy, "360 deg" evenly all round. mirror: about a plane (with offset: a construction plane in the same step), count and spacing "". features with op source repeat each one\'s own operation; bodies with op new make "<body> (Instance k)". Copies are <Name>.copy(k), mirrors <Name>.mirror.',
   revolve: 'axis: "X axis", "Y axis", "Z axis", a sketch line ("Profile.ax"), a straight edge, or "axis of <round face>". The profile may not cross the axis. Faces made: <Name>.side(<entity>) per profile edge.',
   set_params:
     'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. A change keeps the comment the parameter has (comment "-" removes it); each answer row says added or changed, and was. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
@@ -295,6 +299,42 @@ const sketchRows = (): HelpRow[] => {
   return rows;
 };
 
+/** The details of construct, direct, edit_feature's choice fields, extrude's face and direction, pattern's options and keys, measure's totals and checks. */
+const detailRows = (): HelpRow[] => [
+  {
+    about: 'construct planes',
+    text: 'offset [plane], value the distance (flip: the other way). angle [plane, axis], value the angle; the axis lies in or along the plane. three_points [p1, p2, p3]. midplane [plane, plane2]: parallel planes give the middle, crossing ones the bisector. normal_to_curve [curve], value the position "50 %" (0 to 100 % of its length), or [curve, a point on it] with value "". flip turns the normal round.',
+  },
+  {
+    about: 'construct axes and points',
+    text: 'Axes: two_points [p1, p2]; cylinder [a cylindrical or conical face]; edge [a straight edge: along it; a round edge: its axis]; two_planes [plane, plane2]: where they cross; flip reverses it. Points: vertex [a point]; center [an arc, a circle or a spherical face]; on_edge [a curve], value "25 %" or a length from its start (from_end: from its other end); edge_plane [an edge, a plane]: where the edge crosses it; coordinates: refs [], xyz three lengths.',
+  },
+  {
+    about: 'construct refs',
+    text: 'A plane: Top, Front, Right, a construction plane by name or a flat face (not "<plane> offset ...": make that plane first). An axis: X axis, Y axis, Z axis, a construction axis, a sketch line ("Sk.l1"), a straight or round edge, "axis of <round face>". A point: origin, a construction point, a vertex selector, or a sketch point "<sketch>.<id>" (a point), "<sketch>.<line>.start|.end", "<sketch>.<circle or arc>.center". A curve: an edge, or a sketch curve "<sketch>.<id>". Nothing made by the feature itself or after it.',
+  },
+  {
+    about: 'direct kinds',
+    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"... enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid. repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
+  },
+  {
+    about: 'edit_feature choices',
+    text: 'set rows with a choice field and one of its words (on/off: "true" or "false"; get_model full shows choices now). extrude, revolve: flip, op (new, join, cut, intersect). sweep: orientation (follow, fixed), op. loft: ruled, op. chamfer: flip, mode (distance, two). shell: direction (inside, outside). combine: op (join, cut, intersect), keep_tools. linear pattern: op (source, new, join, cut, intersect), flip, symmetric, mode (spacing, extent), flip2, symmetric2, mode2. circular pattern: op, flip, symmetric, mode (full, angle). mirror: op. split: plane (Top, Front, Right) by a plane, keep_tool by a body. enclosure: shape (box, cylinder), axis (X, Y, Z), padding (zero, percent, fixed). construction plane, axis: method, flip; point: method, along (distance, percent), from_end. A change that leaves the feature incomplete (a method without its picks) is refused: resend it with its tool.',
+  },
+  {
+    about: 'extrude face and direction',
+    text: 'face: one flat face of a body extruded with no sketch (sketch "", regions []), along its outward normal (flip: into the body); its side faces are named by the edges they came from. direction: "" for the normal, or an axis to extrude along: X axis, an edge, a sketch line, a construction axis, "normal of <plane>"; flip reverses it.',
+  },
+  {
+    about: 'pattern options and keys',
+    text: 'options: symmetric (copies on both sides of the first direction, or of a circular one), flip2 and symmetric2 (the second direction), extent and extent2 (spacing is the whole length from the original to the last copy). skip: copy keys to leave out. Keys: linear "i" along the first direction ("2" the first copy), "i.j" with a second one, negative on a symmetric side; circular "i"; "0" is the original. The reply lists every copy as "key (label)"; a key no copy has is refused.',
+  },
+  {
+    about: 'measure totals and checks',
+    text: 'Two bodies: total beside the pair. 3 to 32 bodies (all bodies): total {bodies, volume_mm3, area_mm2, centroid_mm, bbox_mm} as the Mass properties panel adds them, and each body\'s volume and valid. One body that is not valid: problems [{status, on ("face 3 of shell 1"), at_mm}], problem_total and problem_counts, as the Check panel lists them.',
+  },
+];
+
 export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
   sketch: sketchRows(),
   selectors: selectorRows(),
@@ -310,6 +350,7 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   example_chip: exampleRows('example_chip'),
   guide: guideRows(),
   sketch_tools: sketchToolRows(),
+  details: detailRows(),
 });
 
 export const isHelpTopic = (t: unknown): t is HelpTopic => typeof t === 'string' && (HELP_TOPICS as readonly string[]).includes(t);

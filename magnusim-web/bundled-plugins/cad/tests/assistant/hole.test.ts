@@ -262,7 +262,7 @@ describe('hole', () => {
       // The diameter sent to the cut: it is a dimension of the hole's sketch, and the answer says which.
       const onCut = await fail(h, 'edit_feature', EDIT('Hole 1', { set: [{ field: 'd', value: '8 mm' }] }));
       expect(onCut).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_input', sketch: 'Hole 1 sketch' }, hint: 'Call edit_feature with feature "Hole 1 sketch" and the same set rows.' });
-      expect(onCut.message).toBe("bad_input: set[0].field: d is a dimension of Hole 1 sketch, the sketch Hole 1 is made from: edit_feature Hole 1 sketch with it (Hole 1's own fields: none).");
+      expect(onCut.message).toBe("bad_input: set[0].field: d is a dimension of Hole 1 sketch, the sketch Hole 1 is made from: edit_feature Hole 1 sketch with it (Hole 1's own fields: flip, op).");
       expect(h.doc.state.get().doc).toBe(doc);
       expect(undoLabel(h)).toBe(label);
       expect(uiFor(h.services).state.get().panel).toBeNull();

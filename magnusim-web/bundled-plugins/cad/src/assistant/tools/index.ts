@@ -10,8 +10,12 @@
 export { tool as body } from './body';
 // combine: Combine bodies.
 export { tool as combine } from './combine';
+// construct: Construction geometry.
+export { tool as construct } from './construct';
 // delete: Delete features.
 export { tool as delete } from './delete';
+// direct: Direct edits and enclosure.
+export { tool as direct } from './direct';
 // edit_feature: Change a feature.
 export { tool as edit_feature } from './edit_feature';
 // extrude: Extrude.

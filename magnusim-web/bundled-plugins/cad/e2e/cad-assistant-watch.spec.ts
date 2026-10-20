@@ -1,6 +1,6 @@
 // The Part's tools for the app's Assistant, as the person and the model meet them (CAD tools spec
-// §12.3 watch 1, T1): a Part open in its workspace offers its 18 tools on its tab; a turn there
-// offers 21 (the app's 3 first, then the Part's by name), the first 20 strict and cad__view not;
+// §12.3 watch 1, T1): a Part open in its workspace offers its 20 tools on its tab; a turn there
+// offers 23 (the app's 3 first, then the Part's by name), the first 20 strict and the last 3 not;
 // the system text holds the CAD notes; the tools go out byte for byte the same in the next turn.
 // get_model answers the model with the Part in data; a hole on the empty Part answers bad_selector
 // with its hint and the Part's names. The dock's chip and the frame's data-assistant say what
@@ -81,11 +81,11 @@ test.afterEach(() => {
   expect(host.fake.pending(), 'scripted answers left unused').toBe(0);
 });
 
-/** The Part's 18 tools by name, as the app names them (src/assistant/schemas.ts). */
-const CAD = ['body', 'combine', 'delete', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view'].map((n) => `cad__${n}`);
+/** The Part's 20 tools by name, as the app names them (src/assistant/schemas.ts). */
+const CAD = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view'].map((n) => `cad__${n}`);
 const HOST_TOOLS = ['app_status', 'explain_ready', 'project_summary'];
 
-test('cad:assistant-watch-registration the Part offers its 18 tools; a turn offers 21, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
+test('cad:assistant-watch-registration the Part offers its 20 tools; a turn offers 23, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant registration');
   const { tab } = await openNewPart(page, request, host, pid);
@@ -100,8 +100,9 @@ test('cad:assistant-watch-registration the Part offers its 18 tools; a turn offe
   const t2 = await startTurn(request, host, { text: 'Say hello again.', tab });
   expect((await t2.ended(STEP_MS)).turn.state).toBe('done');
   const [first, second] = chats(host).slice(before);
-  // The app's own tools first (by name), then the Part's by name: 21, the first 20 strict.
-  expect(offeredTools(first)).toEqual([...HOST_TOOLS, ...CAD].map((name) => ({ name, strict: name !== 'cad__view' })));
+  // The app's own tools first (by name), then the Part's by name: 23, the first 20 strict (the provider's budget).
+  const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view'];
+  expect(offeredTools(first)).toEqual([...HOST_TOOLS, ...CAD].map((name) => ({ name, strict: !loose.includes(name) })));
   // The CAD notes are the second system block, line breaks kept.
   const system = (first.body.system as { text: string }[]).map((s) => s.text).join('\n');
   expect(system).toContain(GUIDE);
@@ -640,7 +641,7 @@ test("cad:assistant-watch-plate the guide's plate, watched: its sketch going to 
   host.fake.reply(
     { tools: [{ name: 'cad__set_params', input: { set: [PLATE_PARAM('w', '60 mm'), PLATE_PARAM('d', '40 mm'), PLATE_PARAM('t', '6 mm'), PLATE_PARAM('hd', '5 mm'), PLATE_PARAM('e', '8 mm')], remove: [] } }] },
     { tools: [sketchOf('Plate sketch', 'Top', [SC('c0', 'coincident', ['r.center', 'origin']), SC('dw', 'distance', ['r.bottom'], 'w'), SC('dh', 'distance', ['r.left'], 'd')])] },
-    { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: 't', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
+    { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: 't', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
     {
       tools: [
         {
@@ -963,7 +964,7 @@ test("cad:assistant-watch-pictures each edit's result carries one iso picture of
     const from = chats(host).length;
     host.fake.reply(
       { tools: [sketchOf('Plate sketch', 'Top')] },
-      { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], extent: 'blind', distance: '6 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
+      { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '6 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
       { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
       { text: 'The plate is made.' },
     );

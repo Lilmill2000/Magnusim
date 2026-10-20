@@ -50,7 +50,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Bin", "sketch": "Bin sketch", "regions": ["all"], "extent": "blind", "distance": "H_bin", "distance2": "", "to": "", "flip": true, "op": "new", "bodies": [], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Bin", "sketch": "Bin sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "H_bin", "distance2": "", "to": "", "flip": true, "op": "new", "bodies": [], "body_name": "", "color": "" }
           }
         ]
       },
@@ -113,7 +113,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Inlet", "sketch": "Inlet sketch", "regions": ["all"], "extent": "blind", "distance": "L_in", "distance2": "", "to": "", "flip": false, "op": "join", "bodies": [], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Inlet", "sketch": "Inlet sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "L_in", "distance2": "", "to": "", "flip": false, "op": "join", "bodies": [], "body_name": "", "color": "" }
           }
         ]
       },
@@ -143,7 +143,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Finder", "sketch": "Finder sketch", "regions": ["at(27.8, 0)"], "extent": "blind", "distance": "H_vf", "distance2": "", "to": "", "flip": true, "op": "cut", "bodies": [], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Finder", "sketch": "Finder sketch", "regions": ["at(27.8, 0)"], "face": "", "direction": "", "extent": "blind", "distance": "H_vf", "distance2": "", "to": "", "flip": true, "op": "cut", "bodies": [], "body_name": "", "color": "" }
           }
         ]
       },
