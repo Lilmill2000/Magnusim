@@ -72,8 +72,8 @@ describe('chipButtons', () => {
 
   it("docked (the app's own Assistant panel offers Stop and Undo): the chip leaves out Stop and Undo, and keeps the rest", () => {
     const ids = (s: Partial<AssistantUiState>, undo = false) => chipButtons({ ...base, canStop: true, ...s }, undo, true).map((b) => b.id);
-    expect(ids({ phase: 'thinking' })).toEqual(['pause', 'ask']);
-    expect(ids({ phase: 'working' })).toEqual(['pause', 'pace', 'ask']);
+    expect(ids({ phase: 'thinking' })).toEqual(['pause', 'ask', 'pictures']);
+    expect(ids({ phase: 'working' })).toEqual(['pause', 'pace', 'ask', 'pictures']);
     expect(ids({ phase: 'waiting' })).toEqual(['pause']);
     expect(ids({ phase: 'approve' })).toEqual(['keep', 'discard']);
     expect(ids({ phase: 'paused' })).toEqual(['resume']);

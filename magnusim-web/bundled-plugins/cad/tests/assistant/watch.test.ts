@@ -379,7 +379,7 @@ describe("the app's Assistant panel (docked): Undo and Stop are the panel's", ()
     expect(rt.store.get()).toMatchObject({ docked: true, canStop: true });
     h.fake.emitTurn({ id: 't1', title: 'Add a' });
     const shown = () => chipButtons(rt.store.get(), true, rt.store.get().docked === true).map((b) => b.id);
-    expect(shown()).toEqual(['pause', 'ask']);
+    expect(shown()).toEqual(['pause', 'ask', 'pictures']);
     await h.ok('set_params', PARAM('a', '3 mm'), { turn: 't1' });
     h.fake.emitTurn({ id: 't1', title: 'Add a', ...ENDED });
     expect(rt.store.get().phase).toBe('ended');
@@ -441,7 +441,7 @@ describe("the app's Assistant panel (docked): Undo and Stop are the panel's", ()
     expect(rt.store.get().docked).toBe(false);
     h.fake.emitTurn({ id: 't1', title: 'Add a' });
     await h.ok('set_params', PARAM('a', '3 mm'), { turn: 't1' });
-    expect(chipButtons(rt.store.get(), false, rt.store.get().docked === true).map((b) => b.id)).toEqual(['pause', 'stop', 'ask']);
+    expect(chipButtons(rt.store.get(), false, rt.store.get().docked === true).map((b) => b.id)).toEqual(['pause', 'stop', 'ask', 'pictures']);
     h.fake.emitTurn({ id: 't1', title: 'Add a', ...ENDED });
     expect(chipButtons(rt.store.get(), true, rt.store.get().docked === true).map((b) => b.id)).toEqual(['undo']);
   });
