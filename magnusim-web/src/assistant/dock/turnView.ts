@@ -13,13 +13,13 @@
  *   from the page relay (one place for questions, spec 4.1).
  * - A newer `plan` replaces the plan row in place; a coding agent's own tools are one group row,
  *   updated by `call`.
- * - The log may have dropped a step's text: `text_so_far` (the summary of a snapshot or a
+ * - The log may have dropped a step's text: `text_so_far` (the full summary of a snapshot or a
  *   long-poll answer) then fills it, as one row before the first text the view has, when it is
  *   longer and ends with what the view has.
  *
  * Nothing here reads the clock, the DOM or the network: the store (store.ts) feeds it.
  */
-import type { GateView, ImageRef, SlimSummary, TurnEvent, TurnState, TurnSummary } from '../wire';
+import type { GateView, ImageRef, SlimTurnSummary, TurnEvent, TurnState, TurnSummary } from '../wire';
 
 type Risk = 'read' | 'edit' | 'compute' | 'destructive';
 export type EndState = 'done' | 'stopped' | 'failed' | 'capped';
@@ -73,8 +73,11 @@ export type TurnItem =
   | { kind: 'agent_mode'; key: string; label: string }
   | { kind: 'agent_model'; key: string; label: string };
 
-/** The newest summary the view has: a turn channel's (no `text_so_far`) or a long-poll's. */
-export type SummaryView = SlimSummary & { prompt?: string };
+/**
+ * The newest summary the view has, kept without `text_so_far`: a snapshot's or a long-poll's
+ * (with `prompt`), or a `summary` frame's (slim: no `prompt`).
+ */
+export type SummaryView = Omit<TurnSummary, 'text_so_far'>;
 
 export interface TurnView {
   id: string;
@@ -303,7 +306,7 @@ function applyOne(v: TurnView, d: Draft, e: TurnEvent): void {
  * once a snapshot brought them, and its state when the log has said none or the turn ended (an
  * ended turn whose log is no longer kept still ends the view).
  */
-export function applySummary(v: TurnView, s: SummaryView | TurnSummary): TurnView {
+export function applySummary(v: TurnView, s: SlimTurnSummary | TurnSummary): TurnView {
   if (!s || typeof s !== 'object' || s.id !== v.id) return v;
   const { text_so_far: _drop, ...slim } = s as TurnSummary;
   void _drop;

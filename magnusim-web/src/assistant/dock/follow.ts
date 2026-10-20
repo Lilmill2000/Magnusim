@@ -28,7 +28,7 @@
  */
 import { openChannel, type ChannelHandle } from '../../api/eventHub';
 import { AssistantApiError, assistantGet } from '../api';
-import type { SlimSummary, TurnChannelFrameData, TurnEvent, TurnPollAnswer, TurnState, TurnSummary } from '../wire';
+import type { SlimTurnSummary, TurnChannelFrameData, TurnEvent, TurnPollAnswer, TurnState, TurnSummary } from '../wire';
 
 /** A failed subscribe is asked again after this long. */
 export const RETRY_MS = 1000;
@@ -54,9 +54,10 @@ export function turnChannelUrl(turn: string, since: number): string {
 export interface FollowSink {
   /**
    * A snapshot, frame or long-poll answer: its events (may be empty) and the summary that came
-   * with it (a long-poll's carries `text_so_far`).
+   * with it (a snapshot's and a long-poll's are the full summary, with `prompt` and
+   * `text_so_far`; a `summary` frame's is slim).
    */
-  data(d: { events: TurnEvent[]; summary?: (SlimSummary & { prompt?: string }) | TurnSummary }): void;
+  data(d: { events: TurnEvent[]; summary?: SlimTurnSummary | TurnSummary }): void;
   /** The follower stopped: 'ended' (the turn ended), 'gone' (404), 'refused' (403). */
   stopped(why: 'ended' | 'gone' | 'refused'): void;
 }
@@ -307,7 +308,7 @@ class Follower implements TurnFollower {
 
   // ------------------------------------------------------------ what came
 
-  private hand(events: TurnEvent[] | undefined, summary?: (SlimSummary & { prompt?: string }) | TurnSummary): void {
+  private hand(events: TurnEvent[] | undefined, summary?: SlimTurnSummary | TurnSummary): void {
     if (this.mode === 'done') return;
     const list = Array.isArray(events) ? events : [];
     for (const e of list) if (e && typeof e.seq === 'number' && e.seq > this.lastSeq) this.lastSeq = e.seq;

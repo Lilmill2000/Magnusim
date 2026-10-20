@@ -1,7 +1,7 @@
 // Following a turn (phase 4 spec 5.1-5.3): a fake hub channel per openChannel, a fetch whose
 // answers each test hands out, on fake timers.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TurnEvent, TurnSummary } from '../wire';
+import type { SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
 import {
   END_GRACE_MS,
   FAILS_BEFORE_POLL,
@@ -108,6 +108,13 @@ const summary = (id: string, state: TurnSummary['state'], extra: Partial<TurnSum
   served_by: null,
   ...extra,
 });
+/** A `summary` frame's turn, as the server sends it: without text_so_far and prompt. */
+const slim = (id: string, state: TurnSummary['state']): SlimTurnSummary => {
+  const s: Partial<TurnSummary> = summary(id, state);
+  delete s.text_so_far;
+  delete s.prompt;
+  return s as SlimTurnSummary;
+};
 const END = (seq: number) => ev(seq, { type: 'end', state: 'done', reason: 'done', message: null });
 
 function sinkLog() {
@@ -163,7 +170,7 @@ describe('the turn channel', () => {
     expect(ch.pinned).toBe(true);
     ch.frame('snapshot', { turn: { ...summary('t1', 'model'), prompt: 'Make a box' }, events: [ev(1, { type: 'state', state: 'starting' }), ev(2, { type: 'state', state: 'model' })], next: 2, ended: false, more: false });
     ch.frame('events', { events: [ev(3, { type: 'text', step: 1, text: 'Hi' })], next: 3 });
-    ch.frame('summary', { turn: summary('t1', 'model') });
+    ch.frame('summary', { turn: slim('t1', 'model') });
     expect(data.map((d) => [d.events.map((e) => e.seq), !!d.summary])).toEqual([
       [[1, 2], true],
       [[3], false],
@@ -388,7 +395,7 @@ describe('limits and the end', () => {
     const f = followTurn('t1', sink);
     const ch = channels[0];
     ch.frame('snapshot', { turn: summary('t1', 'model'), events: [ev(1, { type: 'state', state: 'model' })], next: 1, ended: false, more: false });
-    ch.frame('summary', { turn: summary('t1', 'done') });
+    ch.frame('summary', { turn: slim('t1', 'done') });
     expect(ch.pinned).toBe(false);
     expect(stopped).toEqual([]);
     await vi.advanceTimersByTimeAsync(END_GRACE_MS);
@@ -424,7 +431,7 @@ describe('limits and the end', () => {
     const { sink, stopped } = sinkLog();
     followTurn('t1', sink);
     const ch = channels[0];
-    ch.frame('summary', { turn: summary('t1', 'done') });
+    ch.frame('summary', { turn: slim('t1', 'done') });
     ch.frame('events', { events: [END(2)], next: 2 });
     await vi.advanceTimersByTimeAsync(END_GRACE_MS * 2);
     expect(sent).toHaveLength(0);

@@ -20,11 +20,11 @@
  */
 import { useSyncExternalStore } from 'react';
 import { assistantGet, RemoteError } from '../api';
-import type { ConversationRow, ConversationsAnswer, TurnEvent, TurnSummary } from '../wire';
+import type { ConversationRow, ConversationsAnswer, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
 import { LIVE_ITS_WORKSPACE } from './copy';
 import { followTurn, type FollowSink, type TurnFollower } from './follow';
 import { createAnnouncer, liveMessagesOf, type Announcer } from './live';
-import { applyEvents, applySummary, emptyTurnView, fillDroppedText, isEnded, markGone, type EndState, type SummaryView, type TurnView } from './turnView';
+import { applyEvents, applySummary, emptyTurnView, fillDroppedText, isEnded, markGone, type EndState, type TurnView } from './turnView';
 
 export type DockSize = 'open' | 'pill' | 'closed';
 export type PillKind = 'question' | 'running' | 'done';
@@ -336,7 +336,7 @@ function workspaceName(): string {
   return context.workspace || LIVE_ITS_WORKSPACE;
 }
 
-function onData(id: string, events: TurnEvent[], summary?: SummaryView | TurnSummary): void {
+function onData(id: string, events: TurnEvent[], summary?: SlimTurnSummary | TurnSummary): void {
   const w = watches.get(id);
   const before = turns[id];
   if (!w || !before) return;

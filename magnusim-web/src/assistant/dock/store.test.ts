@@ -2,7 +2,7 @@
 // whose answers each test hands out, on fake timers.
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConversationRow, TurnEvent, TurnSummary } from '../wire';
+import type { ConversationRow, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
 import { resetFollowForTests } from './follow';
 import {
   chooseConversation,
@@ -98,7 +98,8 @@ const flush = async () => {
 
 let seq = 0;
 const ev = (body: Record<string, unknown>): TurnEvent => ({ seq: ++seq, at: 0, ...body }) as TurnEvent;
-const summary = (id: string, state: TurnSummary['state']): Omit<TurnSummary, 'text_so_far'> => ({
+/** A snapshot's turn, as the server sends it: the full summary. */
+const summary = (id: string, state: TurnSummary['state']): TurnSummary => ({
   id,
   conversation: 'c1',
   state,
@@ -110,10 +111,18 @@ const summary = (id: string, state: TurnSummary['state']): Omit<TurnSummary, 'te
   end_reason: null,
   message: null,
   open_gates: [],
+  text_so_far: '',
   tab: null,
   project_id: null,
   served_by: null,
 });
+/** A `summary` frame's turn, as the server sends it: without text_so_far and prompt. */
+const slim = (id: string, state: TurnSummary['state']): SlimTurnSummary => {
+  const s: Partial<TurnSummary> = summary(id, state);
+  delete s.text_so_far;
+  delete s.prompt;
+  return s as SlimTurnSummary;
+};
 const row = (id: string, project: string | null, lastUsed: string): ConversationRow => ({
   id,
   provider: 'p',
@@ -251,10 +260,28 @@ describe('open, pill and closed', () => {
     const heard = vi.fn();
     const off = subscribeDock(heard);
     channels[1].frame('events', { events: start, next: 2 });
-    channels[1].frame('summary', { turn: summary('t1', 'model') });
+    channels[1].frame('summary', { turn: slim('t1', 'model') });
     expect(heard).not.toHaveBeenCalled();
     expect(dockSnapshot().turns.t1).toBe(before);
     off();
+  });
+
+  it("a snapshot's full summary brings the person's request and fills the text the log dropped; a slim one keeps them", () => {
+    watchTurn('t1');
+    channels[0].frame('snapshot', {
+      turn: { ...summary('t1', 'model'), prompt: 'Make a box', text_so_far: 'Earlier step.\n\nHi' },
+      events: [ev({ type: 'state', state: 'model' }), ev({ type: 'text', step: 2, text: 'Hi' })],
+      next: 2,
+      ended: false,
+      more: false,
+    });
+    const v = dockSnapshot().turns.t1;
+    expect(v.prompt).toBe('Make a box');
+    expect(v.summary).not.toHaveProperty('text_so_far');
+    expect(v.items.map((it) => it.kind)).toEqual(['earlier_text', 'text']);
+    channels[0].frame('summary', { turn: slim('t1', 'tools') });
+    expect(dockSnapshot().turns.t1.prompt).toBe('Make a box');
+    expect(dockSnapshot().turns.t1.items.map((it) => it.kind)).toEqual(['earlier_text', 'text']);
   });
 
   it('keepTurn pins the channel; unwatching drops the view and the channel; retainTurns keeps only those named', () => {

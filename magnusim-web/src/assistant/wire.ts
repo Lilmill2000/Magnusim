@@ -327,8 +327,6 @@ export interface TurnPollAnswer {
 
 /** A turn's summary as the turn channel's `summary` frames carry it: without text_so_far and prompt. */
 export type SlimTurnSummary = Omit<TurnSummary, 'text_so_far' | 'prompt'>;
-/** The dock's name for SlimTurnSummary until it reads the server's own names. */
-export type SlimSummary = SlimTurnSummary;
 
 /**
  * A window following a turn on its tab's event stream: hub kind `assistant`, params
