@@ -73,7 +73,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
     'face, direction: help details. Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
   find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets. count is every match, limit only cuts rows.',
   get_model:
-    "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit; a hole's sketch and cut show made_by hole and are edited as sketch and extrude. user_changes: what the person changed since your last call (while this one ran too). A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. editable false says why.",
+    "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit. user_changes: what the person changed since your last call (while this one ran too). editable false says why. Holes, a brief short of room: help details.",
   help: 'Fixed text; no Part needed. Every field of every tool is required: "", [] or false when unused.',
   hole:
     'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
@@ -85,7 +85,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
     'linear: about an axis or edge, spacing a positive pitch (flip for the other way). options, skip: help details. circular: spacing the angle from the original to the last copy, "360 deg" evenly all round. mirror: about a plane (with offset: a construction plane in the same step), count and spacing "". features with op source repeat each one\'s own operation; bodies with op new make "<body> (Instance k)". Copies are <Name>.copy(k), mirrors <Name>.mirror.',
   revolve: 'axis: "X axis", "Y axis", "Z axis", a sketch line ("Profile.ax"), a straight edge, or "axis of <round face>". The profile may not cross the axis. Faces made: <Name>.side(<entity>) per profile edge.',
   set_params:
-    'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. A change keeps the comment the parameter has (comment "-" removes it); each answer row says added or changed, and was. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
+    'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. Comments: help details. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
   sketch:
     'on "<plane> offset <length>" makes "<sketch> plane", or uses one made for the same plane and offset. Replace: edit "<name>" with every input (get_model feature <name> gives them). Reply: plane (origin, u, v in model axes, words), solver (state, dof, free, moved, dropped_inferred), regions (id, area, at, holes), open ends. help sketch has every kind and signature.',
   sweep_loft:
@@ -317,8 +317,12 @@ const sketchRows = (): HelpRow[] => {
   return rows;
 };
 
-/** The details of construct, direct, edit_feature's choice fields, extrude's face and direction, pattern's options and keys, measure's totals and checks. */
+/** The details of get_model's holes and short brief, set_params' comments, construct, direct, edit_feature's choice fields, extrude's face and direction, pattern's options and keys, measure's totals and checks. */
 const detailRows = (): HelpRow[] => [
+  {
+    about: 'get_model and set_params',
+    text: "get_model: a hole's sketch and cut show made_by hole and are edited as sketch and extrude. A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. set_params: a change keeps the comment the parameter has (comment \"-\" removes it); each answer row says added or changed, and was.",
+  },
   {
     about: 'construct planes',
     text: 'offset [plane], value the distance (flip: the other way). angle [plane, axis], value the angle; the axis lies in or along the plane. three_points [p1, p2, p3]. midplane [plane, plane2]: parallel planes give the middle, crossing ones the bisector. normal_to_curve [curve], value the position "50 %" (0 to 100 % of its length), or [curve, a point on it] with value "". flip turns the normal round.',
