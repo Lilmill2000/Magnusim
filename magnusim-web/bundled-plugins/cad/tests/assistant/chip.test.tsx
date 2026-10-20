@@ -64,6 +64,18 @@ describe('chipButtons', () => {
     const ask = (on: boolean) => chipButtons({ ...base, phase: 'thinking', askEach: on }, false).find((b) => b.id === 'ask')!.pressed;
     expect([ask(false), ask(true)]).toEqual([false, true]);
   });
+
+  it("docked (the app's own Assistant panel offers Stop and Undo): the chip leaves out Stop and Undo, and keeps the rest", () => {
+    const ids = (s: Partial<AssistantUiState>, undo = false) => chipButtons({ ...base, canStop: true, ...s }, undo, true).map((b) => b.id);
+    expect(ids({ phase: 'thinking' })).toEqual(['pause', 'ask']);
+    expect(ids({ phase: 'working' })).toEqual(['pause', 'pace', 'ask']);
+    expect(ids({ phase: 'waiting' })).toEqual(['pause']);
+    expect(ids({ phase: 'approve' })).toEqual(['keep', 'discard']);
+    expect(ids({ phase: 'paused' })).toEqual(['resume']);
+    expect(ids({ phase: 'ended', turn: turn('done') }, true)).toEqual([]);
+    // Not docked (an older host): both stay.
+    expect(chipButtons({ ...base, canStop: true, phase: 'paused' }, false, false).map((b) => b.id)).toEqual(['resume', 'stop']);
+  });
 });
 
 /** A doc state with these features as built (state per name), sketches with their solved state. */

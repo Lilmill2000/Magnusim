@@ -11,6 +11,8 @@ import type {
   AssistantStopAnswer,
   AssistantTool,
   AssistantTurn,
+  AssistantUndoAnswer,
+  AssistantUndoOffer,
   ConfirmOptions,
   LeaveHandler,
   LinkedGeometry,
@@ -79,6 +81,12 @@ export interface CadAssistantBridge {
   onTurn: ((fn: (turn: AssistantTurn) => void) => () => void) | null;
   /** Stop a turn this page was told of; null on a host without turn events. */
   stop: ((turn: string) => Promise<AssistantStopAnswer>) | null;
+  /** The app shows its own Assistant panel with Stop and "Undo these changes": the chip leaves its own out. */
+  docked: boolean;
+  /** Offer (label) or withdraw (null) the undo of a turn's changes in the app's panel; null on a host without it. */
+  setUndo: ((turn: string, label: string | null) => Promise<AssistantUndoOffer>) | null;
+  /** Undo a turn's changes when the app's panel asks; null on a host without it. */
+  onUndo: ((fn: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null) => () => void) | null;
 }
 
 export interface Bridge {
@@ -164,6 +172,9 @@ export function assistantOf(ws: Workspace): CadAssistantBridge | null {
   const register = a.register.bind(a);
   const onTurn = typeof a.onTurn === 'function' ? a.onTurn.bind(a) : null;
   const stop = typeof a.stop === 'function' ? a.stop.bind(a) : null;
+  // Undo from the app's panel (the dock), feature-detected apart as well.
+  const setUndo = typeof a.setUndo === 'function' ? a.setUndo.bind(a) : null;
+  const onUndo = typeof a.onUndo === 'function' ? a.onUndo.bind(a) : null;
   return {
     async register(tools, handler, opts) {
       try {
@@ -176,6 +187,9 @@ export function assistantOf(ws: Workspace): CadAssistantBridge | null {
     },
     onTurn: onTurn ? (fn) => onTurn(fn) : null,
     stop: stop ? (turn) => stop(turn) : null,
+    docked: a.docked === true,
+    setUndo: setUndo ? (turn, label) => setUndo(turn, label) : null,
+    onUndo: onUndo ? (fn) => onUndo(fn) : null,
   };
 }
 

@@ -10,7 +10,8 @@
 //   approve   Keep, Discard
 //   paused    Resume, Stop
 //   ended     Undo, while the turn's undo group is the newest step
-// Stop shows only with the host's turn events. Pause and Stop do not show once the turn the chip
+// Stop shows only with the host's turn events. Stop and Undo do not show when the app has its own
+// Assistant panel (docked): the panel offers them there. Pause and Stop do not show once the turn the chip
 // speaks of has ended (its last call may still be finishing). An ended turn also shows the Part's health
 // (health.ts: "· Fillet 1 fails", "· 1 sketch under-defined"; `data-assistant-health` ok, warn or
 // error, the chip amber or red when not ok), and a click on those words selects the first such
@@ -70,9 +71,12 @@ export interface ChipButton {
   pressed?: boolean;
 }
 
-/** The chip's buttons in a phase (`undo`: the ended turn's group is the newest step). */
-export function chipButtons(s: AssistantUiState, undo: boolean): ChipButton[] {
-  const stop: ChipButton[] = s.canStop ? [{ id: 'stop', label: 'Stop', title: 'Stop the request: the step it is on now is not kept' }] : [];
+/**
+ * The chip's buttons in a phase (`undo`: the ended turn's group is the newest step). `docked`: the
+ * app's own Assistant panel offers Stop and Undo, so the chip leaves them out.
+ */
+export function chipButtons(s: AssistantUiState, undo: boolean, docked = false): ChipButton[] {
+  const stop: ChipButton[] = s.canStop && !docked ? [{ id: 'stop', label: 'Stop', title: 'Stop the request: the step it is on now is not kept' }] : [];
   const pause: ChipButton = { id: 'pause', label: 'Pause', title: 'Pause: its edits wait until you resume (it can still read the Part)' };
   const ask: ChipButton = { id: 'ask', label: 'Ask each step', title: s.askEach ? 'Stop asking before each step is kept' : 'Ask before each step is kept (Keep or Discard)', pressed: !!s.askEach };
   const pace: ChipButton = s.pace === 'fast' ? { id: 'pace', label: 'Watch', title: 'Watch each step being made' } : { id: 'pace', label: 'Fast', title: 'Make each step at once, without waits' };
@@ -93,7 +97,7 @@ export function chipButtons(s: AssistantUiState, undo: boolean): ChipButton[] {
     case 'paused':
       return [{ id: 'resume', label: 'Resume', title: 'Let the Assistant edit the Part again' }, ...stop];
     case 'ended':
-      return undo ? [{ id: 'undo', label: 'Undo', title: "Undo the Assistant's changes of this request (one Ctrl+Z)" }] : [];
+      return undo && !docked ? [{ id: 'undo', label: 'Undo', title: "Undo the Assistant's changes of this request (one Ctrl+Z)" }] : [];
     default:
       return [];
   }
@@ -147,7 +151,7 @@ export function AssistantChip() {
   const text = chipText(s);
   if (!text) return null;
   const busy = s.phase === 'working' || s.phase === 'thinking';
-  const buttons = chipButtons(s, end.undo);
+  const buttons = chipButtons(s, end.undo, s.docked === true);
   const cls = ['cad-chip', 'cad-assistant-chip', ended && end.health === 'error' ? 'is-error' : '', ended && end.health === 'warn' ? 'is-warning' : ''].filter(Boolean).join(' ');
   const first = end.first;
   return (

@@ -60,6 +60,22 @@ describe("the bridge's guard", () => {
     expect((await older.register([], null)).available).toBe(true);
   });
 
+  it("undo from the app's panel: docked, setUndo and onUndo pass through; a host without them: null (and docked false)", async () => {
+    const fake = createFakeAssistant({ docked: true });
+    const full = assistantOf({ assistant: fake } as unknown as Workspace)!;
+    expect(full.docked).toBe(true);
+    expect(await full.setUndo!('t-1', 'Assistant: plate')).toEqual({ offered: true });
+    expect(fake.offered.get('t-1')).toBe('Assistant: plate');
+    const off = full.onUndo!(() => ({ undone: true }));
+    expect(await fake.askUndo('t-1')).toEqual({ undone: true });
+    off();
+    expect(await fake.askUndo('t-1')).toEqual({ undone: false, reason: 'no_handler' });
+    const older = assistantOf(createFakeWorkspace({ assistant: { undo: false } }))!;
+    expect(older.docked).toBe(false);
+    expect(older.setUndo).toBeNull();
+    expect(older.onUndo).toBeNull();
+  });
+
   it("an older host's not_allowed answers not available; any other rejection stays one", async () => {
     const refusing = assistantOf(createFakeWorkspace({ assistant: { refuse: 'not_allowed' } }))!;
     expect(await refusing.register([], null)).toEqual(refused('not_allowed'));

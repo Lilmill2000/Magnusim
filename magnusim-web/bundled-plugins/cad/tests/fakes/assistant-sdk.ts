@@ -4,15 +4,22 @@
 // runs the kept handler as the bridge would (no handler or a tool not accepted: no_tool), with a
 // signal and progress recorded (waiting too); emitTurn tells this tab's turn listeners; stop is
 // recorded and answered. `turns: false` is a host without turn events (no onTurn, no stop);
-// `refuse: 'not_allowed'` a host whose bridge refuses the call.
+// `refuse: 'not_allowed'` a host whose bridge refuses the call. Undo from the app's panel: `docked`
+// says the host has it; setUndo's offers are recorded (`undoOffers`, the latest per turn in
+// `offered`), and askUndo(turn) runs the page's onUndo handler as the panel's ask would.
+// `undo: false` is a host without setUndo and onUndo.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { AssistantHandler, AssistantRegistration, AssistantStopAnswer, AssistantTool, AssistantTurn } from '@magnusim/workspace';
+import type { AssistantHandler, AssistantRegistration, AssistantStopAnswer, AssistantTool, AssistantTurn, AssistantUndoAnswer, AssistantUndoOffer } from '@magnusim/workspace';
 
 export interface FakeAssistantOptions {
   /** A host with turn events (onTurn, stop): true by default. */
   turns?: boolean;
   /** register() rejects with this code (an older host: 'not_allowed'). */
   refuse?: string;
+  /** The host has its own Assistant panel (ws.assistant.docked); false by default. */
+  docked?: boolean;
+  /** A host with setUndo and onUndo: true by default (with the turn events). */
+  undo?: boolean;
 }
 
 export interface FakeProgress {
@@ -43,6 +50,15 @@ export interface FakeAssistant {
   readonly stops: string[];
   /** stop()'s next answer. */
   stopAnswer: AssistantStopAnswer;
+  readonly docked: boolean;
+  setUndo?(turn: string, label: string | null): Promise<AssistantUndoOffer>;
+  onUndo?(fn: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null): () => void;
+  /** Every setUndo, in order. */
+  readonly undoOffers: { turn: string; label: string | null }[];
+  /** The label each turn is offered with now (a withdrawal removes it). */
+  readonly offered: Map<string, string>;
+  /** The app's panel asks to undo that turn: the page's onUndo answer (no_handler without one). */
+  askUndo(turn: string): Promise<AssistantUndoAnswer>;
 }
 
 const verdictFor = (tools: AssistantTool[]): AssistantRegistration => ({ available: true, accepted: tools.map((t) => t.name), refused: [] });
@@ -62,7 +78,15 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
   let accepted = new Set<string>();
   const listeners = new Set<(t: AssistantTurn) => void>();
   let n = 0;
+  let undoHandler: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null = null;
   const fake: FakeAssistant = {
+    docked: o.docked === true,
+    undoOffers: [],
+    offered: new Map(),
+    async askUndo(turn) {
+      if (!undoHandler) return { undone: false, reason: 'no_handler' };
+      return undoHandler(turn);
+    },
     registrations: [],
     verdicts: [],
     get accepted() {
@@ -124,6 +148,23 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
       fake.stops.push(turn);
       return fake.stopAnswer;
     };
+    if (o.undo !== false) {
+      fake.setUndo = async (turn, label) => {
+        fake.undoOffers.push({ turn, label });
+        if (label === null) {
+          fake.offered.delete(turn);
+          return { offered: false };
+        }
+        fake.offered.set(turn, label);
+        return { offered: true };
+      };
+      fake.onUndo = (fn) => {
+        undoHandler = fn;
+        return () => {
+          if (undoHandler === fn) undoHandler = null;
+        };
+      };
+    }
   }
   return fake;
 }

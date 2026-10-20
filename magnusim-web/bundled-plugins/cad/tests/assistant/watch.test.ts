@@ -17,6 +17,10 @@
 //   - set_params at the watch pace with no panel open shows the Assistant's own Parameters panel,
 //     which closes with the step;
 //   - Undo of an ended turn: one Ctrl+Z of its group, refused while another step is newest.
+//   - With the app's own Assistant panel (docked): the chip leaves Stop and Undo out; the page
+//     offers the panel the undo of an ended turn while its group is the newest step (setUndo,
+//     withdrawn after the person's edit, offered again after a redo), and the panel's ask undoes
+//     it once (onUndo), not_newest otherwise.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chipButtons } from '../../src/assistant/AssistantChip';
@@ -363,5 +367,82 @@ describe("the chip: Undo of an ended turn", () => {
     actionsOf(h).undo();
     expect(params(h)).toEqual(['a', 'b', 'mine']);
     expect(h.ws.log.toasts.at(-1)?.message).toMatch(/^Undo: /);
+  });
+});
+
+describe("the app's Assistant panel (docked): Undo and Stop are the panel's", () => {
+  const ENDED = { state: 'ended' as const, end: { state: 'done' as const, reason: 'done' } };
+
+  it('the store says docked, and the chip has no Stop while a turn runs nor Undo once it ended', async () => {
+    h = await start({ assistant: { docked: true } });
+    const rt = runtimeOf(h.services)!;
+    expect(rt.store.get()).toMatchObject({ docked: true, canStop: true });
+    h.fake.emitTurn({ id: 't1', title: 'Add a' });
+    const shown = () => chipButtons(rt.store.get(), true, rt.store.get().docked === true).map((b) => b.id);
+    expect(shown()).toEqual(['pause', 'ask']);
+    await h.ok('set_params', PARAM('a', '3 mm'), { turn: 't1' });
+    h.fake.emitTurn({ id: 't1', title: 'Add a', ...ENDED });
+    expect(rt.store.get().phase).toBe('ended');
+    expect(shown()).toEqual([]);
+  });
+
+  it("offers the undo of an ended turn while its group is the newest step: withdrawn after the person's edit, offered again after a redo; none for a running turn", async () => {
+    h = await start({ assistant: { docked: true } });
+    h.fake.emitTurn({ id: 't1', title: 'Add a and b' });
+    await h.ok('set_params', PARAM('a', '3 mm'), { turn: 't1' });
+    await h.ok('set_params', PARAM('b', '4 mm'), { turn: 't1' });
+    expect(h.fake.undoOffers, 'not while it runs').toEqual([]);
+    h.fake.emitTurn({ id: 't1', title: 'Add a and b', ...ENDED });
+    await vi.waitFor(() => expect([...h!.fake.offered]).toEqual([['t1', 'Assistant: Add a and b']]));
+    // The person's own step on top: withdrawn.
+    h.doc.addParam({ name: 'mine', expr: '1 mm', quantity: 'length' });
+    await vi.waitFor(() => expect(h!.fake.offered.size).toBe(0));
+    expect(h.fake.undoOffers.at(-1)).toEqual({ turn: 't1', label: null });
+    // Their Ctrl+Z takes their step back: the turn's group is the newest again, and offered again.
+    h.doc.undo();
+    await vi.waitFor(() => expect([...h!.fake.offered]).toEqual([['t1', 'Assistant: Add a and b']]));
+    // Another turn's group on top: that turn once it ended, never the older one with it.
+    h.fake.emitTurn({ id: 't2', title: 'Add c' });
+    await h.ok('set_params', PARAM('c', '5 mm'), { turn: 't2' });
+    await vi.waitFor(() => expect(h!.fake.offered.size).toBe(0));
+    h.fake.emitTurn({ id: 't2', title: 'Add c', ...ENDED });
+    await vi.waitFor(() => expect([...h!.fake.offered]).toEqual([['t2', 'Assistant: Add c']]));
+    const offersBefore = h.fake.undoOffers.length;
+    // Uninstall withdraws the offer.
+    h.dispose();
+    await vi.waitFor(() => expect(h!.fake.offered.size).toBe(0));
+    expect(h.fake.undoOffers.slice(offersBefore)).toEqual([{ turn: 't2', label: null }]);
+    h = null;
+  });
+
+  it("the panel's ask undoes the turn's group once (Redo brings it back), and answers not_newest when another step is newest", async () => {
+    h = await start({ assistant: { docked: true } });
+    h.fake.emitTurn({ id: 't1', title: 'Add a and b' });
+    await h.ok('set_params', PARAM('a', '3 mm'), { turn: 't1' });
+    await h.ok('set_params', PARAM('b', '4 mm'), { turn: 't1' });
+    h.fake.emitTurn({ id: 't1', title: 'Add a and b', ...ENDED });
+    expect(await h.fake.askUndo('t1')).toEqual({ undone: true });
+    expect(params(h)).toEqual([]);
+    await vi.waitFor(() => expect(h!.fake.offered.size).toBe(0));
+    expect(await h.fake.askUndo('t1'), 'its group is no longer the newest step').toEqual({ undone: false, reason: 'not_newest' });
+    h.doc.redo();
+    expect(params(h)).toEqual(['a', 'b']);
+    await vi.waitFor(() => expect([...h!.fake.offered]).toEqual([['t1', 'Assistant: Add a and b']]));
+    // A step of the person's on top: refused, nothing changes.
+    h.doc.addParam({ name: 'mine', expr: '1 mm', quantity: 'length' });
+    expect(await h.fake.askUndo('t1')).toEqual({ undone: false, reason: 'not_newest' });
+    expect(params(h)).toEqual(['a', 'b', 'mine']);
+    expect(await h.fake.askUndo('t-never')).toEqual({ undone: false, reason: 'not_newest' });
+  });
+
+  it('on a host without the panel nothing is offered and the chip keeps Stop and Undo', async () => {
+    h = await start();
+    const rt = runtimeOf(h.services)!;
+    expect(rt.store.get().docked).toBe(false);
+    h.fake.emitTurn({ id: 't1', title: 'Add a' });
+    await h.ok('set_params', PARAM('a', '3 mm'), { turn: 't1' });
+    expect(chipButtons(rt.store.get(), false, rt.store.get().docked === true).map((b) => b.id)).toEqual(['pause', 'stop', 'ask']);
+    h.fake.emitTurn({ id: 't1', title: 'Add a', ...ENDED });
+    expect(chipButtons(rt.store.get(), true, rt.store.get().docked === true).map((b) => b.id)).toEqual(['undo']);
   });
 });

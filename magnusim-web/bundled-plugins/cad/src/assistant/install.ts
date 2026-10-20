@@ -13,6 +13,9 @@
 // and the chip's buttons (AssistantActions): Pause and Resume, Stop (the running call reverts at
 // once, later calls of the turn answer busy stopped, the host ends the turn), Keep and Discard,
 // Fast / Watch, Ask each step, and Undo of an ended turn's group while it is the newest step.
+// With the app's own Assistant panel (docked) the chip leaves Stop and Undo to it: the page offers
+// the panel the undo of an ended turn while its group is the newest step (setUndo, withdrawn
+// once it is not), and the panel's ask undoes that group (onUndo; not_newest otherwise).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantRegistration } from '@magnusim/workspace';
@@ -161,7 +164,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     }),
   );
   // The chip's toggles show the person's choices.
-  store.set({ pace: pace.get(), askEach: askEach.get(), canStop: !!assistant?.stop });
+  store.set({ pace: pace.get(), askEach: askEach.get(), canStop: !!assistant?.stop, docked: !!assistant?.docked });
   offs.push(
     pace.subscribe((p) => store.set({ pace: p })),
     askEach.subscribe((on) => store.set({ askEach: on })),
@@ -283,6 +286,42 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
 
   // ---- the turns, heard before the tools are offered (the running ones are told on registration)
   if (assistant.onTurn) offs.push(assistant.onTurn((t) => turns.take(t)));
+
+  // ---- undo from the app's panel: an ended turn's group while it is the newest step
+  const setUndo = assistant.setUndo;
+  if (setUndo) {
+    /** The turn offered now, and its label. */
+    let offered: { id: string; label: string } | null = null;
+    const tell = (id: string, label: string | null) => void setUndo(id, label).catch((e) => console.warn('[cad] the undo could not be offered', e));
+    const sync = () => {
+      const top = services.doc.assistant?.topGroup?.() ?? null;
+      const id = top && top.tag.startsWith('turn:') ? top.tag.slice('turn:'.length) : null;
+      // Only a turn the host told of, once it ended (the same group the chip's Undo takes back).
+      const want = id && turns.get(id)?.state === 'ended' ? { id, label: top!.label } : null;
+      if (offered && (!want || want.id !== offered.id)) tell(offered.id, null);
+      if (want && (!offered || want.id !== offered.id || want.label !== offered.label)) tell(want.id, want.label);
+      offered = want;
+    };
+    offs.push(
+      services.doc.state.subscribe(sync),
+      turns.subscribe(sync),
+      () => {
+        if (offered) tell(offered.id, null);
+        offered = null;
+      },
+    );
+    sync();
+  }
+  if (assistant.onUndo) {
+    offs.push(
+      assistant.onUndo((turn) => {
+        const tag = `turn:${turn}`;
+        if (services.doc.assistant?.topGroup?.()?.tag !== tag) return { undone: false, reason: 'not_newest' };
+        // The newest step still, but the Part takes no undo now (a panel of the person's is open).
+        return services.doc.assistant.undoGroup(tag).ok ? { undone: true } : { undone: false, reason: 'busy' };
+      }),
+    );
+  }
 
   // ---- one registration
   const handler = createCallHandler(rt);

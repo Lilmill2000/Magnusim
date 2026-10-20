@@ -94,6 +94,8 @@ export interface AssistantUiState {
   askEach?: boolean;
   /** The host can stop a turn from this page (its turn events): the chip offers Stop. */
   canStop?: boolean;
+  /** The app shows its own Assistant panel (the dock), which offers Stop and Undo: the chip leaves them out. */
+  docked?: boolean;
 }
 
 /** The facts the host tells of a turn bound to this tab (ws.assistant.onTurn), kept per turn id. */
