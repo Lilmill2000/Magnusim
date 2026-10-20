@@ -5415,6 +5415,152 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 @media (max-width: 719px) {
   body.assistant-dock-open .app-toasts { bottom: calc(min(70vh, 100vh - 60px) + 16px); }
 }
+/* ---- The Assistant's dock (phase 4): bottom right, above toasts, under every dialog ---- */
+.assistant-dock[hidden], .assistant-dock-pill[hidden] { display: none !important; }
+.assistant-dock {
+  position: fixed;
+  right: var(--mg-space-4);
+  bottom: var(--mg-space-4);
+  z-index: var(--mg-z-assistant);
+  width: min(400px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - var(--mg-header-height) - 32px));
+  display: flex;
+  flex-direction: column;
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-lg);
+  box-shadow: var(--mg-shadow-md);
+  font: var(--mg-weight-regular) var(--mg-text-md)/var(--mg-line) var(--mg-font);
+}
+.assistant-dock-pill {
+  position: fixed;
+  right: var(--mg-space-4);
+  bottom: var(--mg-space-4);
+  z-index: var(--mg-z-assistant);
+  height: 36px;
+  max-width: 320px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mg-space-2);
+  padding: 0 var(--mg-space-2) 0 var(--mg-space-3);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-pill);
+  box-shadow: var(--mg-shadow-sm);
+  font: var(--mg-weight-medium) var(--mg-text-sm)/1 var(--mg-font);
+}
+.assistant-dock-pill[data-pill="question"] { border-color: var(--mg-warning); background: var(--mg-warning-bg); }
+.assistant-dock-log { flex: 1; min-height: 0; overflow-y: auto; padding: var(--mg-space-3); }
+.assistant-dock-composer { flex-shrink: 0; border-top: 1px solid var(--mg-divider); padding: var(--mg-space-2) var(--mg-space-3) var(--mg-space-3); }
+/* Narrow windows: a bottom sheet across the width. */
+@media (max-width: 719px) {
+  .assistant-dock { left: 8px; right: 8px; bottom: 8px; width: auto; height: min(70vh, calc(100vh - 60px)); }
+  .assistant-dock-pill { right: 8px; bottom: 8px; max-width: calc(100vw - 16px); }
+}
+/* Short windows: the full height under the header. */
+@media (max-height: 519px) {
+  .assistant-dock { top: calc(var(--mg-header-height) + 8px); bottom: 8px; height: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-dock *, .assistant-dock-pill { transition: none !important; animation: none !important; }
+}
+/* The panel takes the keyboard only as a last resort (nothing to focus inside yet). */
+.assistant-dock:focus { outline: none; }
+.assistant-dock:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: -2px; }
+.assistant-dock-head {
+  display: flex;
+  align-items: center;
+  gap: var(--mg-space-1);
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 var(--mg-space-2) 0 var(--mg-space-3);
+  border-bottom: 1px solid var(--mg-divider);
+}
+.assistant-dock-title { margin: 0; font-size: var(--mg-text-lg); font-weight: var(--mg-weight-semibold); color: var(--mg-text-strong); }
+.assistant-dock-head-gap { flex: 1; }
+.assistant-dock-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--mg-radius-md);
+  background: none;
+  color: var(--mg-text-muted);
+  cursor: pointer;
+}
+.assistant-dock-icon:hover { background: var(--mg-surface-muted); color: var(--mg-text-strong); }
+.assistant-dock-icon:focus-visible,
+.assistant-dock-pill-open:focus-visible,
+.assistant-dock-pill-stop:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+/* The states the dock shows by itself (loading, the server not answering, remote, off). */
+.assistant-dock-state { flex: 1; min-height: 0; overflow-y: auto; padding: var(--mg-space-3); display: flex; flex-direction: column; align-items: flex-start; gap: var(--mg-space-3); }
+.assistant-dock-note { margin: 0; color: var(--mg-text-muted); }
+/* Announcements (live.ts): read, never drawn. */
+.assistant-dock-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* The pill: its words open the dock; Stop beside them while a request runs. */
+.assistant-dock-pill-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mg-space-2);
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.assistant-dock-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-dock-pill-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: var(--mg-radius-round); background: var(--mg-text-subtle); }
+.assistant-dock-pill[data-pill="running"] .assistant-dock-pill-dot { background: var(--mg-primary); }
+.assistant-dock-pill[data-pill="question"] .assistant-dock-pill-dot { background: var(--mg-warning); }
+.assistant-dock-pill[data-pill="done"] .assistant-dock-pill-dot { background: var(--mg-success); }
+.assistant-dock-pill-stop {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 var(--mg-space-2);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  font: inherit;
+  cursor: pointer;
+}
+.assistant-dock-pill-stop:hover { background: var(--mg-surface-muted); }
+/* The header buttons' dot: a question waits, a request works, or one ended unseen. */
+#home-assistant[data-assistant-badge],
+#wb-assistant[data-assistant-badge] { position: relative; }
+#home-assistant[data-assistant-badge]::after,
+#wb-assistant[data-assistant-badge]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--mg-radius-round);
+  background: var(--mg-primary);
+}
+#home-assistant[data-assistant-badge="question"]::after,
+#wb-assistant[data-assistant-badge="question"]::after { background: var(--mg-warning); }
+#home-assistant[data-assistant-badge="done"]::after,
+#wb-assistant[data-assistant-badge="done"]::after { background: var(--mg-success); }
 .ws-menu-host:empty { display: none; }
 .ws-menu { position: relative; }
 .ws-menu-list {

@@ -122,4 +122,6 @@
   --mg-duration-switch: 150ms;
   --mg-z-tooltip: 40;
   --mg-z-toast: 2000;
+  /* The Assistant's dock: above toasts, under every dialog (modal 9999, Settings, confirm). */
+  --mg-z-assistant: 2100;
 }

@@ -4,6 +4,7 @@
  * (`providers_ready[id].label`, `TurnSummary.agent.name`). The server's own messages (a turn's
  * end, a refusal) are shown as they come and never rewritten here.
  */
+import { REMOTE_TEXT } from '../api';
 import type { TurnEvent } from '../wire';
 
 type EndState = 'done' | 'stopped' | 'failed' | 'capped';
@@ -126,6 +127,8 @@ export const STOP_LABEL = 'Stop the Assistant';
 export const STATE_LOADING = 'Loading the Assistant…';
 export const STATE_ERROR = "Magnusim's server didn't answer.";
 export const TRY_AGAIN = 'Try again';
+/** Over remote access: the server's own sentence, as Settings shows it. */
+export { REMOTE_TEXT };
 export const STATE_OFF = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 export const OPEN_SETTINGS = 'Open Settings';
 const END_LABELS: Record<EndState, string | null> = { done: null, stopped: 'Stopped', capped: 'Limit reached', failed: "Didn't finish" };

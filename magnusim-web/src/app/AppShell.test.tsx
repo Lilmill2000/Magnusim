@@ -40,6 +40,33 @@ describe("AppShell and the Assistant's page relay", () => {
   });
 });
 
+describe("AppShell and the Assistant's dock", () => {
+  it('portals the dock into #assistant-dock-root, a child of body outside #app, kept across renders', () => {
+    document.body.innerHTML = '<div id="app"><header id="top-header"></header></div><div id="react-root"></div>';
+    const view = render(<AppShell />);
+    const root = document.getElementById('assistant-dock-root') as HTMLElement;
+    expect(root.parentElement).toBe(document.body);
+    expect(document.body.lastElementChild).toBe(root);
+    const dock = document.getElementById('assistant-dock') as HTMLElement;
+    expect(root.contains(dock)).toBe(true);
+    expect(document.getElementById('app')?.contains(dock)).toBe(false);
+    expect(dock).toHaveAttribute('hidden');
+    expect(root.querySelector('[data-assistant-pill]')).not.toBeNull();
+    view.rerender(<AppShell />);
+    expect(document.getElementById('assistant-dock')).toBe(dock);
+    view.unmount();
+    expect(document.getElementById('assistant-dock')).toBeNull();
+  });
+
+  it('uses the root main.tsx made', () => {
+    document.body.innerHTML = '<div id="app"></div><div id="react-root"></div><div id="assistant-dock-root"></div>';
+    const made = document.getElementById('assistant-dock-root');
+    render(<AppShell />);
+    expect(document.querySelectorAll('#assistant-dock-root')).toHaveLength(1);
+    expect(made?.querySelector('#assistant-dock')).not.toBeNull();
+  });
+});
+
 describe('AppShell', () => {
   it("draws the app toast region, and an in-page plugin's toast shows in it", () => {
     render(<AppShell />);

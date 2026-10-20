@@ -34,6 +34,7 @@ const SHELL = `
       <button type="button" id="wb-home">Home</button>
       <div class="top-right">
         <div id="queue-menu"><button type="button" id="btn-queue">Queue</button><div id="job-queue-chip" hidden></div></div>
+        <button type="button" id="wb-assistant">Assistant</button>
         <button type="button" id="wb-prefs">Settings</button>
       </div>
     </header>
@@ -41,6 +42,7 @@ const SHELL = `
     <div class="main-row"><div class="tree-row" tabindex="0" id="tree-row">Wing section</div></div>
     <div id="workspace-overlay" hidden></div>
   </div>
+  <div id="assistant-dock-root"><aside id="assistant-dock" tabindex="-1" hidden><textarea id="dock-text"></textarea></aside></div>
   <div id="setup-wizard" class="wiz" hidden><button type="button" id="wiz-skip">Close</button></div>
   <div id="modal-confirm" class="cfd-modal" hidden role="dialog" aria-modal="true" aria-labelledby="cf-heading">
     <div class="cfd-modal-backdrop" id="cf-backdrop"></div>
@@ -102,6 +104,20 @@ describe('when the host gives the keyboard to the workspace frame', () => {
       expect(frameMayTakeFocus(document, frame, header), id).toBe(false);
       $(`#${id}`).hidden = true;
     }
+    expect(frameMayTakeFocus(document, frame, header)).toBe(true);
+  });
+
+  it("never while the keyboard is in the Assistant's dock; once it hides, yes", () => {
+    const dock = $('#assistant-dock');
+    dock.hidden = false;
+    $('#dock-text').focus();
+    expect(frameMayTakeFocus(document, frame, header)).toBe(false);
+    // Open with the keyboard elsewhere: the dock is not a dialog.
+    $('#tree-row').focus();
+    expect(frameMayTakeFocus(document, frame, header)).toBe(true);
+    // Hidden with the keyboard still named in it (Chromium): the frame may take it.
+    $('#dock-text').focus();
+    dock.hidden = true;
     expect(frameMayTakeFocus(document, frame, header)).toBe(true);
   });
 
@@ -270,6 +286,10 @@ describe('the workspace overlay', () => {
     await open();
     expect($('.ws-header-right').contains($('#wb-prefs'))).toBe(true);
     expect($('.ws-header-right').contains($('#queue-menu'))).toBe(true);
+    // Queue, Assistant, Settings, in the header's order.
+    expect([...$('.ws-header-right').children].map((el) => el.id)).toEqual(['queue-menu', 'wb-assistant', 'wb-prefs']);
+    // The dock lives outside #app: never inert.
+    expect($('#assistant-dock-root').inert).toBeFalsy();
     expect([top.inert, $('#toolbar').inert, $('#app > .main-row').inert]).toEqual([true, true, true]);
     expect($('#workspace-overlay').inert).toBeFalsy();
     // Clean: Back leaves at once.
@@ -278,6 +298,7 @@ describe('the workspace overlay', () => {
     expect(location.hash).toBe('#/p/proj');
     expect(confirm).not.toHaveBeenCalled();
     expect(top.contains($('#wb-prefs'))).toBe(true);
+    expect([...$('#top-header .top-right').children].map((el) => el.id)).toEqual(['queue-menu', 'wb-assistant', 'wb-prefs']);
     expect([top.inert, $('#toolbar').inert, $('#app > .main-row').inert]).toEqual([false, false, false]);
     expect(log).toEqual([
       [true, false],
@@ -759,13 +780,37 @@ describe('the workspace overlay', () => {
     await waitFor(() => expect(focus).toHaveBeenCalledTimes(2));
   });
 
+  it("gives the keyboard back when the Assistant's dock closes with the keyboard in it, not when it was elsewhere", async () => {
+    const { frame } = await open();
+    await connect(frame);
+    await nextFrame();
+    await nextFrame();
+    const focus = vi.spyOn(frame, 'focus');
+    const dock = $('#assistant-dock');
+    dock.hidden = false;
+    $('#dock-text').focus();
+    await nextFrame();
+    dock.hidden = true;
+    await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
+    // Closed from its header button in the workspace header: the keyboard stays on that button.
+    dock.hidden = false;
+    await nextFrame();
+    $('#wb-assistant').focus();
+    dock.hidden = true;
+    await nextFrame();
+    await nextFrame();
+    await later();
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe($('#wb-assistant'));
+  });
+
   it('takes the keyboard back only when a panel really closes: hiding one that is already hidden (as the Queue sync does) does not', async () => {
     const { frame } = await open();
     await connect(frame);
     await nextFrame();
     await nextFrame();
     const focus = vi.spyOn(frame, 'focus');
-    for (const id of ['modal-confirm', 'modal-prompt', 'setup-wizard', 'job-queue-chip']) {
+    for (const id of ['modal-confirm', 'modal-prompt', 'setup-wizard', 'job-queue-chip', 'assistant-dock']) {
       const el = $(`#${id}`);
       // The user clicked the header's plain text: the keyboard is on the page body.
       (document.activeElement as HTMLElement | null)?.blur();

@@ -189,8 +189,8 @@ function reset(): void {
 
 /**
  * Whether the host may give the keyboard to the workspace frame now: never away
- * from its own dialogs, Settings, the Queue or the workspace header, and never
- * while something else is full screen.
+ * from its own dialogs, Settings, the Queue, the workspace header or the Assistant's
+ * dock, and never while something else is full screen.
  */
 export function frameMayTakeFocus(doc: Document, frame: HTMLIFrameElement | null, header: Element | null): boolean {
   if (!frame) return false;
@@ -199,6 +199,8 @@ export function frameMayTakeFocus(doc: Document, frame: HTMLIFrameElement | null
   if (shown(doc.getElementById('job-queue-chip'))) return false;
   const active = doc.activeElement;
   if (header && active && header.contains(active)) return false;
+  // The Assistant's dock (its panel or its pill) has the keyboard: the person is typing there.
+  if (active && active !== doc.body && active.closest('#assistant-dock, [data-assistant-pill]') && shown(active)) return false;
   if (doc.fullscreenElement && doc.fullscreenElement !== frame) return false;
   return true;
 }

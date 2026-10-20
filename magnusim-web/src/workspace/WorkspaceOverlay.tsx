@@ -45,7 +45,7 @@ export const HANDSHAKE_MS = 5000;
 const LOST = 'Changes that were not saved in the workspace were lost.';
 
 /** The app's own UI over the workspace: when one closes, the keyboard goes back to the frame. */
-const HOST_UI = ['modal-confirm', 'modal-prompt', 'modal-link-choice', 'setup-wizard', 'job-queue-chip'];
+const HOST_UI = ['modal-confirm', 'modal-prompt', 'modal-link-choice', 'setup-wizard', 'job-queue-chip', 'assistant-dock'];
 
 type PluginRow = {
   key: string;
@@ -104,7 +104,7 @@ function projectTitle(projectId: string): string {
   return (p && p.id === projectId && (p.title || p.name)) || projectId;
 }
 
-/** Move the header's Queue and Settings into the workspace header; returns how to put them back. */
+/** Move the header's Queue, Assistant and Settings into the workspace header; returns how to put them back. */
 function borrowHeaderControls(ids: string[], into: HTMLElement): () => void {
   const moved: Array<{ el: HTMLElement; parent: Node; next: Node | null }> = [];
   for (const id of ids) {
@@ -299,12 +299,12 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   const entry = row && row.workspaces ? row.workspaces.find((w) => w.key === route.workspace)?.entry : undefined;
   const scopeKey = pluginStudyScope(route.projectId, route.plugin, route.studyId);
 
-  // Covering the workbench: its Queue and Settings move into this header, the rest
+  // Covering the workbench: its Queue, Assistant and Settings move into this header, the rest
   // of it is inert (no Tab or clicks into it); the viewport pauses.
   useEffect(() => {
     document.body.classList.add('workspace-open');
     window.dispatchEvent(new CustomEvent('cfd:workspace-open'));
-    const restore = slotRef.current ? borrowHeaderControls(['queue-menu', 'wb-prefs'], slotRef.current) : () => undefined;
+    const restore = slotRef.current ? borrowHeaderControls(['queue-menu', 'wb-assistant', 'wb-prefs'], slotRef.current) : () => undefined;
     const uncover = coverWorkbench();
     return () => {
       try {

@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { RequiredPluginError } from './RequiredPluginError';
 import { ToastHost } from './ToastHost';
 import ReactDOM from 'react-dom/client';
+import { AssistantDock } from '../assistant/dock/AssistantDock';
 import { startAssistantRelay } from '../assistant/relay';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
@@ -81,6 +82,8 @@ export function AppShell() {
     <>
       {/* App toasts (a plugin UI that failed, pluginUi.toast), above an open workspace. */}
       <ToastHost />
+      {/* The Assistant's dock, bottom right: a portal into #assistant-dock-root, outside #app. */}
+      <AssistantDock />
       <RequiredPluginError />
       <Home />
       <SetupWizard />

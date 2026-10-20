@@ -1,6 +1,10 @@
 // The Assistant's place on screen (chat dock spec, phase 4, lane C: 1.4-1.8, 2.10, 11.3-9 and
 // 11.3-13): the app's toasts at the bottom left, clear of a workspace's status chips (the
-// frame's bottom-left 660 x 110 px band) and of the workspace's own toast.
+// frame's bottom-left 660 x 110 px band) and of the workspace's own toast; the dock at the
+// bottom right with its header buttons, Ctrl+/, Escape and the keyboard given back, its sizes in
+// wide, narrow and short windows, under Settings, over a workspace (its header borrows the
+// button), the toasts clear of it, and the states it shows by itself (Off here; over remote
+// access only the remote sentence, with no stream of the Assistant's opened).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys) and the
 // ai-demo test plugin (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks
 // allow 2 px (fonts differ under Linux); no pixel snapshots.
@@ -14,6 +18,9 @@ const PLUGIN = 'ai-demo';
 const CHIP_BAND = 136;
 /** Font metrics differ under the Linux mirror's fonts. */
 const SLACK = 2;
+const REMOTE_TEXT =
+  'The Assistant and its API keys can only be set up and used on the PC running Magnusim. Over remote access it is off.';
+const OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 
 let host;
 let project;
@@ -123,5 +130,179 @@ test.describe('toasts', () => {
     await wsToast.locator('.mgk-toast-close').click();
     await expect(wsToast).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => document.body.style.getPropertyValue('--ws-toast-reserve'))).toBe('');
+  });
+});
+
+const dock = (page) => page.locator('#assistant-dock');
+
+/** Whether nothing draws over the middle of `locator` (it is on top there). */
+const onTop = (locator) =>
+  locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && el.contains(hit);
+  });
+
+async function openFromHome(page) {
+  await page.goto(`${host.base}/#/`);
+  await appReady(page);
+  await page.locator('#home-assistant').click();
+  await expect(dock(page)).toBeVisible();
+  await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'off');
+}
+
+test.describe('the dock', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+
+  test("Home's button opens it bottom right, Off with Open Settings; Escape and Ctrl+/ close it and give the keyboard back", async ({ page }) => {
+    await page.goto(`${host.base}/#/`);
+    await appReady(page);
+    const button = page.locator('#home-assistant');
+    // Before Settings, in Home's header.
+    await expect(page.locator('.home-top-actions > button').first()).toHaveId('home-assistant');
+    await expect(page.locator('#home-assistant + #home-prefs')).toHaveCount(1);
+    await expect(button).toHaveText('Assistant');
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    await expect(dock(page)).toBeHidden();
+    await expect(page.locator('[data-assistant-pill]')).toBeHidden();
+
+    await button.click();
+    await expect(dock(page)).toBeVisible();
+    await expect(button).toHaveAttribute('aria-expanded', 'true');
+    await expect(dock(page)).toHaveAttribute('data-dock-size', 'open');
+    await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'off');
+    await expect(dock(page).locator('.assistant-dock-note')).toHaveText(OFF_TEXT);
+    const settings = dock(page).getByRole('button', { name: 'Open Settings' });
+    await expect(settings).toBeFocused();
+    await expect(dock(page).getByRole('heading', { name: 'Assistant' })).toBeVisible();
+    await expect(dock(page).getByRole('button', { name: 'Assistant settings' })).toBeVisible();
+    await expect(dock(page).getByRole('button', { name: 'Close the Assistant' })).toBeVisible();
+
+    // 400 x min(640, vh - 76) at 16 px from the bottom right, outside #app and on top.
+    const vp = page.viewportSize();
+    const r = await rect(dock(page));
+    expect(Math.abs(vp.width - r.right - 16)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(vp.height - r.bottom - 16)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(r.right - r.left - 400)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(r.bottom - r.top - Math.min(640, vp.height - 76))).toBeLessThanOrEqual(SLACK);
+    expect(await page.evaluate(() => document.getElementById('assistant-dock').closest('#app, #home'))).toBeNull();
+    expect(await page.evaluate(() => document.getElementById('assistant-dock-root').parentElement === document.body)).toBe(true);
+    expect(await onTop(dock(page))).toBe(true);
+
+    // Escape inside closes it; the keyboard goes back to the button that opened it.
+    await page.keyboard.press('Escape');
+    await expect(dock(page)).toBeHidden();
+    await expect(button).toBeFocused();
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+
+    // Ctrl+/ from the search field opens it with the keyboard in it, and again closes it, back to the field.
+    await page.locator('#home-search').focus();
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeVisible();
+    await expect(settings).toBeFocused();
+    await page.locator('#home-search').focus();
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeVisible();
+    await expect(settings).toBeFocused();
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeHidden();
+    await expect(page.locator('#home-search')).toBeFocused();
+  });
+
+  test('Settings covers it and Ctrl+/ waits while Settings shows; it stays open from Home to a project', async ({ page }) => {
+    await openFromHome(page);
+    await dock(page).getByRole('button', { name: 'Open Settings' }).click();
+    const wizard = page.locator('#setup-wizard');
+    await expect(wizard).toBeVisible();
+    await expect(wizard.locator('#wiz-rail li.is-on')).toHaveText('Assistant');
+    expect(await onTop(dock(page)), 'Settings is in front of the dock').toBe(false);
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeVisible();
+    await page.locator('#wiz-skip').click();
+    await expect(wizard).toBeHidden();
+    expect(await onTop(dock(page))).toBe(true);
+
+    await page.goto(`${host.base}/#/p/${project}`);
+    await expect(page.locator('#app')).toBeVisible({ timeout: 60_000 });
+    await expect(dock(page)).toBeVisible();
+    // Between Queue and Settings in the workbench header.
+    await expect(page.locator('#top-header .top-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
+    await expect(page.locator('#wb-assistant')).toHaveAttribute('aria-expanded', 'true');
+    await page.locator('#wb-assistant').click();
+    await expect(dock(page)).toBeHidden();
+    await expect(page.locator('#wb-assistant')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test("over a workspace: the header's button opens it on top of the frame, and closing gives the keyboard back to it", async ({ page }) => {
+    await openWorkspace(page);
+    const button = page.locator('#workspace-overlay .ws-header-right #wb-assistant');
+    await expect(page.locator('#workspace-overlay .ws-header-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
+    await button.click();
+    await expect(dock(page)).toBeVisible();
+    expect(await onTop(dock(page)), 'the dock is over the workspace').toBe(true);
+    expect(await dock(page).evaluate((el) => !!el.closest('[inert]'))).toBe(false);
+    await dock(page).getByRole('button', { name: 'Close the Assistant' }).click();
+    await expect(dock(page)).toBeHidden();
+    await expect(button).toBeFocused();
+    // Back to the project: the button goes home to the workbench header.
+    await page.locator('#workspace-overlay [data-ws-back]').click();
+    await expect(page.locator('#workspace-overlay')).toBeHidden();
+    await expect(page.locator('#top-header .top-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
+  });
+
+  test('with the dock open, a toast and the dock do not overlap', async ({ page }) => {
+    await openFromHome(page);
+    await page.mouse.move(640, 10);
+    const t = await rect(await appToast(page, 'Saved beside the dock'));
+    expect(overlap(t, await rect(dock(page)))).toBe(false);
+    expect(t.left).toBeLessThanOrEqual(16 + 1);
+  });
+
+  test('a narrow window: a bottom sheet with the toasts above it; a short one: the full height under the header', async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 800 });
+    await openFromHome(page);
+    let vp = page.viewportSize();
+    let r = await rect(dock(page));
+    expect(Math.abs(r.left - 8)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(vp.width - r.right - 8)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(vp.height - r.bottom - 8)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(r.bottom - r.top - Math.min(0.7 * vp.height, vp.height - 60))).toBeLessThanOrEqual(SLACK);
+    await expect(page.locator('#home-assistant')).toHaveText('Assistant');
+    await page.mouse.move(300, 5);
+    const t = await rect(await appToast(page, 'Saved above the sheet'));
+    expect(overlap(t, r), 'the toast is above the sheet').toBe(false);
+    expect(t.bottom).toBeLessThanOrEqual(r.top);
+
+    await page.setViewportSize({ width: 1000, height: 480 });
+    vp = page.viewportSize();
+    r = await rect(dock(page));
+    expect(Math.abs(r.top - (44 + 8))).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(vp.height - r.bottom - 8)).toBeLessThanOrEqual(SLACK);
+  });
+
+  test('over remote access it says only that it is off there, and opens no stream of its own', async ({ browser }) => {
+    // Every request of this browser comes through a proxy, as over the public tunnel.
+    const context = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-for': '203.0.113.9' }, viewport: { width: 1280, height: 800 } });
+    try {
+      const page = await context.newPage();
+      const streams = [];
+      page.on('request', (req) => {
+        const url = req.url();
+        if (url.includes('/api/assistant/events') || (url.includes('/api/events/subscribe') && /"kind"\s*:\s*"assistant"/.test(req.postData() || ''))) streams.push(url);
+      });
+      await page.goto(`${host.base}/#/`);
+      await appReady(page);
+      await page.locator('#home-assistant').click();
+      await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'remote');
+      await expect(dock(page).locator('[data-dock-remote]')).toHaveText(REMOTE_TEXT);
+      await expect(dock(page).locator('textarea, [role="log"], [role="listbox"], .assistant-dock-composer')).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(dock(page)).toBeHidden();
+      expect(streams, 'no stream of the Assistant').toEqual([]);
+    } finally {
+      await context.close();
+    }
   });
 });

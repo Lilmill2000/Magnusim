@@ -8,6 +8,7 @@ import '../theme/tokens.css';
 import '../plugin-ui/kit.css';
 import { AppShell } from './AppShell';
 import { parseHomeRoute } from '../home/controller';
+import { ensureDockRoot } from '../assistant/dock/root';
 
 // First, before anything else runs: the workspace leave guard must be the first
 // hashchange listener on window. Chromium runs window listeners in registration
@@ -48,6 +49,9 @@ async function boot(): Promise<void> {
     return;
   }
   injectShell();
+  // The Assistant's dock: the last child of body, after #react-root (never in #app or #home).
+  ensureReactRoot();
+  ensureDockRoot();
   document.getElementById('left-tree')?.setAttribute('data-react-tree', '1');
   const route = parseHomeRoute();
   document.body.classList.toggle('on-home', route.view === 'home');
