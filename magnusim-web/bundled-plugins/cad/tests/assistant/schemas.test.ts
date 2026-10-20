@@ -147,7 +147,7 @@ describe('the 18 tools', () => {
   });
 
   it('the help topics, the core set and the enums the guide uses exist', () => {
-    expect(HELP_TOPICS).toEqual(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide']);
+    expect(HELP_TOPICS).toEqual(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools']);
     expect((toolNamed('help')!.inputSchema.properties.topic as { enum: string[] }).enum).toEqual([...HELP_TOPICS]);
     expect(CORE_TOOLSET).toHaveLength(13);
     for (const n of CORE_TOOLSET) expect(TOOL_NAMES).toContain(n);

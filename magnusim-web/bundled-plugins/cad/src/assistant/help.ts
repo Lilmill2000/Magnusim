@@ -2,9 +2,11 @@
 // topic at most 8 KB (example topics 12 KB), every string at most 2000 characters, as the app
 // hands them to the model. `guide` is the CAD notes themselves, `errors` every reason with its
 // fix, `features` each tool's fields and rules, `parameters`, `selectors` every form of the
-// selector language, `sketch` the entity kinds, parts, DOF, the solver's ref signatures, joins
+// selector language, `sketch` the entity kinds (splines too), parts, DOF, the solver's ref signatures, joins
 // and frames, `checks` what to verify and how, `traps` the common mistakes, `examples` the index
-// of the worked parts. The example topics are the worked parts of examples.ts, one row per call
+// of the worked parts, `sketch_tools` fix, driven dimensions, places and the person's sketch tools
+// as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link)
+// with examples, and how a pattern's values change later. The example topics are the worked parts of examples.ts, one row per call
 // with its whole input and its key results ({about, text, tool, input, result}: the call sits in
 // the row itself, so a sketch's `at` lists stay at depth 7 of the reply's data, inside the app's
 // 8; every other container is at most 6 deep). guide-example.test.ts runs every call.
@@ -240,6 +242,22 @@ function partsWords(kind: EntityKind, at: number[]): string {
   return parts.length ? parts.map((p) => `x.${p}`).join(' ') : '';
 }
 
+/** Fix, driven dimensions, places and the person's sketch tools as rows of the sketch tool (sketch/ops.ts). */
+const sketchToolRows = (): HelpRow[] => [
+  { about: 'rows', text: 'The person\'s sketch tools are rows of constraints {id, kind, refs, value}, run in order on the sketch as the rows before them left it, solved: draw and dimension, then trim, fillet or pattern, then constrain what they made. "at(u, v)" in refs is a place in mm. The answer\'s made lists what each row made. Each tool stores what the person\'s tool stores.' },
+  { about: 'fix', text: 'fix [p] holds a point where it is, fix [p, at(u, v)] at that place; fix [l] holds a curve (every point) where it is. A fixed point is fully defined.' },
+  { about: 'driven', text: 'A dimension with value "driven" measures and never holds (grey in parentheses; the person\'s "Make it driven?"): use it when a driving one would over-define the sketch (the conflict names it). A last ref at(u, v) places any dimension\'s label: distance [r.bottom, at(0, -12)] "w".' },
+  { about: 'trim and extend', text: 'trim [curve, at(u, v)]: the piece around the place goes, up to the nearest crossings (a piece cut in two keeps its id at the start, the other is "<id>.b"; new ends sit on the curves that cut them). extend [curve, at(u, v)]: the end nearest the place runs to the next curve. Example: {id:"t1", kind:"trim", refs:["c1", "at(0, 5)"], value:""}.' },
+  { about: 'fillet and chamfer', text: 'fillet [corner] or [c1, c2] (two lines, or a line and an arc, meeting there), value the radius: an arc tangent to both and a driving Radius dimension; the corner stays as a construction point ("f1.corner"); the arc is "f1" in later rows. chamfer: value "d" (equal) or "d1; d2" (d1 along the first line); its line is "ch1". made gives the stored ids and dimensions (edit_feature takes them). Example: {id:"f1", kind:"fillet", refs:["r.tr"], value:"3 mm"}.' },
+  { about: 'mirror', text: 'mirror [axis line, items...]: copies kept symmetric about the line (Symmetric relations; circles also Equal); an item lying on the axis is left out, a point on it shared. Items are entities or whole macros ("r"). Copies are "m1.<item>" in later rows ("m1.c1", "m1.r.top").' },
+  { about: 'offset', text: 'offset [curve, at(u, v)], value the distance: the curve\'s chain (curves joined end to end) offset to the place\'s side; without at(u, v) both sides. It follows its source (a tie). Copies are "<id>.1.<curve>" (".2." for the other side). Example: {id:"o1", kind:"offset", refs:["p.1", "at(10, 12)"], value:"2 mm"}.' },
+  { about: 'linear_pattern', text: 'linear_pattern [items...], value "count 4; spacing 10 mm; angle 0 deg" (count includes the items; angle from +u, 0 deg if left out); a second direction "count2 3; spacing2 8 mm; angle2 90 deg"; "along l1" or "along2 l2" runs along a line instead of an angle. Copies follow their items; copy k of item c1 is "<id>.k.c1" ("<id>.i_k.c1" with two directions).' },
+  { about: 'circular_pattern', text: 'circular_pattern [centre point, items...], value "count 6" (the whole circle, equal spacing) or "count 4; angle 90 deg" (spread over that total angle). Copy k is "<id>.k.<item>". Example: {id:"p1", kind:"circular_pattern", refs:["origin", "h"], value:"count 6"}.' },
+  { about: 'later', text: 'A pattern or offset keeps its row\'s id. edit_feature on the sketch sets its values: "<id>.count", "<id>.spacing", "<id>.angle", "<id>.count2", "<id>.spacing2", "<id>.angle2" (linear), "<id>.count", "<id>.angle" ("full" for the whole circle; circular), "<id>.distance" (offset); copies are made or removed. A replace keeps a row sent with its id (new values lay it out again), and removes one left out.' },
+  { about: 'project and intersect', text: 'project [selector]: a face (its outer edges), an edge or a vertex of a body, or a body (its silhouette along the sketch normal), as fixed curves linked to the model (they follow it at every rebuild). intersect [body]: where the sketch plane cuts the body. One per row; the curves are "<id>" (one) or "<id>.1", "<id>.2"... Constrain to them, or trim and offset them after break_link. A replace keeps a row sent with its id (its refs are not read again).' },
+  { about: 'break_link', text: 'break_link [curves or a project/intersect row id]: the linked curves become ordinary geometry where they are; constraints on them stay.' },
+];
+
 /** The sketch reference (CAD tools spec §10.2 sketch): kinds, parts, DOF, refs, joins, frames. */
 const sketchRows = (): HelpRow[] => {
   const kinds: [EntityKind, number[], string][] = [
@@ -254,24 +272,26 @@ const sketchRows = (): HelpRow[] => {
     ['slot', [0, 0, 2, 0, 1], 'x.a and x.b are the arc centres; sides tangent to the arcs, the arcs equal; x.axis is construction'],
     ['polygon', [0, 0, 1, 4], 'corners x.p1... on the construction circle x.circle (x.p1 at +u), sides x.s1... (x.sk from x.pk), all equal'],
     ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece: arcs x.inner, x.outer on x.center, radial lines x.start, x.end through the centre'],
+    ['spline', [0, 0, 10, 5, 20, 0], 'x is the curve through its points x.p0, x.p1... (a cubic, as the person\'s Spline tool); x.start, x.end when open; x.h0, x.h1 are its end handles once a tangent gave them. A wing: spline [100,0, 50,6, 0,0, 50,-4, 100,0] closed'],
+    ['control_spline', [0, 0, 10, 10, 20, 0, 30, 0, 3], 'x is the curve on its poles x.p0, x.p1... (as the person\'s Control-point spline); x.start, x.end when open'],
   ];
   const rows: HelpRow[] = kinds.map(([kind, at, words]) => {
-    const parts = kind === 'polyline' || kind === 'polygon' ? '' : partsWords(kind, at);
+    const parts = kind === 'polyline' || kind === 'polygon' || kind === 'spline' || kind === 'control_spline' ? '' : partsWords(kind, at);
     const dof = KIND_DOF[kind];
-    return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : ''}.` };
+    return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : kind.endsWith('spline') ? '. 2 DOF per point' : ''}.` };
   });
   const relations = (Object.keys(SIGNATURES) as ToolConstraintKind[]).filter((k) => !TOOL_DIMENSIONS.includes(k));
-  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. point_on is on a line or a circle/arc; collinear makes two lines one line.` });
+  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. point_on is on a line or a circle/arc; collinear makes two lines one line. A spline's curve takes tangent [s, curve] at an end they share (a fit spline gets its end handle there) and coincident [point, s] (the point slides on it); other relations take its points. fix: help sketch_tools.` });
   rows.push({
     about: 'dimensions',
-    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit). ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
+    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit), or "driven" (it shows the value without holding it); a last ref at(u, v) places its label. ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
   });
   rows.push({ about: 'ids and refs', text: 'Ids: a-z, 0-9 and _ (a letter first, at most 24, no double _, not origin), unique across entities and constraints. Refs: an id, a part (l.start, r.top, p.2, p.p2, c.center) or origin. A kept entity of an edited sketch keeps its points (and an id the sketch has, e_..., pt_..., is taken as it is).' });
   rows.push({ about: 'joins', text: `Ends within ${JOIN_TOL} mm of another entity's point are one point (the first entity's wins; refs follow; "joined" lists them), never two points of one entity, never the origin by itself; 0.05 to 0.5 mm apart is a warning (add coincident or fix the numbers). Points an edited sketch has apart stay apart. A rect corner drawn on a line's end is joined: no coincident needed.` });
   rows.push({ about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours, or cannot hold with one, is left out and said so (dropped_inferred, and a warning naming which).' });
   rows.push({ about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." });
   rows.push({ about: 'planes and faces', text: 'Top n+Z u+X v+Y; Front n-Y u+X v+Z; Right n+X u+Y v+Z. On a flat face (n out of the part): +Z u+X v+Y; -Z u+X v-Y; +Y u+X v-Z; -Y u+X v+Z; +X u+Y v+Z; -X u+Y v-Z; its origin is the model origin projected onto it. "<plane or face> offset <length> [flip]" makes "<sketch> plane".' });
-  rows.push({ about: 'replace', text: 'edit "<name>" and every input: get_model feature <name> gives them in this form. "" for on keeps where it lies. Keep the ids that stay: region keys and face names follow them. edit_feature changes one dimension by its id. Sketches with projected edges, splines, patterns, fixed points or driven dimensions are not replaced (edit_feature still changes their values).' });
+  rows.push({ about: 'replace', text: 'edit "<name>" and every input: get_model feature <name> gives them in this form (splines, fix, driven dimensions, patterns, offsets and projections too: help sketch_tools). "" for on keeps where it lies. Keep the ids that stay: region keys and face names follow them. edit_feature changes one dimension by its id, or a pattern\'s value as <id>.count.' });
   return rows;
 };
 
@@ -289,6 +309,7 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   example_flange: exampleRows('example_flange'),
   example_chip: exampleRows('example_chip'),
   guide: guideRows(),
+  sketch_tools: sketchToolRows(),
 });
 
 export const isHelpTopic = (t: unknown): t is HelpTopic => typeof t === 'string' && (HELP_TOPICS as readonly string[]).includes(t);

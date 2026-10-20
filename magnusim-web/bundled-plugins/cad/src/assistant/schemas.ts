@@ -52,6 +52,7 @@ export const HELP_TOPICS = [
   'example_flange',
   'example_chip',
   'guide',
+  'sketch_tools',
 ] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
@@ -59,7 +60,7 @@ export type HelpTopic = (typeof HELP_TOPICS)[number];
 export const VIEW_DIRECTIONS = ['iso', 'iso_back', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
 
 /** The sketch entity kinds and relation/dimension kinds (the sketch tool's enums). */
-export const SKETCH_ENTITY_KINDS = ['point', 'line', 'centerline', 'polyline', 'circle', 'arc', 'rect', 'center_rect', 'slot', 'polygon', 'sector'] as const;
+export const SKETCH_ENTITY_KINDS = ['point', 'line', 'centerline', 'polyline', 'circle', 'arc', 'rect', 'center_rect', 'slot', 'polygon', 'sector', 'spline', 'control_spline'] as const;
 export const SKETCH_CONSTRAINT_KINDS = [
   'coincident',
   'horizontal',
@@ -80,6 +81,8 @@ export const SKETCH_CONSTRAINT_KINDS = [
   'diameter',
   'angle',
 ] as const;
+/** Fix and the person's sketch tools, as rows of the sketch tool's constraints (help sketch_tools). */
+export const SKETCH_TOOL_KINDS = ['fix', 'trim', 'extend', 'offset', 'fillet', 'chamfer', 'mirror', 'linear_pattern', 'circular_pattern', 'project', 'intersect', 'break_link'] as const;
 
 interface ToolSpec {
   name: string;
@@ -146,7 +149,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 30,
     description:
-      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them). Read it when unsure instead of guessing.',
+      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project). Read it when unsure instead of guessing.',
     schema: obj({ topic: en(HELP_TOPICS, 'Topic') }),
   },
   {
@@ -178,7 +181,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Make a sketch (edit "") or replace one\'s content (edit: its name; keep the ids that stay). on: Top, Front, Right, "<plane> offset <length>" (adds a construction plane), a construction plane\'s name, or one flat face ("Base.end"; find shows its frame). entities {id, kind, at, construction}, at in mm of sketch u, v: point [u,v]; line, centerline [u1,v1,u2,v2]; polyline [u1,v1,u2,v2,...] (closed when it ends where it starts); rect [u1,v1,u2,v2] corners; center_rect [cu,cv,width,height]; circle [cu,cv,r]; arc [cu,cv,r,start deg,end deg] counter-clockwise; slot [u1,v1,u2,v2,r] arc centres; polygon [cu,cv,R,sides]; sector [cu,cv,r1,r2,start deg,end deg] a ring piece. constraints {id, kind, refs, value}: value "" for a relation, an expression for a dimension; refs are ids, parts (l.start, c.center, r.top, p.p2, p.2) or origin. Ids: a-z, 0-9, _ (letter first). The solver always runs; returns state, dof, free, moved, the plane and regions (r1...). Conflicts and duplicates are refused with their ids.',
+      'Make a sketch (edit "") or replace one (edit: its name). on: Top, Front, Right, "<plane> offset <length>", a construction plane, or one flat face ("Base.end"). entities {id, kind, at, construction}, at in mm of sketch u, v: point [u,v]; line, centerline [u1,v1,u2,v2]; polyline [u1,v1,u2,v2,...] (closed when it ends where it starts; splines too); rect [u1,v1,u2,v2] corners; center_rect [cu,cv,width,height]; circle [cu,cv,r]; arc [cu,cv,r,start deg,end deg] ccw; slot [u1,v1,u2,v2,r] arc centres; polygon [cu,cv,R,sides]; sector [cu,cv,r1,r2,start deg,end deg]; spline [u1,v1,...] fit points; control_spline [u1,v1,...,degree] poles. constraints {id, kind, refs, value}, in order: value "" for a relation, an expression or "driven" for a dimension; refs: ids, parts (l.start, c.center, r.top, p.p2, p.2), origin, at(u, v) a place. fix and the person\'s sketch tools (trim, offset, fillet, patterns, project...) are rows too: help sketch_tools. Returns the solver\'s state, dof, free, moved, regions (r1...), made.',
     schema: obj({
       edit: EDIT,
       name: NAME,
@@ -187,7 +190,7 @@ const SPECS: ToolSpec[] = [
         obj({
           id: str(24, 'a-z, 0-9, _ (letter first, no double _); unique; not origin', 1),
           kind: en(SKETCH_ENTITY_KINDS, 'Kind'),
-          at: arr(num('mm'), 2, 200, 'Numbers for the kind, mm in sketch u, v (polygon: last number is the side count)'),
+          at: arr(num('mm'), 2, 200, 'Numbers for the kind, mm in sketch u, v (polygon: last number is the side count; control_spline: the degree, 3 or 5)'),
           construction: bool('Reference only: bounds no region'),
         }),
         1,
@@ -197,13 +200,13 @@ const SPECS: ToolSpec[] = [
       constraints: arr(
         obj({
           id: str(24, 'Constraint id', 1),
-          kind: en(SKETCH_CONSTRAINT_KINDS, 'Relation or dimension'),
-          refs: arr(str(60, 'An id, a part (l.start) or origin'), 1, 3, 'What it ties'),
-          value: str(200, 'Dimensions: an expression ("w", "12 mm", "30 deg"). Relations: "".'),
+          kind: en([...SKETCH_CONSTRAINT_KINDS, ...SKETCH_TOOL_KINDS], 'Relation, dimension or sketch tool'),
+          refs: arr(str(120, 'An id, a part (l.start), origin or at(u, v)'), 1, 40, 'What it ties or works on'),
+          value: str(200, 'Dimensions: an expression ("w", "12 mm", "30 deg") or "driven". Relations: "". Tools: help sketch_tools.'),
         }),
         0,
         180,
-        'Relations and dimensions (at most 200 with the inferred ones).',
+        'Relations, dimensions and sketch tools, in order (at most 200 with the inferred ones).',
       ),
       infer: bool('true: lines and polyline sides drawn exactly along u or v also get horizontal or vertical'),
     }),

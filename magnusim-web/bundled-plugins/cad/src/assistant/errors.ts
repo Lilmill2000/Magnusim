@@ -82,7 +82,7 @@ export const HINTS: Readonly<Record<Reason | SubReason, string>> = Object.freeze
   open_profile: 'Close the profile: join the open ends the message lists (help sketch).',
   sketch_conflict: 'Remove one of your named constraints; never add it back.',
   sketch_collapsed: 'Give the named entity a size above zero, or remove what shrinks it.',
-  unsupported_sketch: 'This sketch has projected edges, splines or sketch patterns: change its dimension values with edit_feature.',
+  unsupported_sketch: 'The sketch tool cannot write this sketch: change its dimension values with edit_feature.',
   too_big: 'Split the work: use edit_feature for its dimensions, or make a second sketch.',
   bad_section: 'A section takes one body and a plane; leave section "" otherwise.',
   in_use: 'Change or delete what uses it first: detail lists them.',

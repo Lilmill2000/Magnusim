@@ -13,12 +13,15 @@
 //      it fights or repeats (a redundant one's partners are found by solving without each in turn),
 //      a macro's own relation as `internal` ("r's own horizontal on r.top");
 //   4. no solution: sketch_unsolved; a line, circle or arc solved to no size: sketch_collapsed;
-//   5. `moved`: points the solution put more than max(0.5 mm, 2% of the sketch's size) from where
+//   5. a new driven dimension (value "driven") takes the value it measures on the solution, as the
+//      person's "Make it driven" places it;
+//   6. `moved`: points the solution put more than max(0.5 mm, 2% of the sketch's size) from where
 //      the model drew them (the 10 farthest); `free`: what still moves (the solver's free
 //      parameters by the model's names: {"of": "bo.center", "moves": ["u", "v"]}).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { entityPoints, evaluateDimensions, withSolved } from '../../sketch/model';
+import { entityPoints, evaluateDimensions, isDimension, measureDimension, quantityOf, withSolved } from '../../sketch/model';
+import { exprFor } from '../../sketch/mode';
 import { statusOf } from '../../sketch/dof';
 import type { CallCtx } from '../../types/assistant';
 import type { SketchConstraint, SketchEntity, SketchFeature, Vec2 } from '../../types/doc';
@@ -271,13 +274,24 @@ export async function solveSketch(ctx: Pick<CallCtx, 'services' | 'progress' | '
     const named = rows.map((x) => x.internal ?? `${x.id} (${x.label})`);
     const list = named.length <= 1 ? named.join('') : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
     const fix = mine.length ? `remove ${mine.length === 1 ? mine[0] : `one of ${mine.join(', ')}`}` : 'change the numbers or the shapes';
+    // The person's "Make it driven?": a dimension of the model's that over-defines it can measure instead.
+    const dims = rows.filter((x) => !x.internal && !x.inferred && attempt.constraints.some((c) => c.id === x.id && isDimension(c) && c.driving)).map((x) => x.id);
+    const driven = dims.length ? `, or make ${dims.length === 1 ? dims[0] : `one of ${dims.join(', ')}`} driven (value "driven": it shows the value without holding it)` : '';
     // One constraint alone repeats what the sketch holds already: joined points, or a shape's own relations.
     const what = st.conflicting.length ? 'cannot all hold' : rows.length === 1 ? 'repeats what the sketch already holds (points within 0.05 mm are one point, and each shape keeps its own relations)' : 'say the same thing';
-    throw new ToolError('sketch_conflict', `The sketch is over-defined: ${list} ${what}; ${fix}. Nothing changed.`, { detail: { conflicts: rows.slice(0, 20) } });
+    throw new ToolError('sketch_conflict', `The sketch is over-defined: ${list} ${what}; ${fix}${driven}. Nothing changed.`, { detail: { conflicts: rows.slice(0, 20) } });
   }
   if (!r.solve.solved) throw new ToolError('sketch_unsolved', 'The solver found no shape that holds every constraint and dimension. Nothing changed.', { detail: { status: r.solve.status } });
   const solved = withSolved(asFeature(attempt), r.solve.values) as unknown as SketchGeometry;
   const shrunk = collapsed(solved);
+  // A new driven dimension shows what it measures (signed as the person's are: x, y and angle).
+  const constraints = attempt.constraints.map((c) => {
+    if (!isDimension(c) || c.driving || c.expr) return c;
+    const v = measureDimension(solved, c);
+    if (v == null || !Number.isFinite(v)) return c;
+    const signed = c.kind === 'distance_x' || c.kind === 'distance_y' || c.kind === 'angle';
+    return { ...c, expr: exprFor(signed ? v : Math.abs(v), quantityOf(c.kind), services.doc.units) };
+  });
   if (shrunk) throw new ToolError('sketch_collapsed', `${refOf(shrunk)} would shrink to nothing: its constraints and dimensions leave it no size. Nothing changed.`, { detail: { entity: refOf(shrunk) } });
   // Moved: points the solution put far from the model's guess.
   const gp = Object.values(input.guess);
@@ -297,7 +311,7 @@ export async function solveSketch(ctx: Pick<CallCtx, 'services' | 'progress' | '
   const entityIds = new Set(solved.entities.map((e) => e.id));
   const free = freeRows(r.analysis.dependentParams ?? [], (owner) => !!solved.points[owner] || entityIds.has(owner), refOf);
   return {
-    geometry: { points: solved.points, entities: solved.entities, constraints: attempt.constraints },
+    geometry: { points: solved.points, entities: solved.entities, constraints, ...(attempt.ties ? { ties: attempt.ties } : {}), ...(attempt.links ? { links: attempt.links } : {}) },
     values: ev.values,
     state: st.state === 'fully' ? 'fully' : 'under',
     dof: st.dof,

@@ -6,8 +6,8 @@
 //     "" for on keeps where it lies; name renames; a sketch made later, an extrude, a missing name
 //     and a taken name are refused before anything changes;
 //   - get_model feature <sketch> gives the tool's input form: resent as it is, the sketch comes back
-//     the same (macros, joins, infer, a sketch the person drew with the UI's ids); a sketch the tool
-//     cannot write is unsupported (and refused), one too big to resend is too_big (and refused);
+//     the same (macros, joins, infer, a sketch the person drew with the UI's ids); a sketch the person
+//     drew with a fixed point resends too, one too big to resend is too_big (and refused);
 //   - edit_feature on a sketch's dimension ids: checked headless first (no solution, a bad field),
 //     written through sketch mode; a value that breaks a feature after it changes nothing; on a
 //     person's sketch with a sketch pattern the check keeps the pattern's ties, so its state, dof,
@@ -207,7 +207,7 @@ describe("get_model's input form", () => {
   );
 
   it(
-    "resends a sketch the person drew, by its own ids; a fixed point makes it unsupported, too many entities too_big",
+    "resends a sketch the person drew, by its own ids (a fixed point too); too many entities too_big",
     async () => {
       h = await assistantHarness({ sketchMode: true });
       await h.add('sketch', {
@@ -243,7 +243,7 @@ describe("get_model's input form", () => {
       const after = stored(featureNamed(h, 'Drawn'));
       expect(after.entities).toEqual(before.entities);
       expect(after.constraints.map((c) => ({ ...c, inferred: undefined }))).toEqual(before.constraints.map((c) => ({ ...c, inferred: undefined })));
-      // A fixed point: unsupported, with the words; a replace is refused, its dimensions still change.
+      // A fixed point: its form has the fix row; resent, the sketch comes back the same; its dimensions change.
       await h.add('sketch', {
         name: 'Fixed',
         points: { pt_1: [0, 0], pt_2: [20, 0] },
@@ -254,9 +254,11 @@ describe("get_model's input form", () => {
         ],
         solved: { values: { c_2: 20 }, dof: 1, state: 'under' },
       });
-      const fx = await ok(h, 'get_model', { detail: 'brief', feature: 'Fixed' });
-      expect(fx.data.feature).toMatchObject({ inputs: null, unsupported: expect.stringContaining('fixed points') });
-      expect((await fail(h, 'sketch', SK({ edit: 'Fixed', on: '', entities: [E('e_1', 'line', [0, 0, 20, 0])] }))).detail.reason).toBe('unsupported_sketch');
+      const fixedForm = await inputsOf(h, 'Fixed');
+      expect(fixedForm).toMatchObject({ constraints: [{ id: 'c_1', kind: 'fix', refs: ['e_1.start'], value: '' }, { id: 'c_2', kind: 'distance', refs: ['e_1'], value: '20 mm' }] });
+      const fixedBefore = stored(featureNamed(h, 'Fixed'));
+      await ok(h, 'sketch', fixedForm!);
+      expect(stored(featureNamed(h, 'Fixed'))).toEqual(fixedBefore);
       await ok(h, 'edit_feature', EDIT('Fixed', { set: [{ field: 'c_2', value: '25 mm' }] }));
       expect(featureNamed(h, 'Fixed').points.pt_2[0]).toBeCloseTo(25, 6);
       // 151 points: too big to resend.
