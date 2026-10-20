@@ -217,6 +217,17 @@ export interface TurnStarted {
   answer_key: string;
 }
 
+/**
+ * A picture a turn keeps (phase 4 spec 9.4): the person's (`n` "p1".."p4") or a tool result's
+ * ("1", "2", ...), read with GET /api/assistant/turns/:id/images/:n (404 image_gone once dropped).
+ */
+export interface ImageRef {
+  n: string;
+  media_type: string;
+  width: number;
+  height: number;
+}
+
 /** One entry of a turn's log (GET /api/assistant/turns/:id), numbered by `seq`. */
 export type TurnEvent = { seq: number; at: number } & (
   | { type: 'state'; state: TurnState }
@@ -225,13 +236,19 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'note'; text: string }
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: 'read' | 'edit' | 'compute' | 'destructive'; source: string; input_preview: string }
-  | { type: 'tool_progress'; call: string; fraction: number | null; label: string }
-  /** `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's line. */
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number }
+  /** `waiting`: the call waits for the person in its workspace (phase 4 spec 9.5). */
+  | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
+  /**
+   * `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's line;
+   * `images`: the result's pictures the turn keeps (phase 4 spec 9.4; one per CAD edit).
+   */
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
   | { type: 'end'; state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string; message: string | null }
+  /** A review round after the model's last answer while edits happened (`round` of `of`). */
+  | { type: 'review'; round: number; of: number }
   // A turn on a coding agent (phase 3): the agent once it is ready, its plan, its own tools, its
   // permission requests (ours auto-allowed; its own asked in the window), its mode and model.
   | { type: 'agent'; name: string; version: string | null; own_tools: 'off' | 'on' }
@@ -265,6 +282,83 @@ export interface TurnSummary {
   billing?: 'usd' | 'free' | 'agent_account';
   /** The coding agent the turn runs on (null for an API-key provider). */
   agent?: { id: string; name: string; version: string | null } | null;
+  // Phase 4 (spec 9.1, 9.7); absent from an older server.
+  /** The person's text (at most 20,000 characters, as stored). */
+  prompt?: string;
+  /** The first line of the person's text (at most 60 characters). */
+  title?: string;
+  /** 'window': started in an app window (its live link); 'program': the command line or another program. */
+  started_by?: 'window' | 'program';
+  /** What the turn used of its limits now: the counters its tab's page shows, and its active minutes. */
+  used?: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number; active_ms: number; minutes_cap: number };
+  /** The person's pictures. */
+  prompt_images?: ImageRef[];
+  /** The turn's log and pictures are no longer kept (its record stays). */
+  log_dropped?: boolean;
+}
+
+/** A turn as the turn channel's `summary` frames carry it (the snapshot's adds `prompt`). */
+export type SlimSummary = Omit<TurnSummary, 'text_so_far' | 'prompt'>;
+
+/** GET /api/assistant/turns/:id?since&wait_ms: the long-poll's answer. */
+export interface TurnPollAnswer {
+  ok: true;
+  turn: TurnSummary;
+  events: TurnEvent[];
+  next: number;
+  ended: boolean;
+}
+
+/**
+ * What the turn channel sends (phase 4 spec 5.1; hub kind `assistant`, params {role:'turn',
+ * turn, since}): `snapshot` first with the events after `since` (at most 500; `more` when
+ * `events` frames follow at once), then `events` as they come and `summary` when the turn
+ * changes. The server ends the channel once the `end` event went out.
+ */
+export interface TurnChannelFrameData {
+  snapshot: { turn: SlimSummary & { prompt?: string }; events: TurnEvent[]; next: number; ended: boolean; more: boolean };
+  events: { events: TurnEvent[]; next: number };
+  summary: { turn: SlimSummary };
+}
+
+/** A turn of a conversation as GET /api/assistant/conversations lists it (oldest first). */
+export interface ConversationTurnRow {
+  id: string;
+  title: string;
+  state: TurnState;
+  started_at: string;
+  ended_at: string | null;
+  started_by: 'window' | 'program';
+}
+
+/** A conversation as GET /api/assistant/conversations lists it (phase 4 spec 9.3). */
+export interface ConversationRow {
+  id: string;
+  provider: string;
+  /** Its provider's label, or the coding agent's name. */
+  label: string;
+  billing: 'usd' | 'free' | 'agent_account';
+  model: string;
+  project_id: string | null;
+  project_title: string | null;
+  created_at: string;
+  last_used_at: string;
+  /** The turn running in it, if any. */
+  running: string | null;
+  /** Why it takes no more messages, if so. */
+  full: string | null;
+  /** Its first turn's title. */
+  title: string;
+  /** The turns it keeps, oldest first. */
+  turns: ConversationTurnRow[];
+  /** Its turns no longer kept. */
+  dropped_turns: number;
+}
+
+/** GET /api/assistant/conversations[?project=<id>|home]: newest use first. */
+export interface ConversationsAnswer {
+  ok: true;
+  conversations: ConversationRow[];
 }
 
 /**

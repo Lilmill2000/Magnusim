@@ -17,8 +17,8 @@
  *   Home and a project with nothing to follow hold no connection.
  * - Each `hello` (the first, and every reconnect) asks for every channel again, in one
  *   call; their snapshots catch them up, as a reconnecting EventSource's did.
- * - A refused channel is CLOSED and gets `error`; one the server ended (`_closed`, a job
- *   that ended) is CLOSED with no error. A dropped stream: every channel is CONNECTING
+ * - A refused channel is CLOSED and gets `error`, and its `refusal` says the server's status
+ *   and words; one the server ended (`_closed`, a job that ended) is CLOSED with no error. A dropped stream: every channel is CONNECTING
  *   and gets `error`, as an EventSource's reconnect does.
  * - `ready()` says when the server has a channel (its subscribe answered, or a first frame
  *   came): a caller whose request starts what the channel reports waits for it first.
@@ -64,6 +64,8 @@ export interface ChannelHandle {
   pin(on: boolean): void;
   /** True once the server has this channel (OPEN), false once it is closed or refused. */
   ready(): Promise<boolean>;
+  /** Why the server refused it (its subscribe answer's status and error); null until it is refused. */
+  readonly refusal?: { status: number; error: string } | null;
 }
 
 interface HubState {
@@ -147,6 +149,7 @@ class Channel implements ChannelHandle {
   onerror: ((ev: Event) => void) | null = null;
   onopen: ((ev: Event) => void) | null = null;
   pinned: boolean;
+  refusal: { status: number; error: string } | null = null;
   private readonly listeners = new Map<string, Set<Listener>>();
   private readyWaiters: Array<(ok: boolean) => void> = [];
 
@@ -437,9 +440,10 @@ function opened(ch: Channel): void {
 }
 
 /** Refused by the server: closed, with an error (an EventSource refused its URL did the same). */
-function refuse(ch: Channel): void {
+function refuse(ch: Channel, status: number, error: string): void {
   if (ch.readyState === CLOSED) return;
   ch.readyState = CLOSED;
+  ch.refusal = { status, error };
   ch.settleReady(false);
   dropChannel(ch, false);
   ch.fire(new Event('error'));
@@ -477,7 +481,7 @@ function flush(): void {
   else if (resumed) announceResumed();
 }
 
-type SubscribeAnswer = { results?: Array<{ cid?: string; ok?: boolean }> };
+type SubscribeAnswer = { results?: Array<{ cid?: string; ok?: boolean; status?: unknown; error?: unknown }> };
 
 async function subscribe(conn: string, list: Channel[], resumed: boolean): Promise<void> {
   const s = hub();
@@ -525,18 +529,24 @@ async function subscribe(conn: string, list: Channel[], resumed: boolean): Promi
     if (resumed) s.resumePending = true;
     return;
   }
-  const answered = new Map<string, boolean>();
-  for (const res of (body && body.results) || []) if (res && typeof res.cid === 'string') answered.set(res.cid, !!res.ok);
+  const answered = new Map<string, { ok: boolean; status: number; error: string }>();
+  for (const res of (body && body.results) || []) {
+    if (!res || typeof res.cid !== 'string') continue;
+    const status = typeof res.status === 'number' && Number.isFinite(res.status) ? res.status : 0;
+    answered.set(res.cid, { ok: !!res.ok, status, error: typeof res.error === 'string' ? res.error : '' });
+  }
   const late: string[] = [];
   for (const ch of list) {
-    const ok = r.ok && answered.get(ch.cid) === true;
+    const said = answered.get(ch.cid);
+    const ok = r.ok && said?.ok === true;
     if (s.channels.get(ch.cid) !== ch) {
       // Closed while it was asked for: the server has it now, so it is let go there too.
       if (ok) late.push(ch.cid);
       continue;
     }
     if (ok) opened(ch);
-    else refuse(ch);
+    // A subscribe refused as a whole (no results) gives each channel its own status.
+    else refuse(ch, said && said.status ? said.status : r.ok ? 0 : r.status, said?.error ?? '');
   }
   if (late.length) {
     for (const cid of late) s.toUnsubscribe.add(cid);

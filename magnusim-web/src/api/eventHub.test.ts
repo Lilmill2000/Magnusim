@@ -157,6 +157,9 @@ describe('one event stream per tab', () => {
     await settle();
     expect(refused.readyState).toBe(refused.CLOSED);
     expect(refusedErr).toHaveBeenCalledTimes(1);
+    // Its refusal says why, as the server did; the other channel has none.
+    expect(refused.refusal).toEqual({ status: 404, error: 'job not found' });
+    expect(ended.refusal).toBeNull();
     const cid = subscribes()[0].body.channels![1].cid;
     es.frame('end', cid, { status: 'done' });
     es.frame('_closed', cid, undefined);
