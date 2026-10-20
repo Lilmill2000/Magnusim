@@ -17,6 +17,8 @@ import {
   ASSISTANT_REGISTER_MS,
   ASSISTANT_SUMMARY_MAX,
   ASSISTANT_TEXT_BYTES,
+  ASSISTANT_UNDO_OFFERS_MAX,
+  ASSISTANT_UNDO_WAIT_MS,
   BridgeError,
   HOST_API_VERSION,
   WorkspaceBridge,
@@ -1182,6 +1184,242 @@ describe('the SDK and the bridge together (1.9, unreleased)', () => {
     expect(await call(t.bridge)).toEqual({ ok: false, code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Call add with by 1, 2 or 3.', detail });
     expect(await call(t.bridge)).toEqual({ ok: false, code: 'failed', message: 'No.', hint: 'Wait.', detail: { at: '1970-01-01T00:00:00.000Z' } });
     expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
+    t.end();
+  });
+});
+
+describe("undo from the app's Assistant panel, and its key (1.9, unreleased)", () => {
+  const RUNNING: AssistantTurn = {
+    id: 't-1',
+    state: 'running',
+    title: 'Add 2 to the counter',
+    local: false,
+    contextTokens: null,
+    images: null,
+    used: { steps: 1, stepsCap: 50, changes: 0, changesCap: 0, usd: 0.01, usdCap: 3 },
+  };
+  const ENDED: AssistantTurn = { ...RUNNING, state: 'ended', end: { state: 'done', reason: 'end_turn' } };
+  const undoHooks = () => {
+    const h = hooks();
+    h.assistantUndoable = vi.fn();
+    return h;
+  };
+  /** The undo events the page got, as {req, turn}. */
+  const asks = (events: Event[]) => of(events, 'assistantUndo').map((e) => e.data as { req: string; turn: string });
+
+  it('assistant.undoable offers only a turn told to this page; the label is cleaned and cut, or names the turn; null withdraws; bad_request for a turn or label of the wrong kind; no hook: no_assistant', async () => {
+    const h = undoHooks();
+    const t = await connected(h);
+    expect((await t.call('assistant.undoable', { turn: 't-1', label: 'Assistant: add 2' })).result, 'not told yet').toEqual({ offered: false, reason: 'not_this_tab' });
+    expect(h.assistantUndoable).not.toHaveBeenCalled();
+    t.bridge.assistantTurn(RUNNING);
+    t.bridge.assistantTurn(ENDED);
+    expect((await t.call('assistant.undoable', { turn: 't-1', label: `Assistant:${BEL} add${RLO} 2${LS}` })).result).toEqual({ offered: true });
+    expect(h.assistantUndoable).toHaveBeenLastCalledWith('t-1', 'Assistant: add 2');
+    expect(t.calls.undoOffer('t-1')).toBe('Assistant: add 2');
+    expect((await t.call('assistant.undoable', { turn: 't-1', label: 'x'.repeat(300) })).result).toEqual({ offered: true });
+    expect(h.assistantUndoable).toHaveBeenLastCalledWith('t-1', 'x'.repeat(120));
+    expect((await t.call('assistant.undoable', { turn: 't-1', label: ` ${BEL} ` })).result).toEqual({ offered: true });
+    expect(h.assistantUndoable).toHaveBeenLastCalledWith('t-1', 'Assistant: Add 2 to the counter');
+    // Withdrawn: the hook hears null once; again changes nothing.
+    expect((await t.call('assistant.undoable', { turn: 't-1', label: null })).result).toEqual({ offered: false });
+    expect((await t.call('assistant.undoable', { turn: 't-1' })).result).toEqual({ offered: false });
+    expect(h.assistantUndoable.mock.calls.filter((c) => c[1] === null)).toEqual([['t-1', null]]);
+    expect(t.calls.undoOffer('t-1')).toBeNull();
+    for (const params of [{ label: 'a' }, { turn: '', label: 'a' }, { turn: 5, label: 'a' }, { turn: 'x'.repeat(129), label: 'a' }, { turn: 't-1', label: 5 }, { turn: 't-1', label: { text: 'a' } }]) {
+      expect((await t.call('assistant.undoable', params)).error, JSON.stringify(params)).toMatchObject({ code: 'bad_request' });
+    }
+    expect(h.assistantUndoable).toHaveBeenCalledTimes(4);
+    t.end();
+    const bare = await connected();
+    bare.bridge.assistantTurn(ENDED);
+    expect((await bare.call('assistant.undoable', { turn: 't-1', label: 'a' })).result).toEqual({ offered: false, reason: 'no_assistant' });
+    bare.end();
+  });
+
+  it(`a page keeps at most ${ASSISTANT_UNDO_OFFERS_MAX} offers: the oldest goes, and the app hears it go`, async () => {
+    const h = undoHooks();
+    const t = await connected(h);
+    const n = ASSISTANT_UNDO_OFFERS_MAX + 2;
+    for (let i = 1; i <= n; i++) {
+      t.bridge.assistantTurn({ ...ENDED, id: `t-${i}` });
+      expect((await t.call('assistant.undoable', { turn: `t-${i}`, label: `Step ${i}` })).result).toEqual({ offered: true });
+    }
+    expect(h.assistantUndoable.mock.calls.filter((c) => c[1] === null)).toEqual([
+      ['t-1', null],
+      ['t-2', null],
+    ]);
+    expect(t.calls.undoOffer('t-2')).toBeNull();
+    expect(t.calls.undoOffer('t-3')).toBe('Step 3');
+    expect(t.calls.undoOffer(`t-${n}`)).toBe(`Step ${n}`);
+    t.end();
+  });
+
+  it("an offered turn stays known however many turns are told after it; others are forgotten past 64", async () => {
+    const h = undoHooks();
+    const t = await connected(h);
+    t.bridge.assistantTurn({ ...ENDED, id: 'kept' });
+    expect((await t.call('assistant.undoable', { turn: 'kept', label: 'Kept' })).result).toEqual({ offered: true });
+    t.bridge.assistantTurn({ ...ENDED, id: 'forgotten' });
+    for (let i = 0; i < 70; i++) t.bridge.assistantTurn({ ...ENDED, id: `n-${i}` });
+    expect((await t.call('assistant.undoable', { turn: 'kept', label: 'Kept again' })).result).toEqual({ offered: true });
+    expect((await t.call('assistant.undoable', { turn: 'forgotten', label: 'Old' })).result).toEqual({ offered: false, reason: 'not_this_tab' });
+    t.end();
+  });
+
+  it('assistantUndo asks the page only for a turn it offers, while nothing of it runs, one at a time; its answer comes back, and an undone answer spends the offer', async () => {
+    const h = undoHooks();
+    const t = await connected(h);
+    expect(await t.bridge.assistantUndo('t-1'), 'nothing offered').toEqual({ undone: false, reason: 'not_offered' });
+    t.bridge.assistantTurn(RUNNING);
+    // Offered while it still runs (the page may say so early): not asked until it ended.
+    expect((await t.call('assistant.undoable', { turn: 't-1', label: 'Assistant: add 2' })).result).toEqual({ offered: true });
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'busy' });
+    t.bridge.assistantTurn(ENDED);
+    // Another turn told to the page runs: no undo of an earlier one meanwhile.
+    t.bridge.assistantTurn({ ...RUNNING, id: 't-2' });
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'busy' });
+    t.bridge.assistantTurn({ ...ENDED, id: 't-2' });
+    // A tool call runs in the page (another app's, with no turn): busy too.
+    await t.call('assistant.register', { tools: [ADD] });
+    const x = invoke(t, { turn: 'mcp:m-1' });
+    await settle(() => of(t.events, 'assistantInvoke').length === 1, 'the call');
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'busy' });
+    await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'ok' } });
+    await outcomeOf(x);
+    expect(asks(t.events), 'nothing was asked while it could not be').toEqual([]);
+    // Now it is asked: one at a time.
+    let first: { undone: boolean; reason?: string } | null = null;
+    void t.bridge.assistantUndo('t-1').then((a) => (first = a));
+    await settle(() => asks(t.events).length === 1, 'the ask');
+    expect(asks(t.events)[0]).toEqual({ req: 'undo-1', turn: 't-1' });
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'busy' });
+    // A stale or foreign answer changes nothing.
+    await t.call('assistant.undone', { req: 'undo-9', undone: true });
+    await t.call('assistant.undone', { undone: true });
+    expect(first).toBeNull();
+    await t.call('assistant.undone', { req: 'undo-1', undone: false, reason: `not_newest${BEL}` });
+    expect(first).toEqual({ undone: false, reason: 'not_newest' });
+    expect(t.calls.undoOffer('t-1'), 'a refusal keeps the offer').toBe('Assistant: add 2');
+    // An answer with no reason reads failed; then one that undid it spends the offer.
+    const second = t.bridge.assistantUndo('t-1');
+    await settle(() => asks(t.events).length === 2, 'the second ask');
+    await t.call('assistant.undone', { req: 'undo-2', undone: 'yes' });
+    expect(await second).toEqual({ undone: false, reason: 'failed' });
+    const third = t.bridge.assistantUndo('t-1');
+    await settle(() => asks(t.events).length === 3, 'the third ask');
+    await t.call('assistant.undone', { req: 'undo-3', undone: true });
+    expect(await third).toEqual({ undone: true });
+    expect(t.calls.undoOffer('t-1')).toBeNull();
+    expect(h.assistantUndoable).toHaveBeenLastCalledWith('t-1', null);
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'not_offered' });
+    t.end();
+  });
+
+  it("refused leaving while the page's exit hook runs", async () => {
+    const t = await connected(undoHooks());
+    t.bridge.assistantTurn(ENDED);
+    await t.call('assistant.undoable', { turn: 't-1', label: 'Assistant: add 2' });
+    await t.call('nav.leaveHook', { on: true });
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: () => undefined });
+    await settle(() => of(t.events, 'leave').length === 1, 'the leave');
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'leaving' });
+    expect(asks(t.events)).toEqual([]);
+    t.end();
+  });
+
+  it(`no_answer after ${ASSISTANT_UNDO_WAIT_MS} ms; a closed channel ends an ask closed, withdraws every offer and forgets the turns told`, async () => {
+    const h = undoHooks();
+    const t = await connected(h);
+    t.bridge.assistantTurn(ENDED);
+    t.bridge.assistantTurn({ ...ENDED, id: 't-2' });
+    await t.call('assistant.undoable', { turn: 't-1', label: 'One' });
+    await t.call('assistant.undoable', { turn: 't-2', label: 'Two' });
+    fakeTimers();
+    let late: { undone: boolean; reason?: string } | null = null;
+    void t.bridge.assistantUndo('t-1').then((a) => (late = a));
+    await vi.advanceTimersByTimeAsync(ASSISTANT_UNDO_WAIT_MS - 1);
+    expect(late).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(late).toEqual({ undone: false, reason: 'no_answer' });
+    // Its answer after that changes nothing; the next ask goes.
+    await t.call('assistant.undone', { req: 'undo-1', undone: true });
+    expect(t.calls.undoOffer('t-1')).toBe('One');
+    vi.useRealTimers();
+    const pending = t.bridge.assistantUndo('t-2');
+    await settle(() => asks(t.events).length === 2, 'the second ask');
+    // The page loads again: its hello ends the channel.
+    window.dispatchEvent(new MessageEvent('message', { data: { magnusim: 'hello', sdkVersion: '1.4.0', instance: 'i2' }, source: t.win }));
+    expect(await pending).toEqual({ undone: false, reason: 'closed' });
+    expect(h.assistantUndoable.mock.calls.filter((c) => c[1] === null).map((c) => c[0]).sort()).toEqual(['t-1', 't-2']);
+    await vi.waitFor(() => expect(t.posted.length).toBe(2));
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: false, reason: 'not_offered' });
+    // The new page was told nothing yet: it can't offer the old turns.
+    const next = (t.posted[1] as [unknown, unknown, FakePort[]])[2][0];
+    const replies: Record<string, unknown>[] = [];
+    next.onmessage = (e) => void replies.push(e.data as Record<string, unknown>);
+    next.postMessage({ id: 1, method: 'assistant.undoable', params: { turn: 't-1', label: 'One' } });
+    await settle(() => replies.length === 1, 'the answer');
+    expect(replies[0].result).toEqual({ offered: false, reason: 'not_this_tab' });
+    t.end();
+    expect(await t.bridge.assistantUndo('t-1'), 'no channel').toEqual({ undone: false, reason: 'closed' });
+  });
+
+  it("the welcome says whether the host has the panel (hooks.assistantDocked; false without it); the page's assistant.dock goes to hooks.assistantDockKey", async () => {
+    const h = hooks();
+    h.assistantDocked = vi.fn(() => true);
+    h.assistantDockKey = vi.fn(() => true);
+    const t = await connected(h);
+    expect(t.welcome.context).toMatchObject({ assistantDock: true });
+    expect((await t.call('assistant.dock')).result).toEqual({ ok: true });
+    h.assistantDockKey.mockReturnValueOnce(false);
+    expect((await t.call('assistant.dock')).result).toEqual({ ok: false });
+    h.assistantDockKey.mockImplementationOnce(() => {
+      throw new Error('the dock broke');
+    });
+    expect((await t.call('assistant.dock')).result).toEqual({ ok: false });
+    expect(h.log).toHaveBeenCalledWith('assistant dock: the key was not taken', expect.any(Error));
+    expect(h.assistantDockKey).toHaveBeenCalledTimes(3);
+    t.end();
+    const bare = await connected();
+    expect(bare.welcome.context).toMatchObject({ assistantDock: false });
+    expect((await bare.call('assistant.dock')).result).toEqual({ ok: false });
+    bare.end();
+  });
+
+  it("the panel's messages are no work of a running leave's hook (NOT_HOOK_WORK)", async () => {
+    const h = undoHooks();
+    h.assistantDockKey = vi.fn(() => true);
+    const t = await connected(h);
+    t.bridge.assistantTurn(ENDED);
+    await t.call('nav.leaveHook', { on: true });
+    const seen: LeaveActivity[] = [];
+    void t.bridge.runLeave('back', { signal: new AbortController().signal, interactive: true, activity: (x) => seen.push(x) });
+    await settle(() => of(t.events, 'leave').length === 1, 'the leave');
+    await t.call('assistant.undoable', { turn: 't-1', label: 'One' });
+    await t.call('assistant.undone', { req: 'undo-1', undone: true });
+    await t.call('assistant.dock');
+    expect(seen.filter((x) => x.kind === 'calls')).toEqual([{ kind: 'calls', inFlight: 0 }]);
+    t.end();
+  });
+
+  it('through the real SDK: docked, setUndo reaches the app, and assistantUndo runs the onUndo handler', async () => {
+    const h = undoHooks();
+    h.assistantDocked = vi.fn(() => true);
+    const t = await sdkConnected(h);
+    const assistant = t.ws.assistant!;
+    expect(assistant.docked).toBe(true);
+    expect(await assistant.setUndo('t-1', 'Assistant: add 2')).toEqual({ offered: false, reason: 'not_this_tab' });
+    t.bridge.assistantTurn(ENDED);
+    expect(await assistant.setUndo('t-1', 'Assistant: add 2')).toEqual({ offered: true });
+    expect(h.assistantUndoable).toHaveBeenLastCalledWith('t-1', 'Assistant: add 2');
+    expect(await t.bridge.assistantUndo('t-1'), 'no handler yet').toEqual({ undone: false, reason: 'no_handler' });
+    const handler = vi.fn(async (turn: string) => (turn === 't-1' ? { undone: true } : { undone: false, reason: 'not_newest' }));
+    assistant.onUndo(handler);
+    expect(await t.bridge.assistantUndo('t-1')).toEqual({ undone: true });
+    expect(handler).toHaveBeenCalledWith('t-1');
+    expect(h.assistantUndoable).toHaveBeenLastCalledWith('t-1', null);
+    expect(await assistant.setUndo('t-1', null)).toEqual({ offered: false });
     t.end();
   });
 });

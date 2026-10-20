@@ -28,7 +28,7 @@ type Reply = (method: string, params: Params) => unknown;
  */
 async function open(
   reply: Reply,
-  opts: { clone?: boolean } = {},
+  opts: { clone?: boolean; context?: Partial<WorkspaceContext> } = {},
 ): Promise<{ ws: Workspace; posts: Post[]; hello: ReturnType<typeof vi.fn>; push: (msg: Record<string, unknown>) => void }> {
   const posts: Post[] = [];
   const port = {
@@ -56,7 +56,7 @@ async function open(
       const welcome = new Event('message');
       Object.defineProperties(welcome, {
         source: { value: parent },
-        data: { value: { magnusim: 'welcome', instance: msg.instance, context: CONTEXT } },
+        data: { value: { magnusim: 'welcome', instance: msg.instance, context: { ...CONTEXT, ...opts.context } } },
         ports: { value: [port] },
       });
       window.dispatchEvent(welcome);
@@ -935,6 +935,130 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
       throw Object.assign(new Error(`not allowed: ${JSON.stringify(method)}`), { code: 'not_allowed' });
     });
     expect(await older.ws.assistant!.stop('t-1')).toEqual({ stopped: false, reason: 'not_allowed' });
+  });
+
+  it('docked says whether the host has its Assistant panel: false on a host whose welcome says nothing', async () => {
+    expect((await open(accepting)).ws.assistant!.docked).toBe(false);
+    expect((await open(accepting, { context: { assistantDock: false } })).ws.assistant!.docked).toBe(false);
+    expect((await open(accepting, { context: { assistantDock: true } })).ws.assistant!.docked).toBe(true);
+  });
+
+  it('setUndo sends {turn, label} and answers {offered} or {offered:false, reason}; a host without the call answers not_allowed; it checks its arguments', async () => {
+    const { ws, posts } = await open((method, params) => {
+      if (method !== 'assistant.undoable') return accepting(method, params);
+      if (params.turn === 't-9') throw Object.assign(new Error('bad parameter: turn'), { code: 'bad_request' });
+      if (params.label === null) return { offered: false };
+      return params.turn === 't-1' ? { offered: true } : { offered: false, reason: 'not_this_tab' };
+    });
+    expect(await ws.assistant!.setUndo('t-1', 'Assistant: add 2')).toEqual({ offered: true });
+    expect(await ws.assistant!.setUndo('t-2', 'Assistant: add 3')).toEqual({ offered: false, reason: 'not_this_tab' });
+    expect(await ws.assistant!.setUndo('t-1', null)).toEqual({ offered: false });
+    await expect(ws.assistant!.setUndo('t-9', 'x')).rejects.toMatchObject({ code: 'bad_request' });
+    expect(posts.filter((p) => p.method === 'assistant.undoable').map((p) => p.params)).toEqual([
+      { turn: 't-1', label: 'Assistant: add 2' },
+      { turn: 't-2', label: 'Assistant: add 3' },
+      { turn: 't-1', label: null },
+      { turn: 't-9', label: 'x' },
+    ]);
+    await expect(ws.assistant!.setUndo('' as never, 'x')).rejects.toThrow(TypeError);
+    await expect(ws.assistant!.setUndo('t-1', 5 as never)).rejects.toThrow(TypeError);
+    await expect(ws.assistant!.setUndo('t-1', undefined as never)).rejects.toThrow(TypeError);
+    expect(posts.filter((p) => p.method === 'assistant.undoable')).toHaveLength(4);
+    const older = await open((method) => {
+      throw Object.assign(new Error(`not allowed: ${JSON.stringify(method)}`), { code: 'not_allowed' });
+    });
+    expect(await older.ws.assistant!.setUndo('t-1', 'x')).toEqual({ offered: false, reason: 'not_allowed' });
+  });
+
+  it("onUndo: the host's assistantUndo runs the handler and its answer goes back as assistant.undone; no handler, a throw and a bad answer say so; a newer handler replaces it, and its off clears only itself", async () => {
+    const { ws, posts, push } = await open(accepting);
+    const undone = () => posts.filter((p) => p.method === 'assistant.undone').map((p) => p.params);
+    const ask = (req: string, turn = 't-1') => push({ event: 'assistantUndo', data: { req, turn } });
+    ask('undo-1');
+    await vi.waitFor(() => expect(undone()).toHaveLength(1));
+    expect(undone()[0]).toEqual({ req: 'undo-1', undone: false, reason: 'no_handler' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const answers: unknown[] = [{ undone: true }, { undone: false, reason: 'not_newest' }, { undone: false }, 'yes', null];
+    let i = 0;
+    const first = vi.fn(async () => answers[i++]);
+    const offFirst = ws.assistant!.onUndo(first);
+    for (let n = 2; n <= 6; n++) ask(`undo-${n}`);
+    await vi.waitFor(() => expect(undone()).toHaveLength(6));
+    expect(first.mock.calls).toEqual([['t-1'], ['t-1'], ['t-1'], ['t-1'], ['t-1']]);
+    const byReq = Object.fromEntries(undone().map((u) => [u.req, u]));
+    expect([2, 3, 4, 5, 6].map((n) => byReq[`undo-${n}`])).toEqual([
+      { req: 'undo-2', undone: true },
+      { req: 'undo-3', undone: false, reason: 'not_newest' },
+      { req: 'undo-4', undone: false, reason: 'failed' },
+      { req: 'undo-5', undone: false, reason: 'failed' },
+      { req: 'undo-6', undone: false, reason: 'failed' },
+    ]);
+    // A throw (sync too) is failed; a newer handler replaces it, and the older one's off leaves it.
+    const second = vi.fn((): never => {
+      throw new Error('the undo broke');
+    });
+    ws.assistant!.onUndo(second);
+    offFirst();
+    ask('undo-7');
+    await vi.waitFor(() => expect(undone()).toHaveLength(7));
+    expect(undone()[6]).toEqual({ req: 'undo-7', undone: false, reason: 'failed' });
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('[workspace] assistant.onUndo', expect.any(Error));
+    // Not an ask: nothing runs; null clears the handler.
+    push({ event: 'assistantUndo', data: { turn: 't-1' } });
+    push({ event: 'assistantUndo', data: { req: 'undo-8' } });
+    ws.assistant!.onUndo(null);
+    ask('undo-9');
+    await vi.waitFor(() => expect(undone()).toHaveLength(8));
+    expect(undone()[7]).toEqual({ req: 'undo-9', undone: false, reason: 'no_handler' });
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(() => ws.assistant!.onUndo('undo' as never)).toThrow(TypeError);
+  });
+
+  it('onUndo: a handler that does not answer within 10 s answers no_answer', async () => {
+    const { ws, posts, push } = await open(accepting);
+    ws.assistant!.onUndo(() => new Promise(() => undefined));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    push({ event: 'assistantUndo', data: { req: 'undo-1', turn: 't-1' } });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(posts.filter((p) => p.method === 'assistant.undone')).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(posts.filter((p) => p.method === 'assistant.undone').map((p) => p.params)).toEqual([{ req: 'undo-1', undone: false, reason: 'no_answer' }]));
+  });
+
+  it("Ctrl+/ (Cmd+/) in the page goes to the app's panel as assistant.dock, once the key is through: not when the page kept it (preventDefault), not with other keys, and not on a host without the panel", async () => {
+    const key = (init: KeyboardEventInit, target: EventTarget = document.body) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      target.dispatchEvent(e);
+      return e;
+    };
+    const plain = await open(accepting);
+    const docked = await open(accepting, { context: { assistantDock: true } });
+    const docks = (p: { posts: Post[] }) => p.posts.filter((x) => x.method === 'assistant.dock');
+    key({ key: '/', code: 'Slash', ctrlKey: true });
+    await vi.waitFor(() => expect(docks(docked)).toHaveLength(1));
+    expect(docks(docked)[0].params).toEqual({});
+    key({ key: '/', code: 'Slash', metaKey: true });
+    await vi.waitFor(() => expect(docks(docked)).toHaveLength(2));
+    // A page that keeps the key for itself keeps it.
+    const own = (e: KeyboardEvent) => e.preventDefault();
+    document.body.addEventListener('keydown', own);
+    key({ key: '/', code: 'Slash', ctrlKey: true });
+    document.body.removeEventListener('keydown', own);
+    // Not Ctrl+/: a slash alone, Ctrl+Shift+/, Ctrl+Alt+/, Ctrl+Z, a held key, a key while composing.
+    key({ key: '/', code: 'Slash' });
+    key({ key: '?', code: 'Slash', ctrlKey: true, shiftKey: true });
+    key({ key: '/', code: 'Slash', ctrlKey: true, altKey: true });
+    key({ key: 'z', code: 'KeyZ', ctrlKey: true });
+    key({ key: '/', code: 'Slash', ctrlKey: true, repeat: true });
+    key({ key: '/', code: 'Slash', ctrlKey: true, isComposing: true });
+    // The key that types "/" counts, wherever it is; another layout's Slash key that types "-" does not (Ctrl+- zooms).
+    key({ key: '-', code: 'Slash', ctrlKey: true });
+    key({ key: '/', code: 'Digit7', ctrlKey: true });
+    await vi.waitFor(() => expect(docks(docked)).toHaveLength(3));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(docks(docked)).toHaveLength(3);
+    expect(docks(plain)).toHaveLength(0);
   });
 
   it('a throw keeps its code only from the page list (invalid_input, busy, not_ready, failed); anything else is failed', async () => {

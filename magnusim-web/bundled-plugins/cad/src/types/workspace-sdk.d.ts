@@ -83,6 +83,11 @@ declare module '@magnusim/workspace' {
        * the action opened; a reload has none. null or absent otherwise.
        */
       launch?: LaunchTarget | null;
+      /**
+       * The app shows its own Assistant panel, which offers the person Stop and "Undo these changes"
+       * for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
+       */
+      assistantDock?: boolean;
   }
   /** What a geometry action was started on (host 1.7). */
   export interface LaunchTarget {
@@ -627,6 +632,26 @@ declare module '@magnusim/workspace' {
       stopped: boolean;
       reason?: string;
   }
+  /**
+   * ws.assistant.setUndo's answer (unreleased, 1.9): whether the app now offers the person to undo
+   * that turn's changes. `reason` when not: "not_this_tab" (no turn of that id was told to this page),
+   * "no_assistant", "not_allowed" (a host without the call); a withdrawal answers offered false with
+   * no reason.
+   */
+  export interface AssistantUndoOffer {
+      offered: boolean;
+      reason?: string;
+  }
+  /**
+   * What an onUndo handler answers (unreleased, 1.9): `undone` once the turn's changes went back as one
+   * step, else why not: "not_newest" (something changed after them), "busy" (try again in a moment),
+   * or the page's own word. The SDK answers "no_answer" for a handler that takes over 10 s, "failed"
+   * for one that throws, and "no_handler" with none.
+   */
+  export interface AssistantUndoAnswer {
+      undone: boolean;
+      reason?: string;
+  }
   /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
   export interface WorkspaceAssistant {
       /**
@@ -651,6 +676,29 @@ declare module '@magnusim/workspace' {
        * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
        */
       stop(turn: string): Promise<AssistantStopAnswer>;
+      /**
+       * The app shows its own Assistant panel (its dock), with Stop and "Undo these changes" for each
+       * turn: a page that has its own Stop and Undo for a turn leaves them out then, so no control shows
+       * twice. False on an older host, and on a host without the panel. Read once, as the page connects.
+       * While docked, Ctrl+/ (Cmd+/ on macOS) typed in the page goes to the app's panel, as it does in
+       * the app, unless a keydown handler of the page calls preventDefault() for it.
+       */
+      readonly docked: boolean;
+      /**
+       * Say that a turn's changes can be undone now as one step (`label`, "Assistant: <title>", names
+       * it), or no longer (null), so the app's panel offers "Undo these changes" for it. Only a turn told
+       * to this page (onTurn) can be offered. Call it again whenever that changes: after the turn ended,
+       * and with null once something else changed on top of its changes. The offers go when the page
+       * closes or reloads.
+       */
+      setUndo(turn: string, label: string | null): Promise<AssistantUndoOffer>;
+      /**
+       * The person asked the app's panel to undo a turn's changes that this page offered (setUndo): undo
+       * them as one step and answer {undone: true}, or {undone: false, reason} ("not_newest" when
+       * something changed after them). One handler per page; a newer one replaces it, null clears it.
+       * Answer within 10 s ("no_answer" after that). Returns a function that clears this handler.
+       */
+      onUndo(fn: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null): () => void;
   }
   export interface ConfirmOptions {
       title: string;

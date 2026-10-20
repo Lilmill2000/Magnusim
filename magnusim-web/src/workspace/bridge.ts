@@ -62,12 +62,22 @@
  * bound to this tab reach the page as the event `assistantTurn` (assistantTurn(), from the page
  * relay), and the page's assistant.stop {turn} goes to hooks.assistantStop, which stops only a
  * turn told to this tab.
+ *
+ * Undo from the app's Assistant panel (the dock; unreleased, 1.9): the page says which turn's
+ * changes it can undo now as one step (assistant.undoable {turn, label|null}; only a turn told to
+ * this page; hooks.assistantUndoable hears each offer and its withdrawal, and every offer goes with
+ * the channel). assistantUndo(turn) asks the page (the event `assistantUndo {req, turn}`, answered
+ * by assistant.undone {req, undone, reason?}) only for a turn it offers, while no turn told to it
+ * runs and no tool call runs, one at a time. The welcome's `assistantDock` says the host has the
+ * panel (hooks.assistantDocked), and the page's Ctrl+/ comes as assistant.dock (hooks.assistantDockKey).
  */
 import type {
   AssistantRegistration,
   AssistantRisk,
   AssistantStopAnswer,
   AssistantTurn,
+  AssistantUndoAnswer,
+  AssistantUndoOffer,
   ComputeJob,
   EditedGeometry,
   FileInfo,
@@ -233,6 +243,9 @@ const NOT_HOOK_WORK = new Set([
   'assistant.progress',
   'assistant.result',
   'assistant.stop',
+  'assistant.undoable',
+  'assistant.undone',
+  'assistant.dock',
 ]);
 
 /** Link refusals that are no error of the hook: "Keep editing", the Queue's remove, a newer link. */
@@ -298,6 +311,16 @@ export interface BridgeHooks {
    * it was told to this tab (else `not_this_tab`). No hook: the page hears `no_assistant`.
    */
   assistantStop?(turn: string): Promise<AssistantStopAnswer>;
+  /**
+   * The page offers to undo a turn's changes as one step (`label` names it), or no longer does
+   * (null; also for each offer when its channel ends) (1.9, unreleased). Only a turn told to this
+   * page reaches it. No hook: the page hears `no_assistant`.
+   */
+  assistantUndoable?(turn: string, label: string | null): void;
+  /** Whether the host shows its Assistant panel (the welcome's `assistantDock`; 1.9, unreleased). */
+  assistantDocked?(): boolean;
+  /** The page's Ctrl+/ (assistant.dock; 1.9, unreleased): true when the panel took it. */
+  assistantDockKey?(): boolean;
 }
 
 /** What hooks.assistantTools answers: the verdict to come, and how to drop a list it was too late for. */
@@ -396,6 +419,14 @@ export const ASSISTANT_IMAGE_BYTES = 1.5 * 1024 * 1024;
 export const ASSISTANT_HINT_MAX = 500;
 export const ASSISTANT_DETAIL_BYTES = 4 * 1024;
 export const ASSISTANT_SUMMARY_MAX = 160;
+/** How long assistantUndo waits for the page's answer (the SDK answers no_answer itself after 10 s). */
+export const ASSISTANT_UNDO_WAIT_MS = 12_000;
+/** The most undo offers a page keeps (the oldest goes first). */
+export const ASSISTANT_UNDO_OFFERS_MAX = 16;
+/** The most turns told to a page that the bridge remembers (an offered one always stays). */
+const ASSISTANT_TOLD_MAX = 64;
+/** An undo offer's label (characters). */
+export const ASSISTANT_UNDO_LABEL_MAX = 120;
 /** A tool's confirm note (characters): what the question before a destructive call says it does. */
 export const ASSISTANT_CONFIRM_MAX = 120;
 /** A page error's message, at most this many characters (a note on a dropped detail included). */
@@ -854,6 +885,12 @@ export class WorkspaceCalls {
   private assistantSerial = 0;
   private readonly assistantWaiting = new Set<AssistantPublication>();
   private assistantOffered = false;
+  /** The turns told to this channel's page (assistantTurn), by id: their title and whether they run (the newest last). */
+  private readonly toldTurns = new Map<string, { title: string; running: boolean }>();
+  /** The turns whose changes the page offers to undo now, with the label (the oldest first). */
+  private readonly undoOffers = new Map<string, string>();
+  /** The undo the page was asked for and has not answered (one at a time): its id and how to settle it. */
+  private undoWait: { req: string; done: (a: AssistantUndoAnswer) => void } | null = null;
 
   constructor(scope: BridgeScope, hooks: BridgeHooks, launch: LaunchSource | null = null) {
     this.scope = scope;
@@ -1034,6 +1071,7 @@ export class WorkspaceCalls {
       hostVersion: HOST_API_VERSION,
       geometry,
       launch,
+      assistantDock: this.hooks.assistantDocked?.() === true,
     };
   }
 
@@ -1334,6 +1372,25 @@ export class WorkspaceCalls {
       }
       case 'assistant.stop':
         return this.stopAssistantTurn(params.turn);
+      // Undo from the app's Assistant panel (1.9, unreleased): the page's offers and its answers.
+      case 'assistant.undoable':
+        return this.offerUndo(params.turn, params.label);
+      case 'assistant.undone': {
+        const w = this.undoWait;
+        if (w && typeof params.req === 'string' && params.req === w.req) {
+          w.done(params.undone === true ? { undone: true } : { undone: false, reason: cleanLine(params.reason, 64) || 'failed' });
+        }
+        return { ok: true };
+      }
+      case 'assistant.dock': {
+        let took = false;
+        try {
+          took = this.hooks.assistantDockKey?.() === true;
+        } catch (e) {
+          this.hooks.log('assistant dock: the key was not taken', e);
+        }
+        return { ok: took };
+      }
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
     }
@@ -1409,6 +1466,101 @@ export class WorkspaceCalls {
     }
     if (answer?.stopped === true) return { stopped: true };
     return { stopped: false, reason: cleanLine(answer?.reason, 64) || 'failed' };
+  }
+
+  /**
+   * A turn of the app's assistant was told to this channel's page (1.9, unreleased): only such a
+   * turn may be offered for undo, and none is undone while one of them runs.
+   */
+  noteTurn(turn: AssistantTurn): void {
+    const id = typeof turn?.id === 'string' ? turn.id : '';
+    if (!id) return;
+    this.toldTurns.delete(id);
+    this.toldTurns.set(id, { title: cleanLine(turn.title, 60), running: turn.state === 'running' });
+    // The oldest go, except one still offered (at most ASSISTANT_UNDO_OFFERS_MAX of those).
+    for (const old of [...this.toldTurns.keys()]) {
+      if (this.toldTurns.size <= ASSISTANT_TOLD_MAX) break;
+      if (!this.undoOffers.has(old)) this.toldTurns.delete(old);
+    }
+  }
+
+  /** Tell the hook of an offer or its withdrawal; a hook that fails stays here. */
+  private tellUndo(turn: string, label: string | null): void {
+    try {
+      this.hooks.assistantUndoable?.(turn, label);
+    } catch (e) {
+      this.hooks.log('assistant undo: the app did not take the offer', e);
+    }
+  }
+
+  /**
+   * assistant.undoable {turn, label} (1.9, unreleased): the page can undo that turn's changes now
+   * as one step (label null: no longer). Only a turn told to this page; `bad_request` for a turn
+   * that is not an id or a label that is not text. A label that cleans to nothing reads
+   * "Assistant: <title>".
+   */
+  private offerUndo(turn: unknown, label: unknown): AssistantUndoOffer {
+    if (typeof turn !== 'string' || !turn || turn.length > 128) throw badParam('turn (the id of a turn this page was told of)');
+    if (label !== null && label !== undefined && typeof label !== 'string') throw badParam('label (text, or null to withdraw the offer)');
+    if (label === null || label === undefined) {
+      if (this.undoOffers.delete(turn)) this.tellUndo(turn, null);
+      return { offered: false };
+    }
+    if (!this.hooks.assistantUndoable) return { offered: false, reason: 'no_assistant' };
+    const told = this.toldTurns.get(turn);
+    if (!told) return { offered: false, reason: 'not_this_tab' };
+    const name = cleanLine(label, ASSISTANT_UNDO_LABEL_MAX) || cleanLine(`Assistant: ${told.title || 'request'}`, ASSISTANT_UNDO_LABEL_MAX);
+    this.undoOffers.delete(turn);
+    this.undoOffers.set(turn, name);
+    this.tellUndo(turn, name);
+    for (const old of [...this.undoOffers.keys()]) {
+      if (this.undoOffers.size <= ASSISTANT_UNDO_OFFERS_MAX) break;
+      this.undoOffers.delete(old);
+      this.tellUndo(old, null);
+    }
+    return { offered: true };
+  }
+
+  /** The page's offer for that turn (its label), or null. */
+  undoOffer(turn: string): string | null {
+    return this.undoOffers.get(turn) ?? null;
+  }
+
+  /**
+   * Why the page can't be asked to undo that turn now, or null when it can: `not_offered` (it offers
+   * no undo of it), `leaving` (its exit hook runs), `busy` (a tool call runs, a turn told to it
+   * runs, or another undo waits for its answer).
+   */
+  undoRefusal(turn: string): string | null {
+    if (!this.undoOffers.has(turn)) return 'not_offered';
+    if (this.leave) return 'leaving';
+    if (this.invoke || this.undoWait) return 'busy';
+    for (const t of this.toldTurns.values()) if (t.running) return 'busy';
+    return null;
+  }
+
+  /** An undo the page is asked for: settles with its answer, `no_answer` after ASSISTANT_UNDO_WAIT_MS, or `closed` with the channel. */
+  beginUndo(req: string, turn: string): Promise<AssistantUndoAnswer> {
+    return new Promise<AssistantUndoAnswer>((resolve) => {
+      const w = {
+        req,
+        done: (a: AssistantUndoAnswer) => {
+          if (this.undoWait !== w) return;
+          this.undoWait = null;
+          clearTimeout(timer);
+          // Undone: the offer is spent (the page offers it again after a redo).
+          if (a.undone && this.undoOffers.delete(turn)) this.tellUndo(turn, null);
+          resolve(a);
+        },
+      };
+      const timer = setTimeout(() => w.done({ undone: false, reason: 'no_answer' }), ASSISTANT_UNDO_WAIT_MS);
+      this.undoWait = w;
+    });
+  }
+
+  /** Settle the undo asked for under that id (its page could not be told). */
+  endUndo(req: string, a: AssistantUndoAnswer): void {
+    if (this.undoWait && this.undoWait.req === req) this.undoWait.done(a);
   }
 
   /**
@@ -2147,6 +2299,14 @@ export class WorkspaceCalls {
       }
     }
     this.assistantWaiting.clear();
+    // Undo from the app's panel (1.9, unreleased): an undo asked for ends `closed`, and the offers go.
+    this.undoWait?.done({ undone: false, reason: 'closed' });
+    this.undoWait = null;
+    for (const turn of [...this.undoOffers.keys()]) {
+      this.undoOffers.delete(turn);
+      this.tellUndo(turn, null);
+    }
+    this.toldTurns.clear();
     if (this.assistantOffered) {
       this.assistantOffered = false;
       try {
@@ -2198,6 +2358,7 @@ export class WorkspaceBridge {
   /** Probes waiting for the page's answer. */
   private readonly aliveWaiters = new Set<(instance: string) => void>();
   private leaveSerial = 0;
+  private undoSerial = 0;
 
   constructor(frame: HTMLIFrameElement, calls: WorkspaceCalls, hooks: BridgeHooks) {
     this.frame = frame;
@@ -2534,7 +2695,32 @@ export class WorkspaceBridge {
       ch.port.postMessage({ event: 'assistantTurn', data: turn });
     } catch (e) {
       this.hooks.log('assistant turn: the page could not be told', e);
+      return;
     }
+    this.calls.noteTurn(turn);
+  }
+
+  /**
+   * The app's Assistant panel asks the page to undo a turn's changes (1.9, unreleased): the event
+   * `assistantUndo {req, turn}`, then the page's assistant.undone. Refused at once, with nothing
+   * sent, when there is no page (`closed`) or calls.undoRefusal says why (`not_offered`, `leaving`,
+   * `busy`); `no_answer` after ASSISTANT_UNDO_WAIT_MS, `closed` when the channel ends first.
+   */
+  assistantUndo(turn: string): Promise<AssistantUndoAnswer> {
+    const ch = this.channel;
+    if (!ch || !ch.welcomed) return Promise.resolve({ undone: false, reason: 'closed' });
+    const id = String(turn);
+    const why = this.calls.undoRefusal(id);
+    if (why) return Promise.resolve({ undone: false, reason: why });
+    const req = `undo-${++this.undoSerial}`;
+    const answer = this.calls.beginUndo(req, id);
+    try {
+      ch.port.postMessage({ event: 'assistantUndo', data: { req, turn: id } });
+    } catch (e) {
+      this.hooks.log('assistant undo: the page could not be told', e);
+      this.calls.endUndo(req, { undone: false, reason: 'closed' });
+    }
+    return answer;
   }
 
   /**

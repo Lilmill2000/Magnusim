@@ -79,6 +79,11 @@ export interface WorkspaceContext {
    * the action opened; a reload has none. null or absent otherwise.
    */
   launch?: LaunchTarget | null;
+  /**
+   * The app shows its own Assistant panel, which offers the person Stop and "Undo these changes"
+   * for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
+   */
+  assistantDock?: boolean;
 }
 
 /** What a geometry action was started on (host 1.7). */
@@ -606,6 +611,28 @@ export interface AssistantStopAnswer {
   reason?: string;
 }
 
+/**
+ * ws.assistant.setUndo's answer (unreleased, 1.9): whether the app now offers the person to undo
+ * that turn's changes. `reason` when not: "not_this_tab" (no turn of that id was told to this page),
+ * "no_assistant", "not_allowed" (a host without the call); a withdrawal answers offered false with
+ * no reason.
+ */
+export interface AssistantUndoOffer {
+  offered: boolean;
+  reason?: string;
+}
+
+/**
+ * What an onUndo handler answers (unreleased, 1.9): `undone` once the turn's changes went back as one
+ * step, else why not: "not_newest" (something changed after them), "busy" (try again in a moment),
+ * or the page's own word. The SDK answers "no_answer" for a handler that takes over 10 s, "failed"
+ * for one that throws, and "no_handler" with none.
+ */
+export interface AssistantUndoAnswer {
+  undone: boolean;
+  reason?: string;
+}
+
 /** Tools this page offers to the app's assistant (unreleased, next host minor 1.9). */
 export interface WorkspaceAssistant {
   /**
@@ -628,6 +655,29 @@ export interface WorkspaceAssistant {
    * and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
    */
   stop(turn: string): Promise<AssistantStopAnswer>;
+  /**
+   * The app shows its own Assistant panel (its dock), with Stop and "Undo these changes" for each
+   * turn: a page that has its own Stop and Undo for a turn leaves them out then, so no control shows
+   * twice. False on an older host, and on a host without the panel. Read once, as the page connects.
+   * While docked, Ctrl+/ (Cmd+/ on macOS) typed in the page goes to the app's panel, as it does in
+   * the app, unless a keydown handler of the page calls preventDefault() for it.
+   */
+  readonly docked: boolean;
+  /**
+   * Say that a turn's changes can be undone now as one step (`label`, "Assistant: <title>", names
+   * it), or no longer (null), so the app's panel offers "Undo these changes" for it. Only a turn told
+   * to this page (onTurn) can be offered. Call it again whenever that changes: after the turn ended,
+   * and with null once something else changed on top of its changes. The offers go when the page
+   * closes or reloads.
+   */
+  setUndo(turn: string, label: string | null): Promise<AssistantUndoOffer>;
+  /**
+   * The person asked the app's panel to undo a turn's changes that this page offered (setUndo): undo
+   * them as one step and answer {undone: true}, or {undone: false, reason} ("not_newest" when
+   * something changed after them). One handler per page; a newer one replaces it, null clears it.
+   * Answer within 10 s ("no_answer" after that). Returns a function that clears this handler.
+   */
+  onUndo(fn: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null): () => void;
 }
 
 export interface ConfirmOptions {
@@ -929,6 +979,8 @@ function newInstance(): string {
 const ASSISTANT_PAGE_CODES = new Set(['invalid_input', 'busy', 'not_ready', 'failed']);
 /** The most of a tool error's hint the SDK sends (the host caps it again). */
 const ASSISTANT_HINT_MAX = 500;
+/** How long an onUndo handler has to answer before the app hears "no_answer" (unreleased, 1.9). */
+const ASSISTANT_UNDO_MS = 10_000;
 
 /** A handler's result as the host takes it: text alone becomes `{text}`, nothing `{}`; only text, data, images and summary go. */
 function assistantResultOf(out: unknown): unknown {
@@ -1041,6 +1093,9 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   const assistantCalls = new Map<string, AbortController>();
   // Who hears the assistant's turns bound to this tab (ws.assistant.onTurn).
   const turnListeners = new Set<(turn: AssistantTurn) => void>();
+  // Who undoes a turn's changes when the app's panel asks (ws.assistant.onUndo), and the asks running.
+  let undoHandler: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null = null;
+  const undoing = new Set<string>();
   let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
@@ -1118,12 +1173,35 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       }
       return;
     }
+    if (msg.event === 'assistantUndo') {
+      void runUndo(msg.data);
+      return;
+    }
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
     if (msg.event === 'theme') ctx.theme = msg.data as ThemeInfo;
     if (msg.event === 'study') ctx.study = msg.data as StudyRecord;
     for (const fn of listeners.get(String(msg.event)) || []) fn(msg.data);
   };
   port.start();
+
+  // The app's Assistant panel opens and closes with Ctrl+/ (Cmd+/ on macOS); keys typed in this
+  // frame never reach the app's page, so they go on as assistant.dock (unreleased, 1.9). Heard
+  // first (capture), sent once the event is through, so a page that keeps the key for itself
+  // (preventDefault) keeps it. Only on a host that has the panel.
+  if (ctx.assistantDock === true && typeof window !== 'undefined') {
+    window.addEventListener(
+      'keydown',
+      (e: KeyboardEvent) => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.isComposing || e.repeat) return;
+        // The key that types "/" (another layout's Slash key may be its minus: Ctrl+- zooms).
+        if (e.key !== '/') return;
+        setTimeout(() => {
+          if (!e.defaultPrevented) void call('assistant.dock').catch(() => undefined);
+        }, 0);
+      },
+      true,
+    );
+  }
 
   /** Ask the host; `sent` runs once the message left the page (never when it could not be copied). */
   function call<T = unknown>(method: string, params: Record<string, unknown> = {}, transfer?: Transferable[], sent?: () => void): Promise<T> {
@@ -1227,6 +1305,43 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
       const why = typeof err.message === 'string' && err.message ? `: ${err.message}` : '';
       void send({ ok: false, error: { code: 'failed', message: `The result could not be sent to the app${why}` } }).catch(() => undefined);
     }
+  }
+
+  /**
+   * The app's panel asks this page to undo a turn's changes (unreleased, 1.9): the onUndo handler's
+   * answer goes back as assistant.undone {req, undone, reason?}; no handler answers no_handler, a
+   * throw failed, and no answer within ASSISTANT_UNDO_MS no_answer.
+   */
+  async function runUndo(data: unknown): Promise<void> {
+    const d = (data || {}) as { req?: unknown; turn?: unknown };
+    const req = typeof d.req === 'string' ? d.req : '';
+    const turn = typeof d.turn === 'string' ? d.turn : '';
+    if (!req || !turn || undoing.has(req)) return;
+    undoing.add(req);
+    const handler = undoHandler;
+    let answer: AssistantUndoAnswer;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (!handler) answer = { undone: false, reason: 'no_handler' };
+      else {
+        const late = new Promise<'late'>((done) => {
+          timer = setTimeout(() => done('late'), ASSISTANT_UNDO_MS);
+        });
+        const out = await Promise.race([Promise.resolve().then(() => handler(turn)), late]);
+        if (out === 'late') answer = { undone: false, reason: 'no_answer' };
+        else {
+          const o = (out && typeof out === 'object' ? out : {}) as { undone?: unknown; reason?: unknown };
+          answer = o.undone === true ? { undone: true } : { undone: false, reason: typeof o.reason === 'string' && o.reason ? o.reason.slice(0, 64) : 'failed' };
+        }
+      }
+    } catch (e) {
+      console.warn('[workspace] assistant.onUndo', e);
+      answer = { undone: false, reason: 'failed' };
+    } finally {
+      clearTimeout(timer);
+      undoing.delete(req);
+    }
+    void call('assistant.undone', { req, ...answer }).catch(() => undefined);
   }
 
   /** Listen to a job's events; the first listener asks the host to follow it (`method`). */
@@ -1494,6 +1609,28 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         }
         if (answer?.stopped === true) return { stopped: true };
         return { stopped: false, reason: typeof answer?.reason === 'string' && answer.reason ? answer.reason : 'failed' };
+      },
+      docked: ctx.assistantDock === true,
+      setUndo: async (turn, label) => {
+        if (typeof turn !== 'string' || !turn) throw new TypeError('assistant.setUndo takes the id of a turn this page was told of');
+        if (label !== null && typeof label !== 'string') throw new TypeError('assistant.setUndo takes a label, or null to withdraw the offer');
+        let answer: { offered?: unknown; reason?: unknown } | null;
+        try {
+          answer = await call<{ offered?: unknown; reason?: unknown } | null>('assistant.undoable', { turn, label });
+        } catch (e) {
+          // A host without the call: nothing is offered.
+          if ((e as { code?: unknown } | null)?.code === 'not_allowed') return { offered: false, reason: 'not_allowed' };
+          throw e;
+        }
+        if (answer?.offered === true) return { offered: true };
+        return typeof answer?.reason === 'string' && answer.reason ? { offered: false, reason: answer.reason } : { offered: false };
+      },
+      onUndo: (fn) => {
+        if (fn !== null && typeof fn !== 'function') throw new TypeError('assistant.onUndo takes a function, or null to clear it');
+        undoHandler = fn;
+        return () => {
+          if (undoHandler === fn) undoHandler = null;
+        };
       },
     },
     on(event: string, fn: (data: never) => void) {

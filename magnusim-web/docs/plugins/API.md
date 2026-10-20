@@ -316,6 +316,28 @@ A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what t
 - `used.usdCap: number`
 - `end?: { … }`: How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then).
 
+#### AssistantUndoAnswer
+
+```ts
+interface AssistantUndoAnswer
+```
+
+What an onUndo handler answers (unreleased, 1.9): `undone` once the turn's changes went back as one step, else why not: "not_newest" (something changed after them), "busy" (try again in a moment), or the page's own word. The SDK answers "no_answer" for a handler that takes over 10 s, "failed" for one that throws, and "no_handler" with none.
+
+- `undone: boolean`
+- `reason?: string | undefined`
+
+#### AssistantUndoOffer
+
+```ts
+interface AssistantUndoOffer
+```
+
+ws.assistant.setUndo's answer (unreleased, 1.9): whether the app now offers the person to undo that turn's changes. `reason` when not: "not_this_tab" (no turn of that id was told to this page), "no_assistant", "not_allowed" (a host without the call); a withdrawal answers offered false with no reason.
+
+- `offered: boolean`
+- `reason?: string | undefined`
+
 #### ClaimedTwice
 
 ```ts
@@ -807,6 +829,9 @@ Tools this page offers to the app's assistant (unreleased, next host minor 1.9).
 - `register(tools: AssistantTool[], handler: AssistantHandler | null, opts?: { guide?: string; } | undefined): Promise<AssistantRegistration>`: Set this page's tools and their handler in one step; register([], null) withdraws them. `guide`: fixed notes for the model about this workspace (no project data; it is kept for a whole conversation). Resolves once the app has the list. available:false with reason 'not_connected' means the app could not reach the assistant from this tab yet (for example the tab opened in the background): call register again later, e.g. on visibilitychange. With available:false nothing changed: the earlier tools and handler stay. Calls of a tool the app did not accept answer "no_tool". The tools go when the page closes or reloads.
 - `onTurn(fn: (turn: AssistantTurn) => void): () => void`: Hear the assistant's turns bound to this tab: each start, change and end (AssistantTurn). Listen before register: the turns already running are told to a page once it offers tools. Returns a function that stops listening.
 - `stop(turn: string): Promise<AssistantStopAnswer>`: Stop a turn this page was told of (onTurn), as the person's Stop: its running call is aborted and it ends `stopped`. Resolves once it ended (or, after 5 s, while it is stopping).
+- `docked: boolean`: The app shows its own Assistant panel (its dock), with Stop and "Undo these changes" for each turn: a page that has its own Stop and Undo for a turn leaves them out then, so no control shows twice. False on an older host, and on a host without the panel. Read once, as the page connects. While docked, Ctrl+/ (Cmd+/ on macOS) typed in the page goes to the app's panel, as it does in the app, unless a keydown handler of the page calls preventDefault() for it.
+- `setUndo(turn: string, label: string | null): Promise<AssistantUndoOffer>`: Say that a turn's changes can be undone now as one step (`label`, "Assistant: <title>", names it), or no longer (null), so the app's panel offers "Undo these changes" for it. Only a turn told to this page (onTurn) can be offered. Call it again whenever that changes: after the turn ended, and with null once something else changed on top of its changes. The offers go when the page closes or reloads.
+- `onUndo(fn: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null): () => void`: The person asked the app's panel to undo a turn's changes that this page offered (setUndo): undo them as one step and answer {undone: true}, or {undone: false, reason} ("not_newest" when something changed after them). One handler per page; a newer one replaces it, null clears it. Answer within 10 s ("no_answer" after that). Returns a function that clears this handler.
 
 #### WorkspaceContext
 
@@ -825,6 +850,7 @@ interface WorkspaceContext
 - `hostVersion: string`: The host's bridge API version ("1.7"). To use a call a later host added, compare it as numbers, major then minor (ws.nav.setDirty needs 1.2, ws.compute and ws.results need 1.3, ws.project.linkGeometry 1.5, ws.nav.onLeave 1.6, ws.prefs and ws.project.geometrySource 1.7), or catch the refusal: an older host rejects a call it does not know with code "not_allowed". `ws.assistant` (unreleased in 1.8: check that it exists).
 - `geometry?: EditedGeometry | null | undefined`: The project geometry this study edits (host 1.7; absent on an older host): the one the user chose "Edit in …" on (a `[[geometry_actions]]` entry), or the one this study links. null for a study that edits no project geometry. Read its file with ws.project.geometrySource() and its faces with ws.project.geometryFaces().
 - `launch?: LaunchTarget | null | undefined`: What the user right-clicked to open this page (host 1.7): a face label ("face 3@Body1") or a body ("Body1") of `geometry`, from the viewport's menu. Given once, to the page load the action opened; a reload has none. null or absent otherwise.
+- `assistantDock?: boolean | undefined`: The app shows its own Assistant panel, which offers the person Stop and "Undo these changes" for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
 
 #### AssistantHandler
 

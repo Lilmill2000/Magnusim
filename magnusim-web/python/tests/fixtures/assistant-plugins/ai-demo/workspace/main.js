@@ -23,13 +23,24 @@
 // heard (running, or how it ended: done, stopped, failed, capped, or "ended" when the page did
 // not hear how), window.__turns every turn event; #stop stops that turn, #stop-answer says how
 // ("stopped", or "not stopped: <reason>"), and window.__stopTurn(id) stops any id.
+//
+// Undo from the app's Assistant panel (ws.assistant.setUndo and onUndo, 1.9, unreleased): the
+// page keeps the counter's value before each turn; after a turn that changed it, it offers to
+// undo that turn ("Assistant: <title>"), until the counter changes another way (another turn's
+// call, the page's own Add 1). An undo puts the value back while the counter is still what the
+// turn left (else not_newest). #docked reads "yes" when the app has the panel, #undo-state
+// "offered: <title>", "undone: <title>", "refused: <reason>" or "none", and window.__undoOffers
+// every setUndo answer; #bump adds 1 as the person would.
 import { connect } from '@magnusim/workspace';
 
 const $ = (id) => document.getElementById(id);
 let count = 0;
 const show = () => {
   $('counter').textContent = String(count);
+  counterChanged();
 };
+// Set once the undo offers are wired (below); until then a change has nothing to withdraw.
+let counterChanged = () => undefined;
 show();
 window.__aiCalls = [];
 
@@ -169,6 +180,7 @@ async function snap() {
 }
 
 async function handle(call) {
+  noteCall(call.turn);
   window.__aiCalls.push({ tool: call.tool, input: call.input, turn: call.turn });
   $('calls').textContent = window.__aiCalls.map((c) => c.tool).join(' ');
   switch (call.tool) {
@@ -247,6 +259,64 @@ if (ws.assistant && typeof ws.assistant.onTurn === 'function') {
   });
 }
 window.__stopTurn = (id) => ws.assistant.stop(id);
+
+// Undo from the app's panel: the counter before each turn, and the one turn offered now.
+const before = new Map();
+let offer = null;
+window.__undoOffers = [];
+$('docked').textContent = ws.assistant && ws.assistant.docked ? 'yes' : 'no';
+function noteCall(turn) {
+  if (turn && !before.has(turn)) before.set(turn, count);
+}
+async function setUndo(turn, label) {
+  if (!ws.assistant || typeof ws.assistant.setUndo !== 'function') return;
+  const answer = await ws.assistant.setUndo(turn, label);
+  window.__undoOffers.push({ turn, label, ...answer });
+}
+function withdraw(state) {
+  if (!offer) return;
+  const turn = offer.turn;
+  offer = null;
+  $('undo-state').textContent = state;
+  void setUndo(turn, null);
+}
+counterChanged = () => {
+  // A change the offered turn did not make: its changes are no longer the newest.
+  if (offer && count !== offer.after) withdraw('none');
+};
+if (ws.assistant && typeof ws.assistant.onTurn === 'function') {
+  ws.assistant.onTurn((turn) => {
+    if (turn.state === 'running') {
+      noteCall(turn.id);
+      return;
+    }
+    const from = before.get(turn.id);
+    before.delete(turn.id);
+    if (from === undefined || from === count) return;
+    withdraw('none');
+    offer = { turn: turn.id, title: turn.title, before: from, after: count };
+    $('undo-state').textContent = `offered: ${turn.title}`;
+    void setUndo(turn.id, `Assistant: ${turn.title}`);
+  });
+}
+if (ws.assistant && typeof ws.assistant.onUndo === 'function') {
+  ws.assistant.onUndo(async (turn) => {
+    if (!offer || offer.turn !== turn || count !== offer.after) {
+      $('undo-state').textContent = 'refused: not_newest';
+      return { undone: false, reason: 'not_newest' };
+    }
+    const { title } = offer;
+    count = offer.before;
+    offer = null;
+    show();
+    $('undo-state').textContent = `undone: ${title}`;
+    return { undone: true };
+  });
+}
+$('bump').addEventListener('click', () => {
+  count += 1;
+  show();
+});
 $('stop').addEventListener('click', async () => {
   if (!lastTurn || !ws.assistant) return;
   $('stop-answer').textContent = 'stopping';

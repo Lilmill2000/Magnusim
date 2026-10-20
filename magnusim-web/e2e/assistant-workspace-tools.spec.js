@@ -28,6 +28,8 @@
 // Stop ends it, and the frame's page loaded again during the turn hearing it run (H3). And a
 // destructive tool's confirm note as its question's text, mystery's question saying "can't be
 // undone" without one (H10).
+// And the frame's offer to undo a turn that changed the counter, held by the app under that
+// turn, undone through it once, and withdrawn by the person's own change (Phase 4 spec 8.2).
 // And one turn per tab: a second one while it works is refused 409 tab_busy (H4). And every
 // problem with a call's input in one result, the terminal showing them all (H9); a local
 // model's string, list and boolean fields left out filled with "", [] and false (H9).
@@ -1310,6 +1312,54 @@ test("the frame hears its turn: #turn-state shows the request's first line and t
   // Only a running turn told to this tab is the frame's to stop.
   expect(await w.handle.evaluate((id) => window.__stopTurn(id), t.id)).toEqual({ stopped: false, reason: 'ended' });
   expect(await w.handle.evaluate(() => window.__stopTurn('t-never-told'))).toEqual({ stopped: false, reason: 'not_this_tab' });
+});
+
+test("the frame offers to undo a turn that changed the counter: the app holds the offer under that turn, its undo puts the counter back once, and the person's own change withdraws a newer one", async ({
+  page,
+  request,
+}) => {
+  const w = await openCounter(page, request);
+  // The app's side as the dock reads it (src/workspace/assistantTools.ts; its state is page-wide).
+  const offers = () =>
+    page.evaluate(async () => {
+      const m = await import('/src/workspace/assistantTools.ts');
+      return [...m.workspaceToolsSnapshot().undo.values()].map((o) => [o.turn, o.label, o.scope.workspace]);
+    });
+  const undo = (id) => page.evaluate(async (turn) => (await import('/src/workspace/assistantTools.ts')).undoWorkspaceTurn(turn), id);
+  // No panel in the app yet: the page is not docked.
+  await expect(w.frame.locator('#docked')).toHaveText('no');
+  // A turn that only reads: nothing to undo.
+  fake.reply({ tools: [{ name: `${PLUGIN}__get_count`, input: {} }] }, { text: 'It is 0.' });
+  const read = await startTurn(request, host.base, { text: 'Read the counter.', tab: w.tab });
+  expect((await read.ended()).turn.state).toBe('done');
+  await expect(w.frame.locator('#turn-state')).toHaveText('done: Read the counter.', STEP);
+  expect(await offers()).toEqual([]);
+  // A turn that adds 2: offered under its id, named after the request.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'The counter is 2.' });
+  const add = await startTurn(request, host.base, { text: 'Add 2 to the counter.', tab: w.tab });
+  expect((await add.ended()).turn.state).toBe('done');
+  await expect(w.frame.locator('#undo-state')).toHaveText('offered: Add 2 to the counter.', STEP);
+  await expect.poll(offers, STEP).toEqual([[add.id, 'Assistant: Add 2 to the counter.', 'counter']]);
+  expect(await undo(read.id)).toEqual({ undone: false, reason: 'not_offered' });
+  expect(await undo(add.id)).toEqual({ undone: true });
+  await expect(w.frame.locator('#counter')).toHaveText('0');
+  await expect(w.frame.locator('#undo-state')).toHaveText('undone: Add 2 to the counter.');
+  await expect.poll(offers, STEP).toEqual([]);
+  expect(await undo(add.id), 'spent').toEqual({ undone: false, reason: 'not_offered' });
+  // Another turn adds 3; the person's own Add 1 on top of it withdraws its offer.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 3 } }] }, { text: 'The counter is 3.' });
+  const more = await startTurn(request, host.base, { text: 'Add 3.', tab: w.tab });
+  expect((await more.ended()).turn.state).toBe('done');
+  await expect.poll(offers, STEP).toEqual([[more.id, 'Assistant: Add 3.', 'counter']]);
+  await w.frame.locator('#bump').click();
+  await expect(w.frame.locator('#counter')).toHaveText('4');
+  await expect(w.frame.locator('#undo-state')).toHaveText('none');
+  await expect.poll(offers, STEP).toEqual([]);
+  expect(await undo(more.id)).toEqual({ undone: false, reason: 'not_offered' });
+  await expect(w.frame.locator('#counter')).toHaveText('4');
+  // A page may offer only a turn told to its tab.
+  expect(await w.handle.evaluate(() => window.__ws.assistant.setUndo('t-never-told', 'Assistant: no'))).toEqual({ offered: false, reason: 'not_this_tab' });
+  expect(await offers()).toEqual([]);
 });
 
 test("a reload of the workspace's own page while its turn runs: the reloaded page shows that turn running as it offers its tools again, then how it ended", async ({ page, request }) => {

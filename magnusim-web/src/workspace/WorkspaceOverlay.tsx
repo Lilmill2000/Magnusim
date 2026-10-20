@@ -8,7 +8,7 @@ import { Toast, type ToastKind } from '../plugin-ui';
 import { prefersImperial } from '../prefs';
 import { pluginStudyScope } from '../scope';
 import { useProjectStore } from '../store/project';
-import { newWorkspaceFrameId, publishWorkspaceTools, withdrawWorkspaceTools, type ToolInvoke } from './assistantTools';
+import { newWorkspaceFrameId, offerWorkspaceUndo, publishWorkspaceTools, withdrawWorkspaceTools, workspaceDock, type ToolInvoke } from './assistantTools';
 import { WorkspaceBridge, WorkspaceCalls, type BridgeHooks, type BridgeScope } from './bridge';
 import {
   cancelLeave,
@@ -587,6 +587,17 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
       ...hooks,
       assistantTools: (reg) => publishWorkspaceTools(toolsScope, frameId, reg, invoke, (turn) => bridge.assistantTurn(turn)),
       assistantStop: (turn) => stopAnnouncedTurn(turn),
+      // Undo from the app's Assistant panel (1.9, unreleased): this frame's offers, asked back
+      // through its bridge; the panel's presence in the welcome, and the frame's Ctrl+/ for it
+      // (only while the frame has the keyboard: a page can't open the panel on its own).
+      assistantUndoable: (turn, label) => offerWorkspaceUndo(toolsScope, frameId, turn, label, (t) => bridge.assistantUndo(t)),
+      assistantDocked: () => workspaceDock() !== null,
+      assistantDockKey: () => {
+        const dock = workspaceDock();
+        if (!dock || document.activeElement !== frame) return false;
+        dock.key();
+        return true;
+      },
     };
     const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);
     bridgeRef.current = bridge;

@@ -22,11 +22,18 @@
  * - null (the frame's page went away) withdraws that frame's list; a newer frame's stays. A
  *   frame's page that loads again (a reload keeps the frame and its bridge) offers its lists
  *   under the same frame id with the next `load`: a new page there.
+ * - Undo from the app's Assistant panel (the dock; Phase 4 spec 8.2): each frame's offers to undo
+ *   a turn's changes as one step (the bridge's hooks.assistantUndoable: only turns told to that
+ *   frame's page, withdrawn with null and when its channel ends) are in the snapshot's `undo`, by
+ *   turn; undoWorkspaceTurn(turn) asks the frame that offers it (the bridge's assistantUndo). A
+ *   frame that goes (withdrawWorkspaceTools) takes its offers with it.
+ * - The dock registers itself (setWorkspaceDock): a page that connects while one is set hears
+ *   `docked` in its welcome, and its Ctrl+/ (assistant.dock) reaches the dock's `key()`.
  *
  * The state is on globalThis, so a hot swap of this module keeps the revs going up.
  */
 import { useSyncExternalStore } from 'react';
-import type { AssistantRegistration, AssistantTurn } from '../plugin-sdk/workspace';
+import type { AssistantRegistration, AssistantTurn, AssistantUndoAnswer } from '../plugin-sdk/workspace';
 import type { AssistantCallOutcome, AssistantInvoke, AssistantPublication, CheckedTool } from './bridge';
 
 /** The workspace a list belongs to, from the host's route (and its title from the host's plugin row). */
@@ -70,14 +77,41 @@ export interface PublishedTools {
   readonly taken: boolean;
 }
 
+/** Asks the frame that offered it to undo a turn's changes (WorkspaceBridge.assistantUndo). */
+export type UndoRun = (turn: string) => Promise<AssistantUndoAnswer>;
+
+/** A frame's offer to undo a turn's changes as one step (the dock's "Undo these changes"). */
+export interface WorkspaceUndoOffer {
+  readonly turn: string;
+  /** What the page calls that step ("Assistant: <title>"), cleaned, at most 120 characters. */
+  readonly label: string;
+  /** The frame (WorkspaceBridge instance) that offers it. */
+  readonly frameId: string;
+  /** The workspace that frame shows, as the host's route names it (with its title when known). */
+  readonly scope: WorkspaceToolsScope;
+}
+
 export interface WorkspaceToolsSnapshot {
   /** The page's newest list, or null when the frame withdrew it (or none was offered). */
   readonly current: PublishedTools | null;
+  /** The turns whose changes an open frame offers to undo now, by turn id (empty when none). */
+  readonly undo: ReadonlyMap<string, WorkspaceUndoOffer>;
+}
+
+/** The app's Assistant panel, as it registers itself (setWorkspaceDock). */
+export interface WorkspaceDock {
+  /** Ctrl+/ typed in a workspace frame (assistant.dock): as the same key in the app's page. */
+  key(): void;
 }
 
 interface Rec {
   view: PublishedTools;
   resolve: (r: AssistantRegistration) => void;
+}
+
+interface UndoRec {
+  view: WorkspaceUndoOffer;
+  run: UndoRun;
 }
 
 interface ToolsState {
@@ -94,14 +128,36 @@ interface ToolsState {
   dead: Map<string, string>;
   /** How many times each frame's page went away (its next page's `load`). */
   loads: Map<string, number>;
+  /** The undo offers, by turn (a newer offer of the same turn replaces the older). */
+  undo: Map<string, UndoRec>;
+  /** The undo offers as the snapshot gives them, replaced when they change. */
+  undoView: ReadonlyMap<string, WorkspaceUndoOffer>;
+  /** The dock, while one is set. */
+  dock: WorkspaceDock | null;
   snap: WorkspaceToolsSnapshot;
   listeners: Set<() => void>;
 }
 
 const KEY = Symbol.for('magnusim.workspaceTools');
 
+const NO_UNDO: ReadonlyMap<string, WorkspaceUndoOffer> = new Map();
+
 function fresh(): ToolsState {
-  return { rev: 0, frames: 0, current: null, waiting: new Set(), epochs: new Map(), kept: new Map(), dead: new Map(), loads: new Map(), snap: { current: null }, listeners: new Set() };
+  return {
+    rev: 0,
+    frames: 0,
+    current: null,
+    waiting: new Set(),
+    epochs: new Map(),
+    kept: new Map(),
+    dead: new Map(),
+    loads: new Map(),
+    undo: new Map(),
+    undoView: NO_UNDO,
+    dock: null,
+    snap: { current: null, undo: NO_UNDO },
+    listeners: new Set(),
+  };
 }
 
 function st(): ToolsState {
@@ -111,8 +167,11 @@ function st(): ToolsState {
     s = fresh();
     g[KEY] = s;
   }
-  // A state an older copy of this module made (a hot swap) has no loads yet.
+  // A state an older copy of this module made (a hot swap) has none of these yet.
   s.loads ??= new Map();
+  s.undo ??= new Map();
+  s.undoView ??= NO_UNDO;
+  s.dock ??= null;
   return s;
 }
 
@@ -121,7 +180,7 @@ const refusal = (reason: string): AssistantRegistration => ({ available: false, 
 function emit(): void {
   const s = st();
   const view = s.current ? s.current.view : null;
-  if (s.snap.current !== view) s.snap = { current: view };
+  if (s.snap.current !== view || s.snap.undo !== s.undoView) s.snap = { current: view, undo: s.undoView };
   for (const fn of [...s.listeners]) {
     try {
       fn();
@@ -216,13 +275,94 @@ export function publishWorkspaceTools(
   return Object.assign(verdict, { abandon: () => abandonRec(rec) });
 }
 
+/** The undo offers changed: a new view for the snapshot. The caller emits. */
+function undoChanged(): void {
+  const s = st();
+  s.undoView = Object.freeze(new Map([...s.undo].map(([turn, rec]) => [turn, rec.view]))) as ReadonlyMap<string, WorkspaceUndoOffer>;
+}
+
+/**
+ * hooks.assistantUndoable: a frame offers to undo a turn's changes as one step (`label`), or no
+ * longer does (null: only that frame's own offer of the turn goes). `run` asks that frame.
+ */
+export function offerWorkspaceUndo(scope: WorkspaceToolsScope, frameId: string, turn: string, label: string | null, run: UndoRun): void {
+  const s = st();
+  if (!turn) return;
+  if (label === null) {
+    if (s.undo.get(turn)?.view.frameId !== frameId) return;
+    s.undo.delete(turn);
+  } else {
+    if (s.dead.has(frameId)) return;
+    s.undo.delete(turn);
+    s.undo.set(turn, {
+      view: Object.freeze({
+        turn,
+        label,
+        frameId,
+        scope: Object.freeze({
+          project_id: scope.project_id,
+          plugin: scope.plugin,
+          workspace: scope.workspace,
+          ...(scope.title ? { title: scope.title } : {}),
+          study_id: scope.study_id,
+        }),
+      }),
+      run,
+    });
+  }
+  undoChanged();
+  emit();
+}
+
+/** Drop every undo offer of a frame; true when there was one. The caller emits. */
+function dropFrameUndo(frameId: string): boolean {
+  const s = st();
+  let changed = false;
+  for (const [turn, rec] of [...s.undo]) {
+    if (rec.view.frameId !== frameId) continue;
+    s.undo.delete(turn);
+    changed = true;
+  }
+  if (changed) undoChanged();
+  return changed;
+}
+
+/**
+ * The dock's "Undo these changes": asks the frame that offers that turn's undo. `not_offered` when
+ * none does; else the frame's answer (`undone`, or `not_newest`, `busy`, `no_answer`, `closed`, ...).
+ */
+export async function undoWorkspaceTurn(turn: string): Promise<AssistantUndoAnswer> {
+  const rec = st().undo.get(turn);
+  if (!rec) return { undone: false, reason: 'not_offered' };
+  try {
+    return await rec.run(turn);
+  } catch (e) {
+    console.warn('[CFD] workspace undo', e);
+    return { undone: false, reason: 'failed' };
+  }
+}
+
+/** The dock sets itself (null: it went). Returns a function that clears it while it is still this one. */
+export function setWorkspaceDock(dock: WorkspaceDock | null): () => void {
+  const s = st();
+  s.dock = dock;
+  return () => {
+    if (st().dock === dock) st().dock = null;
+  };
+}
+
+/** The dock, while one is set. */
+export function workspaceDock(): WorkspaceDock | null {
+  return st().dock;
+}
+
 /** The frame's page went away (detach, the plugin-off card): its list goes; a newer frame's stays. */
 export function withdrawWorkspaceTools(frameId: string): void {
   const s = st();
   s.kept.delete(frameId);
   // What the frame offers next comes from a new page.
   s.loads.set(frameId, (s.loads.get(frameId) ?? 0) + 1);
-  let changed = false;
+  let changed = dropFrameUndo(frameId);
   for (const rec of [...s.waiting]) {
     if (rec.view.frameId !== frameId) continue;
     update(rec, { abandoned: true });
@@ -255,6 +395,7 @@ export function markWorkspaceFrameDead(frameId: string, reason: string): void {
   const why = s.dead.get(frameId) as string;
   for (const rec of [...s.waiting]) if (rec.view.frameId === frameId) settleRec(rec, refusal(why));
   if (s.current && s.current.view.frameId === frameId && !s.current.view.dead) update(s.current, { dead: true });
+  dropFrameUndo(frameId);
   emit();
 }
 
