@@ -37,7 +37,7 @@ import { join } from 'node:path';
 // @ts-expect-error the app's host helper is plain JavaScript
 import { killTree } from '../../../e2e/support/host-server.mjs';
 import { fakeSteps, loadReference, loadTask, PLUGIN_DIR, referenceCalls, runTask, scriptedDriver, type EvalDriver, type RunRecord } from '../eval/lib.mjs';
-import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, startAssistantHost, startTurn, tabRow, useScriptedModel, type AssistantHost } from './assistant-helpers';
+import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, tabRow, useScriptedModel, type AssistantHost } from './assistant-helpers';
 import { REVIEW_PROMPT } from '../src/assistant/review';
 import { PNG } from './png';
 
@@ -69,6 +69,9 @@ const TURN_MS = 100_000;
 const scripted = (page: Page, id: string, out: string | null = null, driver: EvalDriver = scriptedDriver(host.fake)): Promise<RunRecord> =>
   runTask({ base: host.base, page, driver, out }, loadTask(id), { label: 'e2e', pace: 'fast', turnMs: TURN_MS });
 
+/** The Part's read tools (schemas.ts risk 'read'): their answers carry no picture of the Part. */
+const READ_TOOLS = new Set(['get_model', 'find', 'measure', 'view', 'help']);
+
 /** A first-shot pass on every counted check, with the record's step, error and first-shot fields. */
 function expectPass(r: RunRecord, id: string): void {
   const failed = r.checks.filter((c) => !c.pass && !c.heuristic).map((c) => `${c.id}: ${c.why}`);
@@ -85,6 +88,10 @@ function expectPass(r: RunRecord, id: string): void {
   expect(r.notes).toEqual([]);
   // The app's one review round after the build, which the reference answers with no change.
   expect([r.review, r.reviews, r.references]).toEqual([true, [{ turn: 1, repair: false, round: 1, of: 3 }], []]);
+  // With review on, the record's images still count each edit's picture (the references call no view).
+  const edits = referenceCalls(loadReference(id), 0).filter((c) => !READ_TOOLS.has(c.tool) && c.expect === 'ok').length;
+  expect(edits, `${id}: the reference edits`).toBeGreaterThan(0);
+  expect(r.images, `${id}: one picture per edit`).toBe(edits);
 }
 
 test('cad:assistant-eval-plate-holes the plate scores pass at the first shot, its walk of t keeps it working; the run folder holds its records and a picture', async ({ page }, info) => {
@@ -197,6 +204,12 @@ test('cad:assistant-eval-review a turn that edited the Part gets the review prom
   };
   expect(lastUser(2)).toBe(`Review round 1 of 3: ${REVIEW_PROMPT}`);
   expect(lastUser(4)).toBe(`Review round 2 of 3: ${REVIEW_PROMPT}`);
+  // An edit made in a review round still carries its picture of the Part, as one before it does.
+  for (const i of [1, 3]) {
+    const [set] = resultsIn(chats(host)[before + i]);
+    expect(set, `the edit answered in request ${i}`).toMatchObject({ tool: 'cad__set_params', ok: true, data: { picture: expect.stringMatching(/^Picture: iso view/) } });
+    expect(set.images).toHaveLength(1);
+  }
   expect(chats(host).length - before).toBe(5);
   // The turn ended: the chip says how, not the round.
   await expect(chipWords(frame)).toHaveText(/^Assistant: Add a thickness parameter\. · done/, { timeout: 30_000 });
