@@ -5814,6 +5814,122 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 .dock-viewer-bar { display: flex; align-items: center; gap: var(--mg-space-1); min-height: 44px; padding: 0 var(--mg-space-2) 0 var(--mg-space-3); border-bottom: 1px solid var(--mg-divider); }
 .dock-viewer-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--mg-space-2); }
 .dock-viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* ---- The dock's composer (phase 4, 3): context, provider, text, pictures, Send or Stop ---- */
+.dock-composer { display: flex; flex-direction: column; gap: var(--mg-space-1); }
+.dock-composer-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--mg-space-1) var(--mg-space-2); }
+.dock-context {
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px var(--mg-space-2);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-pill);
+  background: var(--mg-surface-muted);
+  color: var(--mg-text-secondary);
+  font-size: var(--mg-text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-context[data-dock-context="connecting"], .dock-context[data-dock-context="late"] { border-color: var(--mg-warning); background: var(--mg-warning-bg); color: var(--mg-warning); }
+.dock-picker { position: relative; display: inline-flex; align-items: center; gap: var(--mg-space-1); min-width: 0; font-size: var(--mg-text-sm); }
+.dock-picker-button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 200px;
+  min-height: 24px;
+  padding: 0 var(--mg-space-2);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  font: inherit;
+  cursor: pointer;
+}
+.dock-picker-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-picker-locked { font-size: var(--mg-text-sm); color: var(--mg-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-picker-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 2;
+  width: min(340px, calc(100vw - 48px));
+  padding: var(--mg-space-1);
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: var(--mg-radius-md);
+  box-shadow: var(--mg-shadow-md);
+}
+.dock-picker-list { max-height: 280px; overflow-y: auto; margin: 0 0 var(--mg-space-1); padding: 0; list-style: none; outline: none; }
+.dock-picker-option { display: flex; flex-direction: column; padding: var(--mg-space-1) var(--mg-space-2); border-radius: var(--mg-radius-sm); cursor: pointer; }
+.dock-picker-option.active { background: var(--mg-surface-muted); }
+.dock-picker-option[aria-selected="true"] { background: var(--mg-selected-bg); }
+.dock-picker-option[aria-disabled="true"] { cursor: not-allowed; }
+.dock-picker-option[aria-disabled="true"] .dock-picker-option-text { color: var(--mg-text-muted); }
+.dock-picker-list:focus-visible .dock-picker-option.active { outline: 2px solid var(--mg-focus); outline-offset: -2px; }
+.dock-picker-option-text { color: var(--mg-text-strong); }
+.dock-picker-option-detail, .dock-picker-option-billing { font-size: var(--mg-text-xs); }
+.dock-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: calc(1.5em + 2 * var(--mg-space-2));
+  max-height: calc(8 * 1.5em + 2 * var(--mg-space-2));
+  padding: var(--mg-space-2);
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  font: inherit;
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
+}
+.dock-textarea:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 0; border-color: transparent; }
+.dock-composer-row { display: flex; align-items: center; gap: var(--mg-space-2); }
+.dock-composer-line { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--mg-space-2); font-size: var(--mg-text-sm); }
+.dock-count { font-variant-numeric: tabular-nums; }
+.dock-count.over { color: var(--mg-danger); }
+.dock-attach, .dock-send, .dock-stop {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 0 var(--mg-space-3);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  font: inherit;
+  font-size: var(--mg-text-sm);
+  cursor: pointer;
+}
+.dock-send { border-color: var(--mg-primary); background: var(--mg-primary); color: var(--mg-primary-text); }
+.dock-send:hover:not(:disabled) { background: var(--mg-primary-hover); }
+.dock-stop { border-color: var(--mg-danger-border); color: var(--mg-danger); }
+.dock-stop:hover { background: var(--mg-danger-bg); }
+.dock-attach:disabled, .dock-send:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
+.dock-attach:focus-visible, .dock-send:focus-visible, .dock-stop:focus-visible, .dock-picker-button:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+.dock-chips { display: flex; flex-direction: column; gap: var(--mg-space-1); margin: 0; padding: 0; list-style: none; }
+.dock-chip { display: flex; align-items: center; gap: var(--mg-space-2); font-size: var(--mg-text-sm); }
+.dock-chip img, .dock-chip-img { flex-shrink: 0; width: 56px; height: 56px; object-fit: cover; border: 1px solid var(--mg-border-subtle); border-radius: var(--mg-radius-sm); background: var(--mg-surface-muted); }
+.dock-chip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.dock-chips-note { margin: 0; font-size: var(--mg-text-xs); }
+.dock-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--mg-space-4);
+  border: 2px dashed var(--mg-primary);
+  border-radius: var(--mg-radius-lg);
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+  text-align: center;
+  pointer-events: none;
+}
+.dock-readonly { display: flex; flex-direction: column; gap: var(--mg-space-2); }
+.dock-readonly p { margin: 0; }
+.dock-readonly-actions { display: flex; flex-wrap: wrap; gap: var(--mg-space-2); }
 .ws-menu-host:empty { display: none; }
 .ws-menu { position: relative; }
 .ws-menu-list {

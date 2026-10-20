@@ -24,12 +24,12 @@ const pub = (more: Partial<PublishedTools>): PublishedTools =>
   }) as unknown as PublishedTools;
 
 describe('workspaceOf', () => {
-  it('tools once the server took them; connecting while it registers (within the wait); none after, or refused, dead, of another', () => {
+  it('tools once the server took them; connecting while it registers (within the wait), late after; none when refused, dead or offering none', () => {
     expect(workspaceOf(route, pub({}), true)).toEqual({ plugin: 'cad', key: 'part', name: 'Part', state: 'tools' });
     expect(workspaceOf(route, pub({ settled: false, taken: false }), true)?.state).toBe('connecting');
-    expect(workspaceOf(route, pub({ settled: false, taken: false }), false)?.state).toBe('none');
+    expect(workspaceOf(route, pub({ settled: false, taken: false }), false)?.state).toBe('late');
     expect(workspaceOf(route, null, true)).toEqual({ plugin: 'cad', key: 'part', name: 'part', state: 'connecting' });
-    expect(workspaceOf(route, null, false)?.state).toBe('none');
+    expect(workspaceOf(route, null, false)?.state).toBe('late');
     expect(workspaceOf(route, pub({ taken: false }), true)?.state).toBe('none');
     expect(workspaceOf(route, pub({ dead: true }), true)?.state).toBe('none');
     expect(workspaceOf(route, pub({ tools: [] }), true)?.state).toBe('none');

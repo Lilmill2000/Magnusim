@@ -7,14 +7,16 @@
  */
 import { useEffect, useState } from 'react';
 import { useAssistantStatus } from '../status';
-import type { ConversationTurn } from '../wire';
-import { INTRO_HOME, INTRO_PROJECT, introCad, introWorkspace } from './copy';
+import type { ConversationRow, ConversationTurn } from '../wire';
+import { Composer } from './Composer';
+import { INTRO_HOME, INTRO_PROJECT, introCad, introWorkspace, NEW_CONVERSATION, OPEN_PROJECT, readOnlyConversation } from './copy';
 import { useDockPlace, type DockPlace } from './context';
 import { ConversationMenu } from './ConversationMenu';
 import { useDock } from './dockState';
 import type { DockContent } from './DockShell';
 import { setShownTurn } from './follow';
-import { refreshConversations, retainTurns, setDockContext, showConversation, useDockStore, watchTurn } from './store';
+import { stopDockTurn } from './send';
+import { keptTurns, localPicturesOf, refreshConversations, retainTurns, setDockContext, setTurnStopper, showConversation, useDockStore, watchTurn } from './store';
 import { Transcript, type TranscriptTurn } from './Transcript';
 import { emptyTurnView, isEnded } from './turnView';
 
@@ -30,12 +32,41 @@ export function introOf(place: DockPlace): string {
   return place.projectId ? INTRO_PROJECT : INTRO_HOME;
 }
 
+/** A conversation of another project (spec 2.2): read here, continued there. */
+function ReadOnly({ row, onNew }: { row: ConversationRow; onNew: () => void }) {
+  return (
+    <div className="dock-readonly" data-dock-readonly="1">
+      <p className="dock-muted">{readOnlyConversation(row.project_title ?? row.project_id ?? '')}</p>
+      <div className="dock-readonly-actions">
+        <button
+          type="button"
+          className="home-btn"
+          data-dock-open-project="1"
+          onClick={() => {
+            if (row.project_id) location.hash = `#/p/${encodeURIComponent(row.project_id)}`;
+          }}
+        >
+          {OPEN_PROJECT}
+        </button>
+        <button type="button" className="home-btn" data-dock-new-line="1" onClick={onNew}>
+          {NEW_CONVERSATION}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function useDockContent(): DockContent | null {
   const place = useDockPlace();
   const store = useDockStore();
   const status = useAssistantStatus();
   const dock = useDock();
   const [page, setPage] = useState(TURNS_PAGE);
+  // The pill's Stop is the composer's.
+  useEffect(() => {
+    setTurnStopper((turn) => void stopDockTurn(turn));
+    return () => setTurnStopper(null);
+  }, []);
 
   const wsName = place.workspace?.name ?? null;
   useEffect(() => setDockContext({ project_id: place.projectId, workspace: wsName }), [place.projectId, wsName]);
@@ -47,17 +78,24 @@ export function useDockContent(): DockContent | null {
   const row = list.find((r) => r.id === store.shown) ?? null;
   useEffect(() => setPage(TURNS_PAGE), [store.shown]);
 
-  const rows: ConversationTurn[] = row ? row.turns : [];
+  // The list's turns, then this tab's own it doesn't name yet.
+  const listed: ConversationTurn[] = row ? row.turns : [];
+  const mine = store.shown ? (store.local[store.shown] ?? []) : [];
+  const rows: Array<ConversationTurn | { id: string; state: 'starting'; title: ''; started_at: ''; ended_at: null; started_by: 'window' }> = [
+    ...listed,
+    ...mine.filter((id) => !listed.some((t) => t.id === id)).map((id) => ({ id, state: 'starting' as const, title: '' as const, started_at: '' as const, ended_at: null, started_by: 'window' as const })),
+  ];
   const visible = rows.slice(-page);
   const visibleKey = visible.map((t) => `${t.id}:${TERMINAL.has(t.state) ? 1 : 0}`).join(',');
 
   // Follow what is shown (an ended request only for its snapshot); stop following the rest.
   useEffect(() => {
     for (const t of visible) watchTurn(t.id, { ended: TERMINAL.has(t.state) });
-    retainTurns(visible.map((t) => t.id));
+    // This tab's own running requests stay followed (the pill shows them) in another conversation too.
+    retainTurns([...visible.map((t) => t.id), ...keptTurns()]);
   }, [visibleKey]);
 
-  const turns: TranscriptTurn[] = visible.map((t) => ({ id: t.id, row: t, view: store.turns[t.id] ?? emptyTurnView(t.id) }));
+  const turns: TranscriptTurn[] = visible.map((t) => ({ id: t.id, row: t.started_at ? t : null, view: store.turns[t.id] ?? emptyTurnView(t.id) }));
   const running = turns.filter((t) => !isEnded(t.view) && !(t.row && TERMINAL.has(t.row.state) && !t.view.summary && t.view.lastSeq === 0));
   const newestRunning = running.length ? running[running.length - 1].id : null;
   useEffect(() => setShownTurn(newestRunning), [newestRunning]);
@@ -74,9 +112,11 @@ export function useDockContent(): DockContent | null {
   if (status.state !== 'ready') return null;
 
   const state: DockContent['state'] = store.questions.length ? 'question' : running.length ? 'running' : turns.length ? 'ready' : 'empty';
+  const onNew = () => showConversation(null);
+  const elsewhereProject = !!row && (row.project_id ?? null) !== place.projectId;
   return {
     state,
-    header: <ConversationMenu list={list} shown={row} projectId={place.projectId} onPick={(id) => showConversation(id)} onNew={() => showConversation(null)} />,
+    header: <ConversationMenu list={list} shown={row} projectId={place.projectId} onPick={(id) => showConversation(id)} onNew={onNew} />,
     log: (
       <Transcript
         turns={turns}
@@ -85,7 +125,15 @@ export function useDockContent(): DockContent | null {
         intro={introOf(place)}
         status={status.status}
         workspace={place.workspace?.name ?? ''}
+        stops={store.stops}
+        localPictures={localPicturesOf}
       />
     ),
+    composer:
+      elsewhereProject && row ? (
+        <ReadOnly row={row} onNew={onNew} />
+      ) : (
+        <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} />
+      ),
   };
 }

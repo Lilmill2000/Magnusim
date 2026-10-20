@@ -30,6 +30,75 @@ describe('the dock copy', () => {
     expect(copy.introWorkspace('Counter')).toBe('Tell the Assistant what to do in Counter.');
   });
 
+  it('the provider picker and the composer', () => {
+    expect([copy.PROVIDER, copy.providerDefault('A'), copy.providerAgent('Helper'), copy.notReady('No key'), copy.notReady('')]).toEqual([
+      'Provider',
+      'A · default',
+      'Helper (coding agent)',
+      'No key · not ready',
+      'not ready',
+    ]);
+    expect([copy.billingTag('usd', ''), copy.billingTag('free', ''), copy.billingTag('agent_account', 'Helper')]).toEqual(['API key, $ limits apply', 'No cost', 'Billed to your Helper account']);
+    expect(['agent_not_allowed', 'agent_missing', 'agent_allow_changed', 'agent_signed_out', 'mcp_unavailable', 'not_checked', 'other', null].map(copy.agentReason)).toEqual([
+      'Off until you allow it in Settings → Assistant',
+      'Not installed',
+      'Its command changed: allow it again',
+      'Not signed in',
+      "Its tool connection isn't running",
+      'Not looked for yet: open Settings → Assistant',
+      null,
+      null,
+    ]);
+    expect(copy.PROVIDER_LOCKED).toBe('A conversation keeps its provider. Start a new one to use another.');
+    expect(copy.SET_UP_PROVIDERS).toBe('Set up providers in Settings → Assistant');
+    expect([copy.MESSAGE_LABEL, copy.placeholderWorkspace('CAD'), copy.PLACEHOLDER_PROJECT, copy.PLACEHOLDER_HOME]).toEqual([
+      'Message to the Assistant',
+      'Tell the Assistant what to do in CAD…',
+      'Ask about this project…',
+      'Ask the Assistant…',
+    ]);
+    expect([copy.COMPOSER_HINT, copy.charCount(18_000), copy.SEND, copy.WORKING_ON_IT]).toEqual([
+      'Enter sends · Shift+Enter for a new line',
+      '18,000 of 20,000 characters',
+      'Send',
+      'The Assistant is working on your last message.',
+    ]);
+    expect(copy.providerNotReady('Cloud A', 'No key')).toBe('Cloud A: No key. Settings → Assistant can fix it.');
+    expect(copy.tabBusy('CAD')).toBe('A request is already working in CAD. Wait for it, or stop it.');
+    expect([copy.STOP_THAT_REQUEST, copy.CONVERSATION_FULL]).toEqual(['Stop that request', 'This conversation is full. Start a new one.']);
+    expect([copy.ATTACH_LABEL, copy.DROP_PICTURES, copy.ONLY_IMAGES, copy.AT_MOST_FOUR, copy.PICTURES_GO]).toEqual([
+      'Attach pictures (up to 4)',
+      'Drop pictures to attach (up to 4)',
+      'Only PNG, JPEG and WebP pictures can be attached.',
+      'At most 4 pictures per message.',
+      'Pictures go to the provider with your message.',
+    ]);
+    expect([copy.shrunkTo(2000, 92), copy.tooLargeAfterShrinking('a.jpg'), copy.pictureChip('a.png', 64, 48), copy.removePicture('a.png')]).toEqual([
+      'Shrunk to 2000 × 92 px to fit',
+      'a.jpg is larger than 1.5 MB even after shrinking it.',
+      'a.png · 64 × 48',
+      'Remove a.png',
+    ]);
+    expect(copy.noPictures('Helper')).toBe("Helper doesn't take pictures. Send the message without them.");
+    expect([
+      copy.CONTEXT_HOME,
+      copy.contextProject('Wing'),
+      copy.contextWorkspace('CAD', 'Wing'),
+      copy.contextConnecting('CAD'),
+      copy.waitingForTools('CAD'),
+      copy.contextLate('CAD'),
+      copy.contextNoTools('CAD', 'Wing'),
+    ]).toEqual([
+      'Home · no project',
+      'Project: Wing',
+      'CAD in Wing',
+      'CAD · connecting…',
+      'Waiting for CAD to offer its tools…',
+      'CAD offers no tools now · the Assistant can read the project only',
+      'CAD offers no tools · Project: Wing',
+    ]);
+  });
+
   it('tool steps', () => {
     expect((['read', 'edit', 'compute', 'destructive'] as const).map(copy.riskBadge)).toEqual(['Reads', 'Changes', 'Runs a computation', "Can't be undone"]);
     expect(copy.WHAT_IT_SENT).toBe('What it sent');

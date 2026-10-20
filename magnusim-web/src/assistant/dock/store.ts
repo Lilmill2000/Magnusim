@@ -54,12 +54,20 @@ export interface DockStoreSnapshot {
   shown: string | null;
   /** The turns watched, by id. */
   turns: Readonly<Record<string, TurnView>>;
+  /** Turns this tab started, by conversation, until the server's list names them. */
+  local: Readonly<Record<string, readonly string[]>>;
+  /** When this tab sent Stop for a turn (performance.now()). */
+  stops: Readonly<Record<string, number>>;
 }
 
 export const CONVERSATIONS_PATH = '/api/assistant/conversations';
 export const STORAGE_KEYS = Object.freeze({
   conv: 'mg.assistant.dock.conv',
   draftPrefix: 'mg.assistant.dock.draft.',
+  /** {<turn>: <answer key>} of the running turns this tab started (spec 3.1, 5.4). */
+  keys: 'mg.assistant.dock.keys',
+  /** {<context>: <provider>}: the last pick per context (spec 2.3). */
+  provider: 'mg.assistant.dock.provider',
 });
 
 // ---------------------------------------------------------------- storage (a convenience only)
@@ -116,6 +124,10 @@ let shown: string | null = null;
 /** The person picked the conversation shown (or a new one) in this context. */
 let picked = false;
 let turns: Record<string, TurnView> = {};
+let local: Record<string, string[]> = {};
+let stops: Record<string, number> = {};
+/** This tab's own copies of the person's pictures (blob: URLs), by turn. */
+const localPictures = new Map<string, string[]>();
 const watches = new Map<string, Watch>();
 const drafts = new Map<string, string>();
 let listSeq = 0;
@@ -133,7 +145,7 @@ function running(id: string): boolean {
 }
 
 function build(): DockStoreSnapshot {
-  return { questions, context, conversations, shown, turns };
+  return { questions, context, conversations, shown, turns, local, stops };
 }
 
 function publish(): void {
@@ -189,7 +201,8 @@ function wantedPill(): { key: string; pill: DockPill } | null | undefined {
   const id = newestRunning();
   if (id) {
     const v = turns[id];
-    const text = pillRunning(footerWords(turnPhase(v), workspaceName()), countersOf(v));
+    const sent = stops[id];
+    const text = pillRunning(footerWords(turnPhase(v, sent === undefined ? null : { sentAt: sent, now: performance.now() }), workspaceName()), countersOf(v));
     const stop = stopper;
     return {
       key: `running\n${id}\n${text}\n${stop ? 'stop' : ''}`,
@@ -328,8 +341,117 @@ export async function refreshConversations(): Promise<void> {
   }
   if (seq !== listSeq) return;
   conversations = next;
-  if (next.state === 'ready') choose();
+  if (next.state === 'ready') {
+    // A turn of this tab's the list names now is the list's.
+    for (const row of next.list) {
+      const mine = local[row.id];
+      if (!mine) continue;
+      const left = mine.filter((t) => !row.turns.some((x) => x.id === t));
+      local = { ...local };
+      if (left.length) local[row.id] = left;
+      else delete local[row.id];
+    }
+    choose();
+  }
   publish();
+}
+
+// ---------------------------------------------------------------- what this tab started
+
+/** A turn this tab started: shown in its conversation until the list names it. */
+export function addLocalTurn(conv: string, turn: string): void {
+  start();
+  const have = local[conv] ?? [];
+  if (have.includes(turn)) return;
+  local = { ...local, [conv]: [...have, turn] };
+  publish();
+}
+
+/** This tab sent Stop for a turn (the footer reads "Stopping…" until its end). */
+export function markStopSent(turn: string): void {
+  stops = { ...stops, [turn]: performance.now() };
+  publish();
+}
+
+/** Keeps this tab's own copies of a turn's pictures (blob: URLs) for its transcript. */
+export function setLocalPictures(turn: string, urls: string[]): void {
+  if (urls.length) localPictures.set(turn, urls);
+}
+
+export function localPicturesOf(turn: string): readonly string[] | undefined {
+  return localPictures.get(turn);
+}
+
+function dropLocalPictures(turn: string): void {
+  const urls = localPictures.get(turn);
+  if (!urls) return;
+  localPictures.delete(turn);
+  for (const u of urls) {
+    try {
+      URL.revokeObjectURL(u);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+function readKeys(): Record<string, string> {
+  try {
+    const raw = readKey(STORAGE_KEYS.keys);
+    const j = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(j as Record<string, unknown>)) if (typeof v === 'string') out[k] = v;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** The answer key of a turn this tab started (only to show its questions here again after a reload). */
+export function keepAnswerKey(turn: string, key: string): void {
+  writeKey(STORAGE_KEYS.keys, JSON.stringify({ ...readKeys(), [turn]: key }));
+}
+
+export function answerKeyOf(turn: string): string | null {
+  return readKeys()[turn] ?? null;
+}
+
+/** The turn ended: its key is of no more use. */
+export function dropAnswerKey(turn: string): void {
+  const keys = readKeys();
+  if (!(turn in keys)) return;
+  delete keys[turn];
+  writeKey(STORAGE_KEYS.keys, Object.keys(keys).length ? JSON.stringify(keys) : null);
+}
+
+/** The turns this tab started that it may still show (their keys), for a reload. */
+export function keptTurns(): string[] {
+  return Object.keys(readKeys());
+}
+
+/** The provider picked last in a context (null: none kept). */
+export function pickedProvider(ctx: string): string | null {
+  try {
+    const raw = readKey(STORAGE_KEYS.provider);
+    const j = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+    const v = j && typeof j === 'object' ? j[ctx] : null;
+    return typeof v === 'string' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setPickedProvider(ctx: string, id: string): void {
+  let j: Record<string, unknown> = {};
+  try {
+    const raw = readKey(STORAGE_KEYS.provider);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) j = parsed as Record<string, unknown>;
+  } catch {
+    j = {};
+  }
+  writeKey(STORAGE_KEYS.provider, JSON.stringify({ ...j, [ctx]: id }));
 }
 
 // ---------------------------------------------------------------- drafts
@@ -391,6 +513,7 @@ function onData(id: string, events: TurnEvent[], summary?: SlimTurnSummary | Tur
   if (v === before) return;
   setTurn(id, v);
   if (wasRunning && isEnded(v) && v.end) endCame(id, v.end.state);
+  if (isEnded(v)) dropAnswerKey(id);
   publish();
 }
 
@@ -420,6 +543,7 @@ export function unwatchTurn(id: string): void {
   if (!w) return;
   watches.delete(id);
   w.follower.close();
+  dropLocalPictures(id);
   const { [id]: _gone, ...rest } = turns;
   void _gone;
   turns = rest;
@@ -457,6 +581,9 @@ export function resetDockStoreForTests(): void {
   shown = null;
   picked = false;
   turns = {};
+  local = {};
+  stops = {};
+  for (const id of [...localPictures.keys()]) dropLocalPictures(id);
   listSeq = 0;
   started = false;
   snap = build();

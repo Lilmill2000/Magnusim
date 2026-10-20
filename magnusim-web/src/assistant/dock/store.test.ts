@@ -7,10 +7,16 @@ import type { ConversationRow, SlimTurnSummary, TurnEvent, TurnSummary } from '.
 import { closeDock, DOCK_OPEN_KEY, dockSnapshot as dock, DONE_PILL_MS, openDock, resetDockForTests } from './dockState';
 import { resetFollowForTests } from './follow';
 import {
+  addLocalTurn,
+  answerKeyOf,
   chooseConversation,
   dockStoreSnapshot,
   draftOf,
+  keepAnswerKey,
   keepTurn,
+  keptTurns,
+  markStopSent,
+  pickedProvider,
   questionClosed,
   questionShown,
   refreshConversations,
@@ -18,6 +24,7 @@ import {
   retainTurns,
   setDockContext,
   setDraft,
+  setPickedProvider,
   setTurnStopper,
   showConversation,
   STORAGE_KEYS,
@@ -405,6 +412,39 @@ describe('the conversation per context', () => {
     await sent[3].answer(403, { ok: false, reason: 'remote' });
     await remote;
     expect(dockStoreSnapshot().conversations).toMatchObject({ state: 'remote', list: [] });
+  });
+});
+
+describe('what this tab started', () => {
+  it("a started turn shows in its conversation until the list names it; its answer key goes at its end", async () => {
+    addLocalTurn('c1', 't1');
+    addLocalTurn('c1', 't1');
+    expect(dockStoreSnapshot().local).toEqual({ c1: ['t1'] });
+    keepAnswerKey('t1', 'k1');
+    keepAnswerKey('t2', 'k2');
+    expect(keptTurns()).toEqual(['t1', 't2']);
+    expect(answerKeyOf('t1')).toBe('k1');
+    const listed = refreshConversations();
+    await sent[0].answer(200, { ok: true, conversations: [{ ...row('c1', null, '2026-10-20T10:00:00Z'), turns: [{ id: 't1', title: 'x', state: 'model', started_at: 'a', ended_at: null, started_by: 'window' }] }] });
+    await listed;
+    expect(dockStoreSnapshot().local).toEqual({});
+    watchTurn('t1');
+    channels[0].frame('snapshot', { turn: summary('t1', 'model'), events: [ev({ type: 'state', state: 'model' })], next: 1, ended: false, more: false });
+    expect(answerKeyOf('t1')).toBe('k1');
+    channels[0].frame('events', { events: [ev({ type: 'end', state: 'done', reason: 'done', message: null })], next: 2 });
+    expect(answerKeyOf('t1')).toBeNull();
+    expect(keptTurns()).toEqual(['t2']);
+  });
+
+  it('a Stop sent says Stopping… on the pill too; the provider pick is kept per context', () => {
+    watchTurn('t1');
+    channels[0].frame('snapshot', { turn: summary('t1', 'model'), events: [ev({ type: 'state', state: 'model' })], next: 1, ended: false, more: false });
+    act(() => markStopSent('t1'));
+    expect(typeof dockStoreSnapshot().stops.t1).toBe('number');
+    expect(dock().pill?.text).toBe('Assistant · Stopping…');
+    setPickedProvider('home', 'first');
+    setPickedProvider('p1', 'agent:helper');
+    expect([pickedProvider('home'), pickedProvider('p1'), pickedProvider('p2')]).toEqual(['first', 'agent:helper', null]);
   });
 });
 

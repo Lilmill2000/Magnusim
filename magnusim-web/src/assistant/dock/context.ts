@@ -7,8 +7,8 @@
  * - A workspace offers tools when its newest list (workspaceToolsSnapshot().current) is of
  *   this route, settled, taken and not dead: the dock then binds its turns to this tab
  *   (`tab: 'link'`). Still registering, it is `connecting` for up to CONNECTING_MS from when
- *   it opened; then, or when refused, dead or an older plugin, it offers `none` and the dock
- *   sends the project's context instead.
+ *   it opened, then `late`; refused, dead or an older plugin, it offers `none`. Late or none,
+ *   the dock sends the project's context instead.
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { parseHomeRoute } from '../../home/controller';
@@ -24,7 +24,11 @@ export interface DockWorkspace {
   key: string;
   /** How the person reads it: its registration's title, else its key. */
   name: string;
-  state: 'tools' | 'connecting' | 'none';
+  /**
+   * tools: the server took its tools (turns bind to this tab); connecting: registering, within
+   * CONNECTING_MS; late: still nothing past it; none: refused, dead, or an older plugin.
+   */
+  state: 'tools' | 'connecting' | 'late' | 'none';
 }
 
 export interface DockPlace {
@@ -73,7 +77,8 @@ export function workspaceOf(route: Route, cur: PublishedTools | null, connecting
   if (offered && cur.settled && cur.taken) return { ...base, state: 'tools' };
   // Registering, or nothing offered yet: connecting while the wait lasts.
   const pending = offered && !cur.settled && !cur.abandoned;
-  return { ...base, state: connecting && (pending || !mine) ? 'connecting' : 'none' };
+  if (pending || !mine) return { ...base, state: connecting ? 'connecting' : 'late' };
+  return { ...base, state: 'none' };
 }
 
 export function useDockPlace(): DockPlace {

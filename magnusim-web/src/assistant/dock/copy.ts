@@ -66,6 +66,62 @@ export const introCad = (workspace: string): string =>
   `Tell the Assistant what to model in ${workspace}. You can watch each step, pause or take over in the Part, and stop it here.`;
 export const introWorkspace = (workspace: string): string => `Tell the Assistant what to do in ${workspace}.`;
 
+// ---------------------------------------------------------------- the provider picker (2.3)
+
+export const PROVIDER = 'Provider';
+export const providerDefault = (label: string): string => `${label} · default`;
+export const providerAgent = (label: string): string => `${label} (coding agent)`;
+export const notReady = (line: string): string => (line ? `${line} · not ready` : 'not ready');
+const BILLING_TAGS: Record<'usd' | 'free', string> = { usd: 'API key, $ limits apply', free: 'No cost' };
+export const billingTag = (billing: Billing, name: string): string => (billing === 'agent_account' ? `Billed to your ${name} account` : BILLING_TAGS[billing]);
+const AGENT_REASONS: Record<string, string> = {
+  agent_not_allowed: 'Off until you allow it in Settings → Assistant',
+  agent_missing: 'Not installed',
+  agent_allow_changed: 'Its command changed: allow it again',
+  agent_signed_out: 'Not signed in',
+  mcp_unavailable: "Its tool connection isn't running",
+  not_checked: 'Not looked for yet: open Settings → Assistant',
+};
+/** A coding agent's reason for not being ready, as the person reads it (null for a code it doesn't know). */
+export const agentReason = (code: string | null): string | null => (code && Object.hasOwn(AGENT_REASONS, code) ? AGENT_REASONS[code] : null);
+export const PROVIDER_LOCKED = 'A conversation keeps its provider. Start a new one to use another.';
+export const SET_UP_PROVIDERS = 'Set up providers in Settings → Assistant';
+
+// ---------------------------------------------------------------- the composer (3)
+
+export const MESSAGE_LABEL = 'Message to the Assistant';
+export const placeholderWorkspace = (workspace: string): string => `Tell the Assistant what to do in ${workspace}…`;
+export const PLACEHOLDER_PROJECT = 'Ask about this project…';
+export const PLACEHOLDER_HOME = 'Ask the Assistant…';
+export const COMPOSER_HINT = 'Enter sends · Shift+Enter for a new line';
+export const charCount = (n: number): string => `${n.toLocaleString('en-US')} of 20,000 characters`;
+export const SEND = 'Send';
+export const WORKING_ON_IT = 'The Assistant is working on your last message.';
+export const providerNotReady = (label: string, detail: string): string => `${label}: ${detail}. Settings → Assistant can fix it.`;
+export const tabBusy = (workspace: string): string => `A request is already working in ${workspace}. Wait for it, or stop it.`;
+export const STOP_THAT_REQUEST = 'Stop that request';
+export const CONVERSATION_FULL = 'This conversation is full. Start a new one.';
+// Pictures (3.2).
+export const ATTACH_LABEL = 'Attach pictures (up to 4)';
+export const ATTACH = 'Attach';
+export const DROP_PICTURES = 'Drop pictures to attach (up to 4)';
+export const ONLY_IMAGES = 'Only PNG, JPEG and WebP pictures can be attached.';
+export const shrunkTo = (w: number, h: number): string => `Shrunk to ${w} × ${h} px to fit`;
+export const tooLargeAfterShrinking = (name: string): string => `${name} is larger than 1.5 MB even after shrinking it.`;
+export const pictureChip = (name: string, w: number, h: number): string => `${name} · ${w} × ${h}`;
+export const removePicture = (name: string): string => `Remove ${name}`;
+export const AT_MOST_FOUR = 'At most 4 pictures per message.';
+export const PICTURES_GO = 'Pictures go to the provider with your message.';
+export const noPictures = (name: string): string => `${name} doesn't take pictures. Send the message without them.`;
+// Context (3.3).
+export const CONTEXT_HOME = 'Home · no project';
+export const contextProject = (title: string): string => `Project: ${title}`;
+export const contextWorkspace = (workspace: string, project: string): string => `${workspace} in ${project}`;
+export const contextConnecting = (workspace: string): string => `${workspace} · connecting…`;
+export const waitingForTools = (workspace: string): string => `Waiting for ${workspace} to offer its tools…`;
+export const contextLate = (workspace: string): string => `${workspace} offers no tools now · the Assistant can read the project only`;
+export const contextNoTools = (workspace: string, project: string): string => `${workspace} offers no tools · Project: ${project}`;
+
 // ---------------------------------------------------------------- tool steps (2.6)
 
 const RISK_BADGES: Record<Risk, string> = { read: 'Reads', edit: 'Changes', compute: 'Runs a computation', destructive: "Can't be undone" };
