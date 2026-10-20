@@ -76,8 +76,9 @@
  * - A plugin turned off, swapped or reset (foam-runner.js bumpPluginEpoch) drops its
  *   registrations in every tab, fails their calls (`plugin_off`) and tells each page
  *   `unregistered`, synchronously, before the worker answers.
- * - Gates of a turn bound to a tab, and of an MCP call that ran in one (any owner gates.ts
- *   tabOf gives a tab), are shown there (the GateBroker's presenter): sent to its
+ * - Gates of a turn shown in a tab (its showTab: the window that started it, else its bound
+ *   tab), and of an MCP call that ran in one (any owner gates.ts tabOf gives a tab), are shown
+ *   there (the GateBroker's presenter): sent to its
  *   live link, sent again when its link returns; the broker notes an unseen one after 15 s.
  *   Each link remembers the gates it was sent: the page answers one only on such a link,
  *   while it is its tab's live link (the turn's answer key is the other way, turns.ts).
@@ -915,6 +916,18 @@ export class Relay {
     const l = this.tabs.get(tab)?.link;
     if (!l || !l.open) return;
     l.send('gate_closed', { gate: view.id, answer: closed?.answer ?? 'deny', by: closed?.by ?? 'stop' });
+  }
+
+  /** The app tab whose live relay link `link` is now (its newest, open, not silent), or null. */
+  liveLinkTab(link: unknown): string | null {
+    const rec = this.closed ? null : this.liveLink(link);
+    return rec && !rec.silent ? rec.tab : null;
+  }
+
+  /** Whether `tab` has a live relay link now (a window that shows it). */
+  tabLive(tab: string): boolean {
+    const l = this.closed ? null : this.tabs.get(tab)?.link;
+    return !!l && l.open && !l.silent;
   }
 
   /** Whether `link` is `tab`'s live relay link now (tests: which tab a link belongs to). */

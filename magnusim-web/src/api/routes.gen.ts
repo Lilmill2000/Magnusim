@@ -30,6 +30,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/assistant/turns' },
   { method: 'GET', path: '/api/assistant/turns/:id' },
   { method: 'GET', path: '/api/assistant/turns/:id/images/:n' },
+  { method: 'POST', path: '/api/assistant/turns/:id/show' },
   { method: 'POST', path: '/api/assistant/turns/:id/stop' },
   { method: 'GET', path: '/api/bcs' },
   { method: 'POST', path: '/api/bcs' },

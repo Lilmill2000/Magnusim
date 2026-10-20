@@ -23,6 +23,10 @@
  *   which the answer key never answers, "Show it to answer"); the gate is shown again when
  *   the tab's link returns, and stays answerable with the answer key meanwhile.
  *
+ * A turn's questions show in the window that started it (its `showTab`, phase 4 spec 9.1),
+ * else in its bound tab; retarget() moves a turn's open questions to another tab (a window
+ * that reloaded shows them again: POST /api/assistant/turns/:id/show).
+ *
  * Open and answered gates live in the Assistant's state on globalThis, so a server Vite
  * restarted in this process still answers a gate an older one opened.
  */
@@ -174,7 +178,7 @@ export interface GateBrokerOptions {
 
 export class GateBroker {
   private presenter: GatePresenter;
-  private readonly clock: Clock;
+  readonly clock: Clock;
   private readonly timeoutMs: number;
   private readonly unseenMs: number;
   private readonly listeners = new Set<(e: GateEvent) => void>();
@@ -256,15 +260,17 @@ export class GateBroker {
           this.clock.clearTimeout(entry.timer);
           this.clock.clearTimeout(entry.unseenTimer);
           signal.removeEventListener('abort', onAbort);
+          // Its owner now: retarget() may have moved it to another tab since it opened.
+          const now = entry.owner;
           // Kept as answered (a second answer is told `already`), unless a test reset dropped the table.
           const map = table();
-          if (map.get(id) === entry) map.set(id, { state: 'closed', view, owner, answer, by, at: this.clock.now() });
+          if (map.get(id) === entry) map.set(id, { state: 'closed', view, owner: now, answer, by, at: this.clock.now() });
           try {
-            this.presenter.withdraw(view, owner, { answer, by });
+            this.presenter.withdraw(view, now, { answer, by });
           } catch {
             /* the dialog goes with its page */
           }
-          this.tell({ type: 'closed', view, owner, answer, by });
+          this.tell({ type: 'closed', view, owner: now, answer, by });
           resolve(answer);
         },
       };
@@ -330,6 +336,24 @@ export class GateBroker {
   /** A tab's link came back: its open gates are shown again. */
   tabLinked(tab: string): void {
     for (const e of this.openEntries()) if (tabOf(e.owner) === tab) e.broker.show(e);
+  }
+
+  /**
+   * A turn's open questions move to `tab` (the window that shows them now) and are shown there:
+   * answered on that tab's live link from then on, never on the tab they were on. How many moved.
+   */
+  retarget(turn: string, tab: string): number {
+    let n = 0;
+    for (const e of this.openEntries()) {
+      if (e.owner.kind !== 'turn' || e.owner.id !== turn) continue;
+      e.owner = { ...e.owner, tab };
+      // Unseen again only if this tab can't show it either.
+      e.broker.clock.clearTimeout(e.unseenTimer);
+      e.unseenTimer = null;
+      e.broker.show(e);
+      n += 1;
+    }
+    return n;
   }
 
   /** A tab's link went: its open gates count as unseen after the wait. */

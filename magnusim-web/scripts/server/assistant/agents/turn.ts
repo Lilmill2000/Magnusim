@@ -99,6 +99,8 @@ interface EndInfo {
 export interface AgentRunTurn extends RunnerTurn {
   readonly prompt: string;
   readonly tab: string | null;
+  /** The tab that shows its questions: the window that started it, else its bound tab (phase 4 spec 9.1). */
+  readonly showTab: string | null;
   readonly projectId: string | null;
   readonly simulationId: string | null;
   readonly settings: AgentTurnSettings;
@@ -246,7 +248,6 @@ class AgentTurnRun implements AgentDispatch {
   private readonly d: AgentTurnDeps;
   private readonly timings: AgentTimings;
   private readonly name: string;
-  private readonly owner: GateOwner;
   private session: AgentSession | null = null;
   private matcher: OursMatcher;
   private project: ProjectInfo | null = null;
@@ -283,11 +284,15 @@ class AgentTurnRun implements AgentDispatch {
     this.d = d;
     this.timings = timings;
     this.name = t.settings.agent.name;
-    this.owner = { kind: 'turn', id: t.id, tab: t.tab };
     this.matcher = new OursMatcher(policyOf(d.known).ours, () => false);
     this.halted = new Promise((resolve) => {
       this.wake = () => resolve('halted');
     });
+  }
+
+  /** Who asks its questions: this turn, shown in the tab that shows them now (it may move: /show). */
+  private get owner(): GateOwner {
+    return { kind: 'turn', id: this.t.id, tab: this.t.showTab };
   }
 
   // ------------------------------------------------------------ the binding's dispatch
@@ -444,9 +449,9 @@ class AgentTurnRun implements AgentDispatch {
       this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: nothing });
       return false;
     }
-    // The question is link_only: with no tab nobody could see or answer it (a Home turn that
-    // names a project, the CLI's --project), so it isn't asked.
-    if (!t.tab) {
+    // The question is link_only: with no window to show it nobody could see or answer it (a Home
+    // turn the CLI started that names a project, its --project), so it isn't asked.
+    if (!t.showTab) {
       this.endOrHalt(first, { state: 'stopped', reason: 'privacy', message: AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, nothing) });
       return false;
     }
@@ -495,7 +500,7 @@ class AgentTurnRun implements AgentDispatch {
     }
     // An answer forgotten mid-turn asks again (in the window; with no tab the turn ends).
     if (await this.requirePrivacy(false)) return null;
-    return errorResult(call, 'declined', this.t.tab ? AGENT_PRIVACY_DECLINED_TEXT : AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, NOTHING_MORE_SENT));
+    return errorResult(call, 'declined', this.t.showTab ? AGENT_PRIVACY_DECLINED_TEXT : AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, NOTHING_MORE_SENT));
   }
 
   // ------------------------------------------------------------ ending early
@@ -664,7 +669,9 @@ class AgentTurnRun implements AgentDispatch {
       t.emit({ type: 'agent_permission', title, outcome: 'declined', by: 'magnusim' });
       return pickOption(view.options, REJECT_KINDS);
     }
-    if (!t.tab) {
+    // No window shows its questions (a tab-less turn the CLI started): answered no, with a note.
+    // A Home turn started from a window asks there (link_only, answered on its live link).
+    if (!t.showTab) {
       t.note(HOME_OWN_TOOL_NOTE(this.name));
       t.emit({ type: 'agent_permission', title, outcome: 'declined', by: 'magnusim' });
       return pickOption(view.options, REJECT_KINDS);
@@ -678,7 +685,7 @@ class AgentTurnRun implements AgentDispatch {
     const s = this.session as AgentSession;
     const allowOption = pickOption(view.options, ['allow_once']);
     const rejectOption = pickOption(view.options, REJECT_KINDS);
-    const owner: GateOwner = { kind: 'turn', id: t.id, tab: t.tab };
+    const owner: GateOwner = this.owner;
     let gateId: string | null = null;
     // The answer goes to the agent the moment the question closes (before a session/cancel that
     // follows in the same tick: the first answer wins).

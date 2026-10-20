@@ -93,6 +93,8 @@ export interface PageLimits {
 export interface LoopTurn extends RunnerTurn {
   readonly prompt: string;
   readonly tab: string | null;
+  /** The tab that shows its questions: the window that started it, else its bound tab (phase 4 spec 9.1). */
+  readonly showTab: string | null;
   readonly projectId: string | null;
   readonly simulationId: string | null;
   readonly settings: ModelTurnSettings;
@@ -308,7 +310,7 @@ async function requirePrivacy(t: LoopTurn, d: LoopDeps, adapter: ProviderAdapter
   try {
     answer = await d.gates.ask(
       privacyGate({ turn: t.id, project, provider: t.settings.provider, host: destinationHost(t.settings.provider, t.settings.base_url) }),
-      { kind: 'turn', id: t.id, tab: t.tab },
+      { kind: 'turn', id: t.id, tab: t.showTab },
       t.signal,
     );
   } finally {
@@ -654,7 +656,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         const signal = t.callSignal();
         let r;
         try {
-          r = await d.runner.run(call, { owner: { kind: 'turn', id: t.id, tab: t.tab }, ctx, signal, turn: t, offered });
+          // Its questions show where the turn shows them; its tools are still only its bound tab's (ctx).
+          r = await d.runner.run(call, { owner: { kind: 'turn', id: t.id, tab: t.showTab }, ctx, signal, turn: t, offered });
         } finally {
           t.callDone();
         }

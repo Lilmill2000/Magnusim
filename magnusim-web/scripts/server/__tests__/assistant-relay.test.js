@@ -19,7 +19,7 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete process.env[k];
 
-const { makeManager, relayServer, demoTools, DEMO_WORKSPACE, hubTab, runTool, settledNow, settled, eventsOf, until } = await import('./assistant-harness.js');
+const { makeManager, relayServer, demoTools, DEMO_WORKSPACE, hubTab, runTool, settledNow, settled, eventsOf, until, hostTool } = await import('./assistant-harness.js');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
 const { ABORT_GRACE_MS } = await import('../assistant/runner.ts');
@@ -1119,5 +1119,125 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
     assert.equal((await call.promise).error.code, 'tab_disconnected');
     const r = await page.subscribe('assistant:2');
     assert.deepEqual([r.ok, r.status], [false, 503]);
+  });
+});
+
+describe('a request started in a window (phase 4 spec 9.1, 9.6)', { timeout: 30_000 }, () => {
+  const WINDOW_LOST = 'This window lost its connection to Magnusim. Try again.';
+  const start = (s, body) => s.post('/api/assistant/turns', body);
+
+  it("tab:'link' binds the window's own tab; its questions show there and it is started_by window; a dead link 409 no_channel; a dormant registration 409 tab_hidden; without a link, a program", async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    m.provider.script({ text: 'Hi.' }, { text: 'Hi again.' });
+    const r = await start(s, { text: 'Count', tab: 'link', link });
+    assert.equal(r.status, 202, JSON.stringify(r.json));
+    const t = s.handle.turns.get(r.json.turn);
+    assert.deepEqual([t.tab, t.showTab, t.projectId, t.summary().started_by], [page.tab, page.tab, 'p1', 'window']);
+    await settled(t);
+    const cli = await start(s, { text: 'Count', tab: page.tab });
+    assert.equal(cli.status, 202, JSON.stringify(cli.json));
+    const ct = s.handle.turns.get(cli.json.turn);
+    assert.deepEqual([ct.tab, ct.showTab, ct.summary().started_by], [page.tab, page.tab, 'program']);
+    await settled(ct);
+    for (const body of [{ tab: 'link' }, { tab: 'link', link: 'c'.repeat(24) }, { link: 'c'.repeat(24) }, { link: 42 }]) {
+      const no = await start(s, { text: 'Count', ...body });
+      assert.deepEqual([no.status, no.json.code, no.json.error], [409, 'no_channel', WINDOW_LOST], JSON.stringify(body));
+    }
+    // A new link of the tab that hasn't registered again: the registration is dormant.
+    await page.unsubscribe();
+    const fresh = await page.open('assistant:2');
+    const hidden = await start(s, { text: 'Count', tab: 'link', link: fresh });
+    assert.deepEqual([hidden.status, hidden.json.code], [409, 'tab_hidden']);
+    assert.equal(m.provider.requests.length, 2, 'nothing refused reached the model');
+  });
+
+  it("a Home turn from a window asks its confirm question in that window, answered on its link; a tab-less CLI turn's question goes to no window", async () => {
+    const { m, s } = await setup({ manager: { hostTools: [hostTool('wipe', { risk: 'destructive', title: 'Wipe the notes' })] } });
+    const home = await s.page();
+    const link = await home.open();
+    m.provider.script({ tools: [{ name: 'wipe' }] }, { text: 'Wiped.' });
+    const r = await start(s, { text: 'Wipe them', link });
+    assert.equal(r.status, 202, JSON.stringify(r.json));
+    const t = s.handle.turns.get(r.json.turn);
+    assert.deepEqual([t.tab, t.showTab, t.summary().started_by], [null, home.tab, 'window']);
+    const { gate } = await home.frame('gate', 0);
+    assert.deepEqual([gate.turn, gate.title], [t.id, 'Allow the Assistant to wipe the notes?']);
+    const yes = await s.post('/api/assistant/relay/gate', { link, gate: gate.id, allow: true });
+    assert.equal(yes.status, 200, JSON.stringify(yes.json));
+    await settled(t);
+    assert.deepEqual([t.state, eventsOf(t).find((e) => e.type === 'tool_result').ok], ['done', true]);
+    // The CLI's tab-less turn: its question is read through its long-poll, never sent to a window.
+    m.provider.script({ tools: [{ name: 'wipe' }] }, { text: 'Not wiped.' });
+    const cli = await start(s, { text: 'Wipe them' });
+    const ct = s.handle.turns.get(cli.json.turn);
+    await until(() => ct.summary().open_gates.length === 1, 5000, 'its question');
+    assert.equal(ct.showTab, null);
+    assert.equal(home.of('gate').length, 1, 'the window got no second question');
+    const g = ct.summary().open_gates[0];
+    assert.equal((await s.post('/api/assistant/relay/gate', { link, gate: g.id, allow: true })).status, 403, 'nor can it answer it');
+    assert.equal(s.handle.turns.answerGate(g.id, false, { kind: 'key', key: ct.answerKey }).status, 200);
+    await settled(ct);
+  });
+
+  it("a Home cloud turn's privacy question shows in the window that started it; Don't send ends it with nothing sent", async () => {
+    const { m, s } = await setup();
+    const home = await s.page();
+    const link = await home.open();
+    const r = await start(s, { text: 'Look at the wing', provider: 'anthropic', context: { project_id: 'p1' }, link });
+    assert.equal(r.status, 202, JSON.stringify(r.json));
+    const t = s.handle.turns.get(r.json.turn);
+    const { gate } = await home.frame('gate', 0);
+    assert.deepEqual([gate.kind, gate.turn], ['privacy', t.id]);
+    assert.equal((await s.post('/api/assistant/relay/gate', { link, gate: gate.id, allow: false })).status, 200);
+    await settled(t);
+    assert.deepEqual([t.state, t.endReason, t.message], ['stopped', 'privacy', 'Nothing was sent.']);
+    assert.equal(m.adapters.anthropic?.requests.length ?? 0, 0);
+  });
+
+  it('/show: the window that started a turn shows its open question again on its new link once the old window is gone; refusals; never answered on the old tab', async () => {
+    const { m, s } = await setup({ manager: { hostTools: [hostTool('wipe', { risk: 'destructive' })] } });
+    const a = await s.page();
+    const linkA = await a.open();
+    m.provider.script({ tools: [{ name: 'wipe' }] }, { text: 'Wiped.' });
+    const r = await start(s, { text: 'Wipe them', link: linkA });
+    assert.equal(r.status, 202, JSON.stringify(r.json));
+    const { turn: id, answer_key: key } = r.json;
+    const t = s.handle.turns.get(id);
+    const first = (await a.frame('gate', 0)).gate;
+    const b = await s.page();
+    const linkB = await b.open();
+    const show = (body, turn = id) => s.post(`/api/assistant/turns/${turn}/show`, body);
+    const codeOf = async (body, turn) => {
+      const x = await show(body, turn);
+      return [x.status, x.json.code];
+    };
+    assert.deepEqual(await codeOf({ link: linkB, answer_key: key }, 't-nope-00000000'), [404, 'unknown_turn']);
+    assert.deepEqual(await codeOf({ link: linkB }), [403, 'answer_key']);
+    assert.deepEqual(await codeOf({ link: linkB, answer_key: 'f'.repeat(32) }), [403, 'answer_key']);
+    assert.deepEqual(await codeOf({ link: 'c'.repeat(24), answer_key: key }), [409, 'no_channel']);
+    const elsewhere = await show({ link: linkB, answer_key: key });
+    assert.deepEqual([elsewhere.status, elsewhere.json.code, elsewhere.json.error], [409, 'shown_elsewhere', 'Its questions show in another window.']);
+    assert.equal(b.of('gate').length, 0);
+    // The window that started it goes (a reload gives it a new tab id).
+    a.close();
+    await until(() => !s.relay.tabLive(a.tab), 5000, 'the old window gone');
+    const ok = await show({ link: linkB, answer_key: key });
+    assert.deepEqual([ok.status, ok.json.turn.id], [200, id]);
+    assert.equal(t.showTab, b.tab);
+    const again = (await b.frame('gate', 0)).gate;
+    assert.equal(again.id, first.id, 'the same question, shown in the new window');
+    // The old tab comes back with a new link: the question isn't shown there, nor answered there.
+    const a2 = await s.page(a.tab);
+    const linkA2 = await a2.open();
+    assert.equal(a2.of('gate').length, 0);
+    const there = await s.post('/api/assistant/relay/gate', { link: linkA2, gate: first.id, allow: true });
+    assert.deepEqual([there.status, there.json.code], [403, 'not_shown']);
+    const here = await s.post('/api/assistant/relay/gate', { link: linkB, gate: first.id, allow: true });
+    assert.equal(here.status, 200, JSON.stringify(here.json));
+    await settled(t);
+    assert.equal(t.state, 'done');
+    assert.equal((await b.frame('gate_closed', 0)).gate, first.id, 'it closes in the window that shows it');
+    assert.deepEqual(await codeOf({ link: linkB, answer_key: key }), [409, 'ended']);
   });
 });

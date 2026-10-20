@@ -2211,6 +2211,45 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
       await w.close();
     }
   });
+
+  it('from Home in a window (its live link, phase 4 spec 9.1): an own-tool request is asked in that window (link_only), answered on its link', async () => {
+    resetAssistantState();
+    host.setTestOptions({ cancelMs: null, idleMs: null, gateMs: null });
+    const m = H.makeManager({ dir: ROOT, pluginEpoch: () => '1', projects: { p1: { ...PROJECT } }, settings: { provider: `agent:${CUSTOM_ID}`, privacy: 'allow', custom_agents: [customAgent()] } });
+    m.state.settings.agents = { ...m.state.settings.agents, [CUSTOM_ID]: { model: null, mode: null, allowed: { fingerprint: await fingerprintOf(CUSTOM_ID, m.state.settings), at: 'now' }, lockdown_failed: null } };
+    const srv = await H.relayServer(m);
+    let home = null;
+    try {
+      assert.equal((await L.startMcpListener()).running, true);
+      home = await srv.page();
+      const link = await home.open();
+      const r = await srv.post('/api/assistant/turns', { text: 'List.', provider: `agent:${CUSTOM_ID}`, link });
+      assert.equal(r.status, 202, JSON.stringify(r.json));
+      const t = srv.handle.turns.get(r.json.turn);
+      assert.deepEqual([t.tab, t.showTab, t.summary().started_by], [null, home.tab, 'window']);
+      custom.script({ askOwn: { title: 'ls', kind: 'execute' } }, { say: 'ok' });
+      const { gate } = await home.frame('gate', 0, 'assistant:1', CEILING);
+      assert.deepEqual([gate.turn, gate.link_only, gate.title], [t.id, true, 'Let Scripted use its own tool (execute)?']);
+      // Only the window answers it: never the answer key.
+      assert.equal(srv.handle.turns.answerGate(gate.id, true, { kind: 'key', key: t.answerKey }).status, 403);
+      const yes = await srv.post('/api/assistant/relay/gate', { link, gate: gate.id, allow: true });
+      assert.equal(yes.status, 200, JSON.stringify(yes.json));
+      await settledTurn(t);
+      assert.equal(endOf(t).state, 'done');
+      assert.deepEqual(custom.events('permission_outcome').at(-1).outcome, { outcome: 'selected', optionId: 'allow' });
+      assert.deepEqual(
+        H.eventsOf(t)
+          .filter((x) => x.type === 'agent_permission')
+          .map((x) => [x.title, x.outcome, x.by]),
+        [['ls', 'allowed', 'user']],
+      );
+      assert.equal(H.eventsOf(t).some((x) => x.type === 'note' && /answer such questions/.test(x.text)), false, 'no Home note');
+    } finally {
+      home?.close();
+      host.endAll('test end');
+      await srv.close();
+    }
+  });
 });
 
 // ------------------------------------------------------------------------------------------------

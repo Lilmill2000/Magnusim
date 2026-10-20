@@ -30,7 +30,11 @@
  *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?}
  *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
- *                                        an app tab's id, or 'auto' for the only connected one.
+ *                                        an app tab's id, 'auto' for the only connected one, or
+ *                                        'link' for the tab whose live relay link `link` is. With
+ *                                        `link` (a window's start) its questions show in that tab
+ *                                        and it is started_by 'window'; a link that isn't live is
+ *                                        409 no_channel.
  *                                        provider: any provider, whatever the default (without
  *                                        one: the conversation's own, else the default), or
  *                                        agent:<id> for a coding agent, whose turn needs the
@@ -50,6 +54,10 @@
  *                                        nosniff, no-store and CSP default-src 'none'; 404 image_gone
  *                                        once it is no longer kept (or never was)
  *   POST /api/assistant/turns/:id/stop  {} → {ok, turn} once it ended (≤ 5 s), else {ok, stopping:true}
+ *   POST /api/assistant/turns/:id/show  {link, answer_key} → {ok, turn}: the window that started the
+ *                                        turn shows its open questions again on its new live link
+ *                                        (a reload); 403 answer_key, 409 no_channel, 404, 409 ended,
+ *                                        409 shown_elsewhere (the window showing them is still there)
  *   POST /api/assistant/gates/:id       {allow, answer_key} → {ok}: the program that started the turn
  *                                        answers its question with the 202's answer_key; 403
  *                                        answer_key (missing or wrong), not_shown (a question for
@@ -727,6 +735,14 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
   );
 
   router.post(
+    '/api/assistant/turns/:id/show',
+    local(async (ctx) => {
+      const r = turns.show(ctx.params.id, await ctx.readJsonBody());
+      ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  router.post(
     '/api/assistant/gates/:id',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
@@ -978,6 +994,11 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   // The page proves this account with an app tab's live link (an agent's start, Test, connect,
   // sign-in, a custom agent added, an allow switch turned on): any tab's, the one that sends it.
   turns.setLinkCheck((link) => relay.isLiveLink(link));
+  // A turn started in a window (its live link) shows its questions there (phase 4's dock).
+  turns.setLinkTab(
+    (link) => relay.liveLinkTab(link),
+    (tab) => relay.tabLive(tab),
+  );
   // Discovery's allow switch and custom-agent removal stop that agent's turns and processes.
   const host = agentHost();
   setAgentRunHooks({ running: (id) => host.running(id), stop: (id, text) => host.stopAgent(id, text) });

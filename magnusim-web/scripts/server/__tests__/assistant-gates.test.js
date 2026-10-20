@@ -458,3 +458,25 @@ describe('who may answer a question (P2): the program that started the turn, or 
     await settled(t);
   });
 });
+
+describe('retarget (phase 4 spec 9.6)', () => {
+  it("moves a turn's open questions to another tab: shown there, closed there, answered only there; other turns' stay", async () => {
+    const p = presenter();
+    const withdrawnTo = [];
+    p.withdraw = (view, owner) => withdrawnTo.push([view.id, owner.tab]);
+    const { b, events } = broker({ presenter: p });
+    const mine = ask(b, events, REQ, TURN('tab-a'));
+    const other = ask(b, events, { ...REQ, turn: 't-2' }, { kind: 'turn', id: 't-2', tab: 'tab-a' });
+    assert.equal(b.retarget('t-1', 'tab-b'), 1);
+    assert.deepEqual(p.presented.slice(-1).map((x) => [x.view.id, x.owner.tab]), [[mine.view.id, 'tab-b']]);
+    assert.equal(b.lookup(mine.view.id).owner.tab, 'tab-b');
+    assert.equal(b.lookup(other.view.id).owner.tab, 'tab-a');
+    assert.equal(b.answer(mine.view.id, true), 'ok');
+    assert.equal(await mine.answer, 'allow');
+    assert.deepEqual(withdrawnTo, [[mine.view.id, 'tab-b']], 'taken down where it shows now');
+    assert.equal(events.filter((e) => e.type === 'closed').at(-1).owner.tab, 'tab-b');
+    assert.equal(b.lookup(mine.view.id).owner.tab, 'tab-b', 'remembered as answered there');
+    b.answer(other.view.id, false);
+    await other.answer;
+  });
+});

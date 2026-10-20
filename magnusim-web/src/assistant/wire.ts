@@ -207,6 +207,36 @@ export interface GateView {
 }
 
 /**
+ * POST /api/assistant/turns' body as a window sends it (phase 4): `link` is this tab's live relay
+ * link (always, from the dock): the turn's questions show in this tab and it is started_by
+ * 'window' (409 no_channel when the link is no longer live: get a fresh one and send again).
+ * `tab: 'link'` binds the turn to this tab's workspace (409 no_channel, 400 bad_tab, 409
+ * tab_hidden, 409 tab_busy as for a tab id); else `context` names the project and study.
+ * `provider` only before a conversation's first message (it keeps its provider).
+ */
+export interface TurnStartBody {
+  text: string;
+  conversation?: string;
+  provider?: string;
+  link?: string;
+  /** 'link' (this window's workspace), an app tab's id, or 'auto' (the only connected one: the CLI). */
+  tab?: string;
+  context?: { project_id?: string; simulation_id?: string };
+}
+
+/**
+ * POST /api/assistant/turns/:id/show {link, answer_key}: the window that started a turn (it kept
+ * the 202's answer_key) shows the turn's open questions again on its new live link after a
+ * reload; they come as relay `gate` frames on that link and are answered through /relay/gate.
+ * 200 {ok, turn}; 403 answer_key, 409 no_channel, 404 unknown_turn, 409 ended, 409
+ * shown_elsewhere ("Its questions show in another window.": the window showing them is still there).
+ */
+export interface TurnShowBody {
+  link: string;
+  answer_key: string;
+}
+
+/**
  * POST /api/assistant/turns' 202. `answer_key` answers the turn's questions (POST
  * /api/assistant/gates/:id {allow, answer_key}): it goes only to whoever started the turn.
  */

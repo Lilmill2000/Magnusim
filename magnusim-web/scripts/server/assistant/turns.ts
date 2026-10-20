@@ -21,6 +21,12 @@
  *   default; every check of the start is about that provider.
  * - A turn's questions are answered only by the program that started it (the answer key
  *   of its 202) or by the app tab that shows them (its live relay link); see answerGate.
+ * - A turn started with `link` (an app tab's live relay link: the window's dock, phase 4 spec
+ *   9.1) shows its questions in that tab (showTab), whatever it is bound to (Home, a project, a
+ *   workspace), and is started_by 'window'; a dead link is 409 no_channel (a coding agent's start
+ *   keeps 403 launch_proof when nothing else proves it). `tab: 'link'` binds it to that tab's
+ *   workspace. Without a link it shows them in its bound tab and is started_by 'program'. POST
+ *   …/turns/:id/show with its answer key moves them to another window once theirs is gone.
  * - A turn on a coding agent (provider `agent:<id>`, phase 3 spec 4.7, 5.2, 6.1) runs on
  *   agents/turn.ts instead of the loop, in the same log, gates, relay and limits on how many
  *   run. Its start needs a proof of this account (launchProven): the per-launch token (the CLI
@@ -258,6 +264,8 @@ interface TurnInit {
   gates: GateBroker;
   /** Who started it: a Magnusim window (its live relay link) or a program; 'program' when left out. */
   startedBy?: 'window' | 'program';
+  /** The tab that shows its questions (the window that started it); its bound tab when left out. */
+  showTab?: string | null;
   onEnded?: (t: Turn) => void;
   /**
    * What its tab's page shows changed (at most once a TURN_UPDATE_MS; never after its end).
@@ -285,6 +293,7 @@ export class Turn implements AnyTurn {
   readonly settings: TurnSettings;
   readonly startedAt: number;
   readonly startedBy: 'window' | 'program';
+  private shownIn: string | null;
   state: TurnState = 'starting';
   step = 0;
   calls = 0;
@@ -353,6 +362,7 @@ export class Turn implements AnyTurn {
     this.simulationId = o.simulationId;
     this.settings = o.settings;
     this.startedBy = o.startedBy ?? 'program';
+    this.shownIn = o.showTab === undefined ? o.tab : o.showTab;
     // A cloud model reads images: its tab's page hears that with the turn's start, not as a change.
     // A coding agent's model is its own: whether it reads them is not known (null).
     if (isModelSettings(o.settings) && o.settings.provider !== 'openai_compatible') this.images = true;
@@ -375,6 +385,16 @@ export class Turn implements AnyTurn {
 
   get ended(): boolean {
     return TERMINAL.has(this.state);
+  }
+
+  /** The tab that shows its questions: the window that started it, else its bound tab (null: none). */
+  get showTab(): string | null {
+    return this.shownIn;
+  }
+
+  /** Its questions show in `tab` from now (a window that reloaded: TurnManager.show). */
+  showIn(tab: string): void {
+    this.shownIn = tab;
   }
 
   // ------------------------------------------------------------ the log
@@ -999,6 +1019,10 @@ export const BAD_TAB_TEXT = 'That app tab offers no tools to the Assistant (it i
 export const NO_TAB_TEXT = 'No app tab offers tools to the Assistant. Open a workspace in Magnusim, or start the turn without a tab.';
 /** A second turn bound to a tab while one works there: one watched build and one undo group per page. */
 export const TAB_BUSY_TEXT = 'A turn is already working in that tab: wait for it or stop it.';
+/** A window's start whose relay link is no longer live (the page reconnects and sends again). */
+export const WINDOW_LOST_TEXT = 'This window lost its connection to Magnusim. Try again.';
+export const SHOWN_ELSEWHERE_TEXT = 'Its questions show in another window.';
+export const SHOW_KEY_TEXT = 'Only the window that started this request can show its questions here.';
 const ambiguousTabText = (tabs: string[]) => `More than one app tab offers tools to the Assistant: ${tabs.join(', ')}. Name one of them.`;
 
 /** The app tab a turn binds to (resolveTab), with the project and study its workspace registered. */
@@ -1097,6 +1121,8 @@ export class TurnManager {
   private readonly turnListeners = new Set<(t: Turn, change: TurnChange) => void>();
   private tabInfo: ((tab: string) => TabInfo | null) | null = null;
   private linkCheck: ((link: unknown) => boolean) | null = null;
+  private linkTab: ((link: unknown) => string | null) | null = null;
+  private tabLive: ((tab: string) => boolean) | null = null;
   /** Project titles for the conversation list, by id (PROJECT_TITLE_MS). */
   private readonly titleCache = new Map<string, { title: string | null; at: number }>();
 
@@ -1120,6 +1146,20 @@ export class TurnManager {
   /** The relay says whether a link is an app tab's live link now (the page's launch proof). */
   setLinkCheck(fn: ((link: unknown) => boolean) | null): void {
     this.linkCheck = fn;
+  }
+
+  /**
+   * The relay says which app tab a live link is (null when it is none's now), and whether a tab
+   * has a live link: a turn started in a window shows its questions there (phase 4 spec 9.1, 9.6).
+   */
+  setLinkTab(tabOf: ((link: unknown) => string | null) | null, live: ((tab: string) => boolean) | null = null): void {
+    this.linkTab = tabOf;
+    this.tabLive = live;
+  }
+
+  /** The app tab whose live relay link `link` is now, or null. */
+  private tabOfLink(link: unknown): string | null {
+    return this.linkTab?.(link) ?? null;
   }
 
   /**
@@ -1338,12 +1378,17 @@ export class TurnManager {
     }
     if (key?.set && key.state === 'unreadable') return refuse(400, 'no_key', "The saved key can't be decrypted on this account. Enter it again in Settings → Assistant.");
 
+    // A window's start (its live relay link): its questions show in that window; `tab: 'link'` binds
+    // the turn to that window's workspace.
+    const linkGiven = body.link !== undefined && body.link !== null;
+    const linkTab = linkGiven ? this.tabOfLink(body.link) : null;
+    if ((linkGiven || tab === 'link') && !linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
     // The tab ('auto': the only connected one): only a registered, connected one; its project is the turn's.
     let boundTab: string | null = null;
     let projectId = ctxProject;
     let simulationId = ctxStudy;
     if (tab) {
-      const target = this.resolveTab(tab);
+      const target = this.resolveTab(tab === 'link' ? (linkTab as string) : tab);
       if ('status' in target) return target;
       if (ctxProject && ctxProject !== target.projectId) return refuse(400, 'project_mismatch', "The context's project is not the tab's project.");
       boundTab = target.tab;
@@ -1373,6 +1418,8 @@ export class TurnManager {
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
       if (conv.fullReason(settings.base_url)) return refuse(409, 'conversation_full', FULL_TEXT);
     }
+    // The window still has its link (the checks above awaited).
+    if (linkGiven && this.tabOfLink(body.link) !== linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
     const refused = this.admitRefusal(boundTab);
     if (refused) return refused;
     if (!conv) conv = this.conversations.create(binding);
@@ -1395,6 +1442,8 @@ export class TurnManager {
       settings: turnSettings,
       clock: this.clock,
       gates: this.gates,
+      startedBy: linkTab ? 'window' : 'program',
+      showTab: linkTab ?? boundTab,
       onEnded: (ended) => this.turnChanged(ended, 'ended'),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
@@ -1435,10 +1484,14 @@ export class TurnManager {
     // any local caller anyway.
     const listener = await ad.listener();
     if (!listener.running) return refuse(400, 'mcp_unavailable', mcpUnavailableText(listener.reason, listener.port ?? settings.mcp.port));
+    // A window's start: its link (also its proof below) shows the questions there; `tab: 'link'`
+    // binds the turn to that window's workspace.
+    const linkTab = a.link !== undefined && a.link !== null ? this.tabOfLink(a.link) : null;
     let target: TabTarget | null = null;
     let tabRefusal: Answer | null = null;
-    if (a.tab) {
-      const r = this.resolveTab(a.tab);
+    if (a.tab === 'link' && !linkTab) tabRefusal = refuse(409, 'no_channel', WINDOW_LOST_TEXT);
+    else if (a.tab) {
+      const r = this.resolveTab(a.tab === 'link' ? (linkTab as string) : a.tab);
       if ('status' in r) tabRefusal = r;
       else target = r;
     }
@@ -1484,6 +1537,9 @@ export class TurnManager {
       if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
     }
+    // The window still has its link (the checks above awaited): else it shows nothing there.
+    const shownBy = linkTab !== null && this.tabOfLink(a.link) === linkTab ? linkTab : null;
+    if (a.tab === 'link' && shownBy === null) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
     // One turn per app tab, and three in all: an agent turn counts as any other.
     const busy = this.admitRefusal(boundTab);
     if (busy) return busy;
@@ -1504,6 +1560,8 @@ export class TurnManager {
       settings: turnSettings,
       clock: this.clock,
       gates: this.gates,
+      startedBy: shownBy ? 'window' : 'program',
+      showTab: shownBy ?? boundTab,
       onEnded: (ended) => this.turnChanged(ended, 'ended'),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
@@ -1716,6 +1774,27 @@ export class TurnManager {
     this.titleCache.set(id, { title, at: this.clock.now() });
     if (this.titleCache.size > 200) this.titleCache.delete(this.titleCache.keys().next().value as string);
     return title;
+  }
+
+  /**
+   * POST /api/assistant/turns/:id/show {link, answer_key} (phase 4 spec 9.6): the window that
+   * started a turn (its answer key) shows its questions again after a reload, on its new live link.
+   * Refused: 404 unknown_turn, 403 answer_key, 409 no_channel (the link isn't live), 409 ended,
+   * 409 shown_elsewhere (another window that shows them is still there). Its open questions move
+   * to this tab (GateBroker.retarget) and are answered on this link from then on.
+   */
+  show(id: string, body: Record<string, unknown>): Answer {
+    const t = this.get(id);
+    if (!t) return refuse(404, 'unknown_turn', 'No such turn: Magnusim keeps a request while its conversation lives.');
+    if (!keyMatches(body.answer_key, t.answerKey)) return refuse(403, 'answer_key', SHOW_KEY_TEXT);
+    const tab = this.tabOfLink(body.link);
+    if (!tab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
+    if (t.ended) return refuse(409, 'ended', 'That request has ended.');
+    const now = t.showTab;
+    if (now !== null && now !== tab && this.tabLive?.(now) === true) return refuse(409, 'shown_elsewhere', SHOWN_ELSEWHERE_TEXT);
+    t.showIn(tab);
+    this.gates.retarget(t.id, tab);
+    return { status: 200, body: { ok: true, turn: t.summary() } };
   }
 
   /** POST /api/assistant/conversations/:id/forget. */

@@ -182,6 +182,7 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/turns',
       '/api/assistant/turns/:id',
       '/api/assistant/turns/:id/images/:n',
+      '/api/assistant/turns/:id/show',
       '/api/assistant/turns/:id/stop',
       '/api/test/assistant/reset',
       '/api/test/assistant/state',
