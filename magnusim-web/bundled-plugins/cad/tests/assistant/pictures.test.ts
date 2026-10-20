@@ -100,7 +100,7 @@ const start = async (images: boolean | null = true) => {
 };
 
 describe('a picture after every edit', () => {
-  it('an answer that changed no model (the workspace tool's undo_step false) carries none', async () => {
+  it("an answer that changed no model (the workspace tool's undo_step false) carries none", async () => {
     h = await start(true);
     const fv = fakeViewport(h);
     fakeRaster();
