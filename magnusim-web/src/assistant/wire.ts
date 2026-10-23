@@ -260,9 +260,10 @@ export type TurnEvent = { seq: number; at: number } & (
   /**
    * `hint`: how a failed call's tool says to fix it (the model has it too); `summary`: the log's
    * line; `images`: the result's pictures the turn keeps for the window (refs; the bytes from
-   * GET /api/assistant/turns/:id/images/:n).
+   * GET /api/assistant/turns/:id/images/:n); `links`: files the person may save (a finished
+   * export's Download), the app's own addresses only, never sent to the model.
    */
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] }
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[]; links?: ToolLink[] }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
@@ -396,6 +397,12 @@ export interface ConversationTurn {
  * while it is kept (404 {code:'image_gone'} after: a turn keeps at most 64 pictures and 24 MB,
  * and the oldest ended turns' pictures go first past 96 MB in all).
  */
+/** A file a tool result offers the person (spec 06 §8.6): the dock shows a Download link. */
+export interface ToolLink {
+  label: string;
+  href: string;
+}
+
 export interface ImageRef {
   /** Its id in the turn: "1", "2", ... for tool results; "p1".."p4" for the person's own. */
   n: string;

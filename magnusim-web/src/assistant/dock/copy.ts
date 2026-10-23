@@ -54,6 +54,8 @@ export const SHOW_EARLIER = 'Show earlier requests';
 export const NEW_MESSAGES = 'New messages ↓';
 export const ELSEWHERE = 'Elsewhere';
 export const PICTURE_VIEWER = 'Picture viewer';
+/** A result's Download link (spec 06 §8.6): the person saves the file; the Assistant never does. */
+export const DOWNLOAD_TITLE = 'Save the file on this PC';
 export const CLOSE_PICTURE = 'Close the picture';
 export const PREVIOUS_PICTURE = 'Previous picture';
 export const NEXT_PICTURE = 'Next picture';

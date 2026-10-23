@@ -6,6 +6,7 @@ import {
   applyEvents,
   applySummary,
   currentTool,
+  downloadLinks,
   emptyTurnView,
   fillDroppedText,
   finalText,
@@ -136,14 +137,25 @@ describe('tool steps', () => {
     v = applyEvents(v, [ev({ type: 'tool_result', call: 'c1', ok: true, summary: 'Extruded 10 mm', ms: 812, images })]);
     const step = v.items[0] as Extract<TurnItem, { kind: 'tool' }>;
     expect(step).toMatchObject({ kind: 'tool', call: 'c1', title: 'Extrude', source: 'CAD', risk: 'edit', input_preview: '{"d":10}', progress: null });
-    expect(step.result).toEqual({ ok: true, summary: 'Extruded 10 mm', ms: 812, code: null, hint: null, images });
+    expect(step.result).toEqual({ ok: true, summary: 'Extruded 10 mm', ms: 812, code: null, hint: null, images, links: [] });
     expect(currentTool(v)).toBeNull();
     // A late progress of a finished call changes nothing.
     const late = applyEvents(v, [ev({ type: 'tool_progress', call: 'c1', fraction: 0.9, label: 'late' })]);
     expect(late.items[0]).toBe(v.items[0]);
     // A failed call: its hint and code.
     v = applyEvents(v, [ev({ type: 'tool_call', step: 2, call: 'c2', tool: 'fillet', title: 'Fillet', risk: 'edit', source: 'CAD', input_preview: '{}' }), ev({ type: 'tool_result', call: 'c2', ok: false, code: 'bad_edge', hint: 'Pick an edge.', summary: 'No such edge', ms: 5 })]);
-    expect((v.items[1] as Extract<TurnItem, { kind: 'tool' }>).result).toEqual({ ok: false, summary: 'No such edge', ms: 5, code: 'bad_edge', hint: 'Pick an edge.', images: [] });
+    expect((v.items[1] as Extract<TurnItem, { kind: 'tool' }>).result).toEqual({ ok: false, summary: 'No such edge', ms: 5, code: 'bad_edge', hint: 'Pick an edge.', images: [], links: [] });
+  });
+
+  it("a result's links: only the app's own export files reach the view", () => {
+    seq = 0;
+    const good = { label: 'Download Run_1.zip', href: '/api/results/export-vtk/job-a1/file?project_id=p1' };
+    const v = view([
+      ev({ type: 'tool_call', step: 1, call: 'w', tool: 'wait', title: 'Wait for jobs', risk: 'read', source: 'Magnusim', input_preview: '{}' }),
+      ev({ type: 'tool_result', call: 'w', ok: true, summary: 'done', ms: 1, links: [good, { label: 'x', href: 'https://example.com/x' }, { label: 'y', href: '/api/assistant/key' }] }),
+    ]);
+    expect((v.items[0] as Extract<TurnItem, { kind: 'tool' }>).result?.links).toEqual([good]);
+    expect(downloadLinks('nope')).toEqual([]);
   });
 
   it('a call waiting for the person reads as waiting until a progress without it', () => {

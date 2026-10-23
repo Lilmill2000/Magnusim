@@ -33,6 +33,7 @@ import { checkSchema } from './schema.ts';
 import { cleanGuide, cleanText, CONFIRM_NOTE_MAX, hasControls, TEXT_CAPS } from './sanitize.ts';
 import { emitSchema } from './schema.ts';
 import type { GateDetail } from './gates.ts';
+import type { ToolLink } from './links.ts';
 import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts';
 
 /** Where a turn's window is (C8): Home, a project's workbench, or a plugin workspace. */
@@ -86,6 +87,8 @@ export interface ToolOutcome {
   error?: { code: string; message: string; hint?: string; detail?: unknown };
   /** One line for the turn log (never sent to the model). */
   summary: string;
+  /** Links for the person under the step (a Download; links.ts): on the log only, never sent to the model. */
+  links?: ToolLink[];
 }
 
 /** What else a progress says: the call waits for the person (the turn's minutes stop meanwhile). */

@@ -5771,6 +5771,9 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 .dock-step-result.failed { color: var(--mg-danger); }
 .dock-step[open] { padding-bottom: var(--mg-space-2); }
 .dock-step-hint, .dock-step-code { margin: 0 0 var(--mg-space-1); }
+.dock-step-links { display: flex; flex-wrap: wrap; gap: var(--mg-space-2); margin: 0 0 var(--mg-space-1); }
+.dock-download { color: var(--mg-link); font-weight: var(--mg-weight-medium); overflow-wrap: anywhere; }
+.dock-download::before { content: '\2193\00a0'; }
 .dock-badge {
   display: inline-block;
   padding: 0 6px;

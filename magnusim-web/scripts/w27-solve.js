@@ -53,6 +53,8 @@ import {
 } from './registry-defaults.js';
 import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
+import { fakeCompute } from './test-compute.js';
+import { startFakeSolve, stopFakeSolve } from './test-solve.js';
 import {
   claimComputeSlot,
   computeSlotHolder,
@@ -2150,6 +2152,8 @@ async function startSolveBody(opts = {}, slot) {
   );
   const winOut = stored.case_dir;
   mkdirSync(winOut, { recursive: true });
+  // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in solve after every real check (test-solve.js).
+  if (fakeCompute()) return startFakeSolve({ id, runId, simId, slot, endTime: et, onDone });
   // The run solves on the step-list runner (core-solve.js).
   return startSolveOnRunner({
     id,
@@ -2602,6 +2606,10 @@ function resolveStopTarget(projectId, runId) {
 /** @param {{ projectId?: string, force?: boolean, runId?: string, starting?: boolean, startId?: string }} [opts] */
 export function stopSolve({ projectId, force, runId, starting, startId } = {}) {
   const id = projectId || projectIdOrActive('', readActiveId);
+  if (fakeCompute()) {
+    const fake = stopFakeSolve(id, runId);
+    if (fake) return fake;
+  }
   // The slot's own solve first: a start in progress, a drain, or the live run.
   const h = computeSlotHolder();
   const mine = !!h && h.kind === 'solve' && sameProjectFolder(h.project_id, id) && (!runId || String(h.run_id) === String(runId));

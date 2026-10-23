@@ -19,7 +19,18 @@
  *
  * Nothing here reads the clock, the DOM or the network: the store (store.ts) feeds it.
  */
-import type { GateView, ImageRef, SlimTurnSummary, TurnEvent, TurnState, TurnSummary } from '../wire';
+import type { GateView, ImageRef, SlimTurnSummary, ToolLink, TurnEvent, TurnState, TurnSummary } from '../wire';
+
+/** A result's links the dock shows: the app's own export files only (the server checks them too). */
+const DOWNLOAD_HREF = /^\/api\/results\/export-vtk\/job-[A-Za-z0-9-]{1,60}\/file\?project_id=[A-Za-z0-9._%-]{1,200}$/;
+
+export function downloadLinks(raw: unknown): ToolLink[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((l): l is ToolLink => !!l && typeof l === 'object' && typeof (l as ToolLink).href === 'string' && DOWNLOAD_HREF.test((l as ToolLink).href))
+    .slice(0, 4)
+    .map((l) => ({ label: typeof l.label === 'string' && l.label ? l.label.slice(0, 80) : 'Download', href: l.href }));
+}
 
 type Risk = 'read' | 'edit' | 'compute' | 'destructive';
 export type EndState = 'done' | 'stopped' | 'failed' | 'capped';
@@ -42,6 +53,8 @@ export interface ToolResult {
   hint: string | null;
   /** The result's pictures the turn keeps (one per CAD edit). */
   images: ImageRef[];
+  /** Files the person may save (a finished export), the app's own addresses only. */
+  links: ToolLink[];
 }
 
 /** One row of a turn's transcript, in the order the log gave them. `key` is stable for React. */
@@ -242,6 +255,7 @@ function applyOne(v: TurnView, d: Draft, e: TurnEvent): void {
           code: e.code ?? null,
           hint: e.hint ?? null,
           images: Array.isArray(e.images) ? e.images : [],
+          links: downloadLinks(e.links),
         },
       });
       return;

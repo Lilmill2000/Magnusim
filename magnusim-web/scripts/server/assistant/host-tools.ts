@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { loadedPlugins } from '../../registry-defaults.js';
 import { CONNECTION_CHECK } from './provider-test.ts';
 import { createHostTransport, HostCallError, type HostCall, type HostGet } from './host-call.ts';
+import { createJobTools } from './host/job-tools.ts';
 import { agentPrefs, loadSettings } from './settings.ts';
 import { agentIdOf } from './agents/known.ts';
 import { HOST_STALL_MS, type Place, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext } from './registry.ts';
@@ -234,7 +235,7 @@ export function appVersion(): Promise<string> {
 /** The host tools as the server uses them: the app over loopback on `port`, the settings, package.json and the live registry. */
 export function defaultHostTools(port: () => number | null | undefined): ToolDef[] {
   const transport = createHostTransport({ port });
-  return createHostTools({
+  const starters = createHostTools({
     hostGet: transport.get,
     hostCall: transport.call,
     assistant: async () => {
@@ -246,4 +247,6 @@ export function defaultHostTools(port: () => number | null | undefined): ToolDef
     version: appVersion,
     plugins: () => loadedPlugins(),
   });
+  // The job tools (compute, wait, jobs; spec 06 C4).
+  return [...starters, ...createJobTools({ call: transport.call })];
 }

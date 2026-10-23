@@ -44,6 +44,7 @@ export const H15_TESTS = [
   'server/__tests__/assistant-conversations.test.js',
   'server/__tests__/assistant-turn-channel.test.js',
   'server/__tests__/mesh-stop.test.js',
+  'server/__tests__/assistant-jobs.test.js',
   '__tests__/project-delete-jobs.test.mjs',
   '__tests__/wsl-case-watch.test.mjs',
   '__tests__/solve-hooks.test.mjs',

@@ -127,6 +127,7 @@ test("a local server that doesn't say the model's context: the terminal says the
   const note = "note: Magnusim doesn't know this model's context length, so it offers tools up to 16,384 tokens of definitions.";
   expect(out.split('\n').filter((l) => l === note), out).toHaveLength(1);
   expect(out).toContain('All good.');
-  // Its tools went: the host's own, which fit.
-  expect(chats().slice(before).map((r) => r.body.tools.map((t) => t.function.name))).toEqual([['app_status'], ['app_status']]);
+  // Its tools went: the host's own that Home offers (spec 06 §15), which fit.
+  const home = ['app_status', 'compute', 'jobs', 'wait'];
+  expect(chats().slice(before).map((r) => r.body.tools.map((t) => t.function.name))).toEqual([home, home]);
 });
