@@ -261,7 +261,8 @@ test('an attached STEP is imported by the Assistant: it asks first, then the pro
   // An import runs a computation on this PC: the person is asked first, in the dock.
   const gate = dock(page).locator('[data-gate]').first();
   await expect(gate).toBeVisible(STEP_WAIT);
-  await expect(gate.locator('.dock-gate-title')).toHaveText('Allow the Assistant to import a geometry file?');
+  await expect(gate.locator('.dock-gate-title')).toHaveText('Allow the Assistant to import the attached file?');
+  await expect(gate.locator('.dock-gate-copy')).toContainText('Adds it to this project as a new geometry and makes its preview.');
   await gate.locator('[data-gate-answer="yes"]').click({ timeout: STEP_WAIT.timeout });
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 120_000 });
   const geoms = (await getJson(request, `/api/project?project_id=${project}`)).project.geometries;

@@ -1,9 +1,10 @@
 // The CAD Part's 21 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 24 tools (its 3, then the Part's
-// 21 by name), the first 20 strict on the first cloud dialect and the last 4 not; no CAD property
-// is optional; 24 is within the local server's 24 and nothing is cut; each CAD schema's size is
+// sent only the keywords they take; in a CAD turn the app offers 24 tools (the Part's 21 by name
+// first, then its 3: core host tools spec §12.4), strict as strictFlags grants them in that order
+// on the first cloud dialect; no CAD property is optional; the 24 fit the local budget of a 32K
+// context and nothing is cut (their tokens printed); each CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
 // the system prompt) is at most 52,000 characters, its estimated tokens printed.
@@ -33,7 +34,7 @@ const sanitizeCopy = await import('../../bundled-plugins/cad/tests/assistant/san
 const { checkSchema, emitSchema, STRICT_KEEP, validateInput } = await import('../server/assistant/schema.ts');
 const { JSON_CAPS, resultText, TEXT_CAPS } = await import('../server/assistant/sanitize.ts');
 const { strictFlags, STRICT_LIMITS } = await import('../server/assistant/providers/anthropic.ts');
-const { createToolRegistry, providerTools, REGISTRATION_MAX_BYTES, REQUEST_MAX_TOOLS } = await import('../server/assistant/registry.ts');
+const { createToolRegistry, localBudget, providerTools, REGISTRATION_MAX_BYTES, toolTokens } = await import('../server/assistant/registry.ts');
 const { createHostTools } = await import('../server/assistant/host-tools.ts');
 const { SYSTEM_PROMPT, guideBlock } = await import('../server/assistant/prompt.ts');
 const { estimateStep } = await import('../server/assistant/prices.ts');
@@ -43,7 +44,7 @@ const LOCAL_PREFIX_MAX = 52_000;
 
 const hostTools = () =>
   createHostTools({
-    call: async () => ({}),
+    hostCall: async () => ({}),
     assistant: async () => ({ provider: 'off', model: '' }),
     version: async () => '0.0.0',
     plugins: () => [],
@@ -59,7 +60,7 @@ function offered({ local = false } = {}) {
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
   assert.equal(verdict.accepted.length, 21);
-  return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local });
+  return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local, place: 'workspace', budgetTokens: local ? localBudget(32_768) : null, prompt: null });
 }
 
 /** Every schema node, with its path. */
@@ -87,22 +88,25 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 25: the app's 4 for a workspace, then the Part's 21 by name; the first 20 strict on the first cloud dialect, the rest not", () => {
+  it("a CAD turn offers 25: the Part's 21 by name first, then the app's 4 for a workspace; strict as strictFlags grants them in that order", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
-    assert.deepEqual(names, [...HOST_IN_WORKSPACE, ...CAD_TOOLS.map((t) => `cad__${t.name}`)]);
+    assert.deepEqual(names, [...CAD_TOOLS.map((t) => `cad__${t.name}`), ...HOST_IN_WORKSPACE]);
     const flags = strictFlags(providerTools(tools).map((t) => emitSchema('anthropic', t.schema)));
-    assert.deepEqual(flags, names.map((_n, i) => i < STRICT_LIMITS.tools));
-    // The budget is exactly full: 20 strict tools, none of them with an optional parameter.
+    // The strict budget goes to the Part's tools first: its first 20 by name; the rest go loose.
+    assert.deepEqual(flags, names.map((_, i) => i < STRICT_LIMITS.tools));
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it("the local server's 24: the lowest-priority host tool (app_status) is left out, every CAD tool kept", () => {
-    const { tools, dropped } = offered({ local: true });
-    assert.equal(tools.length, REQUEST_MAX_TOOLS.local);
-    assert.deepEqual(dropped, ['app_status']);
-    assert.ok(CAD_TOOLS.every((t) => tools.some((x) => x.name === `cad__${t.name}`)));
+  it('the 25 fit the local budget of a 32K context (half of it): nothing is cut', () => {
+    const { tools, dropped, budget } = offered({ local: true });
+    assert.equal(tools.length, 25);
+    assert.deepEqual(dropped, []);
+    const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
+    console.log(`[assistant-cad-tools] the 25 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
+    assert.equal(budget, 16_384);
+    assert.ok(tokens <= budget, `${tokens} tokens`);
   });
 
   it('each CAD schema as sent is within the app\'s 16 KB (sizes printed)', () => {

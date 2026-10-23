@@ -624,7 +624,8 @@ describe('tools/list', () => {
         assert.equal(`${SLUG}__${LONG1}`.length, 58);
         assert.equal(mapped1.length, 44);
         assert.equal(mapped1.slice(0, 39), `${SLUG}__${LONG1}`.slice(0, 39));
-        assert.deepEqual(names, ['app_info', 'project_read', 'wipe_all', `${SLUG}__${TAKER}`, mapped1, `${SLUG}__pick`, 'src_pick']);
+        // In a workspace its tools come first, then the host's (core host tools spec §12.4).
+        assert.deepEqual(names, [`${SLUG}__${TAKER}`, mapped1, `${SLUG}__pick`, 'src_pick', 'app_info', 'project_read', 'wipe_all']);
         assert.ok(!names.includes('connection_check'));
         assert.ok(logged.some((l) => l.includes('mcp tool name taken') && l.includes(full2.slice(0, 40))), 'the collision is logged');
         const byName = Object.fromEntries(listed.map((t) => [t.name, t]));

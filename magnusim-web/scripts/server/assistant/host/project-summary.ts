@@ -53,10 +53,10 @@ export function projectSummaryTool(d: HostToolDeps): HostToolDef {
         const id = await readableProject(input, rt.ctx, d);
         const o = via(rt, 'project_summary');
         const [list, one, sims, plugin] = await Promise.all([
-          d.call('projects.list', {}, o) as Promise<Record<string, unknown>>,
-          d.call('project.get', { project_id: id }, o) as Promise<Record<string, unknown>>,
-          d.call('simulation.get', { project_id: id }, o) as Promise<Record<string, unknown>>,
-          (d.call('plugin_studies.list', { project_id: id }, o) as Promise<Record<string, unknown>>).catch(() => ({}) as Record<string, unknown>),
+          d.hostCall('projects.list', {}, o) as Promise<Record<string, unknown>>,
+          d.hostCall('project.get', { project_id: id }, o) as Promise<Record<string, unknown>>,
+          d.hostCall('simulation.get', { project_id: id }, o) as Promise<Record<string, unknown>>,
+          (d.hostCall('plugin_studies.list', { project_id: id }, o) as Promise<Record<string, unknown>>).catch(() => ({}) as Record<string, unknown>),
         ]);
         const row = records(list.projects).find((p) => p.id === id);
         if (!row) return fail('not_found', 'That project is not in the projects list any more.', 'projects lists them.');
@@ -105,7 +105,7 @@ export function projectSummaryTool(d: HostToolDeps): HostToolDef {
         if (input.with_thumbnail === true) {
           // A picture still being made (202), or none, is left out and said so.
           try {
-            const png = await d.call('geometry.thumb', { project_id: id }, o);
+            const png = await d.hostCall('geometry.thumb', { project_id: id }, o);
             const checked = Buffer.isBuffer(png) ? checkImage(png) : null;
             if (checked && checked.ok && Buffer.isBuffer(png)) {
               images = [{ type: 'image', mediaType: checked.mediaType, base64: png.toString('base64'), width: checked.width, height: checked.height }];

@@ -1,39 +1,19 @@
 /**
- * Every app route a host tool may call (Core host tools spec 3.1, 4): one frozen table.
+ * The app routes the host tools may call (core host tools spec C1, §3, §4): one table of
+ * entries by id, grouped by tool. host-call.ts checks every entry against the denylist when
+ * it freezes the table, and the call's body again at each call. A tool lane adds its entries
+ * here, never transport code.
  *
- * A tool never passes a path: it names an entry and gives its args, and the entry builds
- * the request. Every body key is named here (the model's input is never spread into a
- * body), and the bodies that would do more than the tool means are not in the table at
- * all: a `{delete:true}` to /api/bcs or /api/mesh/refinements (it deletes every record of
- * the study), an empty /api/mesh body (it restores the defaults, or makes a new mesh), a
- * geometry import with `mode=replace`, /api/case/attach, /api/project/open and the
- * Assistant's own routes. The node test (assistant-host-writes.test.js) holds each entry
- * to its method, path and body keys.
- *
- * `:name` segments are filled from the args and must match SEGMENT. `band` says whether
- * a call writes (the write rate, and the ui_sync that follows).
+ * Every builder names each key it sends: a value comes from `args` (the tool's own, already
+ * checked input) by name, never the model's input spread into a query or body. Beyond the
+ * denylist, the bodies that would do more than a tool means are not built at all: an empty
+ * /api/mesh body (it restores the defaults, or makes a new mesh), a BC or refinement delete
+ * by anything but its id. The node tests (assistant-host-writes, -project, -delete) hold
+ * each entry to its method, path and body keys. Ids are `<area>.<what>`; the starter tools'
+ * five (Foundation) are HOST_GET_ALLOWLIST's paths.
  */
 
-export type Args = Record<string, unknown>;
-
-export interface HostRoute {
-  method: 'GET' | 'POST' | 'PATCH';
-  /** Exact path; `:name` segments are filled from args and must match SEGMENT. */
-  path: string;
-  /** Query from args (GET, and the raw import). Empty and null values are left out. */
-  query?: (a: Args) => Record<string, string | number | boolean | null | undefined>;
-  /** JSON body from args (POST/PATCH). Never spreads the model's input: every key is named. */
-  body?: (a: Args) => Record<string, unknown>;
-  /** A raw body instead (the geometry import): a file stream, with its byte count. */
-  raw?: (a: Args) => { stream: NodeJS.ReadableStream; bytes: number; type: 'application/octet-stream' };
-  /** Binary answer (PNG thumbnails). */
-  binary?: boolean;
-  timeoutMs: number;
-  maxBytes: number;
-  band: 'read' | 'write';
-}
-
-export const SEGMENT = /^[A-Za-z0-9._-]{1,128}$/;
+import type { Args, HostRoute } from './host-call.ts';
 
 const S30 = 30_000;
 const MB4 = 4 * 1024 * 1024;
@@ -46,10 +26,10 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object'
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 function read(path: string, query?: HostRoute['query'], extra: Partial<HostRoute> = {}): HostRoute {
-  return Object.freeze({ method: 'GET', path, ...(query ? { query } : {}), timeoutMs: S30, maxBytes: MB4, band: 'read', ...extra }) as HostRoute;
+  return { method: 'GET', path, ...(query ? { query } : {}), timeoutMs: S30, maxBytes: MB4, band: 'read', ...extra };
 }
 function write(path: string, body: NonNullable<HostRoute['body']>, extra: Partial<HostRoute> = {}): HostRoute {
-  return Object.freeze({ method: 'POST', path, body, timeoutMs: S30, maxBytes: MB4, band: 'write', ...extra }) as HostRoute;
+  return { method: 'POST', path, body, timeoutMs: S30, maxBytes: MB4, band: 'write', ...extra };
 }
 
 const P = (a: Args) => ({ project_id: str(a.project_id) });
@@ -60,7 +40,7 @@ const bcFields = (a: Args) => obj(a.fields);
 /** The refinement fields of its type (checked by setup_edit). */
 const refFields = (a: Args) => obj(a.fields);
 
-export const HOST_ROUTES: Readonly<Record<string, HostRoute>> = Object.freeze({
+export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
   // ---------------------------------------------------------------- the starters (Foundation 7.4)
   'queue.get': read('/api/compute-queue', (a) => ({ project_id: opt(str(a.project_id)) })),
   'projects.list': read('/api/projects'),
@@ -73,11 +53,12 @@ export const HOST_ROUTES: Readonly<Record<string, HostRoute>> = Object.freeze({
   'plugin.env': read('/api/plugins/:key/env'),
   'prefs.get': read('/api/prefs'),
   'registry.get': read('/api/registry', undefined, { maxBytes: MB16 }),
-  'bc.menu': write('/api/worker', () => ({ method: 'bc.menu', params: {} }), { band: 'read' }),
+  'bc.menu': write('/api/worker', () => ({ method: 'bc.menu', params: {} }), { band: 'read', worker: 'bc.menu' }),
 
   // ---------------------------------------------------------------- project_summary, read_setup
   'plugin_studies.list': read('/api/plugin-studies', P),
-  'geometry.thumb': read('/api/geometry/thumb', P, { binary: true }),
+  // Host-tool images (C6): the project's picture as on Home, PNG at most 1.5 MB (IMAGE_CAPS).
+  'geometry.thumb': read('/api/geometry/thumb', P, { binary: true, maxBytes: 1.5 * 1024 * 1024 }),
   'materials.get': read('/api/materials', PS),
   'bcs.get': read('/api/bcs', PS),
   'mesh.get': read('/api/mesh', (a) => ({ ...PS(a), mesh_id: opt(str(a.mesh_id)) })),
@@ -190,7 +171,7 @@ export const HOST_ROUTES: Readonly<Record<string, HostRoute>> = Object.freeze({
         ...(list(a.only_ids).length ? { only_ids: list(a.only_ids).map(str) } : {}),
       },
     },
-  })),
+  }), { worker: 'materials.set' }),
 
   // ---------------------------------------------------------------- setup_edit: BCs
   'bcs.upsert': write('/api/bcs', (a) => ({
@@ -296,7 +277,7 @@ export const HOST_ROUTES: Readonly<Record<string, HostRoute>> = Object.freeze({
   }), { timeoutMs: 120_000 }),
 
   // ---------------------------------------------------------------- import_file (never mode=replace)
-  'geometry.import_raw': Object.freeze({
+  'geometry.import_raw': {
     method: 'POST',
     path: '/api/geometry/import',
     query: (a: Args) => ({ project_id: str(a.project_id), filename: str(a.filename), length_unit: opt(str(a.length_unit)) }),
@@ -304,7 +285,7 @@ export const HOST_ROUTES: Readonly<Record<string, HostRoute>> = Object.freeze({
     timeoutMs: 600_000,
     maxBytes: MB4,
     band: 'write',
-  }) as HostRoute,
+  },
   // Only a path the person typed in this turn's message (import_file checks it).
   'geometry.import_path': write('/api/geometry/import', (a) => ({ project_id: str(a.project_id), step_path: str(a.step_path), length_unit: opt(str(a.length_unit)) }), {
     timeoutMs: 600_000,
@@ -343,9 +324,4 @@ export const HOST_ROUTES: Readonly<Record<string, HostRoute>> = Object.freeze({
     run_id: opt(str(a.run_id)),
     entry: a.entry && typeof a.entry === 'object' ? a.entry : undefined,
   })),
-});
-
-export type HostRouteId = keyof typeof HOST_ROUTES;
-
-/** The starters' GET paths, as HOST_GET_ALLOWLIST lists them. */
-export const STARTER_ROUTES: readonly string[] = Object.freeze(['queue.get', 'projects.list', 'project.get', 'simulation.get', 'run.ready']);
+};

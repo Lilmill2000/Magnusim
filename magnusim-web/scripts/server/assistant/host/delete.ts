@@ -37,6 +37,7 @@ import {
   type HostToolDeps,
   type HostToolDef,
   type SyncKind,
+  assessments,
 } from './common.ts';
 import { readProject } from './read-setup.ts';
 import { andList } from './study-edit.ts';
@@ -60,7 +61,11 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const faceNumbers = (faces: unknown[]) => faces.map((f) => /^face\s*(\d+)/i.exec(str(f))?.[1] ?? str(f));
 
 export function deleteTool(d: HostToolDeps): HostToolDef {
+  // Escalations whole, for the card's copy (assessments).
+  const whole = assessments();
   const contexts = ['home', 'workbench'] as const;
+  /** What each assessed call deletes, as its card names it (by the call's input). */
+  const named = new WeakMap<Record<string, unknown>, string>();
 
   /** The target of a call, read now: what goes, and how to delete it. */
   async function targetOf(input: Record<string, unknown>, ctx: ToolCtx, rt: { signal: AbortSignal; turn: string | null }): Promise<Target> {
@@ -71,7 +76,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
     const notFound = (what: string, hint: string): never => refuse('not_found', `No ${what} "${cleanText(id, 80)}".`, hint);
     if (kind === 'folder') {
       if (!id || id === ROOT_FOLDER) refuse('invalid_input', 'Name the folder to delete (My Projects can\'t be deleted).');
-      const list = (await d.call('projects.list', {}, o)) as Record<string, unknown>;
+      const list = (await d.hostCall('projects.list', {}, o)) as Record<string, unknown>;
       const folders = Array.isArray(list.folders) ? list.folders : [];
       const inside = records(list.projects).filter((p) => str(p.folder) === id);
       if (!folders.includes(id) && !inside.length) notFound('folder', 'projects lists the folders.');
@@ -82,24 +87,24 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
         note: inside.length ? 'Deletes these projects and everything in them.' : 'The folder is empty.',
         detail,
         exec: async () => {
-          await d.call('folders.delete', { name: id }, o);
+          await d.hostCall('folders.delete', { name: id }, o);
           return { done: `Deleted folder ${quoted(id)}${inside.length ? ` and its ${plural(inside.length, 'project')}` : ''}.`, kinds: ['tree'], ids: { project: inside.map((p) => str(p.id)) }, sim: null };
         },
       };
     }
     if (kind === 'project') {
       const pid = id || ctx.projectId || '';
-      const list = (await d.call('projects.list', {}, o)) as Record<string, unknown>;
+      const list = (await d.hostCall('projects.list', {}, o)) as Record<string, unknown>;
       const row = records(list.projects).find((p) => p.id === pid);
       if (!row) notFound('project', 'projects lists them.');
-      const [proj, studies] = await Promise.all([readProject(d.call, rt, pid, 'delete.project'), studiesOf(d.call, pid, rt, 'delete.project')]);
+      const [proj, studies] = await Promise.all([readProject(d.hostCall, rt, pid, 'delete.project'), studiesOf(d.hostCall, pid, rt, 'delete.project')]);
       const nGeom = records(proj.geometries).length;
       return {
         what: `project ${quoted(row?.title)}`,
         note: `Deletes the project and everything in it: ${plural(nGeom, 'geometry', 'geometries')}, ${plural(studies.list.length, 'study', 'studies')}, their meshes, runs and results.`,
         detail: [{ label: 'Project', value: cleanText(str(row?.title), 80) }],
         exec: async () => {
-          await d.call('project.delete', { project_id: pid }, o);
+          await d.hostCall('project.delete', { project_id: pid }, o);
           return { done: `Deleted project ${quoted(row?.title)}.`, kinds: ['tree'], ids: { project: [pid] }, sim: null };
         },
       };
@@ -109,18 +114,18 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
     if (!project) return refuse('no_project', 'No project is open in this window.', "Open one first: core__show {target:'project', project_id}.");
     const given = str(input.project_id).trim();
     if (given && given !== project) refuse('not_this_project', 'Changes go only to the project open in this window.', `Open it first: core__show {target:'project', project_id:'${cleanText(given, 80)}'}, then call this again.`);
-    const studies = await studiesOf(d.call, project, rt, `delete.${kind}`);
+    const studies = await studiesOf(d.hostCall, project, rt, `delete.${kind}`);
     const sim = str(input.simulation_id).trim() || ctx.simulationId || studies.activeId || '';
     const q = { project_id: project, simulation_id: sim };
     const done = (line: string, kinds: SyncKind[], ids: Record<string, string[]>, s: string | null = sim) => ({ done: line, kinds: [...kinds, 'tree' as SyncKind], ids, sim: s });
     switch (kind) {
       case 'geometry':
       case 'lost_faces': {
-        const proj = await readProject(d.call, rt, project, `delete.${kind}`);
+        const proj = await readProject(d.hostCall, rt, project, `delete.${kind}`);
         const g = records(proj.geometries).find((x) => x.id === id);
         if (!g) notFound('geometry', 'project_summary lists the geometries.');
         if (kind === 'lost_faces') {
-          const lost = (await d.call('geometry.lost_faces', { project_id: project, geometry_id: id }, o)) as Record<string, unknown>;
+          const lost = (await d.hostCall('geometry.lost_faces', { project_id: project, geometry_id: id }, o)) as Record<string, unknown>;
           const entries = records(lost.entries);
           const rev = typeof lost.rev === 'number' ? lost.rev : null;
           const one = sub ? entries.find((e) => `${str(e.kind)}:${str(e.id)}:${str(e.field)}` === sub || str(e.id) === sub) : null;
@@ -131,7 +136,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
             note: `The ${plural(n, 'entry', 'entries')} that lost faces stop showing; their records keep the faces they still have.`,
             detail: [],
             exec: async () => {
-              await d.call(
+              await d.hostCall(
                 'lost_faces.forget',
                 {
                   project_id: project,
@@ -151,7 +156,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
           note: using.length ? `Its ${plural(using.length, 'study', 'studies')} go too: ${andList(using.map((n) => `"${n}"`))}, with their meshes, runs and results.` : 'No study uses it.',
           detail: using.slice(0, 6).map((n) => ({ label: 'Study', value: cleanText(n, 80) })),
           exec: async () => {
-            await d.call('geometry.remove', { project_id: project, geometry_id: id }, o);
+            await d.hostCall('geometry.remove', { project_id: project, geometry_id: id }, o);
             return done(`Removed geometry ${quoted(g?.name)}${using.length ? ` and its ${plural(using.length, 'study', 'studies')}` : ''}.`, ['geometry', 'study', 'active'], { geometry: [id] }, null);
           },
         };
@@ -160,9 +165,9 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
         const s = studies.list.find((x) => x.id === id);
         if (!s) notFound('study', 'project_summary lists the studies.');
         const [meshes, runs, queue] = await Promise.all([
-          d.call('mesh.get', { project_id: project, simulation_id: id }, o) as Promise<Record<string, unknown>>,
-          d.call('run.status', { project_id: project, simulation_id: id }, o) as Promise<Record<string, unknown>>,
-          d.call('queue.get', { project_id: project }, o) as Promise<Record<string, unknown>>,
+          d.hostCall('mesh.get', { project_id: project, simulation_id: id }, o) as Promise<Record<string, unknown>>,
+          d.hostCall('run.status', { project_id: project, simulation_id: id }, o) as Promise<Record<string, unknown>>,
+          d.hostCall('queue.get', { project_id: project }, o) as Promise<Record<string, unknown>>,
         ]);
         const meshIds = new Set(records(meshes.meshes).map((m) => str(m.id)));
         const runIds = new Set(records(runs.runs).map((r) => str(r.id)));
@@ -174,13 +179,13 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
           note: `Its ${plural(meshIds.size, 'mesh', 'meshes')} and ${plural(runIds.size, 'run')}, with their results, go too.`,
           detail: [],
           exec: async () => {
-            await d.call('simulation.delete', { project_id: project, simulation_id: id }, o);
+            await d.hostCall('simulation.delete', { project_id: project, simulation_id: id }, o);
             return done(`Deleted study ${quoted(s?.name)}.`, ['study', 'active'], { study: [id] }, id);
           },
         };
       }
       case 'plugin_study': {
-        const list = records(((await d.call('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
+        const list = records(((await d.hostCall('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
         const s = list.find((x) => x.id === id);
         if (!s) notFound('plugin study', 'project_summary lists them.');
         return {
@@ -188,18 +193,18 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
           note: 'Its design and history go. Geometries already sent to the simulation stay.',
           detail: [],
           exec: async () => {
-            await d.call('plugin_studies.delete', { project_id: project, plugin: str(s?.plugin), study_id: id }, o);
+            await d.hostCall('plugin_studies.delete', { project_id: project, plugin: str(s?.plugin), study_id: id }, o);
             return done(`Deleted ${quoted(s?.title)}.`, ['plugin_studies'], { plugin_study: [id] }, null);
           },
         };
       }
       case 'mesh':
       case 'mesh_generated': {
-        const doc = (await d.call('mesh.get', { ...q, mesh_id: id }, o)) as Record<string, unknown>;
+        const doc = (await d.hostCall('mesh.get', { ...q, mesh_id: id }, o)) as Record<string, unknown>;
         const m = records(doc.meshes).find((x) => x.id === id);
         if (!m) notFound('mesh', "read_setup {what:'meshes'} lists them.");
         if (kind === 'mesh_generated') {
-          const runs = (await d.call('run.status', q, o)) as Record<string, unknown>;
+          const runs = (await d.hostCall('run.status', q, o)) as Record<string, unknown>;
           const users = records(runs.runs).filter((r) => r.mesh_id === id).map((r) => str(r.name));
           const meshing = m?.status === 'running' || m?.status === 'meshing';
           return {
@@ -207,25 +212,25 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
             note: `${users.length ? `${andList(users)} can't run again until it is generated again.` : 'Its settings stay; generate it again to use it.'}${meshing ? ' It stops the mesher first.' : ''}`,
             detail: [],
             exec: async () => {
-              await d.call('mesh.delete_generated', { ...q, mesh_id: id }, o);
+              await d.hostCall('mesh.delete_generated', { ...q, mesh_id: id }, o);
               return done(`Deleted the generated mesh of ${quoted(m?.name)}; its settings stay.`, ['mesh'], { mesh: [id] });
             },
           };
         }
-        const refs = (await d.call('refinements.get', q, o)) as Record<string, unknown>;
+        const refs = (await d.hostCall('refinements.get', q, o)) as Record<string, unknown>;
         const n = records(refs.refinements).filter((r) => r.mesh_id === id).length;
         return {
           what: `mesh ${quoted(m?.name)}`,
           note: `Its settings, ${plural(n, 'refinement')} and generated mesh go; its queued jobs leave the queue.`,
           detail: [],
           exec: async () => {
-            await d.call('mesh.delete_record', { ...q, mesh_id: id }, o);
+            await d.hostCall('mesh.delete_record', { ...q, mesh_id: id }, o);
             return done(`Deleted mesh ${quoted(m?.name)}.`, ['mesh', 'refinements'], { mesh: [id] });
           },
         };
       }
       case 'refinement': {
-        const doc = (await d.call('refinements.get', q, o)) as Record<string, unknown>;
+        const doc = (await d.hostCall('refinements.get', q, o)) as Record<string, unknown>;
         const r = records(doc.refinements).find((x) => x.id === id);
         if (!r) notFound('refinement', "read_setup {what:'refinements'} lists them.");
         return {
@@ -233,7 +238,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
           note: `Its ${plural(Array.isArray(r?.faces) ? r.faces.length : 0, 'face')} go back to the mesh's own sizing.`,
           detail: [],
           exec: async () => {
-            await d.call('refinements.delete', { ...q, id }, o);
+            await d.hostCall('refinements.delete', { ...q, id }, o);
             return done(`Deleted refinement ${quoted(r?.name)}.`, ['refinements'], { refinement: [id] });
           },
         };
@@ -245,7 +250,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
         const runId = kind === 'run' ? id : kind === 'media' ? sub.replace(/^run-/, '') : sub;
         if (kind === 'media' && !/^(run|mesh)-/.test(sub)) refuse('invalid_input', 'media needs sub_id: its owner, run-<id> or mesh-<id>.', "read_results {kind:'media'} lists a run's.");
         if (kind === 'media') {
-          const list = (await d.call('media.list', { ...q, owner: sub }, o)) as Record<string, unknown>;
+          const list = (await d.hostCall('media.list', { ...q, owner: sub }, o)) as Record<string, unknown>;
           const item = records(list.items).find((x) => x.id === id);
           if (!item) notFound('picture or recording', "read_results {kind:'media'} lists them.");
           return {
@@ -253,12 +258,12 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
             note: 'It goes from the gallery.',
             detail: [],
             exec: async () => {
-              await d.call('media.delete', { ...q, owner: sub, id }, o);
+              await d.hostCall('media.delete', { ...q, owner: sub, id }, o);
               return done(`Deleted ${quoted(item?.name)} from the gallery.`, ['runs'], { media: [id] });
             },
           };
         }
-        const status = (await d.call('run.status', { ...q, run_id: runId }, o)) as Record<string, unknown>;
+        const status = (await d.hostCall('run.status', { ...q, run_id: runId }, o)) as Record<string, unknown>;
         const run = isRecord(status.run) && (status.run.id === runId || status.run.run_id === runId) ? status.run : null;
         if (!run) return refuse('not_found', `No run "${cleanText(runId, 80)}" in this study.`, "read_setup {what:'runs'} lists them.");
         if (kind === 'run') {
@@ -267,7 +272,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
             note: run.has_results === true || run.status === 'done' ? 'Its results go.' : 'Its settings go.',
             detail: [],
             exec: async () => {
-              await d.call('run.delete', { ...q, run_id: runId }, o);
+              await d.hostCall('run.delete', { ...q, run_id: runId }, o);
               return done(`Deleted run ${quoted(run.name)}.`, ['runs'], { run: [runId] });
             },
           };
@@ -281,31 +286,31 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
           note: kind === 'monitor' ? `It goes from ${quoted(run.name)}, with what it recorded.` : `It goes from ${quoted(run.name)}.`,
           detail: [],
           exec: async () => {
-            const r = (await d.call('run.update', { ...q, run_id: runId, changes: { [listKey]: items.filter((x) => x.id !== id) }, base_rev: typeof run.rev === 'number' ? run.rev : undefined }, o)) as Record<string, unknown>;
+            const r = (await d.hostCall('run.update', { ...q, run_id: runId, changes: { [listKey]: items.filter((x) => x.id !== id) }, base_rev: typeof run.rev === 'number' ? run.rev : undefined }, o)) as Record<string, unknown>;
             if (r.ok === false) refuse('refused', cleanText(str(r.error) || 'Not deleted.', 300));
             return done(`Deleted ${kind === 'monitor' ? 'monitor' : 'saved view'} ${quoted(item?.name)}.`, ['runs'], { run: [runId] });
           },
         };
       }
       case 'material': {
-        const doc = (await d.call('materials.get', q, o)) as Record<string, unknown>;
+        const doc = (await d.hostCall('materials.get', q, o)) as Record<string, unknown>;
         const m = records(doc.materials).find((x) => x.id === id);
         if (!m) notFound('material', "read_setup {what:'materials'} lists them.");
         const bodies = Array.isArray(m?.assigned_volumes) ? m.assigned_volumes.map((b) => str(b)) : [];
-        const proj = await readProject(d.call, rt, project, 'delete.material');
+        const proj = await readProject(d.hostCall, rt, project, 'delete.material');
         const study = studies.list.find((s) => s.id === sim);
         return {
           what: `material ${quoted(m?.name)}`,
           note: bodies.length ? `${andList(bodies)} ${bodies.length === 1 ? 'has' : 'have'} no material then.` : 'It is on no body.',
           detail: [],
           exec: async () => {
-            await d.call('materials.delete', { ...q, geometry_id: str(study?.geometry_id) || str(proj.active_geometry_id), material_id: id }, o);
+            await d.hostCall('materials.delete', { ...q, geometry_id: str(study?.geometry_id) || str(proj.active_geometry_id), material_id: id }, o);
             return done(`Deleted material ${quoted(m?.name)}.`, ['materials'], { material: [id] });
           },
         };
       }
       case 'bc': {
-        const doc = (await d.call('bcs.get', q, o)) as Record<string, unknown>;
+        const doc = (await d.hostCall('bcs.get', q, o)) as Record<string, unknown>;
         const b = records(doc.boundary_conditions).find((x) => x.id === id);
         if (!b) notFound('boundary condition', "read_setup {what:'bcs'} lists them.");
         const faces = Array.isArray(b?.faces) ? b.faces : [];
@@ -314,7 +319,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
           note: faces.length ? `${faces.length === 1 ? 'Face' : 'Faces'} ${andList(faceNumbers(faces))} become${faces.length === 1 ? 's' : ''} unassigned.` : 'It is on no face.',
           detail: [],
           exec: async () => {
-            await d.call('bcs.delete', { ...q, id }, o);
+            await d.hostCall('bcs.delete', { ...q, id }, o);
             return done(`Deleted boundary condition ${quoted(b?.name)}.`, ['bcs'], { bc: [id] });
           },
         };
@@ -344,12 +349,15 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
     projectOf: (input, ctx) => (input.kind === 'folder' ? null : projectIdOf(input, ctx)),
     async escalate(input: Record<string, unknown>, a: AssessContext): Promise<Assessed> {
       const t = await targetOf(input, a.ctx, { signal: a.signal, turn: a.turn });
-      return { risk: 'destructive', note: t.note, detail: t.detail };
+      // The card's title names the item (the runner asks gateText with this same input).
+      named.set(input, t.what);
+      return whole.keep(input, { risk: 'destructive', note: t.note, detail: t.detail }) as Assessed;
     },
     gateText: (input, a) => {
       const kind = str(input.kind);
-      const what = kind === 'folder' ? `folder "${cleanText(str(input.id), 80)}"` : `this ${kind.replace('_', ' ')}`;
-      return { title: `Allow the Assistant to delete ${what}?`, copy: a?.note || "It can't be undone.", ...(a?.detail.length ? { detail: a.detail } : {}) };
+      const what = named.get(input) ?? (kind === 'folder' ? `folder "${cleanText(str(input.id), 80)}"` : `this ${kind.replace('_', ' ')}`);
+      const verb = kind === 'geometry' ? 'remove' : kind === 'lost_faces' ? 'forget' : 'delete';
+      return { title: `Allow the Assistant to ${verb} ${what}?`, copy: whole.note(input, a, "It can't be undone."), ...(a?.detail.length ? { detail: a.detail } : {}) };
     },
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       const kind = str(input.kind);
@@ -357,7 +365,7 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
         if (placeOf(rt.ctx) === 'home' && !HOME_KINDS.has(kind)) {
           return fail('no_project', 'From Home only a project or a folder can be deleted.', "Open the project first: core__show {target:'project', project_id}.");
         }
-        if (!HOME_KINDS.has(kind)) await writableProject(input, rt.ctx, d.call, rt);
+        if (!HOME_KINDS.has(kind)) await writableProject(input, rt.ctx, d.hostCall, rt);
         const t = await targetOf(input, rt.ctx, rt);
         const r = await t.exec();
         // The open window hears it (a project deleted from Home has no window to tell).

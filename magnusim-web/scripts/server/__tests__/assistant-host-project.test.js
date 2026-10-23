@@ -14,13 +14,14 @@ process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
 process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 
-const { createRouteCaller } = await import('../assistant/host/route-call.ts');
+const { createHostTransport } = await import('../assistant/host-call.ts');
+const { paced } = await import('../assistant/host/common.ts');
 const { projectEditTool } = await import('../assistant/host/project-edit.ts');
 const { importFileTool } = await import('../assistant/host/import-file.ts');
 const { startFakeApp, makeRt, world } = await import('./assistant-host-harness.js');
 
 let app;
-// The calls' pacing runs on this clock: a call that waits for its slot moves it on, never the test's time.
+// The calls' rate runs on this clock: a call that waits for its slot moves it on, never the test's time.
 let fakeNow = 0;
 const synced = [];
 before(async () => {
@@ -32,7 +33,7 @@ after(async () => {
 });
 
 const deps = (o = {}) => ({
-  call: createRouteCaller({ port: () => app.port, now: () => fakeNow, sleep: async (ms) => { fakeNow += ms; } }),
+  hostCall: paced(createHostTransport({ port: () => app.port, now: () => fakeNow }).call, async (ms) => { fakeNow += ms; }),
   assistant: async () => ({ provider: 'anthropic', model: 'm' }),
   version: async () => '0',
   plugins: () => [],
@@ -97,6 +98,11 @@ describe('project_edit: every action', () => {
     assert.equal(a.risk, 'destructive');
     assert.equal(a.note, 'Converts the values you entered in 2 boundary conditions and 3 mesh refinements from Metric to US units. Results already computed are not converted.');
     assert.equal(t().gateText(proj({}), a).title, 'Allow the Assistant to change the units of this project?');
+    // The runner cuts an escalation's note to a confirm note's length; the card's copy is whole.
+    const tool = t();
+    const input = proj({ action: 'update', units: 'Imperial' });
+    const full = await tool.escalate(input, { ctx: rt().ctx, signal: new AbortController().signal, turn: 't' });
+    assert.equal(tool.gateText(input, { ...full, note: full.note.slice(0, 120) }).copy, full.note);
     assert.equal(await t().escalate(proj({ action: 'update', units: 'Metric' }), { ctx: rt().ctx, signal: new AbortController().signal, turn: 't' }), null, 'the same units: nothing converts');
   });
 });

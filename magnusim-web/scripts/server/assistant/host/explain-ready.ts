@@ -61,8 +61,8 @@ export function explainReadyTool(d: HostToolDeps): HostToolDef {
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       try {
         const project = await readableProject(input, rt.ctx, d);
-        const { id: sim } = await studyIdOf(input, rt.ctx, project, d.call, rt, 'explain_ready');
-        const verdict = (await d.call('run.ready', { project_id: project, simulation_id: sim, run_id: str(input.run_id) }, via(rt, 'explain_ready'))) as Record<string, unknown>;
+        const { id: sim } = await studyIdOf(input, rt.ctx, project, d.hostCall, rt, 'explain_ready');
+        const verdict = (await d.hostCall('run.ready', { project_id: project, simulation_id: sim, run_id: str(input.run_id) }, via(rt, 'explain_ready'))) as Record<string, unknown>;
         const issues = records(verdict.issues)
           .slice(0, 50)
           .map((i) => {

@@ -108,8 +108,8 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
       const o = via(rt, tool);
       try {
         const project = await readableProject(input, rt.ctx, d);
-        const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.call, rt, tool);
-        const status = (await d.call('run.status', { project_id: project, simulation_id: sim, run_id: str(input.run_id) }, o)) as Record<string, unknown>;
+        const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.hostCall, rt, tool);
+        const status = (await d.hostCall('run.status', { project_id: project, simulation_id: sim, run_id: str(input.run_id) }, o)) as Record<string, unknown>;
         const run = isRecord(status.run) ? status.run : null;
         const wanted = str(input.run_id).trim();
         if (!run || (wanted && run.id !== wanted && run.run_id !== wanted)) {
@@ -124,7 +124,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
           case 'status': {
             let position: number | null = null;
             try {
-              const q = (await d.call('queue.get', { project_id: project }, o)) as Record<string, unknown>;
+              const q = (await d.hostCall('queue.get', { project_id: project }, o)) as Record<string, unknown>;
               position = num(records(q.items).find((r) => r.kind === 'solve' && r.run_id === runId)?.position);
             } catch {
               position = null;
@@ -168,7 +168,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
             return okData({ run_id: runId, x: num(last.t), last: lastValues, series }, `${runName}: ${keys.length} residual series`);
           }
           case 'monitors': {
-            const m = (await d.call('run.monitors', { project_id: project, simulation_id: sim, run_id: runId }, o)) as Record<string, unknown>;
+            const m = (await d.hostCall('run.monitors', { project_id: project, simulation_id: sim, run_id: runId }, o)) as Record<string, unknown>;
             const thinRows = (v: unknown) => (Array.isArray(v) ? thin(v, SERIES_MAX) : v);
             const monitors = records(m.monitors).map((x) => noPaths({ ...x, ...(Array.isArray(x.rows) ? { rows: thinRows(x.rows) } : {}), ...(Array.isArray(x.series) ? { series: thinRows(x.series) } : {}) }));
             return okData(
@@ -187,17 +187,17 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
             );
           }
           case 'transient_preview': {
-            const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
             const study = studies.list.find((s) => s.id === sim) ?? {};
             const fields = runFields(registry, str(study.analysis_type)).filter((f) => f.key.startsWith('transient.'));
             const parsed = parseValues(input.values, fields);
             if (!parsed.ok) return badValues(parsed.problems, "catalog {kind:'analyses', key} lists the transient.* fields.");
             const transient = isRecord(nest(parsed.values).transient) ? (nest(parsed.values).transient as Record<string, unknown>) : {};
-            const pv = (await d.call('run.transient_preview', { project_id: project, simulation_id: sim, run_id: runId, transient }, o)) as Record<string, unknown>;
+            const pv = (await d.hostCall('run.transient_preview', { project_id: project, simulation_id: sim, run_id: runId, transient }, o)) as Record<string, unknown>;
             return okData(noPaths(pv), `${runName}: transient preview`);
           }
           case 'media': {
-            const list = (await d.call('media.list', { project_id: project, simulation_id: sim, owner: `run-${runId}` }, o)) as Record<string, unknown>;
+            const list = (await d.hostCall('media.list', { project_id: project, simulation_id: sim, owner: `run-${runId}` }, o)) as Record<string, unknown>;
             const items = records(list.items).slice(0, 100).map((m) => ({
               id: text(m.id, 80),
               kind: text(m.kind, 20),
@@ -214,7 +214,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
             const exports = [];
             for (const id of ids.slice(0, 10)) {
               try {
-                const e = (await d.call('results.export', { project_id: project, id }, o)) as Record<string, unknown>;
+                const e = (await d.hostCall('results.export', { project_id: project, id }, o)) as Record<string, unknown>;
                 exports.push({ job_id: `export.${id}`, status: text(e.status, 20), fraction: num(e.fraction), message: text(e.message, 300) });
               } catch {
                 exports.push({ job_id: `export.${id}`, status: 'unknown' });
@@ -228,7 +228,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
         // The rest read the case's files.
         if (!caseDir) return noResults();
         const at = { project_id: project, case: caseDir };
-        const times = (await d.call('results.times', at, o)) as Record<string, unknown>;
+        const times = (await d.hostCall('results.times', at, o)) as Record<string, unknown>;
         const list = Array.isArray(times.times) ? times.times.map((t) => String(t)) : [];
         if (kind === 'times') {
           return okData({ run_id: runId, times: list.slice(-500), fields_available: Array.isArray(times.fields_available) ? times.fields_available : [] }, `${list.length} saved times`);
@@ -238,12 +238,12 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
         const field = str(input.field).trim();
         if (kind === 'field_range') {
           if (!FIELD_NAME.test(field)) return fail('invalid_input', 'field_range needs a field, e.g. "p" or "U".', "read_results {kind:'times'} lists fields_available.");
-          const meta = (await d.call('results.field_meta', { ...at, field, time }, o)) as Record<string, unknown>;
+          const meta = (await d.hostCall('results.field_meta', { ...at, field, time }, o)) as Record<string, unknown>;
           const proof = isRecord(meta.foam_proof) ? meta.foam_proof : {};
           const surface = isRecord(meta.surface_field) ? meta.surface_field : {};
           let overAll: Record<string, unknown> | null = null;
           try {
-            const series = (await d.call('results.series_range', { ...at, field }, o)) as Record<string, unknown>;
+            const series = (await d.hostCall('results.series_range', { ...at, field }, o)) as Record<string, unknown>;
             if (series.ok !== false) overAll = { min: num(series.min), max: num(series.max) };
           } catch {
             overAll = null;
@@ -262,7 +262,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
           for (const [i, p] of points.entries()) {
             rt.progress(i / points.length, `Probing point ${i + 1} of ${points.length}`);
             const [x, y, z] = (p as number[]).map(Number);
-            const r = (await d.call('results.inspect', { ...at, time, x, y, z, fields: field }, o)) as Record<string, unknown>;
+            const r = (await d.hostCall('results.inspect', { ...at, time, x, y, z, fields: field }, o)) as Record<string, unknown>;
             const values: Record<string, unknown> = {};
             for (const [k, v] of Object.entries(isRecord(r.values) ? r.values : {}).slice(0, 40)) values[cleanText(k, 64)] = typeof v === 'number' || v === null ? v : Array.isArray(v) ? v.slice(0, 9) : null;
             out.push({ x, y, z, values, inside: r.hit === true });
@@ -274,7 +274,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
           if (points.length !== 2) return fail('invalid_input', 'line needs exactly 2 points: its start and its end, each [x, y, z] in metres.');
           const samples = Number(input.samples) > 0 ? Math.min(2000, Number(input.samples)) : 100;
           const encoded = (points as number[][]).map((p) => p.map(Number).join(',')).join(';');
-          const r = (await d.call('results.line', { ...at, time, points: encoded, subdivisions: samples, field }, o)) as Record<string, unknown>;
+          const r = (await d.hostCall('results.line', { ...at, time, points: encoded, subdivisions: samples, field }, o)) as Record<string, unknown>;
           const dist = Array.isArray(r.distances) ? r.distances : [];
           const vals = Array.isArray(r.values) ? r.values : [];
           const at3 = Array.isArray(r.sample_points) ? r.sample_points : [];
@@ -289,7 +289,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
         }
         if (kind === 'plugin_filter') {
           const key = str(input.filter_key).trim();
-          const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+          const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
           const row = records(registry.filter).find((f) => f.key === key);
           if (!row) return fail('not_found', `No filter "${cleanText(key, 80)}".`, "catalog {kind:'filters', key:''} lists them.");
           const parsed = parseValues(input.values, flattenSchema(row.schema));
@@ -297,7 +297,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
           const params: Record<string, string> = { time };
           if (field) params.field = field;
           for (const [k, v] of Object.entries(parsed.values)) params[k] = Array.isArray(v) || isRecord(v) ? JSON.stringify(v) : String(v);
-          const r = (await d.call('results.filter', { project_id: project, simulation_id: sim, case: caseDir, key, params }, o)) as Record<string, unknown>;
+          const r = (await d.hostCall('results.filter', { project_id: project, simulation_id: sim, case: caseDir, key, params }, o)) as Record<string, unknown>;
           return okData({ filter: key, answer: noPaths(r) }, `Filter ${key}`);
         }
         return fail('invalid_input', `Unknown kind "${cleanText(kind, 40)}".`);

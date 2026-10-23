@@ -28,6 +28,7 @@ import {
   type Assessed,
   type HostToolDeps,
   type HostToolDef,
+  assessments,
 } from './common.ts';
 
 export const PROJECT_ACTIONS = ['create', 'update', 'move', 'new_folder', 'from_sample', 'start_action'] as const;
@@ -38,9 +39,9 @@ const OPEN_HINT = "Open it with core__show {target:'project', project_id} (or {t
 export async function unitBearing(d: HostToolDeps, rt: { signal: AbortSignal; turn: string | null }, project: string): Promise<{ bcs: number; refinements: number }> {
   const o = via(rt, 'project_edit.units');
   const [bcs, registry, sims] = await Promise.all([
-    d.call('bcs.get', { project_id: project }, o) as Promise<Record<string, unknown>>,
-    d.call('registry.get', {}, o) as Promise<Record<string, unknown>>,
-    d.call('simulation.get', { project_id: project }, o) as Promise<Record<string, unknown>>,
+    d.hostCall('bcs.get', { project_id: project }, o) as Promise<Record<string, unknown>>,
+    d.hostCall('registry.get', {}, o) as Promise<Record<string, unknown>>,
+    d.hostCall('simulation.get', { project_id: project }, o) as Promise<Record<string, unknown>>,
   ]);
   // A BC converts when its family names a unit field and the record holds a number for it.
   const nBcs = records(bcs.boundary_conditions_all).filter((b) => {
@@ -49,16 +50,18 @@ export async function unitBearing(d: HostToolDeps, rt: { signal: AbortSignal; tu
   }).length;
   let nRefs = 0;
   for (const s of records(sims.simulations).slice(0, 50)) {
-    const refs = (await d.call('refinements.get', { project_id: project, simulation_id: str(s.id) }, o)) as Record<string, unknown>;
+    const refs = (await d.hostCall('refinements.get', { project_id: project, simulation_id: str(s.id) }, o)) as Record<string, unknown>;
     nRefs += records(refs.refinements).length;
   }
   return { bcs: nBcs, refinements: nRefs };
 }
 
 export function projectEditTool(d: HostToolDeps): HostToolDef {
+  // Escalations whole, for the card's copy (assessments).
+  const whole = assessments();
   const contexts = ['home', 'workbench'] as const;
   const rowOf = async (rt: { signal: AbortSignal; turn: string | null }, id: string) =>
-    records(((await d.call('projects.list', {}, via(rt, 'project_edit'))) as Record<string, unknown>).projects).find((p) => p.id === id) ?? null;
+    records(((await d.hostCall('projects.list', {}, via(rt, 'project_edit'))) as Record<string, unknown>).projects).find((p) => p.id === id) ?? null;
 
   const assess = async (input: Record<string, unknown>, a: AssessContext): Promise<Assessed | null> => {
     const units = str(input.units);
@@ -103,8 +106,8 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts),
     projectOf: (input, ctx) => (input.action === 'update' || input.action === 'move' ? projectIdOf(input, ctx) : null),
-    escalate: assess,
-    gateText: (_input, a) => ({ title: 'Allow the Assistant to change the units of this project?', copy: a?.note || 'It changes the project.', ...(a?.detail.length ? { detail: a.detail } : {}) }),
+    escalate: async (input, a) => whole.keep(input, await assess(input, a)),
+    gateText: (input, a) => ({ title: 'Allow the Assistant to change the units of this project?', copy: whole.note(input, a, 'It changes the project.'), ...(a?.detail.length ? { detail: a.detail } : {}) }),
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       const action = str(input.action);
       const o = via(rt, `project_edit.${action}`);
@@ -114,20 +117,20 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
         const sync = (project: string, kinds: Parameters<typeof emitSync>[2]['kinds']) => emitSync(d, rt, { project_id: project, simulation_id: null, kinds, ids: { project: [project] }, revs: {}, tool: `project_edit.${action}` });
         const ensureFolder = async () => {
           if (!folder || folder === ROOT_FOLDER) return;
-          const list = (await d.call('projects.list', {}, o)) as Record<string, unknown>;
-          if (!(Array.isArray(list.folders) ? list.folders : []).includes(folder)) await d.call('folders.create', { name: folder }, o);
+          const list = (await d.hostCall('projects.list', {}, o)) as Record<string, unknown>;
+          if (!(Array.isArray(list.folders) ? list.folders : []).includes(folder)) await d.hostCall('folders.create', { name: folder }, o);
         };
         switch (action) {
           case 'create': {
             if (!title) return fail('invalid_input', 'create needs a title.');
             await ensureFolder();
-            const made = (await d.call('project.create', { title, description: str(input.description), category: str(input.category), units: str(input.units), folder }, o)) as Record<string, unknown>;
+            const made = (await d.hostCall('project.create', { title, description: str(input.description), category: str(input.category), units: str(input.units), folder }, o)) as Record<string, unknown>;
             const id = str(made.id);
             return okDone({ done: `Created project ${quoted(made.title ?? title)}${folder ? ` in ${quoted(folder)}` : ''}.`, ids: { project: id }, hint: OPEN_HINT });
           }
           case 'new_folder': {
             if (!folder || folder === ROOT_FOLDER) return fail('invalid_input', 'new_folder needs a folder name other than My Projects.');
-            await d.call('folders.create', { name: folder }, o);
+            await d.hostCall('folders.create', { name: folder }, o);
             return okDone({ done: `Made folder ${quoted(folder)}.`, ids: {} });
           }
           case 'from_sample': {
@@ -135,22 +138,22 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
             const sample = str(input.key).trim();
             if (!plugin || !sample) return fail('invalid_input', 'from_sample needs plugin and key (the sample).', "catalog {kind:'samples', key:''} lists them.");
             rt.progress(null, 'Copying the sample');
-            const made = (await d.call('project.sample', { plugin, sample, folder }, o)) as Record<string, unknown>;
+            const made = (await d.hostCall('project.sample', { plugin, sample, folder }, o)) as Record<string, unknown>;
             return okDone({ done: `Created project ${quoted(made.title)} from the sample.`, ids: { project: str(made.id) }, hint: OPEN_HINT });
           }
           case 'start_action': {
             const plugin = str(input.plugin).trim();
             const kind = str(input.key).trim();
-            const plugins = records(((await d.call('plugins.list', {}, o)) as Record<string, unknown>).plugins);
+            const plugins = records(((await d.hostCall('plugins.list', {}, o)) as Record<string, unknown>).plugins);
             const p = plugins.find((x) => x.key === plugin && x.enabled !== false);
             const act = p ? records(p.start_actions).find((a) => a.study_kind === kind) : null;
             if (!act) return fail('not_found', `No start action "${cleanText(kind, 80)}" of plugin "${cleanText(plugin, 64)}".`, "catalog {kind:'start_actions', key:''} lists them.");
             const kindTitle = cleanText(str(act.kind_title) || kind, 80);
             await ensureFolder();
-            const made = (await d.call('project.create', { title: title || `${kindTitle} project`, description: str(input.description), category: str(input.category), units: str(input.units), folder }, o)) as Record<string, unknown>;
+            const made = (await d.hostCall('project.create', { title: title || `${kindTitle} project`, description: str(input.description), category: str(input.category), units: str(input.units), folder }, o)) as Record<string, unknown>;
             const id = str(made.id);
             // As the workspace's own start does (startActions.ts startStudy): "<kind title> 1".
-            const study = (await d.call('plugin_studies.create', { project_id: id, plugin, kind, title: `${kindTitle} 1` }, o)) as Record<string, unknown>;
+            const study = (await d.hostCall('plugin_studies.create', { project_id: id, plugin, kind, title: `${kindTitle} 1` }, o)) as Record<string, unknown>;
             const s = isRecord(study.study) ? study.study : {};
             return okDone({
               done: `Created project ${quoted(made.title ?? title)} with ${quoted(s.title)}.`,
@@ -165,7 +168,7 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
             const row = await rowOf(rt, id);
             if (!row) return fail('not_found', `No project "${cleanText(id, 80)}".`, 'projects lists them.');
             if (action === 'move') {
-              await d.call('project.move', { project_id: id, folder: folder || ROOT_FOLDER }, o);
+              await d.hostCall('project.move', { project_id: id, folder: folder || ROOT_FOLDER }, o);
               sync(id, ['project']);
               return okDone({ done: `Moved project ${quoted(row.title)} to ${quoted(folder || ROOT_FOLDER)}.`, ids: { project: id } });
             }
@@ -178,7 +181,7 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
             const description = str(input.description);
             const category = cleanText(str(input.category).trim(), 80);
             if (!title && !description && !category && !units && !folder) return fail('invalid_input', 'update needs at least one of title, description, category, units, folder.');
-            await d.call('project.update', { project_id: id, title, description, category, units: unitsChange ? units : '', folder }, o);
+            await d.hostCall('project.update', { project_id: id, title, description, category, units: unitsChange ? units : '', folder }, o);
             sync(id, ['project', 'tree']);
             const what = [title && 'title', description && 'description', category && 'category', unitsChange && 'units', folder && 'folder'].filter(Boolean).join(', ');
             return okDone({ done: `Changed the ${what} of project ${quoted(title || row.title)}.${unitsChange ? ' The open window converts the entered values.' : ''}`, ids: { project: id } });

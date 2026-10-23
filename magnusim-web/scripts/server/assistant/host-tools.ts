@@ -35,7 +35,9 @@ import { HOST_STALL_MS, type ToolDef, type ToolOutcome } from './registry.ts';
 import type { ProviderId } from './types.ts';
 import { appStatusTool } from './host/app-status.ts';
 import { catalogTool } from './host/catalog.ts';
-import type { HostToolDeps } from './host/common.ts';
+import { paced, type HostToolDeps } from './host/common.ts';
+import { createHostTransport } from './host-call.ts';
+import { uiSync } from '../ui-sync.ts';
 import { deleteTool } from './host/delete.ts';
 import { explainReadyTool } from './host/explain-ready.ts';
 import { importFileTool } from './host/import-file.ts';
@@ -44,13 +46,14 @@ import { projectSummaryTool } from './host/project-summary.ts';
 import { projectsTool } from './host/projects.ts';
 import { readResultsTool } from './host/read-results.ts';
 import { readSetupTool } from './host/read-setup.ts';
-import { createRouteCaller } from './host/route-call.ts';
 import { setupEditTool } from './host/setup-edit.ts';
 import { studyEditTool } from './host/study-edit.ts';
 
 export type { HostToolDeps } from './host/common.ts';
 
-export function createHostTools(d: HostToolDeps): ToolDef[] {
+export function createHostTools(deps: HostToolDeps): ToolDef[] {
+  // A tool's own steps wait for the turn's call rate rather than fail half done.
+  const d: HostToolDeps = { ...deps, hostCall: paced(deps.hostCall) };
   return [
     appStatusTool(d),
     catalogTool(d),
@@ -101,7 +104,7 @@ export function appVersion(): Promise<string> {
 /** The host tools as the server uses them: the app over loopback on `port`, the settings, package.json and the live registry. */
 export function defaultHostTools(port: () => number | null | undefined, more: Partial<HostToolDeps> = {}): ToolDef[] {
   return createHostTools({
-    call: createRouteCaller({ port }),
+    hostCall: createHostTransport({ port }).call,
     assistant: async () => {
       const s = await loadSettings();
       // The default's (a turn passes its own through ToolCtx.assistant): a coding agent's model is its saved choice.
@@ -116,6 +119,7 @@ export function defaultHostTools(port: () => number | null | undefined, more: Pa
     version: appVersion,
     plugins: () => loadedPlugins(),
     attachments,
+    uiSync,
     statFile: async (path: string) => {
       try {
         const st = await stat(path);

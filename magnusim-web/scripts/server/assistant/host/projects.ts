@@ -32,7 +32,7 @@ export function projectsTool(d: HostToolDeps): HostToolDef {
         if (!(await mayReadBeyondTurn(rt.ctx, d))) {
           return fail('privacy_declined', 'Sending the project list needs the person to allow it first.', 'Ask the person to open the project, or to set project data to Always allow in Settings → Assistant.');
         }
-        const list = (await d.call('projects.list', {}, via(rt, 'projects'))) as Record<string, unknown>;
+        const list = (await d.hostCall('projects.list', {}, via(rt, 'projects'))) as Record<string, unknown>;
         const folder = str(input.folder).trim();
         const search = str(input.search).trim().toLowerCase();
         const limit = Number(input.limit) > 0 ? Math.min(200, Number(input.limit)) : 50;

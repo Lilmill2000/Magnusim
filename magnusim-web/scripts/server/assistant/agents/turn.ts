@@ -58,7 +58,7 @@ import { cleanText } from '../sanitize.ts';
 import type { AgentCaps, AssistantSettings } from '../settings.ts';
 import type { Clock, GateBroker, GateEvent, GateOwner, GateRequest } from '../gates.ts';
 import type { Conversation } from '../conversations.ts';
-import type { ToolCtx, ToolDef, WorkspaceRegistration } from '../registry.ts';
+import { placeFor, type ToolCtx, type ToolDef, type WorkspaceRegistration } from '../registry.ts';
 import { bindingServes, notePromptSent, type AgentDispatch } from '../mcp/sessions.ts';
 import type { EndState, PageLimits, TurnState } from '../loop.ts';
 import type { StreamEvent, ToolCallPart } from '../types.ts';
@@ -302,7 +302,19 @@ class AgentTurnRun implements AgentDispatch {
 
   ctx(): ToolCtx {
     const t = this.t;
-    return { tab: t.tab, projectId: t.projectId, simulationId: t.simulationId, cloud: true, local: false, assistant: { provider: t.settings.provider, model: t.settings.model } };
+    const ws = t.tab ? this.d.registry.workspaceOf(t.tab) : null;
+    return {
+      tab: t.tab,
+      projectId: t.projectId,
+      simulationId: t.simulationId,
+      cloud: true,
+      local: false,
+      place: placeFor(ws, t.projectId),
+      budgetTokens: null,
+      // A coding agent's calls carry no message of the person's (the typed-path rule refuses a path).
+      prompt: null,
+      assistant: { provider: t.settings.provider, model: t.settings.model },
+    };
   }
 
   owns(owner: GateOwner): boolean {

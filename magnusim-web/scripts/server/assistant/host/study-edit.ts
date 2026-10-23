@@ -35,8 +35,9 @@ import {
   type Assessed,
   type HostToolDeps,
   type HostToolDef,
+  assessments,
 } from './common.ts';
-import { RouteCallError, type HostCall } from './route-call.ts';
+import { HostCallError, type HostCall } from '../host-call.ts';
 
 export const STUDY_ACTIONS = ['create', 'copy', 'rename', 'activate', 'reorder', 'set', 'set_time', 'plugin_create', 'plugin_rename'] as const;
 
@@ -61,16 +62,18 @@ export function resultsNote(names: string[]): string {
 const tdOf = (v: unknown): string => (v === 'transient' ? 'Transient' : v === 'steady' ? 'Steady-state' : '');
 
 export function studyEditTool(d: HostToolDeps): HostToolDef {
+  // Escalations whole, for the card's copy (assessments).
+  const whole = assessments();
   const contexts = ['workbench'] as const;
   const assess = async (input: Record<string, unknown>, a: AssessContext): Promise<Assessed | null> => {
     if (input.action !== 'set' && input.action !== 'set_time') return null;
     const project = a.ctx.projectId;
     if (!project) return null;
     const rt = { signal: a.signal, turn: a.turn };
-    const studies = await studiesOf(d.call, project, rt, 'study_edit');
+    const studies = await studiesOf(d.hostCall, project, rt, 'study_edit');
     const sim = str(input.id) || a.ctx.simulationId || studies.activeId || '';
     if (!sim) return null;
-    const names = await runsWithResults(d.call, rt, project, sim, 'study_edit');
+    const names = await runsWithResults(d.hostCall, rt, project, sim, 'study_edit');
     if (!names.length) return null;
     return { risk: 'destructive', note: resultsNote(names), detail: names.slice(0, 6).map((n) => ({ label: 'Has results', value: n })) };
   };
@@ -100,10 +103,10 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts, (ctx: ToolCtx) => (ctx.projectId ? true : 'No project is open in this window.')),
     projectOf: (_input, ctx) => ctx.projectId,
-    escalate: assess,
+    escalate: async (input, a) => whole.keep(input, await assess(input, a)),
     gateText: (input, a) => ({
       title: `Allow the Assistant to change ${input.action === 'set_time' ? 'the time dependency' : 'the settings'} of this study?`,
-      copy: a?.note || 'It changes the study.',
+      copy: whole.note(input, a, 'It changes the study.'),
       ...(a?.detail.length ? { detail: a.detail } : {}),
     }),
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
@@ -111,8 +114,8 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
       const tool = `study_edit.${action}`;
       const o = via(rt, tool);
       try {
-        const project = await writableProject(input, rt.ctx, d.call, rt);
-        const studies = await studiesOf(d.call, project, rt, tool);
+        const project = await writableProject(input, rt.ctx, d.hostCall, rt);
+        const studies = await studiesOf(d.hostCall, project, rt, tool);
         const named = (id: string) => studies.list.find((s) => s.id === id) ?? null;
         const target = () => {
           const id = str(input.id).trim() || rt.ctx.simulationId || studies.activeId || '';
@@ -123,15 +126,15 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
         // POST /api/simulation/update also makes its study the project's active one: a change
         // to another study than the active one puts the active one back.
         const update = async (sim: string, args: Record<string, unknown>) => {
-          await d.call('simulation.update', { project_id: project, simulation_id: sim, ...args }, o);
-          if (studies.activeId && studies.activeId !== sim) await d.call('simulation.activate', { project_id: project, simulation_id: studies.activeId }, o);
+          await d.hostCall('simulation.update', { project_id: project, simulation_id: sim, ...args }, o);
+          if (studies.activeId && studies.activeId !== sim) await d.hostCall('simulation.activate', { project_id: project, simulation_id: studies.activeId }, o);
         };
         const sync = (kinds: Parameters<typeof emitSync>[2]['kinds'], sim: string | null, ids: Record<string, string[]>, active?: { study?: string }) =>
           emitSync(d, rt, { project_id: project, simulation_id: sim, kinds, ids, revs: {}, ...(active ? { active } : {}), tool });
         switch (action) {
           case 'create':
           case 'copy': {
-            const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
             let created: Record<string, unknown>;
             if (action === 'create') {
               const analysis = str(input.analysis).trim();
@@ -139,18 +142,18 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
               if (analysis && !known.includes(analysis)) {
                 return fail('not_found', `No analysis "${cleanText(analysis, 80)}".`, "catalog {kind:'analyses', key:''} lists them.");
               }
-              created = (await d.call('simulation.create', { project_id: project, analysis_type: analysis, time_dependency: tdOf(input.time_dependency), geometry_id: str(input.geometry_id) }, o)) as Record<string, unknown>;
+              created = (await d.hostCall('simulation.create', { project_id: project, analysis_type: analysis, time_dependency: tdOf(input.time_dependency), geometry_id: str(input.geometry_id) }, o)) as Record<string, unknown>;
             } else {
               const from = str(input.copy_from).trim();
               if (!named(from)) return fail('not_found', `No study ${quoted(from)} to copy.`, 'project_summary lists the studies.');
-              created = (await d.call('simulation.copy', { project_id: project, copy_from: from, copy_mode: str(input.copy_mode) || 'settings', geometry_id: str(input.geometry_id) }, o)) as Record<string, unknown>;
+              created = (await d.hostCall('simulation.copy', { project_id: project, copy_from: from, copy_mode: str(input.copy_mode) || 'settings', geometry_id: str(input.geometry_id) }, o)) as Record<string, unknown>;
             }
             const sim = isRecord(created.simulation) ? created.simulation : {};
             const id = str(sim.id);
             if (!id) return fail('app_error', 'The app made no study.');
             // The create route ignores `name`: the rename follows.
             const name = cleanText(str(input.name).trim(), 64);
-            if (name) await d.call('simulation.update', { project_id: project, simulation_id: id, name }, o);
+            if (name) await d.hostCall('simulation.update', { project_id: project, simulation_id: id, name }, o);
             // Settings given with the create, checked against its analysis.
             if (Array.isArray(input.values) && input.values.length) {
               const parsed = parseValues(input.values, studyFields(registry, str(sim.analysis_type)));
@@ -158,13 +161,13 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
                 sync(['study', 'active', 'tree'], id, { study: [id] }, { study: id });
                 return badValues(parsed.problems, `The study was made (${id}); set its settings again with study_edit {action:'set'}. catalog {kind:'analyses', key} lists them.`);
               }
-              await d.call('simulation.update', { project_id: project, simulation_id: id, settings: nest(parsed.values) }, o);
+              await d.hostCall('simulation.update', { project_id: project, simulation_id: id, settings: nest(parsed.values) }, o);
             }
             // A new study's first run (the page's create makes none; check, then make it once).
             let run = '';
-            const status = (await d.call('run.status', { project_id: project, simulation_id: id }, o)) as Record<string, unknown>;
+            const status = (await d.hostCall('run.status', { project_id: project, simulation_id: id }, o)) as Record<string, unknown>;
             if (!records(status.runs).length) {
-              const made = (await d.call('run.create', { project_id: project, simulation_id: id, name: 'Run 1' }, o)) as Record<string, unknown>;
+              const made = (await d.hostCall('run.create', { project_id: project, simulation_id: id, name: 'Run 1' }, o)) as Record<string, unknown>;
               run = str(isRecord(made.run) ? made.run.id : '');
             }
             sync(['study', 'runs', 'active', 'tree'], id, { study: [id], ...(run ? { run: [run] } : {}) }, { study: id });
@@ -188,7 +191,7 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
             const id = str(input.id).trim();
             const s = named(id);
             if (!s) return fail('not_found', `No study ${quoted(id)} in this project.`, 'project_summary lists the studies.');
-            await d.call('simulation.activate', { project_id: project, simulation_id: id }, o);
+            await d.hostCall('simulation.activate', { project_id: project, simulation_id: id }, o);
             sync(['active', 'tree'], id, { study: [id] }, { study: id });
             return okDone({ done: `Study ${quoted(s.name)} is now the active study.`, ids: { study: id } });
           }
@@ -200,13 +203,13 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
             if (!same) {
               return fail('invalid_input', 'reorder needs every study of the geometry exactly once.', 'project_summary lists the studies with their geometry_id.', { studies_of_geometry: mine });
             }
-            await d.call('simulation.reorder', { project_id: project, ids, geometry_id: geometry }, o);
+            await d.hostCall('simulation.reorder', { project_id: project, ids, geometry_id: geometry }, o);
             sync(['study', 'tree'], null, { study: ids });
             return okDone({ done: `Reordered ${ids.length} studies.`, ids: {} });
           }
           case 'set': {
             const s = target();
-            const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
             const parsed = parseValues(input.values, studyFields(registry, str(s.analysis_type)));
             if (!parsed.ok) return badValues(parsed.problems, `catalog {kind:'analyses', key:'${cleanText(str(s.analysis_type), 80)}'} lists the fields.`);
             if (!Object.keys(parsed.values).length) return fail('invalid_input', 'set needs at least one value.');
@@ -214,8 +217,8 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
               await update(str(s.id), { settings: nest(parsed.values) });
             } catch (err) {
               // The route's own refusal names its key.
-              if (err instanceof RouteCallError && err.status === 400 && err.body && typeof err.body.key === 'string') {
-                return badValues([{ key: err.body.key, problem: err.message }], 'catalog lists the fields.');
+              if (err instanceof HostCallError && err.status === 400 && err.detail && typeof err.detail.key === 'string') {
+                return badValues([{ key: err.detail.key, problem: err.message }], 'catalog lists the fields.');
               }
               throw err;
             }
@@ -236,7 +239,7 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
             const plugin = str(input.plugin).trim();
             const kind = str(input.kind).trim();
             if (!plugin || !kind) return fail('invalid_input', 'plugin_create needs plugin and kind.', "catalog {kind:'study_kinds'} lists them.");
-            const made = (await d.call('plugin_studies.create', { project_id: project, plugin, kind, title: cleanText(str(input.name).trim(), 120) }, o)) as Record<string, unknown>;
+            const made = (await d.hostCall('plugin_studies.create', { project_id: project, plugin, kind, title: cleanText(str(input.name).trim(), 120) }, o)) as Record<string, unknown>;
             const study = isRecord(made.study) ? made.study : {};
             const id = str(study.id);
             sync(['plugin_studies', 'tree'], null, { plugin_study: [id] });
@@ -250,10 +253,16 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
             const id = str(input.id).trim();
             const name = cleanText(str(input.name).trim(), 120);
             if (!name) return fail('invalid_input', 'plugin_rename needs a name.');
-            const list = records(((await d.call('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
+            const list = records(((await d.hostCall('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
             const s = list.find((x) => x.id === id);
             if (!s) return fail('not_found', `No plugin study ${quoted(id)}.`, 'project_summary lists them.');
-            await d.call('plugin_studies.rename', { project_id: project, plugin: str(s.plugin), study_id: id, title: name, rev: Number(s.rev) || 0 }, o);
+            try {
+              await d.hostCall('plugin_studies.rename', { project_id: project, plugin: str(s.plugin), study_id: id, title: name, rev: Number(s.rev) || 0 }, o);
+            } catch (err) {
+              // A rev other than the study's is the worker's -32009, a 409 (routes.ts rpcStatus).
+              if (err instanceof HostCallError && err.status === 409) return fail('stale_record', 'This was changed elsewhere since it was read.', 'Read it again with read_setup; the person or another window changed it.');
+              throw err;
+            }
             sync(['plugin_studies', 'tree'], null, { plugin_study: [id] });
             return okDone({ done: `Renamed ${quoted(s.title)} to ${quoted(name)}.`, ids: { plugin_study: id } });
           }

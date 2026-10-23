@@ -9,23 +9,13 @@
  * them now and the runner reads them once it knows them.
  */
 import type { GateDetail } from '../gates.ts';
-import { HostCallError } from '../host-call.ts';
-import { HOST_STALL_MS, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext } from '../registry.ts';
+import { HostCallError, type HostCall, type HostCallOptions } from '../host-call.ts';
+import { HOST_STALL_MS, type Assessed, type AssessContext, type Place, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext } from '../registry.ts';
 import { cleanText, TEXT_CAPS } from '../sanitize.ts';
 import type { JsonSchemaObject } from '../types.ts';
-import { RouteCallError, type HostCall } from './route-call.ts';
+import { uiSyncOrigin, type UiSyncEmitter, type UiSyncInput, type UiSyncKind } from '../../ui-sync.ts';
 
-export type Place = 'home' | 'workbench' | 'workspace';
-export interface Assessed {
-  risk: 'edit' | 'compute' | 'destructive';
-  note: string;
-  detail: GateDetail[];
-}
-export interface AssessContext {
-  ctx: ToolCtx;
-  signal: AbortSignal;
-  turn: string | null;
-}
+export type { Assessed, AssessContext, Place };
 
 /** A host tool with the fields the core host tools spec gives it (2.1). */
 export interface HostToolDef extends ToolDef {
@@ -35,27 +25,15 @@ export interface HostToolDef extends ToolDef {
   projectOf?(input: Record<string, unknown>, ctx: ToolCtx): string | null;
 }
 
-/** The fields lane A and C add to ToolCtx, read where present. */
-export interface CtxExtras {
-  place?: Place;
-  /** This turn's own message (the typed-path rule); null for MCP and agents. */
-  prompt?: string | null;
-  /** The turn's conversation (attachments are bound to it). */
-  conversation?: string | null;
-  /** The turn's spend and steps so far (app_status). */
-  used?: { usd?: number; steps?: number; minutes?: number };
-}
-const extras = (ctx: ToolCtx) => ctx as ToolCtx & CtxExtras;
-
-/** Where the turn is: its tab's place, else (before core registrations) a tab means a workspace. */
-export function placeOf(ctx: ToolCtx): Place {
-  const p = extras(ctx).place;
-  if (p === 'home' || p === 'workbench' || p === 'workspace') return p;
-  return ctx.tab ? 'workspace' : ctx.projectId ? 'workbench' : 'home';
-}
-export const promptOf = (ctx: ToolCtx): string | null => (typeof extras(ctx).prompt === 'string' ? (extras(ctx).prompt as string) : null);
-export const conversationOf = (ctx: ToolCtx): string | null => (typeof extras(ctx).conversation === 'string' ? (extras(ctx).conversation as string) : null);
-export const usedOf = (ctx: ToolCtx) => extras(ctx).used ?? null;
+/** Where the turn's window is (ToolCtx.place; a caller that predates places: from its tab and project). */
+export const placeOf = (ctx: ToolCtx): Place =>
+  ctx.place === 'home' || ctx.place === 'workbench' || ctx.place === 'workspace' ? ctx.place : ctx.tab ? 'workspace' : ctx.projectId ? 'workbench' : 'home';
+/** This turn's own message (the typed-path rule); null for MCP and agents. */
+export const promptOf = (ctx: ToolCtx): string | null => (typeof ctx.prompt === 'string' ? ctx.prompt : null);
+/** The turn's conversation (attachments are bound to it). */
+export const conversationOf = (ctx: ToolCtx): string | null => (typeof ctx.conversation === 'string' ? ctx.conversation : null);
+/** The turn's spend and steps so far (app_status), when the turn lends them. */
+export const usedOf = (ctx: ToolCtx): { usd?: number; steps?: number; minutes?: number } | null => (ctx as ToolCtx & { used?: { usd?: number; steps?: number; minutes?: number } }).used ?? null;
 
 /**
  * Whether the runner asks for another project's consent before a call reads it (lane C's
@@ -64,23 +42,9 @@ export const usedOf = (ctx: ToolCtx) => extras(ctx).used ?? null;
  */
 export const PER_CALL_PRIVACY = false;
 
-// ---------------------------------------------------------------- ui_sync (lane A's interface, lane B's channel)
+// ---------------------------------------------------------------- ui_sync (scripts/server/ui-sync.ts)
 
-export type SyncKind = 'project' | 'geometry' | 'study' | 'materials' | 'bcs' | 'bc_defaults' | 'mesh' | 'refinements' | 'runs' | 'plugin_studies' | 'active' | 'tree';
-export interface UiSyncEvent {
-  project_id: string;
-  simulation_id: string | null;
-  kinds: SyncKind[];
-  ids: Record<string, string[]>;
-  revs: Record<string, number>;
-  active?: { geometry?: string; study?: string; mesh?: string; run?: string };
-  by: 'assistant' | 'app';
-  turn: string | null;
-  tool: string;
-}
-export interface UiSync {
-  emit(e: UiSyncEvent): void;
-}
+export type SyncKind = UiSyncKind;
 
 // ---------------------------------------------------------------- attachments (lane F)
 
@@ -95,7 +59,8 @@ export interface Attachments {
 }
 
 export interface HostToolDeps {
-  call: HostCall;
+  /** The routes call (C1: an entry id of HOST_ROUTES). */
+  hostCall: HostCall;
   /** The default provider and model as Settings has them. */
   assistant(): Promise<{ provider: string; model: string }>;
   version(): Promise<string>;
@@ -104,7 +69,8 @@ export interface HostToolDeps {
   assistantSettings?(): Promise<{ effort: string; privacy: string; caps: Record<string, number> }>;
   /** Today's spend (the ledger). */
   spentToday?(): Promise<number>;
-  uiSync?: UiSync;
+  /** The ui_sync emitter (scripts/server/ui-sync.ts uiSync). */
+  uiSync?: Pick<UiSyncEmitter, 'emit'>;
   attachments?: Attachments;
   /** A typed path's file, if it is one (import_file). */
   statFile?(path: string): Promise<{ size: number; file: boolean } | null>;
@@ -163,6 +129,27 @@ export function fail(code: string, message: string, hint?: string, detail?: unkn
   return { ok: false, error: { code, message, ...(hint ? { hint } : {}), ...(detail !== undefined ? { detail } : {}) }, summary: cleanText(message, 160) };
 }
 
+/**
+ * A tool's escalations by call, whole: the runner cuts an escalation's note to a confirm
+ * note's length (CONFIRM_NOTE_MAX), and a card's copy names more (spec 14.2: what converts,
+ * which studies go). The runner asks gateText with the same input it assessed.
+ */
+export function assessments(): {
+  keep(input: Record<string, unknown>, a: Assessed | null): Assessed | null;
+  note(input: Record<string, unknown>, a: Assessed | null, fallback: string): string;
+} {
+  const kept = new WeakMap<Record<string, unknown>, Assessed>();
+  return {
+    keep(input, a) {
+      if (a) kept.set(input, a);
+      return a;
+    },
+    note(input, a, fallback) {
+      return kept.get(input)?.note || a?.note || fallback;
+    },
+  };
+}
+
 /** A thrown failure carried to the tool's answer. */
 export class ToolFail extends Error {
   outcome: ToolOutcome;
@@ -179,21 +166,59 @@ export const refuse = (code: string, message: string, hint?: string, detail?: un
 export function failed(err: unknown, notFoundHint?: string): ToolOutcome {
   if (err instanceof ToolFail) return err.outcome;
   if (err instanceof HostCallError) {
-    const appCode = err instanceof RouteCallError ? err.appCode : null;
-    if (appCode === 'stale_record' || appCode === '-32009' || appCode === '-32012') {
-      return fail('stale_record', 'This was changed elsewhere since it was read.', 'Read it again with read_setup; the person or another window changed it.');
+    const appCode = err.appCode;
+    if (err.code === 'stale_record' || appCode === 'stale_record') {
+      return fail('stale_record', 'This was changed elsewhere since it was read.', 'Read it again with read_setup; the person or another window changed it.', err.detail ?? undefined);
     }
-    if (appCode === 'geometry_changed') return fail('geometry_changed', err.message, "Read the faces again with read_setup {what:'faces'}.");
-    if (appCode === 'geometry_updating') return fail('geometry_updating', err.message, 'The geometry is updating; wait, then try again.');
+    if (err.code === 'geometry_changed') return fail('geometry_changed', err.message, "Read the faces again with read_setup {what:'faces'}.");
+    if (err.code === 'geometry_updating') return fail('geometry_updating', err.message, 'The geometry is updating; wait, then try again.');
     if (err.code === 'http') {
       if (err.status === 404) return fail('not_found', err.message, notFoundHint);
-      if (appCode === 'busy' || err.status === 409) return fail(appCode === 'busy' ? 'busy' : 'refused', err.message);
+      if (appCode === 'busy') return fail('busy', err.message);
       if (err.status !== null && err.status >= 500) return fail('app_error', err.message);
       return fail('refused', err.message);
     }
     return fail(err.code, err.message);
   }
   return fail('failed', 'The app could not be reached.');
+}
+
+/** How long a tool's own steps wait for the turn's call rate, at most, before failing rate_limited. */
+const PACE_MAX_MS = 15_000;
+
+/**
+ * The routes call with its rate (host-call.ts: 5 calls and 2 writes a second per turn) waited
+ * out: a tool whose steps are several writes (a study, its name, its Run 1) or many probes waits
+ * for its slot instead of failing half done. A Stop ends the wait.
+ */
+export function paced(call: HostCall, sleep: (ms: number, signal?: AbortSignal) => Promise<void> = realSleep): HostCall {
+  return async (id, args, o) => {
+    let waited = 0;
+    for (;;) {
+      try {
+        return await call(id, args, o);
+      } catch (err) {
+        if (!(err instanceof HostCallError) || err.code !== 'rate_limited' || waited >= PACE_MAX_MS) throw err;
+        await sleep(200, o.signal);
+        waited += 200;
+      }
+    }
+  };
+}
+
+function realSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new HostCallError('aborted', 'Stopped.'));
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new HostCallError('aborted', 'Stopped.'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 // ---------------------------------------------------------------- which project and study
@@ -527,16 +552,16 @@ export const S = {
 // ---------------------------------------------------------------- sync
 
 /** Emits a write's ui_sync (2.8); a sync that fails never fails the write. */
-export function emitSync(deps: HostToolDeps, rt: ToolRunContext, e: Omit<UiSyncEvent, 'by' | 'turn'>): void {
+export function emitSync(deps: HostToolDeps, rt: ToolRunContext, e: Omit<UiSyncInput, 'by' | 'turn'>): void {
   try {
-    deps.uiSync?.emit({ ...e, by: rt.turn && rt.turn.startsWith('mcp:') ? 'app' : 'assistant', turn: rt.turn });
+    deps.uiSync?.emit({ ...e, ...uiSyncOrigin(rt) });
   } catch {
     /* the page reloads on its next switch */
   }
 }
 
 /** The call options for one tool step. */
-export const via = (rt: { signal: AbortSignal; turn: string | null }, tool: string) => ({ signal: rt.signal, turn: rt.turn, tool });
+export const via = (rt: { signal: AbortSignal; turn: string | null }, tool: string): HostCallOptions => ({ signal: rt.signal, turn: rt.turn, tool });
 
 /** A linked geometry's rev, which face-carrying writes send (3.4); null for a plain import. */
 export function geometryRevOf(project: Record<string, unknown>, geometryId: string | null): number | null {

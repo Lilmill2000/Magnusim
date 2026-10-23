@@ -14,7 +14,8 @@ process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
 process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 
-const { createRouteCaller } = await import('../assistant/host/route-call.ts');
+const { createHostTransport } = await import('../assistant/host-call.ts');
+const { paced } = await import('../assistant/host/common.ts');
 const { deleteTool, DELETE_KINDS } = await import('../assistant/host/delete.ts');
 const { startFakeApp, makeRt, world } = await import('./assistant-host-harness.js');
 
@@ -32,7 +33,7 @@ after(async () => {
 
 const tool = () =>
   deleteTool({
-    call: createRouteCaller({ port: () => app.port, now: () => fakeNow, sleep: async (ms) => { fakeNow += ms; } }),
+    hostCall: paced(createHostTransport({ port: () => app.port, now: () => fakeNow }).call, async (ms) => { fakeNow += ms; }),
     assistant: async () => ({ provider: 'anthropic', model: 'm' }),
     version: async () => '0',
     plugins: () => [],
@@ -96,15 +97,26 @@ describe('delete: every kind', () => {
   });
   it('the cards: a folder lists its projects; a geometry its studies (at most 6 rows)', async () => {
     fresh();
-    const f = await tool().escalate(del('folder', 'Aero'), ac());
+    const t = tool();
+    const folder = del('folder', 'Aero');
+    const f = await t.escalate(folder, ac());
     assert.deepEqual(f.detail, [
       { label: 'Project', value: 'Wing' },
       { label: 'Project', value: 'Duct' },
     ]);
-    assert.equal(tool().gateText(del('folder', 'Aero'), f).title, 'Allow the Assistant to delete folder "Aero"?');
-    const g = await tool().escalate(del('geometry', 'g1'), ac());
+    assert.equal(t.gateText(folder, f).title, 'Allow the Assistant to delete folder "Aero" and its 2 projects?');
+    const geometry = del('geometry', 'g1');
+    const g = await t.escalate(geometry, ac());
     assert.deepEqual(g.detail.map((r) => r.value), ['Cruise', 'Climb']);
-    assert.equal(tool().gateText(del('geometry', 'g1'), g).copy, 'Its 2 studies go too: "Cruise" and "Climb", with their meshes, runs and results.');
+    assert.deepEqual(t.gateText(geometry, g), {
+      title: 'Allow the Assistant to remove geometry "Wing"?',
+      copy: 'Its 2 studies go too: "Cruise" and "Climb", with their meshes, runs and results.',
+      detail: g.detail,
+    });
+    const bc = del('bc', 'bc-1');
+    assert.equal(t.gateText(bc, await t.escalate(bc, ac())).title, 'Allow the Assistant to delete boundary condition "Inlet"?');
+    // Asked without its escalation (a card for an input not assessed): the kind, generically.
+    assert.equal(t.gateText(del('bc', 'bc-1'), null).title, 'Allow the Assistant to delete this bc?');
   });
   it('a study whose mesh or run is in the queue is refused (busy)', async () => {
     fresh();

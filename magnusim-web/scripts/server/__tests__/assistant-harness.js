@@ -214,12 +214,12 @@ export class ScriptedProvider {
 const EMPTY = Object.freeze({ type: 'object', properties: {}, additionalProperties: false });
 
 /** A host tool for tests: `run(input, rt)` gives its outcome. */
-export function hostTool(name, { risk = 'read', run, schema = EMPTY, title, projectData = false, available = () => true, priority = 0, stallMs = HOST_STALL_MS } = {}) {
+export function hostTool(name, { risk = 'read', run, schema = EMPTY, title, description, projectData = false, available = () => true, priority = 0, stallMs = HOST_STALL_MS, ...extra } = {}) {
   return {
     name,
     localName: name,
     title: title ?? `Run ${name}`,
-    description: `Test tool ${name}.`,
+    description: description ?? `Test tool ${name}.`,
     schema,
     risk,
     source: { kind: 'host' },
@@ -228,6 +228,8 @@ export function hostTool(name, { risk = 'read', run, schema = EMPTY, title, proj
     workerBacked: false,
     priority,
     available,
+    // contexts, pinned, escalate, gateText, chainKey, describe (core host tools spec §2.1).
+    ...extra,
     run: run ?? (async () => ({ ok: true, data: { tool: name }, summary: `${name} ran` })),
   };
 }

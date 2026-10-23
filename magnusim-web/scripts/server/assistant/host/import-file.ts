@@ -80,7 +80,7 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
       const path = str(input.path);
       const unit = str(input.length_unit);
       try {
-        const project = await writableProject(input, rt.ctx, d.call, rt);
+        const project = await writableProject(input, rt.ctx, d.hostCall, rt);
         if (!attachment && !path.trim()) return fail('needs_file', 'No file to import.', NEEDS_FILE_HINT);
         let name = '';
         let r: Record<string, unknown>;
@@ -96,7 +96,7 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
             return fail('invalid_input', `${cleanText(name, 80)} is a mesh file: say its length unit (mm, cm, m or in).`, 'Ask the person which unit the file is in.');
           }
           rt.progress(null, `Importing ${cleanText(name, 80)}`);
-          r = (await d.call(
+          r = (await d.hostCall(
             'geometry.import_raw',
             { project_id: project, filename: name, length_unit: unit ? LENGTH_UNITS[unit] : '', raw: { stream: opened.stream, bytes: opened.bytes, type: 'application/octet-stream' } },
             o,
@@ -112,7 +112,7 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
           if (MESH_EXTS.includes(ext) && !unit) return fail('invalid_input', 'That is a mesh file: say its length unit (mm, cm, m or in).', 'Ask the person which unit the file is in.');
           name = basename(path);
           rt.progress(null, `Importing ${cleanText(name, 80)}`);
-          r = (await d.call('geometry.import_path', { project_id: project, step_path: path, length_unit: unit ? LENGTH_UNITS[unit] : '' }, o)) as Record<string, unknown>;
+          r = (await d.hostCall('geometry.import_path', { project_id: project, step_path: path, length_unit: unit ? LENGTH_UNITS[unit] : '' }, { ...o, prompt: promptOf(rt.ctx) })) as Record<string, unknown>;
         }
         const added = isRecord(r.added) ? r.added : {};
         const shown = isRecord(r.geometry) ? r.geometry : {};

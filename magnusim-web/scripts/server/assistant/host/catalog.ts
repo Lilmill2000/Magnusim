@@ -182,10 +182,10 @@ export function catalogTool(d: HostToolDeps): HostToolDef {
       try {
         const o = via(rt, `catalog.${kind}`);
         if (['study_kinds', 'start_actions', 'samples', 'plugins'].includes(kind)) {
-          const list = records(((await d.call('plugins.list', {}, o)) as Record<string, unknown>).plugins);
+          const list = records(((await d.hostCall('plugins.list', {}, o)) as Record<string, unknown>).plugins);
           return pluginKinds(kind, key, list);
         }
-        const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+        const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
         const pick = <T extends Record<string, unknown>>(rows: T[], what: string): T | ToolOutcome => {
           const hit = rows.find((r) => r.key === key);
           return hit ?? fail('not_found', `No ${what} "${cleanText(key, 80)}".`, `catalog {kind:'${kind}', key:''} lists them.`);
@@ -219,7 +219,7 @@ export function catalogTool(d: HostToolDeps): HostToolDef {
             if (!key) {
               let menu: unknown[] = [];
               try {
-                menu = records(((await d.call('bc.menu', {}, o)) as Record<string, unknown>).menu).map((m) => ({
+                menu = records(((await d.hostCall('bc.menu', {}, o)) as Record<string, unknown>).menu).map((m) => ({
                   key: text(m.key, 64),
                   label: text(m.label),
                   variants: records(m.variants).map((v) => ({ key: text(v.key, 64), label: text(v.label) })),

@@ -145,6 +145,9 @@ test('a delete asks first: Don\'t leaves the BC, Allow removes it from the study
   await dockSend(page, 'Delete the inlet');
   const gate = dockGate(page);
   await expect(gate).toBeVisible(STEP);
+  // The card names the item and what goes with it (the tool's own words, spec 14.2).
+  await expect(gate.locator('.dock-gate-title')).toHaveText('Allow the Assistant to delete boundary condition "Inlet"?');
+  await expect(gate.locator('.dock-gate-copy')).toContainText('Face 1 becomes unassigned.');
   await expect(gate).toContainText("Can't be undone");
   await gate.locator('[data-gate-answer="no"]').click();
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
@@ -163,17 +166,26 @@ test('a delete asks first: Don\'t leaves the BC, Allow removes it from the study
   await expect(row).not.toContainText('Inlet');
 });
 
-// The cards' own words name what goes with it (core host tools spec 14.2): they come from the
-// tool's gateText and escalate, which the runner reads once lane A's plumbing lands.
-test.fixme('the delete card names the faces that become unassigned (needs the runner\'s gateText, lane A)', async ({ page }) => {
+// A units change converts the values entered (spec 4.8): project_edit asks first, a "Can't be
+// undone" card that says what converts; Don't leaves the units.
+test("a units change asks first, naming what it converts; Don't leaves the units", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const study = (await postOk(request, '/api/simulation', { project_id: project, analysis_type: 'incompressible_steady', activate: true })).simulation.id;
+  await postOk(request, '/api/bcs', { project_id: project, simulation_id: study, name: 'Inlet units', bc_type: 'Velocity inlet', faces: ['face 1@Body1'], value: 4 });
   await openProject(page);
-  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText('Face 1 becomes unassigned.');
-});
-
-// A units change converts the values entered (spec 4.8): project_edit escalates to a
-// "Can't be undone" card that says what converts (lane A's escalate in the runner).
-test.fixme('a units change asks first, naming the boundary conditions and refinements it converts (needs escalate, lane A)', async ({ page }) => {
-  await openProject(page);
-  await expect(dockGate(page).locator('.dock-gate-title')).toHaveText('Allow the Assistant to change the units of this project?');
-  await expect(dockGate(page).locator('.dock-gate-copy')).toContainText('Converts the values you entered in 1 boundary condition from Metric to US units.');
+  const all = (await getJson(request, `/api/bcs?project_id=${project}`)).boundary_conditions_all.length;
+  fake.reply(
+    { tools: [{ name: 'project_edit', input: { action: 'update', project_id: '', title: '', description: '', category: '', units: 'Imperial', folder: '', plugin: '', key: '' } }] },
+    { text: 'Left the units.' },
+  );
+  await dockSend(page, 'Use US units');
+  const gate = dockGate(page);
+  await expect(gate).toBeVisible(STEP);
+  await expect(gate.locator('.dock-gate-title')).toHaveText('Allow the Assistant to change the units of this project?');
+  await expect(gate.locator('.dock-gate-copy')).toContainText(`Converts the values you entered in ${all} boundary condition${all === 1 ? '' : 's'}`);
+  await expect(gate.locator('.dock-gate-copy')).toContainText('from Metric to US units. Results already computed are not converted.');
+  await expect(gate).toContainText("Can't be undone");
+  await gate.locator('[data-gate-answer="no"]').click();
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  expect((await getJson(request, `/api/project?project_id=${project}`)).project.units).toBe('Metric');
 });

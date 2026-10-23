@@ -1,7 +1,9 @@
 // The Part's tools for the app's Assistant, as the person and the model meet them (CAD tools spec
 // §12.3 watch 1, T1): a Part open in its workspace offers its 21 tools on its tab; a turn there
-// offers 24 (the app's 3 first, then the Part's by name), the first 20 strict and the last 4 not;
-// the system text holds the CAD notes; the tools go out byte for byte the same in the next turn.
+// offers 25 (the Part's by name first, then the app's 4: core host tools spec §12.4), the first 20
+// strict and the last 5 not; the system text holds the CAD notes; the tools go out byte for byte
+// the same in the next turn. A local model whose context is too small for them all: the dock names
+// the tools left out and where they are offered, and the request carries only the rest (§12.3).
 // get_model answers the model with the Part in data; a hole on the empty Part answers bad_selector
 // with its hint and the Part's names. The dock's chip and the frame's data-assistant say what
 // the Assistant does: thinking while the model answers, working while a call runs ("Read the
@@ -35,6 +37,8 @@ import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { HINTS } from '../src/assistant/errors';
 import { WORKED_PARTS } from '../src/assistant/examples';
 import { GUIDE } from '../src/assistant/guide';
+// @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
+import * as core from '../../../e2e/support/assistant.js';
 import {
   cadFrame,
   chats,
@@ -101,8 +105,8 @@ test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offe
   const t2 = await startTurn(request, host, { text: 'Say hello again.', tab });
   expect((await t2.ended(STEP_MS)).turn.state).toBe('done');
   const [first, second] = chats(host).slice(before);
-  // The app's own tools first (by name), then the Part's by name: 25, the first 20 strict (the provider's budget).
-  expect(offeredTools(first)).toEqual([...HOST_TOOLS, ...CAD].map((name, i) => ({ name, strict: i < 20 })));
+  // The Part's tools first (by name), then the app's own by name: 25, the first 20 strict (the provider's budget).
+  expect(offeredTools(first)).toEqual([...CAD, ...HOST_TOOLS].map((name, i) => ({ name, strict: i < 20 })));
   // The CAD notes are the second system block, line breaks kept.
   const system = (first.body.system as { text: string }[]).map((s) => s.text).join('\n');
   expect(system).toContain(GUIDE);
@@ -520,6 +524,36 @@ test('cad:assistant-watch-view-no-images a local model that reads no images is t
     expect(JSON.stringify(chats(host).slice(from).map((r) => r.body))).not.toContain('image_url');
     const calls = await cadFrame(page).evaluate(() => (window as unknown as Cad).__CAD__.assistant.calls.map((c) => ({ tool: c.tool, ok: c.ok, reason: c.reason ?? null })));
     expect(calls.at(-1)).toEqual({ tool: 'view', ok: false, reason: 'no_images' });
+  } finally {
+    // The scripted model listed again, with no row.
+    host.fake.models([local.model], 'compat');
+  }
+});
+
+test("cad:assistant-watch-local-budget a local model with a 20K context: the dock names the tools left out and where they are offered; the request carries only the rest", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant local budget');
+  await openNewPart(page, request, host, pid);
+  const local = await useScriptedModel(request, host, 'local');
+  // The local server says its model has a 20,000-token context: the tools may take half of it.
+  host.fake.models([{ id: local.model, context: 20_000, type: 'llm' }], 'compat');
+  try {
+    const from = chats(host).length;
+    host.fake.reply({ text: 'Hello.' });
+    await core.dockSend(page, 'Say hello.');
+    await expect(core.dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 2 });
+    const note = core.dockTurn(page).locator('[data-dock-line="note"]').filter({ hasText: 'these tools were left out' });
+    await expect(note).toHaveCount(1);
+    const said = ((await note.textContent()) || '').replace(/^\W+\s*/, '');
+    // The app's own go first (the lowest priority first), then the Part's (the later name first), each with where it is offered.
+    expect(said).toMatch(
+      /^To fit this model's context \(20,000 tokens\), these tools were left out: app_status \(Home, Workbench, Workspaces\), explain_ready \(Home, Workbench, Workspaces\), project_summary \(Home, Workbench, Workspaces\), cad__workspace \([^)]+Part\)(, cad__\w+ \([^)]+Part\))*\. Load the model with a longer context to have them\.$/,
+    );
+    const left = [...said.slice(said.indexOf('left out: ')).matchAll(/(\w+) \(/g)].map((m) => m[1]);
+    const [sent] = chats(host).slice(from);
+    const offered = ((sent.body as { tools: { function: { name: string } }[] }).tools || []).map((t) => t.function.name);
+    expect(offered.filter((n) => left.includes(n))).toEqual([]);
+    expect([...offered, ...left].sort()).toEqual([...CAD, ...HOST_TOOLS].sort());
   } finally {
     // The scripted model listed again, with no row.
     host.fake.models([local.model], 'compat');

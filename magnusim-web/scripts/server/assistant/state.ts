@@ -46,6 +46,8 @@ export interface AssistantState {
     queue: Promise<unknown>;
   };
   ledger: SpendLedger | null;
+  /** Chain grants and the jobs each turn started (grants.ts), made at their first use. */
+  grants: unknown;
   /** Settings' connection test while one runs (one at a time). */
   test: { abort: AbortController } | null;
   /** Secret values every log line and error text is scrubbed of (redact.ts): each secret's forms, oldest first. */
@@ -66,6 +68,7 @@ function fresh(): AssistantState {
     secrets: { master: null, masterId: null, unwrap: null, store: null },
     settings: { path: null, cache: null, queue: Promise.resolve() },
     ledger: null,
+    grants: null,
     test: null,
     redactions: [],
     shutdownHooks: new Set(),

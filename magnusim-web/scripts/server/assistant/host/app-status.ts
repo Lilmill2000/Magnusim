@@ -26,9 +26,9 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
         const [version, assistant, queue, prefs, pluginsList, settings, spent] = await Promise.all([
           d.version(),
           own ? Promise.resolve(own) : d.assistant(),
-          d.call('queue.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>,
-          (d.call('prefs.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>).catch(() => ({}) as Record<string, unknown>),
-          (d.call('plugins.list', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>).catch(() => null),
+          d.hostCall('queue.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>,
+          (d.hostCall('prefs.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>).catch(() => ({}) as Record<string, unknown>),
+          (d.hostCall('plugins.list', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>).catch(() => null),
           d.assistantSettings ? d.assistantSettings().catch(() => null) : Promise.resolve(null),
           d.spentToday ? d.spentToday().catch(() => null) : Promise.resolve(null),
         ]);

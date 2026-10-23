@@ -18,7 +18,7 @@ const { checkSchema, emitSchema } = await import('../assistant/schema.ts');
 
 after(() => rmSync(ROOT, { recursive: true, force: true }));
 
-const TOOLS = createHostTools({ call: async () => ({}), assistant: async () => ({ provider: 'off', model: '' }), version: async () => '0', plugins: () => [] });
+const TOOLS = createHostTools({ hostCall: async () => ({}), assistant: async () => ({ provider: 'off', model: '' }), version: async () => '0', plugins: () => [] });
 
 function walk(node, path = '(root)', out = []) {
   out.push({ node, path });

@@ -16,12 +16,13 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 
 const { createHostTools } = await import('../assistant/host-tools.ts');
-const { createRouteCaller } = await import('../assistant/host/route-call.ts');
+const { createHostTransport } = await import('../assistant/host-call.ts');
+const { paced } = await import('../assistant/host/common.ts');
 const { resultText } = await import('../assistant/sanitize.ts');
 const { startFakeApp, makeRt, pathFree, world, WIN } = await import('./assistant-host-harness.js');
 
 let app;
-// The calls' pacing runs on this clock: a call that waits for its slot moves it on, never the test's time.
+// The calls' rate runs on this clock: a call that waits for its slot moves it on, never the test's time.
 let fakeNow = 0;
 before(async () => {
   app = await startFakeApp();
@@ -33,7 +34,7 @@ after(async () => {
 
 function tools(o = {}) {
   const list = createHostTools({
-    call: createRouteCaller({ port: () => app.port, now: () => fakeNow, sleep: async (ms) => { fakeNow += ms; } }),
+    hostCall: paced(createHostTransport({ port: () => app.port, now: () => fakeNow }).call, async (ms) => { fakeNow += ms; }),
     assistant: async () => ({ provider: 'anthropic', model: 'm' }),
     version: async () => '0.5.0',
     plugins: () => [],

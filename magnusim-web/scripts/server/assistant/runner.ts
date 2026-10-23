@@ -4,21 +4,27 @@
  * `gateTimeoutMs`); a turn passes hooks for its log and its clock.
  *
  * 1. Resolve the name ONLY in `offered`: the list sent in that step's request (MCP: the
- *    list it last served). Anything else, a tool the per-request cap left out and the
+ *    list it last served). Anything else, a tool the per-request cap or budget left out and the
  *    Settings test's own tool included, is `no_tool`. A tool result can never add a tool.
  * 2. Input the model wrote as broken JSON is `invalid_input`.
  * 3. Nulls the second cloud dialect sends for optional fields are removed; a local model's
- *    call of a workspace tool gets "", [] or false for the required fields it left out or
- *    sent as null, when their type has that empty value (fillLocalDefaults). Then the input
- *    is validated against every constraint of the tool's schema, every problem named at
- *    once (`invalid_input`).
+ *    call of a workspace or host tool gets "", [] or false for the required fields it left
+ *    out or sent as null, when their type has that empty value (fillLocalDefaults). Then the
+ *    input is validated against every constraint of the tool's schema, every problem named
+ *    at once (`invalid_input`).
  * 4. Availability is checked again now, with the plugin-epoch fence (`unavailable`,
  *    `plugin_off`).
- * 5. compute and destructive tools ask first (a confirm gate); a no, the timeout or Stop
- *    means it doesn't run (`declined`). An unknown risk counts as destructive. The question
- *    shows every field the call sent, in the schema's order, each cut on its own and marked.
- *    Another app's call (MCP, `app`) is asked for as that app's, not the Assistant's.
- *    Then the caller's last check (`beforeRun`; MCP reads privacy again) may stop it unrun.
+ * 5. The call's risk: the tool's, raised (never lowered) by its `escalate` for this input
+ *    (core host tools spec C3); an escalate that throws or takes longer than ESCALATE_MAX_MS
+ *    counts as destructive. The log's tool_call carries that risk (a tool that escalates is
+ *    logged once it is known). compute and destructive calls ask first (a confirm gate); a
+ *    no, the timeout or Stop means it doesn't run (`declined`). An unknown risk counts as
+ *    destructive. The question is the tool's own (`gateText`) or shows every field the call
+ *    sent, in the schema's order, each cut on its own and marked. Another app's call (MCP,
+ *    `app`) is asked for as that app's, not the Assistant's. A compute call whose job a chain
+ *    grant of the same owner covers (grants.ts) runs without a question, with a note; a call
+ *    allowed with a `chain` grants its other jobs. Then the caller's last check (`beforeRun`;
+ *    MCP reads privacy again) may stop it unrun.
  * 6. The tool runs with its stall window (reset by progress); Stop and the turn's
  *    minutes cap abort it through the call's signal (`stopped`, `capped`). An aborted tool
  *    has ABORT_GRACE_MS for its last answer: a result that finished (ok) is its result, as
@@ -42,6 +48,8 @@ import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from 
 import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
+import { CHAIN_MAX, grants as serverGrants, type ChainGrants } from './grants.ts';
+import type { Assessed } from './registry.ts';
 import type { ImagePart, Risk, ToolCallPart, ToolResultPart } from './types.ts';
 
 export type RunnerEvent =
@@ -130,6 +138,12 @@ export interface RunResult {
 }
 
 const RISKS: readonly Risk[] = ['read', 'edit', 'compute', 'destructive'];
+/** How long a tool's escalate may take: past it, the call counts as destructive. */
+export const ESCALATE_MAX_MS = 10_000;
+/** The card's words when a tool's escalate failed or took too long. */
+export const ESCALATE_FAILED_NOTE = 'Magnusim could not check what this changes, so it asks.';
+/** The log's line when a chain grant covered a call: the job's label follows. */
+export const COVERED_NOTE = 'Covered by your earlier approval: ';
 /** How long an aborted tool may take to give its last answer. */
 export const ABORT_GRACE_MS = 2_000;
 /**
@@ -171,6 +185,20 @@ export function riskOf(def: ToolDef | null): Risk {
   return def && RISKS.includes(def.risk) ? def.risk : 'destructive';
 }
 
+/** The higher of two risks (read < edit < compute < destructive); an unknown one counts as destructive. */
+export function maxRisk(a: Risk, b: Risk | null | undefined): Risk {
+  if (b === null || b === undefined) return RISKS.includes(a) ? a : 'destructive';
+  const i = RISKS.indexOf(a);
+  const j = RISKS.indexOf(b);
+  return i < 0 || j < 0 ? 'destructive' : RISKS[Math.max(i, j)];
+}
+
+/** The job ids a call's `chain` names (its tool has chainKey): strings of 1-100 characters, at most CHAIN_MAX. */
+export function chainOf(def: ToolDef, input: Record<string, unknown>): string[] {
+  if (!def.chainKey || !Array.isArray(input.chain)) return [];
+  return [...new Set(input.chain.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 100))].slice(0, CHAIN_MAX);
+}
+
 /** Who offers the tool, as the person reads it. */
 export function sourceLabel(source: ToolSource | null): string {
   if (!source) return '';
@@ -190,15 +218,15 @@ function preview(call: ToolCallPart, max: number): string {
   return cleanText(text, max);
 }
 
-/** The tool_call event for a call (also for calls that don't run). */
-export function toolCallEvent(call: ToolCallPart, def: ToolDef | null, step: number): RunnerEvent {
+/** The tool_call event for a call (also for calls that don't run); `risk`: the call's own when it escalated. */
+export function toolCallEvent(call: ToolCallPart, def: ToolDef | null, step: number, risk?: Risk): RunnerEvent {
   return {
     type: 'tool_call',
     step,
     call: call.callId,
     tool: cleanText(call.name, 64),
     title: cleanText(def?.title ?? call.name, TEXT_CAPS.name),
-    risk: riskOf(def),
+    risk: risk ?? riskOf(def),
     source: sourceLabel(def?.source ?? null),
     input_preview: preview(call, PREVIEW),
   };
@@ -301,44 +329,76 @@ export function gateInputText(schema: unknown, input: Record<string, unknown>): 
   return `{${parts.join(',')}}`;
 }
 
+const ASSISTANT_ASKS = 'Allow the Assistant to ';
+const APP_ASKS = 'Allow an app on this PC to ';
+
+/** What the question knows of the call beyond its tool: its risk once escalated, and what the escalation found. */
+export interface GateCall {
+  risk?: Risk;
+  assessed?: Assessed | null;
+}
+
 /**
- * The confirm question for a compute or destructive tool: the Assistant's, or (`app`, who
- * asks in its stead) another app's. A destructive tool's confirm note says what the call does
- * in place of "can't be undone"; a compute tool's always "starts a computation".
+ * The confirm question for a compute or destructive call: the Assistant's, or (`app`, who
+ * asks in its stead) another app's. The tool's own words when it has them (gateText: title,
+ * copy and rows); else a destructive call's confirm note (or what its escalation found) says
+ * what it does in place of "can't be undone", a compute call's "starts a computation" (or what
+ * its escalation found), with every field it sent. Rows: the tool's, else the escalation's, else
+ * describe()'s (at most 6).
  */
-export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null, app?: string): GateRequest {
-  const risk = riskOf(def) === 'compute' ? 'compute' : 'destructive';
+export function confirmGate(def: ToolDef, input: Record<string, unknown>, turn: string | null, app?: string, call: GateCall = {}): GateRequest {
+  const risk: 'compute' | 'destructive' = (call.risk ?? riskOf(def)) === 'compute' ? 'compute' : 'destructive';
+  const assessed = call.assessed ?? null;
+  let own: { title: string; copy: string; detail?: GateDetail[] } | null = null;
+  try {
+    own = def.gateText?.(input, assessed) ?? null;
+  } catch {
+    own = null;
+  }
+  let detail: GateDetail[] | undefined;
+  try {
+    detail = own?.detail?.length ? own.detail : assessed?.detail?.length ? assessed.detail : def.describe?.(input)?.detail;
+  } catch {
+    detail = undefined;
+  }
+  detail = detail?.slice(0, 6);
+  const head = {
+    kind: 'confirm' as const,
+    turn,
+    yes: 'Allow',
+    no: "Don't",
+    ...(detail?.length ? { detail } : {}),
+    risk,
+    tool: def.name,
+    source: sourceLabel(def.source),
+  };
+  const ownTitle = own ? cleanText(own.title, TEXT_CAPS.name) : '';
+  const ownCopy = own ? cleanText(own.copy, 1500) : '';
+  if (ownTitle && ownCopy) {
+    const title = app && ownTitle.startsWith(ASSISTANT_ASKS) ? `${APP_ASKS}${ownTitle.slice(ASSISTANT_ASKS.length)}` : ownTitle;
+    return { ...head, title, copy: `${app ? `${app} asks for this. ` : ''}${ownCopy}` };
+  }
   let sent = '';
   try {
     sent = gateInputText(def.schema, input);
   } catch {
     sent = '(unreadable)';
   }
-  let detail: GateDetail[] | undefined;
-  try {
-    detail = def.describe?.(input)?.detail;
-  } catch {
-    detail = undefined;
-  }
+  const found = cleanText(assessed?.note, CONFIRM_NOTE_MAX);
   const note = risk === 'destructive' ? cleanText(def.confirmNote, CONFIRM_NOTE_MAX) : '';
-  const what = risk === 'compute' ? 'starts a computation' : note || "can't be undone";
+  const what = found || (risk === 'compute' ? 'starts a computation' : note || "can't be undone");
   const action = lowerFirst(cleanText(def.title || def.name, TEXT_CAPS.name));
   return {
-    kind: 'confirm',
-    turn,
-    title: app ? `Allow an app on this PC to ${action}?` : `Allow the Assistant to ${action}?`,
+    ...head,
+    title: app ? `${APP_ASKS}${action}?` : `${ASSISTANT_ASKS}${action}?`,
     copy: `${app ? `${app} asks for this. ` : ''}${sourceLabel(def.source)} · ${what}${/[.!?]$/.test(what) ? '' : '.'} What it sent: ${sent}. Nothing runs until you choose.`,
-    yes: 'Allow',
-    no: "Don't",
-    ...(detail ? { detail } : {}),
-    risk,
-    tool: def.name,
-    source: sourceLabel(def.source),
   };
 }
 
 export interface ToolRunnerOptions {
   gates: GateBroker;
+  /** The chain grants (grants.ts); the server's own store when left out. */
+  grants?: ChainGrants;
   /** The plugin-epoch fence (Registry.fenced). */
   fenced?: (source: ToolSource) => boolean;
   clock?: Clock;
@@ -350,9 +410,12 @@ export class ToolRunner {
   private readonly fenced: (source: ToolSource) => boolean;
   private readonly clock: Clock;
   private readonly graceMs: number;
+  private readonly grantsOf: () => ChainGrants;
 
   constructor(o: ToolRunnerOptions) {
     this.gates = o.gates;
+    const own = o.grants;
+    this.grantsOf = own ? () => own : serverGrants;
     this.fenced = o.fenced ?? (() => false);
     this.clock = o.clock ?? realClock;
     this.graceMs = o.abortGraceMs ?? ABORT_GRACE_MS;
@@ -361,8 +424,16 @@ export class ToolRunner {
   async run(call: ToolCallPart, o: RunOptions): Promise<RunResult> {
     const started = this.clock.now();
     const def = o.offered.get(call.name) ?? null;
-    o.turn?.emit(toolCallEvent(call, def, o.turn.step));
-    const r = await this.runResolved(call, def, o);
+    // A tool that escalates is logged once its call's risk is known (or as it fails before).
+    let logged = false;
+    const announce = (risk?: Risk) => {
+      if (logged) return;
+      logged = true;
+      o.turn?.emit(toolCallEvent(call, def, o.turn.step, risk));
+    };
+    if (!def?.escalate) announce();
+    const r = await this.runResolved(call, def, o, announce);
+    announce();
     // Its pictures (checked: the model gets the same ones) are kept for the window, by reference.
     let images: ImageRef[] = [];
     if (r.part.images.length && o.turn?.keepImages) {
@@ -385,15 +456,15 @@ export class ToolRunner {
     return r;
   }
 
-  private async runResolved(call: ToolCallPart, def: ToolDef | null, o: RunOptions): Promise<RunResult> {
+  private async runResolved(call: ToolCallPart, def: ToolDef | null, o: RunOptions, announce: (risk: Risk) => void): Promise<RunResult> {
     // 1. Only this step's list.
     if (!def) return errorResult(call, 'no_tool', `No tool named ${cleanText(call.name, 64)} in this step. Use only the tools listed.`);
     if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
     // 2-3. The input.
     if (call.inputError) return errorResult(call, 'invalid_input', call.inputError);
     let input = stripNullOptionals(def.schema, call.input ?? {}) as Record<string, unknown>;
-    // A local model often leaves out the fields it has no use for: a workspace tool gets their empty values.
-    if (o.ctx.local && def.source.kind === 'workspace') input = fillLocalDefaults(def.schema, input) as Record<string, unknown>;
+    // A local model often leaves out the fields it has no use for: a workspace or host tool gets their empty values.
+    if (o.ctx.local && def.source.kind !== 'plugin') input = fillLocalDefaults(def.schema, input) as Record<string, unknown>;
     const valid = validateInput(def.schema, input);
     if (!valid.ok) return errorResult(call, 'invalid_input', valid.error);
     // 4. Still available, and its plugin not turned off or replaced.
@@ -405,20 +476,41 @@ export class ToolRunner {
       available = 'It is not available now.';
     }
     if (available !== true) return errorResult(call, 'unavailable', String(available));
-    // 5. Ask first.
-    const risk = riskOf(def);
+    // 5. This call's risk (raise-only), then ask first.
+    const assessed = def.escalate ? await this.assess(def, input, o) : null;
+    if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
+    const risk = maxRisk(riskOf(def), assessed?.risk);
+    announce(risk);
     if (risk === 'compute' || risk === 'destructive') {
-      o.turn?.setState('awaiting_confirmation');
-      o.turn?.pause();
-      let answer: 'allow' | 'deny';
-      try {
-        answer = await this.gates.ask(confirmGate(def, input, o.turn?.id ?? null, o.app), o.owner, o.signal, { timeoutMs: o.gateTimeoutMs });
-      } finally {
-        o.turn?.resume();
-        o.turn?.setState('tools');
+      const owner = o.turn?.id ?? o.callTurn ?? null;
+      const key = def.chainKey ? this.keyOf(def, input) : null;
+      const store = this.grantsOf();
+      // A chain grant covers a compute call of its own owner, each job once: never a destructive one.
+      const covered = risk === 'compute' && owner && key ? store.consume(owner, key) : null;
+      if (covered !== null) {
+        let label = covered;
+        try {
+          label = cleanText(def.describe?.(input)?.line, TEXT_CAPS.name) || covered;
+        } catch {
+          label = covered;
+        }
+        o.turn?.note?.(`${COVERED_NOTE}${label}`);
+      } else {
+        o.turn?.setState('awaiting_confirmation');
+        o.turn?.pause();
+        let answer: 'allow' | 'deny';
+        try {
+          answer = await this.gates.ask(confirmGate(def, input, o.turn?.id ?? null, o.app, { risk, assessed }), o.owner, o.signal, { timeoutMs: o.gateTimeoutMs });
+        } finally {
+          o.turn?.resume();
+          o.turn?.setState('tools');
+        }
+        if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
+        if (answer !== 'allow') return errorResult(call, 'declined', 'The user declined this call; it did not run. Accept it and say what you would have done.');
+        // Allowed with a chain: its other jobs run without a card, each once, for this owner.
+        const chain = chainOf(def, input).filter((j) => j !== key);
+        if (owner && chain.length) store.grant(owner, chain);
       }
-      if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
-      if (answer !== 'allow') return errorResult(call, 'declined', 'The user declined this call; it did not run. Accept it and say what you would have done.');
     }
     // 5b. The caller's last check (MCP: privacy, which may have changed while it asked).
     if (o.beforeRun) {
@@ -432,6 +524,45 @@ export class ToolRunner {
 
   private abortedResult(call: ToolCallPart, signal: AbortSignal, running: boolean): RunResult {
     return abortedResult(call, callAbortOf(signal) ?? { code: 'stopped' }, running);
+  }
+
+  /** The job a call starts (chainKey), or null when the tool's own answer is not one. */
+  private keyOf(def: ToolDef, input: Record<string, unknown>): string | null {
+    try {
+      const k = def.chainKey?.(input);
+      return typeof k === 'string' && k.length > 0 && k.length <= 100 ? k : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * What the tool's escalate finds for this input, within ESCALATE_MAX_MS: a throw, a time-out
+   * or an answer out of shape counts as destructive (it asks). Its own signal aborts with the
+   * call's, or at the time-out.
+   */
+  private async assess(def: ToolDef, input: Record<string, unknown>, o: RunOptions): Promise<Assessed | null> {
+    const failed: Assessed = { risk: 'destructive', note: ESCALATE_FAILED_NOTE, detail: [] };
+    const late = new AbortController();
+    const signal = AbortSignal.any([o.signal, late.signal]);
+    let timer: unknown = null;
+    // The time-out, or the call stopped meanwhile (the caller then answers the abort).
+    const timedOut = new Promise<'late'>((resolve) => {
+      timer = this.clock.setTimeout(() => late.abort(), ESCALATE_MAX_MS);
+      if (signal.aborted) resolve('late');
+      else signal.addEventListener('abort', () => resolve('late'), { once: true });
+    });
+    try {
+      const got = await Promise.race([Promise.resolve().then(() => def.escalate?.(input, { ctx: o.ctx, signal, turn: o.turn?.id ?? o.callTurn ?? null })), timedOut]);
+      if (got === 'late') return failed;
+      if (got === null || got === undefined) return null;
+      if (!got || typeof got !== 'object' || !['edit', 'compute', 'destructive'].includes(got.risk)) return failed;
+      return { risk: got.risk, note: cleanText(got.note, CONFIRM_NOTE_MAX), detail: Array.isArray(got.detail) ? got.detail.slice(0, 6) : [] };
+    } catch {
+      return failed;
+    } finally {
+      this.clock.clearTimeout(timer);
+    }
   }
 
   private async execute(call: ToolCallPart, def: ToolDef, input: Record<string, unknown>, o: RunOptions): Promise<RunResult> {

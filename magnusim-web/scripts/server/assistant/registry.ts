@@ -9,12 +9,17 @@
  * this list.
  *
  * - Names are provider-safe: host tools plain snake_case (no `__`), workspace tools
- *   `<plugin slug>__<name>` (`ai-demo__add`). Host tools come first, then workspace
- *   tools, each by name, and the provider definitions are memoized by content, so the
- *   bytes of the tool list stay the same from step to step (the provider's cache holds).
- * - Caps: ≤ 32 tools and ≤ 512 KB per registration; per request 40 tools (cloud) or 24
- *   (local), workspace tools kept first; over the cap the lowest-priority host tools go,
- *   and the step can't call them.
+ *   `<plugin slug>__<name>` (`ai-demo__add`). In a workspace its tools come first, then the
+ *   host's; elsewhere the host's first (core host tools spec §12.4: strict status goes in
+ *   that order); each group by name. The provider definitions are memoized by content, so
+ *   the bytes of the tool list stay the same from step to step (the provider's cache holds).
+ * - Places (§12.1): a host tool is offered only where its `contexts` say (home, workbench,
+ *   workspace); the tab's workspace tools are offered in their workspace.
+ * - Caps: ≤ 32 tools and ≤ 512 KB per registration. Per request, cloud: 40 tools, the
+ *   workspace's kept first, the lowest-priority host tools dropped. Local: no count cap,
+ *   only a budget of tool-definition tokens (§12.2, §12.3: half the model's context, 16,384
+ *   when unknown); over it the lowest-priority host tools go first, then the workspace's
+ *   (their registration's priority), and pinned tools last. The step can't call a dropped tool.
  * - Fence: a registration records its plugin's epoch (foam-runner.js pluginEpoch); a
  *   plugin turned off, swapped or reset bumps it, and from then on its tools are neither
  *   offered nor available.
@@ -26,7 +31,13 @@ import { createHash } from 'node:crypto';
 import { pluginEpoch as foamPluginEpoch } from '../../foam-runner.js';
 import { checkSchema } from './schema.ts';
 import { cleanGuide, cleanText, CONFIRM_NOTE_MAX, hasControls, TEXT_CAPS } from './sanitize.ts';
+import { emitSchema } from './schema.ts';
+import type { GateDetail } from './gates.ts';
 import type { ImagePart, JsonSchemaObject, ProviderTool, Risk } from './types.ts';
+
+/** Where a turn's window is (C8): Home, a project's workbench, or a plugin workspace. */
+export type Place = 'home' | 'workbench' | 'workspace';
+export const PLACES: readonly Place[] = Object.freeze(['home', 'workbench', 'workspace']);
 
 export type ToolSource =
   | { kind: 'host' }
@@ -41,14 +52,31 @@ export interface ToolCtx {
   simulationId: string | null;
   /** The turn's provider sends data off this PC. */
   cloud: boolean;
-  /** The turn runs on a local server (the smaller per-request tool cap). */
+  /** The turn runs on a local server (its tools fit a token budget, not a count). */
   local: boolean;
+  /** Where the turn's window is (C8): which host tools are offered. */
+  place: Place;
+  /** A local turn's budget of tool-definition tokens (localBudget); null for any other. */
+  budgetTokens: number | null;
+  /** This turn's own message (the typed-path rule, §4.11); null for MCP and coding agents. */
+  prompt: string | null;
   /** The turn's provider and model (app_status reports them); absent outside a turn. */
   assistant?: { provider: string; model: string };
-  /** The person's own message of this turn (import_file's typed-path rule); absent for MCP and agents. */
-  prompt?: string | null;
   /** The turn's conversation (attachments are bound to it); absent outside a turn. */
   conversation?: string | null;
+}
+
+/** What an escalation found (C3): the call's risk raised to it, and what the card says. */
+export interface Assessed {
+  risk: 'edit' | 'compute' | 'destructive';
+  note: string;
+  detail: GateDetail[];
+}
+
+export interface AssessContext {
+  ctx: ToolCtx;
+  signal: AbortSignal;
+  turn: string | null;
 }
 
 export interface ToolOutcome {
@@ -94,8 +122,15 @@ export interface ToolDef {
    */
   stallMs: number;
   workerBacked: boolean;
-  /** Higher stays when a request is over the tool cap (host tools; workspace tools always go first). */
+  /**
+   * Higher stays when a request is over its cap or budget: host tools 0-100; a workspace tool's
+   * comes from its registration (0-100, default 50).
+   */
   priority?: number;
+  /** Never dropped by a local budget while anything else fits (core__show: how the model reaches another place). */
+  pinned?: boolean;
+  /** Where the tool is offered (C8). Workspace tools: ['workspace'], set by the registry. Left out: everywhere. */
+  contexts?: readonly Place[];
   /**
    * What the confirm question says a destructive call does, in place of "can't be undone"
    * (a workspace tool's `confirm`, cleaned, at most CONFIRM_NOTE_MAX characters; CAD tools spec H10).
@@ -103,7 +138,35 @@ export interface ToolDef {
   confirmNote?: string;
   available(ctx: ToolCtx): true | string;
   describe?(input: Record<string, unknown>): { line: string; detail?: Array<{ label: string; value: string }> };
+  /**
+   * Raise-only risk per call (C3): the runner uses the higher of `risk` and the answer's. One
+   * that throws or takes longer than ESCALATE_MAX_MS (runner.ts) counts as destructive.
+   */
+  escalate?(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null>;
+  /** Plain-English card title and copy for compute and destructive calls (§14), in place of the generic one. */
+  gateText?(input: Record<string, unknown>, a: Assessed | null): { title: string; copy: string; detail?: GateDetail[] };
+  /** The project this call reads or writes, for the per-call privacy check (C5). null = no project data. */
+  projectOf?(input: Record<string, unknown>, ctx: ToolCtx): string | null;
+  /** The job this call starts, for chain grants (C3): e.g. "mesh.m-1"; null when it starts none. */
+  chainKey?(input: Record<string, unknown>): string | null;
   run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome>;
+}
+
+/** A tool a request left out, with where it is offered as the person reads it ("Home", "Magnusim CAD Part"). */
+export interface DroppedTool {
+  name: string;
+  contexts: string[];
+}
+
+/** One step's tools (selectTools). */
+export interface ToolSelection {
+  tools: ToolDef[];
+  /** What the cap or budget left out, in the order dropped. */
+  dropped: DroppedTool[];
+  /** The local budget the selection fitted (tokens); null for a cloud request. */
+  budget: number | null;
+  /** A local budget too small for even the pinned tools: nothing may be offered (the turn fails `context`). */
+  tooSmall: boolean;
 }
 
 /**
@@ -162,7 +225,17 @@ export interface ToolRegistry {
 
 export const REGISTRATION_MAX_TOOLS = 32;
 export const REGISTRATION_MAX_BYTES = 512 * 1024;
-export const REQUEST_MAX_TOOLS = Object.freeze({ cloud: 40, local: 24 });
+/** Per request with a cloud provider (the providers' own limit). A local server has no count cap: LOCAL_BUDGET. */
+export const REQUEST_MAX_TOOLS = Object.freeze({ cloud: 40 });
+/**
+ * A local request's tool definitions take at most `share` of the model's context (tokens), and
+ * `unknown` when its server doesn't say (half of a 32K context). A tool's tokens: its definition
+ * as sent, in characters, divided by `charsPerToken` (calibrated on CAD's tools: 3.5 to 3.8, so
+ * this over-counts a little, the safe side).
+ */
+export const LOCAL_BUDGET = Object.freeze({ share: 0.5, unknown: 16_384, charsPerToken: 3.5 });
+/** A workspace tool's priority when its registration gives none. */
+export const WORKSPACE_PRIORITY_DEFAULT = 50;
 export const GUIDE_MAX = 4000;
 /** A review's most rounds and its prompt's most characters. */
 export const REVIEW_ROUNDS_MAX = 5;
@@ -229,6 +302,47 @@ export function providerTools(tools: readonly ToolDef[]): ProviderTool[] {
   });
 }
 
+/** Tokens by provider definition (they are memoized, so one count per content). */
+const tokenCounts = new WeakMap<ProviderTool, number>();
+
+/**
+ * A tool's size in a local request (§12.3): its definition as the local server is sent it, in
+ * characters, divided by LOCAL_BUDGET.charsPerToken, rounded up.
+ */
+export function toolTokens(def: ToolDef): number {
+  const [p] = providerTools([def]);
+  let n = tokenCounts.get(p);
+  if (n === undefined) {
+    const chars = JSON.stringify({ type: 'function', function: { name: p.name, description: p.description, parameters: emitSchema('openai_compatible', p.schema) } }).length;
+    n = Math.ceil(chars / LOCAL_BUDGET.charsPerToken);
+    tokenCounts.set(p, n);
+  }
+  return n;
+}
+
+/** A local request's budget of tool-definition tokens for a model of `contextTokens` (null: not known). */
+export function localBudget(contextTokens: number | null | undefined): number {
+  return typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0 ? Math.floor(LOCAL_BUDGET.share * contextTokens) : LOCAL_BUDGET.unknown;
+}
+
+/**
+ * Where a turn's window is, from its tab's workspace registration and its project (§11.3): a
+ * connected registration of the same project is a workspace; else a project is its workbench;
+ * else Home.
+ */
+export function placeFor(ws: { connected: boolean; reg: { projectId: string } } | null | undefined, projectId: string | null | undefined): Place {
+  if (ws && ws.connected && (projectId ?? '') === ws.reg.projectId) return 'workspace';
+  return projectId ? 'workbench' : 'home';
+}
+
+const PLACE_LABEL: Readonly<Record<Place, string>> = Object.freeze({ home: 'Home', workbench: 'Workbench', workspace: 'Workspaces' });
+
+/** Where a tool is offered, as the person reads it (the left-out note). */
+export function contextsLabel(t: ToolDef): string[] {
+  if (t.source.kind === 'workspace') return [cleanText(`${t.source.pluginName} ${t.source.workspace}`, TEXT_CAPS.name)];
+  return (t.contexts ?? PLACES).map((p) => PLACE_LABEL[p]);
+}
+
 interface TabEntry {
   tab: string;
   link: string;
@@ -250,6 +364,9 @@ export interface RegistryOptions {
 }
 
 const byName = (a: ToolDef, b: ToolDef) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+const WORKSPACE_ONLY: readonly Place[] = Object.freeze(['workspace']);
+/** Which goes first when a budget is tight: the lowest priority, then the later name. */
+const dropOrder = (a: ToolDef, b: ToolDef) => (a.priority ?? 0) - (b.priority ?? 0) || byName(b, a);
 
 export class Registry implements ToolRegistry {
   private readonly host: ToolDef[];
@@ -384,6 +501,9 @@ export class Registry implements ToolRegistry {
     const localName = raw.name;
     const fullName = workspaceToolName(source.plugin, localName);
     const confirmNote = cleanText(typeof raw.confirm === 'string' ? raw.confirm : '', CONFIRM_NOTE_MAX);
+    // Which of the page's tools a tight local budget keeps first (bridge 1.9: 0-100, default 50).
+    const p = raw.priority;
+    const priority = typeof p === 'number' && Number.isInteger(p) && p >= 0 && p <= 100 ? p : WORKSPACE_PRIORITY_DEFAULT;
     const registry = this;
     return {
       name: fullName,
@@ -396,6 +516,8 @@ export class Registry implements ToolRegistry {
       projectData: true,
       stallMs: timeoutS * 1000,
       workerBacked: false,
+      priority,
+      contexts: WORKSPACE_ONLY,
       ...(confirmNote ? { confirmNote } : {}),
       available(ctx: ToolCtx): true | string {
         return registry.workspaceAvailable(source, ctx);
@@ -449,33 +571,75 @@ export class Registry implements ToolRegistry {
     return [...this.tabs.keys()];
   }
 
-  /** Every tool that may be offered for `ctx`, before the per-request cap. */
+  /** Where `tab`'s window is, by its workspace registration and the project (placeFor). */
+  placeOf(tab: string | null, projectId: string | null): Place {
+    return placeFor(tab ? this.tabs.get(tab) : null, projectId);
+  }
+
+  /** The context's place: its own, or (a caller that predates places) the tab's. */
+  private placeIn(ctx: ToolCtx): Place {
+    return PLACES.includes(ctx.place) ? ctx.place : this.placeOf(ctx.tab, ctx.projectId);
+  }
+
+  /** Every tool that may be offered for `ctx`, before the per-request cap or budget: host and other tools only in their places. */
   private candidates(ctx: ToolCtx): { host: ToolDef[]; workspace: ToolDef[]; other: ToolDef[] } {
-    const host = this.host.filter((t) => t.available(ctx) === true).sort(byName);
+    const place = this.placeIn(ctx);
+    const here = (t: ToolDef) => !t.contexts || t.contexts.includes(place);
+    const host = this.host.filter((t) => here(t) && t.available(ctx) === true).sort(byName);
     const entry = ctx.tab ? this.tabs.get(ctx.tab) : undefined;
     const workspace = entry ? entry.tools.filter((t) => this.workspaceAvailable(t.source, ctx) === true) : [];
     const other: ToolDef[] = [];
     for (const fn of this.sources) {
-      for (const t of fn(ctx)) if (!this.fenced(t.source) && t.available(ctx) === true) other.push(t);
+      for (const t of fn(ctx)) if (!this.fenced(t.source) && here(t) && t.available(ctx) === true) other.push(t);
     }
     other.sort(byName);
     return { host, workspace, other };
   }
 
   /**
-   * This step's tools, and the host tools the per-request cap left out (the loop notes
-   * them). Workspace (and other plugin) tools are kept first; then host tools by
-   * priority. The result is ordered host tools first, then the rest, each by name.
+   * This step's tools, and what the cap or budget left out (the loop notes them).
+   * - Cloud: at most REQUEST_MAX_TOOLS.cloud. Workspace (and other plugin) tools are kept
+   *   first; then host tools by priority (pinned ones first).
+   * - Local: no count cap. When the tools' tokens (toolTokens) are over ctx.budgetTokens
+   *   (LOCAL_BUDGET.unknown when not given), tools are dropped until they fit: host tools by
+   *   priority (the lowest first, then the later name), then workspace and other tools by
+   *   theirs, pinned tools last. Nothing left of a non-empty set: `tooSmall`.
+   * The result is ordered by place (§12.4): in a workspace its tools first, then the host's;
+   * elsewhere the host's first. Each group by name, so the bytes are a function of the set.
    */
-  selectTools(ctx: ToolCtx): { tools: ToolDef[]; dropped: string[] } {
-    const cap = ctx.local ? REQUEST_MAX_TOOLS.local : REQUEST_MAX_TOOLS.cloud;
+  selectTools(ctx: ToolCtx): ToolSelection {
+    const place = this.placeIn(ctx);
     const { host, workspace, other } = this.candidates(ctx);
-    const rest = [...workspace, ...other].slice(0, cap);
-    const room = Math.max(0, cap - rest.length);
-    const keptHost = [...host].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || byName(a, b)).slice(0, room);
-    const keep = new Set(keptHost.map((t) => t.name));
-    const dropped = [...host.filter((t) => !keep.has(t.name)), ...[...workspace, ...other].slice(cap)].map((t) => t.name);
-    return { tools: [...host.filter((t) => keep.has(t.name)), ...rest], dropped };
+    const rest = [...workspace, ...other];
+    let keep: Set<ToolDef>;
+    let dropped: ToolDef[];
+    let budget: number | null = null;
+    if (!ctx.local) {
+      const cap = REQUEST_MAX_TOOLS.cloud;
+      const keptRest = rest.slice(0, cap);
+      const room = Math.max(0, cap - keptRest.length);
+      const keptHost = [...host].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true) || (b.priority ?? 0) - (a.priority ?? 0) || byName(a, b)).slice(0, room);
+      keep = new Set([...keptHost, ...keptRest]);
+      dropped = [...host.filter((t) => !keep.has(t)), ...rest.slice(cap)];
+    } else {
+      budget = typeof ctx.budgetTokens === 'number' && Number.isFinite(ctx.budgetTokens) && ctx.budgetTokens >= 0 ? ctx.budgetTokens : LOCAL_BUDGET.unknown;
+      const all = [...host, ...rest];
+      let total = all.reduce((n, t) => n + toolTokens(t), 0);
+      const order = [...host.filter((t) => !t.pinned).sort(dropOrder), ...rest.filter((t) => !t.pinned).sort(dropOrder), ...all.filter((t) => t.pinned).sort(dropOrder)];
+      dropped = [];
+      for (const t of order) {
+        if (total <= budget) break;
+        dropped.push(t);
+        total -= toolTokens(t);
+      }
+      const gone = new Set(dropped);
+      keep = new Set(all.filter((t) => !gone.has(t)));
+    }
+    const keptHost = host.filter((t) => keep.has(t));
+    const keptRest = rest.filter((t) => keep.has(t));
+    const tools = place === 'workspace' ? [...keptRest, ...keptHost] : [...keptHost, ...keptRest];
+    const total = host.length + rest.length;
+    return { tools, dropped: dropped.map((t) => ({ name: t.name, contexts: contextsLabel(t) })), budget, tooSmall: total > 0 && tools.length === 0 };
   }
 
   toolsFor(ctx: ToolCtx): ToolDef[] {

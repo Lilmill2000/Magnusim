@@ -53,9 +53,10 @@ import {
   type HostToolDeps,
   type HostToolDef,
   type SyncKind,
+  assessments,
 } from './common.ts';
 import { readMeta, readProject, studyGeometry } from './read-setup.ts';
-import { RouteCallError } from './route-call.ts';
+import { HostCallError } from '../host-call.ts';
 import { resultsNote, runsWithResults } from './study-edit.ts';
 
 export const SETUP_KINDS = ['material', 'bc', 'bc_defaults', 'mesh', 'refinement', 'run', 'monitor', 'saved_view', 'geometry'] as const;
@@ -98,6 +99,8 @@ function baseRev(input: Record<string, unknown>, rec: Record<string, unknown> | 
 }
 
 export function setupEditTool(d: HostToolDeps): HostToolDef {
+  // Escalations whole, for the card's copy (assessments).
+  const whole = assessments();
   const contexts = ['workbench'] as const;
 
   async function assess(input: Record<string, unknown>, a: AssessContext): Promise<Assessed | null> {
@@ -111,8 +114,8 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       return { risk: 'compute', note: 'Imports the original file of this geometry as a new geometry and makes its preview.', detail: [] };
     }
     if (kind === 'geometry' && action === 'link_choice' && input.type === 'overwrite') {
-      const proj = await readProject(d.call, rt, project, 'setup_edit');
-      const sims = (await d.call('simulation.get', { project_id: project }, o)) as Record<string, unknown>;
+      const proj = await readProject(d.hostCall, rt, project, 'setup_edit');
+      const sims = (await d.hostCall('simulation.get', { project_id: project }, o)) as Record<string, unknown>;
       const job = await findLinkJob(project, str(input.other_id), rt);
       const gid = str(job?.job.geometryId) || str(job?.job.oldGeometryId);
       const g = records(proj.geometries).find((x) => x.id === gid);
@@ -127,7 +130,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const detail: GateDetail[] = [];
     let note = '';
     if (kind === 'mesh' && ['update', 'restore_defaults', 'copy_from'].includes(action)) {
-      const doc = (await d.call('mesh.get', { project_id: project, simulation_id: sim, mesh_id: idOf(input) }, o)) as Record<string, unknown>;
+      const doc = (await d.hostCall('mesh.get', { project_id: project, simulation_id: sim, mesh_id: idOf(input) }, o)) as Record<string, unknown>;
       const m = records(doc.meshes).find((x) => x.id === (idOf(input) || doc.active_id));
       if (m && (m.generated === true || m.status === 'done')) {
         note = `${cleanText(str(m.name) || 'This mesh', 60)} is generated; changing its settings marks it out of date and it must be generated again.`;
@@ -135,12 +138,12 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       }
     }
     if (kind === 'refinement' && action === 'copy_from') {
-      const doc = (await d.call('refinements.get', { project_id: project, simulation_id: sim }, o)) as Record<string, unknown>;
+      const doc = (await d.hostCall('refinements.get', { project_id: project, simulation_id: sim }, o)) as Record<string, unknown>;
       const n = records(doc.refinements).filter((r) => r.mesh_id === idOf(input)).length;
       if (n) note = `Its ${n} refinement${n === 1 ? ' is' : 's are'} replaced by the copied ones.`;
     }
     if (['material', 'bc', 'refinement', 'mesh', 'run', 'monitor'].includes(kind) && CHANGES_SETTINGS.has(action) && sim) {
-      const names = await runsWithResults(d.call, rt, project, sim, 'setup_edit');
+      const names = await runsWithResults(d.hostCall, rt, project, sim, 'setup_edit');
       if (names.length) {
         note = note ? `${note} ${resultsNote(names)}` : resultsNote(names);
         for (const n of names.slice(0, 6 - detail.length)) detail.push({ label: 'Has results', value: n });
@@ -153,10 +156,10 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
   async function findLinkJob(project: string, jobId: string, rt: { signal: AbortSignal; turn: string | null }) {
     if (!jobId) return null;
     const o = via(rt, 'setup_edit.geometry.link_choice');
-    const list = records(((await d.call('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
+    const list = records(((await d.hostCall('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
     for (const s of list.slice(0, 50)) {
       try {
-        const r = (await d.call('link.status', { project_id: project, plugin: str(s.plugin), study_id: str(s.id), job_id: jobId }, o)) as Record<string, unknown>;
+        const r = (await d.hostCall('link.status', { project_id: project, plugin: str(s.plugin), study_id: str(s.id), job_id: jobId }, o)) as Record<string, unknown>;
         if (isRecord(r.job)) return { plugin: str(s.plugin), study_id: str(s.id), job: r.job };
       } catch {
         /* not this study's job */
@@ -191,7 +194,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts, (ctx: ToolCtx) => (ctx.projectId ? true : 'No project is open in this window.')),
     projectOf: (_input, ctx) => ctx.projectId,
-    escalate: assess,
+    escalate: async (input, a) => whole.keep(input, await assess(input, a)),
     gateText: (input, a) => ({
       title:
         a?.risk === 'compute'
@@ -199,7 +202,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
           : input.kind === 'geometry'
             ? 'Allow the Assistant to overwrite this geometry?'
             : `Allow the Assistant to change this ${str(input.kind).replace('_', ' ')}?`,
-      copy: a?.note || 'It changes the study setup.',
+      copy: whole.note(input, a, 'It changes the study setup.'),
       ...(a?.detail.length ? { detail: a.detail } : {}),
     }),
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
@@ -212,30 +215,30 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
         return fail('invalid_input', `${cleanText(kind, 40)} takes ${pairs ? pairs.join(', ') : 'no such action'}, not ${cleanText(action, 40)}.`, `Valid actions for ${cleanText(kind, 40)}: ${(pairs ?? []).join(', ')}.`, { valid: pairs ?? [] });
       }
       try {
-        const project = await writableProject(input, rt.ctx, d.call, rt);
+        const project = await writableProject(input, rt.ctx, d.hostCall, rt);
         const sync = (kinds: SyncKind[], sim: string | null, ids: Record<string, string[]>, revs: Record<string, number> = {}, active?: Record<string, string>) =>
           emitSync(d, rt, { project_id: project, simulation_id: sim, kinds, ids, revs, ...(active ? { active } : {}), tool });
         if (kind === 'geometry') return await geometryEdit(project, input, rt, sync, findLinkJob);
-        const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.call, rt, tool);
+        const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.hostCall, rt, tool);
         const study = studies.list.find((s) => s.id === sim) ?? {};
         const q = { project_id: project, simulation_id: sim };
         const ctxOf = async () => {
-          const proj = await readProject(d.call, rt, project, tool);
+          const proj = await readProject(d.hostCall, rt, project, tool);
           const geometryId = studyGeometry(proj, study);
           return { proj, geometryId, geometryRev: geometryRevOf(proj, geometryId) };
         };
-        const facesOk = async (geometryId: string, faces: readonly unknown[]) => (faces.length ? checkFaces(faces, records((await readMeta(d.call, rt, project, geometryId, tool)).faces)) : []);
+        const facesOk = async (geometryId: string, faces: readonly unknown[]) => (faces.length ? checkFaces(faces, records((await readMeta(d.hostCall, rt, project, geometryId, tool)).faces)) : []);
 
         switch (kind) {
           // ------------------------------------------------------------ materials
           case 'material': {
             const [doc, registry, g] = await Promise.all([
-              d.call('materials.get', q, o) as Promise<Record<string, unknown>>,
-              d.call('registry.get', {}, o) as Promise<Record<string, unknown>>,
+              d.hostCall('materials.get', q, o) as Promise<Record<string, unknown>>,
+              d.hostCall('registry.get', {}, o) as Promise<Record<string, unknown>>,
               ctxOf(),
             ]);
             const list = records(doc.materials).map((m) => ({ ...m }));
-            const meta = await readMeta(d.call, rt, project, g.geometryId, tool);
+            const meta = await readMeta(d.hostCall, rt, project, g.geometryId, tool);
             const bodyNames = Array.isArray(meta.bodies) ? meta.bodies.map((b) => str(b)) : ['Body1'];
             const bodies = strList(input.bodies, 200);
             const unknownBodies = bodies.filter((b) => !bodyNames.includes(b));
@@ -305,7 +308,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             });
             next.push(rec);
             const air = next.find((m) => strList(m.assigned_volumes, 1).length) ?? next[0];
-            const saved = (await d.call('materials.set', { project_id: project, simulation_id: sim, materials: next, air, only_id: str(rec.id), only_ids: changed }, o)) as Record<string, unknown>;
+            const saved = (await d.hostCall('materials.set', { project_id: project, simulation_id: sim, materials: next, air, only_id: str(rec.id), only_ids: changed }, o)) as Record<string, unknown>;
             if (saved.ok === false) return fail('refused', cleanText(str(saved.error) || 'The material was not saved.', 300));
             const back = records(saved.materials).find((m) => m.id === rec.id);
             const rev = revOf(back ?? null);
@@ -321,8 +324,8 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
           // ------------------------------------------------------------ boundary conditions
           case 'bc': {
             const [doc, registry, g] = await Promise.all([
-              d.call('bcs.get', q, o) as Promise<Record<string, unknown>>,
-              d.call('registry.get', {}, o) as Promise<Record<string, unknown>>,
+              d.hostCall('bcs.get', q, o) as Promise<Record<string, unknown>>,
+              d.hostCall('registry.get', {}, o) as Promise<Record<string, unknown>>,
               ctxOf(),
             ]);
             const list = records(doc.boundary_conditions);
@@ -354,7 +357,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             const carried: Record<string, unknown> = {};
             if (old) for (const f of fields) if (old[f.key] !== undefined) carried[f.key] = old[f.key];
             const base = old ? baseRev(input, old) : undefined;
-            const saved = (await d.call(
+            const saved = (await d.hostCall(
               'bcs.upsert',
               {
                 project_id: project,
@@ -385,16 +388,16 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             if (!parsed.ok) return badValues(parsed.problems, 'bc_defaults takes wall_type: "No-slip" or "Slip".');
             const wall = str(parsed.values.wall_type);
             if (!wall) return fail('invalid_input', 'bc_defaults update needs values wall_type.');
-            await d.call('bcs.defaults', { project_id: project, simulation_id: sim, wall_type: wall }, o);
+            await d.hostCall('bcs.defaults', { project_id: project, simulation_id: sim, wall_type: wall }, o);
             sync(['bc_defaults'], sim, {});
             return okDone({ done: `Walls with no boundary condition are now ${wall}.`, ids: {} });
           }
           // ------------------------------------------------------------ meshes
           case 'mesh': {
-            const doc = (await d.call('mesh.get', { ...q, mesh_id: idOf(input) }, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('mesh.get', { ...q, mesh_id: idOf(input) }, o)) as Record<string, unknown>;
             const meshes = records(doc.meshes);
             if (action === 'add') {
-              const made = (await d.call('mesh.create', { ...q, name: cleanText(str(input.name).trim(), 64) }, o)) as Record<string, unknown>;
+              const made = (await d.hostCall('mesh.create', { ...q, name: cleanText(str(input.name).trim(), 64) }, o)) as Record<string, unknown>;
               const id = str(made.active_id) || str(isRecord(made.mesh) ? made.mesh.id : '');
               sync(['mesh', 'tree'], sim, { mesh: [id] });
               return okDone({ done: `Added mesh ${quoted(isRecord(made.mesh) ? made.mesh.name : 'Mesh')}.`, ids: { mesh: id }, hint: "Change it with setup_edit {kind:'mesh', action:'update'}; generate it with compute." });
@@ -405,19 +408,19 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             const base = baseRev(input, m);
             const mq = { ...q, mesh_id: id, base_rev: base };
             if (action === 'activate') {
-              await d.call('mesh.activate', { ...q, mesh_id: id }, o);
+              await d.hostCall('mesh.activate', { ...q, mesh_id: id }, o);
               sync(['active'], sim, { mesh: [id] }, {}, { mesh: id });
               return okDone({ done: `Mesh ${quoted(m.name)} is now the active mesh.`, ids: { mesh: id } });
             }
             if (action === 'rename') {
               const name = cleanText(str(input.name).trim(), 64);
               if (!name) return fail('invalid_input', 'rename needs a name.');
-              await d.call('mesh.rename', { ...mq, name }, o);
+              await d.hostCall('mesh.rename', { ...mq, name }, o);
               sync(['mesh', 'tree'], sim, { mesh: [id] });
               return okDone({ done: `Renamed mesh ${quoted(m.name)} to ${quoted(name)}.`, ids: { mesh: id } });
             }
             if (action === 'restore_defaults') {
-              await d.call('mesh.restore_defaults', mq, o);
+              await d.hostCall('mesh.restore_defaults', mq, o);
               sync(['mesh'], sim, { mesh: [id] });
               return okDone({ done: `Mesh ${quoted(m.name)} is back to its default settings.`, ids: { mesh: id } });
             }
@@ -426,14 +429,14 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
               const all = records(doc.meshes_all).length ? records(doc.meshes_all) : meshes;
               const src = all.find((x) => x.id === from);
               if (!src || from === id) return fail('not_found', `No other mesh "${cleanText(from, 80)}" to copy from.`, "read_setup {what:'meshes'} lists them.");
-              await d.call('mesh.copy_from', { ...mq, copy_from: from }, o);
+              await d.hostCall('mesh.copy_from', { ...mq, copy_from: from }, o);
               // The panel's "Copy settings from" copies the refinements too (audit X7).
-              await d.call('refinements.copy', { ...q, mesh_id: id, copy_from_mesh: from }, o);
+              await d.hostCall('refinements.copy', { ...q, mesh_id: id, copy_from_mesh: from }, o);
               sync(['mesh', 'refinements', 'tree'], sim, { mesh: [id] });
               return okDone({ done: `Copied the settings and refinements of ${quoted(src.name)} into mesh ${quoted(m.name)}.`, ids: { mesh: id } });
             }
             // update: never an empty body (it would restore the defaults).
-            const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
             const settings = isRecord(m.settings) ? m.settings : {};
             const engineNow = str(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '');
             const wanted = (Array.isArray(input.values) ? input.values : []).find((p) => isRecord(p) && p.key === 'advanced.mesh_engine');
@@ -450,13 +453,13 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             const nested = nest(parsed.values);
             // mesher_settings is replaced whole by the route: the stored keys go with the change.
             if (isRecord(nested.mesher_settings)) nested.mesher_settings = { ...(isRecord(settings.mesher_settings) ? settings.mesher_settings : {}), ...nested.mesher_settings };
-            await d.call('mesh.update', { ...mq, geometry_id: '', name, settings: nested }, o);
+            await d.hostCall('mesh.update', { ...mq, geometry_id: '', name, settings: nested }, o);
             sync(['mesh'], sim, { mesh: [id] });
             return okDone({ done: `Saved ${Object.keys(parsed.values).length} setting${Object.keys(parsed.values).length === 1 ? '' : 's'} of mesh ${quoted(name || m.name)}.`, ids: { mesh: id } });
           }
           // ------------------------------------------------------------ refinements
           case 'refinement': {
-            const [doc, meshDoc] = await Promise.all([d.call('refinements.get', q, o) as Promise<Record<string, unknown>>, d.call('mesh.get', q, o) as Promise<Record<string, unknown>>]);
+            const [doc, meshDoc] = await Promise.all([d.hostCall('refinements.get', q, o) as Promise<Record<string, unknown>>, d.hostCall('mesh.get', q, o) as Promise<Record<string, unknown>>]);
             const list = records(doc.refinements);
             const meshes = records(meshDoc.meshes);
             if (action === 'copy_from') {
@@ -465,7 +468,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
               const all = records(meshDoc.meshes_all).length ? records(meshDoc.meshes_all) : meshes;
               if (!meshes.some((m) => m.id === dest)) return fail('not_found', `No mesh "${cleanText(dest, 80)}" in this study (id is the mesh to copy into).`, "read_setup {what:'meshes'} lists them.");
               if (!all.some((m) => m.id === from) || from === dest) return fail('not_found', `No other mesh "${cleanText(from, 80)}" to copy from.`, "read_setup {what:'meshes'} lists them.");
-              const r = (await d.call('refinements.copy', { ...q, mesh_id: dest, copy_from_mesh: from }, o)) as Record<string, unknown>;
+              const r = (await d.hostCall('refinements.copy', { ...q, mesh_id: dest, copy_from_mesh: from }, o)) as Record<string, unknown>;
               sync(['refinements', 'tree'], sim, { mesh: [dest] });
               const lost = records(r.lost_faces);
               return okDone({
@@ -501,7 +504,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
                     : held;
             const carried: Record<string, unknown> = {};
             if (old) for (const f of fields) if (old[f.key] !== undefined) carried[f.key] = old[f.key];
-            const r = (await d.call(
+            const r = (await d.hostCall(
               'refinements.upsert',
               {
                 ...q,
@@ -531,7 +534,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             return fail('invalid_input', `Unknown kind "${cleanText(kind, 40)}".`);
         }
       } catch (err) {
-        if (err instanceof RouteCallError && err.status === 400 && err.body && typeof err.body.error === 'string' && /unsupported|not .*type/i.test(err.body.error)) {
+        if (err instanceof HostCallError && err.status === 400 && /unsupported|not .*type/i.test(err.message)) {
           return fail('bad_values', err.message, 'catalog lists the types and fields.');
         }
         return failed(err, 'read_setup lists the records.');
@@ -557,14 +560,14 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     if (kind === 'run' && action === 'add') {
       const parsed = parseValues(input.values, [], { mesh_id: (v) => (typeof v === 'string' ? null : 'a mesh id (text)') });
       if (!parsed.ok) return badValues(parsed.problems, 'add takes values mesh_id only; change the rest with update.');
-      const made = (await d.call('run.create', { ...q, name: cleanText(str(input.name).trim(), 64), mesh_id: str(parsed.values.mesh_id) }, o)) as Record<string, unknown>;
+      const made = (await d.hostCall('run.create', { ...q, name: cleanText(str(input.name).trim(), 64), mesh_id: str(parsed.values.mesh_id) }, o)) as Record<string, unknown>;
       const run = isRecord(made.run) ? made.run : {};
       sync(['runs', 'tree'], sim, { run: [str(run.id)] });
       return okDone({ done: `Added run ${quoted(run.name)}.`, ids: { run: str(run.id) }, hint: "Change its settings with setup_edit {kind:'run', action:'update'}." });
     }
     // The run: the call's id for a run, its other_id for a monitor or a saved view.
     const runId = kind === 'run' ? idOf(input) : str(input.other_id).trim();
-    const status = (await d.call('run.status', { ...q, run_id: runId }, o)) as Record<string, unknown>;
+    const status = (await d.hostCall('run.status', { ...q, run_id: runId }, o)) as Record<string, unknown>;
     const run = isRecord(status.run) ? status.run : null;
     if (!run || (runId && run.id !== runId && run.run_id !== runId)) {
       return fail('not_found', runId ? `No run "${cleanText(runId, 80)}" in this study.` : 'This study has no run yet.', "read_setup {what:'runs'} lists them.");
@@ -573,31 +576,31 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const base = baseRev(kind === 'run' ? input : { rev: 0 }, run);
     const g = await ctxOf();
     const update = async (changes: Record<string, unknown>) => {
-      const r = (await d.call('run.update', { ...q, run_id: id, changes, geometry_rev: g.geometryRev ?? undefined, base_rev: base }, o)) as Record<string, unknown>;
+      const r = (await d.hostCall('run.update', { ...q, run_id: id, changes, geometry_rev: g.geometryRev ?? undefined, base_rev: base }, o)) as Record<string, unknown>;
       if (r.ok === false) refuse('refused', cleanText(str(r.error) || 'The run was not saved.', 300));
       return isRecord(r.run) ? r.run : {};
     };
     if (kind === 'run') {
       if (action === 'activate') {
-        await d.call('run.activate', { ...q, run_id: id }, o);
+        await d.hostCall('run.activate', { ...q, run_id: id }, o);
         sync(['active'], sim, { run: [id] }, {}, { run: id });
         return okDone({ done: `Run ${quoted(run.name)} is now the active run.`, ids: { run: id } });
       }
       if (action === 'rename') {
         const name = cleanText(str(input.name).trim(), 64);
         if (!name) return fail('invalid_input', 'rename needs a name.');
-        await d.call('run.rename', { ...q, run_id: id, name }, o);
+        await d.hostCall('run.rename', { ...q, run_id: id, name }, o);
         sync(['runs', 'tree'], sim, { run: [id] });
         return okDone({ done: `Renamed run ${quoted(run.name)} to ${quoted(name)}.`, ids: { run: id } });
       }
-      const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+      const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
       const fields = runFields(registry, str(study.analysis_type));
       if (action === 'copy_from') {
         const from = str(input.other_id).trim();
         const all = [...records(status.runs_all), ...records(status.runs)];
         const src = all.find((r) => r.id === from);
         if (!src || from === id) return fail('not_found', `No other run "${cleanText(from, 80)}" to copy from.`, "read_setup {what:'runs'} lists them.");
-        const bcs = (await d.call('bcs.get', q, o)) as Record<string, unknown>;
+        const bcs = (await d.hostCall('bcs.get', q, o)) as Record<string, unknown>;
         const studyBcIds = records(bcs.boundary_conditions).filter((b) => strList(b.faces, 1).length).map((b) => str(b.id));
         // The source's transient block over its analysis's defaults (the page's transientSettingsFor).
         const transient: Record<string, unknown> = {};
@@ -658,7 +661,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       return okDone({ done: `Renamed saved view ${quoted(was)} to ${quoted(name)}.`, ids: { run: id, saved_view: str(view.id) } });
     }
     // monitors: the run's list with this one added or replaced (the route replaces the array).
-    const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+    const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
     const rcs = records(run.result_controls).map((r) => ({ ...r }));
     const old = action === 'add' ? null : (rcs.find((r) => r.id === idOf(input)) ?? null);
     if (action === 'update' && !old) return fail('not_found', `No monitor "${cleanText(idOf(input), 80)}" on this run.`, "read_setup {what:'run'} lists its monitors.");
@@ -700,7 +703,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
   ): Promise<ToolOutcome> {
     const action = str(input.action);
     const o = via(rt, `setup_edit.geometry.${action}`);
-    const proj = await readProject(d.call, rt, project, 'setup_edit');
+    const proj = await readProject(d.hostCall, rt, project, 'setup_edit');
     if (action === 'link_choice') {
       const jobId = str(input.other_id).trim();
       const choice = str(input.type).trim();
@@ -709,7 +712,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       if (!found) return fail('not_found', `No link job "${cleanText(jobId, 80)}" in this project.`, 'wait follows link jobs; their ids are link.<gl-…>.');
       const parsed = parseValues(input.values, [], { copy: (v) => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? null : 'a list of study ids') });
       if (!parsed.ok) return badValues(parsed.problems, 'link_choice takes values copy: the study ids to copy.');
-      const r = (await d.call('link.choose', { project_id: project, plugin: found.plugin, study_id: found.study_id, job_id: jobId, choice, copy: Array.isArray(parsed.values.copy) ? parsed.values.copy : [] }, o)) as Record<string, unknown>;
+      const r = (await d.hostCall('link.choose', { project_id: project, plugin: found.plugin, study_id: found.study_id, job_id: jobId, choice, copy: Array.isArray(parsed.values.copy) ? parsed.values.copy : [] }, o)) as Record<string, unknown>;
       sync(['geometry', 'tree'], null, { geometry: [str(r.geometry_id)].filter(Boolean) });
       const said: Record<string, string> = { new: 'It adds the design as a new geometry.', overwrite: 'It updates the geometry in place.', cancel: 'The update is cancelled.', not_now: 'The question waits for later.' };
       return okDone({ done: `Answered the link question: ${choice}. ${said[choice]}`, ids: { link_job: jobId, ...(r.geometry_id ? { geometry: str(r.geometry_id) } : {}) } });
@@ -718,22 +721,22 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const g = records(proj.geometries).find((x) => x.id === id);
     if (!g) return fail('not_found', id ? `No geometry "${cleanText(id, 80)}" in this project.` : 'Name the geometry by its id.', 'project_summary lists the geometries.');
     if (action === 'activate') {
-      await d.call('geometry.activate', { project_id: project, geometry_id: id }, o);
+      await d.hostCall('geometry.activate', { project_id: project, geometry_id: id }, o);
       sync(['active', 'geometry', 'tree'], null, { geometry: [id] }, {}, { geometry: id });
       return okDone({ done: `Geometry ${quoted(g.name)} is now shown.`, ids: { geometry: id } });
     }
     if (action === 'add_original') {
       rt.progress(null, 'Importing the original file');
-      const r = (await d.call('geometry.original_import', { project_id: project, geometry_id: id }, o)) as Record<string, unknown>;
+      const r = (await d.hostCall('geometry.original_import', { project_id: project, geometry_id: id }, o)) as Record<string, unknown>;
       const added = isRecord(r.added) ? r.added : {};
       sync(['geometry', 'active', 'tree'], null, { geometry: [str(added.id)] }, {}, { geometry: str(added.id) });
       return okDone({ done: `Imported the original of ${quoted(g.name)} as geometry ${quoted(added.name)}.`, ids: { geometry: str(added.id) } });
     }
     // edit_in_cad: the plugin's geometry-editing study kind (catalog study_kinds, edits_geometry).
-    const plugins = records(((await d.call('plugins.list', {}, o)) as Record<string, unknown>).plugins).filter((p) => p.enabled !== false);
+    const plugins = records(((await d.hostCall('plugins.list', {}, o)) as Record<string, unknown>).plugins).filter((p) => p.enabled !== false);
     const editor = plugins.flatMap((p) => records(p.geometry_actions).map((a) => ({ plugin: str(p.key), kind: str(a.study_kind) }))).find((x) => x.plugin && x.kind);
     if (!editor) return fail('not_found', 'No plugin that edits geometry is on.', "catalog {kind:'plugins', key:''} lists them; the person can turn one on in Settings.");
-    const r = (await d.call('geometry_actions.open', { project_id: project, geometry_id: id, plugin: editor.plugin, study_kind: editor.kind }, o)) as Record<string, unknown>;
+    const r = (await d.hostCall('geometry_actions.open', { project_id: project, geometry_id: id, plugin: editor.plugin, study_kind: editor.kind }, o)) as Record<string, unknown>;
     sync(['plugin_studies', 'tree'], null, { plugin_study: [str(r.study_id)] });
     return okDone({
       done: `${r.created ? 'Made' : 'Found'} ${quoted(r.title ?? 'the CAD study')} to edit ${quoted(g.name)}.`,

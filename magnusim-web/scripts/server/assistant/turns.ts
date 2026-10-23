@@ -54,6 +54,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
+import { grants } from './grants.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
@@ -1710,6 +1711,8 @@ export class TurnManager {
       .catch(() => {})
       .finally(() => {
         if (!t.ended) t.end('failed', 'internal', 'The turn ended without an answer.');
+        // Its chain grants end with it (grants.ts): ended, stopped or crashed.
+        grants().end(t.id);
         // Any call it left open is answered before the conversation takes another turn.
         try {
           t.conv.repair();

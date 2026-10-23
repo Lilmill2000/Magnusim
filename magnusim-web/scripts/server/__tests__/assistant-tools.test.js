@@ -16,9 +16,8 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete process.env[k];
 
-const { createHostCaller, HOST_GET_ALLOWLIST, HostCallError } = await import('../assistant/host-call.ts');
+const { createHostCaller, createHostTransport, HOST_GET_ALLOWLIST, HostCallError } = await import('../assistant/host-call.ts');
 const { createHostTools, defaultHostTools, appVersion } = await import('../assistant/host-tools.ts');
-const { createRouteCaller } = await import('../assistant/host/route-call.ts');
 const { cleanText, sanitizeJson, resultText, checkImage, checkImages, capResult, JSON_CAPS, ERROR_DETAIL_BYTES } = await import('../assistant/sanitize.ts');
 const { TURN_HEADER } = await import('../assistant/access.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -152,7 +151,7 @@ const rt = (o = {}) => ({ signal: new AbortController().signal, ctx: ctx(), turn
 
 function tools(o = {}) {
   const list = createHostTools({
-    call: createRouteCaller({ port: () => app.port, now, sleep: async () => tick(1_000) }),
+    hostCall: createHostTransport({ port: () => app.port, now }).call,
     assistant: async () => ({ provider: 'anthropic', model: 'claude-opus-5-5' }),
     version: async () => '0.5.0-dev',
     plugins: () => loadedPlugins(),

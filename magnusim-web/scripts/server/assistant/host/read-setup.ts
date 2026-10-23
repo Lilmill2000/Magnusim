@@ -35,7 +35,7 @@ import {
   type HostToolDeps,
   type HostToolDef,
 } from './common.ts';
-import type { HostCall } from './route-call.ts';
+import type { HostCall } from '../host-call.ts';
 import { isLinked } from './project-summary.ts';
 
 export const READ_SETUP_WHATS = ['study', 'materials', 'bcs', 'meshes', 'mesh', 'refinements', 'runs', 'run', 'geometry', 'bodies', 'faces', 'face_map', 'lost_faces', 'linked', 'plugin_study'] as const;
@@ -162,14 +162,14 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
         if (what === 'geometry' || what === 'bodies' || what === 'faces' || what === 'face_map' || what === 'lost_faces' || what === 'linked' || what === 'plugin_study') {
           return await readGeometryPart(d, rt, input, project, what, id);
         }
-        const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.call, rt, tool);
+        const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.hostCall, rt, tool);
         const study = studies.list.find((s) => s.id === sim) ?? null;
         const q = { project_id: project, simulation_id: sim };
         switch (what) {
           case 'study': {
-            const one = (await d.call('simulation.get', q, o)) as Record<string, unknown>;
+            const one = (await d.hostCall('simulation.get', q, o)) as Record<string, unknown>;
             const rec = isRecord(one.simulation) ? one.simulation : study ?? {};
-            const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
             const analysis = str(rec.analysis_type);
             const settings: Record<string, unknown> = {};
             for (const f of studyFields(registry, analysis)) {
@@ -191,7 +191,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             );
           }
           case 'materials': {
-            const [doc, registry] = await Promise.all([d.call('materials.get', q, o) as Promise<Record<string, unknown>>, d.call('registry.get', {}, o) as Promise<Record<string, unknown>>]);
+            const [doc, registry] = await Promise.all([d.hostCall('materials.get', q, o) as Promise<Record<string, unknown>>, d.hostCall('registry.get', {}, o) as Promise<Record<string, unknown>>]);
             const models = records(registry.material);
             const list = records(doc.materials).map((m) => {
               const model = models.find((x) => x.key === m.material_model) ?? null;
@@ -212,7 +212,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             return okData({ materials: list }, `${list.length} materials`);
           }
           case 'bcs': {
-            const doc = (await d.call('bcs.get', q, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('bcs.get', q, o)) as Record<string, unknown>;
             const bcs = records(doc.boundary_conditions).map((b) => ({
               id: text(b.id, 80),
               name: text(b.name),
@@ -228,19 +228,19 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             );
           }
           case 'meshes': {
-            const doc = (await d.call('mesh.get', q, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('mesh.get', q, o)) as Record<string, unknown>;
             const active = str(doc.active_id);
             const meshes = records(doc.meshes).map((m) => meshRow(m, active));
             return okData({ meshes }, `${meshes.length} meshes`);
           }
           case 'mesh': {
-            const doc = (await d.call('mesh.get', { ...q, mesh_id: id }, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('mesh.get', { ...q, mesh_id: id }, o)) as Record<string, unknown>;
             const rec = isRecord(doc.mesh) ? doc.mesh : null;
             if (!rec || (id && rec.id !== id)) return fail('not_found', id ? `No mesh "${cleanText(id, 80)}" in this study.` : 'This study has no mesh yet.', "read_setup {what:'meshes'} lists them.");
             const row = records(doc.meshes).find((m) => m.id === rec.id) ?? rec;
             const settings = isRecord(rec.settings) ? rec.settings : {};
             const engine = str(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '');
-            const registry = (await d.call('registry.get', {}, o)) as Record<string, unknown>;
+            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
             const flat = dotted(settings);
             const shown: Record<string, unknown> = {};
             for (const f of meshFields(registry, engine)) if (flat[f.key] !== undefined) shown[f.key] = flat[f.key];
@@ -257,14 +257,14 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             );
           }
           case 'refinements': {
-            const doc = (await d.call('refinements.get', q, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('refinements.get', q, o)) as Record<string, unknown>;
             const list = records(doc.refinements)
               .filter((r) => !id || r.mesh_id === id)
               .map((r) => refinementRow(r));
             return okData({ refinements: list }, `${list.length} refinements`);
           }
           case 'runs': {
-            const doc = (await d.call('run.status', q, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('run.status', q, o)) as Record<string, unknown>;
             const active = str(doc.active_run_id);
             const runs = records(doc.runs).map((r) => ({
               id: text(r.id, 80),
@@ -277,7 +277,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             return okData({ runs }, `${runs.length} runs`);
           }
           case 'run': {
-            const doc = (await d.call('run.status', { ...q, run_id: id }, o)) as Record<string, unknown>;
+            const doc = (await d.hostCall('run.status', { ...q, run_id: id }, o)) as Record<string, unknown>;
             const r = isRecord(doc.run) ? doc.run : null;
             if (!r || (id && r.id !== id && r.run_id !== id)) return fail('not_found', id ? `No run "${cleanText(id, 80)}" in this study.` : 'This study has no run yet.', "read_setup {what:'runs'} lists them.");
             return okData(runRow(r, str(doc.active_run_id)), `Run ${quoted(r.name)}`);
@@ -360,7 +360,7 @@ async function readGeometryPart(d: HostToolDeps, rt: ToolRunContext, input: Reco
   const tool = `read_setup.${what}`;
   const o = via(rt, tool);
   if (what === 'plugin_study' || what === 'linked') {
-    const list = records(((await d.call('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
+    const list = records(((await d.hostCall('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
     if (what === 'plugin_study') {
       const s = id ? list.find((x) => x.id === id) : list[0];
       if (!s) return fail('not_found', id ? `No plugin study "${cleanText(id, 80)}".` : 'This project has no plugin study.', 'project_summary lists them.');
@@ -370,7 +370,7 @@ async function readGeometryPart(d: HostToolDeps, rt: ToolRunContext, input: Reco
       );
     }
     // linked: a plugin study's design, or every linked geometry's.
-    const proj = await readProject(d.call, rt, project, tool);
+    const proj = await readProject(d.hostCall, rt, project, tool);
     const geoms = records(proj.geometries).filter(isLinked);
     const targets = geoms
       .map((g) => ({ g, src: isRecord(g.source) ? g.source : {} }))
@@ -383,7 +383,7 @@ async function readGeometryPart(d: HostToolDeps, rt: ToolRunContext, input: Reco
       let linked: Record<string, unknown> | null = null;
       if (plugin && studyId) {
         try {
-          const r = (await d.call('link.linked', { project_id: project, plugin, study_id: studyId }, o)) as Record<string, unknown>;
+          const r = (await d.hostCall('link.linked', { project_id: project, plugin, study_id: studyId }, o)) as Record<string, unknown>;
           linked = isRecord(r.linked) ? r.linked : null;
         } catch {
           linked = null;
@@ -397,13 +397,13 @@ async function readGeometryPart(d: HostToolDeps, rt: ToolRunContext, input: Reco
     }
     return okData({ linked: out }, `${out.length} linked geometries`);
   }
-  const proj = await readProject(d.call, rt, project, tool);
+  const proj = await readProject(d.hostCall, rt, project, tool);
   let geometryId = id;
   if (!geometryId) {
     // The shown study's geometry, else the project's shown one.
     let study: Record<string, unknown> | null = null;
     try {
-      const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.call, rt, tool);
+      const { id: sim, studies } = await studyIdOf(input, rt.ctx, project, d.hostCall, rt, tool);
       study = studies.list.find((s) => s.id === sim) ?? null;
     } catch {
       study = null;
@@ -413,7 +413,7 @@ async function readGeometryPart(d: HostToolDeps, rt: ToolRunContext, input: Reco
   const geom = records(proj.geometries).find((g) => g.id === geometryId) ?? null;
   if (!geom) return fail('not_found', geometryId ? `No geometry "${cleanText(geometryId, 80)}" in this project.` : 'This project has no geometry yet.', 'project_summary lists the geometries.');
   if (what === 'lost_faces') {
-    const r = (await d.call('geometry.lost_faces', { project_id: project, geometry_id: geometryId }, o)) as Record<string, unknown>;
+    const r = (await d.hostCall('geometry.lost_faces', { project_id: project, geometry_id: geometryId }, o)) as Record<string, unknown>;
     const entries = records(r.entries).slice(0, 200).map((e) => ({
       study_id: text(e.studyId, 80),
       study: text(e.studyTitle),
@@ -431,12 +431,12 @@ async function readGeometryPart(d: HostToolDeps, rt: ToolRunContext, input: Reco
   if (what === 'face_map') {
     const other = str(input.other_id).trim();
     if (!other) return fail('invalid_input', 'face_map needs other_id: the geometry to map the faces to.', 'project_summary lists the geometries.');
-    const r = (await d.call('geometry.face_map', { project_id: project, from: geometryId, to: other }, o)) as Record<string, unknown>;
+    const r = (await d.hostCall('geometry.face_map', { project_id: project, from: geometryId, to: other }, o)) as Record<string, unknown>;
     const map: Record<string, string> = {};
     for (const [k, v] of Object.entries(isRecord(r.map) ? r.map : {}).slice(0, 2000)) map[cleanText(k, 40)] = cleanText(String(v), 40);
     return okData({ from: geometryId, to: other, map }, `${Object.keys(map).length} faces matched`);
   }
-  const meta = await readMeta(d.call, rt, project, geometryId, tool);
+  const meta = await readMeta(d.hostCall, rt, project, geometryId, tool);
   const table = records(meta.faces);
   if (what === 'bodies') {
     const names = Array.isArray(meta.bodies) ? meta.bodies.map((b) => str(b)) : ['Body1'];
