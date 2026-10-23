@@ -135,19 +135,19 @@ describe('projects', () => {
     const one = await tools().projects.run({ folder: '', search: '', sort: 'name', limit: 1 }, r);
     assert.deepEqual([one.data.projects.length, one.data.total], [1, 3]);
   });
-  it('to a cloud provider only when the person allows project data (the list question is the runner\'s)', async () => {
-    const asked = await tools().projects.run({ folder: '', search: '', sort: 'name', limit: 0 }, rt());
-    assert.deepEqual([asked.ok, asked.error.code], [false, 'privacy_declined']);
-    const allowed = await tools({ privacy: 'allow' }).projects.run({ folder: '', search: '', sort: 'name', limit: 0 }, rt());
-    assert.equal(allowed.ok, true);
+  it('names the project list for its privacy question: the runner asks it once per destination before the call', async () => {
+    assert.equal(tools().projects.projectOf({}, rt().ctx), '*projects');
+    // Reached here, the runner allowed it.
+    const sent = await tools().projects.run({ folder: '', search: '', sort: 'name', limit: 0 }, rt());
+    assert.equal(sent.ok, true);
   });
 });
 
 describe('project_summary', () => {
-  it('another project is read only when allowed; this one always', async () => {
+  it('another project is named for its own privacy question (the runner asks it first); this one is read as is', async () => {
     fresh();
     const other = await tools().project_summary.run({ project_id: 'p2', with_thumbnail: false }, rt());
-    assert.equal(other.error.code, 'privacy_declined');
+    assert.equal(other.ok, true);
     assert.equal(tools().project_summary.projectOf({ project_id: 'p2' }, rt().ctx), 'p2');
     assert.equal(tools().project_summary.projectOf({ project_id: '' }, rt().ctx), 'p1');
     const mine = await ok('project_summary', { project_id: '', with_thumbnail: false });

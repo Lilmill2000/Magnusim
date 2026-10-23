@@ -7,6 +7,7 @@
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { bool, fail, failed, hostTool, mayReadBeyondTurn, num, objectSchema, offeredIn, okData, records, S, str, text, via, type HostToolDeps, type HostToolDef } from './common.ts';
+import { LIST_CONSENT_KEY } from '../privacy.ts';
 
 export function projectsTool(d: HostToolDeps): HostToolDef {
   const contexts = ['home', 'workbench'] as const;
@@ -27,6 +28,8 @@ export function projectsTool(d: HostToolDeps): HostToolDef {
     priority: 40,
     contexts,
     available: offeredIn(contexts),
+    // The runner asks for the list's own consent (LIST_CONSENT_KEY) before it is sent.
+    projectOf: () => LIST_CONSENT_KEY,
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       try {
         if (!(await mayReadBeyondTurn(rt.ctx, d))) {

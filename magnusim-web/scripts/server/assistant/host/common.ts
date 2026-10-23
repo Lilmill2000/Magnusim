@@ -35,11 +35,12 @@ export const conversationOf = (ctx: ToolCtx): string | null => (typeof ctx.conve
 export const usedOf = (ctx: ToolCtx): { usd?: number; steps?: number; minutes?: number } | null => (ctx as ToolCtx & { used?: { usd?: number; steps?: number; minutes?: number } }).used ?? null;
 
 /**
- * Whether the runner asks for another project's consent before a call reads it (lane C's
- * `privacyFor`). Until it does, a cloud turn may read only its own project: reading another
- * one is refused, never sent unasked.
+ * Whether the runner asks for another project's consent before a call reads it (the runner's
+ * `privacyFor`, core host tools spec 9.2, 9.3): the loop, agent turns and MCP each ask about the
+ * project a tool's projectOf names (the project list: LIST_CONSENT_KEY) before the call runs, so
+ * a tool that reaches here was allowed. With it off, a cloud turn could read only its own project.
  */
-export const PER_CALL_PRIVACY = false;
+export const PER_CALL_PRIVACY = true;
 
 // ---------------------------------------------------------------- ui_sync (scripts/server/ui-sync.ts)
 
