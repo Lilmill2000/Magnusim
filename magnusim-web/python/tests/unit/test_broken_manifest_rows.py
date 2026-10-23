@@ -191,6 +191,20 @@ def test_a_bundled_manifest_that_does_not_validate_is_listed_bundled(env, old: s
     assert row["error"] == error
 
 
+def test_the_key_core_is_reserved_for_the_apps_own_assistant_tools(env):
+    # The app page's tools are core__show and core__view (core host tools spec 11.2): a plugin
+    # keyed "core" would offer tools under the same slug, so it is listed with why, never loaded.
+    folder = env["bundled"] / "core"
+    shutil.copytree(env["bundled"] / KEY, folder)
+    _edit(folder / "manifest.toml", 'key = "opt-demo"', 'key = "core"')
+    shutil.rmtree(env["bundled"] / KEY)
+    env["local"].write_text(json.dumps({"plugins": {"enabled": ["core"]}}), encoding="utf-8")
+    load_all()
+    row = _row("core")
+    assert (row["status"], row["enabled"]) == ("error", False)
+    assert row["error"] == "manifest: the key \"core\" is reserved for the app's own Assistant tools"
+
+
 def test_a_bundled_plugin_unloaded_for_an_unknown_solver_is_listed_bundled(env):
     # It loads, then fails the registry's cross-reference check and is unloaded (h6).
     folder = env["bundled"] / "bad-solver"

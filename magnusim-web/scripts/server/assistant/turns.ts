@@ -24,9 +24,11 @@
  * - A turn started with `link` (an app tab's live relay link: the window's dock, phase 4 spec
  *   9.1) shows its questions in that tab (showTab), whatever it is bound to (Home, a project, a
  *   workspace), and is started_by 'window'; a dead link is 409 no_channel (a coding agent's start
- *   keeps 403 launch_proof when nothing else proves it). `tab: 'link'` binds it to that tab's
- *   workspace. Without a link it shows them in its bound tab and is started_by 'program'. POST
- *   …/turns/:id/show with its answer key moves them to another window once theirs is gone.
+ *   keeps 403 launch_proof when nothing else proves it). `tab: 'link'` binds it to that tab: its
+ *   workspace, else its core page (core host tools spec C7: Home and the workbench too), and the
+ *   turn follows the tab to another project from then on (Turn.follow, read at each step: its
+ *   conversation moves with it). Without a link it shows them in its bound tab and is
+ *   started_by 'program'. POST …/turns/:id/show with its answer key moves them to another window once theirs is gone.
  * - A window's start may name files the person attached in its dock (`attachments`, core host
  *   tools spec 13.2): each kept, attached from that window, and unbound or this conversation's;
  *   they are bound to the conversation in the start's synchronous step, and the model (or the
@@ -58,8 +60,9 @@ import { grants } from './grants.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
-import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, type ProjectInfo } from './privacy.ts';
-import type { Registry } from './registry.ts';
+import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
+import type { CorePlace, Registry } from './registry.ts';
+import { tabHere } from './tab-place.ts';
 import { ToolRunner, type CallAbort, type ImageRef, type RunnerEvent } from './runner.ts';
 import { checkPromptImages, cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
@@ -315,8 +318,9 @@ export class Turn implements AnyTurn {
   readonly attachments: readonly AttachmentRef[];
   readonly conv: Conversation;
   readonly tab: string | null;
-  readonly projectId: string | null;
-  readonly simulationId: string | null;
+  /** Its tab's project and study: they follow the tab (follow), so a turn bound to a window moves with it. */
+  projectId: string | null;
+  simulationId: string | null;
   readonly settings: TurnSettings;
   readonly startedAt: number;
   readonly startedBy: 'window' | 'program';
@@ -428,6 +432,22 @@ export class Turn implements AnyTurn {
   /** Its questions show in `tab` from now (a window that reloaded: TurnManager.show). */
   showIn(tab: string): void {
     this.shownIn = tab;
+  }
+
+  /**
+   * Its tab is somewhere else now (core host tools spec C5, §9.4): `core__show` opened another
+   * project, or the person did. Another project (or Home) moves the conversation with it and says
+   * so in the transcript; `title` is the new project's (its id when unknown). True when the
+   * project changed. The caller asks the new project's privacy before its next request.
+   */
+  follow(projectId: string | null, simulationId: string | null, title: string | null = null): boolean {
+    const moved = (projectId ?? null) !== (this.projectId ?? null);
+    this.projectId = projectId;
+    this.simulationId = simulationId;
+    if (!moved) return false;
+    this.conv.moveTo(projectId);
+    this.note(projectId ? `Moved to project "${quotedTitle(title, projectId)}".` : 'Moved to Home.');
+    return true;
   }
 
   // ------------------------------------------------------------ the log
@@ -1077,8 +1097,8 @@ const refuse = (status: number, code: string, error: string, extra: Record<strin
 
 export const TAB_HIDDEN_TEXT =
   "That tab isn't connected to the Assistant: its window is in the background or covered, or it was closed. Show the Magnusim window and try again.";
-export const BAD_TAB_TEXT = 'That app tab offers no tools to the Assistant (it is unknown, or no workspace in it registered any).';
-export const NO_TAB_TEXT = 'No app tab offers tools to the Assistant. Open a workspace in Magnusim, or start the turn without a tab.';
+export const BAD_TAB_TEXT = "That app tab isn't connected to the Assistant (it is unknown, or its page registered nothing).";
+export const NO_TAB_TEXT = 'No Magnusim window is connected to the Assistant. Open Magnusim on this PC, or start the turn without a tab.';
 /** A second turn bound to a tab while one works there: one watched build and one undo group per page. */
 export const TAB_BUSY_TEXT = 'A turn is already working in that tab: wait for it or stop it.';
 /** A window's start whose relay link is no longer live (the page reconnects and sends again). */
@@ -1087,11 +1107,15 @@ export const SHOWN_ELSEWHERE_TEXT = 'Its questions show in another window.';
 export const SHOW_KEY_TEXT = 'Only the window that started this request can show its questions here.';
 const ambiguousTabText = (tabs: string[]) => `More than one app tab offers tools to the Assistant: ${tabs.join(', ')}. Name one of them.`;
 
-/** The app tab a turn binds to (resolveTab), with the project and study its workspace registered. */
+/**
+ * The app tab a turn binds to (resolveTab), with where it is: the project and study its workspace
+ * registered, else its core page's (core host tools spec C7; projectId '' = Home).
+ */
 export interface TabTarget {
   tab: string;
   projectId: string;
   studyId: string;
+  place: CorePlace;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -1354,32 +1378,51 @@ export class TurnManager {
   }
 
   /**
-   * The app tab a turn (and, later, an MCP call) binds to: `target` is a tab id, or 'auto' for
-   * the only connected one (as /tabs lists them). Refused: none (400 no_tab), only dormant ones
-   * (409 tab_hidden) or more than one connected (409 ambiguous_tab) for 'auto'; for the tab, an
-   * unknown one or one with no project (400 bad_tab), or a dormant one (409 tab_hidden).
+   * The app tab a turn (or an MCP call) binds to: `target` is a tab id, or 'auto' for the only
+   * connected one. A tab counts by its core page's registration (every app tab on this PC has one,
+   * C7) or its workspace's. Refused: none (400 no_tab), only dormant ones (409 tab_hidden) or more
+   * than one connected (409 ambiguous_tab) for 'auto'; for the tab, an unknown one or one that
+   * registered nothing (400 bad_tab), or a dormant one (409 tab_hidden). Its project is '' on Home.
    */
   resolveTab(target: string): TabTarget | Answer {
-    const reg = this.d.registry;
     let tab = target;
     if (target === 'auto') {
-      const listed = reg.tabIds().flatMap((id) => {
-        // The relay first, as for /tabs: a registration whose plugin went is gone before it counts.
-        this.tabInfo?.(id);
-        const w = reg.workspaceOf(id);
-        return w ? [{ id, connected: w.connected }] : [];
-      });
+      const listed = this.knownTabs();
       const connected = listed.filter((x) => x.connected).map((x) => x.id);
       if (connected.length > 1) return refuse(409, 'ambiguous_tab', ambiguousTabText(connected));
       if (!connected.length) return listed.length ? refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT) : refuse(400, 'no_tab', NO_TAB_TEXT);
       tab = connected[0];
     }
-    const ws = reg.workspaceOf(tab);
-    if (!ws) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
-    if (!ws.connected) return refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT);
-    // Workspace tools are project data: a registration names its project, or it offers nothing.
-    if (!ws.reg.projectId) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
-    return { tab, projectId: ws.reg.projectId, studyId: ws.reg.studyId };
+    const here = tabHere(this.d.registry, tab);
+    if (!here) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
+    if (!here.connected) return refuse(409, 'tab_hidden', TAB_HIDDEN_TEXT);
+    return { tab, projectId: here.projectId, studyId: here.studyId, place: here.place };
+  }
+
+  /**
+   * The connected app tab showing project `id`, when exactly one does (an MCP call by project_id
+   * with two or more windows open, §9.5); else null.
+   */
+  resolveTabForProject(id: string): TabTarget | null {
+    if (!id) return null;
+    const hits = this.knownTabs().flatMap((x) => {
+      if (!x.connected) return [];
+      const here = tabHere(this.d.registry, x.id);
+      return here && here.connected && here.projectId === id ? [{ tab: x.id, projectId: here.projectId, studyId: here.studyId, place: here.place }] : [];
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  /** Every app tab that registered (its core page or a workspace), and whether it is connected now. */
+  private knownTabs(): Array<{ id: string; connected: boolean }> {
+    const reg = this.d.registry;
+    const ids = [...new Set([...reg.coreTabIds(), ...reg.tabIds()])];
+    return ids.flatMap((id) => {
+      // The relay first, as for /tabs: a registration whose plugin went is gone before it counts.
+      this.tabInfo?.(id);
+      const here = tabHere(reg, id);
+      return here ? [{ id, connected: here.connected }] : [];
+    });
   }
 
   /**
@@ -1937,18 +1980,22 @@ export class TurnManager {
    */
   tabs(): Answer {
     const reg = this.d.registry;
-    const tabs = reg.tabIds().flatMap((tab) => {
+    const ids = [...new Set([...reg.tabIds(), ...reg.coreTabIds()])];
+    const tabs = ids.flatMap((tab) => {
       // The relay first: a registration it finds its plugin no longer has goes before it is listed.
       const info = this.tabInfo?.(tab) ?? null;
       const w = reg.workspaceOf(tab);
-      if (!w) return [];
+      const core = reg.coreOf(tab);
+      if (!w && !core) return [];
       return {
         tab,
-        connected: !!w?.connected,
+        connected: w ? !!w.connected : !!core?.connected,
         since: info?.since ?? null,
         workspace: w
           ? { project_id: w.reg.projectId, plugin: w.reg.plugin, plugin_name: w.reg.pluginName, workspace: w.reg.workspace, study_id: w.reg.studyId }
           : null,
+        // Its core page (C7): where the window is, and the core tools it offers.
+        core: core ? { connected: core.connected, project_id: core.projectId, study_id: core.studyId, place: core.place, tools: core.tools } : null,
         tools: w?.tools ?? [],
         refused: w?.refused ?? [],
         active_turns: this.activeForTab(tab),

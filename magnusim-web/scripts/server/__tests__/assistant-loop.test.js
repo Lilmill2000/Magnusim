@@ -1631,7 +1631,7 @@ describe('how many turns', () => {
       assert.deepEqual([r.status, r.body.code], [status, code]);
       return r;
     };
-    assert.match((await expect(400, 'no_tab')).body.error, /^No app tab offers tools to the Assistant\./);
+    assert.match((await expect(400, 'no_tab')).body.error, /^No Magnusim window is connected to the Assistant\./);
     m.registry.setWorkspace('T1', 'L1', ws());
     m.registry.setConnected('T1', 'L1', false);
     assert.equal((await expect(409, 'tab_hidden')).body.error, TAB_HIDDEN_TEXT, 'only a dormant tab');
@@ -1639,7 +1639,7 @@ describe('how many turns', () => {
     m.registry.setWorkspace('T2', 'L2', ws());
     assert.match((await expect(409, 'ambiguous_tab')).body.error, /^More than one app tab offers tools to the Assistant: T1, T2\./);
     m.registry.setConnected('T2', 'L2', false);
-    assert.deepEqual(m.manager.resolveTab('auto'), { tab: 'T1', projectId: 'p1', studyId: 's1' });
+    assert.deepEqual(m.manager.resolveTab('auto'), { tab: 'T1', projectId: 'p1', studyId: 's1', place: 'workspace' });
     assert.deepEqual([m.manager.resolveTab('T2').status, m.manager.resolveTab('T9').status], [409, 400], 'an id: as given');
     m.provider.script({ text: 'bound' });
     const r = await startTurn(m, { text: 'x', tab: 'auto' });

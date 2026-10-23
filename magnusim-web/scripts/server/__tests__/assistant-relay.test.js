@@ -177,6 +177,7 @@ describe('registrations', { timeout: 30_000 }, () => {
       connected: true,
       since: m.clock.now(),
       workspace: { project_id: 'p1', plugin: 'ai-demo', plugin_name: 'Workspace demo', workspace: 'counter', study_id: 's1' },
+      core: null,
       tools: ['ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset', 'ai-demo__slow_add'],
       refused: r.json.refused,
       active_turns: 0,

@@ -277,6 +277,10 @@ def _disabled_plugins(web_root: Path | None) -> set[str]:
     return set(plugin_state(web_root).disabled)
 
 
+# A plugin key no plugin may have: the app page's own Assistant tools use its slug (core__show).
+RESERVED_PLUGIN_KEY = "core"
+
+
 def _manifest_bool(meta: dict[str, Any], name: str, default: bool) -> bool:
     """A true/false manifest key (the line-fallback parser yields strings)."""
     raw = meta.get(name, default)
@@ -1577,6 +1581,10 @@ def _load_entry(
     True when it loaded or is off, False when it has an error or incompatible row."""
     key = str(meta.get("key") or child.name)
     try:
+        # The Assistant's core page tools are named core__<tool> (core host tools spec 11.2): no
+        # plugin may take the slug.
+        if key == RESERVED_PLUGIN_KEY:
+            raise ValueError(f"the key \"{RESERVED_PLUGIN_KEY}\" is reserved for the app's own Assistant tools")
         required, default_enabled = tier_flags(meta, tier)
         if _parse_default_analysis(meta) and not (tier == "bundled" and required):
             raise ValueError("[default_analysis] is only for a required bundled plugin")

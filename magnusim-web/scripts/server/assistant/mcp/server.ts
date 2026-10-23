@@ -7,9 +7,11 @@
  *   through initialize), with a low-level Server answering tools/list and tools/call.
  * - The list is the registry's toolsFor(ctx) (the 40-tool cap), each tool under its MCP
  *   name (names.ts), with read-only and destructive hints. An external app's context is
- *   the only connected app tab (TurnManager.resolveTab('auto')), read per request; with
- *   none, or more than one, it is tab-less: host tools only, and the reason in the
- *   answer to a call of a tool it can't see.
+ *   the only connected app tab (TurnManager.resolveTab('auto'): every Magnusim window counts,
+ *   by its core page, core host tools spec C7), read per request; with none, or more than one,
+ *   it is tab-less: host tools only (the Home subset, each project tool by its project_id), and
+ *   the reason in the answer to a call of a tool it can't see. With more than one, a call whose
+ *   project_id is open in exactly one window runs in that window's context (§9.5).
  * - A call resolves only in the list last served on that connection (before any
  *   tools/list, the current list counts as served at the call), runs through ToolRunner
  *   (schema validation, the epoch fence, availability, questions, stall windows and
@@ -24,8 +26,9 @@
  *   workspace and other plugin tools without their registration text (a generic
  *   description, schemas without enums, descriptions, titles, consts, defaults or examples),
  *   whatever their projectData flag, and their instructions carry no workspace guide: a
- *   registration's text can hold project names. Before a tool that reads project data runs,
- *   the mode is read live: Never send refuses it (`privacy_denied`); Ask opens the question
+ *   registration's text can hold project names. Before a tool that reads project data runs
+ *   (the project its call names, projectOf, else the tab's; the project list is asked about as
+ *   one more "project", once for every app, §9.3), the mode is read live: Never send refuses it (`privacy_denied`); Ask opens the question
  *   in the tab ("Let other apps read project …?", one answer for every app: calls while it is
  *   open wait on that same question, and it is withdrawn only when every call waiting on it
  *   has gone), and Allow is remembered and every app's list changes (list_changed); Don't
@@ -74,7 +77,18 @@ import type { Readable, Writable } from 'node:stream';
 import { GATE_TIMEOUT_MS, realClock, type Clock, type GateAnswer, type GateBroker, type GateOwner } from '../gates.ts';
 import { appVersion } from '../host-tools.ts';
 import { alog } from '../log.ts';
-import { MCP_DESTINATION, MCP_PRIVACY_DENIED_TEXT, mcpAppText, mcpPrivacyGate, privacyDecision, remember as rememberConsent, type ProjectInfo } from '../privacy.ts';
+import {
+  isProjectList,
+  LIST_CONSENT_KEY,
+  MCP_DESTINATION,
+  MCP_PRIVACY_DENIED_TEXT,
+  mcpAppText,
+  mcpPrivacyGate,
+  mcpProjectListGate,
+  privacyDecision,
+  remember as rememberConsent,
+  type ProjectInfo,
+} from '../privacy.ts';
 import { guideBlock, SYSTEM_PROMPT } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
@@ -109,14 +123,14 @@ export const WAITING_HIDDEN_TEXT = 'Waiting for an answer in Magnusim: its windo
 export const PRIVACY_DECLINED_TEXT = "The person didn't allow other apps to read this project's data, so the tool did not run. Nothing was read.";
 export const PROJECT_UNREADABLE_TEXT = "Magnusim couldn't read this project's row, so it can't ask about its data; the tool did not run.";
 export const NO_WINDOW_TEXT =
-  'Magnusim asks the person before this tool runs, and only in its own window, but no app tab can show the question now. Show the Magnusim window with one workspace open, then call it again.';
+  'Magnusim asks the person before this tool runs, and only in its own window, but no app tab can show the question now. Show one Magnusim window (or name a project open in exactly one), then call it again.';
 export const TOOLS_CHANGED_HINT = 'The tools changed. List the tools again.';
 /** Why an app's list has no tab's tools, worded for an app (a turn's words tell a person to name a tab). */
-export const NO_APP_TAB_TEXT = "No Magnusim tab has a workspace open, so only Magnusim's own tools are offered. Open a workspace in Magnusim, then list the tools again.";
+export const NO_APP_TAB_TEXT = "No Magnusim window is open, so only Magnusim's own tools are offered, each project tool by its project_id. Open Magnusim, then list the tools again.";
 export const MANY_APP_TABS_TEXT =
-  "More than one app tab has a workspace open in Magnusim, so only Magnusim's own tools are offered. Leave one open, then list the tools again.";
+  "More than one app tab of Magnusim is open, so only Magnusim's own tools are offered, each project tool by its project_id (a project open in one window is read in that window). Leave one open, then list the tools again.";
 export const HIDDEN_APP_TAB_TEXT =
-  "The Magnusim window with a workspace open is in the background or covered, or it was closed, so only Magnusim's own tools are offered. Show it, then list the tools again.";
+  "The Magnusim window is in the background or covered, or it was closed, so only Magnusim's own tools are offered. Show it, then list the tools again.";
 const APP_TAB_TEXTS = new Map([
   ['no_tab', NO_APP_TAB_TEXT],
   ['ambiguous_tab', MANY_APP_TABS_TEXT],
@@ -192,6 +206,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** No tab (none, or two or more windows): Home (core host tools spec 9.5); each project tool by its project_id. */
 const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null });
 
 /** Schema keys that carry a registration's own words or values. */
@@ -425,6 +440,8 @@ export interface McpServiceDeps {
   gates: GateBroker;
   /** TurnManager.resolveTab: the only connected app tab ('auto'), or why there is none. */
   resolveTab(target: string): { tab: string; projectId: string; studyId: string } | { status: number; body: Record<string, unknown> };
+  /** TurnManager.resolveTabForProject: the one connected app tab showing a project, or null (§9.5). */
+  resolveTabForProject?(projectId: string): { tab: string; projectId: string; studyId: string } | null;
   settings(): Promise<AssistantSettings>;
   /** A project's row (its title and created_at), for the privacy rules (privacy.ts projectLookup); none: unreadable. */
   projects?: (id: string, o: { signal: AbortSignal; turn: string }) => Promise<ProjectInfo | null>;
@@ -501,19 +518,44 @@ export function createMcpService(d: McpServiceDeps): McpService {
   /** "Don't allow" answers by project (as it is now): until when each holds, for every app. */
   const declines = new Map<string, number>();
 
-  /** The context a session's tools are listed and run in now, and why it has no tab (worded for an app). */
-  function contextOf(session: McpSession): { ctx: ToolCtx; why: string | null } {
+  /**
+   * The context a session's tools are listed and run in now, and why it has no tab (worded for an
+   * app). `projectId`: the project a call names; with two or more windows, the one window showing
+   * it (if exactly one does) is the call's context (§9.5).
+   */
+  function contextOf(session: McpSession, projectId: string | null = null): { ctx: ToolCtx; why: string | null } {
     if (session.kind === 'agent') {
       const dispatch = session.binding ? bindingEntry(session.binding.id)?.dispatch : null;
       return { ctx: dispatch ? dispatch.ctx() : TABLESS, why: null };
     }
     const t = d.resolveTab('auto');
     if ('status' in t) {
+      const hit = projectId ? (d.resolveTabForProject?.(projectId) ?? null) : null;
+      if (hit) {
+        const pid = hit.projectId || null;
+        return { ctx: { tab: hit.tab, projectId: pid, simulationId: hit.studyId || null, cloud: true, local: false, place: d.registry.placeOf(hit.tab, pid), budgetTokens: null, prompt: null }, why: null };
+      }
       const why = APP_TAB_TEXTS.get(String(t.body.code)) ?? (typeof t.body.error === 'string' ? t.body.error : null);
       return { ctx: TABLESS, why };
     }
-    const projectId = t.projectId || null;
-    return { ctx: { tab: t.tab, projectId, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, projectId), budgetTokens: null, prompt: null }, why: null };
+    const pid = t.projectId || null;
+    return { ctx: { tab: t.tab, projectId: pid, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, pid), budgetTokens: null, prompt: null }, why: null };
+  }
+
+  /**
+   * The project a call reads (§9.2): the one its tool names (projectOf: its project_id, or the
+   * project list), else the context's for a tool of project data. Null: no project data.
+   */
+  function projectOfCall(def: ToolDef, input: Record<string, unknown>, ctx: ToolCtx): string | null {
+    const of = def.projectOf;
+    if (typeof of === 'function') {
+      try {
+        return of.call(def, input, ctx) || null;
+      } catch {
+        return ctx.projectId;
+      }
+    }
+    return def.projectData ? ctx.projectId : null;
   }
 
   /** The project's row, kept a moment per session; null when it can't be read. */
@@ -666,13 +708,18 @@ export function createMcpService(d: McpServiceDeps): McpService {
     return errorResult(call, 'stopped', stoppedText(false, why?.server === true, why?.cause));
   }
 
-  /** The privacy rules for an external app reading the project of `ctx` now, read live, with no question. */
-  async function privacyNow(session: McpSession, call: ToolCallPart, ctx: ToolCtx, signal: AbortSignal): Promise<{ ok: true } | { ok: false; r: RunResult } | { ok: 'ask'; project: ProjectInfo }> {
-    if (!ctx.projectId) return { ok: true };
+  /** The privacy rules for an external app reading `projectId` now (the project list too), read live, with no question. */
+  async function privacyNow(session: McpSession, call: ToolCallPart, projectId: string | null, signal: AbortSignal): Promise<{ ok: true } | { ok: false; r: RunResult } | { ok: 'ask'; project: ProjectInfo }> {
+    if (!projectId) return { ok: true };
     const s = await d.settings();
     if (s.privacy === 'allow') return { ok: true };
     if (s.privacy === 'deny') return { ok: false, r: errorResult(call, 'privacy_denied', MCP_PRIVACY_DENIED_TEXT) };
-    const project = await projectRow(session, ctx.projectId, signal);
+    // The project list: one answer for every app, remembered under its reserved key (§9.3).
+    if (isProjectList(projectId)) {
+      const verdict = privacyDecision(s, { cloud: true, destination: MCP_DESTINATION, projectId: LIST_CONSENT_KEY, createdAt: null });
+      return verdict === 'allow' ? { ok: true } : { ok: 'ask', project: { id: LIST_CONSENT_KEY, title: '', created_at: null } };
+    }
+    const project = await projectRow(session, projectId, signal);
     if (signal.aborted) return { ok: false, r: stoppedBefore(call, signal) };
     if (!project) return { ok: false, r: errorResult(call, 'project_unreadable', PROJECT_UNREADABLE_TEXT) };
     const verdict = privacyDecision(s, { cloud: true, destination: MCP_DESTINATION, projectId: project.id, createdAt: project.created_at });
@@ -687,10 +734,15 @@ export function createMcpService(d: McpServiceDeps): McpService {
    * answered): null when it may run, else its answer.
    */
   async function requireProjectData(session: McpSession, call: ToolCallPart, def: ToolDef, ctx: ToolCtx, signal: AbortSignal, watch: Watch): Promise<RunResult | null> {
-    if (session.kind !== 'external' || !def.projectData || !ctx.projectId) return null;
-    const now = await privacyNow(session, call, ctx, signal);
+    if (session.kind !== 'external') return null;
+    // The project the call names (a read of another project by its id), not only the tab's.
+    const projectId = projectOfCall(def, call.input ?? {}, ctx);
+    if (!projectId) return null;
+    const now = await privacyNow(session, call, projectId, signal);
     if (now.ok === true) return null;
     if (now.ok === false) return now.r;
+    // The question shows only in a Magnusim window: with none to show it, refused at once.
+    if (!ctx.tab) return errorResult(call, 'no_window', NO_WINDOW_TEXT);
     return askPrivacy(session, call, ctx.tab, now.project, signal, watch);
   }
 
@@ -738,7 +790,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
     });
     let asked: Promise<GateAnswer>;
     try {
-      asked = d.gates.ask(mcpPrivacyGate({ project, client: session.client.name }), owner, stop.signal, { timeoutMs: MCP_GATE_TIMEOUT_MS });
+      const gate = isProjectList(project.id) ? mcpProjectListGate({ client: session.client.name }) : mcpPrivacyGate({ project, client: session.client.name });
+      asked = d.gates.ask(gate, owner, stop.signal, { timeoutMs: MCP_GATE_TIMEOUT_MS });
     } finally {
       off();
     }
@@ -851,7 +904,9 @@ export function createMcpService(d: McpServiceDeps): McpService {
     if (signal.aborted) return { r: stoppedBefore(call, signal), def: null };
     // Other apps turned off since this app connected (or since this call was queued).
     if (session.kind === 'external' && !(await d.settings()).mcp.clients) return { r: errorResult(call, 'clients_off', CLIENTS_OFF_TEXT), def: null };
-    const { ctx, why } = contextOf(session);
+    // A call naming a project runs in the one window showing it, when two or more are open (§9.5).
+    const named = isRecord(call.input) && typeof call.input.project_id === 'string' && call.input.project_id ? call.input.project_id : null;
+    const { ctx, why } = contextOf(session, named);
     const served = session.served ?? listFor(session, ctx, false);
     const def = served.get(call.name) ?? null;
     if (!def) {
@@ -880,7 +935,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
     if (!rate.ok) return { r: errorResult(call, 'rate_limited', rate.text), def };
     const refused = await requireProjectData(session, call, def, ctx, signal, watch);
     if (refused) return { r: refused, def };
-    const reads = def.projectData && !!ctx.projectId;
+    const reads = !!projectOfCall(def, call.input ?? {}, ctx);
     let r = await d.runner.run(call, {
       owner: { kind: 'mcp', session: session.id, tab: ctx.tab },
       ctx,
@@ -896,7 +951,7 @@ export function createMcpService(d: McpServiceDeps): McpService {
       ...onProgress,
     });
     // Privacy turned against other apps while it ran: its result stays here.
-    if (r.ok && reads && (await privacyNow(session, call, ctx, new AbortController().signal)).ok !== true) r = errorResult(call, 'privacy_denied', RESULT_KEPT_TEXT);
+    if (r.ok && reads && (await privacyNow(session, call, projectOfCall(def, call.input ?? {}, ctx), new AbortController().signal)).ok !== true) r = errorResult(call, 'privacy_denied', RESULT_KEPT_TEXT);
     // A value of a schema it was listed without: said without the schema's withheld values.
     if (r.code === 'invalid_input' && !call.inputError && def.source.kind !== 'host' && !(await projectOpen(session, ctx).catch(() => false))) {
       r = errorResult(call, 'invalid_input', withheldInputError(def, call.input));

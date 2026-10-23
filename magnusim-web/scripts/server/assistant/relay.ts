@@ -34,13 +34,18 @@
  *   unregistered {reason}          'plugin_off': the tab's tools are gone; that publication
  *                                  must not register again (a new frame may)
  * POSTs from the page (assistant-routes.ts; each 409 no_channel without a live link):
- *   /relay/tools    {link, rev, epoch?, workspace:{project_id, plugin, workspace, title?, study_id},
- *                   tools, guide?, review?:{rounds 1-5, prompt ≤ 1500}} → {ok, available:true,
- *                   accepted, refused, epoch}; tools []
- *                   withdraws them. 409 stale_rev (a lower rev than the tab's last; the same
+ *   /relay/tools    {link, rev, slot?, epoch?, workspace:{project_id, plugin, workspace, title?,
+ *                   study_id}, place?, tools, guide?, review?:{rounds 1-5, prompt ≤ 1500}} → {ok,
+ *                   available:true, accepted, refused, epoch}; tools []
+ *                   withdraws them. 409 stale_rev (a lower rev than the slot's last; the same
  *                   rev is taken again, e.g. on a new link), plugin_changed (the frame's pinned
  *                   epoch is no longer its plugin's), plugin_off (a fresh frame, no epoch,
  *                   while the live registry says the plugin is not loaded); 400.
+ *                   slot 'core' (core host tools spec C7, 11.2): the tab's core page, beside its
+ *                   workspace (slot 'workspace', the default), each with its own rev. Its plugin
+ *                   is "core" and `place` says where the tab is (home, workbench, workspace); no
+ *                   plugin or epoch check (its epoch is the fixed token `core`). Its calls come
+ *                   as `invoke {…, slot:'core'}`, one at a time per tab with the workspace's.
  *   /relay/progress {link, call, ack?, fraction?, label?, waiting?} → {ok} | {ok, stale:true}
  *   /relay/result   {link, call, ok, result? | error?}    → {ok} | {ok, stale:true}
  *   /relay/gate     {link, gate, allow} → {ok}: the person's answer to a question this link
@@ -98,7 +103,7 @@ import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
 import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
-import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type ProgressOptions, type Registry, type ToolOutcome } from './registry.ts';
+import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type CorePlace, type ProgressOptions, type Registry, type ToolOutcome } from './registry.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
@@ -146,6 +151,8 @@ export const PAGE_RESULT_CODES: ReadonlySet<string> = new Set([
   'too_large',
   'bad_result',
 ]);
+/** The codes a core page tool's error may carry besides those (core host tools spec 2.6, 5). */
+export const CORE_RESULT_CODES: ReadonlySet<string> = new Set(['person_busy', 'cancelled_by_person', 'not_found', 'deferred', 'no_project', 'unavailable']);
 const IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const PLUGIN_KEY = /^[A-Za-z0-9._-]{1,64}$/;
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -274,6 +281,8 @@ interface Pending {
   call: string;
   tab: string;
   link: string;
+  /** The registration it runs in: the workspace's (plugin and epoch checks), or the core page's. */
+  slot: 'workspace' | 'core';
   plugin: string;
   pluginName: string;
   epoch: string;
@@ -312,6 +321,11 @@ interface TabRec {
   turns: number;
   holdUntil: number | null;
   holdTimer: unknown;
+  /** The core page's registration (C7): the link it came on; dormant while that link is gone (kept for the dormant time). */
+  core: { link: string; dormant: boolean } | null;
+  /** The highest core rev taken. */
+  coreRev: number;
+  coreTimer: unknown;
 }
 
 /** A tab as the test state route shows it (Relay.snapshot). */
@@ -325,6 +339,8 @@ export interface RelayTabSnapshot {
   hold_until: number | null;
   /** What is left of its hold now, on the relay's own clock (null: none). */
   hold_left_ms: number | null;
+  /** Its core page's registration is there and connected (C7). */
+  core: boolean;
 }
 
 /** One call of a page's tool, as the registry asks for it. */
@@ -444,7 +460,7 @@ export class Relay {
   private tabRec(tab: string): TabRec {
     let t = this.tabs.get(tab);
     if (!t) {
-      t = { tab, link: null, rev: 0, reg: null, dormant: false, dormantTimer: null, since: this.clock.now(), pending: null, turns: 0, holdUntil: null, holdTimer: null };
+      t = { tab, link: null, rev: 0, reg: null, dormant: false, dormantTimer: null, since: this.clock.now(), pending: null, turns: 0, holdUntil: null, holdTimer: null, core: null, coreRev: 0, coreTimer: null };
       this.tabs.set(tab, t);
     }
     return t;
@@ -482,6 +498,13 @@ export class Relay {
       }
       t.dormantTimer = this.clock.setTimeout(() => this.expireDormant(t), this.dormantMs);
     }
+    if (t.core && t.core.link === rec.link && !t.coreTimer) {
+      if (!t.core.dormant) {
+        this.registry.setCoreConnected(t.tab, rec.link, false);
+        t.core.dormant = true;
+      }
+      t.coreTimer = this.clock.setTimeout(() => this.expireCore(t), this.dormantMs);
+    }
     if (t.link === rec) {
       t.link = null;
       this.turns.gates.tabUnlinked(t.tab);
@@ -503,6 +526,10 @@ export class Relay {
       t.dormant = true;
       t.since = this.clock.now();
     }
+    if (t.core && t.core.link === rec.link && !t.core.dormant) {
+      this.registry.setCoreConnected(t.tab, rec.link, false);
+      t.core.dormant = true;
+    }
     this.turns.gates.tabUnlinked(t.tab);
   }
 
@@ -517,6 +544,12 @@ export class Relay {
       this.registry.setConnected(t.tab, rec.link, true);
       t.since = this.clock.now();
     }
+    if (t.core && t.core.link === rec.link && t.core.dormant) {
+      this.clock.clearTimeout(t.coreTimer);
+      t.coreTimer = null;
+      t.core.dormant = false;
+      this.registry.setCoreConnected(t.tab, rec.link, true);
+    }
     this.turns.gates.tabLinked(t.tab);
   }
 
@@ -530,6 +563,16 @@ export class Relay {
     this.maybeForget(t);
   }
 
+  /** A core registration dormant for its whole time goes. */
+  private expireCore(t: TabRec): void {
+    t.coreTimer = null;
+    if (t.core && t.core.dormant) {
+      this.registry.setCore(t.tab, t.core.link, null);
+      t.core = null;
+    }
+    this.maybeForget(t);
+  }
+
   private clearDormant(t: TabRec): void {
     this.clock.clearTimeout(t.dormantTimer);
     t.dormantTimer = null;
@@ -538,10 +581,11 @@ export class Relay {
 
   /** Forgets a tab with nothing left: no link, registration, call, bound turn or hold. */
   private maybeForget(t: TabRec): void {
-    if (t.link || t.reg || t.pending || t.turns > 0 || this.tabs.get(t.tab) !== t) return;
+    if (t.link || t.reg || t.core || t.pending || t.turns > 0 || this.tabs.get(t.tab) !== t) return;
     if (this.liveHold(t) !== null) return;
     this.clock.clearTimeout(t.holdTimer);
     this.clock.clearTimeout(t.dormantTimer);
+    this.clock.clearTimeout(t.coreTimer);
     this.tabs.delete(t.tab);
   }
 
@@ -603,7 +647,7 @@ export class Relay {
     const reg = t.reg;
     if (!reg) return;
     const p = t.pending;
-    if (p && !p.done && p.plugin === reg.plugin) this.finish(p, fail('plugin_off', pluginOffText(p.pluginName)));
+    if (p && !p.done && p.slot === 'workspace' && p.plugin === reg.plugin) this.finish(p, fail('plugin_off', pluginOffText(p.pluginName)));
     this.registry.setWorkspace(t.tab, reg.link, null);
     t.reg = null;
     this.clearDormant(t);
@@ -623,6 +667,8 @@ export class Relay {
     if (typeof rev !== 'number' || !Number.isSafeInteger(rev) || rev < 1) return refuse(400, 'bad_request', 'rev is a whole number from 1.');
     if (!Array.isArray(body.tools)) return refuse(400, 'bad_request', 'tools is a list ([] withdraws them).');
     if (body.guide !== undefined && body.guide !== null && typeof body.guide !== 'string') return refuse(400, 'bad_request', 'guide is text.');
+    if (body.slot !== undefined && body.slot !== null && body.slot !== 'workspace' && body.slot !== 'core') return refuse(400, 'bad_request', "slot is 'workspace' or 'core'.");
+    if (body.slot === 'core') return this.registerCore(rec, rev, body);
     // A review the page's bridge checked: {rounds 1-5, prompt}, the prompt text of at most 1500 characters.
     const askedReview = body.review !== undefined && body.review !== null;
     const rawPrompt = askedReview && typeof body.review === 'object' ? (body.review as { prompt?: unknown }).prompt : undefined;
@@ -689,6 +735,66 @@ export class Relay {
     return ok({ available: true, accepted: verdict.accepted, refused: verdict.refused, epoch: `${boot}:${current}:${pluginHash(ws.plugin)}` });
   }
 
+  /**
+   * A core page's registration (slot 'core', C7): where the tab is and the core tools, in the
+   * registry's core slot of the tab. No plugin or epoch check: the page is the app's own. tools []
+   * withdraws it.
+   */
+  private registerCore(rec: LinkRec, rev: number, body: Record<string, unknown>): Answer {
+    const t = this.tabRec(rec.tab);
+    if (rev < t.coreRev) return refuse(409, 'stale_rev', 'A newer list of this page was already received.', { rev: t.coreRev });
+    const tools = body.tools as unknown[];
+    if (tools.length === 0) {
+      t.coreRev = rev;
+      this.clock.clearTimeout(t.coreTimer);
+      t.coreTimer = null;
+      if (t.core) this.registry.setCore(t.tab, t.core.link, null);
+      t.core = null;
+      return ok({ available: true, accepted: [], refused: [], epoch: CORE_EPOCH });
+    }
+    const where = parseCore(body.workspace, body.place);
+    if (typeof where === 'string') return refuse(400, 'bad_request', where);
+    t.coreRev = rev;
+    const tab = rec.tab;
+    const link = rec.link;
+    const verdict = this.registry.setCore(tab, link, {
+      projectId: where.projectId,
+      studyId: where.studyId,
+      place: where.place,
+      tools,
+      guide: typeof body.guide === 'string' ? body.guide : '',
+      invoke: (c) => this.invokeCore(tab, link, c),
+      escalate: (tool, input) => this.coreEscalate(tab, tool, input),
+    });
+    this.clock.clearTimeout(t.coreTimer);
+    t.coreTimer = null;
+    t.core = { link, dormant: false };
+    return ok({ available: true, accepted: verdict.accepted, refused: verdict.refused, epoch: CORE_EPOCH });
+  }
+
+  /**
+   * core__show leaving a workspace whose plugin links geometry sends its design to the simulation
+   * (§0.4, §5.1): a computation, asked first. Null for any other call.
+   */
+  private coreEscalate(tab: string, tool: string, input: Record<string, unknown>): { risk: 'compute'; note: string; title: string; copy: string } | null {
+    if (tool !== 'show') return null;
+    const core = this.registry.coreOf(tab);
+    const w = this.registry.workspaceOf(tab);
+    if (!core || core.place !== 'workspace' || !w) return null;
+    // Opening the same workspace again leaves nothing.
+    if (input.target === 'workspace' && (input.id === '' || input.id === w.reg.studyId)) return null;
+    const row = (this.pluginLoaded(w.reg.plugin) ?? null) as { links_geometry?: unknown } | null;
+    if (!row || row.links_geometry !== true) return null;
+    const name = cleanText(w.reg.workspaceName || w.reg.workspace, TEXT_CAPS.name) || 'the workspace';
+    const plugin = cleanText(w.reg.pluginName || w.reg.plugin, TEXT_CAPS.name) || 'the plugin';
+    return {
+      risk: 'compute',
+      note: 'sends the design to the simulation',
+      title: 'Allow the Assistant to send your design to the simulation?',
+      copy: `Leaves ${plugin}'s ${name} and sends its design to this project: it updates the geometry it links, or adds a new one. You may be asked how to update it.`,
+    };
+  }
+
   /** tools []: the registration goes; a call still running gets the grace for its result. */
   private withdraw(t: TabRec): void {
     if (t.reg) {
@@ -697,7 +803,7 @@ export class Relay {
     }
     this.clearDormant(t);
     const p = t.pending;
-    if (p && !p.done && !p.unregistering) {
+    if (p && !p.done && !p.unregistering && p.slot === 'workspace') {
       p.unregistering = true;
       p.unregisterTimer = this.clock.setTimeout(() => this.finish(p, fail('closed', closedText(p.workspace))), this.graceMs);
     }
@@ -708,7 +814,7 @@ export class Relay {
     const hit = (plugin: string) => key === '*' || plugin === key;
     for (const t of [...this.tabs.values()]) {
       const p = t.pending;
-      if (p && !p.done && hit(p.plugin)) this.finish(p, fail('plugin_off', pluginOffText(p.pluginName)));
+      if (p && !p.done && p.slot === 'workspace' && hit(p.plugin)) this.finish(p, fail('plugin_off', pluginOffText(p.pluginName)));
       if (t.reg && hit(t.reg.plugin)) this.dropReg(t);
       this.maybeForget(t);
     }
@@ -729,6 +835,29 @@ export class Relay {
     if (ready !== true) return Promise.resolve(fail(ready.code, ready.message));
     const live = t.link;
     if (this.closed || !live || !live.open || live.link !== link || live.silent || t.dormant) return Promise.resolve(fail('tab_disconnected', notSentText(ws)));
+    return this.startCall(t, live, { slot: 'workspace', plugin: reg.plugin, pluginName: reg.pluginName, epoch: reg.epoch, workspace: ws }, c);
+  }
+
+  /** Runs one core tool call in the tab's page (the registry's invoke of a core tool, C7). */
+  invokeCore(tab: string, link: string, c: InvokeCall): Promise<ToolOutcome> {
+    const t = this.tabs.get(tab);
+    const ws = 'The Magnusim window';
+    if (!t || !t.core || t.core.link !== link) return Promise.resolve(fail('unavailable', 'This Magnusim window is no longer open.'));
+    const live = t.link;
+    if (this.closed || !live || !live.open || live.link !== link || live.silent || t.core.dormant) return Promise.resolve(fail('tab_disconnected', notSentText(ws)));
+    return this.startCall(t, live, { slot: 'core', plugin: 'core', pluginName: 'Magnusim', epoch: CORE_EPOCH, workspace: ws }, c);
+  }
+
+  /** One call sent to the page on its live link: one at a time per tab, acknowledged, abortable. */
+  private startCall(
+    t: TabRec,
+    live: LinkRec,
+    meta: { slot: 'workspace' | 'core'; plugin: string; pluginName: string; epoch: string; workspace: string },
+    c: InvokeCall,
+  ): Promise<ToolOutcome> {
+    const ws = meta.workspace;
+    const tab = t.tab;
+    const link = live.link;
     if (t.pending) return Promise.resolve(fail('busy', busyText(ws)));
     if (c.signal.aborted) return Promise.resolve(fail('aborted', 'It was stopped before it started.'));
     this.serial += 1;
@@ -738,9 +867,10 @@ export class Relay {
         call,
         tab,
         link,
-        plugin: reg.plugin,
-        pluginName: reg.pluginName,
-        epoch: reg.epoch,
+        slot: meta.slot,
+        plugin: meta.plugin,
+        pluginName: meta.pluginName,
+        epoch: meta.epoch,
         workspace: ws,
         progress: c.progress,
         resolve,
@@ -754,7 +884,7 @@ export class Relay {
         offAbort: null,
       };
       t.pending = p;
-      const sent = live.send('invoke', { call, turn: c.turn, tool: c.tool, input: c.input, timeout_s: c.timeoutS });
+      const sent = live.send('invoke', { call, turn: c.turn, tool: c.tool, input: c.input, timeout_s: c.timeoutS, ...(meta.slot === 'core' ? { slot: 'core' } : {}) });
       // The channel or its stream is gone (its cleanup may not have run yet): it never reached the page.
       if (!sent) {
         this.finish(p, fail('tab_disconnected', notSentText(ws)));
@@ -841,12 +971,12 @@ export class Relay {
     this.heard(rec);
     const p = this.pendingFor(rec, body.call);
     if (!p) return ok({ stale: true });
-    // The plugin changed under it: its answer is not taken.
-    if (this.registry.currentEpoch(p.plugin) !== p.epoch) {
+    // The plugin changed under it: its answer is not taken (a core call has no plugin).
+    if (p.slot === 'workspace' && this.registry.currentEpoch(p.plugin) !== p.epoch) {
       this.finish(p, fail('plugin_off', pluginOffText(p.pluginName)));
       return ok({ stale: true });
     }
-    this.finish(p, pageOutcome(body));
+    this.finish(p, pageOutcome(body, p.slot));
     return ok();
   }
 
@@ -987,6 +1117,7 @@ export class Relay {
         turns: t.turns,
         hold_until: hold,
         hold_left_ms: hold === null ? null : Math.max(0, hold - now),
+        core: !!t.core && !t.core.dormant,
       };
     }
     return out;
@@ -1007,6 +1138,7 @@ export class Relay {
       if (p && !p.done) this.finish(p, fail('tab_disconnected', 'The server stopped while the tool ran; it may or may not have finished.'));
       this.clock.clearTimeout(t.dormantTimer);
       this.clock.clearTimeout(t.holdTimer);
+      this.clock.clearTimeout(t.coreTimer);
     }
   }
 }
@@ -1031,15 +1163,36 @@ function parseWorkspace(raw: unknown): { plugin: string; workspace: string; titl
   return { plugin, workspace, title, projectId, studyId };
 }
 
+/** The fixed epoch token of a core registration: no plugin's, it never bumps. */
+export const CORE_EPOCH = 'core';
+
+/**
+ * Where a core page says its tab is (slot 'core'): plugin "core", and Home with no project, or the
+ * workbench or a workspace with one.
+ */
+function parseCore(raw: unknown, place: unknown): { projectId: string; studyId: string; place: CorePlace } | string {
+  if (!isRecord(raw)) return 'workspace is {project_id, plugin: "core", workspace, study_id}.';
+  if (raw.plugin !== 'core') return 'A core registration names the plugin "core".';
+  if (place !== 'home' && place !== 'workbench' && place !== 'workspace') return 'place is home, workbench or workspace.';
+  const id = (v: unknown) => (v === undefined || v === null || v === '' ? '' : typeof v === 'string' && ID.test(v) ? v : null);
+  const projectId = id(raw.project_id);
+  const studyId = id(raw.study_id);
+  if (projectId === null || studyId === null) return 'workspace.project_id and workspace.study_id are ids.';
+  if (place === 'home' && projectId) return 'Home shows no project: project_id is "" there.';
+  if (place !== 'home' && !projectId) return 'The workbench and a workspace name their project.';
+  return { projectId, studyId, place };
+}
+
 /**
  * A page's error as the call's outcome: a code from the page's and the bridge's lists (else
  * `failed`), its message, its hint (≤ 500 characters) and its detail (≤ 4 KB as JSON, else
  * dropped with " (detail too large)", or " (detail not plain JSON)", on the message), as the
  * bridge keeps them.
  */
-function pageError(raw: unknown): ToolOutcome {
+function pageError(raw: unknown, slot: 'workspace' | 'core' = 'workspace'): ToolOutcome {
   const e = isRecord(raw) ? raw : {};
-  const code = typeof e.code === 'string' && PAGE_RESULT_CODES.has(e.code) ? e.code : 'failed';
+  const known = (c: string) => PAGE_RESULT_CODES.has(c) || (slot === 'core' && CORE_RESULT_CODES.has(c));
+  const code = typeof e.code === 'string' && known(e.code) ? e.code : 'failed';
   let note = '';
   let detail: unknown;
   if (e.detail !== undefined && e.detail !== null) {
@@ -1065,10 +1218,10 @@ function pageError(raw: unknown): ToolOutcome {
  * capped as the bridge does (`bad_result`, `too_large`); images go on as base64 for the
  * runner's own checks. The page's summary (≤ 160 characters) is the log's line, else "Done".
  */
-export function pageOutcome(body: Record<string, unknown>): ToolOutcome {
+export function pageOutcome(body: Record<string, unknown>, slot: 'workspace' | 'core' = 'workspace'): ToolOutcome {
   const bad = (why: string) => fail('bad_result', `The tool's result was refused: ${why}.`);
   const big = (why: string) => fail('too_large', `The tool's result is too large: ${why}.`);
-  if (body.ok === false) return pageError(body.error);
+  if (body.ok === false) return pageError(body.error, slot);
   if (body.ok !== true) return bad('it says neither ok nor not ok');
   const raw = body.result;
   if (raw === undefined || raw === null) return { ok: true, summary: 'Done' };

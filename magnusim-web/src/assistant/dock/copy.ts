@@ -159,7 +159,8 @@ export const seconds = (ms: number): string => {
 export const resultOk = (summary: string, ms: number): string => `✓ ${summary} · ${seconds(ms)}`;
 export const resultFailed = (summary: string): string => `✗ ${summary}`;
 export const howToFix = (hint: string): string => `How to fix: ${hint}`;
-export const waitsFor = (workspace: string, label: string): string => `Waits for you in ${workspace}: ${label}`;
+/** A call that waits for the person: in a workspace, said so; on Home or in the workbench (a core page tool), its own words. */
+export const waitsFor = (workspace: string, label: string): string => (workspace ? `Waits for you in ${workspace}: ${label}` : label || 'Waits for you');
 export const pictureAlt = (i: number, n: number, title: string): string => `Picture ${i} of ${n} from ${title}`;
 export const PICTURE_GONE = 'Picture no longer kept';
 

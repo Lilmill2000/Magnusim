@@ -46,6 +46,7 @@ export const H15_TESTS = [
   'server/__tests__/ui-sync.test.js',
   'server/__tests__/record-rev.test.js',
   'server/__tests__/assistant-attachments.test.js',
+  'server/__tests__/assistant-core-tabs.test.js',
   '__tests__/project-delete-jobs.test.mjs',
   '__tests__/wsl-case-watch.test.mjs',
   '__tests__/solve-hooks.test.mjs',

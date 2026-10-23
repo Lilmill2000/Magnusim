@@ -425,14 +425,19 @@ test("a project's first cloud request asks the privacy question as a card: Don't
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
   await openDock(page);
   await expect(dock(page).locator('[data-dock-context]')).toHaveText(`Project: ${PROJECT_TITLE}`);
+  // The window's core page is on the server (it binds the dock's request to this window).
+  await expect
+    .poll(async () => (await getJson(request, '/api/assistant/tabs')).tabs.some((t) => t.core?.connected && t.core.project_id === project), { timeout: 30_000 })
+    .toBe(true);
   const before = chats().length;
   const sent = [];
   page.on('request', (r) => {
     if (new URL(r.url()).pathname === '/api/assistant/turns' && r.method() === 'POST') sent.push(r.postDataJSON());
   });
   await dockSend(page, 'What is in this project?');
-  expect(sent[0].context).toMatchObject({ project_id: project });
-  expect(sent[0].tab).toBeUndefined();
+  // Bound to this window by its core page (core host tools spec C7, 11.3): the project is the window's.
+  expect(sent[0].tab).toBe('link');
+  expect(sent[0].context).toBeUndefined();
   const card = dockGate(page);
   await expect(card).toHaveAttribute('data-gate-kind', 'privacy', STEP);
   await expect(card.locator('[data-gate-badge]')).toHaveText(['Project data']);

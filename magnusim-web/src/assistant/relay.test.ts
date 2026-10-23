@@ -3,8 +3,10 @@
 // timers. Every race here is forced: a held answer, a released one, a timer moved on.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  publishCoreTools,
   publishWorkspaceTools,
   resetWorkspaceToolsForTests,
+  withdrawCoreTools,
   workspaceToolsSnapshot,
   type ToolInvoke,
   type TurnTell,
@@ -21,6 +23,7 @@ import {
   PROOF_WAIT_MS,
   RELAY_CHANNEL_URL,
   RESULT_BEFORE_UNREGISTER_MS,
+  coreRegisteredOn,
   holdAssistantLink,
   relayTurnsSnapshot,
   setGatePresenter,
@@ -312,6 +315,103 @@ describe('the page relay opens nothing until a workspace offers tools', () => {
     expect(channels).toHaveLength(0);
     // The status was read once; nothing else went out.
     expect(sent.map((s) => s.path)).toEqual(['/api/assistant/status']);
+  });
+});
+
+describe('the core page (core host tools spec C7, 11.1): every app tab registers where it is and its own tools', () => {
+  const CORE_TOOLS = [{ name: 'show', title: 'Show', description: 'Moves the window.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, risk: 'edit' as const, timeoutS: 120 }];
+  const coreCalls: AssistantInvoke[] = [];
+  const coreInvoke: ToolInvoke = async (req) => {
+    coreCalls.push(req);
+    return { ok: true, result: { data: { shown: 'home' }, summary: 'Showed Home' } };
+  };
+  const home = () => publishCoreTools({ project_id: '', study_id: '', place: 'home' }, CORE_TOOLS, 'Use core__show.', coreInvoke);
+
+  it('opens the channel on Home after the status (not pinned), registers slot core with its place, again on a change and on a new link; coreRegisteredOn says when the server holds it', async () => {
+    coreCalls.length = 0;
+    home();
+    startAssistantRelay();
+    await settle();
+    expect(sent.map((x) => x.path)).toEqual(['/api/assistant/status']);
+    expect(channels).toHaveLength(1);
+    expect(channel().pinned).toBe(false);
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    const first = take('/api/assistant/relay/tools');
+    expect(first.body).toMatchObject({ link: LINK_A, slot: 'core', place: 'home', workspace: { project_id: '', plugin: 'core', workspace: 'app', study_id: '' }, guide: 'Use core__show.' });
+    expect((first.body.tools as Array<{ name: string }>).map((t) => t.name)).toEqual(['show']);
+    expect(coreRegisteredOn(LINK_A)).toBe(false);
+    accept(first, 'core');
+    await settle();
+    expect(coreRegisteredOn(LINK_A)).toBe(true);
+    expect(coreRegisteredOn(LINK_B)).toBe(false);
+    // The same place again: nothing new.
+    home();
+    await settle(60_000);
+    expect(toolPosts()).toHaveLength(1);
+    // A project opened: registered again with its project.
+    publishCoreTools({ project_id: 'proj-a', study_id: 'st-1', place: 'workbench' }, CORE_TOOLS, 'Use core__show.', coreInvoke);
+    await settle();
+    const moved = take('/api/assistant/relay/tools');
+    expect(moved.body).toMatchObject({ slot: 'core', place: 'workbench', workspace: { project_id: 'proj-a', study_id: 'st-1' } });
+    expect(Number(moved.body.rev)).toBeGreaterThan(Number(first.body.rev));
+    accept(moved, 'core');
+    await settle();
+    // A new link: the same registration again on it.
+    channel().frame('linked', { link: LINK_B });
+    await settle();
+    expect(coreRegisteredOn(LINK_B)).toBe(false);
+    const again = take('/api/assistant/relay/tools');
+    expect(again.body).toMatchObject({ link: LINK_B, slot: 'core', place: 'workbench' });
+    accept(again, 'core');
+    await settle();
+    expect(coreRegisteredOn(LINK_B)).toBe(true);
+    // Its calls run in this page (slot core), never in a frame.
+    channel().frame('invoke', { call: 'rc-1', turn: 't-1', tool: 'show', input: { target: 'home' }, timeout_s: 120, slot: 'core' });
+    await settle();
+    expect(coreCalls.map((c) => [c.tool, c.input])).toEqual([['show', { target: 'home' }]]);
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
+    const result = last('/api/assistant/relay/result');
+    expect(result.body).toMatchObject({ link: LINK_B, call: 'rc-1', ok: true, result: { summary: 'Showed Home' } });
+    result.answer(200, { ok: true });
+    await settle(120_000);
+    expect(channel().closed).toBe(false);
+    // The core page went (the shell unmounted): withdrawn; then the channel may go.
+    withdrawCoreTools();
+    await settle();
+    const off = take('/api/assistant/relay/tools');
+    expect(off.body).toMatchObject({ slot: 'core', tools: [] });
+    off.answer(200, { ok: true, available: true, accepted: [], refused: [] });
+    await settle();
+    expect(coreRegisteredOn(LINK_B)).toBe(false);
+    expect(channel().closed).toBe(true);
+  });
+
+  it('another PC: the core page opens nothing', async () => {
+    auto = (x) => (x.path === '/api/assistant/status' ? [403, { ok: false, reason: 'remote', error: 'remote' }] : defaultAuto(x));
+    home();
+    startAssistantRelay();
+    await settle(60_000);
+    expect(channels).toHaveLength(0);
+    expect(sent.map((x) => x.path)).toEqual(['/api/assistant/status']);
+  });
+
+  it('beside a workspace: the workspace list goes first, then the core registration; each keeps its own slot', async () => {
+    home();
+    startAssistantRelay();
+    void register(['add']);
+    await settle();
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    const ws = take('/api/assistant/relay/tools');
+    expect(ws.body.slot).toBeUndefined();
+    accept(ws);
+    await settle();
+    const core = take('/api/assistant/relay/tools');
+    expect(core.body.slot).toBe('core');
+    accept(core, 'core');
+    await settle();
+    expect(toolPosts().map((x) => x.body.slot ?? 'workspace')).toEqual(['workspace', 'core']);
   });
 });
 

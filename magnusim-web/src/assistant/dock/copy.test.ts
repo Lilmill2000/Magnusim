@@ -123,6 +123,9 @@ describe('the dock copy', () => {
     expect(copy.resultFailed('No such edge')).toBe('✗ No such edge');
     expect(copy.howToFix('Pick an edge.')).toBe('How to fix: Pick an edge.');
     expect(copy.waitsFor('CAD', 'Paused by the person')).toBe('Waits for you in CAD: Paused by the person');
+    // A core page tool on Home or in the workbench (core host tools spec 5.3): its own words.
+    expect(copy.waitsFor('', 'Waiting for you to finish with the view')).toBe('Waiting for you to finish with the view');
+    expect(copy.waitsFor('', '')).toBe('Waits for you');
     expect(copy.pictureAlt(1, 3, 'Extrude')).toBe('Picture 1 of 3 from Extrude');
     expect(copy.PICTURE_GONE).toBe('Picture no longer kept');
   });

@@ -125,6 +125,27 @@ export interface RunOptions {
    * privacy rules read again): a result stops the call there, unrun.
    */
   beforeRun?: () => Promise<RunResult | null>;
+  /**
+   * The privacy of another project than the turn's (core host tools spec C5, §9.2): a call whose
+   * tool names a project (projectOf) other than ctx.projectId asks for that project's consent
+   * (LIST_CONSENT_KEY: the project list's) before it runs. A refusal comes back as `{code,
+   * message}` and the call doesn't run; the turn goes on.
+   */
+  privacyFor?: (projectId: string, signal: AbortSignal) => Promise<{ code: string; message: string } | null>;
+}
+
+
+/** The project a call reads, when it is not the turn's own (null: the turn's, or no project data). */
+export function otherProjectOf(def: ToolDef, input: Record<string, unknown>, ctx: ToolCtx): string | null {
+  const of = def.projectOf;
+  if (typeof of !== 'function') return null;
+  let id: string | null = null;
+  try {
+    id = of.call(def, input, ctx);
+  } catch {
+    id = null;
+  }
+  return id && id !== (ctx.projectId ?? '') ? id : null;
 }
 
 export interface RunResult {
@@ -202,7 +223,7 @@ export function chainOf(def: ToolDef, input: Record<string, unknown>): string[] 
 /** Who offers the tool, as the person reads it. */
 export function sourceLabel(source: ToolSource | null): string {
   if (!source) return '';
-  if (source.kind === 'host') return 'Magnusim';
+  if (source.kind === 'host' || source.kind === 'core') return 'Magnusim';
   if (source.kind === 'workspace') return `${source.pluginName} (${source.workspace})`;
   return cleanText(source.plugin, TEXT_CAPS.name);
 }
@@ -512,6 +533,13 @@ export class ToolRunner {
         if (owner && chain.length) store.grant(owner, chain);
       }
     }
+    // 5a. Another project's data: that project's consent (the turn goes on when it is refused).
+    const other = o.privacyFor ? otherProjectOf(def, input, o.ctx) : null;
+    if (other && o.privacyFor) {
+      const refused = await o.privacyFor(other, o.signal);
+      if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
+      if (refused) return errorResult(call, refused.code, refused.message);
+    }
     // 5b. The caller's last check (MCP: privacy, which may have changed while it asked).
     if (o.beforeRun) {
       const stop = await o.beforeRun();
@@ -566,7 +594,7 @@ export class ToolRunner {
   }
 
   private async execute(call: ToolCallPart, def: ToolDef, input: Record<string, unknown>, o: RunOptions): Promise<RunResult> {
-    const stallMs = def.stallMs + (def.source.kind === 'workspace' ? WORKSPACE_STALL_MARGIN_MS : 0);
+    const stallMs = def.stallMs + (def.source.kind === 'workspace' || def.source.kind === 'core' ? WORKSPACE_STALL_MARGIN_MS : 0);
     const stall = new AbortController();
     const signal = AbortSignal.any([o.signal, stall.signal]);
     const clock = this.clock;

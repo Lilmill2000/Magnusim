@@ -448,7 +448,8 @@ export interface RelayFrameData {
    */
   turn: RelayTurnFrame;
   /** Run a tool of the page (`tool` is the page's own name for it). */
-  invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number };
+  /** `slot: 'core'`: a core page tool (core host tools spec C7), run in this page; else the workspace's. */
+  invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number; slot?: 'core' };
   abort: { call: string };
   /** A question to show as the app's own confirm dialog. */
   gate: { gate: GateView };
@@ -513,7 +514,11 @@ export interface RelayToolsBody {
   rev: number;
   /** The frame's pinned epoch (absent for a fresh frame). */
   epoch?: string;
+  /** 'core': the app page's own registration (core host tools spec C7); absent: the workspace's. */
+  slot?: 'workspace' | 'core';
   workspace: RelayWorkspace;
+  /** Where the tab is (slot 'core' only). */
+  place?: 'home' | 'workbench' | 'workspace';
   tools: RelayTool[];
   guide?: string;
   /** The review rounds the workspace asked for (1 to 5, a prompt of at most 1500 characters). */

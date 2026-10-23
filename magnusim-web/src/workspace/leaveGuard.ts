@@ -346,12 +346,16 @@ type HookEnd =
   /** "Continue in background", or a caller that cannot ask once the server took the link. */
   | { kind: 'go' };
 
+/** The link job the last leave's exit hook started (its server job id), or null (none, or none yet). */
+let leaveLinkJob: string | null = null;
+
 /**
  * Run the page's hook (LINK 6.4 step 3): the progress the header shows, the stall timer,
  * Cancel and "Continue in background". `interactive: false` goes on once the server has
  * taken the link (the job then runs on), and never asks.
  */
 function runHook(ws: GuardedWorkspace, hook: LeaveHook, reason: LeaveReason, interactive: boolean): Promise<HookEnd> {
+  leaveLinkJob = null;
   const study = plainName(ws.studyTitle(), ws.route.studyId);
   const ctl = new AbortController();
   const started = Date.now();
@@ -427,6 +431,7 @@ function runHook(ws: GuardedWorkspace, hook: LeaveHook, reason: LeaveReason, int
       } else if (a.kind === 'accepted') {
         create = a.create;
         if (a.jobId) {
+          leaveLinkJob = a.jobId;
           jobAt = Date.now();
           if (update !== 'done') update = 'running';
         }
@@ -778,6 +783,11 @@ async function confirmLeave(reason: LeaveReason, opts: { interactive?: boolean }
   approve(reason !== 'plugin-off');
   noteReason(ws, reason);
   return true;
+}
+
+/** The link job the last leave started (core__show reports it, core host tools spec 5.1); null when it started none. */
+export function lastLeaveLinkJob(): string | null {
+  return leaveLinkJob;
 }
 
 /** Go to `hash` if the user may leave the open workspace; false when they chose to stay. */

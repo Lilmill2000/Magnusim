@@ -199,8 +199,9 @@ async function tabsNow(request) {
   return j.tabs;
 }
 
+/** The tab's workspace registration as /tabs lists it (null: none; its core page's row alone, C7, is not one). */
 async function tabRow(request, tab) {
-  return (await tabsNow(request)).find((t) => t.tab === tab) || null;
+  return (await tabsNow(request)).find((t) => t.tab === tab && t.workspace) || null;
 }
 
 async function relayState(request) {
@@ -265,7 +266,8 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
   expect(turn).toMatchObject({ state: 'done', tab: w.tab, project_id: project });
   const sent = chats()[before].body;
   const names = sent.tools.map((x) => x.name);
-  const hostTools = names.filter((n) => !n.includes('__'));
+  // The app's own: its host tools and the window's core__show (core host tools spec C7).
+  const hostTools = names.filter((n) => !n.startsWith(`${PLUGIN}__`));
   // In a workspace its tools first, then the host's own, each by name (core host tools spec §12.4).
   expect(names).toEqual([...TOOLS, ...[...hostTools].sort()]);
   // Every one strict, with no keyword a strict tool may not use.
@@ -280,7 +282,9 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
   await expect.poll(async () => tabRow(request, w.tab)).toBeNull();
-  expect((await tabsNow(request)).filter((r) => r.connected)).toEqual([]);
+  expect((await tabsNow(request)).filter((r) => r.connected && r.workspace)).toEqual([]);
+  // The window stays listed by its core page (C7), now on the workbench.
+  await expect.poll(async () => (await tabsNow(request)).find((r) => r.tab === w.tab)?.core?.place).toBe('workbench');
   expect((await relayState(request)).links[w.tab] || { tools: 0 }).toMatchObject({ tools: 0 });
 });
 
@@ -617,7 +621,8 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
   // Every list a page sends after its plugin went off: none may be, until a new page.
   let listsSent = [];
   const onRequest = (r) => {
-    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/assistant/relay/tools') listsSent.push(r.postDataJSON());
+    // The window's core page registers on every link (core host tools spec C7): not the frame's.
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/assistant/relay/tools' && r.postDataJSON().slot !== 'core') listsSent.push(r.postDataJSON());
   };
   let off = false;
   const turnOff = async () => {
@@ -650,9 +655,10 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     fake.release(afterOff);
     expect((await t.ended()).turn.state).toBe('done');
     expect(await tabRow(request, w.tab)).toBeNull();
-    // Nothing of the dead frame on the server and no question open: its channel goes, and the
-    // frame registering again is refused in the page, before and after the plugin is back.
-    await expect.poll(() => assistantChannels(w.tab), { timeout: 15_000 }).toBe(0);
+    // Nothing of the dead frame on the server and no question open: the channel stays only for
+    // the window's own core page (C7), and the frame registering again is refused in the page,
+    // before and after the plugin is back.
+    await expect.poll(() => assistantChannels(w.tab), { timeout: 15_000 }).toBe(1);
     expect(await registerAgain(w)).toMatchObject({ available: false, reason: 'plugin_off' });
     await expect(w.frame.locator('#ai-available')).toHaveText('no');
     await turnOn();
@@ -698,13 +704,13 @@ test('the plugin turned off during a tool call ends it at once; its tools never 
     await expect(dockGate(page)).toBeHidden();
     expect((await asking.ended()).turn.state).toBe('done');
     await expect(w2.frame.locator('#counter')).toHaveText('0');
-    // With nothing of this page left on the server, its channel goes; the frame registering
-    // again is refused in the page.
-    await expect.poll(() => assistantChannels(w2.tab), { timeout: 15_000 }).toBe(0);
+    // With nothing of the frame left on the server, the channel is the core page's alone; the
+    // frame registering again is refused in the page.
+    await expect.poll(() => assistantChannels(w2.tab), { timeout: 15_000 }).toBe(1);
     expect(await registerAgain(w2)).toMatchObject({ available: false, reason: 'plugin_off' });
     await expect(w2.frame.locator('#ai-available')).toHaveText('no');
     expect(await tabRow(request, w2.tab)).toBeNull();
-    expect(await assistantChannels(w2.tab)).toBe(0);
+    expect(await assistantChannels(w2.tab)).toBe(1);
     expect(listsSent, 'nothing of the dead frame was ever sent again').toEqual([]);
   } finally {
     page.off('request', onRequest);
@@ -1025,7 +1031,7 @@ test("a cloud provider that can't compile the tools strictly: the request goes a
   /** A request's tools, strict or not: the host's own, then the workspace's. */
   const strictness = (r) => {
     const tools = offeredTools(r);
-    return { host: tools.filter((t) => !t.name.includes('__')).map((t) => t.strict), workspace: tools.filter((t) => t.name.includes('__')).map((t) => t.strict) };
+    return { host: tools.filter((t) => !t.name.startsWith(`${PLUGIN}__`)).map((t) => t.strict), workspace: tools.filter((t) => t.name.startsWith(`${PLUGIN}__`)).map((t) => t.strict) };
   };
 
   const w = await openCounter(page, request);
