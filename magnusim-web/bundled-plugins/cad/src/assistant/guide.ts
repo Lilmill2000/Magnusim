@@ -63,17 +63,22 @@ export const GUIDE_TOOL_WORDS: readonly (readonly [tool: string, words: string, 
 ] as const);
 
 /** The line that names the tools a Part does not offer now. */
-export const notOfferedLine = (tools: readonly string[]) => `Tools not offered now: ${tools.join(', ')}.`;
+export const notOfferedLine = (tools: readonly string[]) => `Not offered now: ${tools.join(', ')}.`;
+
+/** The tools of `tools` the guide names as words (the not-offered line names only those: the guide never mentions the others). */
+export const namedInGuide = (tools: readonly string[]) => tools.filter((t) => new RegExp(`(^|[^\\w])${t}([^\\w]|$)`).test(GUIDE));
 
 /**
  * The guide of a Part that offers all its tools but `tools` (the eval's core set): GUIDE without
- * the words that send the model to them, and a line under the introduction naming them. GUIDE
- * itself when every tool is offered.
+ * the words that send the model to them, and a line under the introduction naming those of them
+ * the guide names. GUIDE itself when every tool is offered.
  */
 export function guideWithout(tools: readonly string[]): string {
   if (!tools.length) return GUIDE;
   let g = GUIDE;
   for (const [tool, words, without] of GUIDE_TOOL_WORDS) if (tools.includes(tool)) g = g.replace(words, without);
+  const named = namedInGuide(tools);
+  if (!named.length) return g;
   const intro = g.indexOf('\n\n');
-  return `${g.slice(0, intro)}\n${notOfferedLine(tools)}${g.slice(intro)}`;
+  return `${g.slice(0, intro)}\n${notOfferedLine(named)}${g.slice(intro)}`;
 }

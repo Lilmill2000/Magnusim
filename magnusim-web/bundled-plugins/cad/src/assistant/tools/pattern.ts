@@ -17,6 +17,11 @@
 // copies are named "<body> (Instance k)"; combine takes them as "bodies of <pattern>". The person's
 // own panel opens read-only, filled; a copy that misses its body turns the pattern red, which
 // changes nothing and answers feature_failed with CAD's words naming the copies.
+// options: symmetric (both sides of the first direction, or of a circular pattern), flip2 and
+// symmetric2 (the second direction), extent and extent2 (spacing is the whole length from the
+// original to the last copy: the panel's Extent). skip: copies left out by key, as a click on a
+// copy's marker does ("2", "1.3", "-1"); a key no copy has is refused once the pattern is built
+// (nothing changes), and the reply lists every copy's key.
 // get_model full shows patterns as this tool's input (registerFeatureIo), and edit_feature sets
 // count, spacing, count2 and spacing2.
 // Owner: ASSISTANT.
@@ -28,6 +33,7 @@ import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assista
 import type { BodyId, CircularPatternFeature, Feature, FeatureId, LinearPatternFeature, MirrorFeature, PatternCommon, PatternOp, PatternOf, PersistentRef, RefPlaneFeature } from '../../types/doc';
 import type { DocState, PatternOutput } from '../../types/doc-service';
 import type { AxisRef, PlaneRef } from '../../types/references';
+import { PATTERN_OPTIONS } from '../schemas';
 import { ToolError, type Reason } from '../errors';
 import { andList, axisText, bodyText, createdLabels, editTarget, faceText, fillFeature, nameFor, partOf, pathIn, planeText, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo, type FeatureValue } from '../features-io';
@@ -69,7 +75,13 @@ interface Plan extends EditPlan {
   madePlane: FeatureId | null;
   sources: string;
   warnings: string[];
+  /** The copies to leave out (checked against the built copies' keys). */
+  skip: string[];
 }
+
+type PatternOption = (typeof PATTERN_OPTIONS)[number];
+/** A copy key: "2", "-1", "1.3" (along both directions). */
+const KEY = /^-?\d+(\.-?\d+)?$/;
 
 const unquote = (t: string) => (/^".*"$/.test(t) ? t.slice(1, -1).replace(/\\(["\\])/g, '$1') : t);
 
@@ -114,9 +126,21 @@ const pattern: EditTool<Plan> = {
     const count2 = str(ctx.input.count2);
     const spacing2 = str(ctx.input.spacing2);
     const scopeIn = strings(ctx.input.bodies);
-    const symmetric = ctx.input.symmetric === true;
+    const options = strings(ctx.input.options) as PatternOption[];
+    // A call written before options came (symmetric and flip2 on their own) means the same.
+    const on = (o: PatternOption) => options.includes(o) || (o === 'symmetric' && ctx.input.symmetric === true) || (o === 'flip2' && ctx.input.flip2 === true);
+    const symmetric = on('symmetric');
     const flip = ctx.input.flip === true;
-    const flip2 = ctx.input.flip2 === true;
+    const flip2 = on('flip2');
+    const symmetric2 = on('symmetric2');
+    const extent = on('extent');
+    const extent2 = on('extent2');
+    const skip = [...new Set(strings(ctx.input.skip))];
+    for (const o of options) if (!(PATTERN_OPTIONS as readonly string[]).includes(o)) problems.push(`options: "${o}" is not one of ${PATTERN_OPTIONS.join(', ')}`);
+    if (kind === 'mirror' && (options.length || skip.length)) problems.push('options and skip: [] for a mirror');
+    if (kind === 'circular' && (flip2 || symmetric2 || extent || extent2)) problems.push('options: a circular pattern takes symmetric only');
+    if (kind === 'linear' && !str(ctx.input.about2) && (flip2 || symmetric2 || extent2)) problems.push('options: flip2, symmetric2 and extent2 need about2');
+    for (const [i, k] of skip.entries()) if (!KEY.test(k) || /^0(\.0)?$/.test(k)) problems.push(`skip[${i}]: a copy's key ("2", "1.3", "-1"), not the original "0"`);
     if (!items.length) problems.push(`items: at least one ${of === 'features' ? 'feature' : of === 'bodies' ? 'body' : 'face'}`);
     if (items.length > ITEMS_MAX) problems.push(`items: at most ${ITEMS_MAX}`);
     items.forEach((t, i) => {
@@ -228,12 +252,12 @@ const pattern: EditTool<Plan> = {
       faces: r.faces,
       op: effectiveOp,
       scope: r.scope,
-      skip: editing ? [...((editing as unknown as PatternCommon).skip ?? [])] : [],
+      skip,
     };
     let fields: Partial<Feature>;
     if (kind === 'linear') {
-      const dir1 = { axis: r.axis, flip, count, mode: 'spacing' as const, distance: spacing, symmetric };
-      const dir2 = about2 ? { axis: r.axis2, flip: flip2, count: count2, mode: 'spacing' as const, distance: spacing2, symmetric } : null;
+      const dir1 = { axis: r.axis, flip, count, mode: extent ? ('extent' as const) : ('spacing' as const), distance: spacing, symmetric };
+      const dir2 = about2 ? { axis: r.axis2, flip: flip2, count: count2, mode: extent2 ? ('extent' as const) : ('spacing' as const), distance: spacing2, symmetric: symmetric2 } : null;
       fields = { ...common, dir1, dir2 } as Partial<LinearPatternFeature>;
     } else if (kind === 'circular') {
       const a = services.doc.units.evaluate(spacing, 'angle');
@@ -248,6 +272,8 @@ const pattern: EditTool<Plan> = {
     const label = services.doc.features.get(type)?.label ?? type;
     const resolved: Record<string, string> = { ...r.resolved, of: `${of}: ${r.sources}`, op: of === 'faces' ? 'onto the faces\' body (a boss joins, a pocket cuts)' : effectiveOp };
     if (kind !== 'mirror') resolved.count = count;
+    if (options.length) resolved.options = options.join(', ');
+    if (skip.length) resolved.skip = skip.join(', ');
     if (kind === 'linear') resolved.spacing = spacing;
     if (kind === 'circular') resolved.spacing = (fields as Partial<CircularPatternFeature>).mode === 'full' ? `${spacing} (evenly all round)` : spacing;
     if (editing) resolved.edit = editing.name;
@@ -266,6 +292,7 @@ const pattern: EditTool<Plan> = {
       madePlane: null,
       sources: r.sources,
       warnings: r.warnings,
+      skip,
     };
   },
 
@@ -296,6 +323,13 @@ const pattern: EditTool<Plan> = {
       fields = { ...fields, plane: { kind: 'feature', feature: planeId } } as Partial<Feature>;
     }
     const id = await fillFeature(ctx, plan, { edit: plan.edit, type: plan.type, fields: plan.name ? { ...fields, name: plan.name } : fields, label });
+    // A copy key that no copy has would skip nothing: refused, as the built copies say.
+    const out = doc.state.get().rebuild.outputs[id] as PatternOutput | undefined;
+    if (plan.skip.length && out?.type === 'pattern') {
+      const keys = out.copies.map((c) => c.key);
+      const unknown = plan.skip.filter((k) => !keys.includes(k));
+      if (unknown.length) throw new ToolError('bad_input', `skip: no copy has the key ${unknown.join(', ')}; the copies are ${keys.slice(0, 40).join(', ')}.`, { detail: { field: 'skip', keys: keys.slice(0, 60) } });
+    }
     const made = doc.state.get().doc.features.find((f) => f.id === id);
     if (made) plan.part = partOf(services, plan.type, made.name, !!plan.edit);
   },
@@ -313,7 +347,10 @@ const pattern: EditTool<Plan> = {
     const out = s.rebuild.outputs[id] as PatternOutput | undefined;
     const created = createdLabels(ctx.services, id);
     const planeName = plan.madePlane ? s.doc.features.find((g) => g.id === plan.madePlane)?.name ?? null : null;
-    const copies = out?.type === 'pattern' ? { made: out.made, skipped: out.copies.filter((c) => c.skipped).map((c) => c.label), failed: out.copies.filter((c) => c.failed).map((c) => c.label) } : null;
+    const copies =
+      out?.type === 'pattern'
+        ? { made: out.made, skipped: out.copies.filter((c) => c.skipped).map((c) => c.label), failed: out.copies.filter((c) => c.failed).map((c) => c.label), keys: out.copies.slice(0, 60).map((c) => `${c.key} (${c.label})`) }
+        : null;
     const body = bodyWords(data);
     const name = f?.name ?? plan.name ?? plan.type;
     const what = plan.kind === 'mirror' ? `mirrored ${plan.sources}` : `${copies ? copies.made : '?'} ${copies?.made === 1 ? 'copy' : 'copies'} of ${plan.sources}`;
@@ -355,7 +392,7 @@ function sourcesOf(services: AppServices, f: PatternCommon & { type: string }, a
   return { of: f.of, items, op: f.of === 'faces' ? 'source' : f.op, bodies: f.op === 'new' || f.op === 'source' ? [] : f.scope.map((id) => bodyText(s, id)) };
 }
 
-const noSecond = { about2: '', count2: '', spacing2: '', flip2: false };
+const noSecond = { about2: '', count2: '', spacing2: '' };
 
 registerFeatureIo('pattern_linear', {
   tool: 'pattern',
@@ -363,9 +400,14 @@ registerFeatureIo('pattern_linear', {
   inputsOf(f, services, at = null) {
     const g = f as LinearPatternFeature;
     const src = sourcesOf(services, g, at);
-    // A direction by its extent, or two directions symmetric differently, has no field here.
-    if (!src || g.dir1.mode !== 'spacing' || (g.dir2 && (g.dir2.mode !== 'spacing' || !!g.dir2.symmetric !== !!g.dir1.symmetric))) return null;
+    if (!src) return null;
     const s = services.doc.state.get();
+    const options: string[] = [];
+    if (g.dir1.symmetric) options.push('symmetric');
+    if (g.dir2?.flip) options.push('flip2');
+    if (g.dir2?.symmetric) options.push('symmetric2');
+    if (g.dir1.mode === 'extent') options.push('extent');
+    if (g.dir2?.mode === 'extent') options.push('extent2');
     return {
       edit: g.name,
       name: '',
@@ -375,9 +417,10 @@ registerFeatureIo('pattern_linear', {
       about: axisText(s, g.dir1.axis, at),
       count: g.dir1.count,
       spacing: g.dir1.distance,
-      symmetric: !!g.dir1.symmetric,
       flip: !!g.dir1.flip,
-      ...(g.dir2 ? { about2: axisText(s, g.dir2.axis, at), count2: g.dir2.count, spacing2: g.dir2.distance, flip2: !!g.dir2.flip } : noSecond),
+      ...(g.dir2 ? { about2: axisText(s, g.dir2.axis, at), count2: g.dir2.count, spacing2: g.dir2.distance } : noSecond),
+      options,
+      skip: [...(g.skip ?? [])],
       op: src.op,
       bodies: src.bodies,
     };
@@ -385,19 +428,16 @@ registerFeatureIo('pattern_linear', {
   values(f) {
     const g = f as LinearPatternFeature;
     const out: FeatureValue[] = [];
-    const dir = (d: LinearPatternFeature['dir1'], at: string, n: string) => {
-      if (d.mode === 'spacing') out.push({ field: `count${n}`, expr: d.count }, { field: `spacing${n}`, expr: d.distance });
-      else out.push({ field: `${at}.count`, expr: d.count }, { field: `${at}.distance`, expr: d.distance });
-    };
-    dir(g.dir1, 'dir1', '');
-    if (g.dir2) dir(g.dir2, 'dir2', '2');
+    // spacing is the pitch, or with extent the whole length: the direction's distance either way.
+    const dir = (d: LinearPatternFeature['dir1'], n: string) => out.push({ field: `count${n}`, expr: d.count }, { field: `spacing${n}`, expr: d.distance });
+    dir(g.dir1, '');
+    if (g.dir2) dir(g.dir2, '2');
     return out;
   },
   pathOf(f, field, services) {
     const g = f as LinearPatternFeature;
-    const map: Record<string, string> = {};
-    if (g.dir1.mode === 'spacing') Object.assign(map, { count: 'dir1.count', spacing: 'dir1.distance' });
-    if (g.dir2?.mode === 'spacing') Object.assign(map, { count2: 'dir2.count', spacing2: 'dir2.distance' });
+    const map: Record<string, string> = { count: 'dir1.count', spacing: 'dir1.distance' };
+    if (g.dir2) Object.assign(map, { count2: 'dir2.count', spacing2: 'dir2.distance' });
     return pathIn(services, f, field, map);
   },
 });
@@ -410,7 +450,8 @@ registerFeatureIo('pattern_circular', {
     const src = sourcesOf(services, g, at);
     if (!src) return null;
     const s = services.doc.state.get();
-    return { edit: g.name, name: '', kind: 'circular', of: src.of, items: src.items, about: axisText(s, g.axis, at), count: g.count, spacing: g.mode === 'full' ? '360 deg' : g.angle, symmetric: g.mode === 'angle' && !!g.symmetric, flip: !!g.flip, ...noSecond, op: src.op, bodies: src.bodies };
+    const options = g.mode === 'angle' && g.symmetric ? ['symmetric'] : [];
+    return { edit: g.name, name: '', kind: 'circular', of: src.of, items: src.items, about: axisText(s, g.axis, at), count: g.count, spacing: g.mode === 'full' ? '360 deg' : g.angle, flip: !!g.flip, ...noSecond, options, skip: [...(g.skip ?? [])], op: src.op, bodies: src.bodies };
   },
   // A full turn has no angle to change: send the pattern again with another spacing.
   values: (f) => {
@@ -427,7 +468,7 @@ registerFeatureIo('mirror', {
     const g = f as MirrorFeature;
     const src = sourcesOf(services, g, at);
     if (!src) return null;
-    return { edit: g.name, name: '', kind: 'mirror', of: src.of, items: src.items, about: planeText(services.doc.state.get(), g.plane, at), count: '', spacing: '', symmetric: false, flip: false, ...noSecond, op: src.op, bodies: src.bodies };
+    return { edit: g.name, name: '', kind: 'mirror', of: src.of, items: src.items, about: planeText(services.doc.state.get(), g.plane, at), count: '', spacing: '', flip: false, ...noSecond, options: [], skip: [], op: src.op, bodies: src.bodies };
   },
   values: () => [],
   pathOf: () => null,

@@ -1,5 +1,5 @@
 // @vitest-environment node
-// The Part's 18 Assistant tools as the app gets them (CAD tools spec §3, §12.1): names, risks,
+// The Part's 20 Assistant tools as the app gets them (CAD tools spec §3, §12.1): names, risks,
 // stall windows and confirm note; every object lists every property in `required` (no strict
 // optional budget spent); only the schema subset's keywords; descriptions at most 1024
 // characters at every depth; each schema at most 6 KB and the registration at most 64 KB; no
@@ -33,16 +33,18 @@ function nodes(n: Node, path = '', depth = 1): { n: Node; path: string; depth: n
 }
 
 
-describe('the 18 tools', () => {
-  it('are the spec\'s 18, by name, with their titles, risks and stall windows', () => {
-    expect(TOOL_NAMES).toEqual(['body', 'combine', 'delete', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view']);
+describe('the 21 tools', () => {
+  it('are the spec\'s 21, by name, with their titles, risks and stall windows', () => {
+    expect(TOOL_NAMES).toEqual(['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace']);
     for (const t of CAD_TOOLS) expect(t.name).toMatch(/^[a-z][a-z0-9_]{0,31}$/);
     for (const t of CAD_TOOLS) expect(t.name.includes('__'), t.name).toBe(false);
     const risks = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, t.risk]));
     expect(risks).toEqual({
       body: 'edit',
       combine: 'edit',
+      construct: 'edit',
       delete: 'destructive',
+      direct: 'edit',
       edit_feature: 'edit',
       extrude: 'edit',
       find: 'read',
@@ -58,12 +60,15 @@ describe('the 18 tools', () => {
       sweep_loft: 'edit',
       undo: 'edit',
       view: 'read',
+      workspace: 'edit',
     });
     const windows = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, t.timeoutS]));
     expect(windows).toEqual({
       body: 60,
       combine: 180,
+      construct: 180,
       delete: 120,
+      direct: 240,
       edit_feature: 180,
       extrude: 180,
       find: 90,
@@ -79,9 +84,11 @@ describe('the 18 tools', () => {
       sweep_loft: 240,
       undo: 120,
       view: 90,
+      workspace: 180,
     });
     expect(toolNamed('get_model')?.title).toBe('Read the Part');
-    expect(toolNamed('undo')?.title).toBe("Undo the Assistant's steps");
+    expect(toolNamed('undo')?.title).toBe('Undo or redo');
+    expect(toolNamed('workspace')?.title).toBe('Workspace and view');
     for (const t of CAD_TOOLS) expect(t.title, t.name).toBeTruthy();
   });
 
@@ -147,7 +154,7 @@ describe('the 18 tools', () => {
   });
 
   it('the help topics, the core set and the enums the guide uses exist', () => {
-    expect(HELP_TOPICS).toEqual(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide']);
+    expect(HELP_TOPICS).toEqual(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace']);
     expect((toolNamed('help')!.inputSchema.properties.topic as { enum: string[] }).enum).toEqual([...HELP_TOPICS]);
     expect(CORE_TOOLSET).toHaveLength(13);
     for (const n of CORE_TOOLSET) expect(TOOL_NAMES).toContain(n);

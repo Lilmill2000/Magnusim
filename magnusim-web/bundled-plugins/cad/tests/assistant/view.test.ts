@@ -340,8 +340,8 @@ describe('view', () => {
       expect([drawn[0].width, drawn[0].height]).toEqual([768, 576]);
       // Each view drawn by the viewport at its tile's size, nothing hidden, no cut.
       expect(fv.shots).toEqual([
-        { view: 'iso', width: 384, height: 288, hide: [], section: null },
-        { view: 'top', width: 384, height: 288, hide: [], section: null },
+        { view: 'iso', width: 384, height: 288, hide: [], section: null, display: 'shaded-edges', projection: 'orthographic' },
+        { view: 'top', width: 384, height: 288, hide: [], section: null, display: 'shaded-edges', projection: 'orthographic' },
       ]);
       expect(px(drawn[0], 10, 100)).toEqual(VIEW_RGB.iso);
       expect(px(drawn[0], 700, 100)).toEqual(VIEW_RGB.top);

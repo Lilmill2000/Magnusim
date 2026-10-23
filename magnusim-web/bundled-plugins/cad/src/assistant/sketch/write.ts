@@ -24,6 +24,8 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { emptyPreview, modeFor, type ApplyResult, type SketchHit, type SketchMode, type SketchPreview } from '../../sketch/mode';
+import { entityPoints } from '../../sketch/model';
+import { splineSamples } from '../../sketch/tools/spline-entity';
 import type { Feature, FeatureId, SketchConstraint, SketchEntity, SketchFeature, SketchSupport, Vec2 } from '../../types/doc';
 import type { EditSession } from '../../types/doc-service';
 import type { PlaneRef } from '../../types/references';
@@ -140,12 +142,21 @@ function previewOf(es: readonly SketchEntity[], at: (id: string) => Vec2 | null)
     } else if (e.kind === 'point') {
       const q = at(e.p);
       if (q) p.points.push(q);
+    } else if (e.kind === 'spline') {
+      // The person's Spline tool shows its curve as it is drawn.
+      const points: Record<string, Vec2> = {};
+      for (const id of entityPoints(e)) {
+        const q = at(id);
+        if (q) points[id] = q;
+      }
+      const poly = splineSamples({ points }, e, 64);
+      for (let i = 1; i < poly.length; i++) p.lines.push([poly[i - 1], poly[i]]);
     }
   }
   return p;
 }
 
-const pointsOf = (e: SketchEntity): string[] => (e.kind === 'point' ? [e.p] : e.kind === 'line' ? [...e.p] : e.kind === 'circle' ? [e.c] : e.kind === 'arc' ? [e.c, e.a, e.b] : []);
+const pointsOf = (e: SketchEntity): string[] => entityPoints(e);
 
 /** Replace items by id, appending the new ones. */
 function upsert<T extends { id: string }>(list: readonly T[], items: readonly T[]): T[] {
@@ -157,6 +168,9 @@ function upsert<T extends { id: string }>(list: readonly T[], items: readonly T[
 }
 
 const isDim = (c: SketchConstraint) => typeof (c as { expr?: unknown }).expr === 'string';
+
+/** The whole sketch as sketch mode stores it: its geometry, ties (patterns, offsets) and links (none: none). */
+const whole = (g: SketchGeometry) => ({ points: g.points, entities: g.entities, constraints: g.constraints, ties: g.ties, links: g.links });
 
 /**
  * The watch path's applies from what is stored (`start`: empty for a new sketch) to `target` (drawn
@@ -239,6 +253,7 @@ export function drawSteps(start: SketchGeometry, target: SketchGeometry, kinds: 
 export function isExactly(cur: SketchGeometry, target: SketchGeometry, tol: number): boolean {
   const shape = (es: readonly SketchEntity[]) => es.map((e) => (e.kind === 'circle' ? { ...e, r: 0 } : e));
   if (!same(shape(cur.entities), shape(target.entities)) || !same(cur.constraints, target.constraints)) return false;
+  if (!same(cur.ties ?? null, target.ties ?? null) || !same(cur.links ?? null, target.links ?? null)) return false;
   const ids = Object.keys(target.points);
   if (Object.keys(cur.points).length !== ids.length) return false;
   for (const id of ids) {
@@ -264,7 +279,7 @@ function paceOf(steps: readonly DrawStep[]): number {
 async function drawWatched(ctx: EditCtx, mode: SketchMode, session: EditSession, w: SketchWrite, refOf: (id: string) => string, name: string): Promise<void> {
   const target = w.geometry;
   const cur0 = mode.stored();
-  const start: SketchGeometry = cur0 ? { points: cur0.points, entities: cur0.entities, constraints: cur0.constraints } : { points: {}, entities: [], constraints: [] };
+  const start: SketchGeometry = cur0 ? { points: cur0.points, entities: cur0.entities, constraints: cur0.constraints, ...(cur0.ties ? { ties: cur0.ties } : {}), ...(cur0.links ? { links: cur0.links } : {}) } : { points: {}, entities: [], constraints: [] };
   const steps = drawSteps(start, drawAt(target, w.drawn).geometry, w.kinds);
   ctx.pacer.plan(paceOf(steps));
   let n = 0;
@@ -293,7 +308,7 @@ async function drawWatched(ctx: EditCtx, mode: SketchMode, session: EditSession,
   // Always last: the headless solution, exactly (a partial solve can take another path).
   const now = mode.stored();
   if (now && isExactly(now, target, 1e-6 * diagonal(target.points))) return;
-  const r = await mode.apply('Solve', () => ({ points: target.points, entities: target.entities, constraints: target.constraints }), { by: ctx.step });
+  const r = await mode.apply('Solve', () => whole(target), { by: ctx.step });
   await mode.idle();
   if (!r.ok) {
     await ctx.checkpoint();
@@ -391,7 +406,7 @@ export async function writeSketch(ctx: EditCtx, w: SketchWrite, refOf: (id: stri
     await drawWatched(ctx, mode, session, w, refOf, name);
   } else {
     const g = w.geometry;
-    const r = await mode.apply('Sketch', () => ({ points: g.points, entities: g.entities, constraints: g.constraints }), { by: ctx.step });
+    const r = await mode.apply('Sketch', () => whole(g), { by: ctx.step });
     await mode.idle();
     if (!r.ok) {
       // A take-over or a stop shows first.

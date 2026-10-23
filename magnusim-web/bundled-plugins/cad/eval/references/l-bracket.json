@@ -47,7 +47,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Bracket", "sketch": "L profile", "regions": ["all"], "extent": "symmetric", "distance": "wid", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Bracket", "sketch": "L profile", "regions": ["all"], "face": "", "direction": "", "extent": "symmetric", "distance": "wid", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
           }
         ]
       },

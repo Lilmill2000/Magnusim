@@ -1,0 +1,93 @@
+// The Assistant does what the person's direct-edit and Construct panels do (the owner's rule:
+// anything a person can do in CAD, the Assistant can do through its tools), as the person sees it:
+// on the person's 40 x 30 x 6 plate, a scripted turn press-pulls its top face 4 mm (the volume chip
+// adds up to 12000 mm3 from 7200 and the tree shows Press-pull 1, built), makes a construction axis
+// where Top and Right cross (the tree shows Axis 1, a construction feature, built), and splits the
+// body by Right moved 10 mm (the tree shows Split 1 and the bodies Body 1 and Body 1 (2)). Each call
+// answers ok with what it made. A split by a body that is also a target is refused before anything
+// changes. One Undo, named for the request, takes all three away.
+// Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
+// Owner: ASSISTANT.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { expect, test, type Page } from '@playwright/test';
+import { addSolid } from './helpers';
+import { cadFrame, chats, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
+
+let host: AssistantHost;
+
+test.beforeAll(async ({ request }) => {
+  test.setTimeout(300_000);
+  host = await startAssistantHost('cad-assistant-features', 110);
+  await useScriptedModel(request, host, 'cloud');
+});
+
+test.afterAll(async () => {
+  if (host) await host.stop();
+});
+
+test.beforeEach(async ({ request }) => {
+  await resetAssistant(request, host);
+  await useScriptedModel(request, host, 'cloud');
+});
+
+test.afterEach(() => {
+  expect(host.fake.pending(), 'scripted answers left unused').toBe(0);
+});
+
+type W = { __CAD__: { services: { doc: { state: { get(): { history: { undoLabel: string | null } } } } }; assistant: { setPace(p: string | null, scale?: number | null): void } } };
+
+const DIRECT = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, shape: 'box', padding: 'zero', sides: [], ...o });
+const CONSTRUCT = (o: Record<string, unknown>) => ({ edit: '', name: '', method: 'offset', refs: [], value: '', xyz: [], flip: false, from_end: false, ...o });
+
+/** The tree's feature rows as the person reads them: name, type and state. */
+const treeRows = (page: Page) =>
+  cadFrame(page).evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('[data-cad-tree] [data-feature-row]'), (e) => `${e.querySelector('.tree-row .tl')?.textContent ?? ''} ${e.dataset.featureType ?? ''} ${e.dataset.state ?? ''}`));
+/** The tree's body rows by name. */
+const bodyRows = (page: Page) => cadFrame(page).evaluate(() => Array.from(document.querySelectorAll('[data-cad-tree] [data-body-row] .cad-body-name'), (e) => e.textContent ?? ''));
+
+test('cad:assistant-features press-pull, a construction axis and a split, as the person sees them; a bad split changes nothing; one Undo takes all', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant features');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [40, 30, 6] });
+  // The volume chip's bodies, added up (one entry per body once the split makes two).
+  const mm3 = () => cadFrame(page).evaluate(() => Math.round(Array.from(document.querySelectorAll('[data-chip="volume"] [data-volume-mm3]'), (e) => Number(e.getAttribute('data-volume-mm3'))).reduce((a, b) => a + b, 0)));
+  await expect.poll(mm3, STEP).toBe(7200);
+  await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok']);
+  const label = () => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel);
+  const undoBefore = await label();
+
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__direct', input: DIRECT({ faces: ['Extrude 1.end'], distance: '4 mm' }) }] },
+    { tools: [{ name: 'cad__construct', input: CONSTRUCT({ method: 'two_planes', refs: ['Top', 'Right'] }) }] },
+    { tools: [{ name: 'cad__direct', input: DIRECT({ kind: 'split', bodies: ['Body 1'], tool: 'Right', distance: '10 mm' }) }] },
+    { tools: [{ name: 'cad__direct', input: DIRECT({ kind: 'split', bodies: ['Body 1'], tool: 'Body 1' }) }] },
+    { text: 'The plate is 10 mm thick, with an axis where Top and Right cross, split at x = 10 mm.' },
+  );
+  const t = await startTurn(request, host, { text: 'Make the plate 10 mm thick, add an axis and split it at x 10.', tab });
+  expect((await t.ended(STEP_MS * 4)).turn.state).toBe('done');
+  const [, afterPull, afterAxis, afterSplit, afterBad] = chats(host).slice(before);
+  expect(resultsIn(afterPull)[0]).toMatchObject({ tool: 'cad__direct', ok: true, data: { feature: { name: 'Press-pull 1', type: 'press_pull', state: 'ok' } } });
+  expect(resultsIn(afterAxis)[0]).toMatchObject({ tool: 'cad__construct', ok: true, data: { feature: { name: 'Axis 1', type: 'ref_axis', state: 'ok' }, built: { origin_mm: [0, 0, 0] } } });
+  expect(resultsIn(afterAxis)[0].text).toMatch(/^Axis 1 ok: construction axis by two_planes through \(0, 0, 0\), along \(0, -?1, 0\)$/);
+  expect(resultsIn(afterSplit)[0]).toMatchObject({ tool: 'cad__direct', ok: true, data: { feature: { name: 'Split 1', type: 'split', state: 'ok' }, resolved: { tool: 'Right offset 10 mm' } } });
+  expect(resultsIn(afterBad)[0]).toMatchObject({ tool: 'cad__direct', ok: false, error: { code: 'invalid_input', detail: { reason: 'bad_input', field: 'bodies' } } });
+
+  // What the person sees: the thicker plate, the three rows built, two bodies.
+  await expect.poll(mm3, STEP).toBe(12000);
+  await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok', 'Press-pull 1 press_pull ok', 'Axis 1 ref_axis ok', 'Split 1 split ok']);
+  await expect.poll(() => bodyRows(page), STEP).toEqual(['Body 1', 'Body 1 (2)']);
+  // The request names the undo group (its last full stop left out).
+  expect(await label()).toBe('Assistant: Make the plate 10 mm thick, add an axis and split it at x 10');
+
+  // One Undo, named for the request, takes all three away.
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').hover();
+  await expect(frame.locator('[data-cad-tip]')).toContainText('Undo Assistant: Make the plate 10 mm thick, add an axis and split it at x 10', STEP);
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok']);
+  await expect.poll(() => bodyRows(page), STEP).toEqual(['Body 1']);
+  await expect.poll(mm3, STEP).toBe(7200);
+  expect(await label()).toBe(undoBefore);
+});

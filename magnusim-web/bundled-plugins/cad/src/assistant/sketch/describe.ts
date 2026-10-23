@@ -4,17 +4,23 @@
 // with their stored ids (a kept id keeps its points on resend, so region keys and side names stay);
 // coordinates to 1e-6 mm so joins work again; the inferred relations as infer true; `on` as a
 // selector ("" keeps where it lies when no selector names its face).
-// What the tool cannot write makes the sketch unsupported (inputs null): projected edges, splines,
-// sketch patterns or offsets, fixed points, driven dimensions, ids with characters the tool does not
-// use. Past 150 entities, 200 constraints (inferred ones included) or the reply's room it is too_big.
+// Splines as spline or control_spline (their stored handles and a trimmed piece's knots stay with a
+// kept id); fix rows; driven dimensions as value "driven"; a dimension's label as its last ref
+// at(u, v); the sketch's patterns and offsets, and its links (projected and intersected curves), as
+// the rows of the person's tools that make them, first (ops.ts keeps them by id: their copies and
+// curves are not entities of the form, and are named as names.ts says). Every sketch the person
+// can make has a form. Past 150 entities, 200 constraints (inferred ones included) or the reply's
+// room it is too_big.
 // refOf(stored id) gives the model's name for any point or entity (free, moved, conflicts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { ORIGIN_PLANES, type SketchConstraint, type SketchEntity, type SketchFeature, type Vec2 } from '../../types/doc';
+import { sourceWords } from '../../sketch/project/source';
+import { ORIGIN_PLANES, type SketchConstraint, type SketchEntity, type SketchFeature, type SketchLink, type Vec2 } from '../../types/doc';
 import type { DocState } from '../../types/doc-service';
 import { LabelIndex, quoteName } from '../labels';
 import { jsonBytes } from '../numbers';
 import { expandEntity, type EntityKind, type Macro } from './macros';
+import { linkEntityNames, offsetSidePlace, ownedEntities, partsOfEntity, tieCopyNames, tieValue } from './names';
 import { toolKindOf } from './signatures';
 
 export interface SketchForm {
@@ -36,7 +42,6 @@ export const FORM_ROOM = 0.75;
 /** The cloud reply's room for one sketch (bytes), when no call says another. */
 export const FORM_BUDGET = 16 * 1024;
 
-export const UNSUPPORTED_WORDS = 'projected edges, splines or sketch patterns: sketch cannot replace it; edit_feature can change its dimension values';
 export const TOO_BIG_WORDS = 'too big to resend; use edit_feature for its dimensions';
 
 const r6 = (v: number) => {
@@ -46,8 +51,8 @@ const r6 = (v: number) => {
 const DEG = 180 / Math.PI;
 const angleDeg = (c: Vec2, p: Vec2) => r6(Math.atan2(p[1] - c[1], p[0] - c[0]) * DEG);
 const dist = (a: Vec2, b: Vec2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
-/** The characters the tool writes in ids. */
-const PLAIN_ID = /^[A-Za-z0-9_]+$/;
+/** A place ref: "at(u, v)" to 1e-6 mm. */
+const placeRef = (p: Vec2) => `at(${r6(p[0])}, ${r6(p[1])})`;
 
 /** Which macro a group of "<id>__<part>" entities looks like, by its parts. */
 function kindOfGroup(parts: string[]): EntityKind | null {
@@ -73,6 +78,8 @@ function pointsOf(e: SketchEntity): string[] {
       return [e.c];
     case 'arc':
       return [e.c, e.a, e.b];
+    case 'spline':
+      return [...e.pts];
     default:
       return [];
   }
@@ -189,17 +196,41 @@ function matchMacro(f: SketchFeature, m: Macro, group: SketchEntity[]): Map<stri
   return map;
 }
 
-/** Why the sketch tool cannot write this sketch, or null. */
-export function unsupportedWhy(f: SketchFeature): string | null {
-  if (f.links?.length || f.ties?.length || f.entities.some((e) => e.kind === 'spline')) return UNSUPPORTED_WORDS;
-  if (f.constraints.some((c) => c.kind === 'fix')) return 'fixed points: sketch cannot replace it; edit_feature can change its dimension values';
-  if (f.constraints.some((c) => 'driving' in c && c.driving === false)) return 'driven dimensions: sketch cannot replace it; edit_feature can change its dimension values';
-  const ids = [...Object.keys(f.points), ...f.entities.map((e) => e.id), ...f.constraints.map((c) => c.id)];
-  if (ids.some((id) => !PLAIN_ID.test(id))) return 'trimmed or split pieces (ids the tool does not write): sketch cannot replace it; edit_feature can change its dimension values';
+/** Why the sketch tool cannot write this sketch, or null (every sketch the person can make has a form now). */
+export function unsupportedWhy(_f: SketchFeature): string | null {
   return null;
 }
 
 const SHOWN_LABELS = new WeakMap<object, LabelIndex>();
+
+/** What a link reads, as a selector where one says it (a body, a face's label), else the person's words. */
+function linkRef(l: SketchLink, s: DocState): string {
+  const src = l.source;
+  const body = s.rebuild.bodies.find((b) => b.id === src.body);
+  const bodyName = body?.name ?? s.doc.bodies[src.body]?.name ?? 'a body';
+  if (src.kind === 'silhouette' || src.kind === 'section') return quoteName(bodyName);
+  if (src.kind === 'face' && body) {
+    const label = labelOfFace(s, body.id, src.ref.name);
+    if (label) return label;
+  }
+  const bodies = new Map(s.rebuild.bodies.map((b) => [b.id, { shape: b.shape, names: b.names ?? null }] as const));
+  return sourceWords(src, { bodies, bodyName: () => bodyName, featureName: (id) => s.doc.features.find((g) => g.id === id)?.name ?? null });
+}
+
+/** A face's label on the shown bodies, or "". */
+function labelOfFace(s: DocState, bodyId: string, face: string): string {
+  const bodies = s.rebuild.bodies;
+  const bi = bodies.findIndex((b) => b.id === bodyId);
+  const fi = bi >= 0 ? (bodies[bi].names?.faces.indexOf(face) ?? -1) : -1;
+  if (fi < 0) return '';
+  let labels = SHOWN_LABELS.get(s.rebuild);
+  if (!labels) {
+    const names = new Map(s.doc.features.map((g) => [g.id, g.name] as const));
+    labels = new LabelIndex(bodies, { featureName: (id) => names.get(id) ?? null });
+    SHOWN_LABELS.set(s.rebuild, labels);
+  }
+  return labels.of(bi, fi).label ?? '';
+}
 
 /**
  * Where the sketch lies as a plane selector (the sketch tool's `on`, a hole's `face`): Top, a
@@ -237,7 +268,10 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
   // Groups of "<id>__<part>" entities, in the order they first appear.
   const groups = new Map<string, SketchEntity[]>();
   const steps: ({ kind: 'group'; id: string } | { kind: 'one'; e: SketchEntity })[] = [];
+  // Pattern and offset copies and linked curves come with their rows, not as entities.
+  const owned = ownedEntities(f);
   for (const e of f.entities) {
+    if (owned.has(e.id)) continue;
     const k = e.id.indexOf('__');
     if (k <= 0) {
       steps.push({ kind: 'one', e });
@@ -291,6 +325,15 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
         entities.push({ id: e.id, kind: 'arc', at: [r6(c[0]), r6(c[1]), r6(dist(c, P(start))), angleDeg(c, P(start)), angleDeg(c, P(end))], construction });
         return;
       }
+      case 'spline': {
+        name(e.id, e.id);
+        for (const [part, p] of partsOfEntity(e)) name(p, `${e.id}.${part}`);
+        const at = e.pts.flatMap((p) => P(p).map(r6));
+        if (e.closed) at.push(...P(e.pts[0]).map(r6));
+        if (e.form === 'control') at.push(e.degree);
+        entities.push({ id: e.id, kind: e.form === 'fit' ? 'spline' : 'control_spline', at, construction });
+        return;
+      }
       default:
         return;
     }
@@ -321,10 +364,35 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
   }
   const unsupported = unsupportedWhy(f);
   if (unsupported) return { inputs: null, unsupported, tooBig: false, refOf };
+  // ---- links and ties first (their copies and curves are named before a row uses them)
+  const rowsFirst: Record<string, unknown>[] = [];
+  const nameEntity = (id: string, n: string) => {
+    name(id, n);
+    const e = byId.get(id);
+    if (e) for (const [part, p] of partsOfEntity(e)) name(p, part ? `${n}.${part}` : n);
+  };
+  for (const l of f.links ?? []) {
+    for (const [id, n] of linkEntityNames(l)) nameEntity(id, n);
+    rowsFirst.push({ id: l.id, kind: l.type === 'intersection' ? 'intersect' : 'project', refs: [linkRef(l, s)], value: '' });
+  }
+  for (const t of f.ties ?? []) {
+    for (const [id, n] of tieCopyNames(t, refOf)) nameEntity(id, n);
+    const sources = t.sources.map(refOf);
+    if (t.kind === 'offset') {
+      const side = offsetSidePlace(f, t);
+      rowsFirst.push({ id: t.id, kind: 'offset', refs: [sources[0], ...(side ? [placeRef(side)] : [])], value: tieValue(t, refOf) });
+    } else if (t.kind === 'circular') rowsFirst.push({ id: t.id, kind: 'circular_pattern', refs: [refOf(t.centre ?? 'origin'), ...sources], value: tieValue(t, refOf) });
+    else rowsFirst.push({ id: t.id, kind: 'linear_pattern', refs: sources, value: tieValue(t, refOf) });
+  }
+  // Every other point by its entity's part (a trimmed end, a tool's new points).
+  for (const e of f.entities) {
+    const n = refOf(e.id);
+    for (const [part, p] of partsOfEntity(e)) if (p !== 'origin') name(p, part ? `${n}.${part}` : n);
+  }
   // The tool's own inferred relations come back from infer true.
   const lines = new Set(f.entities.filter((e) => e.kind === 'line').map((e) => e.id));
   const isInferred = (c: SketchConstraint) => 'inferred' in c && !!c.inferred && /__[hv]$/.test(c.id) && lines.has(c.id.slice(0, -3)) && (c.kind === 'horizontal' || c.kind === 'vertical');
-  const constraints: Record<string, unknown>[] = [];
+  const constraints: Record<string, unknown>[] = [...rowsFirst];
   let inferred = 0;
   for (const c of f.constraints) {
     if (own.has(c.id)) continue;
@@ -333,7 +401,17 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
       continue;
     }
     const kind = toolKindOf(c.kind) ?? c.kind;
-    constraints.push({ id: c.id, kind, refs: c.refs.map(refOf), value: 'expr' in c && typeof c.expr === 'string' ? c.expr : '' });
+    const refs = c.refs.map(refOf);
+    let value = '';
+    if ('expr' in c && typeof c.expr === 'string') {
+      value = c.driving === false ? 'driven' : c.expr;
+      if (c.at) refs.push(placeRef(c.at));
+    } else if (c.kind === 'fix' && 'value' in c && c.value) {
+      // A point fixed away from where it is (it was dragged off): its spot.
+      const here: Vec2 | undefined = c.refs[0] === 'origin' ? [0, 0] : f.points[c.refs[0]];
+      if (!here || dist(here, c.value) > 1e-9) refs.push(placeRef(c.value));
+    }
+    constraints.push({ id: c.id, kind, refs, value });
   }
   const inputs = { edit: f.name, name: f.name, on: supportSelector(f, s), entities, constraints, infer: inferred > 0 };
   const budget = o.budget ?? FORM_BUDGET;

@@ -12,7 +12,7 @@ import { namesVendor } from './vendor';
 describe('reasons and codes', () => {
   it('every reason of the spec has its code and one hint sentence', () => {
     expect(REASONS.not_ready).toContain('not_built');
-    expect(REASONS.busy).toEqual(['person_editing', 'rolled_back', 'paused', 'taken_over', 'step_declined', 'stopped', 'other_turn', 'changed']);
+    expect(REASONS.busy).toEqual(['person_editing', 'rolled_back', 'paused', 'taken_over', 'step_declined', 'stopped', 'other_turn', 'changed', 'view_latched']);
     for (const [code, list] of Object.entries(REASONS)) for (const r of list) expect(REASON_CODE[r], r).toBe(code);
     for (const r of [...Object.values(REASONS).flat(), 'no_overlap', 'wrong_side', 'too_short', 'off_body'] as (keyof typeof HINTS)[]) {
       expect(HINTS[r], r).toMatch(/^[A-Z][^\n]*[.:?]$/);

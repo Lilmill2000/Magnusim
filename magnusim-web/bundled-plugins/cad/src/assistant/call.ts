@@ -105,7 +105,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       const reply: ToolReply = await impl.run(ctx);
       ok = true;
       // An edit that answered ok: one picture of the Part as it is now (pictures.ts); never a failure.
-      if (!reply.images?.length && wantsPicture(ctx, rt.pictures.get())) {
+      // A reply that changed no model (undo_step false: the workspace tool's view state) gets none.
+      if (!reply.images?.length && reply.data.undo_step !== false && wantsPicture(ctx, rt.pictures.get())) {
         const pic = await editPicture(ctx);
         if (pic && 'image' in pic) {
           reply.images = [pic.image];

@@ -177,7 +177,7 @@ describe('sweep', () => {
       // edit_feature has no value to set on it.
       const set = await h.call('edit_feature', { feature: 'Sweep 1', set: [{ field: 'distance', value: '1 mm' }], rename_to: '', suppress: 'keep', move: '' });
       expect(reasonOf(set)).toBe('bad_input');
-      expect(messageOf(set)).toContain('Sweep 1 has no field "distance" (its fields: none)');
+      expect(messageOf(set)).toContain('Sweep 1 has no field "distance" (its fields: orientation, op)');
     },
     REAL_KERNEL_MS,
   );

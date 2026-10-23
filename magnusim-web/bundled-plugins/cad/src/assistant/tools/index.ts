@@ -10,8 +10,12 @@
 export { tool as body } from './body';
 // combine: Combine bodies.
 export { tool as combine } from './combine';
+// construct: Construction geometry.
+export { tool as construct } from './construct';
 // delete: Delete features.
 export { tool as delete } from './delete';
+// direct: Direct edits and enclosure.
+export { tool as direct } from './direct';
 // edit_feature: Change a feature.
 export { tool as edit_feature } from './edit_feature';
 // extrude: Extrude.
@@ -42,3 +46,5 @@ export { tool as sweep_loft } from './sweep_loft';
 export { tool as undo } from './undo';
 // view: Look at the Part.
 export { tool as view } from './view';
+// workspace: Workspace and view.
+export { tool as workspace } from './workspace';

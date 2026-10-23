@@ -8,7 +8,8 @@
 // it in the history (the rebuild reads a sketch's plane from the features before it). The answer:
 // the state, dof, free and moved points, the plane in numbers and words, the regions (r1, r2, ...
 // by area) with what bounds them, open ends, joins, inferred relations and warnings (an inferred
-// relation left out says what it repeated or could not hold with).
+// relation left out says what it repeated or could not hold with), and what each of the person's
+// sketch tools made (`made`: sketch/ops.ts runs them in row order, before the solve).
 // get_model reads a sketch back in this tool's input form (sketch/describe.ts, registered here).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -23,7 +24,9 @@ import { registerFeatureIo } from '../features-io';
 import { featureByName, frameWords, supportText } from '../model';
 import { dir, jsonBytes, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
-import { compileSketch, type Compiled, type ConstraintIn, type EntityIn } from '../sketch/compile';
+import { compileSketchRows, type Compiled, type ConstraintIn, type EntityIn } from '../sketch/compile';
+import { tieFields } from '../sketch/dims';
+import { toolHost } from '../sketch/ops';
 import { describeSketch, TOO_BIG_WORDS } from '../sketch/describe';
 import { regionRows } from '../sketch/regions';
 import { solveSketch, type Solved } from '../sketch/solve';
@@ -67,15 +70,19 @@ const sketchTool: EditTool<Plan> = {
     const clash = s.doc.features.find((f) => f.id !== edit?.id && f.name.toLowerCase() === name.toLowerCase());
     if (clash) throw new ToolError('name_taken', `name: another feature is already called ${clash.name}.`, { detail: { field: 'name' } });
     const support = await planSupport(ctx, str(ctx.input.on), { edit, sketchName: name });
-    const compiled = compileSketch(
+    // The person's sketch tools read the plane the sketch will lie on, and the bodies before it.
+    const frame = support.kind === 'keep' ? edit!.plane : support.frame;
+    const compiled = await compileSketchRows(
       {
         entities: (Array.isArray(ctx.input.entities) ? ctx.input.entities : []) as EntityIn[],
         constraints: (Array.isArray(ctx.input.constraints) ? ctx.input.constraints : []) as ConstraintIn[],
         infer: ctx.input.infer === true,
       },
       { units: services.doc.units, stored: edit },
+      toolHost(ctx, { frame, scene: { before: edit?.id ?? null, self: edit?.id ?? null } }),
     );
-    const solved = await solveSketch(ctx, { ...compiled, geometry: compiled.draft });
+    // The tools' own optional relations go first when they over-define it, as in sketch mode.
+    const solved = await solveSketch(ctx, { ...compiled, inferred: [...compiled.inferred, ...compiled.optional], geometry: compiled.draft });
     return {
       part: `Sketch ${name}`,
       // A sketch replace is structural: what it breaks downstream is kept and listed.
@@ -155,14 +162,15 @@ const sketchTool: EditTool<Plan> = {
           }))
         : [];
     const constraint = (cid: string) => plan.compiled.draft.constraints.find((c) => c.id === cid);
-    const dropped = solved.dropped.map((cid) => (constraint(cid) ? words(constraint(cid)!) : cid));
+    const optional = new Set(plan.compiled.optional);
+    const dropped = solved.dropped.filter((cid) => !optional.has(cid)).map((cid) => (constraint(cid) ? words(constraint(cid)!) : cid));
     const inferred = plan.compiled.inferred.filter((cid) => !solved.dropped.includes(cid)).map((cid) => words(constraint(cid)!));
     const warnings = [...plan.compiled.warnings, ...plan.support.warnings, ...data.warnings];
     if (solved.state === 'under') {
       const free = solved.free.slice(0, 6).map((x) => `${x.of} (${x.moves.join(', ')})`);
       warnings.push(`${plan.name} is under-defined (dof ${solved.dof})${free.length ? `: ${free.join(', ')} still move` : ''}; add relations or dimensions until dof is 0`);
     }
-    if (dropped.length) {
+    if (solved.dropped.some((cid) => !optional.has(cid))) {
       // Why each went, in the model's words: what it fought or repeated.
       const named = (cid: string) => {
         const c = constraint(cid);
@@ -171,7 +179,7 @@ const sketchTool: EditTool<Plan> = {
         if (plan.compiled.inferred.includes(cid)) return `inferred ${words(c)}`;
         return `${cid} (${words(c)})`;
       };
-      const why = solved.dropped.map((cid) => {
+      const why = solved.dropped.filter((cid) => !optional.has(cid)).map((cid) => {
         const w = solved.droppedWhy[cid] ?? { fought: false, with: [] };
         const others = w.with.slice(0, 4).map(named);
         const list = others.length <= 1 ? others.join('') : `${others.slice(0, -1).join(', ')} and ${others[others.length - 1]}`;
@@ -186,6 +194,7 @@ const sketchTool: EditTool<Plan> = {
       plane: plane ? { on, origin_mm: vec(plane.origin), normal: dir(plane.normal), u: dir(plane.xdir), v: dir(ydirOf(plane)), words: frameWords(plane) } : null,
       solver: { state: solved.state, dof: solved.dof, free: solved.free, moved: solved.moved, dropped_inferred: dropped },
       joined: plan.compiled.joined.slice(0, 40),
+      ...(plan.compiled.made.length ? { made: plan.compiled.made.slice(0, 40) } : {}),
       inferred: inferred.slice(0, 60),
       regions,
       open: out?.type === 'sketch' ? out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: refOf(o.entity), point: o.point ? refOf(o.point) : null })) : [],
@@ -217,5 +226,9 @@ export const tool: ToolImpl = {
 registerFeatureIo('sketch', {
   tool: 'sketch',
   inputsOf: (f, services) => describeSketch(f as SketchFeature, services.doc.state.get()).inputs,
-  values: (f) => (f as SketchFeature).constraints.filter((c): c is SketchDimension => isDimension(c) && c.driving).map((c) => ({ field: c.id, expr: c.expr })),
+  values: (f) => [
+    ...(f as SketchFeature).constraints.filter((c): c is SketchDimension => isDimension(c) && c.driving).map((c) => ({ field: c.id, expr: c.expr })),
+    // A pattern's or offset's values: edit_feature "<id>.count" ...
+    ...((f as SketchFeature).ties ?? []).flatMap(tieFields),
+  ],
 });

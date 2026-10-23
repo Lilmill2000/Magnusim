@@ -1,9 +1,8 @@
 // Extrudes and revolves as the tools' input (CAD tools spec §4 "Full", §7.7, §12.1 features-io), on
 // the REAL kernel: what get_model full writes for a feature the person made with the panels
 // (every extent, an Up to face or vertex, a cut on given bodies, a revolve about an origin axis, a
-// sketch line and an edge), resent with edit as it is, leaves the feature exactly as it was. A face
-// extrude and one along a chosen direction have no form in the tool (inputs null, a summary), and
-// the tool refuses to replace them. The panel the tool opens is never handed an id, a type or
+// sketch line and an edge), resent with edit as it is, leaves the feature exactly as it was; so do a
+// face extrude (no sketch) and one along a chosen direction. The panel the tool opens is never handed an id, a type or
 // a body id; names are checked (taken, too long, any case), and an edit keeps its own.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -94,17 +93,14 @@ describe('extrudes the person made, as extrude input', () => {
   );
 
   it(
-    'a face extrude, or one along a chosen direction, has no extrude input and is not replaced by the tool',
+    'a face extrude, and one along a chosen direction, come back as extrude input and are replaced in place',
     async () => {
       h = await assistantHarness();
       const p = await personPlate(h);
       const top = await faceRef(h, p.body, `F:${p.extrude}:end`);
       await h.add('extrude', { name: 'Raised', face: top, profiles: [], op: 'join', scope: [], creates: null, extent: { kind: 'blind', distance: '2 mm' }, flip: false });
-      const row = await inputsOf(h, 'Raised');
-      expect(row).toMatchObject({ inputs: null, summary: 'Extrude · op join', values: [{ field: 'distance', expr: '2 mm' }] });
-      const refused = await fail(h, 'extrude', EXTRUDE({ edit: 'Raised', sketch: 'Plate sketch', distance: '2 mm' }));
-      expect(refused).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_input', field: 'edit' } });
-      expect(refused.message).toBe('bad_input: edit: Raised extrudes a face of a body, which this tool does not write: change its values with edit_feature.');
+      expect(await roundTrip(h, 'Raised', 'extrude')).toEqual(EXTRUDE({ edit: 'Raised', sketch: '', regions: [], face: 'Plate.end', distance: '2 mm', op: 'join' }));
+      expect(h.doc.state.get().rebuild.bodies[0].bbox[5]).toBeCloseTo(8, 6);
       const sk = await sketchOn(h, 'Slanted sketch', 'origin:top', new Shapes().circle('s', [0, 0], 2));
       await extrude(h, 'Slanted', regions(h, sk), { distance: '5 mm' });
       const slanted = featureNamed<ExtrudeFeature>(h, 'Slanted');
@@ -112,8 +108,11 @@ describe('extrudes the person made, as extrude input', () => {
       s.update({ direction: { kind: 'origin', axis: 'origin:x' } } as Partial<Feature>);
       s.commit();
       await h.settle();
-      expect((await inputsOf(h, 'Slanted')).inputs).toBeNull();
-      expect(await fail(h, 'extrude', EXTRUDE({ edit: 'Slanted', sketch: 'Slanted sketch', distance: '2 mm' }))).toMatchObject({ detail: { reason: 'bad_input', field: 'edit' } });
+      expect(await roundTrip(h, 'Slanted', 'extrude')).toMatchObject({ sketch: 'Slanted sketch', face: '', direction: 'X axis', distance: '5 mm' });
+      // Sent again without the direction: the extrude goes along the sketch normal again.
+      const row = (await inputsOf(h, 'Slanted')).inputs as Row;
+      await ok(h, 'extrude', { ...row, direction: '' });
+      expect(featureNamed<ExtrudeFeature>(h, 'Slanted').direction).toBeNull();
     },
     REAL_KERNEL_MS,
   );

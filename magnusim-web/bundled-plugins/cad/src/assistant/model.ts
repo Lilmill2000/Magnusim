@@ -28,6 +28,7 @@ import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
 import { refBodiesOf, type RefBodies } from './feature-tools';
+import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { LabelIndex } from './labels';
 import { madeWith } from './made-with';
@@ -169,6 +170,9 @@ export function fullFeature(services: AppServices, s: DocState, f: Feature, at: 
   if (!inputs) row.summary = summaryOf(f, services);
   const values = valuesOf(f, services);
   if (values.length) row.values = values.slice(0, 200);
+  // Its choice and on/off fields, as edit_feature sets them (choices.ts; help features has their words).
+  const choices = choicesOf(f);
+  if (choices.length) row.choices = Object.fromEntries(choices.map((c) => [c.field, c.value]));
   return row;
 }
 

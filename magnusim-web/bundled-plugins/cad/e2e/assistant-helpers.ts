@@ -158,13 +158,16 @@ export async function openNewPart(page: Page, request: APIRequestContext, h: Ass
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
   await expect.poll(tabOf, { message: "the page's event stream names its tab", timeout: STEP_MS }).not.toBe('');
   const tab = tabOf();
-  await expect.poll(async () => (await tabRow(request, h, tab))?.tools.length ?? 0, { message: "the Part's tools are offered on its tab", timeout: 60_000 }).toBe(18);
+  await expect.poll(async () => (await tabRow(request, h, tab))?.tools.length ?? 0, { message: "the Part's tools are offered on its tab", timeout: 60_000 }).toBe(PART_TOOLS);
   if (!o.review) {
     const v = await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { assistant: { setReview(on: boolean): Promise<{ available: boolean }> } } }).__CAD__.assistant.setReview(false));
     expect(v.available, 'the Part offers its tools again without review rounds').toBe(true);
   }
   return { frame, tab };
 }
+
+/** How many tools the Part offers on its tab (src/assistant/schemas.ts CAD_TOOLS). */
+export const PART_TOOLS = 21;
 
 /** The Part's frame, for evaluate(). */
 export const cadFrame = (page: Page): Frame => workspaceFrame(page);

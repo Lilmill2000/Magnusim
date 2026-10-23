@@ -2,9 +2,11 @@
 // topic at most 8 KB (example topics 12 KB), every string at most 2000 characters, as the app
 // hands them to the model. `guide` is the CAD notes themselves, `errors` every reason with its
 // fix, `features` each tool's fields and rules, `parameters`, `selectors` every form of the
-// selector language, `sketch` the entity kinds, parts, DOF, the solver's ref signatures, joins
+// selector language, `sketch` the entity kinds (splines too), parts, DOF, the solver's ref signatures, joins
 // and frames, `checks` what to verify and how, `traps` the common mistakes, `examples` the index
-// of the worked parts. The example topics are the worked parts of examples.ts, one row per call
+// of the worked parts, `sketch_tools` fix, driven dimensions, places and the person's sketch tools
+// as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link)
+// with examples, and how a pattern's values change later. The example topics are the worked parts of examples.ts, one row per call
 // with its whole input and its key results ({about, text, tool, input, result}: the call sits in
 // the row itself, so a sketch's `at` lists stay at depth 7 of the reply's data, inside the app's
 // 8; every other container is at most 6 deep). guide-example.test.ts runs every call.
@@ -59,32 +61,37 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   body: 'One step. A body name is unique among bodies; it may equal a feature name. exclude leaves the body out of the geometry the project simulates.',
   combine:
     'targets keep the result; tools go unless keep_tools. Entries: a body name, "bodies of <feature>" (a pattern\'s copies), "all bodies"; repeats are dropped and a target is taken out of tools. A join of bodies that do not touch is one body of several solids (a warning).',
+  construct:
+    'Methods, refs: help details. Its name is a plane, axis or point for other tools.',
+  direct:
+    'Kinds, fields: help details.',
   delete:
     'The person is asked first. in_use (detail.users) while a feature not listed uses one: list those too, or change them first. One step; what fails afterwards is in broke. The person gets them back with Ctrl+Z; for your own calls use undo.',
   edit_feature:
-    'set: the fields get_model detail full lists for the feature (distance, size, count...) or a sketch dimension id (d, h1x): a value edit, refused (broke_downstream) when a working feature would fail; flipped names a sketch a dimension mirrored. rename_to, suppress and move ("before X", "after X", "end") go in the same step.',
+    'set: the fields get_model detail full lists for the feature (values; choices: help details) or a sketch dimension id (d, h1x): a value edit, refused (broke_downstream) when a working feature would fail; flipped names a sketch a dimension mirrored. rename_to, suppress and move ("before X", "after X", "end") go in the same step.',
   extrude:
-    'Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
+    'face, direction: help details. Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
   find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets. count is every match, limit only cuts rows.',
   get_model:
-    "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit; a hole's sketch and cut show made_by hole and are edited as sketch and extrude. user_changes: what the person changed since your last call (while this one ran too). A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. editable false says why.",
+    "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit. user_changes: what the person changed since your last call (while this one ran too). editable false says why. Holes, a brief short of room: help details.",
   help: 'Fixed text; no Part needed. Every field of every tool is required: "", [] or false when unused.',
   hole:
     'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
   measure:
-    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. One body: volume, area, centroid, bbox, solids, shells, voids. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. section (one body): area, loops, holes, regions.',
+    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. One body: volume, area, centroid, bbox, solids, shells, voids. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
   modify:
     'fillet, chamfer: a face (or "edges of <face>") is kept as the face, a live set; an edge ("A & B", #e3) a fixed set; kept_as says which. size2 "" is an equal chamfer; flip swaps. shell: targets are the faces taken off; inward true keeps the outer size. One body per call. Faces made: <Name>.fillet(k), <Name>.chamfer(k), <Name>.inner(<face>).',
   pattern:
-    'linear: about an axis or edge, spacing a positive pitch (flip for the other way). circular: spacing the angle from the original to the last copy, "360 deg" evenly all round. mirror: about a plane (with offset: a construction plane in the same step), count and spacing "". features with op source repeat each one\'s own operation; bodies with op new make "<body> (Instance k)". Copies are <Name>.copy(k), mirrors <Name>.mirror.',
+    'linear: about an axis or edge, spacing a positive pitch (flip for the other way). options, skip: help details. circular: spacing the angle from the original to the last copy, "360 deg" evenly all round. mirror: about a plane (with offset: a construction plane in the same step), count and spacing "". features with op source repeat each one\'s own operation; bodies with op new make "<body> (Instance k)". Copies are <Name>.copy(k), mirrors <Name>.mirror.',
   revolve: 'axis: "X axis", "Y axis", "Z axis", a sketch line ("Profile.ax"), a straight edge, or "axis of <round face>". The profile may not cross the axis. Faces made: <Name>.side(<entity>) per profile edge.',
   set_params:
-    'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. A change keeps the comment the parameter has (comment "-" removes it); each answer row says added or changed, and was. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
+    'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. Comments: help details. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
   sketch:
     'on "<plane> offset <length>" makes "<sketch> plane", or uses one made for the same plane and offset. Replace: edit "<name>" with every input (get_model feature <name> gives them). Reply: plane (origin, u, v in model axes, words), solver (state, dof, free, moved, dropped_inferred), regions (id, area, at, holes), open ends. help sketch has every kind and signature.',
   sweep_loft:
     "sweep: profiles are regions of one sketch; draw them on a plane through the path's start, square to it; path curves run end to end. loft: one region per sketch, in order, none with a hole. Faces: <Name>.side(<profile entity>@<path entity>) (<Name>.side(o): every side swept from o), <Name>.start, <Name>.end.",
   undo: 'steps n: your newest n calls of this request, back to before the oldest. previous_turn true (steps 0): the whole previous request, while it is the newest change. not_own_step when the person changed the Part after one of them.',
+  workspace: 'help workspace has every action. Only reheal is an undo step; the rest is view or session state and says so (undo_step false). The person\'s view moves only with person_asked true or while they have not moved it.',
   view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
@@ -228,6 +235,23 @@ const exampleRows = (topic: string): HelpRow[] => {
   return [{ about: 'the part', text: p.part }, ...p.calls.map((c) => ({ about: c.about, text: c.text, tool: c.tool, input: c.input, result: c.result })), { about: 'checks', text: p.checks }];
 };
 
+/** The workspace tool: every action, what it takes and what it does (none of them but reheal is an undo step). */
+const workspaceRows = (): HelpRow[] => [
+  { about: 'fields', text: 'action names what to do; target, value and items carry what it needs ("" and [] when unused); person_asked true only when the person asked in this request for a change of their view. Every answer says what changed; data.undo_step false: view or session state, not an undo step (only reheal is one).' },
+  { about: 'roll_back_to, roll_to_end', text: 'target: a feature; the bar goes just after it and later features roll back (not built). While the bar is not at the end your edits answer rolled_back at once: call roll_to_end first. roll_to_end takes no target.' },
+  { about: 'show, hide', text: "target: a sketch, a construction plane, axis or point, or a body: the tree\'s eye. A sketch is shown until a later feature uses it, unless shown on purpose. body visibility does the same for bodies." },
+  { about: 'origin_planes, rename_part', text: 'origin_planes value auto (drawn on an empty part and while one is selected or hovered) or always. rename_part value: the new name of the Part (the study title, as the tree\'s Rename part; at most 120 characters).' },
+  { about: 'select, selection_filter', text: 'select items: selectors (help selectors), feature names, Top, Front, Right, X axis, Y axis, Z axis or origin; [] clears the selection. The person sees it selected; "selection" in later selectors reads it. selection_filter items: face, edge, vertex, body, feature, origin, sketch, region; [] lets everything be picked.' },
+  { about: 'expand, collapse', text: 'target origin or bodies (the tree folders), tree (the design tree card; in a sketch for that sketch only), sketch_panel (the Sketch panel), sketch_details (its Details).' },
+  { about: 'toolbar_show, toolbar_hide, toolbar_move, toolbar_reset', text: 'target: a toolbar command id (solid.extrude, modify.shell, sketch.spline, ...). show puts it on the bar, hide in its group\'s More menu; move value "before <command id of the same group>" or end. toolbar_reset value model, sketch or "" (both). The layout is the person\'s, in every project.' },
+  { about: 'banana_show, banana_hide, banana_place', text: 'The banana for scale: never a body, never in the simulation. banana_place value "x, y, z[, rot deg]" (mm; its underside at z). With target a sketch: that sketch\'s taped banana picture (seen while the sketch is edited), banana_place value "u, v" mm.' },
+  { about: 'reload, keep_mine, retry_save, retry_kernel', text: 'reload: after another tab saved (the save chip); when this tab has a change of its own the person confirms first, as it is lost. keep_mine: this tab\'s version over the other tab\'s save; the person confirms. retry_save: a save that failed, now. retry_kernel: the geometry kernel that failed to start.' },
+  { about: 'import_step, reheal', text: 'import_step: the file picker is the person\'s, so they are asked to pick the STEP (Import STEP in FILE, or a drop on the Part); call get_model after. reheal target: an Imported STEP; value the heal tolerance ("0.01 mm"; "" keeps it); items ["knit"] knits loose faces into solids, [] does not. One undo step, as Heal all in its panel.' },
+  { about: 'export_step', text: 'target AP214 or AP242 ("": AP214); value the file name ("": the Part\'s name); items the bodies ([]: every shown body). The person\'s Export STEP panel opens filled in and they click Export: the download is theirs. Refused while they have a panel open.' },
+  { about: 'send_to_simulation', text: 'Save, then link the bodies included in the simulation into the project\'s geometry, as the app\'s Back does (body simulation include or exclude chooses them). Outcomes: linked, unchanged (the geometry has this design), nothing (no body included), kept-editing (the person answered the app\'s question with Keep editing), not-now; a refusal is link_failed with the app\'s words. value leave: after a send that went through, the Part closes as Back: no Part tool answers after it.' },
+  { about: "the person\'s view", text: 'fit; standard_view value front, back, left, right, top, bottom, iso or home; normal_to target a flat face, a plane or a sketch; orbit_pivot target center, origin, "(x, y, z)" or a selector; section value off or "<Top|Front|Right> [offset <length> | middle] [flip]"; projection value perspective or orthographic; display value shaded_edges, shaded or wireframe. These move what the person sees: only with person_asked true, or while they have not moved the view in this request (else busy view_latched). Pictures (view) never move it.' },
+];
+
 /** The index of the worked parts: what each one is, its calls and its topic. */
 const exampleIndex = (): HelpRow[] =>
   WORKED_PARTS.map((p) => ({ about: p.topic, text: `${p.title}. ${p.calls.length} calls: ${[...new Set(p.calls.map((c) => c.tool))].join(', ')}. help ${p.topic} has every input whole.` }));
@@ -239,6 +263,22 @@ function partsWords(kind: EntityKind, at: number[]): string {
   const parts = Object.keys(r.macro.parts).filter(Boolean);
   return parts.length ? parts.map((p) => `x.${p}`).join(' ') : '';
 }
+
+/** Fix, driven dimensions, places and the person's sketch tools as rows of the sketch tool (sketch/ops.ts). */
+const sketchToolRows = (): HelpRow[] => [
+  { about: 'rows', text: 'The person\'s sketch tools are rows of constraints {id, kind, refs, value}, run in order on the sketch as the rows before them left it, solved: draw and dimension, then trim, fillet or pattern, then constrain what they made. "at(u, v)" in refs is a place in mm. The answer\'s made lists what each row made. Each tool stores what the person\'s tool stores.' },
+  { about: 'fix', text: 'fix [p] holds a point where it is, fix [p, at(u, v)] at that place; fix [l] holds a curve (every point) where it is. A fixed point is fully defined.' },
+  { about: 'driven', text: 'A dimension with value "driven" measures and never holds (grey in parentheses; the person\'s "Make it driven?"): use it when a driving one would over-define the sketch (the conflict names it). A last ref at(u, v) places any dimension\'s label: distance [r.bottom, at(0, -12)] "w".' },
+  { about: 'trim and extend', text: 'trim [curve, at(u, v)]: the piece around the place goes, up to the nearest crossings (a piece cut in two keeps its id at the start, the other is "<id>.b"; new ends sit on the curves that cut them). extend [curve, at(u, v)]: the end nearest the place runs to the next curve. Example: {id:"t1", kind:"trim", refs:["c1", "at(0, 5)"], value:""}.' },
+  { about: 'fillet and chamfer', text: 'fillet [corner] or [c1, c2] (two lines, or a line and an arc, meeting there), value the radius: an arc tangent to both and a driving Radius dimension; the corner stays as a construction point ("f1.corner"); the arc is "f1" in later rows. chamfer: value "d" (equal) or "d1; d2" (d1 along the first line); its line is "ch1". made gives the stored ids and dimensions (edit_feature takes them). Example: {id:"f1", kind:"fillet", refs:["r.tr"], value:"3 mm"}.' },
+  { about: 'mirror', text: 'mirror [axis line, items...]: copies kept symmetric about the line (Symmetric relations; circles also Equal); an item lying on the axis is left out, a point on it shared. Items are entities or whole macros ("r"). Copies are "m1.<item>" in later rows ("m1.c1", "m1.r.top").' },
+  { about: 'offset', text: 'offset [curve, at(u, v)], value the distance: the curve\'s chain (curves joined end to end) offset to the place\'s side; without at(u, v) both sides. It follows its source (a tie). Copies are "<id>.1.<curve>" (".2." for the other side). Example: {id:"o1", kind:"offset", refs:["p.1", "at(10, 12)"], value:"2 mm"}.' },
+  { about: 'linear_pattern', text: 'linear_pattern [items...], value "count 4; spacing 10 mm; angle 0 deg" (count includes the items; angle from +u, 0 deg if left out); a second direction "count2 3; spacing2 8 mm; angle2 90 deg"; "along l1" or "along2 l2" runs along a line instead of an angle. Copies follow their items; copy k of item c1 is "<id>.k.c1" ("<id>.i_k.c1" with two directions).' },
+  { about: 'circular_pattern', text: 'circular_pattern [centre point, items...], value "count 6" (the whole circle, equal spacing) or "count 4; angle 90 deg" (spread over that total angle). Copy k is "<id>.k.<item>". Example: {id:"p1", kind:"circular_pattern", refs:["origin", "h"], value:"count 6"}.' },
+  { about: 'later', text: 'A pattern or offset keeps its row\'s id. edit_feature on the sketch sets its values: "<id>.count", "<id>.spacing", "<id>.angle", "<id>.count2", "<id>.spacing2", "<id>.angle2" (linear), "<id>.count", "<id>.angle" ("full" for the whole circle; circular), "<id>.distance" (offset); copies are made or removed. A replace keeps a row sent with its id (new values lay it out again), and removes one left out.' },
+  { about: 'project and intersect', text: 'project [selector]: a face (its outer edges), an edge or a vertex of a body, or a body (its silhouette along the sketch normal), as fixed curves linked to the model (they follow it at every rebuild). intersect [body]: where the sketch plane cuts the body. One per row; the curves are "<id>" (one) or "<id>.1", "<id>.2"... Constrain to them, or trim and offset them after break_link. A replace keeps a row sent with its id (its refs are not read again).' },
+  { about: 'break_link', text: 'break_link [curves or a project/intersect row id]: the linked curves become ordinary geometry where they are; constraints on them stay.' },
+];
 
 /** The sketch reference (CAD tools spec §10.2 sketch): kinds, parts, DOF, refs, joins, frames. */
 const sketchRows = (): HelpRow[] => {
@@ -254,26 +294,68 @@ const sketchRows = (): HelpRow[] => {
     ['slot', [0, 0, 2, 0, 1], 'x.a and x.b are the arc centres; sides tangent to the arcs, the arcs equal; x.axis is construction'],
     ['polygon', [0, 0, 1, 4], 'corners x.p1... on the construction circle x.circle (x.p1 at +u), sides x.s1... (x.sk from x.pk), all equal'],
     ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece: arcs x.inner, x.outer on x.center, radial lines x.start, x.end through the centre'],
+    ['spline', [0, 0, 10, 5, 20, 0], 'x is the curve through its points x.p0, x.p1... (a cubic, as the person\'s Spline tool); x.start, x.end when open; x.h0, x.h1 are its end handles once a tangent gave them. A wing: spline [100,0, 50,6, 0,0, 50,-4, 100,0] closed'],
+    ['control_spline', [0, 0, 10, 10, 20, 0, 30, 0, 3], 'x is the curve on its poles x.p0, x.p1... (as the person\'s Control-point spline); x.start, x.end when open'],
   ];
   const rows: HelpRow[] = kinds.map(([kind, at, words]) => {
-    const parts = kind === 'polyline' || kind === 'polygon' ? '' : partsWords(kind, at);
+    const parts = kind === 'polyline' || kind === 'polygon' || kind === 'spline' || kind === 'control_spline' ? '' : partsWords(kind, at);
     const dof = KIND_DOF[kind];
-    return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : ''}.` };
+    return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : kind.endsWith('spline') ? '. 2 DOF per point' : ''}.` };
   });
   const relations = (Object.keys(SIGNATURES) as ToolConstraintKind[]).filter((k) => !TOOL_DIMENSIONS.includes(k));
-  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. point_on is on a line or a circle/arc; collinear makes two lines one line.` });
+  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. point_on is on a line or a circle/arc; collinear makes two lines one line. A spline's curve takes tangent [s, curve] at an end they share (a fit spline gets its end handle there) and coincident [point, s] (the point slides on it); other relations take its points. fix: help sketch_tools.` });
   rows.push({
     about: 'dimensions',
-    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit). ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
+    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit), or "driven" (it shows the value without holding it); a last ref at(u, v) places its label. ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
   });
   rows.push({ about: 'ids and refs', text: 'Ids: a-z, 0-9 and _ (a letter first, at most 24, no double _, not origin), unique across entities and constraints. Refs: an id, a part (l.start, r.top, p.2, p.p2, c.center) or origin. A kept entity of an edited sketch keeps its points (and an id the sketch has, e_..., pt_..., is taken as it is).' });
   rows.push({ about: 'joins', text: `Ends within ${JOIN_TOL} mm of another entity's point are one point (the first entity's wins; refs follow; "joined" lists them), never two points of one entity, never the origin by itself; 0.05 to 0.5 mm apart is a warning (add coincident or fix the numbers). Points an edited sketch has apart stay apart. A rect corner drawn on a line's end is joined: no coincident needed.` });
   rows.push({ about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours, or cannot hold with one, is left out and said so (dropped_inferred, and a warning naming which).' });
   rows.push({ about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." });
   rows.push({ about: 'planes and faces', text: 'Top n+Z u+X v+Y; Front n-Y u+X v+Z; Right n+X u+Y v+Z. On a flat face (n out of the part): +Z u+X v+Y; -Z u+X v-Y; +Y u+X v-Z; -Y u+X v+Z; +X u+Y v+Z; -X u+Y v-Z; its origin is the model origin projected onto it. "<plane or face> offset <length> [flip]" makes "<sketch> plane".' });
-  rows.push({ about: 'replace', text: 'edit "<name>" and every input: get_model feature <name> gives them in this form. "" for on keeps where it lies. Keep the ids that stay: region keys and face names follow them. edit_feature changes one dimension by its id. Sketches with projected edges, splines, patterns, fixed points or driven dimensions are not replaced (edit_feature still changes their values).' });
+  rows.push({ about: 'replace', text: 'edit "<name>" and every input: get_model feature <name> gives them in this form (splines, fix, driven dimensions, patterns, offsets and projections too: help sketch_tools). "" for on keeps where it lies. Keep the ids that stay: region keys and face names follow them. edit_feature changes one dimension by its id, or a pattern\'s value as <id>.count.' });
   return rows;
 };
+
+/** The details of get_model's holes and short brief, set_params' comments, construct, direct, edit_feature's choice fields, extrude's face and direction, pattern's options and keys, measure's totals and checks. */
+const detailRows = (): HelpRow[] => [
+  {
+    about: 'get_model and set_params',
+    text: "get_model: a hole's sketch and cut show made_by hole and are edited as sketch and extrude. A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. set_params: a change keeps the comment the parameter has (comment \"-\" removes it); each answer row says added or changed, and was.",
+  },
+  {
+    about: 'construct planes',
+    text: 'offset [plane], value the distance (flip: the other way). angle [plane, axis], value the angle; the axis lies in or along the plane. three_points [p1, p2, p3]. midplane [plane, plane2]: parallel planes give the middle, crossing ones the bisector. normal_to_curve [curve], value the position "50 %" (0 to 100 % of its length), or [curve, a point on it] with value "". flip turns the normal round.',
+  },
+  {
+    about: 'construct axes and points',
+    text: 'Axes: two_points [p1, p2]; cylinder [a cylindrical or conical face]; edge [a straight edge: along it; a round edge: its axis]; two_planes [plane, plane2]: where they cross; flip reverses it. Points: vertex [a point]; center [an arc, a circle or a spherical face]; on_edge [a curve], value "25 %" or a length from its start (from_end: from its other end); edge_plane [an edge, a plane]: where the edge crosses it; coordinates: refs [], xyz three lengths.',
+  },
+  {
+    about: 'construct refs',
+    text: 'A plane: Top, Front, Right, a construction plane by name or a flat face (not "<plane> offset ...": make that plane first). An axis: X axis, Y axis, Z axis, a construction axis, a sketch line ("Sk.l1"), a straight or round edge, "axis of <round face>". A point: origin, a construction point, a vertex selector, or a sketch point "<sketch>.<id>" (a point), "<sketch>.<line>.start|.end", "<sketch>.<circle or arc>.center". A curve: an edge, or a sketch curve "<sketch>.<id>". Nothing made by the feature itself or after it.',
+  },
+  {
+    about: 'direct kinds',
+    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"... enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid. repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
+  },
+  {
+    about: 'edit_feature choices',
+    text: 'set rows with a choice field and one of its words (on/off: "true" or "false"; get_model full shows choices now). extrude, revolve: flip, op (new, join, cut, intersect). sweep: orientation (follow, fixed), op. loft: ruled, op. chamfer: flip, mode (distance, two). shell: direction (inside, outside). combine: op (join, cut, intersect), keep_tools. linear pattern: op (source, new, join, cut, intersect), flip, symmetric, mode (spacing, extent), flip2, symmetric2, mode2. circular pattern: op, flip, symmetric, mode (full, angle). mirror: op. split: plane (Top, Front, Right) by a plane, keep_tool by a body. enclosure: shape (box, cylinder), axis (X, Y, Z), padding (zero, percent, fixed). construction plane, axis: method, flip; point: method, along (distance, percent), from_end. A change that leaves the feature incomplete (a method without its picks) is refused: resend it with its tool.',
+  },
+  {
+    about: 'extrude face and direction',
+    text: 'face: one flat face of a body extruded with no sketch (sketch "", regions []), along its outward normal (flip: into the body); its side faces are named by the edges they came from. direction: "" for the normal, or an axis to extrude along: X axis, an edge, a sketch line, a construction axis, "normal of <plane>"; flip reverses it.',
+  },
+  {
+    about: 'pattern options and keys',
+    text: 'options: symmetric (copies on both sides of the first direction, or of a circular one), flip2 and symmetric2 (the second direction), extent and extent2 (spacing is the whole length from the original to the last copy). skip: copy keys to leave out. Keys: linear "i" along the first direction ("2" the first copy), "i.j" with a second one, negative on a symmetric side; circular "i"; "0" is the original. The reply lists every copy as "key (label)"; a key no copy has is refused.',
+  },
+  {
+    about: 'measure totals and checks',
+    text: 'Two bodies: total beside the pair. 3 to 32 bodies (all bodies): total {bodies, volume_mm3, area_mm2, centroid_mm, bbox_mm} as the Mass properties panel adds them, and each body\'s volume and valid. One body that is not valid: problems [{status, on ("face 3 of shell 1"), at_mm}], problem_total and problem_counts, as the Check panel lists them.',
+  },
+];
 
 export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
   sketch: sketchRows(),
@@ -289,6 +371,9 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   example_flange: exampleRows('example_flange'),
   example_chip: exampleRows('example_chip'),
   guide: guideRows(),
+  sketch_tools: sketchToolRows(),
+  details: detailRows(),
+  workspace: workspaceRows(),
 });
 
 export const isHelpTopic = (t: unknown): t is HelpTopic => typeof t === 'string' && (HELP_TOPICS as readonly string[]).includes(t);

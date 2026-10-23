@@ -10,6 +10,10 @@
 //   - rename, setSuppressed and move are the Part's own edits, with their refusal words; they are
 //     structural, so a feature they turn red is kept and listed in `broke`. With values in the same
 //     call, the values are judged first, as a value edit, before the rename, suppression or move.
+//   - Choice and on/off fields (choices.ts: flip, op, method, shape, padding, axis, keepTool,
+//     orientation, ruled, along, fromEnd, a pattern's symmetric and mode...) go the same way, a
+//     row's value one of the field's words; the feature with every row applied must be complete
+//     by its type's own check (a method that needs a pick it has not got is refused).
 //   - A sketch's dimension values (set rows naming its dimension ids) are checked headless first and
 //     go through sketch mode, which solves the stored geometry with them (sketch/dims.ts); the answer
 //     says when a change turned a sketch over (`flipped`).
@@ -22,6 +26,7 @@ import type { EditResult } from '../../types/doc-service';
 import { uiFor } from '../../ui/controller';
 import { heartbeat } from '../busy';
 import { ToolError } from '../errors';
+import { choiceField, choicesOf, storedChoice } from '../choices';
 import { pathOfField, valuesOf } from '../features-io';
 import { featureByName, stateWord } from '../model';
 import { macrotask } from '../pace';
@@ -40,7 +45,7 @@ interface Plan extends EditPlan {
   name: string;
   /** The top-level fields the values change, each whole (session.update merges only the top level). */
   patch: Partial<Feature> | null;
-  set: { field: string; path: string; value: string }[];
+  set: { field: string; path: string; value: string; stored?: unknown }[];
   renameTo: string | null;
   suppress: boolean | null;
   /** The feature's index after the move, or null. */
@@ -66,7 +71,7 @@ function pathKeys(path: string): (string | number)[] {
 }
 
 /** `f` with `value` at `path` (copies along the path; the rest shared). */
-function withValue<T>(f: T, path: string, value: string): T {
+function withValue<T>(f: T, path: string, value: unknown): T {
   const keys = pathKeys(path);
   const put = (node: unknown, i: number): unknown => {
     const k = keys[i];
@@ -140,8 +145,16 @@ const editFeature: EditTool<Plan> = {
       const field = str(row?.field);
       const value = str(row?.value);
       const path = pathOfField(f, field, services);
+      const choice = path ? null : choiceField(f, field);
+      if (choice) {
+        const st = storedChoice(choice, value);
+        if (!st.ok) problems.push(`set[${i}].value: ${st.why}`);
+        else if (set.some((x) => x.path === choice.path)) problems.push(`set[${i}]: ${field} is set twice`);
+        else set.push({ field: choice.field, path: choice.path, value, stored: st.value });
+        continue;
+      }
       if (!path) {
-        const fields = valuesOf(f, services).map((v) => v.field);
+        const fields = [...valuesOf(f, services).map((v) => v.field), ...choicesOf(f).map((c) => c.field)];
         const sketch = sketchWithDimension(s, f, field);
         if (sketch) {
           redirect ??= sketch.name;
@@ -162,15 +175,32 @@ const editFeature: EditTool<Plan> = {
     // The dry run: the feature with each new value, as its type checks it.
     let patched: Feature = f;
     const def = services.doc.features.get(f.type);
+    const choiceRows = set.filter((x) => 'stored' in x);
     for (let i = 0; i < (dims ? 0 : set.length); i++) {
-      const next = withValue(patched, set[i].path, set[i].value);
+      const row = set[i];
+      if ('stored' in row) continue;
+      const next = withValue(patched, row.path, row.value);
       const why = def?.incomplete(next, services.doc.units) ?? null;
       if (why && !def?.incomplete(patched, services.doc.units)) {
-        throw new ToolError('expr_error', `set[${i}].value (${set[i].field}): ${why}.`, { detail: { field: `set[${i}].value` } });
+        throw new ToolError('expr_error', `set[${i}].value (${row.field}): ${why}.`, { detail: { field: `set[${i}].value` } });
       }
       patched = next;
     }
-    const patch: Partial<Feature> | null = set.length && !dims ? (Object.fromEntries([...new Set(set.map((x) => String(pathKeys(x.path)[0])))].map((k) => [k, (patched as unknown as Record<string, unknown>)[k]])) as Partial<Feature>) : null;
+    // The choices together (a method and its picks may only make sense as a whole), as the type checks them.
+    if (choiceRows.length) {
+      const was = def?.incomplete(patched, services.doc.units) ?? null;
+      for (const row of choiceRows) patched = withValue(patched, row.path, row.stored);
+      // The person's panel clears a Point's face when its method is no longer a centre.
+      if (patched.type === 'ref_point' && patched.method !== 'center' && choiceRows.some((r) => r.path === 'method')) patched = { ...patched, face: null };
+      const why = def?.incomplete(patched, services.doc.units) ?? null;
+      if (why && !was) {
+        const fields = choiceRows.map((r) => r.field).join(', ');
+        throw new ToolError('bad_input', `set (${fields}): ${f.name} would be incomplete: ${why}. Send its picks with its own tool${f.type.startsWith('ref_') ? ' (construct, edit)' : ''} instead.`, { detail: { field: 'set', why } });
+      }
+    }
+    const keys = new Set(set.map((x) => String(pathKeys(x.path)[0])));
+    if (patched !== f && patched.type === 'ref_point' && (f as Feature & { face?: unknown }).face !== (patched as Feature & { face?: unknown }).face) keys.add('face');
+    const patch: Partial<Feature> | null = set.length && !dims ? (Object.fromEntries([...keys].map((k) => [k, (patched as unknown as Record<string, unknown>)[k]])) as Partial<Feature>) : null;
     const renameTo = str(ctx.input.rename_to);
     let rename: string | null = null;
     if (renameTo && renameTo !== f.name) {
@@ -274,7 +304,8 @@ const editFeature: EditTool<Plan> = {
       extra.solver = { state: plan.dims.solved.state, dof: plan.dims.solved.dof, free: plan.dims.solved.free };
       if (flipped.length) data.warnings.push(`${flipped.join(', ')} turned over: a dimension went through zero; check it with get_model or view`);
     }
-    return { text, data: { ...data, values: f ? valuesOf(f, ctx.services).slice(0, 40) : [], ...extra }, summary: text };
+    const choices = f ? choicesOf(f) : [];
+    return { text, data: { ...data, values: f ? valuesOf(f, ctx.services).slice(0, 40) : [], ...(choices.length ? { choices: Object.fromEntries(choices.map((c) => [c.field, c.value])) } : {}), ...extra }, summary: text };
   },
 };
 

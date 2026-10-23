@@ -22,6 +22,7 @@ import type { AppServices } from '../types/app';
 import type { CallCtx, TurnFacts } from '../types/assistant';
 import { uiFor } from '../ui/controller';
 import { ToolError } from './errors';
+import { ownRollbackBlock } from './own-rollback';
 import { runtimeOf, type AssistantRuntime } from './runtime';
 import { MIN_LOCAL_CONTEXT } from './turn-info';
 
@@ -370,6 +371,9 @@ export async function waitForEdit(ctx: CallCtx): Promise<void> {
   await waitForRead(ctx);
   const block = editBlockError(ctx.services);
   if (block) throw block;
+  // A bar this key's own workspace call rolled back: no wait for the person.
+  const own = ownRollbackBlock(ctx.services, ctx.key);
+  if (own) throw own;
   if (ctx.key.startsWith('turn:')) {
     const id = ctx.key.slice('turn:'.length);
     const running = rt.turns.running();

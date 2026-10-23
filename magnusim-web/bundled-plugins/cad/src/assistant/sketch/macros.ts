@@ -22,11 +22,25 @@
 //   sector       [cu, cv, r1, r2, start, end] __center, arcs __inner __outer, radial lines
 //                deg, 0 < r1 < r2             __start __end through the centre, their ends
 //                                             __inner_start ... __outer_end              6
+//   spline       [u1, v1, u2, v2, ...]        a fit-point spline S through points S__p0...
+//                (closed when it ends where   (the person's Spline tool: a cubic, chord-length
+//                it starts)                   parameters); S.start, S.end; S.h0, S.h1 once a
+//                                             tangent gave it end handles           2 x points
+//   control_spline [u1, v1, ..., degree]      a control-point spline on poles S__p0... of
+//                (closed as a spline; degree  degree 3 or 5 (degree + 1 poles or more)
+//                3 or 5)                                                          2 x points
 // Pure functions; compile.ts checks ids, joins points and resolves the constraints' refs.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { splineCurve } from '../../sketch/tools/bspline';
 import type { SketchEntity, SketchRelation, Vec2 } from '../../types/doc';
 import type { SKETCH_ENTITY_KINDS } from '../schemas';
+
+/** The fewest points a spline takes (the person's Spline tools: fit 2 open, 3 closed; control degree + 1). */
+export function splineMinPoints(form: 'fit' | 'control', degree: number, closed: boolean): number {
+  if (form === 'control') return degree + 1;
+  return closed ? 3 : 2;
+}
 
 export type EntityKind = (typeof SKETCH_ENTITY_KINDS)[number];
 
@@ -43,10 +57,12 @@ export const AT_WORDS: Readonly<Record<EntityKind, string>> = Object.freeze({
   slot: '[u1, v1, u2, v2, r] (the two arc centres and the radius)',
   polygon: '[cu, cv, R, sides] (3 to 24 sides; R to the corners)',
   sector: '[cu, cv, r1, r2, start deg, end deg] (0 < r1 < r2, counter-clockwise)',
+  spline: '[u1, v1, u2, v2, ...] (the fit points it passes through, 2 or more; closed when the last point is the first, 3 or more then)',
+  control_spline: '[u1, v1, ..., un, vn, degree] (the poles, then the degree 3 or 5; degree + 1 poles or more; closed when the last pole is the first)',
 });
 
 /** The DOF each kind keeps after its own relations (help sketch; polyline: 2 per point). */
-export const KIND_DOF: Readonly<Record<EntityKind, number | null>> = Object.freeze({ point: 2, line: 4, centerline: 4, polyline: null, circle: 3, arc: 5, rect: 4, center_rect: 4, slot: 5, polygon: 4, sector: 6 });
+export const KIND_DOF: Readonly<Record<EntityKind, number | null>> = Object.freeze({ point: 2, line: 4, centerline: 4, polyline: null, circle: 3, arc: 5, rect: 4, center_rect: 4, slot: 5, polygon: 4, sector: 6, spline: null, control_spline: null });
 
 /** Ends this close are one point (mm): joins, closed polylines, infer. */
 export const JOIN_TOL = 0.05;
@@ -117,6 +133,13 @@ class Builder {
     const id = part ? S(this.m.id, part) : this.m.id;
     this.m.entities.push({ id, kind: 'arc', c, a, b, ...this.flags() });
     this.m.parts[part] = id;
+    return id;
+  }
+  /** A spline as the person's Spline tools store it (src/sketch/tools/spline.ts). */
+  spline(form: 'fit' | 'control', pts: string[], degree: number, closed: boolean): string {
+    const id = this.m.id;
+    this.m.entities.push({ id, kind: 'spline', form, pts, degree, ...(closed ? { closed: true } : {}), ...this.flags() });
+    this.m.parts[''] = id;
     return id;
   }
   pointEntity(part: string, p: string, extra?: { construction?: boolean }): string {
@@ -300,6 +323,33 @@ export function expandEntity(id: string, kind: EntityKind, at: readonly number[]
       const end = b.line('end', ie, oe);
       b.rel('on_start', 'point_on_line', [centre, start], `centre on ${id}.start`);
       b.rel('on_end', 'point_on_line', [centre, end], `centre on ${id}.end`);
+      break;
+    }
+    case 'spline':
+    case 'control_spline': {
+      const form = kind === 'spline' ? 'fit' : 'control';
+      const nums = form === 'fit' ? at : at.slice(0, -1);
+      const degree = form === 'fit' ? 3 : at[at.length - 1];
+      if (form === 'control' && degree !== 3 && degree !== 5) return bad(`its last number is the degree, 3 or 5, not ${degree}`);
+      if (nums.length < 4 || nums.length % 2) return bad(`a ${kind} takes ${AT_WORDS[kind]}, not ${at.length} numbers`);
+      const pts: Vec2[] = [];
+      for (let i = 0; i < nums.length; i += 2) pts.push([nums[i], nums[i + 1]]);
+      const closed = pts.length >= 3 && dist(pts[0], pts[pts.length - 1]) <= JOIN_TOL;
+      const own = closed ? pts.slice(0, -1) : pts;
+      const need = splineMinPoints(form, degree, closed);
+      if (own.length < need) return bad(`a ${closed ? 'closed ' : ''}${kind}${form === 'control' ? ` of degree ${degree}` : ''} needs ${need} ${form === 'fit' ? 'points' : 'poles'} or more, not ${own.length}`);
+      for (let i = 0; i < own.length; i++) for (let j = i + 1; j < own.length; j++) if (dist(own[i], own[j]) <= JOIN_TOL) return bad(`its points ${i} and ${j} are in one place: a spline passes through a point once`);
+      try {
+        splineCurve({ form, degree, pts: own, closed });
+      } catch (e) {
+        return bad(`its points make no curve: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      const ids = own.map((p, i) => b.point(`p${i}`, p));
+      if (!closed) {
+        b.m.parts.start = ids[0];
+        b.m.parts.end = ids[ids.length - 1];
+      }
+      b.spline(form, ids, degree, closed);
       break;
     }
     default:

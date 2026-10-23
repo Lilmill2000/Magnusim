@@ -14,7 +14,7 @@
 import type { AssistantCall, AssistantRegistration, Workspace } from '@magnusim/workspace';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCallHandler } from '../../src/assistant/call';
-import { GUIDE, guideWithout, notOfferedLine } from '../../src/assistant/guide';
+import { GUIDE, guideWithout, namedInGuide, notOfferedLine } from '../../src/assistant/guide';
 import { HELP, HELP_TOPIC_BYTES, NOT_OFFERED } from '../../src/assistant/help';
 import { assistantTestHandle } from '../../src/assistant/install';
 import { REVIEW_PROMPT } from '../../src/assistant/review';
@@ -147,14 +147,14 @@ describe('the registration', () => {
     h = await start();
     const handle = assistantTestHandle(h.services)!;
     const missing = TOOL_NAMES.filter((n) => !CORE_TOOLSET.includes(n));
-    expect(missing).toEqual(['body', 'delete', 'edit_feature', 'sweep_loft', 'view']);
+    expect(missing).toEqual(['body', 'construct', 'delete', 'direct', 'edit_feature', 'sweep_loft', 'view', 'workspace']);
     expect(await handle.setToolset('core')).toMatchObject({ available: true });
     const reg = h.fake.registrations.at(-1)!;
     expect(reg.tools.map((t) => t.name)).toEqual(TOOL_NAMES.filter((n) => CORE_TOOLSET.includes(n)));
     expect(handle.tools).toEqual([...CORE_TOOLSET]);
     // The guide it registers sends the model to none of the 5, and says they are not offered.
     expect(reg.guide).toBe(guideWithout(missing));
-    expect(reg.guide).toContain(notOfferedLine(missing));
+    expect(reg.guide).toContain(notOfferedLine(namedInGuide(missing)));
     expect(reg.guide).not.toMatch(/view at milestones|edit_feature;|delete asks/);
     // help guide is that guide; help features marks the 5 (and only them); both whole through the app's rules.
     const guide = await h.ok('help', { topic: 'guide' });

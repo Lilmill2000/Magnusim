@@ -202,6 +202,10 @@ export interface SnapshotOptions {
   hide: BodyId[];
   /** A cut parallel to an origin plane (as the section view's: `offset` mm along its normal, `flip` keeps the other side), or null. */
   section: { plane: 'top' | 'front' | 'right'; offset: number; flip: boolean } | null;
+  /** How the bodies are drawn in the picture (default 'shaded-edges'; the view's own display is never touched). */
+  display?: DisplayMode;
+  /** The picture's projection (default 'orthographic'; perspective: mmPerPx holds at the framed centre only). */
+  projection?: Projection;
 }
 
 export interface SnapshotResult {

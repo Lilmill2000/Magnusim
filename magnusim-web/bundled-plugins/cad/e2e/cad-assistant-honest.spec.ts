@@ -376,7 +376,7 @@ test('cad:assistant-honest-fillet a fillet too large for its wall changes nothin
 
 // T7 too: copies that miss the body they join change nothing and say so by name; the model then
 // makes them new bodies and combines them, which the person sees in the tree and the volume chip.
-const PATTERN = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'linear', of: 'bodies', items: [], about: 'X axis', count: '', spacing: '', symmetric: false, flip: false, about2: '', count2: '', spacing2: '', flip2: false, op: 'new', bodies: [], ...o });
+const PATTERN = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'linear', of: 'bodies', items: [], about: 'X axis', count: '', spacing: '', flip: false, about2: '', count2: '', spacing2: '', options: [], skip: [], op: 'new', bodies: [], ...o });
 
 test('cad:assistant-honest-pattern copies that miss their body change nothing; new bodies and a combine are kept', async ({ page, request }) => {
   test.setTimeout(240_000);
@@ -419,7 +419,7 @@ test('cad:assistant-honest-pattern copies that miss their body change nothing; n
 // its -X face at v = +22.5 and cut through lies below it, so the answer is off_body with the face's
 // frame in words ("u runs +Y, v runs -Z"). Each time the person's tree, panels, volume and Undo are
 // as before the call.
-const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
 /** A disc on `on`, fully defined: its centre at (u, v) from the sketch origin and its diameter (no (-) in the tree). */
 const DISC = (name: string, on: string, u: number, v: number, r: number) => ({
   edit: '',

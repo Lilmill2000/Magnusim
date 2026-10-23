@@ -26,7 +26,7 @@ import type { BodyId, Vec3 } from '../types/doc';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
 import type { EvalResult } from '../types/units';
-import type { SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
+import type { DisplayMode, Projection, SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
 import { VIEWPORT_BG } from '../viewport/colors';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
 import { heartbeat, waitForRead } from './busy';
@@ -65,10 +65,15 @@ export interface ViewInput {
   section: string;
   labels: ViewLabels;
   size: ViewSize;
+  /** How the bodies are drawn (the input's shaded_edges is the viewport's shaded-edges). */
+  display: DisplayMode;
+  projection: Projection;
 }
 
 const LABELS: readonly ViewLabels[] = ['none', 'bodies', 'faces'];
 const SIZES: readonly ViewSize[] = ['small', 'large'];
+const DISPLAYS: Readonly<Record<string, DisplayMode>> = { shaded_edges: 'shaded-edges', shaded: 'shaded', wireframe: 'wireframe' };
+const PROJECTIONS: readonly Projection[] = ['orthographic', 'perspective'];
 
 /** The tool's input checked (the app checks it against the schema first; this is what the page relies on). */
 export function readViewInput(input: Record<string, unknown>): ViewInput {
@@ -88,7 +93,12 @@ export function readViewInput(input: Record<string, unknown>): ViewInput {
   if (!LABELS.includes(labels as ViewLabels)) throw bad('labels', `labels must be one of ${LABELS.join(', ')}.`);
   const size = input.size ?? 'small';
   if (!SIZES.includes(size as ViewSize)) throw bad('size', 'size must be small or large.');
-  return { views, hide: hide as string[], section, labels: labels as ViewLabels, size: size as ViewSize };
+  // Absent (an older caller): shaded with edges, orthographic, as the pictures always were.
+  const display = DISPLAYS[String(input.display ?? 'shaded_edges')];
+  if (!display) throw bad('display', 'display must be shaded_edges, shaded or wireframe.');
+  const projection = (input.projection ?? 'orthographic') as Projection;
+  if (!PROJECTIONS.includes(projection)) throw bad('projection', 'projection must be orthographic or perspective.');
+  return { views, hide: hide as string[], section, labels: labels as ViewLabels, size: size as ViewSize, display, projection };
 }
 
 // ------------------------------------------------------------ the cut
@@ -570,7 +580,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
 
   // Every picture in this task: the Part as it is now in each of them.
   ctx.progress(0, `Drawing ${input.views.join(', ')}`);
-  const snapOpts = (view: SnapshotView, t: Tile): SnapshotOptions => ({ view, width: t.w, height: t.h, hide: [...hideIds], section: section ? { ...section } : null });
+  const snapOpts = (view: SnapshotView, t: Tile): SnapshotOptions => ({ view, width: t.w, height: t.h, hide: [...hideIds], section: section ? { ...section } : null, display: input.display, projection: input.projection });
   const shots = input.views.map((view, i) => snap(handle, snapOpts(view, layout.tiles[i])));
   const shown = drawn;
   const inTree = bodies.filter((b) => !b.visible && !hideIds.has(b.id));
@@ -687,6 +697,8 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
     ...(inTree.length ? { hidden_in_tree: inTree.slice(0, BODY_NAMES_MAX).map((b) => b.name) } : {}),
     ...(inTree.length > BODY_NAMES_MAX ? { hidden_in_tree_more: inTree.length - BODY_NAMES_MAX } : {}),
     section: sectionData(section),
+    ...(input.display !== 'shaded-edges' ? { display: input.display.replace('-', '_') } : {}),
+    ...(input.projection !== 'orthographic' ? { projection: input.projection } : {}),
     labels,
     ...(dims.length ? { dimensions: dims.slice(0, DIMENSIONS_MAX) } : {}),
     ...(dims.length > DIMENSIONS_MAX ? { dimensions_more: dims.length - DIMENSIONS_MAX } : {}),
