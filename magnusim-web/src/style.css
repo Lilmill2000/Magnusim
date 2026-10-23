@@ -5473,6 +5473,29 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 @media (max-height: 519px) {
   .assistant-dock { top: calc(var(--mg-header-height) + 8px); bottom: 8px; height: auto; }
 }
+/* A workspace's bottom-left chips (CAD's .cad-dock, up to 18 + 640 px wide and 110 px tall) reach
+   under the dock's bottom right in windows narrower than 16 + 660 + 16 + 400 = 1092 px: there
+   the pill, and the open panel (not the narrow sheet, which covers them while it is read), sit
+   above the chips' band, as toasts do. */
+@media (max-width: 1091.98px) {
+  body.workspace-open .assistant-dock-pill { bottom: 136px; }
+}
+@media (min-width: 720px) and (max-width: 1091.98px) and (min-height: 520px) {
+  body.workspace-open .assistant-dock { bottom: 136px; height: min(640px, calc(100vh - var(--mg-header-height) - 152px)); }
+}
+/* A narrow window with a workspace: toasts (the app's and the page's) go above the lifted pill. */
+@media (max-width: 719.98px) {
+  body.workspace-open.assistant-dock-pill .app-toasts { bottom: calc(180px + var(--ws-toast-reserve, 0px)); }
+  body.workspace-open.assistant-dock-pill .ws-toast-slot { bottom: 180px; }
+}
+/* With the pill lifted beside them, the page's toast keeps left of it as the app's do. */
+@media (min-width: 720px) and (max-width: 1091.98px) {
+  body.assistant-dock-pill .ws-toast-slot { max-width: min(420px, calc(100vw - 368px)); }
+}
+/* A narrow and short window: the open sheet takes the whole height, so toasts show over it. */
+@media (max-width: 719.98px) and (max-height: 519px) {
+  body.assistant-dock-open .app-toasts { bottom: calc(16px + var(--ws-toast-reserve, 0px)); z-index: calc(var(--mg-z-assistant) + 1); }
+}
 @media (prefers-reduced-motion: reduce) {
   .assistant-dock *, .assistant-dock-pill { transition: none !important; animation: none !important; }
 }
@@ -5608,7 +5631,9 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 .dock-new-messages:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
 .dock-alert { margin: var(--mg-space-1) 0 0; color: var(--mg-danger); font-size: var(--mg-text-sm); }
 /* The header's conversation menu and New. */
-.dock-menu-wrap { position: relative; display: flex; align-items: center; gap: var(--mg-space-1); min-width: 0; }
+/* The menu hangs from the header (its full width), so it never reaches past the panel. */
+.dock-menu-wrap { position: static; display: flex; align-items: center; gap: var(--mg-space-1); min-width: 0; }
+.assistant-dock-head { position: relative; }
 .dock-menu-button {
   display: inline-flex;
   align-items: center;
@@ -5639,10 +5664,11 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 }
 .dock-menu {
   position: absolute;
-  left: 0;
+  left: var(--mg-space-2);
+  right: var(--mg-space-2);
   top: calc(100% + 4px);
   z-index: 2;
-  width: min(340px, calc(100vw - 48px));
+  width: auto;
   max-height: 360px;
   overflow-y: auto;
   padding: var(--mg-space-2);
@@ -5831,7 +5857,9 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
   white-space: nowrap;
 }
 .dock-context[data-dock-context="connecting"], .dock-context[data-dock-context="late"] { border-color: var(--mg-warning); background: var(--mg-warning-bg); color: var(--mg-warning); }
-.dock-picker { position: relative; display: inline-flex; align-items: center; gap: var(--mg-space-1); min-width: 0; font-size: var(--mg-text-sm); }
+/* The list hangs from the composer's top row (its full width), wherever the picker wrapped to. */
+.dock-composer-top { position: relative; }
+.dock-picker { position: static; display: inline-flex; align-items: center; gap: var(--mg-space-1); min-width: 0; font-size: var(--mg-text-sm); }
 .dock-picker-button {
   display: inline-flex;
   align-items: center;
@@ -5850,10 +5878,11 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 .dock-picker-locked { font-size: var(--mg-text-sm); color: var(--mg-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dock-picker-pop {
   position: absolute;
+  left: 0;
   right: 0;
   bottom: calc(100% + 4px);
   z-index: 2;
-  width: min(340px, calc(100vw - 48px));
+  width: auto;
   padding: var(--mg-space-1);
   background: var(--mg-bg);
   border: 1px solid var(--mg-border-subtle);

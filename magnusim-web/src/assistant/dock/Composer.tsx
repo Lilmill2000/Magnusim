@@ -161,16 +161,18 @@ export function Composer({ place, status, conversation, conversationId, running,
     [pictureDeps],
   );
 
-  // A drop anywhere on the dock attaches; the overlay says so while files are dragged over it.
+  // A drop anywhere on the dock attaches; the overlay says so while files are dragged over it. A
+  // coding agent takes none: the drop says so (DockShell keeps any file drop from leaving the app).
   useEffect(() => {
     const panel = document.getElementById('assistant-dock');
-    if (!panel || agent) return;
+    if (!panel) return;
     let depth = 0;
     const enter = (e: DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       depth += 1;
-      setDragging(true);
+      // A coding agent's conversation: no "Drop pictures to attach" (it takes none).
+      if (!agent) setDragging(true);
     };
     const over = (e: DragEvent) => {
       if (dragHasFiles(e.dataTransfer)) e.preventDefault();
@@ -185,6 +187,10 @@ export function Composer({ place, status, conversation, conversationId, running,
       setDragging(false);
       if (!files.length) return;
       e.preventDefault();
+      if (agent) {
+        setPictureErrors([noPictures(agentName)]);
+        return;
+      }
       void add(files);
     };
     panel.addEventListener('dragenter', enter);
@@ -197,7 +203,7 @@ export function Composer({ place, status, conversation, conversationId, running,
       panel.removeEventListener('dragleave', leave);
       panel.removeEventListener('drop', drop);
     };
-  }, [add, agent]);
+  }, [add, agent, agentName]);
 
   const projectTitle = place.projectTitle ?? conversation?.project_title ?? place.projectId ?? '';
   const ws = place.workspace;
@@ -308,7 +314,7 @@ export function Composer({ place, status, conversation, conversationId, running,
           className="dock-attach"
           aria-label={ATTACH_LABEL}
           title={agent ? noPictures(agentName) : ATTACH_LABEL}
-          disabled={agent || !!running}
+          disabled={agent}
           data-dock-attach="1"
           onClick={() => file.current?.click()}
         >

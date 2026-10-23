@@ -188,6 +188,30 @@ describe('what holds Send back', () => {
     expect(document.querySelector('[data-dock-picture-error]')?.textContent).toBe("Helper doesn't take pictures. Send the message without them.");
   });
 
+  it('a coding agent: a picture dropped on the dock says it takes none (never left for the browser to open), with no "Drop pictures" overlay', async () => {
+    sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
+    render(
+      <aside id="assistant-dock">
+        <Composer place={HOME} status={LOCAL} conversation={null} conversationId={null} running={null} onNew={() => undefined} />
+      </aside>,
+    );
+    const panel = document.getElementById('assistant-dock') as HTMLElement;
+    const f = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
+    const dt = { types: ['Files'], files: [f], items: [] };
+    expect(fireEvent.dragEnter(panel, { dataTransfer: dt })).toBe(false);
+    expect(document.querySelector('[data-dock-drop]')).toBeNull();
+    expect(fireEvent.drop(panel, { dataTransfer: dt })).toBe(false);
+    await waitFor(() => expect(document.querySelector('[data-dock-picture-error]')?.textContent).toBe("Helper doesn't take pictures. Send the message without them."));
+    expect(document.querySelector('[data-dock-picture-chip]')).toBeNull();
+  });
+
+  it('Attach stays on while a request runs (the next message can take pictures, as a paste or drop can)', () => {
+    mount({ conversation: { id: 'c1', provider: 'openai_compatible', label: 'Local server', full: null } as unknown as ConversationRow, conversationId: 'c1', running: 't7' });
+    const attach = document.querySelector('[data-dock-attach]') as HTMLButtonElement;
+    expect(attach.disabled).toBe(false);
+    expect(attach.title).toBe('Attach pictures (up to 4)');
+  });
+
   it('pictures: chips with their size, shrunk, removed; the line under them', async () => {
     const deps: PictureDeps = { size: async () => ({ width: 2600, height: 1300, draw: async () => new Blob([new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80])]) }) };
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }));

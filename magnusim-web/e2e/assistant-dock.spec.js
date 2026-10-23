@@ -318,6 +318,54 @@ test('the provider picker: the default first, a provider with no key disabled wi
   await expect(dock(page).locator('[data-dock-provider-locked]')).toHaveAttribute('title', 'A conversation keeps its provider. Start a new one to use another.');
 });
 
+test("over a workspace at 1280, 1000 and 760 px: the provider list and the conversation menu stay inside the panel; below 1092 px the panel and the pill keep clear of its chips' band", async ({ page, request }) => {
+  await openCounter(page, request);
+  await openDock(page);
+  const inside = (inner, outer) => inner.left >= outer.left - 2 && inner.right <= outer.right + 2 && inner.top >= outer.top - 2 && inner.bottom <= outer.bottom + 2;
+  const box = async (loc) => {
+    const b = await loc.boundingBox();
+    expect(b, 'on screen').not.toBeNull();
+    return { left: b.x, top: b.y, right: b.x + b.width, bottom: b.y + b.height };
+  };
+  const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  for (const width of [1280, 1000, 760]) {
+    await page.setViewportSize({ width, height: 800 });
+    const vp = page.viewportSize();
+    // CAD's .cad-dock: 18 px from the left, up to 640 px wide, from 16 px up to about 124 px up.
+    const band = { left: 18, right: 658, top: vp.height - 126, bottom: vp.height - 16 };
+    const panel = await box(dock(page));
+    expect(panel.right, `${width}: in the window`).toBeLessThanOrEqual(vp.width + 2);
+    expect(overlap(panel, band), `${width}: the panel is clear of the chips`).toBe(false);
+    await dock(page).locator('.dock-picker-button').click();
+    const list = dock(page).locator('.dock-picker-pop');
+    await expect(list).toBeVisible();
+    expect(inside(await box(list), panel), `${width}: the provider list inside the panel`).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(list).toHaveCount(0);
+    await dock(page).locator('[data-dock-menu]').click();
+    const menu = dock(page).locator('[data-dock-menu-list]');
+    await expect(menu).toBeVisible();
+    expect(inside(await box(menu), panel), `${width}: the conversation menu inside the panel`).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await shot(page, 'popups');
+  }
+  // The pill, as a running request shows it, at 760 and in a narrow window.
+  await page.evaluate(() => import('/src/assistant/dock/dockState.ts').then((m) => m.closeDock()));
+  await page.evaluate(() =>
+    import('/src/assistant/dock/dockState.ts').then((m) => m.setDockPill({ kind: 'running', text: 'Assistant · Working: Add to the counter · 3 of 120 steps', onStop: () => undefined })),
+  );
+  const pill = page.locator('[data-assistant-pill]');
+  for (const width of [760, 600]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(pill).toBeVisible();
+    const vp = page.viewportSize();
+    const band = { left: 18, right: Math.min(658, vp.width - 18), top: vp.height - 126, bottom: vp.height - 16 };
+    expect(overlap(await box(pill), band), `${width}: the pill is clear of the chips`).toBe(false);
+  }
+  await page.evaluate(() => import('/src/assistant/dock/dockState.ts').then((m) => m.setDockPill(null)));
+});
+
 // ---------------------------------------------------------------- questions (spec 4)
 
 test("a question shows as a card in the dock with No focused, the frame's keyboard taken; Enter answers No; Yes is guarded; the app's dialog never shows", async ({ page, request }) => {

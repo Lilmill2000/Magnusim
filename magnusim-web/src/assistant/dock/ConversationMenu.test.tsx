@@ -142,4 +142,26 @@ describe('the menu', () => {
     });
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('A request is running in this conversation. Stop it first.'));
   });
+
+  it("a mouse answers the confirm dialog (its click lands outside the menu, which closes): a 409 opens the menu again to say why; the next opening doesn't show it again", async () => {
+    const { container } = mount(LIST, LIST[1]);
+    fireEvent.click(container.querySelector('[data-dock-menu]') as HTMLElement);
+    answer = 409;
+    dialogs.confirm.mockImplementationOnce(async () => {
+      // The dialog's Forget button: a pointerdown outside the menu.
+      fireEvent.pointerDown(document.body);
+      return true;
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Forget Title b1' }));
+    });
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('A request is running in this conversation. Stop it first.'));
+    expect(container.querySelector('[data-dock-menu-list]')).not.toBeNull();
+    // Closed by a click elsewhere, then opened again: no stale line.
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(container.querySelector('[data-dock-menu-list]')).toBeNull());
+    fireEvent.click(container.querySelector('[data-dock-menu]') as HTMLElement);
+    expect(container.querySelector('[data-dock-menu-list]')).not.toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

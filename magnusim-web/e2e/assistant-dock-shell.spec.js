@@ -349,6 +349,17 @@ test.describe('the dock', () => {
     expect(Math.abs(vp.height - r.bottom - 8)).toBeLessThanOrEqual(SLACK);
   });
 
+  test('a narrow and short window: the sheet takes the whole height, so a toast shows over it, never hidden behind it', async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 480 });
+    await openFromHome(page);
+    await page.mouse.move(300, 5);
+    const toast = await appToast(page, 'Saved over the sheet');
+    const t = await rect(toast);
+    const vp = page.viewportSize();
+    expect(t.bottom, 'in the window').toBeLessThanOrEqual(vp.height);
+    expect(await onTop(toast), 'nothing draws over it').toBe(true);
+  });
+
   test('over remote access it says only that it is off there, and opens no stream of its own', async ({ browser }) => {
     // Every request of this browser comes through a proxy, as over the public tunnel.
     const context = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-for': '203.0.113.9' }, viewport: { width: 1280, height: 800 } });

@@ -14,12 +14,13 @@
  *   composer's text field, else the first button of the body, else the panel.
  * - The status is read again each time the dock opens.
  */
-import { useEffect, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { openSetupWizard } from '../../wizard/controller';
 import { exitFrameFullscreen } from '../../workspace/leaveGuard';
 import { refreshStatus, retryStatus, providerReady, useAssistantStatus, type StatusSnapshot } from '../status';
 import { ASSISTANT_SETTINGS, CLOSE_DOCK, DOCK_TITLE, OPEN_SETTINGS, REMOTE_TEXT, STATE_ERROR, STATE_LOADING, STATE_OFF, STOP, STOP_LABEL, TRY_AGAIN } from './copy';
 import { closeDock, openDock, useDock } from './dockState';
+import { dragHasFiles } from './pictures';
 
 /** The states the dock shows by itself, from the status alone. */
 export type DockShellState = 'loading' | 'error' | 'remote' | 'off';
@@ -55,6 +56,15 @@ export function dockShellState(s: StatusSnapshot): DockShellState | null {
 }
 
 const openSettings = () => openSetupWizard({ required: false, step: 'assistant' });
+
+/**
+ * A file dragged onto the dock or its pill never leaves the app (the browser would open it in
+ * place of Magnusim): the composer attaches pictures, or says why not; every other state, a
+ * read-only conversation and the pill take the drop and do nothing.
+ */
+function keepFileDrop(e: ReactDragEvent<HTMLElement>): void {
+  if (dragHasFiles(e.dataTransfer)) e.preventDefault();
+}
 
 /** The panel's entry for the keyboard. */
 function entryOf(panel: HTMLElement): HTMLElement {
@@ -135,6 +145,8 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
         hidden={!dock.open}
         tabIndex={-1}
         onKeyDown={onKeyDown}
+        onDragOver={keepFileDrop}
+        onDrop={keepFileDrop}
       >
         <header className="assistant-dock-head">
           <h2 className="assistant-dock-title">{DOCK_TITLE}</h2>
@@ -182,7 +194,14 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
       </aside>
       {/* Outside the panel: announcements also reach the person while it is closed (live.ts). */}
       <div id="assistant-dock-live" className="assistant-dock-live" role="status" aria-live="polite" />
-      <div className="assistant-dock-pill" data-assistant-pill="1" data-pill={pill ? pill.kind : undefined} hidden={dock.size !== 'pill'}>
+      <div
+        className="assistant-dock-pill"
+        data-assistant-pill="1"
+        data-pill={pill ? pill.kind : undefined}
+        hidden={dock.size !== 'pill'}
+        onDragOver={keepFileDrop}
+        onDrop={keepFileDrop}
+      >
         <button
           type="button"
           className="assistant-dock-pill-open"

@@ -117,7 +117,13 @@ export function ConversationMenu({
         aria-haspopup="true"
         aria-expanded={open ? 'true' : 'false'}
         data-dock-menu="1"
-        onClick={() => (open ? close(false) : setOpen(true))}
+        onClick={() => {
+          if (open) close(false);
+          else {
+            setError(null);
+            setOpen(true);
+          }
+        }}
       >
         <span className="dock-menu-title">{conversationName(shown)}</span>
         <span aria-hidden="true"> ▾</span>
@@ -162,6 +168,8 @@ export function ConversationMenu({
                         onClick={() => {
                           void forgetConversation(row.id).then((out) => {
                             setError(typeof out === 'object' ? out.error : null);
+                            // The confirm dialog's click closed the menu: it opens again to say why not.
+                            if (typeof out === 'object') setOpen(true);
                             if (out === 'gone' && row.id === shown?.id) onNew();
                           });
                         }}

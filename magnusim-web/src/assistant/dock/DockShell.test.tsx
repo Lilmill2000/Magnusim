@@ -290,4 +290,21 @@ describe('the pill', () => {
     expect(pill).toHaveAttribute('data-pill', 'question');
     expect(screen.queryByRole('button', { name: 'Stop the Assistant' })).toBeNull();
   });
+
+  it('a file dropped on the dock (with no composer: off, remote, read-only) or on its pill never leaves the app', async () => {
+    render(<DockShell />);
+    act(() => openDock());
+    await waitFor(() => expect(panel()).toHaveAttribute('data-assistant-dock-state', 'off'));
+    const files = () => ({ dataTransfer: { types: ['Files'], files: [], items: [] } });
+    // fireEvent answers false when the default was prevented (the browser would open the file).
+    expect(fireEvent.dragOver(panel(), files())).toBe(false);
+    expect(fireEvent.drop(panel(), files())).toBe(false);
+    act(() => closeDock());
+    act(() => setDockPill({ kind: 'running', text: 'Assistant · Thinking…' }));
+    const pill = $('[data-assistant-pill]');
+    expect(fireEvent.dragOver(pill, files())).toBe(false);
+    expect(fireEvent.drop(pill, files())).toBe(false);
+    // Not a file (a text drag): left alone.
+    expect(fireEvent.drop(pill, { dataTransfer: { types: ['text/plain'], files: [], items: [] } })).toBe(true);
+  });
 });
