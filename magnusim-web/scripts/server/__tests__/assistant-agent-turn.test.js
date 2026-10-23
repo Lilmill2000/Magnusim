@@ -1130,6 +1130,44 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
     }
   });
 
+  it("the project list and another project's read (core host tools spec 9.2, 9.3): each asked once in the window for agent:<id>; Don't send refuses only that call and the turn goes on", async () => {
+    const reads = [];
+    const projectsTool = Object.assign(H.hostTool('projects', { run: async () => (reads.push('list'), { ok: true, data: { projects: [] }, summary: 'listed' }) }), {
+      projectOf: () => '*projects',
+    });
+    const other = Object.assign(
+      H.hostTool('read_other', {
+        projectData: true,
+        schema: { type: 'object', properties: { project_id: { type: 'string' } }, required: ['project_id'], additionalProperties: false },
+        run: async (input) => (reads.push(input.project_id), { ok: true, data: {}, summary: 'read' }),
+      }),
+      { projectOf: (input, c) => input.project_id || c.projectId },
+    );
+    const w = await world({ privacy: 'ask', hostTools: [projectsTool, other] });
+    try {
+      const { withConsent } = await import('../assistant/settings.ts');
+      w.m.projects.set('p2', { id: 'p2', title: 'Tail', created_at: null });
+      w.m.state.settings = withConsent(w.m.state.settings, 'p1', PROJECT.created_at, 'agent:claude');
+      const r = await w.turn({ text: 'List and compare.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ call: { tool: 'projects', args: {} } }, { call: { tool: 'read_other', args: { project_id: 'p2' } } }, { say: 'done' });
+      const list = await gateOf(r.turn);
+      assert.deepEqual([list.kind, list.link_only, list.title], ['privacy', true, 'Send your project list to Claude Code?']);
+      assert.equal(byTab(w, list, true).status, 200);
+      const tail = await H.until(() => r.turn.summary().open_gates.find((g) => g.id !== list.id), CEILING, 'the second question');
+      assert.equal(tail.title, 'Send project "Tail" to Claude Code?');
+      assert.equal(byTab(w, tail, false).status, 200);
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done', 'the turn went on');
+      assert.deepEqual(reads, ['list'], "Tail's read did not run");
+      const results = claude.events('mcp_result', lastPid(claude));
+      assert.match(results.at(-1).result.content[0].text, /"code":"privacy_declined"/);
+      assert.deepEqual(w.m.consents.map((c) => [c.projectId, c.destination]), [['*projects', 'agent:claude']]);
+    } finally {
+      await w.close();
+    }
+  });
+
   it('Always deny chosen mid-turn: the next project call is refused and the turn ends after it', async () => {
     const w = await world();
     try {

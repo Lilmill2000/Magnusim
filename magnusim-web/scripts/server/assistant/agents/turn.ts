@@ -50,14 +50,25 @@ import type { ContentBlock } from '@agentclientprotocol/sdk';
 import { capText as loopCapText, GUIDE_CHANGED_NOTE } from '../loop.ts';
 import { contextBlock, guideBlock } from '../prompt.ts';
 import { destinationOf } from '../providers/index.ts';
-import { agentPrivacyGate, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, type ProjectInfo } from '../privacy.ts';
+import {
+  agentPrivacyGate,
+  agentProjectListGate,
+  isProjectList,
+  LIST_CONSENT_KEY,
+  NOTHING_MORE_SENT,
+  NOTHING_SENT,
+  privacyDecision,
+  privacyDeclinedText,
+  type ProjectInfo,
+} from '../privacy.ts';
 import { redact } from '../redact.ts';
 import { abortedResult, callAbortOf, errorResult, gateInputText, riskOf, STOPPED_BEFORE, type CallAbort, type RunnerEvent, type RunnerTurn, type RunResult, type ToolRunner } from '../runner.ts';
 import { cleanText } from '../sanitize.ts';
 import type { AgentCaps, AssistantSettings } from '../settings.ts';
 import type { Clock, GateBroker, GateEvent, GateOwner, GateRequest } from '../gates.ts';
 import type { Conversation } from '../conversations.ts';
-import { placeFor, type ToolCtx, type ToolDef, type WorkspaceRegistration } from '../registry.ts';
+import type { CorePlace, ToolCtx, ToolDef, WorkspaceRegistration } from '../registry.ts';
+import { placeOf, tabHere } from '../tab-place.ts';
 import { bindingServes, notePromptSent, type AgentDispatch } from '../mcp/sessions.ts';
 import type { EndState, PageLimits, TurnState } from '../loop.ts';
 import type { StreamEvent, ToolCallPart } from '../types.ts';
@@ -103,6 +114,8 @@ export interface AgentRunTurn extends RunnerTurn {
   readonly showTab: string | null;
   readonly projectId: string | null;
   readonly simulationId: string | null;
+  /** Its tab is somewhere else now (core host tools spec §9.4): true when the project changed (the conversation moved). */
+  follow(projectId: string | null, simulationId: string | null, title?: string | null): boolean;
   readonly settings: AgentTurnSettings;
   readonly conv: Conversation;
   readonly signal: AbortSignal;
@@ -134,7 +147,11 @@ export interface AgentTurnDeps {
   /** The TurnManager (server lifetime) the session is tagged with. */
   manager: object;
   known: KnownAgent | null;
-  registry: { workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string } | null };
+  registry: {
+    workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string } | null;
+    /** The tab's core page (C7): where the window is now (the turn follows its tab). */
+    coreOf?(tab: string): { connected: boolean; projectId: string; studyId: string; place: CorePlace } | null;
+  };
   runner: ToolRunner;
   gates: GateBroker;
   /** The live settings (caps are min'd with the turn's, privacy is read from them). */
@@ -299,14 +316,13 @@ class AgentTurnRun implements AgentDispatch {
 
   ctx(): ToolCtx {
     const t = this.t;
-    const ws = t.tab ? this.d.registry.workspaceOf(t.tab) : null;
     return {
       tab: t.tab,
       projectId: t.projectId,
       simulationId: t.simulationId,
       cloud: true,
       local: false,
-      place: placeFor(ws, t.projectId),
+      place: placeOf(this.d.registry, t.tab, t.projectId),
       budgetTokens: null,
       // A coding agent's calls carry no message of the person's (the typed-path rule refuses a path).
       prompt: null,
@@ -346,6 +362,11 @@ class AgentTurnRun implements AgentDispatch {
     const def = o.offered.get(call.name) ?? null;
     const risk = riskOf(def);
     if (risk !== 'read' && this.changes >= caps.changes) return refused(errorResult(call, 'capped', changesCapText(caps.changes), CHANGES_CAP_HINT));
+    // The turn follows its tab (§9.4): a project opened there since its last call is this call's,
+    // and its privacy is asked below before any of it goes to the agent.
+    const unreadable = await this.followTab();
+    if (unreadable) return refused(errorResult(call, 'project_unreadable', unreadable));
+    if (t.ended || t.signal.aborted || this.pendingEnd) return refused(errorResult(call, 'stopped', STOPPED_BEFORE));
     // A call is a request of the turn: privacy is read live before a tool that reads project data.
     if (def?.projectData && t.projectId && this.project) {
       const no = await this.privacyForCall(call);
@@ -423,6 +444,8 @@ class AgentTurnRun implements AgentDispatch {
         turn,
         offered: o.offered,
         gateTimeoutMs: this.timings.gateMs,
+        // Another project's data, or the project list: that consent first (§9.2, §9.3).
+        privacyFor: (projectId, callSignal) => this.otherPrivacy(projectId, callSignal),
         ...(o.onProgress ? { onProgress: o.onProgress } : {}),
       });
     } finally {
@@ -442,7 +465,82 @@ class AgentTurnRun implements AgentDispatch {
     this.t.setUsed(agentPageLimits(caps), counts, tell);
   }
 
+  // ------------------------------------------------------------ following the tab
+
+  /**
+   * Where the turn's tab is now (§9.4): another project (or Home) there moves the turn and its
+   * conversation, and its row is read for the privacy that follows. Null when it went well, else
+   * why the new project can't be read.
+   */
+  private async followTab(): Promise<string | null> {
+    const t = this.t;
+    const here = t.tab ? tabHere(this.d.registry, t.tab) : null;
+    if (!here) return null;
+    const projectId = here.projectId || null;
+    const studyId = here.studyId || null;
+    if (projectId === (t.projectId ?? null)) {
+      if (studyId !== (t.simulationId ?? null)) t.follow(projectId, studyId);
+      return null;
+    }
+    let next: ProjectInfo | null = null;
+    if (projectId) {
+      try {
+        next = await this.d.projects(projectId, { signal: t.signal, turn: t.id });
+      } catch (err) {
+        return `The project could not be read: ${err instanceof Error ? err.message : 'no answer'}`;
+      }
+      if (!next) return 'That project is not in the projects list.';
+    }
+    t.follow(projectId, studyId, next?.title ?? null);
+    this.project = next;
+    return null;
+  }
+
   // ------------------------------------------------------------ privacy
+
+  /**
+   * Another project's data, or the project list, in one call (§9.2, §9.3): that consent for this
+   * agent, asked only in the Magnusim window (link_only). Don't send answers the call
+   * `privacy_declined` and the turn goes on; Never send is `privacy_denied`.
+   */
+  private async otherPrivacy(projectId: string, signal: AbortSignal): Promise<{ code: string; message: string } | null> {
+    const t = this.t;
+    const destination = destinationOf({ provider: t.settings.provider, base_url: '' });
+    const list = isProjectList(projectId);
+    let project: ProjectInfo | null = null;
+    if (!list) {
+      try {
+        project = await this.d.projects(projectId, { signal, turn: t.id });
+      } catch (err) {
+        return { code: 'project_unreadable', message: `The project could not be read: ${err instanceof Error ? err.message : 'no answer'}` };
+      }
+      if (!project) return { code: 'not_found', message: 'No project has that id. The projects tool lists them.' };
+    }
+    const key = list ? LIST_CONSENT_KEY : projectId;
+    const createdAt = project?.created_at ?? null;
+    const verdict = privacyDecision(await this.d.settings(), { cloud: true, destination, projectId: key, createdAt });
+    if (verdict === 'allow') return null;
+    if (verdict === 'deny') return { code: 'privacy_denied', message: AGENT_PRIVACY_DENIED_CALL_TEXT };
+    if (!t.showTab) return { code: 'privacy_declined', message: AGENT_PRIVACY_NO_WINDOW_TEXT(this.name, NOTHING_MORE_SENT) };
+    this.consents += 1;
+    this.syncState();
+    t.pause();
+    let answer: 'allow' | 'deny';
+    try {
+      const gate = project ? agentPrivacyGate({ turn: t.id, project, name: this.name }) : agentProjectListGate({ turn: t.id, name: this.name });
+      answer = await this.d.gates.ask(gate, this.owner, AbortSignal.any([t.signal, signal]), { timeoutMs: this.timings.gateMs });
+    } finally {
+      t.resume();
+      this.consents -= 1;
+      this.syncState();
+    }
+    if (signal.aborted || t.signal.aborted) return { code: 'stopped', message: STOPPED_BEFORE };
+    if (answer !== 'allow') return { code: 'privacy_declined', message: privacyDeclinedText(project ? project.id : null) };
+    // "Always deny" chosen while the question was open wins over its Send.
+    if ((await this.d.settings()).privacy === 'deny') return { code: 'privacy_denied', message: AGENT_PRIVACY_DENIED_CALL_TEXT };
+    await this.d.remember(key, createdAt, destination);
+    return null;
+  }
 
   /**
    * Whether the agent may read the project now (spec 4.14), read live: allowed or remembered; a

@@ -9658,8 +9658,12 @@ const landingCams = new Map();
 // changed after it is the user's, not a framing's. A click (a face pick, a press on the
 // empty viewport, with a few pixels of jitter) is not a move.
 let viewerInputAt = 0;
+// The person is pressing in the viewer now (a drag may be under way): the Assistant's view tools
+// wait for them (core host tools spec 5.3).
+let viewerPressed = () => false;
 {
   let press = null;
+  viewerPressed = () => press !== null;
   const inViewer = (e) => {
     const t = e && e.target;
     return !!(t && typeof t.closest === 'function' && t.closest('#viewer'));
@@ -35886,7 +35890,7 @@ function drawCaptureFrame(ctx, out, frameRect, scale, opts) {
       console.warn('[CFD] capture drawImage', e);
     }
   }
-  for (const id of ['legend', 'legend-pt', 'legend-b']) {
+  for (const id of o.legends === false ? [] : ['legend', 'legend-pt', 'legend-b']) {
     const el = document.getElementById(id);
     if (!el || el.hidden || el.classList.contains('is-hidden')) continue;
     const r = el.getBoundingClientRect();
@@ -38292,6 +38296,261 @@ function landLinked(d) {
 window.addEventListener('cfd:workspace-left', onLinkLanding);
 // A question answered from the geometry's row ("Choose…", API 1.5): the same landing.
 window.addEventListener('cfd:link-land', onLinkLanding);
+
+/* ---------------- The Assistant's core page tools (core host tools spec 5) ---------------- */
+
+/** The largest picture side and size the Assistant's model takes (sanitize.ts IMAGE_CAPS). */
+const ASSISTANT_PICTURE_SIDE = 2000;
+const ASSISTANT_PICTURE_BYTES = 1.5 * 1024 * 1024;
+
+function canvasBlob(canvas, type, quality) {
+  return new Promise((res) => {
+    try {
+      canvas.toBlob((b) => res(b), type, quality);
+    } catch (_) {
+      res(null);
+    }
+  });
+}
+
+/**
+ * A picture of what the viewer shows now, for the Assistant (core__view picture): the current
+ * camera drawn as the framed screenshot draws it, without the capture frame, `width` px wide (at
+ * most 2000 px a side), `aspect` 'view' or 'w:h' (the largest centred crop of the viewer), with
+ * the visible legends or without (`legend: false`). A PNG, a JPEG when the PNG is over 1.5 MB, and
+ * smaller again until it fits. It never moves the camera. Null when there is no viewer to draw.
+ */
+async function captureViewImage(opts) {
+  const o = opts || {};
+  const wrap = captureWrap();
+  if (!wrap || !(wrap.clientWidth > 0) || !(wrap.clientHeight > 0)) return null;
+  let w = wrap.clientWidth;
+  let h = wrap.clientHeight;
+  let x = 0;
+  let y = 0;
+  const m = /^(\d+):(\d+)$/.exec(String(o.aspect || 'view'));
+  if (m && Number(m[1]) > 0 && Number(m[2]) > 0) {
+    const ar = Number(m[1]) / Number(m[2]);
+    if (w / h > ar) {
+      const nw = h * ar;
+      x = (w - nw) / 2;
+      w = nw;
+    } else {
+      const nh = w / ar;
+      y = (h - nh) / 2;
+      h = nh;
+    }
+  }
+  const frame = { x, y, w, h };
+  let width = Math.max(64, Math.min(ASSISTANT_PICTURE_SIDE, Math.round(Number(o.width) || 1024)));
+  for (let tries = 0; tries < 5; tries += 1) {
+    let scale = width / w;
+    if (h * scale > ASSISTANT_PICTURE_SIDE) scale = ASSISTANT_PICTURE_SIDE / h;
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(w * scale));
+    out.height = Math.max(1, Math.round(h * scale));
+    const ctx = out.getContext('2d');
+    if (!ctx) return null;
+    // Above screen resolution as a screenshot renders it (never while a recording runs).
+    const hi = captureState.rec ? false : applyCaptureHiRes(scale);
+    try {
+      drawCaptureFrame(ctx, out, frame, scale, { legends: o.legend !== false });
+    } finally {
+      if (hi) restoreCaptureHiRes();
+    }
+    let blob = await canvasBlob(out, 'image/png');
+    if (blob && blob.size > ASSISTANT_PICTURE_BYTES) blob = await canvasBlob(out, 'image/jpeg', 0.85);
+    if (blob && blob.size <= ASSISTANT_PICTURE_BYTES) return { blob, width: out.width, height: out.height, type: blob.type || 'image/png' };
+    width = Math.max(64, Math.round(width * 0.7));
+  }
+  return null;
+}
+
+/**
+ * Saves an Assistant's picture (captureViewImage) to the Screenshots of what is on screen, as the
+ * person's capture does (core__view save): the run whose results are open, or the inspected mesh.
+ * Its gallery item, or null when nothing on screen owns screenshots.
+ */
+async function saveAssistantPicture(pic) {
+  const own = captureOwner();
+  if (!own || !pic || !pic.blob) return null;
+  const ext = pic.type === 'image/jpeg' ? 'jpg' : 'png';
+  return uploadCaptureToOwner(own, { kind: 'screenshot', blob: pic.blob, ext, width: pic.width, height: pic.height }, captureDefaultName('screenshot'));
+}
+
+/** A face as the Assistant names it ("face 3@Body1", "face 3", "3"): its label and number, or null. */
+function assistantFaceRef(id) {
+  const raw = String(id || '').trim();
+  const ref = parseFaceRef(/^\d+$/.test(raw) ? 'face ' + raw : raw);
+  if (!ref || !(ref.faceId > 0)) return null;
+  const body = cadFaceBodyMap().get(ref.faceId) || ref.bodyId || 1;
+  return { faceId: ref.faceId, label: faceLabel(ref.faceId, body) };
+}
+
+/** A body as the Assistant names it ("Body2", "2"): its 1-based index among the shown geometry's bodies, or 0. */
+function assistantBodyIndex(id) {
+  const raw = String(id || '').trim();
+  const m = /^(?:body\s*)?(\d+)$/i.exec(raw);
+  if (m) return Number(m[1]);
+  const names = geometryBodies();
+  const i = names.findIndex((n) => String(n).toLowerCase() === raw.toLowerCase());
+  return i >= 0 ? i + 1 : 0;
+}
+
+/** Shows these CAD faces again (labels), leaving the other hidden ones hidden. */
+function showCadFaces(labels) {
+  (labels || []).forEach((lab) => hiddenCadFaces.delete(lab));
+  applyHiddenDisplays();
+  try { applyGeomHighlight(); } catch (_) {}
+}
+
+/**
+ * The person is using the Filters panel (core host tools spec 5.3, "has a filter panel open"): it
+ * shows and they are typing in it, or pressed, typed or scrolled in it within the last 3 s. The app
+ * opens the panel by itself with results and a mesh's inspect view, so it being shown alone is not
+ * the person's doing.
+ */
+let assistantFiltersInputAt = 0;
+{
+  const fp = document.getElementById('filters-panel');
+  const mark = () => {
+    assistantFiltersInputAt = Date.now();
+  };
+  if (fp) for (const type of ['pointerdown', 'keydown', 'input', 'wheel']) fp.addEventListener(type, mark, { capture: true, passive: true });
+}
+
+function assistantFiltersInUse() {
+  const fp = document.getElementById('filters-panel');
+  if (!fp || fp.hidden || fp.classList.contains('is-hidden')) return false;
+  const a = document.activeElement;
+  const typing = !!a && fp.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName);
+  return typing || Date.now() - assistantFiltersInputAt < 3000;
+}
+
+/** What the workbench shows now, for the Assistant's answers. */
+function assistantShownNow() {
+  return {
+    project_id: String(currentProjectId() || ''),
+    geometry_id: shownGeometryId(),
+    study_id: String(currentStudyId() || ''),
+    mesh_id: String((meshCatalog && meshCatalog.active_id) || ''),
+    run_id: String((runCatalog && (runCatalog.selected_run_id || runCatalog.active_run_id)) || ''),
+    results: !!resultsViewOpen,
+    mesh_inspect: !!meshInspectOpen,
+  };
+}
+
+/** A panel of the workbench the Assistant opens (core__show panel), as its tree row or fix does. */
+function openAssistantPanel(panel) {
+  switch (panel) {
+    case 'materials':
+      openSetupFix({ go: 'material' });
+      return true;
+    case 'bcs':
+      openSetupFix({ go: 'bc' });
+      return true;
+    case 'bc_defaults':
+      expandTreeFolder('Boundary conditions');
+      showBcDefaultsPanel();
+      return true;
+    case 'mesh_hub':
+      openSetupFix({ go: 'mesh-hub' });
+      return true;
+    case 'refinements':
+      void applyTreeIntent({ type: 'refs-hub', meshId: (meshCatalog && meshCatalog.active_id) || '', gen: studySwitchGen });
+      return true;
+    case 'runs':
+    case 'study':
+      openSetupFix({ go: 'sim-hub' });
+      return true;
+    case 'add_run':
+      openSetupFix({ go: 'add-run' });
+      return true;
+    case 'create_study':
+      openSetupFix({ go: 'create-sim' });
+      return true;
+    case 'queue': {
+      const btn = document.getElementById('btn-queue');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+window.__CFD_ASSISTANT_CORE__ = {
+  viewerPressed: () => viewerPressed(),
+  viewerInputAt: () => viewerInputAt,
+  /** Why the view is busy for a tool that would move it ('' when it isn't): a capture, a study switch, an app dialog. */
+  viewBusy: () => (captureState.open ? 'capture' : studySwitchBusy ? 'study' : dialogBusy() ? 'dialog' : ''),
+  filtersInUse: () => assistantFiltersInUse(),
+  captureViewImage,
+  saveAssistantPicture,
+  shown: assistantShownNow,
+  hasGeometry: (id) => importedGeometries().some((g) => g && String(g.id) === String(id)),
+  hasStudy: (id) => !studyIsGone(id) && (studyCatalog.simulations || []).some((sim) => sim && String(sim.id) === String(id)),
+  hasMesh: (id) => !!findMeshRecord(id),
+  // The study's runs are read on demand: once more from the server before a run counts as unknown.
+  hasRun: async (id) => {
+    if (findRunRecord(id)) return true;
+    try { await refreshRunCatalog(); } catch (_) {}
+    return !!findRunRecord(id);
+  },
+  switchGeometry: (id) => switchGeometryClient(id),
+  selectStudy: (id) => selectStudyClient(id),
+  showMesh: (id) => applyTreeIntent({ type: 'mesh', id: String(id), gen: studySwitchGen }),
+  showRun: (id) => applyTreeIntent({ type: 'run', id: String(id) }),
+  showResults: async (id) => {
+    // A run of another study: that study first, as its row in the tree is.
+    const rec = findRunRecord(String(id));
+    const sid = rec && rec.simulation_id;
+    if (sid && String(currentStudyId() || '') !== String(sid)) await selectStudyClient(String(sid));
+    return openRunResults(String(id));
+  },
+  openPanel: openAssistantPanel,
+  fit: () => frameSceneCamera(true),
+  normalTo: (id) => {
+    const ref = assistantFaceRef(id);
+    return !!ref && lookNormalToFace(ref.faceId) !== false;
+  },
+  orbitAt: (id) => {
+    const ref = assistantFaceRef(id);
+    const info = ref ? faceOrientationInfo(ref.faceId) : null;
+    if (!info || !info.c) return false;
+    const k = cadToWorldScale();
+    setOrbitCenter('custom', [info.c[0] * k, info.c[1] * k, info.c[2] * k]);
+    try { renderWindow.render(); } catch (_) {}
+    return true;
+  },
+  /** Hides or shows faces and bodies by the Assistant's ids; answers the ids it did not know. */
+  setHidden: (ids, hide) => {
+    const faces = [];
+    const bodies = [];
+    const unknown = [];
+    for (const id of ids || []) {
+      const ref = /^face/i.test(String(id)) || /^\d+$/.test(String(id)) ? assistantFaceRef(id) : null;
+      if (ref) faces.push(ref.label);
+      else {
+        const b = assistantBodyIndex(id);
+        if (b > 0 && b <= geometryBodies().length) bodies.push(b);
+        else unknown.push(String(id));
+      }
+    }
+    if (faces.length) (hide ? hideCadFaces : showCadFaces)(faces);
+    if (bodies.length) setBodiesHidden(bodies, hide);
+    try { renderWindow.render(); } catch (_) {}
+    return { faces: faces.length, bodies: bodies.length, unknown };
+  },
+  showAll: () => {
+    showAllCadFaces();
+    showAllBodies();
+    try { renderWindow.render(); } catch (_) {}
+  },
+  edges: (on) => setCadEdgesVisible(!!on),
+  legend: (on) => setLegendVisible(!!on),
+};
 
 bindSetupHost({
   viewingBcId,

@@ -329,11 +329,16 @@ test('the workspace closing (Back) gives list_changed at the client, and the old
   expect(app.changes.n).toBe(0);
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
-  await expect.poll(() => app.changes.n, { timeout: 10_000, message: 'list_changed' }).toBe(1);
+  // The workspace's tools went, and the window's core page now says the workbench (core host
+  // tools spec C7): one change or two, as they land.
+  await expect.poll(() => app.changes.n, { timeout: 10_000, message: 'list_changed' }).toBeGreaterThanOrEqual(1);
   const r = await app.client.callTool({ name: `${PLUGIN}__add`, arguments: { by: 1 } });
   expect(r.isError).toBe(true);
   expect(resultJson(r).error).toMatchObject({ code: 'unavailable', hint: TOOLS_CHANGED_HINT });
-  // Listed again: no workspace tool.
-  expect((await app.client.listTools()).tools.filter((t) => t.name.includes('__'))).toEqual([]);
-  expect(app.changes.n).toBe(1);
+  // Listed again: no workspace tool; the window's own core tools (the workbench's).
+  const after = (await app.client.listTools()).tools.map((t) => t.name).filter((n) => n.includes('__'));
+  expect(after).toEqual(['core__show', 'core__view']);
+  const seen = app.changes.n;
+  await new Promise((r) => setTimeout(r, 1000));
+  expect(app.changes.n, 'nothing changed since it was listed').toBe(seen);
 });

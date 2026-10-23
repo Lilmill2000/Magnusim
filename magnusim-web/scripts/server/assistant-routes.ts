@@ -1133,6 +1133,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     runner: turns.runner,
     gates: turns.gates,
     resolveTab: (target) => turns.resolveTab(target),
+    resolveTabForProject: (id) => turns.resolveTabForProject(id),
     settings: deps.turns?.settings ?? loadSettings,
     projects: deps.turns?.projects ?? projectLookup(createHostCaller({ port: () => deps.port?.() ?? null })),
     remember: deps.turns?.remember ?? remember,

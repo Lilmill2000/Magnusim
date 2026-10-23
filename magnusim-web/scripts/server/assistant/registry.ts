@@ -26,6 +26,11 @@
  * - A tool belongs to its registration: once the tab registers again (even on the same
  *   link), a tool of the earlier one, still in a step's offered list, is unavailable.
  * - An unknown risk counts as destructive.
+ * - The core page (core host tools spec C7): every app tab registers its own core__show and
+ *   core__view beside its workspace (setCore, `coreTabs`), with where it is (place, project,
+ *   study). They are offered with the host tools to the tab's own turn in that project only,
+ *   core__view not in a workspace; the same tools on the same link keep their ToolDefs as the tab
+ *   moves, so a step's offered call still runs.
  */
 import { createHash } from 'node:crypto';
 import { pluginEpoch as foamPluginEpoch } from '../../foam-runner.js';
@@ -44,7 +49,9 @@ export type ToolSource =
   /** `workspace`: as the person reads it (the workspace's title). */
   | { kind: 'workspace'; plugin: string; pluginName: string; workspace: string; tab: string; link: string; projectId: string; studyId: string; epoch: string }
   /** Reserved for a later phase (other plugins' tools). */
-  | { kind: 'plugin'; plugin: string; method: string; epoch: string };
+  | { kind: 'plugin'; plugin: string; method: string; epoch: string }
+  /** The core page of an app tab (core host tools spec C7): `core__show`, `core__view`. */
+  | { kind: 'core'; tab: string; link: string };
 
 export interface ToolCtx {
   tab: string | null;
@@ -213,6 +220,39 @@ export interface Refusal {
   message: string;
 }
 
+/** Where an app tab is (core host tools spec C7, C8): Home, a project's workbench, or a workspace over it. */
+export type CorePlace = Place;
+
+/**
+ * What the core page of an app tab registered (C7): where the tab is, the core tools, and the
+ * call that reaches the page. Every app tab on this PC registers it, so a turn binds to its
+ * window from Home and the workbench too.
+ */
+export interface CoreRegistration {
+  /** The project the tab shows ('' = Home). */
+  projectId: string;
+  /** The study the tab shows ('' = none). */
+  studyId: string;
+  place: CorePlace;
+  tools: unknown[];
+  guide?: string;
+  invoke?: WorkspaceRegistration['invoke'];
+  ready?(): true | string;
+  /**
+   * Raise-only risk per call (C3, §5.1): leaving a workspace that sends its design to the
+   * simulation is a computation. The relay gives it (it knows the open workspace's plugin).
+   */
+  escalate?(tool: string, input: Record<string, unknown>): { risk: 'compute'; note: string; title: string; copy: string } | null;
+}
+
+/** The core tools a core page may register, each with its risk (the page can't claim another) and priority (§15). */
+export const CORE_TOOLS: Readonly<Record<string, { risk: Risk; priority: number; contexts: readonly Place[]; pinned?: boolean }>> = Object.freeze({
+  // How the model reaches another place: never dropped by a budget while anything else fits (§12.3).
+  show: { risk: 'edit', priority: 80, contexts: PLACES, pinned: true },
+  // A workspace has its own view tool, and the core viewer is under its overlay.
+  view: { risk: 'read', priority: 52, contexts: Object.freeze(['home', 'workbench'] as Place[]) },
+});
+
 export interface ToolRegistry {
   toolsFor(ctx: ToolCtx): ToolDef[];
   /** Diagnostics and /tabs; the runner resolves only in the step's offered list. */
@@ -355,6 +395,20 @@ interface TabEntry {
   connected: boolean;
 }
 
+interface CoreEntry {
+  tab: string;
+  link: string;
+  source: ToolSource & { kind: 'core' };
+  /** The newest registration: its place and project change without new tools (a step's tools still run). */
+  reg: CoreRegistration;
+  /** Its tools' and guide's JSON: the same on the same link keeps the tools (and their source). */
+  key: string;
+  tools: ToolDef[];
+  refused: Refusal[];
+  guide: string;
+  connected: boolean;
+}
+
 export interface RegistryOptions {
   hostTools?: readonly ToolDef[];
   /** foam-runner.js pluginEpoch (tests pass their own). */
@@ -370,6 +424,8 @@ export class Registry implements ToolRegistry {
   private readonly host: ToolDef[];
   private readonly epochOf: (key: string) => string;
   private readonly tabs = new Map<string, TabEntry>();
+  /** Each app tab's core page registration (C7), beside its workspace one. */
+  private readonly coreTabs = new Map<string, CoreEntry>();
   private readonly sources = new Set<(ctx: ToolCtx) => ToolDef[]>();
   private readonly changeListeners = new Set<(tab: string) => void>();
 
@@ -428,7 +484,7 @@ export class Registry implements ToolRegistry {
 
   /** A registration's fence: its plugin's epoch is still the one it was made under. */
   fenced(source: ToolSource): boolean {
-    if (source.kind === 'host') return false;
+    if (source.kind === 'host' || source.kind === 'core') return false;
     return this.epochOf(source.plugin) !== source.epoch;
   }
 
@@ -569,9 +625,144 @@ export class Registry implements ToolRegistry {
     return [...this.tabs.keys()];
   }
 
-  /** Where `tab`'s window is, by its workspace registration and the project (placeFor). */
+  // ------------------------------------------------------------ the core page (C7)
+
+  /**
+   * The core page of `tab` registered (null: it withdrew, or its link went for good). Its tools
+   * are only those of CORE_TOOLS, at their own risk. Where the tab is (place, project, study)
+   * changes with every registration; the same tools on the same link keep their ToolDefs, so a
+   * step's offered core tool still runs after the tab moved within a project.
+   */
+  setCore(tab: string, link: string, reg: CoreRegistration | null): { accepted: string[]; refused: Refusal[] } {
+    if (!reg) {
+      if (this.coreTabs.delete(tab)) this.changed(tab);
+      return { accepted: [], refused: [] };
+    }
+    const list = Array.isArray(reg.tools) ? reg.tools : [];
+    let key = '';
+    try {
+      key = JSON.stringify({ tools: list, guide: reg.guide ?? '' });
+    } catch {
+      key = '';
+    }
+    const prev = this.coreTabs.get(tab);
+    if (prev && key && prev.link === link && prev.key === key) {
+      prev.reg = reg;
+      prev.connected = true;
+      this.changed(tab);
+      return { accepted: prev.tools.map((t) => t.localName), refused: prev.refused };
+    }
+    const source = { kind: 'core' as const, tab, link };
+    const refused: Refusal[] = [];
+    const tools: ToolDef[] = [];
+    if (!key || Buffer.byteLength(key, 'utf8') > REGISTRATION_MAX_BYTES) {
+      for (const t of list) refused.push({ name: nameOf(t), code: 'too_large', message: `A registration is at most ${REGISTRATION_MAX_BYTES / 1024} KB.` });
+    } else {
+      const seen = new Set<string>();
+      for (const raw of list) {
+        const r = this.checkCoreTool(raw, source, seen);
+        if ('code' in r) refused.push(r);
+        else tools.push(r);
+      }
+    }
+    tools.sort(byName);
+    this.coreTabs.set(tab, { tab, link, source, reg, key, tools, refused, guide: cleanGuide(reg.guide ?? '', GUIDE_MAX), connected: true });
+    this.changed(tab);
+    return { accepted: tools.map((t) => t.localName), refused };
+  }
+
+  /** A core tool as a workspace tool is checked (name, description, schema), with its fixed risk and priority. */
+  private checkCoreTool(raw: unknown, source: ToolSource & { kind: 'core' }, seen: Set<string>): ToolDef | Refusal {
+    const fixed = isRecord(raw) && typeof raw.name === 'string' && Object.hasOwn(CORE_TOOLS, raw.name) ? CORE_TOOLS[raw.name] : null;
+    if (!fixed) return { name: nameOf(raw), code: 'bad_name', message: `The core page offers only ${Object.keys(CORE_TOOLS).join(' and ')}.` };
+    // The shape checks of a workspace tool, under the `core` slug; its risk is the core table's.
+    const shape: ToolSource & { kind: 'workspace' } = { kind: 'workspace', plugin: 'core', pluginName: 'Magnusim', workspace: 'app', tab: source.tab, link: source.link, projectId: '', studyId: '', epoch: 'core' };
+    const checked = this.checkTool({ ...(raw as Record<string, unknown>), risk: fixed.risk }, shape, { plugin: 'core', pluginName: 'Magnusim', workspace: 'app', projectId: '', studyId: '', tools: [] }, seen, 0);
+    if ('code' in checked) return checked;
+    const registry = this;
+    const localName = checked.localName;
+    const timeoutS = Math.round(checked.stallMs / 1000);
+    const def: ToolDef = {
+      ...checked,
+      source,
+      priority: fixed.priority,
+      contexts: fixed.contexts,
+      ...(fixed.pinned ? { pinned: true } : {}),
+      available(ctx: ToolCtx): true | string {
+        return registry.coreAvailable(source, localName, ctx);
+      },
+      async run(input, rt) {
+        const why = registry.coreAvailable(source, localName, rt.ctx);
+        if (why !== true) return { ok: false, error: { code: 'unavailable', message: why }, summary: why };
+        const invoke = registry.coreTabs.get(source.tab)?.reg.invoke;
+        if (!invoke) {
+          const message = "This window isn't connected.";
+          return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
+        }
+        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
+      },
+      // Raise-only risk per call and its card (C3, §2.1): the core page's own rule, from its newest registration.
+      async escalate(input) {
+        const up = registry.coreTabs.get(source.tab)?.reg.escalate?.(localName, input) ?? null;
+        return up ? Object.assign({ risk: up.risk, note: up.note, detail: [] }, { title: up.title, copy: up.copy }) : null;
+      },
+      gateText(_input, a) {
+        const own = (a ?? {}) as { title?: string; copy?: string };
+        return own.title && own.copy ? { title: own.title, copy: own.copy } : { title: `Allow the Assistant to ${localName === 'show' ? 'move this window' : 'use the view'}?`, copy: a?.note ?? '' };
+      },
+    };
+    return def;
+  }
+
+  /** Whether a core tool may run for `ctx` now (true), else why not. */
+  coreAvailable(source: ToolSource, localName: string, ctx: ToolCtx): true | string {
+    if (source.kind !== 'core') return true;
+    const e = this.coreTabs.get(source.tab);
+    if (!e || e.link !== source.link) return 'This Magnusim window is no longer open.';
+    if (e.source !== source) return 'This window changed its tools since they were offered; use the tools offered now.';
+    if (!e.connected) return "This Magnusim window isn't connected.";
+    if (ctx.tab !== source.tab) return 'That tool belongs to another window.';
+    // A project opened since this step began: its tools (and its privacy) come with the next step.
+    if ((ctx.projectId ?? '') !== e.reg.projectId) return 'This window opened another project; its tools are offered again from the next step.';
+    if (localName === 'view' && e.reg.place === 'workspace') return "core__view works on Home and in the workbench; in a workspace, use the workspace's own view tool.";
+    return e.reg.ready?.() ?? true;
+  }
+
+  /** The core tools of the turn's own tab (none without a tab: a tab-less MCP client). */
+  private coreToolsOf(ctx: ToolCtx): ToolDef[] {
+    const e = ctx.tab ? this.coreTabs.get(ctx.tab) : undefined;
+    return e ? e.tools : [];
+  }
+
+  /** The core page's link came or went (as setConnected for a workspace registration). */
+  setCoreConnected(tab: string, link: string, connected: boolean): void {
+    const e = this.coreTabs.get(tab);
+    if (!e || e.link !== link || e.connected === connected) return;
+    e.connected = connected;
+    this.changed(tab);
+  }
+
+  /** Where an app tab's core page says it is (resolveTab, the turn following its tab), or null. */
+  coreOf(tab: string): { link: string; connected: boolean; projectId: string; studyId: string; place: CorePlace; tools: string[]; refused: Refusal[]; guide: string } | null {
+    const e = this.coreTabs.get(tab);
+    if (!e) return null;
+    return { link: e.link, connected: e.connected, projectId: e.reg.projectId, studyId: e.reg.studyId, place: e.reg.place, tools: e.tools.map((t) => t.name), refused: e.refused, guide: e.guide };
+  }
+
+  coreTabIds(): string[] {
+    return [...this.coreTabs.keys()];
+  }
+
+  /**
+   * Where `tab`'s window is (§11.3): a connected workspace registration of the project → workspace;
+   * else its core page's place when it shows that project (C7); else the project's workbench or Home.
+   */
   placeOf(tab: string | null, projectId: string | null): Place {
-    return placeFor(tab ? this.tabs.get(tab) : null, projectId);
+    const ws = tab ? this.tabs.get(tab) : null;
+    if (ws && ws.connected && (projectId ?? '') === ws.reg.projectId) return 'workspace';
+    const core = tab ? this.coreTabs.get(tab) : null;
+    if (core && core.reg.projectId === (projectId ?? '')) return core.reg.place;
+    return placeFor(null, projectId);
   }
 
   /** The context's place: its own, or (a caller that predates places) the tab's. */
@@ -583,7 +774,8 @@ export class Registry implements ToolRegistry {
   private candidates(ctx: ToolCtx): { host: ToolDef[]; workspace: ToolDef[]; other: ToolDef[] } {
     const place = this.placeIn(ctx);
     const here = (t: ToolDef) => !t.contexts || t.contexts.includes(place);
-    const host = this.host.filter((t) => here(t) && t.available(ctx) === true).sort(byName);
+    // The tab's core page tools go with the host's (C7).
+    const host = [...this.host, ...this.coreToolsOf(ctx)].filter((t) => here(t) && t.available(ctx) === true).sort(byName);
     const entry = ctx.tab ? this.tabs.get(ctx.tab) : undefined;
     const workspace = entry ? entry.tools.filter((t) => this.workspaceAvailable(t.source, ctx) === true) : [];
     const other: ToolDef[] = [];

@@ -24,6 +24,8 @@ declare global {
     __CFD_PREPARE_PROJECT_SWITCH__?: (id: string) => void;
     __CFD_LEAVE_WORKBENCH__?: () => void;
     __CFD_PROJECT_READY__?: string;
+    /** The workbench's functions the Assistant's core page tools use (runtime.js; core host tools spec 5). */
+    __CFD_ASSISTANT_CORE__?: import('../assistant/coreTools').AssistantCoreApi;
     __CFD_PREFS__?: Record<string, unknown>;
     __CFD_RUN_SCOPE__?: string;
     __CFD_MESH_VIEW__?: { bounds?: number[]; case_dir?: string };

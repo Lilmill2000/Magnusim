@@ -190,7 +190,7 @@ describe('assistant-run.mjs', () => {
     }
     const none = await cli(['--tab', 'auto', 'Do it.']);
     assert.equal(none.code, 1);
-    assert.match(none.stderr, /No app tab offers tools/);
+    assert.match(none.stderr, /No Magnusim window is connected to the Assistant/);
     // Two connected tabs: the server's rule refuses to pick one.
     for (const t of ['T1', 'T2']) handle.registry.setWorkspace(t, `L${t}`, { plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [] });
     try {

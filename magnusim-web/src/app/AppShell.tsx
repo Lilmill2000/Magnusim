@@ -4,6 +4,7 @@ import { ToastHost } from './ToastHost';
 import ReactDOM from 'react-dom/client';
 import { AssistantDock } from '../assistant/dock/AssistantDock';
 import { dockShortcut } from '../assistant/dock/toggle';
+import { startCoreTools } from '../assistant/coreTools';
 import { startAssistantRelay } from '../assistant/relay';
 import { FiltersPanel } from '../chrome/FiltersPanel';
 import { LeftTree } from '../chrome/LeftTree';
@@ -76,10 +77,14 @@ export function AppShell() {
       lastProject = next;
       void loadPluginUi(next ? `p:${next}` : '').catch(() => undefined);
     });
-    // The open workspace's tools reach the Assistant through this tab (idle until one offers some).
+    // The app page's own tools and where this tab is (core host tools spec C7): every app tab on
+    // this PC offers them, so the Assistant's turns bind to their window from Home and the workbench.
+    const stopCore = startCoreTools();
+    // The open workspace's tools and the core page's reach the Assistant through this tab.
     const stopRelay = startAssistantRelay();
     return () => {
       unsubscribe();
+      stopCore();
       stopRelay();
     };
   }, []);

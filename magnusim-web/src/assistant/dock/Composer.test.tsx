@@ -11,7 +11,7 @@ import { dockStoreSnapshot, resetDockStoreForTests } from './store';
 
 const wizard = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('../../wizard/controller', () => ({ openSetupWizard: wizard.open }));
-const relay = vi.hoisted(() => ({ links: [] as Array<string | null> }));
+const relay = vi.hoisted(() => ({ links: [] as Array<string | null>, core: new Set<string>() }));
 vi.mock('../relay', () => ({
   // This tab's link: L1, then L2 once L1 was refused.
   withAssistantLink: async (use: (link: string | null) => Promise<unknown>, avoid: string | null = null) => {
@@ -19,6 +19,8 @@ vi.mock('../relay', () => ({
     relay.links.push(avoid);
     return use(link);
   },
+  // The links the server holds this tab's core registration on (core host tools spec C7).
+  coreRegisteredOn: (link: string | null) => !!link && relay.core.has(link),
 }));
 vi.mock('../../api/eventHub', () => ({
   openChannel: () => ({ CONNECTING: 0, OPEN: 1, CLOSED: 2, readyState: 0, addEventListener() {}, removeEventListener() {}, close() {}, pin() {} }),
@@ -41,6 +43,7 @@ beforeEach(() => {
   posts = [];
   answers = [];
   relay.links = [];
+  relay.core = new Set();
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -83,6 +86,20 @@ describe('typing and sending', () => {
     expect(sessionStorage.getItem('mg.assistant.dock.keys')).toBe('{"t1":"k1"}');
   });
 
+  it('a window whose core registration the server holds on the link binds the turn to it, from Home and the workbench (core host tools spec 11.3)', async () => {
+    // The server holds it on L2 only: the first link's attempt goes unbound, the fresh one bound.
+    relay.core = new Set(['L2']);
+    answers = [[409, { ok: false, code: 'no_channel', error: 'This window lost its connection to Magnusim. Try again.' }]];
+    mount({ place: PROJECT });
+    fireEvent.change(area(), { target: { value: 'Open it' } });
+    await act(async () => {
+      fireEvent.click(sendButton());
+    });
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[0].body).toEqual({ text: 'Open it', provider: 'openai_compatible', context: { project_id: 'p1', simulation_id: 's1' }, link: 'L1' });
+    expect(posts[1].body).toEqual({ text: 'Open it', provider: 'openai_compatible', tab: 'link', link: 'L2' });
+  });
+
   it('counts from 18,000 characters; past 20,000 Send is disabled', () => {
     mount();
     fireEvent.change(area(), { target: { value: 'x'.repeat(17_999) } });
@@ -119,6 +136,8 @@ describe('the body per context', () => {
     for (const s of ['connecting', 'late', 'none'] as const) expect(turnBody({ ...send, place: WS(s) })).toEqual({ text: 'x', provider: 'p', context: { project_id: 'p1', simulation_id: 's1' } });
     expect(turnBody({ ...send, place: PROJECT })).toEqual({ text: 'x', provider: 'p', context: { project_id: 'p1', simulation_id: 's1' } });
     expect(turnBody({ ...send, place: HOME })).toEqual({ text: 'x', provider: 'p' });
+    // The window's core registration on the link (C7): bound from Home and the workbench too.
+    for (const place of [HOME, PROJECT, WS('connecting')]) expect(turnBody({ ...send, place }, true)).toEqual({ text: 'x', provider: 'p', tab: 'link' });
     // A conversation keeps its provider: only its id goes.
     expect(turnBody({ ...send, conversation: 'c9', place: HOME })).toEqual({ text: 'x', conversation: 'c9' });
     const pic = { media_type: 'image/png' as const, data: 'AAAA', width: 1, height: 1, name: 'a.png', shrunk: false, blob: new Blob() };

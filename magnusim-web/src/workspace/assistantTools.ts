@@ -29,11 +29,17 @@
  *   frame that goes (withdrawWorkspaceTools) takes its offers with it.
  * - The dock registers itself (setWorkspaceDock): a page that connects while one is set hears
  *   `docked` in its welcome, and its Ctrl+/ (assistant.dock) reaches the dock's `key()`.
+ * - A second slot, `core` (core host tools spec C7, 11.1): the app page's own tools (core__show,
+ *   core__view, src/assistant/coreTools.ts) and where the tab is (Home, a project's workbench, a
+ *   workspace; its project and study). One publication per slot, and only the newest of each
+ *   counts; the relay sends both, each with its own rev. A publication of the same place and
+ *   tools again changes nothing (no rev, no POST).
  *
  * The state is on globalThis, so a hot swap of this module keeps the revs going up.
  */
 import { useSyncExternalStore } from 'react';
 import type { AssistantRegistration, AssistantTurn, AssistantUndoAnswer } from '../plugin-sdk/workspace';
+import type { RelayTool } from '../assistant/wire';
 import type { AssistantCallOutcome, AssistantInvoke, AssistantPublication, CheckedAssistantTools, CheckedReview, CheckedTool } from './bridge';
 
 /** The workspace a list belongs to, from the host's route (and its title from the host's plugin row). */
@@ -93,11 +99,30 @@ export interface WorkspaceUndoOffer {
   readonly scope: WorkspaceToolsScope;
 }
 
+/** Where this tab is, as its core page tells the Assistant (core host tools spec C7; project_id '' on Home). */
+export interface CoreToolsScope {
+  project_id: string;
+  study_id: string;
+  place: 'home' | 'workbench' | 'workspace';
+}
+
+/** The core page's publication (C7): its place and tools, and the call that runs one in this page. */
+export interface PublishedCore {
+  /** Page-wide, only ever going up (shared with the workspace slot's revs). */
+  readonly rev: number;
+  readonly scope: CoreToolsScope;
+  readonly tools: readonly RelayTool[];
+  readonly guide: string;
+  readonly invoke: ToolInvoke;
+}
+
 export interface WorkspaceToolsSnapshot {
   /** The page's newest list, or null when the frame withdrew it (or none was offered). */
   readonly current: PublishedTools | null;
   /** The turns whose changes an open frame offers to undo now, by turn id (empty when none). */
   readonly undo: ReadonlyMap<string, WorkspaceUndoOffer>;
+  /** The core page's newest publication (C7), or null while none is (another PC, a test page). */
+  readonly core: PublishedCore | null;
 }
 
 /** The app's Assistant panel, as it registers itself (setWorkspaceDock). */
@@ -136,6 +161,8 @@ interface ToolsState {
   undoView: ReadonlyMap<string, WorkspaceUndoOffer>;
   /** The dock, while one is set. */
   dock: WorkspaceDock | null;
+  /** The core slot's newest publication (C7). */
+  core: PublishedCore | null;
   snap: WorkspaceToolsSnapshot;
   listeners: Set<() => void>;
 }
@@ -157,7 +184,8 @@ function fresh(): ToolsState {
     undo: new Map(),
     undoView: NO_UNDO,
     dock: null,
-    snap: { current: null, undo: NO_UNDO },
+    core: null,
+    snap: { current: null, undo: NO_UNDO, core: null },
     listeners: new Set(),
   };
 }
@@ -174,6 +202,7 @@ function st(): ToolsState {
   s.undo ??= new Map();
   s.undoView ??= NO_UNDO;
   s.dock ??= null;
+  s.core ??= null;
   return s;
 }
 
@@ -182,7 +211,7 @@ const refusal = (reason: string): AssistantRegistration => ({ available: false, 
 function emit(): void {
   const s = st();
   const view = s.current ? s.current.view : null;
-  if (s.snap.current !== view || s.snap.undo !== s.undoView) s.snap = { current: view, undo: s.undoView };
+  if (s.snap.current !== view || s.snap.undo !== s.undoView || s.snap.core !== s.core) s.snap = { current: view, undo: s.undoView, core: s.core };
   for (const fn of [...s.listeners]) {
     try {
       fn();
@@ -276,6 +305,43 @@ export function publishWorkspaceTools(
   if (deadReason !== undefined) settleRec(rec, refusal(deadReason));
   emit();
   return Object.assign(verdict, { abandon: () => abandonRec(rec) });
+}
+
+/**
+ * The core page's tools and where this tab is (core host tools spec C7): a new publication with
+ * the next rev, unless it is the same place, tools and guide as the newest (then that one stays).
+ */
+export function publishCoreTools(scope: CoreToolsScope, tools: readonly RelayTool[], guide: string, invoke: ToolInvoke): PublishedCore {
+  const s = st();
+  const cur = s.core;
+  if (
+    cur &&
+    cur.scope.project_id === scope.project_id &&
+    cur.scope.study_id === scope.study_id &&
+    cur.scope.place === scope.place &&
+    cur.tools === tools &&
+    cur.guide === guide &&
+    cur.invoke === invoke
+  ) {
+    return cur;
+  }
+  s.core = Object.freeze({
+    rev: ++s.rev,
+    scope: Object.freeze({ project_id: scope.project_id, study_id: scope.study_id, place: scope.place }),
+    tools,
+    guide,
+    invoke,
+  });
+  emit();
+  return s.core;
+}
+
+/** The core page went (the shell unmounted): the relay withdraws its tools. */
+export function withdrawCoreTools(): void {
+  const s = st();
+  if (!s.core) return;
+  s.core = null;
+  emit();
 }
 
 /** The undo offers changed: a new view for the snapshot. The caller emits. */

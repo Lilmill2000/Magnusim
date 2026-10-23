@@ -68,6 +68,15 @@
  *
  * The dock reads the running turns bound to this tab (relayTurnsSnapshot, subscribeRelayTurns):
  * a request of the command line here shows in it, and its composer knows the tab is busy.
+ *
+ * The core page (core host tools spec C7, 11.1): every app tab publishes its own tools and where
+ * it is (src/assistant/coreTools.ts, the `core` slot of src/workspace/assistantTools.ts), so the
+ * relay opens its channel on every app tab on this PC (after the status says this PC; never on
+ * another PC), not pinned. Its registration goes as `slot: 'core'` after the workspace's work, on
+ * each new link and whenever the place, project or study changes (each with its own rev); its
+ * calls come as `invoke {…, slot: 'core'}` and run in this page. coreRegisteredOn(link) says the
+ * server holds it on that link: the dock then binds its turns to this window from Home and the
+ * workbench too.
  */
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import type { AssistantRegistration, AssistantStopAnswer, AssistantTurn } from '../plugin-sdk/workspace';
@@ -81,6 +90,7 @@ import {
   workspaceFrameEpoch,
   workspaceFrameKept,
   workspaceToolsSnapshot,
+  type PublishedCore,
   type PublishedTools,
 } from '../workspace/assistantTools';
 import type { AssistantCallOutcome } from '../workspace/bridge';
@@ -225,6 +235,14 @@ interface Relay {
   linkWaiters: Set<() => void>;
   /** The dock's holds (holdAssistantLink): the channel stays, pinned, while any is. */
   keeps: number;
+  /** The core publication (by its rev) last answered on a link. */
+  corePostedOn: { link: string; rev: number } | null;
+  /** The link the server took the core registration on (null: none now). */
+  coreOn: string | null;
+  /** The server may hold a core registration of this page (withdrawn once the page has none). */
+  coreHeld: boolean;
+  /** A channel refused (or ended by the server) opens again for the core only with a newer publication. */
+  coreRefusedRev: number;
 }
 
 let R: Relay | null = null;
@@ -317,9 +335,9 @@ function runOnce(r: Relay): void {
         return;
       }
     }
-    // A request needs the window's proof, or the dock holds the link: the status first (a page
-    // from another PC opens nothing).
-    if (r.proofs > 0 || r.keeps > 0) void checkStatus(r);
+    // A request needs the window's proof, the dock holds the link, or the core page offers its
+    // tools: the status first (a page from another PC opens nothing).
+    if (r.proofs > 0 || r.keeps > 0 || workspaceToolsSnapshot().core) void checkStatus(r);
     return;
   }
   if (r.mode === 'checking') return;
@@ -328,7 +346,9 @@ function runOnce(r: Relay): void {
   if (cur && !cur.settled && cur.tools.length === 0 && !r.maybeHeld && !r.pumping) settleWorkspaceTools(cur.rev, NOTHING_HELD);
   // Opened for a list to offer, or for the window's proof (once per request: a refused channel isn't asked again in a loop).
   const forProof = (r.proofs > 0 || r.keeps > 0) && r.proofOpenedFor < r.proofEpoch;
-  if (!r.ch && ((cur && live(cur) && cur.rev > r.refusedRev) || forProof)) {
+  const core = workspaceToolsSnapshot().core;
+  const forCore = !!core && core.rev > r.coreRefusedRev;
+  if (!r.ch && ((cur && live(cur) && cur.rev > r.refusedRev) || forProof || forCore)) {
     r.proofOpenedFor = r.proofEpoch;
     openRelay(r);
   }
@@ -403,6 +423,8 @@ function onLinked(r: Relay, d: RelayFrameData['linked']): void {
   // Calls that came over an earlier link are gone on the server.
   for (const inv of r.invokes.values()) if (inv.link !== link) inv.ctl.abort();
   r.link = link;
+  // The core registration goes again on this link.
+  r.coreOn = null;
   // A new link starts with nothing bound: the server says `active` right after `linked` when
   // turns are bound to this tab or its hold runs (a restarted one, or a hold that ran out while
   // the link was down, has none, and an old count would pin the stream for good).
@@ -428,6 +450,7 @@ function onLinked(r: Relay, d: RelayFrameData['linked']): void {
 
 function onChannelError(r: Relay, ch: ChannelHandle): void {
   r.link = null;
+  r.coreOn = null;
   // The server failed this page's calls when the stream went (tab_disconnected): stop them here too.
   for (const inv of r.invokes.values()) inv.ctl.abort();
   if (ch.readyState === ch.CLOSED) channelGone(r, workspaceToolsSnapshot().current);
@@ -446,6 +469,10 @@ function channelGone(r: Relay, cur: PublishedTools | null): void {
   r.held = null;
   r.turns = 0;
   r.holdUntil = 0;
+  r.corePostedOn = null;
+  r.coreOn = null;
+  r.coreHeld = false;
+  r.coreRefusedRev = Math.max(r.coreRefusedRev, workspaceToolsSnapshot().core?.rev ?? 0);
   if (cur) {
     r.refusedRev = Math.max(r.refusedRev, cur.rev);
     if (!cur.settled) settleWorkspaceTools(cur.rev, refusal('not_connected'));
@@ -483,6 +510,18 @@ async function pump(r: Relay): Promise<void> {
       if (pendingOn(r, want, link)) {
         sent = true;
         await register(r, link, want as PublishedTools);
+        continue;
+      }
+      // The core page's registration (C7), after the workspace's: each new publication, and again on each link.
+      const core = workspaceToolsSnapshot().core;
+      if (core && !(r.corePostedOn && r.corePostedOn.link === link && r.corePostedOn.rev === core.rev)) {
+        sent = true;
+        await registerCore(r, link, core);
+        continue;
+      }
+      if (!core && r.coreHeld) {
+        sent = true;
+        await withdrawCore(r, link);
         continue;
       }
       break;
@@ -567,6 +606,71 @@ async function register(r: Relay, link: string, pub: PublishedTools): Promise<vo
   // list); a kept list sent again is not sent on this link again.
   r.postedOn = pub.taken ? { link, rev: pub.rev } : before;
   settleWorkspaceTools(pub.rev, refusal(code || `http_${a.status}`));
+}
+
+/** The core page's registration (slot 'core', C7): where this tab is and its tools. */
+async function registerCore(r: Relay, link: string, pub: PublishedCore): Promise<void> {
+  const body: RelayToolsBody = {
+    link,
+    rev: nextWorkspaceToolsRev(),
+    slot: 'core',
+    workspace: { project_id: pub.scope.project_id, plugin: 'core', workspace: 'app', title: 'Magnusim', study_id: pub.scope.study_id },
+    place: pub.scope.place,
+    tools: pub.tools.map((t) => ({ ...t })),
+    ...(pub.guide ? { guide: pub.guide } : {}),
+  };
+  const a = await post(TOOLS_PATH, body);
+  if (R !== r) return;
+  if (!a) {
+    // No answer: the server may have it or not; tried again in a moment.
+    r.coreHeld = true;
+    r.corePostedOn = null;
+    retryLater(r);
+    return;
+  }
+  if (a.status === 409 && codeOf(a) === 'no_channel') {
+    r.corePostedOn = null;
+    if (r.link === link) r.link = null;
+    return;
+  }
+  // Answered: not sent again on this link until it changes (a refusal is the page's own bug, never a loop).
+  r.corePostedOn = { link, rev: pub.rev };
+  if (a.status === 200) {
+    r.coreOn = link;
+    r.coreHeld = true;
+  } else {
+    console.warn('[CFD] assistant core tools refused', codeOf(a) || a.status);
+  }
+}
+
+/** The core page went: its registration is withdrawn (`tools: []`). */
+async function withdrawCore(r: Relay, link: string): Promise<void> {
+  const a = await post(TOOLS_PATH, {
+    link,
+    rev: nextWorkspaceToolsRev(),
+    slot: 'core',
+    workspace: { project_id: '', plugin: 'core', workspace: 'app', study_id: '' },
+    place: 'home',
+    tools: [],
+  } satisfies RelayToolsBody);
+  if (R !== r) return;
+  if (!a) {
+    retryLater(r);
+    return;
+  }
+  if (a.status === 409 && codeOf(a) === 'no_channel' && r.link === link) r.link = null;
+  r.coreHeld = false;
+  r.coreOn = null;
+  r.corePostedOn = null;
+}
+
+/**
+ * Whether the server holds this tab's core registration on `link` (C7): a turn the dock starts
+ * with that link may bind to this window (`tab: 'link'`), from Home and the workbench too.
+ */
+export function coreRegisteredOn(link: string | null): boolean {
+  const r = R;
+  return !!r && !!link && r.coreOn === link && r.link === link && !!workspaceToolsSnapshot().core;
 }
 
 /** `tools: []`, once the calls still running sent their results (at most 3 s). */
@@ -676,8 +780,10 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
   // The ack first, from this handler, before the frame is asked.
   void post(PROGRESS_PATH, { link, call, ack: true } satisfies RelayProgressBody);
   const ctl = new AbortController();
-  // The frame whose list the server took (its answer may still be on its way: the open frame's).
-  const pub = r.held ?? workspaceToolsSnapshot().current;
+  // A core call runs in this page (C7); else the frame whose list the server took (its answer may
+  // still be on its way: the open frame's).
+  const core = d.slot === 'core' ? workspaceToolsSnapshot().core : null;
+  const pub = d.slot === 'core' ? core : (r.held ?? workspaceToolsSnapshot().current);
   const progress = progressSender(link, call);
   const inv: Invoke = { link, ctl, done: Promise.resolve() };
   r.invokes.set(call, inv);
@@ -946,6 +1052,8 @@ function updatePin(r: Relay): void {
 /** Nothing offered, nothing on the server, nothing open, no proof wanted: the channel goes (the relay is idle again). */
 function maybeClose(r: Relay): void {
   if (!r.ch || r.pumping || r.maybeHeld || r.gates.size || r.proofs > 0 || r.keeps > 0 || Date.now() < r.proofUntil) return;
+  // The core page's tools stay offered while this page publishes them (C7).
+  if (workspaceToolsSnapshot().core || r.coreHeld) return;
   const cur = workspaceToolsSnapshot().current;
   if (wanted(cur) || (cur && !cur.settled)) return;
   const ch = r.ch;
@@ -999,6 +1107,10 @@ export function startAssistantRelay(): () => void {
       linkWaiters: new Set(),
       // The dock's holds taken before it started (it mounts before the shell starts the relay).
       keeps: dockHolds,
+      corePostedOn: null,
+      coreOn: null,
+      coreHeld: false,
+      coreRefusedRev: 0,
     };
     if (dockHolds > 0) r.proofEpoch += 1;
     R = r;

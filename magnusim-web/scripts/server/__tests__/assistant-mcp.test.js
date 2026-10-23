@@ -133,6 +133,7 @@ async function world({ hostTools = [], clients = true, privacy, presenter, gateT
     runner: m.manager.runner,
     gates: m.manager.gates,
     resolveTab: (t) => m.manager.resolveTab(t),
+    resolveTabForProject: (id) => m.manager.resolveTabForProject(id),
     settings: m.deps.settings,
     projects: m.deps.projects,
     remember: m.deps.remember,
@@ -844,6 +845,55 @@ describe('an agent session’s binding (A4)', () => {
 });
 
 describe('tools/call', () => {
+  it("a project read by id (core host tools spec 9.2, 9.5): with two windows the call runs in the one showing it and asks that project's question there; the project list asks once for every app", async () => {
+    const seen = [];
+    const reader = Object.assign(
+      H.hostTool('read_project', {
+        projectData: true,
+        schema: { type: 'object', properties: { project_id: { type: 'string' } }, required: ['project_id'], additionalProperties: false },
+        run: async (input, rt) => (seen.push([input.project_id, rt.ctx.tab, rt.ctx.projectId]), { ok: true, data: { read: input.project_id }, summary: 'read' }),
+      }),
+      { projectOf: (input, c) => input.project_id || c.projectId },
+    );
+    const lister = Object.assign(H.hostTool('projects', { run: async (_i, rt) => (seen.push(['list', rt.ctx.tab, null]), { ok: true, data: { projects: [] }, summary: 'listed' }) }), {
+      projectOf: () => P.LIST_CONSENT_KEY,
+    });
+    const w = await world({ hostTools: [reader, lister], privacy: 'ask' });
+    try {
+      w.m.projects.set('p2', { id: 'p2', title: 'Tail', created_at: null });
+      // Two windows: each core page says where it is (C7).
+      w.m.registry.setCore('T1', 'L1', { projectId: 'p1', studyId: '', place: 'workbench', tools: [] });
+      w.m.registry.setCore('T2', 'L2', { projectId: 'p2', studyId: '', place: 'workbench', tools: [] });
+      const asked = [];
+      const off = w.m.manager.gates.subscribe((e) => {
+        if (e.type !== 'open') return;
+        asked.push([e.view.title, e.owner.tab]);
+        queueMicrotask(() => w.m.manager.answerGate(e.view.id, true, { kind: 'link', tab: e.owner.tab }));
+      });
+      const c = await w.client({ name: 'Desk' });
+      const r = await c.client.callTool({ name: 'read_project', arguments: { project_id: 'p2' } });
+      assert.ok(!r.isError, JSON.stringify(M.resultJson(r)));
+      assert.deepEqual(seen.shift(), ['p2', 'T2', 'p2'], "the window showing Tail is the call's context");
+      // The list names no project: tab-less with two windows, so no window could show its question.
+      const none = await c.client.callTool({ name: 'projects', arguments: {} });
+      assert.deepEqual(M.resultJson(none).error, { code: 'no_window', message: S.NO_WINDOW_TEXT });
+      w.m.registry.setCore('T2', 'L2', null);
+      for (let i = 0; i < 2; i += 1) {
+        const l = await c.client.callTool({ name: 'projects', arguments: {} });
+        assert.ok(!l.isError, JSON.stringify(M.resultJson(l)));
+      }
+      off();
+      assert.deepEqual(asked, [
+        ['Let other apps read project "Tail"?', 'T2'],
+        ['Let other apps read your project list?', 'T1'],
+      ]);
+      assert.deepEqual(seen, [['list', 'T1', null], ['list', 'T1', null]]);
+      assert.deepEqual(w.m.consents.map((x) => [x.projectId, x.destination]), [['p2', 'mcp'], [P.LIST_CONSENT_KEY, 'mcp']]);
+    } finally {
+      await w.close();
+    }
+  });
+
   it('runs through ToolRunner and answers the cleaned JSON text plus images; an image over the caps fails the call', async () => {
     const pics = H.hostTool('pics', { run: async () => ({ ok: true, data: { a: 1 }, images: [{ type: 'image', mediaType: 'image/png', base64: PNG }], summary: 'pics' }) });
     const many = H.hostTool('many_pics', { run: async () => ({ ok: true, data: {}, images: Array.from({ length: 5 }, () => ({ base64: PNG })), summary: 'many' }) });

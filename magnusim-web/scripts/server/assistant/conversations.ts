@@ -60,7 +60,8 @@ export class Conversation {
   readonly id: string;
   readonly provider: ProviderId | AgentProviderId;
   readonly model: string;
-  readonly projectId: string | null;
+  /** Its project (null: Home). It moves only with its turn's tab (moveTo). */
+  private boundProject: string | null;
   readonly createdAt: number;
   lastUsed: number;
   /** The first workspace guide this conversation met, frozen. */
@@ -89,9 +90,21 @@ export class Conversation {
     this.id = id;
     this.provider = b.provider;
     this.model = b.model;
-    this.projectId = b.projectId;
+    this.boundProject = b.projectId;
     this.createdAt = now;
     this.lastUsed = now;
+  }
+
+  get projectId(): string | null {
+    return this.boundProject;
+  }
+
+  /**
+   * Its turn's tab opened another project, or went Home (core host tools spec C5, §9.4): the
+   * conversation moves with it, so the window's next message there continues it (mismatch agrees).
+   */
+  moveTo(projectId: string | null): void {
+    this.boundProject = projectId;
   }
 
   get messages(): readonly Message[] {

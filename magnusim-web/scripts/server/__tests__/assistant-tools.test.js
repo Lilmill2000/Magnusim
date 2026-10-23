@@ -327,6 +327,18 @@ describe('the host tools', () => {
     assert.deepEqual([gone.ok, gone.error.code], [false, 'not_found']);
   });
 
+  it('project_summary by project_id (core host tools spec 9.2): that project on every request, and projectOf names it for its privacy question', async () => {
+    tick();
+    const t = tools();
+    const from = app.seen.length;
+    const other = await t.project_summary.run({ project_id: 'p9' }, rt());
+    assert.deepEqual([other.ok, other.error.code], [false, 'not_found']);
+    for (const r of app.seen.slice(from)) assert.equal(r.query.get('project_id'), 'p9', r.path);
+    assert.equal(t.project_summary.projectOf({ project_id: 'p9' }, ctx()), 'p9');
+    assert.equal(t.project_summary.projectOf({ project_id: '' }, ctx()), 'p1');
+    assert.deepEqual(t.project_summary.schema.required, ['project_id']);
+  });
+
   it('explain_ready: issues and fixes, worker-backed, project_id always passed, the study from the input or the turn', async () => {
     tick();
     const t = tools();

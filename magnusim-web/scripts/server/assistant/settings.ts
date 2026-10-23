@@ -669,7 +669,7 @@ export function rememberConsent(projectId: string, createdAt: string | null, des
   return updateSettings((s) => withConsent(s, projectId, createdAt, destination));
 }
 
-/** How many projects have an answer remembered ("Forget project answers (N)"). */
+/** How many projects have an answer remembered ("Forget project answers (N)"): the project list's (`*projects`) is not a project. */
 export function consentCount(s: AssistantSettings): number {
-  return Object.keys(s.consents).length;
+  return Object.keys(s.consents).filter((k) => k !== '*projects').length;
 }

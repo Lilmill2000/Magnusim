@@ -44,8 +44,21 @@ import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
 import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
-import { destinationHost, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
-import { localBudget, LOCAL_BUDGET, placeFor, providerTools, type ToolCtx, type ToolDef, type ToolSelection, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
+import {
+  destinationHost,
+  isProjectList,
+  LIST_CONSENT_KEY,
+  NOTHING_MORE_SENT,
+  NOTHING_SENT,
+  privacyDecision,
+  privacyDeclinedText,
+  privacyDeniedText,
+  privacyGate,
+  projectListGate,
+  type ProjectInfo,
+} from './privacy.ts';
+import { localBudget, LOCAL_BUDGET, providerTools, type CorePlace, type ToolCtx, type ToolDef, type ToolSelection, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
+import { placeOf, tabHere } from './tab-place.ts';
 import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
 import type { Caps, AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
@@ -111,6 +124,8 @@ export interface LoopTurn extends RunnerTurn {
   readonly showTab: string | null;
   readonly projectId: string | null;
   readonly simulationId: string | null;
+  /** Its tab is somewhere else now (core host tools spec §9.4): true when the project changed (the conversation moved). */
+  follow(projectId: string | null, simulationId: string | null, title?: string | null): boolean;
   readonly settings: ModelTurnSettings;
   readonly conv: Conversation;
   readonly signal: AbortSignal;
@@ -150,6 +165,8 @@ export interface LoopTurn extends RunnerTurn {
 export interface LoopRegistry {
   selectTools(ctx: ToolCtx): ToolSelection;
   workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string; review?: WorkspaceReview | null } | null;
+  /** The tab's core page registration (C7): where the window is now (the turn follows its tab). */
+  coreOf?(tab: string): { connected: boolean; projectId: string; studyId: string; place: CorePlace } | null;
 }
 
 export interface LoopDeps {
@@ -381,6 +398,57 @@ async function requirePrivacy(t: LoopTurn, d: LoopDeps, adapter: ProviderAdapter
   return true;
 }
 
+/**
+ * Another project's data, or the project list, in one call (core host tools spec C5, §9.2, §9.3):
+ * that project's consent for this turn's destination, as requirePrivacy asks for the turn's own.
+ * Send is remembered; Don't send answers the call `privacy_declined` and the turn goes on; Always
+ * deny is `privacy_denied`. A local, on-PC model is never asked (privacyDecision).
+ */
+export async function otherProjectPrivacy(
+  t: LoopTurn,
+  d: LoopDeps,
+  cloud: boolean,
+  projectId: string,
+  signal: AbortSignal,
+): Promise<{ code: string; message: string } | null> {
+  const destination = destinationOf(t.settings);
+  const host = destinationHost(t.settings.provider, t.settings.base_url);
+  const list = isProjectList(projectId);
+  let project: ProjectInfo | null = null;
+  const live = await d.settings();
+  if (!cloud || live.privacy === 'allow') return null;
+  if (live.privacy === 'deny') return { code: 'privacy_denied', message: privacyDeniedText(t.settings.provider, host) };
+  if (!list) {
+    try {
+      project = await d.projects(projectId, { signal, turn: t.id });
+    } catch (err) {
+      return { code: 'project_unreadable', message: `The project could not be read: ${err instanceof Error ? err.message : 'no answer'}` };
+    }
+    if (!project) return { code: 'not_found', message: 'No project has that id. The projects tool lists them.' };
+  }
+  const key = list ? LIST_CONSENT_KEY : projectId;
+  const createdAt = project?.created_at ?? null;
+  const verdict = privacyDecision(live, { cloud, destination, projectId: key, createdAt });
+  if (verdict === 'allow') return null;
+  if (verdict === 'deny') return { code: 'privacy_denied', message: privacyDeniedText(t.settings.provider, host) };
+  const gate = project ? privacyGate({ turn: t.id, project, provider: t.settings.provider, host }) : projectListGate({ turn: t.id, provider: t.settings.provider, host });
+  t.setState('awaiting_consent');
+  t.pause();
+  let answer: 'allow' | 'deny';
+  try {
+    answer = await d.gates.ask(gate, { kind: 'turn', id: t.id, tab: t.showTab }, signal);
+  } finally {
+    t.resume();
+    t.setState('tools');
+  }
+  if (signal.aborted) return { code: 'stopped', message: 'Stopped by the user before this ran.' };
+  if (answer !== 'allow') return { code: 'privacy_declined', message: privacyDeclinedText(project ? project.id : null) };
+  // "Always deny" chosen while the question was open wins over its Send.
+  if ((await d.settings()).privacy === 'deny') return { code: 'privacy_denied', message: privacyDeniedText(t.settings.provider, host) };
+  await d.remember(key, createdAt, destination);
+  return null;
+}
+
 export const GUIDE_CHANGED_NOTE = "The workspace's notes changed; start a new conversation to use them.";
 
 /** Freezes the tab's guide into a conversation that has sent nothing yet; later changes only get a note. */
@@ -485,6 +553,27 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     if (hit) return t.end('capped', hit.reason, hit.text);
     const full = conv.fullReason();
     if (full && full !== 'context') return t.end('failed', 'conversation_full', FULL_TEXT);
+    // The turn follows its tab (§9.4): a project opened there since the last step (core__show, or
+    // the person) is this step's, and its privacy is asked before this request carries any of it.
+    const at = step > 1 && t.tab ? tabHere(d.registry, t.tab) : null;
+    const here = at ? { projectId: at.projectId || null, studyId: at.studyId || null } : null;
+    if (here && here.projectId !== (t.projectId ?? null)) {
+      let next: ProjectInfo | null = null;
+      if (here.projectId) {
+        try {
+          next = await d.projects(here.projectId, { signal: t.signal, turn: t.id });
+        } catch (err) {
+          if (stoppedNow(t)) return;
+          return t.end('failed', 'project_unreadable', `The project could not be read: ${err instanceof Error ? err.message : 'no answer'}`);
+        }
+        if (stoppedNow(t)) return;
+        if (!next) return t.end('failed', 'bad_project', 'That project is not in the projects list.');
+      }
+      t.follow(here.projectId, here.studyId, next?.title ?? null);
+      project = next;
+    } else if (here && here.studyId !== (t.simulationId ?? null)) {
+      t.follow(here.projectId, here.studyId);
+    }
     // Privacy is read live: a change made during the turn holds from this request on.
     if (adapter.cloud && project) {
       if (!(await requirePrivacy(t, d, adapter, project, live, step === 1))) return;
@@ -512,7 +601,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       simulationId: t.simulationId,
       cloud: adapter.cloud,
       local,
-      place: placeFor(workspaceNow(), t.projectId),
+      // Where the turn's tab is (core host tools spec 11.3): its workspace, else its core page.
+      place: placeOf(d.registry, t.tab, t.projectId),
       budgetTokens: local ? localBudget(contextTokens) : null,
       prompt: t.prompt,
       // app_status reports the turn's own provider and model, not the default's.
@@ -756,7 +846,15 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         let r;
         try {
           // Its questions show where the turn shows them; its tools are still only its bound tab's (ctx).
-          r = await d.runner.run(call, { owner: { kind: 'turn', id: t.id, tab: t.showTab }, ctx, signal, turn: t, offered });
+          r = await d.runner.run(call, {
+            owner: { kind: 'turn', id: t.id, tab: t.showTab },
+            ctx,
+            signal,
+            turn: t,
+            offered,
+            // Another project's data, or the project list: that consent first (§9.2, §9.3).
+            privacyFor: (projectId, callSignal) => otherProjectPrivacy(t, d, adapter.cloud, projectId, callSignal),
+          });
         } finally {
           t.callDone();
         }

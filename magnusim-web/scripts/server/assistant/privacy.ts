@@ -111,6 +111,70 @@ export function privacyGate(o: { turn: string; project: ProjectInfo; provider: P
   };
 }
 
+// ---------------------------------------------------------------- the project list (core host tools spec §9.3)
+// The `projects` tool sends every project's title, folder and dates. It is asked about once per
+// destination, remembered in `consents` under a reserved key (no project id holds a `*`), and
+// "Forget project answers" clears it with the rest. A local, on-PC model is never asked.
+
+/** The reserved consent key of the project list. */
+export const LIST_CONSENT_KEY = '*projects';
+
+/** Whether a "project" a tool names (projectOf) is the project list. */
+export function isProjectList(projectId: string | null): boolean {
+  return projectId === LIST_CONSENT_KEY;
+}
+
+/** The project list's question for the Assistant's own provider. */
+export function projectListGate(o: { turn: string; provider: ProviderId; host: string }): GateRequest {
+  const where =
+    o.provider === 'openai_compatible'
+      ? `${o.host}, a server that isn't on this PC. A server on this PC keeps them here.`
+      : `${o.host}, a cloud provider. A local server keeps them on this PC.`;
+  return {
+    kind: 'privacy',
+    turn: o.turn,
+    title: 'Let the Assistant read your project list?',
+    copy: `The Assistant is about to send the names, folders and dates of all your projects to ${where} Settings → Assistant can change this.`,
+    yes: 'Send',
+    no: "Don't send",
+  };
+}
+
+/** The project list's question for other apps on this PC (one answer for every app). */
+export function mcpProjectListGate(o: { client: string }): GateRequest {
+  return {
+    kind: 'privacy',
+    turn: null,
+    title: 'Let other apps read your project list?',
+    copy: `${mcpAppText(o.client)} is about to read the names, folders and dates of all your projects. It may send them to its own AI service. This answer covers every app using Magnusim's tools. Settings → Assistant can change this.`,
+    yes: 'Allow',
+    no: "Don't allow",
+  };
+}
+
+/** The project list's question for a coding agent: answered only in the Magnusim window. */
+export function agentProjectListGate(o: { turn: string; name: string }): GateRequest {
+  const name = cleanText(o.name, 64).replace(QUOTES, "'") || 'the coding agent';
+  return {
+    kind: 'privacy',
+    turn: o.turn,
+    title: `Send your project list to ${name}?`,
+    copy: `The Assistant's coding agent, ${name}, is about to read the names, folders and dates of all your projects and send them to its own service under your account. Settings → Assistant can change this.`,
+    yes: 'Send',
+    no: "Don't send",
+    link_only: true,
+  };
+}
+
+/**
+ * A call refused because the person chose not to send another project, or the project list (the
+ * turn goes on). It names the project by the id the call gave, never its title: the title is
+ * that project's data, which the person just chose not to send.
+ */
+export function privacyDeclinedText(projectId: string | null): string {
+  return projectId === null ? 'The person chose not to send the project list.' : `The person chose not to send project ${cleanText(projectId, 128)}.`;
+}
+
 // ---------------------------------------------------------------- coding agents
 // A coding agent counts as off this PC: it sends what it reads to its own service under the
 // person's account (phase 3 spec 4.14). Its destination is `agent:<id>` (providers/index.ts
