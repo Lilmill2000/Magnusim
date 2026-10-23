@@ -473,7 +473,14 @@ describe('retarget (phase 4 spec 9.6)', () => {
     assert.equal(b.lookup(other.view.id).owner.tab, 'tab-a');
     assert.equal(b.answer(mine.view.id, true), 'ok');
     assert.equal(await mine.answer, 'allow');
-    assert.deepEqual(withdrawnTo, [[mine.view.id, 'tab-b']], 'taken down where it shows now');
+    assert.deepEqual(
+      withdrawnTo,
+      [
+        [mine.view.id, 'tab-a'],
+        [mine.view.id, 'tab-b'],
+      ],
+      'taken down in the tab it left (at the move), then where it shows now (at its answer)',
+    );
     assert.equal(events.filter((e) => e.type === 'closed').at(-1).owner.tab, 'tab-b');
     assert.equal(b.lookup(mine.view.id).owner.tab, 'tab-b', 'remembered as answered there');
     b.answer(other.view.id, false);

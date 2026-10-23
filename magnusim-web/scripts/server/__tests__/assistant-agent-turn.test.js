@@ -806,6 +806,8 @@ describe('starting a turn on a coding agent (spec 5.2, 5.3)', LIMIT, () => {
       assert.equal((await w.turn({ text: 'x' }, {})).body.code, 'launch_proof');
       // An app tab's live link proves it (the page), whichever tab sends it; a link that is no tab's live one doesn't.
       w.m.manager.setLinkCheck((link) => link === 'f'.repeat(24));
+      // As the relay wires it: a live link is a tab's (a link the start can't place is refused no_channel).
+      w.m.manager.setLinkTab((link) => (link === 'f'.repeat(24) ? 'tab-1' : null));
       assert.equal((await w.turn({ text: 'x', provider: 'agent:claude', tab: 'tab-1', link: 'e'.repeat(24) }, {})).body.code, 'launch_proof');
       assert.equal((await w.turn({ text: 'x', provider: 'agent:claude', link: 42 }, {})).body.code, 'launch_proof');
       assert.equal(claude.pids('agent').length, before, 'nothing started');
