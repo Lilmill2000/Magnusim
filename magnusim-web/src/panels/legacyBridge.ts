@@ -145,7 +145,7 @@ function usePublished<T>(
   return useSyncExternalStore(subscribeTo, () => published() || atMount);
 }
 
-export type MeshPhase = 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued';
+export type MeshPhase = 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued' | 'stopped';
 
 /** What runtime.publishMeshJobState publishes instead of writing panel DOM. */
 export interface MeshJobState {

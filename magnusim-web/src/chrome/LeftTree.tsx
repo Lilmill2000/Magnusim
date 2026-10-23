@@ -25,6 +25,7 @@ import { getTreeSession, onTreeAction, subscribeTreeSession, treeExpanded } from
 import { GeometryMenu, type GeometryMenuExtra } from './GeometryMenu';
 import { bodyHidden, bodyMenuItems, getBodyView, requestBodyView, subscribeBodyView } from '../workbench/bodyView';
 import { actionsFor, rememberTreeActions, studyKindWords } from '../workspace/geometryActions';
+import { stopMesh } from '../panels/mesh/meshStop';
 
 function Mark({ ok, busy, queuePos }: { ok?: boolean; busy?: boolean; queuePos?: number }) {
   if (ok) return <span className="tree-check" aria-hidden="true">✓</span>;
@@ -145,7 +146,29 @@ function MediaNodes({ ownerKind, id, selectedKey }: { ownerKind: 'run' | 'mesh';
   })}</>;
 }
 
-function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: boolean; selectedKey: string | null }) {
+/** The Stop on a generating mesh's row: the app's question, then the mesh's Stop (meshStop.ts). */
+function MeshStopButton({ mesh, studyId }: { mesh: MeshNode; studyId: string }) {
+  return (
+    <button
+      type="button"
+      className="tree-stop"
+      data-mesh-stop={mesh.id}
+      title={`Stop meshing ${mesh.name}`}
+      aria-label={`Stop meshing ${mesh.name}`}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void stopMesh({ projectId: useProjectStore.getState().projectId || '', simulationId: studyId, meshId: mesh.id, name: mesh.name }).catch(
+          (err) => console.warn('[CFD] mesh stop', err),
+        );
+      }}
+    >
+      Stop
+    </button>
+  );
+}
+
+function MeshItem({ mesh, selected, selectedKey, studyId }: { mesh: MeshNode; selected: boolean; selectedKey: string | null; studyId: string }) {
   const meshKey = mesh.scopeKey || `mesh:${mesh.id}`;
   const refs = mesh.refinements || [];
   return (
@@ -170,6 +193,12 @@ function MeshItem({ mesh, selected, selectedKey }: { mesh: MeshNode; selected: b
           <span className="tree-sub" data-mesh-failed="1" title="The last Generate failed. Open the mesh to see why.">
             Failed
           </span>
+        ) : mesh.stopped ? (
+          <span className="tree-sub" data-mesh-stopped="1" title="Meshing was stopped before it finished. Generate it again.">
+            Stopped
+          </span>
+        ) : mesh.busy ? (
+          <MeshStopButton mesh={mesh} studyId={studyId} />
         ) : undefined
       }
     >
@@ -291,7 +320,7 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
   const meshKey = study.scopeKey ? `${study.scopeKey}/item:mesh` : `Mesh:${study.id}`;
   const simKey = study.scopeKey ? `${study.scopeKey}/item:simulation` : `Simulation:${study.id}`;
   const meshKids = study.meshes.map((m) => (
-    <MeshItem key={m.id} mesh={m} selectedKey={selectedKey} selected={study.active && selectedKey === `meshid:${m.id}`} />
+    <MeshItem key={m.id} mesh={m} studyId={study.id} selectedKey={selectedKey} selected={study.active && selectedKey === `meshid:${m.id}`} />
   ));
   const runKids = study.runs.map((r) => {
     const runKey = r.scopeKey || `run:${r.id}`;

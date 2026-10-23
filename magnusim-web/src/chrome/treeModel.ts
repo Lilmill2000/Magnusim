@@ -15,6 +15,8 @@ export interface MeshNode {
   outOfDate?: boolean;
   /** Its last generate failed (and none is running): the Mesh panel says why. */
   failed?: boolean;
+  /** Its last generate was stopped (Stop), and none runs now. */
+  stopped?: boolean;
 }
 
 /** One material record of a study (host API 1.8). */
@@ -480,6 +482,7 @@ export function readSetupTree(
               })),
               ...(mesh.out_of_date ? { outOfDate: true } : {}),
               ...(!ready && !busy && mesh.live_status === 'failed' ? { failed: true } : {}),
+              ...(!ready && !busy && mesh.live_status === 'stopped' ? { stopped: true } : {}),
             };
           }),
           runs: owned(study.runs).map((run) => {

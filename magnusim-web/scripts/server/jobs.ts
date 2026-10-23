@@ -40,6 +40,10 @@ function nowIso(): string {
 /** How often a running job's events are written to its file, at most. */
 export const EVENT_PERSIST_MS = 500;
 
+function isEnded(status: JobStatus): boolean {
+  return status === 'done' || status === 'failed' || status === 'stopped';
+}
+
 function newId(): string {
   return `job-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 }
@@ -48,6 +52,8 @@ export class JobManager extends EventEmitter {
   private readonly dir: string;
   private readonly jobs = new Map<string, JobRecord>();
   private readonly children = new Map<string, ChildProcess>();
+  /** What ends a running job whose process another module owns (attachChild's `stop`). */
+  private readonly stoppers = new Map<string, () => void>();
   private readonly emitters = new Map<string, EventEmitter>();
   private readonly onPersist?: (job: JobRecord) => void;
   /** Event writes waiting, by job (see pushEvent). */
@@ -187,28 +193,40 @@ export class JobManager extends EventEmitter {
     return job;
   }
 
-  attachChild(id: string, child: ChildProcess | { pid?: number | null } | null | undefined): void {
+  /**
+   * The job runs `child`. A job whose process this server does not own (a mesh: its
+   * generator is w21's) passes `stop`, what ends it; stop() calls it in place of a kill.
+   */
+  attachChild(id: string, child: ChildProcess | { pid?: number | null } | null | undefined, opts?: { stop?: () => void }): void {
     const job = this.jobs.get(id);
     if (!job) return;
+    // A job that already ended (its process ended before this) stays ended.
+    if (isEnded(job.status)) return;
     job.status = 'running';
     job.started_at = job.started_at || nowIso();
     job.pid = child && child.pid != null ? Number(child.pid) : null;
     if (child && typeof (child as ChildProcess).kill === 'function') {
       this.children.set(id, child as ChildProcess);
     }
+    if (opts?.stop) this.stoppers.set(id, opts.stop);
     this.persist(job);
     this.pushEvent(id, { event: 'start', job_id: id, kind: job.kind, pid: job.pid });
   }
 
+  /**
+   * The job's end. Only the first counts: a mesh stopped from here ends again when its
+   * generator closes, and that later "done" or "failed" never overwrites "stopped".
+   */
   finish(id: string, status: 'done' | 'failed' | 'stopped', result?: unknown, error?: string): void {
     const job = this.jobs.get(id);
-    if (!job) return;
+    if (!job || isEnded(job.status)) return;
     job.status = status;
     job.finished_at = nowIso();
     job.pid = null;
     if (result !== undefined) job.result = result;
     if (error) job.error = error;
     this.children.delete(id);
+    this.stoppers.delete(id);
     this.persist(job);
     this.pushEvent(id, {
       event: status === 'done' ? 'result' : 'error',
@@ -225,8 +243,16 @@ export class JobManager extends EventEmitter {
     if (!job) return null;
     const want = String(projectId || '').trim();
     if (want && job.project !== want) return null;
+    const stopper = this.stoppers.get(id);
     const child = this.children.get(id);
-    if (child && child.exitCode == null) {
+    if (stopper && !isEnded(job.status)) {
+      // Its owner ends it (a mesh: stopMeshGenerate kills the generator and its WSL side).
+      try {
+        stopper();
+      } catch {
+        /* still marked stopped below */
+      }
+    } else if (child && child.exitCode == null) {
       // The tool and everything it started (child.kill() would leave its children).
       killProcessTree(child.pid);
     }

@@ -3590,6 +3590,19 @@ select.fp-select {
 .tree-row .bc-plus:hover,
 .tree-row .ref-plus:hover,
 .tree-row .rc-plus:hover { color: #101828; }
+/* A generating mesh's Stop, before its spinner. */
+.tree-row .tree-stop {
+  margin-left: auto;
+  border: 1px solid #d0d5dd;
+  border-radius: 4px;
+  background: #fff;
+  color: #b42318;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 6px;
+}
+.tree-row .tree-stop:hover { background: #fef3f2; }
 .ref-panel { border-left: 3px solid #0d9488; }
 
 /* ---- W20 Mesh form settings ---- */

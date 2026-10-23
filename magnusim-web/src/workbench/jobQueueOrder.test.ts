@@ -515,6 +515,21 @@ describe('meshProgressPhase', () => {
   });
 });
 
+describe('meshProgressPhase stopped', () => {
+  it('reads stopped when its own job was stopped, or its record says so', () => {
+    expect(meshProgressPhase({ jobStatus: 'stopped' })).toBe('stopped');
+    // A leftover live flag does not keep a stopped mesh "generating".
+    expect(meshProgressPhase({ jobStatus: 'stopped', computeLive: true })).toBe('stopped');
+    expect(meshProgressPhase({ jobStatus: 'idle', stopped: true })).toBe('stopped');
+    // Generating again, queued, ready or failed wins over an earlier stop.
+    expect(meshProgressPhase({ jobStatus: 'running', stopped: true })).toBe('generating');
+    expect(meshProgressPhase({ jobStatus: 'idle', stopped: true, queued: true })).toBe('queued');
+    expect(meshProgressPhase({ jobStatus: 'stopped', meshReady: true })).toBe('ready');
+    expect(meshProgressPhase({ jobStatus: 'idle', failed: true, stopped: true })).toBe('failed');
+    expect(meshProgressPhase({ jobStatus: 'idle' })).toBe('idle');
+  });
+});
+
 describe('meshProgressPhase queued', () => {
   it('reads queued, not generating, while the mesh waits behind another job', () => {
     expect(meshProgressPhase({ jobStatus: 'idle', queued: true })).toBe('queued');
