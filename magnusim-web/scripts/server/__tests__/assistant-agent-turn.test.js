@@ -2250,6 +2250,29 @@ describe("the agent's own tools, its mode and the lockdown (spec 4.7, 4.8)", LIM
       await srv.close();
     }
   });
+
+  it("a window's link that is no longer live (the launch token still proves the account): 409 no_channel as a model turn's, never a turn no window shows", async () => {
+    resetAssistantState();
+    host.setTestOptions({ cancelMs: null, idleMs: null, gateMs: null });
+    const m = H.makeManager({ dir: ROOT, pluginEpoch: () => '1', projects: { p1: { ...PROJECT } }, settings: { provider: `agent:${CUSTOM_ID}`, privacy: 'allow', custom_agents: [customAgent()] } });
+    m.state.settings.agents = { ...m.state.settings.agents, [CUSTOM_ID]: { model: null, mode: null, allowed: { fingerprint: await fingerprintOf(CUSTOM_ID, m.state.settings), at: 'now' }, lockdown_failed: null } };
+    const srv = await H.relayServer(m);
+    let home = null;
+    try {
+      assert.equal((await L.startMcpListener()).running, true);
+      home = await srv.page();
+      const link = await home.open();
+      home.close();
+      await H.until(() => !srv.relay.isLiveLinkOf(home.tab, link), 5000, 'the window gone');
+      const r = await srv.post('/api/assistant/turns', { text: 'List.', provider: `agent:${CUSTOM_ID}`, link }, proof());
+      assert.deepEqual([r.status, r.json.code, r.json.error], [409, 'no_channel', 'This window lost its connection to Magnusim. Try again.'], JSON.stringify(r.json));
+      assert.equal(srv.handle.turns.running().length, 0);
+    } finally {
+      home?.close();
+      host.endAll('test end');
+      await srv.close();
+    }
+  });
 });
 
 // ------------------------------------------------------------------------------------------------

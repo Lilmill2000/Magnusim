@@ -7,9 +7,11 @@
  * For this PC only (assistantAccess on both the stream and the subscribe: 403). Refused: a turn
  * id that is not one (400), a since that is not a whole number from 0 (400), a turn this server
  * doesn't keep (404), and a ninth turn channel of one tab (429). Frames to the page:
- *   snapshot {turn, events, next, ended, more}   first: the turn's summary (with its prompt and
- *                                  text_so_far) and its events after `since`, at most 500;
- *                                  more:true when `events` frames with the rest follow at once
+ *   snapshot {turn, events, next, ended, more, upto}   first: the turn's summary (with its
+ *                                  prompt and text_so_far) and its events after `since`, at most
+ *                                  500; more:true when `events` frames with the rest follow at
+ *                                  once; upto: the seq they reach together (text_so_far is the
+ *                                  text up to there)
  *   events {events, next}          the events logged since, in frames of at most 500, at most
  *                                  every 100 ms (the log merges streamed text into an event no
  *                                  reader has had, so a wake waits flushMs before it reads)
@@ -51,8 +53,13 @@ export function slimSummary(t: Turn): SlimSummary {
   return s as SlimSummary;
 }
 
-/** Open turn channels per tab (this module's server). */
-const openPerTab = new Map<string, number>();
+/**
+ * Open turn channels per tab: on globalThis, as the hub's streams and channels are, so a Vite
+ * restart (a new copy of this module, the old server's channels still open) counts them all.
+ */
+const PER_TAB_KEY = Symbol.for('magnusim.assistant.turnChannelsPerTab');
+const openPerTab: Map<string, number> = ((globalThis as Record<symbol, unknown>)[PER_TAB_KEY] as Map<string, number> | undefined) ??
+  ((globalThis as Record<symbol, unknown>)[PER_TAB_KEY] = new Map<string, number>());
 
 /** How many turn channels each tab holds open now (tests). */
 export function turnChannelsOpen(): Record<string, number> {
@@ -128,7 +135,7 @@ export function openTurnChannel(manager: TurnManager, params: Record<string, unk
   const head = first.slice(0, TURN_CHANNEL.perFrame);
   const rest = first.slice(TURN_CHANNEL.perFrame);
   const ended = t.ended && cursor >= t.lastSeq();
-  if (!send('snapshot', { turn: t.summary(), events: head, next: head.length ? head[head.length - 1].seq : cursor, ended, more: rest.length > 0 })) {
+  if (!send('snapshot', { turn: t.summary(), events: head, next: head.length ? head[head.length - 1].seq : cursor, ended, more: rest.length > 0, upto: cursor })) {
     cleanup();
     return { ok: true, cleanup };
   }

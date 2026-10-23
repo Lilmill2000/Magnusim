@@ -346,6 +346,15 @@ export class GateBroker {
     let n = 0;
     for (const e of this.openEntries()) {
       if (e.owner.kind !== 'turn' || e.owner.id !== turn) continue;
+      const before = e.owner;
+      // The tab it was on (a window gone quiet may still show it) takes it down: it can't answer it now.
+      if (tabOf(before) !== null && tabOf(before) !== tab) {
+        try {
+          e.broker.presenter.withdraw(e.view, before, { answer: 'deny', by: 'stop' });
+        } catch {
+          /* the dialog goes with its page */
+        }
+      }
       e.owner = { ...e.owner, tab };
       // Unseen again only if this tab can't show it either.
       e.broker.clock.clearTimeout(e.unseenTimer);

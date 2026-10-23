@@ -1161,6 +1161,23 @@ describe('the hold and dormant registrations', { timeout: 30_000 }, () => {
     assert.equal((await B.get(`/api/assistant/turns/${free.json.turn}`)).json.turn.state, 'done');
   });
 
+  it("the same restart: a window's turn with no tab (the dock on a project) ends too, since only the old relay could show its question", async () => {
+    const m = makeManager({ dir: ROOT, provider: 'anthropic', projects: PROJECTS });
+    const A = await relayServer(m);
+    servers.push(A);
+    const { page, link } = await linkedPage(A);
+    const shown = await A.post('/api/assistant/turns', { text: 'Hi', context: { project_id: 'p1' }, link });
+    assert.equal(shown.status, 202, JSON.stringify(shown.json));
+    const t = A.handle.turns.get(shown.json.turn);
+    assert.deepEqual([t.tab, t.showTab], [null, page.tab]);
+    assert.equal((await page.frame('gate')).gate.kind, 'privacy', 'its question shows in the window');
+    const B = await relayServer(m);
+    servers.push(B);
+    await A.close();
+    assert.deepEqual([t.state, t.endReason], ['failed', 'shutdown'], 'not left waiting 10 minutes on a question no window can show');
+    assert.deepEqual(t.summary().open_gates, []);
+  });
+
   it('the server stopping: a call still out fails, and no channel opens any more', async () => {
     const { m, s } = await setup();
     const { page } = await linkedPage(s);
@@ -1290,5 +1307,31 @@ describe('a request started in a window (phase 4 spec 9.1, 9.6)', { timeout: 30_
     assert.equal(t.state, 'done');
     assert.equal((await b.frame('gate_closed', 0)).gate, first.id, 'it closes in the window that shows it');
     assert.deepEqual(await codeOf({ link: linkB, answer_key: key }), [409, 'ended']);
+  });
+
+  it('/show from a window gone quiet (a half-open link, not live): the quiet window is told the question closed, so it never keeps a card it can no longer answer', async () => {
+    const { m, s } = await setup({ manager: { hostTools: [hostTool('wipe', { risk: 'destructive' })] } });
+    const { page: a, link: linkA } = await linkedPage(s);
+    m.provider.script({ tools: [{ name: 'wipe' }] }, { text: 'Wiped.' });
+    const r = await start(s, { text: 'Wipe them', link: linkA });
+    assert.equal(r.status, 202, JSON.stringify(r.json));
+    const { turn: id, answer_key: key } = r.json;
+    const first = (await a.frame('gate', 0)).gate;
+    // A call the page never acknowledges: its link goes quiet (open, not live).
+    const call = runTool(toolOf(m, a.tab, 'add'), { by: 1 }, ctx(a.tab));
+    await a.frame('invoke');
+    m.clock.advance(RELAY_ACK_MS);
+    assert.equal((await call.promise).error.code, 'tab_disconnected');
+    assert.equal(s.relay.tabLive(a.tab), false);
+    const b = await s.page();
+    const linkB = await b.open();
+    const ok = await s.post(`/api/assistant/turns/${id}/show`, { link: linkB, answer_key: key });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    assert.equal((await b.frame('gate', 0)).gate.id, first.id);
+    const closed = await a.frame('gate_closed', 0);
+    assert.equal(closed.gate, first.id, 'taken down in the quiet window');
+    const there = await s.post('/api/assistant/relay/gate', { link: linkA, gate: first.id, allow: true });
+    assert.deepEqual([there.status, there.json.code], [403, 'not_shown']);
+    s.handle.turns.get(id).stop();
   });
 });

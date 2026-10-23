@@ -264,6 +264,9 @@ describe('reference pictures', () => {
     assert.match(lastUserText(m.provider.requests[2].req), /^Review round 1 of 1: .*\nThe request came with a reference picture/s);
     // Never in the turn's log.
     assert.ok(!JSON.stringify(eventsOf(r.turn)).includes(PNG_1x1));
+    // Let go at its end: the window's copy is the kept p1 (within the picture budgets), not the sent one.
+    assert.deepEqual(r.turn.promptImages, [], 'the sent pictures are let go at the end');
+    assert.notEqual(r.turn.imageOf('p1'), null);
   });
 
   it('a cloud turn on a project: nothing goes, pictures included, until privacy allows it; "Don\'t send" keeps them here', async () => {

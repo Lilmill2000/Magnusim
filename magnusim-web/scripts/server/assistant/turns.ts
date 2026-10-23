@@ -295,7 +295,8 @@ export class Turn implements AnyTurn {
    */
   readonly answerKey: string = randomBytes(16).toString('hex');
   readonly prompt: string;
-  readonly promptImages: readonly ImagePart[];
+  /** The person's pictures sent with the request, until its end (the loop reads them at its start). */
+  promptImages: readonly ImagePart[];
   readonly conv: Conversation;
   readonly tab: string | null;
   readonly projectId: string | null;
@@ -819,6 +820,9 @@ export class Turn implements AnyTurn {
     this.updateTimer = null;
     this.offShutdown?.();
     this.offShutdown = null;
+    // The person's pictures as sent: no step reads them again (the window's copies are the kept
+    // "p1".."p4", within the picture budgets; the conversation keeps its own within its limits).
+    this.promptImages = [];
     // Nothing of this turn runs on: questions still open are withdrawn.
     if (!this.abort.signal.aborted) {
       this.stopAs = { state, reason, message };
@@ -1568,8 +1572,10 @@ export class TurnManager {
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
     }
     // The window still has its link (the checks above awaited): else it shows nothing there.
+    // A window's start whose link went (or never was live, with the CLI's token as the proof) is
+    // refused as a model turn's is: never a turn whose questions no window can answer.
     const shownBy = linkTab !== null && this.tabOfLink(a.link) === linkTab ? linkTab : null;
-    if (a.tab === 'link' && shownBy === null) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
+    if ((a.tab === 'link' || (a.link !== undefined && a.link !== null)) && shownBy === null) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
     // One turn per app tab, and three in all: an agent turn counts as any other.
     const busy = this.admitRefusal(boundTab);
     if (busy) return busy;
@@ -1869,12 +1875,14 @@ export class TurnManager {
 
   /**
    * This server's relay is closing (a Vite restart closes the old server after the new one is
-   * up): the running turns this manager started that are bound to an app tab end now, as at a
-   * server stop. Their tab, its tools and their questions are reachable only through that
-   * relay. Turns with no tab go on; the new server serves them.
+   * up): the running turns this manager started that are bound to an app tab, or that show their
+   * questions in a window (a dock turn from Home or a project), end now, as at a server stop.
+   * Their tab, its tools and their questions are reachable only through that relay (the new
+   * server's relay can't show a question this manager's broker asks). Turns with neither go
+   * on; the new server serves them.
    */
   shutdownTabTurns(): void {
-    for (const t of this.running()) if (t.tab && this.started.has(t)) t.shutdown();
+    for (const t of this.running()) if ((t.tab || t.showTab) && this.started.has(t)) t.shutdown();
   }
 }
 

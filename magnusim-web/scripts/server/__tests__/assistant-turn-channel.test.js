@@ -111,6 +111,7 @@ describe('the turn channel', () => {
       seqs.slice(2),
     );
     assert.equal(snap.next, seqs.at(-1));
+    assert.equal(snap.upto, seqs.at(-1), 'what text_so_far covers');
     assert.equal(ch.frames.length, 1, 'nothing else yet');
   });
 
@@ -128,6 +129,7 @@ describe('the turn channel', () => {
       ],
     );
     assert.equal(ch.of('snapshot')[0].more, true);
+    assert.equal(ch.of('snapshot')[0].upto, 1200, 'the seq the snapshot and the frames after it reach (its text_so_far is up to there)');
     assert.deepEqual(
       ch.events().map((e) => e.seq),
       Array.from({ length: 1200 }, (_, i) => i + 1),
@@ -219,6 +221,20 @@ describe('the turn channel', () => {
     assert.equal(refusal(channel(m, { role: 'turn', turn: t.id })), 'ok', 'one closed: room again');
   });
 
+  it("a Vite restart's new copy of the module counts the old server's open channels too (the hub keeps them across it)", async () => {
+    const m = mk();
+    const t = await heldTurn(m);
+    const fresh = await import(`../assistant/turn-channel.ts?copy=${Date.now()}`);
+    assert.notEqual(fresh.openTurnChannel, openTurnChannel, 'another copy of the module');
+    const eight = Array.from({ length: TURN_CHANNEL.perTab }, () => channel(m, { role: 'turn', turn: t.id }, { tab: 'tab-v' }));
+    assert.ok(eight.every((ch) => ch.result.ok));
+    assert.equal(fresh.turnChannelsOpen()['tab-v'], TURN_CHANNEL.perTab);
+    const ninth = fresh.openTurnChannel(m.manager, { role: 'turn', turn: t.id }, () => true, () => undefined, { tab: 'tab-v', conn: 'conn-1', cid: 'assistant:copy', local: true, streamReq: LOCAL, req: LOCAL });
+    assert.deepEqual([ninth.ok, ninth.status], [false, 429]);
+    for (const ch of eight) ch.close();
+    assert.equal(fresh.turnChannelsOpen()['tab-v'], undefined);
+  });
+
   it('two windows on one turn each get every event', async () => {
     const m = mk();
     const t = await heldTurn(m);
@@ -294,7 +310,8 @@ describe('the turn channel', () => {
     assert.equal(ev.text, 'heard');
     assert.deepEqual([(await page.subscribe('assistant:8', { role: 'nope' })).status], [400]);
     const remote = await s.page(undefined, { headers: { 'x-forwarded-for': '203.0.113.9' } });
-    if (remote.conn) assert.equal((await remote.subscribe('assistant:1', { role: 'turn', turn: t.id }, { 'x-forwarded-for': '203.0.113.9' })).status, 403);
+    assert.ok(remote.conn, 'a remote stream opens (other kinds serve it): its assistant subscribe is what is refused');
+    assert.equal((await remote.subscribe('assistant:1', { role: 'turn', turn: t.id }, { 'x-forwarded-for': '203.0.113.9' })).status, 403);
     page.close();
     remote.close();
   });
