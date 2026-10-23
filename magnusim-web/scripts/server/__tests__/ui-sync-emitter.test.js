@@ -57,9 +57,9 @@ describe('uiSync.emit', () => {
   });
 
   it("who made it: the Assistant's turn, another app (mcp:<connection>, or no turn), a coding agent", () => {
-    assert.deepEqual(uiSyncOrigin({ turn: 't-1', ctx: { assistant: { provider: 'anthropic', model: 'm' } } }), { by: 'assistant', turn: 't-1' });
+    assert.deepEqual(uiSyncOrigin({ turn: 't-1', ctx: { assistant: { provider: 'cloud-provider', model: 'm' } } }), { by: 'assistant', turn: 't-1' });
     assert.deepEqual(uiSyncOrigin({ turn: 'mcp:s-9', ctx: {} }), { by: 'app', turn: 'mcp:s-9' });
     assert.deepEqual(uiSyncOrigin({ turn: null, ctx: {} }), { by: 'app', turn: null });
-    assert.deepEqual(uiSyncOrigin({ turn: 't-2', ctx: { assistant: { provider: 'agent:claude-code', model: '' } } }), { by: 'app', turn: 't-2' });
+    assert.deepEqual(uiSyncOrigin({ turn: 't-2', ctx: { assistant: { provider: 'agent:some-agent', model: '' } } }), { by: 'app', turn: 't-2' });
   });
 });
