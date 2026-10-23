@@ -22,6 +22,7 @@ import {
   LOG_DROPPED,
   RECORD_GONE,
   reviewDivider,
+  updatedLine,
   usageLine,
   yourPictureAlt,
 } from './copy';
@@ -94,6 +95,14 @@ function Row({ view, item, open, workspace, streaming, onOpenPicture }: { view: 
           <span>{reviewDivider(item.round, item.of)}</span>
         </div>
       );
+    case 'updated': {
+      const line = updatedLine(item.updated.kinds, item.updated.ids, item.updated.names);
+      return line ? (
+        <p className="dock-muted dock-line" data-dock-line="updated" data-dock-updated="1">
+          {line}
+        </p>
+      ) : null;
+    }
     case 'plan':
       return <AgentPlan item={item} />;
     case 'agent_tools':

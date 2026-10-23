@@ -629,8 +629,12 @@ def persist_child_item(
     """Write one record into its own folder (``BC_*/bc.json`` and its ``id.json``).
 
     Atomic (a temp file, then a replace), so no reader sees half a record. The link's
-    keys follow :func:`link_keys_from_disk`.
+    keys follow :func:`link_keys_from_disk`. The record's ``rev`` follows
+    :func:`cfddesk.project.record_rev.stamp_rev`: a record that carries ``base_rev`` other
+    than the stored rev is refused (``StaleRecordError``) before anything is written. A
+    legacy row or a copy given its own folder (``keep_row``) counts on from its own rev.
     """
+    from cfddesk.project.record_rev import base_rev_of, check_base_rev, stamp_rev
     from cfddesk.project.web_writes import atomic_write
 
     spec = _ITEM_KIND.get(kind)
@@ -639,7 +643,6 @@ def persist_child_item(
     prefix, json_name, fallback = spec
     if not rec or rec.get("id") is None:
         raise ValueError(f"{kind} id required")
-    parent.mkdir(parents=True, exist_ok=True)
     found = None
     on_disk = None
     want = str(rec["id"])
@@ -649,12 +652,15 @@ def persist_child_item(
             found = folder
             on_disk = data
             break
+    check_base_rev(kind, want, on_disk, base_rev_of(rec))
+    parent.mkdir(parents=True, exist_ok=True)
     if found is None:
         wanted = prefix + sanitize_folder_name(str(rec.get("name") or rec["id"]), fallback)
         found = _unique_child(parent, wanted)
         found.mkdir(parents=True, exist_ok=True)
     bound = {k: v for k, v in rec.items() if k not in ("dir", "folder")}
     link_keys_from_disk(bound, on_disk, geometry_rev, keep_row)
+    stamp_rev(bound, on_disk if on_disk is not None else ({"rev": rec.get("rev")} if keep_row else None))
     atomic_write(
         found / "id.json",
         {

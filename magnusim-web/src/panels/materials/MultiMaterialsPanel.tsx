@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../../api/client';
 import { bodyDisplay, subscribeFaceNames } from '../../workbench/faceNames';
 import { linkedWorkerRpc, stampRecords } from '../../workbench/geometryRev';
+import { isStaleRecord, withBaseRev } from '../../workbench/recordRev';
+import { releaseFocus, showStaleNotice } from '../../workbench/staleNotice';
 import { SciNumberInput } from '../../forms/SciNumberInput';
 import {
   customPresetKey,
@@ -108,6 +110,8 @@ export function MultiMaterialsPanel(props: IslandProps & { analysisKey: string }
   const [note, setNote] = useState('');
   const imperial = prefersImperial();
   const live = useRef({ rows, editId, draft });
+  // Saves refused as stale (C2): a save queued before a refusal is dropped with it.
+  const refusals = useRef(0);
   live.current = { rows, editId, draft };
   const queue = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -153,7 +157,10 @@ export function MultiMaterialsPanel(props: IslandProps & { analysisKey: string }
     const fields = { ...live.current.draft, ...next };
     setDraft(fields);
     live.current = { ...live.current, draft: fields };
+    const epoch = refusals.current;
     const run = async () => {
+      // A save queued before a refusal carries the edits refused with it (C2).
+      if (epoch !== refusals.current) return;
       const scoped = ids();
       if (!scoped.project_id || !scoped.simulation_id) {
         setNote('Create a simulation first.');
@@ -186,21 +193,36 @@ export function MultiMaterialsPanel(props: IslandProps & { analysisKey: string }
           if (left) moved.push(left);
           return left || r;
         });
-      const stamped = stampRecords([...moved, rec] as Record<string, unknown>[]) as SavedMaterial[];
+      // Each record carries the rev it was loaded with (`base_rev`): one changed since is refused.
+      const stamped = stampRecords([...moved, rec].map((r) => withBaseRev(r as Record<string, unknown>))) as SavedMaterial[];
       const byId = new Map(stamped.map((r) => [String(r.id), r]));
       const materials = [...others.map((r) => byId.get(String(r.id)) || r), byId.get(String(rec.id)) || rec];
-      const doc = await linkedWorkerRpc<{ materials?: SavedMaterial[] }>('materials.set', {
-        project_id: scoped.project_id,
-        sim_id: scoped.simulation_id,
-        body: {
+      let doc: { materials?: SavedMaterial[] };
+      try {
+        doc = await linkedWorkerRpc<{ materials?: SavedMaterial[] }>('materials.set', {
           project_id: scoped.project_id,
-          simulation_id: scoped.simulation_id,
-          materials,
-          air: byId.get(String(rec.id)) || rec,
-          only_id: rec.id,
-          only_ids: stamped.map((r) => String(r.id)),
-        },
-      });
+          sim_id: scoped.simulation_id,
+          body: {
+            project_id: scoped.project_id,
+            simulation_id: scoped.simulation_id,
+            materials,
+            air: byId.get(String(rec.id)) || rec,
+            only_id: rec.id,
+            only_ids: stamped.map((r) => String(r.id)),
+          },
+        });
+      } catch (e) {
+        if (!isStaleRecord(e)) throw e;
+        // Changed since this panel loaded it: show what is saved, then say so.
+        releaseFocus();
+        refusals.current += 1;
+        load();
+        // The record refused: the one edited, or one a body moved away from.
+        const which = String((e as { id?: unknown }).id || rec.id);
+        const named = [...list, rec].find((r) => String(r.id) === which);
+        await showStaleNotice('material', which, String((named && named.name) || ''));
+        return;
+      }
       const after = Array.isArray(doc.materials) && doc.materials.length ? doc.materials : materials;
       const mine = after.find((r) => String(r.id) === String(rec.id)) || rec;
       setEditId(String(rec.id));

@@ -146,7 +146,7 @@ test.describe('tabs in the background and the browser connection limit', () => {
     expect(await shownZmax(back)).toBe(35);
     const backTab = seen.tabIdOf(back);
     expect(backTab, "the tab's event stream").toBeTruthy();
-    await expect.poll(() => serverChannels(request, host, backTab), { timeout: 15_000, message: 'its two linked geometries, on the server' }).toBe(2);
+    await expect.poll(() => serverChannels(request, host, backTab, 'link'), { timeout: 15_000, message: 'its two linked geometries, on the server' }).toBe(2);
 
     // The user goes to another tab: after a few seconds the server holds nothing for it.
     await hideTab(back);
@@ -167,7 +167,8 @@ test.describe('tabs in the background and the browser connection limit', () => {
     expect(await shownZmax(back), 'the hidden tab still shows v1').toBe(35);
     // Shown again: its stream and both channels are back on the server, and it catches up.
     await showTab(back);
-    await expect.poll(() => serverChannels(request, host, backTab), { timeout: 15_000, message: 'its channels, back on the server' }).toBe(2);
+    await expect.poll(() => serverChannels(request, host, backTab, 'link'), { timeout: 15_000, message: 'its channels, back on the server' }).toBe(2);
+    await expect.poll(() => serverChannels(request, host, backTab, 'ui'), { timeout: 15_000, message: "and its project's ui channel" }).toBe(1);
     await expect.poll(() => shownZmax(back), { timeout: 15_000, message: 'the tab shown again shows v2' }).toBe(30);
 
     // Its page waits for a link (queued: the compute slot is held) when the user leaves the tab.

@@ -165,7 +165,11 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   `startHost({ env })`); the page's are `window.__CFD_TEST_*__` globals the test sets,
   never the app. `window.__CFD_TEST_WORKSPACE_CLOSE_MS__ = N` keeps a workspace
   mounted N ms after the address left it (`e2e/link-leave.spec.js`, a quick way out
-  and back).
+  and back). `MAGNUSIM_TEST_UI_SYNC=1` adds `POST /api/test/ui-sync`, which says a
+  record changed as a host tool does after its write (`scripts/server/ui-channel.ts`),
+  and, with `MAGNUSIM_TEST_ASSISTANT=1`, the host tool `test_ui_sync` a scripted model
+  can call; the window counts the changes it reloaded in `window.__CFD_UI_SYNCS__`
+  (`e2e/assistant-core-stale.spec.js`).
 - **A plugin's tests go in its own suite**, not in `e2e/`.
 - **To let a stress run reach a spec**, import `test` and `expect` from the harness:
   `./support/stress.js` (core), `../../../e2e/support/plugin-suite.js` (a plugin

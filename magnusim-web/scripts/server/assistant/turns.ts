@@ -72,6 +72,7 @@ import { agentStartRefusal, rememberAgentSignIn, type AgentEntry, type AgentRow 
 import { findAgentNow, foundAgentOf, signInView } from './agents/test.ts';
 import { appVersion } from './host-tools.ts';
 import { mcpLaunchTokenMatches, mcpUnavailableText, startMcpListener } from './mcp/listener.ts';
+import { uiSync, type UiSync } from '../ui-sync.ts';
 
 export type { TurnState, ModelTurnSettings } from './loop.ts';
 export type { ImageRef } from './runner.ts';
@@ -108,11 +109,14 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'end'; state: EndState; reason: string; message: string | null }
   // A review round starts (loop.ts): the workspace's review prompt went to the model.
   | { type: 'review'; round: number; of: number }
+  // A call wrote to the project and the open windows reload it (C2, ui-sync.ts): `call` is the
+  // call that wrote (absent when none was open), `names` the records' names by id.
+  | { type: 'ui_sync'; call?: string; project_id: string; kinds: string[]; ids: Record<string, string[]>; names?: Record<string, string> }
   // A coding agent's turn (phase 3 spec 5.5): the agent once ready, its plan, its own tools,
   // its permission requests, its mode and model.
   | AgentEvent
 );
-// Reserved for later phases (never emitted in Foundation): 'job', 'ui_sync'.
+// Reserved for a later phase (never emitted yet): 'job'.
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type TurnEventBody = DistributiveOmit<TurnEvent, 'seq' | 'at'>;
@@ -343,6 +347,8 @@ export class Turn implements AnyTurn {
   private readonly waiters = new Set<() => void>();
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private call: AbortController | null = null;
+  /** The tool call logged and not yet answered: a `ui_sync` it causes goes under it. */
+  private openCall: string | null = null;
   private minutes: { limitMs: number; text: string; timer: unknown; up: boolean } = { limitMs: Number.POSITIVE_INFINITY, text: '', timer: null, up: false };
   private pausedAt: number | null = null;
   private pausedMs = 0;
@@ -459,9 +465,23 @@ export class Turn implements AnyTurn {
 
   emit(e: RunnerEvent | TurnEventBody): void {
     if (e.type === 'agent') this.agentVersion = e.version;
+    if (e.type === 'tool_call') this.openCall = e.call;
+    else if (e.type === 'tool_result' && e.call === this.openCall) this.openCall = null;
     this.push(e as TurnEventBody);
     // A call's result: the steps and money its tab's page shows moved on.
     if (e.type === 'tool_result') this.changed();
+  }
+
+  /** A write of one of its calls (C2): the log's `ui_sync` row, under the call that made it. */
+  synced(e: UiSync): void {
+    this.emit({
+      type: 'ui_sync',
+      ...(this.openCall ? { call: this.openCall } : {}),
+      project_id: e.project_id,
+      kinds: [...e.kinds],
+      ids: { ...e.ids },
+      ...(e.names ? { names: { ...e.names } } : {}),
+    });
   }
 
   /**
@@ -1136,6 +1156,23 @@ function stopTurnsForSlot(slot: KeySlot): void {
   }
 }
 
+const UI_SYNC_HEARD = Symbol.for('magnusim.turns.uiSync');
+
+/**
+ * A host tool's write (ui-sync.ts) goes on its turn's log under the call that made it. Heard
+ * once per process, whatever number of managers (and Vite re-imports) there are: the turns
+ * are the process's (assistantState).
+ */
+function hearUiSync(): void {
+  const g = globalThis as unknown as Record<symbol, boolean | undefined>;
+  if (g[UI_SYNC_HEARD]) return;
+  g[UI_SYNC_HEARD] = true;
+  uiSync.subscribe((e) => {
+    const t = e.turn ? (assistantState().turns as Map<string, Turn>).get(e.turn) : undefined;
+    if (t && !t.ended) t.synced(e);
+  });
+}
+
 export class TurnManager {
   readonly gates: GateBroker;
   readonly runner: ToolRunner;
@@ -1168,6 +1205,8 @@ export class TurnManager {
       const now = this.clock.now();
       for (const t of this.turns().values()) if (t.conv.id === id) t.releasedAt ??= now;
     });
+    // A call of a turn wrote to the project (C2): the turn's log says so, under the call.
+    hearUiSync();
   }
 
   /** The relay says whether a link is an app tab's live link now (the page's launch proof). */

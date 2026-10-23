@@ -142,6 +142,36 @@ export const waitsFor = (workspace: string, label: string): string => `Waits for
 export const pictureAlt = (i: number, n: number, title: string): string => `Picture ${i} of ${n} from ${title}`;
 export const PICTURE_GONE = 'Picture no longer kept';
 
+/** What a call changed, as the step's "Updated" line names each kind (phase 5, C2). */
+const UPDATED_KINDS: Record<string, { label: string; record: string }> = {
+  project: { label: 'Project', record: 'project' },
+  geometry: { label: 'Geometry', record: 'geometry' },
+  study: { label: 'Study', record: 'study' },
+  materials: { label: 'Materials', record: 'material' },
+  bcs: { label: 'Boundary conditions', record: 'bc' },
+  bc_defaults: { label: 'Boundary condition defaults', record: '' },
+  mesh: { label: 'Mesh', record: 'mesh' },
+  refinements: { label: 'Mesh refinements', record: 'refinement' },
+  runs: { label: 'Runs', record: 'run' },
+  plugin_studies: { label: 'Studies', record: 'plugin_study' },
+};
+
+/**
+ * "Updated: Boundary conditions (Inlet); Mesh (Mesh 1)": each kind a call changed, with the
+ * names of its records when the call gave them. `active` and `tree` are how the window follows,
+ * not something changed: they are left out. Empty when nothing is left to name.
+ */
+export const updatedLine = (kinds: readonly string[], ids: Record<string, readonly string[]>, names: Record<string, string>): string => {
+  const parts: string[] = [];
+  for (const kind of kinds) {
+    const k = Object.hasOwn(UPDATED_KINDS, kind) ? UPDATED_KINDS[kind] : null;
+    if (!k) continue;
+    const named = (k.record && ids[k.record] ? ids[k.record] : []).map((id) => names[id]).filter((n): n is string => !!n);
+    parts.push(named.length ? `${k.label} (${[...new Set(named)].join(', ')})` : k.label);
+  }
+  return parts.length ? `Updated: ${parts.join('; ')}` : '';
+};
+
 // ---------------------------------------------------------------- a coding agent's events (2.7)
 
 export const agentLine = (name: string, version: string | null, ownTools: 'off' | 'on'): string =>

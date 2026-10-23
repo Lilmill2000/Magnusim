@@ -11,7 +11,8 @@
  * an EventSource (readyState, addEventListener, onmessage/onerror/onopen, close), whose
  * events are the ones that stream sent, with the same data. The assistant's channel
  * (`/api/assistant/events?role=relay`) never was a stream: that URL is only its name, and it
- * is not pinned unless its caller pins it.
+ * is not pinned unless its caller pins it. Nor is the open project's `ui` channel
+ * (`/api/ui/events?project_id=…`, what the Assistant changed there; workbench/uiSync.ts).
  *
  * - The stream opens with the first channel and closes 2 s after the last one goes, so
  *   Home and a project with nothing to follow hold no connection.
@@ -33,7 +34,7 @@
  */
 
 type Listener = (ev: Event) => void;
-type Kind = 'link' | 'job' | 'case' | 'assistant';
+type Kind = 'link' | 'job' | 'case' | 'assistant' | 'ui';
 
 const CONNECTING = 0;
 const OPEN = 1;
@@ -232,6 +233,8 @@ function channelOf(url: string): { kind: Kind; params: Record<string, string> } 
   if (u.pathname === '/api/plugin-cases/events') return { kind: 'case', params };
   // A channel name only (no such route): `?role=relay` is the page's assistant relay.
   if (u.pathname === '/api/assistant/events') return { kind: 'assistant', params };
+  // A channel name only (no such route): what the Assistant changed in a project (workbench/uiSync.ts).
+  if (u.pathname === '/api/ui/events') return { kind: 'ui', params };
   const job = /^\/api\/jobs\/([^/]+)\/events$/.exec(u.pathname);
   if (job) return { kind: 'job', params: { ...params, job_id: decodeURIComponent(job[1]) } };
   throw new Error(`no event channel for ${url}`);

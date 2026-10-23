@@ -26,6 +26,7 @@ import { agentPrefs, loadSettings } from './settings.ts';
 import { agentIdOf } from './agents/known.ts';
 import { HOST_STALL_MS, type Place, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext } from './registry.ts';
 import { cleanText, TEXT_CAPS } from './sanitize.ts';
+import { uiSync, uiSyncOrigin, type UiSyncInput } from '../ui-sync.ts';
 import type { JsonSchemaObject, ProviderId } from './types.ts';
 
 export interface HostToolDeps {
@@ -231,10 +232,55 @@ export function appVersion(): Promise<string> {
   return versionRead;
 }
 
+/**
+ * A test-only tool (MAGNUSIM_TEST_ASSISTANT=1 and MAGNUSIM_TEST_UI_SYNC=1, both): it says the
+ * turn's project changed, as a writing tool does after its route answered (ui-sync.ts), so the
+ * browser tests can show the dock's "Updated" line before the real writing tools exist. It
+ * writes nothing itself.
+ */
+export function testUiSyncTool(): ToolDef {
+  return {
+    ...hostTool({
+      name: 'test_ui_sync',
+      title: 'Say what changed (test)',
+      description: 'Test only: tells the open window that a record of the project changed.',
+      schema: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', maxLength: 40 },
+          record: { type: 'string', maxLength: 40 },
+          id: { type: 'string', maxLength: 120 },
+          name: { type: 'string', maxLength: 120 },
+        },
+        required: ['kind', 'record', 'id', 'name'],
+        additionalProperties: false,
+      } as JsonSchemaObject,
+      projectData: false,
+      available: withProject,
+      async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
+        const id = String(input.id || '');
+        const sent = uiSync.emit({
+          project_id: String(rt.ctx.projectId || ''),
+          simulation_id: rt.ctx.simulationId,
+          kinds: [String(input.kind || '')] as UiSyncInput['kinds'],
+          ids: { [String(input.record || '')]: [id] },
+          revs: {},
+          names: { [id]: String(input.name || '') },
+          ...uiSyncOrigin(rt),
+          tool: 'test_ui_sync',
+        });
+        return sent ? { ok: true, data: { done: 'said' }, summary: 'Said what changed' } : { ok: false, error: { code: 'bad_values', message: 'Nothing to say.' }, summary: 'Nothing said' };
+      },
+    }),
+    risk: 'edit',
+  };
+}
+
 /** The host tools as the server uses them: the app over loopback on `port`, the settings, package.json and the live registry. */
 export function defaultHostTools(port: () => number | null | undefined): ToolDef[] {
   const transport = createHostTransport({ port });
-  return createHostTools({
+  const test = process.env.MAGNUSIM_TEST_ASSISTANT === '1' && process.env.MAGNUSIM_TEST_UI_SYNC === '1' ? [testUiSyncTool()] : [];
+  return [...createHostTools({
     hostGet: transport.get,
     hostCall: transport.call,
     assistant: async () => {
@@ -245,5 +291,5 @@ export function defaultHostTools(port: () => number | null | undefined): ToolDef
     },
     version: appVersion,
     plugins: () => loadedPlugins(),
-  });
+  }), ...test];
 }

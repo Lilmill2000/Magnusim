@@ -201,6 +201,9 @@ import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
 import { bindSetupHost, saveBoundary, saveMeshSettings } from './setupPersist.js';
+import { bindUiSyncHost, followProject as followUiSync } from './uiSync';
+import { isStaleRecord, revOf, serialSave, withBaseRev } from './recordRev';
+import { releaseFocus, showStaleNotice } from './staleNotice';
 import {
   OLDER_RUN_TEXT,
   adoptServerRev,
@@ -20870,6 +20873,8 @@ function resetWorkbenchScope(nextId) {
     // Home holds none of the project's link streams (the browser's connections are few).
     try { forgetLinkedGeometries(); } catch (_) {}
   }
+  // The project shown before is followed no more (the next project's open follows its own).
+  try { followUiSync(''); } catch (_) {}
   try { cancelResultsPrefetch(); } catch (_) {}
   try { hideAllTreeDetails(); } catch (_) {}
   try { if (typeof hideRunResultsView === 'function') hideRunResultsView({ silent: true }); } catch (_) {}
@@ -21083,6 +21088,8 @@ async function hydrateOpenProjectNow(projectId, opts) {
     }
     publishW16({ hydrated: true, opened: true });
     window.__CFD_PROJECT_READY__ = id;
+    // What the Assistant changes in this project reloads here (C2, uiSync.ts).
+    try { followUiSync(id); } catch (_) {}
     try {
       if (j) useProjectStore.getState().setHydrate(id, j);
     } catch (_) {}
@@ -26853,8 +26860,9 @@ function allProjectBcs() {
   return out;
 }
 
-async function persistConvertedBcs(changed) {
+async function persistConvertedBcs(changed, imperial, again) {
   if (!changed.length) return;
+  let stale = false;
   const groups = new Map();
   for (const bc of changed) {
     const sid = String(bc.simulation_id || (typeof currentStudyId === 'function' ? currentStudyId() : '') || '');
@@ -26867,19 +26875,29 @@ async function persistConvertedBcs(changed) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bcs: stampRecords(list),
+        // Each with the rev it was read at (C2): one changed since is refused, not overwritten.
+        bcs: stampRecords(list.map((b) => withBaseRev(b))),
         project_id: currentProjectId() || undefined,
         simulation_id: sid || undefined,
       }),
     });
     const j = await r.json().catch(() => null);
     if (r.ok && j && j.ok) last = j;
+    else if (r.status === 409 && isStaleRecord(j)) stale = true;
   }
   if (last) applyBcRecords(last, last.project_id);
+  // Refused as changed meanwhile: read them again and convert what was read, once.
+  if (stale && !again && typeof imperial === 'boolean') {
+    await rereadBcRecords();
+    const next = [];
+    for (const bc of allProjectBcs()) if (convertBcRecord(bc, imperial)) next.push(bc);
+    await persistConvertedBcs(next, imperial, true);
+  }
 }
 
-async function persistConvertedRefs(changed) {
+async function persistConvertedRefs(changed, imperial, again) {
   if (!changed.length) return;
+  let stale = false;
   const groups = new Map();
   for (const ref of changed) {
     const sid = String(ref.simulation_id || (typeof currentStudyId === 'function' ? currentStudyId() : '') || '');
@@ -26889,15 +26907,24 @@ async function persistConvertedRefs(changed) {
   let last = null;
   for (const [sid, list] of groups) {
     const posted = await postRefinements({
-      refinements: list,
+      // Each with the rev it was read at (C2): one changed since is refused, not overwritten.
+      refinements: list.map((x) => withBaseRev(x)),
       project_id: currentProjectId() || undefined,
       simulation_id: sid || undefined,
     });
     const r = posted.response;
     const j = posted.json;
     if (r.ok && j && j.ok) last = j;
+    else if (r.status === 409 && isStaleRecord(j)) stale = true;
   }
   if (last && typeof applyRefRecords === 'function') applyRefRecords(last, last.project_id);
+  // Refused as changed meanwhile: read them again and convert what was read, once.
+  if (stale && !again && typeof imperial === 'boolean') {
+    await reloadRefsClient();
+    const next = [];
+    for (const ref of refinementCatalog.refinements || []) if (convertRefRecord(ref, imperial)) next.push(ref);
+    await persistConvertedRefs(next, imperial, true);
+  }
 }
 
 async function persistProjectUnits(imperial) {
@@ -26937,8 +26964,8 @@ async function applyPreferredUnitsToOpenProject(opts) {
   for (const ref of (typeof refinementCatalog !== 'undefined' && refinementCatalog.refinements) || []) {
     if (convertRefRecord(ref, imperial)) changedRefs.push(ref);
   }
-  try { await persistConvertedBcs(changedBcs); } catch (e) { console.warn('[CFD] convert BCs', e); }
-  try { await persistConvertedRefs(changedRefs); } catch (e) { console.warn('[CFD] convert refs', e); }
+  try { await persistConvertedBcs(changedBcs, imperial); } catch (e) { console.warn('[CFD] convert BCs', e); }
+  try { await persistConvertedRefs(changedRefs, imperial); } catch (e) { console.warn('[CFD] convert refs', e); }
   if (fromPrefs) {
     try { await persistProjectUnits(imperial); } catch (_) {}
   }
@@ -27843,6 +27870,8 @@ function mapListedMeshes(listed) {
     settings: m.settings || ((typeof findMeshRecord === 'function' && findMeshRecord(m.id)) || {}).settings || null,
     created_at: m.created_at,
     updated_at: m.updated_at,
+    // Its rev (C2): a settings save sends it as base_rev.
+    ...(Number.isInteger(m.rev) ? { rev: m.rev } : {}),
     };
   });
 }
@@ -27886,6 +27915,7 @@ function applyMeshRecord(doc, projectId, opts) {
       geometry_id: mesh.geometry_id || null,
       simulation_id: mesh.simulation_id || null,
       settings: settings || null,
+      ...(Number.isInteger(mesh.rev) ? { rev: mesh.rev } : {}),
     }];
   }
   if (!listedAll && (listed || (mesh && incomingId && String(viewing) === String(incomingId)))) {
@@ -28224,7 +28254,7 @@ async function postMeshApi(body, opts) {
   });
   const j = await r.json();
   if (!r.ok || !j.ok) {
-    throw new Error((j && j.error) || 'Mesh request failed');
+    throw Object.assign(new Error((j && j.error) || 'Mesh request failed'), { status: r.status, code: (j && j.code) || '' });
   }
   applyMeshRecord(j, j.project_id, opts);
   return j;
@@ -29118,16 +29148,52 @@ async function persistActiveRef(expectedId, opts) {
   }
   if (opts && opts.facesExplicit) draft.faces_explicit = true;
   else if (!(draft.faces || []).length) delete draft.faces;
-  const gen = (refinementCatalog._persistGen = (refinementCatalog._persistGen || 0) + 1);
   const ownerId = draft.id;
-  const posted = await postRefinements(draft);
-  const r = posted.response;
-  const j = posted.json;
-  if (!r.ok || !j.ok) throw new Error(j.error || 'Refinement save failed');
-  if (gen !== refinementCatalog._persistGen) return j;
-  if (viewingRefId() && ownerId && String(viewingRefId()) !== String(ownerId)) return j;
-  applyRefRecords(j, j.project_id);
-  return j;
+  const key = String(ownerId || draft.name || '');
+  const epoch = refRefusals.get(key) || 0;
+  // Saves of one refinement go one at a time, each with the rev the catalog has when it is
+  // sent (C2): one changed since (by the Assistant, or another window) is refused.
+  return serialSave('ref:' + key, async () => {
+    if ((refRefusals.get(key) || 0) !== epoch) return null;
+    const gen = (refinementCatalog._persistGen = (refinementCatalog._persistGen || 0) + 1);
+    const stored = ownerId ? (refinementCatalog.refinements || []).find((x) => x && String(x.id) === String(ownerId)) : null;
+    const posted = await postRefinements(ownerId ? withBaseRev(draft, stored) : draft);
+    const r = posted.response;
+    const j = posted.json;
+    if (r.status === 409 && isStaleRecord(j)) {
+      releaseFocus();
+      refRefusals.set(key, epoch + 1);
+      await reloadRefsClient();
+      await showStaleNotice('refinement', String(ownerId || ''), String(draft.name || (stored && stored.name) || ''));
+      return null;
+    }
+    if (!r.ok || !j.ok) throw new Error(j.error || 'Refinement save failed');
+    // The saved record's new rev, even when a newer save makes this answer's list old.
+    const saved = j.refinement && ownerId && String(j.refinement.id) === String(ownerId) ? j.refinement : null;
+    const now = ownerId ? (refinementCatalog.refinements || []).find((x) => x && String(x.id) === String(ownerId)) : null;
+    if (saved && now && revOf(saved) !== null) now.rev = revOf(saved);
+    if (gen !== refinementCatalog._persistGen) return j;
+    if (viewingRefId() && ownerId && String(viewingRefId()) !== String(ownerId)) return j;
+    applyRefRecords(j, j.project_id);
+    return j;
+  });
+}
+
+/** Saves of a refinement refused as stale, by refinement: a save queued before a refusal is dropped with it. */
+const refRefusals = new Map();
+
+/** The study's refinements as the server has them now. */
+async function reloadRefsClient() {
+  const pid = currentProjectId();
+  const sid = currentStudyId();
+  if (!pid) return;
+  const qs = 'project_id=' + encodeURIComponent(pid) + (sid ? '&simulation_id=' + encodeURIComponent(sid) : '');
+  try {
+    const j = await fetch('/api/mesh/refinements?' + qs, { cache: 'no-store' }).then((r) => r.json());
+    if (j && j.ok !== false && String(currentProjectId() || '') === String(pid)) applyRefRecords(j, j.project_id || pid);
+  } catch (e) {
+    console.warn('[CFD] refinements re-read', e);
+  }
 }
 
 function toggleAssignRefFace(label) {
@@ -30655,7 +30721,22 @@ window.__CFD_W21_GENERATE__ = generateMeshClient;
 window.__CFD_MESH_SAVE__ = function saveMeshSettingsFromPanel(meshId, settings) {
   const body = { ...(settings || {}) };
   if (meshId) body.mesh_id = meshId;
-  return postMeshApi(body, { skipTree: true });
+  // The form sends every setting it shows, with the rev the mesh was loaded with (C2), read
+  // when it is sent: saves of one mesh go one at a time.
+  return serialSave('mesh:' + String(meshId || ''), async () => {
+    const rev = meshId ? revOf(findMeshRecord(meshId)) : null;
+    try {
+      return await postMeshApi(rev === null ? body : { ...body, base_rev: rev }, { skipTree: true });
+    } catch (e) {
+      if (!isStaleRecord(e)) throw e;
+      // Changed since the panel loaded it: show what is saved, then say so.
+      releaseFocus();
+      await reloadMeshRecordClient(meshId);
+      const rec = findMeshRecord(meshId);
+      await showStaleNotice('mesh', String(meshId || ''), String((rec && rec.name) || ''));
+      throw e;
+    }
+  });
 };
 
 /* Generate lives on the React mesh island; it calls this so queue, chip and tree stay in one path. */
@@ -31976,9 +32057,32 @@ async function persistRunSettings(partial, opts) {
   // Post-processing state (saved filter-set views + the live filter set).
   if (partial && Array.isArray(partial.views)) body.views = partial.views;
   if (partial && partial.current_view !== undefined) body.current_view = partial.current_view;
+  // A settings save carries the run's rev (C2), read when it is sent (saves of a run go one at
+  // a time). The live filter set is not a setting, and a draft's time dependency follows its
+  // study (one key the server merges): neither checks one.
+  const unchecked = ['run_id', 'project_id', 'simulation_id', 'geometry_id', 'current_view', 'time_dependency'];
+  const checked = Object.keys(body).some((k) => !unchecked.includes(k));
+  const epoch = runRefusals.get(String(runId)) || 0;
   return queueRunSettingsSave(runId, async () => {
-    const posted = await postRunUpdate(body);
+    // A save queued before a refusal carries the edits refused with it.
+    if (checked && (runRefusals.get(String(runId)) || 0) !== epoch) return { ok: false, code: 'stale_record', error: 'This was changed elsewhere.' };
+    const rev = checked ? revOf(findRunRecord(runId)) : null;
+    const posted = await postRunUpdate(rev === null ? body : { ...body, base_rev: rev });
     const j = posted.json;
+    if (posted.response && posted.response.status === 409 && isStaleRecord(j)) {
+      releaseFocus();
+      runRefusals.set(String(runId), epoch + 1);
+      // The person's unsaved edits of this run go with it: the panel shows what is saved.
+      delete runCatalog.pending_control[runId];
+      delete runCatalog.pending_cores[runId];
+      delete runCatalog.pending_settle[runId];
+      try { await refreshRunCatalog(); } catch (_) {}
+      try { publishRunState(); } catch (_) {}
+      try { syncSimControlPanel(); } catch (_) {}
+      const rec = findRunRecord(runId);
+      await showStaleNotice('run', String(runId), String((rec && rec.name) || ''));
+      return j;
+    }
     if (j && j.ok) {
       applyRunCatalog(j);
       const rec = findRunRecord(runId);
@@ -31989,6 +32093,9 @@ async function persistRunSettings(partial, opts) {
     return j;
   });
 }
+
+/** Saves of a run refused as stale, by run: a save queued before a refusal is dropped with it. */
+const runRefusals = new Map();
 
 function syncRunMeshSelect() {
   const sel = document.getElementById('sim-run-mesh');
@@ -38293,10 +38400,163 @@ window.addEventListener('cfd:workspace-left', onLinkLanding);
 // A question answered from the geometry's row ("Choose…", API 1.5): the same landing.
 window.addEventListener('cfd:link-land', onLinkLanding);
 
+/* ---- What the Assistant changed (C2): the open workbench reloads it (uiSync.ts) ---- */
+
+/** The mesh as the server has it now (a save of the person's was refused as stale). */
+async function reloadMeshRecordClient(meshId) {
+  const pid = currentProjectId();
+  if (!pid) return;
+  const sid = currentStudyId();
+  const qs = new URLSearchParams({ project_id: String(pid) });
+  if (sid) qs.set('simulation_id', String(sid));
+  if (meshId) qs.set('mesh_id', String(meshId));
+  try {
+    const j = await fetch('/api/mesh?' + qs.toString(), { cache: 'no-store' }).then((r) => r.json());
+    if (j && j.ok !== false && String(currentProjectId() || '') === String(pid)) applyMeshRecord(j, j.project_id || pid);
+  } catch (e) {
+    console.warn('[CFD] mesh re-read', e);
+  }
+}
+
+/** GET a JSON answer for a sync reload; null when it failed or a switch happened meanwhile. */
+async function syncRead(url, gen, pid, sid) {
+  const j = await fetch(url, { cache: 'no-store' })
+    .then((r) => r.json())
+    .catch(() => null);
+  if (gen !== studySwitchGen || String(currentProjectId() || '') !== String(pid)) return null;
+  if (sid !== undefined && String(currentStudyId() || '') !== String(sid || '')) return null;
+  return j && j.ok !== false ? j : null;
+}
+
+function syncQs(pid, sid, extra) {
+  const qs = new URLSearchParams({ project_id: String(pid) });
+  if (sid) qs.set('simulation_id', String(sid));
+  for (const [k, v] of Object.entries(extra || {})) if (v) qs.set(k, String(v));
+  return qs.toString();
+}
+
+/**
+ * The project's own fields again (title, description, category, units, folder): the chrome
+ * shows them, and a units change converts the entered values (as opening the project does).
+ */
+async function reloadProjectShell(gen) {
+  const pid = String(currentProjectId() || '');
+  if (!pid || !w16State.project) return;
+  const j = await syncRead('/api/project?' + syncQs(pid), gen, pid);
+  const p = j && j.project;
+  if (!p || !w16State.project) return;
+  const unitsBefore = String(w16State.project.units || '');
+  for (const k of ['title', 'description', 'category', 'units', 'folder']) {
+    if (p[k] !== undefined) w16State.project[k] = p[k];
+  }
+  try { rememberProjectTitle(p.id || pid, p.title); } catch (_) {}
+  syncProjectChrome();
+  if (String(w16State.project.units || '') !== unitsBefore) await applyPreferredUnitsToOpenProject();
+}
+
+/** The project's geometries again, as the landing reads them: the tree's Geometries list. */
+async function reloadGeometriesForSync(gen) {
+  const pid = String(currentProjectId() || '');
+  if (!pid) return;
+  const j = await syncRead('/api/project?' + syncQs(pid), gen, pid);
+  const list = (j && (j.geometries || (j.project && j.project.geometries))) || null;
+  if (!Array.isArray(list)) return;
+  w16State.geometries = list.map((g) => ({ ...g }));
+  try { syncGeometryTree(); } catch (_) {}
+  try { refreshSetupTree(); } catch (_) {}
+}
+
+/** The shown study's settings and the study list again. */
+async function reloadStudies(gen) {
+  const pid = String(currentProjectId() || '');
+  const sid = currentStudyId();
+  if (!pid) return;
+  const j = await syncRead('/api/simulation?' + syncQs(pid, sid), gen, pid, sid);
+  if (!j) return;
+  applySimulationRecord(j.simulation || null, j.project_id || pid, j);
+}
+
+async function reloadMaterialsForSync(gen) {
+  const pid = String(currentProjectId() || '');
+  const sid = currentStudyId();
+  if (!pid) return;
+  const mat = await syncRead('/api/materials?' + syncQs(pid, sid), gen, pid, sid);
+  if (!mat) return;
+  if (mat.air) {
+    applyMaterialRecord(mat.air, mat.project_id || pid, {
+      openPanel: false,
+      materials_all: mat.materials_all || mat.materials,
+      simulation_id: mat.simulation_id || sid,
+    });
+  }
+  // The material panels read their records themselves on this.
+  try { window.dispatchEvent(new CustomEvent('cfd:material')); } catch (_) {}
+}
+
+async function reloadBcsForSync(gen) {
+  const pid = String(currentProjectId() || '');
+  const sid = currentStudyId();
+  if (!pid) return;
+  const j = await syncRead('/api/bcs?' + syncQs(pid, sid), gen, pid, sid);
+  if (j) applyBcRecords(j, j.project_id || pid);
+}
+
+async function reloadMeshForSync(gen) {
+  const pid = String(currentProjectId() || '');
+  const sid = currentStudyId();
+  if (!pid) return;
+  const want = (typeof viewingMeshId === 'function' && viewingMeshId()) || (meshCatalog && meshCatalog.active_id) || '';
+  const j = await syncRead('/api/mesh?' + syncQs(pid, sid, { mesh_id: want }), gen, pid, sid);
+  if (j) applyMeshRecord(j, j.project_id || pid);
+}
+
+async function reloadRefsForSync(gen) {
+  const pid = String(currentProjectId() || '');
+  const sid = currentStudyId();
+  if (!pid) return;
+  const j = await syncRead('/api/mesh/refinements?' + syncQs(pid, sid), gen, pid, sid);
+  if (j) applyRefRecords(j, j.project_id || pid);
+}
+
+async function reloadRunsForSync(gen, ids) {
+  if (gen !== studySwitchGen) return;
+  await refreshRunCatalog();
+  try { syncSimControlPanel(); } catch (_) {}
+  // A run's monitors are its result controls: their numbers are read again.
+  for (const id of ids || []) {
+    try { if (typeof window.__CFD_REFRESH_MONITORS__ === 'function') await window.__CFD_REFRESH_MONITORS__(id); } catch (_) {}
+  }
+}
+
+bindUiSyncHost({
+  currentProjectId: () => String(currentProjectId() || ''),
+  currentStudyId: () => String(currentStudyId() || ''),
+  currentGeometryId: () => String((w16State.geometry && w16State.geometry.id) || w16State.selectedGeomId || ''),
+  switchGen: () => studySwitchGen,
+  reloadProjectShell,
+  reloadGeometries: reloadGeometriesForSync,
+  reloadStudies,
+  reloadMaterials: reloadMaterialsForSync,
+  reloadBcs: reloadBcsForSync,
+  reloadMesh: reloadMeshForSync,
+  reloadRefinements: reloadRefsForSync,
+  reloadRuns: reloadRunsForSync,
+  activateGeometry: (id) => switchGeometryClient(id),
+  activateStudy: (id) => selectStudyClient(id),
+  activateMesh: (id) => activateMeshClient(id),
+  activateRun: (id) => activateRunClient(id),
+  reloadAll: () => reloadGeometryScopedSetup(),
+  syncTree: () => {
+    try { window.dispatchEvent(new CustomEvent('cfd:tree-sync')); } catch (_) {}
+  },
+});
+
 bindSetupHost({
   viewingBcId,
   readBcEditorDraft,
   applyBcRecords,
+  rereadBcRecords,
+  reloadMeshRecord: reloadMeshRecordClient,
   currentStudyId,
   viewingMeshId,
   settingsOwnedByMesh,

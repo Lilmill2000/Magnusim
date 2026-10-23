@@ -41,6 +41,27 @@ describe('the person\'s message', () => {
   });
 });
 
+describe('what a call changed (phase 5, C2)', () => {
+  const sync = (x: Record<string, unknown>) => ({ type: 'ui_sync', project_id: 'p1', kinds: ['bcs'], ids: { bc: ['bc-7'] }, names: { 'bc-7': 'Inlet' }, ...x });
+
+  it('shows "Updated: …" under the call that wrote, with the names of its records', () => {
+    const c = block(view([call('a', 'Change the setup'), sync({ call: 'a' }), sync({ call: 'a', kinds: ['mesh', 'active'], ids: { mesh: ['m1'] }, names: { m1: 'Mesh 1' } }), { type: 'tool_result', call: 'a', ok: true, summary: 'Saved', ms: 300 }]));
+    const step = c.querySelector('[data-dock-step="a"]') as HTMLDetailsElement;
+    expect(step.querySelector('[data-dock-updated]')?.textContent).toBe('Updated: Boundary conditions (Inlet); Mesh (Mesh 1)');
+  });
+
+  it('a kind with no names given is named alone; a sync with no open call is a line of its own', () => {
+    const c = block(view([call('a'), sync({ call: 'a', kinds: ['materials'], ids: {}, names: {} }), sync({ kinds: ['refinements'], ids: { refinement: ['r1'] }, names: { r1: 'Wall' } })]));
+    expect(c.querySelector('[data-dock-step="a"] [data-dock-updated]')?.textContent).toBe('Updated: Materials');
+    expect(c.querySelector('[data-dock-line="updated"]')?.textContent).toBe('Updated: Mesh refinements (Wall)');
+  });
+
+  it('only how the window follows (active, tree): no line', () => {
+    const c = block(view([call('a'), sync({ call: 'a', kinds: ['active', 'tree'], ids: {}, names: {} })]));
+    expect(c.querySelector('[data-dock-updated]')).toBeNull();
+  });
+});
+
 describe('tool steps', () => {
   it('title, source, risk badge, what it sent, the result and its time', () => {
     const c = block(view([call('a'), { type: 'tool_result', call: 'a', ok: true, summary: 'Counter is 2', ms: 812 }]));

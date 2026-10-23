@@ -2,15 +2,16 @@
  * One tool call in a turn's transcript (phase 4 spec 2.6): its title, where it ran, its risk,
  * what it sent (collapsed), its progress while it runs (a call that waits for the person in its
  * workspace in amber), and its result: "✓ <summary> · 0.8 s", or "✗ <summary>" with how to fix
- * it and the code. Its pictures (one per CAD edit) as thumbnails; a click opens the dock's
- * picture viewer. A turn of many steps keeps only its newest three open (`open`); the person
+ * it and the code. What it changed in the project ("Updated: Boundary conditions (Inlet)", from
+ * the turn's ui_sync events; phase 5, C2). Its pictures (one per CAD edit) as thumbnails; a click
+ * opens the dock's picture viewer. A turn of many steps keeps only its newest three open (`open`); the person
  * may open or close any.
  *
  * Every string here is server data shown as text.
  */
 import { useState } from 'react';
 import type { ImageRef } from '../wire';
-import { howToFix, PICTURE_GONE, pictureAlt, resultFailed, resultOk, riskBadge, waitsFor, WHAT_IT_SENT } from './copy';
+import { howToFix, PICTURE_GONE, pictureAlt, resultFailed, resultOk, riskBadge, updatedLine, waitsFor, WHAT_IT_SENT } from './copy';
 import type { TurnItem } from './turnView';
 
 type ToolItem = Extract<TurnItem, { kind: 'tool' }>;
@@ -59,6 +60,7 @@ export function ToolStep({
   const p = item.progress;
   const images = r ? r.images : [];
   const title = item.title || item.tool;
+  const updated = item.updated ? updatedLine(item.updated.kinds, item.updated.ids, item.updated.names) : '';
   const riskClass = item.risk === 'destructive' ? 'danger' : item.risk === 'compute' ? 'warning' : '';
   return (
     <details
@@ -97,6 +99,11 @@ export function ToolStep({
           </span>
           {p.waiting ? <span className="dock-progress-label">{waitsFor(workspace, p.label)}</span> : p.label ? <span className="dock-progress-label">{p.label}</span> : null}
         </div>
+      ) : null}
+      {updated ? (
+        <p className="dock-muted dock-step-updated" data-dock-updated="1">
+          {updated}
+        </p>
       ) : null}
       {r && !r.ok && r.hint ? <p className="dock-muted dock-step-hint">{howToFix(r.hint)}</p> : null}
       {r && !r.ok && r.code ? <p className="dock-muted dock-mono dock-step-code">{r.code}</p> : null}

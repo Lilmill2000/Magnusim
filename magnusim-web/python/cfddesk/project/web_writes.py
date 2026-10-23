@@ -271,7 +271,12 @@ def persist_mesh_doc(project_dir: Path, sim_id: str, doc: dict[str, Any]) -> dic
         else:
             from cfddesk.project.paths import keep_build_stamp
 
+            on_disk = None
             keep_build_stamp(rec, None)
+        from cfddesk.project.record_rev import stamp_rev
+
+        # A mesh's rev moves only with its settings save (Node's /api/mesh): kept here.
+        stamp_rev(rec, on_disk, bump=False)
         atomic_write(
             folder_dir / "id.json",
             {"id": rec["id"], "name": rec.get("name"), "simulation_id": sim_id, "kind": "mesh"},
@@ -476,15 +481,70 @@ def _only_ids(raw: Any) -> set[str]:
     return {i for i in ids if i}
 
 
+def _drop_base_rev(rec: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in rec.items() if k != "base_rev"}
+
+
+def _rebase_on_stored(raw: dict[str, Any], key: str, kind: str, stored: list[dict[str, Any]]) -> dict[str, Any]:
+    """A whole-list save of ``key`` made safe against newer records (C2).
+
+    Each sent record that carries ``base_rev`` must match the stored rev of its id, else
+    :class:`StaleRecordError` before anything is written. With ``only_id`` / ``only_ids``
+    the list written is the **stored** list with only the named records replaced (or
+    added) by the sent ones; every other sent record is ignored, so a panel's stale copy of
+    a record it did not edit never overwrites a newer one. Without them the sent list is
+    written as before (legacy whole-list). ``base_rev`` is never kept.
+    """
+    from cfddesk.project.record_rev import first_stale
+
+    rows = raw.get(key)
+    sent = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    only = _only_ids(raw)
+    if not only:
+        stale = first_stale(kind, stored, sent)
+        if stale:
+            raise stale
+        if not isinstance(rows, list):
+            return raw
+        return {**raw, key: [_drop_base_rev(r) if isinstance(r, dict) else r for r in rows]}
+    named = {str(r.get("id")): r for r in sent if str(r.get("id") or "") in only}
+    stale = first_stale(kind, stored, list(named.values()))
+    if stale:
+        raise stale
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in stored:
+        rid = str(row.get("id"))
+        if rid in named:
+            out.append(_drop_base_rev(named[rid]))
+            seen.add(rid)
+        else:
+            out.append(row)
+    for rid, row in named.items():
+        if rid not in seen:
+            out.append(_drop_base_rev(row))
+    nxt = {**raw, key: out}
+    one = raw.get("air")
+    if isinstance(one, dict) and one.get("id") is not None:
+        aid = str(one.get("id"))
+        if aid in named:
+            nxt["air"] = _drop_base_rev(named[aid])
+        else:
+            nxt["air"] = next((r for r in stored if str(r.get("id")) == aid), _drop_base_rev(one))
+    return nxt
+
+
 def set_materials(
     project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geometry_rev: Any = None
 ) -> dict[str, Any]:
-    from cfddesk.project.paths import find_study, persist_child_item
+    from cfddesk.project.paths import assemble_study_materials, find_study, persist_child_item
 
     raw = body if isinstance(body, dict) else {"materials": body}
     raw = strip_material_notes(raw) or raw
     sid = str(sim_id or raw.get("simulation_id") or "").strip()
     rev = _save_rev(project_dir, sid, raw, "materials", geometry_rev)
+    # Refuse a stale record, and write the named ones onto the stored list (C2).
+    raw = _rebase_on_stored(raw, "materials", "material", assemble_study_materials(project_dir, sid))
     path = _study_dest(project_dir, "materials.json", sid)
     _proj, mode, mirror = write_through_project(project_dir, "materials", raw, sim_id=sid)
     src = mirror if isinstance(mirror, dict) and (mirror.get("materials") or mirror.get("air")) else raw
@@ -499,6 +559,11 @@ def set_materials(
             if only and str(rec.get("id")) not in only:
                 continue
             persist_child_item(parent, "material", {**rec, "simulation_id": sid}, geometry_rev=rev)
+        # The answer's records carry the revs as written.
+        revs = {str(r.get("id")): r.get("rev") for r in assemble_study_materials(project_dir, sid)}
+        for rec in [*(doc.get("materials") or []), doc.get("air")]:
+            if isinstance(rec, dict) and isinstance(revs.get(str(rec.get("id"))), int):
+                rec["rev"] = revs[str(rec.get("id"))]
     proj_path = project_dir / "project.json"
     proj = read_json(proj_path)
     if proj and mode != "python":
@@ -542,6 +607,8 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geomet
     kept_defaults = assemble_study_bc_defaults(project_dir, sid)
     # Legacy aggregate-only rows get folders first: the mirror rewrite below would drop them.
     adopt_legacy_bcs(project_dir, sid)
+    # Refuse a stale record, and write the named ones onto the stored list (C2).
+    raw = _rebase_on_stored(raw, "boundary_conditions", "bc", assemble_study_bcs(project_dir, sid))
     _proj, mode, mirror = write_through_project(
         project_dir, "boundary_conditions", raw, sim_id=sid
     )
@@ -553,25 +620,30 @@ def set_bcs(project_dir: Path, body: dict[str, Any], *, sim_id: str = "", geomet
     doc = _scope_doc_to_study(stamp(src, sim_id=sid, increment="W19"), "boundary_conditions", sid)
     doc["defaults"] = dict(kept_defaults)
     doc["defaults_by_simulation"] = {sid: dict(kept_defaults)} if sid else {}
-    only = str(raw.get("only_id") or "").strip()
+    # only_id, and (API 1.8) every id in only_ids: the records this save writes.
+    only = _only_ids(raw)
     study = find_study(project_dir, sid)
     if study:
         parent = Path(study["dir"]) / "boundary_conditions"
         for rec in doc.get("boundary_conditions") or []:
             if not isinstance(rec, dict) or rec.get("id") is None:
                 continue
-            if only and str(rec.get("id")) != only:
+            if only and str(rec.get("id")) not in only:
                 continue
             persist_child_item(parent, "bc", {**rec, "simulation_id": sid}, geometry_rev=rev)
         rows = assemble_study_bcs(project_dir, sid)
         doc["boundary_conditions"] = rows
         atomic_write(path, {**doc, "boundary_conditions": rows, "simulation_id": sid})
+        # The defaults are kept as saved, and so is their rev (only a defaults save moves it).
+        kept = read_json(parent / "defaults.json")
+        doc["defaults_rev"] = int(kept.get("defaults_rev") or 0) if isinstance(kept, dict) else 0
         atomic_write(
             parent / "defaults.json",
             {
                 "defaults": doc.get("defaults"),
                 "defaults_by_simulation": doc.get("defaults_by_simulation") or {},
                 "simulation_id": sid,
+                "defaults_rev": doc["defaults_rev"],
             },
         )
     proj_path = project_dir / "project.json"
@@ -789,6 +861,7 @@ def run_upsert(
     if not isinstance(body, dict):
         raise ValueError("body must be object")
     from cfddesk.project.paths import create_run_folder, ensure_study_folder, find_run
+    from cfddesk.project.record_rev import stamp_rev
 
     sid = str(sim_id or body.get("simulation_id") or "").strip()
     if not sid:
@@ -840,6 +913,9 @@ def run_upsert(
         # the run's build stamp from disk (only Start sets it).
         link_keys_from_disk(merged, existing, geometry_rev, False)
         keep_run_build_stamp(merged, existing)
+        # The run's rev moves only with its settings save (Node's updateRunSettings): a status
+        # or result write keeps the stored one, whatever rev the run it was given was read at.
+        stamp_rev(merged, existing, bump=False)
         keep_status = str(existing.get("status") or "")
         if keep_status in {"running", "starting", "done", "failed", "stopped"} and incoming_status in {
             "",
@@ -850,6 +926,7 @@ def run_upsert(
         body = merged
     else:
         body.pop("built_from", None)
+        stamp_rev(body, None, bump=False)
     if not fresh_start:
         stage = str(body.get("stage") or "")
         evidence = 0.0

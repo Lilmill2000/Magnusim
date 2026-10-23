@@ -5,6 +5,8 @@ import {
   MeshInspect,
   MeshSettings,
   editedKeys,
+  editsAfterSave,
+  editsAfterSync,
   formValuesFrom,
   generateButtonFor,
   mergeEdits,
@@ -205,6 +207,18 @@ describe('settings mapping', () => {
     });
   });
 
+  it('forgets an edit once a save stored it, and keeps one changed again since (C2 finding 7)', () => {
+    const saved = { fineness: 3, add_layers: true };
+    expect([...editsAfterSave(['fineness', 'add_layers'], saved, { fineness: 3, add_layers: false })]).toEqual(['add_layers']);
+    expect([...editsAfterSave(['fineness'], saved, saved)]).toEqual([]);
+  });
+
+  it("drops an edit of what the Assistant changed and keeps the person's edits of the rest", () => {
+    const before = { fineness: 7, add_layers: false };
+    const after = { fineness: 9, add_layers: false };
+    expect([...editsAfterSync(['fineness', 'add_layers'], before, after)]).toEqual(['add_layers']);
+  });
+
   it('labels the Generate button by queue state', () => {
     expect(generateButtonFor('generate').text).toBe('Generate');
     expect(generateButtonFor('generating')).toMatchObject({ text: 'Generating…', disabled: true });
@@ -382,6 +396,91 @@ describe('MeshSettings', () => {
     await waitFor(() => expect(screen.getByText('Mesh 1')).toBeInTheDocument());
     publishJob({ mesh_id: 'other', phase: 'failed', error: 'boom' });
     expect(screen.queryByText('Mesh failed')).toBeNull();
+  });
+
+  it('a save that answered forgets its edits: a later change by the Assistant shows (C2 finding 7)', async () => {
+    const saves: Array<Record<string, unknown>> = [];
+    window.__CFD_MESH_SAVE__ = vi.fn(async (_mesh: string | undefined, settings: Record<string, unknown>) => {
+      saves.push(settings);
+      return {};
+    });
+    try {
+      render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+      const slider = screen.getByLabelText('Fineness') as HTMLInputElement;
+      await waitFor(() => expect(slider.value).toBe('7'));
+      fireEvent.change(slider, { target: { value: '3' } });
+      await waitFor(() => expect(saves.length).toBeGreaterThan(0));
+      expect(saves.at(-1)).toMatchObject({ fineness: 3 });
+      // The Assistant sets fineness 9; the window hears it.
+      meshDoc.mesh.settings.fineness = 9;
+      try {
+        act(() => {
+          window.dispatchEvent(new CustomEvent('cfd:ui-sync', { detail: { kinds: ['mesh'], ids: { mesh: ['m1'] } } }));
+        });
+        await waitFor(() => expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('9'));
+      } finally {
+        meshDoc.mesh.settings.fineness = 7;
+      }
+    } finally {
+      delete window.__CFD_MESH_SAVE__;
+    }
+  });
+
+  it("a ui_sync for this mesh keeps the person's unsaved edit of a setting the Assistant left, and shows what it changed", async () => {
+    window.__CFD_MESH_SAVE__ = vi.fn(() => new Promise(() => undefined));
+    try {
+      render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+      const slider = screen.getByLabelText('Fineness') as HTMLInputElement;
+      await waitFor(() => expect(slider.value).toBe('7'));
+      // An edit whose save never answers: still the person's.
+      fireEvent.change(slider, { target: { value: '3' } });
+      meshDoc.mesh.settings.automatic_boundary_layers = true;
+      try {
+        act(() => {
+          window.dispatchEvent(new CustomEvent('cfd:ui-sync', { detail: { kinds: ['mesh'], ids: { mesh: ['m1'] } } }));
+        });
+        await waitFor(() => expect(screen.getByLabelText('Automatic boundary layers')).toHaveAttribute('aria-pressed', 'true'));
+        expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('3');
+      } finally {
+        meshDoc.mesh.settings.automatic_boundary_layers = false;
+      }
+    } finally {
+      delete window.__CFD_MESH_SAVE__;
+    }
+  });
+
+  it('a ui_sync for another mesh reads nothing again', async () => {
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    await waitFor(() => expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('7'));
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const before = fetchMock.mock.calls.length;
+    act(() => {
+      window.dispatchEvent(new CustomEvent('cfd:ui-sync', { detail: { kinds: ['mesh'], ids: { mesh: ['m2'] } } }));
+      window.dispatchEvent(new CustomEvent('cfd:ui-sync', { detail: { kinds: ['bcs'], ids: { bc: ['b1'] } } }));
+    });
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
+
+  it('a save refused as stale shows the stored values, every one', async () => {
+    window.__CFD_MESH_SAVE__ = vi.fn(async () => {
+      throw Object.assign(new Error('This was changed elsewhere.'), { code: 'stale_record' });
+    });
+    try {
+      render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+      const slider = screen.getByLabelText('Fineness') as HTMLInputElement;
+      await waitFor(() => expect(slider.value).toBe('7'));
+      fireEvent.change(slider, { target: { value: '3' } });
+      await waitFor(() => expect(window.__CFD_MESH_SAVE__).toHaveBeenCalled());
+      await waitFor(() => expect((screen.getByLabelText('Fineness') as HTMLInputElement).value).toBe('7'));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(window.__CFD_MESH_GENERATE_CLICK__).not.toHaveBeenCalled();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      delete window.__CFD_MESH_SAVE__;
+    }
   });
 
   it('renames through the bridge', async () => {

@@ -26,6 +26,7 @@ import {
   type MeshJobState,
 } from '../legacyBridge';
 import { scopeIds, useRegistryReady } from '../scope';
+import { isStaleRecord } from '../../workbench/recordRev';
 
 /** Settings as they live on disk (mesh.json `settings`). */
 interface MeshSettingsDoc {
@@ -221,6 +222,32 @@ export function mergeEdits(
   const next = { ...stored };
   for (const key of edited) next[key] = shown[key];
   return next;
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * The person's edits a save took with it: a key whose value was saved is theirs no more (the
+ * stored value is the same). The panel kept every edited key over every later load, never
+ * clearing them after a save, so a change the Assistant made later to a key edited earlier
+ * in the panel showed the old value, and the next save wrote it back (C2 finding 7).
+ */
+export function editsAfterSave(edited: Iterable<string>, saved: Record<string, unknown>, shown: Record<string, unknown>): Set<string> {
+  const out = new Set<string>();
+  for (const key of edited) if (!sameValue(saved[key], shown[key])) out.add(key);
+  return out;
+}
+
+/**
+ * The person's edits once the Assistant changed this mesh (a ui_sync): a key it changed shows
+ * its value (the edit goes); an edit of a key it left keeps the person's value.
+ */
+export function editsAfterSync(edited: Iterable<string>, before: Record<string, unknown>, after: Record<string, unknown>): Set<string> {
+  const out = new Set<string>();
+  for (const key of edited) if (sameValue(before[key], after[key])) out.add(key);
+  return out;
 }
 
 export function generateButtonFor(kind: MeshGenerateKind): { text: string; title: string; disabled: boolean } {
@@ -441,6 +468,10 @@ export function MeshSettings(props: IslandProps) {
   const [note, setNote] = useState('');
   const live = useRef(data);
   const engineNow = useRef(engine);
+  // The stored settings last shown (the values a ui_sync's load is compared with), and a load
+  // that answers a ui_sync for this mesh (C2).
+  const stored = useRef<{ values: Record<string, unknown>; engine: string; name: string } | null>(null);
+  const syncing = useRef(false);
   // The form opens before the mesh's stored settings arrive. What the user changes in
   // the meantime is theirs: a load that lands later fills in the rest and keeps it.
   const edits = useRef({ keys: new Set<string>(), engine: false, name: false });
@@ -473,10 +504,27 @@ export function MeshSettings(props: IslandProps) {
   function applyDoc(mesh: MeshDoc | undefined) {
     if (!mesh) return;
     if (mesh.id) setMeshId(String(mesh.id));
-    if ((mesh.name || mesh.settings?.name) && !edits.current.name) setName(String(mesh.name || mesh.settings?.name));
     const settings = mesh.settings || {};
-    if (!edits.current.engine) setEngine(String(mesh.ui_mesh_engine || settings.advanced?.mesh_engine || 'standard'));
-    const next = mergeEdits(formValuesFrom(settings), live.current, edits.current.keys);
+    const incoming = {
+      values: formValuesFrom(settings),
+      engine: String(mesh.ui_mesh_engine || settings.advanced?.mesh_engine || 'standard'),
+      name: String(mesh.name || settings.name || ''),
+    };
+    if (syncing.current) {
+      // The Assistant changed this mesh: what it changed shows its value; the person's
+      // edits of what it left stay theirs.
+      syncing.current = false;
+      const before = stored.current;
+      if (before) {
+        edits.current.keys = editsAfterSync(edits.current.keys, before.values, incoming.values);
+        if (before.engine !== incoming.engine) edits.current.engine = false;
+        if (before.name !== incoming.name) edits.current.name = false;
+      }
+    }
+    stored.current = incoming;
+    if (incoming.name && !edits.current.name) setName(incoming.name);
+    if (!edits.current.engine) setEngine(incoming.engine);
+    const next = mergeEdits(incoming.values, live.current, edits.current.keys);
     live.current = next;
     setData(next);
   }
@@ -518,6 +566,20 @@ export function MeshSettings(props: IslandProps) {
     void load();
   }, [props.projectId, props.simId, props.itemId, props.scope]);
 
+  // The Assistant changed meshes of this study (uiSync.ts): this one is read again.
+  useEffect(() => {
+    const onSync = (ev: Event) => {
+      const b = (ev as CustomEvent<{ kinds?: string[]; ids?: Record<string, string[]> }>).detail;
+      if (!b || !Array.isArray(b.kinds) || !b.kinds.includes('mesh')) return;
+      const ids = (b.ids && b.ids.mesh) || [];
+      if (ids.length && meshId && !ids.includes(String(meshId))) return;
+      syncing.current = true;
+      void load();
+    };
+    window.addEventListener('cfd:ui-sync', onSync);
+    return () => window.removeEventListener('cfd:ui-sync', onSync);
+  }, [meshId]);
+
   useEffect(
     () =>
       subscribeMeshSettings((ev) => {
@@ -537,23 +599,34 @@ export function MeshSettings(props: IslandProps) {
     const mesh = scoped.mesh_id || meshId || undefined;
     // The runtime path merges into the stored mesh and keeps its catalog current.
     const viaRuntime = window.__CFD_MESH_SAVE__;
-    if (viaRuntime) {
-      await viaRuntime(mesh, settings);
-      return settings;
+    try {
+      if (viaRuntime) await viaRuntime(mesh, settings);
+      else {
+        await workerRpc('mesh.set', {
+          project_id: scoped.project_id,
+          sim_id: scoped.simulation_id,
+          body: {
+            simulation_id: scoped.simulation_id,
+            geometry_id: scoped.geometry_id || undefined,
+            mesh_id: mesh,
+            id: mesh,
+            active_id: mesh,
+            settings,
+            meshes: mesh ? [{ id: mesh, settings, simulation_id: scoped.simulation_id }] : [],
+          },
+        });
+      }
+    } catch (e) {
+      // Changed since this panel loaded it (the runtime said so): the stored values, all of them.
+      if (isStaleRecord(e)) {
+        forgetEdits();
+        void load();
+      }
+      throw e;
     }
-    await workerRpc('mesh.set', {
-      project_id: scoped.project_id,
-      sim_id: scoped.simulation_id,
-      body: {
-        simulation_id: scoped.simulation_id,
-        geometry_id: scoped.geometry_id || undefined,
-        mesh_id: mesh,
-        id: mesh,
-        active_id: mesh,
-        settings,
-        meshes: mesh ? [{ id: mesh, settings, simulation_id: scoped.simulation_id }] : [],
-      },
-    });
+    // What this save wrote is the stored value now: those edits are the person's no more.
+    edits.current.keys = editsAfterSave(edits.current.keys, values, live.current);
+    if (engineNow.current === nextEngine) edits.current.engine = false;
     return settings;
   }
 
@@ -563,6 +636,8 @@ export function MeshSettings(props: IslandProps) {
       const settings = await save(await loaded());
       await generateMesh({ mesh_id: meshId || undefined, settings });
     } catch (e) {
+      // A refused stale save has said so already (its notice): nothing was generated.
+      if (isStaleRecord(e)) return;
       setNote(e instanceof Error ? e.message : 'Generate failed to start');
     }
   }
@@ -620,7 +695,7 @@ export function MeshSettings(props: IslandProps) {
             const next = e.target.value;
             edits.current.engine = true;
             setEngine(next);
-            if (loading.current.done) void save(live.current, next);
+            if (loading.current.done) void save(live.current, next).catch(() => {});
             else loading.current.saveAfter = true;
           }}
         >
@@ -672,7 +747,7 @@ export function MeshSettings(props: IslandProps) {
           }}
           onCommit={() => {
             // The form's values as they are now: a load may have landed since this change.
-            if (loading.current.done) void save(live.current);
+            if (loading.current.done) void save(live.current).catch(() => {});
             else loading.current.saveAfter = true;
           }}
         />

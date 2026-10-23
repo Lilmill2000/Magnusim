@@ -5,6 +5,7 @@
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { matchesStudy } from './w16-geometry-scope.js';
+import { baseRevOf, checkBaseRev, stampRev } from './record-rev.js';
 import { firstLegacySimId, projectDir } from './w17-sim-catalog.js';
 import {
   caseUnderOwner,
@@ -157,6 +158,7 @@ function assembleStudyCollection(projectId, simId, which) {
         (defaultsDoc && defaultsDoc.defaults_by_simulation) ||
         (legacy && legacy.defaults_by_simulation) ||
         {},
+      defaults_rev: Number(defaultsDoc && defaultsDoc.defaults_rev) || 0,
       simulation_id: simId,
     };
   }
@@ -227,20 +229,32 @@ export function persistOneBc(projectId, simId, rec, opts) {
   return persistOneBcAt(projectDir(projectId), simId, rec, opts);
 }
 
-export function persistBcDefaultsAt(projectDirPath, simId, defaults, defaultsBySimulation) {
+/**
+ * The study's BC defaults (defaults.json). `defaults_rev` is their rev (record-rev.js): + 1 when
+ * the study's defaults change, kept otherwise. `opts.baseRev`: the rev the save read, refused
+ * (StaleRecord, kind 'bc_defaults') when it is not the stored one.
+ */
+export function persistBcDefaultsAt(projectDirPath, simId, defaults, defaultsBySimulation, opts) {
   const s = findStudy(projectDirPath, String(simId));
   if (!s) throw new Error('study folder missing for ' + simId);
   const path = join(studyBcsDir(s.dir), 'defaults.json');
+  const onDisk = readJsonFile(path);
+  const stored = { rev: Number(onDisk && onDisk.defaults_rev) || 0 };
+  const base = opts && Number.isInteger(opts.baseRev) ? opts.baseRev : null;
+  checkBaseRev('bc_defaults', simId, stored, base);
+  const mine = (doc) => JSON.stringify((doc && ((doc.defaults_by_simulation || {})[simId] || doc.defaults)) || null);
+  const next = { defaults: defaults || null, defaults_by_simulation: defaultsBySimulation || {} };
+  const changed = !onDisk || mine(onDisk) !== mine(next);
   writeJsonAtomic(path, {
-    defaults: defaults || null,
-    defaults_by_simulation: defaultsBySimulation || {},
+    ...next,
     simulation_id: simId,
+    defaults_rev: changed ? stored.rev + 1 : stored.rev,
   });
   return path;
 }
 
-export function persistBcDefaults(projectId, simId, defaults, defaultsBySimulation) {
-  return persistBcDefaultsAt(projectDir(projectId), simId, defaults, defaultsBySimulation);
+export function persistBcDefaults(projectId, simId, defaults, defaultsBySimulation, opts) {
+  return persistBcDefaultsAt(projectDir(projectId), simId, defaults, defaultsBySimulation, opts);
 }
 
 export function persistOneResultControlAt(projectDirPath, simId, rec, opts) {
@@ -406,8 +420,11 @@ function writeMeshFolder(root, sid, rec, folder, opts) {
   delete bound.dir;
   delete bound.folder;
   const onDisk = readJsonFile(join(folder.dir, 'mesh.json'));
+  checkBaseRev('mesh', bound.id, onDisk, baseRevOf(bound));
   keepLinkKeys(bound, onDisk, opts || {});
   if (!(opts && opts.generator)) keepBuildStamp(bound, onDisk);
+  // Only the settings save (`opts.stampRev`) moves the mesh's rev; a generate's result keeps it.
+  stampRev(bound, onDisk, { bump: !!(opts && opts.stampRev) });
   writeIdFile(folder.dir, {
     id: bound.id,
     name: bound.name,
@@ -429,7 +446,11 @@ export function persistOneMeshAt(projectDirPath, simId, rec, opts) {
   return folder;
 }
 
-/** `opts.generator`: the generate's own result writes its build stamp (keepBuildStamp). */
+/**
+ * `opts.generator`: the generate's own result writes its build stamp (keepBuildStamp).
+ * `opts.stampRev`: a settings save, which moves the mesh's rev (record-rev.js); any other
+ * write keeps the stored rev.
+ */
 export function persistOneMesh(projectId, simId, rec, opts) {
   persistOneMeshAt(projectDir(projectId), simId, rec, opts);
   return assembleMeshDoc(projectId, String(simId || (rec && rec.simulation_id) || ''), rec.id);
@@ -613,6 +634,10 @@ export function persistRunAt(projectDirPath, simId, run, opts) {
   delete rec.dir;
   delete rec.folder;
   keepLinkKeys(rec, onDisk, opts || {});
+  // Only the run settings save (`opts.stampRev`) moves the run's rev; a status write keeps it,
+  // whatever rev the run object it was given had when it was read.
+  if (opts && opts.stampRev) checkBaseRev('run', rec.id, onDisk, baseRevOf(run));
+  stampRev(rec, onDisk, { bump: !!(opts && opts.stampRev), ignore: ['current_view'] });
   // A run's build stamp (host API 1.5): only Start sets it (`opts.builtFrom`); every other
   // write keeps the one on disk.
   if (opts && opts.builtFrom) rec.built_from = { ...opts.builtFrom };

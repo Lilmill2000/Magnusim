@@ -278,7 +278,7 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     const tab = seen.tabIdOf(page);
     expect(tab, "the tab's event stream").toBeTruthy();
     // Its two linked geometries' channels, on the server.
-    await expect.poll(() => serverChannels(request, host, tab), { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => serverChannels(request, host, tab, 'link'), { timeout: 15_000 }).toBe(2);
     const asked = streamsAsked;
     // The stream is cut as a restart cuts it: the server forgets its channels.
     const cut = await request.post(`${host.base}/api/test/event-hub/drop`, { data: { tab } });
@@ -286,8 +286,9 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     // The page connects again by itself and asks for both channels again.
     await expect.poll(() => streamsAsked, { timeout: 15_000, message: 'the page opens its stream again' }).toBeGreaterThan(asked);
     await expect
-      .poll(() => serverChannels(request, host, tab), { timeout: 30_000, message: 'the server carries both channels again' })
+      .poll(() => serverChannels(request, host, tab, 'link'), { timeout: 30_000, message: 'the server carries both channels again' })
       .toBe(2);
+    await expect.poll(() => serverChannels(request, host, tab, 'ui'), { timeout: 15_000, message: "and its project's ui channel" }).toBe(1);
     stage(`stream cut and taken again: ${streamsAsked - asked} new stream request(s); the server carries 2 channels`);
     // A link made now reaches the tab on its new stream: the viewport shows v2, with no reload.
     await linkVersion(request, host, project.pid, target.sid, 'v2', 2, 1);

@@ -26,6 +26,7 @@ import { matchFaces, readPreviewFaces, remapRecordFaces } from './geometry-face-
 import { findStudy, walkMeshes, walkStudies } from './project-layout.js';
 import { commitRpc, writeProjectCli } from './py-json.js';
 import { checkRecordSave, studyLinkState, updatingAnswer } from './link-stamp.js';
+import { firstStale, staleAnswer } from './record-rev.js';
 import { geometryFenced } from './server/link-job.js';
 import { mesherByKey } from './registry-defaults.js';
 import {
@@ -560,6 +561,10 @@ async function upsertRefinements(body) {
   // A linked geometry's stamp check (host API 1.5) for the records this save writes.
   const stamp = checkRecordSave(projectDir(projectId), sim.id, Array.isArray(batch) && batch.length ? batch : [body || {}], body && body.geometry_rev);
   if (!stamp.ok) return stamp;
+  // A record saved from an older copy than the stored one is refused, before anything is
+  // written (record-rev.js): the save carries the rev it read as `base_rev`.
+  const stale = firstStale('refinement', list, Array.isArray(batch) && batch.length ? batch : [body || {}]);
+  if (stale) return staleAnswer(stale);
   let last = null;
   const changed = [];
   if (Array.isArray(batch) && batch.length) {
@@ -584,6 +589,11 @@ async function upsertRefinements(body) {
     changed.push(last);
   }
   const { doc, path } = await persistDoc(projectId, sim, list, { only: changed, geometryRev: stamp.rev });
+  // The saved record as written: with its new rev.
+  if (last) {
+    const written = (doc.refinements || []).find((r) => r && String(r.id) === String(last.id));
+    if (written && Number.isInteger(written.rev)) Object.assign(last, { rev: written.rev });
+  }
   return {
     ok: true,
     status: 200,

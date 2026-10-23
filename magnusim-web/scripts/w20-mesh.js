@@ -38,6 +38,7 @@ import {
   defaultMeshEngineFor,
 } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc, meshDocLogIsBloated } from './mesh-live-slim.js';
+import { baseRevOf, recordRev, staleAnswer, StaleRecord } from './record-rev.js';
 import { recoverStudyMeshesFromDisk, stopMeshGenerate } from './w21-mesh-generate.js';
 import {
   assembleAllMeshes,
@@ -331,6 +332,8 @@ function makeMeshEntry(raw) {
   }
   if (src.cloned_from_mesh) base.cloned_from_mesh = src.cloned_from_mesh;
   if (src.cloned_from_generate) base.cloned_from_generate = src.cloned_from_generate;
+  // Its rev (record-rev.js), as read: a save checks a `base_rev` against it.
+  if (Number.isInteger(src.rev)) base.rev = src.rev;
   return migrateMeshEngineEntry(base).entry;
 }
 
@@ -426,6 +429,7 @@ function listPayload(meshes, activeId, nameByGeom) {
     simulation_id: m.simulation_id || null,
     created_at: m.created_at,
     updated_at: m.updated_at,
+    rev: Number.isInteger(m.rev) ? m.rev : 0,
   }));
 }
 
@@ -540,6 +544,7 @@ function scopedMeshFields(doc, scoped, projectId) {
       mesh_json: (doc && doc.mesh_json) || meshJsonPath(projectId),
       created_at: active.created_at,
       updated_at: active.updated_at,
+      rev: Number.isInteger(active.rev) ? active.rev : 0,
     }) || active;
   return {
     mesh: slim,
@@ -547,6 +552,7 @@ function scopedMeshFields(doc, scoped, projectId) {
     generated: isGeneratedDoc(active),
     live_mesh_result: slimLiveMeshResult(active.live_mesh_result) || null,
     active_id: active.id,
+    rev: Number.isInteger(active.rev) ? active.rev : 0,
     bank_exact: !!(slim.bank_exact) || bankExact(active.settings),
     simulation_id: active.simulation_id,
   };
@@ -981,11 +987,17 @@ function requireProjectSim(body) {
 }
 
 async function saveComposed(projectId, proj, sim, existing, meshes, active, now, extra) {
-  persistOneMesh(projectId, sim.id, {
-    ...active,
-    simulation_id: sim.id,
-    updated_at: now,
-  });
+  // A settings save: the mesh's rev moves when its record changed (record-rev.js).
+  persistOneMesh(
+    projectId,
+    sim.id,
+    {
+      ...active,
+      simulation_id: sim.id,
+      updated_at: now,
+    },
+    { stampRev: true },
+  );
   const assembled = assembleMeshDoc(projectId, sim.id, active.id);
   const liveActive =
     (assembled.meshes || []).find((m) => m && String(m.id) === String(active.id)) || active;
@@ -1114,6 +1126,12 @@ async function upsertMesh(body) {
       status: 404,
       body: { error: 'mesh not found in this study', project_id: projectId },
     };
+  }
+  // A save made from an older copy than the stored mesh is refused (record-rev.js): the
+  // save carries the rev it read as `base_rev`.
+  const base = baseRevOf(body);
+  if (active && base !== null && base !== recordRev(active)) {
+    return staleAnswer(new StaleRecord('mesh', String(active.id), recordRev(active)));
   }
   const autoCreated = !active;
   if (!active) {
