@@ -278,7 +278,7 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       settings?: Record<string, unknown>;
   }
   export type MeshGenerateKind = 'generating' | 'queued' | 'queue' | 'generate';
-  export type MeshPhase = 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued';
+  export type MeshPhase = 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued' | 'stopped';
   /** What runtime.publishMeshJobState publishes instead of writing panel DOM. */
   export interface MeshJobState {
       /** The mesh the tree is viewing; falls back to the job's mesh. */
