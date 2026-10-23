@@ -385,24 +385,39 @@ test.describe('the dock', () => {
   });
 });
 
-test("Home's header keeps every button in the window from 720 to 1000 px wide, the Assistant button included", async ({ page }) => {
+test("Home's header keeps every button in the window from 720 to 1000 px wide, the Assistant button included, also in a wider font", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(`${host.base}/#/`);
   await appReady(page);
-  for (const width of [720, 740, 760, 790, 820, 900, 1000]) {
-    await page.setViewportSize({ width, height: 800 });
-    const why = `at ${width}px`;
-    for (const sel of ['#home-new-project', '#home-new-folder', '#home-prefs', '#home-assistant', '#home-mark']) {
-      await expect(page.locator(sel), `${sel} ${why}`).toBeInViewport({ ratio: 1 });
-    }
-    const top = await page.locator('.home-top').evaluate((el) => [el.scrollWidth, el.clientWidth]);
-    expect(top[0], why).toBeLessThanOrEqual(top[1]);
-    const search = await page.locator('.home-search-wrap').boundingBox();
-    const actions = await page.locator('.home-top-actions').boundingBox();
-    expect(search.x + search.width, why).toBeLessThanOrEqual(actions.x);
-    expect(search.width, why).toBeGreaterThanOrEqual(120);
-    // Nothing in the actions runs into the next (a start button cut short stays in its place).
-    const boxes = await page.locator('.home-top-actions > button:visible, #home-start-host [data-home-start], #home-sample-host button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]).sort((a, b) => a[0] - b[0]));
-    for (let i = 1; i < boxes.length; i += 1) expect(boxes[i][0], `${why}: ${JSON.stringify(boxes)}`).toBeGreaterThanOrEqual(boxes[i - 1][1] - 0.5);
+  // The app's font, then a wider one (as Linux's fallback fonts are; Verdana is wider still).
+  for (const font of ['', 'Verdana']) {
+    if (font) await page.addStyleTag({ content: `.home-top, .home-top button, .home-top input { font-family: "${font}", sans-serif !important; }` });
+    for (const width of [720, 740, 760, 790, 820, 900, 1000]) await headerFits(page, `at ${width}px${font ? ` in ${font}` : ''}`, width);
   }
 });
+
+/** Home's header at `width`: every button in the window, none running into the next, start buttons whole. */
+async function headerFits(page, why, width) {
+  await page.setViewportSize({ width, height: 800 });
+  // The start buttons' row is marked after layout (a ResizeObserver): two frames.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  for (const sel of ['#home-new-project', '#home-new-folder', '#home-prefs', '#home-assistant', '#home-mark']) {
+    await expect(page.locator(sel), `${sel} ${why}`).toBeInViewport({ ratio: 1 });
+  }
+  const top = await page.locator('.home-top').evaluate((el) => [el.scrollWidth, el.clientWidth]);
+  expect(top[0], why).toBeLessThanOrEqual(top[1]);
+  const search = await page.locator('.home-search-wrap').boundingBox();
+  const actions = await page.locator('.home-top-actions').boundingBox();
+  expect(search.x + search.width, why).toBeLessThanOrEqual(actions.x);
+  expect(search.width, why).toBeGreaterThanOrEqual(120);
+  // Nothing in the actions runs into the next (a start button cut short stays in its place).
+  const boxes = await page.locator('.home-top-actions > button:visible, #home-start-host [data-home-start]:visible, #home-sample-host button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]).sort((a, b) => a[0] - b[0]));
+  for (let i = 1; i < boxes.length; i += 1) expect(boxes[i][0], `${why}: ${JSON.stringify(boxes)}`).toBeGreaterThanOrEqual(boxes[i - 1][1] - 0.5);
+  // A start button shown is whole in its place (one that doesn't fit is hidden, not a sliver).
+  const place = await page.locator('#home-start-host').boundingBox();
+  for (const b of await page.locator('#home-start-host [data-home-start]:visible').all()) {
+    const r = await b.boundingBox();
+    expect(r.x + r.width, `${why}: a start button inside its place`).toBeLessThanOrEqual(place.x + place.width + 0.5);
+  }
+  await expect(page.locator('#home-start-host [data-home-start]:visible'), `${why}: at least one start button`).not.toHaveCount(0);
+}

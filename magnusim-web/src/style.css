@@ -6119,15 +6119,17 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 .home-top:has(.home-start-host:not(:empty)) .home-top-actions > button { flex: none; white-space: nowrap; }
 /* A narrower window (the Assistant button made the actions wider): the header is a row that
    gives way as with start buttons, the search shrinking first (down to 120px), then the
-   start buttons (each to its padding, cut with an ellipsis), the buttons a little tighter,
-   so nothing runs into New project, which stays in view down to 720px. */
+   start buttons (the first cut with an ellipsis; the others wrap out of the one row and are
+   hidden whole, Home.tsx useStartRow), the buttons a little tighter, so nothing runs into New
+   project, which stays in view down to 720px. */
 @media (max-width: 1023px) {
   .home-top { display: flex; justify-content: space-between; column-gap: 8px; padding: 0 8px; }
   .home-top .home-mark { flex: none; }
   .home-top .home-search-wrap,
   .home-top:has(.home-start-host:not(:empty)) .home-search-wrap { flex: 0 1000 420px; width: auto; min-width: 120px; }
   .home-top .home-top-actions { flex: 0 1 auto; min-width: 0; gap: 6px; }
-  .home-top .home-start-host { overflow: hidden; }
+  .home-top .home-start-host { overflow: hidden; flex-wrap: wrap; align-content: flex-start; height: 34px; }
+  .home-top .home-start-host [data-home-start-out] { visibility: hidden; }
   .home-top .home-top-actions > button { flex: none; white-space: nowrap; }
   .home-top .home-top-actions .home-btn,
   .home-top .home-top-actions .home-btn-primary { padding: 0 10px; }

@@ -1,9 +1,29 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { homeFolderNow, initHome, openCreateModalFromHome, openProject, refreshHome } from './controller';
 import { createFromSample, sampleKey, useSamples, type SampleEntry } from './samples';
 import { useHashRoute } from '../app/routes';
 import { homeLabel, shownStartActions, startKey, useStartActions } from '../workspace/startActions';
+
+/**
+ * In a narrow window the start buttons wrap inside their one-row place (style.css): a button
+ * that went past the first row is marked and hidden whole (not left as a sliver at the edge,
+ * and not focusable while unseen). It comes back when the window is wide enough again.
+ */
+function useStartRow(host: HTMLElement | null, count: number) {
+  useLayoutEffect(() => {
+    if (!host || typeof ResizeObserver === 'undefined') return undefined;
+    const mark = () => {
+      const buttons = [...host.querySelectorAll<HTMLElement>('[data-home-start]')];
+      const top = buttons[0]?.offsetTop ?? 0;
+      for (const b of buttons) b.toggleAttribute('data-home-start-out', b.offsetTop > top);
+    };
+    const watch = new ResizeObserver(mark);
+    watch.observe(host);
+    mark();
+    return () => watch.disconnect();
+  }, [host, count]);
+}
 
 /**
  * Home's start actions (API 1.4), before New project: one button per `home` action of
@@ -14,6 +34,7 @@ import { homeLabel, shownStartActions, startKey, useStartActions } from '../work
 function HomeStartActions() {
   const host = typeof document !== 'undefined' ? document.getElementById('home-start-host') : null;
   const shown = shownStartActions(useStartActions()).home;
+  useStartRow(host, shown.length);
   if (!host || !shown.length) return null;
   return createPortal(
     shown.map((entry) => (
