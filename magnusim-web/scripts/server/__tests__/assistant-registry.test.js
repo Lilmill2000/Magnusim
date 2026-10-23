@@ -1,6 +1,7 @@
-// The tool registry (Foundation spec 7.1, 7.3, 7.5, 10.1): provider-safe names and plugin
-// slugs, what a registration may hold and why a tool is refused, stable order and bytes,
-// the per-request caps, tab, project and connection scoping, and the plugin-epoch fence
+// The tool registry (Foundation spec 7.1, 7.3, 7.5, 10.1; core host tools spec C8): provider-safe
+// names and plugin slugs, what a registration may hold and why a tool is refused, stable order
+// and bytes (a workspace's tools first in a workspace), places, the cloud cap and the local
+// budget, tab, project and connection scoping, and the plugin-epoch fence
 // that removes a plugin's tools the moment it is turned off, swapped or reset: with the
 // page relay, before the worker answers, and a frame's pinned epoch is refused after.
 import { after, afterEach, describe, it } from 'node:test';
@@ -16,7 +17,10 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 after(() => rmSync(ROOT, { recursive: true, force: true }));
 
-const { createToolRegistry, pluginSlug, workspaceToolName, providerTools, PROVIDER_TOOL_NAME, TOOL_NAME_MAX, REQUEST_MAX_TOOLS } = await import('../assistant/registry.ts');
+const { createToolRegistry, pluginSlug, workspaceToolName, providerTools, PROVIDER_TOOL_NAME, TOOL_NAME_MAX, REQUEST_MAX_TOOLS, LOCAL_BUDGET, localBudget, placeFor, toolTokens } = await import(
+  '../assistant/registry.ts'
+);
+const { emitSchema } = await import('../assistant/schema.ts');
 const { bumpPluginEpoch, pluginEpoch } = await import('../../foam-runner.js');
 const { createHostTools, connectionCheckTool } = await import('../assistant/host-tools.ts');
 
@@ -29,12 +33,13 @@ const DEMO = () => [wsTool('get_count'), wsTool('add', { risk: 'edit', inputSche
 const registration = (o = {}) => ({ plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: DEMO(), ...o });
 const ctx = (o = {}) => ({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: true, local: false, ...o });
 
-function hostTool(name, priority = 0, available = () => true) {
+function hostTool(name, priority = 0, available = () => true, extra = {}) {
   return {
     name,
     localName: name,
     title: name,
     description: `Host ${name}.`,
+    ...extra,
     schema: EMPTY,
     risk: 'read',
     source: { kind: 'host' },
@@ -220,11 +225,14 @@ describe('a workspace registration', () => {
 });
 
 describe('toolsFor', () => {
-  it('host tools first, then the tab’s workspace tools, each by name; stable bytes and memoized definitions', () => {
+  it('in a workspace its tools first, then the host’s; elsewhere the host’s first; each by name; stable bytes and memoized definitions', () => {
     const r = createToolRegistry({ hostTools: [hostTool('zeta'), hostTool('alpha')] });
     r.setWorkspace('T1', 'L1', registration());
     const first = r.toolsFor(ctx());
-    assert.deepEqual(names(first), ['alpha', 'zeta', 'ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset']);
+    assert.deepEqual(names(first), ['ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset', 'alpha', 'zeta']);
+    assert.deepEqual(names(r.toolsFor(ctx({ place: 'workspace' }))), names(first), 'the place given is the same place');
+    // Not a workspace (a caller that says so): the host's first.
+    assert.deepEqual(names(r.toolsFor(ctx({ place: 'workbench' }))), ['alpha', 'zeta', 'ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset']);
     const defs1 = providerTools(first);
     // The same registration again (a reconnect, a re-POST): the same bytes and the same objects.
     r.setWorkspace('T1', 'L2', registration());
@@ -238,7 +246,7 @@ describe('toolsFor', () => {
     const r = createToolRegistry({ hostTools: [hostTool('alpha')] });
     r.setWorkspace('T1', 'L1', registration());
     r.setWorkspace('T2', 'L2', registration({ projectId: 'p2', tools: [wsTool('other')] }));
-    assert.deepEqual(names(r.toolsFor(ctx({ tab: 'T2', projectId: 'p2' }))), ['alpha', 'ai-demo__other']);
+    assert.deepEqual(names(r.toolsFor(ctx({ tab: 'T2', projectId: 'p2' }))), ['ai-demo__other', 'alpha']);
     assert.deepEqual(names(r.toolsFor(ctx({ tab: 'T3' }))), ['alpha']);
     assert.deepEqual(names(r.toolsFor(ctx({ tab: null }))), ['alpha']);
     assert.deepEqual(names(r.toolsFor(ctx({ projectId: 'p2' }))), ['alpha'], 'another project');
@@ -252,11 +260,11 @@ describe('toolsFor', () => {
     assert.deepEqual([r.workspaceOf('T1').link, r.workspaceOf('T1').connected], ['L1', false]);
     // Its own link coming back does.
     r.setConnected('T1', 'L1', true);
-    assert.deepEqual(names(r.toolsFor(ctx())), ['alpha', 'ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset']);
+    assert.deepEqual(names(r.toolsFor(ctx())), ['ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset', 'alpha']);
     // A registration on the new link replaces it.
     r.setConnected('T1', 'L1', false);
     r.setWorkspace('T1', 'L9', registration({ tools: [wsTool('get_count')] }));
-    assert.deepEqual(names(r.toolsFor(ctx())), ['alpha', 'ai-demo__get_count']);
+    assert.deepEqual(names(r.toolsFor(ctx())), ['ai-demo__get_count', 'alpha']);
     assert.equal(r.lookup(ctx(), 'ai-demo__get_count').source.link, 'L9');
   });
 
@@ -266,25 +274,116 @@ describe('toolsFor', () => {
     assert.deepEqual(names(r.toolsFor(ctx({ tab: null }))), ['alpha', 'needs_project']);
   });
 
-  it('per request: 40 tools (cloud) or 24 (local); workspace tools kept first, the lowest-priority host tools dropped', () => {
-    const host = Array.from({ length: 30 }, (_, i) => hostTool(`h${String(i).padStart(2, '0')}`, i));
+  it('cloud: 40 tools a request; workspace tools kept first, the lowest-priority host tools dropped (pinned ones kept), the workspace first in order', () => {
+    const host = Array.from({ length: 30 }, (_, i) => hostTool(`h${String(i).padStart(2, '0')}`, i, undefined, i === 0 ? { pinned: true } : {}));
     const r = createToolRegistry({ hostTools: host });
     r.setWorkspace('T1', 'L1', registration({ tools: Array.from({ length: 20 }, (_, i) => wsTool(`w${String(i).padStart(2, '0')}`)) }));
     const cloud = r.selectTools(ctx());
+    assert.deepEqual(REQUEST_MAX_TOOLS, { cloud: 40 }, 'no local count cap');
     assert.equal(cloud.tools.length, REQUEST_MAX_TOOLS.cloud);
+    assert.equal(cloud.budget, null);
+    assert.equal(cloud.tooSmall, false);
     assert.equal(cloud.tools.filter((t) => t.source.kind === 'workspace').length, 20);
-    assert.deepEqual(cloud.dropped, host.slice(0, 10).map((t) => t.name), 'the ten lowest priorities');
-    assert.deepEqual(names(cloud.tools.slice(0, 20)), host.slice(10).map((t) => t.name), 'host tools still first, by name');
-    const local = r.selectTools(ctx({ local: true }));
-    assert.equal(local.tools.length, REQUEST_MAX_TOOLS.local);
-    assert.deepEqual(names(local.tools.filter((t) => t.source.kind === 'host')), ['h26', 'h27', 'h28', 'h29']);
-    assert.deepEqual(r.toolsFor(ctx({ local: true })).map((t) => t.name), names(local.tools));
-    // A page with more tools than a local request holds: the cap still holds.
-    r.setWorkspace('T1', 'L1', registration({ tools: Array.from({ length: 32 }, (_, i) => wsTool(`w${String(i).padStart(2, '0')}`)) }));
-    const crowded = r.selectTools(ctx({ local: true }));
-    assert.equal(crowded.tools.length, 24);
-    assert.equal(crowded.tools.filter((t) => t.source.kind === 'host').length, 0);
-    assert.ok(crowded.dropped.includes('ai-demo__w31'));
+    assert.deepEqual(names(cloud.dropped), host.slice(1, 11).map((t) => t.name), 'the ten lowest priorities, the pinned one kept');
+    assert.deepEqual(names(cloud.tools.slice(0, 20)), Array.from({ length: 20 }, (_, i) => `ai-demo__w${String(i).padStart(2, '0')}`), 'the workspace first, by name');
+    assert.deepEqual(names(cloud.tools.slice(20)), ['h00', ...host.slice(11).map((t) => t.name)], 'then the host tools, by name');
+    assert.deepEqual(cloud.dropped[0].contexts, ['Home', 'Workbench', 'Workspaces'], 'where each is offered');
+  });
+
+  it('local: no count cap, a budget of tool tokens: half the context, 16,384 when unknown; 60 small tools fit a 128K context', () => {
+    assert.deepEqual([localBudget(131_072), localBudget(8192), localBudget(4096), localBudget(null), localBudget(0), localBudget(undefined)], [65_536, 4096, 2048, 16_384, 16_384, 16_384]);
+    assert.equal(LOCAL_BUDGET.unknown, 16_384);
+    const host = Array.from({ length: 60 }, (_, i) => hostTool(`h${String(i).padStart(2, '0')}`, i));
+    const r = createToolRegistry({ hostTools: host });
+    const sel = r.selectTools(ctx({ tab: null, local: true, cloud: false, budgetTokens: localBudget(131_072) }));
+    assert.equal(sel.tools.length, 60);
+    assert.deepEqual([sel.dropped, sel.budget, sel.tooSmall], [[], 65_536, false]);
+    // The same tools with no budget given: the unknown one.
+    assert.equal(r.selectTools(ctx({ tab: null, local: true, cloud: false })).budget, LOCAL_BUDGET.unknown);
+  });
+
+  it("a tool's tokens: its definition as a local server is sent it, in characters, divided by 3.5, rounded up", () => {
+    const t = hostTool('alpha', 0, undefined, { description: 'x'.repeat(500) });
+    const chars = JSON.stringify({ type: 'function', function: { name: 'alpha', description: t.description, parameters: emitSchema('openai_compatible', t.schema) } }).length;
+    assert.equal(toolTokens(t), Math.ceil(chars / 3.5));
+    assert.equal(toolTokens({ ...t }), toolTokens(t), 'the same content, the same count');
+  });
+
+  it('local over the budget: host tools go by priority (the later name first on a tie), then the workspace’s by theirs, pinned tools last; each drop names where it is offered', () => {
+    // About 300 tokens each.
+    const big = (name, priority, extra = {}) => hostTool(name, priority, undefined, { description: `${name} ${'x'.repeat(1000)}`, ...extra });
+    const host = [big('h_low', 10, { contexts: ['home', 'workbench', 'workspace'] }), big('h_mid', 50), big('h_tie_a', 30), big('h_tie_b', 30), big('h_pin', 0, { pinned: true })];
+    const r = createToolRegistry({ hostTools: host });
+    const text = 'y'.repeat(1000);
+    r.setWorkspace(
+      'T1',
+      'L1',
+      registration({ pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', tools: [wsTool('keep', { description: text, priority: 90 }), wsTool('cheap', { description: text }), wsTool('drop', { description: text, priority: 5 })] }),
+    );
+    const per = toolTokens(r.lookup(ctx(), 'h_low'));
+    const all = r.selectTools(ctx({ local: true, cloud: false, budgetTokens: 100_000 }));
+    assert.equal(all.tools.length, 8);
+    const total = all.tools.reduce((n, t) => n + toolTokens(t), 0);
+    // Room for all but four.
+    const sel = r.selectTools(ctx({ local: true, cloud: false, budgetTokens: total - 3 * per - 10 }));
+    assert.deepEqual(names(sel.dropped), ['h_low', 'h_tie_b', 'h_tie_a', 'h_mid']);
+    assert.deepEqual(sel.dropped[0].contexts, ['Home', 'Workbench', 'Workspaces']);
+    assert.deepEqual(names(sel.tools), ['ai-demo__cheap', 'ai-demo__drop', 'ai-demo__keep', 'h_pin'], 'the workspace first in a workspace');
+    // Tighter: the workspace's lowest goes next, then its default 50, then its 90; the pinned one last.
+    const tight = r.selectTools(ctx({ local: true, cloud: false, budgetTokens: toolTokens(r.lookup(ctx(), 'h_pin')) + 5 }));
+    assert.deepEqual(names(tight.dropped).slice(4), ['ai-demo__drop', 'ai-demo__cheap', 'ai-demo__keep']);
+    assert.deepEqual(tight.dropped[4].contexts, ['Magnusim CAD Part']);
+    assert.deepEqual(names(tight.tools), ['h_pin']);
+    assert.equal(tight.tooSmall, false);
+    // Not even the pinned one: nothing may be offered.
+    const none = r.selectTools(ctx({ local: true, cloud: false, budgetTokens: 10 }));
+    assert.deepEqual([none.tools, none.tooSmall, names(none.dropped).at(-1)], [[], true, 'h_pin']);
+  });
+
+  it('places: a host tool only where its contexts say; the tab’s workspace tools in their workspace; a tool with no contexts everywhere', () => {
+    const r = createToolRegistry({
+      hostTools: [
+        hostTool('anywhere'),
+        hostTool('home_only', 0, undefined, { contexts: ['home'] }),
+        hostTool('bench', 0, undefined, { contexts: ['workbench'] }),
+        hostTool('space', 0, undefined, { contexts: ['workspace'] }),
+        hostTool('bench_space', 0, undefined, { contexts: ['workbench', 'workspace'] }),
+      ],
+    });
+    assert.deepEqual(names(r.toolsFor(ctx({ tab: null, projectId: null }))), ['anywhere', 'home_only'], 'Home');
+    assert.deepEqual(names(r.toolsFor(ctx({ tab: null }))), ['anywhere', 'bench', 'bench_space'], 'the workbench');
+    r.setWorkspace('T1', 'L1', registration());
+    assert.deepEqual(names(r.toolsFor(ctx())), ['ai-demo__add', 'ai-demo__get_count', 'ai-demo__reset', 'anywhere', 'bench_space', 'space'], 'the workspace');
+    assert.deepEqual(r.lookup(ctx(), 'ai-demo__add').contexts, ['workspace']);
+    // The place a caller gives wins over the tab's (core registration, lane C).
+    assert.deepEqual(names(r.toolsFor(ctx({ tab: null, projectId: null, place: 'workbench' }))), ['anywhere', 'bench', 'bench_space']);
+    // A dormant registration: the tab is its project's workbench again.
+    r.setConnected('T1', 'L1', false);
+    assert.equal(r.placeOf('T1', 'p1'), 'workbench');
+    assert.deepEqual([placeFor(null, null), placeFor(null, 'p1'), placeFor({ connected: true, reg: { projectId: 'p1' } }, 'p1'), placeFor({ connected: true, reg: { projectId: 'p2' } }, 'p1')], [
+      'home',
+      'workbench',
+      'workspace',
+      'workbench',
+    ]);
+  });
+
+  it('a workspace tool’s priority comes from its registration (0-100, default 50); bytes stay the same from step to step', () => {
+    const r = createToolRegistry({ hostTools: [hostTool('alpha')] });
+    r.setWorkspace('T1', 'L1', registration({ tools: [wsTool('a', { priority: 0 }), wsTool('b', { priority: 100 }), wsTool('c'), wsTool('d', { priority: 101 }), wsTool('e', { priority: 2.5 })] }));
+    assert.deepEqual(
+      r.toolsFor(ctx()).filter((t) => t.source.kind === 'workspace').map((t) => [t.localName, t.priority]),
+      [
+        ['a', 0],
+        ['b', 100],
+        ['c', 50],
+        ['d', 50],
+        ['e', 50],
+      ],
+    );
+    const one = JSON.stringify(providerTools(r.selectTools(ctx({ local: true, cloud: false, budgetTokens: 5000 })).tools));
+    const two = JSON.stringify(providerTools(r.selectTools(ctx({ local: true, cloud: false, budgetTokens: 5000 })).tools));
+    assert.equal(two, one);
   });
 
   it('other sources (a later phase) join through registerToolSource, fenced the same way', () => {
@@ -315,13 +414,13 @@ describe('toolsFor', () => {
     assert.deepEqual(
       defs.map((d) => [d.name, d.workspace ?? null]),
       [
-        ['alpha', null],
         ['ai-demo__add', true],
         ['ai-demo__get_count', true],
         ['ai-demo__reset', true],
+        ['alpha', null],
       ],
     );
-    assert.ok(!('workspace' in defs[0]), 'a host tool carries no flag at all');
+    assert.ok(!('workspace' in defs[3]), 'a host tool carries no flag at all');
   });
 });
 

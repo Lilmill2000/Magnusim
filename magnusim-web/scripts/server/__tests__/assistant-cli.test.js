@@ -74,6 +74,8 @@ before(async () => {
     body: JSON.stringify({ provider: 'openai_compatible', base_url: fake.compatBase, model: 'qwen3.8-27b' }),
   });
   assert.equal(r.status, 200);
+  // The local server says its model's context, so no turn notes an unknown one.
+  fake.models([{ id: 'qwen3.8-27b', context: 32_768, type: 'vlm' }], 'compat');
 });
 
 after(async () => {

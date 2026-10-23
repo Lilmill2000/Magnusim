@@ -298,6 +298,7 @@ describe('reference pictures', () => {
   it('a local model known not to read images gets none, with the note once; one not known yet gets them (its adapter decides)', async () => {
     const m = mk({ provider: 'openai_compatible' });
     m.provider.readsImages = () => false;
+    m.provider.modelRow = async () => ({ context: 32_768, type: null });
     m.provider.script({ text: 'No pictures.' });
     const r = await startTurn(m, { text: 'x', images: [{ media_type: 'image/png', data: PNG_1x1 }] });
     await settled(r.turn);

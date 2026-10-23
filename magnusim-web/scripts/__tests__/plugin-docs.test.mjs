@@ -313,12 +313,20 @@ describe('the handwritten guides', () => {
       .filter(Boolean);
     assert.equal(limits.length, 1, 'one provider file holds the strict limits');
     const [, tools, optional, unions] = limits[0];
-    const caps = /export const REQUEST_MAX_TOOLS = Object\.freeze\(\{ cloud: (\d+), local: (\d+) \}\)/.exec(app('scripts', 'server', 'assistant', 'registry.ts'));
-    assert.ok(caps, 'REQUEST_MAX_TOOLS in registry.ts');
+    const registry = app('scripts', 'server', 'assistant', 'registry.ts');
+    // A cloud request's count; a local one has none, only a budget of tokens (core host tools spec C8).
+    const caps = /export const REQUEST_MAX_TOOLS = Object\.freeze\(\{ cloud: (\d+) \}\)/.exec(registry);
+    assert.ok(caps, 'REQUEST_MAX_TOOLS in registry.ts, a cloud cap only');
+    const budget = /export const LOCAL_BUDGET = Object\.freeze\(\{ share: ([\d.]+), unknown: ([\d_]+), charsPerToken: ([\d.]+) \}\)/.exec(registry);
+    assert.ok(budget, 'LOCAL_BUDGET in registry.ts');
+    assert.equal(Number(budget[1]), 0.5, 'half the context, as the docs say');
+    const unknown = Number(budget[2].replace(/_/g, '')).toLocaleString('en-US');
     const authoring = read('authoring.md');
     assert.ok(authoring.includes(`${tools} tools, ${optional} optional properties and ${unions} properties of more than one type`), 'the strict budget');
-    assert.ok(authoring.includes(`at most ${caps[1]} tools with a cloud provider and ${caps[2]} with a local server`), 'the tools per request');
-    assert.ok(authoring.includes(`When you offer more than ${caps[2]},`), 'the local cap again');
+    assert.ok(authoring.includes(`at most ${caps[1]} tools with a cloud provider.`), 'the tools per request');
+    assert.ok(authoring.includes(`with a local server, tool definitions take at most half of the model's context (${unknown} tokens when unknown)`), 'the local budget');
+    assert.ok(authoring.includes(`divided by ${budget[3]}`), "a tool's tokens");
+    assert.ok(!/with a local server and \d+|When you offer more than \d+,/.test(authoring), 'no local count cap left in the docs');
   });
 
   test("GUIDE.md's startHost options are the ones host-server.mjs takes", () => {

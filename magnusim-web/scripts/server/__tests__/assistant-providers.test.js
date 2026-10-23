@@ -1523,7 +1523,7 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     }
   });
 
-  it("the first dialect: only a workspace tool sent strict makes the second request differ, and the CAD-sized set keeps its host tools' strict budget", async () => {
+  it('the first dialect: only a workspace tool sent strict makes the second request differ, and the CAD-sized set (its tools first) goes loose with the host tools strict', async () => {
     // 20 host tools take the whole strict budget: the workspace tool after them already goes
     // without strict, so a refusal is not sent again.
     const hosts = Array.from({ length: 20 }, (_, i) => ({ name: `h${String(i).padStart(2, '0')}`, description: 'A host tool.', schema: obj({}) }));
@@ -1531,9 +1531,9 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
     const sent = await sentBy('anthropic', () => assert.rejects(send('anthropic', request('anthropic', [userText('x')], { tools: full })), (e) => e.code === 'bad_request'));
     assert.deepEqual(sent.map(strictness), [[...allStrict(hosts), [WS[0].name, false]]]);
-    // 3 host tools and 18 workspace tools (a CAD turn): the first 20 strict, then, refused,
-    // the 3 host tools only.
-    const cad = [...HOST, { name: 'explain_ready', description: 'Ready?', schema: obj({}) }, ...workspace(Array.from({ length: 18 }, (_, i) => ({ name: `t${i}`, description: 'A tool.', schema: obj({}) })), 'cad')];
+    // 21 workspace tools, then 3 host tools (a CAD turn: the workspace first, core host tools
+    // spec §12.4): the first 20 strict, all the Part's; then, refused, the 3 host tools only.
+    const cad = [...workspace(Array.from({ length: 21 }, (_, i) => ({ name: `t${String(i).padStart(2, '0')}`, description: 'A tool.', schema: obj({}) })), 'cad'), ...HOST, { name: 'explain_ready', description: 'Ready?', schema: obj({}) }];
     fake.failNext({ status: 400, body: REFUSED.anthropic, dialect: 'anthropic' });
     fake.reply({ text: 'ok' });
     let r;
@@ -1542,8 +1542,8 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     });
     assert.deepEqual(r.notes, [NOTE.anthropic]);
     assert.deepEqual(two.map((q) => q.body.tools.map((t) => t.strict === true)), [
-      [...Array(20).fill(true), false],
-      [true, true, true, ...Array(18).fill(false)],
+      [...Array(20).fill(true), false, false, false, false],
+      [...Array(21).fill(false), true, true, true],
     ]);
   });
 

@@ -79,6 +79,7 @@ import { guideBlock, SYSTEM_PROMPT } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
 import type { Registry, ToolCtx, ToolDef } from '../registry.ts';
+import { grants } from '../grants.ts';
 import { callAbortOf, errorResult, riskOf, sourceLabel, STOPPED_BEFORE, stoppedText, type CallAbort, type RunResult, type ToolRunner } from '../runner.ts';
 import { cleanText, resultText } from '../sanitize.ts';
 import { emitSchema, stripNullOptionals, validateInput } from '../schema.ts';
@@ -191,7 +192,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
-const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false });
+const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null });
 
 /** Schema keys that carry a registration's own words or values. */
 const WITHHELD_KEYS = new Set(['description', 'title', 'enum', 'const', 'default', 'examples']);
@@ -511,7 +512,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
       const why = APP_TAB_TEXTS.get(String(t.body.code)) ?? (typeof t.body.error === 'string' ? t.body.error : null);
       return { ctx: TABLESS, why };
     }
-    return { ctx: { tab: t.tab, projectId: t.projectId || null, simulationId: t.studyId || null, cloud: true, local: false }, why: null };
+    const projectId = t.projectId || null;
+    return { ctx: { tab: t.tab, projectId, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, projectId), budgetTokens: null, prompt: null }, why: null };
   }
 
   /** The project's row, kept a moment per session; null when it can't be read. */
@@ -1020,6 +1022,8 @@ export function createMcpService(d: McpServiceDeps): McpService {
       offShutdown();
       claim?.release();
       sessions.delete(session.id);
+      // Its chain grants end with it (grants.ts).
+      grants().end(`mcp:${session.id}`);
       void handle?.close().catch(() => {});
       alog('info', 'mcp connection closed', {
         session: session.id,

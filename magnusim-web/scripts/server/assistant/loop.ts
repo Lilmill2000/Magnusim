@@ -9,9 +9,11 @@
  *     the caps (minutes, tokens; then the spend estimate and the day's reservation)
  *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
  *       before this request, forgotten answers ask again
- *     a local server's model row (its context, kept 60 s): the answer gets the room the
- *       prompt leaves; too little → failed (context) before this request, and the row
- *       is read again next turn
+ *     a local server's model row (its context, kept 60 s), read before the tools are chosen:
+ *       the tools fit half its context (16,384 tokens when it says none, noted once a
+ *       turn), the ones left out named once with where they are offered; not even the
+ *       pinned ones → failed (context); the answer gets the room the prompt leaves; too
+ *       little → failed (context) before this request, and the row is read again next turn
  *     whether the model reads images (cloud: yes; a local server: its row's type, or a
  *       refusal remembered); the adapter's notes on how a request went, each once a turn
  *     model: one request with this step's tools (computed by the host, every step)
@@ -43,7 +45,7 @@ import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import { destinationHost, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, privacyGate, type ProjectInfo } from './privacy.ts';
-import { providerTools, type ToolCtx, type ToolDef, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
+import { localBudget, LOCAL_BUDGET, placeFor, providerTools, type ToolCtx, type ToolDef, type ToolSelection, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
 import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
 import type { Caps, AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
@@ -146,7 +148,7 @@ export interface LoopTurn extends RunnerTurn {
 }
 
 export interface LoopRegistry {
-  selectTools(ctx: ToolCtx): { tools: ToolDef[]; dropped: string[] };
+  selectTools(ctx: ToolCtx): ToolSelection;
   workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string; review?: WorkspaceReview | null } | null;
 }
 
@@ -184,10 +186,32 @@ export function capText(reason: CapReason, caps: Caps): string {
   }
 }
 
+const grouped = (tokens: number) => String(Math.round(tokens)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
 /** A local model's context leaves too little room for an answer (the turn ends failed, `context`). */
 export function contextText(tokens: number): string {
-  const n = String(Math.round(tokens)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `The local model's context (${n} tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation.`;
+  return `The local model's context (${grouped(tokens)} tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation.`;
+}
+
+/** A local server that doesn't say its model's context: the tools fit the unknown budget (noted once a turn). */
+export const UNKNOWN_CONTEXT_NOTE = `Magnusim doesn't know this model's context length, so it offers tools up to ${grouped(LOCAL_BUDGET.unknown)} tokens of definitions.`;
+
+/** Not even the pinned tools fit a local model's budget (the turn ends failed, `context`, before its first request). */
+export function toolsTooBigText(tokens: number | null): string {
+  return tokens
+    ? `This model's context (${grouped(tokens)} tokens) is too small for Magnusim's tools. Load it with a longer context.`
+    : `Magnusim's tools need more than ${grouped(LOCAL_BUDGET.unknown)} tokens, and this model's context is not known. Load it with a longer context.`;
+}
+
+/**
+ * The note naming the tools a request left out: a local budget's, with where each is offered
+ * (§12.3), or the cloud cap's.
+ */
+export function droppedNote(sel: ToolSelection, local: boolean, contextTokens: number | null): string {
+  if (!local) return `More tools than one request may carry; left out: ${sel.dropped.map((d) => d.name).join(', ')}.`;
+  const list = sel.dropped.map((d) => (d.contexts.length ? `${d.name} (${d.contexts.join(', ')})` : d.name)).join(', ');
+  const fit = contextTokens ? `To fit this model's context (${grouped(contextTokens)} tokens)` : `To fit ${grouped(sel.budget ?? LOCAL_BUDGET.unknown)} tokens of tool definitions`;
+  return `${fit}, these tools were left out: ${list}. Load the model with a longer context to have them.`;
 }
 
 /** An overload's resend that no longer fits the money left: the turn ends capped. */
@@ -438,6 +462,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   let prev: EstimateInput['prev'] = null;
   let counted = 0;
   const notedDrops = new Set<string>();
+  let notedUnknown = false;
   // Review rounds (the turn's workspace asked for them): its edit tools that succeeded since the
   // turn began or the last round started, and the rounds started (`of` fixed by the first).
   let editedSinceReview = false;
@@ -467,33 +492,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
     if (step > 1) syncGuide(t, workspaceNow(), true);
 
-    const ctx: ToolCtx = {
-      tab: t.tab,
-      projectId: t.projectId,
-      simulationId: t.simulationId,
-      cloud: adapter.cloud,
-      local: adapter.id === 'openai_compatible',
-      // app_status reports the turn's own provider and model, not the default's.
-      assistant: { provider: t.settings.provider, model: t.settings.model },
-    };
-    let tools: ToolDef[];
-    if (finalStep && lastTools) {
-      // The summing-up request keeps the tool list, so the cached prefix holds.
-      tools = lastTools;
-    } else {
-      const sel = d.registry.selectTools(ctx);
-      tools = sel.tools;
-      const key = sel.dropped.join(',');
-      if (key && !notedDrops.has(key)) {
-        notedDrops.add(key);
-        t.note(`More tools than one request may carry; left out: ${sel.dropped.join(', ')}.`);
-      }
-    }
-    lastTools = tools;
-    const offered = new Map(tools.map((x) => [x.name, x] as const));
-    const req = buildRequest(conv, tools, t.settings);
-
-    // A local server's word on the model's context (cached 60 s): the turn knows it from now on.
+    // A local server's word on the model's context (cached 60 s), before the tools are chosen:
+    // they fit its budget. The turn knows it from now on.
     const row = adapter.modelRow ? await adapter.modelRow(model, t.signal) : null;
     if (stoppedNow(t)) return;
     // What the conversation knew counts only for the server that said it (the address may have changed).
@@ -504,6 +504,46 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       conv.contextBaseUrl = t.settings.base_url;
     }
     learnImages();
+
+    const local = adapter.id === 'openai_compatible';
+    const ctx: ToolCtx = {
+      tab: t.tab,
+      projectId: t.projectId,
+      simulationId: t.simulationId,
+      cloud: adapter.cloud,
+      local,
+      place: placeFor(workspaceNow(), t.projectId),
+      budgetTokens: local ? localBudget(contextTokens) : null,
+      prompt: t.prompt,
+      // app_status reports the turn's own provider and model, not the default's.
+      assistant: { provider: t.settings.provider, model: t.settings.model },
+    };
+    let tools: ToolDef[];
+    if (finalStep && lastTools) {
+      // The summing-up request keeps the tool list, so the cached prefix holds.
+      tools = lastTools;
+    } else {
+      if (local && !contextTokens && !notedUnknown) {
+        notedUnknown = true;
+        t.note(UNKNOWN_CONTEXT_NOTE);
+      }
+      const sel = d.registry.selectTools(ctx);
+      if (sel.tooSmall) {
+        // The person may load the model with a longer context: the next turn asks the server again.
+        adapter.forgetRow?.(model);
+        conv.contextTokens = null;
+        return t.end('failed', 'context', toolsTooBigText(contextTokens));
+      }
+      tools = sel.tools;
+      const key = sel.dropped.map((x) => x.name).join(',');
+      if (key && !notedDrops.has(key)) {
+        notedDrops.add(key);
+        t.note(droppedNote(sel, local, contextTokens));
+      }
+    }
+    lastTools = tools;
+    const offered = new Map(tools.map((x) => [x.name, x] as const));
+    const req = buildRequest(conv, tools, t.settings);
 
     // The spend estimate and the day's reservation (cloud only; a local server costs nothing).
     const fresh = freshOf(conv.messages.slice(counted));

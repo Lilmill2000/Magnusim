@@ -54,7 +54,7 @@ export const NOTHING_RUNS_TEXT = "Nothing runs between messages: the person hasn
 export const AGENTS_BUSY_TEXT = 'Two coding agents are already working. Wait for one to finish, or stop one.';
 export const RESTARTED_TEXT = (name: string) => `${name} was started again, so it doesn't remember this conversation's earlier messages.`;
 
-const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false });
+const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null });
 
 export interface AgentTimings {
   idleMs: number;
