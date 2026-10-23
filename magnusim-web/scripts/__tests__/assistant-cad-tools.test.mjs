@@ -44,11 +44,14 @@ const LOCAL_PREFIX_MAX = 52_000;
 
 const hostTools = () =>
   createHostTools({
-    hostGet: async () => ({}),
+    hostCall: async () => ({}),
     assistant: async () => ({ provider: 'off', model: '' }),
     version: async () => '0.0.0',
     plugins: () => [],
   });
+
+/** The host tools a workspace turn is offered (Core host tools spec 15; the core page's come with lane C). */
+const HOST_IN_WORKSPACE = ['app_status', 'explain_ready', 'project_summary', 'read_setup'];
 
 /** The tools the app offers a turn on the Part's tab, in order (the registry's own selection). */
 function offered({ local = false } = {}) {
@@ -85,23 +88,23 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 24: the Part's 21 by name first, then the app's 3; strict as strictFlags grants them in that order", () => {
+  it("a CAD turn offers 25: the Part's 21 by name first, then the app's 4 for a workspace; strict as strictFlags grants them in that order", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
-    assert.deepEqual(names, [...CAD_TOOLS.map((t) => `cad__${t.name}`), 'app_status', 'explain_ready', 'project_summary']);
+    assert.deepEqual(names, [...CAD_TOOLS.map((t) => `cad__${t.name}`), ...HOST_IN_WORKSPACE]);
     const flags = strictFlags(providerTools(tools).map((t) => emitSchema('anthropic', t.schema)));
     // The strict budget goes to the Part's tools first: its first 20 by name; the rest go loose.
     assert.deepEqual(flags, names.map((_, i) => i < STRICT_LIMITS.tools));
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it('the 24 fit the local budget of a 32K context (half of it): nothing is cut', () => {
+  it('the 25 fit the local budget of a 32K context (half of it): nothing is cut', () => {
     const { tools, dropped, budget } = offered({ local: true });
-    assert.equal(tools.length, 24);
+    assert.equal(tools.length, 25);
     assert.deepEqual(dropped, []);
     const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
-    console.log(`[assistant-cad-tools] the 24 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
+    console.log(`[assistant-cad-tools] the 25 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
     assert.equal(budget, 16_384);
     assert.ok(tokens <= budget, `${tokens} tokens`);
   });

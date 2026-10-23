@@ -4,10 +4,14 @@
 // file with its attachment_id; the person's message lists it. Too big or another type is
 // refused in plain words before anything is sent; a file the server can't read as its type is
 // refused with the server's words. A forgotten conversation's files go; one never sent is swept
-// and the send then says so; a conversation can't use another conversation's file.
+// and the send then says so; a conversation can't use another conversation's file. An attached
+// STEP the model imports (import_file by its attachment_id) asks first, then the project has it.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys) and the
 // scripted model (support/fake-llm.mjs). No WSL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { dockSend, dockTurn, openDock, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { startHost } from './support/host-server.mjs';
@@ -239,6 +243,36 @@ test("swept when it should be: a forgotten conversation's file goes; one never s
   expect(chats().length).toBe(sent);
   await dock(page).getByRole('button', { name: 'Remove late.stl' }).click();
   await expect(chips(page)).toHaveCount(0);
+});
+
+test('an attached STEP is imported by the Assistant: it asks first, then the project has the new geometry and the window shows it', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await openProject(page);
+  const elbow = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.step'));
+  await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'elbow.step', mimeType: 'application/octet-stream', buffer: elbow }]);
+  await expect(chips(page).first()).toHaveAttribute('data-dock-file-state', 'ready', STEP_WAIT);
+  const [att] = (await getJson(request, '/api/test/assistant/state')).attachments;
+  const before = ((await getJson(request, `/api/project?project_id=${project}`)).project.geometries || []).length;
+  fake.reply(
+    { text: 'Importing it.', tools: [{ name: 'import_file', input: { project_id: '', attachment_id: att.id, path: '', as: 'geometry', length_unit: '' } }] },
+    { text: 'elbow.step is in the project.' },
+  );
+  await dockSend(page, 'Import the elbow');
+  // An import runs a computation on this PC: the person is asked first, in the dock.
+  const gate = dock(page).locator('[data-gate]').first();
+  await expect(gate).toBeVisible(STEP_WAIT);
+  await expect(gate.locator('.dock-gate-title')).toHaveText('Allow the Assistant to import the attached file?');
+  await expect(gate.locator('.dock-gate-copy')).toContainText('Adds it to this project as a new geometry and makes its preview.');
+  await gate.locator('[data-gate-answer="yes"]').click({ timeout: STEP_WAIT.timeout });
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 120_000 });
+  const geoms = (await getJson(request, `/api/project?project_id=${project}`)).project.geometries;
+  expect(geoms.length).toBe(before + 1);
+  const added = geoms.at(-1);
+  expect(added.original_filename).toBe('elbow.step');
+  // The window shows it (after a reload until the open window's live reload lands).
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
+  await expect(page.locator('#left-tree')).toContainText(added.name, STEP_WAIT);
 });
 
 test("a conversation can't use another conversation's file", async ({ page, request }) => {

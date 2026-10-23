@@ -397,13 +397,55 @@ describe('toolsFor', () => {
     assert.deepEqual(names(r.toolsFor(ctx())), ['alpha']);
   });
 
-  it('the host’s own tools: app_status, project_summary, explain_ready, never connection_check', () => {
-    const tools = createHostTools({ hostGet: async () => ({}), assistant: async () => ({ provider: 'off', model: '' }), version: async () => '0', plugins: () => [] });
+  it('the host’s own tools, by where the turn is (spec 15), never connection_check', () => {
+    const tools = createHostTools({ hostCall: async () => ({}), assistant: async () => ({ provider: 'off', model: '' }), version: async () => '0', plugins: () => [] });
     const r = createToolRegistry({ hostTools: tools });
-    assert.deepEqual(names(r.toolsFor(ctx())), ['app_status', 'explain_ready', 'project_summary']);
-    assert.deepEqual(names(r.toolsFor(ctx({ projectId: null, tab: null }))), ['app_status']);
+    // A workspace's tab (ctx() has one).
+    assert.deepEqual(names(r.toolsFor(ctx())), ['app_status', 'explain_ready', 'project_summary', 'read_setup']);
+    // The workbench: a project, no workspace tab.
+    assert.deepEqual(names(r.toolsFor(ctx({ tab: null }))), [
+      'app_status',
+      'catalog',
+      'delete',
+      'explain_ready',
+      'import_file',
+      'project_edit',
+      'project_summary',
+      'projects',
+      'read_results',
+      'read_setup',
+      'setup_edit',
+      'study_edit',
+    ]);
+    // Home: no project.
+    assert.deepEqual(names(r.toolsFor(ctx({ projectId: null, tab: null }))), [
+      'app_status',
+      'catalog',
+      'delete',
+      'explain_ready',
+      'project_edit',
+      'project_summary',
+      'projects',
+      'read_results',
+      'read_setup',
+    ]);
     assert.equal(r.lookup(ctx(), 'connection_check'), null);
-    assert.ok(tools.every((t) => t.risk === 'read' && t.source.kind === 'host'));
+    assert.ok(tools.every((t) => t.source.kind === 'host'));
+    const risks = Object.fromEntries(tools.map((t) => [t.name, t.risk]));
+    assert.deepEqual(risks, {
+      app_status: 'read',
+      catalog: 'read',
+      projects: 'read',
+      project_summary: 'read',
+      read_setup: 'read',
+      explain_ready: 'read',
+      read_results: 'read',
+      project_edit: 'edit',
+      study_edit: 'edit',
+      setup_edit: 'edit',
+      import_file: 'compute',
+      delete: 'destructive',
+    });
     assert.equal(connectionCheckTool().name, 'connection_check');
   });
 

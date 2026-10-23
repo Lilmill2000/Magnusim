@@ -1681,6 +1681,18 @@ describe('how many turns', () => {
   });
 });
 
+describe("what a tool hears of its turn: the person's message and the conversation", () => {
+  it('import_file takes only a path typed in this message, and only files attached to this conversation: both reach the tool', async () => {
+    const seen = [];
+    const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push([rt.ctx.prompt, rt.ctx.conversation]), { ok: true, summary: 'who' }) })] });
+    m.provider.script({ text: 'Looking.', tools: [{ name: 'who' }] }, { text: 'Done.' });
+    const r = await startTurn(m, { text: 'Import C:\\parts\\bracket.step' });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.deepEqual(seen, [['Import C:\\parts\\bracket.step', r.body.conversation]]);
+  });
+});
+
 describe('a turn on any provider, not only the default', () => {
   it("names its provider: that provider's adapter and model; its conversation stays bound to it, and goes on with it unnamed", async () => {
     const seen = [];

@@ -1294,6 +1294,18 @@ export async function handleW17Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
       const result = updateSimulation(body || {});
+      // A time-dependency change: the study's draft runs follow it (they start as the study is).
+      const answer = /** @type {any} */ (result.body);
+      if (result.ok && body && body.time_dependency != null && answer && answer.simulation) {
+        const want = String(body.simulation_id || body.id || '') || answer.simulation.id;
+        const sim = (answer.simulations || []).find((/** @type {any} */ s) => s && s.id === want) || answer.simulation;
+        try {
+          const { followStudyTimeDependency } = await import('./w27-solve.js');
+          answer.runs_followed = await followStudyTimeDependency(answer.project_id, sim.id, sim.time_dependency);
+        } catch (e) {
+          console.warn('[CFD W17] draft runs did not follow the time dependency', e);
+        }
+      }
       res.setHeader('X-CFD-Source', 'simulation-update');
       return sendJson(res, result.status, result.body);
     }

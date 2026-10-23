@@ -47,6 +47,12 @@ export const H15_TESTS = [
   'server/__tests__/record-rev.test.js',
   'server/__tests__/assistant-attachments.test.js',
   'server/__tests__/assistant-core-tabs.test.js',
+  'server/__tests__/assistant-host-schemas.test.js',
+  'server/__tests__/assistant-host-routes.test.js',
+  'server/__tests__/assistant-host-reads.test.js',
+  'server/__tests__/assistant-host-writes.test.js',
+  'server/__tests__/assistant-host-project.test.js',
+  'server/__tests__/assistant-host-delete.test.js',
   '__tests__/project-delete-jobs.test.mjs',
   '__tests__/wsl-case-watch.test.mjs',
   '__tests__/solve-hooks.test.mjs',
@@ -61,6 +67,7 @@ export const H15_TESTS = [
   '__tests__/h15-test-roots.test.mjs',
   '__tests__/assistant-boundaries.test.mjs',
   '__tests__/assistant-cad-tools.test.mjs',
+  '__tests__/w17-time-dependency-drafts.test.mjs',
 ];
 
 /** Code only (comments may mention imports). */

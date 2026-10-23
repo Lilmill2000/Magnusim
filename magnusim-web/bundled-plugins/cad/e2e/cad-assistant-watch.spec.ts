@@ -1,10 +1,10 @@
 // The Part's tools for the app's Assistant, as the person and the model meet them (CAD tools spec
 // §12.3 watch 1, T1): a Part open in its workspace offers its 21 tools on its tab; a turn there
-// offers 25 (the Part's by name first, then the app's 4: its 3 host tools and core__show, core host
-// tools spec §12.4, C7), the first 20 strict and the last 5 not; the system text holds the CAD notes;
-// the tools go out byte for byte the same in the next turn. A local model whose context is too small
-// for them all: the dock names the tools left out and where they are offered, and the request carries
-// only the rest (§12.3).
+// offers 26 (the Part's by name first, then the app's 5 by name: its 4 host tools and core__show,
+// core host tools spec §12.4, §15, C7), the first 20 strict and the last 6 not; the system text holds
+// the CAD notes; the tools go out byte for byte the same in the next turn. A local model whose context
+// is too small for them all: the dock names the tools left out and where they are offered, and the
+// request carries only the rest (§12.3).
 // get_model answers the model with the Part in data; a hole on the empty Part answers bad_selector
 // with its hint and the Part's names. The dock's chip and the frame's data-assistant say what
 // the Assistant does: thinking while the model answers, working while a call runs ("Read the
@@ -89,11 +89,11 @@ test.afterEach(() => {
 
 /** The Part's 21 tools by name, as the app names them (src/assistant/schemas.ts). */
 const CAD = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace'].map((n) => `cad__${n}`);
-// The app's own: its host tools and the app page's core__show (core host tools spec C7; core__view
-// is the workbench's: a workspace has its own view tool).
-const HOST_TOOLS = ['app_status', 'core__show', 'explain_ready', 'project_summary'];
+// The app's own: its host tools and the app page's core__show (core host tools spec §15, C7;
+// core__view is the workbench's: a workspace has its own view tool).
+const HOST_TOOLS = ['app_status', 'core__show', 'explain_ready', 'project_summary', 'read_setup'];
 
-test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 25, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
+test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 26, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant registration');
   const { tab } = await openNewPart(page, request, host, pid);
@@ -108,7 +108,7 @@ test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offe
   const t2 = await startTurn(request, host, { text: 'Say hello again.', tab });
   expect((await t2.ended(STEP_MS)).turn.state).toBe('done');
   const [first, second] = chats(host).slice(before);
-  // The Part's tools first (by name), then the app's own by name: 25, the first 20 strict (the provider's budget).
+  // The Part's tools first (by name), then the app's own by name: 26, the first 20 strict (the provider's budget).
   expect(offeredTools(first)).toEqual([...CAD, ...HOST_TOOLS].map((name, i) => ({ name, strict: i < 20 })));
   // The CAD notes are the second system block, line breaks kept.
   const system = (first.body.system as { text: string }[]).map((s) => s.text).join('\n');

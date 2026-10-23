@@ -609,6 +609,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       place: placeOf(d.registry, t.tab, t.projectId),
       budgetTokens: local ? localBudget(contextTokens) : null,
       prompt: t.prompt,
+      // import_file takes only the files attached to this conversation.
+      conversation: conv.id,
       // app_status reports the turn's own provider and model, not the default's.
       assistant: { provider: t.settings.provider, model: t.settings.model },
     };

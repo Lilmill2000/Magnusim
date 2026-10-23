@@ -69,6 +69,8 @@ export interface ToolCtx {
   prompt: string | null;
   /** The turn's provider and model (app_status reports them); absent outside a turn. */
   assistant?: { provider: string; model: string };
+  /** The turn's conversation (attachments are bound to it); absent outside a turn. */
+  conversation?: string | null;
 }
 
 /** What an escalation found (C3): the call's risk raised to it, and what the card says. */
