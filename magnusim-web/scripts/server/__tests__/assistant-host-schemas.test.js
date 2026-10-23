@@ -28,7 +28,7 @@ function walk(node, path = '(root)', out = []) {
 }
 
 describe('the host tools’ schemas', () => {
-  it('are the nine of this lane, each with its contexts and priority', () => {
+  it('are the twelve of this lane, each with its contexts and priority', () => {
     assert.deepEqual(
       TOOLS.map((t) => [t.name, t.priority, [...t.contexts]]),
       [
@@ -39,8 +39,11 @@ describe('the host tools’ schemas', () => {
         ['read_setup', 95, ['home', 'workbench', 'workspace']],
         ['explain_ready', 78, ['home', 'workbench', 'workspace']],
         ['read_results', 76, ['home', 'workbench']],
+        ['project_edit', 54, ['home', 'workbench']],
         ['study_edit', 86, ['workbench']],
         ['setup_edit', 88, ['workbench']],
+        ['import_file', 56, ['workbench']],
+        ['delete', 60, ['home', 'workbench']],
       ],
     );
   });
@@ -64,7 +67,7 @@ describe('the host tools’ schemas', () => {
   }
 
   it('the write tools say where changes go and what the sentinels are', () => {
-    for (const name of ['study_edit', 'setup_edit']) assert.match(TOOLS.find((t) => t.name === name).description, /open here|Unused/);
+    for (const name of ['study_edit', 'setup_edit', 'import_file']) assert.match(TOOLS.find((t) => t.name === name).description, /open here|Unused/);
     assert.ok(TOOLS.every((t) => t.source.kind === 'host' && t.localName === t.name));
   });
 });

@@ -30,12 +30,16 @@ import { CONNECTION_CHECK } from './provider-test.ts';
 import { agentPrefs, loadSettings } from './settings.ts';
 import { agentIdOf } from './agents/known.ts';
 import { spendLedger } from './ledger.ts';
+import { attachments } from './attachments.ts';
 import { HOST_STALL_MS, type ToolDef, type ToolOutcome } from './registry.ts';
 import type { ProviderId } from './types.ts';
 import { appStatusTool } from './host/app-status.ts';
 import { catalogTool } from './host/catalog.ts';
 import type { HostToolDeps } from './host/common.ts';
+import { deleteTool } from './host/delete.ts';
 import { explainReadyTool } from './host/explain-ready.ts';
+import { importFileTool } from './host/import-file.ts';
+import { projectEditTool } from './host/project-edit.ts';
 import { projectSummaryTool } from './host/project-summary.ts';
 import { projectsTool } from './host/projects.ts';
 import { readResultsTool } from './host/read-results.ts';
@@ -55,8 +59,11 @@ export function createHostTools(d: HostToolDeps): ToolDef[] {
     readSetupTool(d),
     explainReadyTool(d),
     readResultsTool(d),
+    projectEditTool(d),
     studyEditTool(d),
     setupEditTool(d),
+    importFileTool(d),
+    deleteTool(d),
   ];
 }
 
@@ -108,6 +115,7 @@ export function defaultHostTools(port: () => number | null | undefined, more: Pa
     spentToday: async () => (await spendLedger()).spentToday(),
     version: appVersion,
     plugins: () => loadedPlugins(),
+    attachments,
     statFile: async (path: string) => {
       try {
         const st = await stat(path);

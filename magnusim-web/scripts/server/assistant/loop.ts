@@ -479,6 +479,10 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       local: adapter.id === 'openai_compatible',
       // app_status reports the turn's own provider and model, not the default's.
       assistant: { provider: t.settings.provider, model: t.settings.model },
+      // The person's own words and the conversation: import_file takes only a path typed
+      // there, and only the files attached to this conversation.
+      prompt: t.prompt,
+      conversation: conv.id,
     };
     let tools: ToolDef[];
     if (finalStep && lastTools) {

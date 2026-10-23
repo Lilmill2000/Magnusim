@@ -307,7 +307,10 @@ describe('toolsFor', () => {
     assert.deepEqual(names(r.toolsFor(ctx({ tab: null }))), [
       'app_status',
       'catalog',
+      'delete',
       'explain_ready',
+      'import_file',
+      'project_edit',
       'project_summary',
       'projects',
       'read_results',
@@ -319,7 +322,9 @@ describe('toolsFor', () => {
     assert.deepEqual(names(r.toolsFor(ctx({ projectId: null, tab: null }))), [
       'app_status',
       'catalog',
+      'delete',
       'explain_ready',
+      'project_edit',
       'project_summary',
       'projects',
       'read_results',
@@ -336,8 +341,11 @@ describe('toolsFor', () => {
       read_setup: 'read',
       explain_ready: 'read',
       read_results: 'read',
+      project_edit: 'edit',
       study_edit: 'edit',
       setup_edit: 'edit',
+      import_file: 'compute',
+      delete: 'destructive',
     });
     assert.equal(connectionCheckTool().name, 'connection_check');
   });

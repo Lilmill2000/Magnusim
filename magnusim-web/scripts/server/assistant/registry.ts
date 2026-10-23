@@ -45,6 +45,10 @@ export interface ToolCtx {
   local: boolean;
   /** The turn's provider and model (app_status reports them); absent outside a turn. */
   assistant?: { provider: string; model: string };
+  /** The person's own message of this turn (import_file's typed-path rule); absent for MCP and agents. */
+  prompt?: string | null;
+  /** The turn's conversation (attachments are bound to it); absent outside a turn. */
+  conversation?: string | null;
 }
 
 export interface ToolOutcome {
