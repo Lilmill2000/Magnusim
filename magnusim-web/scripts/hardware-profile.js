@@ -2,20 +2,68 @@
 /**
  * One-shot PC check used by the setup wizard.
  * Writes ``hardware`` into ``.magnusim-local.json (or legacy .cfddesk-local.json)`` so solves pick n_procs from it.
+ *
+ * Every probe runs as a child process the server waits for without blocking: a check
+ * takes up to about two minutes (WSL's first start, OpenFOAM's), and with spawnSync the
+ * whole server stopped answering for that long (every page, every event stream).
  */
 import { cpus, totalmem } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { statfsSync } from 'node:fs';
 import { WEB_ROOT, writeLocalDoc } from './prefs.js';
 import { wslDistro } from './wsl-env.js';
+import { fakeCompute, fakeHardwareProbe } from './test-compute.js';
+
+/**
+ * A probe's exit status and output. Never throws: a command that is missing, fails to
+ * start or outlives `timeoutMs` (then killed) gives status null.
+ * @param {string} command
+ * @param {string[]} args
+ * @param {number} timeoutMs
+ * @returns {Promise<{ status: number | null, stdout: string }>}
+ */
+export function runProbe(command, args, timeoutMs) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let done = false;
+    /** @type {import('node:child_process').ChildProcess} */
+    let child;
+    const finish = (/** @type {number | null} */ status) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ status, stdout });
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* gone */
+      }
+      finish(null);
+    }, timeoutMs);
+    try {
+      child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      finish(null);
+      return;
+    }
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => {
+      if (stdout.length < 65536) stdout += chunk;
+    });
+    child.on('error', () => finish(null));
+    child.on('close', (code) => finish(code));
+  });
+}
 
 /** Open MPI slots as WSL reports them (cores, not hyperthreads). Hybrid Intel
  *  CPUs often show fewer slots in WSL than Windows Win32_Processor.NumberOfCores. */
-export function probeWslMpiSlots(distro) {
+export async function probeWslMpiSlots(distro, run = runProbe) {
   const name = String(distro || '').trim();
   if (!name) return 0;
   try {
-    const r = spawnSync(
+    const r = await run(
       'wsl',
       [
         '-d',
@@ -25,7 +73,7 @@ export function probeWslMpiSlots(distro) {
         '-lc',
         "lscpu 2>/dev/null | awk -F: '/^Core\\(s\\) per socket/{gsub(/[ \\t]/,\"\",$2); c=$2} /^Socket\\(s\\)/{gsub(/[ \\t]/,\"\",$2); s=$2} END{v=(c+0)*(s+0); print v+0}'",
       ],
-      { encoding: 'utf8', windowsHide: true, timeout: 20000 },
+      20000,
     );
     const n = Number(String(r.stdout || '').trim().split(/\s+/).pop());
     if (Number.isFinite(n) && n >= 1) return Math.floor(n);
@@ -35,10 +83,10 @@ export function probeWslMpiSlots(distro) {
   return 0;
 }
 
-function physicalCoreCount() {
+async function physicalCoreCount(run = runProbe) {
   if (process.platform === 'win32') {
     try {
-      const r = spawnSync(
+      const r = await run(
         'powershell.exe',
         [
           '-NoProfile',
@@ -46,7 +94,7 @@ function physicalCoreCount() {
           '-Command',
           '(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum',
         ],
-        { encoding: 'utf8', windowsHide: true, timeout: 20000 },
+        20000,
       );
       const n = Number(String(r.stdout || '').trim());
       if (Number.isFinite(n) && n >= 1) return Math.floor(n);
@@ -68,13 +116,9 @@ function diskFreeGb() {
   return null;
 }
 
-function probeOpenFoam(distro) {
+async function probeOpenFoam(distro, run = runProbe) {
   try {
-    const r = spawnSync(
-      'wsl',
-      ['-d', distro, '--', 'openfoam2606', 'bash', '-c', 'simpleFoam -help'],
-      { encoding: 'utf8', windowsHide: true, timeout: 90000 },
-    );
+    const r = await run('wsl', ['-d', distro, '--', 'openfoam2606', 'bash', '-c', 'simpleFoam -help'], 90000);
     return r.status === 0;
   } catch {
     return false;
@@ -115,14 +159,27 @@ export function computeProfile({ physical, logical, ram_gb: ramGb, wsl_slots: ws
   return { profile, n_procs: n, reserve_cores: reserve, notes };
 }
 
-export function runHardwareCheck() {
+/** runProbe; with MAGNUSIM_TEST_COMPUTE=fake its slow stand-in (a Node process per probe, through runProbe). */
+function defaultProbe() {
+  if (!fakeCompute()) return runProbe;
+  return (/** @type {string} */ _command, /** @type {string[]} */ args, /** @type {number} */ timeoutMs) =>
+    fakeHardwareProbe(runProbe, args, timeoutMs);
+}
+
+/**
+ * The check, in the same order and with the same timeouts as before; the server answers meanwhile.
+ * `run` and `write` are the probe runner and the prefs writer (tests pass their own; with
+ * MAGNUSIM_TEST_COMPUTE=fake the probes are test-compute.js's slow stand-in).
+ * @param {{ run?: typeof runProbe, write?: (patch: Record<string, unknown>) => unknown }} [io]
+ */
+export async function runHardwareCheck({ run = defaultProbe(), write = writeLocalDoc } = {}) {
   const logical = Math.max(1, (cpus() || []).length);
-  const physical = physicalCoreCount();
+  const physical = await physicalCoreCount(run);
   const ram_gb = Math.round((totalmem() / 1e9) * 10) / 10;
   const disk_free_gb = diskFreeGb();
   const distro = wslDistro();
-  const openfoam_ok = probeOpenFoam(distro);
-  const wsl_slots = probeWslMpiSlots(distro);
+  const openfoam_ok = await probeOpenFoam(distro, run);
+  const wsl_slots = await probeWslMpiSlots(distro, run);
   const tuned = computeProfile({ physical, logical, ram_gb, wsl_slots });
   const hardware = {
     checked_at: new Date().toISOString(),
@@ -135,6 +192,6 @@ export function runHardwareCheck() {
     openfoam_ok,
     ...tuned,
   };
-  writeLocalDoc({ hardware });
+  write({ hardware });
   return hardware;
 }

@@ -24,7 +24,7 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
 
   if (req.method === 'POST' && parts[2] === 'hardware-check') {
     try {
-      const hardware = runHardwareCheck();
+      const hardware = await runHardwareCheck();
       return sendJson(res, 200, { ok: true, hardware, prefs: pagePrefs() });
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: String(err && err.message ? err.message : err) });
