@@ -20,11 +20,11 @@ const h = await import('./assistant-harness.js');
 const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates, checkInvariants, hostTool, until, tick } = h;
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
-const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, capText, contextText } = await import('../assistant/loop.ts');
+const { GUIDE_CHANGED_NOTE, CRASH_DURING, CRASH_BEFORE, UNKNOWN_CONTEXT_NOTE, capText, contextText } = await import('../assistant/loop.ts');
 const { TURN_LIMITS, TAB_HIDDEN_TEXT, createTurnManager } = await import('../assistant/turns.ts');
 const { PRIVACY_DENIED_TEXT } = await import('../assistant/privacy.ts');
 const { connectionCheckTool } = await import('../assistant/host-tools.ts');
-const { createToolRegistry, REQUEST_MAX_TOOLS } = await import('../assistant/registry.ts');
+const { createToolRegistry, LOCAL_BUDGET, REQUEST_MAX_TOOLS, toolTokens } = await import('../assistant/registry.ts');
 const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
 after(() => {
@@ -1068,6 +1068,7 @@ describe('images only for models that read them (CAD tools spec H6)', () => {
 
   it("the adapter's notes on a request become note events, each once a turn (the next turn says it again), in the order given", async () => {
     const m = localSays(() => false, { hostTools: [snap()] });
+    m.provider.modelRow = async () => ({ context: 32_768, type: null });
     m.provider.script({ tools: [{ name: 'snap' }], notes: [REFUSED] }, { tools: [{ name: 'snap' }], notes: [LEFT, REFUSED] }, { text: 'done', notes: [LEFT] });
     let r = await startTurn(m, 'Look twice.');
     await settled(r.turn);
@@ -1102,19 +1103,117 @@ describe('images only for models that read them (CAD tools spec H6)', () => {
 });
 
 describe('the offered list', () => {
-  it('a tool the 24-tool local cap left out, and the Settings test’s tool, are no_tool; the cap is noted once', async () => {
-    const many = Array.from({ length: 30 }, (_, i) => hostTool(`tool_${String(i).padStart(2, '0')}`, { priority: i }));
+  /** A host tool of about `tokens` tokens as a local request carries it. */
+  const sized = (name, tokens, o = {}) => hostTool(name, { description: `Tool ${name}. ${'x'.repeat(Math.max(0, Math.round(tokens * LOCAL_BUDGET.charsPerToken) - 160))}`, ...o });
+
+  it('a tool the local budget left out, and the Settings test’s tool, are no_tool; the drop is noted once, with where each is offered', async () => {
+    // Ten tools of about 1,100 tokens; an 8K model's budget is 4,096 tokens.
+    const many = Array.from({ length: 10 }, (_, i) => sized(`tool_${i}`, 1100, { priority: i, contexts: i < 5 ? ['home', 'workbench'] : ['home'] }));
     const registry = createToolRegistry({ hostTools: many });
     const m = mk({ provider: 'openai_compatible', registry });
-    m.provider.script({ tools: [{ name: 'tool_00' }, { name: 'connection_check', input: { word: 'ok' } }, { name: 'tool_29' }] }, { text: 'ok' });
+    m.provider.modelRow = async () => ({ context: 8192, type: null });
+    m.provider.script({ tools: [{ name: 'tool_0' }, { name: 'connection_check', input: { word: 'ok' } }, { name: 'tool_9' }] }, { text: 'ok' });
     const { turn: t } = await startTurn(m, 'x');
     await settled(t);
     const offered = m.provider.requests[0].req.tools.map((x) => x.name);
-    assert.equal(offered.length, REQUEST_MAX_TOOLS.local);
-    assert.ok(!offered.includes('tool_00'), 'the lowest priority went');
+    const kept = many.filter((d) => offered.includes(d.name));
+    assert.ok(kept.reduce((n, d) => n + toolTokens(d), 0) <= 4096, 'within half the context');
+    assert.deepEqual(offered, ['tool_7', 'tool_8', 'tool_9'], 'the highest priorities stay, by name');
     assert.ok(!offered.includes(connectionCheckTool().name));
     assert.deepEqual(codes(lastResults(t.conv)), ['no_tool', 'no_tool', 'ok']);
-    assert.equal(ofType(t, 'note').filter((n) => /left out/.test(n.text)).length, 1);
+    const left = ofType(t, 'note').filter((n) => /left out/.test(n.text));
+    assert.deepEqual(
+      left.map((n) => n.text),
+      [
+        "To fit this model's context (8,192 tokens), these tools were left out: tool_0 (Home, Workbench), tool_1 (Home, Workbench), tool_2 (Home, Workbench), tool_3 (Home, Workbench), tool_4 (Home, Workbench), tool_5 (Home), tool_6 (Home). Load the model with a longer context to have them.",
+      ],
+      'noted once, the lowest priority first',
+    );
+  });
+
+  it('no local count cap: 60 small tools all fit a 128K context', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => hostTool(`tool_${String(i).padStart(2, '0')}`, { priority: i }));
+    const m = mk({ provider: 'openai_compatible', registry: createToolRegistry({ hostTools: many }) });
+    m.provider.modelRow = async () => ({ context: 131_072, type: null });
+    m.provider.script({ text: 'ok' });
+    const { turn: t } = await startTurn(m, 'x');
+    await settled(t);
+    assert.equal(m.provider.requests[0].req.tools.length, 60);
+    assert.deepEqual(ofType(t, 'note'), []);
+    assert.equal(REQUEST_MAX_TOOLS.local, undefined, 'no local cap at all');
+  });
+
+  it("the model row is read before the tools are chosen: the budget follows this request's context", async () => {
+    const many = Array.from({ length: 4 }, (_, i) => sized(`tool_${i}`, 1000, { priority: i }));
+    const m = mk({ provider: 'openai_compatible', registry: createToolRegistry({ hostTools: many }) });
+    const order = [];
+    const select = m.registry.selectTools.bind(m.registry);
+    m.registry.selectTools = (ctx) => {
+      order.push(`select ${ctx.budgetTokens}`);
+      return select(ctx);
+    };
+    m.provider.modelRow = async () => {
+      order.push('row');
+      return { context: 6000, type: null };
+    };
+    m.provider.script({ text: 'ok' });
+    const { turn: t } = await startTurn(m, 'x');
+    await settled(t);
+    assert.deepEqual(order, ['row', 'select 3000']);
+    const offered = many.filter((d) => m.provider.requests[0].req.tools.some((x) => x.name === d.name));
+    assert.ok(offered.length >= 1 && offered.length < 4 && offered.reduce((n, d) => n + toolTokens(d), 0) <= 3000);
+    assert.ok(!offered.some((d) => d.name === 'tool_0'), 'the lowest priority went first');
+  });
+
+  it("a local server that doesn't say the context: the tools fit 16,384 tokens, noted once a turn", async () => {
+    const many = Array.from({ length: 20 }, (_, i) => sized(`tool_${String(i).padStart(2, '0')}`, 1000, { priority: i }));
+    const m = mk({ provider: 'openai_compatible', registry: createToolRegistry({ hostTools: many }) });
+    m.provider.modelRow = async () => null;
+    m.provider.script({ tools: [{ name: 'tool_19' }] }, { text: 'ok' });
+    const { turn: t } = await startTurn(m, 'x');
+    await settled(t);
+    assert.equal(t.state, 'done');
+    for (const r of m.provider.requests) {
+      const offered = many.filter((d) => r.req.tools.some((x) => x.name === d.name));
+      assert.ok(offered.reduce((n, d) => n + toolTokens(d), 0) <= LOCAL_BUDGET.unknown);
+      assert.ok(offered.length >= 15 && offered.length < 20, String(offered.length));
+    }
+    const said = ofType(t, 'note').map((n) => n.text);
+    assert.equal(said.filter((x) => x === UNKNOWN_CONTEXT_NOTE).length, 1, 'once a turn');
+    assert.equal(UNKNOWN_CONTEXT_NOTE, "Magnusim doesn't know this model's context length, so it offers tools up to 16,384 tokens of definitions.");
+    assert.ok(said.some((x) => x.startsWith('To fit 16,384 tokens of tool definitions, these tools were left out: tool_00 (Home, Workbench, Workspaces)')), said.join('\n'));
+  });
+
+  it('pinned tools stay while anything fits; a context too small for them ends the turn failed (context) before any request', async () => {
+    const tools = [sized('pin', 4000, { pinned: true, priority: 80 }), sized('big', 4000, { priority: 99 })];
+    let m = mk({ provider: 'openai_compatible', registry: createToolRegistry({ hostTools: tools }) });
+    m.provider.modelRow = async () => ({ context: 12_000, type: null });
+    m.provider.script({ text: 'ok' });
+    let r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.deepEqual(m.provider.requests[0].req.tools.map((x) => x.name), ['pin'], 'the pinned one stays over a higher priority');
+    m = mk({ provider: 'openai_compatible', registry: createToolRegistry({ hostTools: tools }) });
+    let forgot = 0;
+    m.provider.forgetRow = () => (forgot += 1);
+    m.provider.modelRow = async () => ({ context: 6000, type: null });
+    r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.message], ['failed', 'context', "This model's context (6,000 tokens) is too small for Magnusim's tools. Load it with a longer context."]);
+    assert.equal(m.provider.requests.length, 0, 'nothing sent');
+    assert.equal(forgot, 1, 'the row is read again next turn');
+  });
+
+  it('cloud: at most 40 tools, the workspace first, pinned host tools kept first', async () => {
+    const many = Array.from({ length: 45 }, (_, i) => hostTool(`tool_${String(i).padStart(2, '0')}`, { priority: i, ...(i === 0 ? { pinned: true } : {}) }));
+    const m = mk({ registry: createToolRegistry({ hostTools: many }) });
+    m.provider.script({ text: 'ok' });
+    const { turn: t } = await startTurn(m, 'x');
+    await settled(t);
+    const offered = m.provider.requests[0].req.tools.map((x) => x.name);
+    assert.equal(offered.length, REQUEST_MAX_TOOLS.cloud);
+    assert.ok(offered.includes('tool_00'), 'pinned');
+    assert.deepEqual(['tool_01', 'tool_02', 'tool_03', 'tool_04', 'tool_05'].filter((n) => offered.includes(n)), [], 'the five lowest priorities went');
+    assert.deepEqual(ofType(t, 'note').map((n) => n.text), ['More tools than one request may carry; left out: tool_01, tool_02, tool_03, tool_04, tool_05.']);
   });
 });
 
@@ -1763,6 +1862,7 @@ describe('untrusted text', () => {
 
   it('a workspace guide is frozen into its conversation: a changed guide leaves the system bytes and emits one note', async () => {
     const m = mk({ provider: 'openai_compatible', projects: { p1: WING } });
+    m.provider.modelRow = async () => ({ context: 32_768, type: null });
     const reg = (guide) => ({ plugin: 'ai-demo', pluginName: 'Workspace demo', workspace: 'Counter', projectId: 'p1', studyId: 's1', tools: [], guide });
     m.registry.setWorkspace('T1', 'L1', reg('Counter notes, version one.'));
     m.provider.script({ text: 'a' }, { text: 'b' }, { text: 'c' });

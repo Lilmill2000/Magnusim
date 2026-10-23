@@ -266,8 +266,8 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
   const sent = chats()[before].body;
   const names = sent.tools.map((x) => x.name);
   const hostTools = names.filter((n) => !n.includes('__'));
-  // The host's own tools first, then the workspace's, each by name.
-  expect(names).toEqual([...[...hostTools].sort(), ...TOOLS]);
+  // In a workspace its tools first, then the host's own, each by name (core host tools spec §12.4).
+  expect(names).toEqual([...TOOLS, ...[...hostTools].sort()]);
   // Every one strict, with no keyword a strict tool may not use.
   expect(offeredTools(chats()[before])).toEqual(names.map((name) => ({ name, strict: true })));
   for (const tool of sent.tools) expect(refusedKeywords(tool.input_schema), tool.name).toEqual([]);

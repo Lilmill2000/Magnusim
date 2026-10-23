@@ -8,6 +8,8 @@
 // - Loaded with room: each answer may run to 8192 tokens, and the conversation is full at 80%
 //   of the model's own context, not of the 128K assumed for a server that reports none (the
 //   next turn is refused, and the terminal says so).
+// - A server that says no context for its model: the terminal says once that the tools are
+//   offered up to 16,384 tokens of definitions (core host tools spec §12.2), and the turn goes on.
 // Its own server with the Assistant's test switch (a test home, never this PC's keys). The
 // server keeps a row 60 s; the test reset before each test forgets it.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -113,4 +115,18 @@ test("loaded with room: the answer may run to 8192 tokens, and the conversation 
   expect(code, out).toBe(1);
   expect(out).toContain(FULL_TEXT);
   expect(chats().length, 'the refused turn sent nothing').toBe(before + 1);
+});
+
+test("a local server that doesn't say the model's context: the terminal says the tools are offered up to 16,384 tokens of definitions, once, and the answer comes", async () => {
+  // The scripted model listed with no row: its context is not known.
+  fake.models([MODEL], 'compat');
+  fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+  const before = chats().length;
+  const { code, out } = await terminal(['How is the app?']);
+  expect(code, out).toBe(0);
+  const note = "note: Magnusim doesn't know this model's context length, so it offers tools up to 16,384 tokens of definitions.";
+  expect(out.split('\n').filter((l) => l === note), out).toHaveLength(1);
+  expect(out).toContain('All good.');
+  // Its tools went: the host's own, which fit.
+  expect(chats().slice(before).map((r) => r.body.tools.map((t) => t.function.name))).toEqual([['app_status'], ['app_status']]);
 });

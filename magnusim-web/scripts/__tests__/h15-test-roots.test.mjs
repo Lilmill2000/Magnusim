@@ -39,6 +39,8 @@ export const H15_TESTS = [
   'server/__tests__/assistant-agents.test.js',
   'server/__tests__/assistant-agent-turn.test.js',
   'server/__tests__/assistant-runner.test.js',
+  'server/__tests__/assistant-host-call.test.js',
+  'server/__tests__/ui-sync-emitter.test.js',
   'server/__tests__/assistant-conversations.test.js',
   'server/__tests__/assistant-turn-channel.test.js',
   'server/__tests__/mesh-stop.test.js',
