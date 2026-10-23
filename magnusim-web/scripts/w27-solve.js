@@ -28,7 +28,7 @@ import { simIsTransient } from './w30-transient.js';
 import { MAX_LOG_BYTES, jobLogPath } from './log.js';
 import { envGet } from './env-compat.js';
 import { foldSolveEvent, regionSeries, regionsOf } from './solve-fold.js';
-import { checkRecordSave } from './link-stamp.js';
+import { checkRecordSave, studyLinkState } from './link-stamp.js';
 import { LINK_BUILD_TEXT, linkStartRefusal, meshOutOfDate, runBuiltFrom } from './link-build.js';
 import { commitRpc } from './py-json.js';
 import {
@@ -1614,6 +1614,37 @@ async function applyRunSettings(id, runId, partial) {
     ...runListPayload(id, cat, { simulation_id: rec.simulation_id || found.sid || (partial && partial.simulation_id) }),
     meshes: listGeneratedMeshes(id, rec.simulation_id || found.sid || (partial && partial.simulation_id)),
   };
+}
+
+/**
+ * A study's draft runs follow its time dependency (a started run keeps what it solved
+ * with): each draft of the study is saved with it, as the run panel did after a study's
+ * change. Called by POST /api/simulation/update, so every caller of the route (the page,
+ * the Assistant) gets the same. A linked geometry's rev is the current one: this save
+ * follows a study change the route already accepted. Returns the drafts' ids.
+ * @param {string} projectId
+ * @param {string} simulationId
+ * @param {string} timeDependency
+ * @returns {Promise<string[]>}
+ */
+export async function followStudyTimeDependency(projectId, simulationId, timeDependency) {
+  if (!projectId || !simulationId) return [];
+  const cat = loadCatalog(projectId, { simulation_id: simulationId });
+  const drafts = (cat.runs || []).filter(
+    (r) => r && (!r.status || r.status === 'draft') && (!r.simulation_id || String(r.simulation_id) === String(simulationId)),
+  );
+  const link = studyLinkState(projectDir(projectId), simulationId);
+  const done = [];
+  for (const rec of drafts) {
+    const r = await updateRunSettings(projectId, {
+      run_id: rec.id,
+      simulation_id: simulationId,
+      time_dependency: timeDependency,
+      ...(link ? { geometry_rev: link.rev } : {}),
+    });
+    if (r && r.ok) done.push(String(rec.id));
+  }
+  return done;
 }
 
 export async function deleteCatalogRun(projectId, runId, simulationId) {

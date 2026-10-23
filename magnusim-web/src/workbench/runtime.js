@@ -197,6 +197,7 @@ import { runProgressText } from './runProgressText';
 import { importFailureText } from './importFailureText';
 import { waitCadPreview } from './cadPreviewWait';
 import { carrySettle } from './runSettle';
+import { runCopyBody } from './runCopyBody';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
@@ -22508,14 +22509,9 @@ async function updateSimulationTimeDependency(value) {
   const j = await r.json();
   if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || 'Could not change time dependency');
   applySimulationRecord(j.simulation, j.project_id, j);
-  // Draft runs follow the simulation: stamp them so the run panel switches too.
-  if (typeof runCatalog !== 'undefined' && Array.isArray(runCatalog.runs)) {
-    const drafts = runCatalog.runs.filter((rec) => rec && (!rec.status || rec.status === 'draft'));
-    for (const rec of drafts) {
-      try {
-        await persistRunSettings({ run_id: rec.id, time_dependency: j.simulation.time_dependency });
-      } catch (_) {}
-    }
+  // Draft runs follow the study: the route saved them (w17 followStudyTimeDependency); reread them.
+  if (Array.isArray(j.runs_followed) && j.runs_followed.length) {
+    try { await refreshRunCatalog(); } catch (_) {}
   }
   try { if (typeof syncSimControlPanel === 'function') syncSimControlPanel(); } catch (_) {}
   return j;
@@ -32244,18 +32240,6 @@ function otherRunsForCopy(destId) {
   return studyRunList().filter((r) => r && r.id && String(r.id) !== String(destId));
 }
 
-function cloneRunResultControls(src) {
-  return (Array.isArray(src) ? src : []).map((rc) => {
-    const next = { ...(rc || {}) };
-    next.id = stampRcId();
-    next.results = null;
-    next.series = null;
-    next.chart_values = null;
-    next.results_available = false;
-    return next;
-  });
-}
-
 function endRunCopyPick() {
   runCopyPick = null;
   const tree = document.getElementById('simulations-tree');
@@ -32316,39 +32300,21 @@ async function copyRunSettingsFrom(srcId, opts) {
   if (!dest || !src || runIsLocked(dest)) return;
   if (String(src.id) === String(dest.id)) return;
   const transient = transientSettingsFor(src);
-  // A run of another study keeps its mesh and monitors (they are that study's, maybe
-  // another geometry's); only the time settings come across.
-  const sid = currentStudyId();
-  const otherStudy = !!(src.simulation_id && sid && String(src.simulation_id) !== String(sid));
-  const body = {
-    run_id: dest.id,
-    mesh_id: otherStudy ? dest.mesh_id || '' : src.mesh_id || '',
-    endTime: src.endTime != null ? src.endTime : runCatalog.endTime,
-    writeInterval: src.writeInterval != null ? src.writeInterval : runCatalog.writeInterval,
-    // A new run (Add run) follows the study, like any draft; copying onto an
-    // existing draft takes the source run's time dependency with its settings.
-    time_dependency:
-      opts && opts.insideCreate
-        ? simIsTransientClient()
-          ? 'Transient'
-          : 'Steady-state'
-        : src.time_dependency || (runRecIsTransient(src) ? 'Transient' : 'Steady-state'),
-    transient,
-    result_controls: otherStudy ? dest.result_controls || [] : cloneRunResultControls(src.result_controls),
-    // Cores is the PC's, not the study's: it comes across from any run (null: Auto).
-    cores: runCoresOf(src),
-  };
-  // Its "Stop when settled" (API 1.4) follows its monitor to the copy, or is off with a note.
-  const destTransient = /transient/i.test(String(body.time_dependency || ''));
-  const carried = carrySettle(src, {
-    copiedControls: body.result_controls,
-    otherStudy,
+  // The body both the run panel and the Assistant build (runCopyBody.ts).
+  const { body, otherStudy, note } = runCopyBody({
+    src,
+    dest,
+    studyId: currentStudyId(),
+    fallback: { endTime: runCatalog.endTime, writeInterval: runCatalog.writeInterval },
+    insideCreate: !!(opts && opts.insideCreate),
+    studyTransient: simIsTransientClient(),
     srcTransient: runRecIsTransient(src),
-    destTransient,
+    transient,
+    cores: runCoresOf(src),
     studyBcIds: studyBcIdsWithFaces(),
+    newRcId: stampRcId,
+    carry: carrySettle,
   });
-  body.settle = carried.settle;
-  body.settle_time_dependency = destTransient ? 'Transient' : 'Steady-state';
   const j = await persistRunSettings(body, opts);
   if (!j || j.ok === false) {
     console.warn('[CFD] copy run settings', j && j.error);
@@ -32363,7 +32329,7 @@ async function copyRunSettingsFrom(srcId, opts) {
   runCopyNote =
     (otherStudy
       ? 'Copied the time settings from ' + (src.name || 'that run') + ' of another study. Its mesh and monitors stay there.'
-      : 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.') + (carried.note ? ' ' + carried.note : '');
+      : 'Copied from ' + (src.name || 'previous run') + '. Change anything you want.') + (note ? ' ' + note : '');
   endRunCopyPick();
   expandRunFolders(dest.id, true);
   try { refreshSetupTree(); } catch (_) {}

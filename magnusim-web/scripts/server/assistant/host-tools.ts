@@ -41,6 +41,8 @@ import { projectsTool } from './host/projects.ts';
 import { readResultsTool } from './host/read-results.ts';
 import { readSetupTool } from './host/read-setup.ts';
 import { createRouteCaller } from './host/route-call.ts';
+import { setupEditTool } from './host/setup-edit.ts';
+import { studyEditTool } from './host/study-edit.ts';
 
 export type { HostToolDeps } from './host/common.ts';
 
@@ -53,6 +55,8 @@ export function createHostTools(d: HostToolDeps): ToolDef[] {
     readSetupTool(d),
     explainReadyTool(d),
     readResultsTool(d),
+    studyEditTool(d),
+    setupEditTool(d),
   ];
 }
 

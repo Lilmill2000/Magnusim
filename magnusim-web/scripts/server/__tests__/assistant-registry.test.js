@@ -312,6 +312,8 @@ describe('toolsFor', () => {
       'projects',
       'read_results',
       'read_setup',
+      'setup_edit',
+      'study_edit',
     ]);
     // Home: no project.
     assert.deepEqual(names(r.toolsFor(ctx({ projectId: null, tab: null }))), [
@@ -334,6 +336,8 @@ describe('toolsFor', () => {
       read_setup: 'read',
       explain_ready: 'read',
       read_results: 'read',
+      study_edit: 'edit',
+      setup_edit: 'edit',
     });
     assert.equal(connectionCheckTool().name, 'connection_check');
   });
