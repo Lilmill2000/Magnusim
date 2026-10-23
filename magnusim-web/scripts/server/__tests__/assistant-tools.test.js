@@ -18,6 +18,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 
 const { createHostCaller, HOST_GET_ALLOWLIST, HostCallError } = await import('../assistant/host-call.ts');
 const { createHostTools, defaultHostTools, appVersion } = await import('../assistant/host-tools.ts');
+const { createRouteCaller } = await import('../assistant/host/route-call.ts');
 const { cleanText, sanitizeJson, resultText, checkImage, checkImages, capResult, JSON_CAPS, ERROR_DETAIL_BYTES } = await import('../assistant/sanitize.ts');
 const { TURN_HEADER } = await import('../assistant/access.ts');
 const { Router, dispatch } = await import('../router.ts');
@@ -150,9 +151,8 @@ const ctx = (o = {}) => ({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud
 const rt = (o = {}) => ({ signal: new AbortController().signal, ctx: ctx(), turn: 't-1', progress() {}, ...o });
 
 function tools(o = {}) {
-  const hostGet = createHostCaller({ port: () => app.port, now });
   const list = createHostTools({
-    hostGet,
+    call: createRouteCaller({ port: () => app.port, now, sleep: async () => tick(1_000) }),
     assistant: async () => ({ provider: 'anthropic', model: 'claude-opus-5-5' }),
     version: async () => '0.5.0-dev',
     plugins: () => loadedPlugins(),
@@ -238,15 +238,15 @@ describe('hostGet: the app’s own routes over loopback', () => {
     try {
       app.answers.set('/api/run/ready', () => ({ status: 500, body: { ok: false, error: pathy } }));
       tick();
-      const out = await t.explain_ready.run({}, rt());
+      const out = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt());
       assert.deepEqual([out.ok, out.error.code, out.error.message], [false, 'app_error', 'The app had an error (HTTP 500).']);
       const sent = resultText('explain_ready', out);
       for (const bit of ['someone', 'Users', 'C:', 'Magnusim Projects', 'simulations.json']) assert.ok(!sent.includes(bit), bit);
       // A refusal (4xx) keeps its words, with any path taken out.
       app.answers.set('/api/run/ready', () => ({ status: 400, body: { ok: false, error: `bad study: ${pathy} and /home/someone/cases/s1 and \\\\server\\share\\someone\\x.json` } }));
       tick();
-      const refused = await t.explain_ready.run({}, rt());
-      assert.equal(refused.error.code, 'app_error');
+      const refused = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt());
+      assert.equal(refused.error.code, 'refused');
       assert.match(refused.error.message, /^bad study: \[Errno 2\] No such file or directory: '\[path\]' and \[path\] and \[path\]$/);
       assert.ok(!resultText('explain_ready', refused).includes('someone'));
     } finally {
@@ -256,19 +256,19 @@ describe('hostGet: the app’s own routes over loopback', () => {
 });
 
 describe('the host tools', () => {
-  it('app_status: version, provider and model, loaded plugins, the compute queue; nothing else', async () => {
+  it("app_status: version, the Assistant (read only), plugins, the queue; another project's rows only by kind and place", async () => {
     tick();
     setLiveRegistry({ mesher: [], analysis: [], plugins: [{ key: 'ai-demo', name: 'Workspace demo', version: '0.1.0', folder: WINDOWS_PATH, entry: 'x.py' }] });
     const out = await tools().app_status.run({}, rt());
     assert.equal(out.ok, true);
-    assert.deepEqual(out.data, {
-      app: { version: '0.5.0-dev' },
-      assistant: { provider: 'anthropic', model: 'claude-opus-5-5' },
-      plugins: [{ key: 'ai-demo', name: 'Workspace demo', version: '0.1.0' }],
-      compute: { busy: true, queued: 1 },
-      where: 'project',
-    });
-    assert.equal((await tools().app_status.run({}, rt({ ctx: ctx({ projectId: null }) }))).data.where, 'home');
+    assert.deepEqual(out.data.app, { version: '0.5.0-dev' });
+    assert.deepEqual(out.data.assistant, { provider: 'anthropic', model: 'claude-opus-5-5', can_change_these: false });
+    assert.deepEqual(out.data.plugins, [{ key: 'ai-demo', name: 'Workspace demo', version: '0.1.0', on: true, env: 'none' }]);
+    // The queue's busy job is another project's (no project on it): it says only what runs.
+    assert.deepEqual(out.data.compute, { busy: true, live: { kind: 'mesh', mine: false }, queue: [{ kind: 'solve', mine: false, position: 1 }] });
+    assert.equal(out.data.where, 'workspace');
+    assert.ok(!JSON.stringify(out).includes('p2'), "another project's id never shows");
+    assert.equal((await tools().app_status.run({}, rt({ ctx: ctx({ projectId: null, tab: null }) }))).data.where, 'home');
     assert.equal(tools().app_status.projectData, false);
   });
 
@@ -276,76 +276,83 @@ describe('the host tools', () => {
     let asked = 0;
     const t = tools({ assistant: async () => ((asked += 1), { provider: 'anthropic', model: 'claude-opus-5-5' }) });
     const out = await t.app_status.run({}, rt({ ctx: ctx({ assistant: { provider: 'openai', model: 'gpt-6-luna' } }) }));
-    assert.deepEqual(out.data.assistant, { provider: 'openai', model: 'gpt-6-luna' });
+    assert.deepEqual(out.data.assistant, { provider: 'openai', model: 'gpt-6-luna', can_change_these: false });
     assert.equal(asked, 0, "the default's settings are not read for a turn's call");
     // A call outside a turn (no provider of its own): the default's.
-    assert.deepEqual((await t.app_status.run({}, rt())).data.assistant, { provider: 'anthropic', model: 'claude-opus-5-5' });
+    assert.deepEqual((await t.app_status.run({}, rt())).data.assistant, { provider: 'anthropic', model: 'claude-opus-5-5', can_change_these: false });
   });
 
   it('project_summary: the whitelist, with project_id on every request and no path anywhere', async () => {
     tick();
     const from = app.seen.length;
-    const out = await tools().project_summary.run({}, rt());
+    const out = await tools().project_summary.run({ project_id: '', with_thumbnail: false }, rt());
     assert.equal(out.ok, true, JSON.stringify(out));
-    assert.deepEqual(out.data, {
-      project: {
-        id: 'p1',
-        title: 'Wing spoof',
-        description: `${INJECTION} ${'d'.repeat(800)}`.slice(0, 500),
-        units: 'Metric',
-        created_at: '2026-10-01T10:00:00Z',
-        updated_at: '2026-10-02T10:00:00Z',
-        geometry_name: 'wing.step',
-        has_mesh: true,
-        mesh_cells: 1_200_000,
-        run_status: 'done',
-        simulating: false,
-      },
-      geometries: [{ id: 'g1', name: 'wing.step' }],
-      studies: [
-        { id: 's1', name: 'Cruise', analysis: 'incompressible' },
-        { id: 's2', name: 'Climb', analysis: 'incompressible' },
-      ],
-      active_study: 's1',
+    assert.deepEqual(out.data.project, {
+      id: 'p1',
+      title: 'Wing spoof',
+      description: `${INJECTION} ${'d'.repeat(800)}`.slice(0, 500),
+      category: 'Other',
+      folder: 'My Projects',
+      units: 'Metric',
+      created_at: '2026-10-01T10:00:00Z',
+      updated_at: '2026-10-02T10:00:00Z',
+      geometry_name: 'wing.step',
+      has_mesh: true,
+      mesh_cells: 1_200_000,
+      run_status: 'done',
+      simulating: false,
     });
+    assert.deepEqual(out.data.geometries, [{ id: 'g1', name: 'wing.step', representation: null, linked: false, active: false }]);
+    assert.deepEqual(
+      out.data.studies.map((s) => [s.id, s.name, s.active]),
+      [
+        ['s1', 'Cruise', true],
+        ['s2', 'Climb', false],
+      ],
+    );
+    assert.equal(out.data.active_study, 's1');
+    assert.deepEqual(out.data.shown, { study_id: 's1', place: 'workspace' });
     const text = JSON.stringify(out);
     for (const bad of ['projects_root', 'thumb', '_path', 'simulation_json', 'case_dir', 'Magnusim Projects', 'C:\\']) assert.ok(!text.includes(bad), bad);
     const reqs = app.seen.slice(from);
-    assert.deepEqual(reqs.map((r) => r.path).sort(), ['/api/project', '/api/projects', '/api/simulation']);
-    for (const r of reqs) assert.equal(r.query.get('project_id'), 'p1', r.path);
+    assert.deepEqual(reqs.map((r) => r.path).sort(), ['/api/plugin-studies', '/api/project', '/api/projects', '/api/simulation']);
+    for (const r of reqs.filter((x) => x.path !== '/api/projects')) assert.equal(r.query.get('project_id'), 'p1', r.path);
     assert.equal(tools().project_summary.projectData, true);
   });
 
-  it('project_summary needs the turn’s project, and says when it is gone', async () => {
+  it('project_summary needs a project, and says when it is gone', async () => {
     tick();
     const t = tools();
-    assert.match(t.project_summary.available(ctx({ projectId: null })), /No project is open/);
-    const none = await t.project_summary.run({}, rt({ ctx: ctx({ projectId: null }) }));
-    assert.deepEqual([none.ok, none.error.code], [false, 'unavailable']);
+    const none = await t.project_summary.run({ project_id: '', with_thumbnail: false }, rt({ ctx: ctx({ projectId: null, tab: null }) }));
+    assert.deepEqual([none.ok, none.error.code], [false, 'no_project']);
     tick();
-    const gone = await t.project_summary.run({}, rt({ ctx: ctx({ projectId: 'p9' }) }));
+    const gone = await t.project_summary.run({ project_id: '', with_thumbnail: false }, rt({ ctx: ctx({ projectId: 'p9' }) }));
     assert.deepEqual([gone.ok, gone.error.code], [false, 'not_found']);
   });
 
-  it('explain_ready: issues and fixes, worker-backed, project_id always passed, the study from the input or the turn', async () => {
+  it('explain_ready: issues, fixes and the call that fixes each, worker-backed, project_id always passed, the study from the input or the turn', async () => {
     tick();
     const t = tools();
     assert.equal(t.explain_ready.workerBacked, true);
-    const out = await t.explain_ready.run({}, rt());
+    const out = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt());
     assert.deepEqual(out.data, {
       ready: false,
+      simulation_id: 's1',
       issues: [
-        { message: 'Pick a material for the fluid.', fix: { go: 'materials', name: 'Air' } },
+        { message: 'Pick a material for the fluid.', fix: { go: 'materials', name: 'Air' }, fix_with: "setup_edit {kind:'material', action:'add'} or {action:'assign'}" },
         { message: 'The mesh is out of date.', fix: 'Generate the mesh again.' },
       ],
     });
     assert.equal(out.summary, '2 issues block the run');
     let r = app.seen.at(-1);
     assert.deepEqual([r.path, r.query.get('project_id'), r.query.get('simulation_id')], ['/api/run/ready', 'p1', 's1']);
-    await t.explain_ready.run({ simulation_id: 's2' }, rt());
+    tick();
+    await t.explain_ready.run({ project_id: '', simulation_id: 's2', run_id: '' }, rt());
     r = app.seen.at(-1);
     assert.deepEqual([r.query.get('project_id'), r.query.get('simulation_id')], ['p1', 's2']);
-    assert.match(t.explain_ready.available(ctx({ projectId: null })), /No project is open/);
+    tick();
+    const none = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt({ ctx: ctx({ projectId: null, tab: null }) }));
+    assert.equal(none.error.code, 'no_project');
   });
 
   it('the server’s own wiring: the app over loopback, the version from package.json', async () => {
@@ -354,7 +361,7 @@ describe('the host tools', () => {
     const out = await t.app_status.run({}, rt());
     assert.equal(out.data.app.version, await appVersion());
     assert.match(out.data.app.version, /^\d+\.\d+\.\d+/);
-    assert.deepEqual(out.data.assistant, { provider: 'off', model: '' });
+    assert.deepEqual([out.data.assistant.provider, out.data.assistant.model, out.data.assistant.can_change_these], ['off', '', false]);
   });
 });
 

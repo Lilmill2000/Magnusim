@@ -728,7 +728,7 @@ describe('turns', () => {
     assert.deepEqual([...new Set(sent.filter((x) => x.kind === 'chat').map((x) => x.dialect))], ['anthropic'], 'not the default local server');
     assert.equal(sent.find((x) => x.dialect === 'anthropic').body.model, 'claude-sonnet-5-5', "the provider's own model");
     const result = JSON.stringify(sent.at(-1).body.messages);
-    assert.match(result, /\\"assistant\\":\{\\"provider\\":\\"anthropic\\",\\"model\\":\\"claude-sonnet-5-5\\"\}/, "app_status names the turn's provider, not the default");
+    assert.match(result, /\\"assistant\\":\{\\"provider\\":\\"anthropic\\",\\"model\\":\\"claude-sonnet-5-5\\"[,}]/, "app_status names the turn's provider, not the default");
     const bad = await post('/api/assistant/turns', { text: 'x', provider: 'bogus' });
     assert.deepEqual([bad.status, bad.json.code], [400, 'bad_provider']);
     assert.match(bad.json.error, /anthropic, openai, openai_compatible/);

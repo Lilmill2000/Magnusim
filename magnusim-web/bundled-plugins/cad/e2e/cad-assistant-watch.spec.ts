@@ -84,9 +84,9 @@ test.afterEach(() => {
 
 /** The Part's 21 tools by name, as the app names them (src/assistant/schemas.ts). */
 const CAD = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace'].map((n) => `cad__${n}`);
-const HOST_TOOLS = ['app_status', 'explain_ready', 'project_summary'];
+const HOST_TOOLS = ['app_status', 'explain_ready', 'project_summary', 'read_setup'];
 
-test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 24, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
+test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 25, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant registration');
   const { tab } = await openNewPart(page, request, host, pid);
@@ -101,9 +101,8 @@ test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offe
   const t2 = await startTurn(request, host, { text: 'Say hello again.', tab });
   expect((await t2.ended(STEP_MS)).turn.state).toBe('done');
   const [first, second] = chats(host).slice(before);
-  // The app's own tools first (by name), then the Part's by name: 24, the first 20 strict (the provider's budget).
-  const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view', 'cad__workspace'];
-  expect(offeredTools(first)).toEqual([...HOST_TOOLS, ...CAD].map((name) => ({ name, strict: !loose.includes(name) })));
+  // The app's own tools first (by name), then the Part's by name: 25, the first 20 strict (the provider's budget).
+  expect(offeredTools(first)).toEqual([...HOST_TOOLS, ...CAD].map((name, i) => ({ name, strict: i < 20 })));
   // The CAD notes are the second system block, line breaks kept.
   const system = (first.body.system as { text: string }[]).map((s) => s.text).join('\n');
   expect(system).toContain(GUIDE);

@@ -43,11 +43,14 @@ const LOCAL_PREFIX_MAX = 52_000;
 
 const hostTools = () =>
   createHostTools({
-    hostGet: async () => ({}),
+    call: async () => ({}),
     assistant: async () => ({ provider: 'off', model: '' }),
     version: async () => '0.0.0',
     plugins: () => [],
   });
+
+/** The host tools a workspace turn is offered (Core host tools spec 15; the core page's come with lane C). */
+const HOST_IN_WORKSPACE = ['app_status', 'explain_ready', 'project_summary', 'read_setup'];
 
 /** The tools the app offers a turn on the Part's tab, in order (the registry's own selection). */
 function offered({ local = false } = {}) {
@@ -84,23 +87,22 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it('a CAD turn offers 24: the app\'s 3, then the Part\'s 21 by name; the first 20 strict on the first cloud dialect, the last 4 not', () => {
+  it("a CAD turn offers 25: the app's 4 for a workspace, then the Part's 21 by name; the first 20 strict on the first cloud dialect, the rest not", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
-    assert.deepEqual(names, ['app_status', 'explain_ready', 'project_summary', ...CAD_TOOLS.map((t) => `cad__${t.name}`)]);
+    assert.deepEqual(names, [...HOST_IN_WORKSPACE, ...CAD_TOOLS.map((t) => `cad__${t.name}`)]);
     const flags = strictFlags(providerTools(tools).map((t) => emitSchema('anthropic', t.schema)));
-    const loose = ['cad__sweep_loft', 'cad__undo', 'cad__view', 'cad__workspace'];
-    assert.deepEqual(flags, names.map((n) => !loose.includes(n)));
-    // The budget is exactly full: 20 strict tools; the host tools' one optional parameter.
+    assert.deepEqual(flags, names.map((_n, i) => i < STRICT_LIMITS.tools));
+    // The budget is exactly full: 20 strict tools, none of them with an optional parameter.
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it("24 is within the local server's 24: nothing is cut", () => {
+  it("the local server's 24: the lowest-priority host tool (app_status) is left out, every CAD tool kept", () => {
     const { tools, dropped } = offered({ local: true });
-    assert.equal(tools.length, 24);
-    assert.ok(tools.length <= REQUEST_MAX_TOOLS.local);
-    assert.deepEqual(dropped, []);
+    assert.equal(tools.length, REQUEST_MAX_TOOLS.local);
+    assert.deepEqual(dropped, ['app_status']);
+    assert.ok(CAD_TOOLS.every((t) => tools.some((x) => x.name === `cad__${t.name}`)));
   });
 
   it('each CAD schema as sent is within the app\'s 16 KB (sizes printed)', () => {
