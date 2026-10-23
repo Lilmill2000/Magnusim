@@ -991,8 +991,11 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     let i = 0;
     const first = vi.fn(async () => answers[i++]);
     const offFirst = ws.assistant!.onUndo(first);
-    for (let n = 2; n <= 6; n++) ask(`undo-${n}`);
-    await vi.waitFor(() => expect(undone()).toHaveLength(6));
+    // One at a time, as the host asks (a turn whose undo still runs answers busy: the next test).
+    for (let n = 2; n <= 6; n++) {
+      ask(`undo-${n}`);
+      await vi.waitFor(() => expect(undone()).toHaveLength(n));
+    }
     expect(first.mock.calls).toEqual([['t-1'], ['t-1'], ['t-1'], ['t-1'], ['t-1']]);
     const byReq = Object.fromEntries(undone().map((u) => [u.req, u]));
     expect([2, 3, 4, 5, 6].map((n) => byReq[`undo-${n}`])).toEqual([
@@ -1033,6 +1036,29 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     expect(posts.filter((p) => p.method === 'assistant.undone')).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     await vi.waitFor(() => expect(posts.filter((p) => p.method === 'assistant.undone').map((p) => p.params)).toEqual([{ req: 'undo-1', undone: false, reason: 'no_answer' }]));
+  });
+
+  it('onUndo: while a slow undo of a turn still runs (past its no_answer), another ask for that turn answers busy and never undoes it twice', async () => {
+    const { ws, posts, push } = await open(accepting);
+    let finish: (a: { undone: boolean }) => void = () => undefined;
+    const handler = vi.fn(() => new Promise<{ undone: boolean }>((done) => (finish = done)));
+    ws.assistant!.onUndo(handler);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const answers = () => posts.filter((p) => p.method === 'assistant.undone').map((p) => p.params);
+    push({ event: 'assistantUndo', data: { req: 'undo-1', turn: 't-1' } });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(answers()).toEqual([{ req: 'undo-1', undone: false, reason: 'no_answer' }]));
+    push({ event: 'assistantUndo', data: { req: 'undo-2', turn: 't-1' } });
+    await vi.waitFor(() => expect(answers()).toHaveLength(2));
+    expect(answers()[1]).toEqual({ req: 'undo-2', undone: false, reason: 'busy' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    finish({ undone: true });
+    await vi.advanceTimersByTimeAsync(0);
+    push({ event: 'assistantUndo', data: { req: 'undo-3', turn: 't-1' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledTimes(2);
+    finish({ undone: false });
+    await vi.waitFor(() => expect(answers()).toHaveLength(3));
   });
 
   it("Ctrl+/ (Cmd+/) in the page goes to the app's panel as assistant.dock, once the key is through: not when the page kept it (preventDefault), not with other keys, and not on a host without the panel", async () => {

@@ -453,6 +453,21 @@ export function keptTurns(): string[] {
   return Object.keys(readKeys());
 }
 
+/**
+ * Whether a request this tab started may be working in its workspace now: running and bound to a
+ * tab, or just started and not heard of yet (its relay `turn` frame may still be on its way).
+ * Undo of an earlier request waits for it.
+ */
+export function startedHereRunning(): boolean {
+  const ids = new Set([...keptTurns(), ...Object.values(local).flat()]);
+  for (const id of ids) {
+    const v = turns[id];
+    if (!v) continue;
+    if (!v.summary ? !isEnded(v) : running(id) && v.summary.tab !== null) return true;
+  }
+  return false;
+}
+
 /** The provider picked last in a context (null: none kept). */
 export function pickedProvider(ctx: string): string | null {
   try {

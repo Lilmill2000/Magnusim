@@ -16,7 +16,8 @@
 import { useState, useSyncExternalStore } from 'react';
 import { undoWorkspaceTurn, useWorkspaceTools } from '../../workspace/assistantTools';
 import { relayTurnsSnapshot, subscribeRelayTurns } from '../relay';
-import { UNDO_CHANGES, UNDO_WAIT, UNDO_WHILE_OPEN, undoBusy, undone, undoNoAnswer, undoNotNewest, undoTitle } from './copy';
+import { UNDO_CHANGES, UNDO_WAIT, UNDO_WHILE_OPEN, undoAsking, undoBusy, undone, undoNoAnswer, undoNotNewest, undoTitle } from './copy';
+import { startedHereRunning, useDockStore } from './store';
 import type { TurnView } from './turnView';
 
 /** What an undo of a request said, by turn (kept while the page lives). */
@@ -53,6 +54,8 @@ export function UndoChanges({ view }: { view: TurnView }) {
   const tools = useWorkspaceTools();
   useSyncExternalStore(subscribe, snapshot, snapshot);
   const running = useSyncExternalStore(subscribeRelayTurns, relayTurnsSnapshot, relayTurnsSnapshot);
+  // A request this tab just started counts before its relay frame says it runs.
+  useDockStore();
   const [asking, setAsking] = useState(false);
   const offer = tools.undo.get(view.id) ?? null;
   const line = said.get(view.id) ?? null;
@@ -64,7 +67,7 @@ export function UndoChanges({ view }: { view: TurnView }) {
     const partOpen = !!tools.current && tools.current.scope.plugin === 'cad' && !tools.current.dead;
     return changedCad(view) && !partOpen ? <p className="dock-muted" data-dock-undo-later="1">{UNDO_WHILE_OPEN}</p> : null;
   }
-  const busy = running.length > 0;
+  const busy = running.length > 0 || startedHereRunning();
   const ask = async () => {
     if (asking || busy) return;
     setAsking(true);
@@ -83,10 +86,20 @@ export function UndoChanges({ view }: { view: TurnView }) {
         data-dock-undo={view.id}
         title={busy ? UNDO_WAIT : undoTitle(workspace)}
         disabled={busy || asking}
+        aria-describedby={busy ? `dock-undo-why-${view.id}` : undefined}
         onClick={() => void ask()}
       >
         {UNDO_CHANGES}
       </button>
+      {busy ? (
+        <p className="dock-muted" id={`dock-undo-why-${view.id}`} data-dock-undo-wait="1">
+          {UNDO_WAIT}
+        </p>
+      ) : asking ? (
+        <p className="dock-muted" role="status" data-dock-undo-asking="1">
+          {undoAsking(workspace)}
+        </p>
+      ) : null}
       {line ? (
         <p className="dock-muted" data-dock-undo-said="1">
           {line}

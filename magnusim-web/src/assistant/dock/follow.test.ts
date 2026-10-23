@@ -8,6 +8,7 @@ import {
   followState,
   followTurn,
   MAX_TURN_CHANNELS,
+  POLL_BACKGROUND_MS,
   POLL_RETRY_MS,
   POLL_WAIT_MS,
   resetFollowForTests,
@@ -346,6 +347,29 @@ describe('the long-poll fallback', () => {
     setShownTurn(null);
     await flush();
     expect(pending()).toHaveLength(0);
+  });
+
+  it('a running turn not shown is read again every POLL_BACKGROUND_MS without waiting, so its end comes', async () => {
+    const shown = sinkLog();
+    const other = sinkLog();
+    followTurn('ta', shown.sink);
+    followTurn('tb', other.sink);
+    setShownTurn('ta');
+    channels[0].refuse(400);
+    channels[1].refuse(400);
+    await flush();
+    await answer(pending()[0], 200, { ok: true, turn: summary('ta', 'model'), events: [ev(1, { type: 'state', state: 'model' })], next: 1, ended: false });
+    await answer(pending()[0], 200, { ok: true, turn: summary('tb', 'model'), events: [ev(1, { type: 'state', state: 'model' })], next: 1, ended: false });
+    const waitA = pending()[0];
+    expect(waitA.url).toBe(`/api/assistant/turns/ta?since=1&wait_ms=${POLL_WAIT_MS}`);
+    await vi.advanceTimersByTimeAsync(POLL_BACKGROUND_MS);
+    expect(pending().map((s) => s.url)).toEqual(['/api/assistant/turns/tb?since=1&wait_ms=0']);
+    await answer(pending()[0], 200, { ok: true, turn: summary('tb', 'done'), events: [END(2)], next: 2, ended: true });
+    expect(other.stopped).toEqual(['ended']);
+    // The shown one waits again; the ended one is never read again.
+    expect(pending().map((s) => s.url)).toEqual([`/api/assistant/turns/ta?since=1&wait_ms=${POLL_WAIT_MS}`]);
+    await vi.advanceTimersByTimeAsync(POLL_BACKGROUND_MS * 2);
+    expect(sent.filter((s) => s.url.includes('/tb?')).length).toBe(2);
   });
 
   it('a failed read is sent again after POLL_RETRY_MS; a 404 says gone', async () => {

@@ -81,24 +81,38 @@ export function workspaceOf(route: Route, cur: PublishedTools | null, connecting
   return { ...base, state: 'none' };
 }
 
+/**
+ * A workspace that opened is "connecting" for CONNECTING_MS, then offers none until its tools
+ * come. Each opening has its own wait: the same workspace opened again (after Back) waits again.
+ */
+export function useConnectingWindow(wsKey: string): boolean {
+  const [expired, setExpired] = useState<string>('');
+  const [seen, setSeen] = useState(wsKey);
+  if (seen !== wsKey) {
+    // Another workspace, or none: a later opening of the one that expired starts afresh.
+    setSeen(wsKey);
+    setExpired('');
+  }
+  useEffect(() => {
+    if (!wsKey) return;
+    const t = setTimeout(() => setExpired(wsKey), CONNECTING_MS);
+    return () => clearTimeout(t);
+  }, [wsKey]);
+  return expired !== wsKey || seen !== wsKey;
+}
+
 export function useDockPlace(): DockPlace {
   const route = useSyncExternalStore(subscribeRoute, routeSnapshot, routeSnapshot);
   const tools = useWorkspaceTools();
   const project = useProjectStore((s) => (route.projectId && s.projectId === route.projectId ? s : null));
   const hydrate = project?.hydrate as { project?: { title?: unknown; name?: unknown } } | null | undefined;
   const title = hydrate?.project ? String(hydrate.project.title || hydrate.project.name || '') || null : null;
-  // A workspace that opened is "connecting" for CONNECTING_MS, then offers none until its tools come.
   const wsKey = route.workspace ? `${route.projectId}\n${route.workspace.plugin}\n${route.workspace.workspace}` : '';
-  const [expired, setExpired] = useState<string>('');
-  useEffect(() => {
-    if (!wsKey) return;
-    const t = setTimeout(() => setExpired(wsKey), CONNECTING_MS);
-    return () => clearTimeout(t);
-  }, [wsKey]);
+  const connecting = useConnectingWindow(wsKey);
   return {
     projectId: route.projectId,
     projectTitle: title,
     simulationId: project?.activeSimId ?? null,
-    workspace: workspaceOf(route, tools.current, expired !== wsKey),
+    workspace: workspaceOf(route, tools.current, connecting),
   };
 }

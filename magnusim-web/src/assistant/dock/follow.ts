@@ -40,6 +40,12 @@ export const FAILS_BEFORE_POLL = 3;
 export const POLL_WAIT_MS = 25_000;
 /** A long-poll that failed is sent again after this long. */
 export const POLL_RETRY_MS = 2000;
+/**
+ * On the long-poll, a running turn that isn't the one shown (another conversation's, one
+ * "Elsewhere") is read again this often without waiting, so its end still comes (the pill, its
+ * answer key and the link's hold go with it).
+ */
+export const POLL_BACKGROUND_MS = 10_000;
 /** Turn channels open at once (the server's per-tab limit). */
 export const MAX_TURN_CHANNELS = 8;
 /** After a summary said the turn ended, its `end` event is waited for this long, then read. */
@@ -119,6 +125,8 @@ function freeSlot(): void {
 export function setShownTurn(id: string | null): void {
   if (shownTurn === id) return;
   shownTurn = id;
+  // Those no longer shown are read now and then instead of waited for.
+  for (const f of pollers) if (f.id !== id) f.readLater();
   kickPoll();
 }
 
@@ -160,6 +168,7 @@ class Follower implements TurnFollower {
   private fails = 0;
   private keeps = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private backgroundTimer: ReturnType<typeof setTimeout> | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private pinnedNow = false;
   /** A summary that says the turn ended came (its last one, or near it). */
@@ -320,6 +329,18 @@ class Follower implements TurnFollower {
     this.hand(Array.isArray(answer.events) ? answer.events : [], answer.turn);
     // The server logs a turn's end in the step that ends it: a read that says it ended has it all.
     if (answer.ended || (answer.turn && TERMINAL.has(answer.turn.state))) this.ended();
+    else if (!waits) this.readLater();
+  }
+
+  /** A running turn not shown: read again after POLL_BACKGROUND_MS (the shown one's wait reads it as it comes). */
+  readLater(): void {
+    if (this.backgroundTimer || (this.mode as FollowMode) !== 'poll' || !this.running) return;
+    this.backgroundTimer = setTimeout(() => {
+      this.backgroundTimer = null;
+      if (this.mode !== 'poll' || !this.running) return;
+      if (this.id !== shownTurn) this.needsRead = true;
+      kickPoll();
+    }, POLL_BACKGROUND_MS);
   }
 
   // ------------------------------------------------------------ what came
@@ -398,8 +419,10 @@ class Follower implements TurnFollower {
     this.running = false;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.graceTimer) clearTimeout(this.graceTimer);
+    if (this.backgroundTimer) clearTimeout(this.backgroundTimer);
     this.retryTimer = null;
     this.graceTimer = null;
+    this.backgroundTimer = null;
     this.dropChannel();
     if (hadSlot) freeSlot();
     if (pollers.delete(this)) {

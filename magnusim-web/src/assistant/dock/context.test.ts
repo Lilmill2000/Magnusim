@@ -1,7 +1,8 @@
 // Where the person is, as the dock reads it (phase 4 spec 3.3, 7): the workspace's tools and the intro.
-import { describe, expect, it } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { PublishedTools } from '../../workspace/assistantTools';
-import { workspaceOf } from './context';
+import { CONNECTING_MS, useConnectingWindow, workspaceOf } from './context';
 import { introOf } from './ConversationView';
 
 const route = { projectId: 'p1', workspace: { plugin: 'cad', workspace: 'part' } };
@@ -35,6 +36,27 @@ describe('workspaceOf', () => {
     expect(workspaceOf(route, pub({ tools: [] }), true)?.state).toBe('none');
     expect(workspaceOf({ projectId: 'p1', workspace: null }, pub({}), true)).toBeNull();
     expect(workspaceOf({ projectId: null, workspace: null }, null, true)).toBeNull();
+  });
+});
+
+describe('useConnectingWindow', () => {
+  it('each opening of a workspace waits CONNECTING_MS: the same one opened again after Back waits again', () => {
+    vi.useFakeTimers();
+    try {
+      const { result, rerender } = renderHook(({ k }) => useConnectingWindow(k), { initialProps: { k: 'p1/cad/part' } });
+      expect(result.current).toBe(true);
+      act(() => vi.advanceTimersByTime(CONNECTING_MS));
+      expect(result.current).toBe(false);
+      rerender({ k: '' });
+      rerender({ k: 'p1/cad/part' });
+      expect(result.current).toBe(true);
+      act(() => vi.advanceTimersByTime(CONNECTING_MS - 1));
+      expect(result.current).toBe(true);
+      act(() => vi.advanceTimersByTime(1));
+      expect(result.current).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

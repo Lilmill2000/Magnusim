@@ -5,8 +5,13 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { offerWorkspaceUndo, publishWorkspaceTools, resetWorkspaceToolsForTests, type WorkspaceToolsScope } from '../../workspace/assistantTools';
 import type { TurnEvent } from '../wire';
+import { addLocalTurn, resetDockStoreForTests, watchTurn } from './store';
 import { applyEvents, emptyTurnView } from './turnView';
 import { UndoChanges, undoLine } from './Undo';
+
+vi.mock('../../api/eventHub', () => ({
+  openChannel: () => ({ CONNECTING: 0, OPEN: 1, CLOSED: 2, readyState: 0, addEventListener() {}, removeEventListener() {}, close() {}, pin() {} }),
+}));
 
 const relay = vi.hoisted(() => ({ turns: [] as Array<{ id: string }>, listeners: new Set<() => void>() }));
 vi.mock('../relay', () => ({
@@ -29,9 +34,13 @@ const cadTurn = (id: string) =>
 
 beforeEach(() => {
   resetWorkspaceToolsForTests();
+  resetDockStoreForTests();
   relay.turns = [];
 });
-afterEach(() => resetWorkspaceToolsForTests());
+afterEach(() => {
+  resetWorkspaceToolsForTests();
+  resetDockStoreForTests();
+});
 
 describe('Undo these changes', () => {
   it('offered while the open workspace offers it; undone says how to redo, and the button goes', async () => {
@@ -67,6 +76,34 @@ describe('Undo these changes', () => {
     const b = screen.getByRole('button', { name: 'Undo these changes' }) as HTMLButtonElement;
     expect(b.disabled).toBe(true);
     expect(b.title).toBe('Wait for the running request to end.');
+    expect(document.querySelector('[data-dock-undo-wait]')?.textContent).toBe('Wait for the running request to end.');
+  });
+
+  it("a request this tab just started waits it too, before the relay's frame says it runs", () => {
+    act(() => offerWorkspaceUndo(SCOPE, 'f1', 't-prev', 'Assistant: x', async () => ({ undone: true })));
+    render(<UndoChanges view={cadTurn('t-prev')} />);
+    const b = () => screen.getByRole('button', { name: 'Undo these changes' }) as HTMLButtonElement;
+    expect(b().disabled).toBe(false);
+    act(() => {
+      watchTurn('t-new');
+      addLocalTurn('c1', 't-new');
+    });
+    expect(b().disabled).toBe(true);
+    expect(b().title).toBe('Wait for the running request to end.');
+  });
+
+  it('while the workspace is asked, the block says so', async () => {
+    let answer: (a: { undone: boolean; reason?: string }) => void = () => undefined;
+    const run = vi.fn(() => new Promise<{ undone: boolean; reason?: string }>((done) => (answer = done)));
+    act(() => offerWorkspaceUndo(SCOPE, 'f1', 't-ask', 'Assistant: x', run));
+    render(<UndoChanges view={cadTurn('t-ask')} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Undo these changes' }));
+    });
+    expect(screen.getByRole('status').textContent).toBe('Asking Part 1 to undo them…');
+    await act(async () => answer({ undone: false, reason: 'busy' }));
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByText('Part 1 is busy; try again in a moment.')).toBeTruthy();
   });
 
   it("no offer: a request that changed a Part says the undo lasts while it is open, once it isn't; a host-only request says nothing", () => {

@@ -253,6 +253,8 @@ export const gateHelp = (no: string, yes: string): string => `Enter or Escape an
 export const UNDO_CHANGES = 'Undo these changes';
 export const undoTitle = (workspace: string): string => `Undo the Assistant's changes of this request in ${workspace} (one step)`;
 export const UNDO_WAIT = 'Wait for the running request to end.';
+/** While the workspace is asked to undo (up to its 10 s answer). */
+export const undoAsking = (workspace: string): string => `Asking ${workspace} to undo them…`;
 export const undone = (workspace: string): string => `Undone. Redo (Ctrl+Y) in ${workspace} brings them back.`;
 export const undoNotNewest = (workspace: string): string =>
   `Something changed after this request, so its changes can't be undone as one step here. Use Undo in ${workspace}.`;

@@ -1112,6 +1112,8 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
   // Who undoes a turn's changes when the app's panel asks (ws.assistant.onUndo), and the asks running.
   let undoHandler: ((turn: string) => AssistantUndoAnswer | Promise<AssistantUndoAnswer>) | null = null;
   const undoing = new Set<string>();
+  // The turns whose undo handler still runs (past its 10 s answer too): a second ask answers busy.
+  const undoRunning = new Set<string>();
   let followingGeometry = false;
   // The follow calls already sent ("<method> <id>"): one per job and kind of job.
   const followed = new Set<string>();
@@ -1339,11 +1341,20 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (!handler) answer = { undone: false, reason: 'no_handler' };
-      else {
+      else if (undoRunning.has(turn)) {
+        // The page still undoes this turn (an ask that took over 10 s): never a second undo of it.
+        answer = { undone: false, reason: 'busy' };
+      } else {
         const late = new Promise<'late'>((done) => {
           timer = setTimeout(() => done('late'), ASSISTANT_UNDO_MS);
         });
-        const out = await Promise.race([Promise.resolve().then(() => handler(turn)), late]);
+        undoRunning.add(turn);
+        const run = Promise.resolve().then(() => handler(turn));
+        void run.then(
+          () => undoRunning.delete(turn),
+          () => undoRunning.delete(turn),
+        );
+        const out = await Promise.race([run, late]);
         if (out === 'late') answer = { undone: false, reason: 'no_answer' };
         else {
           const o = (out && typeof out === 'object' ? out : {}) as { undone?: unknown; reason?: unknown };
