@@ -192,12 +192,12 @@ test("cad:assistant-coexist-between a person's edit between two calls of a turn:
   expect(await paramNames(page)).toEqual([]);
 });
 
-test('cad:assistant-coexist-stop Stop at before-commit, from the chip and through the route: the turn ends stopped, that call is not kept, the earlier one is', async ({ page, request }) => {
+test('cad:assistant-coexist-stop Stop at before-commit, from the pill and through the route: the turn ends stopped, that call is not kept, the earlier one is', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant stop');
   const { frame, tab } = await openNewPart(page, request, host, pid);
   await forcePace(page, 'fast', 0);
-  for (const how of ['chip', 'route'] as const) {
+  for (const how of ['pill', 'route'] as const) {
     const before = chats(host).length;
     // (A hold's name stays released in the scripted model: one name per turn.)
     host.fake.reply({ tools: [SET(`${how}1`, '3 mm')] }, { hold: `second-${how}`, tools: [SET(`${how}2`, '4 mm')] });
@@ -208,9 +208,10 @@ test('cad:assistant-coexist-stop Stop at before-commit, from the chip and throug
     host.fake.release(`second-${how}`);
     await reachedHold(page, 'before-commit');
     expect(await paramNames(page)).toContain(`${how}2`);
-    if (how === 'chip') {
-      await expect(chipButton(frame, 'stop')).toBeVisible();
-      await chipButton(frame, 'stop').click();
+    if (how === 'pill') {
+      // The app's dock has Stop (the chip leaves it there); closed, its pill offers it.
+      await expect(chipButton(frame, 'stop')).toHaveCount(0);
+      await page.locator('[data-assistant-pill]').getByRole('button', { name: 'Stop the Assistant' }).click();
     } else {
       const r = await request.post(`${host.base}/api/assistant/turns/${t.id}/stop`, { data: {} });
       expect(r.ok(), await r.text()).toBe(true);

@@ -39,6 +39,7 @@ import {
   cadFrame,
   chats,
   chipButton,
+  dockUndo,
   chipWords,
   forcePace,
   newProject,
@@ -854,7 +855,7 @@ test("cad:assistant-watch-camera-big a view button in the turn latches it: the A
   expect(await cameraNow(page), 'the camera stays where the view button put it').toEqual(seen);
 });
 
-test("cad:assistant-watch-chip-end the chip after the turn: Undo is one Ctrl+Z of the request; the Part's health names an under-defined sketch, then a failing fillet (a click selects its row)", async ({ page, request }) => {
+test("cad:assistant-watch-chip-end the chip after the turn: the dock's Undo is one Ctrl+Z of the request; the Part's health names an under-defined sketch, then a failing fillet (a click selects its row)", async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant chip at the end');
   const { frame, tab } = await openNewPart(page, request, host, pid);
@@ -867,7 +868,7 @@ test("cad:assistant-watch-chip-end the chip after the turn: Undo is one Ctrl+Z o
   expect((await t1.ended(STEP_MS * 2)).turn.state).toBe('done');
   await expect(chip).toHaveAttribute('data-assistant-state', 'ended', STEP);
   await expect(chip).toHaveAttribute('data-assistant-health', 'ok');
-  await chipButton(frame, 'undo').click();
+  await dockUndo(page);
   await expect.poll(() => paramsNow(page), STEP).toEqual([]);
   expect(await undoNow(page)).toBe(label0);
   await cadFrame(page).evaluate(() => (window as unknown as { __CAD__: { services: { doc: { redo(): void } } } }).__CAD__.services.doc.redo());
@@ -945,7 +946,7 @@ test("cad:assistant-watch-help help's worked plate reaches the model whole, and 
   await expect(chipWords(frame)).toHaveText('Assistant: Build the plate from help. · done', STEP);
   await expect(frame.locator('[data-chip="assistant"]')).toHaveAttribute('data-assistant-health', 'ok');
   // The whole request is one Undo.
-  await chipButton(frame, 'undo').click();
+  await dockUndo(page);
   await expect(watchHistory(frame)).toHaveCount(0, STEP);
   expect(await paramsNow(page)).toEqual([]);
 });

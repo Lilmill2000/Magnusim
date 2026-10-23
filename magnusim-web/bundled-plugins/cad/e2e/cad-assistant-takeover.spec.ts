@@ -550,12 +550,11 @@ test('cad:assistant-takeover-pause-mid-step Pause while the Assistant draws a sk
     await reachedHold(page, 'sketch-step:2');
     const panel = frame.locator('[data-cad-panel="sketch"]');
     await expect(panel).toHaveAttribute('data-panel-owner', 'assistant', STEP);
-    // The chip's buttons are 24 px targets, Stop set apart from Pause; its live region is its words alone.
+    // The chip's Pause is a 24 px target and Stop is the app's dock's (not in the chip); its live
+    // region is its words alone.
     const pause = (await chipButton(frame, 'pause').boundingBox())!;
-    const stop = (await chipButton(frame, 'stop').boundingBox())!;
     expect(pause.height).toBeGreaterThanOrEqual(24);
-    expect(stop.height).toBeGreaterThanOrEqual(24);
-    expect(stop.x - (pause.x + pause.width), 'Stop set apart from Pause').toBeGreaterThanOrEqual(12);
+    await expect(chipButton(frame, 'stop')).toHaveCount(0);
     await expect(chip.locator('[role="status"]')).toHaveCount(1);
     await expect(chip.locator('[role="status"] button')).toHaveCount(0);
     await chipButton(frame, 'pause').click();

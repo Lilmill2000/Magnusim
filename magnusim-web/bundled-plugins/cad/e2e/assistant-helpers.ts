@@ -177,6 +177,16 @@ export const chipWords = (frame: FrameLocator) => frame.locator('[data-chip="ass
 
 /** One of the Assistant chip's buttons (pause, resume, stop, pace, ask, keep, discard, undo). */
 export const chipButton = (frame: FrameLocator, id: string) => frame.locator(`[data-chip="assistant"] [data-assistant-action="${id}"]`);
+/**
+ * Undo of the newest request, as a person does it: the app's dock has it (the chip leaves Undo
+ * there), so the dock opens, its Undo is clicked, and the dock closes again.
+ */
+export async function dockUndo(page: Page) {
+  await core.openDock(page);
+  await core.dockTurn(page).locator('[data-dock-undo]').click();
+  await page.locator('#assistant-dock [data-dock-close]').click();
+  await expect(page.locator('#assistant-dock')).toBeHidden();
+}
 
 type HoldWindow = { __CAD__: { assistant: { hold(p: string): void; release(p: string): void; waiting(): string[]; setPace(p: string | null, scale?: number | null): void } } };
 

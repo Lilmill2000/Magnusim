@@ -63,7 +63,7 @@ type DockCad = {
 };
 const features = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as DockCad).__CAD__.services.doc.state.get().doc.features.map((f) => f.name));
 
-const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
 /** A disc on Top, fully defined. */
 const DISC = (name: string, r: number) => ({
   edit: '',
@@ -122,7 +122,7 @@ test('cad:assistant-dock-coexist a build sent from the dock: the chip works with
   const extrude = dockTurn(page).locator('[data-dock-step]').filter({ hasText: 'Extrude' });
   const img = extrude.locator('.dock-step-pictures img').first();
   await expect(img).toBeVisible(STEP);
-  await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), STEP).toBeGreaterThan(0);
+  await expect.poll(() => img.evaluate((el: Element) => (el as HTMLImageElement).naturalWidth), STEP).toBeGreaterThan(0);
   expect(await features(page)).toEqual(['Disc sketch', 'Disc']);
 });
 
@@ -233,4 +233,38 @@ test("cad:assistant-dock-toasts the app's toasts stay clear of the Part's chips,
     const host: Rect = { left: fb.x + c.left, top: fb.y + c.top, right: fb.x + c.right, bottom: fb.y + c.bottom };
     expect(overlap(t, host), `the toast ${JSON.stringify(t)} and a chip ${JSON.stringify(host)}`).toBe(false);
   }
+});
+
+test("cad:assistant-dock-view-tools the pill and the open panel stay clear of the Part's view tools at the bottom right: Home, views and the axis triad", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const pid = await newProject(request, host, 'Dock view tools');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  host.fake.reply({ tools: [SKETCH] }, { tools: [EXTRUDE] }, { text: 'Built.' });
+  expect((await (await startTurn(request, host, { text: 'Make a disc.', tab })).ended(STEP_MS * 2)).turn.state).toBe('done');
+  const fb = (await page.locator('#workspace-frame').boundingBox())!;
+  const tools = async () =>
+    (await frame.locator('.cad-vp-gizmo button, .cad-vp-triad-slot').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; })))
+      .filter((r) => r.right > r.left && r.bottom > r.top)
+      .map((r) => ({ left: fb.x + r.left, top: fb.y + r.top, right: fb.x + r.right, bottom: fb.y + r.bottom }));
+  const rectOf = async (sel: string): Promise<Rect> => {
+    const b = (await page.locator(sel).boundingBox())!;
+    return { left: b.x, top: b.y, right: b.x + b.width, bottom: b.y + b.height };
+  };
+  const clear = async (what: string, sel: string) => {
+    const r = await rectOf(sel);
+    const ts = await tools();
+    expect(ts.length).toBeGreaterThanOrEqual(2);
+    for (const t of ts) expect(overlap(r, t), `${what} ${JSON.stringify(r)} and a view tool ${JSON.stringify(t)}`).toBe(false);
+  };
+  // The ended request's pill (shown 120 s), then the open panel.
+  await expect(page.locator('[data-assistant-pill]')).toBeVisible(STEP);
+  await clear('the pill', '[data-assistant-pill]');
+  await core.openDock(page);
+  await clear('the open panel', '#assistant-dock');
+  // Home answers a click while the panel is open: nothing of the app's lies over it.
+  const home = frame.locator('.cad-vp-gizmo button').first();
+  const hb = (await home.boundingBox())!;
+  const top = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id ?? '', { x: hb.x + hb.width / 2, y: hb.y + hb.height / 2 });
+  expect(top).toBe('workspace-frame');
 });

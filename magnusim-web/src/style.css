@@ -5473,6 +5473,13 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 @media (max-height: 519px) {
   .assistant-dock { top: calc(var(--mg-header-height) + 8px); bottom: 8px; height: auto; }
 }
+/* A workspace's bottom-right 340 x 92 px belongs to its own view tools (CAD's Home, view buttons
+   and 72 px axis triad, .cad-vp-gizmo): the pill, and the open panel (not the narrow sheet or the
+   short window's full height, which cover them while they are read), sit above them. */
+body.workspace-open .assistant-dock-pill { bottom: 104px; }
+@media (min-width: 720px) and (min-height: 520px) {
+  body.workspace-open .assistant-dock { bottom: 104px; height: min(640px, calc(100vh - var(--mg-header-height) - 120px)); }
+}
 /* A workspace's bottom-left chips (CAD's .cad-dock, up to 18 + 640 px wide and 110 px tall) reach
    under the dock's bottom right in windows narrower than 16 + 660 + 16 + 400 = 1092 px: there
    the pill, and the open panel (not the narrow sheet, which covers them while it is read), sit
