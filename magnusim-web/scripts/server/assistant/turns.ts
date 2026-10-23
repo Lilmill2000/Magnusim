@@ -27,6 +27,10 @@
  *   keeps 403 launch_proof when nothing else proves it). `tab: 'link'` binds it to that tab's
  *   workspace. Without a link it shows them in its bound tab and is started_by 'program'. POST
  *   …/turns/:id/show with its answer key moves them to another window once theirs is gone.
+ * - A window's start may name files the person attached in its dock (`attachments`, core host
+ *   tools spec 13.2): each kept, attached from that window, and unbound or this conversation's;
+ *   they are bound to the conversation in the start's synchronous step, and the model (or the
+ *   coding agent) gets one line per file with its attachment_id (attachments.ts).
  * - A turn on a coding agent (provider `agent:<id>`, phase 3 spec 4.7, 5.2, 6.1) runs on
  *   agents/turn.ts instead of the loop, in the same log, gates, relay and limits on how many
  *   run. Its start needs a proof of this account (launchProven): the per-launch token (the CLI
@@ -71,6 +75,7 @@ import type { FoundAgent } from './agents/session.ts';
 import { agentStartRefusal, rememberAgentSignIn, type AgentEntry, type AgentRow } from './agents/discover.ts';
 import { findAgentNow, foundAgentOf, signInView } from './agents/test.ts';
 import { appVersion } from './host-tools.ts';
+import type { AttachmentRef, AttachmentStore } from './attachments.ts';
 import { mcpLaunchTokenMatches, mcpUnavailableText, startMcpListener } from './mcp/listener.ts';
 import { uiSync, type UiSync } from '../ui-sync.ts';
 
@@ -153,6 +158,8 @@ export interface TurnSummary {
   used: TurnUsed;
   /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
   prompt_images: ImageRef[];
+  /** The files the person attached to the request ([] without any). */
+  attachments: AttachmentRef[];
   /** Its log and pictures are no longer kept (past the 200 newest ended turns): only this summary is. */
   log_dropped: boolean;
 }
@@ -269,6 +276,8 @@ interface TurnInit {
   prompt: string;
   /** Its reference pictures, checked (sanitize.ts checkPromptImages); none when left out. */
   promptImages?: readonly ImagePart[];
+  /** The files attached to it, checked and bound to its conversation; none when left out. */
+  attachments?: readonly AttachmentRef[];
   conv: Conversation;
   tab: string | null;
   projectId: string | null;
@@ -302,6 +311,8 @@ export class Turn implements AnyTurn {
   readonly prompt: string;
   /** The person's pictures sent with the request, until its end (the loop reads them at its start). */
   promptImages: readonly ImagePart[];
+  /** The files the person attached to the request (their lines follow the prompt). */
+  readonly attachments: readonly AttachmentRef[];
   readonly conv: Conversation;
   readonly tab: string | null;
   readonly projectId: string | null;
@@ -377,6 +388,7 @@ export class Turn implements AnyTurn {
     this.id = o.id;
     this.prompt = o.prompt;
     this.promptImages = Object.freeze([...(o.promptImages ?? [])]);
+    this.attachments = Object.freeze((o.attachments ?? []).map((a) => Object.freeze({ ...a })));
     this.conv = o.conv;
     this.tab = o.tab;
     this.projectId = o.projectId;
@@ -907,6 +919,7 @@ export class Turn implements AnyTurn {
       started_by: this.startedBy,
       used: this.usedNow(),
       prompt_images: this.promptRefs.map((r) => ({ ...r })),
+      attachments: this.attachments.map((a) => ({ ...a })),
       log_dropped: this.logDropped,
     };
   }
@@ -1042,6 +1055,8 @@ export interface TurnManagerDeps {
   resendDelayMs?: number;
   /** Tests: parts of an agent turn's start replaced (the real listener, discovery and settings otherwise). */
   agents?: Partial<AgentStartDeps>;
+  /** The person's attached files (assistant-routes.ts hands in the store); without it a start naming any is refused. */
+  attachments?: AttachmentStore | null;
 }
 
 export type Answer = { status: number; body: Record<string, unknown> };
@@ -1368,6 +1383,24 @@ export class TurnManager {
   }
 
   /**
+   * A start's `attachments` (spec 13.2), synchronously: each kept, attached from the window that
+   * starts the turn (`tab`: its live link's tab) and unbound or `conversation`'s. Answers their
+   * refs, or the refusal.
+   */
+  private attachmentsOf(raw: unknown, tab: string | null, conversation: string | null): AttachmentRef[] | Answer {
+    if (raw === undefined || raw === null || (Array.isArray(raw) && raw.length === 0)) return [];
+    const store = this.d.attachments;
+    if (!store) return refuse(409, 'attachment_gone', 'This server keeps no attached files.');
+    const r = store.check(raw, { tab, conversation });
+    return r.ok ? r.refs : refuse(r.status, r.code, r.error);
+  }
+
+  /** Binds a started turn's files to its conversation (in the start's synchronous step). */
+  private bindAttachments(refs: readonly AttachmentRef[], conversation: string): void {
+    if (refs.length) this.d.attachments?.bind(refs.map((a) => a.id), conversation);
+  }
+
+  /**
    * The last checks before a turn starts: one turn per app tab (409 tab_busy) and three in all
    * (429 too_many). Every start path calls it in the synchronous step that starts its turn.
    */
@@ -1426,6 +1459,7 @@ export class TurnManager {
         ctxProject,
         ctxStudy,
         link: body.link,
+        attachments: body.attachments,
         provider,
         agentId,
         settings,
@@ -1453,6 +1487,9 @@ export class TurnManager {
     const linkGiven = body.link !== undefined && body.link !== null;
     const linkTab = linkGiven ? this.tabOfLink(body.link) : null;
     if ((linkGiven || tab === 'link') && !linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
+    // The person's files: checked now, and again with the start (the checks below await).
+    const attachedFirst = this.attachmentsOf(body.attachments, linkTab, convId);
+    if (!Array.isArray(attachedFirst)) return attachedFirst;
     // The tab ('auto': the only connected one): only a registered, connected one; its project is the turn's.
     let boundTab: string | null = null;
     let projectId = ctxProject;
@@ -1490,9 +1527,12 @@ export class TurnManager {
     }
     // The window still has its link (the checks above awaited).
     if (linkGiven && this.tabOfLink(body.link) !== linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
+    const attached = this.attachmentsOf(body.attachments, linkTab, conv?.id ?? null);
+    if (!Array.isArray(attached)) return attached;
     const refused = this.admitRefusal(boundTab);
     if (refused) return refused;
     if (!conv) conv = this.conversations.create(binding);
+    this.bindAttachments(attached, conv.id);
     const turnSettings: TurnSettings = {
       kind: 'model',
       provider,
@@ -1506,6 +1546,7 @@ export class TurnManager {
       id,
       prompt: text,
       promptImages: pictures.images,
+      attachments: attached,
       conv,
       tab: boundTab,
       projectId: projectId || null,
@@ -1540,6 +1581,8 @@ export class TurnManager {
     ctxProject: string | null;
     ctxStudy: string | null;
     link: unknown;
+    /** The start's `attachments`, unchecked. */
+    attachments: unknown;
     provider: AgentProviderId;
     agentId: string;
     settings: AssistantSettings;
@@ -1616,12 +1659,16 @@ export class TurnManager {
     // refused as a model turn's is: never a turn whose questions no window can answer.
     const shownBy = linkTab !== null && this.tabOfLink(a.link) === linkTab ? linkTab : null;
     if ((a.tab === 'link' || (a.link !== undefined && a.link !== null)) && shownBy === null) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
+    // The person's files (spec 13.3): the agent gets the same lines and imports them by id.
+    const attached = this.attachmentsOf(a.attachments, shownBy, conv?.id ?? null);
+    if (!Array.isArray(attached)) return attached;
     // One turn per app tab, and three in all: an agent turn counts as any other.
     const busy = this.admitRefusal(boundTab);
     if (busy) return busy;
     const host = agentHost();
     if (!host.fits(conv?.id ?? null)) return refuse(429, 'agents_busy', AGENTS_BUSY_TEXT);
     if (!conv) conv = this.conversations.create(binding);
+    this.bindAttachments(attached, conv.id);
     host.reserve(conv.id, id, this, this.clock);
     const agent: FoundAgent = { ...foundAgentOf(entry, row), name };
     const turnSettings: AgentTurnSettings = { kind: 'agent', provider, agent, caps: { ...settings.agent_caps }, model, gateTimeoutMs: host.timings().gateMs };
@@ -1629,6 +1676,7 @@ export class TurnManager {
     const t = new Turn({
       id: tid,
       prompt: a.text,
+      attachments: attached,
       conv,
       tab: boundTab,
       projectId: projectId || null,

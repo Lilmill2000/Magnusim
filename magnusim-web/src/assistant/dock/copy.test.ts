@@ -67,12 +67,28 @@ describe('the dock copy', () => {
     expect(copy.tabBusy('CAD')).toBe('A request is already working in CAD. Wait for it, or stop it.');
     expect([copy.STOP_THAT_REQUEST, copy.CONVERSATION_FULL]).toEqual(['Stop that request', 'This conversation is full. Start a new one.']);
     expect([copy.ATTACH_LABEL, copy.DROP_PICTURES, copy.ONLY_IMAGES, copy.AT_MOST_FOUR, copy.PICTURES_GO]).toEqual([
-      'Attach pictures (up to 4)',
-      'Drop pictures to attach (up to 4)',
+      'Attach pictures or files',
+      'Drop pictures or geometry files to attach',
       'Only PNG, JPEG and WebP pictures can be attached.',
       'At most 4 pictures per message.',
       'Pictures go to the provider with your message.',
     ]);
+    expect([copy.attachFilesOnly('Helper'), copy.DROP_FILES, copy.ONLY_FILES, copy.fileTooLarge('big.step'), copy.AT_MOST_FOUR_FILES, copy.FILES_STAY, copy.ATTACHED_FILES]).toEqual([
+      "Attach geometry files (Helper doesn't take pictures)",
+      'Drop geometry files to attach',
+      'Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.',
+      'big.step is larger than 500 MB. Import it with + Add geometry.',
+      'At most 4 files per message.',
+      'Files stay on this PC. The Assistant gets their names and can import them into the project open here.',
+      'Attached files',
+    ]);
+    expect([copy.uploadingLabel('a.stl'), copy.waitingForUpload('a.stl'), copy.uploadLost('a.stl')]).toEqual([
+      'Uploading a.stl',
+      'Waiting for a.stl to finish uploading…',
+      "a.stl didn't reach Magnusim's server. Attach it again.",
+    ]);
+    expect([0, 1, 512, 1024, 12_345, 4.2 * 1024 * 1024, 37.6 * 1024 * 1024, 500 * 1024 * 1024].map(copy.fileSize)).toEqual(['0 bytes', '1 byte', '512 bytes', '1 KB', '12 KB', '4.2 MB', '38 MB', '500 MB']);
+    expect(copy.fileChip('bracket.step', 4.2 * 1024 * 1024)).toBe('bracket.step · 4.2 MB');
     expect([copy.shrunkTo(2000, 92), copy.tooLargeAfterShrinking('a.jpg'), copy.pictureChip('a.png', 64, 48), copy.removePicture('a.png')]).toEqual([
       'Shrunk to 2000 × 92 px to fit',
       'a.jpg is larger than 1.5 MB even after shrinking it.',

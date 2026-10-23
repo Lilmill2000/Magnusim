@@ -318,6 +318,8 @@ export interface TurnSummary {
   used?: TurnUsed;
   /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
   prompt_images?: ImageRef[];
+  /** The files the person attached to the request (core host tools spec 13.2; absent from an older server). */
+  attachments?: Array<{ id: string; name: string; bytes: number }>;
   /** Its log and pictures are no longer kept (past the server's 200 newest ended turns): this summary is all there is. */
   log_dropped?: boolean;
 }

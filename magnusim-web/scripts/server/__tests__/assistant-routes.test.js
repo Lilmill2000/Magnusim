@@ -163,6 +163,7 @@ describe('only on this PC: the remote census', () => {
       // The router's underscore alias of a hyphenated path (router.ts underscoreAlias).
       '/api/assistant/agents/sign_in',
       '/api/assistant/agents/test',
+      '/api/assistant/attachments',
       '/api/assistant/conversations',
       '/api/assistant/conversations/:id/forget',
       '/api/assistant/gates/:id',
@@ -184,6 +185,7 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/turns/:id/images/:n',
       '/api/assistant/turns/:id/show',
       '/api/assistant/turns/:id/stop',
+      '/api/test/assistant/attachments/sweep',
       '/api/test/assistant/reset',
       '/api/test/assistant/state',
     ]);
@@ -312,6 +314,14 @@ describe('local(): JSON only, never from a tool call, errors redacted', () => {
       assert.equal(r.status, 400, ct);
       assert.equal(r.json.field, 'privacy', ct);
     }
+    // The one route that takes a file's bytes wants them as application/octet-stream, never a simple type or JSON;
+    // every other route refuses octet-stream.
+    for (const ct of ['text/plain', 'application/x-www-form-urlencoded', 'application/json', 'multipart/form-data; boundary=x', '']) {
+      const r = await request('POST', '/api/assistant/attachments?name=a.step', { headers: { 'content-type': ct }, body: '{}' });
+      assert.deepEqual([r.status, r.json.code], [415, 'octet_only'], ct);
+    }
+    const octet = await request('POST', '/api/assistant/settings', { headers: { 'content-type': 'application/octet-stream' }, body: '{"privacy":"allow"}' });
+    assert.deepEqual([octet.status, octet.json.code], [415, 'json_only']);
     const t = await get('/api/assistant/status', { headers: { [routes.TURN_HEADER]: 't-1' } });
     assert.equal(t.status, 403);
     assert.equal(t.json.code, 'recursion');
@@ -571,7 +581,7 @@ describe('turns', () => {
     assert.ok(sent[0].body.tools.some((t) => t.function.name === 'app_status'));
     assert.ok(!sent[0].body.tools.some((t) => t.function.name === 'connection_check'));
     assert.deepEqual(Object.keys(turn).sort(), [
-      'agent', 'billing', 'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'log_dropped', 'message', 'open_gates', 'project_id', 'prompt', 'prompt_images', 'provider', 'served_by', 'started_at', 'started_by', 'state', 'step', 'tab', 'text_so_far', 'title', 'usd', 'used',
+      'agent', 'attachments', 'billing', 'conversation', 'end_reason', 'ended_at', 'estimated', 'id', 'log_dropped', 'message', 'open_gates', 'project_id', 'prompt', 'prompt_images', 'provider', 'served_by', 'started_at', 'started_by', 'state', 'step', 'tab', 'text_so_far', 'title', 'usd', 'used',
     ]);
     // Who pays (phase 3 spec 4.15): a local server is not priced, and no coding agent runs it.
     assert.deepEqual([turn.provider, turn.billing, turn.agent], ['openai_compatible', 'free', null]);

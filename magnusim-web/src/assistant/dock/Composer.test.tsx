@@ -177,18 +177,20 @@ describe('what holds Send back', () => {
     expect(document.querySelector('[data-dock-provider-locked]')?.textContent).toBe('Provider: Local server');
   });
 
-  it("a coding agent takes no pictures: Attach is off and says why; a paste says so too", async () => {
+  it("a coding agent takes files but no pictures: Attach says so and takes geometry files only; a pasted picture is refused", async () => {
     sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
     mount();
     const attach = document.querySelector('[data-dock-attach]') as HTMLButtonElement;
-    expect(attach.disabled).toBe(true);
-    expect(attach.title).toBe("Helper doesn't take pictures. Send the message without them.");
+    expect(attach.disabled).toBe(false);
+    expect(attach.title).toBe("Attach geometry files (Helper doesn't take pictures)");
+    expect(attach.getAttribute('aria-label')).toBe("Attach geometry files (Helper doesn't take pictures)");
+    expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply');
     const f = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
     fireEvent.paste(area(), { clipboardData: { files: [f], items: [] } });
     expect(document.querySelector('[data-dock-picture-error]')?.textContent).toBe("Helper doesn't take pictures. Send the message without them.");
   });
 
-  it('a coding agent: a picture dropped on the dock says it takes none (never left for the browser to open), with no "Drop pictures" overlay', async () => {
+  it('a coding agent: a picture dropped on the dock says it takes none (never left for the browser to open); the overlay says geometry files', async () => {
     sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
     render(
       <aside id="assistant-dock">
@@ -199,7 +201,7 @@ describe('what holds Send back', () => {
     const f = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
     const dt = { types: ['Files'], files: [f], items: [] };
     expect(fireEvent.dragEnter(panel, { dataTransfer: dt })).toBe(false);
-    expect(document.querySelector('[data-dock-drop]')).toBeNull();
+    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop geometry files to attach');
     expect(fireEvent.drop(panel, { dataTransfer: dt })).toBe(false);
     await waitFor(() => expect(document.querySelector('[data-dock-picture-error]')?.textContent).toBe("Helper doesn't take pictures. Send the message without them."));
     expect(document.querySelector('[data-dock-picture-chip]')).toBeNull();
@@ -209,7 +211,9 @@ describe('what holds Send back', () => {
     mount({ conversation: { id: 'c1', provider: 'openai_compatible', label: 'Local server', full: null } as unknown as ConversationRow, conversationId: 'c1', running: 't7' });
     const attach = document.querySelector('[data-dock-attach]') as HTMLButtonElement;
     expect(attach.disabled).toBe(false);
-    expect(attach.title).toBe('Attach pictures (up to 4)');
+    expect(attach.title).toBe('Attach pictures or files');
+    expect(attach.getAttribute('aria-label')).toBe('Attach pictures or files');
+    expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('image/png,image/jpeg,image/webp,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply');
   });
 
   it('pictures: chips with their size, shrunk, removed; the line under them', async () => {
@@ -226,6 +230,123 @@ describe('what holds Send back', () => {
     expect(screen.getByText('Pictures go to the provider with your message.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Remove wide.png' }));
     expect(document.querySelector('[data-dock-picture-chip]')).toBeNull();
+  });
+});
+
+describe('files (core host tools spec 13.1)', () => {
+  /** A scripted upload: each call held until the test answers it, its progress reported on demand. */
+  function uploads() {
+    const calls: Array<{ file: File; link: string | null; progress: (f: number) => void; signal: AbortSignal; answer: (status: number, body: Record<string, unknown>) => void }> = [];
+    const send = (file: File, link: string | null, progress: (f: number) => void, signal: AbortSignal) =>
+      new Promise<{ status: number; body: Record<string, unknown> }>((resolve) => calls.push({ file, link, progress, signal, answer: (status, body) => resolve({ status, body }) }));
+    return { calls, send };
+  }
+  const geometry = (name: string, size = 10) => new File([new Uint8Array(size)], name);
+  const pick = async (files: File[]) => {
+    await act(async () => {
+      fireEvent.change(document.querySelector('[data-dock-file]') as HTMLInputElement, { target: { files } });
+    });
+  };
+  const chips = () => Array.from(document.querySelectorAll('[data-dock-file-chip]'));
+
+  it('a STEP file: its chip with name and size, a progress bar while it uploads, Send held until it is up; the request names it; the line under the chips', async () => {
+    const up = uploads();
+    mount({ uploadSend: up.send });
+    fireEvent.change(area(), { target: { value: 'Import it' } });
+    await pick([geometry('bracket.step', Math.round(4.2 * 1024 * 1024))]);
+    expect(chips().map((c) => c.querySelector('.dock-chip-text > span')?.textContent)).toEqual(['bracket.step · 4.2 MB']);
+    expect(chips()[0].getAttribute('data-dock-file-state')).toBe('uploading');
+    expect(screen.getByText('Files stay on this PC. The Assistant gets their names and can import them into the project open here.')).toBeTruthy();
+    expect(line()).toBe('Waiting for bracket.step to finish uploading…');
+    expect(sendButton().disabled).toBe(true);
+    await waitFor(() => expect(up.calls).toHaveLength(1));
+    expect(up.calls[0].link).toBe('L1');
+    act(() => up.calls[0].progress(0.5));
+    const bar = screen.getByRole('progressbar', { name: 'Uploading bracket.step' });
+    expect(bar.getAttribute('aria-valuenow')).toBe('50');
+    await act(async () => up.calls[0].answer(200, { ok: true, attachment_id: 'att-0123456789abcdef', name: 'bracket.step', bytes: 4404019, kind: 'geometry', format: 'step' }));
+    await waitFor(() => expect(chips()[0].getAttribute('data-dock-file-state')).toBe('ready'));
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(sendButton().disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(sendButton());
+    });
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0].body).toEqual({ text: 'Import it', provider: 'openai_compatible', link: 'L1', attachments: ['att-0123456789abcdef'] });
+    await waitFor(() => expect(chips()).toHaveLength(0));
+  });
+
+  it('refused plainly: another type, over 500 MB, a fifth file; what the server refuses; a stale link tried once more', async () => {
+    const up = uploads();
+    mount({ uploadSend: up.send });
+    await pick([geometry('notes.txt'), geometry('plugin.zip')]);
+    expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toEqual(['Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.']);
+    const big = geometry('huge.stl');
+    Object.defineProperty(big, 'size', { value: 600 * 1024 * 1024 });
+    await pick([big]);
+    expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toEqual(['huge.stl is larger than 500 MB. Import it with + Add geometry.']);
+    expect(up.calls).toHaveLength(0);
+    await pick(['a.step', 'b.igs', 'c.brep', 'd.obj', 'e.ply'].map((n) => geometry(n)));
+    expect(chips()).toHaveLength(4);
+    expect(document.querySelector('[data-dock-file-error]')?.textContent).toBe('At most 4 files per message.');
+    await waitFor(() => expect(up.calls).toHaveLength(4));
+    // The server's words: the chip goes and the line stays.
+    await act(async () => up.calls[0].answer(400, { ok: false, code: 'bad_type', error: "a.step doesn't look like a STEP file." }));
+    await waitFor(() => expect(chips()).toHaveLength(3));
+    expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toContain("a.step doesn't look like a STEP file.");
+    // A link the server no longer takes: once more with a fresh one.
+    await act(async () => up.calls[1].answer(409, { ok: false, code: 'no_channel', error: 'This window lost its connection to Magnusim. Try again.' }));
+    await waitFor(() => expect(up.calls).toHaveLength(5));
+    expect(up.calls[4].link).toBe('L2');
+    await act(async () => up.calls[4].answer(200, { ok: true, attachment_id: 'att-00000000000000b2', name: 'b.igs', bytes: 10 }));
+    await waitFor(() => expect(document.querySelector('[data-dock-file-chip="b.igs"]')?.getAttribute('data-dock-file-state')).toBe('ready'));
+    // No answer at all.
+    await act(async () => up.calls[2].answer(0, {}));
+    await waitFor(() => expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toContain("c.brep didn't reach Magnusim's server. Attach it again."));
+    // × while it uploads: the upload stops.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove d.obj' }));
+    expect(up.calls[3].signal.aborted).toBe(true);
+    expect(chips().map((c) => c.getAttribute('data-dock-file-chip'))).toEqual(['b.igs']);
+  });
+
+  it('paste and drop take files as Attach does; pictures and files in one drop go each their way', async () => {
+    const up = uploads();
+    const deps: PictureDeps = { size: async () => ({ width: 10, height: 10, draw: async () => new Blob() }) };
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }));
+    render(
+      <aside id="assistant-dock">
+        <Composer place={HOME} status={LOCAL} conversation={null} conversationId={null} running={null} onNew={() => undefined} uploadSend={up.send} pictureDeps={deps} />
+      </aside>,
+    );
+    fireEvent.paste(area(), { clipboardData: { files: [geometry('pasted.stl')], items: [] } });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    const panel = document.getElementById('assistant-dock') as HTMLElement;
+    const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
+    const dt = { types: ['Files'], files: [geometry('dropped.step'), png], items: [] };
+    fireEvent.dragEnter(panel, { dataTransfer: dt });
+    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop pictures or geometry files to attach');
+    await act(async () => {
+      fireEvent.drop(panel, { dataTransfer: dt });
+    });
+    await waitFor(() => expect(chips().map((c) => c.getAttribute('data-dock-file-chip'))).toEqual(['pasted.stl', 'dropped.step']));
+    await waitFor(() => expect(document.querySelector('[data-dock-picture-chip]')?.getAttribute('data-dock-picture-chip')).toBe('a.png'));
+  });
+
+  it('a coding agent takes the files (no pictures): the upload and the request as for any provider', async () => {
+    sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
+    const up = uploads();
+    mount({ uploadSend: up.send });
+    await pick([geometry('part.ply')]);
+    await waitFor(() => expect(up.calls).toHaveLength(1));
+    await act(async () => up.calls[0].answer(200, { ok: true, attachment_id: 'att-00000000000000c3', name: 'part.ply', bytes: 10 }));
+    fireEvent.change(area(), { target: { value: 'Import it' } });
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(sendButton());
+    });
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0].body.attachments).toEqual(['att-00000000000000c3']);
+    expect(posts[0].body.provider).toBe('agent:helper');
   });
 });
 

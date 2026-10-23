@@ -5726,6 +5726,8 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
   overflow-wrap: anywhere;
 }
 .dock-you-pictures { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--mg-space-1); }
+.dock-you-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--mg-space-1); margin: 0; padding: 0; list-style: none; }
+.dock-you-files li { padding: 2px var(--mg-space-2); border: 1px solid var(--mg-border-subtle); border-radius: var(--mg-radius-sm); background: var(--mg-surface-muted); font-size: var(--mg-text-xs); overflow-wrap: anywhere; }
 .dock-from { margin: 0; }
 .dock-model-text { overflow-wrap: anywhere; }
 .dock-model-text p, .dock-model-text ul, .dock-model-text ol { margin: 0 0 var(--mg-space-2); }
@@ -5948,6 +5950,8 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 .dock-chip img, .dock-chip-img { flex-shrink: 0; width: 56px; height: 56px; object-fit: cover; border: 1px solid var(--mg-border-subtle); border-radius: var(--mg-radius-sm); background: var(--mg-surface-muted); }
 .dock-chip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
 .dock-chips-note { margin: 0; font-size: var(--mg-text-xs); }
+.dock-chip .dock-file-type { display: flex; align-items: center; justify-content: center; width: 44px; height: 32px; color: var(--mg-text-muted); font-size: var(--mg-text-xs); font-weight: 600; }
+.dock-file-chip .dock-progress-bar { margin-top: 4px; }
 .dock-drop {
   position: absolute;
   inset: 0;

@@ -3,12 +3,15 @@
  *
  * - Where the request goes (the context chip, `data-dock-context`), who answers it (the provider
  *   picker, editable only before a conversation's first message), the text (1 to 8 rows; Enter
- *   sends, Shift+Enter makes a newline, never while composing), and the person's pictures
- *   (Attach, paste, or a drop onto the dock; at most 4, shrunk to fit).
+ *   sends, Shift+Enter makes a newline, never while composing), the person's pictures (Attach,
+ *   paste, or a drop onto the dock; at most 4, shrunk to fit) and geometry files beside them
+ *   (core host tools spec 13.1: the same three ways in, at most 4 of 500 MB each, each uploaded
+ *   at once with its progress and named in the request by its attachment id).
  * - Send is disabled, with the line that says why in place of the hint, while the Assistant is
  *   off, the provider isn't ready, the workspace is still offering its tools, a coding agent is
- *   picked with pictures attached, the conversation ended or is full, or the text is empty or
- *   past 20,000 characters. While its request runs, Send is Stop.
+ *   picked with pictures attached, a file is still uploading, the conversation ended or is full,
+ *   or the text is empty or past 20,000 characters. While its request runs, Send is Stop. A
+ *   coding agent takes files but no pictures.
  * - A refusal shows the server's words above the composer; the draft and pictures stay. The
  *   draft is kept per conversation (store.ts).
  */
@@ -19,6 +22,7 @@ import { isAgentProvider, providerReady } from '../status';
 import type { AssistantStatus, ConversationRow } from '../wire';
 import {
   ATTACH,
+  attachFilesOnly,
   ATTACH_LABEL,
   charCount,
   COMPOSER_HINT,
@@ -29,7 +33,10 @@ import {
   contextProject,
   contextWorkspace,
   CONVERSATION_FULL,
+  DROP_FILES,
   DROP_PICTURES,
+  fileChip,
+  FILES_STAY,
   MESSAGE_LABEL,
   NEW_CONVERSATION,
   noPictures,
@@ -40,6 +47,7 @@ import {
   PLACEHOLDER_PROJECT,
   placeholderWorkspace,
   providerNotReady,
+  ONLY_FILES,
   removePicture,
   SEND,
   shrunkTo,
@@ -47,9 +55,12 @@ import {
   STOP,
   STOP_FAILED,
   STOP_LABEL,
+  uploadingLabel,
   waitingForTools,
+  waitingForUpload,
   WORKING_ON_IT,
 } from './copy';
+import { ACCEPT_ALL, ACCEPT_FILES, checkFiles, kindOf, uploadFile, type AttachedFile, type UploadSend } from './attachments';
 import type { DockPlace } from './context';
 import { addPictures, dragHasFiles, picturesFrom, type PictureDeps, type PreparedPicture } from './pictures';
 import { defaultProvider, ProviderPicker, providerOptions } from './ProviderPicker';
@@ -101,12 +112,14 @@ export interface ComposerProps {
   busy?: (Blocked & { onStop?: () => void; stopLabel?: string }) | null;
   /** Tests: the browser calls pictures need. */
   pictureDeps?: PictureDeps;
+  /** Tests: the upload's browser call (XMLHttpRequest otherwise). */
+  uploadSend?: UploadSend;
 }
 
 /** The context key the provider pick is kept under. */
 const contextKey = (place: DockPlace) => place.projectId ?? 'home';
 
-export function Composer({ place, status, conversation, conversationId, running, onNew, busy = null, pictureDeps }: ComposerProps) {
+export function Composer({ place, status, conversation, conversationId, running, onNew, busy = null, pictureDeps, uploadSend }: ComposerProps) {
   const draftKey = conversationId;
   const [text, setText] = useState(() => draftOf(draftKey));
   const [pictures, setPictures] = useState<PreparedPicture[]>([]);
@@ -119,6 +132,33 @@ export function Composer({ place, status, conversation, conversationId, running,
   const file = useRef<HTMLInputElement>(null);
   const picturesRef = useRef(pictures);
   picturesRef.current = pictures;
+  // The files: kept in a ref too, so two quick adds count each other against the limit.
+  const [files, setFilesState] = useState<AttachedFile[]>([]);
+  const [fileErrors, setFileErrors] = useState<string[]>([]);
+  const filesRef = useRef<AttachedFile[]>([]);
+  const uploads = useRef(new Map<string, AbortController>());
+  const fileSerial = useRef(0);
+  const putFiles = useCallback((next: AttachedFile[]) => {
+    filesRef.current = next;
+    setFilesState(next);
+  }, []);
+  const patchFile = useCallback((key: string, patch: Partial<AttachedFile>) => putFiles(filesRef.current.map((f) => (f.key === key ? { ...f, ...patch } : f))), [putFiles]);
+  const removeFile = useCallback(
+    (key: string) => {
+      uploads.current.get(key)?.abort();
+      uploads.current.delete(key);
+      putFiles(filesRef.current.filter((f) => f.key !== key));
+    },
+    [putFiles],
+  );
+  // Leaving the composer stops its uploads (the server sweeps what it kept).
+  useEffect(() => {
+    const live = uploads.current;
+    return () => {
+      for (const ac of live.values()) ac.abort();
+      live.clear();
+    };
+  }, []);
 
   // Another conversation: its draft; a refusal of the one before is not this one's.
   useEffect(() => {
@@ -151,18 +191,58 @@ export function Composer({ place, status, conversation, conversationId, running,
   const agent = !!choice && (isAgentProvider(choice) || ready?.kind === 'agent');
   const agentName = ready?.label ?? conversation?.label ?? '';
 
+  /** One geometry file: its chip at once, uploading; its attachment id once the server kept it. */
+  const startUpload = useCallback(
+    (file: File) => {
+      fileSerial.current += 1;
+      const key = `f${fileSerial.current}`;
+      const ac = new AbortController();
+      uploads.current.set(key, ac);
+      putFiles([...filesRef.current, { key, name: file.name, bytes: file.size, state: 'uploading', progress: 0, id: null }]);
+      uploadFile(file, (progress) => patchFile(key, { progress }), ac.signal, uploadSend)
+        .then((r) => patchFile(key, { state: 'ready', progress: 1, id: r.id, name: r.name, bytes: r.bytes }))
+        .catch((err: unknown) => {
+          if (ac.signal.aborted) return;
+          putFiles(filesRef.current.filter((f) => f.key !== key));
+          const text = err instanceof Error ? err.message : String(err);
+          setFileErrors((e) => (e.includes(text) ? e : [...e, text]));
+        })
+        .finally(() => uploads.current.delete(key));
+    },
+    [patchFile, putFiles, uploadSend],
+  );
+
+  // Pictures go to pictures.ts (a coding agent takes none); geometry files upload; anything else is refused.
   const add = useCallback(
-    async (files: File[]) => {
-      if (!files.length) return;
-      const out = await addPictures(picturesRef.current, files, pictureDeps);
+    async (all: File[]) => {
+      if (!all.length) return;
+      const pics = all.filter((f) => kindOf(f) === 'picture');
+      const geometry = all.filter((f) => kindOf(f) === 'geometry');
+      const fileLines: string[] = all.some((f) => kindOf(f) === 'other') ? [ONLY_FILES] : [];
+      if (geometry.length) {
+        const checked = checkFiles(filesRef.current.length, geometry);
+        fileLines.push(...checked.errors);
+        checked.accepted.forEach(startUpload);
+      }
+      setFileErrors(fileLines);
+      if (!pics.length) {
+        setPictureErrors([]);
+        return;
+      }
+      if (agent) {
+        setPictureErrors([noPictures(agentName)]);
+        return;
+      }
+      const out = await addPictures(picturesRef.current, pics, pictureDeps);
       setPictures(out.pictures);
       setPictureErrors(out.errors);
     },
-    [pictureDeps],
+    [agent, agentName, pictureDeps, startUpload],
   );
 
   // A drop anywhere on the dock attaches; the overlay says so while files are dragged over it. A
-  // coding agent takes none: the drop says so (DockShell keeps any file drop from leaving the app).
+  // coding agent takes files but no pictures: a picture's drop says so (DockShell keeps any file
+  // drop from leaving the app).
   useEffect(() => {
     const panel = document.getElementById('assistant-dock');
     if (!panel) return;
@@ -171,8 +251,7 @@ export function Composer({ place, status, conversation, conversationId, running,
       if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       depth += 1;
-      // A coding agent's conversation: no "Drop pictures to attach" (it takes none).
-      if (!agent) setDragging(true);
+      setDragging(true);
     };
     const over = (e: DragEvent) => {
       if (dragHasFiles(e.dataTransfer)) e.preventDefault();
@@ -187,10 +266,6 @@ export function Composer({ place, status, conversation, conversationId, running,
       setDragging(false);
       if (!files.length) return;
       e.preventDefault();
-      if (agent) {
-        setPictureErrors([noPictures(agentName)]);
-        return;
-      }
       void add(files);
     };
     panel.addEventListener('dragenter', enter);
@@ -203,7 +278,7 @@ export function Composer({ place, status, conversation, conversationId, running,
       panel.removeEventListener('dragleave', leave);
       panel.removeEventListener('drop', drop);
     };
-  }, [add, agent, agentName]);
+  }, [add]);
 
   const projectTitle = place.projectTitle ?? conversation?.project_title ?? place.projectId ?? '';
   const ws = place.workspace;
@@ -217,6 +292,7 @@ export function Composer({ place, status, conversation, conversationId, running,
   else if (!running && busy) blocked = busy;
   else if (!running && ws && ws.state === 'connecting') blocked = { line: waitingForTools(ws.name) };
   else if (!running && agent && pictures.length) blocked = { line: noPictures(agentName) };
+  else if (!running && files.some((f) => f.state === 'uploading')) blocked = { line: waitingForUpload(files.find((f) => f.state === 'uploading')?.name ?? '') };
 
   const tooLong = text.length > TEXT_MAX;
   const canSend = !running && !blocked && !sending && !!text.trim() && !tooLong;
@@ -226,11 +302,14 @@ export function Composer({ place, status, conversation, conversationId, running,
     setSending(true);
     setError(null);
     try {
-      await startDockTurn({ text, conversation: conversationId, provider: conversationId ? null : choice, place, pictures });
+      const attachments = files.filter((f) => f.state === 'ready' && f.id).map((f) => f.id as string);
+      await startDockTurn({ text, conversation: conversationId, provider: conversationId ? null : choice, place, pictures, attachments });
       setText('');
       setDraft(draftKey, '');
       setPictures([]);
       setPictureErrors([]);
+      putFiles([]);
+      setFileErrors([]);
     } catch (err) {
       const code = err instanceof AssistantApiError ? err.code : 'network';
       setError({ text: err instanceof Error ? err.message : String(err), code });
@@ -248,14 +327,10 @@ export function Composer({ place, status, conversation, conversationId, running,
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = picturesFrom(e.clipboardData);
-    if (!files.length) return;
+    const pasted = picturesFrom(e.clipboardData);
+    if (!pasted.length) return;
     e.preventDefault();
-    if (agent) {
-      setPictureErrors([noPictures(agentName)]);
-      return;
-    }
-    void add(files);
+    void add(pasted);
   };
 
   return (
@@ -294,6 +369,23 @@ export function Composer({ place, status, conversation, conversationId, running,
           {line}
         </p>
       ))}
+      {files.length ? (
+        <>
+          <ul className="dock-chips" data-dock-files="1">
+            {files.map((f) => (
+              <FileChip key={f.key} file={f} onRemove={() => removeFile(f.key)} />
+            ))}
+          </ul>
+          <p className="dock-muted dock-chips-note" data-dock-files-note="1">
+            {FILES_STAY}
+          </p>
+        </>
+      ) : null}
+      {fileErrors.map((line) => (
+        <p key={line} className="dock-alert" role="alert" data-dock-file-error="1">
+          {line}
+        </p>
+      ))}
       <textarea
         ref={area}
         className="dock-textarea"
@@ -312,9 +404,8 @@ export function Composer({ place, status, conversation, conversationId, running,
         <button
           type="button"
           className="dock-attach"
-          aria-label={ATTACH_LABEL}
-          title={agent ? noPictures(agentName) : ATTACH_LABEL}
-          disabled={agent}
+          aria-label={agent ? attachFilesOnly(agentName) : ATTACH_LABEL}
+          title={agent ? attachFilesOnly(agentName) : ATTACH_LABEL}
           data-dock-attach="1"
           onClick={() => file.current?.click()}
         >
@@ -323,14 +414,14 @@ export function Composer({ place, status, conversation, conversationId, running,
         <input
           ref={file}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept={agent ? ACCEPT_FILES : ACCEPT_ALL}
           multiple
           hidden
           data-dock-file="1"
           onChange={(e) => {
-            const files = Array.from(e.target.files || []);
+            const picked = Array.from(e.target.files || []);
             e.target.value = '';
-            void add(files);
+            void add(picked);
           }}
         />
         <div className="dock-composer-line" data-dock-line-state={blocked ? 'blocked' : running ? 'running' : 'hint'}>
@@ -377,7 +468,7 @@ export function Composer({ place, status, conversation, conversationId, running,
       </div>
       {dragging ? (
         <div className="dock-drop" data-dock-drop="1" aria-hidden="true">
-          {DROP_PICTURES}
+          {agent ? DROP_FILES : DROP_PICTURES}
         </div>
       ) : null}
     </div>
@@ -406,6 +497,30 @@ function PictureChip({ picture, onRemove }: { picture: PreparedPicture; onRemove
         {picture.shrunk ? <span className="dock-muted">{shrunkTo(picture.width, picture.height)}</span> : null}
       </span>
       <button type="button" className="assistant-dock-icon" aria-label={removePicture(picture.name)} onClick={onRemove}>
+        ×
+      </button>
+    </li>
+  );
+}
+
+/** A geometry file's chip: its type, "<name> · 4.2 MB", the upload's progress while it goes, and ×. */
+function FileChip({ file, onRemove }: { file: AttachedFile; onRemove: () => void }) {
+  const ext = (/\.([A-Za-z0-9]{1,5})$/.exec(file.name)?.[1] ?? '').toUpperCase();
+  const pct = Math.round(file.progress * 100);
+  return (
+    <li className="dock-chip dock-file-chip" data-dock-file-chip={file.name} data-dock-file-state={file.state}>
+      <span className="dock-chip-img dock-file-type" aria-hidden="true">
+        {ext}
+      </span>
+      <span className="dock-chip-text">
+        <span>{fileChip(file.name, file.bytes)}</span>
+        {file.state === 'uploading' ? (
+          <span className="dock-progress-bar" role="progressbar" aria-label={uploadingLabel(file.name)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+            <span style={{ width: `${pct}%` }} />
+          </span>
+        ) : null}
+      </span>
+      <button type="button" className="assistant-dock-icon" aria-label={removePicture(file.name)} onClick={onRemove}>
         ×
       </button>
     </li>

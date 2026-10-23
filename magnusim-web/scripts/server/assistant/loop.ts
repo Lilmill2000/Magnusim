@@ -40,6 +40,7 @@
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
 import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
+import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
 import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
@@ -106,6 +107,8 @@ export interface LoopTurn extends RunnerTurn {
   readonly prompt: string;
   /** The person's reference pictures with the prompt (checked at the start; the first user message carries them). */
   readonly promptImages: readonly ImagePart[];
+  /** The files the person attached (core host tools spec 13.2): one line each after the prompt. */
+  readonly attachments?: readonly AttachmentRef[];
   readonly tab: string | null;
   /** The tab that shows its questions: the window that started it, else its bound tab (phase 4 spec 9.1). */
   readonly showTab: string | null;
@@ -442,6 +445,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     role: 'user',
     parts: [
       { type: 'text', text: t.prompt },
+      ...(t.attachments?.length ? [{ type: 'text' as const, text: attachmentLines(t.attachments) }] : []),
       ...pictures.map((p) => ({ ...p })),
       {
         type: 'text',

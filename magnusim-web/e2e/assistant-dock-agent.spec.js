@@ -1,7 +1,7 @@
 // The chat dock with a coding agent (phase 4 spec 2.3, 2.7, 2.9, 11.3-8): the provider picker
 // lists the agent found beside the API-key providers ("<name> (coding agent)", its detail and
 // who pays), a pick of it sends the request to the agent, and the dock shows its line, its plan,
-// the workspace tool it called and its counters, billed to its own account; Attach is off for it; the picker is
+// the workspace tool it called and its counters, billed to its own account; Attach takes its files, no pictures; the picker is
 // locked after the first message. The agent is the scripted coding agent
 // (e2e/support/fake-acp-agent.mjs) installed as npm installs the known agent in a temp folder
 // that agent discovery's test switches point at (never this PC's PATH or home), signed in by its
@@ -126,7 +126,7 @@ test.afterEach(async ({ request }) => {
   expect(unused, 'every scripted prompt was used').toBe(0);
 });
 
-test("the picker offers the coding agent beside the API keys; a request on it shows its line, plan, Magnusim's tool, counters and who pays; Attach is off for it; locked after", async ({ page, request }) => {
+test("the picker offers the coding agent beside the API keys; a request on it shows its line, plan, Magnusim's tool, counters and who pays; Attach takes files, no pictures; locked after", async ({ page, request }) => {
   test.setTimeout(180_000);
   await resetAssistant(request, host.base);
   await useScriptedModel(request, host.base, llm, 'cloud');
@@ -157,9 +157,11 @@ test("the picker offers the coding agent beside the API keys; a request on it sh
   await expect(dock.locator('[data-dock-provider-option="openai_compatible"]')).toHaveAttribute('aria-disabled', 'true');
   await agent.click();
   await expect(dock.locator('.dock-picker-button')).toContainText(AGENT.name);
+  // A coding agent takes the person's files (it imports them by id) but no pictures.
   const attach = dock.locator('[data-dock-attach]');
-  await expect(attach).toBeDisabled();
-  await expect(attach).toHaveAttribute('title', `${AGENT.name} doesn't take pictures. Send the message without them.`);
+  await expect(attach).toBeEnabled();
+  await expect(attach).toHaveAttribute('title', `Attach geometry files (${AGENT.name} doesn't take pictures)`);
+  await expect(dock.locator('[data-dock-file]')).toHaveAttribute('accept', '.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply');
 
   fake.script(
     { plan: [{ content: 'Add 2 to the counter', status: 'in_progress', priority: 'high' }] },
