@@ -4,9 +4,8 @@
  * the `values: [{key, value}]` forms checked against a registry or plugin schema, the
  * face checks, and the ui_sync a write emits.
  *
- * The fields lane A adds to ToolDef and ToolCtx (`contexts`, `escalate`, `gateText`,
- * `projectOf`, `place`, `prompt`) are typed here as optional extras, so the tools carry
- * them now and the runner reads them once it knows them.
+ * HostToolDef is a ToolDef whose `contexts` are always given (spec 15); the runner reads its
+ * `escalate`, `gateText` and `projectOf` (C3, C5).
  */
 import type { GateDetail } from '../gates.ts';
 import { HostCallError, type HostCall, type HostCallOptions } from '../host-call.ts';
