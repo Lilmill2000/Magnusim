@@ -31,7 +31,7 @@ import { dockSnapshot, openDock, setDockPill, subscribeDock, type DockPill } fro
 import { followTurn, type FollowSink, type TurnFollower } from './follow';
 import { createAnnouncer, liveMessagesOf, type Announcer } from './live';
 import { countersOf, footerWords } from './pill';
-import { applyEvents, applySummary, emptyTurnView, fillDroppedText, isEnded, markGone, turnPhase, type EndState, type TurnView } from './turnView';
+import { applyEvents, applySummary, emptyTurnView, fillDroppedText, isEnded, markGone, STILL_STOPPING_MS, turnPhase, type EndState, type TurnView } from './turnView';
 
 /** Where the person is: a project (or Home, null) and the workspace open in this tab, by name. */
 export interface DockContext {
@@ -126,6 +126,8 @@ let picked = false;
 let turns: Record<string, TurnView> = {};
 let local: Record<string, string[]> = {};
 let stops: Record<string, number> = {};
+/** When "Stopping…" turns "Still stopping…" (the pill reads it only when the store publishes). */
+const stopTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** This tab's own copies of the person's pictures (blob: URLs), by turn. */
 const localPictures = new Map<string, string[]>();
 const watches = new Map<string, Watch>();
@@ -370,6 +372,27 @@ export function addLocalTurn(conv: string, turn: string): void {
 /** This tab sent Stop for a turn (the footer reads "Stopping…" until its end). */
 export function markStopSent(turn: string): void {
   stops = { ...stops, [turn]: performance.now() };
+  const had = stopTimers.get(turn);
+  if (had) clearTimeout(had);
+  stopTimers.set(
+    turn,
+    setTimeout(() => {
+      stopTimers.delete(turn);
+      if (stops[turn] !== undefined) publish();
+    }, STILL_STOPPING_MS + 20),
+  );
+  publish();
+}
+
+/** The Stop didn't reach the server: the request isn't stopping (the footer and pill say what it does). */
+export function clearStopSent(turn: string): void {
+  const t = stopTimers.get(turn);
+  if (t) clearTimeout(t);
+  stopTimers.delete(turn);
+  if (stops[turn] === undefined) return;
+  const next = { ...stops };
+  delete next[turn];
+  stops = next;
   publish();
 }
 
@@ -491,7 +514,7 @@ function workspaceName(): string {
   return context.workspace || LIVE_ITS_WORKSPACE;
 }
 
-function onData(id: string, events: TurnEvent[], summary?: SlimTurnSummary | TurnSummary): void {
+function onData(id: string, events: TurnEvent[], summary?: SlimTurnSummary | TurnSummary, textSoFar?: string): void {
   const w = watches.get(id);
   const before = turns[id];
   if (!w || !before) return;
@@ -501,6 +524,8 @@ function onData(id: string, events: TurnEvent[], summary?: SlimTurnSummary | Tur
     v = applySummary(v, summary);
     if (typeof (summary as TurnSummary).text_so_far === 'string') v = fillDroppedText(v, (summary as TurnSummary).text_so_far);
   }
+  // A snapshot's, once the events it covers all came (follow.ts holds it until then).
+  if (typeof textSoFar === 'string') v = fillDroppedText(v, textSoFar);
   if (w.primed || w.announceFirst) {
     const said = liveMessagesOf(before, v, events, workspaceName());
     if (said.length) {
@@ -523,7 +548,7 @@ export function watchTurn(id: string, o: WatchOptions = {}): void {
   if (watches.has(id)) return;
   setTurn(id, emptyTurnView(id));
   const sink: FollowSink = {
-    data: (d) => onData(id, d.events, d.summary),
+    data: (d) => onData(id, d.events, d.summary, d.textSoFar),
     stopped: (why) => {
       // A record the server no longer keeps: its key is of no more use.
       if (why === 'gone') dropAnswerKey(id);
@@ -585,6 +610,8 @@ export function resetDockStoreForTests(): void {
   turns = {};
   local = {};
   stops = {};
+  for (const t of stopTimers.values()) clearTimeout(t);
+  stopTimers.clear();
   for (const id of [...localPictures.keys()]) dropLocalPictures(id);
   listSeq = 0;
   started = false;

@@ -14,7 +14,7 @@ import { withAssistantLink } from '../relay';
 import type { TurnStarted, TurnSummary } from '../wire';
 import type { DockPlace } from './context';
 import type { PreparedPicture } from './pictures';
-import { addLocalTurn, dropAnswerKey, keepAnswerKey, keepTurn, markStopSent, refreshConversations, setLocalPictures, showConversation, watchTurn } from './store';
+import { addLocalTurn, clearStopSent, dropAnswerKey, keepAnswerKey, keepTurn, markStopSent, refreshConversations, setLocalPictures, showConversation, watchTurn } from './store';
 
 export const TURNS_PATH = '/api/assistant/turns';
 
@@ -105,7 +105,9 @@ export async function showHere(turn: string, answerKey: string): Promise<void> {
 
 /**
  * Stops a running request (the composer's Stop, the pill's, "Stop that request"): the footer
- * reads "Stopping…" until its end. Its channel stays pinned while the answer is on its way.
+ * reads "Stopping…" until its end. Its channel stays pinned while the answer is on its way. A
+ * Stop that didn't reach the server answers null and the footer goes back to what the request
+ * does (never "Stopping…" for a request that isn't).
  */
 export async function stopDockTurn(turn: string): Promise<{ stopping: boolean; turn?: TurnSummary } | null> {
   markStopSent(turn);
@@ -114,6 +116,7 @@ export async function stopDockTurn(turn: string): Promise<{ stopping: boolean; t
     return await assistantPost<{ stopping: boolean; turn?: TurnSummary }>(`${TURNS_PATH}/${encodeURIComponent(turn)}/stop`, {});
   } catch (err) {
     console.warn('[CFD] assistant stop', err);
+    clearStopSent(turn);
     return null;
   } finally {
     release();

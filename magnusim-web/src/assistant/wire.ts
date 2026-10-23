@@ -337,8 +337,11 @@ export type SlimTurnSummary = Omit<TurnSummary, 'text_so_far' | 'prompt'>;
  * ended turn's channel ends right after its snapshot.
  */
 export interface TurnChannelFrameData {
-  /** First: the full summary, the events after `since` (at most 500; more:true when `events` frames follow at once). */
-  snapshot: { turn: TurnSummary; events: TurnEvent[]; next: number; ended: boolean; more: boolean };
+  /**
+   * First: the full summary, the events after `since` (at most 500; more:true when `events`
+   * frames follow at once); upto: the seq they reach together, which its text_so_far covers.
+   */
+  snapshot: { turn: TurnSummary; events: TurnEvent[]; next: number; ended: boolean; more: boolean; upto?: number };
   /** Events logged since (at most 500 a frame, at most every 100 ms); `next` is the last one's seq. */
   events: { events: TurnEvent[]; next: number };
   /** The turn changed as its tab's page hears it (at most once a second), and once after its end. */

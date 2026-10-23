@@ -57,9 +57,11 @@ export interface FollowSink {
   /**
    * A snapshot, frame or long-poll answer: its events (may be empty) and the summary that came
    * with it (a snapshot's and a long-poll's are the full summary, with `prompt` and
-   * `text_so_far`; a `summary` frame's is slim).
+   * `text_so_far`; a `summary` frame's is slim). A snapshot with more to come hands its
+   * `text_so_far` on as `textSoFar` with the frame that reaches its `upto`, never before: the
+   * text the log dropped is told from what came only once all the snapshot's events did.
    */
-  data(d: { events: TurnEvent[]; summary?: SlimTurnSummary | TurnSummary }): void;
+  data(d: { events: TurnEvent[]; summary?: SlimTurnSummary | TurnSummary; textSoFar?: string }): void;
   /** The follower stopped: 'ended' (the turn ended), 'gone' (404), 'refused' (403). */
   stopped(why: 'ended' | 'gone' | 'refused'): void;
 }
@@ -164,6 +166,8 @@ class Follower implements TurnFollower {
   private endSummary = false;
   /** The `end` event came on the channel: its last summary is waited for. */
   private awaitingLast = false;
+  /** A snapshot's text_so_far, held until the frames after it reach its upto. */
+  private pendingText: { text: string; upto: number } | null = null;
 
   constructor(
     readonly id: string,
@@ -218,7 +222,13 @@ class Follower implements TurnFollower {
         fn(d);
       });
     on('snapshot', (d) => {
-      this.hand(d.events, d.turn);
+      this.pendingText = null;
+      if (d.more && d.turn && typeof d.turn === 'object') {
+        // The rest of its events follow: its text_so_far is read against them all, not this head.
+        const { text_so_far: text, ...rest } = d.turn;
+        if (typeof text === 'string' && typeof d.upto === 'number') this.pendingText = { text, upto: d.upto };
+        this.hand(d.events, rest as SlimTurnSummary);
+      } else this.hand(d.events, d.turn);
       // Ended with more to come: its end is in the `events` frames that follow (its summary
       // says it ended, so it is read after a moment if they never come).
       if (d.ended && !d.more) this.ended();
@@ -318,7 +328,10 @@ class Follower implements TurnFollower {
     if (this.mode === 'done') return;
     const list = Array.isArray(events) ? events : [];
     for (const e of list) if (e && typeof e.seq === 'number' && e.seq > this.lastSeq) this.lastSeq = e.seq;
-    this.sink.data(summary && typeof summary === 'object' ? { events: list, summary } : { events: list });
+    const held = this.pendingText;
+    const textSoFar = held && this.lastSeq >= held.upto ? held.text : undefined;
+    if (textSoFar !== undefined) this.pendingText = null;
+    this.sink.data({ events: list, ...(summary && typeof summary === 'object' ? { summary } : {}), ...(textSoFar !== undefined ? { textSoFar } : {}) });
     // The sink may have stopped following it.
     if ((this.mode as FollowMode) === 'done') return;
     const terminal = !!summary && TERMINAL.has(summary.state);

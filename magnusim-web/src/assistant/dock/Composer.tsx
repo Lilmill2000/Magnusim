@@ -45,6 +45,7 @@ import {
   shrunkTo,
   STATE_OFF,
   STOP,
+  STOP_FAILED,
   STOP_LABEL,
   waitingForTools,
   WORKING_ON_IT,
@@ -124,6 +125,8 @@ export function Composer({ place, status, conversation, conversationId, running,
     setText(draftOf(draftKey));
     setError(null);
   }, [draftKey]);
+  // A Stop that didn't reach the server is about the request it was for.
+  useEffect(() => setError((e) => (e && e.code === 'stop' ? null : e)), [running]);
   const ctxKey = contextKey(place);
   useEffect(() => setPicked(pickedProvider(ctxKey)), [ctxKey]);
 
@@ -357,7 +360,7 @@ export function Composer({ place, status, conversation, conversationId, running,
           ) : null}
         </div>
         {running ? (
-          <button type="button" className="dock-stop" data-dock-stop="1" aria-label={STOP_LABEL} onClick={() => void stopDockTurn(running)}>
+          <button type="button" className="dock-stop" data-dock-stop="1" aria-label={STOP_LABEL} onClick={() => void stopDockTurn(running).then((out) => setError(out === null ? { text: STOP_FAILED, code: 'stop' } : null))}>
             {STOP}
           </button>
         ) : (

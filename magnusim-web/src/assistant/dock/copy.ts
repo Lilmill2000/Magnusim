@@ -206,6 +206,8 @@ const PILL_ENDS: Record<EndState, string> = { done: 'Assistant: done', stopped: 
 export const pillDone = (state: EndState): string => PILL_ENDS[state];
 export const STOP = 'Stop';
 export const STOP_LABEL = 'Stop the Assistant';
+/** A Stop that didn't reach Magnusim's server (the request goes on). */
+export const STOP_FAILED = "The Stop didn't reach Magnusim's server, so the request goes on. Try Stop again.";
 
 // ---------------------------------------------------------------- dock states and turn ends (2.10)
 

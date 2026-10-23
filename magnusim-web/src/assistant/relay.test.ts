@@ -1571,6 +1571,25 @@ describe("the dock's place in the relay (chat dock spec 4.1, 5.3, 5.6)", () => {
     expect(ch.closed).toBe(true);
   });
 
+  it('a hold taken before the relay starts (the dock mounts before the shell starts it, as after a reload) applies once it does', async () => {
+    const release = holdAssistantLink();
+    await settle();
+    expect(channels).toHaveLength(0);
+    startAssistantRelay();
+    await settle();
+    expect(sent.map((s) => s.path)).toEqual(['/api/assistant/status']);
+    expect(channels.map((c) => c.url)).toEqual([RELAY_CHANNEL_URL]);
+    const ch = channel();
+    ch.frame('linked', { link: LINK_A });
+    await settle(PROOF_KEEP_MS * 2);
+    expect([ch.closed, ch.pinned]).toEqual([false, true]);
+    release();
+    await settle();
+    expect(ch.pinned).toBe(false);
+    await settle(PROOF_KEEP_MS);
+    expect(ch.closed).toBe(true);
+  });
+
   it("relayTurnsSnapshot: the running turns bound to this tab, as they start and end; its listeners hear each change", async () => {
     await registered();
     const heard: string[][] = [];

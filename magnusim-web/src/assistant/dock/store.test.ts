@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationRow, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
 import { closeDock, DOCK_OPEN_KEY, dockSnapshot as dock, DONE_PILL_MS, openDock, resetDockForTests } from './dockState';
 import { resetFollowForTests } from './follow';
+import { STILL_STOPPING_MS } from './turnView';
 import {
   addLocalTurn,
   answerKeyOf,
@@ -15,6 +16,7 @@ import {
   keepAnswerKey,
   keepTurn,
   keptTurns,
+  clearStopSent,
   markStopSent,
   pickedProvider,
   questionClosed,
@@ -322,6 +324,28 @@ describe('open, pill and closed', () => {
     expect(dockStoreSnapshot().turns.t1.items.map((it) => it.kind)).toEqual(['earlier_text', 'text']);
   });
 
+  it("a snapshot with more to come: its text_so_far is read once the frames after it reach its upto, so text that comes in them shows once; text the log dropped still shows", () => {
+    watchTurn('t1');
+    const head = [ev({ type: 'state', state: 'tools' })];
+    const later = ev({ type: 'text', step: 2, text: 'Hello there' });
+    channels[0].frame('snapshot', { turn: { ...summary('t1', 'model'), text_so_far: 'Hello there' }, events: head, next: head[0].seq, ended: false, more: true, upto: later.seq });
+    expect(dockStoreSnapshot().turns.t1.items.filter((it) => it.kind === 'earlier_text')).toEqual([]);
+    channels[0].frame('events', { events: [later], next: later.seq });
+    const kinds = dockStoreSnapshot().turns.t1.items.map((it) => it.kind);
+    expect(kinds.filter((k) => k === 'text' || k === 'earlier_text')).toEqual(['text']);
+    // The log dropped the first step's text: it shows before the text that came.
+    watchTurn('t2');
+    const h2 = [ev({ type: 'state', state: 'tools' })];
+    const l2 = ev({ type: 'text', step: 3, text: 'Second' });
+    channels[1].frame('snapshot', { turn: { ...summary('t2', 'model'), text_so_far: ['First', 'Second'].join(String.fromCharCode(10, 10)) }, events: h2, next: h2[0].seq, ended: false, more: true, upto: l2.seq });
+    channels[1].frame('events', { events: [l2], next: l2.seq });
+    const items = dockStoreSnapshot().turns.t2.items.filter((it) => it.kind === 'text' || it.kind === 'earlier_text');
+    expect(items.map((it) => [it.kind, (it as { text: string }).text])).toEqual([
+      ['earlier_text', 'First'],
+      ['text', 'Second'],
+    ]);
+  });
+
   it('keepTurn pins the channel; unwatching drops the view and the channel; retainTurns keeps only those named', () => {
     watchTurn('a', { ended: true });
     watchTurn('b', { ended: true });
@@ -446,6 +470,13 @@ describe('what this tab started', () => {
     act(() => markStopSent('t1'));
     expect(typeof dockStoreSnapshot().stops.t1).toBe('number');
     expect(dock().pill?.text).toBe('Assistant · Stopping…');
+    // No frame comes: the pill still turns "Still stopping…" after 5 s.
+    act(() => vi.advanceTimersByTime(STILL_STOPPING_MS + 50));
+    expect(dock().pill?.text).toBe('Assistant · Still stopping…');
+    // A Stop that didn't reach the server: the request isn't stopping.
+    act(() => clearStopSent('t1'));
+    expect(dockStoreSnapshot().stops.t1).toBeUndefined();
+    expect(dock().pill?.text).toBe('Assistant · Thinking…');
     setPickedProvider('home', 'first');
     setPickedProvider('p1', 'agent:helper');
     expect([pickedProvider('home'), pickedProvider('p1'), pickedProvider('p2')]).toEqual(['first', 'agent:helper', null]);

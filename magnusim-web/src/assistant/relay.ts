@@ -997,8 +997,10 @@ export function startAssistantRelay(): () => void {
       proofUntil: 0,
       proofTimer: null,
       linkWaiters: new Set(),
-      keeps: 0,
+      // The dock's holds taken before it started (it mounts before the shell starts the relay).
+      keeps: dockHolds,
     };
+    if (dockHolds > 0) r.proofEpoch += 1;
     R = r;
     r.unsubscribe = subscribeWorkspaceTools(kick);
     // The page's calls that need the window's proof get this tab's link from here (api.ts windowPost).
@@ -1060,25 +1062,32 @@ export async function withAssistantLink<T>(use: (link: string | null) => Promise
   }
 }
 
+/** The dock's holds (holdAssistantLink), kept apart from any relay: one taken before the relay starts (the dock mounts first) or across its restart still counts. */
+let dockHolds = 0;
+
 /**
  * The dock holds this tab's relay channel while a request it started runs (its questions come on
- * it): open (once the status says this PC) and pinned while any hold is. Answers its release
- * (once; later calls change nothing).
+ * it): open (once the status says this PC) and pinned while any hold is. A hold taken before the
+ * relay starts applies once it does. Answers its release (once; later calls change nothing).
  */
 export function holdAssistantLink(): () => void {
+  dockHolds += 1;
   const r = R;
-  if (!r) return () => undefined;
-  r.keeps += 1;
-  // A hold opens the channel as the window's proof does (the status first), once per hold.
-  r.proofEpoch += 1;
-  kick();
+  if (r) {
+    r.keeps = dockHolds;
+    // A hold opens the channel as the window's proof does (the status first), once per hold.
+    r.proofEpoch += 1;
+    kick();
+  }
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    r.keeps = Math.max(0, r.keeps - 1);
-    if (R === r) {
-      updatePin(r);
+    dockHolds = Math.max(0, dockHolds - 1);
+    const now = R;
+    if (now) {
+      now.keeps = dockHolds;
+      updatePin(now);
       kick();
     }
   };

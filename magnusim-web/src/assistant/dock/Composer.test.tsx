@@ -7,7 +7,7 @@ import { Composer, contextChip, placeholderOf } from './Composer';
 import type { DockPlace } from './context';
 import type { PictureDeps } from './pictures';
 import { turnBody } from './send';
-import { resetDockStoreForTests } from './store';
+import { dockStoreSnapshot, resetDockStoreForTests } from './store';
 
 const wizard = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('../../wizard/controller', () => ({ openSetupWizard: wizard.open }));
@@ -217,5 +217,15 @@ describe('Stop', () => {
       fireEvent.click(stop);
     });
     await waitFor(() => expect(posts.map((p) => p.url)).toEqual(['/api/assistant/turns/t7/stop']));
+  });
+
+  it("a Stop that doesn't reach the server says so, and the request isn't shown as stopping", async () => {
+    answers = [[500, { ok: false, error: 'boom' }]];
+    mount({ conversation: { id: 'c1', provider: 'openai_compatible', label: 'Local server', full: null } as unknown as ConversationRow, conversationId: 'c1', running: 't7' });
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-dock-stop]') as HTMLButtonElement);
+    });
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("The Stop didn't reach Magnusim's server, so the request goes on. Try Stop again."));
+    expect(dockStoreSnapshot().stops.t7).toBeUndefined();
   });
 });
