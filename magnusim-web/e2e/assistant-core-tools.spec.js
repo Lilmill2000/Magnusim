@@ -201,7 +201,9 @@ test('from Home the request is bound to the window: core__show opens the project
   await expect(dockTurn(page)).toContainText('The wing is open.');
   await expect(dockTurn(page).locator('[data-dock-line="note"]')).toContainText(`Moved to project "${WING}".`);
   expect(homeTools).toEqual(expect.arrayContaining(['core__show', 'core__view']));
-  expect(homeTools, "Home offers no tool that needs the window's project").not.toContain('project_summary');
+  // Home reads a project by its id (spec 06 §15), but offers no tool that writes to the window's project.
+  expect(homeTools).toContain('project_summary');
+  for (const name of ['setup_edit', 'study_edit', 'import_file']) expect(homeTools, "Home offers no tool that needs the window's project").not.toContain(name);
   expect(wingTools, "the next step's tools are the workbench's").toEqual(expect.arrayContaining(['core__show', 'core__view', 'project_summary']));
   // The conversation is the project's now: the dock goes on with it here (no read-only notice), listed under "Here".
   await expect(dockPanel(page).locator('[data-dock-readonly]')).toHaveCount(0);

@@ -228,7 +228,7 @@ export function catalogTool(d: HostToolDeps): HostToolDef {
                 menu = [];
               }
               const list = families.map((f) => ({ key: text(f.key, 64), type: text(f.record_type), label: text(f.label), plugin: text(f.plugin, 64) }));
-              return answer({ types: list, menu, note: 'setup_edit takes `type` (the record type, e.g. "Velocity inlet") and the family fields in values.' }, `${list.length} BC types`);
+              return answer({ types: list, menu, note: "setup_edit takes `type` (a record type from this list's `type`) and the family fields in values." }, `${list.length} BC types`);
             }
             const f = bcFamily(registry, key);
             if (!f) return fail('not_found', `No BC type "${cleanText(key, 80)}".`, "catalog {kind:'bc_types', key:''} lists them.");

@@ -14,6 +14,7 @@ import {
   renameStudy,
   serverAnswersIn,
   serverChannels,
+  serverStream,
   showsProject,
   shownZmax,
   stager,
@@ -120,12 +121,21 @@ test.describe('the browser connection limit (6 to the app server)', () => {
     await expect(card).toBeVisible({ timeout: 30_000 });
     const homeTab = seen.tabIdOf(page);
     expect(homeTab, "tab 1's event stream").toBeTruthy();
-    // Home follows nothing of the project: the server carries no channel for the tab (its
-    // stream closes 2 s after its last channel goes), and the browser holds no stream for it.
+    // Home follows nothing of the project: the server carries no channel of it for the tab. The
+    // window's core page (core host tools spec C7: Home too) keeps at most the Assistant's relay
+    // channel, on the tab's one event stream, so the tab holds at most that one stream.
+    const projectChannels = async () => {
+      const s = await serverStream(request, host, homeTab);
+      return s ? Object.entries(s.kinds || {}).filter(([k]) => k !== 'assistant').reduce((n, [, v]) => n + v, 0) : 0;
+    };
+    await expect.poll(projectChannels, { timeout: 10_000, message: "the server carries no channel of the project for the tab on Home" }).toBe(0);
+    expect(await serverChannels(request, host, homeTab, 'assistant'), "at most the Assistant's relay").toBeLessThanOrEqual(1);
     await expect
-      .poll(() => serverChannels(request, host, homeTab), { timeout: 10_000, message: 'the server carries no channel for the tab on Home' })
-      .toBe(0);
-    await expect.poll(() => seen.openStreams(page), { timeout: 10_000, message: 'the tab on Home holds no event stream' }).toBe(0);
+      .poll(async () => seen.openStreams(page) <= (await serverChannels(request, host, homeTab)) && seen.openStreams(page) <= 1, {
+        timeout: 10_000,
+        message: 'the tab on Home holds at most its one event stream, and only while the relay is on it',
+      })
+      .toBe(true);
     stage(`tab 1 is on Home; link streams it still holds: ${seen.openStreams(page)}`);
     const tab2 = await context.newPage();
     await showsProject(tab2, host, project, seen, { ready: false });

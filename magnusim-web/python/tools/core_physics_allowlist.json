@@ -18,6 +18,13 @@
       "reason": "OpenFOAM install probe (simpleFoam -help), the same check as python/cfddesk/wsl/openfoam.py."
     },
     {
+      "file": "scripts/test-compute.js",
+      "line_contains": [
+        "Usage: simpleFoam [OPTIONS]"
+      ],
+      "reason": "The test stand-in of the hardware check's probe (MAGNUSIM_TEST_HW_PROBE_MS): it answers the install probe's simpleFoam -help as the real one does. Only that line is allowed."
+    },
+    {
       "file": "python/cfddesk/wsl/solve_run.py",
       "reason": "LEGACY_PROCESS_NAMES: the process names of runs started before launch specs (v0.2.0 and earlier), so Stop and Force stop still find them."
     },
