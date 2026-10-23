@@ -124,6 +124,19 @@ describe('tool steps', () => {
     expect(c.querySelector('[data-dock-picture-gone]')?.textContent).toBe('Picture no longer kept');
   });
 
+  it("a finished export's Download link: the person's click saves the file (spec 06 §8.6)", () => {
+    const href = '/api/results/export-vtk/job-x1/file?project_id=p1';
+    const c = block(view([call('w', 'Wait for jobs', 'read'), { type: 'tool_result', call: 'w', ok: true, summary: 'VTK export done', ms: 3, links: [{ label: 'Download Run_1-vtk-0.5.zip', href }] }]));
+    const a = c.querySelector('[data-dock-step="w"] a[data-dock-download]') as HTMLAnchorElement;
+    expect(a.textContent).toBe('Download Run_1-vtk-0.5.zip');
+    expect(a.getAttribute('href')).toBe(href);
+    expect(a.hasAttribute('download')).toBe(true);
+    expect(a.title).toBe('Save the file on this PC');
+    // A failed call shows none, nor does a result without links.
+    const f = block(view([call('x'), { type: 'tool_result', call: 'x', ok: false, summary: 'No', ms: 1, links: [{ label: 'Download', href }] }]));
+    expect(f.querySelector('a[data-dock-download]')).toBeNull();
+  });
+
   it(`only the newest ${OPEN_STEPS} steps show open; the person may open any`, () => {
     const events: Array<Record<string, unknown>> = [];
     for (let i = 1; i <= 5; i += 1) events.push(call(`c${i}`), { type: 'tool_result', call: `c${i}`, ok: true, summary: `s${i}`, ms: 1 });

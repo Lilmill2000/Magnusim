@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { envGet } from './env-compat.js';
 import { polyMeshComplete } from './poly-mesh.js';
 import { stopFilterToolsFor } from './filter-spawn.js';
-import { dropComputeJobsForMesh } from './server/compute-queue.ts';
+import { dropComputeJobsForMesh, removeComputeJob, snapshotComputeQueue } from './server/compute-queue.ts';
 import { writeJsonCli, writeProjectCli } from './py-json.js';
 import {
   MESH_ENGINES,
@@ -39,7 +39,7 @@ import {
 } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc, meshDocLogIsBloated } from './mesh-live-slim.js';
 import { baseRevOf, recordRev, staleAnswer, StaleRecord } from './record-rev.js';
-import { recoverStudyMeshesFromDisk, stopMeshGenerate } from './w21-mesh-generate.js';
+import { recoverStudyMeshesFromDisk, stopMeshGenerate, stopMeshGenerating } from './w21-mesh-generate.js';
 import {
   assembleAllMeshes,
   assembleMeshDoc,
@@ -655,6 +655,50 @@ async function deleteGeneratedMesh(body) {
       generated: false,
       live_mesh_result: null,
     }, proj),
+  };
+}
+
+/**
+ * POST /api/mesh/stop {project_id, simulation_id, mesh_id}: the mesh's Stop. A generating
+ * mesh's generator is ended and the mesh is recorded stopped; a queued one leaves the
+ * queue. Nothing is deleted: the record, its settings and refinements stay (Delete is
+ * the other button). 409 not_running when it neither generates nor waits.
+ */
+export async function stopMeshRoute(body) {
+  const gate = requireProjectSim(body);
+  if (!gate.ok) return gate;
+  const { projectId, proj, sim } = gate;
+  const meshId = String((body && (body.mesh_id || body.id)) || '').trim();
+  if (!meshId) return { ok: false, status: 400, body: { ok: false, error: 'mesh_id required', project_id: projectId } };
+  const existing = readMeshFile(projectId, sim.id);
+  const meshes = existing ? meshesFromDoc(existing) : [];
+  const geomId = sim.geometry_id || activeGeometryId(proj, body && body.geometry_id);
+  const scoped = filterByStudy(filterByGeometry(meshes, geomId, primaryGeometryId(proj)), sim.id, firstLegacySimId(projectId, proj));
+  const target = findMeshById(scoped, meshId);
+  if (!target) {
+    return { ok: false, status: 404, body: { ok: false, error: 'mesh not found in this study', project_id: projectId } };
+  }
+  const name = target.name || (target.settings && target.settings.name) || 'Mesh';
+  const queuedRow = () =>
+    (snapshotComputeQueue(projectId).items || []).some((row) => row && row.kind === 'mesh' && String(row.mesh_id || '') === String(target.id));
+  if (queuedRow()) {
+    removeComputeJob('mesh', target.id, projectId);
+    if (!queuedRow()) {
+      return { ok: true, status: 200, body: { ok: true, stopped: true, unqueued: true, mesh_id: target.id, name, project_id: projectId } };
+    }
+  }
+  const r = stopMeshGenerating({ meshId: String(target.id), projectId });
+  if (!r.stopped) {
+    return {
+      ok: false,
+      status: 409,
+      body: { ok: false, code: 'not_running', error: `${name} is not generating.`, mesh_id: target.id, project_id: projectId },
+    };
+  }
+  return {
+    ok: true,
+    status: 200,
+    body: { ok: true, stopped: true, mesh_id: target.id, name, generate_id: r.generate_id || null, project_id: projectId },
   };
 }
 

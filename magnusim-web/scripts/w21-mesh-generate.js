@@ -9,6 +9,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { spawnJob } from './job-runner.js';
+import { meshGeneratorScript } from './test-compute.js';
 import { killProcessTree } from './proc-tree.js';
 import { projectIdOrActive } from './request-scope.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -826,6 +827,50 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
   };
 }
 
+/**
+ * The mesh's Stop (POST /api/mesh/stop): ends its generate and keeps everything else (the
+ * mesh record, its settings, its refinements). The generate this server runs is stopped
+ * as Delete stops it; one a previous server left running (its record says running and its
+ * generator lives) is killed by its case folder and recorded stopped. Anything else is
+ * not running: `{ stopped: false }`.
+ * @param {{ meshId: string, projectId: string }} ids
+ * @returns {{ stopped: boolean, generate_id?: string | null }}
+ */
+export function stopMeshGenerating({ meshId, projectId }) {
+  dropDeadLiveJob();
+  if (liveJob && meshStopMatchesLive(liveJob, { meshId, projectId }).match && String(liveJob.mesh_id || '') === String(meshId)) {
+    const r = stopMeshGenerate({ meshId, projectId });
+    return { stopped: true, generate_id: (r.bodyExtra && r.bodyExtra.generate_id) || null };
+  }
+  let rec = null;
+  try {
+    rec = meshLiveRecord(projectId, meshId);
+  } catch {
+    rec = null;
+  }
+  if (!rec || rec.status !== 'running' || !meshGeneratorAlive(rec)) return { stopped: false };
+  // Unowned: kill what runs on its case folder (stopMeshGenerate reaps it when no live job matches).
+  try {
+    if (rec.pid) killWindowsPidTree(rec.pid);
+  } catch {
+    /* gone */
+  }
+  stopMeshGenerate({ meshId, projectId });
+  killWslMeshCase({ generate_id: rec.generate_id, wsl_case: rec.wsl_case });
+  persistMeshResult(projectId, {
+    ...rec,
+    mesh_id: meshId,
+    status: 'stopped',
+    stage: 'stopped',
+    pid: null,
+    error: 'cancelled',
+    finished_at: new Date().toISOString(),
+    note: 'Mesh generate cancelled.',
+  });
+  scheduleComputeQueueKick(250);
+  return { stopped: true, generate_id: rec.generate_id || null };
+}
+
 /** Case on disk is a finished generate even if mesh.json never flipped. */
 export function inspectGeneratedCase(caseDir) {
   if (!caseDir) return null;
@@ -1313,7 +1358,8 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
   const { child } = spawnJob({
     kind: 'mesh',
     jobId: generateId,
-    script: argv[1],
+    // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in generator with the same arguments.
+    script: meshGeneratorScript(argv[1]),
     args: argv.slice(2),
     env: { PYTHONUNBUFFERED: '1' },
   });
@@ -1817,7 +1863,8 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
   const { child } = spawnJob({
     kind: 'mesh',
     jobId: generateId,
-    script: argv[1],
+    // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in generator with the same arguments.
+    script: meshGeneratorScript(argv[1]),
     args: argv.slice(2),
     env: { PYTHONUNBUFFERED: '1' },
   });

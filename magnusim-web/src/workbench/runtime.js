@@ -17280,6 +17280,8 @@ function publishMeshJobState() {
   const ownJobLive = (mine || thisLive) && (jobStatus === 'running' || jobStatus === 'done' || computeLive);
   const recFailed = !!(viewId && recError != null && !meshReady && !queuedRow && !ownJobLive);
   const failed = (jobStatus === 'failed' && meshJob && mine) || recFailed;
+  // The shown mesh's last generate was stopped (Stop; after a reload, or by another tab).
+  const recStopped = !!(viewId && recLive && recLive.status === 'stopped' && !meshReady && !queuedRow && !ownJobLive);
   // jobState also carries solves: a finished run must not read as "Finishing mesh"
   // on a mesh that was never generated. Only this mesh's own mesh job counts.
   const ownJobStatus = meshJob && (mine || thisLive) ? jobStatus : 'idle';
@@ -17289,6 +17291,7 @@ function publishMeshJobState() {
     meshReady,
     failed,
     queued: !!queuedRow,
+    stopped: recStopped,
   });
   const running = phase === 'generating';
   const finishing = phase === 'finishing';

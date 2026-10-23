@@ -27,6 +27,7 @@ import {
 } from '../legacyBridge';
 import { scopeIds, useRegistryReady } from '../scope';
 import { isStaleRecord } from '../../workbench/recordRev';
+import { stopMesh } from './meshStop';
 
 /** Settings as they live on disk (mesh.json `settings`). */
 interface MeshSettingsDoc {
@@ -307,6 +308,9 @@ export function queuedLine(queue: MeshJobState['queue']): string {
   return behind + place;
 }
 
+/** What the Mesh panel says under Stopped. */
+export const STOPPED_LINE = 'Meshing was stopped before it finished. Generate to mesh again.';
+
 /** The progress block under Generate: what V0.1.0 showed in #mesh-finished. */
 function MeshStatus({ job }: { job: MeshJobState | null }) {
   const ticking = useElapsed(job?.started_at ?? undefined, job?.finished_at ?? undefined);
@@ -324,13 +328,15 @@ function MeshStatus({ job }: { job: MeshJobState | null }) {
   const finishing = job.phase === 'finishing';
   const ready = job.phase === 'ready';
   const failed = job.phase === 'failed';
-  const title = failed ? 'Mesh failed' : running ? 'Generating mesh' : finishing ? 'Finishing mesh' : 'Mesh ready';
+  const stopped = job.phase === 'stopped';
+  const title = failed ? 'Mesh failed' : stopped ? 'Stopped' : running ? 'Generating mesh' : finishing ? 'Finishing mesh' : 'Mesh ready';
   let line = '';
   if (failed) line = job.error || 'Generate failed. Open Job / debug for the log.';
+  else if (stopped) line = STOPPED_LINE;
   else if (running) line = `${job.stage_text || 'Working'}…`;
   else if (finishing) line = 'Writing the mesh into the project…';
   else if (ready) line = `${formatCount(job.n_cells)} cells / ${formatCount(job.n_points)} nodes`;
-  const meta = [...(ready ? job.meta_bits : []), ...((ready || failed) && elapsed ? [elapsed] : [])];
+  const meta = [...(ready ? job.meta_bits : []), ...((ready || failed || stopped) && elapsed ? [elapsed] : [])];
   return (
     <div className="mesh-finished" data-mesh-status={job.phase}>
       <div className="mat-k">{title}</div>
@@ -642,6 +648,23 @@ export function MeshSettings(props: IslandProps) {
     }
   }
 
+  /** Stop (while this mesh generates): asks, then ends the generate; the status then says Stopped. */
+  async function stop() {
+    setNote('');
+    const scoped = ids();
+    try {
+      const r = await stopMesh({
+        projectId: scoped.project_id,
+        simulationId: scoped.simulation_id,
+        meshId: meshId || scoped.mesh_id,
+        name: job?.name || name,
+      });
+      if (r === 'not_running') setNote('It had already finished.');
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'Stop failed');
+    }
+  }
+
   async function restore() {
     setNote('');
     try {
@@ -762,6 +785,11 @@ export function MeshSettings(props: IslandProps) {
           >
             {button.text}
           </button>
+          {job?.generate_kind === 'generating' && job.phase === 'generating' ? (
+            <button type="button" className="fp-btn" data-mesh-stop="1" title="Stop meshing; what it made so far is discarded" onClick={() => void stop()}>
+              Stop
+            </button>
+          ) : null}
         </div>
         <MeshStatus job={job} />
         <OutOfDate geometry={job?.phase === 'generating' || job?.phase === 'queued' ? null : stale} />
@@ -835,7 +863,9 @@ export function MeshInspect(props: IslandProps) {
           ? 'Finishing mesh'
           : job?.phase === 'failed'
             ? 'Mesh failed'
-            : liveCells != null
+            : job?.phase === 'stopped'
+              ? 'Stopped'
+              : liveCells != null
               ? 'Generated'
               : 'No mesh';
   const counts =

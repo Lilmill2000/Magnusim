@@ -27,6 +27,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadedPlugins } from '../../registry-defaults.js';
 import { CONNECTION_CHECK } from './provider-test.ts';
+import { createJobTools } from './host/job-tools.ts';
 import { agentPrefs, loadSettings } from './settings.ts';
 import { agentIdOf } from './agents/known.ts';
 import { spendLedger } from './ledger.ts';
@@ -149,9 +150,10 @@ export function testUiSyncTool(): ToolDef {
 
 /** The host tools as the server uses them: the app over loopback on `port`, the settings, package.json and the live registry. */
 export function defaultHostTools(port: () => number | null | undefined, more: Partial<HostToolDeps> = {}): ToolDef[] {
+  const transport = createHostTransport({ port });
   const test = process.env.MAGNUSIM_TEST_ASSISTANT === '1' && process.env.MAGNUSIM_TEST_UI_SYNC === '1' ? [testUiSyncTool()] : [];
-  return [...createHostTools({
-    hostCall: createHostTransport({ port }).call,
+  const tools = createHostTools({
+    hostCall: transport.call,
     assistant: async () => {
       const s = await loadSettings();
       // The default's (a turn passes its own through ToolCtx.assistant): a coding agent's model is its saved choice.
@@ -176,5 +178,7 @@ export function defaultHostTools(port: () => number | null | undefined, more: Pa
       }
     },
     ...more,
-  }), ...test];
+  });
+  // The job tools (compute, wait, jobs; spec 06 C4).
+  return [...tools, ...createJobTools({ call: transport.call }), ...test];
 }

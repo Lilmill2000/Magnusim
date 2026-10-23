@@ -4,14 +4,15 @@
  * workspace in amber), and its result: "✓ <summary> · 0.8 s", or "✗ <summary>" with how to fix
  * it and the code. What it changed in the project ("Updated: Boundary conditions (Inlet)", from
  * the turn's ui_sync events; phase 5, C2). Its pictures (one per CAD edit) as thumbnails; a click
- * opens the dock's picture viewer. A turn of many steps keeps only its newest three open (`open`); the person
+ * opens the dock's picture viewer. A finished export's Download link (the person saves the file).
+ * A turn of many steps keeps only its newest three open (`open`); the person
  * may open or close any.
  *
  * Every string here is server data shown as text.
  */
 import { useState } from 'react';
 import type { ImageRef } from '../wire';
-import { howToFix, PICTURE_GONE, pictureAlt, resultFailed, resultOk, riskBadge, updatedLine, waitsFor, WHAT_IT_SENT } from './copy';
+import { DOWNLOAD_TITLE, howToFix, PICTURE_GONE, pictureAlt, resultFailed, resultOk, riskBadge, updatedLine, waitsFor, WHAT_IT_SENT } from './copy';
 import type { TurnItem } from './turnView';
 
 type ToolItem = Extract<TurnItem, { kind: 'tool' }>;
@@ -103,6 +104,16 @@ export function ToolStep({
       {updated ? (
         <p className="dock-muted dock-step-updated" data-dock-updated="1">
           {updated}
+        </p>
+      ) : null}
+      {r && r.ok && r.links.length ? (
+        <p className="dock-step-links">
+          {r.links.map((l) => (
+            // The person's click saves it (the browser's download); the Assistant never does.
+            <a key={l.href} className="dock-download" href={l.href} download title={DOWNLOAD_TITLE} data-dock-download="1">
+              {l.label}
+            </a>
+          ))}
         </p>
       ) : null}
       {r && !r.ok && r.hint ? <p className="dock-muted dock-step-hint">{howToFix(r.hint)}</p> : null}

@@ -11,9 +11,10 @@ import { registerLostFaceRoutes } from './link-routes.ts';
 import { registerOriginalImportRoute } from './geometry-edit-routes.ts';
 import { handleW18Api } from '../w18-materials.js';
 import { handleW19Api } from '../w19-boundary-conditions.js';
-import { handleW20Api } from '../w20-mesh.js';
+import { handleW20Api, stopMeshRoute } from '../w20-mesh.js';
 import {
   startMeshGenerate,
+  stopMeshGenerate,
   liveMeshJobSnapshot,
   reapOrphanMeshGeneratorsOnBoot,
   projectTitleOf,
@@ -368,6 +369,18 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
     return handled !== false;
   });
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh/delete', wrap(handleW20Api));
+  // The mesh's Stop (Mesh panel, tree, the Assistant's jobs tool): ends its generate, deletes nothing.
+  router.post('/api/mesh/stop', async (ctx) => {
+    let body;
+    try {
+      body = await ctx.readJsonBody();
+    } catch (e) {
+      ctx.sendJson(400, { error: 'invalid JSON body', detail: String(e) });
+      return;
+    }
+    const result = await stopMeshRoute({ ...body, project_id: body.project_id || (ctx.scope && ctx.scope.projectId) || undefined });
+    ctx.sendJson(result.status, result.body);
+  });
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh/kick', wrap(handleW20Api));
 
   router.get('/api/fields/:field/series-range', async (ctx) => {
@@ -647,7 +660,10 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       }
       api.applyKickUpdate(kicked.bodyExtra);
       const snap = api.caseSnapshot();
-      jobs.attachChild(job.id, { pid: snap.pid });
+      // The generator is w21's: Stop ends it there (a plain {pid} would kill nothing).
+      const meshId = params.mesh_id || params.id || null;
+      const projectId = params.project_id || params.projectId || null;
+      jobs.attachChild(job.id, { pid: snap.pid }, { stop: () => stopMeshGenerate({ meshId, projectId }) });
       job.result = snap;
     },
     async startSolveJob(params, job) {
@@ -820,7 +836,9 @@ async function kickMesh(ctx, api, jobs) {
   api.applyKickUpdate(kicked.bodyExtra);
   if (job && jobs) {
     const pid = kicked.bodyExtra && kicked.bodyExtra.pid;
-    jobs.attachChild(job.id, { pid: pid || null });
+    const meshId = body.mesh_id || body.id || null;
+    // POST /api/jobs/:id/stop ends the generator through w21, as the mesh's own Stop does.
+    jobs.attachChild(job.id, { pid: pid || null }, { stop: () => stopMeshGenerate({ meshId, projectId }) });
   }
   const snap = api.caseSnapshot();
   ctx.res.setHeader('X-CFD-Source', 'mesh-generate');

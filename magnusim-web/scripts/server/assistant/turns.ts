@@ -61,8 +61,10 @@ import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSet
 import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
+import type { ToolLink } from './links.ts';
 import type { CorePlace, Registry } from './registry.ts';
 import { tabHere } from './tab-place.ts';
+import { stillRunningNote } from './host/turn-jobs.ts';
 import { ToolRunner, type CallAbort, type ImageRef, type RunnerEvent } from './runner.ts';
 import { checkPromptImages, cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
@@ -110,7 +112,7 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'fallback'; step: number; from: string; to: string }
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] }
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[]; links?: ToolLink[] }
   | { type: 'gate'; gate: GateView }
   | { type: 'gate_closed'; gate: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { type: 'usage'; usd: number; estimated: boolean; turn_usd: number; day_usd: number; tokens: number }
@@ -891,6 +893,15 @@ export class Turn implements AnyTurn {
       }
     }
     this.endingListeners.clear();
+    // Meshes and runs it started keep running past its end, also on Stop (Daniel): its last
+    // line names them and how to stop them (spec 06 §8.3).
+    let still: string | null = null;
+    try {
+      still = stillRunningNote(this.id);
+    } catch {
+      still = null;
+    }
+    if (still) this.push({ type: 'note', text: still });
     this.push({ type: 'state', state });
     this.push({ type: 'end', state, reason: this.endReason, message: this.message });
     this.closed = true;

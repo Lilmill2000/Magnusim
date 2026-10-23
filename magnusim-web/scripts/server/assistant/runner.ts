@@ -42,6 +42,7 @@
  *    too; a result's summary is the log's line only. A turn keeps the result's images for the
  *    window (keepImages): the log's tool_result names them (`images`, refs, never the bytes).
  */
+import { safeLinks, type ToolLink } from './links.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
@@ -55,7 +56,7 @@ import type { ImagePart, Risk, ToolCallPart, ToolResultPart } from './types.ts';
 export type RunnerEvent =
   | { type: 'tool_call'; step: number; call: string; tool: string; title: string; risk: Risk; source: string; input_preview: string }
   | { type: 'tool_progress'; call: string; fraction: number | null; label: string; waiting?: true }
-  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[] };
+  | { type: 'tool_result'; call: string; ok: boolean; code?: string; hint?: string; summary: string; ms: number; images?: ImageRef[]; links?: ToolLink[] };
 
 /**
  * A picture a turn keeps for the window (phase 4 spec 9.4), as its log names it: `n` is its id in
@@ -156,6 +157,8 @@ export interface RunResult {
   /** A failed call's hint, as the model has it (for the log). */
   hint?: string;
   summary: string;
+  /** The person's links of a result (links.ts): the log's tool_result only. */
+  links?: ToolLink[];
 }
 
 const RISKS: readonly Risk[] = ['read', 'edit', 'compute', 'destructive'];
@@ -473,6 +476,7 @@ export class ToolRunner {
       summary: r.summary,
       ms: Math.max(0, this.clock.now() - started),
       ...(images.length ? { images } : {}),
+      ...(r.links?.length ? { links: r.links } : {}),
     });
     return r;
   }
@@ -704,6 +708,7 @@ export class ToolRunner {
     const images = checkImages(outcome.images);
     if (!images.ok) return errorResult(call, images.code, images.message);
     const part = capResult(call.callId, call.name, { ok: true, data: outcome.data, text: outcome.text }, images.images);
-    return { part, ok: true, code: null, summary };
+    const links = safeLinks(outcome.links);
+    return { part, ok: true, code: null, summary, ...(links.length ? { links } : {}) };
   }
 }

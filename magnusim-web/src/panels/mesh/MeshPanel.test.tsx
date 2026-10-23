@@ -4,6 +4,7 @@ import type { MeshJobState } from '../legacyBridge';
 import {
   MeshInspect,
   MeshSettings,
+  STOPPED_LINE,
   editedKeys,
   editsAfterSave,
   editsAfterSync,
@@ -16,6 +17,8 @@ import {
 
 const workerRpc = vi.fn(async () => ({ ok: true }));
 vi.mock('../../api/workerRpc', () => ({ workerRpc: (...args: unknown[]) => workerRpc(...args) }));
+const confirmAction = vi.fn(async (_o?: unknown) => true);
+vi.mock('../../workbench/dialogs', () => ({ confirmAction: (o?: unknown) => confirmAction(o) }));
 
 vi.mock('../scope', async () => {
   const real = await vi.importActual<typeof import('../scope')>('../scope');
@@ -117,6 +120,8 @@ function publishJob(partial: Partial<MeshJobState>) {
 
 beforeEach(() => {
   workerRpc.mockClear();
+  confirmAction.mockReset();
+  confirmAction.mockResolvedValue(true);
   delete window.__CFD_MESH_JOB__;
   delete window.__CFD_MESH_COPY__;
   window.__CFD_MESH_GENERATE_CLICK__ = vi.fn(async () => ({}));
@@ -346,6 +351,53 @@ describe('MeshSettings', () => {
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
   });
 
+  it('shows Stop while this mesh generates: it asks, POSTs /api/mesh/stop, and the status says Stopped', async () => {
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    await waitFor(() => expect(screen.getByText('Mesh 1')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    publishJob({ phase: 'generating', status: 'running', stage_text: 'Meshing the surface', started_at: Date.now() - 5_000, generate_kind: 'generating' });
+    const stop = screen.getByRole('button', { name: 'Stop' });
+    fireEvent.click(stop);
+    await waitFor(() =>
+      expect(confirmAction).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Stop meshing "Mesh 1"?', copy: 'What it made so far is discarded.', yes: 'Stop', no: 'Keep meshing' }),
+      ),
+    );
+    const posted = () =>
+      (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url, init]) => String(url) === '/api/mesh/stop' && (init as RequestInit)?.method === 'POST');
+    await waitFor(() => expect(posted()).toHaveLength(1));
+    expect(JSON.parse(String((posted()[0][1] as RequestInit).body))).toEqual({ project_id: 'p1', simulation_id: 's1', mesh_id: 'm1' });
+    // The runtime follows the job's end: the panel says Stopped, and Stop goes.
+    publishJob({ phase: 'stopped', status: 'stopped', started_at: Date.now() - 5_000, finished_at: Date.now(), generate_kind: 'generate' });
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
+    expect(screen.getByText(STOPPED_LINE)).toBeInTheDocument();
+    expect(screen.queryByText('Mesh ready')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled();
+  });
+
+  it('Keep meshing sends nothing', async () => {
+    confirmAction.mockResolvedValue(false);
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    await waitFor(() => expect(screen.getByText('Mesh 1')).toBeInTheDocument());
+    publishJob({ phase: 'generating', status: 'running', generate_kind: 'generating' });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(confirmAction).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url) === '/api/mesh/stop');
+    expect(calls).toHaveLength(0);
+    expect(screen.getByText('Generating mesh')).toBeInTheDocument();
+  });
+
+  it('has no Stop while queued or once ready', async () => {
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    await waitFor(() => expect(screen.getByText('Mesh 1')).toBeInTheDocument());
+    publishJob({ phase: 'queued', status: 'idle', generate_kind: 'queued', queue: { position: 1, behind: 'Run 1' } });
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    publishJob({ phase: 'ready', status: 'done', n_cells: 10, n_points: 20, generate_kind: 'generate' });
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+
   it('keeps the engine select reachable on an engine with no settings schema', async () => {
     render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
     const engine = (await screen.findByLabelText('Mesh engine')) as HTMLSelectElement;
@@ -505,5 +557,13 @@ describe('MeshInspect', () => {
     expect(window.__CFD_MESH_OPEN_SETTINGS__).toHaveBeenCalledWith('m1');
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(window.__CFD_DELETE_MESH__).toHaveBeenCalled();
+  });
+});
+
+describe('MeshInspect stopped', () => {
+  it('says Stopped for a mesh whose generate was stopped', async () => {
+    window.__CFD_MESH_JOB__ = jobState({ phase: 'stopped', status: 'stopped' });
+    render(<MeshInspect panelId="panel-mesh-inspect" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    await waitFor(() => expect(screen.getByText('Stopped')).toBeInTheDocument());
   });
 });

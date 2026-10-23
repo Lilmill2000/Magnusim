@@ -84,6 +84,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/mesh/refinements' },
   { method: 'POST', path: '/api/mesh/refinements' },
   { method: 'POST', path: '/api/mesh/remesh' },
+  { method: 'POST', path: '/api/mesh/stop' },
   { method: 'GET', path: '/api/particle-trace/faces' },
   { method: 'GET', path: '/api/plugin-cases' },
   { method: 'GET', path: '/api/plugin-cases/events' },

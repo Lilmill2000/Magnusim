@@ -1,9 +1,15 @@
-import { render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LeftTree, SetupTreeView } from './LeftTree';
 import type { SetupTreeModel } from './treeModel';
 import { useProjectStore } from '../store/project';
 import { FIXTURE_MODEL, FIXTURE_REGISTRY } from '../test/materialFixture';
+
+const confirmAction = vi.fn(async (_o?: unknown) => true);
+vi.mock('../workbench/dialogs', async () => {
+  const real = await vi.importActual<typeof import('../workbench/dialogs')>('../workbench/dialogs');
+  return { ...real, confirmAction: (o?: unknown) => confirmAction(o) };
+});
 
 const fixture: SetupTreeModel = {
   selectedKey: null,
@@ -209,6 +215,47 @@ describe('LeftTree', () => {
     );
     const row = document.querySelector('[data-w20-mesh-item="mesh_1"] > .tree-row');
     expect(row?.querySelector('[data-mesh-failed="1"]')?.textContent).toBe('Failed');
+    expect(row?.querySelector('.tree-spin')).toBeFalsy();
+  });
+
+  it("a generating mesh's row has Stop: it asks, then stops that mesh of that study", async () => {
+    useProjectStore.setState({ projectId: 'p1' });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, stopped: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    confirmAction.mockResolvedValue(true);
+    const live: SetupTreeModel = {
+      ...fixture,
+      geoms: [{ ...fixture.geoms[0], studies: [{ ...fixture.geoms[0].studies[0], meshes: [{ id: 'mesh_1', name: 'Mesh 1', ready: false, busy: true }] }] }],
+    };
+    render(
+      <ul>
+        <SetupTreeView model={live} />
+      </ul>,
+    );
+    const stop = screen.getByRole('button', { name: 'Stop meshing Mesh 1' });
+    expect(stop.textContent).toBe('Stop');
+    fireEvent.click(stop);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: 'Stop meshing "Mesh 1"?', yes: 'Stop', no: 'Keep meshing' }));
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/mesh/stop');
+    expect(JSON.parse(String(init.body))).toEqual({ project_id: 'p1', simulation_id: 's1', mesh_id: 'mesh_1' });
+    vi.unstubAllGlobals();
+  });
+
+  it('says Stopped on a mesh whose generate was stopped, with no Stop and no spinner', () => {
+    const live: SetupTreeModel = {
+      ...fixture,
+      geoms: [{ ...fixture.geoms[0], studies: [{ ...fixture.geoms[0].studies[0], meshes: [{ id: 'mesh_1', name: 'Mesh 1', ready: false, busy: false, stopped: true }] }] }],
+    };
+    render(
+      <ul>
+        <SetupTreeView model={live} />
+      </ul>,
+    );
+    const row = document.querySelector('[data-w20-mesh-item="mesh_1"] > .tree-row');
+    expect(row?.querySelector('[data-mesh-stopped="1"]')?.textContent).toBe('Stopped');
+    expect(row?.querySelector('[data-mesh-stop]')).toBeFalsy();
     expect(row?.querySelector('.tree-spin')).toBeFalsy();
   });
 

@@ -2286,3 +2286,51 @@ describe('the pictures a turn keeps for the window (phase 4 spec 9.4)', () => {
     await settled(e);
   });
 });
+
+// Spec 06 §8.3 and Daniel's Q2: meshes and runs a turn started keep running past its end, also
+// on Stop; the turn's last line names what still runs and how to stop it.
+const turnJobs = await import('../assistant/host/turn-jobs.ts');
+describe("the turn's end names the jobs it started that still run", () => {
+  after(() => turnJobs.setLiveCheckForTests(null));
+  /** A host tool that "starts" Mesh 1, as compute does. */
+  const starter = () =>
+    hostTool('start_mesh', {
+      run: async (_input, rt) => {
+        turnJobs.rememberJob(rt.turn, { job_id: 'mesh.m1', kind: 'mesh', id: 'm1', name: 'Mesh 1', project_id: 'p1', simulation_id: 's1', since: new Date().toISOString(), last: 'running' });
+        return { ok: true, data: { job_id: 'mesh.m1' }, summary: 'Mesh 1 is generating' };
+      },
+    });
+  const lastTwo = (t) => eventsOf(t).filter((e) => e.type !== 'usage').slice(-3).map((e) => e.type);
+
+  it('done: the note comes right before the end', async () => {
+    turnJobs.setLiveCheckForTests(() => 'running');
+    const m = mk({ hostTools: [starter()] });
+    m.provider.script({ text: 'Starting.', tools: [{ name: 'start_mesh' }] }, { text: 'It is meshing.' });
+    const { turn: t } = await startTurn(m, 'Mesh it.');
+    await settled(t);
+    assert.equal(t.state, 'done');
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), ['Still running: Mesh 1. Stop it from the tree, the Queue, or ask the Assistant.']);
+    assert.deepEqual(lastTwo(t), ['note', 'state', 'end']);
+  });
+
+  it('Stop: the turn ends, the job is not stopped, and the line names it', async () => {
+    turnJobs.setLiveCheckForTests(() => 'running');
+    const m = mk({ hostTools: [starter()] });
+    m.provider.script({ text: 'Starting.', tools: [{ name: 'start_mesh' }] }, { text: 'waiting', hold: 'w' });
+    const { turn: t } = await startTurn(m, 'Mesh it.');
+    await m.provider.reached('w');
+    await m.manager.stop(t.id);
+    await settled(t);
+    assert.equal(t.state, 'stopped');
+    assert.deepEqual(ofType(t, 'note').map((e) => e.text), ['Still running: Mesh 1. Stop it from the tree, the Queue, or ask the Assistant.']);
+  });
+
+  it('nothing still running: no note', async () => {
+    turnJobs.setLiveCheckForTests(() => 'ended');
+    const m = mk({ hostTools: [starter()] });
+    m.provider.script({ text: 'Starting.', tools: [{ name: 'start_mesh' }] }, { text: 'Done.' });
+    const { turn: t } = await startTurn(m, 'Mesh it.');
+    await settled(t);
+    assert.deepEqual(ofType(t, 'note'), []);
+  });
+});

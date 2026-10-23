@@ -842,7 +842,9 @@ export function isTerminalJobStatus(status: unknown): boolean {
 /**
  * Mesh panel clock. A leftover liveCompute flag must not keep "Generating".
  * A mesh waiting in the compute queue reads "queued", not "generating", even
- * though its Generate click already went out.
+ * though its Generate click already went out. A generate the person (or the
+ * Assistant) stopped reads "stopped": its own job ended so, or (`stopped`) the
+ * mesh's record says so after a reload.
  */
 export function meshProgressPhase(opts?: {
   jobStatus?: unknown;
@@ -850,7 +852,8 @@ export function meshProgressPhase(opts?: {
   meshReady?: boolean;
   failed?: boolean;
   queued?: boolean;
-}): 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued' {
+  stopped?: boolean;
+}): 'failed' | 'generating' | 'finishing' | 'ready' | 'idle' | 'queued' | 'stopped' {
   if (opts && opts.queued) {
     const st = opts.jobStatus;
     const running = String(st || '') === 'running' || (!!opts.computeLive && !isTerminalJobStatus(st));
@@ -862,6 +865,7 @@ export function meshProgressPhase(opts?: {
   if (String(status || '') === 'running') return 'generating';
   if (opts && opts.computeLive && !isTerminalJobStatus(status)) return 'generating';
   if (String(status || '') === 'done') return 'finishing';
+  if (String(status || '') === 'stopped' || (opts && opts.stopped)) return 'stopped';
   return 'idle';
 }
 
