@@ -49,6 +49,7 @@
 import type { ContentBlock } from '@agentclientprotocol/sdk';
 import { capText as loopCapText, GUIDE_CHANGED_NOTE } from '../loop.ts';
 import { contextBlock, guideBlock } from '../prompt.ts';
+import { attachmentLines, type AttachmentRef } from '../attachments.ts';
 import { destinationOf } from '../providers/index.ts';
 import { agentPrivacyGate, NOTHING_MORE_SENT, NOTHING_SENT, privacyDecision, type ProjectInfo } from '../privacy.ts';
 import { redact } from '../redact.ts';
@@ -98,6 +99,8 @@ interface EndInfo {
 /** The turn as the agent runner drives it (turns.ts Turn, narrowed by agentTurn()). */
 export interface AgentRunTurn extends RunnerTurn {
   readonly prompt: string;
+  /** The files the person attached (core host tools spec 13.3): one line each after the prompt. */
+  readonly attachments?: readonly AttachmentRef[];
   readonly tab: string | null;
   /** The tab that shows its questions: the window that started it, else its bound tab (phase 4 spec 9.1). */
   readonly showTab: string | null;
@@ -952,6 +955,7 @@ class AgentTurnRun implements AgentDispatch {
       }
     }
     out.push({ type: 'text', text: t.prompt });
+    if (t.attachments?.length) out.push({ type: 'text', text: attachmentLines(t.attachments) });
     out.push({
       type: 'text',
       text: contextBlock({

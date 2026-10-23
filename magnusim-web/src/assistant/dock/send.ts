@@ -32,6 +32,8 @@ export interface DockSend {
   provider: string | null;
   place: DockPlace;
   pictures: readonly PreparedPicture[];
+  /** The files attached and uploaded (their attachment ids; core host tools spec 13.1). */
+  attachments?: readonly string[];
 }
 
 /** What POST /api/assistant/turns gets from the dock (`link` added per attempt). */
@@ -47,6 +49,7 @@ export function turnBody(s: DockSend): Record<string, unknown> {
         ? { context: { project_id: s.place.projectId, ...(s.place.simulationId ? { simulation_id: s.place.simulationId } : {}) } }
         : {}),
     ...(s.pictures.length ? { images: s.pictures.map((p) => ({ media_type: p.media_type, data: p.data })) } : {}),
+    ...(s.attachments?.length ? { attachments: [...s.attachments] } : {}),
   };
 }
 

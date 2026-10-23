@@ -39,6 +39,15 @@ describe('the person\'s message', () => {
     expect((c.querySelector('.dock-you img') as HTMLImageElement).getAttribute('src')).toBe('blob:here/1');
     expect(screen.queryByText('From the command line or another program')).toBeNull();
   });
+
+  it('its attached files, by name and size (core host tools spec 13.1); none, no list', () => {
+    const c = block(view([], { prompt: 'Import these', attachments: [{ id: 'att-0000000000000001', name: 'bracket.step', bytes: 4.2 * 1024 * 1024 }, { id: 'att-0000000000000002', name: 'wing.stl', bytes: 134 }] }));
+    const list = screen.getByRole('list', { name: 'Attached files' });
+    expect(Array.from(list.querySelectorAll('[data-dock-you-file]')).map((li) => li.textContent)).toEqual(['bracket.step · 4.2 MB', 'wing.stl · 134 bytes']);
+    expect(c.querySelector('.dock-you')?.contains(list)).toBe(true);
+    const none = block(view([], { prompt: 'x', attachments: [] }));
+    expect(none.querySelector('.dock-you-files')).toBeNull();
+  });
 });
 
 describe('tool steps', () => {

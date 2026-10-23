@@ -27,8 +27,18 @@
  *                                        cost_usd} or {ok:false, code, error}; 400 when it can't
  *                                        start; 409 while one runs. For agent:<id>: the agent Test
  *                                        with a message (as /agents/test, with its launch proof)
+ *   POST /api/assistant/attachments     ?name=<file name>, the raw file (application/octet-stream, the one
+ *                                        route that isn't JSON) with the tab's live relay link in
+ *                                        x-magnusim-link → {ok, attachment_id, name, bytes, kind:'geometry',
+ *                                        format}: a STEP, IGES, BREP, STL, OBJ or PLY file (by its name and
+ *                                        its first bytes) of at most 500 MB, kept on this PC for the turn
+ *                                        that names it (assistant/attachments.ts); 400 bad_type,
+ *                                        empty_file, bad_name; 409 no_channel; 413 too_large; 415 octet_only
  *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
- *                                        images?:[{media_type, data}]} (images: ≤ 4 PNG, JPEG or WebP
+ *                                        attachments?:['att-…'], images?:[{media_type, data}]}
+ *                                        (attachments: ≤ 4 files this tab attached, unbound or this
+ *                                        conversation's, then bound to it; 400 bad_attachments,
+ *                                        attachments_need_window; 409 attachment_gone) (images: ≤ 4 PNG, JPEG or WebP
  *                                        reference pictures as base64, each ≤ 1.5 MB and 2000 px a
  *                                        side; 400 bad_images / images_too_large; none on an agent:<id>)
  *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
@@ -114,8 +124,9 @@
  *
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory (turn_channels: the turn
- *                                        channels open, by tab)
- *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files)
+ *                                        channels open, by tab; attachments: the files kept)
+ *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files and attachments)
+ *   POST /api/test/assistant/attachments/sweep  {later_ms?} the attachments' sweep, as if run that much later → {ok, removed}
  */
 import { access, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -142,7 +153,8 @@ import { createToolRegistry, type Registry } from './assistant/registry.ts';
 import { defaultHostTools } from './assistant/host-tools.ts';
 import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
-import { createTurnManager, IMAGE_GONE_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
+import { createTurnManager, IMAGE_GONE_TEXT, WINDOW_LOST_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
+import { attachmentStore, type AttachmentStore } from './assistant/attachments.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 import { turnChannelsOpen } from './assistant/turn-channel.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
@@ -176,6 +188,8 @@ export interface AssistantDeps {
   turns?: Partial<TurnManagerDeps>;
   /** Tests: the relay's timings and the plugins it finds loaded. */
   relay?: Partial<Omit<RelayOptions, 'registry' | 'turns'>>;
+  /** Tests: the attachments' store (a small size cap); `<assistant home>/attachments` otherwise. */
+  attachments?: AttachmentStore;
 }
 
 export interface AssistantHandle {
@@ -206,8 +220,12 @@ function errorCode(err: unknown, status: number): string {
   return status >= 500 ? 'internal' : 'bad_request';
 }
 
-/** Every Assistant handler goes through this (see the header). */
-export function local(handler: RouteHandler): RouteHandler {
+/**
+ * Every Assistant handler goes through this (see the header). `raw`: the one route that takes a
+ * file's bytes (POST /attachments) wants application/octet-stream in place of JSON; neither is a
+ * type a page elsewhere may send without a preflight.
+ */
+export function local(handler: RouteHandler, o: { raw?: boolean } = {}): RouteHandler {
   return async (ctx: RequestContext) => {
     if (!assistantAccess(ctx.req)) {
       ctx.sendJson(403, REMOTE_BODY);
@@ -217,7 +235,12 @@ export function local(handler: RouteHandler): RouteHandler {
     // The media type itself, not a parameter: "text/plain;x=application/json" is a simple
     // type a page elsewhere may send with no preflight.
     const mediaType = String(ctx.req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-    if (method !== 'GET' && method !== 'HEAD' && mediaType !== 'application/json') {
+    if (o.raw && method !== 'GET' && method !== 'HEAD' && mediaType !== 'application/octet-stream') {
+      ctx.res.setHeader('Connection', 'close');
+      ctx.sendJson(415, { ok: false, code: 'octet_only', error: "Send the file's bytes as application/octet-stream." });
+      return;
+    }
+    if (!o.raw && method !== 'GET' && method !== 'HEAD' && mediaType !== 'application/json') {
       ctx.sendJson(415, { ok: false, code: 'json_only', error: 'Send the request as JSON (Content-Type: application/json).' });
       return;
     }
@@ -231,6 +254,8 @@ export function local(handler: RouteHandler): RouteHandler {
       const status = errorStatus(err);
       const message = redact(err instanceof Error ? err.message : String(err)).slice(0, 500);
       if (status >= 500) alog('error', 'request failed', { path: ctx.pathname, status, error: message });
+      // A file's body may still be coming: the socket closes after the answer.
+      if (o.raw && !ctx.res.headersSent) ctx.res.setHeader('Connection', 'close');
       if (!ctx.res.headersSent) ctx.sendJson(status, { ok: false, error: message, code: errorCode(err, status) });
       else ctx.res.end();
       return;
@@ -588,7 +613,7 @@ function keyRefusal(ctx: RequestContext, err: unknown, store: Store): boolean {
   return true;
 }
 
-function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): void {
+function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay, kept: () => AttachmentStore): void {
   router.get(
     '/api/test/assistant/state',
     local(async (ctx) => {
@@ -611,7 +636,19 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         // Windows following a turn (the hub's turn channels), by tab.
         turn_channels: turnChannelsOpen(),
         agents: agentHost().snapshot(),
+        attachments: kept()
+          .snapshot()
+          .map((a) => ({ id: a.id, name: a.name, bytes: a.bytes, format: a.format, link_tab: a.link_tab, conversation: a.conversation })),
       });
+    }),
+  );
+
+  router.post(
+    '/api/test/assistant/attachments/sweep',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      const later = Number(body.later_ms ?? 0);
+      ctx.sendJson(200, { ok: true, removed: await kept().sweep({ later: Number.isFinite(later) ? later : 0 }) });
     }),
   );
 
@@ -634,6 +671,7 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay): v
         for (const f of [join(data, 'settings.json'), join(data, 'spend.json'), join(secrets, 'keys.json'), join(secrets, 'master.json')]) {
           await rm(f, { force: true });
         }
+        await kept().clear();
       }
       ctx.sendJson(200, { ok: true, boot: assistantState().bootId });
     }),
@@ -653,6 +691,7 @@ function turnManager(deps: AssistantDeps): TurnManager {
   const port = () => deps.port?.() ?? null;
   const registry = deps.turns?.registry ?? createToolRegistry({ hostTools: defaultHostTools(port) });
   return createTurnManager({
+    attachments: deps.attachments ?? attachmentStore(),
     settings: loadSettings,
     secrets: () => secretStore(),
     deps: async () => (await depsStatus()).state,
@@ -782,6 +821,37 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
       const r = turns.tabs();
       ctx.sendJson(r.status, r.body);
     }),
+  );
+}
+
+/**
+ * The person's files (core host tools spec 13.2): the dock uploads each one here as it is
+ * attached, from the window (its live relay link), and names it in the turn it sends.
+ */
+function registerAttachmentRoutes(router: Router, relay: Relay, files: () => AttachmentStore): void {
+  router.post(
+    '/api/assistant/attachments',
+    local(
+      async (ctx) => {
+        const link = ctx.req.headers['x-magnusim-link'];
+        const tab = typeof link === 'string' && link ? relay.liveLinkTab(link) : null;
+        if (!tab) {
+          // Nothing of the body is read: the socket closes after the answer.
+          ctx.res.setHeader('Connection', 'close');
+          ctx.sendJson(409, { ok: false, code: 'no_channel', error: WINDOW_LOST_TEXT });
+          return;
+        }
+        const r = await files().receive(ctx.req, { name: ctx.url.searchParams.get('name'), declared: ctx.req.headers['content-length'], linkTab: tab });
+        if (!r.ok) {
+          ctx.res.setHeader('Connection', 'close');
+          ctx.sendJson(r.status, { ok: false, code: r.code, error: r.error });
+          return;
+        }
+        const m = r.meta;
+        ctx.sendJson(200, { ok: true, attachment_id: m.id, name: m.name, bytes: m.bytes, kind: 'geometry', format: m.format });
+      },
+      { raw: true },
+    ),
   );
 }
 
@@ -1118,12 +1188,24 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     }),
   );
 
+  // The person's files: a forgotten or expired conversation's go with it; the sweep takes those
+  // of conversations no server here has any more, and the old ones (at boot and every 6 h).
+  const files = () => deps.attachments ?? attachmentStore();
+  const unwatch = files().watchConversations((id) => turns.conversations.get(id) !== null);
+  const offDrop = turns.conversations.onDrop((id) => {
+    files()
+      .dropConversation(id)
+      .catch(() => undefined);
+  });
+  const stopSweeps = files().startSweeps();
+
   registerTurnRoutes(router, turns);
+  registerAttachmentRoutes(router, relay, files);
   registerRelayRoutes(router, relay);
   registerMcpRoutes(router);
   registerAgentRoutes(router, turns);
 
-  if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay);
+  if (process.env.MAGNUSIM_TEST_ASSISTANT === '1') registerTestRoutes(router, turns, relay, files);
 
   // Other apps and coding agents reach this server's tools through the process-wide listener:
   // its questions through this server's gates (shown by its relay), its privacy rules with the
@@ -1154,6 +1236,9 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
     shutdown() {
       shutdownAssistant(lifetime);
       relay.shutdown();
+      unwatch();
+      offDrop();
+      stopSweeps();
       // Explicitly, superseded or not: the connections this lifetime's handler served close,
       // and the coding agents its turns started end (their turns failed/shutdown).
       disposeMcp();

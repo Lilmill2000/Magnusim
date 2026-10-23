@@ -508,7 +508,8 @@ export async function relayPage(base, tab = newTabId(), { headers = {} } = {}) {
  * `o.loaded` is the demo plugin's state for pluginLoaded ({on, doc}: doc is the live registry
  * read in place, null when none is loaded); `o.relay` more relay options. registryChanged()
  * is the worker's 'registry-changed' (a registry-changing call answered; the live registry is
- * read again after it) and registryRead() that read landing.
+ * read again after it) and registryRead() that read landing. `o.attachments`: the attachments' store
+ * (attachments.ts AttachmentStore), else the test home's.
  */
 export async function relayServer(m, o = {}) {
   const { Router, dispatch } = await import('../router.ts');
@@ -529,7 +530,7 @@ export async function relayServer(m, o = {}) {
     },
     ...(o.relay || {}),
   };
-  const handle = routes.registerAssistantRoutes(router, { turns: m.deps, relay });
+  const handle = routes.registerAssistantRoutes(router, { turns: m.deps, relay, ...(o.attachments ? { attachments: o.attachments } : {}) });
   const server = http.createServer(async (req, res) => {
     try {
       assertSameOrigin(req);

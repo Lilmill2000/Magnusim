@@ -278,7 +278,11 @@ No test reaches a real model provider or this PC's real Assistant files.
   itself also registers `GET /api/test/assistant/state` (turns, open questions, each
   tab's link: connected, dormant, tools, pending call, rev) and
   `POST /api/test/assistant/reset` (`{files: true}` also removes the test home's
-  files; a reset leaves the tabs' links, so open pages stay linked). `run.bat` and
+  files and attachments; a reset leaves the tabs' links, so open pages stay linked);
+  the state lists the files attached in the dock (`attachments`: id, name, bytes,
+  format, tab, conversation), and `POST /api/test/assistant/attachments/sweep
+  {later_ms}` runs their sweep as if that much later (an unbound file goes after an
+  hour). `e2e/assistant-core-attach.spec.js` uses both. `run.bat` and
   the setup scripts set none of them, and a test checks that.
 - **The provider debug log.** `MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder>` (no test switch
   needed; it works in normal runs too, off when unset, read once) makes the server

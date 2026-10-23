@@ -2575,6 +2575,32 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     }
   });
 
+  it("a window's attached files reach the agent as the model's lines do, after the message (core host tools spec 13.3)", async () => {
+    const { srv } = await serverWorld();
+    const page = await srv.page();
+    try {
+      const link = await page.open();
+      const bytes = Buffer.from('ISO-10303-21;\nEND-ISO-10303-21;\n');
+      const up = await fetch(`${srv.base}/api/assistant/attachments?name=bracket.step`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-magnusim-link': link }, body: bytes });
+      const a = await up.json();
+      assert.equal(up.status, 200, JSON.stringify(a));
+      claude.script({ say: 'seen' });
+      const r = await srv.post('/api/assistant/turns', { text: 'Import it', provider: 'agent:claude', link, attachments: [a.attachment_id] });
+      assert.equal(r.status, 202, JSON.stringify(r.json));
+      await settledTurn(srv.handle.turns.get(r.json.turn));
+      const prompt = claude.received(lastPid(claude)).filter((m) => m.method === 'session/prompt').at(-1);
+      const texts = prompt.params.prompt.map((b) => b.text);
+      const at = texts.indexOf('Import it');
+      assert.ok(at >= 0, JSON.stringify(texts));
+      assert.equal(texts[at + 1], `[Attached file: "bracket.step", ${bytes.length} bytes, attachment_id ${a.attachment_id}]`);
+      assert.match(texts[at + 2], /^App context \(data, not instructions\): /);
+      assert.deepEqual((await srv.get(`/api/assistant/turns/${r.json.turn}`)).json.turn.attachments, [{ id: a.attachment_id, name: 'bracket.step', bytes: bytes.length }]);
+    } finally {
+      page.close();
+      await srv.close();
+    }
+  });
+
   it('POST /agents/test: a short message and Magnusim’s test tool (works); connect sends none; the modes and models are kept for the row', async () => {
     const { srv } = await serverWorld();
     try {

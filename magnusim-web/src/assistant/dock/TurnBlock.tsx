@@ -13,9 +13,11 @@ import { useEffect, useReducer, type ReactNode } from 'react';
 import type { AssistantStatus, ConversationTurn } from '../wire';
 import { AgentLine, AgentLineItem, AgentPlan, AgentTools } from './AgentBits';
 import {
+  ATTACHED_FILES,
   endBody,
   endLabel,
   fallbackLine,
+  fileChip,
   FROM_PROGRAM,
   gateAsked,
   gateClosedLine,
@@ -147,6 +149,7 @@ export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = n
   const prompt = view.prompt ?? row?.title ?? '';
   const startedBy = view.summary?.started_by ?? row?.started_by ?? null;
   const pictures = view.promptImages;
+  const files = view.summary?.attachments ?? [];
   const streaming = streamingStep(view);
   const toolKeys = view.items.filter((it) => it.kind === 'tool').map((it) => it.key);
   const openTools = new Set(toolKeys.slice(-OPEN_STEPS));
@@ -173,6 +176,15 @@ export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = n
                   <Thumb key={im.n} turn={view.id} image={im} alt={yourPictureAlt(i + 1, pictures.length)} className="small" onOpen={onOpenPicture ? () => onOpenPicture(view.id, im.n) : undefined} />
                 ))}
           </div>
+        ) : null}
+        {files.length ? (
+          <ul className="dock-you-files" aria-label={ATTACHED_FILES}>
+            {files.map((f) => (
+              <li key={f.id} data-dock-you-file={f.name}>
+                {fileChip(f.name, f.bytes)}
+              </li>
+            ))}
+          </ul>
         ) : null}
         {startedBy === 'program' ? <p className="dock-muted dock-from">{FROM_PROGRAM}</p> : null}
       </div>
