@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../../api/client';
 import { bodyDisplay, subscribeFaceNames, useFaceNamesVersion } from '../../workbench/faceNames';
 import { linkedWorkerRpc, stampRecords } from '../../workbench/geometryRev';
+import { isStaleRecord, withBaseRev } from '../../workbench/recordRev';
+import { releaseFocus, showStaleNotice } from '../../workbench/staleNotice';
 import { SciNumberInput } from '../../forms/SciNumberInput';
 import {
   customPresetKey,
@@ -135,6 +137,9 @@ function FluidPanel(props: IslandProps) {
   // never replaces what is on screen (the save's own reload follows it).
   const loadSeq = useRef(0);
   const shownSeq = useRef(0);
+  // Saves refused as stale (C2): a save queued before a refusal carries the edits that were
+  // refused with it, so it is dropped; one made after the panel reloaded is saved.
+  const refusals = useRef(0);
 
   function ids() {
     return scopeIds({
@@ -244,7 +249,9 @@ function FluidPanel(props: IslandProps) {
     if (next.volumes !== undefined) setVolumes(fields.volumes);
     if (next.preset !== undefined) setPreset(fields.preset);
     if (next.name !== undefined) setName(fields.name);
+    const epoch = refusals.current;
     const write = async () => {
+      if (epoch !== refusals.current) return;
       const scoped = ids();
       if (!scoped.project_id || !scoped.simulation_id) {
         setNote('Create a simulation first.');
@@ -261,19 +268,31 @@ function FluidPanel(props: IslandProps) {
         geometry_id: scoped.geometry_id || undefined,
         project_id: scoped.project_id,
       }, new Date().toISOString());
-      // Each record carries the rev its bodies were drawn at (a linked geometry's stamp).
-      const [stamped] = stampRecords([rec as Record<string, unknown>]);
-      const doc = await linkedWorkerRpc<{ materials?: SavedMaterial[]; air?: SavedMaterial }>('materials.set', {
-        project_id: scoped.project_id,
-        sim_id: scoped.simulation_id,
-        body: {
+      // Each record carries the rev its bodies were drawn at (a linked geometry's stamp), and
+      // the rev it was loaded with (`base_rev`): a fluid changed since is refused, not overwritten.
+      const [stamped] = stampRecords([withBaseRev(rec as Record<string, unknown>)]);
+      let doc: { materials?: SavedMaterial[]; air?: SavedMaterial };
+      try {
+        doc = await linkedWorkerRpc<{ materials?: SavedMaterial[]; air?: SavedMaterial }>('materials.set', {
           project_id: scoped.project_id,
-          simulation_id: scoped.simulation_id,
-          materials: [...live.current.others, stamped],
-          air: stamped,
-          only_id: rec.id,
-        },
-      });
+          sim_id: scoped.simulation_id,
+          body: {
+            project_id: scoped.project_id,
+            simulation_id: scoped.simulation_id,
+            materials: [...live.current.others, stamped],
+            air: stamped,
+            only_id: rec.id,
+          },
+        });
+      } catch (e) {
+        if (!isStaleRecord(e)) throw e;
+        releaseFocus();
+        refusals.current += 1;
+        finish();
+        await showSaved(g);
+        await showStaleNotice('material', String(rec.id), String(rec.name || ''));
+        return;
+      }
       const saved = (doc.materials || []).find((r) => r.id === rec.id) || doc.air || rec;
       if (g === gate.current) {
         setMaterial(saved);
@@ -297,6 +316,25 @@ function FluidPanel(props: IslandProps) {
     const p = queue.current.then(run).catch((e) => setNote(e instanceof Error ? e.message : 'Material save failed'));
     queue.current = p;
     return p;
+  }
+
+  /** The fluid as the server has it now, shown (a save of the person's was refused as stale). */
+  async function showSaved(g: LoadGate) {
+    const scoped = ids();
+    try {
+      const j = (await apiGet('/api/materials', {
+        project_id: scoped.project_id || undefined,
+        simulation_id: scoped.simulation_id || undefined,
+      })) as { materials?: SavedMaterial[]; air?: SavedMaterial | null };
+      if (g !== gate.current) return;
+      const rows = Array.isArray(j.materials) ? j.materials : j.air ? [j.air] : [];
+      shownSeq.current = ++loadSeq.current;
+      loaded.current = rows;
+      applySaved(rows);
+      setNote('');
+    } catch (e) {
+      setNote(`Could not read this simulation's fluid: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   /** A preset loads its values; the custom preset keeps the numbers to edit. */

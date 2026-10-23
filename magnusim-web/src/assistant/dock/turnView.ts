@@ -34,6 +34,13 @@ export interface ToolProgress {
   waiting: boolean;
 }
 
+/** What a call changed in the project (its `ui_sync` events, merged): the step's "Updated" line. */
+export interface ToolUpdated {
+  kinds: string[];
+  ids: Record<string, string[]>;
+  names: Record<string, string>;
+}
+
 export interface ToolResult {
   ok: boolean;
   summary: string;
@@ -61,7 +68,11 @@ export type TurnItem =
       input_preview: string;
       progress: ToolProgress | null;
       result: ToolResult | null;
+      /** What it changed in the project, once a `ui_sync` said so. */
+      updated?: ToolUpdated | null;
     }
+  /** A change in the project no open call made (its call event was dropped). */
+  | { kind: 'updated'; key: string; updated: ToolUpdated }
   | { kind: 'gate'; key: string; gate: string; gateKind: GateView['kind']; title: string; yes: string; no: string }
   | { kind: 'gate_closed'; key: string; gate: string; title: string; yes: string; no: string; answer: 'allow' | 'deny'; by: 'user' | 'timeout' | 'stop' }
   | { kind: 'note'; key: string; text: string }
@@ -208,6 +219,7 @@ function applyOne(v: TurnView, d: Draft, e: TurnEvent): void {
         input_preview: e.input_preview,
         progress: row ? row.progress : null,
         result: row ? row.result : null,
+        updated: row ? row.updated ?? null : null,
       });
       return;
     }
@@ -244,6 +256,15 @@ function applyOne(v: TurnView, d: Draft, e: TurnEvent): void {
           images: Array.isArray(e.images) ? e.images : [],
         },
       });
+      return;
+    }
+    case 'ui_sync': {
+      const row = e.call ? d.get(toolKey(e.call), 'tool') : null;
+      if (row) {
+        d.put({ ...row, updated: mergeUpdated(row.updated ?? null, e) });
+        return;
+      }
+      d.put({ kind: 'updated', key: `updated:${e.seq}`, updated: mergeUpdated(null, e) });
       return;
     }
     case 'gate': {
@@ -299,6 +320,20 @@ function applyOne(v: TurnView, d: Draft, e: TurnEvent): void {
       // A newer server's event: nothing to show for it yet.
       return;
   }
+}
+
+/** A call's changes with one more `ui_sync` added (its kinds, ids and names, each once). */
+function mergeUpdated(prev: ToolUpdated | null, e: Extract<TurnEvent, { type: 'ui_sync' }>): ToolUpdated {
+  const out: ToolUpdated = prev
+    ? { kinds: [...prev.kinds], ids: Object.fromEntries(Object.entries(prev.ids).map(([k, v]) => [k, [...v]])), names: { ...prev.names } }
+    : { kinds: [], ids: {}, names: {} };
+  for (const k of Array.isArray(e.kinds) ? e.kinds : []) if (!out.kinds.includes(k)) out.kinds.push(k);
+  for (const [k, list] of Object.entries(e.ids && typeof e.ids === 'object' ? e.ids : {})) {
+    const have = out.ids[k] || (out.ids[k] = []);
+    for (const id of Array.isArray(list) ? list : []) if (!have.includes(id)) have.push(id);
+  }
+  Object.assign(out.names, e.names && typeof e.names === 'object' ? e.names : {});
+  return out;
 }
 
 /**

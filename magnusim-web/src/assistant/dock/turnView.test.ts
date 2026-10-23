@@ -278,3 +278,26 @@ describe('summaries', () => {
     expect(applySummary(v, summary('done'))).toBe(v);
   });
 });
+
+describe('ui_sync (phase 5, C2)', () => {
+  const toolCall = (id: string) => ev({ type: 'tool_call', step: 1, call: id, tool: 'setup_edit', title: 'Change the setup', risk: 'edit', source: 'Magnusim', input_preview: '{}' });
+  it("merges a call's syncs on its row (kinds, ids and names once each), and a later tool_call keeps them", () => {
+    const c = toolCall('c1');
+    let v = view([c]);
+    v = applyEvents(v, [ev({ type: 'ui_sync', call: 'c1', project_id: 'p1', kinds: ['bcs'], ids: { bc: ['bc-7'] }, names: { 'bc-7': 'Inlet' } })]);
+    v = applyEvents(v, [ev({ type: 'ui_sync', call: 'c1', project_id: 'p1', kinds: ['bcs', 'mesh'], ids: { bc: ['bc-7', 'bc-8'], mesh: ['m1'] }, names: { 'bc-8': 'Outlet' } })]);
+    const row = v.items.find((it) => it.kind === 'tool') as Extract<TurnItem, { kind: 'tool' }>;
+    expect(row.updated).toEqual({ kinds: ['bcs', 'mesh'], ids: { bc: ['bc-7', 'bc-8'], mesh: ['m1'] }, names: { 'bc-7': 'Inlet', 'bc-8': 'Outlet' } });
+    // The same call event again (a replay with a new seq) keeps what the row has.
+    v = applyEvents(v, [{ ...c, seq: 999 }]);
+    expect((v.items.find((it) => it.kind === 'tool') as Extract<TurnItem, { kind: 'tool' }>).updated?.kinds).toEqual(['bcs', 'mesh']);
+  });
+
+  it("a sync of a call the view never saw is a row of its own; a replay changes nothing", () => {
+    const s = ev({ type: 'ui_sync', project_id: 'p1', kinds: ['runs'], ids: { run: ['r1'] } });
+    const v = view([s]);
+    expect(kinds(v)).toEqual(['updated']);
+    expect(applyEvents(v, [s])).toBe(v);
+  });
+});
+

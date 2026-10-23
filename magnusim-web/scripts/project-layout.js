@@ -20,6 +20,7 @@ import {
 } from 'node:fs';
 import { pathIsWithin } from './safe-path.js';
 import { removeTreeSync } from './remove-tree.js';
+import { baseRevOf, checkBaseRev, stampRev } from './record-rev.js';
 import { basename, dirname, join, resolve } from 'node:path';
 
 export const LAYOUT_VERSION = 2;
@@ -862,16 +863,19 @@ export function keepLinkKeys(bound, onDisk, opts = {}) {
 /**
  * Write one record into its own folder (bc.json and its id.json in a BC_ folder), atomically.
  * `opts.geometryRev` is the rev the save's stamp check passed with; the link's keys
- * follow keepLinkKeys.
+ * follow keepLinkKeys. The record's `rev` follows record-rev.js stampRev: a record that
+ * carries `base_rev` other than the stored rev is refused (StaleRecord) before anything is
+ * written. A legacy row or a copy given its own folder (`keepRow`) counts on from its own rev.
  * @param {{ geometryRev?: number | null, keepRow?: boolean }} [opts]
  */
 export function persistChildItem(parentDir, kind, rec, opts = {}) {
   const spec = ITEM_KIND[kind];
   if (!spec) throw new Error('unknown item kind ' + kind);
   if (!rec || rec.id == null) throw new Error(kind + ' id required');
-  mkdirSync(parentDir, { recursive: true });
   let folder = findChildItem(parentDir, spec.json, rec.id);
   const onDisk = folder ? readJsonFile(join(folder.dir, spec.json)) : null;
+  checkBaseRev(kind, rec.id, onDisk, baseRevOf(rec));
+  mkdirSync(parentDir, { recursive: true });
   if (!folder) {
     const wanted = itemFolderName(kind, rec.name, rec.id);
     const created = uniqueChildDir(parentDir, wanted);
@@ -889,6 +893,7 @@ export function persistChildItem(parentDir, kind, rec, opts = {}) {
   delete bound.dir;
   delete bound.folder;
   keepLinkKeys(bound, onDisk && typeof onDisk === 'object' ? onDisk : null, opts);
+  stampRev(bound, onDisk && typeof onDisk === 'object' ? onDisk : opts.keepRow ? { rev: rec.rev } : null);
   writeJsonAtomic(join(folder.dir, spec.json), bound);
   return { ...bound, folder: folder.folder || basename(folder.dir), dir: folder.dir };
 }

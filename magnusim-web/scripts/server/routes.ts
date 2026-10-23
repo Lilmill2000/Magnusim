@@ -23,6 +23,7 @@ import { CASE_BUSY, PluginFileError, PluginFiles, caseBusy, registerPluginFileRo
 import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 import { registerPluginCaseRoutes } from './plugin-cases.ts';
 import { registerLinkRoutes } from './link-routes.ts';
+import { registerUiSyncRoutes } from './ui-channel.ts';
 import { registerChannelKind, registerEventHubRoutes, type ChannelOpened, type ChannelSend } from './event-hub.ts';
 import { cancelStudyQuestions } from './link-job.js';
 import { dropFoamJobs, queuedFoamNames, relabelFoamJobs } from './compute-queue.ts';
@@ -32,6 +33,7 @@ import { pluginLoaded } from '../registry-defaults.js';
 import { sameProjectFolder } from '../compute-slot.js';
 import { projectDir } from '../w17-sim-catalog.js';
 import { checkRecordSave } from '../link-stamp.js';
+import { staleBody } from '../record-rev.js';
 import { PluginPrefsError, getPluginPref, removePluginPref, setPluginPref } from '../plugin-prefs.js';
 
 export interface RouteDeps {
@@ -91,7 +93,8 @@ function validPluginKey(key: string): boolean {
   return PLUGIN_KEY_RE.test(key) && !/[. ]$/.test(key);
 }
 
-function rpcStatus(err: unknown): { status: number; body: Record<string, unknown> } {
+/** A worker error as the app server answers it (exported for its tests). */
+export function rpcStatus(err: unknown): { status: number; body: Record<string, unknown> } {
   if (err instanceof WorkerUnavailableError) {
     return { status: 503, body: { error: err.message, ok: false } };
   }
@@ -102,6 +105,15 @@ function rpcStatus(err: unknown): { status: number; body: Record<string, unknown
       const data = (err.data && typeof err.data === 'object' ? err.data : {}) as { code?: string };
       const code = data.code || (err.code === -32010 ? 'geometry_changed' : 'geometry_updating');
       return { status: err.code === -32010 ? 409 : 503, body: { error: err.message, code, ok: false } };
+    }
+    // -32012: a record saved from an older copy than the stored one (C2, record-rev.js):
+    // the same 409 a Node writer answers, with the record's kind, id and stored rev.
+    if (err.code === -32012) {
+      const data = (err.data && typeof err.data === 'object' ? err.data : {}) as { kind?: unknown; id?: unknown; rev?: unknown };
+      return {
+        status: 409,
+        body: staleBody({ kind: String(data.kind || ''), id: String(data.id || ''), rev: Number(data.rev) || 0 }),
+      };
     }
     // -32009: the record changed since the caller read it (a plugin study's rev).
     const status = err.code === -32004 ? 404 : err.code === -32602 ? 400 : err.code === -32009 ? 409 : 500;
@@ -524,6 +536,8 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   // One event stream per tab (GET /api/events): links, cases and jobs are channels on it.
   registerEventHubRoutes(router);
   registerChannelKind('job', (params, send, done) => openJobChannel(deps.jobs, params, send, done));
+  // What the Assistant changed, for the open windows of a project (C2): the channel kind `ui`.
+  registerUiSyncRoutes(router);
 
   // A job's events on a stream of its own; the app's pages follow jobs on the tab's one stream.
   router.get('/api/jobs/:id/events', (ctx) => {

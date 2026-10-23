@@ -35,6 +35,7 @@ import {
 } from './study-io.js';
 import { fileURLToPath } from 'node:url';
 import { checkRecordSave } from './link-stamp.js';
+import { firstStale, staleAnswer, StaleRecord } from './record-rev.js';
 import { envGet } from './env-compat.js';
 import { defaultUnits } from './prefs.js';
 import { bcFamilyFor, bcRecordTypes, canonicalBcType } from './registry-defaults.js';
@@ -239,6 +240,11 @@ const CORE_BC_KEYS = new Set([
   'dir',
   'folder',
   'kind',
+  // A record's rev and the rev a save read (record-rev.js): the writer's, never a field.
+  'rev',
+  'base_rev',
+  'defaults_rev',
+  'defaults_base_rev',
 ]);
 
 function bcFieldsOf(rec) {
@@ -589,6 +595,13 @@ async function upsertBcs(body) {
   const writes = Array.isArray(batch) && batch.length ? batch : hasBcFields || !hasDefaults ? [body || {}] : [];
   const stamp = writes.length ? checkRecordSave(projectDir(projectId), sim.id, writes, body && body.geometry_rev) : { ok: true, rev: null };
   if (!stamp.ok) return stamp;
+  // A record saved from an older copy than the stored one is refused, before anything is
+  // written (record-rev.js): the save carries the rev it read as `base_rev`.
+  const stale = firstStale('bc', list, writes);
+  if (stale) return staleAnswer(stale);
+  const defaultsBase = hasDefaults && Number.isInteger(body.defaults_base_rev) ? body.defaults_base_rev : null;
+  const defaultsRev = Number(existingDoc && existingDoc.defaults_rev) || 0;
+  if (defaultsBase !== null && defaultsBase !== defaultsRev) return staleAnswer(new StaleRecord('bc_defaults', sim.id, defaultsRev));
   let lastBuilt = null;
   const changed = [];
   if (Array.isArray(batch) && batch.length) {
@@ -617,6 +630,11 @@ async function upsertBcs(body) {
     ? normalizeBcDefaults({ ...((existingDoc && existingDoc.defaults) || {}), ...body.defaults })
     : undefined;
   const { doc, bcsPath } = await persistBcsDoc(projectId, sim, list, nextDefaults, undefined, changed, stamp.rev);
+  // The saved record as written: with its new rev.
+  if (lastBuilt) {
+    const written = (doc.boundary_conditions || []).find((b) => b && String(b.id) === String(lastBuilt.id));
+    if (written && Number.isInteger(written.rev)) Object.assign(lastBuilt, { rev: written.rev });
+  }
   const visible = filterByStudy(
     filterByGeometry(doc.boundary_conditions, geomId, primaryGeometryId(proj)),
     sim.id,
@@ -634,6 +652,7 @@ async function upsertBcs(body) {
       boundary_conditions_all: liveStudyRows(projectId, proj, doc.boundary_conditions || []),
       defaults: studyDefaults,
       defaults_by_simulation: doc.defaults_by_simulation || {},
+      defaults_rev: Number(doc.defaults_rev) || 0,
       project_id: projectId,
       simulation_id: sim.id,
       boundary_conditions_json: bcsPath,
@@ -686,6 +705,7 @@ export function getBcs(projectIdOpt, geomIdOpt, simIdOpt) {
       simulation_id: (sim && sim.id) || null,
       defaults: studyDefaults,
       defaults_by_simulation: (doc && doc.defaults_by_simulation) || {},
+      defaults_rev: Number(doc && doc.defaults_rev) || 0,
       boundary_conditions_json_path: bcsJsonPath(projectId, sim && sim.id),
       boundary_conditions_json_exists: existsSync(bcsJsonPath(projectId, sim && sim.id)),
       increment: 'W19',

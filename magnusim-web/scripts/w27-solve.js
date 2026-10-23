@@ -29,6 +29,7 @@ import { MAX_LOG_BYTES, jobLogPath } from './log.js';
 import { envGet } from './env-compat.js';
 import { foldSolveEvent, regionSeries, regionsOf } from './solve-fold.js';
 import { checkRecordSave } from './link-stamp.js';
+import { baseRevOf, recordRev, staleBody, StaleRecord } from './record-rev.js';
 import { LINK_BUILD_TEXT, linkStartRefusal, meshOutOfDate, runBuiltFrom } from './link-build.js';
 import { commitRpc } from './py-json.js';
 import {
@@ -1373,11 +1374,13 @@ function saveCatalog(projectId, cat, opts) {
     const skipRuns = !!(opts && opts.skipRuns);
     // A draft run's save on a linked geometry is stamped with the rev its check passed with.
     const geometryRev = opts && opts.geometryRev;
+    // A run settings save moves that run's rev (record-rev.js); every other write keeps it.
+    const stampRev = !!(only && opts && opts.stampRev);
     if (!skipRuns) {
       for (const rec of cat.runs || []) {
         if (!rec || !(rec.id || rec.run_id)) continue;
         if (only && String(rec.id || rec.run_id) !== String(only)) continue;
-        persistRun(projectId, sim.id, rec, only ? { geometryRev } : undefined);
+        persistRun(projectId, sim.id, rec, only ? { geometryRev, stampRev } : undefined);
       }
     }
     writeStudyJson(projectId, sim.id, 'runs', { active_id: cat.active_id || null });
@@ -1520,6 +1523,13 @@ async function applyRunSettings(id, runId, partial) {
   const cat = found.cat;
   const rec = cat.runs.find((r) => String(r.id) === String(runId));
   if (!rec) return { ok: false, error: 'Run not found' };
+  // A save made from an older copy than the stored run is refused (record-rev.js): the save
+  // carries the rev it read as `base_rev`.
+  const base = baseRevOf(partial);
+  if (base !== null && base !== recordRev(rec)) {
+    const stale = new StaleRecord('run', String(runId), recordRev(rec));
+    return { ...staleBody(stale), status: 409 };
+  }
   // A run on a linked geometry that can still start holds face labels of its rev (host
   // API 1.5): its saves carry the rev they were drawn at. A finished run is history: unchecked.
   let geometryRev = null;
@@ -1605,7 +1615,10 @@ async function applyRunSettings(id, runId, partial) {
   // reopen exactly as they were left.
   if (Array.isArray(partial.views)) rec.views = partial.views.slice(0, 50);
   if (partial.current_view !== undefined) rec.current_view = partial.current_view || null;
-  await saveCatalog(id, cat, { onlyRunId: runId, geometryRev });
+  await saveCatalog(id, cat, { onlyRunId: runId, geometryRev, stampRev: true });
+  // The run as written: with its new rev.
+  const written = readRunDocFile(id, runId, rec.simulation_id || found.sid);
+  if (written && Number.isInteger(written.rev)) rec.rev = written.rev;
   const side = readJsonSafe(runSidecarPath(id, runId)) || { run_id: runId, project_id: id };
   await writeRunSidecar(id, runId, { ...side, ...rec, run_id: runId, project_id: id, increment: INCREMENT });
   return {

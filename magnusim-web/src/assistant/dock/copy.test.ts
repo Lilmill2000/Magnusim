@@ -217,3 +217,15 @@ describe('the dock copy', () => {
     expect(words).not.toMatch(/anthropic|openai|claude|gpt|gemini|cursor|codex|copilot/i);
   });
 });
+
+describe('the Updated line (phase 5, C2)', () => {
+  it('names each kind a call changed, with its records, and leaves out how the window follows', () => {
+    expect(copy.updatedLine(['bcs'], { bc: ['bc-7'] }, { 'bc-7': 'Inlet' })).toBe('Updated: Boundary conditions (Inlet)');
+    expect(copy.updatedLine(['bcs', 'mesh'], { bc: ['a', 'b'], mesh: ['m'] }, { a: 'Inlet', b: 'Outlet' })).toBe('Updated: Boundary conditions (Inlet, Outlet); Mesh');
+    expect(copy.updatedLine(['project', 'study', 'materials', 'bc_defaults', 'refinements', 'runs', 'geometry', 'plugin_studies'], {}, {})).toBe(
+      'Updated: Project; Study; Materials; Boundary condition defaults; Mesh refinements; Runs; Geometry; Studies',
+    );
+    expect(copy.updatedLine(['active', 'tree', 'nonsense'], {}, {})).toBe('');
+  });
+});
+

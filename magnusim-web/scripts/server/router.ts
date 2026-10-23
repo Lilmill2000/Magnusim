@@ -3,6 +3,7 @@ import { caseDirAllowedForAttach } from '../project-isolation.js';
 import { scopeIsStrict } from '../request-scope.js';
 import { HttpError, jsonBodyLimit, parseUrl, readJsonBody, sendJson } from './http.ts';
 import { admitThroughGate, gateProjectOf, requestIsGated } from './link-gate.js';
+import { StaleRecord, staleBody } from '../record-rev.js';
 
 export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -352,6 +353,11 @@ export async function dispatch(
     const message = err instanceof Error ? err.message : 'request rejected';
     if (status === 400 || status === 403 || status === 404) {
       sendJson(res, status, { error: message });
+      return true;
+    }
+    // A record writer refused a save made from an older copy (record-rev.js StaleRecord).
+    if (err instanceof StaleRecord) {
+      sendJson(res, 409, staleBody(err));
       return true;
     }
     throw err;

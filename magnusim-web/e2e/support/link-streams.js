@@ -168,10 +168,14 @@ export async function serverStream(request, host, tabId) {
   return (tabId && j.tabs[tabId]) || null;
 }
 
-/** The channels the server carries for a tab: 0 when it holds no stream for it. */
-export async function serverChannels(request, host, tabId) {
+/**
+ * The channels the server carries for a tab: 0 when it holds no stream for it. `kind`: only
+ * the channels of that kind (a project's window also follows its `ui` channel, workbench/uiSync.ts).
+ */
+export async function serverChannels(request, host, tabId, kind) {
   const s = await serverStream(request, host, tabId);
-  return s ? s.channels : 0;
+  if (!s) return 0;
+  return kind ? (s.kinds && s.kinds[kind]) || 0 : s.channels;
 }
 
 /** The tab is hidden (the user went to another tab or app), or shown again: it says so, as the browser does. */

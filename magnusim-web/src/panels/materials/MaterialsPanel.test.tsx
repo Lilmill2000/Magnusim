@@ -12,6 +12,12 @@ vi.mock('../../api/workerRpc', () => ({
   workerRpc: (method: string, params?: { body?: { air?: Record<string, unknown> } }) => workerRpc(method, params),
 }));
 
+const showStaleNotice = vi.fn(async (_kind: string, _id: string, _name: string) => undefined);
+vi.mock('../../workbench/staleNotice', () => ({
+  showStaleNotice: (kind: string, id: string, name: string) => showStaleNotice(kind, id, name),
+  releaseFocus: () => undefined,
+}));
+
 let stored: Record<string, unknown> | null;
 // A test holds the next GET /api/materials here until it lets it answer.
 let hold: Promise<void> | null;
@@ -201,6 +207,50 @@ describe('MaterialsPanel', () => {
     await waitFor(() => expect(workerRpc).toHaveBeenCalled());
     expect(lastSavedAir()).toMatchObject({ id: 'mat1', kinematic_viscosity: 2e-5, assigned_volumes: ['Body1'] });
     await waitFor(() => expect(window.__CFD_MATERIAL_APPLY__).toHaveBeenCalled());
+  });
+
+  it('a save sends the rev the fluid was loaded with (base_rev), never its own rev (C2)', async () => {
+    stored = { ...OLD_AIR, rev: 3 };
+    renderPanel();
+    const nu = (await screen.findByLabelText('Kinematic viscosity')) as HTMLInputElement;
+    await waitFor(() => expect(nu.value).toBe('1.5290e-5'));
+    fireEvent.change(nu, { target: { value: '2e-5' } });
+    await act(async () => {
+      fireEvent.blur(nu);
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalled());
+    expect(lastSavedAir()).toMatchObject({ id: 'mat1', base_rev: 3 });
+    expect('rev' in lastSavedAir()).toBe(false);
+    const body = workerRpc.mock.calls.at(-1)?.[1]?.body as { only_id?: string };
+    expect(body.only_id).toBe('mat1');
+  });
+
+  it('a save refused as stale shows the saved fluid, says so, and drops the edit queued behind it (C2)', async () => {
+    stored = { ...OLD_AIR, rev: 3 };
+    let refuse: (e: unknown) => void = () => {};
+    workerRpc.mockImplementationOnce(() => new Promise((_r, j) => (refuse = j)));
+    renderPanel();
+    const nu = (await screen.findByLabelText('Kinematic viscosity')) as HTMLInputElement;
+    await waitFor(() => expect(nu.value).toBe('1.5290e-5'));
+    fireEvent.change(nu, { target: { value: '2e-5' } });
+    await act(async () => {
+      fireEvent.blur(nu);
+    });
+    await waitFor(() => expect(workerRpc).toHaveBeenCalledTimes(1));
+    // A second edit, queued behind the first save.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Body2' }));
+    });
+    // The Assistant changed the fluid meanwhile: the first save is refused.
+    stored = { ...OLD_AIR, kinematic_viscosity: 3e-5, rev: 4 };
+    await act(async () => {
+      refuse(Object.assign(new Error('This was changed elsewhere.'), { code: 'stale_record', kind: 'material', id: 'mat1', rev: 4 }));
+    });
+    await waitFor(() => expect(showStaleNotice).toHaveBeenCalledWith('material', 'mat1', 'Air'));
+    await waitFor(() => expect((screen.getByLabelText('Kinematic viscosity') as HTMLInputElement).value).toBe('3.0000e-5'));
+    expect(workerRpc).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Assigned volumes (1)')).toBeInTheDocument();
+    showStaleNotice.mockClear();
   });
 
   it('a viewport body pick toggles that body and saves', async () => {

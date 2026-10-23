@@ -246,6 +246,20 @@ describe('one event stream per tab', () => {
     expect(JSON.parse((linked.mock.calls[0][0] as MessageEvent).data)).toEqual({ link: 'abc' });
   });
 
+  it("the open project's ui channel name is kind ui with params {project_id}, on the tab's one stream (phase 5, C2)", async () => {
+    const ui = openChannel('/api/ui/events?project_id=p1');
+    const sync = vi.fn();
+    ui.addEventListener('sync', sync);
+    FakeEventSource.made[0].hello('c1');
+    await settle();
+    const asked = subscribes()[0].body.channels!;
+    expect(asked.map((c) => [c.kind, c.params])).toEqual([['ui', { project_id: 'p1' }]]);
+    expect(asked[0].cid).toMatch(/^ui:[0-9]{1,12}$/);
+    FakeEventSource.made[0].frame('sync', asked[0].cid, { seq: 1, kinds: ['bcs'] });
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((sync.mock.calls[0][0] as MessageEvent).data)).toEqual({ seq: 1, kinds: ['bcs'] });
+  });
+
   it('ready() says when the server has a channel: true once its subscribe is answered, false when it is refused or closed', async () => {
     answer = (body) =>
       new Response(

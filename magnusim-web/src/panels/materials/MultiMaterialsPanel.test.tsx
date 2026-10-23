@@ -43,6 +43,12 @@ const REGISTRY = {
   material: [FIXTURE_MODEL, SOLID],
 };
 
+const showStaleNotice = vi.fn(async (_kind: string, _id: string, _name: string) => undefined);
+vi.mock('../../workbench/staleNotice', () => ({
+  showStaleNotice: (kind: string, id: string, name: string) => showStaleNotice(kind, id, name),
+  releaseFocus: () => undefined,
+}));
+
 let stored: Array<Record<string, unknown>>;
 const AIR = { id: 'm-air', name: 'Air', material_model: 'newtonian_incompressible', assigned_volumes: ['Body1', 'Body2'] };
 const SINK = { id: 'm-al', name: 'Aluminium 6061', material_model: 'fx_solid', thermal_conductivity: 167, assigned_volumes: [] };
@@ -135,6 +141,27 @@ describe('panel', () => {
     expect(byId['m-al'].assigned_volumes).toEqual(['Body2']);
     expect(byId['m-al'].material_model).toBe('fx_solid');
     expect(byId['m-air'].assigned_volumes).toEqual(['Body1']);
+  });
+
+  it('each record a save writes carries the rev it was loaded with; a stale one is refused, named, and the list read again (C2)', async () => {
+    stored = [{ ...AIR, rev: 2 }, { ...SINK, rev: 5 }];
+    workerRpc.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('This was changed elsewhere.'), { code: 'stale_record', kind: 'material', id: 'm-air', rev: 3 });
+    });
+    render(<MaterialsPanel panelId="panel-air-material" itemId="m-al" projectId="p1" simId="s1" scope="p:p1/s:s1" />);
+    await waitFor(() => expect((screen.getByLabelText('Material type') as HTMLSelectElement).value).toBe('fx_solid'));
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const loadsBefore = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/materials')).length;
+    await act(async () => {
+      publishBodySelection([{ name: 'Body2', idx: 2 }]);
+    });
+    await waitFor(() => expect(showStaleNotice).toHaveBeenCalledWith('material', 'm-air', 'Air'));
+    const byId = Object.fromEntries((lastSave().materials || []).map((m) => [String(m.id), m]));
+    expect(byId['m-al'].base_rev).toBe(5);
+    expect(byId['m-air'].base_rev).toBe(2);
+    expect('rev' in byId['m-al']).toBe(false);
+    await waitFor(() => expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/materials')).length).toBeGreaterThan(loadsBefore));
+    showStaleNotice.mockClear();
   });
 
   it('the material picker makes a new record on its first change; Delete removes only it', async () => {

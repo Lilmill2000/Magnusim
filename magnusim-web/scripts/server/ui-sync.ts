@@ -38,6 +38,8 @@ export interface UiSync {
   /** The new rev of each record written, by id. */
   revs: Record<string, number>;
   active?: { geometry?: string; study?: string; mesh?: string; run?: string };
+  /** The records' names as the person reads them, by id ({'bc-7': 'Inlet'}): the dock's "Updated" line. */
+  names?: Record<string, string>;
   /** 'app': another app on this PC (MCP) or a coding agent. */
   by: 'assistant' | 'app';
   turn: string | null;
@@ -84,6 +86,16 @@ function cleanIds(v: unknown): Record<string, string[]> {
   return out;
 }
 
+function cleanNames(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!isRecord(v)) return out;
+  for (const [k, n] of Object.entries(v)) {
+    const name = typeof n === 'string' ? n.trim().slice(0, 120) : '';
+    if (name) Object.defineProperty(out, k, { value: name, enumerable: true, writable: true, configurable: true });
+  }
+  return out;
+}
+
 function cleanRevs(v: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   if (!isRecord(v)) return out;
@@ -108,6 +120,7 @@ export const uiSync: UiSyncEmitter = Object.freeze({
       ids: cleanIds(e.ids),
       revs: cleanRevs(e.revs),
       ...(isRecord(e.active) ? { active: { ...e.active } } : {}),
+      ...(Object.keys(cleanNames(e.names)).length ? { names: cleanNames(e.names) } : {}),
       by: e.by === 'app' ? 'app' : 'assistant',
       turn: typeof e.turn === 'string' && e.turn ? e.turn : null,
       tool: typeof e.tool === 'string' ? e.tool.slice(0, 120) : '',

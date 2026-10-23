@@ -625,11 +625,15 @@ STAMP_RPC_CODES = {"geometry_changed": -32010, "geometry_updating": -32011}
 
 def _stamped(save: Any) -> Any:
     from cfddesk.project.link import LinkError
+    from cfddesk.project.record_rev import STALE_RECORD_RPC, StaleRecordError
 
     try:
         return save()
     except LinkError as exc:
         raise RpcError(STAMP_RPC_CODES.get(exc.code, -32000), exc.message, {"code": exc.code}) from exc
+    except StaleRecordError as exc:
+        # A record saved from an older copy than the stored one (C2): the app server answers 409.
+        raise RpcError(STALE_RECORD_RPC, "stale_record", exc.data()) from exc
 
 
 @rpc("bcs.get")

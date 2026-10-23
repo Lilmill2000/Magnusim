@@ -269,6 +269,12 @@ export type TurnEvent = { seq: number; at: number } & (
   | { type: 'end'; state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string; message: string | null }
   /** A review round after the model's last answer while edits happened (`round` of `of`). */
   | { type: 'review'; round: number; of: number }
+  /**
+   * A call wrote to the project and the open windows reload it (phase 5, C2): `call` is the call
+   * that wrote (absent when none was open), `kinds` what it changed, `ids` the records by kind
+   * ({bc: ['bc-7']}), `names` their names by id ({'bc-7': 'Inlet'}).
+   */
+  | { type: 'ui_sync'; call?: string; project_id: string; kinds: string[]; ids: Record<string, string[]>; names?: Record<string, string> }
   // A turn on a coding agent (phase 3): the agent once it is ready, its plan, its own tools, its
   // permission requests (ours auto-allowed; its own asked in the window), its mode and model.
   | { type: 'agent'; name: string; version: string | null; own_tools: 'off' | 'on' }
