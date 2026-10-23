@@ -168,9 +168,25 @@ describe('the job tools: schemas and definitions', () => {
     assert.equal(t.compute.available(ctx({ projectId: null, place: 'home' })), true);
   });
 
-  it('the server registers them after the three starters', () => {
+  it('the server registers them after the read and edit tools', () => {
     const names = defaultHostTools(() => app.port).map((d) => d.name);
-    assert.deepEqual(names, ['app_status', 'project_summary', 'explain_ready', 'compute', 'wait', 'jobs']);
+    assert.deepEqual(names, [
+      'app_status',
+      'catalog',
+      'projects',
+      'project_summary',
+      'read_setup',
+      'explain_ready',
+      'read_results',
+      'project_edit',
+      'study_edit',
+      'setup_edit',
+      'import_file',
+      'delete',
+      'compute',
+      'wait',
+      'jobs',
+    ]);
   });
 
   it('job ids name what runs', () => {

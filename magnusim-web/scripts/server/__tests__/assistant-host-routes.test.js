@@ -60,7 +60,10 @@ describe('the tools\' entries of HOST_ROUTES', () => {
       const body = r.body({ ...ARGS, injected: 'yes', mode: 'replace' });
       const flat = JSON.stringify(body);
       assert.ok(!flat.includes('"injected"') && !flat.includes('"mode"'), `${id}: an unknown arg reached the body`);
-      if (!['folders.create', 'folders.delete', 'project.create', 'project.sample', 'bc.menu'].includes(id)) assert.ok(flat.includes('"project_id"'), `${id}: project_id`);
+      // App-wide: folders, a new project, the BC menu, the queue's order (jobs checks the ids are this project's rows first), this PC's check and a plugin's tools.
+      const appWide = ['folders.create', 'folders.delete', 'project.create', 'project.sample', 'bc.menu', 'queue.reorder', 'prefs.hardware_check', 'plugins.env.install'];
+      const query = typeof r.query === 'function' ? r.query({ ...ARGS }) : r.query || {};
+      if (!appWide.includes(id)) assert.ok(flat.includes('"project_id"') || !!query.project_id, `${id}: project_id`);
       if (r.path === '/api/bcs' || r.path === '/api/mesh/refinements') assert.notEqual(body.delete, true, `${id}: {delete:true} deletes every record`);
       if (r.path === '/api/mesh') assert.ok(Object.keys(body).length > 2, `${id}: never an empty mesh body`);
       if (r.path === '/api/worker') assert.equal(body.method, r.worker, `${id}: the worker method of its entry`);
