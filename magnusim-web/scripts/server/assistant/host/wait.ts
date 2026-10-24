@@ -19,10 +19,10 @@ import { ENDED, followJob, parseJobId, type JobRef, type JobState } from './job-
 import { noteJobState } from './turn-jobs.ts';
 
 /**
- * Spec §15 offers wait in a workspace too. Lane G adds 'workspace' with the final lists and the
- * CAD pins (§12.5): until then the CAD Part's pinned request (24 tools, the first 20 strict) holds.
+ * Where wait is offered (spec §15): in a workspace too, so a CAD turn can wait on a mesh or a
+ * geometry update it started (the CAD Part's request: its 21 tools, then the app's 6).
  */
-export const WAIT_CONTEXTS: readonly Place[] = Object.freeze(['home', 'workbench']);
+export const WAIT_CONTEXTS: readonly Place[] = Object.freeze(['home', 'workbench', 'workspace']);
 export const WAIT_POLL_MS = 2_000;
 const DEFAULT_TIMEOUT_S = 300;
 const MAX_TIMEOUT_S = 600;

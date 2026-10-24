@@ -268,8 +268,10 @@ test('the tools come and go with the workspace: /tabs lists them all, the first 
   const names = sent.tools.map((x) => x.name);
   // The app's own: its host tools and the window's core__show (core host tools spec C7).
   const hostTools = names.filter((n) => !n.startsWith(`${PLUGIN}__`));
-  // In a workspace its tools first, then the host's own, each by name (core host tools spec §12.4).
+  // In a workspace its tools first, then the host's own, each by name (core host tools spec §12.4):
+  // the same 6 as in a CAD Part (§15).
   expect(names).toEqual([...TOOLS, ...[...hostTools].sort()]);
+  expect([...hostTools].sort()).toEqual(['app_status', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait']);
   // Every one strict, with no keyword a strict tool may not use.
   expect(offeredTools(chats()[before])).toEqual(names.map((name) => ({ name, strict: true })));
   for (const tool of sent.tools) expect(refusedKeywords(tool.input_schema), tool.name).toEqual([]);

@@ -1,10 +1,11 @@
 // The CAD Part's 21 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 24 tools (the Part's 21 by name
-// first, then its 3: core host tools spec §12.4), strict as strictFlags grants them in that order
-// on the first cloud dialect; no CAD property is optional; the 24 fit the local budget of a 32K
-// context and nothing is cut (their tokens printed); each CAD schema's size is
+// sent only the keywords they take; in a CAD turn the app offers 27 tools (the Part's 21 by name
+// first, then its 6 host and core tools by name: core host tools spec §12.4, §15), strict as
+// strictFlags grants them in that order on the first cloud dialect; no CAD property is optional;
+// the 27 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
+// CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
 // the system prompt) is at most 52,000 characters, its estimated tokens printed.
@@ -36,22 +37,27 @@ const { JSON_CAPS, resultText, TEXT_CAPS } = await import('../server/assistant/s
 const { strictFlags, STRICT_LIMITS } = await import('../server/assistant/providers/anthropic.ts');
 const { createToolRegistry, localBudget, providerTools, REGISTRATION_MAX_BYTES, toolTokens } = await import('../server/assistant/registry.ts');
 const { createHostTools } = await import('../server/assistant/host-tools.ts');
+const { createJobTools } = await import('../server/assistant/host/job-tools.ts');
+const { CORE_TOOLS } = await import('../../src/assistant/coreToolDefs.ts');
 const { SYSTEM_PROMPT, guideBlock } = await import('../server/assistant/prompt.ts');
 const { estimateStep } = await import('../server/assistant/prices.ts');
 
 /** What a local model reads before the conversation, at most (characters). */
 const LOCAL_PREFIX_MAX = 52_000;
 
-const hostTools = () =>
-  createHostTools({
+/** The app's host tools as the server makes them (defaultHostTools: the host tools, then the job tools). */
+const hostTools = () => [
+  ...createHostTools({
     hostCall: async () => ({}),
     assistant: async () => ({ provider: 'off', model: '' }),
     version: async () => '0.0.0',
     plugins: () => [],
-  });
+  }),
+  ...createJobTools({ call: async () => ({}) }),
+];
 
-/** The host tools a workspace turn is offered (Core host tools spec 15; the core page's come with lane C). */
-const HOST_IN_WORKSPACE = ['app_status', 'explain_ready', 'project_summary', 'read_setup'];
+/** The app's tools a workspace turn is offered, by name (core host tools spec §15): 5 host tools and the core page's core__show. */
+const HOST_IN_WORKSPACE = ['app_status', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
 
 /** The tools the app offers a turn on the Part's tab, in order (the registry's own selection). */
 function offered({ local = false } = {}) {
@@ -60,6 +66,9 @@ function offered({ local = false } = {}) {
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
   assert.equal(verdict.accepted.length, 21);
+  // The app page's own registration in the same tab (C7), where it is: the Part's workspace.
+  const core = registry.setCore('T1', 'L1', { projectId: 'p1', studyId: 's1', place: 'workspace', tools: CORE_TOOLS.map((t) => ({ ...t })), guide: '' });
+  assert.deepEqual(core.refused, []);
   return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local, place: 'workspace', budgetTokens: local ? localBudget(32_768) : null, prompt: null });
 }
 
@@ -88,7 +97,7 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 25: the Part's 21 by name first, then the app's 4 for a workspace; strict as strictFlags grants them in that order", () => {
+  it("a CAD turn offers 27: the Part's 21 by name first, then the app's 6 for a workspace; strict as strictFlags grants them in that order", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
@@ -99,12 +108,12 @@ describe("the CAD Part's tools by the app's rules", () => {
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it('the 25 fit the local budget of a 32K context (half of it): nothing is cut', () => {
+  it('the 27 fit the local budget of a 32K context (half of it): nothing is cut', () => {
     const { tools, dropped, budget } = offered({ local: true });
-    assert.equal(tools.length, 25);
+    assert.equal(tools.length, 27);
     assert.deepEqual(dropped, []);
     const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
-    console.log(`[assistant-cad-tools] the 25 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
+    console.log(`[assistant-cad-tools] the 27 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
     assert.equal(budget, 16_384);
     assert.ok(tokens <= budget, `${tokens} tokens`);
   });

@@ -162,10 +162,11 @@ describe('the job tools: schemas and definitions', () => {
     assert.deepEqual([t.compute.priority, t.wait.priority, t.jobs.priority], [84, 82, 58]);
   });
 
-  it('places (§15): compute and jobs on Home and the workbench, wait too (a workspace with lane G\'s final lists)', () => {
+  it('places (§15): compute and jobs on Home and the workbench; wait there and in a workspace (a CAD turn waits on what it started)', () => {
     const t = tools();
-    assert.deepEqual([t.compute.contexts, t.wait.contexts, t.jobs.contexts], [['home', 'workbench'], ['home', 'workbench'], ['home', 'workbench']]);
+    assert.deepEqual([t.compute.contexts, t.wait.contexts, t.jobs.contexts], [['home', 'workbench'], ['home', 'workbench', 'workspace'], ['home', 'workbench']]);
     assert.equal(t.compute.available(ctx({ projectId: null, place: 'home' })), true);
+    assert.equal(t.wait.available(ctx({ place: 'workspace' })), true);
   });
 
   it('the server registers them after the read and edit tools', () => {
