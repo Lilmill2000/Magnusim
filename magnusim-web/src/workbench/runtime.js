@@ -27989,6 +27989,11 @@ function applyMeshRecord(doc, projectId, opts) {
       simulation_id: home.simulation_id || (study && study.id) || full.simulation_id,
     });
     const keepLive = homeReady || !!(homeLive && homeLive.status === 'running');
+    // A stopped generate stays on the record (the panel says Stopped, also when the record is
+    // read again: a reload, or the Assistant's ui_sync after its jobs stop), with no case. The
+    // record just read says so first: the study's mesh list may not carry its live result.
+    const docLive = mesh && String(mesh.id || '') === String(home.id) ? mesh.live_mesh_result : null;
+    const stoppedLive = keepLive ? null : [docLive, homeLive].find((l) => l && l.status === 'stopped') || null;
     const homeSettings =
       (incomingId && String(incomingId) === String(home.id) && settings) ||
       full.settings ||
@@ -28000,7 +28005,7 @@ function applyMeshRecord(doc, projectId, opts) {
       generated: !!homeReady,
       settings: meshCatalog.settings,
       name: meshCatalog.settings.name || full.name || home.name,
-      live_mesh_result: keepLive ? homeLive : null,
+      live_mesh_result: keepLive ? homeLive : stoppedLive,
       case_dir: keepLive
         ? home.case_dir || (homeLive && homeLive.case_dir) || full.case_dir || null
         : null,
