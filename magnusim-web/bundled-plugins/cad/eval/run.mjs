@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { api, cadFrameOf, loadTasks, newPart, PLUGIN_DIR, runFolder, runTask, runTurn, scriptedDriver, summaryMd, tabShowing, TURN_MS } from './lib.mjs';
+import { api, cadFrameOf, gateAnswer, loadTasks, newPart, PLUGIN_DIR, runFolder, runTask, runTurn, scriptedDriver, summaryMd, tabShowing, TURN_MS } from './lib.mjs';
 
 const DRIVERS = ['profile', 'attach', 'scripted'];
 /** The isolated server's limits for a profile run (each under the profile's own, when it gives one). */
@@ -337,7 +337,9 @@ async function main(argv) {
       created.add(part.projectId);
       const tab = o.tab ? await tabShowing(base, o.tab, part.projectId, 'Eval · probe') : part.tab;
       if (fake) fake.reply(...PROBE_STEPS);
-      const t = await runTurn(base, { text: PROBE_TEXT, tab }, { answer: () => null, ms: o.turnMs, log: env.log });
+      // Its project's privacy question (an attached app set to Ask) is answered as a task's is:
+      // Send for the project this run made; nothing else is asked of a read.
+      const t = await runTurn(base, { text: PROBE_TEXT, tab }, { answer: (gate) => (gate.kind === 'privacy' ? gateAnswer(gate, { gates: {} }, created) : null), ms: o.turnMs, log: env.log });
       const notes = t.events.filter((e) => e.type === 'note').map((e) => e.text);
       const end = t.events.find((e) => e.type === 'end') ?? null;
       const calls = await cadFrameOf(page).evaluate(() => window.__CAD__.assistant.calls);
