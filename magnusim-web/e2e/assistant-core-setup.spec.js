@@ -5,8 +5,7 @@
 // Then the model deletes the BC: the person is asked first (a "Can't be undone" question), and
 // after Allow the BC is gone from the study. A Don't leaves it there.
 //
-// The page shows what the AI changed after a reload here: the live reload of an open window
-// (ui_sync) comes with its own lane, and these reloads go when it lands.
+// The open window shows what the AI changed without a reload (ui_sync reloads what it touched).
 // Its own server with the Assistant's test switches and the scripted model
 // (support/fake-llm.mjs). No WSL.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -124,8 +123,7 @@ test('the Assistant makes a study, a material on both bodies and an inlet; the w
   const bcs = await getJson(request, `/api/bcs?project_id=${project}&simulation_id=${study}`);
   expect(bcs.boundary_conditions.map((b) => [b.name, b.bc_type, b.faces, b.value])).toEqual([['Inlet', 'Velocity inlet', ['face 1@Body1'], 3]]);
 
-  // The window shows them (after a reload until the open window's live reload lands).
-  await openProject(page);
+  // The open window shows them, with no reload.
   await expect(tree(page)).toContainText('Pipe flow', STEP);
   await expect(tree(page)).toContainText('Inlet', STEP);
   await expect(tree(page)).toContainText('Water', STEP);
@@ -159,7 +157,7 @@ test('a delete asks first: Don\'t leaves the BC, Allow removes it from the study
   await dockGate(page).locator('[data-gate-answer="yes"]').click({ timeout: 15_000 });
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
   expect((await getJson(request, `/api/bcs?project_id=${project}&simulation_id=${study}`)).boundary_conditions).toEqual([]);
-  await openProject(page);
+  // The open window drops it, with no reload.
   const row = tree(page).locator(`[data-w17-sim-id="${study}"]`).first();
   await expect(row).toContainText('Delete test', STEP);
   await expect(row).toContainText('Boundary conditions');

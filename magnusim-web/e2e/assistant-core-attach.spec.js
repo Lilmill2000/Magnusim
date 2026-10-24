@@ -269,9 +269,7 @@ test('an attached STEP is imported by the Assistant: it asks first, then the pro
   expect(geoms.length).toBe(before + 1);
   const added = geoms.at(-1);
   expect(added.original_filename).toBe('elbow.step');
-  // The window shows it (after a reload until the open window's live reload lands).
-  await page.reload();
-  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
+  // The open window shows it, with no reload (the Assistant's change reloads what it touched, ui_sync).
   await expect(page.locator('#left-tree')).toContainText(added.name, STEP_WAIT);
 });
 
