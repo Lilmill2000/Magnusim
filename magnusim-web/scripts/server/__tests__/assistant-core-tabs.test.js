@@ -21,7 +21,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 const { makeManager, relayServer, demoTools, DEMO_WORKSPACE, runTool, startTurn, settled, eventsOf, answerGates, until, hostTool } = await import('./assistant-harness.js');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { createToolRegistry, CORE_TOOLS, toolTokens } = await import('../assistant/registry.ts');
-const { sourceLabel, otherProjectOf } = await import('../assistant/runner.ts');
+const { ToolRunner, sourceLabel, otherProjectOf } = await import('../assistant/runner.ts');
 const { consentCount, defaultSettings, withConsent } = await import('../assistant/settings.ts');
 const { LIST_CONSENT_KEY } = await import('../assistant/privacy.ts');
 
@@ -129,6 +129,20 @@ describe('the registry: core slot', () => {
     const out = await runner.run({ type: 'tool_call', callId: 'c-show', name: show.name, input: {} }, { owner: { kind: 'turn', id: 't', tab: 'T1' }, ctx: ctx(), signal: new AbortController().signal, offered: new Map([[show.name, show]]) });
     assert.equal(out.code, 'declined');
     assert.deepEqual([cards[0].title, cards[0].copy, cards[0].risk, cards[0].detail], ['Allow it?', 'Leaves the part.', 'compute', [{ label: 'Geometry', value: 'Plate' }]]);
+  });
+
+  it("through the runner, the card the person sees is the page's (its title and copy, not a generic one)", async () => {
+    const r = createToolRegistry();
+    r.setCore('T1', 'L1', core({ escalate: (tool) => (tool === 'show' ? { risk: 'compute', note: 'sends the design', title: 'Allow the Assistant to send your design to the simulation?', copy: 'Leaves the part.' } : null) }));
+    const [show] = r.toolsFor(ctx());
+    const shown = [];
+    const runner = new ToolRunner({ gates: { ask: async (req) => (shown.push(req), 'deny') } });
+    const out = await runner.run(
+      { type: 'tool_call', callId: 'c1', name: show.name, input: {} },
+      { owner: { kind: 'turn', id: 't1', tab: 'T1' }, ctx: ctx(), signal: new AbortController().signal, offered: new Map([[show.name, show]]) },
+    );
+    assert.equal(shown.length, 1, JSON.stringify(out));
+    assert.deepEqual([shown.length, shown[0].title, shown[0].copy, shown[0].risk], [1, 'Allow the Assistant to send your design to the simulation?', 'Leaves the part.', 'compute']);
   });
 });
 

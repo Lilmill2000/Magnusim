@@ -104,6 +104,24 @@ describe('review rounds', () => {
     checkInvariants(assert, t.conv, m.provider.requests);
   });
 
+  it('no round once the turn left the workspace (core__show, its Back): the window no longer shows it, though its link has not gone yet', async () => {
+    const m = mk();
+    const ctl = {
+      // The edit, then the person's window goes back to the project: its core page says so first.
+      onCall: (c) => {
+        if (c.tool === 'add') m.registry.setCore('T1', 'L1', { projectId: 'p1', studyId: 's1', place: 'workbench', tools: [] });
+      },
+    };
+    demo(m, { review: { rounds: 3, prompt: PROMPT }, ctl });
+    m.registry.setCore('T1', 'L1', { projectId: 'p1', studyId: 's1', place: 'workspace', tools: [] });
+    m.provider.script(ADD, { text: 'Sent it back.' });
+    const r = await startTurn(m, { text: 'Make it and send it', tab: 'T1' });
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['done', 'end_turn']);
+    assert.deepEqual(ofType(r.turn, 'review'), []);
+    assert.equal(m.provider.requests.length, 2);
+  });
+
   it('every round edits: it stops after the n-th round', async () => {
     const m = mk();
     demo(m, { review: { rounds: 2, prompt: PROMPT } });

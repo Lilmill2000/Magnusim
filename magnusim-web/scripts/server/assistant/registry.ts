@@ -97,6 +97,8 @@ export interface Assessed {
   risk: 'edit' | 'compute' | 'destructive';
   note: string;
   detail: GateDetail[];
+  /** What the card called each job of the call's chain, by job id (the covered call's transcript line names it). */
+  labels?: Record<string, string>;
 }
 
 export interface AssessContext {

@@ -33453,7 +33453,8 @@ function runsTreeKey(list, activeId) {
           r.mesh_id,
           // Results node lights up when the first live frame lands.
           runHasResults(r) ? 'R' : '',
-          (r.result_controls || []).map((c) => c.id || c.name).join(','),
+          // A monitor renamed (the Assistant's, or another window's) is drawn again too.
+          (r.result_controls || []).map((c) => (c.id || '') + '=' + (c.name || '')).join(','),
         ].join(':')
       )
       .join('|')
@@ -38527,6 +38528,8 @@ async function reloadRunsForSync(gen, ids) {
   if (gen !== studySwitchGen) return;
   await refreshRunCatalog();
   try { syncSimControlPanel(); } catch (_) {}
+  // The open Monitors panel's list of the run's monitors (added, renamed, removed).
+  try { syncResultsHub(); } catch (_) {}
   // A run's monitors are its result controls: their numbers are read again.
   for (const id of ids || []) {
     try { if (typeof window.__CFD_REFRESH_MONITORS__ === 'function') await window.__CFD_REFRESH_MONITORS__(id); } catch (_) {}

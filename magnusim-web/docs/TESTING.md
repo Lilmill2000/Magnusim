@@ -169,7 +169,16 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   record changed as a host tool does after its write (`scripts/server/ui-channel.ts`),
   and, with `MAGNUSIM_TEST_ASSISTANT=1`, the host tool `test_ui_sync` a scripted model
   can call; the window counts the changes it reloaded in `window.__CFD_UI_SYNCS__`
-  (`e2e/assistant-core-stale.spec.js`).
+  (`e2e/assistant-core-stale.spec.js`). `MAGNUSIM_TEST_COMPUTE=fake` makes the
+  compute the app starts a stand-in (`scripts/test-compute.js`), so a test of what
+  the person sees while a mesh generates, a run solves, either is stopped or ends,
+  or This PC is checked needs no OpenFOAM, no WSL and no minutes: meshes run
+  `python/tools/fake_mesh_generate.py` through the same live job, compute slot and
+  queue (`MAGNUSIM_TEST_MESH_SECONDS`, default 6; `MAGNUSIM_TEST_MESH_RESULT=fail`),
+  a Start runs `scripts/test-solve.js` after every check a real Start makes
+  (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`), and
+  each hardware probe answers after `MAGNUSIM_TEST_HW_PROBE_MS` (default 1500) with a
+  plausible PC (`e2e/assistant-jobs.spec.js`, `e2e/assistant-core-chain.spec.js`).
 - **A plugin's tests go in its own suite**, not in `e2e/`.
 - **To let a stress run reach a spec**, import `test` and `expect` from the harness:
   `./support/stress.js` (core), `../../../e2e/support/plugin-suite.js` (a plugin

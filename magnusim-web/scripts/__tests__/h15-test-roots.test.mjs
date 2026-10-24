@@ -69,6 +69,7 @@ export const H15_TESTS = [
   '__tests__/h15-test-roots.test.mjs',
   '__tests__/assistant-boundaries.test.mjs',
   '__tests__/assistant-cad-tools.test.mjs',
+  '__tests__/assistant-parity.test.mjs',
   '__tests__/w17-time-dependency-drafts.test.mjs',
 ];
 

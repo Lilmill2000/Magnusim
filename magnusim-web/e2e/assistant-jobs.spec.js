@@ -6,10 +6,8 @@
 // a finished export's Download link in the dock that saves the zip when clicked.
 // Its own server with the Assistant's test switches (a test home, the scripted model:
 // support/fake-llm.mjs) and the fake compute (MAGNUSIM_TEST_COMPUTE=fake: a stand-in mesher and
-// solver, no WSL). The compute card's own words (gateText) come with the runner's per-call
-// cards (lane A); until then the card is the runner's generic compute card. Until ui_sync
-// (lane B), the workbench learns of a job the Assistant started from its queue watch (every
-// 10 s while idle), so the fake mesher here runs 30 s.
+// solver, no WSL). The open workbench hears of a job the Assistant started at once (ui_sync),
+// so the tree shows it generating and done with no reload.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -58,8 +56,8 @@ test.beforeAll(async ({ request }) => {
       MAGNUSIM_TEST_ASSISTANT: '1',
       MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base,
       MAGNUSIM_TEST_COMPUTE: 'fake',
-      // Long enough that the workbench's queue watch (every 10 s while idle) sees it run.
-      MAGNUSIM_TEST_MESH_SECONDS: '30',
+      // Long enough for the person's Stop (and the AI's) to land while it runs.
+      MAGNUSIM_TEST_MESH_SECONDS: '15',
     },
   });
   const doc = await getJson(request, `/api/mesh?project_id=${PID}`);
@@ -237,12 +235,7 @@ test('the AI starts a run and waits for it: the run solves (the fake solver) and
   await expect(waitStep.locator('[data-dock-result]')).toContainText('Run AI done');
   const status = await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${sim}&run_id=${rid}`);
   expect(status.run.status).toBe('done');
-  // The tree says so (after a reload: the open page follows the AI's runs live once ui_sync lands, lane B).
-  const tree = await getJson(request, `/api/project/tree?project_id=${PID}`);
-  const runRow = (tree.geometries || []).flatMap((g) => g.studies || []).flatMap((st) => st.runs || []).find((r) => String(r.id) === rid);
-  expect(runRow?.status, JSON.stringify(runRow)).toBe('done');
-  await page.reload();
-  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 60_000 });
+  // The open window's tree says so, with no reload.
   await expect(page.locator(`#left-tree [data-w27-run="${rid}"] > .tree-row .tree-check`)).toBeVisible(STEP);
   const chats = fake.requests().filter((r) => r.kind === 'chat');
   expect(resultsIn(chats.at(-1))[0].data.jobs[0]).toMatchObject({ job_id: `solve.${rid}`, status: 'done' });

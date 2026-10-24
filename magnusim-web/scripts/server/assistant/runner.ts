@@ -225,6 +225,18 @@ export function chainOf(def: ToolDef, input: Record<string, unknown>): string[] 
   return [...new Set(input.chain.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 100))].slice(0, CHAIN_MAX);
 }
 
+/** The card's names of the chained jobs (escalate's `labels`), cleaned; the ids without one are left out. */
+function labelsOf(assessed: Assessed | null, chain: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const given = assessed?.labels;
+  if (!given || typeof given !== 'object') return out;
+  for (const id of chain) {
+    const label = typeof given[id] === 'string' ? cleanText(given[id], TEXT_CAPS.name) : '';
+    if (label) out[id] = label;
+  }
+  return out;
+}
+
 /** Who offers the tool, as the person reads it. */
 export function sourceLabel(source: ToolSource | null): string {
   if (!source) return '';
@@ -515,11 +527,14 @@ export class ToolRunner {
       // A chain grant covers a compute call of its own owner, each job once: never a destructive one.
       const covered = risk === 'compute' && owner && key ? store.consume(owner, key) : null;
       if (covered !== null) {
+        // What the card called it (Start "Run 1"); the call's own line when the card named none.
         let label = covered;
-        try {
-          label = cleanText(def.describe?.(input)?.line, TEXT_CAPS.name) || covered;
-        } catch {
-          label = covered;
+        if (covered === key) {
+          try {
+            label = cleanText(def.describe?.(input)?.line, TEXT_CAPS.name) || covered;
+          } catch {
+            label = covered;
+          }
         }
         o.turn?.note?.(`${COVERED_NOTE}${label}`);
       } else {
@@ -536,7 +551,7 @@ export class ToolRunner {
         if (answer !== 'allow') return errorResult(call, 'declined', 'The user declined this call; it did not run. Accept it and say what you would have done.');
         // Allowed with a chain: its other jobs run without a card, each once, for this owner.
         const chain = chainOf(def, input).filter((j) => j !== key);
-        if (owner && chain.length) store.grant(owner, chain);
+        if (owner && chain.length) store.grant(owner, chain, labelsOf(assessed, chain));
       }
     }
     // 5a. Another project's data: that project's consent (the turn goes on when it is refused).
@@ -592,7 +607,8 @@ export class ToolRunner {
       if (got === null || got === undefined) return null;
       if (!got || typeof got !== 'object' || !['edit', 'compute', 'destructive'].includes(got.risk)) return failed;
       // A tool that words its own card (gateText) gets the whole note, cleaned: its card copy is longer than a confirm note.
-      return { risk: got.risk, note: cleanText(got.note, def.gateText ? GATE_NOTE_MAX : CONFIRM_NOTE_MAX), detail: Array.isArray(got.detail) ? got.detail.slice(0, 6) : [] };
+      const labels = got.labels && typeof got.labels === 'object' && !Array.isArray(got.labels) ? { labels: got.labels } : {};
+      return { risk: got.risk, note: cleanText(got.note, def.gateText ? GATE_NOTE_MAX : CONFIRM_NOTE_MAX), detail: Array.isArray(got.detail) ? got.detail.slice(0, 6) : [], ...labels };
     } catch {
       return failed;
     } finally {
