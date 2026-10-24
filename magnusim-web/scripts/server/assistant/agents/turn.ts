@@ -47,7 +47,7 @@
  * the turn with the prompt still out, the same cancel and kill follow (the finally).
  */
 import type { ContentBlock } from '@agentclientprotocol/sdk';
-import { capText as loopCapText, GUIDE_CHANGED_NOTE } from '../loop.ts';
+import { capText as loopCapText } from '../loop.ts';
 import { contextBlock, guideBlock } from '../prompt.ts';
 import { attachmentLines, type AttachmentRef } from '../attachments.ts';
 import { destinationOf } from '../providers/index.ts';
@@ -1062,9 +1062,10 @@ class AgentTurnRun implements AgentDispatch {
       }
     } else {
       const frozen = sessionGuides.get(session);
+      // A workspace met later gives its notes once, ahead of the prompt (as the first one did).
       if (ws?.guide && ws.guide !== frozen && !t.conv.guidesNoted.has(ws.guide)) {
         t.conv.guidesNoted.add(ws.guide);
-        t.note(GUIDE_CHANGED_NOTE);
+        out.push({ type: 'text', text: guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin) });
       }
     }
     out.push({ type: 'text', text: t.prompt });

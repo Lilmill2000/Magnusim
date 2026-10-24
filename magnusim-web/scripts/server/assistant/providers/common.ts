@@ -112,6 +112,14 @@ export function isStrictNote(text: string): boolean {
 }
 
 /**
+ * What a strict note is shown once by: its kind, not its numbers. A later request's other tools
+ * (a workspace opened) change the counts, and the person needs it once (seen live: twice).
+ */
+export function strictNoteKey(text: string): string {
+  return text.startsWith(STRICT_REDUCED_START) ? STRICT_REDUCED_START : STRICT_FALLBACK_NOTE;
+}
+
+/**
  * The note for a request sent with fewer tools strict, in the person's words: the provider
  * checks only some of the tools' inputs itself, and the app checks the others (named, in the
  * order offered). The provider's own words go to the log (the warn line), not the note.

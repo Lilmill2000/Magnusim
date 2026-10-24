@@ -42,7 +42,7 @@
 import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
-import { isStrictNote } from './providers/common.ts';
+import { isStrictNote, strictNoteKey } from './providers/common.ts';
 import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
@@ -80,6 +80,7 @@ import {
   type ToolCallPart,
   type ToolResultPart,
   type Usage,
+  type UserPart,
 } from './types.ts';
 
 export type TurnState = 'starting' | 'awaiting_consent' | 'model' | 'tools' | 'awaiting_confirmation' | 'done' | 'stopped' | 'failed' | 'capped';
@@ -458,19 +459,29 @@ export async function otherProjectPrivacy(
   return null;
 }
 
-export const GUIDE_CHANGED_NOTE = "The workspace's notes changed; start a new conversation to use them.";
-
-/** Freezes the tab's guide into a conversation that has sent nothing yet; later changes only get a note. */
-function syncGuide(t: LoopTurn, ws: { reg: WorkspaceRegistration; guide: string } | null, fixed: boolean): void {
+/**
+ * Freezes the tab's guide into a conversation that has sent nothing yet (its system blocks). A
+ * guide met later (the window moved to another workspace, often by the model's own core__show)
+ * goes once into the next user message instead: appended, so the cached prefix and the model's
+ * earlier thinking stay valid. Seen live: from Home the model opened CAD and was told only
+ * "start a new conversation". Returns that message text, or null.
+ */
+function syncGuide(t: LoopTurn, ws: { reg: WorkspaceRegistration; guide: string } | null, fixed: boolean): string | null {
   const conv = t.conv;
   const guide = ws?.guide ?? '';
+  const pluginName = ws?.reg.pluginName || ws?.reg.plugin || '';
   if (!fixed && !conv.guide && guide) {
-    conv.guide = { text: guide, pluginName: ws?.reg.pluginName || ws?.reg.plugin || '' };
-    return;
+    conv.guide = { text: guide, pluginName };
+    return null;
   }
-  if (!guide || guide === conv.guide?.text || conv.guidesNoted.has(guide)) return;
+  if (!guide || guide === conv.guide?.text || conv.guidesNoted.has(guide)) return null;
   conv.guidesNoted.add(guide);
-  t.note(GUIDE_CHANGED_NOTE);
+  return guideBlock(guide, pluginName);
+}
+
+/** A user message's parts with a later guide's text after them (syncGuide). */
+function withGuide(parts: UserPart[], guide: string | null): UserPart[] {
+  return guide ? [...parts, { type: 'text', text: guide }] : parts;
 }
 
 async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
@@ -505,7 +516,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   const ws = workspaceNow();
   // The conversation's system blocks are fixed by its first request.
   const fixed = conv.messages.length > 0;
-  syncGuide(t, ws, fixed);
+  const lateGuide = syncGuide(t, ws, fixed);
   // The adapter's notes once a turn; its strict notes once a conversation (they stay true for
   // every later request: isStrictNote).
   const notedByAdapter = new Set<string>();
@@ -519,7 +530,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   }
   conv.append({
     role: 'user',
-    parts: [
+    parts: withGuide([
       { type: 'text', text: t.prompt },
       ...(t.attachments?.length ? [{ type: 'text' as const, text: attachmentLines(t.attachments) }] : []),
       ...pictures.map((p) => ({ ...p })),
@@ -532,7 +543,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           workspace: ws ? { plugin: ws.reg.plugin, pluginName: ws.reg.pluginName, workspace: ws.reg.workspace } : null,
         }),
       },
-    ],
+    ], lateGuide),
   });
 
   const priced = adapter.id !== 'openai_compatible';
@@ -591,7 +602,6 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       if (!(await requirePrivacy(t, d, adapter, project, live, step === 1))) return;
       if (stoppedNow(t)) return;
     }
-    if (step > 1) syncGuide(t, workspaceNow(), true);
 
     // A local server's word on the model's context (cached 60 s), before the tools are chosen:
     // they fit its budget. The turn knows it from now on.
@@ -791,9 +801,11 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
     t.servedBy = out.servedBy || t.servedBy;
     for (const text of out.notes ?? []) {
-      const seen = isStrictNote(text) ? conv.notesShown : notedByAdapter;
-      if (seen.has(text)) continue;
-      seen.add(text);
+      const strict = isStrictNote(text);
+      const seen = strict ? conv.notesShown : notedByAdapter;
+      const key = strict ? strictNoteKey(text) : text;
+      if (seen.has(key)) continue;
+      seen.add(key);
       t.note(text);
     }
     // A server that refused this request's images: the model is text-only from now on.
@@ -824,7 +836,10 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         reviewRound += 1;
         editedSinceReview = false;
         t.setReview(reviewRound, reviewOf);
-        conv.append({ role: 'user', parts: [{ type: 'text', text: reviewText(reviewRound, reviewOf, ask.prompt, t.images === false ? 0 : pictures.length) }] });
+        conv.append({
+          role: 'user',
+          parts: withGuide([{ type: 'text', text: reviewText(reviewRound, reviewOf, ask.prompt, t.images === false ? 0 : pictures.length) }], syncGuide(t, workspaceNow(), true)),
+        });
         continue;
       }
       return t.end('done', 'end_turn', null);
@@ -887,7 +902,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       throw err;
     }
     // Every call answered exactly once, in call order: capped, skipped and stopped ones too.
-    conv.append({ role: 'user', parts: results });
+    // A workspace the calls opened gives its notes with their results (syncGuide).
+    conv.append({ role: 'user', parts: withGuide(results, syncGuide(t, workspaceNow(), true)) });
     if (stoppedNow(t)) return;
     if (capped) {
       if (capped.reason === 'steps' && !finalStep) {

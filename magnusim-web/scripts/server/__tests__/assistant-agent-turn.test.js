@@ -63,7 +63,6 @@ const { stopAllAgentProcesses } = await import('../assistant/agents/process.ts')
 const { dropWarmKeeper } = await import('../assistant/agents/job-win.ts');
 const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
-const { GUIDE_CHANGED_NOTE } = await import('../assistant/loop.ts');
 const { TAB_BUSY_TEXT, TURN_UPDATE_MS } = await import('../assistant/turns.ts');
 const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
@@ -2380,7 +2379,7 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
     }
   });
 
-  it('a later prompt carries no notes again, and a changed workspace guide adds the note once', async () => {
+  it('a later prompt carries no notes again, and a changed workspace guide goes once ahead of the prompt', async () => {
     const w = await world();
     try {
       const r = await w.turn({ text: 'One.', provider: 'agent:claude', tab: 'tab-1' });
@@ -2408,9 +2407,10 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
       await settledTurn(r3.turn);
       const prompts = claude.received(lastPid(claude)).filter((m) => m.method === 'session/prompt');
       assert.equal(prompts.length, 3);
-      assert.deepEqual(prompts[1].params.prompt.map((b) => b.text.slice(0, 4)), ['Two.', 'App ']);
-      assert.equal(H.eventsOf(r2.turn).filter((x) => x.type === 'note' && x.text === GUIDE_CHANGED_NOTE).length, 1);
-      assert.equal(H.eventsOf(r3.turn).filter((x) => x.type === 'note' && x.text === GUIDE_CHANGED_NOTE).length, 0);
+      assert.deepEqual(prompts[1].params.prompt.map((b) => b.text.slice(0, 4)), ['Note', 'Two.', 'App ']);
+      assert.equal(prompts[1].params.prompt[0].text, (await import('../assistant/prompt.ts')).guideBlock('A newer guide.', 'Workspace demo'));
+      assert.deepEqual(prompts[2].params.prompt.map((b) => b.text.slice(0, 4)), ['Thre', 'App '], 'sent once');
+      assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'note' && /new conversation/.test(x.text)), 'no note asks for a new conversation');
     } finally {
       await w.close();
     }
@@ -2503,7 +2503,7 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
         assert.ok(texts[0].startsWith(`${NOTE_PREFIX} `), `${how}: the agent note first: ${texts[0].slice(0, 60)}`);
         assert.equal(texts[1], guideBlock(GUIDE, 'Workspace demo'), `${how}: the workspace notes`);
         assert.equal(texts[2], 'Two.');
-        assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'note' && x.text === GUIDE_CHANGED_NOTE), `${how}: no note that the workspace notes changed`);
+        assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'note' && /new conversation/.test(x.text)), `${how}: no note that the workspace notes changed`);
       } finally {
         custom.configure({ mcpLate: null });
         custom.release(hold);

@@ -66,7 +66,7 @@ export class Conversation {
   lastUsed: number;
   /** The first workspace guide this conversation met, frozen. */
   guide: FrozenGuide | null = null;
-  /** Guides that differed from the frozen one and were noted once. */
+  /** Guides that differed from the frozen one, each sent once in a later user message. */
   readonly guidesNoted = new Set<string>();
   /** The adapter's strict notes (its tools reduced or unchecked by the provider) shown in it once. */
   readonly notesShown = new Set<string>();
