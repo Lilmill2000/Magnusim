@@ -404,8 +404,15 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             const id = str(bc.id);
             const rev = revOf(bc);
             sync(['bcs', 'tree'], sim, { bc: [id] }, rev !== null ? { [id]: rev } : {});
+            // A new Wall takes the wall type that walls with no BC don't have, as the panel's Add
+            // does (bcCatalog newBcRecord). Seen live: the model expected No-slip and found Slip.
+            const wall = str(bc.wall_type);
+            const wallNote =
+              action === 'add' && wall && parsed.values.wall_type === undefined
+                ? ` It is ${wall}: a new Wall takes the other wall type than walls with no BC; values wall_type changes it.`
+                : '';
             return okDone({
-              done: `${action === 'add' ? 'Added' : 'Saved'} boundary condition ${quoted(bc.name)} (${cleanText(str(bc.bc_type), 60)}) on ${nextFaces.length} face${nextFaces.length === 1 ? '' : 's'}.`,
+              done: `${action === 'add' ? 'Added' : 'Saved'} boundary condition ${quoted(bc.name)} (${cleanText(str(bc.bc_type), 60)}${wall ? `, ${cleanText(wall, 20)}` : ''}) on ${nextFaces.length} face${nextFaces.length === 1 ? '' : 's'}.${wallNote}`,
               ids: { bc: id },
               rev,
             });

@@ -213,7 +213,8 @@ function answer(w, method, path, q, body) {
     case '/api/bcs':
       if (body && body.delete) return { ok: true, deleted: true };
       if (body && body.defaults) return { ok: true, defaults: body.defaults };
-      return { ok: true, bc: { id: body.id || 'bc-new', name: body.name || 'Velocity inlet 1', bc_type: body.bc_type, faces: body.faces, rev: 1 } };
+      // As the app's route: a new Wall takes the other wall type than walls with no BC (No-slip here).
+      return { ok: true, bc: { id: body.id || 'bc-new', name: body.name || 'Velocity inlet 1', bc_type: body.bc_type, faces: body.faces, rev: 1, ...(body.bc_type === 'Wall' ? { wall_type: body.wall_type || 'Slip' } : {}) } };
     case '/api/mesh/refinements':
       if (body && body.copy_from_mesh) return { ok: true, copied: true, copied_count: 1, lost_faces: [] };
       if (body && body.delete) return { ok: true, deleted: true };

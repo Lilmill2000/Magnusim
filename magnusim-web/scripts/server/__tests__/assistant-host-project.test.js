@@ -81,6 +81,12 @@ describe('project_edit: every action', () => {
       ['/api/plugin-studies/create', { project_id: 'p-new', plugin: 'cad', kind: 'part', title: 'Part 1' }],
     ]);
   });
+  it('start_action given a project_id is refused, pointing at study_edit plugin_create (seen live: a stray "Part project")', async () => {
+    fresh();
+    const r = await sent(t(), proj({ action: 'start_action', project_id: 'p2', plugin: 'cad', key: 'part' }));
+    assert.deepEqual([r.out.error.code, r.writes], ['invalid_input', []]);
+    assert.match(r.out.error.hint, /study_edit \{action:'plugin_create', plugin:'cad', kind:'part'\}/);
+  });
   it('update (only the given fields) and move: by project_id from anywhere (the card actions)', async () => {
     fresh();
     let r = await sent(t(), proj({ action: 'update', project_id: 'p2', title: 'Elbow', description: 'Bent pipe' }), rt({ ctx: { projectId: null, simulationId: null } }));

@@ -215,6 +215,15 @@ describe('setup_edit: every kind × action, the exact routes and bodies', () => 
     r = await sent(t(), setup({ kind: 'bc', action: 'add', type: 'Velocity inlet', name: 'Inlet' }));
     assert.deepEqual([r.out.error.code, r.writes], ['invalid_input', []]);
   });
+  it("a new Wall's answer says its wall type, and why when the model gave none (seen live: it expected No-slip and found Slip)", async () => {
+    fresh();
+    let r = await sent(t(), setup({ kind: 'bc', action: 'add', type: 'Wall', name: 'Pipe wall', faces: ['face 1@Body1'] }));
+    assert.equal(r.out.data.done, 'Added boundary condition "Pipe wall" (Wall, Slip) on 1 face. It is Slip: a new Wall takes the other wall type than walls with no BC; values wall_type changes it.');
+    r = await sent(t(), setup({ kind: 'bc', action: 'add', type: 'Wall', name: 'Wall 2', faces: ['face 1@Body1'], values: [{ key: 'wall_type', value: '"No-slip"' }] }));
+    assert.equal(r.out.data.done, 'Added boundary condition "Wall 2" (Wall, No-slip) on 1 face.');
+    r = await sent(t(), setup({ kind: 'bc', action: 'add', type: 'Velocity inlet', name: 'Inlet 2', faces: ['face 5@Body2'] }));
+    assert.equal(r.out.data.done, 'Added boundary condition "Inlet 2" (Velocity inlet) on 1 face.');
+  });
   it('a face two bodies share is refused (inside_face), an unknown face is not_found: nothing written', async () => {
     fresh();
     let r = await sent(t(), setup({ kind: 'bc', action: 'add', type: 'Wall', faces: ['face 3@Body1', 'face 4@Body2'] }));

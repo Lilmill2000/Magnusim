@@ -72,7 +72,7 @@ export function explainReadyTool(d: HostToolDeps): HostToolDef {
           });
         // A stale mesh is put first without `ready` changing (w27): the issues decide.
         const ready = issues.length === 0 && verdict.ready !== false;
-        return okData({ ready, simulation_id: sim, issues }, ready ? 'Ready to run' : `${issues.length} issue${issues.length === 1 ? '' : 's'} block the run`);
+        return okData({ ready, simulation_id: sim, issues }, ready ? 'Ready to run' : `${issues.length} issue${issues.length === 1 ? ' blocks' : 's block'} the run`);
       } catch (err) {
         return failed(err);
       }

@@ -365,6 +365,16 @@ describe('the host tools', () => {
     tick();
     const none = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt({ ctx: ctx({ projectId: null, tab: null }) }));
     assert.equal(none.error.code, 'no_project');
+    // One issue reads "1 issue blocks the run" (seen live: "1 issue block the run").
+    const normal = app.answers.get('/api/run/ready');
+    try {
+      app.answers.set('/api/run/ready', () => ({ ...READY, issues: READY.issues.slice(1) }));
+      tick();
+      const one = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt());
+      assert.equal(one.summary, '1 issue blocks the run');
+    } finally {
+      app.answers.set('/api/run/ready', normal);
+    }
   });
 
   it('the server’s own wiring: the app over loopback, the version from package.json', async () => {

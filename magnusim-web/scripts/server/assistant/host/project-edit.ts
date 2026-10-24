@@ -85,7 +85,7 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
     name: 'project_edit',
     title: 'Change or create a project',
     description:
-      'create, update (title, description, category, units, folder), move, new_folder, from_sample, start_action. project_id "" = this window\'s. A units change needs the project open here. Unused fields: "".',
+      'create, update (title, description, category, units, folder), move, new_folder, from_sample, start_action (a new project with a plugin study; to add one to an existing project use study_edit plugin_create). project_id "" = this window\'s. A units change needs the project open here. Unused fields: "".',
     schema: objectSchema({
       action: S.enum(PROJECT_ACTIONS),
       project_id: S.id('update/move: the project; "" = this window\'s'),
@@ -141,6 +141,15 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
           case 'start_action': {
             const plugin = str(input.plugin).trim();
             const kind = str(input.key).trim();
+            // start_action always makes a new project. Seen live: given a project_id, it made a
+            // stray "Part project" beside the one the model meant.
+            if (str(input.project_id).trim()) {
+              return fail(
+                'invalid_input',
+                'start_action makes a new project; it does not add to an existing one.',
+                `To add a study to that project: study_edit {action:'plugin_create', plugin:'${cleanText(plugin, 64)}', kind:'${cleanText(kind, 80)}'} with the project open.`,
+              );
+            }
             const plugins = records(((await d.hostCall('plugins.list', {}, o)) as Record<string, unknown>).plugins);
             const p = plugins.find((x) => x.key === plugin && x.enabled !== false);
             const act = p ? records(p.start_actions).find((a) => a.study_kind === kind) : null;
