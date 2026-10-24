@@ -197,7 +197,11 @@ def _list_end(raw: Any, open_pos: int, *, nested: bool) -> int:
 
 
 _PARENS = bytes.maketrans(b"()", b"  ")
-ASCII_CHUNK = 1 << 22  # bytes of an ascii list parsed at a time
+# Bytes of an ascii list parsed at a time. A piece's parse holds about 9 times its size
+# and up to _workers() pieces are parsed at once, so the peak grows with the piece: at
+# 4 MB it was 140-180 MB on a 125 000 cell mesh (how many pieces overlapped decided it),
+# at 1 MB under 50 MB and no slower.
+ASCII_CHUNK = 1 << 20
 
 
 def _pieces(raw: Any, start: int, end: int, cut: bytes) -> Iterator[bytes]:
@@ -343,12 +347,17 @@ def _face_piece(piece: bytes, label: int) -> tuple[Any, Any]:
     vals, last = _int_tokens(body)
     if vals.size == 0:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int32 if label == 4 else np.int64)
+    # The next character past white space is the next number's first digit, or a mark ('(',
+    # ')', anything else not a digit) when one comes before it: found among the marks (two
+    # per face), never with an array per byte (a 4 MB piece held about 60 MB that way).
     space = (body == 32) | (body == 10) | (body == 13) | (body == 9)
-    idx = np.arange(body.size, dtype=np.int32)
-    nxt = np.minimum.accumulate(np.where(space, np.int32(body.size), idx)[::-1])[::-1]
-    after = nxt[np.minimum(last + 1, body.size - 1)]
-    is_count = (last + 1 < body.size) & (body[np.minimum(after, body.size - 1)] == ord("("))
-    del space, idx, nxt, after
+    mark = np.flatnonzero(~space & (np.subtract(body, 48, dtype=np.uint8) >= 10))
+    del space
+    before = np.searchsorted(mark, last)  # marks before each number (none falls inside one)
+    has_mark = np.append(before[1:], mark.size) > before
+    is_count = np.zeros(vals.size, dtype=bool)
+    is_count[has_mark] = body[mark[before[has_mark]]] == ord("(")
+    del mark, before, has_mark
     sizes = vals[is_count]
     labels = vals[~is_count].astype(np.int32 if label == 4 else np.int64)
     if labels.size != int(sizes.sum()):
