@@ -124,10 +124,10 @@ function cli(args, input = '', { withPort = true, env = {}, answers = null, path
 
 describe('assistant-run.mjs', () => {
   it('prints the answer, each tool call (→) and its result (✓); exit 0; the conversation id on stderr', async () => {
-    fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+    fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'All good.' });
     const r = await cli(['How is the app?']);
     assert.equal(r.code, 0, r.stderr);
-    assert.match(r.stdout, /^Checking\.\n→ app_status \{\}\n✓ Magnusim .*, compute idle, 0 queued\nAll good\.\n$/);
+    assert.match(r.stdout, /^Checking\.\n→ app_status \{"with_projects":false\}\n✓ Magnusim .*, compute idle, 0 queued\nAll good\.\n$/);
     assert.match(r.stderr, /\(conversation c-[0-9a-z]+-[0-9a-f]+; continue it with --conversation c-/);
   });
 

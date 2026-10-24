@@ -109,7 +109,7 @@ test("another cloud provider asks again; Don't send fails only that call, and th
   await newConversation(page);
   const before = chats().length;
 
-  fake.reply({ tools: [projects] }, { tools: [{ name: 'app_status', input: {} }] }, { text: 'I may not read the list; Magnusim is fine.' });
+  fake.reply({ tools: [projects] }, { tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'I may not read the list; Magnusim is fine.' });
   await dockSend(page, 'Which projects do I have, and is the app fine?');
   const card = dockGate(page);
   await expect(card.locator('.dock-gate-title')).toHaveText(LIST_TITLE, STEP);

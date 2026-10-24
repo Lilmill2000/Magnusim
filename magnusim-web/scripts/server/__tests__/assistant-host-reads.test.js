@@ -86,6 +86,27 @@ describe('app_status', () => {
   });
 });
 
+describe('app_status with_projects', () => {
+  it("names another project's running and queued jobs only when asked, and asks for that by the project list's question (seen live: a mesh it could not stop from Home)", async () => {
+    fresh();
+    app.w.queue = {
+      ...app.w.queue,
+      busy: { kind: 'mesh', project_id: 'p2', project_title: 'Other project', mesh_id: 'm9', mesh_name: 'Fine mesh' },
+    };
+    const home = rt({ ctx: { projectId: null } });
+    let d = await ok('app_status', { with_projects: false }, home);
+    assert.deepEqual(d.compute.live, { kind: 'mesh', mine: false });
+    assert.deepEqual(d.compute.queue, [{ kind: 'solve', mine: false, position: 1 }]);
+    d = await ok('app_status', { with_projects: true }, home);
+    assert.deepEqual(d.compute.live, { kind: 'mesh', mine: false, project_id: 'p2', project_title: 'Other project', name: 'Fine mesh' });
+    assert.deepEqual(d.compute.queue, [{ kind: 'solve', mine: false, position: 1, id: 'q-1', project_id: 'p2', project_title: '', name: 'Other run' }]);
+    // The runner asks the project list's question first (LIST_CONSENT_KEY) only for with_projects.
+    const t = tools().app_status;
+    assert.equal(t.projectOf({ with_projects: true }), '*projects');
+    assert.equal(t.projectOf({ with_projects: false }), null);
+  });
+});
+
 describe('catalog', () => {
   const cat = (kind, key = '') => ok('catalog', { kind, key });
   it('every kind lists; a key gives that item\'s fields', async () => {

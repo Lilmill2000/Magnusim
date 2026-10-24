@@ -120,7 +120,7 @@ test("loaded with room: the answer may run to 8192 tokens, and the conversation 
 test("a local server that doesn't say the model's context: the terminal says the tools are offered up to 16,384 tokens of definitions, once, and the answer comes", async () => {
   // The scripted model listed with no row: its context is not known.
   fake.models([MODEL], 'compat');
-  fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+  fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'All good.' });
   const before = chats().length;
   const { code, out } = await terminal(['How is the app?']);
   expect(code, out).toBe(0);

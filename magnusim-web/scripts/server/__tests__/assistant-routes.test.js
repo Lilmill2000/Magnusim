@@ -564,7 +564,7 @@ describe('turns', () => {
   it('a local-server turn: 202, the long-poll, a host tool through the app, then done; 404 for an unknown turn', async () => {
     assert.equal((await localServer()).status, 200);
     const before = fake.requests().length;
-    fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+    fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'All good.' });
     const r = await post('/api/assistant/turns', { text: 'How is the app?' });
     assert.equal(r.status, 202, r.text);
     assert.match(r.json.turn, /^t-[0-9a-z]+-[0-9a-f]{8}$/);
@@ -637,7 +637,7 @@ describe('turns', () => {
       // The person loads the model again with a longer context and tries again at once, in the
       // same conversation: the failed turn dropped the kept row, so the server is asked again.
       fake.models([{ id: 'qwen3.8-27b', context: 32768, type: 'llm' }], 'compat');
-      fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'All good.' });
+      fake.reply({ text: 'Checking.', tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'All good.' });
       r = await post('/api/assistant/turns', { text: 'How is the app?', conversation: r.json.conversation });
       assert.equal(r.status, 202, r.text);
       ({ turn } = await follow(r.json.turn));
@@ -701,7 +701,7 @@ describe('turns', () => {
       assert.equal((await post('/api/assistant/key', { provider, key: keys[provider] })).status, 200);
       assert.equal((await post('/api/assistant/settings', { provider, model: models[provider], privacy: 'allow' })).status, 200);
       const before = fake.requests().length;
-      fake.reply({ thinking: 'Let me look.', text: 'Looking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'Fine.' });
+      fake.reply({ thinking: 'Let me look.', text: 'Looking.', tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'Fine.' });
       const r = await post('/api/assistant/turns', { text: 'Status?' });
       assert.equal(r.status, 202, r.text);
       const { turn, events } = await follow(r.json.turn);
@@ -719,7 +719,7 @@ describe('turns', () => {
     assert.equal((await localServer()).status, 200);
     assert.equal((await post('/api/assistant/settings', { models: { anthropic: 'claude-sonnet-5-5' }, privacy: 'allow' })).status, 200);
     const before = fake.requests().length;
-    fake.reply({ text: 'Looking.', tools: [{ name: 'app_status', input: {} }] }, { text: 'Fine.' });
+    fake.reply({ text: 'Looking.', tools: [{ name: 'app_status', input: { with_projects: false } }] }, { text: 'Fine.' });
     const r = await post('/api/assistant/turns', { text: 'Status?', provider: 'anthropic' });
     assert.equal(r.status, 202, r.text);
     const { turn, events } = await follow(r.json.turn);

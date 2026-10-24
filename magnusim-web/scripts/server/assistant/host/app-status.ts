@@ -2,8 +2,12 @@
  * app_status (Core host tools spec 4.1): the app, the Assistant's own settings (read only:
  * nothing writes them), the plugins with their environments, the units preference, this
  * PC's hardware summary and the compute queue. Not project data: another project's queue
- * rows carry only their kind and place, never a name, an id or the project.
+ * rows carry only their kind and place, never a name, an id or the project; with
+ * `with_projects` they name their project too, after the project list's own question (as the
+ * person's Queue does from any window: seen live, the model could not stop "the mesh that is
+ * generating" from Home, not knowing whose it was).
  */
+import { LIST_CONSENT_KEY } from '../privacy.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { failed, hostTool, isRecord, num, objectSchema, offeredIn, okData, placeOf, records, str, text, usedOf, via, type HostToolDeps, type HostToolDef } from './common.ts';
 
@@ -13,14 +17,16 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
     name: 'app_status',
     title: 'Read the app status',
     description:
-      "Magnusim's version, the Assistant's provider, model, caps and today's spend (you can't change these), the plugins and their environments, the units preference, this PC's hardware and the compute queue. Reads no project.",
-    schema: objectSchema({}),
+      "Magnusim's version, the Assistant's provider, model, caps and today's spend (you can't change these), the plugins and their environments, the units preference, this PC's hardware and the compute queue. with_projects: true also names the project of each running or queued job (it reads the project list; the user may be asked once).",
+    schema: objectSchema({ with_projects: { type: 'boolean' } }),
     risk: 'read',
+    // Naming other projects' jobs reads the project list: its own question (LIST_CONSENT_KEY).
+    projectOf: (input: Record<string, unknown>) => (input.with_projects === true ? LIST_CONSENT_KEY : null),
     projectData: false,
     priority: 50,
     contexts,
     available: offeredIn(contexts),
-    async run(_input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
+    async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       try {
         const own = rt.ctx.assistant;
         const [version, assistant, queue, prefs, pluginsList, settings, spent] = await Promise.all([
@@ -47,17 +53,21 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
         });
         // "Mine" is the turn's project; another project's rows say only what kind waits where.
         const mine = rt.ctx.projectId;
+        // with_projects (the project list allowed): another project's job says whose it is.
+        const named = input.with_projects === true;
+        const whose = (row: Record<string, unknown>) =>
+          named && row.project_id ? { project_id: text(row.project_id, 120), project_title: text(row.project_title ?? ''), name: text(row.mesh_name ?? row.name) } : {};
         const busy = isRecord(queue.busy) ? queue.busy : null;
         const live = busy
           ? busy.project_id && busy.project_id === mine
             ? { kind: text(busy.kind, 20), mine: true, name: text(busy.mesh_name ?? busy.name) }
-            : { kind: text(busy.kind, 20), mine: false }
+            : { kind: text(busy.kind, 20), mine: false, ...whose(busy) }
           : null;
         const items = records(queue.items).slice(0, 50).map((row, i) => {
           const position = num(row.position) ?? i + 1;
           return row.project_id && row.project_id === mine
             ? { id: text(row.id, 80), kind: text(row.kind, 20), mine: true, name: text(row.name), position }
-            : { kind: text(row.kind, 20), mine: false, position };
+            : { kind: text(row.kind, 20), mine: false, position, ...(named && row.project_id ? { id: text(row.id, 80), ...whose(row) } : {}) };
         });
         const hw = isRecord(prefs.hardware) ? prefs.hardware : null;
         const used = usedOf(rt.ctx);
