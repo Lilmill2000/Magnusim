@@ -1465,6 +1465,29 @@ async function testPreviewHold(stepPath, event) {
   while (existsSync(hold)) await new Promise((r) => setTimeout(r, 100));
 }
 
+/** One attempt at removing a temp stage (removeTree retries it); tests stand in one that fails. */
+let stageRmOnce;
+
+/** Tests stand in `fn(path)` for one removal attempt of a temp stage (null puts fs rm back). */
+export function setStageRemoverForTests(fn) {
+  stageRmOnce = fn || undefined;
+}
+
+/**
+ * Remove a preview's stage folder or a thumbnail's render outside the project. Windows
+ * refuses while the indexer, antivirus or a writer finishing holds a file, and rmSync gives up
+ * at once (scripts/remove-tree.js): those left ~1,250 empty magnusim-preview-* folders in
+ * %TEMP%, and the throw from a finally failed a preview that was made. One still held after
+ * the retries is left and logged, never thrown.
+ */
+async function removeStaged(path) {
+  try {
+    await removeTree(path, { maxRetries: 8, retryDelay: 100, rm: stageRmOnce });
+  } catch (e) {
+    console.warn('[CFD W16] temp not removed', path, String(e));
+  }
+}
+
 /** Which file it is, and its age and size ('' when it is not there). */
 function fileStamp(file) {
   try {
@@ -1578,7 +1601,7 @@ async function buildCadPreviewAt(projectId, stepPath, paths, retried = false) {
       return { ok: false, status: 404, body: { error: 'geometry removed while its CAD preview was made', project_id: projectId } };
     }
   } finally {
-    rmSync(stageDir, { recursive: true, force: true });
+    await removeStaged(stageDir);
     await testPreviewHold(stepPath, 'end');
   }
   return { ok: true, ...paths, step_path: stepPath, cached: false };
@@ -2116,7 +2139,7 @@ async function renderGeometryThumb(projectId, retried = false) {
     thumbFailures.delete(failKey);
   } catch (e) {
     thumbFailures.set(failKey, { at: Date.now(), detail: String(e).slice(0, 2000) });
-    rmSync(rendered, { force: true });
+    await removeStaged(rendered);
     if (existsSync(out) && statSync(out).size > 80) {
       return { ok: true, path: out, bytes: readFileSync(out), stale: true, project: proj };
     }
@@ -2124,7 +2147,7 @@ async function renderGeometryThumb(projectId, retried = false) {
   }
   const made = existsSync(rendered) && statSync(rendered).size >= 80;
   const placed = made && placeThumb(id, out, rendered, geomId);
-  rmSync(rendered, { force: true });
+  await removeStaged(rendered);
   if (!made) {
     return { ok: false, status: 500, body: { error: 'thumb missing after render', path: out } };
   }

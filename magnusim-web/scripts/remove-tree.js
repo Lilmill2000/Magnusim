@@ -18,6 +18,8 @@ const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 
 /**
  * @typedef {{ maxRetries?: number, retryDelay?: number }} RemoveTreeOptions
+ * @typedef {RemoveTreeOptions & { rm?: (path: string) => Promise<void> }} RemoveTreeAsyncOptions
+ *   `rm`: one attempt (tests stand in a remover that fails first); fs rm by default.
  */
 
 /** @param {unknown} err */
@@ -42,15 +44,18 @@ export function removeTreeSync(path, { maxRetries = 10, retryDelay = 100 } = {})
   }
 }
 
+/** @param {string} path */
+const rmOnce = (path) => rm(path, { recursive: true, force: true });
+
 /**
  * Remove `path` (a missing one is fine) without blocking the server while it waits.
  * @param {string} path
- * @param {RemoveTreeOptions} [opts]
+ * @param {RemoveTreeAsyncOptions} [opts]
  */
-export async function removeTree(path, { maxRetries = 10, retryDelay = 100 } = {}) {
+export async function removeTree(path, { maxRetries = 10, retryDelay = 100, rm: removeOnce = rmOnce } = {}) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await rm(path, { recursive: true, force: true });
+      await removeOnce(path);
       return;
     } catch (err) {
       if (!isLock(err) || attempt >= maxRetries) throw err;
