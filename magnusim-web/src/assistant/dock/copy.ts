@@ -62,8 +62,10 @@ export const NEXT_PICTURE = 'Next picture';
 
 // ---------------------------------------------------------------- the intro of an empty conversation (7)
 
-export const INTRO_HOME = 'Ask about Magnusim and your projects. To have the Assistant build a part, open a project and a CAD Part, then ask here.';
-export const INTRO_PROJECT = 'The Assistant can read this project. Open a CAD Part to have it build or change one.';
+export const INTRO_HOME =
+  "Ask about your projects, or tell the Assistant what to simulate: it can make a project, import a geometry you attach, set up a study, mesh it and run it. It asks before anything that computes or can't be undone.";
+export const INTRO_PROJECT =
+  'Tell the Assistant what to set up or run in this project (studies, materials, boundary conditions, meshes, runs), or ask about its results. Open a CAD Part to have it build or change one.';
 export const introCad = (workspace: string): string =>
   `Tell the Assistant what to model in ${workspace}. You can watch each step, pause or take over in the Part, and stop it here.`;
 export const introWorkspace = (workspace: string): string => `Tell the Assistant what to do in ${workspace}.`;

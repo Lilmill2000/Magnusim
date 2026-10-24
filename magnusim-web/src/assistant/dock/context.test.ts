@@ -63,10 +63,10 @@ describe('useConnectingWindow', () => {
 describe('introOf', () => {
   it('Home, a project, a CAD Part, another workspace with tools', () => {
     const at = (projectId: string | null, ws: Parameters<typeof introOf>[0]['workspace'] = null) => introOf({ projectId, projectTitle: null, simulationId: null, workspace: ws });
-    expect(at(null)).toMatch(/^Ask about Magnusim/);
-    expect(at('p1')).toMatch(/^The Assistant can read this project/);
+    expect(at(null)).toMatch(/^Ask about your projects, or tell the Assistant what to simulate/);
+    expect(at('p1')).toMatch(/^Tell the Assistant what to set up or run in this project/);
     expect(at('p1', { plugin: 'cad', key: 'part', name: 'Part 1', state: 'tools' })).toMatch(/^Tell the Assistant what to model in Part 1\./);
     expect(at('p1', { plugin: 'ai-demo', key: 'counter', name: 'Counter', state: 'tools' })).toBe('Tell the Assistant what to do in Counter.');
-    expect(at('p1', { plugin: 'cad', key: 'part', name: 'Part 1', state: 'none' })).toMatch(/^The Assistant can read this project/);
+    expect(at('p1', { plugin: 'cad', key: 'part', name: 'Part 1', state: 'none' })).toMatch(/^Tell the Assistant what to set up or run in this project/);
   });
 });

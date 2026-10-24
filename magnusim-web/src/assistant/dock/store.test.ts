@@ -392,6 +392,10 @@ describe('the conversation per context', () => {
     // Remembered from another context: not here.
     expect(chooseConversation(list, { project_id: 'p1', workspace: null }, 'h-old')).toBe('p1-new');
     expect(chooseConversation(list, { project_id: 'p2', workspace: null }, null)).toBeNull();
+    // A request this tab started, still at work: its conversation, wherever the window is now.
+    const moved = [...list, { ...row('c-moved', 'p1', '2026-10-20T06:00:00Z'), running: 't-mine' }];
+    expect(chooseConversation(moved, { project_id: 'p1', workspace: null }, 'p1-old', new Set(['t-mine']))).toBe('c-moved');
+    expect(chooseConversation(moved, { project_id: 'p1', workspace: null }, 'p1-old', new Set(['t-other']))).toBe('p1-old');
   });
 
   it('reads the list, shows the context\'s conversation, and chooses again in another project unless the person picked one', async () => {
@@ -416,6 +420,25 @@ describe('the conversation per context', () => {
     await again;
     expect(dockStoreSnapshot().shown).toBeNull();
     // Another context chooses again.
+    setDockContext({ project_id: null, workspace: null });
+    expect(dockStoreSnapshot().shown).toBe('h-new');
+  });
+
+  it('a request this tab started that moves the window to another project keeps its conversation shown; once it ended, the place chooses again', async () => {
+    const reading = refreshConversations();
+    await sent[0].answer(200, { ok: true, conversations: list });
+    await reading;
+    // Home: a new conversation, its request started here (not heard of yet: at work).
+    showConversation('c-new');
+    addLocalTurn('c-new', 't-run');
+    setDockContext({ project_id: 'p1', workspace: null });
+    expect(dockStoreSnapshot().shown).toBe('c-new');
+    // The list is read again, so the conversation's row says where it is now.
+    expect(sent.map((s) => s.url)).toEqual(['/api/assistant/conversations', '/api/assistant/conversations']);
+    await sent[1].answer(200, { ok: true, conversations: [...list, row('c-new', 'p1', '2026-10-20T10:00:00Z')] });
+    expect(dockStoreSnapshot().shown).toBe('c-new');
+    // Nothing of this tab at work in the shown one: another project chooses its own.
+    showConversation('p1-new');
     setDockContext({ project_id: null, workspace: null });
     expect(dockStoreSnapshot().shown).toBe('h-new');
   });

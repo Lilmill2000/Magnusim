@@ -24,8 +24,8 @@ describe('the dock copy', () => {
     expect(copy.yourPictureAlt(1, 2)).toBe('Your picture 1 of 2');
     expect([copy.SHOW_EARLIER, copy.NEW_MESSAGES, copy.ELSEWHERE]).toEqual(['Show earlier requests', 'New messages ↓', 'Elsewhere']);
     expect([copy.PICTURE_VIEWER, copy.CLOSE_PICTURE, copy.PREVIOUS_PICTURE, copy.NEXT_PICTURE]).toEqual(['Picture viewer', 'Close the picture', 'Previous picture', 'Next picture']);
-    expect(copy.INTRO_HOME).toBe('Ask about Magnusim and your projects. To have the Assistant build a part, open a project and a CAD Part, then ask here.');
-    expect(copy.INTRO_PROJECT).toBe('The Assistant can read this project. Open a CAD Part to have it build or change one.');
+    expect(copy.INTRO_PROJECT).toBe('Tell the Assistant what to set up or run in this project (studies, materials, boundary conditions, meshes, runs), or ask about its results. Open a CAD Part to have it build or change one.');
+    expect(copy.INTRO_HOME).toMatch(/^Ask about your projects, or tell the Assistant what to simulate: it can make a project/);
     expect(copy.introCad('Part 1')).toBe('Tell the Assistant what to model in Part 1. You can watch each step, pause or take over in the Part, and stop it here.');
     expect(copy.introWorkspace('Counter')).toBe('Tell the Assistant what to do in Counter.');
   });

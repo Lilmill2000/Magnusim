@@ -206,6 +206,9 @@ test('from Home the request is bound to the window: core__show opens the project
   for (const name of ['setup_edit', 'study_edit', 'import_file']) expect(homeTools, "Home offers no tool that needs the window's project").not.toContain(name);
   expect(wingTools, "the next step's tools are the workbench's").toEqual(expect.arrayContaining(['core__show', 'core__view', 'project_summary']));
   // The conversation is the project's now: the dock goes on with it here (no read-only notice), listed under "Here".
+  // Seen live: the dock showed the project's empty conversation, with this request under "Elsewhere".
+  await expect(dockPanel(page).locator('.dock-elsewhere [data-dock-turn]')).toHaveCount(0);
+  await expect(dockPanel(page).locator('[data-dock-menu]')).toContainText('Open the wing');
   await expect(dockPanel(page).locator('[data-dock-readonly]')).toHaveCount(0);
   await expect(dockPanel(page).getByRole('textbox', { name: 'Message to the Assistant' })).toBeVisible();
   await dockPanel(page).locator('[data-dock-menu]').click();

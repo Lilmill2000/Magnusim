@@ -279,7 +279,11 @@ const sameContext = (row: ConversationRow, ctx: DockContext) => (row.project_id 
  * The conversation to show in `ctx`: the one remembered for this tab when it is of this
  * context, else the context's newest (the list is newest first), else none (a new one).
  */
-export function chooseConversation(list: readonly ConversationRow[], ctx: DockContext, remembered: string | null): string | null {
+export function chooseConversation(list: readonly ConversationRow[], ctx: DockContext, remembered: string | null, mine: ReadonlySet<string> = new Set()): string | null {
+  // A request this tab started, still at work, wins: its conversation followed the window here
+  // (after a reload too, as opening a project from Home is; its key is kept for the session).
+  const working = list.find((row) => !!row.running && mine.has(row.running));
+  if (working) return working.id;
   const here = list.filter((row) => sameContext(row, ctx));
   if (remembered && here.some((row) => row.id === remembered)) return remembered;
   let newest: ConversationRow | null = null;
@@ -289,23 +293,41 @@ export function chooseConversation(list: readonly ConversationRow[], ctx: DockCo
 
 function choose(): void {
   if (picked) return;
-  const next = chooseConversation(conversations.list, context, readKey(STORAGE_KEYS.conv));
+  const next = chooseConversation(conversations.list, context, readKey(STORAGE_KEYS.conv), new Set([...keptTurns(), ...Object.values(local).flat()]));
   if (next !== shown) {
     shown = next;
     if (next) writeKey(STORAGE_KEYS.conv, next);
   }
 }
 
-/** Where the person is now; another project (or Home) chooses its conversation again. */
+/** Whether a request this tab started is still at work in conversation `conv` (or not heard of yet). */
+function runningHere(conv: string | null): boolean {
+  if (!conv) return false;
+  return (local[conv] ?? []).some((id) => !turns[id] || !isEnded(turns[id]));
+}
+
+/**
+ * Where the person is now; another project (or Home) chooses its conversation again, except
+ * while a request this tab started is at work in the one shown: that request and its
+ * conversation move with the window (the server moves them with the tab, core host tools spec
+ * 9.4), so the dock stays on it, and reads the list again so its row says where it is now.
+ * Seen live: the Assistant opened a project from Home, and the dock showed that project's
+ * empty conversation, with its own request under "Elsewhere".
+ */
 export function setDockContext(next: DockContext): void {
   start();
   const moved = (next.project_id ?? null) !== (context.project_id ?? null);
   if (!moved && next.workspace === context.workspace) return;
   context = { project_id: next.project_id ?? null, workspace: next.workspace ?? null };
   if (moved) {
-    picked = false;
-    shown = null;
-    choose();
+    if (runningHere(shown)) {
+      picked = true;
+      void refreshConversations();
+    } else {
+      picked = false;
+      shown = null;
+      choose();
+    }
   }
   publish();
 }
