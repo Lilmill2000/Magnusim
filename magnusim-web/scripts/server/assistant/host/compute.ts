@@ -145,21 +145,24 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
   const queueWords = (q: { busy: boolean; waiting: number } | null): string =>
     !q ? 'unknown' : !q.busy && !q.waiting ? 'starts now' : `${ordinal(q.waiting + 1)} in line`;
 
-  /** Names of the chained jobs, for the card ("Generate "Mesh 1"", "Start "Run 1""). */
-  async function chainSteps(projectId: string, simId: string, chain: string[], rt: AssessContext): Promise<string[]> {
+  /** Names of the chained jobs, for the card ("Generate "Mesh 1"", "Start "Run 1""), and each by its job id (the covered call's transcript line). */
+  async function chainSteps(projectId: string, simId: string, chain: string[], rt: AssessContext): Promise<{ steps: string[]; labels: Record<string, string> }> {
     const steps: string[] = [];
+    const labels: Record<string, string> = {};
     for (const raw of chain) {
       const ref = parseJobId(raw);
       if (!ref) continue;
+      let step = ref.job_id;
       try {
-        if (ref.kind === 'mesh') steps.push(`Generate ${quoted(text((await meshOf(projectId, simId, ref.id, rt))?.name) || ref.id)}`);
-        else if (ref.kind === 'solve') steps.push(`Start ${quoted((await runOf(projectId, simId, ref.id, rt))?.name || ref.id)}`);
-        else steps.push(ref.job_id);
+        if (ref.kind === 'mesh') step = `Generate ${quoted(text((await meshOf(projectId, simId, ref.id, rt))?.name) || ref.id)}`;
+        else if (ref.kind === 'solve') step = `Start ${quoted((await runOf(projectId, simId, ref.id, rt))?.name || ref.id)}`;
       } catch {
-        steps.push(ref.job_id);
+        step = ref.job_id;
       }
+      steps.push(step);
+      labels[raw] = step;
     }
-    return steps;
+    return { steps, labels };
   }
 
   /** The card's facts and its risk (C3: raise-only; never lower than the call's base). */
@@ -186,7 +189,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     if (!study) return plain;
     const title = await projectTitle(call, projectId, rt);
     const chain = Array.isArray(input.chain) ? input.chain.map(String).filter((c) => parseJobId(c)) : [];
-    const steps = chain.length ? await chainSteps(projectId, study.id, chain, rt) : [];
+    const { steps, labels } = chain.length ? await chainSteps(projectId, study.id, chain, rt) : { steps: [], labels: {} };
 
     if (action === 'mesh_generate') {
       const mesh = await meshOf(projectId, study.id, str(input.mesh_id), rt);
@@ -218,7 +221,12 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       const note = steps.length
         ? `Covers these steps, each once: 1. Generate ${quoted(name)}. ${steps.map((s, i) => `${i + 2}. ${s}.`).join(' ')} Nothing else is covered; you can stop either from the tree.`
         : `Generates ${quoted(name)} for study ${quoted(study.name)} in project ${quoted(title)}. It runs on this PC; other jobs wait in the queue.`;
-      return { risk: 'compute', note, detail: steps.length ? [{ label: 'Steps', value: [`Generate ${quoted(name)}`, ...steps].join(', then ') }, ...detail.slice(0, 4), ...estimateRow].slice(0, 6) : detail };
+      return {
+        risk: 'compute',
+        note,
+        detail: steps.length ? [{ label: 'Steps', value: [`Generate ${quoted(name)}`, ...steps].join(', then ') }, ...detail.slice(0, 4), ...estimateRow].slice(0, 6) : detail,
+        ...(steps.length ? { labels } : {}),
+      };
     }
 
     if (action === 'run_start' || action === 'run_continue') {

@@ -405,6 +405,8 @@ describe('compute and jobs cards (escalate, gateText)', () => {
     const a = await t.compute.escalate(i, ac());
     assert.equal(a.note, 'Covers these steps, each once: 1. Generate "Mesh 1". 2. Start "Run 1". Nothing else is covered; you can stop either from the tree.');
     assert.equal(a.detail[0].value, 'Generate "Mesh 1", then Start "Run 1"');
+    // The covered call's transcript line names its job as the card did.
+    assert.deepEqual(a.labels, { 'solve.r1': 'Start "Run 1"' });
     assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to mesh and run?');
   });
 
