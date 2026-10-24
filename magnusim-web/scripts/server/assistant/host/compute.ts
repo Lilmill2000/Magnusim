@@ -362,6 +362,16 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       const meshName = text(mesh?.name) || 'its mesh';
       return fail('not_ready', `${name} can't start: ${quoted(meshName)} is not generated.`, 'compute mesh_generate first, or chain both: compute {action:"mesh_generate", chain:["solve.<run_id>"]}.');
     }
+    // A run with no mesh of its own takes the one it starts on, as the page's Start does
+    // (runtime.js rememberRunMesh): the start route reads the run's own mesh, and without one
+    // falls back to an active mesh that may not be this study's ("Generated mesh case missing").
+    if (!cont && !str(run.mesh_id) && meshId) {
+      try {
+        await call('run.update', { project_id: projectId, simulation_id: study.id, run_id: runId, changes: { mesh_id: meshId }, base_rev: typeof run.rev === 'number' ? run.rev : undefined }, o(rt));
+      } catch (err) {
+        return failedCall(err);
+      }
+    }
     const startId = `ai-${newId()}`;
     const remember = (state: 'running' | 'queued') => started({ kind: 'solve', id: runId, name, project_id: projectId, simulation_id: study.id }, rt.turn, state);
     const sync = () => emitSync(deps, rt, { project_id: projectId, simulation_id: study.id, kinds: ['runs'], ids: { run: [runId] }, revs: {}, tool: `compute.${cont ? 'run_continue' : 'run_start'}` });

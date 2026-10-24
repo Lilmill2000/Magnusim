@@ -101,6 +101,7 @@ function answer(method, path, q, body) {
     return [200, { ok: true, run, runs: [S.run], runs_all: [S.run], active_run_id: S.run.id }];
   }
   if (path === '/api/run/start' || path === '/api/run/continue') return S.start;
+  if (path === '/api/run/update') return [200, { ok: true, run: { ...S.run, ...(body || {}) } }];
   if (path === '/api/run/stop') return S.runStop;
   if (path === '/api/times') return [200, { times: S.times, case_dir: q.get('case') }];
   if (path === '/api/results/export-vtk' && method === 'POST') return [202, { ok: true, job_id: 'job-exp-1', status: 'queued' }];
@@ -295,6 +296,23 @@ describe('compute', () => {
     out = await tools().compute.run(input({ action: 'run_start' }), rt());
     assert.equal(out.data.state, 'queued');
     assert.equal(writes().find((x) => x.path === '/api/compute-queue').body.mesh_generating, true);
+  });
+
+  it('run_start on a run with no mesh of its own: it takes the study mesh first, as the page Start does (seen live: "Generated mesh case missing" after the mesh had just finished)', async () => {
+    S.mesh.generated = true;
+    S.run = { ...S.run, mesh_id: '', rev: 4 };
+    const out = await tools().compute.run(input({ action: 'run_start' }), rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    const sent = writes().map((x) => [x.path, x.body]);
+    assert.deepEqual(sent.slice(0, 2), [
+      ['/api/run/update', { mesh_id: 'm1', project_id: P, simulation_id: 's1', run_id: 'r1', base_rev: 4 }],
+      ['/api/run/start', { project_id: P, simulation_id: 's1', run_id: 'r1', start_id: 'ai-abc123def456' }],
+    ]);
+    // A run that has its mesh is started as it is: no update.
+    app.seen = [];
+    S.run = { ...S.run, mesh_id: 'm1' };
+    await tools().compute.run(input({ action: 'run_start' }), rt());
+    assert.deepEqual(writes().map((x) => x.path), ['/api/run/start']);
   });
 
   it('run_continue: extra_iterations or end_time; busy queues it with settings.continue', async () => {
