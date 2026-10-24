@@ -19,7 +19,7 @@ process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 const { createHostTransport } = await import('../assistant/host-call.ts');
 const { paced } = await import('../assistant/host/common.ts');
 const { studyEditTool } = await import('../assistant/host/study-edit.ts');
-const { setupEditTool, SETUP_PAIRS, newMonitorRecord } = await import('../assistant/host/setup-edit.ts');
+const { setupEditTool, SETUP_PAIRS, newMonitorRecord, monitorBoundaryTokens } = await import('../assistant/host/setup-edit.ts');
 const { startFakeApp, makeRt, world, REGISTRY } = await import('./assistant-host-harness.js');
 
 let app;
@@ -381,9 +381,41 @@ describe('setup_edit: every kind × action, the exact routes and bodies', () => 
     r = await sent(t(), setup({ kind: 'saved_view', action: 'add', other_id: 'r1' }));
     assert.deepEqual([r.out.error.code, r.writes], ['deferred', []]);
   });
-  it('a new monitor record is the run panel\'s (src/monitorTargets.ts newMonitorRecord)', async () => {
+  it('a new monitor record is the run panel\'s (src/monitorTargets.ts newMonitorRecord), with its boundaries', async () => {
     const { newMonitorRecord: page } = await import('../../../src/monitorTargets.ts');
-    for (const row of REGISTRY.monitor) assert.deepEqual(newMonitorRecord(row, 'rc-x', 'M 1'), page(row, 'rc-x', 'M 1', {}), row.key);
+    for (const row of REGISTRY.monitor) {
+      assert.deepEqual(newMonitorRecord(row, 'rc-x', 'M 1'), page(row, 'rc-x', 'M 1', {}), row.key);
+      assert.deepEqual(newMonitorRecord(row, 'rc-x', 'M 1', { boundaries: ['bc-1', '@walls'] }), page(row, 'rc-x', 'M 1', { boundaries: ['bc-1', '@walls'] }), row.key);
+    }
+  });
+
+  it("a new boundary monitor starts on every boundary it can measure, as the panel's (boundaryChoices): Forces on the walls; one on any boundary on all of them", async () => {
+    const { boundaryChoices } = await import('../../../src/monitorTargets.ts');
+    const bcs = [
+      { id: 'bc-1', name: 'Inlet', bc_type: 'Velocity inlet', faces: ['face 1@Body1'] },
+      { id: 'bc-w', name: 'Wing', bc_type: 'No-slip wall', faces: ['face 2@Body1'] },
+      { id: 'bc-s', name: 'Flap', bc_type: 'wall', faces: ['face 3@Body1'] },
+      { id: 'bc-e', name: 'Empty wall', bc_type: 'Wall', faces: [] },
+      { id: 'bc-o', name: 'Out', bc_type: 'Pressure outlet', faces: ['face 4@Body1'] },
+    ];
+    // The page's family of a record, by its type (src/bcCatalog.ts familyKeyOf over the registry's rows).
+    const familyOf = (bc) => ({ 'Velocity inlet': 'velocity_inlet', 'No-slip wall': 'wall', wall: 'wall', Wall: 'wall', 'Pressure outlet': 'pressure_outlet' })[bc.bc_type] ?? '';
+    for (const row of REGISTRY.monitor.filter((m) => m.target === 'boundary')) {
+      const tokens = monitorBoundaryTokens(bcs, row.boundary_kinds, REGISTRY.bc_family);
+      assert.deepEqual(tokens, boundaryChoices(bcs, row.boundary_kinds, familyOf).map((c) => c.token), row.key);
+    }
+    assert.deepEqual(monitorBoundaryTokens(bcs, ['wall'], REGISTRY.bc_family), ['bc-w', 'bc-s', '@walls']);
+    assert.deepEqual(monitorBoundaryTokens(bcs, [], REGISTRY.bc_family), ['bc-1', 'bc-w', 'bc-s', 'bc-o', '@walls']);
+    // Through the tool: a Forces monitor the AI adds starts on the study's walls.
+    fresh();
+    app.w.bcs.push({ id: 'bc-w', name: 'Wing', bc_type: 'Wall', faces: ['face 2@Body1'] }, { id: 'bc-e', name: 'Empty', bc_type: 'Wall', faces: [] });
+    let r = await sent(t(), setup({ kind: 'monitor', action: 'add', other_id: 'r1', type: 'forces', name: 'Lift' }));
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    const forces = r.writes[0].body.result_controls.find((x) => x.name === 'Lift');
+    assert.deepEqual(forces.boundaries, ['bc-w', '@walls']);
+    // Given boundaries are kept as given.
+    r = await sent(t(), setup({ kind: 'monitor', action: 'add', other_id: 'r1', type: 'forces', name: 'Wing only', values: [{ key: 'boundaries', value: '["bc-w"]' }] }));
+    assert.deepEqual(r.writes[0].body.result_controls.find((x) => x.name === 'Wing only').boundaries, ['bc-w']);
   });
 
   it('geometry activate / link_choice / add_original / edit_in_cad', async () => {

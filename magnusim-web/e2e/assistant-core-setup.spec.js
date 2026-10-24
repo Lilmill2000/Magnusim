@@ -189,3 +189,47 @@ test("a units change asks first, naming what it converts; Don't leaves the units
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
   expect((await getJson(request, `/api/project?project_id=${project}`)).project.units).toBe('Metric');
 });
+
+test("a Forces monitor the Assistant adds starts on every wall, as one the person adds does: its panel shows them ticked", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  // A study of its own with a wall BC ("Wing") and an inlet, and its run.
+  const made = await postOk(request, '/api/simulation', { project_id: project });
+  const sid = String((made.simulation || made.sim || made).id || '');
+  expect(sid, JSON.stringify(made)).toBeTruthy();
+  await postOk(request, '/api/simulation/activate', { project_id: project, simulation_id: sid });
+  for (const [name, bcType, face] of [
+    ['Wing', 'Wall', 'face 1@Body1'],
+    ['Inlet', 'Velocity inlet', 'face 3@Body1'],
+  ]) {
+    await postOk(request, '/api/bcs', { project_id: project, simulation_id: sid, name, bc_type: bcType, faces: [face] });
+  }
+  const wing = (await getJson(request, `/api/bcs?project_id=${project}&simulation_id=${sid}`)).boundary_conditions.find((b) => b.name === 'Wing');
+  const wingToken = wing.id != null && String(wing.id) ? String(wing.id) : 'Wing';
+  const run = await postOk(request, `/api/run/create?project_id=${project}`, { project_id: project, simulation_id: sid, name: 'Run F' });
+  const rid = String(run.run_id || (run.run && (run.run.id || run.run.run_id)));
+  expect(rid, JSON.stringify(run)).toBeTruthy();
+  await openProject(page);
+  fake.reply({ tools: [{ name: 'setup_edit', input: setup({ simulation_id: sid, kind: 'monitor', action: 'add', other_id: rid, type: 'forces', name: 'Lift' }) }] }, { text: 'Added.' });
+  await dockSend(page, 'Add a Forces monitor to Run F');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 120_000 });
+  const rc = ((await getJson(request, `/api/run/status?project_id=${project}&simulation_id=${sid}`)).runs || []).find((r) => String(r.id) === rid).result_controls.find((x) => x.name === 'Lift');
+  expect(rc.boundaries).toEqual([wingToken, '@walls']);
+  // The person opens it: every wall ticked, the inlet not offered.
+  await openProject(page);
+  const studyRow = page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first();
+  if ((await page.evaluate(() => window.__CFD_W17__.activeId)) !== sid) await studyRow.click();
+  await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
+  const runsFolder = page.locator(`#left-tree [data-w17-sim-id="${sid}"] li[data-w27-sim-control="1"]`).first();
+  if (!(await runsFolder.evaluate((el) => el.classList.contains('expanded')))) await runsFolder.locator(':scope > .tree-row .tw').click();
+  const runLi = page.locator(`#left-tree li[data-w27-run="${rid}"]`).first();
+  await runLi.locator(':scope > .tree-row .tl').first().click();
+  if (!(await runLi.evaluate((el) => el.classList.contains('expanded')))) await runLi.locator(':scope > .tree-row .tw').click();
+  const rcFolder = page.locator(`#left-tree li[data-w27-run-rcs="${rid}"]`).first();
+  if (!(await rcFolder.evaluate((el) => el.classList.contains('expanded')))) await rcFolder.locator(':scope > .tree-row .tw').click();
+  await page.locator(`#left-tree [data-w27-aa="${rc.id}"] > .tree-row .tl`).first().click();
+  await expect(page.locator('#panel-area-average')).toBeVisible(STEP);
+  await expect(page.locator('#aa-panel-title')).toHaveText('Lift');
+  await expect(page.locator('#aa-boundary-list .aa-boundary-item')).toHaveText(['Wing', 'Walls with no boundary condition']);
+  await expect(page.locator('#aa-boundary-list input[type="checkbox"]:checked')).toHaveCount(2);
+  await expect(page.locator('#aa-boundary-count')).toHaveText('2');
+});

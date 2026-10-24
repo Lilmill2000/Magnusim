@@ -676,9 +676,11 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const parsed = parseValues(input.values, flattenSchema(typeRow.schema), extra);
     if (!parsed.ok) return badValues(parsed.problems, `catalog {kind:'monitors', key:'${cleanText(str(typeRow.key), 64)}'} lists its fields.`);
     const name = cleanText(str(input.name).trim(), 120);
+    // A new monitor on boundaries starts on every one it can measure, as the panel's does (Forces: every wall).
+    const boundaries = !old && target === 'boundary' ? monitorBoundaryTokens(records(((await d.hostCall('bcs.get', q, o)) as Record<string, unknown>).boundary_conditions), typeRow.boundary_kinds, records(registry.bc_family)) : [];
     const rec: Record<string, unknown> = old
       ? { ...old }
-      : newMonitorRecord(typeRow, rcId(), name || `${cleanText(str(typeRow.label), 60)} ${rcs.filter((r) => r.monitor_type === typeRow.key).length + 1}`);
+      : newMonitorRecord(typeRow, rcId(), name || `${cleanText(str(typeRow.label), 60)} ${rcs.filter((r) => r.monitor_type === typeRow.key).length + 1}`, { boundaries });
     if (name) rec.name = name;
     Object.assign(rec, parsed.values);
     if (target === 'patch' && Array.isArray(input.faces) && input.faces.length) rec.faces = await facesOk(g.geometryId, input.faces);
@@ -768,12 +770,47 @@ function setBodies(rec: Record<string, unknown>, bodies: string[]): void {
   rec.volume_ids = bodies.slice();
 }
 
+/** What a 'boundary' monitor saves for the walls no BC claims (src/monitorTargets.ts DEFAULT_WALLS_TOKEN). */
+export const DEFAULT_WALLS_TOKEN = '@walls';
+
+/** A bc_type compared without case, spaces, '_' or '-' (src/bcCatalog.ts typeText). */
+const bcTypeText = (raw: unknown): string => str(raw).toLowerCase().replace(/[\s_-]+/g, '');
+
+/** The BC family a saved record belongs to, by its bc_type (src/bcCatalog.ts familyKeyOf); '' for none. */
+function bcFamilyKey(bc: Record<string, unknown>, families: Record<string, unknown>[]): string {
+  const want = bcTypeText(bc.bc_type || bc.type);
+  if (!want) return '';
+  const fam = families.find((f) => str(f.key).trim() && str(f.record_type).trim() && [f.record_type, ...(Array.isArray(f.aliases) ? f.aliases : [])].some((n) => bcTypeText(n) === want));
+  return fam ? str(fam.key) : '';
+}
+
+/**
+ * The boundaries a new 'boundary' monitor starts on, as the run panel picks them
+ * (src/monitorTargets.ts boundaryChoices, its tokens): the study's BCs with faces whose family
+ * the type's boundary_kinds lists (any when it lists none), then the walls no BC claims when it
+ * takes walls. A unit test holds the two to the same list.
+ */
+export function monitorBoundaryTokens(bcs: Record<string, unknown>[], kinds: unknown, families: Record<string, unknown>[]): string[] {
+  const want = Array.isArray(kinds) && kinds.length ? new Set(kinds.map(String)) : null;
+  const out: string[] = [];
+  for (const bc of bcs) {
+    if (!Array.isArray(bc.faces) || !bc.faces.length) continue;
+    if (want && !want.has(bcFamilyKey(bc, families))) continue;
+    const name = str(bc.name).trim();
+    const token = bc.id != null && String(bc.id) ? String(bc.id) : name;
+    if (!token || out.includes(token)) continue;
+    out.push(token);
+  }
+  if (!want || want.has('wall')) out.push(DEFAULT_WALLS_TOKEN);
+  return out;
+}
+
 /**
  * A new result control of a monitor type, as the run panel saves it (src/monitorTargets.ts
  * newMonitorRecord: that module imports the registry types, so the server keeps this copy;
  * a unit test holds the two to the same record).
  */
-export function newMonitorRecord(typeRow: Record<string, unknown>, id: string, name: string): Record<string, unknown> {
+export function newMonitorRecord(typeRow: Record<string, unknown>, id: string, name: string, opts: { boundaries?: string[] } = {}): Record<string, unknown> {
   const target = str(typeRow.target) || 'patch';
   const base = {
     id,
@@ -788,7 +825,7 @@ export function newMonitorRecord(typeRow: Record<string, unknown>, id: string, n
     chart_values: null,
     results_available: false,
   };
-  if (target === 'boundary') return { ...base, boundaries: [] };
+  if (target === 'boundary') return { ...base, boundaries: (opts.boundaries || []).slice() };
   if (target === 'point') return { ...base, points: [] };
   return base;
 }
