@@ -20,7 +20,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PROJECTS_ROOT } from '../project-isolation.js';
-import { canonicalFilterKey } from './legacy-aliases.ts';
+import { canonicalApiPath, canonicalFilterKey } from './legacy-aliases.ts';
 
 const WIN = process.platform === 'win32';
 
@@ -93,16 +93,7 @@ export const UNGATED_PREFIXES = Object.freeze([
   '/api/volume',
 ]);
 
-/**
- * A path as the gate reads it: the second segment's underscores read as hyphens (the
- * router adds an underscore alias of every hyphenated route).
- * @param {string} pathname
- */
-function canonicalPath(pathname) {
-  const parts = String(pathname || '').split('/');
-  if (parts.length > 2) parts[2] = parts[2].replace(/(?<=[A-Za-z0-9])_(?=[A-Za-z0-9])/g, '-');
-  return parts.join('/');
-}
+const canonicalPath = canonicalApiPath;
 
 /** @param {string} path @param {string} prefix */
 function under(path, prefix) {

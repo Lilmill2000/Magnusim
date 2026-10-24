@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { caseDirAllowedForAttach } from '../project-isolation.js';
 import { scopeIsStrict } from '../request-scope.js';
 import { HttpError, jsonBodyLimit, parseUrl, readJsonBody, sendJson } from './http.ts';
+import { canonicalApiPath } from './legacy-aliases.ts';
 import { admitThroughGate, gateProjectOf, requestIsGated } from './link-gate.js';
 import { StaleRecord, staleBody } from '../record-rev.js';
 
@@ -220,8 +221,10 @@ function scopedField(
   return { value: fromQuery || bodyValue, mismatch: false };
 }
 
-function pathNeedsProject(pathname: string): boolean {
-  return SCOPED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'));
+export function pathNeedsProject(pathname: string): boolean {
+  // An underscore alias (/api/simulation_control) is scoped like its hyphenated route.
+  const path = canonicalApiPath(pathname);
+  return SCOPED_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix + '/'));
 }
 
 function queryValue(url: URL, ...names: string[]): string {

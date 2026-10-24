@@ -44,3 +44,13 @@ export function canonicalFilterKey(raw: string): string {
   const key = String(raw || '').trim();
   return FILTER_KEY_ALIASES[key] || FILTER_KEY_ALIASES[key.replace(/-/g, '_')] || key;
 }
+
+/**
+ * A path as the scope check and the gate read it: the second segment's underscores read
+ * as hyphens (the router adds an underscore alias of every hyphenated route).
+ */
+export function canonicalApiPath(pathname: string): string {
+  const parts = String(pathname || '').split('/');
+  if (parts.length > 2) parts[2] = parts[2].replace(/(?<=[A-Za-z0-9])_(?=[A-Za-z0-9])/g, '-');
+  return parts.join('/');
+}

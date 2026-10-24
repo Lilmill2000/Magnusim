@@ -25,8 +25,17 @@ try {
 
 const seen = new Set();
 const routes = [];
+// router.add takes its methods first, as one quoted method or a list of them.
 const re =
-  /router\.(get|post|put|delete|patch|add)\(\s*(?:\[[^\]]+\],\s*)?['"]([^'"]+)['"]/g;
+  /router\.(get|post|put|delete|patch|add)\(\s*(?:(\[[^\]]*\]|['"][A-Z]+['"])\s*,\s*)?['"]([^'"]+)['"]/g;
+
+/** The listed methods of a route (HEAD goes with GET and is not listed). */
+function methodsOf(call, spec) {
+  if (call !== 'add') return [call.toUpperCase()];
+  return [...String(spec || '').matchAll(/['"]([A-Z]+)['"]/g)]
+    .map((x) => x[1])
+    .filter((x) => x !== 'HEAD');
+}
 
 for (const file of new Set([...files, ...extra])) {
   let text = '';
@@ -38,8 +47,8 @@ for (const file of new Set([...files, ...extra])) {
   re.lastIndex = 0;
   let m;
   while ((m = re.exec(text))) {
-    const methods = m[1] === 'add' ? ['GET', 'POST'] : [m[1].toUpperCase()];
-    const path = m[2];
+    const methods = methodsOf(m[1], m[2]);
+    const path = m[3];
     for (const method of methods) {
       const key = `${method} ${path}`;
       if (seen.has(key)) continue;

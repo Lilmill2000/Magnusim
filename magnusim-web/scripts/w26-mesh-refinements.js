@@ -645,7 +645,9 @@ export async function handleW26Api(req, res, u, parts, helpers) {
   const { sendJson, readJsonBody } = helpers;
   const isRefs =
     parts[0] === 'api' &&
-    ((parts[1] === 'mesh' && parts[2] === 'refinements') || parts[1] === 'mesh-refinements');
+    ((parts[1] === 'mesh' && parts[2] === 'refinements') ||
+      parts[1] === 'mesh-refinements' ||
+      parts[1] === 'mesh_refinements');
   if (!isRefs) return false;
 
   if (req.method === 'POST') {

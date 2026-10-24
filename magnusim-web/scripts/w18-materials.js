@@ -706,17 +706,6 @@ export async function handleW18Api(req, res, u, parts, helpers) {
       }
       return sendJson(res, result.status, result.body);
     }
-    if (req.method === 'DELETE' && !parts[2]) {
-      const pid = u.searchParams.get('project_id') || undefined;
-      const result = await deleteMaterials(
-        pid,
-        u.searchParams.get('geometry_id') || undefined,
-        u.searchParams.get('simulation_id') || undefined
-      );
-      res.setHeader('X-CFD-Source', 'materials-delete');
-      res.setHeader('X-CFD-Increment', 'W18');
-      return sendJson(res, result.status, result.body);
-    }
     if ((req.method === 'GET' || req.method === 'HEAD') && !parts[2]) {
       const pid = u.searchParams.get('project_id') || undefined;
       const result = getMaterials(
