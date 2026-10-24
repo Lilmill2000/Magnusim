@@ -550,7 +550,7 @@ test("cad:assistant-watch-local-budget a local model with a 20K context: the doc
     const said = ((await note.textContent()) || '').replace(/^\W+\s*/, '');
     // The app's own go first (the lowest priority first), then the Part's (the later name first), each with where it is offered.
     expect(said).toMatch(
-      /^To fit this model's context \(20,000 tokens\), these tools were left out: app_status \(Home, Workbench, Workspaces\), explain_ready \(Home, Workbench, Workspaces\), project_summary \(Home, Workbench, Workspaces\), cad__workspace \([^)]+Part\)(, cad__\w+ \([^)]+Part\))*\. Load the model with a longer context to have them\.$/,
+      /^To fit this model's context \(20,000 tokens\), these tools were left out: app_status \(Home, Workbench, Workspaces\), explain_ready \(Home, Workbench, Workspaces\), project_summary \(Home, Workbench, Workspaces\), read_setup \(Home, Workbench, Workspaces\), cad__workspace \([^)]+Part\)(, cad__\w+ \([^)]+Part\))*\. Load the model with a longer context to have them\.$/,
     );
     const left = [...said.slice(said.indexOf('left out: ')).matchAll(/(\w+) \(/g)].map((m) => m[1]);
     const [sent] = chats(host).slice(from);
