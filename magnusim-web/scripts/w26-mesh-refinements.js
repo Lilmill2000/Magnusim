@@ -1,5 +1,6 @@
 import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
+import { deleteTarget } from './delete-target.js';
 /**
  * Mesh refinements — filesystem persistence.
  * GET/POST /api/mesh/refinements → projects/<id>/mesh_refinements.json
@@ -522,10 +523,12 @@ async function deleteRefinements(body) {
   const gate = requireProject(body);
   if (!gate.ok) return gate;
   const { projectId, sim } = gate;
+  const target = deleteTarget(body);
+  if ('error' in target) return { ok: false, status: 400, body: { error: target.error } };
+  const which = 'which' in target ? target.which : '';
   const before = currentList(projectId, sim.id);
   let list = before.slice();
-  const which = String(body.delete || body.id || body.name || '').trim();
-  if (which === 'all' || which === 'true') {
+  if ('all' in target) {
     const meshId = String((body && (body.mesh_id || body.meshId)) || '').trim();
     const legacyId = firstLegacySimId(projectId, gate.proj);
     list = list.filter((r) => {

@@ -30239,7 +30239,10 @@ function applyQueuedJobOrder(ids) {
   jobQueue.items = slots.length === next.length ? next.map((r, i) => ({ ...r, position: slots[i] })) : next;
   persistJobQueue();
   syncJobQueueChrome();
-  fetchComputeQueue('/api/compute-queue', { method: 'PATCH', body: { ids } })
+  fetchComputeQueue('/api/compute-queue', {
+    method: 'PATCH',
+    body: { ids, project_id: typeof currentProjectId === 'function' ? currentProjectId() : null },
+  })
     .then(applyServerQueue)
     .catch((e) => console.warn('[CFD] queue reorder', e));
   return true;
@@ -30425,7 +30428,8 @@ function pruneJobQueue() {
   persistJobQueue();
   syncJobQueueChrome();
   gone.forEach((row) => {
-    fetchComputeQueue('/api/compute-queue', { method: 'POST', body: { action: 'remove', id: row.id } }).catch(() => {});
+    const pid = row.project_id || (typeof currentProjectId === 'function' ? currentProjectId() : null);
+    fetchComputeQueue('/api/compute-queue', { method: 'POST', body: { action: 'remove', id: row.id, project_id: pid } }).catch(() => {});
   });
   return true;
 }

@@ -116,11 +116,19 @@ function requestProjectId(u, body) {
 function resolveCaseDir(u) {
   const q = u && u.searchParams ? u.searchParams.get('case') : null;
   const raw = q != null ? String(q).trim() : '';
-  const chosen =
-    raw && raw !== 'null' && raw !== 'undefined' ? raw : activeCaseState.case_dir || null;
+  const asked = raw && raw !== 'null' && raw !== 'undefined' ? raw : '';
+  const chosen = asked || activeCaseState.case_dir || null;
   const pid = requestProjectId(u);
   if (pid && chosen && !caseDirBelongsToProject(chosen, pid)) return null;
+  // No project named: a case the request names must still be inside a project of this
+  // projects root (/api/times, /api/plot-over-path and the field routes once read any folder).
+  if (!pid && asked && !caseDirInSomeProject(asked)) return null;
   return chosen;
+}
+
+function caseDirInSomeProject(caseDir) {
+  const owner = projectIdFromCaseDir(caseDir);
+  return !!owner && caseDirBelongsToProject(caseDir, owner);
 }
 
 function resetActiveCaseIdle(note) {

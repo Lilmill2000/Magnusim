@@ -660,7 +660,11 @@ export function mergeComputeQueueItems(incoming: unknown): ComputeQueueSnapshot 
   return snapshotComputeQueue();
 }
 
-/** Remove by queue row id, or by mesh/run id within projectId. */
+/**
+ * Remove by queue row id, or by mesh/run id, within projectId (a row id too: another
+ * project's row is never removed by a request of this one). No projectId: any project
+ * (the server's own callers; the routes always send one).
+ */
 export function removeComputeJob(kind: unknown, id: unknown, projectId?: unknown): ComputeQueueSnapshot {
   ensureLoaded();
   const want = normId(id);
@@ -668,8 +672,8 @@ export function removeComputeJob(kind: unknown, id: unknown, projectId?: unknown
   const before = Q.items.length;
   const was = Q.items.slice();
   Q.items = Q.items.filter((row) => {
-    if (row.id === want) return false;
     if (!sameProject(row, projectId)) return true;
+    if (row.id === want) return false;
     if (kind === 'mesh') return !(row.kind === 'mesh' && normId(row.mesh_id) === want);
     if (kind === 'solve') return !(row.kind === 'solve' && normId(row.run_id) === want);
     if (!kind) {
@@ -825,21 +829,23 @@ export function pushComputeNotice(entry: Partial<ComputeQueueFailure> & { name?:
 /**
  * A tab only lists (and drags) its own project's rows. Reorder just those rows
  * among the places they already hold, so another project's job keeps its place
- * instead of dropping to the back.
+ * instead of dropping to the back. An id of another project's row is ignored: a
+ * request of one project never moves another's jobs.
  */
-function reorderWithinSlots(list: ComputeQueueItem[], ids: unknown): ComputeQueueItem[] {
+function reorderWithinSlots(list: ComputeQueueItem[], ids: unknown, projectId?: unknown): ComputeQueueItem[] {
   const want = (Array.isArray(ids) ? ids : []).map((x) => String(x || '')).filter(Boolean);
   const inSet = new Set(want);
-  const moving = list.filter((row) => row.id && inSet.has(row.id));
+  const moving = list.filter((row) => row.id && inSet.has(row.id) && sameProject(row, projectId));
   if (moving.length < 2) return list.slice();
   const ordered = orderedQueueItems(moving, want);
   let k = 0;
-  return list.map((row) => (row.id && inSet.has(row.id) ? ordered[k++] : row));
+  return list.map((row) => (moving.includes(row) ? ordered[k++] : row));
 }
 
-export function reorderComputeQueue(ids: unknown): ComputeQueueSnapshot & { error?: string } {
+/** Reorder projectId's rows (no projectId: any project's, the server's own callers). */
+export function reorderComputeQueue(ids: unknown, projectId?: unknown): ComputeQueueSnapshot & { error?: string } {
   ensureLoaded();
-  const next = reorderWithinSlots(Q.items, ids);
+  const next = reorderWithinSlots(Q.items, ids, projectId);
   if (queueHasMeshDepViolation(next)) {
     const snap = snapshotComputeQueue();
     return { ...snap, ok: false, error: 'A run cannot sit above the mesh it uses' };

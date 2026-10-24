@@ -244,12 +244,14 @@ export function buildSimulation(body, project) {
   // Every setting the analysis seeds (its settings_schema defaults and whatever its
   // study_defaults adds), stored as given: the core names none of them.
   const settings = studyPhysicsFrom(d, analysisType);
+  // A name sent with the create is the study's (as a rename takes it: trimmed, 64 at most).
+  const ownName = body.name != null ? String(body.name).trim().slice(0, 64) : '';
   const sim = {
     ...settings,
     id,
     project_id: project.id,
-    // Named after its own analysis ("Scalar diffusion Steady-state"), not a fixed one.
-    name: studyBaseName({ time_dependency: timeDependency, analysis: d.analysis }),
+    // Else named after its own analysis ("Scalar diffusion Steady-state"), not a fixed one.
+    name: ownName || studyBaseName({ time_dependency: timeDependency, analysis: d.analysis }),
     analysis: d.analysis,
     analysis_type: analysisType,
     analysis_title: d.analysis_title,
@@ -1039,7 +1041,17 @@ async function activateSimulation(body) {
   const proj = readProject(projectId);
   if (!proj) return { ok: false, status: 404, body: { error: 'project not found' } };
   const simId = body && (body.simulation_id || body.id || body.activate);
+  if (!simId) return { ok: false, status: 400, body: { error: 'simulation_id required' } };
   const cat = setActiveSimulation(projectId, proj, simId);
+  // An id the project has no study for (deleted, or another project's) switches nothing:
+  // say so, with the catalog as it stays, instead of a 200 for a switch that never happened.
+  if (!(cat.simulations || []).some((s) => s.id === simId)) {
+    return {
+      ok: false,
+      status: 404,
+      body: { ...catalogPayload(projectId, proj, cat), ok: false, error: 'study not found', simulation_id: simId },
+    };
+  }
   const sim = (cat.simulations || []).find((s) => s.id === cat.active_id) || null;
   if (sim) {
     touchProjectSimRef(proj, sim);

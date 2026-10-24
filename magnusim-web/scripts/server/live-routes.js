@@ -55,7 +55,8 @@ import { getCaseFieldApi } from '../vite-plugin-case-fields.js';
 import { readBinaryBody, readJsonBody, sendJson } from './http.ts';
 import { WorkerUnavailableError } from './worker.ts';
 
-function wrap(handler) {
+/** `extra`: more helpers for the handler (a hook it calls). */
+function wrap(handler, extra) {
   return async (ctx) => {
     const parts = ctx.pathname.split('/').filter(Boolean);
     try {
@@ -63,6 +64,7 @@ function wrap(handler) {
         sendJson,
         readJsonBody,
         readBinaryBody,
+        ...(extra || {}),
       });
       return handled !== false;
     } catch (err) {
@@ -180,12 +182,18 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       ctx.sendJson(200, mergeComputeQueueItems(body.items));
       return;
     }
+    // A removal names its project: queue row, mesh and run ids are not unique across
+    // projects, and one tab must never take another project's job out of the queue.
+    if ((action === 'drop-mesh' || action === 'remove') && !ctx.scope.projectId) {
+      ctx.sendJson(400, { ok: false, error: 'project_id required' });
+      return;
+    }
     if (action === 'drop-mesh') {
-      ctx.sendJson(200, dropComputeJobsForMesh(body.mesh_id, body.project_id));
+      ctx.sendJson(200, dropComputeJobsForMesh(body.mesh_id, ctx.scope.projectId));
       return;
     }
     if (action === 'remove') {
-      ctx.sendJson(200, removeComputeJob(body.kind, body.id, body.project_id));
+      ctx.sendJson(200, removeComputeJob(body.kind, body.id, ctx.scope.projectId));
       return;
     }
     const enqueued = enqueueComputeJob(body.item || body, {
@@ -210,15 +218,20 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
       ctx.sendJson(400, { error: 'invalid JSON body', detail: String(e) });
       return;
     }
-    const next = reorderComputeQueue(body.ids);
+    if (!ctx.scope.projectId) {
+      ctx.sendJson(400, { ok: false, error: 'project_id required' });
+      return;
+    }
+    const next = reorderComputeQueue(body.ids, ctx.scope.projectId);
     ctx.sendJson(next.ok === false ? 400 : 200, next);
   });
 
   router.add('DELETE', '/api/compute-queue/:id', (ctx) => {
-    ctx.sendJson(
-      200,
-      removeComputeJob(ctx.url.searchParams.get('kind'), ctx.params.id, ctx.url.searchParams.get('project_id')),
-    );
+    if (!ctx.scope.projectId) {
+      ctx.sendJson(400, { ok: false, error: 'project_id required' });
+      return;
+    }
+    ctx.sendJson(200, removeComputeJob(ctx.url.searchParams.get('kind'), ctx.params.id, ctx.scope.projectId));
   });
 
   router.post('/api/compute-queue/kick', async (ctx) => {
@@ -340,35 +353,40 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
   router.post('/api/mesh/generate', (ctx) => kickMesh(ctx, api, jobs));
   router.post('/api/mesh/remesh', (ctx) => kickMesh(ctx, api, jobs));
 
+  // A deleted generated mesh: the attached case goes idle and its surface cache goes.
+  // Both delete routes (POST /api/mesh {delete_generated} and POST /api/mesh/delete) run it.
+  const meshDeleteHook = {
+    onGeneratedMeshDeleted({ deleted_runs }) {
+      const active = api.caseSnapshot().case_dir;
+      const removed = (deleted_runs || []).map((p) => resolve(p).toLowerCase());
+      if (active) {
+        const a = resolve(active).toLowerCase();
+        const hit = removed.some((p) => a === p || a.startsWith(`${p}\\`) || a.startsWith(`${p}/`));
+        if (hit || !existsSync(active)) api.resetActiveCaseIdle('Generated mesh deleted');
+      }
+      for (const p of deleted_runs || []) {
+        try {
+          const vtp = api.meshSurfaceCacheKey(p);
+          const meta = vtp.replace(/\.vtp$/i, '.meta.json');
+          if (existsSync(vtp)) rmSync(vtp, { force: true });
+          if (existsSync(meta)) rmSync(meta, { force: true });
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+  };
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh', async (ctx) => {
     if (/\/(generate|remesh|surface|section|refinements)(\/|$)/.test(ctx.pathname)) return false;
     const parts = ctx.pathname.split('/').filter(Boolean);
     const handled = await handleW20Api(ctx.req, ctx.res, ctx.url, parts, {
       sendJson,
       readJsonBody,
-      onGeneratedMeshDeleted({ deleted_runs }) {
-        const active = api.caseSnapshot().case_dir;
-        const removed = (deleted_runs || []).map((p) => resolve(p).toLowerCase());
-        if (active) {
-          const a = resolve(active).toLowerCase();
-          const hit = removed.some((p) => a === p || a.startsWith(`${p}\\`) || a.startsWith(`${p}/`));
-          if (hit || !existsSync(active)) api.resetActiveCaseIdle('Generated mesh deleted');
-        }
-        for (const p of deleted_runs || []) {
-          try {
-            const vtp = api.meshSurfaceCacheKey(p);
-            const meta = vtp.replace(/\.vtp$/i, '.meta.json');
-            if (existsSync(vtp)) rmSync(vtp, { force: true });
-            if (existsSync(meta)) rmSync(meta, { force: true });
-          } catch {
-            /* ignore */
-          }
-        }
-      },
+      ...meshDeleteHook,
     });
     return handled !== false;
   });
-  router.add(['GET', 'HEAD', 'POST'], '/api/mesh/delete', wrap(handleW20Api));
+  router.add(['GET', 'HEAD', 'POST'], '/api/mesh/delete', wrap(handleW20Api, meshDeleteHook));
   // The mesh's Stop (Mesh panel, tree, the Assistant's jobs tool): ends its generate, deletes nothing.
   router.post('/api/mesh/stop', async (ctx) => {
     let body;

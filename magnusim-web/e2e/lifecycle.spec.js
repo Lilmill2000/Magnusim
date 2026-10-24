@@ -334,9 +334,10 @@ test('a study deleted before its delete left the index is not counted, offered o
   await openProject(page, pid);
   await shown();
   // Asked for by id (an old tab, a queued job), it is not opened.
-  const activated = await (
-    await request.post(q('/api/simulation/activate'), { data: { project_id: pid, simulation_id: MISSING_STUDY_ID } })
-  ).json();
+  // It says so (404, once a 200 for a switch that never happened) and keeps the study that is there.
+  const asked = await request.post(q('/api/simulation/activate'), { data: { project_id: pid, simulation_id: MISSING_STUDY_ID } });
+  expect(asked.status()).toBe(404);
+  const activated = await asked.json();
   expect(activated.active_id).toBe('sim_1');
   const hydrated = await json(request, q('/api/project/hydrate'));
   expect(hydrated.simulation.simulations.map((s) => s.id)).toEqual(['sim_1']);

@@ -48,6 +48,7 @@ import { computeSlotHolder, folderBusyMessage, holderNamesProject, projectBusyMe
 import { computeRowsForProject, dropComputeRows } from './server/compute-queue.ts';
 import { projectDeleted } from './server/project-deleted.ts';
 import { envGet } from './env-compat.js';
+import { readBinaryBody as readCappedBody } from './server/http.ts';
 import { thumbRenderTimeoutMs, thumbTestStandIn } from './server/thumb-render.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
 import { callWorker, commitRpc } from './py-json.js';
@@ -2288,11 +2289,27 @@ async function materializePartStep(opts, destDir, originalName, kind, lengthUnit
       stepPath = conv.dest;
     }
   } else if (stepPath) {
+    // A path is read only as a geometry file: its own name must be STEP, IGES, BREP, STL,
+    // OBJ or PLY (the filename sent beside it once stood in, so any file was copied in).
+    const srcKind = cadKindOfName(stepPath);
+    if (!srcKind) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Not a geometry file: use STEP, IGES, BREP, STL, OBJ or PLY', step_path: stepPath },
+      };
+    }
     if (!existsSync(stepPath)) {
       return { ok: false, status: 404, body: { error: 'file not found', step_path: stepPath } };
     }
-    const srcKind = cadKindOfName(stepPath) || kind;
-    if (srcKind === 'step' || !srcKind) {
+    const st = statSync(stepPath);
+    if (!st.isFile()) {
+      return { ok: false, status: 400, body: { error: 'Not a file: this path is a folder', step_path: stepPath } };
+    }
+    if (st.size > importByteLimit()) {
+      return { ok: false, status: 413, body: { error: importTooBigText(), step_path: stepPath, bytes: st.size } };
+    }
+    if (srcKind === 'step') {
       const dest = join(destDir, 'source.step');
       copyFileSync(stepPath, dest);
       stepPath = dest;
@@ -2789,13 +2806,17 @@ function readStlForProject(projectId) {
   return { ok: true, path: p, bytes: readFileSync(p), project: proj };
 }
 
-function readBinaryBody(req) {
-  return new Promise((resolveP, reject) => {
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolveP(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
+/**
+ * The largest geometry file an import takes, upload or path (MAGNUSIM_IMPORT_MAX_MB,
+ * 1024 MB by default). The upload was read whole with no cap, so its 413 never came.
+ */
+function importByteLimit() {
+  const mb = Number(envGet('IMPORT_MAX_MB'));
+  return Math.floor((Number.isFinite(mb) && mb > 0 ? mb : 1024) * 1024 * 1024);
+}
+
+function importTooBigText() {
+  return `File too large: an import takes up to ${Math.round(importByteLimit() / (1024 * 1024))} MB`;
 }
 
 /**
@@ -2953,7 +2974,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
           // The file itself is the body (no base64); options ride on the query string.
           const q = u.searchParams;
           const opt = (key, header) => q.get(key) || (header ? req.headers[header] : undefined) || undefined;
-          const buf = await readBinaryBody(req);
+          const buf = await readCappedBody(req, importByteLimit());
           opts = {
             project_id: opt('project_id', 'x-cfd-project-id'),
             filename: opt('filename', 'x-cfd-filename') || 'upload.step',
@@ -2970,7 +2991,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       } catch (e) {
         const tooBig = e && e.status === 413;
         return sendJson(res, tooBig ? 413 : 400, {
-          error: tooBig ? 'file too large to upload' : 'invalid body',
+          error: tooBig ? importTooBigText() : 'invalid body',
           detail: String(e),
         });
       }

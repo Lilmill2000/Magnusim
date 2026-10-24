@@ -869,7 +869,9 @@ function buildSettings(body, existing, bankEngine) {
   const advIn = src.advanced || {};
   const existingSettings = (existing && existing.settings) || {};
   const existingAdv = existingSettings.advanced || {};
-  const useBank = src.use_bank_defaults === true || src.bank === true || Object.keys(src).length === 0 || src.reset_defaults === true;
+  // Restore defaults only when asked for: an empty body once restored them too, so a save
+  // that sent no settings wiped the mesh's. It now keeps what the mesh has.
+  const useBank = src.use_bank_defaults === true || src.bank === true || src.reset_defaults === true;
 
   const settings = {
     name: String(src.name || existingSettings.name || W20_DEFAULTS.name),
@@ -1434,6 +1436,11 @@ export async function handleW20Api(req, res, u, parts, helpers) {
           soft_pass: false,
           increment: 'W20',
         });
+      }
+      // An empty body names no study, mesh or setting: it once restored the active mesh's
+      // defaults (or made a new mesh of them). Nothing is saved.
+      if (!body || typeof body !== 'object' || !Object.keys(body).length) {
+        return sendJson(res, 400, { error: 'Nothing to save: the request names no study, mesh or setting', increment: 'W20' });
       }
       const result = await upsertMesh(body);
       res.setHeader('X-CFD-Source', 'mesh-upsert');

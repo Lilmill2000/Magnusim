@@ -1,5 +1,6 @@
 import { safeProjectPath } from './safe-path.js';
 import { projectIdOrActive } from './request-scope.js';
+import { deleteTarget } from './delete-target.js';
 /**
  * Boundary conditions — filesystem persistence.
  * POST/GET /api/bcs → projects/<id>/boundary_conditions.json
@@ -518,10 +519,12 @@ async function deleteBcs(body) {
     [];
   const geomId = studyScopedGeometryId(proj, sim, body && body.geometry_id);
   const primaryId = primaryGeometryId(proj);
-  const which = String(body.delete || body.id || body.name || '').trim();
+  const target = deleteTarget(body);
+  if ('error' in target) return { ok: false, status: 400, body: { error: target.error } };
+  const which = 'which' in target ? target.which : '';
   const legacyId = firstLegacySimId(projectId, proj);
   const before = list.slice();
-  if (which === 'all' || which === 'true') {
+  if ('all' in target) {
     list = list.filter(
       (b) => !(matchesGeometry(b, geomId, primaryId) && matchesStudy(b, sim.id, legacyId))
     );

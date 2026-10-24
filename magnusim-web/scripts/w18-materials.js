@@ -203,7 +203,15 @@ async function writeMaterialsFile(id, doc, simId, only, geometryRev) {
     await commitRpc('materials.set', {
       project_dir: projectDir(id),
       sim_id: String(simId || ''),
-      body: { ...slim, materials: recs, air: recs[0] || slim.air, only_id: recs[0] && recs[0].id },
+      // A record's save sends the study's whole list (only_id: the one written and
+      // stamp-checked), so the project's copy keeps the others; the study's fluid is the
+      // doc's (studyFluid), not whichever record this save wrote.
+      body: {
+        ...slim,
+        materials: recs.length && Array.isArray(slim.materials) ? slim.materials : recs,
+        air: slim.air || recs[0],
+        only_id: recs[0] && recs[0].id,
+      },
       ...(geometryRev != null ? { geometry_rev: geometryRev } : {}),
     });
   } catch (e) {
@@ -223,6 +231,8 @@ function readSimulationFile(id) {
     return null;
   }
 }
+
+const MATERIAL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 
 function newMaterialId() {
   return `mat-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
@@ -402,10 +412,18 @@ async function upsertMaterials(body) {
   const legacyId = firstLegacySimId(projectId, proj);
   const onStudy = (m) =>
     m && matchesGeometry(m, geomId, primaryId) && matchesStudy(m, sim.id, legacyId);
-  const existingAir =
-    (body && body.id && allMats.find((m) => m && m.id === body.id && onStudy(m))) ||
-    allMats.find(onStudy) ||
-    null;
+  // An id names that material; an id the study does not have adds a new material with it
+  // (it once updated the study's first material instead). No id: the study's (first) material.
+  const askedId = body && body.id != null ? String(body.id).trim() : '';
+  if (askedId && !MATERIAL_ID_RE.test(askedId)) {
+    return { ok: false, status: 400, body: { error: 'material id: letters, digits, . _ - only (80 at most)', id: askedId } };
+  }
+  if (askedId && allMats.some((m) => m && m.id === askedId && !onStudy(m))) {
+    return { ok: false, status: 409, body: { error: 'This material id belongs to another study or geometry', id: askedId } };
+  }
+  const existingAir = askedId
+    ? allMats.find((m) => m && m.id === askedId && onStudy(m)) || null
+    : allMats.find(onStudy) || null;
 
   const built = buildAirMaterial(body || {}, existingAir || null);
   if (!built.ok) return built;
@@ -417,13 +435,17 @@ async function upsertMaterials(body) {
   if (geomId) built.material.geometry_id = geomId;
 
   const mine = allMats.filter((m) => m && matchesStudy(m, sim.id, legacyId));
-  const materials = mine.filter((m) => m && m.id !== built.material.id).concat([built.material]);
+  // An update keeps its place; a new material goes last. The study's fluid (the one a
+  // single-material study shows) stays the first assigned one, not the last saved.
+  const at = mine.findIndex((m) => m && m.id === built.material.id);
+  const materials = at >= 0 ? mine.map((m, i) => (i === at ? built.material : m)) : mine.concat([built.material]);
+  const fluid = studyFluid(materials) || built.material;
 
   const doc = {
     project_id: projectId,
     simulation_id: sim.id,
     materials,
-    air: built.material,
+    air: fluid,
     updated_at: built.material.updated_at,
     persistence: 'filesystem',
     materials_json: materialsPath,
@@ -442,12 +464,12 @@ async function upsertMaterials(body) {
 
   proj.materials = {
     air: {
-      id: built.material.id,
-      name: built.material.name,
+      id: fluid.id,
+      name: fluid.name,
       viscosity_model: 'Newtonian',
-      kinematic_viscosity: built.material.kinematic_viscosity,
-      density: built.material.density,
-      assigned_volumes: built.material.assigned_volumes,
+      kinematic_viscosity: fluid.kinematic_viscosity,
+      density: fluid.density,
+      assigned_volumes: fluid.assigned_volumes,
       materials_json: materialsPath,
       updated_at: built.material.updated_at,
     },
@@ -463,11 +485,11 @@ async function upsertMaterials(body) {
     const simDoc = { ...sim };
     simDoc.materials = {
       air: {
-        id: built.material.id,
-        name: built.material.name,
-        kinematic_viscosity: built.material.kinematic_viscosity,
-        density: built.material.density,
-        assigned_volumes: built.material.assigned_volumes,
+        id: fluid.id,
+        name: fluid.name,
+        kinematic_viscosity: fluid.kinematic_viscosity,
+        density: fluid.density,
+        assigned_volumes: fluid.assigned_volumes,
       },
       materials_json: materialsPath,
     };
