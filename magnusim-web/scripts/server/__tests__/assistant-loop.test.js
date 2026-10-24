@@ -103,8 +103,10 @@ describe('a turn from start to end', () => {
   it('the system prompt is the fixed text, numbers with units included', () => {
     assert.match(SYSTEM_PROMPT, /^You are the Magnusim Assistant, working inside Magnusim, a CFD and CAD app, for the person at this PC\./);
     assert.match(SYSTEM_PROMPT, /\n3\. Give numbers with units\. Say plainly when a result is not converged, not ready, or an estimate\.\n/);
-    assert.match(SYSTEM_PROMPT, /\n5\. Be brief\.$/);
-    assert.equal(SYSTEM_PROMPT.split('\n').length, 6);
+    assert.match(SYSTEM_PROMPT, /\n5\. Be brief\.\n/);
+    // Seen live: the model wrote image markdown for a picture the dock already shows.
+    assert.match(SYSTEM_PROMPT, /\n6\. A picture a tool takes is shown to the user with that step; refer to it in words, never with image markdown or a link\.$/);
+    assert.equal(SYSTEM_PROMPT.split('\n').length, 7);
   });
 
   it('a read tool: tools → its result first in the next request → done; the tool events', async () => {

@@ -23,6 +23,7 @@ export const SYSTEM_PROMPT = [
   '3. Give numbers with units. Say plainly when a result is not converged, not ready, or an estimate.',
   '4. When a tool fails, read its error and change the call; never repeat a failed call unchanged.',
   '5. Be brief.',
+  '6. A picture a tool takes is shown to the user with that step; refer to it in words, never with image markdown or a link.',
 ].join('\n');
 
 /** A frozen guide is at most this many characters. */
