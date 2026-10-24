@@ -624,7 +624,8 @@ async function deleteGeneratedMesh(body) {
     };
   }
   try {
-    stopMeshGenerate({ meshId: target.id, projectId });
+    // Its generator and what it left go before the files do (never holding the server meanwhile).
+    await stopMeshGenerate({ meshId: target.id, projectId }).reaped;
   } catch {
     /* best-effort — delete still proceeds */
   }
@@ -688,6 +689,7 @@ export async function stopMeshRoute(body) {
     }
   }
   const r = stopMeshGenerating({ meshId: String(target.id), projectId });
+  await r.reaped;
   if (!r.stopped) {
     return {
       ok: false,
@@ -735,7 +737,7 @@ async function deleteMeshRecord(body) {
     };
   }
   try {
-    stopMeshGenerate({ meshId: target.id, projectId });
+    await stopMeshGenerate({ meshId: target.id, projectId }).reaped;
   } catch {
     /* best-effort — delete still proceeds */
   }

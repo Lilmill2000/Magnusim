@@ -224,4 +224,41 @@ describe('POST /api/mesh/stop and a mesh job stop', () => {
     assert.equal(stop1.status, 200);
     assert.ok(await gone(pid));
   });
+
+  // The search for a mesh's leftover generators ran PowerShell with spawnSync for up to 15 s on
+  // every mesh stop and delete: the whole server (every page, every SSE heartbeat) waited.
+  it("the server answers other requests while a stop and a delete search for the mesh's leftover generators", async () => {
+    const { setStaleGeneratorFinderForTests } = await import('../../w21-mesh-generate.js');
+    const searches = [];
+    // A search that takes as long as a slow PowerShell does, until the test lets it end.
+    setStaleGeneratorFinderForTests((caseDir) => new Promise((resolve) => searches.push({ caseDir, end: () => resolve([]) })));
+    try {
+      for (const how of ['stop', 'delete']) {
+        searches.length = 0;
+        const started = await post('/api/mesh/generate', { project_id: PID, simulation_id: sim, mesh_id: meshId });
+        assert.equal(started.status, 202, JSON.stringify(started.body));
+        const pid = await generating();
+        let settled = false;
+        const asked =
+          how === 'stop'
+            ? post('/api/mesh/stop', { project_id: PID, simulation_id: sim, mesh_id: meshId })
+            : post('/api/mesh', { project_id: PID, simulation_id: sim, mesh_id: meshId, delete_generated: true });
+        void asked.then(() => (settled = true));
+        for (let i = 0; i < 100 && !searches.length; i += 1) await sleep(50);
+        assert.ok(searches.length > 0, `${how}: the leftovers are searched for`);
+        // Meanwhile another request is answered at once.
+        const t0 = Date.now();
+        const queue = await get(`/api/compute-queue?project_id=${PID}`);
+        assert.ok(Array.isArray(queue.items));
+        assert.ok(Date.now() - t0 < 2_000, `${how}: answered in ${Date.now() - t0} ms while the search ran`);
+        assert.equal(settled, false, `${how}: it waits for the search before it answers (a delete removes files after it)`);
+        for (const s of searches) s.end();
+        const r = await asked;
+        assert.equal(r.status, 200, `${how}: ${JSON.stringify(r.body)}`);
+        assert.ok(await gone(pid), `${how}: the generator is gone`);
+      }
+    } finally {
+      setStaleGeneratorFinderForTests(null);
+    }
+  });
 });

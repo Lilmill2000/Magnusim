@@ -10,7 +10,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { spawnJob } from './job-runner.js';
 import { meshGeneratorScript } from './test-compute.js';
-import { killProcessTree } from './proc-tree.js';
+import { killProcessTreeAsync } from './proc-tree.js';
+import { runProbe } from './hardware-profile.js';
 import { projectIdOrActive } from './request-scope.js';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -616,7 +617,7 @@ function closeOnce(onClose, onCloseError) {
 /** Kill what a dead generator left behind, unless a new generate already owns that case folder. */
 function reapAfterDeadGenerator(job, caseDir) {
   if (!(liveJob && liveJob !== job && liveJob.case_dir && caseDir && liveJob.case_dir === caseDir)) {
-    reapStaleMeshGenerators(caseDir);
+    void reapStaleMeshGenerators(caseDir);
   }
   killWslMeshCase(job);
 }
@@ -673,42 +674,72 @@ function bindLiveMeshJob({
   return job;
 }
 
-const killWindowsPidTree = killProcessTree;
+/** @type {((caseDir: string) => Promise<number[]>) | null} */
+let staleGeneratorFinder = null;
 
-/** Kill leftover generate_* processes still pointed at this mesh case folder. */
-function reapStaleMeshGenerators(caseDir) {
-  if (!caseDir) return;
+/**
+ * Tests: how leftover generators of a case folder are found (null: PowerShell on Windows,
+ * none elsewhere).
+ * @param {((caseDir: string) => Promise<number[]>) | null} fn
+ */
+export function setStaleGeneratorFinderForTests(fn) {
+  staleGeneratorFinder = fn;
+}
+
+/**
+ * The pids of generate_* processes whose command line names this case folder: PowerShell's
+ * process list on Windows (up to 15 s), as a child process the server keeps running beside.
+ * @param {string} caseDir
+ * @returns {Promise<number[]>}
+ */
+async function staleGeneratorPids(caseDir) {
+  if (staleGeneratorFinder) return staleGeneratorFinder(caseDir);
+  if (process.platform !== 'win32') return [];
+  const like = '*' + String(caseDir).replace(/'/g, "''") + '*';
+  const r = await runProbe(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*generate_standard.py*' -or $_.CommandLine -like '*generate_snappy.py*' -or $_.CommandLine -like '*generate_cfmesh_standard.py*') -and $_.CommandLine -like '" +
+        like +
+        "' } | ForEach-Object { $_.ProcessId }",
+    ],
+    15000,
+  );
+  return String(r.stdout || '')
+    .split(/\s+/)
+    .map(Number)
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+/**
+ * Kill leftover generate_* processes still pointed at this mesh case folder. It never holds the
+ * server: the search (PowerShell, up to 15 s) and the kills (taskkill) run as child processes,
+ * and the promise resolves once they ended. A caller that deletes the folder next awaits it.
+ * @param {string | null | undefined} caseDir
+ * @returns {Promise<void>}
+ */
+export function reapStaleMeshGenerators(caseDir) {
+  if (!caseDir) return Promise.resolve();
+  /** @type {Promise<unknown>[]} */
+  const kills = [];
   const lockPath = join(caseDir, '.generate.lock');
   try {
     if (existsSync(lockPath)) {
       const prev = JSON.parse(readFileSync(lockPath, 'utf8'));
-      if (prev && prev.pid) killWindowsPidTree(prev.pid);
+      if (prev && prev.pid) kills.push(killProcessTreeAsync(prev.pid));
     }
   } catch {
     /* ignore */
   }
-  if (process.platform !== 'win32') return;
-  const like = '*' + String(caseDir).replace(/'/g, "''") + '*';
-  try {
-    const r = spawnSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*generate_standard.py*' -or $_.CommandLine -like '*generate_snappy.py*' -or $_.CommandLine -like '*generate_cfmesh_standard.py*') -and $_.CommandLine -like '" +
-          like +
-          "' } | ForEach-Object { $_.ProcessId }",
-      ],
-      { encoding: 'utf8', timeout: 15000, windowsHide: true },
-    );
-    for (const tok of String(r.stdout || '').split(/\s+/)) {
-      const pid = Number(tok);
-      if (Number.isInteger(pid) && pid > 0) killWindowsPidTree(pid);
-    }
-  } catch {
-    /* ignore */
-  }
+  kills.push(
+    staleGeneratorPids(caseDir)
+      .then((pids) => Promise.all(pids.map((pid) => killProcessTreeAsync(pid))))
+      .catch(() => undefined),
+  );
+  return Promise.all(kills).then(() => undefined);
 }
 
 function killWslMeshCase(job) {
@@ -794,11 +825,11 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
     }
   }
   if (!match.match) {
-    reapStaleMeshGenerators(caseDir);
     return {
       ok: true,
       status: 200,
       bodyExtra: { ok: true, stopped: !!caseDir, reason: match.reason, increment: INCREMENT },
+      reaped: reapStaleMeshGenerators(caseDir),
     };
   }
   job.stop_requested = true;
@@ -809,9 +840,9 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
   } catch {
     /* ignore */
   }
-  killWindowsPidTree(pid);
+  // The kills run beside the server (never taskkill or PowerShell with spawnSync).
+  const reaped = Promise.all([killProcessTreeAsync(pid), reapStaleMeshGenerators(caseDir)]).then(() => undefined);
   killWslMeshCase(job);
-  reapStaleMeshGenerators(caseDir);
   notifyMeshStopped(job);
   if (liveJob === job) liveJob = null;
   return {
@@ -824,6 +855,8 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
       generate_id: job.generate_id || null,
       increment: INCREMENT,
     },
+    // Resolves once the generator and what it left are gone: a delete awaits it before it removes files.
+    reaped,
   };
 }
 
@@ -834,13 +867,13 @@ export function stopMeshGenerate({ meshId, projectId } = {}) {
  * generator lives) is killed by its case folder and recorded stopped. Anything else is
  * not running: `{ stopped: false }`.
  * @param {{ meshId: string, projectId: string }} ids
- * @returns {{ stopped: boolean, generate_id?: string | null }}
+ * @returns {{ stopped: boolean, generate_id?: string | null, reaped: Promise<void> }}
  */
 export function stopMeshGenerating({ meshId, projectId }) {
   dropDeadLiveJob();
   if (liveJob && meshStopMatchesLive(liveJob, { meshId, projectId }).match && String(liveJob.mesh_id || '') === String(meshId)) {
     const r = stopMeshGenerate({ meshId, projectId });
-    return { stopped: true, generate_id: (r.bodyExtra && r.bodyExtra.generate_id) || null };
+    return { stopped: true, generate_id: (r.bodyExtra && r.bodyExtra.generate_id) || null, reaped: r.reaped };
   }
   let rec = null;
   try {
@@ -848,14 +881,10 @@ export function stopMeshGenerating({ meshId, projectId }) {
   } catch {
     rec = null;
   }
-  if (!rec || rec.status !== 'running' || !meshGeneratorAlive(rec)) return { stopped: false };
+  if (!rec || rec.status !== 'running' || !meshGeneratorAlive(rec)) return { stopped: false, reaped: Promise.resolve() };
   // Unowned: kill what runs on its case folder (stopMeshGenerate reaps it when no live job matches).
-  try {
-    if (rec.pid) killWindowsPidTree(rec.pid);
-  } catch {
-    /* gone */
-  }
-  stopMeshGenerate({ meshId, projectId });
+  const killed = rec.pid ? killProcessTreeAsync(rec.pid) : Promise.resolve();
+  const stop = stopMeshGenerate({ meshId, projectId });
   killWslMeshCase({ generate_id: rec.generate_id, wsl_case: rec.wsl_case });
   persistMeshResult(projectId, {
     ...rec,
@@ -868,7 +897,7 @@ export function stopMeshGenerating({ meshId, projectId }) {
     note: 'Mesh generate cancelled.',
   });
   scheduleComputeQueueKick(250);
-  return { stopped: true, generate_id: rec.generate_id || null };
+  return { stopped: true, generate_id: rec.generate_id || null, reaped: Promise.all([killed, stop.reaped]).then(() => undefined) };
 }
 
 /** Case on disk is a finished generate even if mesh.json never flipped. */
