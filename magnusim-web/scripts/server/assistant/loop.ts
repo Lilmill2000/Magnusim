@@ -42,6 +42,7 @@
 import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
+import { isStrictNote } from './providers/common.ts';
 import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
@@ -505,6 +506,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   // The conversation's system blocks are fixed by its first request.
   const fixed = conv.messages.length > 0;
   syncGuide(t, ws, fixed);
+  // The adapter's notes once a turn; its strict notes once a conversation (they stay true for
+  // every later request: isStrictNote).
   const notedByAdapter = new Set<string>();
   // The person's reference pictures go after the prompt, only once privacy allowed the turn. A
   // local model known not to read images gets none (the adapter's note says so, once a turn).
@@ -788,8 +791,9 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
     t.servedBy = out.servedBy || t.servedBy;
     for (const text of out.notes ?? []) {
-      if (notedByAdapter.has(text)) continue;
-      notedByAdapter.add(text);
+      const seen = isStrictNote(text) ? conv.notesShown : notedByAdapter;
+      if (seen.has(text)) continue;
+      seen.add(text);
       t.note(text);
     }
     // A server that refused this request's images: the model is text-only from now on.

@@ -46,7 +46,7 @@ export const ATTACH_MIN_STEPS = 120;
 export const PROBE_TEXT = 'Call cad__get_model once with detail brief, then say in one sentence how many features the Part has.';
 const STRICT_FALLBACK = /could not compile these tools strictly/;
 /** The app's note when it sent fewer tools strict (scripts/server/assistant/providers/common.ts strictReducedNote). */
-const STRICT_REDUCED = /could not compile all these tools strictly.*: (\d+) of (\d+) are checked by the provider, the rest are sent unchecked \(([^()]*)\); the app still checks every input\.$/;
+const STRICT_REDUCED = /can't check the inputs of all (\d+) of Magnusim's tools at once, so Magnusim checks (\d+) of them itself \(([^()]*)\)\. The Assistant can still use every tool\.$/;
 
 /**
  * What the probe's turn notes say of its strict tools: "accepted"; "reduced: N of M strict
@@ -56,7 +56,7 @@ const STRICT_REDUCED = /could not compile all these tools strictly.*: (\d+) of (
 export function probeStrict(notes) {
   for (const n of notes) {
     const m = STRICT_REDUCED.exec(String(n));
-    if (m) return `reduced: ${m[1]} of ${m[2]} strict (unchecked: ${m[3]})`;
+    if (m) return `reduced: ${Number(m[1]) - Number(m[2])} of ${m[1]} strict (unchecked: ${m[3]})`;
   }
   return notes.some((n) => STRICT_FALLBACK.test(String(n))) ? 'refused: all unchecked' : 'accepted';
 }

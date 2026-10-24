@@ -1715,14 +1715,14 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         assert.deepEqual(r.notes, [strictReducedNote(7, 13, unchecked)]);
         assert.ok(unchecked.includes('h_big') && unchecked.includes('size__w_tie_b') && !unchecked.includes('size__w_tie_a'));
 
-        // Remembered for the tool set: the next request goes straight to those 7, with no note
-        // (the person read it with the answer that found the limit).
+        // Remembered for the tool set: the next request goes straight to those 7, with the note
+        // (the loop shows it once a conversation).
         fake.reply({ text: 'again' });
         const again = await sentBy('anthropic', async () => {
           r = await send('anthropic', request('anthropic', [userText('again')], { tools }));
         });
         assert.deepEqual(again.map((q) => strictNames(q)), [strictNames(sent[2])]);
-        assert.deepEqual(r.notes ?? [], []);
+        assert.deepEqual(r.notes, [strictReducedNote(7, 13, unchecked)]);
 
         // Another tool set (another place in the app) starts within the bytes the first one
         // compiled: no refused request to learn it again.

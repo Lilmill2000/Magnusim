@@ -99,13 +99,25 @@ export function strictFallbackNote(said: string): string {
   return said ? `${STRICT_FALLBACK_NOTE} The provider said: ${said}` : STRICT_FALLBACK_NOTE;
 }
 
+/** The reduced note's start (strictReducedNote), for telling a strict note from the adapter's others. */
+export const STRICT_REDUCED_START = "The cloud provider can't check the inputs of all ";
+
+/**
+ * A note about how the conversation's tools go to the provider (reduced or loose): it stays
+ * true for every later request, so the loop shows it once a conversation; the adapter's other
+ * notes (pictures left out) are about one request and come once a turn.
+ */
+export function isStrictNote(text: string): boolean {
+  return text.startsWith(STRICT_REDUCED_START) || text.startsWith(STRICT_FALLBACK_NOTE);
+}
+
 /**
  * The note for a request sent with fewer tools strict, in the person's words: the provider
  * checks only some of the tools' inputs itself, and the app checks the others (named, in the
  * order offered). The provider's own words go to the log (the warn line), not the note.
  */
 export function strictReducedNote(count: number, of: number, unchecked: readonly string[]): string {
-  return `The cloud provider can't check the inputs of all ${of} of Magnusim's tools at once, so Magnusim checks ${of - count} of them itself (${unchecked.join(', ')}). The Assistant can still use every tool.`;
+  return `${STRICT_REDUCED_START}${of} of Magnusim's tools at once, so Magnusim checks ${of - count} of them itself (${unchecked.join(', ')}). The Assistant can still use every tool.`;
 }
 
 /**
@@ -297,11 +309,11 @@ export async function sendStrictOrLoose(
     }
     return { kind, reason, strict, count: strict.filter(Boolean).length, of };
   };
-  // A loose request's note comes every time (a schema the provider refuses is a fault to see);
-  // a reduced one only with the answer that found the limit (a refusal just now), not with
-  // every later request that reuses it: the person reads it once.
+  // Every reduced or loose answer carries its note; the loop shows a strict note once a
+  // conversation (isStrictNote, loop.ts), so the person reads it once, and a new conversation
+  // (the evaluation's probe, a test) still hears how its tools went.
   const noted = (r: ProviderResult, p: StrictPlan, said: string): ProviderResult => {
-    if (p.kind === 'strict' || (p.kind === 'reduced' && p.reason !== 'strict_reduced')) return r;
+    if (p.kind === 'strict') return r;
     const unchecked = req.tools.filter((_, i) => !p.strict[i]).map((t) => t.name);
     const note = p.kind === 'loose' ? strictFallbackNote(said) : strictReducedNote(p.count, of, unchecked);
     return { ...r, notes: [...(r.notes ?? []), note] };

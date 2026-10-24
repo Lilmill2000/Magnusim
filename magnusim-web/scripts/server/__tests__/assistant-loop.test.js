@@ -17,6 +17,7 @@ process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete process.env[k];
 
 const h = await import('./assistant-harness.js');
+const { strictReducedNote } = await import('../assistant/providers/common.ts');
 const { ScriptedProvider, makeManager, startTurn, settled, eventsOf, answerGates, checkInvariants, hostTool, until, tick } = h;
 const { resetAssistantState, shutdownAssistant } = await import('../assistant/state.ts');
 const { SYSTEM_PROMPT } = await import('../assistant/prompt.ts');
@@ -1082,6 +1083,24 @@ describe('images only for models that read them (CAD tools spec H6)', () => {
     await settled(r.turn);
     assert.deepEqual(notes(r.turn), [LEFT]);
     checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a strict note is shown once a conversation (it stays true for every request after); a new conversation hears it again", async () => {
+    const m = localSays(() => false, { hostTools: [snap()] });
+    m.provider.modelRow = async () => ({ context: 32_768, type: null });
+    const STRICT = strictReducedNote(10, 13, ['a', 'b', 'c']);
+    m.provider.script({ text: 'one', notes: [STRICT] });
+    let r = await startTurn(m, 'First.');
+    await settled(r.turn);
+    assert.deepEqual(notes(r.turn), [STRICT]);
+    m.provider.script({ text: 'two', notes: [STRICT] });
+    r = await startTurn(m, { text: 'Second.', conversation: r.body.conversation });
+    await settled(r.turn);
+    assert.deepEqual(notes(r.turn), [], 'the same conversation: not again');
+    m.provider.script({ text: 'three', notes: [STRICT] });
+    r = await startTurn(m, 'A new conversation.');
+    await settled(r.turn);
+    assert.deepEqual(notes(r.turn), [STRICT]);
   });
 
   it("a model that doesn't read images: the estimate leaves its images out, so they take none of a small context's room", async () => {

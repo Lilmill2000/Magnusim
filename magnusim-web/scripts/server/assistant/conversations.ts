@@ -68,6 +68,8 @@ export class Conversation {
   guide: FrozenGuide | null = null;
   /** Guides that differed from the frozen one and were noted once. */
   readonly guidesNoted = new Set<string>();
+  /** The adapter's strict notes (its tools reduced or unchecked by the provider) shown in it once. */
+  readonly notesShown = new Set<string>();
   /** The turn running in it (until its loop has fully ended). */
   running: string | null = null;
   /** The last request's prompt tokens (for "full"). */

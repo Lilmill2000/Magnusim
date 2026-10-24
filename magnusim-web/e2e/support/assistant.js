@@ -296,7 +296,7 @@ export async function startTurn(request, base, body, opts = {}) {
  * Against the fake that means a strict schema broke one of its rules (a limit keyword, the
  * strict budget): the turn still ends well, so ended() fails it unless the test expects it.
  */
-const STRICT_FALLBACK = /could not compile (all )?these tools strictly/;
+const STRICT_FALLBACK = /could not compile these tools strictly|can't check the inputs of all \d+ of Magnusim's tools/;
 
 /**
  * Follows turn `id`'s event log through the long-poll (GET /api/assistant/turns/:id).

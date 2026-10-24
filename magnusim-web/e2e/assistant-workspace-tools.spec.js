@@ -1119,12 +1119,11 @@ test("a cloud provider that can't compile all the tools strictly (a set too big)
     expect(sent[0].step).toBeUndefined();
     expect(sent.map(strictOf)).toEqual([offered.map((t) => t.name), offered.map((t) => t.name).filter((n) => smallest.includes(n)), offered.map((t) => t.name).filter((n) => smallest.includes(n))]);
 
-    // The next turn: that set from its first request, and no note again (the person read it once).
+    // The next turn (a new conversation): that set from its first request; the shared turn helper fails it unless the test expects the note.
     before = chats().length;
     fake.reply({ text: 'Still 2.' });
-    ended = await (await startTurn(request, host.base, { text: 'What is the counter now?', tab: w.tab })).ended();
-    expect(ended.turn.state).toBe('done');
-    expect(ended.events.filter((e) => e.type === 'note')).toEqual([]);
+    const unexpected = await startTurn(request, host.base, { text: 'What is the counter now?', tab: w.tab });
+    await expect(unexpected.ended()).rejects.toThrow(`the provider refused this turn's strict tools and the app sent them again unchecked by it (note: "${NOTE}")`);
     sent = chats().slice(before);
     expect(sent.map(strictOf)).toEqual([offered.map((t) => t.name).filter((n) => smallest.includes(n))]);
   } finally {

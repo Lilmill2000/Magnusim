@@ -353,8 +353,8 @@ describe('the records', () => {
 describe("the probe's strict record", () => {
   // The app's notes (scripts/server/assistant/providers/common.ts strictReducedNote, strictFallbackNote).
   const SAID = 'The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools.';
-  const reduced = (said: string) =>
-    `The cloud provider could not compile all these tools strictly${said ? ` (it said: ${said})` : ''}: 15 of 21 are checked by the provider, the rest are sent unchecked (cad__extrude, cad__pattern, cad__revolve, cad__sketch, cad__sweep_loft, cad__view); the app still checks every input.`;
+  const reduced = (_said: string) =>
+    "The cloud provider can't check the inputs of all 21 of Magnusim's tools at once, so Magnusim checks 6 of them itself (cad__extrude, cad__pattern, cad__revolve, cad__sketch, cad__sweep_loft, cad__view). The Assistant can still use every tool.";
   const loose = `The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input. The provider said: ${SAID}`;
 
   it('accepted with no strict note; reduced with the count and the unchecked tools; refused when all went unchecked', () => {
@@ -363,8 +363,6 @@ describe("the probe's strict record", () => {
     const want = 'reduced: 15 of 21 strict (unchecked: cad__extrude, cad__pattern, cad__revolve, cad__sketch, cad__sweep_loft, cad__view)';
     expect(probeStrict([reduced(SAID)])).toBe(want);
     expect(probeStrict([reduced('')])).toBe(want);
-    // Words with brackets and colons of their own are still read from the end.
-    expect(probeStrict([reduced('tools (a): too large: 3 of 4 are checked by the provider')])).toBe(want);
     expect(probeStrict([loose])).toBe('refused: all unchecked');
     expect(probeStrict(['The cloud provider could not compile these tools strictly; they are sent unchecked by the provider; the app still checks every input.'])).toBe('refused: all unchecked');
   });
