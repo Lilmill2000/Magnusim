@@ -379,7 +379,9 @@ describe('the adapters against the fake, in every dialect', () => {
     assert.equal(body.messages.length, 1, 'consecutive user messages are merged');
     assert.deepEqual(body.tool_choice, { type: 'auto' });
     assert.deepEqual(body.output_config, { effort: 'high' });
-    assert.equal(body.thinking, undefined);
+    // Adaptive (the 5 series' default), with the binding that drops thinking blocks the tool
+    // set's change no longer holds instead of refusing the request (seen live, 2026-10-24).
+    assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
     assert.deepEqual(body.tools.at(-1).cache_control, { type: 'ephemeral' });
     assert.deepEqual(body.system.at(-1).cache_control, { type: 'ephemeral' });
     assert.deepEqual(body.messages[0].content.at(-1).cache_control, { type: 'ephemeral' });
@@ -625,6 +627,22 @@ describe('the refusal fallback (first cloud dialect)', () => {
     assert.deepEqual(body.messages[2].content.map((b) => b.type), ['tool_result']);
   });
 
+  it('the thinking binding (drop_block) for the 5 series only: an older model is sent no thinking field and no beta', async () => {
+    for (const [model, binds] of [
+      ['claude-opus-5-5', true],
+      ['claude-sonnet-5-5', true],
+      ['claude-haiku-5-5', true],
+      ['claude-opus-4-8', false],
+      ['claude-haiku-4-5', false],
+    ]) {
+      fake.reply({ text: 'ok' });
+      await send('anthropic', request('anthropic', [userText('x')], { model }));
+      const req = lastChat('anthropic');
+      assert.deepEqual(req.body.thinking, binds ? { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } } : undefined, model);
+      assert.equal(String(req.headers['anthropic-beta'] ?? '').includes('thinking-binding-controls-2026-08-01'), binds, model);
+    }
+  });
+
   it('`fallbacks` and its beta only for Opus 5.5 and Sonnet 5.5, never Haiku 5.5 or an unknown id', async () => {
     for (const [model, on] of [
       ['claude-opus-5-5', true],
@@ -637,7 +655,9 @@ describe('the refusal fallback (first cloud dialect)', () => {
       const req = lastChat('anthropic');
       assert.equal(req.body.fallbacks, on ? 'default' : undefined, model);
       assert.equal(req.body.betas, undefined, 'betas travel as a header');
-      assert.equal(req.headers['anthropic-beta'], on ? 'server-side-fallback-2026-07-01' : undefined, model);
+      // The thinking binding's beta goes with every 5-series model (THINKING_BINDING_BETA).
+      const binding = model.startsWith('claude-unknown') ? [] : ['thinking-binding-controls-2026-08-01'];
+      assert.equal(req.headers['anthropic-beta'], [...(on ? ['server-side-fallback-2026-07-01'] : []), ...binding].join(',') || undefined, model);
       assert.deepEqual(adapterFor('anthropic').fallbackTargets(model), on ? [...prices.FALLBACK_TARGETS[model]] : [], model);
     }
   });
@@ -985,7 +1005,8 @@ describe('the environment and the profiles are never read', () => {
       if (r.dialect === 'anthropic') {
         assert.equal(h['x-api-key'], KEYS.anthropic);
         assert.equal(h.authorization, undefined, 'no Authorization on the first cloud dialect');
-        assert.equal(h['anthropic-beta'], undefined, 'Haiku asks for no beta, whatever the environment says');
+        // No beta the environment names: only the app's own (a Haiku chat asks for the thinking binding; the model list for none).
+        assert.ok([undefined, 'thinking-binding-controls-2026-08-01'].includes(h['anthropic-beta']), `${r.path}: ${h['anthropic-beta']}`);
         assert.equal(h['anthropic-version'], '2023-06-01');
       } else if (r.dialect === 'openai') {
         assert.equal(h.authorization, `Bearer ${KEYS.openai}`);

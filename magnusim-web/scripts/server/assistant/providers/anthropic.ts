@@ -175,6 +175,31 @@ export function usesFallback(model: string): boolean {
   return Object.prototype.hasOwnProperty.call(FALLBACK_TARGETS, model);
 }
 
+/**
+ * Preserved thinking: a model's thinking block holds only while the system prompt, the tools
+ * and every earlier message are unchanged, and accounts made on or after 2026-08-31 get a 400
+ * when one comes back after a change. The app changes the tools as its window moves (the
+ * place's own set, core host tools spec 12), so a turn that opened a project from Home was
+ * refused (seen live, 2026-10-24). With this beta and `drop_block`, the provider drops the
+ * blocks that no longer hold, and every one after them, and the request goes on without that
+ * reasoning (claude-api model-migration guide, "Migrating to Claude Fable 5.1", breaking change 3).
+ */
+export const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
+
+/**
+ * Models that think adaptively when `thinking` is left out (the 5 series), so sending
+ * `{type: 'adaptive'}` with the binding changes nothing else. Older models are left as they are
+ * (`thinking` there would turn thinking on), and their blocks are not bound this way.
+ */
+export function bindsThinking(model: string): boolean {
+  return /^claude-(opus|sonnet|haiku|fable|mythos)-5(?:$|[-.])/.test(model);
+}
+
+/** The request's betas: the fallback's and the thinking binding's, as each applies to the model. */
+export function betasOf(model: string): string[] {
+  return [...(usesFallback(model) ? [FALLBACK_BETA] : []), ...(bindsThinking(model) ? [THINKING_BINDING_BETA] : [])];
+}
+
 function userContent(parts: readonly UserPart[]): Json[] {
   return parts.map((p): Json => {
     if (p.type === 'tool_result') {
@@ -236,14 +261,17 @@ export function anthropicBody(req: ProviderRequest, o: { loose?: boolean; strict
       ...(i === req.tools.length - 1 ? { cache_control: EPHEMERAL } : {}),
     }),
   );
+  const betas = betasOf(req.model);
   return {
     model: req.model,
     max_tokens: req.maxOutputTokens,
     ...(system.length ? { system } : {}),
     messages,
     ...(tools.length ? { tools, tool_choice: { type: 'auto' } } : {}),
+    ...(bindsThinking(req.model) ? { thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } } } : {}),
     ...(req.effort !== 'default' ? { output_config: { effort: req.effort } } : {}),
-    ...(fallback ? { fallbacks: 'default', betas: [FALLBACK_BETA] } : {}),
+    ...(fallback ? { fallbacks: 'default' } : {}),
+    ...(betas.length ? { betas } : {}),
   };
 }
 
@@ -493,7 +521,7 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
           const acc = new MessageAccumulator(onEvent);
           const dbg = debugCall({ dialect: 'anthropic', model: req.model, attempt: plan.kind, reason: plan.reason, strict: { count: plan.count, of: plan.of }, body });
           try {
-            const c = await client(String(key), wd, usesFallback(req.model) ? FALLBACK_BETA : null, dbg);
+            const c = await client(String(key), wd, betasOf(req.model).join(',') || null, dbg);
             const stream = await c.beta.messages.create(body, { signal: sig });
             for await (const ev of stream) {
               acc.add(ev);
