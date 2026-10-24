@@ -49,7 +49,7 @@ import { computeRowsForProject, dropComputeRows } from './server/compute-queue.t
 import { envGet } from './env-compat.js';
 import { thumbRenderTimeoutMs, thumbTestStandIn } from './server/thumb-render.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
-import { callWorker, commitRpc, commitRpcSync } from './py-json.js';
+import { callWorker, commitRpc } from './py-json.js';
 import { fillSampleFolder, sampleProblem } from './project-sample.js';
 import { geometryFenced, isLinkedGeometryDir, markRemovedStudies, onGeometryRemove } from './server/link-job.js';
 import { linkOverlay } from './server/link-overlay.js';
@@ -197,29 +197,19 @@ function projectGone(id) {
   return Object.assign(new Error(`project not found: ${id} (deleted)`), { status: 404 });
 }
 
-/** Saves project.json; only a new project (`create`) is saved where there is none. */
-function writeProject(proj, { create = false } = {}) {
+/**
+ * Saves project.json through the long-lived worker: a new Python process per save held the
+ * whole server (every tab's requests) for over a second. Only a new project (`create`) is
+ * saved where there is none. The worker answers one request at a time: this save can run
+ * after the project was deleted, and the worker then refuses it (it never makes the
+ * project again).
+ */
+async function writeProjectAsync(proj, { create = false } = {}) {
   const dir = projectDir(proj.id);
   if (!create && !existsSync(projectJsonPath(proj.id))) throw projectGone(proj.id);
   mkdirSync(geometriesRoot(dir), { recursive: true });
   if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
-  const written = commitRpcSync('project.write_project', { project_dir: dir, doc: proj, create });
-  if (written && typeof written === 'object') Object.assign(proj, written);
-  invalidateProjectsListCache();
-  return proj;
-}
-
-/**
- * writeProject through the long-lived worker, so a geometry switch does not hold the server.
- * The worker answers one request at a time: this save can run after the project was
- * deleted, and the worker then refuses it (it never makes the project again).
- */
-async function writeProjectAsync(proj) {
-  const dir = projectDir(proj.id);
-  if (!existsSync(projectJsonPath(proj.id))) throw projectGone(proj.id);
-  mkdirSync(geometriesRoot(dir), { recursive: true });
-  if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
-  const written = await commitRpc('project.write_project', { project_dir: dir, doc: proj });
+  const written = await commitRpc('project.write_project', { project_dir: dir, doc: proj, create });
   if (written && typeof written === 'object') Object.assign(proj, written);
   invalidateProjectsListCache();
   return proj;
@@ -380,7 +370,12 @@ function listProjects() {
   const out = [];
   for (const name of readdirSync(PROJECTS_ROOT)) {
     if (SKIP_DIR_NAMES.has(name)) continue;
-    const p = projectJsonPath(name);
+    let p;
+    try {
+      p = projectJsonPath(name);
+    } catch {
+      continue; // not a project id: the sample copies' staging folder (.sample-staging), a stray file
+    }
     if (existsSync(p)) {
       try {
         out.push(JSON.parse(readFileSync(p, 'utf8')));
@@ -467,7 +462,7 @@ export function deleteFolder(name) {
   };
 }
 
-function moveProject(id, folder) {
+async function moveProject(id, folder) {
   const proj = readProject(id);
   if (!proj) {
     return { ok: false, status: 404, body: { error: 'project not found', id } };
@@ -478,7 +473,7 @@ function moveProject(id, folder) {
   }
   proj.folder = dest;
   proj.updated_at = new Date().toISOString();
-  writeProject(proj);
+  if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(id);
   return {
     ok: true,
     status: 200,
@@ -486,7 +481,7 @@ function moveProject(id, folder) {
   };
 }
 
-function updateProject(id, body) {
+async function updateProject(id, body) {
   if (!isSafeProjectId(id)) {
     return { ok: false, status: 400, body: { error: 'invalid project id' } };
   }
@@ -512,7 +507,7 @@ function updateProject(id, body) {
     proj.folder = dest;
   }
   proj.updated_at = new Date().toISOString();
-  writeProject(proj);
+  if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(id);
   return {
     ok: true,
     status: 200,
@@ -576,7 +571,8 @@ export function deleteProject(id) {
   return { ok: true, status: 200, body: { ok: true, deleted: id, title: proj.title || id } };
 }
 
-function createProject(body) {
+/** A new project: its folder now, project.json through the worker, then it is the active one. */
+async function createProject(body) {
   ensureProjectsRoot();
   const title = String(body.title || body.name || '').trim();
   if (!title) {
@@ -605,7 +601,7 @@ function createProject(body) {
     soft_pass_avoided: true,
     increment: 'W16',
   };
-  writeProject(proj, { create: true });
+  await writeProjectAsync(proj, { create: true });
   writeActiveId(id);
   return { ok: true, status: 201, body: { ok: true, ...proj, active: true } };
 }
@@ -790,7 +786,7 @@ async function copySample(body) {
     // Whole before it can be listed: the worker writes it (project.write_project) in the
     // staging folder, and the folder moves into place with it.
     if (proj.layout_version == null) proj.layout_version = LAYOUT_VERSION;
-    const written = commitRpcSync('project.write_project', { project_dir: staging, doc: proj });
+    const written = await commitRpc('project.write_project', { project_dir: staging, doc: proj });
     if (written && typeof written === 'object') Object.assign(proj, written);
     if (existsSync(dest)) return await fail(`a project ${id} is already there`);
     await renameFolder(staging, dest);
@@ -854,7 +850,7 @@ function ensureGeometriesHydrated(proj) {
     proj.geometry.id = proj.active_geometry_id;
     dirty = true;
   }
-  if (dirty) writeProject(proj);
+  if (dirty) saveInBackground(proj, 'geometry records repaired on a read');
   // A project whose only geometry a link made has no active record yet: draw it from its
   // own files (never regenerated, never written here).
   if (!proj.geometry && proj.active_geometry_id) {
@@ -1740,6 +1736,16 @@ async function saveUnlessDeleted(proj) {
   return existsSync(projectJsonPath(proj.id));
 }
 
+/**
+ * A save a synchronous caller does not wait for (a read's repair, a cached path): sent to
+ * the worker now, so it lands in order with the saves after it. A project deleted
+ * meanwhile is not made again; any other failure is logged, and the next call makes the
+ * same change again.
+ */
+function saveInBackground(proj, what) {
+  saveUnlessDeleted(proj).catch((e) => console.warn(`[CFD W16] ${what}: project.json not saved`, e));
+}
+
 function projectDeletedAnswer(projectId) {
   return { ok: false, status: 404, body: { error: 'project deleted while it was saved', project_id: projectId } };
 }
@@ -1917,7 +1923,7 @@ export function ensureBody1Stl(projectId, opts) {
     if (shown && proj.geometry && !proj.geometry.stl_path) {
       proj.geometry.stl_path = outStl;
       proj.geometry.stl_url = `/api/geometry/stl?project_id=${encodeURIComponent(id)}`;
-      writeProject(proj);
+      saveInBackground(proj, 'mesh input path');
     }
     return { ok: true, path: outStl, cached: true, cad_quality: true, project_id: id };
   }
@@ -1941,7 +1947,7 @@ export function ensureBody1Stl(projectId, opts) {
     proj.geometry.stl_path = outStl;
     proj.geometry.stl_url = `/api/geometry/stl?project_id=${encodeURIComponent(id)}`;
     proj.updated_at = new Date().toISOString();
-    writeProject(proj);
+    saveInBackground(proj, 'mesh input path');
   }
   return { ok: true, path: outStl, cached: false, project_id: id };
 }
@@ -2523,7 +2529,7 @@ async function importModifier(opts) {
   };
 }
 
-function transformModifier(opts) {
+async function transformModifier(opts) {
   ensureProjectsRoot();
   const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
@@ -2548,7 +2554,7 @@ function transformModifier(opts) {
   if (proj.geometry && proj.geometry.id === host.id) {
     proj.geometry.modifiers = (host.modifiers || []).map((m) => publicModifier(projectId, host.id, m)).filter(Boolean);
   }
-  writeProject(proj);
+  if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(projectId);
   return {
     ok: true,
     status: 200,
@@ -2562,7 +2568,7 @@ function transformModifier(opts) {
   };
 }
 
-function removeModifier(opts) {
+async function removeModifier(opts) {
   ensureProjectsRoot();
   const projectId = String((opts && opts.project_id) || projectIdOrActive('', readActiveId) || '').trim();
   if (!projectId) {
@@ -2588,7 +2594,7 @@ function removeModifier(opts) {
   if (proj.geometry && proj.geometry.id === host.id) {
     proj.geometry.modifiers = (host.modifiers || []).map((m) => publicModifier(projectId, host.id, m)).filter(Boolean);
   }
-  writeProject(proj);
+  if (!(await saveUnlessDeleted(proj))) return projectDeletedAnswer(projectId);
   return {
     ok: true,
     status: 200,
@@ -2825,7 +2831,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
       const id = String(body.project_id || body.id || '').trim();
-      const result = moveProject(id, body.folder);
+      const result = await moveProject(id, body.folder);
       if (result.ok) res.setHeader('X-CFD-Project-Id', id);
       return sendJson(res, result.status, result.body);
     }
@@ -2837,7 +2843,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
       const id = String(body.project_id || body.id || '').trim();
-      const result = updateProject(id, body);
+      const result = await updateProject(id, body);
       if (result.ok) res.setHeader('X-CFD-Project-Id', id);
       return sendJson(res, result.status, result.body);
     }
@@ -2884,7 +2890,7 @@ export async function handleW16Api(req, res, u, parts, helpers) {
       } catch (e) {
         return sendJson(res, 400, { error: 'invalid JSON body', detail: String(e) });
       }
-      const result = createProject(body);
+      const result = await createProject(body);
       res.setHeader('X-CFD-Source', 'project-create');
       if (result.ok && 'id' in result.body) res.setHeader('X-CFD-Project-Id', result.body.id);
       return sendJson(res, result.status, result.body);
@@ -2970,11 +2976,11 @@ export async function handleW16Api(req, res, u, parts, helpers) {
         return sendJson(res, 400, { error: 'invalid body', detail: String(e) });
       }
       if (opts && (opts.delete === true || opts.action === 'delete' || opts.remove === true)) {
-        const result = removeModifier(opts);
+        const result = await removeModifier(opts);
         res.setHeader('X-CFD-Source', 'geometry-modifier-remove');
         return sendJson(res, result.status, result.body);
       }
-      const result = transformModifier(opts);
+      const result = await transformModifier(opts);
       res.setHeader('X-CFD-Source', 'geometry-modifier-transform');
       return sendJson(res, result.status, result.body);
     }

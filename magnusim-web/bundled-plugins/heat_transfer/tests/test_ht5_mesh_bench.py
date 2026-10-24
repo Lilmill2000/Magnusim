@@ -173,12 +173,26 @@ def test_a_large_ascii_polyhedral_mesh_is_checked_fast_and_kept(tmp_path: Path, 
     }
     with capsys.disabled():
         print("\nHT5 mesh bench", json.dumps(row))
-    # The review's targets on 2 M cells: < 5 s and < 1 GB (the parse works in pieces of a few
-    # MB, so a small mesh's peak is mostly that fixed part: 96 MB is allowed for it).
+    # The review's targets on 2 M cells: < 5 s and < 1 GB (the parse works in pieces, a few
+    # at once, so a small mesh's peak is mostly that fixed part: 96 MB is allowed for it).
     budget = 2**30 * info["n_cells"] / 2_000_000 + 96 * 2**20
     assert t_first < 5.0
     assert peak_first < budget and peak_vol < budget and peak_loc < budget
     assert t_again < 0.05 and t_disk < 0.5
+
+
+def test_a_piece_of_an_ascii_face_list_is_parsed_in_little_memory():
+    """A piece's parse holds about 8 times its size. It held 16 times (an array per byte to
+    find the character after each number), and up to 4 pieces are parsed at once: on Linux,
+    where more of them overlapped, the bench's peak went over its budget (170-174 MB of 160)."""
+    piece = b"".join(b"4(%d %d %d %d)\n" % (i, i + 1, i + 2, i + 3) for i in range(100_000, 134_000))
+    polymesh._face_piece(b"3(0 1 2)\n", 4)  # numpy's first-call allocations are not the piece's
+    tracemalloc.start()
+    sizes, labels = polymesh._face_piece(piece, 4)
+    _cur, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert sizes.size == 34_000 and labels[-1] == 134_002
+    assert peak < 12 * len(piece)
 
 
 def test_an_ascii_face_of_many_points_written_over_several_lines_reads():
