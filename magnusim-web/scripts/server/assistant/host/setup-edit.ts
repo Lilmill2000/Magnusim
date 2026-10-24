@@ -225,6 +225,36 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
           return { proj, geometryId, geometryRev: geometryRevOf(proj, geometryId) };
         };
         const facesOk = async (geometryId: string, faces: readonly unknown[]) => (faces.length ? checkFaces(faces, records((await readMeta(d.hostCall, rt, project, geometryId, tool)).faces)) : []);
+        /**
+         * Saves the call's values on mesh `m` (its engine's fields; `advanced.mesh_engine` among the
+         * values switches the engine they are read for), with `name` when given: the update, and an
+         * add's values. Refuses an empty change (an empty body would restore the defaults).
+         */
+        const saveMeshValues = async (
+          m: Record<string, unknown>,
+          mq: Record<string, unknown>,
+          name: string,
+        ): Promise<{ ok: true; count: number } | { ok: false; problems: Parameters<typeof badValues>[0]; hint: string }> => {
+          const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
+          const settings = isRecord(m.settings) ? m.settings : {};
+          const engineNow = str(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '');
+          const wanted = (Array.isArray(input.values) ? input.values : []).find((p) => isRecord(p) && p.key === 'advanced.mesh_engine');
+          let engine = engineNow;
+          try {
+            if (isRecord(wanted)) engine = str(JSON.parse(str(wanted.value))) || engineNow;
+          } catch {
+            engine = engineNow;
+          }
+          const hint = `catalog {kind:'mesh_settings', key:'${cleanText(engine, 64)}'} lists the fields.`;
+          const parsed = parseValues(input.values, meshFields(registry, engine));
+          if (!parsed.ok) return { ok: false, problems: parsed.problems, hint };
+          if (!Object.keys(parsed.values).length && !name) refuse('invalid_input', 'update needs values or a name.', "catalog {kind:'mesh_settings', key} lists the fields.");
+          const nested = nest(parsed.values);
+          // mesher_settings is replaced whole by the route: the stored keys go with the change.
+          if (isRecord(nested.mesher_settings)) nested.mesher_settings = { ...(isRecord(settings.mesher_settings) ? settings.mesher_settings : {}), ...nested.mesher_settings };
+          await d.hostCall('mesh.update', { ...mq, geometry_id: '', name, settings: nested }, o);
+          return { ok: true, count: Object.keys(parsed.values).length };
+        };
 
         switch (kind) {
           // ------------------------------------------------------------ materials
@@ -396,8 +426,21 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             if (action === 'add') {
               const made = (await d.hostCall('mesh.create', { ...q, name: cleanText(str(input.name).trim(), 64) }, o)) as Record<string, unknown>;
               const id = str(made.active_id) || str(isRecord(made.mesh) ? made.mesh.id : '');
+              const madeName = isRecord(made.mesh) ? made.mesh.name : 'Mesh';
               sync(['mesh', 'tree'], sim, { mesh: [id] });
-              return okDone({ done: `Added mesh ${quoted(isRecord(made.mesh) ? made.mesh.name : 'Mesh')}.`, ids: { mesh: id }, hint: "Change it with setup_edit {kind:'mesh', action:'update'}; generate it with compute." });
+              // Settings sent with the add are saved now, as an update would: never dropped.
+              const sent = Array.isArray(input.values) ? input.values.filter(isRecord) : [];
+              if (sent.length) {
+                const fresh = records(((await d.hostCall('mesh.get', { ...q, mesh_id: id }, o)) as Record<string, unknown>).meshes).find((x) => x.id === id) ?? null;
+                const saved = fresh ? await saveMeshValues(fresh, { ...q, mesh_id: id, base_rev: revOf(fresh) ?? undefined }, '') : null;
+                if (!saved || !saved.ok) {
+                  const problems = saved && !saved.ok ? saved.problems : [];
+                  return badValues(problems, `Mesh ${quoted(madeName)} was added (id ${id}) with its default settings; these values were not saved. Set them with setup_edit {kind:'mesh', action:'update', id:'${id}'}.`);
+                }
+                sync(['mesh'], sim, { mesh: [id] });
+                return okDone({ done: `Added mesh ${quoted(madeName)} with ${saved.count} setting${saved.count === 1 ? '' : 's'}.`, ids: { mesh: id }, hint: 'Generate it with compute.' });
+              }
+              return okDone({ done: `Added mesh ${quoted(madeName)}.`, ids: { mesh: id }, hint: "Change it with setup_edit {kind:'mesh', action:'update'}; generate it with compute." });
             }
             const id = idOf(input) || str(doc.active_id);
             const m = meshes.find((x) => x.id === id);
@@ -433,26 +476,11 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
               return okDone({ done: `Copied the settings and refinements of ${quoted(src.name)} into mesh ${quoted(m.name)}.`, ids: { mesh: id } });
             }
             // update: never an empty body (it would restore the defaults).
-            const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
-            const settings = isRecord(m.settings) ? m.settings : {};
-            const engineNow = str(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '');
-            const wanted = (Array.isArray(input.values) ? input.values : []).find((p) => isRecord(p) && p.key === 'advanced.mesh_engine');
-            let engine = engineNow;
-            try {
-              if (isRecord(wanted)) engine = str(JSON.parse(str(wanted.value))) || engineNow;
-            } catch {
-              engine = engineNow;
-            }
-            const parsed = parseValues(input.values, meshFields(registry, engine));
-            if (!parsed.ok) return badValues(parsed.problems, `catalog {kind:'mesh_settings', key:'${cleanText(engine, 64)}'} lists the fields.`);
             const name = cleanText(str(input.name).trim(), 64);
-            if (!Object.keys(parsed.values).length && !name) return fail('invalid_input', 'update needs values or a name.', "catalog {kind:'mesh_settings', key} lists the fields.");
-            const nested = nest(parsed.values);
-            // mesher_settings is replaced whole by the route: the stored keys go with the change.
-            if (isRecord(nested.mesher_settings)) nested.mesher_settings = { ...(isRecord(settings.mesher_settings) ? settings.mesher_settings : {}), ...nested.mesher_settings };
-            await d.hostCall('mesh.update', { ...mq, geometry_id: '', name, settings: nested }, o);
+            const saved = await saveMeshValues(m, mq, name);
+            if (!saved.ok) return badValues(saved.problems, saved.hint);
             sync(['mesh'], sim, { mesh: [id] });
-            return okDone({ done: `Saved ${Object.keys(parsed.values).length} setting${Object.keys(parsed.values).length === 1 ? '' : 's'} of mesh ${quoted(name || m.name)}.`, ids: { mesh: id } });
+            return okDone({ done: `Saved ${saved.count} setting${saved.count === 1 ? '' : 's'} of mesh ${quoted(name || m.name)}.`, ids: { mesh: id } });
           }
           // ------------------------------------------------------------ refinements
           case 'refinement': {

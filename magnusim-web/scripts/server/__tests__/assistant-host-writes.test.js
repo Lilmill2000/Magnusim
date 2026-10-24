@@ -296,6 +296,22 @@ describe('setup_edit: every kind × action, the exact routes and bodies', () => 
     const own = await sent(t(), setup({ kind: 'mesh', action: 'update', id: 'm2', values: [{ key: 'fineness', value: '11' }, { key: 'advanced.mesh_engine', value: '"nope"' }] }));
     assert.deepEqual([own.out.error.code, own.out.error.detail.length], ['bad_values', 2]);
   });
+  it('mesh add with values: the settings sent with it are saved (seen live: a coarse mesh added with fineness 2 was meshed at the default 5)', async () => {
+    fresh();
+    let r = await sent(t(), setup({ kind: 'mesh', action: 'add', name: 'Coarse', values: [{ key: 'fineness', value: '2' }] }));
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.deepEqual(r.writes.map((w) => [w.path, w.body]), [
+      ['/api/mesh', { project_id: 'p1', simulation_id: 's1', create: true, name: 'Coarse' }],
+      ['/api/mesh', { fineness: 2, project_id: 'p1', simulation_id: 's1', mesh_id: 'm-new', base_rev: 1 }],
+    ]);
+    assert.match(r.out.summary, /Added mesh "Coarse" with 1 setting/);
+    // A value it can't take: the mesh is added with its defaults, and the answer says the values were not saved.
+    fresh();
+    r = await sent(t(), setup({ kind: 'mesh', action: 'add', name: 'Bad', values: [{ key: 'fineness', value: '40' }] }));
+    assert.equal(r.out.error.code, 'bad_values');
+    assert.match(r.out.error.hint, /was added \(id m-new\) with its default settings; these values were not saved/);
+    assert.deepEqual(r.writes.map((w) => w.body.create === true), [true]);
+  });
   it('mesh update on a generated mesh, refinement copy onto a mesh with refinements: they ask first', async () => {
     fresh();
     const ac = { ctx: rt().ctx, signal: new AbortController().signal, turn: 't' };

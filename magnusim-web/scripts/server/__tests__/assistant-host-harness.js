@@ -219,7 +219,12 @@ function answer(w, method, path, q, body) {
       if (body && body.delete) return { ok: true, deleted: true };
       return { ok: true, refinement: { id: body.id || 'ref-new', name: body.name || 'Surface custom sizing 1', type: body.type, mesh_id: body.mesh_id, faces: body.faces } };
     case '/api/mesh':
-      if (body && body.create) return { ok: true, mesh: { id: 'm-new', name: body.name || 'Mesh 3' }, active_id: 'm-new' };
+      if (body && body.create) {
+        // As the app's route: the new mesh joins the study's list, with the default settings.
+        const made = { id: 'm-new', name: body.name || 'Mesh 3', generated: false, status: null, rev: 1, settings: { name: body.name || 'Mesh 3', fineness: 5, advanced: { mesh_engine: 'standard' } } };
+        w.meshes = [...w.meshes.filter((m) => m.id !== made.id), made];
+        return { ok: true, mesh: made, active_id: made.id };
+      }
       return { ok: true, saved: true };
     case '/api/worker':
       if (body && body.method === 'materials.set') return { ok: true, materials: body.params.body.materials.map((m) => ({ ...m, rev: 2 })) };
