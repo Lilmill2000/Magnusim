@@ -611,6 +611,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       prompt: t.prompt,
       // import_file takes only the files attached to this conversation.
       conversation: conv.id,
+      // app_status shows what the turn used so far (read when asked; the AI never changes a limit).
+      used: () => t.toolUse?.() ?? null,
       // app_status reports the turn's own provider and model, not the default's.
       assistant: { provider: t.settings.provider, model: t.settings.model },
     };

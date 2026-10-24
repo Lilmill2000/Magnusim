@@ -1187,6 +1187,23 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
       await w.close();
     }
   });
+
+  it("its calls know the turn's conversation (import_file takes the files attached to it, core host tools spec 13.3); no message of the person's", async () => {
+    const seen = [];
+    const probe = H.hostTool('seen_ctx', { run: async (_input, rt) => (seen.push({ conversation: rt.ctx.conversation, prompt: rt.ctx.prompt, turn: rt.turn }), { ok: true, data: {}, summary: 'seen' }) });
+    const w = await world({ hostTools: [probe] });
+    try {
+      const r = await w.turn({ text: 'Look.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ call: { tool: 'seen_ctx', args: {} } }, { say: 'done' });
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      assert.ok(r.turn.conv.id, 'the turn has a conversation');
+      assert.deepEqual(seen, [{ conversation: r.turn.conv.id, prompt: null, turn: r.turn.id }]);
+    } finally {
+      await w.close();
+    }
+  });
 });
 
 // ------------------------------------------------------------------------------------------------

@@ -45,7 +45,7 @@
 import { safeLinks, type ToolLink } from './links.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
+import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource, TurnUse } from './registry.ts';
 import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, GATE_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
@@ -83,6 +83,8 @@ export interface RunnerTurn {
   note?(text: string): void;
   /** Keeps a result's pictures for the window (already checked); their refs go on the log's tool_result. */
   keepImages?(images: ImagePart[]): ImageRef[];
+  /** What it used so far of its limits (ToolCtx.used: app_status shows it). */
+  toolUse?(): TurnUse;
 }
 
 /** Why a call's signal aborted: Stop, the turn's minutes cap, or no progress for too long. */

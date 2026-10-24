@@ -165,4 +165,29 @@ describe('import_file', () => {
     assert.equal(r.out.error.code, 'needs_file');
     assert.match(r.out.error.hint, /paper-clip in the Assistant panel, or to use \+ Add geometry/);
   });
+  it('an app connected over MCP (turn mcp:<id>): no attachments and no typed path, each said plainly; nothing opened or sent', async () => {
+    fresh();
+    const file = join(ROOT, 'mcp.step');
+    writeFileSync(file, 'ISO-10303-21;\n');
+    const opened = [];
+    const t = importFileTool(
+      deps({
+        attachments: { open: async (id, conv) => (opened.push([id, conv]), { name: 'mcp.step', bytes: 14, stream: createReadStream(file) }) },
+        statFile: async () => ({ size: 14, file: true }),
+      }),
+    );
+    const mcp = (prompt = null) => rt({ turn: 'mcp:s-1', ctx: { prompt } });
+    let r = await sent(t, imp({ attachment_id: 'att-0123456789abcdef' }), mcp());
+    assert.deepEqual([r.out.error.code, r.writes, opened], ['needs_file', [], []]);
+    assert.match(r.out.error.message, /connected over MCP has no attached files/);
+    assert.match(r.out.error.hint, /\+ Add geometry in Magnusim, or to attach it in Magnusim's Assistant panel/);
+    // Even a path that happens to be in some text it holds: an app has no message of the person's.
+    r = await sent(t, imp({ path: file }), mcp(`Import ${file}`));
+    assert.deepEqual([r.out.error.code, r.writes], ['path_not_typed', []]);
+    assert.match(r.out.error.message, /can't import a path/);
+    assert.match(r.out.error.hint, /\+ Add geometry in Magnusim/);
+    r = await sent(t, imp({}), mcp());
+    assert.deepEqual([r.out.error.code, r.writes], ['needs_file', []]);
+    assert.match(r.out.error.hint, /\+ Add geometry in Magnusim/);
+  });
 });

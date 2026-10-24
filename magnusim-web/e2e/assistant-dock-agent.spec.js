@@ -184,3 +184,45 @@ test("the picker offers the coding agent beside the API keys; a request on it sh
   await page.screenshot({ path: test.info().outputPath('agent-turn.png') });
   if (process.env.DOCK_SHOTS) await page.screenshot({ path: `${process.env.DOCK_SHOTS}/agent-turn-${page.viewportSize()?.width ?? 0}.png` });
 });
+
+test("a coding agent imports a file the person attached in the dock: Magnusim asks first, then the project has it (the agent's calls know the conversation)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await resetAssistant(request, host.base);
+  await useScriptedModel(request, host.base, llm, 'cloud');
+  await postOk(request, '/api/assistant/settings', { privacy: 'allow' });
+  const agents = await (await request.get(api('/api/assistant/agents?refresh=1'))).json();
+  expect(agents.agents.find((a) => a.id === AGENT.id)).toMatchObject({ found: true, ready: true });
+  await page.goto(api(`/#/p/${project}`));
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project, { timeout: 60_000 });
+  await openDock(page);
+  const dock = page.locator('#assistant-dock');
+  await dock.locator('.dock-picker-button').click();
+  await dock.locator(`[data-dock-provider-option="agent:${AGENT.id}"]`).click();
+  await expect(dock.locator('.dock-picker-button')).toContainText(AGENT.name);
+  const { readFileSync } = await import('node:fs');
+  const { dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const elbow = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.step'));
+  await dock.locator('[data-dock-file]').setInputFiles([{ name: 'elbow.step', mimeType: 'application/octet-stream', buffer: elbow }]);
+  await expect(dock.locator('[data-dock-file-chip]').first()).toHaveAttribute('data-dock-file-state', 'ready', STEP);
+  const [att] = (await (await request.get(api('/api/test/assistant/state'))).json()).attachments;
+  expect(att.id).toMatch(/^att-/);
+  const before = ((await (await request.get(api(`/api/project?project_id=${project}`))).json()).project.geometries || []).length;
+  fake.script(
+    { askOurs: { tool: 'import_file' } },
+    { call: { tool: 'import_file', args: { project_id: '', attachment_id: att.id, path: '', as: 'geometry', length_unit: '' } } },
+    { say: 'Imported the elbow.' },
+  );
+  await dockSend(page, 'Import the elbow I attached');
+  // An import runs a computation on this PC: Magnusim asks the person first, in the dock.
+  const gate = dock.locator('[data-gate]').first();
+  await expect(gate.locator('.dock-gate-title')).toHaveText('Allow the Assistant to import the attached file?', { timeout: 60_000 });
+  await gate.locator('[data-gate-answer="yes"]').click();
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible({ timeout: 180_000 });
+  // The call found the file of this conversation (not not_found): the step succeeded and the project has it.
+  await expect(turn.locator('[data-dock-step]').first()).not.toHaveAttribute('data-dock-step-state', 'failed');
+  const geoms = (await (await request.get(api(`/api/project?project_id=${project}`))).json()).project.geometries;
+  expect(geoms.length).toBe(before + 1);
+  expect(geoms.at(-1).original_filename).toBe('elbow.step');
+});

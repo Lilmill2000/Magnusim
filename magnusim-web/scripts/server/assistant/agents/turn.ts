@@ -329,6 +329,9 @@ class AgentTurnRun implements AgentDispatch {
       budgetTokens: null,
       // A coding agent's calls carry no message of the person's (the typed-path rule refuses a path).
       prompt: null,
+      // import_file takes the files the person attached to this conversation (Attach works for agents too).
+      conversation: t.conv.id,
+      used: () => t.toolUse?.() ?? null,
       assistant: { provider: t.settings.provider, model: t.settings.model },
     };
   }

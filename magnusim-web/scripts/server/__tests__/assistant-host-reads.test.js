@@ -71,6 +71,19 @@ describe('app_status', () => {
     assert.deepEqual(d.compute.queue, [{ kind: 'solve', mine: false, position: 1 }]);
     assert.equal(d.where, 'workbench');
   });
+  it("this turn's spend and caps so far, read when asked (read-only; none outside a turn)", async () => {
+    fresh();
+    let use = { steps: 4, steps_cap: 120, minutes: 2.1, minutes_cap: 60, usd: 0.12, usd_cap: 8 };
+    const r = rt({ ctx: { used: () => use } });
+    let d = await ok('app_status', {}, r);
+    assert.deepEqual(d.assistant.this_turn, { steps: 4, steps_cap: 120, minutes: 2.1, minutes_cap: 60, usd: 0.12, usd_cap: 8 });
+    assert.equal(d.assistant.can_change_these, false);
+    use = { ...use, steps: 5 };
+    d = await ok('app_status', {}, r);
+    assert.equal(d.assistant.this_turn.steps, 5, 'read at the call, not when the turn began');
+    d = await ok('app_status', {}, rt({ ctx: { used: () => { throw new Error('gone'); } } }));
+    assert.equal(d.assistant.this_turn, undefined);
+  });
 });
 
 describe('catalog', () => {

@@ -9,7 +9,7 @@
  */
 import type { GateDetail } from '../gates.ts';
 import { HostCallError, type HostCall, type HostCallOptions } from '../host-call.ts';
-import { HOST_STALL_MS, type Assessed, type AssessContext, type Place, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext } from '../registry.ts';
+import { HOST_STALL_MS, type Assessed, type AssessContext, type Place, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext, type TurnUse } from '../registry.ts';
 import { cleanText, TEXT_CAPS } from '../sanitize.ts';
 import type { JsonSchemaObject } from '../types.ts';
 import { uiSyncOrigin, type UiSyncEmitter, type UiSyncInput, type UiSyncKind } from '../../ui-sync.ts';
@@ -32,7 +32,13 @@ export const promptOf = (ctx: ToolCtx): string | null => (typeof ctx.prompt === 
 /** The turn's conversation (attachments are bound to it). */
 export const conversationOf = (ctx: ToolCtx): string | null => (typeof ctx.conversation === 'string' ? ctx.conversation : null);
 /** The turn's spend and steps so far (app_status), when the turn lends them. */
-export const usedOf = (ctx: ToolCtx): { usd?: number; steps?: number; minutes?: number } | null => (ctx as ToolCtx & { used?: { usd?: number; steps?: number; minutes?: number } }).used ?? null;
+export const usedOf = (ctx: ToolCtx): TurnUse | null => {
+  try {
+    return typeof ctx.used === 'function' ? ctx.used() : null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Whether the runner asks for another project's consent before a call reads it (the runner's

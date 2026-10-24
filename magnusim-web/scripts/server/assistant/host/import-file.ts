@@ -37,6 +37,15 @@ const MESH_EXTS = ['.stl', '.obj', '.ply'];
 /** The length units of the units dialog, as the import (and /api/prefs) take them. */
 export const LENGTH_UNITS: Readonly<Record<string, string>> = Object.freeze({ mm: 'MM', cm: 'CM', m: 'M', in: 'INCH' });
 const NEEDS_FILE_HINT = 'Ask the person to attach it with the paper-clip in the Assistant panel, or to use + Add geometry. A browser can\'t open its file picker for you.';
+/**
+ * An app connected over MCP (its calls' turn is `mcp:<connection id>`) has no Assistant panel,
+ * so no attached files, and no message of the person's, so no typed path (spec 13.3): it
+ * can't import a file; the person does.
+ */
+export const MCP_NO_ATTACHMENT = "An app connected over MCP has no attached files: attachments belong to a conversation in Magnusim's Assistant panel.";
+export const MCP_NO_PATH = "An app connected over MCP can't import a path: only a path the person typed in their message in the Assistant panel can be imported.";
+export const MCP_NEEDS_FILE_HINT = "Ask the person to import it with + Add geometry in Magnusim, or to attach it in Magnusim's Assistant panel and ask there.";
+const isMcpCall = (rt: { turn: string | null }): boolean => typeof rt.turn === 'string' && rt.turn.startsWith('mcp:');
 
 /** Whether `path` appears in the person's own message exactly as given. */
 export function typedInPrompt(prompt: string | null, path: string): boolean {
@@ -81,7 +90,9 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
       const unit = str(input.length_unit);
       try {
         const project = await writableProject(input, rt.ctx, d.hostCall, rt);
-        if (!attachment && !path.trim()) return fail('needs_file', 'No file to import.', NEEDS_FILE_HINT);
+        const mcp = isMcpCall(rt);
+        if (!attachment && !path.trim()) return fail('needs_file', 'No file to import.', mcp ? MCP_NEEDS_FILE_HINT : NEEDS_FILE_HINT);
+        if (mcp) return attachment ? fail('needs_file', MCP_NO_ATTACHMENT, MCP_NEEDS_FILE_HINT) : fail('path_not_typed', MCP_NO_PATH, MCP_NEEDS_FILE_HINT);
         let name = '';
         let r: Record<string, unknown>;
         const o = via(rt, 'import_file');

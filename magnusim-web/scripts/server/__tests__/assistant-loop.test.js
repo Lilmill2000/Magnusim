@@ -1691,6 +1691,21 @@ describe("what a tool hears of its turn: the person's message and the conversati
     await settled(r.turn);
     assert.deepEqual(seen, [['Import C:\\parts\\bracket.step', r.body.conversation]]);
   });
+  it('what the turn used so far of its limits (app_status shows it): its steps, minutes and dollars against its caps in force', async () => {
+    const seen = [];
+    const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });
+    m.provider.script({ text: 'Looking.', tools: [{ name: 'who' }] }, { text: 'Looking again.', tools: [{ name: 'who' }] }, { text: 'Done.' });
+    const r = await startTurn(m, { text: 'How much?' });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.equal(seen.length, 2);
+    for (const u of seen) {
+      assert.deepEqual(Object.keys(u).sort(), ['minutes', 'minutes_cap', 'steps', 'steps_cap', 'usd', 'usd_cap']);
+      assert.equal(u.minutes_cap, m.state.settings.caps.turn_minutes);
+      assert.ok(u.steps_cap > 0 && u.usd_cap > 0, JSON.stringify(u));
+    }
+    assert.ok(seen[1].steps > seen[0].steps, 'read at each call');
+  });
 });
 
 describe('a turn on any provider, not only the default', () => {

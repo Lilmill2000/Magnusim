@@ -72,6 +72,24 @@ export interface ToolCtx {
   assistant?: { provider: string; model: string };
   /** The turn's conversation (attachments are bound to it); absent outside a turn. */
   conversation?: string | null;
+  /** What the turn used so far of its limits, read when asked (app_status shows it, read-only); absent outside a turn. */
+  used?: () => TurnUse | null;
+}
+
+/**
+ * A turn's spend so far against its limits in force (the lower of its start's and the live
+ * settings'): steps (a coding agent's: its calls), minutes of its active time, dollars (none
+ * for a coding agent: its account pays), and a coding agent's changes against its change limit.
+ */
+export interface TurnUse {
+  steps: number;
+  steps_cap: number;
+  minutes: number;
+  minutes_cap: number;
+  usd?: number;
+  usd_cap?: number;
+  changes?: number;
+  changes_cap?: number;
 }
 
 /** What an escalation found (C3): the call's risk raised to it, and what the card says. */

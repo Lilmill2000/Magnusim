@@ -62,7 +62,7 @@ import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts'
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
 import type { ToolLink } from './links.ts';
-import type { CorePlace, Registry } from './registry.ts';
+import type { CorePlace, Registry, TurnUse } from './registry.ts';
 import { tabHere } from './tab-place.ts';
 import { stillRunningNote } from './host/turn-jobs.ts';
 import { ToolRunner, type CallAbort, type ImageRef, type RunnerEvent } from './runner.ts';
@@ -966,6 +966,14 @@ export class Turn implements AnyTurn {
     return isAgentSettings(this.settings)
       ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
       : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd };
+  }
+
+  /** What it used so far of its limits, for its tools (ToolCtx.used; app_status shows it). */
+  toolUse(): TurnUse {
+    const u = this.usedNow();
+    const minutes = Math.round((u.active_ms / 60_000) * 10) / 10;
+    const base = { steps: u.steps, steps_cap: u.steps_cap, minutes, minutes_cap: u.minutes_cap };
+    return isAgentSettings(this.settings) ? { ...base, changes: u.changes, changes_cap: u.changes_cap } : { ...base, usd: u.usd, usd_cap: u.usd_cap };
   }
 
   /** The summary's counters: the page's, its active time and its minutes in force (as armed; its start's before). */
