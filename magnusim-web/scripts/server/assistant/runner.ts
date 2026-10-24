@@ -46,7 +46,7 @@ import { safeLinks, type ToolLink } from './links.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource } from './registry.ts';
-import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
+import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, GATE_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
 import { CHAIN_MAX, grants as serverGrants, type ChainGrants } from './grants.ts';
@@ -589,7 +589,8 @@ export class ToolRunner {
       if (got === 'late') return failed;
       if (got === null || got === undefined) return null;
       if (!got || typeof got !== 'object' || !['edit', 'compute', 'destructive'].includes(got.risk)) return failed;
-      return { risk: got.risk, note: cleanText(got.note, CONFIRM_NOTE_MAX), detail: Array.isArray(got.detail) ? got.detail.slice(0, 6) : [] };
+      // A tool that words its own card (gateText) gets the whole note, cleaned: its card copy is longer than a confirm note.
+      return { risk: got.risk, note: cleanText(got.note, def.gateText ? GATE_NOTE_MAX : CONFIRM_NOTE_MAX), detail: Array.isArray(got.detail) ? got.detail.slice(0, 6) : [] };
     } catch {
       return failed;
     } finally {

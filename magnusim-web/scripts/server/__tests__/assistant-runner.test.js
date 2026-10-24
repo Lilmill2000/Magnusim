@@ -308,6 +308,23 @@ describe('the runner: escalate (raise-only risk per call)', () => {
     await c3Run(runner, def);
     assert.equal(asked[0].title, 'Allow the Assistant to generate a mesh?');
   });
+
+  it("a tool that words its own card gets what its escalation found whole (cleaned, at most 600 characters); the generic card's note stays a confirm note's 120", async () => {
+    const runs = [];
+    const long = `Converts the values you entered in 7 boundary conditions and 3 mesh refinements from Metric to US units ${'x'.repeat(200)} end.`;
+    const escalate = async (input) => ({ risk: 'destructive', note: input.huge ? `${long}\u0007${'y'.repeat(900)}` : long, detail: [] });
+    const own = c3Tool('units', 'edit', runs, { schema: obj({ huge: { type: 'boolean' } }), escalate, gateText: (_input, a) => ({ title: 'Allow the Assistant to change the units?', copy: a.note }) });
+    const { runner, asked } = c3Runner('deny');
+    await c3Run(runner, own, { huge: false });
+    assert.equal(asked[0].copy, long, 'the whole note, past 120 characters');
+    await c3Run(runner, own, { huge: true });
+    assert.equal(asked[1].copy.length, 600, 'at most 600');
+    assert.ok(!asked[1].copy.includes('\u0007'), 'cleaned');
+    const generic = c3Tool('units2', 'edit', runs, { schema: obj({ huge: { type: 'boolean' } }), escalate });
+    await c3Run(runner, generic, { huge: false });
+    assert.ok(asked[2].copy.includes(`· ${long.slice(0, 120)}. What it sent`), asked[2].copy);
+    assert.equal(runs.length, 0);
+  });
 });
 
 describe('the runner: chain grants', () => {

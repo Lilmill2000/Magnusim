@@ -98,11 +98,18 @@ describe('project_edit: every action', () => {
     assert.equal(a.risk, 'destructive');
     assert.equal(a.note, 'Converts the values you entered in 2 boundary conditions and 3 mesh refinements from Metric to US units. Results already computed are not converted.');
     assert.equal(t().gateText(proj({}), a).title, 'Allow the Assistant to change the units of this project?');
-    // The runner cuts an escalation's note to a confirm note's length; the card's copy is whole.
+    // The card the runner shows has the whole copy, past a confirm note's 120 characters.
+    const { ToolRunner } = await import('../assistant/runner.ts');
+    const cards = [];
+    const runner = new ToolRunner({ gates: { ask: async (req) => (cards.push(req), 'deny') } });
     const tool = t();
-    const input = proj({ action: 'update', units: 'Imperial' });
-    const full = await tool.escalate(input, { ctx: rt().ctx, signal: new AbortController().signal, turn: 't' });
-    assert.equal(tool.gateText(input, { ...full, note: full.note.slice(0, 120) }).copy, full.note);
+    const out = await runner.run(
+      { type: 'tool_call', callId: 'c-units', name: tool.name, input: proj({ action: 'update', units: 'Imperial' }) },
+      { owner: { kind: 'turn', id: 't', tab: null }, ctx: rt().ctx, signal: new AbortController().signal, offered: new Map([[tool.name, tool]]) },
+    );
+    assert.equal(out.code, 'declined');
+    assert.ok(a.note.length > 120);
+    assert.equal(cards[0].copy, a.note);
     assert.equal(await t().escalate(proj({ action: 'update', units: 'Metric' }), { ctx: rt().ctx, signal: new AbortController().signal, turn: 't' }), null, 'the same units: nothing converts');
   });
 });

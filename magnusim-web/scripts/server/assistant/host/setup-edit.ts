@@ -53,7 +53,6 @@ import {
   type HostToolDeps,
   type HostToolDef,
   type SyncKind,
-  assessments,
 } from './common.ts';
 import { readMeta, readProject, studyGeometry } from './read-setup.ts';
 import { HostCallError } from '../host-call.ts';
@@ -99,8 +98,6 @@ function baseRev(input: Record<string, unknown>, rec: Record<string, unknown> | 
 }
 
 export function setupEditTool(d: HostToolDeps): HostToolDef {
-  // Escalations whole, for the card's copy (assessments).
-  const whole = assessments();
   const contexts = ['workbench'] as const;
 
   async function assess(input: Record<string, unknown>, a: AssessContext): Promise<Assessed | null> {
@@ -194,7 +191,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts, (ctx: ToolCtx) => (ctx.projectId ? true : 'No project is open in this window.')),
     projectOf: (_input, ctx) => ctx.projectId,
-    escalate: async (input, a) => whole.keep(input, await assess(input, a)),
+    escalate: assess,
     gateText: (input, a) => ({
       title:
         a?.risk === 'compute'
@@ -202,7 +199,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
           : input.kind === 'geometry'
             ? 'Allow the Assistant to overwrite this geometry?'
             : `Allow the Assistant to change this ${str(input.kind).replace('_', ' ')}?`,
-      copy: whole.note(input, a, 'It changes the study setup.'),
+      copy: a?.note || 'It changes the study setup.',
       ...(a?.detail.length ? { detail: a.detail } : {}),
     }),
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {

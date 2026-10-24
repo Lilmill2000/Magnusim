@@ -304,6 +304,30 @@ function send(s: SendSpec): Promise<Sent> {
   });
 }
 
+/**
+ * The worker's numeric error codes (python/cfddesk/worker, its RpcError) as the app's own words:
+ * a route that passes a worker refusal on answers `{code: <number>}` (routes.ts rpcStatus), and
+ * the tools act on the word (spec 2.6).
+ */
+export const WORKER_CODES: Readonly<Record<number, string>> = Object.freeze({
+  [-32004]: 'not_found',
+  [-32602]: 'invalid_input',
+  // A record changed since the caller read it (a plugin study's rev), and a record saved from an
+  // older copy than the stored one (record_rev.py): both are a stale record.
+  [-32009]: 'stale_record',
+  [-32012]: 'stale_record',
+  [-32010]: 'geometry_changed',
+  [-32011]: 'geometry_updating',
+});
+
+/** The app's word for a refusal: its `code` (a word, or a worker number), else its `reason`; null when it gives none. */
+function appCodeOf(obj: Record<string, unknown>): string | null {
+  if (typeof obj.code === 'string' && obj.code) return cleanText(obj.code, 64);
+  if (typeof obj.code === 'number' && Object.hasOwn(WORKER_CODES, obj.code)) return WORKER_CODES[obj.code];
+  if (typeof obj.reason === 'string' && obj.reason) return cleanText(obj.reason, 64);
+  return null;
+}
+
 /** A refusal's fields a tool may pass on: plain strings and numbers, paths scrubbed. */
 function refusalDetail(body: Record<string, unknown>): Record<string, unknown> | null {
   const out: Record<string, unknown> = {};
@@ -333,7 +357,7 @@ function interpret(sent: Sent, path: string, binary: boolean): Record<string, un
   if (status >= 200 && status < 300 && isObject) return body as Record<string, unknown>;
   const obj = isObject ? (body as Record<string, unknown>) : {};
   const raw = obj.error;
-  const appCode = typeof obj.code === 'string' && obj.code ? cleanText(obj.code, 64) : typeof obj.reason === 'string' && obj.reason ? cleanText(obj.reason, 64) : null;
+  const appCode = appCodeOf(obj);
   const said = cleanText(scrubPaths(cleanText(raw, 2000)), 300);
   // The link gate's own answer (after its one retry): it says why in its words, with no path.
   if (status === 503 && appCode === 'geometry_updating') throw new HostCallError('geometry_updating', said || 'The geometry is updating.', status, appCode);

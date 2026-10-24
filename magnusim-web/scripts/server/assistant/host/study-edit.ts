@@ -35,7 +35,6 @@ import {
   type Assessed,
   type HostToolDeps,
   type HostToolDef,
-  assessments,
 } from './common.ts';
 import { HostCallError, type HostCall } from '../host-call.ts';
 
@@ -62,8 +61,6 @@ export function resultsNote(names: string[]): string {
 const tdOf = (v: unknown): string => (v === 'transient' ? 'Transient' : v === 'steady' ? 'Steady-state' : '');
 
 export function studyEditTool(d: HostToolDeps): HostToolDef {
-  // Escalations whole, for the card's copy (assessments).
-  const whole = assessments();
   const contexts = ['workbench'] as const;
   const assess = async (input: Record<string, unknown>, a: AssessContext): Promise<Assessed | null> => {
     if (input.action !== 'set' && input.action !== 'set_time') return null;
@@ -103,10 +100,10 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts, (ctx: ToolCtx) => (ctx.projectId ? true : 'No project is open in this window.')),
     projectOf: (_input, ctx) => ctx.projectId,
-    escalate: async (input, a) => whole.keep(input, await assess(input, a)),
+    escalate: assess,
     gateText: (input, a) => ({
       title: `Allow the Assistant to change ${input.action === 'set_time' ? 'the time dependency' : 'the settings'} of this study?`,
-      copy: whole.note(input, a, 'It changes the study.'),
+      copy: a?.note || 'It changes the study.',
       ...(a?.detail.length ? { detail: a.detail } : {}),
     }),
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
@@ -256,13 +253,8 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
             const list = records(((await d.hostCall('plugin_studies.list', { project_id: project }, o)) as Record<string, unknown>).studies);
             const s = list.find((x) => x.id === id);
             if (!s) return fail('not_found', `No plugin study ${quoted(id)}.`, 'project_summary lists them.');
-            try {
-              await d.hostCall('plugin_studies.rename', { project_id: project, plugin: str(s.plugin), study_id: id, title: name, rev: Number(s.rev) || 0 }, o);
-            } catch (err) {
-              // A rev other than the study's is the worker's -32009, a 409 (routes.ts rpcStatus).
-              if (err instanceof HostCallError && err.status === 409) return fail('stale_record', 'This was changed elsewhere since it was read.', 'Read it again with read_setup; the person or another window changed it.');
-              throw err;
-            }
+            // A rev other than the study's is the worker's -32009: host-call answers it stale_record.
+            await d.hostCall('plugin_studies.rename', { project_id: project, plugin: str(s.plugin), study_id: id, title: name, rev: Number(s.rev) || 0 }, o);
             sync(['plugin_studies', 'tree'], null, { plugin_study: [id] });
             return okDone({ done: `Renamed ${quoted(s.title)} to ${quoted(name)}.`, ids: { plugin_study: id } });
           }

@@ -37,7 +37,6 @@ import {
   type HostToolDeps,
   type HostToolDef,
   type SyncKind,
-  assessments,
 } from './common.ts';
 import { readProject } from './read-setup.ts';
 import { andList } from './study-edit.ts';
@@ -61,8 +60,6 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const faceNumbers = (faces: unknown[]) => faces.map((f) => /^face\s*(\d+)/i.exec(str(f))?.[1] ?? str(f));
 
 export function deleteTool(d: HostToolDeps): HostToolDef {
-  // Escalations whole, for the card's copy (assessments).
-  const whole = assessments();
   const contexts = ['home', 'workbench'] as const;
   /** What each assessed call deletes, as its card names it (by the call's input). */
   const named = new WeakMap<Record<string, unknown>, string>();
@@ -351,13 +348,13 @@ export function deleteTool(d: HostToolDeps): HostToolDef {
       const t = await targetOf(input, a.ctx, { signal: a.signal, turn: a.turn });
       // The card's title names the item (the runner asks gateText with this same input).
       named.set(input, t.what);
-      return whole.keep(input, { risk: 'destructive', note: t.note, detail: t.detail }) as Assessed;
+      return { risk: 'destructive', note: t.note, detail: t.detail };
     },
     gateText: (input, a) => {
       const kind = str(input.kind);
       const what = named.get(input) ?? (kind === 'folder' ? `folder "${cleanText(str(input.id), 80)}"` : `this ${kind.replace('_', ' ')}`);
       const verb = kind === 'geometry' ? 'remove' : kind === 'lost_faces' ? 'forget' : 'delete';
-      return { title: `Allow the Assistant to ${verb} ${what}?`, copy: whole.note(input, a, "It can't be undone."), ...(a?.detail.length ? { detail: a.detail } : {}) };
+      return { title: `Allow the Assistant to ${verb} ${what}?`, copy: a?.note || "It can't be undone.", ...(a?.detail.length ? { detail: a.detail } : {}) };
     },
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       const kind = str(input.kind);

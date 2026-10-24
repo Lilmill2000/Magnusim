@@ -28,7 +28,6 @@ import {
   type Assessed,
   type HostToolDeps,
   type HostToolDef,
-  assessments,
 } from './common.ts';
 
 export const PROJECT_ACTIONS = ['create', 'update', 'move', 'new_folder', 'from_sample', 'start_action'] as const;
@@ -57,8 +56,6 @@ export async function unitBearing(d: HostToolDeps, rt: { signal: AbortSignal; tu
 }
 
 export function projectEditTool(d: HostToolDeps): HostToolDef {
-  // Escalations whole, for the card's copy (assessments).
-  const whole = assessments();
   const contexts = ['home', 'workbench'] as const;
   const rowOf = async (rt: { signal: AbortSignal; turn: string | null }, id: string) =>
     records(((await d.hostCall('projects.list', {}, via(rt, 'project_edit'))) as Record<string, unknown>).projects).find((p) => p.id === id) ?? null;
@@ -106,8 +103,8 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts),
     projectOf: (input, ctx) => (input.action === 'update' || input.action === 'move' ? projectIdOf(input, ctx) : null),
-    escalate: async (input, a) => whole.keep(input, await assess(input, a)),
-    gateText: (input, a) => ({ title: 'Allow the Assistant to change the units of this project?', copy: whole.note(input, a, 'It changes the project.'), ...(a?.detail.length ? { detail: a.detail } : {}) }),
+    escalate: assess,
+    gateText: (_input, a) => ({ title: 'Allow the Assistant to change the units of this project?', copy: a?.note || 'It changes the project.', ...(a?.detail.length ? { detail: a.detail } : {}) }),
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       const action = str(input.action);
       const o = via(rt, `project_edit.${action}`);

@@ -37,6 +37,11 @@ export const IMAGE_CAPS = Object.freeze({ perResult: 4, bytes: 1.5 * 1024 * 1024
 export const ERROR_DETAIL_BYTES = 4 * 1024;
 /** A tool's confirm note (characters): what the question before a destructive call says it does. */
 export const CONFIRM_NOTE_MAX = 120;
+/**
+ * What an escalation found, at most, for a tool that words its own card (gateText): the card's
+ * copy names what converts or goes (core host tools spec 14.2), longer than a confirm note.
+ */
+export const GATE_NOTE_MAX = 600;
 
 /** Cut to `max` characters without splitting a surrogate pair. */
 function cut(s: string, max: number): string {

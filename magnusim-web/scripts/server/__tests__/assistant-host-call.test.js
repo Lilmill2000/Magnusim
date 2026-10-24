@@ -297,6 +297,23 @@ describe('a call', () => {
     app.answers.delete('/api/thing/save');
   });
 
+  it("the worker's numeric codes, as a route passes them on (rpcStatus), are the app's words: -32009/-32012 stale_record, -32004 not_found, -32602 invalid_input; another number none", async () => {
+    tick();
+    const { call } = transport();
+    const answer = (status, code) => app.answers.set('/api/thing/save', () => ({ status, json: { ok: false, code, error: 'Refused.' } }));
+    answer(409, -32009);
+    await assert.rejects(call('thing.save', { project_id: 'p1', name: 'x' }, opts({ turn: 'w1' })), (e) => e.code === 'stale_record' && e.appCode === 'stale_record' && e.status === 409);
+    answer(409, -32012);
+    await assert.rejects(call('thing.save', { project_id: 'p1', name: 'x' }, opts({ turn: 'w2' })), (e) => e.code === 'stale_record' && e.status === 409);
+    answer(404, -32004);
+    await assert.rejects(call('thing.save', { project_id: 'p1', name: 'x' }, opts({ turn: 'w3' })), (e) => e.code === 'http' && e.appCode === 'not_found' && e.status === 404);
+    answer(400, -32602);
+    await assert.rejects(call('thing.save', { project_id: 'p1', name: 'x' }, opts({ turn: 'w4' })), (e) => e.code === 'http' && e.appCode === 'invalid_input');
+    answer(400, -32099);
+    await assert.rejects(call('thing.save', { project_id: 'p1', name: 'x' }, opts({ turn: 'w5' })), (e) => e.code === 'http' && e.appCode === null);
+    app.answers.delete('/api/thing/save');
+  });
+
   it("the app's error text never carries a path: a refusal is scrubbed, a server error is a fixed line", async () => {
     tick();
     const { call } = transport();

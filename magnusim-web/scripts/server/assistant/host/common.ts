@@ -129,27 +129,6 @@ export function fail(code: string, message: string, hint?: string, detail?: unkn
   return { ok: false, error: { code, message, ...(hint ? { hint } : {}), ...(detail !== undefined ? { detail } : {}) }, summary: cleanText(message, 160) };
 }
 
-/**
- * A tool's escalations by call, whole: the runner cuts an escalation's note to a confirm
- * note's length (CONFIRM_NOTE_MAX), and a card's copy names more (spec 14.2: what converts,
- * which studies go). The runner asks gateText with the same input it assessed.
- */
-export function assessments(): {
-  keep(input: Record<string, unknown>, a: Assessed | null): Assessed | null;
-  note(input: Record<string, unknown>, a: Assessed | null, fallback: string): string;
-} {
-  const kept = new WeakMap<Record<string, unknown>, Assessed>();
-  return {
-    keep(input, a) {
-      if (a) kept.set(input, a);
-      return a;
-    },
-    note(input, a, fallback) {
-      return kept.get(input)?.note || a?.note || fallback;
-    },
-  };
-}
-
 /** A thrown failure carried to the tool's answer. */
 export class ToolFail extends Error {
   outcome: ToolOutcome;
