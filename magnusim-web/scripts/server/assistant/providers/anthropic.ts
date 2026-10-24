@@ -93,9 +93,10 @@ export const STRICT_LIMITS = Object.freeze({ tools: 20, optional: 24, unions: 16
  * A 400's words when the strict tool schemas can't be compiled (CAD tools spec H8). The page
  * above quotes only "Schema is too complex for compilation."; the others (a compile that
  * timed out or grew too large, a strict limit or keyword named) are not quoted there and are
- * matched loosely.
+ * matched loosely. The live API also answers a big set with just "Schema is too complex."
+ * (seen 2026-10-24, after "The compiled grammar is too large" for a bigger set).
  */
-export const STRICT_REFUSED_WORDS = /too complex for compilation|compilation timed out|grammar is too large|strict tools?\b/i;
+export const STRICT_REFUSED_WORDS = /too complex|compilation timed out|grammar is too large|strict tools?\b/i;
 
 /**
  * Refusal categories whose decline before any output the provider does not bill

@@ -100,12 +100,12 @@ export function strictFallbackNote(said: string): string {
 }
 
 /**
- * The note for a request sent with fewer tools strict: how many of the request's tools the
- * provider checks, the ones it does not (in the order offered), and the provider's words.
+ * The note for a request sent with fewer tools strict, in the person's words: the provider
+ * checks only some of the tools' inputs itself, and the app checks the others (named, in the
+ * order offered). The provider's own words go to the log (the warn line), not the note.
  */
-export function strictReducedNote(said: string, count: number, of: number, unchecked: readonly string[]): string {
-  const words = said ? ` (it said: ${said})` : '';
-  return `The cloud provider could not compile all these tools strictly${words}: ${count} of ${of} are checked by the provider, the rest are sent unchecked (${unchecked.join(', ')}); the app still checks every input.`;
+export function strictReducedNote(count: number, of: number, unchecked: readonly string[]): string {
+  return `The cloud provider can't check the inputs of all ${of} of Magnusim's tools at once, so Magnusim checks ${of - count} of them itself (${unchecked.join(', ')}). The Assistant can still use every tool.`;
 }
 
 /**
@@ -141,6 +141,46 @@ function memoKey(dialect: ProviderId, tools: readonly ProviderTool[]): string {
     .update(JSON.stringify(tools.map((t) => [t.name, t.description, t.schema, !!t.workspace])))
     .digest('hex');
   return [assistantState().bootId, dialect, hash].join(' ');
+}
+
+/**
+ * Across tool sets, by boot id and dialect: the most strict schema bytes one request carried
+ * that compiled (`ok`), and the fewest a too-big refusal refused (`refused`). A tool set seen
+ * for the first time starts with as many of its smallest strict tools as fit under both, so
+ * another place in the app (another tool set) doesn't pay a refused request, and its wait, to
+ * learn what an earlier one did.
+ */
+interface SizeMemo {
+  ok: number;
+  refused: number;
+}
+const SIZE_MEMO = new Map<string, SizeMemo>();
+
+function sizeKey(dialect: ProviderId): string {
+  return `${assistantState().bootId} ${dialect}`;
+}
+
+function noteSize(dialect: ProviderId, bytes: number, accepted: boolean): void {
+  const key = sizeKey(dialect);
+  const boot = `${assistantState().bootId} `;
+  for (const k of SIZE_MEMO.keys()) if (!k.startsWith(boot)) SIZE_MEMO.delete(k);
+  const m = SIZE_MEMO.get(key) ?? { ok: 0, refused: Infinity };
+  if (accepted) m.ok = Math.max(m.ok, bytes);
+  else m.refused = Math.min(m.refused, bytes);
+  SIZE_MEMO.set(key, m);
+}
+
+/**
+ * How many of the smallest strict tools (`prefix`: their bytes summed, smallest first) a
+ * request may start with after what `size` learned: once a set too big was refused, those
+ * that fit in the most that compiled (else in fewer bytes than the fewest refused); at least
+ * one. Nothing refused yet: all of them (what compiled says nothing about a bigger set).
+ */
+export function strictCountThatFits(prefix: readonly number[], size: { ok: number; refused: number } | undefined): number {
+  if (!size || !prefix.length || size.refused === Infinity) return prefix.length;
+  let k = 0;
+  while (k < prefix.length && prefix[k] < size.refused && (size.ok === 0 || prefix[k] <= size.ok)) k++;
+  return Math.max(1, k);
 }
 
 function remember(key: string, m: StrictMemo): void {
@@ -257,30 +297,41 @@ export async function sendStrictOrLoose(
     }
     return { kind, reason, strict, count: strict.filter(Boolean).length, of };
   };
+  // A loose request's note comes every time (a schema the provider refuses is a fault to see);
+  // a reduced one only with the answer that found the limit (a refusal just now), not with
+  // every later request that reuses it: the person reads it once.
   const noted = (r: ProviderResult, p: StrictPlan, said: string): ProviderResult => {
-    if (p.kind === 'strict') return r;
+    if (p.kind === 'strict' || (p.kind === 'reduced' && p.reason !== 'strict_reduced')) return r;
     const unchecked = req.tools.filter((_, i) => !p.strict[i]).map((t) => t.name);
-    const note = p.kind === 'loose' ? strictFallbackNote(said) : strictReducedNote(said, p.count, of, unchecked);
+    const note = p.kind === 'loose' ? strictFallbackNote(said) : strictReducedNote(p.count, of, unchecked);
     return { ...r, notes: [...(r.notes ?? []), note] };
   };
+  const bytesOf = (p: StrictPlan) => p.strict.reduce((n, on, i) => (on ? n + sets.bytes[i] : n), 0);
+  const prefix: number[] = [];
+  for (const i of order) prefix.push((prefix.length ? prefix[prefix.length - 1] : 0) + sets.bytes[i]);
   const key = canLoosen || canReduce ? memoKey(dialect, req.tools) : '';
   const memo = key ? MEMO.get(key) : undefined;
   let hi = memo ? memo.refused : top;
   let said = memo?.said ?? '';
   let p: StrictPlan;
-  if (!memo) p = plan('strict', null);
-  else if (memo.k === null) p = plan('loose', 'strict_refused_earlier');
+  if (!memo) {
+    // A tool set seen for the first time starts within what another set learned (SIZE_MEMO).
+    const fits = canReduce ? strictCountThatFits(prefix, SIZE_MEMO.get(sizeKey(dialect))) : top;
+    p = fits < top ? plan('reduced', 'strict_reduced_earlier', fits) : plan('strict', null);
+  } else if (memo.k === null) p = plan('loose', 'strict_refused_earlier');
   else p = plan('reduced', 'strict_reduced_earlier', memo.k);
   for (let tries = 1; ; tries++) {
     try {
       const r = await attempt(p);
-      if (p.reason === 'strict_reduced') remember(key, { k: p.count, refused: hi, said });
+      if (p.kind !== 'loose' && p.count > 0) noteSize(dialect, bytesOf(p), true);
+      if (p.kind === 'reduced' && (p.reason === 'strict_reduced' || !memo)) remember(key, { k: p.count, refused: hi, said });
       return noted(r, p, said);
     } catch (err) {
       if (!(err instanceof StrictRefused)) throw err;
       if (p.kind === 'loose' || !key) throw err.mapped;
       said = err.said;
       hi = p.kind === 'strict' ? top : p.count;
+      if (STRICT_SIZE_WORDS.test(err.said)) noteSize(dialect, bytesOf(p), false);
       const k = canReduce && STRICT_SIZE_WORDS.test(err.said) ? nextStrictCount(hi, STRICT_MAX_ATTEMPTS - tries - 1) : null;
       if (k !== null) {
         alog('warn', 'the provider refused the strict tools; sending them again with fewer strict', { provider: dialect, refused: hi, strict: k, said });

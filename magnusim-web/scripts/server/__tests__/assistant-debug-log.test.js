@@ -115,7 +115,7 @@ describe('the provider debug log', () => {
         r = await withDebugScope({ turn: `turn-${provider}`, step: 1 }, () => send(provider, request(provider, [userText('go')])));
       });
       assert.equal(r.notes.length, 1);
-      if (provider === 'anthropic') assert.equal(r.notes[0], strictReducedNote(REFUSED.anthropic.error.message, 2, 3, ['demo__add']));
+      if (provider === 'anthropic') assert.equal(r.notes[0], strictReducedNote(2, 3, ['demo__add']));
       else assert.ok(r.notes[0].startsWith(`${STRICT_FALLBACK_NOTE} The provider said: `), provider);
       assert.equal(added.length, 2, provider);
       const [refused, resent] = added;

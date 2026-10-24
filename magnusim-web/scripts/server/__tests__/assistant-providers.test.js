@@ -1555,6 +1555,8 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     };
     const codeOnly = { error: { message: 'The tool parameters are not accepted.', type: 'invalid_request_error', param: 'tools[2].parameters', code: 'invalid_function_parameters' } };
     for (const provider of CLOUD) {
+      // Nothing learned before (a set refused for its size makes a new set start smaller).
+      resetAssistantState();
       const dialect = DIALECT[provider];
       const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), `which-${provider}`)];
       const fails = [
@@ -1590,11 +1592,11 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
     assert.deepEqual(sent.map(strictness), [allStrict(tools), hostStrict(tools)]);
   });
 
-  it("the note keeps the provider's words: redacted, on one line, capped; with no words, the plain note", async () => {
+  it("the fallback note keeps the provider's words (redacted, on one line, capped); the reduced note is in the person's words", async () => {
     assert.equal(strictFallbackNote(''), STRICT_FALLBACK_NOTE);
     assert.equal(
-      strictReducedNote('', 2, 5, ['a', 'b', 'c']),
-      'The cloud provider could not compile all these tools strictly: 2 of 5 are checked by the provider, the rest are sent unchecked (a, b, c); the app still checks every input.',
+      strictReducedNote(2, 5, ['a', 'b', 'c']),
+      "The cloud provider can't check the inputs of all 5 of Magnusim's tools at once, so Magnusim checks 3 of them itself (a, b, c). The Assistant can still use every tool.",
     );
     for (const [words, start, loose] of [
       [`tools.2.input_schema: strict tools do not support "minimum".\n Key ${KEYS.anthropic} here. ${'x'.repeat(2000)}`, 'tools.2.input_schema: strict tools do not support "minimum". Key [redacted] here. xxx', true],
@@ -1613,13 +1615,21 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         assert.equal(note.length, `${STRICT_FALLBACK_NOTE} The provider said: `.length + SAID_MAX + 1);
         assert.ok(note.endsWith('…'));
       } else {
-        // Too big: 3 of the 4 stay strict, the biggest (add) is named unchecked.
-        const said = note.slice(note.indexOf('(it said: ') + '(it said: '.length, note.indexOf('…') + 1);
-        assert.ok(said.startsWith(start), note);
-        assert.equal(said.length, SAID_MAX + 1);
-        assert.equal(note, strictReducedNote(said, 3, 4, ['saidR__add']));
+        // Too big: 3 of the 4 stay strict, the biggest (add) is named unchecked; the provider's
+        // words stay in the log, not in the person's note.
+        assert.equal(note, strictReducedNote(3, 4, ['saidR__add']));
+        assert.ok(!note.includes('too complex'), note);
       }
     }
+  });
+
+  it('"Schema is too complex." (the words of the live API for a big set, 2026-10-24) is a strict refusal: sent again with fewer strict, never the end of the turn', async () => {
+    resetAssistantState();
+    fake.failNext({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Schema is too complex.' } }, dialect: 'anthropic' });
+    fake.reply({ text: 'ok' });
+    const tools = [...HOST, ...workspace(DEMO_TOOLS.slice(0, 2), 'cplx')];
+    const r = await send('anthropic', request('anthropic', [userText('x')], { tools }));
+    assert.deepEqual(r.notes, [strictReducedNote(3, 4, ['cplx__add'])]);
   });
 
   describe('a strict set too big to compile: the smallest stay strict', () => {
@@ -1702,22 +1712,25 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         const bare = (q) => q.body.tools.map((t) => ({ ...t, strict: null }));
         assert.deepEqual(bare(sent[2]), bare(sent[0]));
         const unchecked = tools.map((t) => t.name).filter((n) => !order.slice(0, 7).includes(n));
-        assert.deepEqual(r.notes, [strictReducedNote(GRAMMAR_TOO_LARGE, 7, 13, unchecked)]);
+        assert.deepEqual(r.notes, [strictReducedNote(7, 13, unchecked)]);
         assert.ok(unchecked.includes('h_big') && unchecked.includes('size__w_tie_b') && !unchecked.includes('size__w_tie_a'));
 
-        // Remembered for the tool set: the next request goes straight to those 7, with the note.
+        // Remembered for the tool set: the next request goes straight to those 7, with no note
+        // (the person read it with the answer that found the limit).
         fake.reply({ text: 'again' });
         const again = await sentBy('anthropic', async () => {
           r = await send('anthropic', request('anthropic', [userText('again')], { tools }));
         });
         assert.deepEqual(again.map((q) => strictNames(q)), [strictNames(sent[2])]);
-        assert.deepEqual(r.notes, [strictReducedNote(GRAMMAR_TOO_LARGE, 7, 13, unchecked)]);
+        assert.deepEqual(r.notes ?? [], []);
 
-        // Another tool set is tried strict first (and searched for itself).
+        // Another tool set (another place in the app) starts within the bytes the first one
+        // compiled: no refused request to learn it again.
         const other = SET('other');
         fake.reply({ text: 'other' });
         const others = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('other')], { tools: other })));
-        assert.deepEqual(others.map((q) => strictNames(q).length), [13, 10, 7]);
+        assert.deepEqual(others.map((q) => strictNames(q).length), [7]);
+        assert.deepEqual(others.map((q) => q.refused ?? null), [null]);
 
         // A remembered set refused again (the provider took less this time): searched below it.
         fake.strictBudget(budgetFor(probe, 4));
@@ -1728,7 +1741,7 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         assert.deepEqual(less.map((q) => strictNames(q).length), [7, nextStrictCount(7, STRICT_MAX_ATTEMPTS - 2), 3]);
         assert.deepEqual(new Set(strictNames(less[2])), new Set(order.slice(0, 3)));
         assert.equal(r.notes.length, 1);
-        assert.ok(r.notes[0].includes(': 3 of 13 are checked by the provider'), r.notes[0]);
+        assert.ok(r.notes[0].includes('so Magnusim checks 10 of them itself'), r.notes[0]);
         fake.reply({ text: 'remembered' });
         const rem = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('rem')], { tools })));
         assert.deepEqual(rem.map((q) => strictNames(q).length), [3]);
@@ -1793,6 +1806,8 @@ describe('strict tools a cloud provider cannot compile (CAD tools spec H8)', () 
         GRAMMAR_TOO_LARGE,
         'Too many strict tools: at most 20.',
       ].entries()) {
+        // Each wording from nothing learned: a set refused for its size makes the next set start within it.
+        resetAssistantState();
         fake.failNext({ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: words } }, dialect: 'anthropic' });
         fake.reply({ text: 'ok' });
         sent = await sentBy('anthropic', () => send('anthropic', request('anthropic', [userText('x')], { tools: SET(`w${i}`) })));

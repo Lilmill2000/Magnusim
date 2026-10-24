@@ -1104,7 +1104,7 @@ test("a cloud provider that can't compile all the tools strictly (a set too big)
       .slice(0, keep)
       .map((t) => t.name);
     const unchecked = offered.map((t) => t.name).filter((n) => !smallest.includes(n));
-    const NOTE = `The cloud provider could not compile all these tools strictly (it said: ${GRAMMAR_TOO_LARGE}): ${keep} of ${offered.length} are checked by the provider, the rest are sent unchecked (${unchecked.join(', ')}); the app still checks every input.`;
+    const NOTE = `The cloud provider can't check the inputs of all ${offered.length} of Magnusim's tools at once, so Magnusim checks ${offered.length - keep} of them itself (${unchecked.join(', ')}). The Assistant can still use every tool.`;
     before = chats().length;
     fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 2 } }] }, { text: 'Added 2.' });
     let ended = await (await startTurn(request, host.base, { text: 'Add 2 to the counter.', tab: w.tab }, { strictFallback: true })).ended();
@@ -1119,11 +1119,12 @@ test("a cloud provider that can't compile all the tools strictly (a set too big)
     expect(sent[0].step).toBeUndefined();
     expect(sent.map(strictOf)).toEqual([offered.map((t) => t.name), offered.map((t) => t.name).filter((n) => smallest.includes(n)), offered.map((t) => t.name).filter((n) => smallest.includes(n))]);
 
-    // The next turn: that set from its first request; the shared turn helper fails it unless the test expects the note.
+    // The next turn: that set from its first request, and no note again (the person read it once).
     before = chats().length;
     fake.reply({ text: 'Still 2.' });
-    const unexpected = await startTurn(request, host.base, { text: 'What is the counter now?', tab: w.tab });
-    await expect(unexpected.ended()).rejects.toThrow(`the provider refused this turn's strict tools and the app sent them again unchecked by it (note: "${NOTE}")`);
+    ended = await (await startTurn(request, host.base, { text: 'What is the counter now?', tab: w.tab })).ended();
+    expect(ended.turn.state).toBe('done');
+    expect(ended.events.filter((e) => e.type === 'note')).toEqual([]);
     sent = chats().slice(before);
     expect(sent.map(strictOf)).toEqual([offered.map((t) => t.name).filter((n) => smallest.includes(n))]);
   } finally {
