@@ -50,7 +50,10 @@ export async function saveBoundary(expectedId) {
     } catch (_) {}
   }
   const viewId = expectedId || host.viewingBcId();
-  const draft = host.readBcEditorDraft();
+  // The named BC's record, open or not. A save writes only its own record (only_id), so a BC
+  // changed while another was open used to be dropped here (seen: a heated cavity's hot wall
+  // saved with no temperature, set while the cold wall's editor was open).
+  const draft = host.readBcEditorDraft(viewId);
   if (!draft) return null;
   if (viewId && draft.id && String(draft.id) !== String(viewId)) return null;
   const same = (rec) => {

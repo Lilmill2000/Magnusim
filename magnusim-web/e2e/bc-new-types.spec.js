@@ -189,3 +189,42 @@ test('each new boundary condition shows its fields, saves them and keeps them af
   await open(vent);
   await expect(field('Velocity')).toHaveValue('3');
 });
+
+test("a BC changed while another one's editor is open is saved, and shows after a reload (seen: a hot wall's temperature dropped)", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const picker = page.locator('#panel-bc-picker .cfd-island');
+  const editor = page.locator('#panel-bc-editor .cfd-island [data-bc-editor="1"]');
+  const hub = page.locator('#panel-bcs-hub .cfd-island');
+  const saved = async (id) =>
+    ((await (await request.get(`${host.base}/api/bcs?project_id=${FIXTURE}&simulation_id=${SIM}`)).json()).boundary_conditions || []).find((b) => b.id === id) || {};
+  const addWall = async () => {
+    await page.locator('#left-tree [data-w19-bcs="1"] .bc-plus').first().click();
+    await expect(picker).toBeVisible();
+    await picker.locator('[data-bc-key="wall"]').click();
+    await picker.locator('[data-bc-add="1"]').click();
+    await expect(editor.locator('[data-bc-title="1"]')).toHaveText(/^Wall \d+$/, { timeout: 15_000 });
+    const id = await editor.getAttribute('data-bc-id');
+    await expect.poll(async () => (await saved(id)).id, { timeout: 15_000 }).toBe(id);
+    return id;
+  };
+
+  await openProject(page);
+  const first = await addWall();
+  const second = await addWall();
+  await expect(editor).toHaveAttribute('data-bc-id', second);
+  // The first wall changes while the second's editor stays open (as a script or the Assistant's page tools do).
+  await page.evaluate((id) => window.__CFD_BC_UPDATE__(id, { wall_type: 'Moving', wall_velocity: [3, 0, 0] }), first);
+  await expect.poll(async () => [(await saved(first)).wall_type, (await saved(first)).wall_velocity]).toEqual(['Moving', [3, 0, 0]]);
+  await expect(editor).toHaveAttribute('data-bc-id', second);
+  await expect(editor.getByLabel('Wall type', { exact: true })).not.toHaveValue('Moving');
+
+  await page.reload();
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, FIXTURE, { timeout: 90_000 });
+  const row = page.locator('#left-tree [data-w19-bcs="1"] > .tree-row .tl').first();
+  await row.click();
+  if (!(await hub.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false))) await row.click();
+  await hub.locator(`[data-open-bc="${first}"]`).click();
+  await expect(editor).toHaveAttribute('data-bc-id', first);
+  await expect(editor.getByLabel('Wall type', { exact: true })).toHaveValue('Moving');
+  await expect(editor.getByLabel('Wall velocity X', { exact: true })).toHaveValue('3');
+});

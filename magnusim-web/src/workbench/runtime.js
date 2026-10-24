@@ -27032,10 +27032,16 @@ function syncBcEditorFields() {
 }
 
 /** The open BC as saved: its record plus the faces being assigned, made whole for its family. No DOM is read. */
-function readBcEditorDraft() {
-  const bc = activeBc();
+/**
+ * The record a BC save sends: the open BC's, with the faces drawn in its editor, or another
+ * BC's own record when `id` names one that is not open (updateBcClient on a closed BC).
+ */
+function readBcEditorDraft(id) {
+  const open = activeBc();
+  const bc = id && (!open || String(open.id) !== String(id)) ? findBcRecord(id) : open;
   if (!bc) return null;
-  const out = completeBcRecord({ ...bc, faces: (bcCatalog.draft_faces || []).slice() }, prefersImperialUnits());
+  const faces = bc === open ? bcCatalog.draft_faces || [] : bc.faces || [];
+  const out = completeBcRecord({ ...bc, faces: faces.slice() }, prefersImperialUnits());
   out.face = out.faces[0] || null;
   const pid = currentProjectId();
   if (pid) out.project_id = pid;

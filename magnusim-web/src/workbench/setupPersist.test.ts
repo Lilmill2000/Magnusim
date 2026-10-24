@@ -42,7 +42,7 @@ beforeEach(() => {
   draft = { id: 'bc-1', name: 'Inlet', bc_type: 'Velocity inlet', velocity: 12, faces: [], project_id: 'p1', simulation_id: 's1', rev: 4 };
   bindSetupHost({
     viewingBcId: () => 'bc-1',
-    readBcEditorDraft: () => ({ ...draft }),
+    readBcEditorDraft: (id?: string) => (id && draft.id && id !== draft.id ? { ...(bcCatalog.bcs as Rec[]).find((b) => b.id === id), project_id: 'p1', simulation_id: 's1', faces: [] } : { ...draft }),
     applyBcRecords: (doc: Rec) => {
       applied.push(doc);
       bcCatalog.bcs = (doc.boundary_conditions as Rec[]).map((r) => ({ ...r }));
@@ -76,6 +76,17 @@ describe('saveBoundary', () => {
     expect(params.body.boundary_conditions[0]).toMatchObject({ id: 'bc-1', velocity: 12, base_rev: 4 });
     expect('rev' in params.body.boundary_conditions[0]).toBe(false);
     expect((bcCatalog.bcs as Rec[])[0].rev).toBe(5);
+  });
+
+  it("a BC that is not open is saved from its own record, and the open editor is not shown it (seen: a hot wall's temperature dropped)", async () => {
+    (bcCatalog.bcs as Rec[])[1].value = 101325;
+    rpc.mockResolvedValueOnce(answer(5));
+    await saveBoundary('bc-2');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const params = (rpc.mock.calls[0] as [string, { body: { boundary_conditions: Rec[]; only_id: string } }])[1];
+    expect(params.body.only_id).toBe('bc-2');
+    expect(params.body.boundary_conditions).toEqual([expect.objectContaining({ id: 'bc-2', value: 101325, base_rev: 2 })]);
+    expect(applied).toHaveLength(0);
   });
 
   it("two quick saves of one BC: the second sends the rev the first one's answer stored", async () => {
