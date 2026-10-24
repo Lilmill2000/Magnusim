@@ -765,11 +765,14 @@ function killWslMeshCase(job) {
   ];
   if (!cleaned.length) return;
   try {
-    spawn(
+    const child = spawn(
       'wsl',
       ['-d', wslDistro(), '--', 'bash', '-lc', `pkill -f ${JSON.stringify(cleaned.join('|'))} || true`],
       { windowsHide: true, stdio: 'ignore' }
     );
+    // No wsl (WSL not installed, or a Linux host) comes as an 'error' event, not a throw:
+    // unheard, it would end the whole server.
+    child.on('error', () => {});
   } catch {
     /* ignore */
   }
