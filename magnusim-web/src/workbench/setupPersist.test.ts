@@ -94,6 +94,22 @@ describe('saveBoundary', () => {
     expect(second.body.boundary_conditions[0]).toMatchObject({ velocity: 13, base_rev: 5 });
   });
 
+  it("two quick saves of one BC: the first one's answer, older than the second edit, is not shown over it", async () => {
+    let release: (v: Rec) => void = () => undefined;
+    rpc.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    rpc.mockResolvedValueOnce(answer(6, 13));
+    const one = saveBoundary('bc-1');
+    draft = { ...draft, velocity: 13 };
+    const two = saveBoundary('bc-1');
+    await vi.waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+    release(answer(5));
+    await one;
+    // The editor still shows 13: the first answer (velocity 12) was not applied.
+    expect(applied).toHaveLength(0);
+    await two;
+    expect(applied.map((d) => (d.boundary_conditions as Rec[])[0].velocity)).toEqual([13]);
+  });
+
   it('keeps the new rev even when a newer save makes the answer old', async () => {
     rpc.mockResolvedValueOnce(answer(5));
     bcCatalog._persistGen = 0;

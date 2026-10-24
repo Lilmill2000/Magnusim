@@ -29159,11 +29159,12 @@ async function persistActiveRef(expectedId, opts) {
   const ownerId = draft.id;
   const key = String(ownerId || draft.name || '');
   const epoch = refRefusals.get(key) || 0;
+  // Counted when the edit asks for the save: an older answer is not shown over a newer edit.
+  const gen = (refinementCatalog._persistGen = (refinementCatalog._persistGen || 0) + 1);
   // Saves of one refinement go one at a time, each with the rev the catalog has when it is
   // sent (C2): one changed since (by the Assistant, or another window) is refused.
   return serialSave('ref:' + key, async () => {
     if ((refRefusals.get(key) || 0) !== epoch) return null;
-    const gen = (refinementCatalog._persistGen = (refinementCatalog._persistGen || 0) + 1);
     const stored = ownerId ? (refinementCatalog.refinements || []).find((x) => x && String(x.id) === String(ownerId)) : null;
     const posted = await postRefinements(ownerId ? withBaseRev(draft, stored) : draft);
     const r = posted.response;

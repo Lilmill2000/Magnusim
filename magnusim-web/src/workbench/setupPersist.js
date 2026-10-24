@@ -66,9 +66,11 @@ export async function saveBoundary(expectedId) {
   const ownerId = draft.id;
   const key = String(ownerId || draft.name || '');
   const epoch = bcRefusals.get(key) || 0;
+  // Counted when the person's edit asks for the save, not when its turn in the queue comes: an
+  // earlier save's answer, older than an edit made since, is then not shown over that edit.
+  const gen = (bcCatalog._persistGen = (bcCatalog._persistGen || 0) + 1);
   return serialSave('bc:' + key, async () => {
     if ((bcRefusals.get(key) || 0) !== epoch) return null;
-    const gen = (bcCatalog._persistGen = (bcCatalog._persistGen || 0) + 1);
     const simId = String(draft.simulation_id || host.currentStudyId() || '');
     // The rev as the catalog has it now: an earlier save's answer moved it.
     const stored = (bcCatalog.bcs || []).find(same) || null;
