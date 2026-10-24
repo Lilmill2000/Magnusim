@@ -265,7 +265,16 @@ export interface CoreRegistration {
    * Raise-only risk per call (C3, §5.1): leaving a workspace that sends its design to the
    * simulation is a computation. The relay gives it (it knows the open workspace's plugin).
    */
-  escalate?(tool: string, input: Record<string, unknown>): { risk: 'compute'; note: string; title: string; copy: string } | null;
+  escalate?(tool: string, input: Record<string, unknown>): CoreEscalation | null | Promise<CoreEscalation | null>;
+}
+
+/** What a core call's escalation found (core__show leaving a workspace that sends its design): its card. */
+export interface CoreEscalation {
+  risk: 'compute';
+  note: string;
+  title: string;
+  copy: string;
+  detail?: GateDetail[];
 }
 
 /** The core tools a core page may register, each with its risk (the page can't claim another) and priority (§15). */
@@ -696,6 +705,7 @@ export class Registry implements ToolRegistry {
 
   /** A core tool as a workspace tool is checked (name, description, schema), with its fixed risk and priority. */
   private checkCoreTool(raw: unknown, source: ToolSource & { kind: 'core' }, seen: Set<string>): ToolDef | Refusal {
+    const cardTitles = new WeakMap<Record<string, unknown>, string>();
     const fixed = isRecord(raw) && typeof raw.name === 'string' && Object.hasOwn(CORE_TOOLS, raw.name) ? CORE_TOOLS[raw.name] : null;
     if (!fixed) return { name: nameOf(raw), code: 'bad_name', message: `The core page offers only ${Object.keys(CORE_TOOLS).join(' and ')}.` };
     // The shape checks of a workspace tool, under the `core` slug; its risk is the core table's.
@@ -725,13 +735,18 @@ export class Registry implements ToolRegistry {
         return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
       },
       // Raise-only risk per call and its card (C3, §2.1): the core page's own rule, from its newest registration.
+      // The runner keeps only an escalation's risk, note and rows: the card's copy goes as its
+      // note (whole, as gateText words the card), its title by the call's input (the runner asks
+      // gateText with the input it assessed).
       async escalate(input) {
-        const up = registry.coreTabs.get(source.tab)?.reg.escalate?.(localName, input) ?? null;
-        return up ? Object.assign({ risk: up.risk, note: up.note, detail: [] }, { title: up.title, copy: up.copy }) : null;
+        const up = (await registry.coreTabs.get(source.tab)?.reg.escalate?.(localName, input)) ?? null;
+        if (!up) return null;
+        cardTitles.set(input, up.title);
+        return { risk: up.risk, note: up.copy || up.note, detail: up.detail ?? [] };
       },
-      gateText(_input, a) {
-        const own = (a ?? {}) as { title?: string; copy?: string };
-        return own.title && own.copy ? { title: own.title, copy: own.copy } : { title: `Allow the Assistant to ${localName === 'show' ? 'move this window' : 'use the view'}?`, copy: a?.note ?? '' };
+      gateText(input, a) {
+        const title = cardTitles.get(input) ?? `Allow the Assistant to ${localName === 'show' ? 'move this window' : 'use the view'}?`;
+        return { title, copy: a?.note ?? '', ...(a?.detail.length ? { detail: a.detail } : {}) };
       },
     };
     return def;

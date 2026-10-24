@@ -103,7 +103,9 @@ import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
 import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
-import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type CorePlace, type ProgressOptions, type Registry, type ToolOutcome } from './registry.ts';
+import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type CoreEscalation, type CorePlace, type ProgressOptions, type Registry, type ToolOutcome } from './registry.ts';
+import { rememberJob } from './host/turn-jobs.ts';
+import { leaveTargetOf, type LeaveTargetFn } from './link-target.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
 import { cleanText, ERROR_DETAIL_BYTES, IMAGE_CAPS, TEXT_CAPS } from './sanitize.ts';
 import { assistantState } from './state.ts';
@@ -374,6 +376,33 @@ export interface RelayOptions {
   onEpochBump?: (fn: (key: string) => void) => () => void;
   /** Leave the turns' gate presenter as it is (a test gave its own). */
   keepPresenter?: boolean;
+  /** Where a Back from a workspace sends its design (the leave card's names); link-target.ts when left out. */
+  leaveTarget?: LeaveTargetFn;
+}
+
+/**
+ * A core__show that left a workspace and answered its link job (`data.job: 'link.<gl-...>'`):
+ * recorded for the turn with the workspace's plugin and study, so `wait` can follow it and the
+ * turn's end names it while it runs.
+ */
+function rememberLinkJob(turn: string | null, out: ToolOutcome, reg: { plugin: string; pluginName?: string; workspace: string; workspaceName?: string; projectId: string; studyId: string }, since: string): void {
+  const data = out.ok && out.data && typeof out.data === 'object' ? (out.data as Record<string, unknown>) : null;
+  const job = typeof data?.job === 'string' ? data.job : '';
+  const m = /^link\.(gl-[A-Za-z0-9._-]{1,90})$/.exec(job);
+  if (!m || !reg.projectId || !reg.studyId) return;
+  const from = cleanText(`${reg.pluginName || reg.plugin} ${reg.workspaceName || reg.workspace}`, 80);
+  rememberJob(turn, {
+    job_id: job,
+    kind: 'link',
+    id: m[1],
+    name: `Geometry update from ${from}`,
+    project_id: reg.projectId,
+    simulation_id: '',
+    plugin: reg.plugin,
+    study_id: reg.studyId,
+    since,
+    last: 'running',
+  });
 }
 
 export class Relay {
@@ -387,6 +416,7 @@ export class Relay {
   private readonly graceMs: number;
   private readonly abortGraceMs: number;
   private readonly pluginLoaded: PluginLoaded;
+  private readonly leaveTarget: LeaveTargetFn;
   private readonly liveRegistry: () => object | null;
   private readonly links = new Map<string, LinkRec>();
   private readonly tabs = new Map<string, TabRec>();
@@ -411,6 +441,7 @@ export class Relay {
     this.abortGraceMs = o.abortGraceMs ?? ABORT_GRACE_MS;
     this.pluginLoaded = o.pluginLoaded ?? ((key: string) => livePluginLoaded(key));
     this.liveRegistry = o.liveRegistry ?? liveRegistryRead;
+    this.leaveTarget = o.leaveTarget ?? leaveTargetOf;
     this.presenter = Object.freeze({
       present: (view: GateView, owner: GateOwner) => this.presentGate(view, owner),
       withdraw: (view: GateView, owner: GateOwner, closed: { answer: GateAnswer; by: GateClosedBy }) => this.withdrawGate(view, owner, closed),
@@ -776,7 +807,7 @@ export class Relay {
    * core__show leaving a workspace whose plugin links geometry sends its design to the simulation
    * (§0.4, §5.1): a computation, asked first. Null for any other call.
    */
-  private coreEscalate(tab: string, tool: string, input: Record<string, unknown>): { risk: 'compute'; note: string; title: string; copy: string } | null {
+  private async coreEscalate(tab: string, tool: string, input: Record<string, unknown>): Promise<CoreEscalation | null> {
     if (tool !== 'show') return null;
     const core = this.registry.coreOf(tab);
     const w = this.registry.workspaceOf(tab);
@@ -785,13 +816,33 @@ export class Relay {
     if (input.target === 'workspace' && (input.id === '' || input.id === w.reg.studyId)) return null;
     const row = (this.pluginLoaded(w.reg.plugin) ?? null) as { links_geometry?: unknown } | null;
     if (!row || row.links_geometry !== true) return null;
-    const name = cleanText(w.reg.workspaceName || w.reg.workspace, TEXT_CAPS.name) || 'the workspace';
+    const name = cleanText(w.reg.workspaceName || w.reg.workspace, TEXT_CAPS.name) || 'workspace';
     const plugin = cleanText(w.reg.pluginName || w.reg.plugin, TEXT_CAPS.name) || 'the plugin';
+    const title = 'Allow the Assistant to send your design to the simulation?';
+    const note = 'sends the design to the simulation';
+    // The geometry it updates and its studies, as the person's own Back would (spec 14.2).
+    const at = await this.leaveTarget(w.reg.projectId, w.reg.plugin, w.reg.studyId).catch(() => null);
+    if (!at) {
+      return { risk: 'compute', note, title, copy: `Leaves ${plugin}'s ${name} and sends its design to this project: it updates the geometry it links, or adds a new one. You may be asked how to update it.` };
+    }
+    const q = (s: string) => `"${cleanText(s, 80)}"`;
+    const what = at.study ? `the ${plugin} ${name} ${q(at.study)}` : `${plugin}'s ${name}`;
+    const where = at.project ? `project ${q(at.project)}` : 'this project';
+    const g = at.geometry;
+    const uses = g ? `${g.studies} ${g.studies === 1 ? 'study uses' : 'studies use'} it` : '';
     return {
       risk: 'compute',
-      note: 'sends the design to the simulation',
-      title: 'Allow the Assistant to send your design to the simulation?',
-      copy: `Leaves ${plugin}'s ${name} and sends its design to this project: it updates the geometry it links, or adds a new one. You may be asked how to update it.`,
+      note,
+      title,
+      copy: g
+        ? `Leaves ${what} and sends its design to ${where}: it updates geometry ${q(g.name)} (${uses}). You may be asked how to update it.`
+        : `Leaves ${what} and sends its design to ${where} as a new geometry.`,
+      detail: g
+        ? [
+            { label: 'Geometry', value: cleanText(g.name, 80) },
+            { label: 'Studies using it', value: String(g.studies) },
+          ]
+        : [{ label: 'Geometry', value: 'a new one' }],
     };
   }
 
@@ -845,7 +896,14 @@ export class Relay {
     if (!t || !t.core || t.core.link !== link) return Promise.resolve(fail('unavailable', 'This Magnusim window is no longer open.'));
     const live = t.link;
     if (this.closed || !live || !live.open || live.link !== link || live.silent || t.core.dormant) return Promise.resolve(fail('tab_disconnected', notSentText(ws)));
-    return this.startCall(t, live, { slot: 'core', plugin: 'core', pluginName: 'Magnusim', epoch: CORE_EPOCH, workspace: ws }, c);
+    // The workspace a core__show may leave: a Back that sends its design answers the link job
+    // (link.<gl-...>), which wait follows by its plugin and study (spec 8.1).
+    const from = c.tool === 'show' ? this.registry.workspaceOf(tab) : null;
+    const since = new Date(this.clock.now()).toISOString();
+    return this.startCall(t, live, { slot: 'core', plugin: 'core', pluginName: 'Magnusim', epoch: CORE_EPOCH, workspace: ws }, c).then((out) => {
+      if (from) rememberLinkJob(c.turn, out, from.reg, since);
+      return out;
+    });
   }
 
   /** One call sent to the page on its live link: one at a time per tab, acknowledged, abortable. */

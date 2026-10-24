@@ -111,16 +111,24 @@ describe('the registry: core slot', () => {
     assert.equal(show.available(ctx({ projectId: 'p2' })), 'This Magnusim window is no longer open.', 'its link went');
   });
 
-  it("core__show's escalation and card come from the page's registration (C3: the runner reads them with lane A)", async () => {
+  it("core__show's escalation and card come from the page's registration, and the runner's card shows them (C3)", async () => {
     const r = createToolRegistry();
     const asked = [];
-    r.setCore('T1', 'L1', core({ escalate: (tool, input) => (asked.push([tool, input.target]), tool === 'show' ? { risk: 'compute', note: 'sends the design', title: 'Allow it?', copy: 'Leaves the part.' } : null) }));
+    r.setCore('T1', 'L1', core({ escalate: (tool, input) => (asked.push([tool, input.target]), tool === 'show' ? { risk: 'compute', note: 'sends the design', title: 'Allow it?', copy: 'Leaves the part.', detail: [{ label: 'Geometry', value: 'Plate' }] } : null) }));
     const [show, view] = r.toolsFor(ctx());
-    const a = await show.escalate({ target: 'project' });
-    assert.deepEqual(a, { risk: 'compute', note: 'sends the design', detail: [], title: 'Allow it?', copy: 'Leaves the part.' });
-    assert.deepEqual(show.gateText({}, a), { title: 'Allow it?', copy: 'Leaves the part.' });
+    const input = { target: 'project' };
+    const a = await show.escalate(input);
+    assert.deepEqual(a, { risk: 'compute', note: 'Leaves the part.', detail: [{ label: 'Geometry', value: 'Plate' }] });
+    assert.deepEqual(show.gateText(input, a), { title: 'Allow it?', copy: 'Leaves the part.', detail: [{ label: 'Geometry', value: 'Plate' }] });
     assert.equal(await view.escalate({ action: 'fit' }), null);
     assert.deepEqual(asked, [['show', 'project'], ['view', undefined]]);
+    // Through the runner (which keeps only an escalation's risk, note and rows): the card is the page's.
+    const { ToolRunner } = await import('../assistant/runner.ts');
+    const cards = [];
+    const runner = new ToolRunner({ gates: { ask: async (req) => (cards.push(req), 'deny') } });
+    const out = await runner.run({ type: 'tool_call', callId: 'c-show', name: show.name, input: {} }, { owner: { kind: 'turn', id: 't', tab: 'T1' }, ctx: ctx(), signal: new AbortController().signal, offered: new Map([[show.name, show]]) });
+    assert.equal(out.code, 'declined');
+    assert.deepEqual([cards[0].title, cards[0].copy, cards[0].risk, cards[0].detail], ['Allow it?', 'Leaves the part.', 'compute', [{ label: 'Geometry', value: 'Plate' }]]);
   });
 });
 
@@ -244,15 +252,104 @@ describe('the relay: slot core', { timeout: 30_000 }, () => {
     await s.register(link, 1);
     await registerCore(s, link, 2, { place: 'workspace' });
     const show = coreTool(m, page.tab, 'show');
-    const up = await show.escalate({ target: 'project', project_id: '', id: '', panel: '' });
+    const leave = { target: 'project', project_id: '', id: '', panel: '' };
+    const up = await show.escalate(leave);
     assert.equal(up?.risk, 'compute');
-    assert.match(up.title, /send your design to the simulation/);
+    assert.match(show.gateText(leave, up).title, /send your design to the simulation/);
     assert.equal(await show.escalate({ target: 'workspace', project_id: '', id: DEMO_WORKSPACE.study_id, panel: '' }), null, 'the same workspace');
     flags.links = false;
     assert.equal(await show.escalate({ target: 'home', project_id: '', id: '', panel: '' }), null);
     await registerCore(s, link, 3);
     flags.links = true;
     assert.equal(await show.escalate({ target: 'home', project_id: '', id: '', panel: '' }), null, 'in the workbench nothing leaves');
+  });
+
+  it('the leave card names the study, the project, the geometry it updates and how many studies use it (spec 14.2); a new geometry says so; unknown: the general words', async () => {
+    let target = { project: 'Wing', study: 'Plate', geometry: { id: 'g2', name: 'Plate', studies: 2 } };
+    const asked = [];
+    const { m, s } = await setup({
+      relay: {
+        pluginLoaded: (key) => (key === 'ai-demo' ? { key, name: 'Workspace demo', links_geometry: true } : null),
+        leaveTarget: async (...args) => (asked.push(args), target),
+      },
+    });
+    const page = await s.page();
+    const link = await page.open();
+    await s.register(link, 1);
+    await registerCore(s, link, 2, { place: 'workspace' });
+    const show = coreTool(m, page.tab, 'show');
+    const back = { target: 'project', project_id: '', id: '', panel: '' };
+    // The card as the runner shows it (the runner keeps an escalation's risk, note and rows).
+    const { ToolRunner } = await import('../assistant/runner.ts');
+    const cards = [];
+    const runner = new ToolRunner({ gates: { ask: async (req) => (cards.push(req), 'deny') } });
+    const card = async () => {
+      // The test page's tools take no input (coreTools above); the leave is what escalates.
+      await runner.run({ type: 'tool_call', callId: `c-${cards.length}`, name: show.name, input: {} }, { owner: { kind: 'turn', id: 't', tab: page.tab }, ctx: ctx({ tab: page.tab }), signal: new AbortController().signal, offered: new Map([[show.name, show]]) });
+      return cards.at(-1);
+    };
+    let c = await card();
+    assert.deepEqual(asked, [['p1', 'ai-demo', DEMO_WORKSPACE.study_id]]);
+    assert.equal(c.risk, 'compute');
+    assert.equal(c.title, 'Allow the Assistant to send your design to the simulation?');
+    assert.match(c.copy, /^Leaves the Workspace demo \S.* "Plate" and sends its design to project "Wing": it updates geometry "Plate" \(2 studies use it\)\. You may be asked how to update it\.$/);
+    assert.deepEqual(c.detail, [
+      { label: 'Geometry', value: 'Plate' },
+      { label: 'Studies using it', value: '2' },
+    ]);
+    target = { ...target, geometry: { id: 'g2', name: 'Plate', studies: 1 } };
+    assert.match((await card()).copy, /\(1 study uses it\)/);
+    target = { ...target, geometry: null };
+    c = await card();
+    assert.match(c.copy, /sends its design to project "Wing" as a new geometry\.$/);
+    assert.deepEqual(c.detail, [{ label: 'Geometry', value: 'a new one' }]);
+    target = null;
+    c = await card();
+    assert.equal(c.title, 'Allow the Assistant to send your design to the simulation?');
+    assert.match(c.copy, /it updates the geometry it links, or adds a new one/);
+  });
+
+  it("a Back that answers its link job (link.<gl-…>) is recorded for the turn with the workspace's plugin and study, so wait follows it", async () => {
+    const { jobHint, startedJobs } = await import('../assistant/host/turn-jobs.ts');
+    const { createJobTools } = await import('../assistant/host/job-tools.ts');
+    const { grants } = await import('../assistant/grants.ts');
+    const { m, s } = await setup({ relay: { pluginLoaded: (key) => (key === 'ai-demo' ? { key, name: 'Workspace demo', links_geometry: true } : null), leaveTarget: async () => null } });
+    const page = await s.page();
+    const link = await page.open();
+    await s.register(link, 1);
+    await registerCore(s, link, 2, { place: 'workspace' });
+    const show = coreTool(m, page.tab, 'show');
+    const call = runTool(show, { target: 'project', project_id: '', id: '', panel: '' }, ctx({ tab: page.tab }), { turn: 't-back' });
+    const inv = await page.frame('invoke');
+    await s.progress(link, inv.call, { ack: true });
+    await s.result(link, inv.call, { ok: true, result: { data: { shown: { place: 'workbench', project_id: 'p1' }, job: 'link.gl-abc123' }, summary: 'Back to the project' } });
+    assert.equal((await call.promise).ok, true);
+    const hint = jobHint('p1', 'link.gl-abc123');
+    assert.deepEqual([hint?.kind, hint?.plugin, hint?.study_id, hint?.project_id], ['link', 'ai-demo', DEMO_WORKSPACE.study_id, 'p1']);
+    assert.match(hint.name, /^Geometry update from Workspace demo /);
+    assert.deepEqual(startedJobs('t-back').map((j) => j.job_id), ['link.gl-abc123'], "the turn's end names it while it runs");
+    // wait reads it from the link's status route, by that plugin and study.
+    const seen = [];
+    const [, wait] = createJobTools({
+      call: async (id, args) => {
+        seen.push([id, args]);
+        if (id === 'link.status') return { ok: true, job: { status: 'done', geometryName: 'Plate' } };
+        throw new Error(`unexpected ${id}`);
+      },
+      sleep: async () => {},
+    });
+    const out = await wait.run({ project_id: '', job_ids: ['link.gl-abc123'], until: 'all', timeout_s: 10 }, { signal: new AbortController().signal, ctx: ctx({ tab: page.tab }), turn: 't-back', progress() {} });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual(out.data.jobs.map((j) => [j.job_id, j.status, j.result]), [['link.gl-abc123', 'done', { geometry: 'Plate' }]]);
+    assert.deepEqual(seen, [['link.status', { project_id: 'p1', plugin: 'ai-demo', study_id: DEMO_WORKSPACE.study_id, job_id: 'gl-abc123' }]]);
+    // A Back that answers no job, or another call, records nothing.
+    const other = runTool(show, { target: 'study', project_id: '', id: 's2', panel: '' }, ctx({ tab: page.tab }), { turn: 't-other' });
+    const inv2 = await page.frame('invoke', 1);
+    await s.progress(link, inv2.call, { ack: true });
+    await s.result(link, inv2.call, { ok: true, result: { data: { shown: { place: 'workbench' } }, summary: 'Showed it' } });
+    await other.promise;
+    assert.deepEqual(startedJobs('t-other'), []);
+    grants().end('t-back');
   });
 });
 

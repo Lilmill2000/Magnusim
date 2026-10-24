@@ -2547,6 +2547,24 @@ function originalOf(adopted) {
   return { fileName: from.file_name || null, format: String(from.format || ''), sha256: String(from.sha256 || '') };
 }
 
+/**
+ * What a Back from this study's workspace would send its design to (the leave card, Assistant
+ * spec 06 §5.1): the geometry it updates (its linked one, or the plain geometry an editing
+ * study takes over), null when it adds a new one; with the study's title. Null when the check
+ * refuses (no such study, an older project).
+ * @param {string} projectId @param {string} plugin @param {string} studyId @param {number} [timeoutMs]
+ * @returns {Promise<{ study: string, geometry: { id: string, name: string } | null } | null>}
+ */
+export async function linkTargetOf(projectId, plugin, studyId, timeoutMs = 60_000) {
+  const check = await call('geometry.link_check', { project_id: projectId, plugin, study_id: studyId }, timeoutMs);
+  if (!check || check.ok !== true) return null;
+  const g = check.geometry;
+  return {
+    study: String((check.study && check.study.title) || ''),
+    geometry: g && g.id ? { id: String(g.id), name: String(g.name || '') } : null,
+  };
+}
+
 /** The records of a study (newest first, 50 at most). */
 export function studyLinkJobs(/** @type {string} */ projectId, /** @type {string} */ plugin, /** @type {string} */ studyId) {
   return listLinkRecords({ filter: (r) => sameStudy(r, projectId, plugin, studyId) }).slice(0, 50);

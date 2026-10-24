@@ -13,6 +13,8 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
+// @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
+import * as core from '../../../e2e/support/assistant.js';
 import { cadFrame, chats, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
 import { addSolid } from './helpers';
 
@@ -169,4 +171,51 @@ test("cad:assistant-workspace-export the person's Export STEP panel opens filled
   const dl = page.waitForEvent('download', { timeout: STEP_MS * 2 });
   await panel.locator('[data-export-run]').click();
   expect((await dl).suggestedFilename()).toBe('plate export.step');
+});
+
+// Back from the Part through the app page's core__show (core host tools spec 5.1, 14.2, 8.1): the
+// card says what it sends where, as a person's Back would; Allow sends the design, and the model
+// follows the link job with wait until the new geometry is in the project.
+test('cad:assistant-workspace-back core__show Back asks with a card naming the Part and the project; Allow sends the design, and wait follows its link job to the end', async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const pid = await newProject(request, host, 'Leave card');
+  await openNewPart(page, request, host, pid);
+  await addSolid(page, { size: [30, 20, 10] });
+  const results: Array<Record<string, unknown>> = [];
+  host.fake.reply(
+    { tools: [{ name: 'core__show', input: { target: 'project', project_id: '', id: '', panel: '' } }] },
+    (body: unknown) => {
+      const r = resultsIn(body);
+      results.push(...r);
+      const job = String((r[0] as { data?: { job?: string } }).data?.job ?? '');
+      return { tools: [{ name: 'wait', input: { project_id: '', job_ids: [job || 'link.gl-none'], until: 'all', timeout_s: 240 } }] };
+    },
+    (body: unknown) => {
+      results.push(...resultsIn(body));
+      return { text: 'Your design is in the simulation.' };
+    },
+  );
+  await core.dockSend(page, 'Send this to the simulation.');
+  // The card names what goes where, before anything leaves.
+  const card = core.dockGate(page);
+  await expect(card.locator('.dock-gate-title')).toHaveText('Allow the Assistant to send your design to the simulation?', STEP);
+  await expect(card.locator('.dock-gate-copy')).toHaveText(/^Leaves the .+ Part "Part 1" and sends its design to project "Leave card" as a new geometry\.$/);
+  await expect(card.locator('.dock-gate-detail')).toContainText('a new one');
+  await expect(page.locator('#workspace-overlay')).toBeVisible();
+  await card.locator('[data-gate-answer="yes"]').click();
+  // The window goes back to the project, and the turn follows the link job to its end.
+  await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: STEP_MS * 2 });
+  await expect(core.dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 300_000 });
+  expect(results.map((r) => [r.tool, r.ok])).toEqual([
+    ['core__show', true],
+    ['wait', true],
+  ]);
+  expect(String((results[0] as { data: { job: string } }).data.job)).toMatch(/^link\.gl-/);
+  const jobs = (results[1] as { data: { ended: boolean; jobs: Array<{ status: string; result: { geometry: string } | null }> } }).data;
+  expect(jobs.ended).toBe(true);
+  expect(jobs.jobs.map((j) => j.status)).toEqual(['done']);
+  // The geometry it names is the project's new one.
+  const proj = await (await request.get(`${host.base}/api/project?project_id=${encodeURIComponent(pid)}`)).json();
+  const names = ((proj.project?.geometries ?? []) as Array<{ name: string }>).map((g) => g.name);
+  expect(names).toContain(jobs.jobs[0].result?.geometry);
 });
