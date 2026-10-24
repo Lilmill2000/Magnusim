@@ -471,6 +471,53 @@ test.describe('a run open in its panel', () => {
   });
 });
 
+// ---------------------------------------------------------------- boundary condition defaults
+
+const wallType = (page) => page.locator('#bc-default-wall-type');
+
+async function storedDefaults(request) {
+  const j = await getJson(request, `/api/bcs?${q()}`);
+  return { wall: j.defaults && j.defaults.wall_type, rev: j.defaults_rev };
+}
+
+/** Another window saves the study's wall default (with the rev it read, as a panel does). */
+async function otherWindowSetsWall(request, wall) {
+  const { rev } = await storedDefaults(request);
+  await postOk(request, '/api/bcs', { project_id: FIXTURE, simulation_id: SIM, defaults: { wall_type: wall }, defaults_base_rev: rev });
+}
+
+test.describe('the boundary condition defaults panel', () => {
+  test('a change made from an older copy is refused with the notice, the panel shows the saved default, and the next change is saved', async ({ page, request }) => {
+    await otherWindowSetsWall(request, 'No-slip');
+    await openProject(page, request);
+    await page.evaluate(() => window.__CFD_BC_OPEN_DEFAULTS__());
+    await expect(page.locator('#panel-bc-defaults')).toBeVisible();
+    await expect(wallType(page)).toHaveValue('No-slip');
+    // Another window changes them twice (this window hears nothing): the panel still shows its copy.
+    const read = (await storedDefaults(request)).rev;
+    await otherWindowSetsWall(request, 'Slip');
+    await otherWindowSetsWall(request, 'No-slip');
+    expect((await storedDefaults(request)).rev).toBe(read + 2);
+    await expect(wallType(page)).toHaveValue('No-slip');
+    // The person's change is from that older copy: refused, not written over the newer save.
+    await wallType(page).selectOption('Slip');
+    const dialog = page.locator('#modal-confirm');
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#cf-heading')).toHaveText(NOTICE_TITLE);
+    await expect(page.locator('#cf-copy')).toHaveText(`The boundary condition defaults were changed in another window while you were editing them. ${TAIL}`);
+    await expect(wallType(page)).toHaveValue('No-slip');
+    await page.locator('#cf-confirm').click();
+    await expect(dialog).toBeHidden();
+    await page.waitForTimeout(500);
+    expect(await storedDefaults(request)).toEqual({ wall: 'No-slip', rev: read + 2 });
+    // The panel read them again: the person's next change is saved.
+    await wallType(page).selectOption('Slip');
+    await expect.poll(async () => (await storedDefaults(request)).wall, { timeout: 15_000 }).toBe('Slip');
+    await expect(dialog).toBeHidden();
+    await otherWindowSetsWall(request, 'No-slip');
+  });
+});
+
 // ---------------------------------------------------------------- the dock
 
 test.describe('the dock', () => {

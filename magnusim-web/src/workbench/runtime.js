@@ -27232,6 +27232,10 @@ function applyBcRecords(doc, projectId) {
   } else if (doc && !doc.defaults && Array.isArray(doc.boundary_conditions)) {
     bcCatalog.defaults = { ...BC_DEFAULTS_FALLBACK };
   }
+  // The rev of the study's defaults as read (C2): the Defaults panel's save sends it back.
+  if (doc && sid && Number.isInteger(doc.defaults_rev)) {
+    bcCatalog.defaults_rev_by_simulation = { ...(bcCatalog.defaults_rev_by_simulation || {}), [String(sid)]: doc.defaults_rev };
+  }
   bcCatalog.project_id = projectId || (doc && doc.project_id) || bcCatalog.project_id;
   bcCatalog.boundary_conditions_json = (doc && doc.boundary_conditions_json) || null;
   bcCatalog.ready = list.length > 0;
@@ -27321,28 +27325,50 @@ function showBcDefaultsPanel() {
   syncBcDefaultsPanel();
 }
 
+/** Defaults saves refused as stale: a save queued before a refusal is dropped with it. */
+let bcDefaultsRefusals = 0;
+
 async function persistBcDefaults(partial) {
   const next = { ...bcDefaults(), ...(partial || {}) };
   next.wall_type = normalizeWallType(next.wall_type);
+  const sid = String((typeof currentStudyId === 'function' && currentStudyId()) || '');
   bcCatalog.defaults = next;
   syncBcDefaultsPanel();
   if (typeof refreshSetupTree === 'function') refreshSetupTree();
-  const body = { defaults: next };
-  const pid = currentProjectId();
-  if (pid) body.project_id = pid;
-  if (typeof currentMeshStudyIds === 'function') Object.assign(body, currentMeshStudyIds());
-  // census: the wall default only, no face-carrying record (never stamp-checked).
-  const r = await fetch('/api/bcs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+  const epoch = bcDefaultsRefusals;
+  // One save at a time, each with the rev the panel has when it is sent (C2): defaults changed
+  // since (by the Assistant, or another window) are refused, not overwritten.
+  return serialSave('bc-defaults:' + sid, async () => {
+    if (bcDefaultsRefusals !== epoch) return null;
+    const body = { defaults: next };
+    const pid = currentProjectId();
+    if (pid) body.project_id = pid;
+    if (typeof currentMeshStudyIds === 'function') Object.assign(body, currentMeshStudyIds());
+    const readRev = sid && bcCatalog.defaults_rev_by_simulation ? bcCatalog.defaults_rev_by_simulation[sid] : undefined;
+    if (Number.isInteger(readRev)) body.defaults_base_rev = readRev;
+    // census: the wall default only, no face-carrying record (never stamp-checked).
+    const r = await fetch('/api/bcs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (r.status === 409 && isStaleRecord(j)) {
+      // Changed since the panel read them: show what is saved, then say so.
+      releaseFocus();
+      bcDefaultsRefusals += 1;
+      await rereadBcRecords();
+      syncBcDefaultsPanel();
+      if (typeof refreshSetupTree === 'function') refreshSetupTree();
+      await showStaleNotice('bc_defaults', sid, '');
+      return null;
+    }
+    if (!r.ok || !j.ok) throw new Error(j.error || 'BC defaults save failed');
+    applyBcRecords(j, j.project_id);
+    // The tree reads the saved default: refresh it now that the save has landed.
+    if (typeof refreshSetupTree === 'function') refreshSetupTree();
+    return j;
   });
-  const j = await r.json();
-  if (!r.ok || !j.ok) throw new Error(j.error || 'BC defaults save failed');
-  applyBcRecords(j, j.project_id);
-  // The tree reads the saved default: refresh it now that the save has landed.
-  if (typeof refreshSetupTree === 'function') refreshSetupTree();
-  return j;
 }
 
 
