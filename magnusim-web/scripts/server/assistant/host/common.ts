@@ -13,6 +13,7 @@ import { HOST_STALL_MS, type Assessed, type AssessContext, type Place, type Tool
 import { cleanText, TEXT_CAPS } from '../sanitize.ts';
 import type { JsonSchemaObject } from '../types.ts';
 import { uiSyncOrigin, type UiSyncEmitter, type UiSyncInput, type UiSyncKind } from '../../ui-sync.ts';
+import { siUnitLabel } from '../../../../src/plugin-ui/units.ts';
 
 export type { Assessed, AssessContext, Place };
 
@@ -316,7 +317,10 @@ export function flattenSchema(schema: unknown, prefix = '', depth = 0): Field[] 
       key,
       type: typeof raw.type === 'string' ? raw.type : 'string',
       label: cleanText(raw.title ?? k, 120),
-      unit: cleanText(x.unit ?? '', 40),
+      // A field with a quantity and no unit of its own holds that quantity's SI unit (what the
+      // editor converts from: a temperature in K, shown in °C or °F). Seen live: a Heat Transfer
+      // wall temperature had no unit, and the model had to guess K from a default of 293.15.
+      unit: cleanText(x.unit ?? (typeof x.quantity === 'string' ? siUnitLabel(x.quantity) : ''), 40),
       enum: Array.isArray(raw.enum) ? raw.enum.slice(0, 64) : null,
       min: num(raw.minimum),
       max: num(raw.maximum),

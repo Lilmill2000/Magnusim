@@ -233,8 +233,11 @@ export function catalogTool(d: HostToolDeps): HostToolDef {
             const f = bcFamily(registry, key);
             if (!f) return fail('not_found', `No BC type "${cleanText(key, 80)}".`, "catalog {kind:'bc_types', key:''} lists them.");
             const unitFields = records(f.values).map((r) => ({ field: text(r.field, 64), unit_field: text(r.unit_field, 64), quantity: text(r.quantity, 64), when: isRecord(r.when) ? r.when : {} }));
+            // A value with its own unit field is in the unit that field names, not the SI one.
+            const byUnitField = new Map(unitFields.filter((u) => u.field && u.unit_field).map((u) => [u.field, u.unit_field]));
+            const fields = flattenSchema(f.fields).map((x) => (byUnitField.has(x.key) ? { ...x, unit: `the unit in ${byUnitField.get(x.key)}` } : x));
             return answer(
-              { key: text(f.key, 64), type: text(f.record_type), label: text(f.label), fields: flattenSchema(f.fields).map(fieldInfo), units: unitFields, defaults: isRecord(f.defaults) ? f.defaults : {} },
+              { key: text(f.key, 64), type: text(f.record_type), label: text(f.label), fields: fields.map(fieldInfo), units: unitFields, defaults: isRecord(f.defaults) ? f.defaults : {} },
               `BC type ${text(f.label)}`,
             );
           }

@@ -107,6 +107,21 @@ describe('app_status with_projects', () => {
   });
 });
 
+describe('field units', () => {
+  it("a field with a quantity and no unit says its SI unit (a temperature in K); a value with its own unit field names that field (seen live: a wall temperature with no unit)", async () => {
+    const { flattenSchema } = await import('../assistant/host/common.ts');
+    const fields = flattenSchema({
+      properties: {
+        wall_temperature: { type: 'number', title: 'Wall temperature', 'x-cfddesk': { quantity: 'temperature' } },
+        wall_htc: { type: 'number', title: 'Heat transfer coefficient', 'x-cfddesk': { quantity: 'heat_transfer_coefficient' } },
+        size: { type: 'number', title: 'Size', 'x-cfddesk': { unit: 'mm', quantity: 'length' } },
+        note: { type: 'string', title: 'Note' },
+      },
+    });
+    assert.deepEqual(Object.fromEntries(fields.map((f) => [f.key, f.unit])), { wall_temperature: 'K', wall_htc: 'W/(m²·K)', size: 'mm', note: '' });
+  });
+});
+
 describe('catalog', () => {
   const cat = (kind, key = '') => ok('catalog', { kind, key });
   it('every kind lists; a key gives that item\'s fields', async () => {
