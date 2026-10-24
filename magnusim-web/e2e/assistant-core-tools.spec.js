@@ -217,7 +217,7 @@ test("another project's read asks that project's question in the dock; Don't sen
   await postOk(request, '/api/assistant/settings', { privacy: 'ask' });
   await openWing(page, request);
   let seen = [];
-  fake.reply(call('project_summary', { project_id: tail }), (body) => {
+  fake.reply(call('project_summary', { project_id: tail, with_thumbnail: false }), (body) => {
     seen = resultsIn(body);
     return { text: 'I could not read the tail.' };
   });
