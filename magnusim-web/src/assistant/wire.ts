@@ -512,6 +512,8 @@ export interface RelayTool {
   timeoutS: number;
   /** What the question before a destructive call says it does (CAD tools spec H10; absent when none). */
   confirm?: string;
+  /** Which tools a local model's budget keeps first (0-100, higher stays; absent: 50). */
+  priority?: number;
 }
 
 /** POST /api/assistant/relay/tools: `tools: []` unregisters. */

@@ -342,6 +342,8 @@ export interface CheckedTool {
   timeoutS: number;
   /** What the app's question before a destructive call says it does, cleaned, at most 120 characters (absent when the page gave none). */
   confirm?: string;
+  /** Which tools a local model's budget keeps first: 0 to 100, higher stays (absent when the page gave none: 50). */
+  priority?: number;
 }
 
 /** Review rounds as the host passes them on (1.9, unreleased): 1 to 5 rounds, the prompt cleaned (its lines kept), at most 1500 characters. */
@@ -509,6 +511,7 @@ export function checkAssistantTools(params: Record<string, unknown>): CheckedAss
     if (typeof raw.description !== 'string') throw badParam(`${what}.description (text)`);
     if (raw.title !== undefined && raw.title !== null && typeof raw.title !== 'string') throw badParam(`${what}.title (text)`);
     if (raw.confirm !== undefined && raw.confirm !== null && typeof raw.confirm !== 'string') throw badParam(`${what}.confirm (text)`);
+    if (raw.priority !== undefined && raw.priority !== null && (typeof raw.priority !== 'number' || !Number.isFinite(raw.priority))) throw badParam(`${what}.priority (a number from 0 to 100)`);
     if (!isPlainObject(raw.inputSchema) || !isJsonData(raw.inputSchema)) throw badParam(`${what}.inputSchema (a JSON schema object)`);
     const risk = typeof raw.risk === 'string' && ASSISTANT_RISKS.has(raw.risk) ? (raw.risk as AssistantRisk) : 'destructive';
     const confirm = cleanLine(raw.confirm, ASSISTANT_CONFIRM_MAX);
@@ -520,6 +523,7 @@ export function checkAssistantTools(params: Record<string, unknown>): CheckedAss
       risk,
       timeoutS: assistantTimeoutS(raw.timeoutS),
       ...(confirm ? { confirm } : {}),
+      ...(typeof raw.priority === 'number' ? { priority: Math.min(100, Math.max(0, Math.round(raw.priority))) } : {}),
     };
   });
   const g = params.guide;

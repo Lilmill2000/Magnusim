@@ -509,6 +509,12 @@ declare module '@magnusim/workspace' {
        * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
        */
       confirm?: string;
+      /**
+       * Which of your tools a local model keeps when the tools don't all fit its context (unreleased,
+       * 1.9): 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the
+       * lowest priority first (the later name among equals).
+       */
+      priority?: number;
   }
   /** One call of a tool, as the handler gets it (unreleased, 1.9). */
   export interface AssistantCall {

@@ -303,6 +303,7 @@ A tool the app's assistant may call while this workspace is open (unreleased, 1.
 - `risk: AssistantRisk`
 - `timeoutS?: number | undefined`: Seconds with no progress before the call counts as stalled (1–600, default 60). Progress resets it; there is no total limit.
 - `confirm?: string | undefined`: For a `destructive` tool: what the app's question before each call says the call does, in place of "can't be undone" (unreleased, 1.9). One sentence of fixed text, at most 120 characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
+- `priority?: number | undefined`: Which of your tools a local model keeps when the tools don't all fit its context (unreleased, 1.9): 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the lowest priority first (the later name among equals).
 
 #### AssistantTurn
 

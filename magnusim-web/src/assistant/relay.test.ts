@@ -560,6 +560,20 @@ describe('registrations', () => {
     expect(await pub).toEqual({ available: true, accepted: ['reset', 'add'], refused: [] });
   });
 
+  it("a tool's priority goes with it to the server (a local model's budget keeps the higher first); a tool without one sends none (the server's 50)", async () => {
+    startAssistantRelay();
+    const pub = publishWorkspaceTools(SCOPE, 'frame-1', { tools: [{ ...tool('reset'), priority: 0 }, { ...tool('add'), priority: 90 }, tool('get')], guide: '' }, invoke);
+    await settle(1000);
+    channel().frame('linked', { link: LINK_A });
+    await settle();
+    const post = take('/api/assistant/relay/tools');
+    const tools = post.body.tools as Array<Record<string, unknown>>;
+    expect(tools.map((t) => t.priority)).toEqual([0, 90, undefined]);
+    expect(Object.hasOwn(tools[2], 'priority')).toBe(false);
+    accept(post);
+    await pub;
+  });
+
   it('a link that went before the POST arrived (409 no_channel): sent again on the next `linked`', async () => {
     startAssistantRelay();
     const verdict = register(['add']);

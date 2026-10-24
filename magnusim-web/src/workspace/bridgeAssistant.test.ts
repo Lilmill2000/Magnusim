@@ -251,6 +251,8 @@ describe('assistant.register (1.9, unreleased)', () => {
       { tools: [{ ...ADD, title: 3 }] },
       { tools: [{ ...ADD, confirm: 3 }] },
       { tools: [{ ...ADD, confirm: { text: 'Undoable.' } }] },
+      { tools: [{ ...ADD, priority: '80' }] },
+      { tools: [{ ...ADD, priority: Number.NaN }] },
       { tools: [{ ...ADD, inputSchema: [SCHEMA] }] },
       { tools: [{ ...ADD, inputSchema: undefined }] },
       { tools: [{ ...ADD, inputSchema: { ...SCHEMA, made: new Date(0) } }] },
@@ -331,6 +333,28 @@ describe('assistant.register (1.9, unreleased)', () => {
     expect(r.result).toEqual({ available: true, accepted: ['reset'], refused: [] });
     const reg = h.assistantTools.mock.calls[0][0] as { tools: CheckedTool[] };
     expect(reg.tools).toEqual([{ ...RESET, title: 'Reset the counter', timeoutS: 60, confirm: 'Sets the counter to 0; add brings it back.' }]);
+    t.end();
+  });
+
+  it("a tool's priority (which tools a local model's budget keeps first): a number rounded into 0 to 100, handed to the app; absent when the page gave none", async () => {
+    const checked = checkAssistantTools({
+      tools: [
+        { ...ADD, name: 'high', priority: 80 },
+        { ...ADD, name: 'over', priority: 250 },
+        { ...ADD, name: 'under', priority: -3 },
+        { ...ADD, name: 'half', priority: 41.6 },
+        { ...ADD, name: 'nulled', priority: null },
+        { ...ADD, name: 'none' },
+      ],
+    });
+    expect(checked.tools.map((t) => t.priority)).toEqual([80, 100, 0, 42, undefined, undefined]);
+    for (const t of checked.tools.slice(4)) expect(Object.hasOwn(t, 'priority'), t.name).toBe(false);
+    const h = hooks();
+    const t = await connected(h);
+    const r = await t.call('assistant.register', { tools: [{ ...ADD, priority: 80 }] });
+    expect(r.result).toEqual({ available: true, accepted: ['add'], refused: [] });
+    const reg = h.assistantTools.mock.calls[0][0] as { tools: CheckedTool[] };
+    expect(reg.tools[0].priority).toBe(80);
     t.end();
   });
 

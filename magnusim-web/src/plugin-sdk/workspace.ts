@@ -498,6 +498,12 @@ export interface AssistantTool {
    * characters, with no project data ("Deletes features from the Part; Ctrl+Z brings them back.").
    */
   confirm?: string;
+  /**
+   * Which of your tools a local model keeps when the tools don't all fit its context (unreleased,
+   * 1.9): 0 to 100, higher stays, default 50. The app's own tools go first, then yours, the
+   * lowest priority first (the later name among equals).
+   */
+  priority?: number;
 }
 
 /** One call of a tool, as the handler gets it (unreleased, 1.9). */
@@ -1591,6 +1597,7 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
           if (tool.title !== undefined) out.title = tool.title;
           if (tool.timeoutS !== undefined) out.timeoutS = tool.timeoutS;
           if (tool.confirm !== undefined) out.confirm = tool.confirm;
+          if (tool.priority !== undefined) out.priority = tool.priority;
           return out;
         });
         const params: Record<string, unknown> = { tools: wire };
