@@ -116,25 +116,6 @@ export async function projectTitle(call: JsonCall, projectId: string, rt: { sign
   }
 }
 
-/**
- * A caller that waits for the turn's rate (5 calls a second, 2 writes) instead of failing:
- * one compute call reads the study, the mesh or run and the queue before it starts the job,
- * and a refusal halfway would leave a start half done. It tries again every 250 ms, for
- * about 3 s at most, then gives the refusal.
- */
-export function paced(call: JsonCall, pause: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): JsonCall {
-  return async (id, args, o) => {
-    for (let tries = 0; ; tries += 1) {
-      try {
-        return await call(id, args, o);
-      } catch (err) {
-        if (!(err instanceof HostCallError) || err.code !== 'rate_limited' || tries >= 12 || o.signal?.aborted) throw err;
-        await pause(250);
-      }
-    }
-  };
-}
-
 /** Emits the write's ui_sync, its origin from the call (uiSyncOrigin); never fails the call. */
 export function emitSync(deps: JobToolDeps, rt: Pick<ToolRunContext, 'turn' | 'ctx'>, e: JobUiSync): void {
   try {

@@ -780,6 +780,43 @@ describe('wait under the rate limit', () => {
     assert.equal(out.data.jobs[0].status, 'running');
     await sleep(0);
   });
+
+  it("the job tools are paced as the other host tools are: a call held back past 3 s still runs (up to 15 s), then it gives the refusal; a Stop ends the wait", async () => {
+    S.live = { kind: 'mesh', mesh_id: 'm1', project_id: P };
+    S.mesh.live_mesh_result = { status: 'running', stage: 'gmsh' };
+    const real = createHostTransport({ port: () => app.port }).call;
+    let held = 0;
+    let n = 0;
+    const flaky = (id, args, o) => {
+      n += 1;
+      if (n <= held) return Promise.reject(new HostCallError('rate_limited', 'Too many'));
+      return real(id, args, o);
+    };
+    let now = 0;
+    const slept = [];
+    const t = createJobTools({ call: flaky, now: () => now, sleep: async (ms) => void (now += ms), pace: async (ms) => void (slept.push(ms), (now += ms)) });
+    // 6 s of refusals (30 x 200 ms): D's own pacing gave up after 12 tries (3 s).
+    held = 30;
+    let out = await t[1].run({ project_id: '', job_ids: ['mesh.m1'], until: 'all', timeout_s: 60 }, rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.data.jobs[0].status, 'running');
+    assert.ok(slept.filter((ms) => ms === 200).length >= 30, 'it waited out each refusal');
+    // Past 15 s it gives the refusal.
+    n = 0;
+    held = 1000;
+    out = await t[2].run({ project_id: '', action: 'stop', job_id: 'mesh.m1', ids: [] }, rt());
+    assert.equal(out.ok, false);
+    assert.equal(out.error.code, 'rate_limited');
+    // A Stop ends the wait at once (the real sleep, an aborted signal).
+    const t2 = createJobTools({ call: () => Promise.reject(new HostCallError('rate_limited', 'Too many')) });
+    const stop = new AbortController();
+    stop.abort();
+    const t0 = Date.now();
+    out = await t2[2].run({ project_id: '', action: 'stop', job_id: 'mesh.m1', ids: [] }, rt({ controller: stop }));
+    assert.equal(out.ok, false);
+    assert.ok(Date.now() - t0 < 1000, 'no wait after a Stop');
+    await sleep(0);
+  });
 });
 
 // Through the runner (C3): the compute card is the tool's own, a declared chain covers the
