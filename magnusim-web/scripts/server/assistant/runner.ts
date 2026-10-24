@@ -549,9 +549,13 @@ export class ToolRunner {
         }
         if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
         if (answer !== 'allow') return errorResult(call, 'declined', 'The user declined this call; it did not run. Accept it and say what you would have done.');
-        // Allowed with a chain: its other jobs run without a card, each once, for this owner.
+        // Allowed with a chain: its other jobs run without a card, each once, for this owner,
+        // only those the card named (escalate's labels): an Allow never covers a step the
+        // person was not shown.
         const chain = chainOf(def, input).filter((j) => j !== key);
-        if (owner && chain.length) store.grant(owner, chain, labelsOf(assessed, chain));
+        const named = labelsOf(assessed, chain);
+        const shown = chain.filter((j) => j in named);
+        if (owner && shown.length) store.grant(owner, shown, named);
       }
     }
     // 5a. Another project's data: that project's consent (the turn goes on when it is refused).

@@ -165,6 +165,22 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     return { steps, labels };
   }
 
+  /**
+   * A card's words for the chained steps after its own (`first` names it), the "Steps" row and
+   * the labels the grant keeps: every step a card's Allow covers is on the card (a chain the
+   * card does not name is not granted, runner.ts).
+   */
+  function withChain(a: Assessed, first: string, steps: readonly string[], labels: Record<string, string>): Assessed {
+    if (!steps.length) return a;
+    const list = steps.map((s, i) => `${i + 2}. ${s}.`).join(' ');
+    return {
+      ...a,
+      note: `${a.note} Covers these steps, each once: 1. ${first}. ${list} Nothing else is covered; you can stop any of them from the tree.`.trim(),
+      detail: [{ label: 'Steps', value: [first, ...steps].join(', then ') }, ...a.detail].slice(0, 6),
+      labels,
+    };
+  }
+
   /** The card's facts and its risk (C3: raise-only; never lower than the call's base). */
   async function escalate(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null> {
     const action = str(input.action) as Action;
@@ -216,7 +232,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
         const note = used.length
           ? `${name} is generated and ${used.join(', ')} used it; generating again replaces it.`
           : `${name} is generated; generating again replaces it.`;
-        return { risk: 'destructive', note, detail };
+        return withChain({ risk: 'destructive', note, detail }, `Generate ${quoted(name)} again`, steps, labels);
       }
       const note = steps.length
         ? `Covers these steps, each once: 1. Generate ${quoted(name)}. ${steps.map((s, i) => `${i + 2}. ${s}.`).join(' ')} Nothing else is covered; you can stop either from the tree.`
@@ -234,7 +250,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       if (!found) return plain;
       const { run, name } = found;
       if (action === 'run_continue' && runConverged(run)) {
-        return { risk: 'destructive', note: `${name} has converged; continuing changes its results.`, detail: [{ label: 'Run', value: name }] };
+        return withChain({ risk: 'destructive', note: `${name} has converged; continuing changes its results.`, detail: [{ label: 'Run', value: name }] }, `Continue ${quoted(name)}`, steps, labels);
       }
       const iterations = num(run.endTime);
       const cores = num(run.cores);
@@ -242,7 +258,12 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       if (action === 'run_continue') {
         const more = num(input.extra_iterations) ?? 0;
         const to = num(input.end_time) ?? 0;
-        return { risk: 'compute', note: more > 0 ? `Runs ${quoted(name)} for ${more} more iterations.` : `Runs ${quoted(name)} on to t = ${to} s.`, detail: [{ label: 'Run', value: name }, ...estimateRow] };
+        return withChain(
+          { risk: 'compute', note: more > 0 ? `Runs ${quoted(name)} for ${more} more iterations.` : `Runs ${quoted(name)} on to t = ${to} s.`, detail: [{ label: 'Run', value: name }, ...estimateRow] },
+          `Continue ${quoted(name)}`,
+          steps,
+          labels,
+        );
       }
       let meshName = text(run.mesh_name) || '';
       if (!meshName && str(run.mesh_id)) meshName = text((await meshOf(projectId, study.id, str(run.mesh_id), rt).catch(() => null))?.name) || String(run.mesh_id);
@@ -254,7 +275,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
         { label: 'Queue', value: queueWords(q) },
         ...estimateRow,
       ];
-      return { risk: 'compute', note: `Starts ${quoted(name)} of study ${quoted(study.name)}${settings ? ` (${settings})` : ''}.`, detail };
+      return withChain({ risk: 'compute', note: `Starts ${quoted(name)} of study ${quoted(study.name)}${settings ? ` (${settings})` : ''}.`, detail }, `Start ${quoted(name)}`, steps, labels);
     }
 
     if (action === 'vtk_export') {
@@ -278,11 +299,12 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     const chained = Array.isArray(input.chain) && input.chain.length > 0;
     const name = a?.detail.find((d) => d.label === 'Mesh' || d.label === 'Run')?.value ?? '';
     let title = 'Allow the Assistant to start a computation?';
+    const named = chained && !!a?.labels && Object.keys(a.labels).length > 0;
     if (a?.risk === 'destructive') {
       title =
         action === 'run_continue'
-          ? `Allow the Assistant to continue ${quoted(name || 'the run')} past convergence?`
-          : `Allow the Assistant to generate ${quoted(name || 'the mesh')} again?`;
+          ? `Allow the Assistant to continue ${quoted(name || 'the run')} past convergence${named ? ', and the steps after it' : ''}?`
+          : `Allow the Assistant to generate ${quoted(name || 'the mesh')} again${named ? ', and the steps after it' : ''}?`;
     } else if (action === 'mesh_generate') title = chained ? 'Allow the Assistant to mesh and run?' : 'Allow the Assistant to generate a mesh?';
     else if (action === 'run_start') title = chained ? 'Allow the Assistant to run these steps?' : 'Allow the Assistant to start a run?';
     else if (action === 'run_continue') title = 'Allow the Assistant to continue a run?';

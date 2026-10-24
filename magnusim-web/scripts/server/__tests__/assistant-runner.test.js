@@ -328,11 +328,15 @@ describe('the runner: escalate (raise-only risk per call)', () => {
 });
 
 describe('the runner: chain grants', () => {
+  // As the compute tool's cards do: a call that declares a chain names each step (labels).
+  const named = (job) => (job === 'solve.r-2' ? 'Run 1' : job);
   const computeTool = (runs, extra = {}) =>
     c3Tool('compute', 'compute', runs, {
       schema: CHAINED,
       chainKey: (input) => input.job,
-      describe: (input) => ({ line: input.job === 'solve.r-2' ? 'Run 1' : input.job }),
+      describe: (input) => ({ line: named(input.job) }),
+      escalate: async (input) =>
+        input.chain.length ? { risk: 'compute', note: 'Covers these steps, each once.', detail: [], labels: Object.fromEntries(input.chain.map((j) => [j, named(j)])) } : null,
       ...extra,
     });
 
@@ -360,9 +364,9 @@ describe('the runner: chain grants', () => {
     assert.equal(runs.length, 4);
   });
 
-  it("the covered call's note names the job as the card did (escalate's labels), not the call", async () => {
+  it("the covered call's note names the job as the card did (escalate's labels); a step the card did not name is not covered", async () => {
     const runs = [];
-    const { runner } = c3Runner('allow');
+    const { runner, asked } = c3Runner('allow');
     const def = computeTool(runs, {
       describe: (input) => ({ line: `compute ${input.job}` }),
       escalate: async (input) =>
@@ -371,15 +375,36 @@ describe('the runner: chain grants', () => {
     const turn = logTurn('t1');
     await c3Run(runner, def, { job: 'mesh.m-1', chain: ['solve.r-2', 'solve.r-3'] }, { turn });
     await c3Run(runner, def, { job: 'solve.r-2', chain: [] }, { turn });
-    // A job the card had no name for: the call's own line.
+    assert.equal(asked.length, 1);
+    // A job the card had no name for was never shown, so the Allow did not cover it: it asks.
     await c3Run(runner, def, { job: 'solve.r-3', chain: [] }, { turn });
-    assert.deepEqual(turn.notes, [`${COVERED_NOTE}Start "Run 1"`, `${COVERED_NOTE}compute solve.r-3`]);
+    assert.equal(asked.length, 2);
+    assert.deepEqual(turn.notes, [`${COVERED_NOTE}Start "Run 1"`]);
+  });
+
+  it('a card that names none of the chain covers none of it (seen live: a regenerate card that did not say it also started the run)', async () => {
+    const runs = [];
+    const { runner, asked, grants } = c3Runner('allow');
+    const def = computeTool(runs, { escalate: async () => ({ risk: 'destructive', note: 'Mesh 1 is generated; generating again replaces it.', detail: [] }) });
+    const turn = logTurn('t1');
+    await c3Run(runner, def, { job: 'mesh.m-1', chain: ['solve.r-2'] }, { turn });
+    assert.equal(grants.holds('t1', 'solve.r-2'), false);
+    await c3Run(runner, computeTool(runs), { job: 'solve.r-2', chain: [] }, { turn });
+    assert.equal(asked.length, 2, 'the run asks its own card');
+    assert.deepEqual(turn.notes, []);
   });
 
   it('never covered: a call that escalates to destructive, another turn, a declined card; the grant ends with its owner', async () => {
     const runs = [];
     const { runner, asked, grants } = c3Runner((req) => (req.risk === 'destructive' || asked.length < 2 ? 'allow' : 'allow'));
-    const again = computeTool(runs, { escalate: async (input) => (input.job === 'mesh.m-9' ? { risk: 'destructive', note: 'It replaces the mesh Run 1 used.', detail: [] } : null) });
+    const again = computeTool(runs, {
+      escalate: async (input) =>
+        input.job === 'mesh.m-9'
+          ? { risk: 'destructive', note: 'It replaces the mesh Run 1 used.', detail: [] }
+          : input.chain.length
+            ? { risk: 'compute', note: 'Covers these steps, each once.', detail: [], labels: Object.fromEntries(input.chain.map((j) => [j, j])) }
+            : null,
+    });
     const t1 = logTurn('t1');
     await c3Run(runner, again, { job: 'solve.r-2', chain: ['mesh.m-9', 'solve.r-3', 'solve.r-4'] }, { turn: t1 });
     assert.equal(asked.length, 1);

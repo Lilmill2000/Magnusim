@@ -429,6 +429,23 @@ describe('compute and jobs cards (escalate, gateText)', () => {
     assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to mesh and run?');
   });
 
+  it('a regenerate card with a chain names every step it covers (seen live: "generate again" quietly covered starting the run)', async () => {
+    const t = tools();
+    S.mesh.generated = true;
+    const i = input({ action: 'mesh_generate', mesh_id: 'm1', chain: ['solve.r1'] });
+    const a = await t.compute.escalate(i, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.match(a.note, /generating again replaces it\. Covers these steps, each once: 1\. Generate "Mesh 1" again\. 2\. Start "Run 1"\./);
+    assert.equal(a.detail[0].value, 'Generate "Mesh 1" again, then Start "Run 1"');
+    assert.deepEqual(a.labels, { 'solve.r1': 'Start "Run 1"' });
+    assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to generate "Mesh 1" again, and the steps after it?');
+    // A run started first, with a step after it: that step is on its card too.
+    S.mesh.generated = true;
+    const r = await t.compute.escalate(input({ action: 'run_start', chain: ['mesh.m1'] }), ac());
+    assert.match(r.note, /Covers these steps, each once: 1\. Start "Run 1"\. 2\. Generate "Mesh 1"\./);
+    assert.deepEqual(r.labels, { 'mesh.m1': 'Generate "Mesh 1"' });
+  });
+
   it('run_start: Run, Mesh, Cores, Queue; continuing a converged run is destructive', async () => {
     const t = tools();
     const a = await t.compute.escalate(input({ action: 'run_start' }), ac());
