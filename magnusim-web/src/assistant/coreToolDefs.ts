@@ -54,7 +54,7 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     name: 'view',
     title: 'Picture or move the view',
     description:
-      'A picture of what this window\'s viewer shows (picture), or moves the view: fit, normal_to or orbit about a face, hide/show faces or bodies, show_all, edges or legend on/off. Unused: target_ids [], aspect "view", size "small", with_legend true, on false, save false. Waits while the person drags or uses the Filters panel.',
+      'A picture of what this window shows (picture: its viewer; on Home a drawing of the window), or moves the view: fit, normal_to or orbit about a face, hide/show faces or bodies, show_all, edges or legend on/off. Unused: target_ids [], aspect "view", size "small", with_legend true, on false, save false. Waits while the person drags or uses the Filters panel.',
     inputSchema: CORE_VIEW_SCHEMA as unknown as Record<string, unknown>,
     risk: 'read',
     timeoutS: 60,

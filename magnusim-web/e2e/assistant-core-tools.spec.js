@@ -295,6 +295,53 @@ test("core__show opens a run's results; a picture saved goes to its Screenshots;
   expect(await camera(page), 'the camera did not move under the person').toEqual(cam);
 });
 
+test("on Home core__view's picture is a drawing of the window the person sees (the project cards), shown in the dock step; a move is not_ready", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const tabOf = trackTab(page);
+  await page.goto(api('/#/'));
+  await appReady(page);
+  await expect.poll(async () => (await coreOf(request, tabOf()))?.place, { timeout: 30_000, message: "Home's core page" }).toBe('home');
+  // The cards the person sees, with Wing's preview drawn.
+  const card = page.locator(`.home-card[data-project-id="${wing}"]`);
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => card.locator('.home-thumb-img').evaluate((img) => img.complete && img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  const pictured = [];
+  fake.reply(
+    view('picture', { aspect: '16:9', size: 'medium' }),
+    (body) => {
+      pictured.push(...resultsIn(body));
+      return view('fit');
+    },
+    (body) => {
+      pictured.push(...resultsIn(body));
+      return { text: 'That is Home.' };
+    },
+  );
+  await dockSend(page, 'What do I see?');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 60_000 });
+  expect(pictured.map((r) => r.ok)).toEqual([true, false]);
+  expect(pictured[0].data).toMatchObject({ picture: { width: 1024, height: 576, aspect: '16:9' }, shown: { place: 'home' } });
+  expect(pictured[0].data.drawn).toMatch(/drawing of the Home window.*not a screenshot/);
+  expect(pictured[0].images).toHaveLength(1);
+  expect(pictured[1].error.code).toBe('not_ready');
+  // The step shows the picture: the window drawn, not a blank page (its cards and their text in many colours).
+  const img = dockTurn(page).locator('[data-dock-step]').first().locator('.dock-step-pictures img').first();
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((el) => el.naturalWidth)).toBe(1024);
+  const colours = await img.evaluate((el) => {
+    const c = document.createElement('canvas');
+    c.width = el.naturalWidth;
+    c.height = el.naturalHeight;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(el, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    const seen = new Set();
+    for (let i = 0; i < d.length; i += 4 * 37) seen.add((d[i] >> 3) * 1024 + (d[i + 1] >> 3) * 32 + (d[i + 2] >> 3));
+    return seen.size;
+  });
+  expect(colours, 'the picture shows the window, not one flat colour').toBeGreaterThan(12);
+});
+
 test('core__show switches the study on screen; core__view hides a face in the viewport and its picture shows in the dock step', async ({ page, request }) => {
   test.setTimeout(180_000);
   await openWing(page, request);

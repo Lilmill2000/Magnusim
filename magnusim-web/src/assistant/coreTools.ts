@@ -12,7 +12,8 @@
  * - core__view takes a picture of the viewer (picture), or moves the view: fit, normal_to a face,
  *   orbit about a face, hide and show faces or bodies, show_all, edges and the legend on or off.
  *   Every action but picture answers a small picture too, so the model sees what it did. Home has
- *   no viewer: a Home picture is `deferred` (no app-chrome capture yet), the rest `not_ready`.
+ *   no viewer: its picture is a drawing of the window as laid out (domPicture.ts: the cards, their
+ *   titles and previews, as the person sees them); the rest answer `not_ready`.
  * - The person first (§5.3): while they drag in the viewer (or did within 1.5 s), use the Filters
  *   panel, frame a capture, switch studies or answer an app dialog, every action but picture, and
  *   core__show, waits up to 10 s ("Waiting for you to finish with the view", waiting) and then
@@ -27,6 +28,7 @@ import type { AssistantCallOutcome, AssistantInvoke } from '../workspace/bridge'
 import { confirmLeaveWorkspace, lastLeaveLinkJob, leaveNeedsWork, leaveWorkspaceTo } from '../workspace/leaveGuard';
 import { workspaceHash } from '../workspace/route';
 import { CORE_GUIDE, CORE_TOOLS, SHOW_TARGETS, VIEW_ACTIONS } from './coreToolDefs';
+import { drawPagePicture } from './domPicture';
 
 /** The workbench's own functions the core tools use (runtime.js window.__CFD_ASSISTANT_CORE__). */
 export interface AssistantCoreApi {
@@ -104,6 +106,8 @@ export interface CoreRuntime {
   subscribeWorkspaceTools(fn: () => void): () => void;
   now(): number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
+  /** A drawing of the window where it has no viewer (Home), as laid out (domPicture.ts). */
+  pagePicture(o: { aspect: string; width: number }): Promise<{ blob: Blob; width: number; height: number; type: string } | null>;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -155,6 +159,7 @@ export function pageRuntime(): CoreRuntime {
     subscribeWorkspaceTools,
     now: () => Date.now(),
     sleep,
+    pagePicture: (o) => drawPagePicture(document.body, o),
   };
 }
 
@@ -467,6 +472,30 @@ async function picture(api: AssistantCoreApi, o: { aspect: string; size: string;
   return api.captureViewImage({ aspect: o.aspect || 'view', width: PICTURE_WIDTH[o.size] ?? PICTURE_WIDTH.small, legend: o.legend });
 }
 
+/** What a Home picture says it is: the model should not read it as a screenshot. */
+export const HOME_PICTURE_NOTE = 'A drawing of the Home window as laid out (its boxes, text and project previews), not a screenshot.';
+
+/** Home has no viewer: its picture is a drawing of the window, as the person sees it. */
+async function homePicture(rt: CoreRuntime, o: { aspect: string; size: string; save: boolean }): Promise<Outcome> {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  const pic = await rt.pagePicture({ aspect: o.aspect, width: PICTURE_WIDTH[o.size] ?? PICTURE_WIDTH.small }).catch(() => null);
+  if (!pic) return fail('failed', 'Home could not be drawn.');
+  const images = [{ mediaType: pic.type, data: await base64Of(pic.blob) }];
+  return {
+    ok: true,
+    result: {
+      data: {
+        picture: { width: pic.width, height: pic.height, aspect: o.aspect },
+        shown: { place: 'home' },
+        drawn: HOME_PICTURE_NOTE,
+        ...(o.save ? { saved: false, note: "Home keeps no screenshots: open a project and show a run's results or a mesh, then save." } : {}),
+      },
+      images,
+      summary: `Picture of Home ${pic.width}×${pic.height}`,
+    },
+  };
+}
+
 async function coreView(input: Record<string, unknown>, req: AssistantInvoke, rt: CoreRuntime): Promise<Outcome> {
   const action = str(input.action);
   if (!(VIEW_ACTIONS as readonly string[]).includes(action)) return fail('invalid_input', `action is one of ${VIEW_ACTIONS.join(', ')}.`);
@@ -477,7 +506,7 @@ async function coreView(input: Record<string, unknown>, req: AssistantInvoke, rt
   const route = rt.route();
   const api = rt.api();
   if (route.view !== 'workbench' || !route.projectId) {
-    if (action === 'picture') return fail('deferred', 'A picture of Home comes in a later version.', 'This comes in a later version; ask the person to do it.');
+    if (action === 'picture') return homePicture(rt, { aspect, size, save: input.save === true });
     return fail('not_ready', 'Home has no 3D view.', "Open a project first: core__show {target:'project', project_id:'<id>'}.");
   }
   if (route.workspace) return fail('not_ready', "A workspace covers the viewer; use the workspace's own view tool.");

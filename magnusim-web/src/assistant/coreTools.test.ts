@@ -16,6 +16,7 @@ import {
   CORE_SHOW_SCHEMA,
   CORE_TOOLS,
   CORE_VIEW_SCHEMA,
+  HOME_PICTURE_NOTE,
   VIEW_WAIT_LABEL,
   VIEW_WAIT_MS,
   runCoreTool,
@@ -108,6 +109,7 @@ function fakeRuntime(o: Partial<CoreRuntime> = {}) {
     sleep: async (ms) => {
       now += ms;
     },
+    pagePicture: vi.fn(async (p: { aspect: string; width: number }) => ({ blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' }), width: p.width, height: Math.round(p.width * 0.5625), type: 'image/png' })),
     ...o,
   };
   return { rt, api, calls, state, advance: (ms: number) => (now += ms) };
@@ -300,11 +302,23 @@ describe('core__show', () => {
 });
 
 describe('core__view', () => {
-  it('Home has no viewer: a picture is deferred, a move not_ready', async () => {
+  it('Home has no viewer: a picture is a drawing of the window (its size asked, said to be a drawing, never saved); a move is not_ready', async () => {
     const f = fakeRuntime();
     f.state.route = { view: 'home', projectId: null, workspace: null };
-    expect(await runCoreTool(view('picture').r, f.rt)).toMatchObject({ ok: false, code: 'deferred', hint: 'This comes in a later version; ask the person to do it.' });
+    const out = await runCoreTool(view('picture', { aspect: '16:9', size: 'medium', save: true }).r, f.rt);
+    expect(f.rt.pagePicture).toHaveBeenCalledWith({ aspect: '16:9', width: 1024 });
+    expect(out).toMatchObject({
+      ok: true,
+      result: {
+        data: { picture: { width: 1024, height: 576, aspect: '16:9' }, shown: { place: 'home' }, drawn: HOME_PICTURE_NOTE, saved: false },
+        images: [{ mediaType: 'image/png', data: 'iVBORw==' }],
+      },
+    });
+    expect(HOME_PICTURE_NOTE).toMatch(/not a screenshot/);
     expect(await runCoreTool(view('fit').r, f.rt)).toMatchObject({ ok: false, code: 'not_ready' });
+    // A window that can't be drawn says so.
+    (f.rt.pagePicture as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    expect(await runCoreTool(view('picture').r, f.rt)).toMatchObject({ ok: false, code: 'failed', message: 'Home could not be drawn.' });
   });
 
   it('a picture answers the image (base64) and its size; save puts it in the Screenshots of what is shown', async () => {
