@@ -220,7 +220,7 @@ test("turned on in Settings: the config to paste shows (key magnusim-apps, --inf
   await app.client.listTools();
   const row = block.locator('[data-assistant-mcp-connection]');
   await expect(row).toHaveText(new RegExp(`^${APP_NAME} · since \\d\\d:\\d\\d · 0 calls$`), { timeout: 20_000 });
-  await app.client.callTool({ name: 'app_status', arguments: {} });
+  await app.client.callTool({ name: 'app_status', arguments: { with_projects: false } });
   await expect(row).toHaveText(new RegExp(`^${APP_NAME} · since \\d\\d:\\d\\d · 1 call$`), { timeout: 20_000 });
   expect(await page.content()).not.toContain(token);
   await app.close();

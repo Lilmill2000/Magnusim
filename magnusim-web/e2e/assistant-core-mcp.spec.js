@@ -83,7 +83,7 @@ test('no Magnusim window: the Home subset of 12; a read with no project data run
   await expect.poll(async () => (await windows(request)).length, { timeout: 15_000, message: 'no app window' }).toBe(0);
   const app = await connectApp(request);
   expect(await listed(app)).toEqual(HOME_SUBSET);
-  const status = await app.client.callTool({ name: 'app_status', arguments: {} });
+  const status = await app.client.callTool({ name: 'app_status', arguments: { with_projects: false } });
   expect(status.isError, JSON.stringify(status)).toBeFalsy();
   expect(resultJson(status).ok).toBe(true);
   const r = await app.client.callTool(summary(wing));
