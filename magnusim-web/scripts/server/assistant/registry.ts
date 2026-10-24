@@ -713,8 +713,16 @@ export class Registry implements ToolRegistry {
         const up = registry.coreTabs.get(source.tab)?.reg.escalate?.(localName, input) ?? null;
         return up ? Object.assign({ risk: up.risk, note: up.note, detail: [] }, { title: up.title, copy: up.copy }) : null;
       },
-      gateText(_input, a) {
-        const own = (a ?? {}) as { title?: string; copy?: string };
+      gateText(input, a) {
+        // The runner's assessment keeps only the risk, note and rows: the card's own words are the page's rule again.
+        let own = (a ?? {}) as { title?: string; copy?: string };
+        if (!own.title || !own.copy) {
+          try {
+            own = registry.coreTabs.get(source.tab)?.reg.escalate?.(localName, input) ?? {};
+          } catch {
+            own = {};
+          }
+        }
         return own.title && own.copy ? { title: own.title, copy: own.copy } : { title: `Allow the Assistant to ${localName === 'show' ? 'move this window' : 'use the view'}?`, copy: a?.note ?? '' };
       },
     };

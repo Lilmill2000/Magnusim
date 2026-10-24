@@ -309,8 +309,13 @@ function isWorkspaceEdit(def: ToolDef | undefined, tab: string | null): boolean 
 /** A review round was due, but the turn had reached a limit (its tool calls, minutes or tokens). */
 export const REVIEW_NO_ROOM_NOTE = 'No review round: this turn has reached its limits.';
 
-/** The review a turn's workspace asks for: only while its link is connected. */
-function reviewAsk(ws: { connected: boolean; review?: WorkspaceReview | null } | null): WorkspaceReview | null {
+/**
+ * The review a turn's workspace asks for: only while its link is connected, and while the window
+ * still shows it (a turn that left it with core__show, its Back, has no rounds of its read tools:
+ * the window's core page says where it is before the workspace's own link goes).
+ */
+function reviewAsk(ws: { connected: boolean; review?: WorkspaceReview | null } | null, core: { place: CorePlace } | null = null): WorkspaceReview | null {
+  if (core && core.place !== 'workspace') return null;
   return ws && ws.connected && ws.review ? ws.review : null;
 }
 
@@ -801,7 +806,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       if (finalStep) return t.end('capped', 'steps', capText('steps', caps));
       // The turn's workspace asked for review and its edits went through since the last round:
       // the next round (within the turn's usual caps, checked at the next step).
-      const ask = editedSinceReview ? reviewAsk(workspaceNow()) : null;
+      const ask = editedSinceReview ? reviewAsk(workspaceNow(), t.tab ? (d.registry.coreOf?.(t.tab) ?? null) : null) : null;
       if (ask && reviewRound < (reviewOf || ask.rounds)) {
         if (stoppedNow(t)) return;
         // A turn already at its limits ends with the answer it has: a round could only be cut short.
