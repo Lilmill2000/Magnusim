@@ -304,7 +304,18 @@ test("on Home core__view's picture is a drawing of the window the person sees (t
   // The cards the person sees, with Wing's preview drawn.
   const card = page.locator(`.home-card[data-project-id="${wing}"]`);
   await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect.poll(() => card.locator('.home-thumb-img').evaluate((img) => img.complete && img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  // Where no picture can be made (no OpenGL for the renderer: Linux CI, or
+  // MAGNUSIM_TEST_THUMB_FAIL), the thumbnail answers "render failed" and the card shows its
+  // initials; the drawing is checked either way.
+  const thumbState = async () => {
+    const r = await request.get(api(`/api/geometry/thumb?project_id=${encodeURIComponent(wing)}`));
+    if (r.status() === 200) return 'made';
+    return r.status() === 500 && /thumb render failed/.test(await r.text()) ? 'unavailable' : 'pending';
+  };
+  await expect.poll(thumbState, { timeout: 120_000 }).not.toBe('pending');
+  if ((await thumbState()) === 'made') {
+    await expect.poll(() => card.locator('.home-thumb-img').evaluate((img) => img.complete && img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  }
   const pictured = [];
   fake.reply(
     view('picture', { aspect: '16:9', size: 'medium' }),
