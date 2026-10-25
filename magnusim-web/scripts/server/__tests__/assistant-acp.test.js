@@ -153,6 +153,11 @@ describe('rpc.ts: newline JSON-RPC over the agent pipes', LIMIT, () => {
     assert.equal(ec.code, -32603);
     assert.equal(ec.authRequired, true, 'a message that mentions auth counts');
     assert.equal(new rpc.RpcError(-32603, 'Internal error').authRequired, false);
+    // A sign-in problem the agent says passes is not a sign-out (seen live with Claude Code).
+    const passing =
+      'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again';
+    assert.equal(new rpc.RpcError(-32000, passing).authRequired, false);
+    assert.equal(new rpc.RpcError(-32603, passing).authRequired, false);
     assert.equal(peer.stats.unmatched, 1);
     assert.equal(peer.pendingCount, 0);
   });

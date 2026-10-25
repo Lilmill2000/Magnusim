@@ -53,6 +53,14 @@ export const REQUEST_TIMEOUTS_MS: Readonly<Record<string, number>> = Object.free
   'session/set_model': 15_000,
 });
 
+/**
+ * An agent's word that a sign-in problem passes on its own ("This is usually transient; retry
+ * in a minute"): not a sign-out. Seen live: Claude Code's "Failed to refresh OAuth token:
+ * another Claude Code process is refreshing it" (another window of it refreshing the shared
+ * login) marked it signed out until a Test.
+ */
+const PASSING = /\btransient\b|\bretry\b|\btry again\b/i;
+
 export class RpcError extends Error {
   readonly code: number;
   readonly data: unknown;
@@ -62,9 +70,9 @@ export class RpcError extends Error {
     this.code = code;
     this.data = data;
   }
-  /** The agent wants a sign-in (ACP's -32000, or a message that mentions auth). */
+  /** The agent wants a sign-in (ACP's -32000, or a message that mentions auth), unless it says the problem passes. */
   get authRequired(): boolean {
-    return this.code === AUTH_REQUIRED || /auth/i.test(this.message);
+    return (this.code === AUTH_REQUIRED || /auth/i.test(this.message)) && !PASSING.test(this.message);
   }
 }
 
