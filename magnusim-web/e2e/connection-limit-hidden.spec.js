@@ -150,11 +150,12 @@ test.describe('tabs in the background and the browser connection limit', () => {
 
     // The user goes to another tab: after a few seconds the server holds nothing for it.
     await hideTab(back);
-    const hiddenAt = Date.now();
+    // The monotonic clock: the wall clock can step back under load (seen on the Linux mirror: 2.1 s for a 2.5 s grace).
+    const hiddenAt = performance.now();
     await expect
       .poll(() => serverStream(request, host, backTab), { timeout: 15_000, message: 'the hidden tab lets its stream go' })
       .toBeNull();
-    const after = Date.now() - hiddenAt;
+    const after = performance.now() - hiddenAt;
     expect(after, 'it was kept for the grace first').toBeGreaterThanOrEqual(2_500);
     await expect.poll(() => seen.openStreams(back), { timeout: 5_000, message: 'the browser holds no stream for it' }).toBe(0);
     await back.waitForTimeout(3_000);
