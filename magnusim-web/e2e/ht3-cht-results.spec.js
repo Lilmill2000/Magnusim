@@ -157,7 +157,8 @@ test('a two-region case solves and shows T across both regions, U in the fluid o
     await page.locator(`[data-w27-run-results="${rid}"] > .tree-row .tl`).first().click();
     await expect(page.locator('#parts-block')).toBeVisible({ timeout: 90_000 });
     await expect(page.locator('#legend .legend-title')).toHaveText('Temperature', { timeout: 90_000 });
-    await expect(page.locator('#legend .legend-units')).toHaveText('K');
+    // A temperature's legend shows the project's unit (API 1.8: °C in this metric project).
+    await expect(page.locator('#legend .legend-units')).toHaveText('°C');
     await expect(page.locator('#legend-note')).toBeHidden();
   };
   await openResults();
@@ -168,6 +169,12 @@ test('a two-region case solves and shows T across both regions, U in the fluid o
   // T over both regions: the air walls at 300 K, the solid's at 350 K.
   expect(w6.min).toBeLessThan(301);
   expect(w6.max).toBeGreaterThan(349);
+  // The data stays in K; the legend's ticks read in °C (300 K = 26.85 °C, 350 K = 76.85 °C).
+  const ticks = (await page.locator('#legend .legend-ticks span').allTextContents()).map(Number);
+  expect(ticks.length > 1 && ticks.every(Number.isFinite), JSON.stringify(ticks)).toBe(true);
+  expect(Math.min(...ticks)).toBeLessThan(w6.min - 273.15 + 1);
+  expect(Math.max(...ticks)).toBeGreaterThan(w6.max - 273.15 - 1);
+  expect(Math.max(...ticks)).toBeLessThan(200);
   expect((await regionsNow()).surface_regions).toEqual(['air', 'aluminium_6061']);
 
   // The Regions filter lists both regions.
