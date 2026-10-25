@@ -319,13 +319,20 @@ class AgentTurnRun implements AgentDispatch {
 
   ctx(): ToolCtx {
     const t = this.t;
+    // Where its tab is now: its next call follows it there (followTab), so the tools listed to the
+    // agent are already that place's. Seen live: right after core__show moved the window into a
+    // project, the list served from the turn's old place dropped core__show (the page's tools
+    // now named the new project) and Claude Code gave up on opening the part.
+    const here = t.tab ? tabHere(this.d.registry, t.tab) : null;
+    const moved = !!here && (here.projectId || null) !== (t.projectId ?? null);
+    const projectId = moved ? here.projectId || null : t.projectId;
     return {
       tab: t.tab,
-      projectId: t.projectId,
-      simulationId: t.simulationId,
+      projectId,
+      simulationId: moved ? here.studyId || null : t.simulationId,
       cloud: true,
       local: false,
-      place: placeOf(this.d.registry, t.tab, t.projectId),
+      place: placeOf(this.d.registry, t.tab, projectId),
       budgetTokens: null,
       // A coding agent's calls carry no message of the person's (the typed-path rule refuses a path).
       prompt: null,

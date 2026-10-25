@@ -250,7 +250,7 @@ async function world(o = {}) {
     dir: ROOT,
     pluginEpoch: () => '1',
     hostTools: o.hostTools ?? [],
-    projects: { p1: { ...PROJECT } },
+    projects: { p1: { ...PROJECT }, ...(o.projects ?? {}) },
     ...(o.adapters ? { adapters: o.adapters } : {}),
     settings: {
       provider: o.provider ?? 'agent:claude',
@@ -1182,6 +1182,45 @@ describe('privacy for agent:<id> (spec 4.14)', LIMIT, () => {
       assert.deepEqual(w.invoked.map((c) => c.tool), ['get_count'], 'the add never ran');
       const result = claude.events('mcp_result', lastPid(claude)).at(-1);
       assert.match(result.result.content[0].text, /"code":"privacy_denied"/);
+    } finally {
+      await w.close();
+    }
+  });
+
+  it("the tools listed to the agent follow its window at once: moved to another project, the window's own tools are listed before its next call (seen live: core__show left the list after a move, and Claude Code gave up)", async () => {
+    const EMPTY = { type: 'object', properties: {}, additionalProperties: false };
+    const core = (projectId, studyId) => ({
+      projectId,
+      studyId,
+      place: 'workbench',
+      tools: [
+        { name: 'show', title: 'Show a place in Magnusim', description: 'Moves this window.', inputSchema: EMPTY, risk: 'edit', timeoutS: 120 },
+        { name: 'view', title: 'Picture or move the view', description: 'A picture of the view.', inputSchema: EMPTY, risk: 'read', timeoutS: 60 },
+      ],
+      invoke: async () => ({ ok: true, data: {}, summary: 'shown' }),
+    });
+    let w;
+    // As core__show does: the window opens another project, and its page registers its tools there.
+    const move = H.hostTool('move_window', {
+      run: async () => {
+        w.m.registry.setCore('tab-1', 'c'.repeat(24), core('p2', ''));
+        return { ok: true, data: {}, summary: 'moved' };
+      },
+    });
+    w = await world({ hostTools: [move], tab: false, projects: { p2: { ...PROJECT, id: 'p2', title: 'Other' } } });
+    try {
+      w.m.registry.setCore('tab-1', 'c'.repeat(24), core('p1', 's1'));
+      const r = await w.turn({ text: 'Move.', provider: 'agent:claude', tab: 'tab-1' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ call: { tool: 'move_window', args: {} } }, { relist: true }, { say: 'done' });
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      const pid = lastPid(claude);
+      const first = claude.events('mcp_tools', pid).find((x) => !x.relisted);
+      assert.ok(first.tools.includes('core__show'), JSON.stringify(first.tools));
+      const relisted = claude.events('mcp_tools', pid).filter((x) => x.relisted === true).at(-1);
+      assert.ok(relisted, 'it listed again');
+      assert.ok(relisted.tools.includes('core__show'), `the window's own tools stay listed after the move: ${JSON.stringify(relisted.tools)}`);
     } finally {
       await w.close();
     }
