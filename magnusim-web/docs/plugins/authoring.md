@@ -241,7 +241,7 @@ assert heat.default_mesher == "snappy_hexdominant"
 
 ## Sample projects (1.8)
 
-A plugin may ship ready-made projects that show what it does. Home's **Open sample** lists the samples of every plugin that is on; a pick copies one into the projects folder as a new project (titled as no project there is: "Heat sink", then "Heat sink 2") and opens it. A sample holds a project's inputs: the geometry, its studies with their materials, BCs, mesh settings and monitors. It holds no mesh and no results, and no runs: each study of the copy gets a new draft run (a run's id names its WSL case, so two copies never share one).
+A plugin may ship ready-made projects that show what it does. The Assistant opens one when asked (Home has no **Open sample** button since v0.5.0); it copies one into the projects folder as a new project (titled as no project there is: "Heat sink", then "Heat sink 2") and opens it. A sample holds a project's inputs: the geometry, its studies with their materials, BCs, mesh settings and monitors. It holds no mesh and no results, and no runs: each study of the copy gets a new draft run (a run's id names its WSL case, so two copies never share one).
 
 ```toml
 [[samples]]
@@ -424,7 +424,7 @@ label = "Start a sketch"        # required, 1-40 characters
 hint = "Draw it here, then simulate it"   # optional, up to 120 characters
 icon = "M4 8l8-4 8 4"           # optional, one SVG path; the default is the kind's icon
 places = ["empty_project", "header", "new_project", "home"]   # optional; the default is all four
-home_label = "New sketch"       # optional, 1-40 characters: Home's button text (default: label)
+home_label = "New sketch"       # optional, 1-40 characters: not shown since v0.5.0 (Home has no start buttons)
 header_label = "Sketch"         # optional, 1-24 characters: the header button's text
 ```
 

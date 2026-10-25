@@ -160,14 +160,11 @@ async function openProject(page, pid, { reload = false } = {}) {
   await expect(emptyButtons(page)).toHaveCount(n.empty_project, { timeout: 30_000 });
 }
 
-// Home, loaded fresh (or reloaded), with its cards and drawn from the plugins that are on.
+// Home, loaded fresh (or reloaded), with its cards.
 async function goHome(page, reload = false) {
   if (reload) await page.reload();
   else await load(page, `${host.base}/#/`);
   await expect(page.locator('#home-grid [data-project-id]').first()).toBeVisible({ timeout: 60_000 });
-  const rows = (await serverAnswer(page, '/api/plugins')).plugins || [];
-  const n = sentCounts(rows.filter((r) => r.status === 'enabled').flatMap((r) => r.start_actions || []));
-  await expect(homeButtons(page)).toHaveCount(n.home, { timeout: 30_000 });
 }
 
 const texts = async (loc) => (await loc.allTextContents()).map((t) => t.trim());
@@ -184,7 +181,6 @@ async function expectPlace(loc, want, cap, what) {
 
 const headerButtons = (page) => page.locator('#ws-start-host [data-start-header] > button');
 const emptyButtons = (page) => page.locator('#wb-empty-start [data-start-empty]');
-const homeButtons = (page) => page.locator('#home-start-host [data-home-start]');
 const overlay = (page) => page.locator('#workspace-overlay');
 
 /** The project places (header, empty project) show exactly `actions`' share. */
@@ -196,15 +192,19 @@ async function expectProjectPlaces(page, actions, why) {
   await expect(page.locator('#btn-add-geometry')).toBeVisible();
 }
 
-/** Home's buttons and the New Project dialog's "Start from" show exactly `actions`' share. */
+/**
+ * Home has no start buttons; its New project dialog's "Start from" shows exactly `actions`'
+ * new_project share, then the home share it doesn't hold already.
+ */
 async function expectHomePlaces(page, actions, why) {
   const s = shown(actions);
-  await expectPlace(homeButtons(page), s.home.map((a) => a.home), CAPS.home, `Home ${why}`);
+  await expect(page.locator('[data-home-start]'), `Home ${why}`).toHaveCount(0);
+  const starts = [...s.new_project, ...s.home.filter((a) => !s.new_project.some((n) => n.id === a.id))];
   await page.locator('#home-new-project').click();
   await expect(page.locator('#modal-new-project')).toBeVisible();
-  if (s.new_project.length) {
+  if (starts.length) {
     await expect(page.locator('#np-start')).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', ...s.new_project.map((a) => a.label)]);
+    await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', ...starts.map((a) => a.label)]);
     await expect(page.locator('#np-start-import')).toBeChecked();
   } else {
     await expect(page.locator('#np-start')).toBeHidden();
@@ -236,7 +236,6 @@ test('the bundled plugins that ship on show their start actions in every place, 
   for (const pass of ['first load', 'after a reload']) {
     await goHome(page, pass !== 'first load');
     await expectHomePlaces(page, onActions, `on Home, ${pass}`);
-    for (const p of OFF) await expect(page.locator(`#home-start-host [data-home-start^="${p.key}:"]`)).toHaveCount(0);
     stage(t0, `Home places checked, ${pass}`);
   }
 });
@@ -262,11 +261,12 @@ test('each start action of a bundled plugin that ships on opens its workspace: f
     };
     let pid;
     const titles = [];
-    if (isShown(a, 'home')) {
-      // Home: New Project with this action chosen and the title filled in; one Create click.
+    if (isShown(a, 'home') || isShown(a, 'new_project')) {
+      // Home: New project, this start picked (its title filled in); one Create click.
       await goHome(page);
-      await page.locator(`#home-start-host [data-home-start="${a.id}"]`).click();
+      await page.locator('#home-new-project').click();
       await expect(page.locator('#modal-new-project')).toBeVisible();
+      await page.locator(`#np-start input[value="${a.id}"]`).check();
       await expect(page.locator(`#np-start input[value="${a.id}"]`)).toBeChecked();
       await expect(page.locator('#np-title')).toHaveValue(`Untitled ${a.kindTitle} 1`);
       await page.locator('#np-create').click();
@@ -347,7 +347,7 @@ test('a bundled plugin that ships off has no start actions only because it is of
 // once the reload had started, the helper waiting for "a tree answer" took it, and the page
 // it belonged to was gone before its body was read ("No resource with given identifier
 // found ... a response that was navigated away from"). Here such a read of the old page
-// (the tree's, or Home's plugin list, which a plugin change reads again) answers after the
+// (the tree's) answers after the
 // reload has asked for the new page and before that page commits, with an answer no page
 // should draw from; the places must still be counted from the reloaded page's own.
 const CUT_OFF = [
@@ -359,14 +359,8 @@ const CUT_OFF = [
     reload: (page, pid) => openProject(page, pid, { reload: true }),
     check: (page) => expectProjectPlaces(page, onActions, 'after a reload that cut off a tree read'),
   },
-  {
-    what: 'Home',
-    read: () => (u) => u.pathname === '/api/plugins',
-    sync: { plugins: true },
-    open: (page) => goHome(page),
-    reload: (page) => goHome(page, true),
-    check: (page) => expectHomePlaces(page, onActions, 'after a reload that cut off a plugin list read'),
-  },
+  // (Home had a case here for its plugin list read: since v0.5.0 Home draws no start buttons,
+  // and New project reads the list when it opens.)
 ];
 
 for (const c of CUT_OFF) {

@@ -254,7 +254,7 @@ export function questionShown(gate: string, title: string): void {
   if (questions.includes(gate)) return;
   questions = [...questions, gate];
   questionTitles.set(gate, title);
-  if (!dockSnapshot().open) openDock({ focus: false, remember: false });
+  if (!dockSnapshot().open) openDock({ focus: false });
   publish();
 }
 

@@ -112,15 +112,16 @@ test.describe('CAD ships on: its start action in every place', () => {
     expect(seen.errors, 'console errors').toEqual([]);
   });
 
-  test('cad:start-home Home "New design" opens New Project with "Untitled Part N" and "Design a part" chosen; one Create click opens the Part', { tag: '@serial' }, async ({ page, request }) => {
+  test(`cad:start-home Home's New project offers "Design a part"; picking it fills in "Untitled Part N", and one Create click opens the Part`, { tag: '@serial' }, async ({ page, request }) => {
     test.setTimeout(240_000);
     const seen = await watchPage(page);
     await shipsOn(request);
     await home(page);
-    const button = page.locator('#home-start-host [data-home-start="cad:part"]');
-    await expect(button).toHaveText('New design');
-    await button.click();
+    // Home has no start buttons: New project is where a design is started.
+    await expect(page.locator('[data-home-start]')).toHaveCount(0);
+    await page.locator('#home-new-project').click();
     await expect(page.locator('#modal-new-project')).toBeVisible();
+    await page.locator('#np-start input[value="cad:part"]').check();
     await expect(page.locator('#np-start input[value="cad:part"]')).toBeChecked();
     // CAD's choices, in order; other plugins that ship on may add theirs after (2D Wind Tunnel does).
     await expect(page.locator('#np-start .np-start-label')).toContainText(['Import geometry', 'Design a part']);

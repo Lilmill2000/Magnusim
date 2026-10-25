@@ -13,11 +13,7 @@
           <input type="search" id="home-search" placeholder="Search projects" autocomplete="off" />
         </div>
         <div class="home-top-actions">
-          <button type="button" class="home-btn" id="home-assistant" aria-controls="assistant-dock" aria-expanded="false">Assistant</button>
           <button type="button" class="home-btn" id="home-prefs">Settings</button>
-          <button type="button" class="home-btn" id="home-new-folder">New folder</button>
-          <span id="home-sample-host" class="home-sample-host"></span>
-          <span id="home-start-host" class="home-start-host"></span>
           <button type="button" class="home-btn-primary" id="home-new-project">New project</button>
         </div>
       </header>
@@ -102,7 +98,6 @@
               <div class="job-queue-empty" id="job-queue-empty">Nothing running or queued.</div>
             </div>
           </div>
-          <button type="button" class="home-btn" id="wb-assistant" aria-controls="assistant-dock" aria-expanded="false">Assistant</button>
           <button type="button" class="home-btn" id="wb-prefs">Settings</button>
         </div>
       </header>
@@ -1269,6 +1264,11 @@
       <div class="cfd-modal-backdrop" id="np-backdrop"></div>
       <div class="cfd-modal-card">
         <h2 id="np-heading">Create new project</h2>
+        <!-- What the project starts with (a design, a wind tunnel, geometry to import): chosen first. -->
+        <fieldset class="np-field np-start" id="np-start" hidden>
+          <legend>Start from</legend>
+          <div class="np-start-list" id="np-start-list"></div>
+        </fieldset>
         <div class="np-field">
           <label for="np-title">Title</label>
           <input type="text" id="np-title" value="Test 2" autocomplete="off" />
@@ -1303,10 +1303,6 @@
           <label for="np-folder-new">New folder name</label>
           <input type="text" id="np-folder-new" placeholder="Cyclone studies" autocomplete="off" />
         </div>
-        <fieldset class="np-field np-start" id="np-start" hidden>
-          <legend>Start from</legend>
-          <div class="np-start-list" id="np-start-list"></div>
-        </fieldset>
         <div class="np-actions">
           <button type="button" class="js-btn" id="np-cancel">Cancel</button>
           <button type="button" class="js-btn js-btn-kick" id="np-create">Create</button>

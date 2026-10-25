@@ -2,7 +2,7 @@
 
 A real-time 2D wind tunnel in its own workspace, solved on the GPU as you watch. Set the wind and the fluid, drop in airfoils, shapes or bodies you sketch, then drag and turn them: the flow answers as they move. Read the forces and the pressure round a body, pin probes in the flow, and sweep an airfoil through its angles for a polar.
 
-The plugin ships on (it can be turned off in **Settings → Plugins**). The header's **Wind tunnel** button, or **New wind tunnel** on the home page, opens a tunnel. Each tunnel is a study in its project and keeps its scene; the flow starts again when it opens.
+The plugin ships on (it can be turned off in **Settings → Plugins**). The header's **Wind tunnel** button, or **New project** on the home page with **Open a 2D wind tunnel** picked, opens a tunnel. Each tunnel is a study in its project and keeps its scene; the flow starts again when it opens.
 
 ## The tunnel
 

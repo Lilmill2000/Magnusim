@@ -1,7 +1,7 @@
-// Heat Transfer (HT6): the heat-sink sample (manifest [[samples]], host API 1.8), as a user
-// finds and opens it.
-// - Home's Open sample lists "Heat sink" (its hint names the plugin); a pick copies it as a
-//   new project and opens it: the study is conjugate heat transfer (Body2 aluminium, a
+// Heat Transfer (HT6): the heat-sink sample (manifest [[samples]], host API 1.8), copied as a
+// new project the way the app does it (POST /api/project/sample: the Assistant's "open the heat
+// sink sample"; Home has no Open sample button since v0.5.0) and opened.
+// - The copy opens: the study is conjugate heat transfer (Body2 aluminium, a
 //   10 W heat source), the BCs and the Hex-dominant mesh settings are there, Generate is
 //   offered, and a draft run waits. The copy names its own folder everywhere (no
 //   placeholder, no other project's path). After a reload, the same.
@@ -50,21 +50,17 @@ function pathStrings(value) {
   return [];
 }
 
-/** Home → Open sample → Heat sink: the new project's id (the page shows it). */
+/** The heat-sink sample copied as a new project (the app's sample route) and opened: its id. */
 async function openSample(page) {
   await page.goto('/#/');
-  const button = page.locator('#home-sample-host [data-home-samples="1"]');
-  await expect(button).toBeVisible({ timeout: 60_000 });
-  await expect(button).toHaveText('Open sample');
-  await button.click();
-  const item = page.locator('[data-home-samples-menu="1"] [data-home-sample="heat_transfer:heat-sink"]');
-  await expect(item.locator('.home-samples-title')).toHaveText('Heat sink');
-  await expect(item.locator('.home-samples-hint')).toHaveText(
-    'An aluminium heat sink with a 10 W source in an air channel: conjugate heat transfer, ready to mesh (Heat Transfer)',
-  );
-  await item.click();
-  await page.waitForURL(/#\/p\//, { timeout: 60_000 });
-  const pid = decodeURIComponent(new URL(page.url()).hash.replace(/^#\/p\//, '').split('/')[0]);
+  await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
+  const made = await page.evaluate(async () => {
+    const r = await fetch('/api/project/sample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plugin: 'heat_transfer', sample: 'heat-sink' }) });
+    return { status: r.status, body: await r.json() };
+  });
+  expect(made.status, JSON.stringify(made.body)).toBeLessThan(300);
+  const pid = String(made.body.id);
+  await page.goto(`/#/p/${encodeURIComponent(pid)}`);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 90_000 });
   return pid;
 }
@@ -119,7 +115,7 @@ async function checkSample(page, request, s) {
   return { meshes, runs, al };
 }
 
-test('Home opens the heat-sink sample as a new project: conjugate heat transfer, a 10 W source, BCs and a Hex-dominant mesh ready to generate; after a reload', async ({ page, request }) => {
+test('the heat-sink sample opens as a new project: conjugate heat transfer, a 10 W source, BCs and a Hex-dominant mesh ready to generate; after a reload', async ({ page, request }) => {
   test.setTimeout(300_000);
   const pid = await openSample(page);
   const s = await sampleStudy(page, request, pid);

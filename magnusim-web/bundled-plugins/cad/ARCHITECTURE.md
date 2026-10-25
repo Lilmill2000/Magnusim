@@ -1220,8 +1220,9 @@ with the host once for the page's life, and its chip goes in the dock.
 - Host API 1.4 start actions, CAD on by default (Daniel's D33, after gate:l3-cad;
   the core half is 60bb971): no `default_enabled = false`, and one
   `[[start_actions]]` for the Part kind: "Design a part" on the empty project and
-  in New Project's "Start from", "New design" on Home, and the header button
-  "CAD" (all four places). The header button takes the kind out of the
+  in New Project's "Start from", "New design" on Home (since v0.5.0 Home has no
+  start buttons: its New project offers it), and the header button "CAD" (all four
+  places). The header button takes the kind out of the
   Workspaces menu, and STUDIES shows once the project has a Part
   (`e2e/cad-start.spec.ts`; the app's `e2e/start-actions-bundled.spec.js` reads
   the manifest).

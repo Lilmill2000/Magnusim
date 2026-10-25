@@ -1,17 +1,13 @@
 /**
- * The ways into the dock outside it (chat dock spec 1.6, 1.7): the header buttons
- * `#home-assistant` and `#wb-assistant` (shell.html; a workspace borrows the workbench's),
+ * The ways into the dock outside it (chat dock spec 1.6, 1.7): the corner button (DockShell)
  * and Ctrl+/ (Cmd+/ on macOS) on this document. Inside a workspace frame keys never reach
  * this document: the SDK forwards Ctrl+/ through the bridge, which calls dockShortcut().
  *
- * installDockToggle() wires them and mirrors the dock's state onto the page: each button's
- * aria-expanded and data-assistant-badge, and body.assistant-dock-open / .assistant-dock-pill
- * (style.css: toasts keep clear of the panel and of the pill).
+ * installDockToggle() wires the key and mirrors the dock's state onto the page:
+ * body.assistant-dock-open / .assistant-corner-shown (style.css: toasts keep clear of the panel
+ * and of the corner button).
  */
-import { closeDock, dockSnapshot, focusDock, focusInDock, openDock, subscribeDock, toggleDock } from './dockState';
-
-/** The header buttons that open and close the dock. */
-export const TOGGLE_IDS = ['home-assistant', 'wb-assistant'] as const;
+import { closeDock, dockSnapshot, focusDock, focusInDock, openDock, subscribeDock } from './dockState';
 
 /** While one of these shows, Ctrl+/ does nothing (a dialog or Settings is in front). */
 export const DIALOG_IDS = ['modal-confirm', 'modal-prompt', 'modal-link-choice', 'setup-wizard'] as const;
@@ -55,34 +51,19 @@ function onKeyDown(e: KeyboardEvent): void {
 
 function sync(): void {
   const s = dockSnapshot();
-  for (const id of TOGGLE_IDS) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    el.setAttribute('aria-expanded', s.open ? 'true' : 'false');
-    if (s.badge) el.setAttribute('data-assistant-badge', s.badge);
-    else el.removeAttribute('data-assistant-badge');
-  }
-  document.body.classList.toggle('assistant-dock-open', s.size === 'open');
-  document.body.classList.toggle('assistant-dock-pill', s.size === 'pill');
+  // The corner button shows whenever the dock is closed: toasts keep clear of it too.
+  document.body.classList.toggle('assistant-dock-open', s.open);
+  document.body.classList.toggle('assistant-corner-shown', !s.open);
 }
 
-/** Wires the buttons and the key, and keeps the page in step with the dock; returns how to undo it. */
+/** Wires the key and keeps the page in step with the dock; returns how to undo it. */
 export function installDockToggle(): () => void {
-  const wired: Array<[HTMLElement, () => void]> = [];
-  for (const id of TOGGLE_IDS) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    const onClick = () => toggleDock(el);
-    el.addEventListener('click', onClick);
-    wired.push([el, onClick]);
-  }
   window.addEventListener('keydown', onKeyDown, true);
   sync();
   const off = subscribeDock(sync);
   return () => {
     off();
     window.removeEventListener('keydown', onKeyDown, true);
-    for (const [el, onClick] of wired) el.removeEventListener('click', onClick);
-    document.body.classList.remove('assistant-dock-open', 'assistant-dock-pill');
+    document.body.classList.remove('assistant-dock-open', 'assistant-corner-shown');
   };
 }

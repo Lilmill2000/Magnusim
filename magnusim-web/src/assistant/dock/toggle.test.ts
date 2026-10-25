@@ -12,10 +12,9 @@ vi.mock('./content', () => ({ useDockContent: () => null }));
 
 const $ = (sel: string) => document.querySelector(sel) as HTMLElement;
 
-/** The page around the dock: Home's and the workbench's buttons, a field, and the app's dialogs. */
+/** The page around the dock: a field and the app's dialogs (the corner button is the dock's own). */
 const PAGE = `
-  <div id="home"><button type="button" id="home-assistant" aria-controls="assistant-dock" aria-expanded="false">Assistant</button><input id="search" /></div>
-  <div id="app" hidden><button type="button" id="wb-assistant" aria-controls="assistant-dock" aria-expanded="false">Assistant</button></div>
+  <div id="home"><input id="search" /></div>
   <div id="modal-confirm" hidden></div>
   <div id="modal-prompt" hidden></div>
   <div id="modal-link-choice" hidden></div>
@@ -63,7 +62,7 @@ describe('isDockKey: Ctrl+/ (Cmd+/ on macOS)', () => {
   });
 });
 
-describe('the header buttons and Ctrl+/', () => {
+describe('the corner button and Ctrl+/', () => {
   async function mount() {
     const view = render(createElement(AssistantDock));
     await act(async () => undefined);
@@ -71,19 +70,24 @@ describe('the header buttons and Ctrl+/', () => {
   }
   const settingsButton = () => $('[data-dock-open-settings]');
 
-  it('a button toggles the dock and both say whether it is open', async () => {
+  it("the corner button is always there while the dock is closed and opens it; the page knows which shows (Daniel: no header button, a corner button that's always there)", async () => {
     await mount();
-    const home = $('#home-assistant');
-    expect(home).toHaveAttribute('aria-expanded', 'false');
-    act(() => home.click());
+    const corner = $('[data-assistant-pill]');
+    const open = $('[data-assistant-pill] .assistant-dock-pill-open');
+    expect(corner).not.toHaveAttribute('hidden');
+    expect(open).toHaveAccessibleName('Assistant');
+    expect(open).toHaveTextContent('Assistant');
+    expect(document.body).toHaveClass('assistant-corner-shown');
+    act(() => open.click());
     expect(dockSnapshot().open).toBe(true);
-    expect(home).toHaveAttribute('aria-expanded', 'true');
-    expect($('#wb-assistant')).toHaveAttribute('aria-expanded', 'true');
+    expect(corner).toHaveAttribute('hidden');
     expect(document.body).toHaveClass('assistant-dock-open');
-    act(() => home.click());
+    expect(document.body).not.toHaveClass('assistant-corner-shown');
+    act(() => $('[data-dock-close]').click());
     expect(dockSnapshot().open).toBe(false);
-    expect(home).toHaveAttribute('aria-expanded', 'false');
+    expect(corner).not.toHaveAttribute('hidden');
     expect(document.body).not.toHaveClass('assistant-dock-open');
+    expect(document.body).toHaveClass('assistant-corner-shown');
   });
 
   it('Ctrl+/: open and focus, focus again from elsewhere, close from inside and give the keyboard back', async () => {
@@ -142,37 +146,31 @@ describe('the header buttons and Ctrl+/', () => {
     expect(document.activeElement).toBe(frame);
   });
 
-  it('badges: a question, working, done; none when idle', async () => {
+  it("the corner button says what is going on: a question, working, done; 'Assistant' when idle", async () => {
     await mount();
-    const badges = () => [$('#home-assistant'), $('#wb-assistant')].map((b) => b.getAttribute('data-assistant-badge'));
-    expect(badges()).toEqual([null, null]);
+    const corner = $('[data-assistant-pill]');
+    const words = () => [corner.getAttribute('data-pill'), $('.assistant-dock-pill-text').textContent];
+    expect(words()).toEqual([null, 'Assistant']);
     act(() => setDockPill({ kind: 'question', text: 'Assistant asks: Reset?' }));
-    expect(badges()).toEqual(['question', 'question']);
-    // The pill shows: the toasts keep clear of it (style.css).
-    expect(document.body).toHaveClass('assistant-dock-pill');
-    act(() => $('#home-assistant').click());
-    expect(document.body).not.toHaveClass('assistant-dock-pill');
-    expect(document.body).toHaveClass('assistant-dock-open');
-    act(() => $('#home-assistant').click());
-    expect(document.body).toHaveClass('assistant-dock-pill');
+    expect(words()).toEqual(['question', 'Assistant asks: Reset?']);
     act(() => setDockPill({ kind: 'running', text: 'Assistant · Thinking…' }));
-    expect(badges()).toEqual(['working', 'working']);
+    expect(words()).toEqual(['running', 'Assistant · Thinking…']);
     act(() => setDockPill({ kind: 'done', text: 'Assistant: done' }));
-    expect(badges()).toEqual(['done', 'done']);
+    expect(words()).toEqual(['done', 'Assistant: done']);
     act(() => setDockPill(null));
-    expect(badges()).toEqual([null, null]);
-    expect(document.body).not.toHaveClass('assistant-dock-pill');
+    expect(words()).toEqual([null, 'Assistant']);
+    expect(corner).not.toHaveAttribute('hidden');
   });
 
-  it('unmounting unwires the buttons and the key', async () => {
+  it('unmounting unwires the key and the page classes', async () => {
     const view = await mount();
     view.unmount();
-    act(() => $('#home-assistant').click());
     ctrlSlash();
     expect(dockSnapshot().open).toBe(false);
+    expect(document.body).not.toHaveClass('assistant-corner-shown');
   });
 
-  it('installDockToggle copes with a page without the buttons', () => {
+  it('installDockToggle works on a page with nothing else in it', () => {
     document.body.innerHTML = '';
     const undo = installDockToggle();
     ctrlSlash({}, document.body);

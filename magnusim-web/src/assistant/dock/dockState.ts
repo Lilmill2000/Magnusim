@@ -4,15 +4,13 @@
  * question and sets the pill through openDock and setDockPill. One module store, read with
  * useSyncExternalStore; a publish replaces the snapshot.
  *
- * - `open`: the person opened it (a toggle button, Ctrl+/, the pill), or a question arrived.
+ * - `open`: the person opened it (the corner button, Ctrl+/), or a question arrived.
  * - `pill`: closed while something is worth seeing (setDockPill): a running request, a
  *   question, or an end not yet seen. A `done` pill goes after 120 s or when the dock opens.
- * - `closed`: nothing on screen; the header button is the way in.
+ * - `closed`: nothing going on; the corner button (DockShell) says "Assistant" and opens it.
  *
- * The pill also drives the toggle buttons' badge (toggle.ts), open or not.
- *
- * Open or closed is remembered for this viewer (localStorage DOCK_OPEN_KEY, read once, every
- * read and write in try/catch): a reload opens it again, without taking the keyboard.
+ * The app starts with the dock closed, whatever it was before (Daniel: it shouldn't pop up
+ * when the app starts).
  *
  * Focus: opening remembers where the keyboard was (the opener) and asks the shell to focus
  * the dock's entry (DockShell: a `[data-dock-autofocus]` element, else the composer, else
@@ -46,8 +44,6 @@ export interface DockSnapshot {
 
 /** How long a `done` pill stays when the dock isn't opened (2.9). */
 export const DONE_PILL_MS = 120_000;
-/** Where this viewer's open or closed is kept (6.1): 'open' or 'closed'. */
-export const DOCK_OPEN_KEY = 'mg.assistant.dock.open';
 
 const BADGE: Record<DockPillKind, DockBadge> = { running: 'working', question: 'question', done: 'done' };
 
@@ -58,38 +54,9 @@ function make(open: boolean, pill: DockPill | null, focusSeq: number): DockSnaps
 let snap: DockSnapshot = make(false, null, 0);
 let opener: HTMLElement | null = null;
 let doneTimer: ReturnType<typeof setTimeout> | null = null;
-let started = false;
+/** A close's way to give the keyboard back, not taken yet (takeReturnFocus). */
+let returnFocus: (() => boolean) | null = null;
 const listeners = new Set<() => void>();
-
-function storage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Keeps the person's choice; blocked or full storage changes nothing else. */
-function remember(open: boolean): void {
-  try {
-    storage()?.setItem(DOCK_OPEN_KEY, open ? 'open' : 'closed');
-  } catch {
-    /* the dock works without it */
-  }
-}
-
-/** The choice remembered for this viewer, read once. */
-function start(): void {
-  if (started) return;
-  started = true;
-  let kept: string | null = null;
-  try {
-    kept = storage()?.getItem(DOCK_OPEN_KEY) ?? null;
-  } catch {
-    kept = null;
-  }
-  if (kept === 'open' && !snap.open) snap = make(true, snap.pill, snap.focusSeq);
-}
 
 function publish(next: DockSnapshot): void {
   snap = next;
@@ -97,7 +64,6 @@ function publish(next: DockSnapshot): void {
 }
 
 export function dockSnapshot(): DockSnapshot {
-  start();
   return snap;
 }
 
@@ -132,20 +98,20 @@ function clearDoneTimer(): void {
 /** Where the keyboard is now, unless that is the dock itself or nowhere. */
 function rememberOpener(from?: HTMLElement | null): void {
   const el = from ?? (typeof document === 'undefined' ? null : (document.activeElement as HTMLElement | null));
-  if (!el || el === document.body || el.closest('#assistant-dock, [data-assistant-pill]')) return;
+  if (!el || el === document.body || el.closest('#assistant-dock')) return;
+  // The corner button that opened it gets the keyboard back (it shows again as the dock
+  // closes); the keyboard merely resting on it doesn't make it the opener.
+  if (!from && el.closest('[data-assistant-pill]')) return;
   opener = el;
 }
 
 /**
- * Opens the dock and gives it the keyboard. `from`: the control that opened it (a toggle
+ * Opens the dock and gives it the keyboard. `from`: the control that opened it (the corner
  * button), when the browser may not have focused it on click; else wherever the keyboard is.
- * `focus: false`: the keyboard stays (a question's card takes it itself). `remember: false`:
- * not the person's choice (a question opened it), so a reload doesn't open it again.
+ * `focus: false`: the keyboard stays (a question's card takes it itself).
  */
-export function openDock(opts: { from?: HTMLElement | null; focus?: boolean; remember?: boolean } = {}): void {
-  start();
+export function openDock(opts: { from?: HTMLElement | null; focus?: boolean } = {}): void {
   rememberOpener(opts.from);
-  if (opts.remember !== false) remember(true);
   // A done pill is seen once the dock opens.
   const pill = snap.pill && snap.pill.kind === 'done' ? null : snap.pill;
   if (!pill) clearDoneTimer();
@@ -154,7 +120,6 @@ export function openDock(opts: { from?: HTMLElement | null; focus?: boolean; rem
 
 /** The dock is open and the keyboard is elsewhere: it goes to the dock's entry. */
 export function focusDock(from?: HTMLElement | null): void {
-  start();
   if (!snap.open) {
     openDock({ from });
     return;
@@ -170,13 +135,9 @@ function canTakeFocus(el: HTMLElement | null): el is HTMLElement {
   return !(el as HTMLButtonElement).disabled;
 }
 
-/** The toggle button the person can see now (the workbench's, borrowed over a workspace too, or Home's). */
-function visibleToggle(): HTMLElement | null {
-  for (const id of ['wb-assistant', 'home-assistant']) {
-    const el = document.getElementById(id);
-    if (el && !el.closest('[hidden], [inert]')) return el;
-  }
-  return null;
+/** The corner button that opens the dock (shown again once it closes). */
+function cornerButton(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-assistant-pill] .assistant-dock-pill-open');
 }
 
 /**
@@ -185,30 +146,52 @@ function visibleToggle(): HTMLElement | null {
  * overlay, which gives it to the frame once the panel hides.
  */
 export function closeDock(): void {
-  start();
   if (!snap.open) return;
-  remember(false);
-  if (focusInDock()) {
-    const back = canTakeFocus(opener) ? opener : document.body.classList.contains('workspace-open') ? null : visibleToggle();
-    if (back) back.focus({ preventScroll: true });
-  }
+  const inDock = focusInDock();
+  const back = opener;
   opener = null;
   publish(make(false, snap.pill, snap.focusSeq));
+  if (!inDock) return;
+  // Back to the opener, else the corner button; over a workspace the keyboard is left to the
+  // overlay, which gives it to the frame. The corner button shows again once React renders
+  // this close, so a target still hidden is tried again on the next frame.
+  const give = (): boolean => {
+    const target = canTakeFocus(back) ? back : document.body.classList.contains('workspace-open') ? null : cornerButton();
+    if (!target || !canTakeFocus(target)) return false;
+    target.focus({ preventScroll: true });
+    return true;
+  };
+  if (give()) return;
+  // DockShell gives it as it renders the close (takeReturnFocus, before a workspace's overlay
+  // hands the keyboard to its frame); a frame later otherwise.
+  returnFocus = give;
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      if (returnFocus !== give) return;
+      returnFocus = null;
+      give();
+    });
+  }
 }
 
-/** A toggle button's click: open, or close when open. */
+/** The keyboard's way back after a close, once the page shows the corner button again (DockShell). */
+export function takeReturnFocus(): (() => boolean) | null {
+  const f = returnFocus;
+  returnFocus = null;
+  return f;
+}
+
+/** Open, or close when open. */
 export function toggleDock(from?: HTMLElement | null): void {
-  start();
   if (snap.open) closeDock();
   else openDock({ from });
 }
 
 /**
  * What the dock has worth seeing (null: nothing). Shown as the pill while the dock is
- * closed, and as the toggle buttons' badge. A `done` pill goes by itself after 120 s.
+ * closed. A `done` pill goes by itself after 120 s.
  */
 export function setDockPill(pill: DockPill | null): void {
-  start();
   clearDoneTimer();
   if (pill && pill.kind === 'done') {
     doneTimer = setTimeout(() => {
@@ -219,15 +202,10 @@ export function setDockPill(pill: DockPill | null): void {
   publish(make(snap.open, pill, snap.focusSeq));
 }
 
-/** Tests only: a fresh page with nothing remembered (closed, no pill, no opener). */
+/** Tests only: a fresh page (closed, no pill, no opener). */
 export function resetDockForTests(): void {
   clearDoneTimer();
   opener = null;
-  try {
-    storage()?.removeItem(DOCK_OPEN_KEY);
-  } catch {
-    /* nothing kept */
-  }
-  started = false;
+  returnFocus = null;
   publish(make(false, null, 0));
 }

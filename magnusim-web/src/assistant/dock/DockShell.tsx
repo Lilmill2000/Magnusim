@@ -19,7 +19,7 @@ import { openSetupWizard } from '../../wizard/controller';
 import { exitFrameFullscreen } from '../../workspace/leaveGuard';
 import { listAgentsOnce, refreshStatus, retryStatus, providerReady, useAssistantStatus, type StatusSnapshot } from '../status';
 import { ASSISTANT_SETTINGS, CLOSE_DOCK, DOCK_TITLE, OPEN_SETTINGS, REMOTE_TEXT, STATE_ERROR, STATE_LOADING, STATE_OFF, STOP, STOP_LABEL, TRY_AGAIN } from './copy';
-import { closeDock, openDock, useDock } from './dockState';
+import { closeDock, openDock, takeReturnFocus, useDock } from './dockState';
 import { dragHasFiles } from './pictures';
 
 /** The states the dock shows by itself, from the status alone. */
@@ -105,6 +105,11 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
   const panelRef = useRef<HTMLElement>(null);
   const shell = dockShellState(status);
   const state: DockState = shell ?? (content ? content.state : 'empty');
+
+  // A close with the keyboard in the dock gives it back now, as the corner button shows again.
+  useLayoutEffect(() => {
+    if (!dock.open) takeReturnFocus()?.();
+  }, [dock.open]);
 
   // Each opening reads the status again (and the coding agents, once, if never looked for)
   // and ends the frame's full screen.
@@ -195,11 +200,12 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
       </aside>
       {/* Outside the panel: announcements also reach the person while it is closed (live.ts). */}
       <div id="assistant-dock-live" className="assistant-dock-live" role="status" aria-live="polite" />
+      {/* The corner button: always there while the dock is closed ("Assistant", or what is going on). */}
       <div
         className="assistant-dock-pill"
         data-assistant-pill="1"
         data-pill={pill ? pill.kind : undefined}
-        hidden={dock.size !== 'pill'}
+        hidden={dock.open}
         onDragOver={keepFileDrop}
         onDrop={keepFileDrop}
       >
@@ -207,10 +213,21 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
           type="button"
           className="assistant-dock-pill-open"
           aria-label={pill ? pill.text : DOCK_TITLE}
+          aria-controls="assistant-dock"
+          aria-expanded="false"
           onClick={(e) => openDock({ from: e.currentTarget })}
         >
+          <svg className="assistant-dock-pill-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <path
+              d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 3.5V16.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinejoin="round"
+            />
+          </svg>
           <span className="assistant-dock-pill-dot" aria-hidden="true" />
-          <span className="assistant-dock-pill-text">{pill ? pill.text : ''}</span>
+          <span className="assistant-dock-pill-text">{pill ? pill.text : DOCK_TITLE}</span>
         </button>
         {pill && pill.onStop ? (
           <button type="button" className="assistant-dock-pill-stop" aria-label={STOP_LABEL} data-pill-stop="1" onClick={pill.onStop}>

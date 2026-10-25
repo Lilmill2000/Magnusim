@@ -4,7 +4,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationRow, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
-import { closeDock, DOCK_OPEN_KEY, dockSnapshot as dock, DONE_PILL_MS, openDock, resetDockForTests } from './dockState';
+import { closeDock, dockSnapshot as dock, DONE_PILL_MS, openDock, resetDockForTests } from './dockState';
 import { resetFollowForTests } from './follow';
 import { STILL_STOPPING_MS } from './turnView';
 import {
@@ -205,7 +205,6 @@ describe('open, pill and closed', () => {
     questionShown('g1', 'Reset the counter to zero before the next step?');
     expect(dock()).toMatchObject({ size: 'open', focusSeq: 0, pill: { kind: 'question', text: 'Assistant asks: Reset the counter to zero before the nex…' }, badge: 'question' });
     expect(dockStoreSnapshot().questions).toEqual(['g1']);
-    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBeNull();
     questionShown('g1', 'Reset the counter to zero before the next step?');
     expect(dockStoreSnapshot().questions).toEqual(['g1']);
     // Closed while it waits: the pill asks it.

@@ -304,7 +304,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
   useEffect(() => {
     document.body.classList.add('workspace-open');
     window.dispatchEvent(new CustomEvent('cfd:workspace-open'));
-    const restore = slotRef.current ? borrowHeaderControls(['queue-menu', 'wb-assistant', 'wb-prefs'], slotRef.current) : () => undefined;
+    const restore = slotRef.current ? borrowHeaderControls(['queue-menu', 'wb-prefs'], slotRef.current) : () => undefined;
     const uncover = coverWorkbench();
     return () => {
       try {

@@ -68,8 +68,10 @@ describe('the dock frame', () => {
     expect(live).toHaveAttribute('role', 'status');
     expect(live).toHaveAttribute('aria-live', 'polite');
     expect(panel().contains(live)).toBe(false);
-    expect($('[data-assistant-pill]')).toHaveAttribute('hidden');
+    // Closed: the corner button shows instead.
+    expect($('[data-assistant-pill]')).not.toHaveAttribute('hidden');
     act(() => openDock());
+    expect($('[data-assistant-pill]')).toHaveAttribute('hidden');
     expect(panel()).not.toHaveAttribute('hidden');
     expect(panel()).toHaveAttribute('data-dock-size', 'open');
     await waitFor(() => expect(panel()).toHaveAttribute('data-assistant-dock-state', 'off'));
@@ -273,10 +275,12 @@ describe('the dock frame', () => {
 });
 
 describe('the pill', () => {
-  it('shows only while closed with something worth seeing: its words open the dock, its Stop stops', () => {
+  it("shows whenever the dock is closed: 'Assistant' with nothing going on, else what is (its words open the dock, its Stop stops)", () => {
     render(<DockShell />);
     const pill = $('[data-assistant-pill]');
-    expect(pill).toHaveAttribute('hidden');
+    expect(pill).not.toHaveAttribute('hidden');
+    expect(pill).not.toHaveAttribute('data-pill');
+    expect(screen.getByRole('button', { name: 'Assistant' })).toHaveTextContent('Assistant');
     const stop = vi.fn();
     act(() => setDockPill({ kind: 'running', text: 'Assistant · Thinking… · 2 of 120 steps', onStop: stop }));
     expect(pill).not.toHaveAttribute('hidden');

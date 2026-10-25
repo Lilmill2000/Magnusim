@@ -40,9 +40,8 @@ What is new in each version: `CHANGELOG.md`. How it is built: the
 A Part lives in a project, like a simulation study. Start one from any of these:
 
 - **Design a part**, beside "Add geometry", on a project with no geometry yet.
-- **Start from: Design a part** in the New Project dialog.
-- **New design** on Home: it makes a project ("Untitled Part N") and opens a
-  Part in one step.
+- **New project** on Home, then **Start from: Design a part**: the title fills in
+  ("Untitled Part N"), and Create makes the project and opens a Part in one step.
 - The **CAD** button in the project header: its menu lists the project's Parts
   and makes a new one.
 - Once a project has a Part, the tree's STUDIES section lists it, with

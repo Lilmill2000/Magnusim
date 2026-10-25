@@ -11,7 +11,7 @@ conditions (`requires_plugins = ["incompressible_flow>=1.1"]`) and imports only
 
 ## Getting started
 
-**The sample.** Home → **Open sample** → **Heat sink** copies a ready project into your
+**The sample.** Ask the Assistant to open the Heat Transfer heat sink sample: it copies a ready project into your
 projects: an aluminium heat sink (a base 40 × 40 mm and 5 mm thick with four fins 4 mm
 thick and 20 mm tall) with a 10 W heat source, on the floor of an air channel
 200 × 50 × 50 mm, air coming in at 0.5 m/s and 20 °C, gravity along −Y, laminar. Its

@@ -11,14 +11,14 @@ import { e2eTemp, startHost } from './support/host-server.mjs';
 //                 the place "toolbar", which this app does not know), so four header
 //                 actions over the two plugins: Gamma, loaded last, is past the cap.
 // Each place opens the study's workspace; Back returns, also after a reload; the
-// overflow kind stays in the Workspaces menu and STUDIES; the New Project dialog and
-// Home's button (one Create click, one project on a double click, none on Cancel or
-// Escape); a create the server refuses; the empty project's buttons during an import;
-// and nothing at all while the plugins are off, back after Enable without a reload.
-// Then the edges: Home's header and the dialog with the longest texts and most actions
-// the manifest allows, the dialog while the plugins are still being read, Home after a
-// failed read, a double click on a start button, and a start action finishing after the
-// user went elsewhere.
+// overflow kind stays in the Workspaces menu and STUDIES; the New Project dialog, Home's one
+// way to start (its home actions too; picking one fills in its title: one Create click, one
+// project on a double click, none on Cancel or Escape); a create the server refuses; the empty
+// project's buttons during an import; and nothing at all while the plugins are off, back after
+// Enable without a reload. Then the edges: Home's header (Settings and New project only), the
+// dialog with the most actions the manifest allows, the dialog while the plugins are still
+// being read and after a failed read, a double click on a start button, and a start action
+// finishing after the user went elsewhere.
 const PROJECT = NO_GEOMETRY_PROJECT;
 const DEMO = 'start-demo';
 const TWO = 'start-demo-2';
@@ -246,8 +246,8 @@ test('gate:l1-places New Project: Start from in create mode (one project, one st
   const start = page.locator('#np-start');
   await expect(start).toBeVisible();
   await expect(start.locator('legend')).toHaveText('Start from');
-  // Import geometry (the default), then every new_project action: Demo, Alpha, Beta (not Gamma).
-  await expect(start.locator('.np-start-label')).toHaveText(['Import geometry', 'Design a demo', 'Start an alpha', 'Start a beta']);
+  // Import geometry (the default), every new_project action (Demo, Alpha, Beta), then the home ones (Gamma).
+  await expect(start.locator('.np-start-label')).toHaveText(['Import geometry', 'Design a demo', 'Start an alpha', 'Start a beta', 'Start a gamma']);
   await expect(page.locator('#np-start-import')).toBeChecked();
   await expect(start).toContainText('Make a demo here, then simulate it');
   await page.locator('#modal-new-project .cfd-modal-card').screenshot({ path: test.info().outputPath('new-project.png') });
@@ -285,24 +285,27 @@ test('gate:l1-places New Project: Start from in create mode (one project, one st
   await expect(modal).toBeHidden();
 });
 
-test("gate:l1-places Home's button opens New Project with its action chosen: one Create click, one project on a double click, none on Cancel or Escape @plugins", async ({ page, request }) => {
+test("gate:l1-places New project from Home: picking a start fills in its title, one Create click, one project on a double click, none on Cancel or Escape @plugins", async ({ page, request }) => {
   test.setTimeout(240_000);
   page.setDefaultTimeout(30_000);
   await goHome(page);
-  const homeButtons = page.locator('#home-start-host [data-home-start]');
-  // home_label for Demo, else the label; at most three.
-  await expect(homeButtons).toHaveText(['New demo', 'Start an alpha', 'Start a gamma']);
+  // Home has no start buttons: New project is where a start is chosen.
+  await expect(page.locator('[data-home-start]')).toHaveCount(0);
+  await expect(page.locator('.home-top-actions > button')).toHaveText(['Settings', 'New project']);
   await page.locator('.home-top').screenshot({ path: test.info().outputPath('home-header.png') });
   const modal = page.locator('#modal-new-project');
   const title = page.locator('#np-title');
   const openFromHome = async () => {
-    await page.locator(`[data-home-start="${DEMO}:demo"]`).click();
+    await page.locator('#home-new-project').click();
     await expect(modal).toBeVisible();
+    await page.locator('#np-start label', { hasText: 'Design a demo' }).click();
   };
   await openFromHome();
   await expect(page.locator('#np-start input[value="start-demo:demo"]')).toBeChecked();
   await expect(title).toHaveValue('Untitled Demo 1');
-  await expect(title).toBeFocused();
+  // Selected, so typing replaces it.
+  await title.focus();
+  await page.keyboard.press('Control+a');
   expect(await title.evaluate((el) => [el.selectionStart, el.selectionEnd])).toEqual([0, 'Untitled Demo 1'.length]);
   await expect(page.locator('#np-folder')).toHaveValue('My Projects');
   // Cancel and Escape make nothing.
@@ -313,6 +316,8 @@ test("gate:l1-places Home's button opens New Project with its action chosen: one
   await expect(modal).toBeHidden();
   // Typing replaces the title filled in.
   await openFromHome();
+  await title.focus();
+  await page.keyboard.press('Control+a');
   await page.keyboard.type('Typed over');
   await expect(title).toHaveValue('Typed over');
   await page.locator('#np-cancel').click();
@@ -432,7 +437,6 @@ test('gate:l1-places with the plugins off nothing shows in the four places; afte
   await expect(page.locator('#wb-empty-start [data-start-empty]')).toHaveCount(0);
   await expect(page.locator('#btn-add-geometry')).toBeVisible();
   await goHome(page);
-  await expect(page.locator('#home-start-host [data-home-start]')).toHaveCount(0);
   await page.locator('#home-new-project').click();
   await expect(page.locator('#modal-new-project')).toBeVisible();
   await expect(page.locator('#np-start')).toBeHidden();
@@ -451,10 +455,9 @@ test('gate:l1-places with the plugins off nothing shows in the four places; afte
   }
   await page.locator('#wiz-next').click();
   await expect(wizard).toBeHidden();
-  await expect(page.locator('#home-start-host [data-home-start]')).toHaveText(['New demo', 'Start an alpha', 'Start a gamma']);
   await page.locator('#home-new-project').click();
   await expect(page.locator('#np-start')).toBeVisible();
-  await expect(page.locator('#np-start .np-start-label')).toHaveCount(4);
+  await expect(page.locator('#np-start .np-start-label')).toHaveCount(5);
   await page.locator('#np-cancel').click();
   await page.evaluate((pid) => window.__CFD_HOME__.open(pid, { reloadIfNeeded: false }), PROJECT);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
@@ -485,30 +488,22 @@ async function homeHeaderFits(page, width) {
   expect(mark.x + mark.width, why).toBeLessThanOrEqual(search.x);
   expect(search.x + search.width, why).toBeLessThanOrEqual(actions.x);
   expect(search.width, why).toBeGreaterThanOrEqual(140);
-  for (const sel of ['#home-new-project', '#home-new-folder', '#home-prefs']) {
+  for (const sel of ['#home-new-project', '#home-prefs']) {
     await expect(page.locator(sel), `${sel} ${why}`).toBeInViewport({ ratio: 1 });
   }
   const top = await page.locator('.home-top').evaluate((el) => [el.scrollWidth, el.clientWidth]);
   expect(top[0], why).toBeLessThanOrEqual(top[1]);
-  for (const b of await page.locator('#home-start-host [data-home-start]').all()) await expect(b).toBeInViewport({ ratio: 1 });
 }
 
-test("gate:l1-places Home's header fits the window with three start buttons, at 1024 and 1280, also with 40-character labels @plugins", async ({ page }) => {
+test("gate:l1-places Home's header is Settings and New project whatever the plugins offer, at 1024 and 1280; their starts (40-character labels too) are in New project @plugins", async ({ page }) => {
   test.setTimeout(240_000);
   page.setDefaultTimeout(30_000);
-  const homeButtons = page.locator('#home-start-host [data-home-start]');
-  // The fixtures' own labels at 1024 wide.
-  await page.setViewportSize({ width: 1024, height: 768 });
-  await goHome(page);
-  await expect(homeButtons).toHaveText(['New demo', 'Start an alpha', 'Start a gamma']);
-  await homeHeaderFits(page, 1024);
-  // The longest labels the manifest allows.
   const long = ['Start a new structural analysis study ok', 'Start a new aerodynamic wing design now!', 'Begin a brand new gamma ray bench setup'];
   expect(long.map((t) => t.length <= 40)).toEqual([true, true, true]);
   await patchPlugins(page, (rows) => {
     for (const row of rows) {
       for (const a of row.start_actions || []) {
-        if (a.study_kind === 'demo') a.home_label = long[0];
+        if (a.study_kind === 'demo') a.label = long[0];
         if (a.study_kind === 'alpha') a.label = long[1];
         if (a.study_kind === 'gamma') a.label = long[2];
       }
@@ -516,19 +511,14 @@ test("gate:l1-places Home's header fits the window with three start buttons, at 
   });
   for (const width of [1280, 1024]) {
     await page.setViewportSize({ width, height: 800 });
-    await page.reload();
-    await expect(page.locator('#home-grid [data-project-id]').first()).toBeVisible({ timeout: 60_000 });
-    await expect(homeButtons).toHaveCount(3);
-    // The whole text is the tooltip, also when the button is cut short.
-    const titles = await homeButtons.evaluateAll((bs) => bs.map((b) => b.getAttribute('title') || ''));
-    expect(titles.map((t, i) => t.startsWith(long[i])), titles.join(' | ')).toEqual([true, true, true]);
+    await goHome(page);
+    await expect(page.locator('.home-top-actions > button')).toHaveText(['Settings', 'New project']);
+    await expect(page.locator('[data-home-start], [data-home-samples]')).toHaveCount(0);
     await homeHeaderFits(page, width);
-    await page.locator('.home-top').screenshot({ path: test.info().outputPath(`home-header-long-${width}.png`) });
   }
-  // A cut button still opens the dialog with its action chosen.
-  await page.locator(`[data-home-start="${DEMO}:demo"]`).click();
-  await expect(page.locator('#modal-new-project')).toBeVisible();
-  await expect(page.locator('#np-start input[value="start-demo:demo"]')).toBeChecked();
+  await page.locator('#home-new-project').click();
+  await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', long[0], long[1], 'Start a beta', long[2]]);
+  await page.locator('#modal-new-project .cfd-modal-card').screenshot({ path: test.info().outputPath('new-project-long.png') });
   await page.locator('#np-cancel').click();
 });
 
@@ -546,7 +536,7 @@ test('gate:l1-places New Project with many start actions: the list scrolls, the 
   await goHome(page);
   await page.locator('#home-new-project').click();
   const labels = page.locator('#np-start .np-start-label');
-  await expect(labels).toHaveCount(12);
+  await expect(labels).toHaveCount(13);
   await expect(page.locator('#np-heading')).toBeInViewport({ ratio: 1 });
   await expect(page.locator('#np-title')).toBeInViewport({ ratio: 1 });
   await expect(page.locator('#np-create')).toBeInViewport({ ratio: 1 });
@@ -582,17 +572,16 @@ test('gate:l1-places New Project opens at once while the app is still reading th
     release();
     // The read itself can take seconds (a worker that just started loads the registry).
     await expect(page.locator('#np-start')).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', 'Design a demo', 'Start an alpha', 'Start a beta']);
+    await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', 'Design a demo', 'Start an alpha', 'Start a beta', 'Start a gamma']);
     await expect(page.locator('#np-start-import')).toBeChecked();
     await expect(page.locator('#np-title')).toHaveValue('Typed while reading');
     await page.locator('#np-cancel').click();
-    await expect(page.locator('#home-start-host [data-home-start]')).toHaveCount(3);
   } finally {
     release();
   }
 });
 
-test("gate:l1-places Home's start buttons come back on their own after the app could not read the plugins @plugins", async ({ page }) => {
+test("gate:l1-places New project's starts come back after the app could not read the plugins @plugins", async ({ page }) => {
   test.setTimeout(240_000);
   page.setDefaultTimeout(30_000);
   // The worker answers 503 for the first 3 s after Home asks, then normally.
@@ -606,9 +595,10 @@ test("gate:l1-places Home's start buttons come back on their own after the app c
     await route.continue();
   });
   await goHome(page);
-  // Nothing else asks again (no dialog, no Settings): the buttons come back by themselves.
-  await expect(page.locator('#home-start-host [data-home-start]')).toHaveText(['New demo', 'Start an alpha', 'Start a gamma'], { timeout: 20_000 });
-  expect(downUntil).toBeGreaterThan(0);
+  await expect.poll(() => downUntil > 0 && Date.now() > downUntil, { timeout: 20_000 }).toBe(true);
+  await page.locator('#home-new-project').click();
+  await expect(page.locator('#np-start .np-start-label')).toHaveText(['Import geometry', 'Design a demo', 'Start an alpha', 'Start a beta', 'Start a gamma'], { timeout: 20_000 });
+  await page.locator('#np-cancel').click();
 });
 
 test('gate:l1-places a double click on an empty-project start button makes one study; the other buttons wait for it @plugins', async ({ page, request }) => {

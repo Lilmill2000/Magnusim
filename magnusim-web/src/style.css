@@ -4569,6 +4569,8 @@ select.fp-select {
 .home-detail-foot[hidden] {
   display: none !important;
 }
+/* The Assistant's corner button (16 px up, 36 px tall) keeps the detail panel's foot (Delete) clear. */
+body.assistant-corner-shown .home-detail { padding-bottom: 60px; }
 
 .home-trash {
   width: 34px;
@@ -5429,14 +5431,14 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
 @media (max-width: 719px) {
   body.assistant-dock-open .app-toasts { bottom: calc(min(70vh, 100vh - 60px) + 16px + var(--ws-toast-reserve, 0px)); }
   body.assistant-dock-open .ws-toast-slot { bottom: calc(min(70vh, 100vh - 60px) + 16px); }
-  body.assistant-dock-pill:not(.workspace-open) .app-toasts { bottom: 52px; }
+  body.assistant-corner-shown:not(.workspace-open) .app-toasts { bottom: 52px; }
 }
 /* A wider window: toasts keep to the left of the open dock (16 + 400 + 16 px) or of the pill
    (up to 320 px), which matters below 868 px. */
 @media (min-width: 720px) {
   body.assistant-dock-open .app-toasts,
   body.assistant-dock-open .ws-toast-slot { max-width: min(420px, calc(100vw - 448px)); }
-  body.assistant-dock-pill .app-toasts { max-width: min(420px, calc(100vw - 368px)); }
+  body.assistant-corner-shown .app-toasts { max-width: min(420px, calc(100vw - 368px)); }
 }
 /* ---- The Assistant's dock (phase 4): bottom right, above toasts, under every dialog ---- */
 .assistant-dock[hidden], .assistant-dock-pill[hidden] { display: none !important; }
@@ -5490,6 +5492,9 @@ body.workspace-open .app-toasts { bottom: calc(136px + var(--ws-toast-reserve, 0
    and 72 px axis triad, .cad-vp-gizmo): the pill, and the open panel (not the narrow sheet or the
    short window's full height, which cover them while they are read), sit above them. */
 body.workspace-open .assistant-dock-pill { bottom: 104px; }
+/* The workbench's own view tools (Home, the axes key and the 72 px triad, #viewport-gizmo) take its
+   bottom-right 160 x 82 px: the corner button sits above them. */
+body.on-workbench:not(.workspace-open) .assistant-dock-pill { bottom: 96px; }
 @media (min-width: 720px) and (min-height: 520px) {
   body.workspace-open .assistant-dock { bottom: 104px; height: min(640px, calc(100vh - var(--mg-header-height) - 120px)); }
 }
@@ -5505,12 +5510,12 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 }
 /* A narrow window with a workspace: toasts (the app's and the page's) go above the lifted pill. */
 @media (max-width: 719.98px) {
-  body.workspace-open.assistant-dock-pill .app-toasts { bottom: calc(180px + var(--ws-toast-reserve, 0px)); }
-  body.workspace-open.assistant-dock-pill .ws-toast-slot { bottom: 180px; }
+  body.workspace-open.assistant-corner-shown .app-toasts { bottom: calc(180px + var(--ws-toast-reserve, 0px)); }
+  body.workspace-open.assistant-corner-shown .ws-toast-slot { bottom: 180px; }
 }
 /* With the pill lifted beside them, the page's toast keeps left of it as the app's do. */
 @media (min-width: 720px) and (max-width: 1091.98px) {
-  body.assistant-dock-pill .ws-toast-slot { max-width: min(420px, calc(100vw - 368px)); }
+  body.assistant-corner-shown .ws-toast-slot { max-width: min(420px, calc(100vw - 368px)); }
 }
 /* A narrow and short window: the open sheet takes the whole height, so toasts show over it. */
 @media (max-width: 719.98px) and (max-height: 519px) {
@@ -5596,24 +5601,11 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
   cursor: pointer;
 }
 .assistant-dock-pill-stop:hover { background: var(--mg-surface-muted); }
-/* The header buttons' dot: a question waits, a request works, or one ended unseen. */
-#home-assistant[data-assistant-badge],
-#wb-assistant[data-assistant-badge] { position: relative; }
-#home-assistant[data-assistant-badge]::after,
-#wb-assistant[data-assistant-badge]::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--mg-radius-round);
-  background: var(--mg-primary);
-}
-#home-assistant[data-assistant-badge="question"]::after,
-#wb-assistant[data-assistant-badge="question"]::after { background: var(--mg-warning); }
-#home-assistant[data-assistant-badge="done"]::after,
-#wb-assistant[data-assistant-badge="done"]::after { background: var(--mg-success); }
+/* The corner button with nothing going on: a chat mark and "Assistant". */
+.assistant-dock-pill-icon { flex-shrink: 0; color: var(--mg-text-muted); }
+.assistant-dock-pill[data-pill] .assistant-dock-pill-icon { display: none; }
+.assistant-dock-pill:not([data-pill]) .assistant-dock-pill-dot { display: none; }
+.assistant-dock-pill:not([data-pill]):hover { background: var(--mg-surface-muted); }
 /* ---- The dock's conversation (phase 4, 2.1-2.10): menu, transcript, steps, ends ---- */
 .dock-sr {
   position: absolute;
@@ -6099,60 +6091,14 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 .ws-start-host { display: inline-flex; gap: 8px; }
 .ws-start-btn { display: inline-flex; align-items: center; gap: 6px; }
 .ws-start-icon { flex: none; }
-.home-start-host { display: flex; gap: 8px; flex: 0 1 auto; min-width: 0; }
-.home-start-host:empty { display: none; }
-/* Open sample (API 1.8): a button and its menu of the plugins' sample projects. */
-.home-sample-host { display: flex; flex: none; }
-.home-sample-host:empty { display: none; }
-.home-samples { position: relative; display: flex; }
-.home-samples > .home-btn { white-space: nowrap; }
-.home-samples-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 80;
-  width: 320px;
-  max-width: calc(100vw - 32px);
-  max-height: min(360px, 60vh);
-  overflow-y: auto;
-  padding: 4px;
-  background: #fff;
-  border: 1px solid #c5cad3;
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(26, 29, 36, 0.16);
-}
-.home-samples-item { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; border: 0; background: transparent; color: #1a1d24; font-family: inherit; padding: 8px 10px; border-radius: 4px; cursor: pointer; }
-.home-samples-item:hover:not(:disabled) { background: #eef0f4; }
-.home-samples-item:disabled { cursor: default; opacity: 0.7; }
-.home-samples-title { font-size: 13px; font-weight: 600; }
-.home-samples-hint { font-size: 12px; line-height: 1.35; color: #5b6575; }
-.home-samples-error { margin: 4px 6px; font-size: 12px; color: #b42318; }
-/* A start button gives way first: cut with an ellipsis (its full text is its tooltip). */
-.home-start-host .home-btn { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* With start buttons the header is a row that gives way instead of overflowing: the
-   start buttons shrink, then the search (down to 140px), so the mark, the search,
-   Settings, New folder and New project always stay in view. */
-.home-top:has(.home-start-host:not(:empty)) { display: flex; justify-content: space-between; column-gap: 12px; }
-.home-top:has(.home-start-host:not(:empty)) .home-mark { flex: none; }
-.home-top:has(.home-start-host:not(:empty)) .home-search-wrap { flex: 0 1 420px; width: auto; min-width: 140px; }
-.home-top:has(.home-start-host:not(:empty)) .home-top-actions { flex: 0 1 auto; min-width: 0; }
-.home-top:has(.home-start-host:not(:empty)) .home-top-actions > button { flex: none; white-space: nowrap; }
-/* A narrower window (the Assistant button made the actions wider): the header is a row that
-   gives way as with start buttons, the search shrinking first (down to 120px), then the
-   start buttons (the first cut with an ellipsis; the others wrap out of the one row and are
-   hidden whole, Home.tsx useStartRow), the buttons a little tighter, so nothing runs into New
-   project, which stays in view down to 720px. */
+/* A narrower window: the header is a row that gives way, the search shrinking (down to 120px)
+   so Settings and New project stay in view. */
 @media (max-width: 1023px) {
   .home-top { display: flex; justify-content: space-between; column-gap: 8px; padding: 0 8px; }
   .home-top .home-mark { flex: none; }
-  .home-top .home-search-wrap,
-  .home-top:has(.home-start-host:not(:empty)) .home-search-wrap { flex: 0 1000 420px; width: auto; min-width: 120px; }
+  .home-top .home-search-wrap { flex: 0 1000 420px; width: auto; min-width: 120px; }
   .home-top .home-top-actions { flex: 0 1 auto; min-width: 0; gap: 6px; }
-  .home-top .home-start-host { overflow: hidden; flex-wrap: wrap; align-content: flex-start; height: 34px; }
-  .home-top .home-start-host [data-home-start-out] { visibility: hidden; }
   .home-top .home-top-actions > button { flex: none; white-space: nowrap; }
-  .home-top .home-top-actions .home-btn,
-  .home-top .home-top-actions .home-btn-primary { padding: 0 10px; }
 }
 .wb-empty-start { display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; }
 .wb-empty-start:empty { display: none; }
@@ -6162,9 +6108,11 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 .np-start[hidden] { display: none; }
 .np-start legend { padding: 0; margin-bottom: 6px; font-size: 11px; color: #5b6575; }
 .np-start-list { display: flex; flex-direction: column; gap: 6px; }
-/* Any number of start actions: the list scrolls, so the title and Create stay in view. */
+/* The dialog scrolls as a whole in a short window. */
 #modal-new-project .cfd-modal-card { max-height: calc(100vh - 32px); overflow-y: auto; }
-#modal-new-project .np-start-list { max-height: min(240px, 32vh); overflow-y: auto; padding-right: 2px; }
+#modal-new-project .np-start { margin-bottom: 14px; }
+/* Many starts (plugins that add theirs): the list scrolls, so the title and Create stay in view. */
+#modal-new-project .np-start-list { max-height: min(280px, 36vh); overflow-y: auto; padding-right: 2px; }
 .np-start .np-start-choice { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--mg-text-strong); cursor: pointer; }
 .np-start .np-start-choice input { margin-top: 3px; }
 .np-start-hint { display: block; color: var(--mg-text-muted); font-size: var(--mg-text-sm); }

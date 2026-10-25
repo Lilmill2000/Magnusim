@@ -793,11 +793,42 @@ const projectModal = {
   starts: [],
   // Counts openings, so a late read of the start actions fills only the opening it was for.
   opening: 0,
+  // The title this dialog filled in for a start ("Untitled Demo 2"), '' when the person's own.
+  autoTitle: '',
 };
 
-/** The "Start from" actions: every new_project one, plus the opener's (Home's button). */
+/**
+ * Picking a start under "Start from" fills in its "Untitled <kind title> N" (selected, so typing
+ * replaces it) when the title is empty or one the dialog filled in; "Import geometry" takes that
+ * back. So New project, a start, then Create is enough (Daniel: New project is where you choose
+ * a design or a wind tunnel). A title the person typed is kept.
+ */
+function onStartPicked() {
+  if (projectModal.mode !== 'create') return;
+  const title = $('np-title');
+  if (!title) return;
+  const now = title.value.trim();
+  if (now && now !== projectModal.autoTitle) return;
+  const value = document.querySelector('#np-start-list input[name="np-start-choice"]:checked')?.value || '';
+  const entry = projectModal.starts.find((e) => startKey(e) === value) || null;
+  if (!entry) {
+    title.value = '';
+    projectModal.autoTitle = '';
+    return;
+  }
+  title.value = firstFreeUntitledTitle(entry.action.kind_title, state.projects, $('np-folder')?.value);
+  projectModal.autoTitle = title.value;
+  title.select();
+}
+
+/**
+ * The "Start from" actions: every new_project one, then every home one (Home has no start
+ * buttons of its own: New project is its one way to start), plus the opener's.
+ */
 function startChoicesFor(all, want) {
-  const starts = shownStartActions(all).new_project.slice();
+  const shown = shownStartActions(all);
+  const starts = shown.new_project.slice();
+  for (const e of shown.home) if (!starts.some((s) => startKey(s) === startKey(e))) starts.push(e);
   const chosen = want ? all.find((e) => e.plugin === want.plugin && e.action.study_kind === want.kind) || null : null;
   if (chosen && !starts.some((e) => startKey(e) === startKey(chosen))) starts.push(chosen);
   return { starts, chosen };
@@ -821,6 +852,7 @@ export function firstFreeUntitledTitle(kindTitle, projects, folder) {
 function fillStartChoices(entries, chosen) {
   const list = $('np-start-list');
   if (!list) return;
+  list.onchange = onStartPicked;
   const radio = (id, value, label, hint, checked) =>
     `<label class="np-start-choice" for="${id}">` +
     `<input type="radio" name="np-start-choice" id="${id}" value="${escapeHtml(value)}"${checked ? ' checked' : ''} />` +
@@ -963,8 +995,10 @@ export async function prepareCreateModal(existing, opts) {
       })
       .catch((e) => console.warn('[CFD home] start actions', e));
     // One Create click is enough: the title is filled in, and selected so typing replaces it.
+    projectModal.autoTitle = '';
     if (chosen && title) {
       title.value = firstFreeUntitledTitle(chosen.action.kind_title, state.projects, $('np-folder')?.value);
+      projectModal.autoTitle = title.value;
       title.select();
     }
   }
@@ -1529,7 +1563,6 @@ function wireHome() {
     }
   });
   $('home-new-project')?.addEventListener('click', openCreateModalFromHome);
-  $('home-new-folder')?.addEventListener('click', openFolderModal);
   $('nf-cancel')?.addEventListener('click', closeFolderModal);
   $('nf-backdrop')?.addEventListener('click', closeFolderModal);
   $('home-delete-project')?.addEventListener('click', () => {

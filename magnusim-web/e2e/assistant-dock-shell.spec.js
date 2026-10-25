@@ -1,10 +1,11 @@
 // The Assistant's place on screen (chat dock spec, phase 4, lane C: 1.4-1.8, 2.10, 11.3-9 and
 // 11.3-13): the app's toasts at the bottom left, clear of a workspace's status chips (the
 // frame's bottom-left 660 x 110 px band) and of the workspace's own toast; the dock at the
-// bottom right with its header buttons, Ctrl+/, Escape and the keyboard given back, its sizes in
-// wide, narrow and short windows, under Settings, over a workspace (its header borrows the
-// button), the toasts clear of it, and the states it shows by itself (Off here; over remote
-// access only the remote sentence, with no stream of the Assistant's opened).
+// bottom right, opened by its corner button (always there while it is closed: no header button,
+// and closed when the app starts), Ctrl+/, Escape and the keyboard given back, its sizes in
+// wide, narrow and short windows, under Settings, over a workspace, the toasts clear of it, and
+// the states it shows by itself (Off here; over remote access only the remote sentence, with no
+// stream of the Assistant's opened).
 // Its own server with the Assistant's test switches (a test home, never this PC's keys) and the
 // ai-demo test plugin (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks
 // allow 2 px (fonts differ under Linux); no pixel snapshots.
@@ -143,10 +144,14 @@ const onTop = (locator) =>
     return !!hit && el.contains(hit);
   });
 
+/** The corner button's place, and the button in it that opens the dock. */
+const corner = (page) => page.locator('[data-assistant-pill]');
+const cornerButton = (page) => page.locator('[data-assistant-pill] .assistant-dock-pill-open');
+
 async function openFromHome(page) {
   await page.goto(`${host.base}/#/`);
   await appReady(page);
-  await page.locator('#home-assistant').click();
+  await cornerButton(page).click();
   await expect(dock(page)).toBeVisible();
   await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'off');
 }
@@ -156,21 +161,27 @@ test.describe('the dock', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
   });
 
-  test("Home's button opens it bottom right, Off with Open Settings; Escape and Ctrl+/ close it and give the keyboard back", async ({ page }) => {
+  test("the corner button opens it bottom right (no header button, closed at start), Off with Open Settings; Escape and Ctrl+/ close it and give the keyboard back", async ({ page }) => {
     await page.goto(`${host.base}/#/`);
     await appReady(page);
-    const button = page.locator('#home-assistant');
-    // Before Settings, in Home's header.
-    await expect(page.locator('.home-top-actions > button').first()).toHaveId('home-assistant');
-    await expect(page.locator('#home-assistant + #home-prefs')).toHaveCount(1);
-    await expect(button).toHaveText('Assistant');
-    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    const button = cornerButton(page);
+    // Home's header: Settings and New project only (Daniel: the header was too cluttered).
+    await expect(page.locator('.home-top-actions > button')).toHaveText(['Settings', 'New project']);
+    await expect(page.locator('#home-assistant, #home-new-folder, [data-home-start], [data-home-samples]')).toHaveCount(0);
+    // Closed at start, with the corner button 16 px from the bottom right.
     await expect(dock(page)).toBeHidden();
-    await expect(page.locator('[data-assistant-pill]')).toBeHidden();
+    await expect(button).toBeVisible();
+    await expect(button).toHaveText('Assistant');
+    await expect(corner(page)).not.toHaveAttribute('data-pill');
+    const vp0 = page.viewportSize();
+    const c = await rect(corner(page));
+    expect(Math.abs(vp0.width - c.right - 16)).toBeLessThanOrEqual(SLACK);
+    expect(Math.abs(vp0.height - c.bottom - 16)).toBeLessThanOrEqual(SLACK);
+    expect(await onTop(button)).toBe(true);
 
     await button.click();
     await expect(dock(page)).toBeVisible();
-    await expect(button).toHaveAttribute('aria-expanded', 'true');
+    await expect(corner(page)).toBeHidden();
     await expect(dock(page)).toHaveAttribute('data-dock-size', 'open');
     await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'off');
     await expect(dock(page).locator('.assistant-dock-note')).toHaveText(OFF_TEXT);
@@ -191,11 +202,11 @@ test.describe('the dock', () => {
     expect(await page.evaluate(() => document.getElementById('assistant-dock-root').parentElement === document.body)).toBe(true);
     expect(await onTop(dock(page))).toBe(true);
 
-    // Escape inside closes it; the keyboard goes back to the button that opened it.
+    // Escape inside closes it; the keyboard goes back to the corner button that opened it.
     await page.keyboard.press('Escape');
     await expect(dock(page)).toBeHidden();
+    await expect(button).toBeVisible();
     await expect(button).toBeFocused();
-    await expect(button).toHaveAttribute('aria-expanded', 'false');
 
     // Ctrl+/ from the search field opens it with the keyboard in it, and again closes it, back to the field.
     await page.locator('#home-search').focus();
@@ -209,6 +220,14 @@ test.describe('the dock', () => {
     await page.keyboard.press('Control+Slash');
     await expect(dock(page)).toBeHidden();
     await expect(page.locator('#home-search')).toBeFocused();
+
+    // Open when the app starts again: it starts closed all the same (Daniel: it shouldn't pop up).
+    await button.click();
+    await expect(dock(page)).toBeVisible();
+    await page.reload();
+    await appReady(page);
+    await expect(button).toBeVisible();
+    await expect(dock(page)).toBeHidden();
   });
 
   test('Settings covers it and Ctrl+/ waits while Settings shows; it stays open from Home to a project', async ({ page }) => {
@@ -227,18 +246,23 @@ test.describe('the dock', () => {
     await page.goto(`${host.base}/#/p/${project}`);
     await expect(page.locator('#app')).toBeVisible({ timeout: 60_000 });
     await expect(dock(page)).toBeVisible();
-    // Between Queue and Settings in the workbench header.
-    await expect(page.locator('#top-header .top-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
-    await expect(page.locator('#wb-assistant')).toHaveAttribute('aria-expanded', 'true');
-    await page.locator('#wb-assistant').click();
+    // The workbench header: Queue then Settings, no Assistant button.
+    await expect(page.locator('#top-header .top-right #queue-menu + #wb-prefs')).toHaveCount(1);
+    await expect(page.locator('#wb-assistant')).toHaveCount(0);
+    await dock(page).getByRole('button', { name: 'Close the Assistant' }).click();
     await expect(dock(page)).toBeHidden();
-    await expect(page.locator('#wb-assistant')).toHaveAttribute('aria-expanded', 'false');
+    // The corner button sits above the view's own tools (Home, axes, triad), not on them.
+    await expect(cornerButton(page)).toBeVisible();
+    expect(overlap(await rect(corner(page)), await rect(page.locator('#viewport-gizmo'))), 'clear of the view tools').toBe(false);
+    expect(await onTop(cornerButton(page))).toBe(true);
   });
 
-  test("over a workspace: the header's button opens it on top of the frame, and closing gives the keyboard back to it", async ({ page }) => {
+  test('over a workspace: the corner button opens it on top of the frame, and closing gives the keyboard back to it', async ({ page }) => {
     await openWorkspace(page);
-    const button = page.locator('#workspace-overlay .ws-header-right #wb-assistant');
-    await expect(page.locator('#workspace-overlay .ws-header-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
+    const button = cornerButton(page);
+    await expect(page.locator('#workspace-overlay .ws-header-right #queue-menu + #wb-prefs')).toHaveCount(1);
+    await expect(page.locator('#wb-assistant')).toHaveCount(0);
+    expect(await onTop(button), 'the corner button is over the workspace').toBe(true);
     await button.click();
     await expect(dock(page)).toBeVisible();
     expect(await onTop(dock(page)), 'the dock is over the workspace').toBe(true);
@@ -246,10 +270,10 @@ test.describe('the dock', () => {
     await dock(page).getByRole('button', { name: 'Close the Assistant' }).click();
     await expect(dock(page)).toBeHidden();
     await expect(button).toBeFocused();
-    // Back to the project: the button goes home to the workbench header.
+    // Back to the project: Queue and Settings go home to the workbench header.
     await page.locator('#workspace-overlay [data-ws-back]').click();
     await expect(page.locator('#workspace-overlay')).toBeHidden();
-    await expect(page.locator('#top-header .top-right #queue-menu + #wb-assistant + #wb-prefs')).toHaveCount(1);
+    await expect(page.locator('#top-header .top-right #queue-menu + #wb-prefs')).toHaveCount(1);
   });
 
   test('in a workspace: its page is docked, and Ctrl+/ typed in its frame opens the dock; typed in the dock, it closes and gives the frame the keyboard back', async ({ page }) => {
@@ -284,6 +308,7 @@ test.describe('the dock', () => {
     await page.goto(`${host.base}/#/`);
     await appReady(page);
     const pill = page.locator('[data-assistant-pill]');
+    await expect(pill).toHaveText('Assistant');
     // The pill as a running request shows it (the dock's store, as the app's own module).
     await page.evaluate(() =>
       import('/src/assistant/dock/dockState.ts').then((m) =>
@@ -292,7 +317,6 @@ test.describe('the dock', () => {
     );
     await expect(pill).toBeVisible();
     await expect(pill).toHaveAttribute('data-pill', 'running');
-    await expect(page.locator('#home-assistant')).toHaveAttribute('data-assistant-badge', 'working');
     await expect(pill.getByRole('button', { name: 'Stop the Assistant' })).toBeVisible();
     for (const width of [760, 600]) {
       await page.setViewportSize({ width, height: 800 });
@@ -307,12 +331,16 @@ test.describe('the dock', () => {
     await expect(dock(page)).toBeVisible();
     await expect(pill).toBeHidden();
     await page.evaluate(() => import('/src/assistant/dock/dockState.ts').then((m) => m.setDockPill(null)));
+    // With nothing going on, closed: the corner button says "Assistant" again.
+    await page.keyboard.press('Escape');
+    await expect(pill).toHaveText('Assistant');
+    await expect(pill).not.toHaveAttribute('data-pill');
   });
 
   test("a narrow window over a workspace: the page's toast and the app's go above the open sheet", async ({ page }) => {
     await page.setViewportSize({ width: 600, height: 800 });
     const frame = await openWorkspace(page);
-    await page.locator('#workspace-overlay #wb-assistant').click();
+    await cornerButton(page).click();
     await expect(dock(page)).toBeVisible();
     await page.mouse.move(300, 5);
     await frame.evaluate(() => window.__ws.ui.toast('From the page'));
@@ -336,7 +364,7 @@ test.describe('the dock', () => {
     expect(Math.abs(vp.width - r.right - 8)).toBeLessThanOrEqual(SLACK);
     expect(Math.abs(vp.height - r.bottom - 8)).toBeLessThanOrEqual(SLACK);
     expect(Math.abs(r.bottom - r.top - Math.min(0.7 * vp.height, vp.height - 60))).toBeLessThanOrEqual(SLACK);
-    await expect(page.locator('#home-assistant')).toHaveText('Assistant');
+    await expect(corner(page)).toBeHidden();
     await page.mouse.move(300, 5);
     const t = await rect(await appToast(page, 'Saved above the sheet'));
     expect(overlap(t, r), 'the toast is above the sheet').toBe(false);
@@ -372,7 +400,7 @@ test.describe('the dock', () => {
       });
       await page.goto(`${host.base}/#/`);
       await appReady(page);
-      await page.locator('#home-assistant').click();
+      await cornerButton(page).click();
       await expect(dock(page)).toHaveAttribute('data-assistant-dock-state', 'remote');
       await expect(dock(page).locator('[data-dock-remote]')).toHaveText(REMOTE_TEXT);
       await expect(dock(page).locator('textarea, [role="log"], [role="listbox"], .assistant-dock-composer')).toHaveCount(0);
@@ -385,7 +413,7 @@ test.describe('the dock', () => {
   });
 });
 
-test("Home's header keeps every button in the window from 720 to 1000 px wide, the Assistant button included, also in a wider font", async ({ page }) => {
+test("Home's header keeps Settings and New project in the window from 720 to 1000 px wide, also in a wider font", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(`${host.base}/#/`);
   await appReady(page);
@@ -396,12 +424,10 @@ test("Home's header keeps every button in the window from 720 to 1000 px wide, t
   }
 });
 
-/** Home's header at `width`: every button in the window, none running into the next, start buttons whole. */
+/** Home's header at `width`: its buttons in the window, none running into the next, the search beside them. */
 async function headerFits(page, why, width) {
   await page.setViewportSize({ width, height: 800 });
-  // The start buttons' row is marked after layout (a ResizeObserver): two frames.
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  for (const sel of ['#home-new-project', '#home-new-folder', '#home-prefs', '#home-assistant', '#home-mark']) {
+  for (const sel of ['#home-new-project', '#home-prefs', '#home-mark']) {
     await expect(page.locator(sel), `${sel} ${why}`).toBeInViewport({ ratio: 1 });
   }
   const top = await page.locator('.home-top').evaluate((el) => [el.scrollWidth, el.clientWidth]);
@@ -410,14 +436,6 @@ async function headerFits(page, why, width) {
   const actions = await page.locator('.home-top-actions').boundingBox();
   expect(search.x + search.width, why).toBeLessThanOrEqual(actions.x);
   expect(search.width, why).toBeGreaterThanOrEqual(120);
-  // Nothing in the actions runs into the next (a start button cut short stays in its place).
-  const boxes = await page.locator('.home-top-actions > button:visible, #home-start-host [data-home-start]:visible, #home-sample-host button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]).sort((a, b) => a[0] - b[0]));
+  const boxes = await page.locator('.home-top-actions > button:visible').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => [r.left, r.right]).sort((a, b) => a[0] - b[0]));
   for (let i = 1; i < boxes.length; i += 1) expect(boxes[i][0], `${why}: ${JSON.stringify(boxes)}`).toBeGreaterThanOrEqual(boxes[i - 1][1] - 0.5);
-  // A start button shown is whole in its place (one that doesn't fit is hidden, not a sliver).
-  const place = await page.locator('#home-start-host').boundingBox();
-  for (const b of await page.locator('#home-start-host [data-home-start]:visible').all()) {
-    const r = await b.boundingBox();
-    expect(r.x + r.width, `${why}: a start button inside its place`).toBeLessThanOrEqual(place.x + place.width + 0.5);
-  }
-  await expect(page.locator('#home-start-host [data-home-start]:visible'), `${why}: at least one start button`).not.toHaveCount(0);
 }

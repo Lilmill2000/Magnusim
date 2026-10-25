@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeDock, DOCK_OPEN_KEY, DONE_PILL_MS, dockSnapshot, focusDock, openDock, resetDockForTests, setDockPill, subscribeDock, toggleDock } from './dockState';
+import { closeDock, DONE_PILL_MS, dockSnapshot, focusDock, openDock, resetDockForTests, setDockPill, subscribeDock, toggleDock } from './dockState';
 
 const $ = (sel: string) => document.querySelector(sel) as HTMLElement;
 
@@ -7,10 +7,9 @@ beforeEach(() => {
   resetDockForTests();
   document.body.className = '';
   document.body.innerHTML = `
-    <div id="home"><button type="button" id="home-assistant">Assistant</button><input id="search" /></div>
-    <div id="app" hidden><button type="button" id="wb-assistant">Assistant</button></div>
+    <div id="home"><input id="search" /><button type="button" id="other">Settings</button></div>
     <aside id="assistant-dock" tabindex="-1"><button type="button" id="inside">Open Settings</button></aside>
-    <div data-assistant-pill="1"><button type="button" id="pill">Assistant · working</button></div>`;
+    <div data-assistant-pill="1"><button type="button" class="assistant-dock-pill-open" id="pill">Assistant</button></div>`;
 });
 
 afterEach(() => {
@@ -86,57 +85,19 @@ describe("the dock's place: open, pill, closed", () => {
   });
 });
 
-describe('open or closed is remembered for this viewer', () => {
-  /** A reload: the module's state goes, localStorage stays. */
-  function reload(kept: string | null): void {
+describe('the app starts with the dock closed', () => {
+  it("whatever it was before: an open dock isn't opened again by a reload, and nothing is kept for it (Daniel: it shouldn't pop up at start)", () => {
+    // An earlier version kept 'open' here: it is no longer read.
+    localStorage.setItem('mg.assistant.dock.open', 'open');
+    openDock();
+    expect(dockSnapshot().open).toBe(true);
+    // A reload: the module's state goes.
     resetDockForTests();
-    if (kept) localStorage.setItem(DOCK_OPEN_KEY, kept);
-  }
-
-  it("the person's open and close are kept, and a reload opens it again without taking the keyboard", () => {
+    expect(dockSnapshot()).toMatchObject({ open: false, size: 'closed', focusSeq: 0 });
+    localStorage.removeItem('mg.assistant.dock.open');
     openDock();
-    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBe('open');
     closeDock();
-    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBe('closed');
-    toggleDock();
-    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBe('open');
-    reload('open');
-    expect(dockSnapshot()).toMatchObject({ open: true, size: 'open', focusSeq: 0 });
-    reload('closed');
-    expect(dockSnapshot()).toMatchObject({ open: false, size: 'closed' });
-    reload(null);
-    expect(dockSnapshot().open).toBe(false);
-  });
-
-  it("an opening that isn't the person's choice (a question) is not kept", () => {
-    openDock({ focus: false, remember: false });
-    expect(dockSnapshot().open).toBe(true);
-    expect(localStorage.getItem(DOCK_OPEN_KEY)).toBeNull();
-  });
-
-  it('works without storage', () => {
-    const boom = () => {
-      throw new DOMException('blocked', 'SecurityError');
-    };
-    const spies = [
-      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(boom),
-      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(boom),
-      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(boom),
-    ];
-    reload(null);
-    expect(dockSnapshot().open).toBe(false);
-    openDock();
-    expect(dockSnapshot().open).toBe(true);
-    closeDock();
-    expect(dockSnapshot().open).toBe(false);
-    for (const s of spies) s.mockRestore();
-    const gone = vi.spyOn(globalThis, 'localStorage', 'get').mockImplementation(() => {
-      throw new DOMException('blocked', 'SecurityError');
-    });
-    reload(null);
-    toggleDock();
-    expect(dockSnapshot().open).toBe(true);
-    gone.mockRestore();
+    expect(localStorage.getItem('mg.assistant.dock.open')).toBeNull();
   });
 });
 
@@ -149,29 +110,40 @@ describe('closing gives the keyboard back', () => {
     expect(document.activeElement).toBe($('#search'));
   });
 
-  it("to the button that opened it, even when the click didn't focus it", () => {
+  it("to the control that opened it, even when the click didn't focus it", () => {
     (document.activeElement as HTMLElement | null)?.blur();
-    toggleDock($('#home-assistant'));
+    toggleDock($('#other'));
     $('#inside').focus();
     toggleDock();
-    expect(document.activeElement).toBe($('#home-assistant'));
+    expect(document.activeElement).toBe($('#other'));
   });
 
   it('leaves it alone when it is not in the dock', () => {
-    openDock({ from: $('#home-assistant') });
+    openDock({ from: $('#other') });
     $('#search').focus();
     closeDock();
     expect(document.activeElement).toBe($('#search'));
   });
 
-  it('with the opener gone: to the button the person can see', () => {
-    openDock({ from: $('#home-assistant') });
+  it('with the opener gone: to the corner button', () => {
+    openDock({ from: $('#other') });
     $('#inside').focus();
     // Home went away for the workbench.
     $('#home').hidden = true;
-    $('#app').hidden = false;
     closeDock();
-    expect(document.activeElement).toBe($('#wb-assistant'));
+    expect(document.activeElement).toBe($('#pill'));
+  });
+
+  it('to the corner button once it shows again, when it is still hidden as the dock closes (it opened the dock)', async () => {
+    $('#pill').focus();
+    openDock({ from: $('#pill') });
+    // As DockShell does: the corner button hides while the dock is open.
+    ($('[data-assistant-pill]') as HTMLElement).hidden = true;
+    $('#inside').focus();
+    closeDock();
+    ($('[data-assistant-pill]') as HTMLElement).hidden = false;
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(document.activeElement).toBe($('#pill'));
   });
 
   it('over a workspace with the opener gone: left in the panel, for the overlay to give to the frame', () => {
@@ -197,7 +169,7 @@ describe('closing gives the keyboard back', () => {
     $('#inside').focus();
     focusDock();
     closeDock();
-    // The pill isn't an opener: it hides as the dock opens. The button the person can see takes it.
-    expect(document.activeElement).toBe($('#home-assistant'));
+    // The corner button isn't an opener (it hides as the dock opens): it takes the keyboard as the corner button.
+    expect(document.activeElement).toBe($('#pill'));
   });
 });

@@ -100,7 +100,7 @@ schema_version = 1
 | `hint` | string | `""` |  | A line under or beside the button. (at most 120 characters) |
 | `icon` | string | `""` |  | One SVG path; the kind's icon when left out. (matches `^[MmLlHhVvCcSsQqTtAaZz0-9 ,.\-eE]{0,4000}$`) |
 | `places` | array of string | `["empty_project","header","new_project","home"]` |  | Where the host draws it (default: all). A place this host does not know is left out with a warning. (each one of `"empty_project"`, `"header"`, `"new_project"`, `"home"`) |
-| `home_label` | string | `""` |  | Home's text for the button (default: label). (at most 40 characters) |
+| `home_label` | string | `""` |  | Kept for older manifests: Home has no start buttons (v0.5.0), so it is not shown. (at most 40 characters) |
 | `header_label` | string | `""` |  | The header button's text (default: the workspace title); needs "header" in places. (at most 24 characters) |
 
 ### [[geometry_actions]]

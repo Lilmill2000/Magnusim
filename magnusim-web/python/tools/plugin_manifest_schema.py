@@ -289,7 +289,7 @@ ARRAY_TABLES: dict[str, tuple[type, tuple[str, ...], dict[str, dict[str, Any]]]]
                 "items": {"type": "string", "enum": list(manifest_mod.START_ACTION_PLACES), "x-open-enum": True},
                 "description": "Where the host draws it (default: all). A place this host does not know is left out with a warning.",
             },
-            "home_label": {"minLength": 1, "maxLength": 40, "description": "Home's text for the button (default: label)."},
+            "home_label": {"minLength": 1, "maxLength": 40, "description": "Kept for older manifests: Home has no start buttons (v0.5.0), so it is not shown."},
             "header_label": {
                 "minLength": 1,
                 "maxLength": HEADER_LABEL_MAX,

@@ -421,11 +421,11 @@ export function dockTurn(page) {
   return page.locator('#assistant-dock [data-dock-turn]').last();
 }
 
-/** Opens the dock with the header button the window shows (Home's, or the workbench's a workspace borrows). */
+/** Opens the dock with its corner button (always there while the dock is closed). */
 export async function openDock(page) {
   if (await dockPanel(page).isVisible()) return;
   await appReady(page);
-  await page.locator('#wb-assistant:visible, #home-assistant:visible').first().click();
+  await page.locator('[data-assistant-pill] .assistant-dock-pill-open').click();
   await expect(dockPanel(page)).toBeVisible();
 }
 

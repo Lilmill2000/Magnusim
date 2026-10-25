@@ -34,7 +34,6 @@ const SHELL = `
       <button type="button" id="wb-home">Home</button>
       <div class="top-right">
         <div id="queue-menu"><button type="button" id="btn-queue">Queue</button><div id="job-queue-chip" hidden></div></div>
-        <button type="button" id="wb-assistant">Assistant</button>
         <button type="button" id="wb-prefs">Settings</button>
       </div>
     </header>
@@ -286,8 +285,8 @@ describe('the workspace overlay', () => {
     await open();
     expect($('.ws-header-right').contains($('#wb-prefs'))).toBe(true);
     expect($('.ws-header-right').contains($('#queue-menu'))).toBe(true);
-    // Queue, Assistant, Settings, in the header's order.
-    expect([...$('.ws-header-right').children].map((el) => el.id)).toEqual(['queue-menu', 'wb-assistant', 'wb-prefs']);
+    // Queue and Settings, in the header's order.
+    expect([...$('.ws-header-right').children].map((el) => el.id)).toEqual(['queue-menu', 'wb-prefs']);
     // The dock lives outside #app: never inert.
     expect($('#assistant-dock-root').inert).toBeFalsy();
     expect([top.inert, $('#toolbar').inert, $('#app > .main-row').inert]).toEqual([true, true, true]);
@@ -298,7 +297,7 @@ describe('the workspace overlay', () => {
     expect(location.hash).toBe('#/p/proj');
     expect(confirm).not.toHaveBeenCalled();
     expect(top.contains($('#wb-prefs'))).toBe(true);
-    expect([...$('#top-header .top-right').children].map((el) => el.id)).toEqual(['queue-menu', 'wb-assistant', 'wb-prefs']);
+    expect([...$('#top-header .top-right').children].map((el) => el.id)).toEqual(['queue-menu', 'wb-prefs']);
     expect([top.inert, $('#toolbar').inert, $('#app > .main-row').inert]).toEqual([false, false, false]);
     expect(log).toEqual([
       [true, false],
@@ -792,16 +791,16 @@ describe('the workspace overlay', () => {
     await nextFrame();
     dock.hidden = true;
     await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
-    // Closed from its header button in the workspace header: the keyboard stays on that button.
+    // Closed with the keyboard on a workspace header control (Settings): it stays there.
     dock.hidden = false;
     await nextFrame();
-    $('#wb-assistant').focus();
+    $('#wb-prefs').focus();
     dock.hidden = true;
     await nextFrame();
     await nextFrame();
     await later();
     expect(focus).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).toBe($('#wb-assistant'));
+    expect(document.activeElement).toBe($('#wb-prefs'));
   });
 
   it('takes the keyboard back only when a panel really closes: hiding one that is already hidden (as the Queue sync does) does not', async () => {

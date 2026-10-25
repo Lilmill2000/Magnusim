@@ -96,6 +96,12 @@ export function useDockContent(): DockContent | null {
 
   const wsName = place.workspace?.name ?? null;
   useEffect(() => setDockContext({ project_id: place.projectId, workspace: wsName }), [place.projectId, wsName]);
+  // Read at the page's start too, with the dock closed (it no longer reopens by itself): a
+  // request still at work after a reload is followed again, so its open question comes back and
+  // opens the dock, and the corner button says it is working.
+  useEffect(() => {
+    void refreshConversations();
+  }, []);
   useEffect(() => {
     if (dock.open) void refreshConversations();
   }, [dock.open]);

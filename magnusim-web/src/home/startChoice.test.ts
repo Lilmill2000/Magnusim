@@ -24,7 +24,7 @@ const act = (kind: string, title: string, places: string[]) => ({
 
 const PLUGINS = [
   { key: 'start-demo', name: 'Start demo', status: 'enabled', start_actions: [act('demo', 'Demo', ALL)] },
-  // Home only: offered under "Start from" only when Home's button opened the dialog.
+  // Home only: offered under "Start from" too (Home has no start buttons; New project is its way to start).
   { key: 'start-demo-2', name: 'Start demo two', status: 'enabled', start_actions: [act('gamma', 'Gamma', ['home'])] },
   { key: 'off-demo', name: 'Off', status: 'disabled', start_actions: [act('off', 'Off', ALL)] },
 ];
@@ -86,12 +86,13 @@ afterEach(() => {
 });
 
 describe('New Project: Start from', () => {
-  it('offers Import geometry (checked) and each new_project action of a plugin that is on', async () => {
+  it('offers Import geometry (checked), each new_project action, then each home action of a plugin that is on', async () => {
     await prepareCreateModal(null, { folder: 'My Projects' });
     expect((document.getElementById('np-start') as HTMLElement).hidden).toBe(false);
     expect(radios()).toEqual([
       ['', 'Import geometry', true],
       ['start-demo:demo', 'Start a demo', false],
+      ['start-demo-2:gamma', 'Start a gamma', false],
     ]);
     expect(document.getElementById('np-start-list')).toHaveTextContent('Demo hint');
     expect((document.getElementById('np-title') as HTMLInputElement).value).toBe('');
@@ -108,6 +109,7 @@ describe('New Project: Start from', () => {
     expect(radios()).toEqual([
       ['', 'Import geometry', false],
       ['start-demo:demo', 'Start a demo', true],
+      ['start-demo-2:gamma', 'Start a gamma', false],
     ]);
     const title = document.getElementById('np-title') as HTMLInputElement;
     // "Untitled Demo 1" (and "untitled demo 3 ") are taken in My Projects.
@@ -123,7 +125,7 @@ describe('New Project: Start from', () => {
     expect(title.value).toBe('Untitled Demo 1');
   });
 
-  it("adds the opener's action for this opening when it has no new_project place", async () => {
+  it("checks the opener's action, a home one included; a plain opening lists it unchecked", async () => {
     await prepareCreateModal(null, { folder: 'My Projects', start: { plugin: 'start-demo-2', kind: 'gamma' } });
     expect(radios()).toEqual([
       ['', 'Import geometry', false],
@@ -131,9 +133,34 @@ describe('New Project: Start from', () => {
       ['start-demo-2:gamma', 'Start a gamma', true],
     ]);
     expect((document.getElementById('np-title') as HTMLInputElement).value).toBe('Untitled Gamma 1');
-    // The next plain opening does not keep it.
     await prepareCreateModal(null, { folder: 'My Projects' });
-    expect(radios().map((r) => r[0])).toEqual(['', 'start-demo:demo']);
+    expect(radios().map((r) => [r[0], r[2]])).toEqual([
+      ['', true],
+      ['start-demo:demo', false],
+      ['start-demo-2:gamma', false],
+    ]);
+  });
+
+  it("picking a start fills in its \"Untitled <kind> N\", picking Import geometry takes it back, and a typed title is kept (Daniel: New project is where you choose)", async () => {
+    await prepareCreateModal(null, { folder: 'My Projects' });
+    const title = document.getElementById('np-title') as HTMLInputElement;
+    const pick = (value: string) => {
+      const r = document.querySelector(`#np-start-list input[value="${value}"]`) as HTMLInputElement;
+      r.checked = true;
+      r.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    expect(title.value).toBe('');
+    pick('start-demo:demo');
+    expect(title.value).toBe('Untitled Demo 2');
+    expect([title.selectionStart, title.selectionEnd]).toEqual([0, title.value.length]);
+    expect(await submitProjectModal()).toMatchObject({ ok: true, fields: { title: 'Untitled Demo 2' }, start: { plugin: 'start-demo', kind: 'demo' } });
+    pick('start-demo-2:gamma');
+    expect(title.value).toBe('Untitled Gamma 1');
+    pick('');
+    expect(title.value).toBe('');
+    title.value = 'My wing';
+    pick('start-demo:demo');
+    expect(title.value).toBe('My wing');
   });
 
   it('is hidden in edit mode, and when no plugin has an action', async () => {
@@ -159,6 +186,7 @@ describe('New Project: Start from', () => {
     expect(radios()).toEqual([
       ['', 'Import geometry', true],
       ['start-demo:demo', 'Start a demo', false],
+      ['start-demo-2:gamma', 'Start a gamma', false],
     ]);
   });
 
@@ -174,11 +202,12 @@ describe('New Project: Start from', () => {
     const more = [...PLUGINS, { key: 'late', name: 'Late', status: 'enabled', start_actions: [{ ...PLUGINS[0].start_actions[0], study_kind: 'wing', label: 'Start a wing' }] }];
     answer(pluginsAnswer(more));
     await reread;
-    await vi.waitFor(() => expect(radios().map((r) => r[0])).toEqual(['', 'start-demo:demo', 'late:wing']));
+    await vi.waitFor(() => expect(radios().map((r) => r[0])).toEqual(['', 'start-demo:demo', 'late:wing', 'start-demo-2:gamma']));
     expect(radios()).toEqual([
       ['', 'Import geometry', false],
       ['start-demo:demo', 'Start a demo', true],
       ['late:wing', 'Start a wing', false],
+      ['start-demo-2:gamma', 'Start a gamma', false],
     ]);
     // Edit mode is never filled in later.
     resetStartActionsForTests();

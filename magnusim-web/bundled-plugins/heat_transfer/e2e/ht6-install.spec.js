@@ -83,13 +83,17 @@ function settings(page) {
   };
 }
 
-/** Home → Open sample → Heat sink: the study panel of the new project says conjugate heat transfer. */
+/** The heat-sink sample copied as a new project (the app's sample route) and opened: the study panel says conjugate heat transfer. */
 async function openTheSample(page, base) {
   await page.goto(`${base}/#/`);
-  await page.locator('#home-sample-host [data-home-samples="1"]').click({ timeout: 60_000 });
-  await page.locator('[data-home-sample="heat_transfer:heat-sink"]').click();
-  await page.waitForURL(/#\/p\//, { timeout: 60_000 });
-  const pid = decodeURIComponent(new URL(page.url()).hash.replace(/^#\/p\//, '').split('/')[0]);
+  await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
+  const made = await page.evaluate(async () => {
+    const r = await fetch('/api/project/sample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plugin: 'heat_transfer', sample: 'heat-sink' }) });
+    return { status: r.status, body: await r.json() };
+  });
+  expect(made.status, JSON.stringify(made.body)).toBeLessThan(300);
+  const pid = String(made.body.id);
+  await page.goto(`${base}/#/p/${encodeURIComponent(pid)}`);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 90_000 });
   const row = page.locator('#left-tree [data-w17-sim-id]').first();
   await expect(row).toBeVisible({ timeout: 60_000 });

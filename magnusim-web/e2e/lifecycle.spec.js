@@ -88,8 +88,9 @@ test('home: a folder, a project renamed and moved into it, then both deleted', a
   await page.goto('/#/');
   await page.waitForFunction(() => typeof window.__CFD_OPEN_NEW_PROJECT_MODAL__ === 'function', null, { timeout: 60_000 });
 
-  // New folder.
-  await page.locator('#home-new-folder').click();
+  // New folder, from the right-click menu on My Projects (Home has no New folder button).
+  await page.locator('.home-main').click({ button: 'right', position: { x: 40, y: 200 } });
+  await page.locator('#home-ctx-new-folder').click();
   await page.locator('#nf-name').fill(folder);
   await page.locator('#nf-create').click();
   await expect.poll(async () => JSON.stringify((await json(request, '/api/folders')).folders)).toContain(folder);

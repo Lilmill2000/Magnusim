@@ -219,7 +219,7 @@ describe('the app toast region in style.css', () => {
       ['body.assistant-dock-open .app-toasts', { bottom: 'calc(min(70vh, 100vh - 60px) + 16px + var(--ws-toast-reserve, 0px))' }],
       ['body.assistant-dock-open .ws-toast-slot', { bottom: 'calc(min(70vh, 100vh - 60px) + 16px)' }],
       // Over a workspace they are 136 px up already, above the pill.
-      ['body.assistant-dock-pill:not(.workspace-open) .app-toasts', { bottom: '52px' }],
+      ['body.assistant-corner-shown:not(.workspace-open) .app-toasts', { bottom: '52px' }],
     ]);
   });
 
@@ -230,7 +230,7 @@ describe('the app toast region in style.css', () => {
     const block = cssRules(css.slice(at, css.indexOf('\n}\n', at) + 3));
     expect(block.map((r) => [r.selectors.join(', '), r.props])).toEqual([
       ['body.assistant-dock-open .app-toasts, body.assistant-dock-open .ws-toast-slot', { 'max-width': 'min(420px, calc(100vw - 448px))' }],
-      ['body.assistant-dock-pill .app-toasts', { 'max-width': 'min(420px, calc(100vw - 368px))' }],
+      ['body.assistant-corner-shown .app-toasts', { 'max-width': 'min(420px, calc(100vw - 368px))' }],
     ]);
   });
 });
