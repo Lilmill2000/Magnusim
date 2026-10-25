@@ -1556,6 +1556,27 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     for (const id of ids.slice(1)) assert.equal((await remove(id)).status, 200);
   });
 
+  it("a sign-out the agent said is forgotten once its login file changed since (seen live: signed in from a terminal, Settings kept 'Not signed in')", async () => {
+    const { utimesSync } = await import('node:fs');
+    const login = join(AGENT_HOME, '.claude', '.credentials.json');
+    const reason = async () => (await rowOf((await D.refreshAgents()).agents.find((e) => e.id === 'claude'))).reason;
+    try {
+      // It said so at noon; the login file is older: still signed out.
+      utimesSync(login, new Date('2026-10-25T11:00:00Z'), new Date('2026-10-25T11:00:00Z'));
+      D.rememberAgentSignIn('claude', { methods: [], at: '2026-10-25T12:00:00Z' });
+      assert.equal(await reason(), 'agent_signed_out');
+      // The person signed in after: the file decides again.
+      utimesSync(login, new Date('2026-10-25T12:05:00Z'), new Date('2026-10-25T12:05:00Z'));
+      assert.equal(await reason(), null);
+      // A word with no time (a connect that said 'none') stays.
+      D.rememberAgentWord('claude', 'none');
+      assert.equal(await reason(), 'agent_signed_out');
+    } finally {
+      D.rememberAgentSignIn('claude', null);
+      D.rememberAgentWord('claude', null);
+    }
+  });
+
   describe('a discovery that runs while things change', () => {
     /** OpenCode's own package in path-b, whose --version counts its runs and waits while HOLD exists. */
     const OC = join(ROOT, 'oc-probe');

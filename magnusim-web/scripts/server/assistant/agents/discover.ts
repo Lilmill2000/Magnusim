@@ -480,14 +480,20 @@ export function loginFile(login: LoginSpec | undefined, o: LoginOptions): string
  * (fs.stat; it is never opened or read), else a key variable, else unknown where the login may
  * live in a keyring, else no. With no known file: unknown (or key).
  */
-export async function loginState(login: LoginSpec | undefined, keyVars: readonly string[], o: LoginOptions): Promise<{ signed_in: SignedIn; key_var: string | null }> {
+export async function loginState(
+  login: LoginSpec | undefined,
+  keyVars: readonly string[],
+  o: LoginOptions,
+): Promise<{ signed_in: SignedIn; key_var: string | null; changed_at?: number }> {
   const env = o.env ?? process.env;
   const platform = o.platform ?? process.platform;
   const file = loginFile(login, o);
   if (file) {
     try {
       // stat only: the file is never opened, so its content (a token) never enters Magnusim.
-      if ((await stat(file)).isFile()) return { signed_in: 'yes', key_var: null };
+      // When it last changed tells a sign-in made since the agent said it wasn't signed in.
+      const s = await stat(file);
+      if (s.isFile()) return { signed_in: 'yes', key_var: null, changed_at: s.mtimeMs };
     } catch {
       /* no file */
     }
@@ -622,6 +628,8 @@ export interface AgentEntry {
   /** Its class as resolved: the catalogue's lockdown with a verified package, else 'none'. */
   lockdown: Lockdown;
   signedIn: SignedIn;
+  /** When its login file last changed (ms), when it has one. */
+  loginAt?: number | null;
   keyVar: string | null;
   fingerprint: string | null;
   /** Why it can't start (cant_start_script, bad_command) or wasn't found, with the text. */
@@ -728,6 +736,7 @@ async function resolveKnown(k: KnownAgent, c: Ctx): Promise<AgentEntry> {
     programName,
     script: r.script,
     signedIn: login.signed_in,
+    loginAt: login.changed_at ?? null,
     keyVar: login.key_var,
     fingerprint: agentFingerprint('known', k.id, realProgram, script, k.args, c.platform),
   };
@@ -1072,8 +1081,27 @@ async function keepDiscovery(c: AgentsCache, d: Discovery, startGen: number): Pr
     const customs = await Promise.all(settings.custom_agents.map(async (a) => cachedCustom(d, a) ?? cachedCustom(before, a) ?? resolveCustom(a, ctx)));
     d.agents = [...d.agents.filter((e) => e.kind === 'known'), ...customs];
   }
+  forgetSignOutsSince(c, d);
   c.result = d;
   return d;
+}
+
+/**
+ * An agent said it wasn't signed in, and its login file changed since: the person signed in
+ * outside Magnusim (e.g. `claude auth login` in a terminal), so that word is forgotten and the
+ * login file decides again. Seen live: Settings and the dock kept "Not signed in" until a Test.
+ */
+function forgetSignOutsSince(c: AgentsCache, d: Discovery): void {
+  for (const e of d.agents) {
+    const view = c.signIn.get(e.id) as { at?: unknown } | undefined;
+    const said = c.word.get(e.id) === 'none';
+    if (!e.loginAt || (!view && !said)) continue;
+    // Only against the time it said so (a sign-in block's); a word with no time stays.
+    const at = typeof view?.at === 'string' ? Date.parse(view.at) : NaN;
+    if (!Number.isFinite(at) || e.loginAt <= at) continue;
+    c.signIn.delete(e.id);
+    if (said) c.word.delete(e.id);
+  }
 }
 
 /** The cached discovery when younger than `maxAgeMs`, else a new one (a turn's start). */
