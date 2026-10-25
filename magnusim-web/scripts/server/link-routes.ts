@@ -9,8 +9,10 @@
  *       | an error {ok: false, code, error} (proposal 5.3)
  *   POST /api/plugin-geometry/choose  {project_id, plugin, study_id, job_id, choice: 'new' |
  *                                      'overwrite' | 'cancel', copy: [study ids]}: the user's
- *       answer to the host's question. Host-only: no bridge call reaches it, so a page
- *       never chooses. 202 {ok, job_id, geometry_id, created, queued} | 200 {ok, cancelled}
+ *       answer to the host's question. Host-only: no bridge call reaches it, and a plugin
+ *       frame cannot call it itself (its opaque origin fails assertSameOrigin, index.ts),
+ *       so a plugin never chooses. No local-operator check: the person answers through
+ *       the tunnel too. 202 {ok, job_id, geometry_id, created, queued} | 200 {ok, cancelled}
  *   GET  /api/plugin-geometry/linked?project_id&plugin&study_id   {ok, linked: LinkedGeometry | null}
  *   GET  /api/plugin-geometry/status?project_id&plugin&study_id&job_id   {ok, job}
  *   GET  /api/plugin-geometry/events?project_id&plugin&study_id   (SSE) a snapshot of the
@@ -151,6 +153,7 @@ export function registerLinkRoutes(router: Router, deps: { worker: WorkerPort; f
     own,
   );
 
+  // The host page's answer only: the same-origin check (index.ts) keeps plugin frames out.
   router.add(
     'POST',
     '/api/plugin-geometry/choose',
