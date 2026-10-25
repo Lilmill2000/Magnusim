@@ -87,6 +87,9 @@ export const UNGATED_PREFIXES = Object.freeze([
   '/api/prefs',
   '/api/projects',
   '/api/registry',
+  // Export to ParaView and Open case folder (vtk-export.ts): read a run's case and their
+  // own job's zip, no record and no geometry file; the export itself runs as a job.
+  '/api/results',
   '/api/simulation-control',
   '/api/test',
   '/api/times',

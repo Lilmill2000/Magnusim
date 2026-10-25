@@ -39,10 +39,11 @@ class FakeWorker {
   }
 }
 
-/** Every route the app registers (live routes and phase 3 routes, links included). */
+/** Every route the app registers, as index.ts does (live, phase 3 with links, VTK export). */
 async function allRoutes() {
   const { registerLiveRoutes } = await import('../live-routes.js');
   const { registerPhase3Routes } = await import('../routes.ts');
+  const { registerVtkExportRoutes } = await import('../vtk-export.ts');
   const { JobManager } = await import('../jobs.ts');
   const router = new Router();
   const worker = new FakeWorker();
@@ -64,6 +65,7 @@ async function allRoutes() {
   });
   const { registerAssistantRoutes } = await import('../assistant-routes.ts');
   registerAssistantRoutes(router, { worker, services: null, port: () => 0 });
+  registerVtkExportRoutes(router, { jobs, cacheDir: join(ROOT, 'cache') });
   return router.list();
 }
 
@@ -78,6 +80,10 @@ describe('the census: every registered route is gated or reviewed', () => {
     for (const p of ['/api/plugin-geometry/link', '/api/plugin-geometry/events', '/api/plugin-geometry/linked', '/api/plugin-geometry/status']) {
       assert.ok(paths.has(p), p);
       assert.equal(gate.gateClassOf(p), 'reviewed', `${p} is not gated: the call writes only its own staging`);
+    }
+    for (const p of ['/api/results/export-vtk', '/api/results/export-vtk/:id', '/api/results/export-vtk/:id/file', '/api/results/open-folder']) {
+      assert.ok(paths.has(p), p);
+      assert.equal(gate.gateClassOf(p), 'reviewed', `${p} is not gated: it reads a run's case, no record`);
     }
     for (const p of ['/api/project', '/api/project/tree', '/api/geometry/cad', '/api/geometry/remove', '/api/simulation/copy', '/api/bcs', '/api/materials', '/api/mesh', '/api/mesh/delete', '/api/mesh/generate', '/api/mesh-refinements', '/api/mesh_refinements', '/api/result-controls', '/api/area-average', '/api/area_average', '/api/run', '/api/runs/x', '/api/particle-trace', '/api/particle_trace/meta']) {
       assert.equal(gate.gateClassOf(p), 'gated', p);
