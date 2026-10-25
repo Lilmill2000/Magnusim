@@ -17,7 +17,7 @@
 import { useEffect, useLayoutEffect, useRef, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { openSetupWizard } from '../../wizard/controller';
 import { exitFrameFullscreen } from '../../workspace/leaveGuard';
-import { refreshStatus, retryStatus, providerReady, useAssistantStatus, type StatusSnapshot } from '../status';
+import { listAgentsOnce, refreshStatus, retryStatus, providerReady, useAssistantStatus, type StatusSnapshot } from '../status';
 import { ASSISTANT_SETTINGS, CLOSE_DOCK, DOCK_TITLE, OPEN_SETTINGS, REMOTE_TEXT, STATE_ERROR, STATE_LOADING, STATE_OFF, STOP, STOP_LABEL, TRY_AGAIN } from './copy';
 import { closeDock, openDock, useDock } from './dockState';
 import { dragHasFiles } from './pictures';
@@ -106,10 +106,11 @@ export function DockShell({ content = null }: { content?: DockContent | null }) 
   const shell = dockShellState(status);
   const state: DockState = shell ?? (content ? content.state : 'empty');
 
-  // Each opening reads the status again and ends the frame's full screen.
+  // Each opening reads the status again (and the coding agents, once, if never looked for)
+  // and ends the frame's full screen.
   useEffect(() => {
     if (!dock.open) return;
-    void refreshStatus();
+    void refreshStatus().then(listAgentsOnce);
     void exitFrameFullscreen();
   }, [dock.open]);
 

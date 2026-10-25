@@ -263,8 +263,12 @@ describe('the dock frame', () => {
     await act(async () => closeDock());
     await act(async () => openDock());
     expect(fullscreen.exit).toHaveBeenCalledTimes(2);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url) === '/api/assistant/status')).toBe(true);
+    // Each opening reads the status; the coding agents are looked for once (this status never
+    // had them), and the status is then read again.
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url).split('?')[0]);
+    expect(urls.filter((u) => u === '/api/assistant/agents')).toHaveLength(1);
+    expect(urls.filter((u) => u === '/api/assistant/status')).toHaveLength(3);
+    expect(urls).toHaveLength(4);
   });
 });
 

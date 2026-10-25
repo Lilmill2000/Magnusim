@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_TEXT } from './api';
-import { providerReady, refreshStatus, resetStatusStore, statusSnapshot, subscribeStatus, writeStatus } from './status';
+import { listAgentsOnce, providerReady, refreshStatus, resetStatusStore, statusSnapshot, subscribeStatus, writeStatus } from './status';
 import type { AssistantStatus } from './wire';
 
 /** A fetch whose answers the test hands out, in any order. */
@@ -45,6 +45,29 @@ afterEach(() => {
 });
 
 describe('assistant status store', () => {
+  it("looks for the coding agents once when the status has never had them, then reads the status again (seen live: the dock could not offer Claude Code after a restart)", async () => {
+    let read = refreshStatus();
+    take(isGet).answer(200, status({ agents_checked_at: null }));
+    await read;
+    const once = listAgentsOnce();
+    const agents = take((p) => p.url.includes('/api/assistant/agents'));
+    expect(agents.method).toBe('GET');
+    agents.answer(200, { ok: true, checked_at: '2026-10-25T04:00:00Z', took_ms: 20, agents: [] });
+    await tick();
+    take(isGet).answer(200, status({ agents_checked_at: '2026-10-25T04:00:00Z' }));
+    await once;
+    expect(pending).toEqual([]);
+    // Not again on the same page, and not when the status has them.
+    await listAgentsOnce();
+    expect(pending).toEqual([]);
+    resetStatusStore();
+    read = refreshStatus();
+    take(isGet).answer(200, status({ agents_checked_at: '2026-10-25T04:00:00Z' }));
+    await read;
+    await listAgentsOnce();
+    expect(pending).toEqual([]);
+  });
+
   it('starts loading and shows the status once read', async () => {
     expect(statusSnapshot()).toEqual({ state: 'loading' });
     const done = refreshStatus();

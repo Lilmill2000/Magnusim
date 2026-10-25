@@ -18,7 +18,7 @@
  * status, which shows only whether a key is set and its last 4 characters.
  */
 import { useSyncExternalStore } from 'react';
-import { AssistantApiError, assistantGet, assistantPost, RemoteError, REMOTE_TEXT } from './api';
+import { AssistantApiError, assistantGet, assistantPost, listAgents, RemoteError, REMOTE_TEXT } from './api';
 import type { AgentCaps, AgentProviderId, AssistantStatus, ProviderReady } from './wire';
 
 export type StatusSnapshot =
@@ -92,6 +92,26 @@ export async function refreshStatus(): Promise<void> {
   }
   applied = seq;
   publish(next);
+}
+
+let agentsAsked = false;
+
+/**
+ * Looks for the coding agents once a page when the status has never had them: the server
+ * looks only when asked (Settings → Assistant, or a turn's start), so after the app started
+ * the dock's picker could not offer Claude Code until Settings had been opened (seen live).
+ * A refusal (another PC's window may not ask) leaves it to the next opening.
+ */
+export async function listAgentsOnce(): Promise<void> {
+  if (agentsAsked || snap.state !== 'ready' || snap.status.agents_checked_at) return;
+  agentsAsked = true;
+  try {
+    await listAgents(false);
+  } catch {
+    agentsAsked = false;
+    return;
+  }
+  await refreshStatus();
 }
 
 /** Shows "loading" and reads the status again (Retry). */
@@ -273,6 +293,7 @@ export function resetStatusStore(): void {
   applied = 0;
   writesInFlight = 0;
   refetchAfterWrites = false;
+  agentsAsked = false;
   changes.clear();
   holders.clear();
 }
