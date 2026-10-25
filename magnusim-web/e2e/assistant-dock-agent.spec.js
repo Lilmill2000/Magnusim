@@ -126,6 +126,22 @@ test.afterEach(async ({ request }) => {
   expect(unused, 'every scripted prompt was used').toBe(0);
 });
 
+// First in this file: nothing has looked for agents since the server started.
+test('after the app starts, the dock offers the coding agent without Settings having been opened (seen live: no Claude Code in the picker after a restart)', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  await useScriptedModel(request, host.base, llm, 'cloud');
+  const before = await (await request.get(api('/api/assistant/status'))).json();
+  expect(before.agents_checked_at ?? null, 'no discovery yet: the test means something').toBeNull();
+  expect(Object.keys(before.providers_ready)).not.toContain(`agent:${AGENT.id}`);
+  await page.goto(api('/#/'));
+  await openDock(page);
+  const dock = page.locator('#assistant-dock');
+  await dock.locator('.dock-picker-button').click();
+  const agent = dock.locator(`[data-dock-provider-option="agent:${AGENT.id}"]`);
+  await expect(agent.locator('.dock-picker-option-text')).toHaveText(`${AGENT.name} (coding agent)`, STEP);
+  await expect(agent).not.toHaveAttribute('aria-disabled', 'true');
+});
+
 test("the picker offers the coding agent beside the API keys; a request on it shows its line, plan, Magnusim's tool, counters and who pays; Attach takes files, no pictures; locked after", async ({ page, request }) => {
   test.setTimeout(180_000);
   await resetAssistant(request, host.base);
