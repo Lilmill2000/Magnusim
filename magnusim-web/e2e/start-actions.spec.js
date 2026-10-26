@@ -129,7 +129,7 @@ test('gate:l1-places in a project: header buttons in load order, the overflow in
   await expect(row).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
   await expect(row).toContainText("manifest [[start_actions]]: place 'toolbar' is not known to this app; ignored");
   await expect(wizard.locator(`[data-plugin-key="${DEMO}"]`)).not.toContainText('not known to this app');
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-close').click();
   await expect(wizard).toBeHidden();
 });
 
@@ -453,7 +453,7 @@ test('gate:l1-places with the plugins off nothing shows in the four places; afte
     await row.locator(`[data-plugin-toggle="${key}"]`).click();
     await expect(row).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
   }
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-close').click();
   await expect(wizard).toBeHidden();
   await page.locator('#home-new-project').click();
   await expect(page.locator('#np-start')).toBeVisible();

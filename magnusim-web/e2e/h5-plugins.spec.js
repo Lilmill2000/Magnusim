@@ -38,11 +38,10 @@ async function openSettingsPlugins(page, button = '#wb-prefs') {
   await page.locator(button).click();
   const wizard = page.locator('#setup-wizard');
   await expect(wizard).toBeVisible();
-  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Welcome', 'Units', 'This PC', 'Port', 'Workspace', 'Assistant', 'Plugins']);
+  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Units', 'This PC', 'Port', 'Workspace', 'Assistant', 'Plugins']);
   await wizard.locator('#wiz-rail li', { hasText: 'Plugins' }).click();
   const step = wizard.locator('.wiz-pane[data-wiz-step="5"]');
   await expect(step).toBeVisible();
-  await expect(wizard.locator('#wiz-next')).toHaveText('Finish');
   return step;
 }
 
@@ -91,7 +90,7 @@ test('@plugins gate:h5-demos-visible laminar, extra mesher, and one React copy',
   await hook.click();
   await expect(hook).toHaveText('Hide hook details');
   await expect(step.locator('[data-plugin-hook-detail="1"]')).toContainText('case.written');
-  await page.locator('#wiz-skip').click();
+  await page.locator('#wiz-close').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
 });
 
@@ -107,7 +106,7 @@ test('@plugins gate:h5-disable-removes demo rows after reload', async ({ page, r
     await expect(laminar).toHaveAttribute('data-plugin-status', 'disabled');
     await mesher.locator('[data-plugin-toggle="example-extra-mesher"]').click();
     await expect(mesher).toHaveAttribute('data-plugin-status', 'disabled');
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(page.locator('#setup-wizard')).toBeHidden();
 
     await page.locator('#btn-create-simulation').click();

@@ -42,7 +42,7 @@ const SHELL = `
     <div id="workspace-overlay" hidden></div>
   </div>
   <div id="assistant-dock-root"><aside id="assistant-dock" tabindex="-1" hidden><textarea id="dock-text"></textarea></aside></div>
-  <div id="setup-wizard" class="wiz" hidden><button type="button" id="wiz-skip">Close</button></div>
+  <div id="setup-wizard" class="wiz" hidden><button type="button" id="wiz-close" aria-label="Close settings">×</button></div>
   <div id="modal-confirm" class="cfd-modal" hidden role="dialog" aria-modal="true" aria-labelledby="cf-heading">
     <div class="cfd-modal-backdrop" id="cf-backdrop"></div>
     <div class="cfd-modal-card">
@@ -772,10 +772,10 @@ describe('the workspace overlay', () => {
     // Chromium still names the clicked Close button of the panel that just closed as the active element.
     const wizard = $('#setup-wizard');
     wizard.hidden = false;
-    $('#wiz-skip').focus();
+    $('#wiz-close').focus();
     await nextFrame();
     wizard.hidden = true;
-    expect(document.activeElement).toBe($('#wiz-skip'));
+    expect(document.activeElement).toBe($('#wiz-close'));
     await waitFor(() => expect(focus).toHaveBeenCalledTimes(2));
   });
 

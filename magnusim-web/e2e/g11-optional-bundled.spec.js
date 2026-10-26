@@ -112,7 +112,7 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
     await row.locator(`[data-plugin-toggle="${KEY}"]`).click();
     await expect(row).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
     await expect(row.locator('[data-plugin-optional-hint]')).toHaveCount(0);
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await expect(page.locator('#plugin-studies-section')).toBeVisible();
     await expect(page.locator(`#plugin-studies-section [data-plugin-study-new="${KEY}:opt_case"]`)).toHaveText('+ New Optional case');
@@ -143,7 +143,7 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
     await wizard.locator('#wiz-rail li', { hasText: 'Plugins' }).click();
     await row.locator(`[data-plugin-toggle="${KEY}"]`).click();
     await expect(row).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await expect(page.locator('#btn-workspaces')).toHaveCount(0);
     const study = page.locator('#plugin-studies-section [data-plugin-study]', { hasText: 'First part' });
@@ -184,7 +184,7 @@ test('gate:g11-optional-bundled a plugin that ships off is listed, turned on, re
     await expect(namelessRow.locator('strong')).toHaveText(new RegExp(`^${NAMELESS} v\\S+ · bundled$`));
     await expect(namelessRow.locator('.wiz-plugin-error')).toHaveText(/^manifest\.toml is not valid TOML \(line 2, column 8\): Invalid value/);
     for (const r of [brokenRow, namelessRow]) await expect(r.locator('.wiz-plugin-error')).not.toContainText('magnusim-g11-');
-    await wizard.locator('#wiz-skip').click();
+    await wizard.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     stage(t0, 'broken manifests: bundled, by name, parser line and column; their studies name the plugin');
   } finally {

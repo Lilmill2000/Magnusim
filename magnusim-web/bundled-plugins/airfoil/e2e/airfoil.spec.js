@@ -129,7 +129,7 @@ async function togglePlugin(page, want) {
   const row = wizard.locator(`.wiz-pane[data-wiz-step="5"] [data-plugin-key="${KEY}"]`);
   await row.locator(`[data-plugin-toggle="${KEY}"]`).click();
   await expect(row).toHaveAttribute('data-plugin-status', want, { timeout: 30_000 });
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-close').click();
   await expect(wizard).toBeHidden();
 }
 
@@ -146,7 +146,7 @@ async function installDependencies(page, timeout) {
   }
   await expect(row).toHaveAttribute('data-plugin-status', 'enabled', { timeout });
   await expect(row.locator('.wiz-plugin-status')).toHaveText('On');
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-close').click();
   await expect(wizard).toBeHidden();
 }
 

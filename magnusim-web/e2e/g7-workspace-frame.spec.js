@@ -224,7 +224,7 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     expect(await page.evaluate(() => !!document.activeElement.closest('#setup-wizard'))).toBe(true);
     await expect(wizard).toBeVisible();
     loadId = await loadIdOf(frame);
-    await wizard.locator('#wiz-skip').click();
+    await wizard.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await keysReach(frame, 'n');
     expect(await loadIdOf(frame)).toBe(loadId);
@@ -277,7 +277,7 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     await expect(modal).toBeHidden();
     await expect(overlay).toBeVisible();
     await expect(overlay.locator('#workspace-frame')).toHaveCount(1);
-    await wizard.locator('#wiz-skip').click();
+    await wizard.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     expect(await loadIdOf(frame)).toBe(loadId);
     await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
@@ -639,7 +639,7 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     // One request in all: neither Enter nor Cancel sent one.
     expect(disables).toEqual(['POST']);
     page.off('request', onDisable);
-    await wizard.locator('#wiz-skip').click();
+    await wizard.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await expect(card.locator('h2')).toHaveText('Workspace demo is off.');
     await expect(overlay.locator('#workspace-frame')).toHaveCount(0);

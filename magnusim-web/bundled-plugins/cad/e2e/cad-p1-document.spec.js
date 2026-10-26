@@ -95,7 +95,7 @@ async function openSettingsPlugins(page) {
 }
 
 async function closeSettings(page) {
-  await page.locator('#wiz-skip').click();
+  await page.locator('#wiz-close').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
 }
 
@@ -303,7 +303,7 @@ test('cad:p1-document-open CAD ships on; Disable and Enable in Settings; "+ New 
   await expect(cadRow).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
   await expect(cadRow.locator('.wiz-plugin-status')).toHaveText('On');
   await expect(cadRow.locator('[data-plugin-toggle="cad"]')).toHaveText('Disable');
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-close').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
   // The same project offers Parts again.
   await expect(cadHeader).toHaveText('CAD', { timeout: 30_000 });
@@ -1064,7 +1064,7 @@ test('cad:p1-document-leave-elsewhere with a save on its way, a typed link to an
   await expect(cadRow).toHaveAttribute('data-plugin-status', 'enabled');
   await expect(cadRow.locator('.wiz-plugin-status')).toHaveText('On');
   await expect(cadRow.locator('[data-plugin-toggle="cad"]')).toHaveText('Disable');
-  await page.locator('#wiz-skip').click();
+  await page.locator('#wiz-close').click();
   await expect(wizard).toBeHidden();
   await stillHere();
   expect((await cadPluginRow(request))?.status).toBe('enabled');
@@ -1224,7 +1224,7 @@ test('cad:p1-document-keys keys work as soon as the Part opens and after Setting
   // The app's Settings opened and closed: the host gives the page the keyboard back, with no click in it.
   await page.locator('#workspace-overlay .ws-header-right #wb-prefs').click();
   await expect(page.locator('#setup-wizard')).toBeVisible();
-  await page.locator('#wiz-skip').click();
+  await page.locator('#wiz-close').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
   await expect(hint).toHaveCount(0);
   await page.keyboard.press('7');
@@ -1249,7 +1249,7 @@ test('cad:p1-document-keys-undo Ctrl+Z / Ctrl+Y reach the Part with no click in 
   await expect(frame.locator('[data-chip="keys"]')).toBeVisible();
   await page.locator('#workspace-overlay .ws-header-right #wb-prefs').click();
   await expect(page.locator('#setup-wizard')).toBeVisible();
-  await page.locator('#wiz-skip').click();
+  await page.locator('#wiz-close').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
   await expect(frame.locator('[data-chip="keys"]')).toHaveCount(0);
   await page.keyboard.press('Control+z');

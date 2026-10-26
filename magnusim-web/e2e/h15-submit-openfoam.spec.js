@@ -345,7 +345,7 @@ test('gate:h15-submit-openfoam and gate:h15-app-allowlist: a plugin case on the 
       expect(await page.evaluate(() => window.__h15Toasts.length)).toBe(0);
       await page.waitForTimeout(1_000);
     }
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     stage('Foam idle on: c3 kept running, no notice');
 
@@ -361,7 +361,7 @@ test('gate:h15-submit-openfoam and gate:h15-app-allowlist: a plugin case on the 
     await expect.poll(async () => (await statusOf(c3.id)).status, { timeout: 120_000, intervals: [2_000] }).toBe('stopped');
     expect((await statusOf(c3.id)).error).toBe(`Stopped: ${NAME} was turned off`);
     expect((await statusOf(c4.id)).status).toBe('stopped');
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     // The toasts the user sees: both notices of this one change, in turn, each once.
     const c3Toast = `Cavity case 1 · c3 · ${NAME} was stopped: ${NAME} was turned off.`;
@@ -428,7 +428,7 @@ test('gate:h15-submit-openfoam and gate:h15-app-allowlist: a plugin case on the 
     await expect.poll(async () => (await statusOf(c7.id)).status, { timeout: 120_000, intervals: [2_000] }).toBe('stopped');
     expect((await statusOf(c7.id)).error).toBe('Stopped: plugins were reloaded');
     await expect(wizard.locator('[data-plugins-reload]')).toHaveText('Reload plugins', { timeout: 60_000 });
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await expect.poll(() => wslProcessesUnder(wslRoot), { timeout: 120_000, intervals: [3_000] }).toEqual([]);
     stage('Reload plugins stopped c7');

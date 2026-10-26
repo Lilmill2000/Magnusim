@@ -32,8 +32,9 @@ const $ = (sel: string) => document.querySelector(sel) as HTMLElement;
 const shownPane = () => document.querySelector('.wiz-pane:not([hidden])')?.getAttribute('data-wiz-key');
 const railKeys = () => [...document.querySelectorAll('#wiz-rail li')].map((li) => li.getAttribute('data-wiz-key'));
 const onKey = () => document.querySelector('#wiz-rail li.is-on')?.getAttribute('data-wiz-key');
-const doneKeys = () => [...document.querySelectorAll('#wiz-rail li.is-done')].map((li) => li.getAttribute('data-wiz-key'));
+const rail = (key: string) => $(`#wiz-rail li[data-wiz-key="${key}"]`);
 const flush = () => new Promise((r) => setTimeout(r, 0));
+const esc = () => $('#setup-wizard').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
 
 async function load(p: Record<string, unknown>): Promise<Controller> {
   prefs = { ok: true, units: 'Metric', port: 8082, ...p };
@@ -43,11 +44,14 @@ async function load(p: Record<string, unknown>): Promise<Controller> {
   return c;
 }
 
+let checks = 0;
+
 beforeEach(() => {
   islands.calls = [];
   leaving.settle = () => true;
   leaving.asked = 0;
   saved = [];
+  checks = 0;
   document.body.innerHTML = wizardMarkup();
   vi.stubGlobal(
     'fetch',
@@ -57,9 +61,12 @@ beforeEach(() => {
         const body = JSON.parse(String(init.body || '{}'));
         saved.push(body);
         prefs = { ...prefs, ...body };
-        return new Response(JSON.stringify({ ok: true, prefs }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, prefs, restart_required: body.port != null && body.port !== 8082 }), { status: 200 });
       }
-      if (url === '/api/prefs/hardware-check') return new Response(JSON.stringify({ ok: true, hardware: { profile: 'standard' } }), { status: 200 });
+      if (url === '/api/prefs/hardware-check') {
+        checks += 1;
+        return new Response(JSON.stringify({ ok: true, hardware: { profile: 'standard' } }), { status: 200 });
+      }
       return new Response(JSON.stringify(prefs), { status: 200 });
     }),
   );
@@ -70,98 +77,123 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('setup wizard steps', () => {
-  it('walks Welcome … Workspace, Assistant, Plugins in that order, by position', async () => {
-    await load({ wizard_completed: false });
-    expect(railKeys()).toEqual(['welcome', 'units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
-    const walked = [shownPane()];
-    for (let i = 0; i < 6; i += 1) {
-      $('#wiz-next').click();
-      walked.push(shownPane());
+describe('Settings', () => {
+  it("is sections on the left (no Welcome), an X and Esc, and no Next, Back, Finish or Close (Daniel: the sections are the way around)", async () => {
+    const c = await load({ wizard_completed: true });
+    expect(railKeys()).toEqual(['units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
+    expect(document.querySelectorAll('[data-wiz-key="welcome"], #wiz-next, #wiz-back, #wiz-skip, .wiz-foot')).toHaveLength(0);
+    expect($('#wiz-heading')).toHaveTextContent('Settings');
+    expect($('#wiz-close')).toHaveAccessibleName('Close settings');
+    c.openSetupWizard({});
+    expect(shownPane()).toBe('units');
+    for (const key of ['port', 'plugins', 'pc', 'workspace']) {
+      rail(key).click();
+      expect([shownPane(), onKey(), rail(key).getAttribute('aria-current')]).toEqual([key, key, 'page']);
     }
-    expect(walked).toEqual(['welcome', 'units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
-    expect(onKey()).toBe('plugins');
-    // Back goes by position too: Plugins → Assistant → Workspace.
-    $('#wiz-back').click();
-    expect(shownPane()).toBe('assistant');
-    $('#wiz-back').click();
-    expect(shownPane()).toBe('workspace');
-  });
-
-  it('Next reads Finish only on Plugins, and Finish saves and closes', async () => {
-    await load({ wizard_completed: false });
-    for (let i = 0; i < 5; i += 1) $('#wiz-next').click();
-    expect(shownPane()).toBe('assistant');
-    expect($('#wiz-next').textContent).toBe('Next');
-    $('#wiz-next').click();
-    expect(shownPane()).toBe('plugins');
-    expect($('#wiz-next').textContent).toBe('Finish');
-    $('#wiz-next').click();
-    await flush();
-    await flush();
-    expect(saved.some((b) => b.wizard_completed === true)).toBe(true);
+    $('#wiz-close').click();
+    expect($('#setup-wizard').hidden).toBe(true);
+    c.openSetupWizard({});
+    expect(shownPane()).toBe('units');
+    esc();
     expect($('#setup-wizard').hidden).toBe(true);
   });
 
-  it('marks the steps before the shown one done, by position', async () => {
+  it("opens on the Assistant or Plugins for a link about one, else on Units", async () => {
     const c = await load({ wizard_completed: true });
-    c.openSetupWizard({ required: false, step: 'plugins' });
-    expect(doneKeys()).toEqual(['welcome', 'units', 'pc', 'port', 'workspace', 'assistant']);
-    c.openSetupWizard({ required: false, step: 'assistant' });
-    expect(doneKeys()).toEqual(['welcome', 'units', 'pc', 'port', 'workspace']);
-    expect(onKey()).toBe('assistant');
+    expect($('#setup-wizard').hidden).toBe(true);
+    c.openSetupWizard({ step: 'assistant' });
+    expect(shownPane()).toBe('assistant');
+    expect(islands.calls).toContain('mount wiz-assistant');
+    c.openSetupWizard({});
+    expect(shownPane()).toBe('units');
+    expect(islands.calls[islands.calls.length - 1]).toBe('unmount wiz-assistant');
+    c.openSetupWizard({ step: 'plugins' });
+    expect(shownPane()).toBe('plugins');
   });
 
-  it('mounts the Assistant step on entering it and unmounts it on leaving and on close', async () => {
+  it('the first run opens it on Units with the PC check running, and closing marks setup done', async () => {
+    await load({ wizard_completed: false });
+    expect($('#setup-wizard').hidden).toBe(false);
+    expect(shownPane()).toBe('units');
+    await flush();
+    expect(checks).toBe(1);
+    expect(saved.some((b) => b.wizard_completed === true)).toBe(false);
+    $('#wiz-close').click();
+    await flush();
+    expect(saved.filter((b) => b.wizard_completed === true)).toHaveLength(1);
+    expect($('#setup-wizard').hidden).toBe(true);
+  });
+
+  it('each change saves as it is made, with "Saved" in the header: units, port (with the restart note) and workspace', async () => {
     const c = await load({ wizard_completed: true });
-    // Settings, for someone who finished the first run.
-    c.openSetupWizard({ required: false });
-    expect(shownPane()).toBe('workspace');
+    c.openSetupWizard({});
+    ($('[data-wiz-units="Imperial"]') as HTMLElement).click();
+    await flush();
+    expect(saved.at(-1)).toEqual({ units: 'Imperial' });
+    expect($('#wiz-saved')).toHaveTextContent('Saved');
+    rail('port').click();
+    const port = $('#wiz-port') as HTMLInputElement;
+    port.value = '8090';
+    port.dispatchEvent(new Event('change'));
+    await flush();
+    await flush();
+    expect(saved.at(-1)).toEqual({ port: 8090 });
+    expect($('#wiz-port-note')).toHaveTextContent('Saved. Double-click stop.bat, then run.bat, so the app listens on 8090.');
+    rail('workspace').click();
+    const collapse = $('#wiz-collapse-completed') as HTMLInputElement;
+    collapse.checked = false;
+    collapse.dispatchEvent(new Event('change'));
+    await flush();
+    expect(saved.at(-1)).toEqual({ collapse_completed_sections: false });
+  });
+
+  it('Reset to defaults: Units Metric, Port 8082, Workspace collapsing finished sections; This PC checks again', async () => {
+    const c = await load({ wizard_completed: true, units: 'Imperial', port: 8090, collapse_completed_sections: false });
+    c.openSetupWizard({});
+    ($('[data-wiz-reset="units"]') as HTMLElement).click();
+    await flush();
+    expect(saved.at(-1)).toEqual({ units: 'Metric' });
+    expect($('[data-wiz-units="Metric"]')).toHaveClass('is-selected');
+    rail('port').click();
+    ($('[data-wiz-reset="port"]') as HTMLElement).click();
+    await flush();
+    await flush();
+    expect(saved.at(-1)).toEqual({ port: 8082 });
+    expect(($('#wiz-port') as HTMLInputElement).value).toBe('8082');
+    rail('workspace').click();
+    ($('[data-wiz-reset="workspace"]') as HTMLElement).click();
+    await flush();
+    expect(saved.at(-1)).toEqual({ collapse_completed_sections: true });
+    expect(($('#wiz-collapse-completed') as HTMLInputElement).checked).toBe(true);
+    rail('pc').click();
+    await flush();
+    const before = checks;
+    ($('[data-wiz-recheck]') as HTMLElement).click();
+    await flush();
+    expect(checks).toBe(before + 1);
+  });
+
+  it('mounts the Assistant section on entering it and unmounts it on leaving and on close', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({});
     islands.calls = [];
-    $('#wiz-next').click();
+    rail('assistant').click();
     expect(islands.calls).toEqual(['mount wiz-assistant']);
     // Showing it again (its rail entry) does not mount it twice.
-    ($('#wiz-rail li[data-wiz-key="assistant"]') as HTMLElement).click();
+    rail('assistant').click();
     expect(islands.calls).toEqual(['mount wiz-assistant']);
-    $('#wiz-next').click();
+    rail('plugins').click();
     expect(islands.calls).toEqual(['mount wiz-assistant', 'unmount wiz-assistant', 'mount wiz-plugins']);
-    ($('#wiz-rail li[data-wiz-key="assistant"]') as HTMLElement).click();
+    rail('assistant').click();
     islands.calls = [];
-    $('#wiz-skip').click();
+    $('#wiz-close').click();
     expect(islands.calls).toEqual(['unmount wiz-plugins', 'unmount wiz-assistant']);
     expect($('#setup-wizard').hidden).toBe(true);
   });
-
-  it("opens on the Assistant for step 'assistant', and returning users still open on Workspace", async () => {
-    const c = await load({ wizard_completed: true });
-    expect($('#setup-wizard').hidden).toBe(true);
-    c.openSetupWizard({ required: false });
-    expect(shownPane()).toBe('workspace');
-    c.openSetupWizard({ required: false, step: 'assistant' });
-    expect(shownPane()).toBe('assistant');
-    expect(islands.calls).toContain('mount wiz-assistant');
-    c.openSetupWizard({ required: false });
-    expect(shownPane()).toBe('workspace');
-    expect(islands.calls[islands.calls.length - 1]).toBe('unmount wiz-assistant');
-    c.openSetupWizard({ required: false, step: 'plugins' });
-    expect(shownPane()).toBe('plugins');
-  });
-
-  it('the required first run starts at Welcome, ignores a step, and Next always goes on from the Assistant', async () => {
-    const c = await load({ wizard_completed: false });
-    expect(shownPane()).toBe('welcome');
-    expect($('#wiz-skip').hidden).toBe(true);
-    c.openSetupWizard({ required: true, step: 'assistant' });
-    expect(shownPane()).toBe('welcome');
-    for (let i = 0; i < 5; i += 1) $('#wiz-next').click();
-    expect(shownPane()).toBe('assistant');
-    $('#wiz-next').click();
-    expect(shownPane()).toBe('plugins');
-  });
 });
 
-describe('leaving the Assistant step', () => {
-  /** A settle the test answers: the step's changes on their way. */
+describe('leaving the Assistant section', () => {
+  /** A settle the test answers: the section's changes on their way. */
   function pendingSettle() {
     let answer!: (ok: boolean) => void;
     leaving.settle = () => new Promise<boolean>((r) => (answer = r));
@@ -169,27 +201,27 @@ describe('leaving the Assistant step', () => {
   }
 
   async function onAssistant(c: Controller) {
-    c.openSetupWizard({ required: false, step: 'assistant' });
+    c.openSetupWizard({ step: 'assistant' });
     expect(shownPane()).toBe('assistant');
   }
 
-  it('any other step is left without asking it', async () => {
+  it('any other section is left without asking it', async () => {
     const c = await load({ wizard_completed: true });
-    c.openSetupWizard({ required: false });
-    $('#wiz-back').click();
-    $('#wiz-next').click();
-    ($('#wiz-rail li[data-wiz-key="plugins"]') as HTMLElement).click();
+    c.openSetupWizard({});
+    rail('port').click();
+    rail('plugins').click();
     expect(shownPane()).toBe('plugins');
+    $('#wiz-close').click();
     expect(leaving.asked).toBe(0);
   });
 
-  it('Next waits for the step to settle, a second press meanwhile does nothing more, and it goes on once saved', async () => {
+  it('a rail entry waits for the section to settle, a second press meanwhile does nothing more, and it goes on once saved', async () => {
     const c = await load({ wizard_completed: true });
     await onAssistant(c);
     const answer = pendingSettle();
     islands.calls = [];
-    $('#wiz-next').click();
-    $('#wiz-next').click();
+    rail('plugins').click();
+    rail('plugins').click();
     expect(leaving.asked).toBe(1);
     expect(shownPane()).toBe('assistant');
     expect(islands.calls).toEqual([]);
@@ -199,49 +231,49 @@ describe('leaving the Assistant step', () => {
     expect(islands.calls).toEqual(['unmount wiz-assistant', 'mount wiz-plugins']);
   });
 
-  it('a refused change keeps the step on screen; the next press, with nothing on its way, leaves', async () => {
+  it('a refused change keeps the section on screen; the next press, with nothing on its way, leaves', async () => {
     const c = await load({ wizard_completed: true });
     await onAssistant(c);
     const answer = pendingSettle();
-    $('#wiz-back').click();
+    rail('workspace').click();
     answer(false);
     await flush();
     expect(shownPane()).toBe('assistant');
     leaving.settle = () => true;
-    $('#wiz-back').click();
+    rail('workspace').click();
     expect(shownPane()).toBe('workspace');
   });
 
-  it('Close and a rail entry wait the same way; the Assistant entry itself leaves nothing', async () => {
+  it('the X and Esc wait the same way; the Assistant entry itself leaves nothing', async () => {
     const c = await load({ wizard_completed: true });
     await onAssistant(c);
     let answer = pendingSettle();
-    ($('#wiz-rail li[data-wiz-key="assistant"]') as HTMLElement).click();
+    rail('assistant').click();
     expect(leaving.asked).toBe(0);
-    ($('#wiz-rail li[data-wiz-key="units"]') as HTMLElement).click();
-    expect(shownPane()).toBe('assistant');
-    answer(true);
-    await flush();
-    expect(shownPane()).toBe('units');
-    await onAssistant(c);
-    answer = pendingSettle();
-    $('#wiz-skip').click();
+    $('#wiz-close').click();
     expect($('#setup-wizard').hidden).toBe(false);
     answer(true);
     await flush();
     expect($('#setup-wizard').hidden).toBe(true);
     expect(islands.calls[islands.calls.length - 1]).toBe('unmount wiz-assistant');
+    await onAssistant(c);
+    answer = pendingSettle();
+    esc();
+    expect($('#setup-wizard').hidden).toBe(false);
+    answer(true);
+    await flush();
+    expect($('#setup-wizard').hidden).toBe(true);
   });
 
-  it('a leave that settles after the step was shown again moves nothing', async () => {
+  it('a leave that settles after the section was shown again moves nothing', async () => {
     const c = await load({ wizard_completed: true });
     await onAssistant(c);
     const answer = pendingSettle();
-    $('#wiz-next').click();
-    // A link about plugins, then back on the Assistant: another showing of the step.
-    c.openSetupWizard({ required: false, step: 'plugins' });
+    rail('plugins').click();
+    // A link about plugins, then back on the Assistant: another showing of the section.
+    c.openSetupWizard({ step: 'plugins' });
     leaving.settle = () => true;
-    ($('#wiz-rail li[data-wiz-key="assistant"]') as HTMLElement).click();
+    rail('assistant').click();
     expect(shownPane()).toBe('assistant');
     answer(true);
     await flush();

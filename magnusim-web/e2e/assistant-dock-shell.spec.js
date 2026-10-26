@@ -239,7 +239,7 @@ test.describe('the dock', () => {
     expect(await onTop(dock(page)), 'Settings is in front of the dock').toBe(false);
     await page.keyboard.press('Control+Slash');
     await expect(dock(page)).toBeVisible();
-    await page.locator('#wiz-skip').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     expect(await onTop(dock(page))).toBe(true);
 

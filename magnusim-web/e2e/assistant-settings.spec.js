@@ -86,19 +86,19 @@ test.afterEach(() => {
   expect(fake.pending(), 'scripted answers left unused').toBe(0);
 });
 
-test('the Assistant step sits between Workspace and Plugins and is Off; Next goes on to Plugins, Finish closes', async ({ page, request }) => {
+test('the Assistant section sits between Workspace and Plugins and is Off; leaving it unmounts it, and the X closes Settings', async ({ page, request }) => {
   await page.goto(`${host.base}/#/`);
   await appReady(page);
   const wizard = page.locator('#setup-wizard');
   await page.locator('#home-prefs').click();
   await expect(wizard).toBeVisible();
-  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Welcome', 'Units', 'This PC', 'Port', 'Workspace', 'Assistant', 'Plugins']);
-  await expect(wizard.locator('.wiz-pane[data-wiz-key="workspace"]')).toBeVisible();
+  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Units', 'This PC', 'Port', 'Workspace', 'Assistant', 'Plugins']);
+  await expect(wizard.locator('.wiz-pane[data-wiz-key="units"]')).toBeVisible();
 
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-rail li[data-wiz-key="assistant"]').click();
   const pane = assistantPane(page);
   await expect(pane).toBeVisible();
-  await expect(pane.locator('h2')).toHaveText('Assistant');
+  await expect(pane.locator('.wiz-pane-title')).toHaveText('Assistant');
   await expect(wizard.locator('#wiz-rail li.is-on')).toHaveText('Assistant');
   await expect(pane.locator('[data-assistant-default]')).toHaveAttribute('data-assistant-default', 'off');
   await expect(pane.locator('[data-assistant-default-option="off"] input')).toBeChecked();
@@ -108,18 +108,15 @@ test('the Assistant step sits between Workspace and Plugins and is Off; Next goe
   await expect(pane.locator('[data-assistant-card][data-open="1"]')).toHaveCount(0);
   await expect(pane.locator('[data-assistant-key], [data-assistant-model]')).toHaveCount(0);
   expect((await assistantStatus(request, host.base)).provider).toBe('off');
-  await expect(page.locator('#wiz-next')).toHaveText('Next');
 
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await expect(wizard.locator('.wiz-pane[data-wiz-key="plugins"]')).toBeVisible();
-  // Left, the step is gone from the page (it holds a key field).
+  // Left, the section is gone from the page (it holds a key field).
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
-  await expect(page.locator('#wiz-next')).toHaveText('Finish');
-  await page.locator('#wiz-back').click();
+  await page.locator('#wiz-rail li[data-wiz-key="assistant"]').click();
   await expect(pane).toBeVisible();
   await expect(pane.locator('[data-assistant-step]')).toHaveCount(1);
-  await page.locator('#wiz-next').click();
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-close').click();
   await expect(wizard).toBeHidden();
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
 
@@ -584,7 +581,7 @@ test('a key save that answers after the step was opened again still shows', asyn
   await expect(pane).toBeVisible();
 });
 
-test('Next saves a key pasted but not saved, and waits for a change on its way: refused, the step stays with its reason', async ({ page, request }) => {
+test('leaving the section saves a key pasted but not saved, and waits for a change on its way: refused, the section stays with its reason', async ({ page, request }) => {
   test.setTimeout(120_000);
   const key = `sk-ant-next${randomBytes(8).toString('hex')}4321`;
   await page.goto(`${host.base}/#/`);
@@ -592,16 +589,16 @@ test('Next saves a key pasted but not saved, and waits for a change on its way: 
   await chooseProvider(page, 'anthropic');
   const plugins = page.locator('#setup-wizard .wiz-pane[data-wiz-key="plugins"]');
 
-  // Pasted, never saved, and Next pressed: the key is saved, then the wizard goes on.
+  // Pasted, never saved, and Plugins clicked: the key is saved, then Settings goes on.
   await pane.locator('[data-assistant-key-input]').fill(key);
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await expect(plugins).toBeVisible();
   expect((await assistantStatus(request, host.base)).keys.anthropic).toMatchObject({ set: true, last4: '4321' });
-  await page.locator('#wiz-back').click();
+  await page.locator('#wiz-rail li[data-wiz-key="assistant"]').click();
   await expect(pane.locator('[data-assistant-key-status]')).toHaveText('Key set, ends in …4321');
   await expect(pane.locator('[data-assistant-key-input]')).toHaveValue('');
 
-  // A limit typed and Next pressed: the field's save (sent as it lost focus) is held on its way.
+  // A limit typed and Plugins clicked: the field's save (sent as it lost focus) is held on its way.
   let sent;
   let release;
   const saveSent = new Promise((r) => (sent = r));
@@ -617,9 +614,9 @@ test('Next saves a key pasted but not saved, and waits for a change on its way: 
   );
   const steps = pane.locator('[data-assistant-cap-steps]');
   await steps.fill('500');
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await saveSent;
-  // The wizard waits for it.
+  // Settings waits for it.
   await expect(pane.locator('[data-assistant-step]')).toHaveCount(1);
   await expect(plugins).toBeHidden();
   release();
@@ -628,14 +625,14 @@ test('Next saves a key pasted but not saved, and waits for a change on its way: 
   await expect(steps).toHaveValue('500');
   await expect(pane).toBeVisible();
   expect((await assistantStatus(request, host.base)).caps.steps).toBe(120);
-  // Pressed again with nothing on its way: the wizard goes on.
-  await page.locator('#wiz-next').click();
+  // Clicked again with nothing on its way: Settings goes on.
+  await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await expect(plugins).toBeVisible();
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
   expect((await assistantStatus(request, host.base)).caps.steps).toBe(120);
 });
 
-test("Next with a key that isn't the provider's kind: saved, the step stays with the warning, and Next again goes on", async ({ page, request }) => {
+test("leaving with a key that isn't the provider's kind: saved, the section stays with the warning, and leaving again goes on", async ({ page, request }) => {
   test.setTimeout(120_000);
   // Another provider's kind of key under Anthropic: the server saves it and says so.
   const key = `sk-proj-e2e${randomBytes(8).toString('hex')}9999`;
@@ -646,7 +643,7 @@ test("Next with a key that isn't the provider's kind: saved, the step stays with
 
   await pane.locator('[data-assistant-key-input]').fill(key);
   const saved = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/key');
-  await page.locator('#wiz-next').click();
+  await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   expect((await saved).status()).toBe(200);
   // The step stays, the warning under the key field, and the key is saved.
   await expect(pane.locator('[data-assistant-key-warning]')).toHaveText(
@@ -658,8 +655,8 @@ test("Next with a key that isn't the provider's kind: saved, the step stays with
   expect((await assistantStatus(request, host.base)).keys.anthropic).toMatchObject({ set: true, last4: '9999' });
   expect(await page.content()).not.toContain(key);
 
-  // Read, and Next pressed again: the wizard goes on.
-  await page.locator('#wiz-next').click();
+  // Read, and Plugins clicked again: Settings goes on.
+  await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await expect(plugins).toBeVisible();
   await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
 });
@@ -735,12 +732,12 @@ test('a Test nobody waits for stops: left during a slow Test, the step can test 
     await expect.poll(chats).toBe(1);
 
     // Left: nobody waits for that Test, so the server stops it and lets the model's request go.
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
     await expect(page.locator('#wiz-assistant [data-assistant-step]')).toHaveCount(0);
     await expect.poll(() => local.disconnects()).toBe(1);
 
-    // Back on the step, a Test runs at once (not "A test is already running.").
-    await page.locator('#wiz-back').click();
+    // Back on the section, a Test runs at once (not "A test is already running.").
+    await page.locator('#wiz-rail li[data-wiz-key="assistant"]').click();
     local.reply(...callsTheTool());
     const result = await pressTest(page);
     await expect(result).toHaveText(/^Connected to qwen3\.8-27b in \d+\.\d s\. Tool calling works\.$/);

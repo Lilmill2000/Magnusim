@@ -480,15 +480,17 @@ test('an Imperial project shows imperial units', async ({ page, request }) => {
   expect(sid).toBeTruthy();
 });
 
-test('setup wizard: first launch walks every step to Finish; Settings reopens it', async ({ page, request }) => {
+test('Settings: the first launch opens it on Units (no Welcome, no Next or Finish), the PC check runs, the X closes it and marks setup done; Settings reopens it on Units', async ({ page, request }) => {
   test.setTimeout(180_000);
   page.setDefaultTimeout(30_000);
   const before = await json(request, '/api/prefs');
   const port = Number(process.env.MAGNUSIM_E2E_PORT || 8083);
-  // The PC check wakes WSL; its answer is not what this test is about.
-  await page.route('**/api/prefs/hardware-check', (route) =>
-    route.fulfill({ json: { ok: true, hardware: { logical_cpus: 8, physical_cores: 4, ram_gb: 16, profile: 'desktop', n_procs: 3, notes: [] } } }),
-  );
+  // The PC check wakes WSL: its answer is the test's (it counts that the first run asks it).
+  let checks = 0;
+  await page.route('**/api/prefs/hardware-check', (route) => {
+    checks += 1;
+    return route.fulfill({ json: { ok: true, hardware: { logical_cpus: 8, physical_cores: 4, ram_gb: 16, profile: 'desktop', n_procs: 3, notes: [] } } });
+  });
   // The Assistant step looks for coding agents; this PC's own are not what this test is about (none is asked its version).
   await page.route('**/api/assistant/agents*', (route) => route.fulfill({ json: { ok: true, checked_at: new Date().toISOString(), took_ms: 0, agents: [] } }));
   try {
@@ -496,31 +498,34 @@ test('setup wizard: first launch walks every step to Finish; Settings reopens it
     await page.goto('/#/');
     const wiz = page.locator('#setup-wizard');
     await expect(wiz).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator('#wiz-skip')).toBeHidden();
-    await expect(page.locator('.wiz-pane[data-wiz-step="0"]')).toBeVisible();
-    // Next walks the rail's order (data-wiz-key), which is not the step ids' order.
+    await expect(page.locator('#wiz-heading')).toHaveText('Settings');
+    await expect(page.locator('.wiz-pane[data-wiz-key="units"]')).toBeVisible();
     const keys = await page.locator('#wiz-rail li').evaluateAll((lis) => lis.map((li) => li.getAttribute('data-wiz-key')));
-    expect(keys).toEqual(['welcome', 'units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
-    for (let i = 0; i < keys.length - 1; i++) {
-      if (keys[i] === 'units') await page.locator('[data-wiz-units="Metric"]').click();
-      if (keys[i] === 'port') await page.locator('#wiz-port').fill(String(port));
-      // The first run walks the Assistant step too, and Next goes on whatever it shows.
-      if (keys[i] === 'assistant') await expect(page.locator('#wiz-assistant [data-assistant-default]')).toBeVisible();
-      await page.locator('#wiz-next').click();
-      await expect(page.locator(`.wiz-pane[data-wiz-key="${keys[i + 1]}"]`)).toBeVisible();
-    }
-    await expect(page.locator('#wiz-next')).toHaveText(/Finish/);
-    await page.locator('#wiz-next').click();
+    expect(keys).toEqual(['units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
+    await expect(page.locator('#wiz-next, #wiz-back, #wiz-skip, [data-wiz-key="welcome"]')).toHaveCount(0);
+    await expect.poll(() => checks, { message: 'the first run asks the PC check' }).toBeGreaterThan(0);
+    // Each section is a click away, and its changes save at once.
+    await page.locator('[data-wiz-units="Metric"]').click();
+    await page.locator('#wiz-rail li', { hasText: 'Assistant' }).click();
+    await expect(page.locator('#wiz-assistant [data-assistant-default]')).toBeVisible();
+    await page.locator('#wiz-rail li', { hasText: 'This PC' }).click();
+    await expect(page.locator('#wiz-hw-result')).toContainText('4 cores');
+    // The X stays at the top, whatever the section; it closes and marks setup done.
+    await page.locator('#wiz-close').click();
     await expect(wiz).toBeHidden({ timeout: 30_000 });
-    const prefs = await json(request, '/api/prefs');
-    expect(prefs.wizard_completed).toBe(true);
-    expect(prefs.units).toBe('Metric');
+    await expect.poll(async () => (await json(request, '/api/prefs')).wizard_completed).toBe(true);
+    expect((await json(request, '/api/prefs')).units).toBe('Metric');
+    // Not again on the next start.
+    await page.reload();
+    await expect(page.locator('#home-prefs')).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(1_000);
+    await expect(wiz).toBeHidden();
 
-    // Settings opens it again at Workspace, closable.
+    // Settings opens it again on Units; Esc closes it.
     await page.locator('#home-prefs').click();
     await expect(wiz).toBeVisible();
-    await expect(page.locator('.wiz-pane[data-wiz-step="4"]')).toBeVisible();
-    await page.locator('#wiz-skip').click();
+    await expect(page.locator('.wiz-pane[data-wiz-key="units"]')).toBeVisible();
+    await page.keyboard.press('Escape');
     await expect(wiz).toBeHidden();
   } finally {
     await request.post('/api/prefs', {

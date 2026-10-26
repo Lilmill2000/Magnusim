@@ -1359,9 +1359,8 @@ test.describe('linked geometries: rows and plugins (gate:l2-e2e)', () => {
       await expect(prow).toHaveAttribute('data-plugin-status', 'disabled');
       await prow.locator('[data-plugin-toggle="link-demo"]').click();
       await expect(prow).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
-      // Plugins is the last step: Finish closes Settings.
-      await expect(page.locator('#wiz-next')).toHaveText('Finish');
-      await page.locator('#wiz-next').click();
+      // The X closes Settings.
+      await page.locator('#wiz-close').click();
       await expect(wizard).toBeHidden({ timeout: 15_000 });
       await reloadProject(page, a.pid);
       await expect(row1.locator('[data-geom-edit]')).toBeEnabled({ timeout: 30_000 });

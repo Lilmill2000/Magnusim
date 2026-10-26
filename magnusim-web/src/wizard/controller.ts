@@ -1,22 +1,30 @@
 // @ts-nocheck
 /**
- * First-run setup and Settings wizard: units, hardware profile, listen port, workspace,
- * Assistant, plugins.
+ * Settings: units, this PC, listen port, workspace, Assistant, plugins. Sections on the left;
+ * each change saves as it is made (a brief "Saved" in the header says so), and the X or Esc
+ * closes. Units, Port and Workspace have a Reset to defaults; This PC a Check again. No
+ * Welcome, Next, Back or Finish (Daniel, 2026-10-25: the sections are the way around).
  *
- * Steps keep their ids (data-wiz-step / data-wiz-dot); WIZ_ORDER is the order they are
- * walked in. Plugins stays id 5 and last (plugin guides and suites name it); the Assistant
- * is id 6, shown before it.
+ * The first run opens it on Units, with the PC check (solver ranks) running meanwhile; closing
+ * it marks setup done (wizard_completed), so it doesn't open by itself again.
+ *
+ * Sections keep their ids (data-wiz-step / data-wiz-dot); WIZ_ORDER is the rail's order.
+ * Plugins stays id 5 (plugin guides and suites name it); the Assistant is id 6, shown before it.
  */
 import { settleStep } from '../assistant/status';
 import { mountIsland, unmountIsland } from '../islands';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
-const WIZ_WORKSPACE_STEP = 4;
-const WIZ_PLUGINS_STEP = 5; // stays 5 and last: GUIDE.md and the plugin suites name it
+const WIZ_UNITS_STEP = 1;
+const WIZ_PC_STEP = 2;
+const WIZ_PLUGINS_STEP = 5; // stays 5: GUIDE.md and the plugin suites name it
 const WIZ_ASSISTANT_STEP = 6;
-const WIZ_ORDER = [0, 1, 2, 3, 4, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
-const WIZ_LAST_STEP = WIZ_PLUGINS_STEP;
+const WIZ_ORDER = [WIZ_UNITS_STEP, WIZ_PC_STEP, 3, 4, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
 const pos = (id) => WIZ_ORDER.indexOf(id);
+/** The app's own port (scripts/prefs.js DEFAULT_PORT): Port's default. */
+const DEFAULT_PORT = 8082;
+/** How long the header's "Saved" stays. */
+const SAVED_MS = 1800;
 
 function $(id) {
   return document.getElementById(id);
@@ -68,14 +76,27 @@ function syncCollapsePrefStore(prefs) {
 
 const wizard = {
   open: false,
-  required: false,
-  step: 0,
+  // This opening is the first run's (closing it marks setup done).
+  firstRun: false,
+  step: WIZ_UNITS_STEP,
   units: 'Metric',
-  port: 8082,
+  port: DEFAULT_PORT,
   hardware: null,
   hwStarted: false,
-  saved: false,
 };
+let savedTimer = null;
+
+/** The header's brief "Saved" (or why not), read out to screen readers too. */
+function flashSaved(text = 'Saved') {
+  const el = $('wiz-saved');
+  if (!el) return;
+  el.textContent = text;
+  if (savedTimer) clearTimeout(savedTimer);
+  savedTimer = setTimeout(() => {
+    savedTimer = null;
+    el.textContent = '';
+  }, SAVED_MS);
+}
 
 // The Assistant step is mounted only while it is shown: it holds a key field.
 let assistantMounted = false;
@@ -121,37 +142,24 @@ function leave(go) {
   );
 }
 
-/** Shows step `id` (a known step id, else the first). */
+/** Shows section `id` (a known section id, else Units). */
 function setStep(id) {
   wizard.step = pos(id) >= 0 ? id : WIZ_ORDER[0];
-  const at = pos(wizard.step);
   document.querySelectorAll('.wiz-pane').forEach((el) => {
     el.hidden = Number(el.getAttribute('data-wiz-step')) !== wizard.step;
   });
   document.querySelectorAll('#wiz-rail li').forEach((el) => {
-    const i = Number(el.getAttribute('data-wiz-dot'));
-    const on = i === wizard.step;
+    const on = Number(el.getAttribute('data-wiz-dot')) === wizard.step;
     el.classList.toggle('is-on', on);
-    el.classList.toggle('is-done', pos(i) >= 0 && pos(i) < at);
-    if (on) el.setAttribute('aria-current', 'step');
+    if (on) el.setAttribute('aria-current', 'page');
     else el.removeAttribute('aria-current');
     el.tabIndex = 0;
   });
-  const back = $('wiz-back');
-  const next = $('wiz-next');
-  const skip = $('wiz-skip');
-  if (back) back.hidden = at === 0;
-  if (next) next.textContent = wizard.step === WIZ_LAST_STEP ? 'Finish' : 'Next';
-  if (skip) skip.hidden = wizard.required;
-  if (wizard.step === 2) startHardwareCheck();
+  const main = document.querySelector('#setup-wizard .wiz-main');
+  if (main) main.scrollTop = 0;
+  if (wizard.step === WIZ_PC_STEP) startHardwareCheck();
   mountAssistant(wizard.step === WIZ_ASSISTANT_STEP);
   if (wizard.step === WIZ_PLUGINS_STEP) mountIsland('wiz-plugins', { scope: '' });
-}
-
-/** The step `delta` places on in the walk (the first or last at the ends). */
-function stepBy(delta) {
-  const i = Math.max(0, Math.min(WIZ_ORDER.length - 1, pos(wizard.step) + delta));
-  return WIZ_ORDER[i];
 }
 
 function paintUnits() {
@@ -210,9 +218,9 @@ function escape(s) {
     .replace(/"/g, '&quot;');
 }
 
-async function startHardwareCheck() {
-  if (wizard.hwStarted && wizard.hardware) {
-    paintHardware(wizard.hardware, 'Applied to this installation.');
+async function startHardwareCheck(again = false) {
+  if (!again && wizard.hwStarted) {
+    if (wizard.hardware) paintHardware(wizard.hardware, 'Applied to this installation.');
     return;
   }
   wizard.hwStarted = true;
@@ -225,7 +233,7 @@ async function startHardwareCheck() {
     if (j.prefs) window.__CFD_PREFS__ = j.prefs;
     paintHardware(wizard.hardware, 'Applied to this installation.');
   } catch (e) {
-    paintHardware(null, 'Could not finish the check: ' + (e && e.message ? e.message : e) + '. You can continue.');
+    paintHardware(null, 'Could not finish the check: ' + (e && e.message ? e.message : e) + '. Check again to retry.');
     wizard.hwStarted = false;
   }
 }
@@ -243,6 +251,7 @@ async function applyPreferredUnitsNow() {
 }
 
 async function persistWizardUnits() {
+  flashSaved();
   try {
     const r = await fetch('/api/prefs', {
       method: 'POST',
@@ -263,28 +272,81 @@ async function persistWizardUnits() {
   await applyPreferredUnitsNow();
 }
 
-async function saveWizard(completed) {
-  const port = Number(($('wiz-port') && $('wiz-port').value) || wizard.port);
-  wizard.port = port;
+/** POSTs a part of the settings; the answer's prefs become the page's. */
+async function postPrefs(patch) {
   const r = await fetch('/api/prefs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      units: wizard.units,
-      port,
-      wizard_completed: !!completed,
-      collapse_completed_sections: prefersCollapseCompletedSections(),
-    }),
+    body: JSON.stringify(patch),
   });
   const j = await r.json();
   if (!r.ok || !j.ok) throw new Error((j && j.error) || 'Could not save settings');
   window.__CFD_PREFS__ = j.prefs;
-  syncCollapsePrefStore(j.prefs);
-  await applyPreferredUnitsNow();
+  if (j.prefs && j.prefs.collapse_completed_sections != null) syncCollapsePrefStore(j.prefs);
   return j;
 }
 
+/** Port saves as it changes: the server takes it at the next start (stop.bat, then run.bat). */
+async function savePort() {
+  const el = $('wiz-port');
+  const note = $('wiz-port-note');
+  const port = Number(el && el.value);
+  if (port === wizard.port) return;
+  try {
+    const j = await postPrefs({ port });
+    wizard.port = j.prefs.port;
+    if (el) el.value = String(wizard.port);
+    flashSaved();
+    if (note) {
+      note.hidden = !j.restart_required;
+      note.textContent = j.restart_required
+        ? 'Saved. Double-click stop.bat, then run.bat, so the app listens on ' + j.prefs.port + '.'
+        : '';
+    }
+  } catch (e) {
+    if (note) {
+      note.hidden = false;
+      note.textContent = e && e.message ? e.message : String(e);
+    }
+  }
+}
+
+/** A section's Reset to defaults: Units Metric, Port 8082, Workspace with finished sections collapsed. */
+async function resetSection(key) {
+  if (key === 'units') {
+    wizard.units = 'Metric';
+    paintUnits();
+    await persistWizardUnits();
+  } else if (key === 'port') {
+    const el = $('wiz-port');
+    if (el) el.value = String(DEFAULT_PORT);
+    await savePort();
+  } else if (key === 'workspace') {
+    const el = $('wiz-collapse-completed');
+    if (el) el.checked = true;
+    await persistCollapsePref(true);
+  }
+}
+
+/** Closing marks the first run's setup done, so Settings doesn't open by itself again. */
+async function markSetUp() {
+  try {
+    await postPrefs({ wizard_completed: true });
+  } catch (e) {
+    console.warn('[CFD] prefs', e);
+  }
+}
+
+function closeSettings() {
+  leave(() => {
+    const first = wizard.firstRun;
+    hideWizard();
+    if (first) void markSetUp();
+  });
+}
+
 async function persistCollapsePref(on) {
+  flashSaved();
   syncCollapsePrefStore({ collapse_completed_sections: !!on });
   try {
     const r = await fetch('/api/prefs', {
@@ -306,20 +368,23 @@ function hideWizard() {
   const el = $('setup-wizard');
   if (el) el.hidden = true;
   wizard.open = false;
+  wizard.firstRun = false;
   unmountIsland('wiz-plugins');
   mountAssistant(false);
 }
 
+/**
+ * Opens Settings on Units, or on the section `opts.step` names ('plugins', 'assistant': a link
+ * about one). `opts.required`: the first run's opening (its PC check starts at once).
+ */
 export function openSetupWizard(opts) {
-  const required = !!(opts && opts.required);
-  wizard.required = required;
+  const first = !!(opts && opts.required);
+  wizard.firstRun = first;
   wizard.open = true;
-  wizard.step = 0;
   wizard.hwStarted = false;
-  wizard.saved = false;
   const prefs = window.__CFD_PREFS__ || {};
   wizard.units = /imperial/i.test(String(prefs.units || '')) ? 'Imperial' : 'Metric';
-  wizard.port = Number(prefs.port) || 8082;
+  wizard.port = Number(prefs.port) || DEFAULT_PORT;
   wizard.hardware = prefs.hardware || null;
   const portEl = $('wiz-port');
   if (portEl) portEl.value = String(wizard.port);
@@ -328,65 +393,42 @@ export function openSetupWizard(opts) {
     note.hidden = true;
     note.textContent = '';
   }
+  const saved = $('wiz-saved');
+  if (saved) saved.textContent = '';
   paintUnits();
   paintWorkspace();
   const el = $('setup-wizard');
   if (el) el.hidden = false;
-  // Settings (after first run) opens on Workspace, as V0.1.0 did; Plugins is two steps on.
-  // A link that is about plugins (a study whose plugin is off) opens on Plugins, and one
-  // about the Assistant on the Assistant.
-  if (!required && opts && opts.step === 'plugins') setStep(WIZ_PLUGINS_STEP);
-  else if (!required && opts && opts.step === 'assistant') setStep(WIZ_ASSISTANT_STEP);
-  else setStep(!required && prefs.wizard_completed ? WIZ_WORKSPACE_STEP : 0);
-}
-
-async function onNext() {
-  const note = $('wiz-port-note');
-  if (wizard.saved) {
-    hideWizard();
-    return;
-  }
-  if (wizard.step !== WIZ_LAST_STEP) {
-    setStep(stepBy(1));
-    return;
-  }
-  try {
-    const j = await saveWizard(true);
-    wizard.saved = true;
-    if (j.restart_required) {
-      if (note) {
-        note.hidden = false;
-        note.textContent =
-          'Port saved. Double-click stop.bat, then run.bat, so the app listens on ' +
-          j.prefs.port +
-          '.';
-      }
-      const next = $('wiz-next');
-      if (next) next.textContent = 'Close';
-      wizard.required = false;
-      const skip = $('wiz-skip');
-      if (skip) skip.hidden = false;
-      return;
-    }
-    hideWizard();
-  } catch (e) {
-    if (note) {
-      note.hidden = false;
-      note.textContent = e && e.message ? e.message : String(e);
-    }
-  }
+  // A link that is about plugins (a study whose plugin is off) opens on Plugins, and one about
+  // the Assistant on the Assistant; anything else on Units.
+  if (opts && opts.step === 'plugins') setStep(WIZ_PLUGINS_STEP);
+  else if (opts && opts.step === 'assistant') setStep(WIZ_ASSISTANT_STEP);
+  else setStep(WIZ_UNITS_STEP);
+  // The first run: the PC check (solver ranks) runs now, not only when This PC is opened.
+  if (first) startHardwareCheck();
+  $('wiz-close')?.focus({ preventScroll: true });
 }
 
 let wizardWired = false;
 function wireWizard() {
   if (wizardWired) return;
   wizardWired = true;
-  $('wiz-back')?.addEventListener('click', () => leave(() => setStep(stepBy(-1))));
-  $('wiz-next')?.addEventListener('click', () => {
-    leave(() => onNext().catch((e) => console.warn('[CFD] wizard', e)));
+  $('wiz-close')?.addEventListener('click', closeSettings);
+  $('setup-wizard')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+    e.preventDefault();
+    closeSettings();
   });
-  $('wiz-skip')?.addEventListener('click', () => {
-    if (!wizard.required) leave(hideWizard);
+  // A click on the dimmed page around it closes it too.
+  $('setup-wizard')?.addEventListener('mousedown', (e) => {
+    if (e.target === $('setup-wizard')) closeSettings();
+  });
+  $('wiz-port')?.addEventListener('change', () => void savePort());
+  document.querySelectorAll('[data-wiz-reset]').forEach((btn) => {
+    btn.addEventListener('click', () => void resetSection(btn.getAttribute('data-wiz-reset')));
+  });
+  document.querySelectorAll('[data-wiz-recheck]').forEach((btn) => {
+    btn.addEventListener('click', () => void startHardwareCheck(true));
   });
   document.querySelectorAll('#wiz-rail li').forEach((el) => {
     const go = () => {
@@ -426,6 +468,7 @@ export function initSetupWizard(): Promise<void> {
     wizardInit = (async () => {
       wireWizard();
       const prefs = await loadPrefs();
+      // The first run opens Settings (on Units, the PC check running) until it is closed once.
       if (!prefs.wizard_completed) openSetupWizard({ required: true });
     })();
   }

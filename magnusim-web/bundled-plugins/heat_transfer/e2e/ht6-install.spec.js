@@ -70,7 +70,7 @@ function settings(page) {
       await expect(wizard.locator('[data-plugin-key="incompressible_flow"]')).toBeVisible();
     },
     close: async () => {
-      await page.locator('#wiz-next').click();
+      await page.locator('#wiz-close').click();
       await expect(wizard).toBeHidden();
     },
     install: async (zip, summary, done) => {

@@ -868,7 +868,7 @@ test.describe('h14 server', () => {
       const row = wizard.locator(`[data-plugin-key="${KEY}"]`);
       await expect(row).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 15_000 });
       await expect(row.locator('.wiz-plugin-error')).toHaveCount(0);
-      await page.locator('#wiz-skip').click();
+      await page.locator('#wiz-close').click();
       await expect(wizard).toBeHidden();
       await expect(page.locator('.app-toasts [data-plugin-toast]')).toHaveCount(0);
 

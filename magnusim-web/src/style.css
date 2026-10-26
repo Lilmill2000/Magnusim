@@ -4979,32 +4979,60 @@ body.is-recording #viewport-gizmo {
 }
 .wiz-card {
   display: flex;
-  width: min(720px, 94vw);
-  min-height: 380px;
-  max-height: 90vh;
+  flex-direction: column;
+  /* One size for every section: the window doesn't jump as sections change. */
+  width: min(780px, 94vw);
+  height: min(620px, 90vh);
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
   overflow: hidden;
   color: #1f2430;
 }
+.wiz-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid #e4e7ec;
+}
+.wiz-head h2 { margin: 0; font-size: 16px; font-weight: 650; flex: 1; }
+.wiz-saved { font-size: 12px; color: #3f6b4a; }
+.wiz-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #4b5563;
+  cursor: pointer;
+}
+.wiz-close:hover { background: #eef0f4; color: #1a1d24; }
+.wiz-close:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+.wiz-body { display: flex; flex: 1; min-height: 0; }
 .wiz-rail {
   list-style: none;
   margin: 0;
-  padding: 22px 18px;
-  width: 148px;
+  padding: 14px 12px;
+  width: 168px;
+  flex-shrink: 0;
   background: #f4f5f7;
   border-right: 1px solid #e4e7ec;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 12px;
-  color: #667085;
+  gap: 2px;
+  font-size: 13px;
+  color: #4b5563;
+  overflow-y: auto;
 }
 .wiz-rail li {
-  padding: 6px 8px;
-  margin: 0 -6px;
-  border-radius: 4px;
+  padding: 7px 10px;
+  border-radius: 6px;
   cursor: pointer;
   user-select: none;
 }
@@ -5014,18 +5042,35 @@ body.is-recording #viewport-gizmo {
   outline-offset: 1px;
 }
 .wiz-rail li.is-on { color: #1a1d24; font-weight: 650; background: #e4e7ec; }
-.wiz-rail li.is-done { color: #3f6b4a; }
 .wiz-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 22px 24px 16px;
+  padding: 20px 24px 24px;
   min-width: 0;
 }
-.wiz-pane h2 {
-  margin: 0 0 10px;
-  font-size: 18px;
-  font-weight: 650;
+/* A section's title, and its Reset to defaults (or Check again) on the right. */
+.wiz-pane-head { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; }
+.wiz-pane-title { margin: 0; font-size: 18px; font-weight: 650; flex: 1; }
+.wiz-reset {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #fff;
+  color: #344054;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wiz-reset:hover { background: #f6f7f9; }
+.wiz-reset:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+/* A narrow window: the sections become a row across the top. */
+@media (max-width: 640px) {
+  .wiz-body { flex-direction: column; }
+  .wiz-rail { width: auto; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 8px; border-right: 0; border-bottom: 1px solid #e4e7ec; }
+  .wiz-rail li { white-space: nowrap; }
+  .wiz-main { padding: 16px; }
 }
 .wiz-copy {
   margin: 0 0 16px;
@@ -5084,14 +5129,6 @@ body.is-recording #viewport-gizmo {
 .wiz-pref-copy strong { font-size: 14px; }
 .wiz-pref-copy span { font-size: 12px; line-height: 1.45; color: #5b6575; }
 .wiz-pref-row .switch { flex-shrink: 0; margin-top: 2px; }
-.wiz-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 16px;
-}
-.wiz-foot-spacer { flex: 1; }
 .wiz-main { overflow-y: auto; }
 .wiz-plugin-list {
   list-style: none;

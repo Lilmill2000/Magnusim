@@ -272,7 +272,7 @@ test('gate:h13-workspace-route, sandbox, assets, handshake error and launchers',
     await expect(pluginRow).toHaveAttribute('data-plugin-status', 'disabled');
     await pluginRow.locator(`[data-plugin-toggle="${KEY}"]`).click();
     await expect(pluginRow).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 30_000 });
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await expect(page.locator('#btn-workspaces')).toBeVisible();
     await expect(row.locator('xpath=..')).not.toHaveAttribute('data-unavailable', '1');

@@ -69,7 +69,7 @@ test('a newer copy of a bundled plugin installs from a zip, is used, and Remove 
     await expect(row).toBeVisible();
   };
   const closeSettings = async () => {
-    await page.locator('#wiz-next').click();
+    await page.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
   };
   const newStudy = async (title) => {

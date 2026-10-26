@@ -736,7 +736,7 @@ test.describe('exit sync (host API 1.6)', () => {
     await prow.locator('[data-plugin-toggle="link-demo"]').click();
     try {
       await expect(prow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 });
-      await wizard.locator('#wiz-skip').click();
+      await wizard.locator('#wiz-close').click();
       await expect(page.locator('#workspace-overlay [data-ws-error] h2')).toHaveText('Link demo is off.');
       expect(await seen(page)).toMatchObject({ choice: false, confirm: [], status: false });
       expect(hookLog(host, scope)).toHaveLength(runsBefore);
@@ -858,7 +858,7 @@ test.describe('exit sync (host API 1.6)', () => {
     await prow.locator('[data-plugin-toggle="link-demo"]').click();
     await expect(wizard.locator('.wiz-plugin-note')).toHaveText('Wait until the workspace has finished updating the project, then turn it off.');
     await expect(prow).toHaveAttribute('data-plugin-status', 'enabled');
-    await wizard.locator('#wiz-skip').click();
+    await wizard.locator('#wiz-close').click();
     await expect(wizard).toBeHidden();
     await expect(page.locator('[data-ws-leave-status]')).toHaveText('Updating the project from Demo 1…');
     const fromDone = await hookFailed(page, false);

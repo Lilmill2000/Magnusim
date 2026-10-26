@@ -1183,22 +1183,29 @@
     </div>
     <div id="setup-wizard" class="wiz" hidden>
       <div class="wiz-card" role="dialog" aria-modal="true" aria-labelledby="wiz-heading">
-        <ol class="wiz-rail" id="wiz-rail" aria-label="Settings steps">
-          <li data-wiz-dot="0" data-wiz-key="welcome" class="is-on" role="button" tabindex="0">Welcome</li>
-          <li data-wiz-dot="1" data-wiz-key="units" role="button" tabindex="0">Units</li>
-          <li data-wiz-dot="2" data-wiz-key="pc" role="button" tabindex="0">This PC</li>
-          <li data-wiz-dot="3" data-wiz-key="port" role="button" tabindex="0">Port</li>
-          <li data-wiz-dot="4" data-wiz-key="workspace" role="button" tabindex="0">Workspace</li>
-          <li data-wiz-dot="6" data-wiz-key="assistant" role="button" tabindex="0">Assistant</li>
-          <li data-wiz-dot="5" data-wiz-key="plugins" role="button" tabindex="0">Plugins</li>
-        </ol>
-        <div class="wiz-main">
-          <section class="wiz-pane" data-wiz-step="0" data-wiz-key="welcome">
-            <h2 id="wiz-heading">Set up Magnusim on this PC</h2>
-            <p class="wiz-copy">A few choices so new projects and solves match how you work. You can change them later from Settings.</p>
-          </section>
-          <section class="wiz-pane" data-wiz-step="1" data-wiz-key="units" hidden>
-            <h2>Default units</h2>
+        <!-- Settings: sections on the left, each saved as it changes; the X (or Esc) closes. -->
+        <header class="wiz-head">
+          <h2 id="wiz-heading">Settings</h2>
+          <span class="wiz-saved" id="wiz-saved" role="status" aria-live="polite"></span>
+          <button type="button" class="wiz-close" id="wiz-close" aria-label="Close settings" title="Close (Esc)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </header>
+        <div class="wiz-body">
+          <ol class="wiz-rail" id="wiz-rail" aria-label="Settings sections">
+            <li data-wiz-dot="1" data-wiz-key="units" class="is-on" role="button" tabindex="0" aria-current="page">Units</li>
+            <li data-wiz-dot="2" data-wiz-key="pc" role="button" tabindex="0">This PC</li>
+            <li data-wiz-dot="3" data-wiz-key="port" role="button" tabindex="0">Port</li>
+            <li data-wiz-dot="4" data-wiz-key="workspace" role="button" tabindex="0">Workspace</li>
+            <li data-wiz-dot="6" data-wiz-key="assistant" role="button" tabindex="0">Assistant</li>
+            <li data-wiz-dot="5" data-wiz-key="plugins" role="button" tabindex="0">Plugins</li>
+          </ol>
+          <div class="wiz-main">
+          <section class="wiz-pane" data-wiz-step="1" data-wiz-key="units">
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">Units</h3>
+              <button type="button" class="wiz-reset" data-wiz-reset="units">Reset to defaults</button>
+            </div>
             <p class="wiz-copy">Projects use this system for setup values. Switching converts numbers already entered — velocity, pressure, material properties, and mesh sizes. The solver still works in SI internally.</p>
             <div class="wiz-choices" role="radiogroup" aria-label="Default units">
               <button type="button" class="wiz-choice is-selected" data-wiz-units="Metric">
@@ -1212,13 +1219,19 @@
             </div>
           </section>
           <section class="wiz-pane" data-wiz-step="2" data-wiz-key="pc" hidden>
-            <h2>This PC</h2>
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">This PC</h3>
+              <button type="button" class="wiz-reset" data-wiz-recheck="1">Check again</button>
+            </div>
             <p class="wiz-copy">A short check of CPU, memory, disk, and OpenFOAM. Magnusim then picks how many solver ranks to use so it does not oversubscribe this machine.</p>
             <p class="wiz-hw-status" id="wiz-hw-status">Checking this PC…</p>
             <div class="wiz-hw-result" id="wiz-hw-result" hidden></div>
           </section>
           <section class="wiz-pane" data-wiz-step="3" data-wiz-key="port" hidden>
-            <h2>Local port</h2>
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">Port</h3>
+              <button type="button" class="wiz-reset" data-wiz-reset="port">Reset to defaults</button>
+            </div>
             <p class="wiz-copy">The app only listens on this computer. Change the port if another program already uses the default.</p>
             <div class="np-field">
               <label for="wiz-port">Port</label>
@@ -1227,7 +1240,10 @@
             <p class="wiz-note" id="wiz-port-note" hidden></p>
           </section>
           <section class="wiz-pane" data-wiz-step="4" data-wiz-key="workspace" hidden>
-            <h2>Workspace</h2>
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">Workspace</h3>
+              <button type="button" class="wiz-reset" data-wiz-reset="workspace">Reset to defaults</button>
+            </div>
             <p class="wiz-copy">How the setup tree behaves while you move through a study.</p>
             <div class="wiz-pref-row">
               <span class="wiz-pref-copy">
@@ -1241,20 +1257,19 @@
             </div>
           </section>
           <section class="wiz-pane" data-wiz-step="6" data-wiz-key="assistant" hidden>
-            <h2>Assistant</h2>
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">Assistant</h3>
+            </div>
             <p class="wiz-copy">An AI model you choose can work in Magnusim for you. Keys you save are kept encrypted on this PC; Magnusim never shows them again, and they leave this PC only to the provider they belong to.</p>
             <div id="wiz-assistant"></div>
           </section>
           <section class="wiz-pane" data-wiz-step="5" data-wiz-key="plugins" hidden>
-            <h2>Plugins</h2>
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">Plugins</h3>
+            </div>
             <p class="wiz-copy">Plugins add analyses, meshers and panels from the plugins folder. Turning one off removes what it adds right away.</p>
             <div id="wiz-plugins"></div>
           </section>
-          <div class="wiz-foot">
-            <button type="button" class="home-btn" id="wiz-back">Back</button>
-            <span class="wiz-foot-spacer"></span>
-            <button type="button" class="home-btn" id="wiz-skip" hidden>Close</button>
-            <button type="button" class="home-btn-primary" id="wiz-next">Next</button>
           </div>
         </div>
       </div>

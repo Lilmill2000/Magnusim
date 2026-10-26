@@ -133,7 +133,7 @@ test('@plugins gate:h6-prefs-single-writer a units save keeps a plugin turned of
     await expect(step.locator('[data-plugin-key="example-laminar"]')).toHaveAttribute('data-plugin-status', 'disabled', {
       timeout: 15_000,
     });
-    await page.locator('#wiz-skip').click();
+    await page.locator('#wiz-close').click();
   } finally {
     await setPlugin(request, 'example-laminar', true);
   }
@@ -158,7 +158,7 @@ test('@plugins gate:h6-ui-ledger turning a plugin off and on shows its panel onc
       await expect(row).toHaveAttribute('data-plugin-status', 'enabled', { timeout: 15_000 });
       await expect(panel).toHaveCount(1, { timeout: 15_000 });
     }
-    await page.locator('#wiz-skip').click();
+    await page.locator('#wiz-close').click();
   } finally {
     await setPlugin(request, 'example-hook-monitor', true);
   }

@@ -59,7 +59,7 @@ export async function openAssistantStep(page, button = '#home-prefs') {
 
 /** Closes Settings (the Close button of a returning user's Settings). */
 export async function closeSettings(page) {
-  await page.locator('#wiz-skip').click();
+  await page.locator('#wiz-close').click();
   await expect(page.locator('#setup-wizard')).toBeHidden();
 }
 
