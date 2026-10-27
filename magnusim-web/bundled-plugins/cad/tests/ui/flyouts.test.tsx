@@ -49,12 +49,16 @@ describe('collapseFlyouts', () => {
     expect(barIdOf(DRAW, 'sketch.point')).toBe('sketch.point');
   });
 
-  it('a flyout without a main takes its first variant by order (the Ellipse lane registers its own)', () => {
-    expect(FLYOUTS.find((f) => f.id === 'ellipse')).toBeTruthy();
-    const c = collapseFlyouts([...DRAW, cmd('sketch.ellipse-partial', 'Partial ellipse', 21, 'ellipse'), cmd('sketch.ellipse', 'Ellipse', 20, 'ellipse')]);
+  it('the Ellipse flyout: Ellipse on the bar, then Partial ellipse, Parabola and Conic; a flyout without a main takes its first variant by order', () => {
+    expect(FLYOUTS.find((f) => f.id === 'ellipse')).toMatchObject({ main: 'sketch.ellipse' });
+    const ellipses = [cmd('sketch.conic', 'Conic', 23, 'ellipse'), cmd('sketch.ellipse-partial', 'Partial ellipse', 21, 'ellipse'), cmd('sketch.parabola', 'Parabola', 22, 'ellipse'), cmd('sketch.ellipse', 'Ellipse', 20, 'ellipse')];
+    const c = collapseFlyouts([...DRAW, ...ellipses]);
     expect(c.commands.map((x) => x.id)).toContain('sketch.ellipse');
-    expect(c.commands.map((x) => x.id)).not.toContain('sketch.ellipse-partial');
-    expect(c.variants.get('sketch.ellipse')!.map((x) => x.label)).toEqual(['Ellipse', 'Partial ellipse']);
+    for (const id of ['sketch.ellipse-partial', 'sketch.parabola', 'sketch.conic']) expect(c.commands.map((x) => x.id)).not.toContain(id);
+    expect(c.variants.get('sketch.ellipse')!.map((x) => x.label)).toEqual(['Ellipse', 'Partial ellipse', 'Parabola', 'Conic']);
+    expect(barIdOf([...DRAW, ...ellipses], 'sketch.conic')).toBe('sketch.ellipse');
+    const other = collapseFlyouts([cmd('x.b', 'B', 2, 'nomain'), cmd('x.a', 'A', 1, 'nomain')]);
+    expect(other.commands.map((x) => x.id)).toEqual(['x.a']);
   });
 });
 

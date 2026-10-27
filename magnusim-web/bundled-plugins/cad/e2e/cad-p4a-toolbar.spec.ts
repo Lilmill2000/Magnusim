@@ -57,6 +57,8 @@ const FOLD_ORDER = [
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
+  // The Ellipse flyout (its bar command).
+  'sketch.ellipse',
   'sketch.extend',
   // v0.5.0: the drawing variants sit in flyouts (src/ui/flyouts.ts); Polygon and the Slot flyout fold here.
   'sketch.polygon',

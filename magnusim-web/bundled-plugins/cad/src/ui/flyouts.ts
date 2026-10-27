@@ -4,7 +4,7 @@
 // name, shortcut and hint. Each variant stays a command of its own (its shortcut, its tooltip,
 // commands.run by id), so the keyboard and the Assistant reach it as before.
 // A command joins a flyout with `flyout: '<id>'` in its CommandDef (one line per variant): the
-// ellipse tools join 'ellipse' that way. A flyout with no variant registered does not show; one
+// ellipse tools (src/sketch/commands.ts) join 'ellipse' that way. A flyout with no variant registered does not show; one
 // with a single variant shows as that command's own button.
 // For the toolbar's layout (order, More, fold, the right-click menus) a flyout is one command:
 // its bar id, `main` when that variant is registered, else its first variant by order.
@@ -36,8 +36,7 @@ export const FLYOUTS: readonly FlyoutDef[] = [
   { id: 'arc', label: 'Arc', main: 'sketch.arc', order: ['sketch.arc-center', 'sketch.arc-tangent', 'sketch.arc', 'sketch.sector'] },
   { id: 'slot', label: 'Slot', main: 'sketch.slot', order: ['sketch.slot', 'sketch.slot-overall', 'sketch.slot-center-point', 'sketch.slot-arc-3pt', 'sketch.slot-arc-center'] },
   { id: 'spline', label: 'Spline', main: 'sketch.spline', order: ['sketch.spline', 'sketch.spline-control'] },
-  // Its variants come with the ellipse tools (each command: flyout: 'ellipse').
-  { id: 'ellipse', label: 'Ellipse' },
+  { id: 'ellipse', label: 'Ellipse', main: 'sketch.ellipse', order: ['sketch.ellipse', 'sketch.ellipse-partial', 'sketch.parabola', 'sketch.conic'] },
 ];
 
 const BY_ID = new Map(FLYOUTS.map((f) => [f.id, f] as const));

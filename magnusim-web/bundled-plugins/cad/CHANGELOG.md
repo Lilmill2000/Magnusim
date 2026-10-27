@@ -28,6 +28,12 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   joined), a body's cross-section at Top, Front, Right or a plane of yours, and
   points typed as x, y, z.
 - Parameters have a comment, under each row.
+- The sketch toolbar's drawing tools come in groups, one button each with an
+  arrow beside it that lists the group's tools (the button runs the one used
+  last): Line (Centerline, Midpoint line), Rectangle (Center, 3-point corner,
+  3-point center, Parallelogram), Circle (Perimeter circle), Arc (Centerpoint,
+  Tangent, 3-point, Sector), Slot (five kinds), Spline (Control-point), Ellipse
+  (Partial ellipse, Parabola, Conic); Polygon is a button of its own.
 
 **The Assistant builds in the Part.** This needs Magnusim's Assistant, which is
 still in development for Magnusim 0.5.0 (Settings > Assistant: a cloud provider

@@ -172,7 +172,21 @@ test('cad:sketch-shapes-flyouts the DRAW flyouts: each list with its variants, t
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
   }
-  // Polygon is one button (no list); no Ellipse flyout until its tools are registered.
+  // The Ellipse flyout: on the bar it lists its four tools; at 1920 px it folds after Chamfer (FOLD_ORDER), and
+  // DRAW's More lists its tools one by one. None of them is a button of its own on the bar.
+  const ellipses = ['Ellipse', 'Partial ellipse', 'Parabola', 'Conic'];
+  for (const id of ['sketch.ellipse-partial', 'sketch.parabola', 'sketch.conic']) await expect(tb.locator(`.tb-btn[data-command="${id}"]`)).toHaveCount(0);
+  if (await tb.locator('[data-tb-flyout="sketch.ellipse"]').count()) {
+    await tb.locator('[data-tb-flyout="sketch.ellipse"]').click();
+    await expect(frame.locator('[data-cad-menu] [role="menuitem"] .cad-menu-label')).toHaveText(ellipses);
+  } else {
+    const more = tb.locator('[data-tb-more="draw"]');
+    await more.click();
+    const labels = await frame.locator('[data-cad-menu] [role="menuitem"] .cad-menu-label').allInnerTexts();
+    expect(labels.filter((l) => ellipses.includes(l.trim())).map((l) => l.trim())).toEqual(ellipses);
+  }
+  await page.keyboard.press('Escape');
+  await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
   await expect(tb.locator('.tb-btn[data-command="sketch.polygon"]')).toBeVisible();
   await expect(tb.locator('[data-tb-flyout="sketch.polygon"]')).toHaveCount(0);
 
