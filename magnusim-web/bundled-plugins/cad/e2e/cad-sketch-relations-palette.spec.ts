@@ -11,11 +11,14 @@
 //  drawn from the origin takes Symmetric, the keyboard keeps its place in the palette, a pressed
 //  button says what the toolbar says, and the palette never covers the origin, the badge or a long
 //  line when zoomed in.
+//  Integration review: Parallel, Perpendicular and Collinear never move a Fixed or a projected line
+//  (the drawn line turns about their shared end), Equal of an arc and a circle with one centre
+//  applies, and the palette moves clear of the badge when Construction's key makes it wider.
 // With RELATIONS_SHOTS=<folder>: screenshots of the palette and the badge for a person to look at.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { join } from 'node:path';
-import { ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { addSolid, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 type V2 = [number, number];
 type V3 = [number, number, number];
@@ -89,7 +92,7 @@ async function paletteCovers(frame: FrameLocator, page: Page, p: V2, gap = 4): P
   return x >= box.x - gap && x <= box.x + box.width + gap && y >= box.y - gap && y <= box.y + box.height + gap;
 }
 
-async function startSketch(page: Page, request: Parameters<typeof newProject>[0]) {
+async function startSketch(page: Page, request: Parameters<typeof newProject>[0], opts: { solid?: [number, number, number] } = {}) {
   await ensureCadOn(request);
   const seen = await watchPage(page);
   const projectId = await newProject(request);
@@ -97,6 +100,7 @@ async function startSketch(page: Page, request: Parameters<typeof newProject>[0]
   await newPartFromTree(page, 'Part 1');
   const frame = await partOpened(page);
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+  if (opts.solid) await addSolid(page, { size: opts.solid });
   await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
   await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
@@ -355,6 +359,28 @@ test('cad:sketch-relations-palette-place the palette never covers the origin, a 
   expect(pb.x < bb.x + bb.width && bb.x < pb.x + pb.width && pb.y < bb.y + bb.height && bb.y < pb.y + pb.height).toBe(false);
   for (let x = -90; x <= -4; x += 2) expect(await paletteCovers(frame, page, [x, 92], 2)).toBe(false);
   await shot(page, 'palette-clear-of-badge');
+  // Integration review: Construction's key changed to a long one (as Set keybind's Done does): the
+  // badge widens on both sides and the palette moves clear of it again, with nothing else changing.
+  const setKey = (combo: string | null) =>
+    cad<boolean>(page, ((c: string | null) => {
+      const k = (window as unknown as { __CAD__: { keybinds: { model: { setKeybind(id: string, c: string): { ok: boolean }; resetToDefault(id: string): { ok: boolean } } } } }).__CAD__.keybinds.model;
+      return (c ? k.setKeybind('sketch.construction', c) : k.resetToDefault('sketch.construction')).ok;
+    }) as never, combo);
+  const narrow = bb.width;
+  try {
+    expect(await setKey('Ctrl+Shift+Alt+X')).toBe(true);
+    await expect.poll(async () => (await badge(frame).boundingBox())!.width).toBeGreaterThan(narrow + 30);
+    await expect
+      .poll(async () => {
+        const p2 = (await palette(frame).boundingBox())!;
+        const b2 = (await badge(frame).boundingBox())!;
+        return p2.x < b2.x + b2.width + 4 && b2.x < p2.x + p2.width + 4 && p2.y < b2.y + b2.height + 4 && b2.y < p2.y + p2.height + 4;
+      })
+      .toBe(false);
+    await shot(page, 'palette-clear-of-wide-badge');
+  } finally {
+    await setKey(null);
+  }
   // Zoomed in on the long line until it runs past both sides of the view: still clear of it.
   await badge(frame).getByRole('button', { name: 'Turn off construction' }).click();
   const view = (await page.locator('#workspace-frame').boundingBox())!;
@@ -379,5 +405,135 @@ test('cad:sketch-relations-palette-place the palette never covers the origin, a 
     })
     .toBe(true);
   await shot(page, 'palette-zoomed-long-line');
+  expect(seen.errors).toEqual([]);
+});
+
+/** A point, as the sketch has it now. */
+const pointNow = (page: Page, id: string) => cad<V2>(page, ((i: string) => (window as unknown as W).__CAD__.services.apis.get().sketch.draft().points[i]) as never, id);
+
+test('cad:sketch-relations-palette-held Parallel, Perpendicular and Collinear next to a Fixed line leave it where it is (the drawn line turns about their shared end); a projected line stays on its edge; Equal of an arc and a circle with one centre applies', async ({ page, request }) => {
+  const { seen, frame } = await startSketch(page, request);
+  // A slanted base line, Fixed from the palette, and a line drawn on from its end.
+  const A: [V2, V2] = [
+    [-50, -34],
+    [-20, -28],
+  ];
+  const B: [V2, V2] = [
+    [-20, -28],
+    [-14, -10],
+  ];
+  await drawLines(page, [A, B]);
+  let d = await drawn(page);
+  const l1 = lineAt(d, ...A);
+  const l2 = lineAt(d, ...B);
+  const [pa, pb] = d.entities.find((e) => e.id === l1)!.p!;
+  expect(d.entities.find((e) => e.id === l2)!.p).toContain(pb);
+  await clickAt(page, mid(...A));
+  await expect.poll(() => kindsShown(frame)).toContain('fix');
+  await relation(frame, 'fix').click();
+  await sketchIdle(page);
+  const held = [await pointNow(page, pa), await pointNow(page, pb)];
+  for (const kind of ['parallel', 'perpendicular', 'collinear']) {
+    await page.keyboard.press('Escape');
+    await clickAt(page, mid(...A));
+    await clickAt(page, mid(...B), true);
+    await expect.poll(() => kindsShown(frame)).toContain(kind);
+    if (kind === 'parallel') await shot(page, 'palette-fixed-neighbour');
+    await relation(frame, kind).click();
+    await sketchIdle(page);
+    expect(await note(page), kind).toBeNull();
+    d = await drawn(page);
+    expect(d.constraints.some((c) => c.kind === kind)).toBe(true);
+    // The fixed line has not moved.
+    expect(Math.hypot(d.points[pa][0] - held[0][0], d.points[pa][1] - held[0][1]), `${kind}: its start`).toBeLessThan(1e-6);
+    expect(Math.hypot(d.points[pb][0] - held[1][0], d.points[pb][1] - held[1][1]), `${kind}: its end`).toBeLessThan(1e-6);
+    await page.keyboard.press('Control+z');
+    await sketchIdle(page);
+  }
+  // An arc and a circle with one centre (Concentric), then Equal: the arc lies on the circle.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('c');
+  await clickAt(page, [60, -40]);
+  await clickAt(page, [68, -40]);
+  await page.keyboard.press('Escape');
+  // The arc well apart from the circle (its ends near the circle would snap onto it).
+  await page.keyboard.press('a');
+  await clickAt(page, [30, -60]);
+  await clickAt(page, [46, -60]);
+  await clickAt(page, [38, -54]);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await sketchIdle(page);
+  d = await drawn(page);
+  const circle = d.entities.find((e) => e.kind === 'circle')!;
+  const arc = d.entities.find((e) => e.kind === 'arc')!;
+  // Each on its curve where it is now (Concentric moves them): the circle, the arc.
+  const select2 = async () => {
+    const now = await drawn(page);
+    const k = now.entities.find((e) => e.id === circle.id) as unknown as { c: string; r: number };
+    const ar = now.entities.find((e) => e.id === arc.id) as unknown as { c: string; a: string; b: string; ccw?: boolean };
+    const kc = now.points[k.c];
+    const [c, pa, pb] = [now.points[ar.c], now.points[ar.a], now.points[ar.b]];
+    const ang = (q: V2) => Math.atan2(q[1] - c[1], q[0] - c[0]);
+    const [s0, s1] = ar.ccw === false ? [ang(pb), ang(pa)] : [ang(pa), ang(pb)];
+    const sweep = (((s1 - s0) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI;
+    const r = Math.hypot(pa[0] - c[0], pa[1] - c[1]);
+    // A third of the way along (its relation glyphs sit at its middle).
+    const m = s0 + sweep / 3;
+    await page.keyboard.press('Escape');
+    // The circle across from the arc's middle (its ends may lie on the circle's rim).
+    await clickAt(page, [kc[0] - k.r * Math.cos(m), kc[1] - k.r * Math.sin(m)]);
+    await clickAt(page, [c[0] + r * Math.cos(m), c[1] + r * Math.sin(m)], true);
+    await expect(palette(frame)).toBeVisible();
+  };
+  await select2();
+  await expect.poll(() => kindsShown(frame)).toContain('concentric');
+  await relation(frame, 'concentric').click();
+  await sketchIdle(page);
+  expect(await note(page)).toBeNull();
+  await select2();
+  await expect.poll(() => kindsShown(frame)).toContain('equal');
+  await shot(page, 'palette-arc-on-circle');
+  await relation(frame, 'equal').click();
+  await sketchIdle(page);
+  expect(await note(page)).toBeNull();
+  d = await drawn(page);
+  expect(d.constraints.filter((c) => c.refs.includes(circle.id) && c.refs.includes(arc.id)).map((c) => c.kind).sort()).toEqual(['concentric', 'equal']);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:sketch-relations-palette-projected Perpendicular with a line drawn from a projected edge\'s end: the projected line stays on its model edge', async ({ page, request }) => {
+  const { seen, frame } = await startSketch(page, request, { solid: [40, 20, 10] });
+  // Project the top face's front edge (y = 0, z = 10): a linked line from (0, 0) to (40, 0).
+  await page.keyboard.press('p');
+  const [ex, ey] = await at(page, [20, 0, 10]);
+  await page.mouse.click(ex, ey);
+  await sketchIdle(page);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  let d = await drawn(page);
+  const proj = d.entities.find((e) => e.kind === 'line' && (e as { link?: string }).link);
+  expect(proj, 'a projected line').toBeTruthy();
+  const ends = proj!.p!.map((q) => [...d.points[q]] as V2);
+  // A line drawn on from the projected line's far end, and a horizontal line apart (over the face).
+  const far = ends.find((q) => q[0] > 20)!;
+  await drawLines(page, [
+    [far, [far[0] + 6, far[1] + 18]],
+    [
+      [5, 12],
+      [30, 12],
+    ],
+  ]);
+  d = await drawn(page);
+  const drawnFromEdge = d.entities.filter((e) => e.kind === 'line' && !(e as { link?: string }).link && e.p!.some((q) => proj!.p!.includes(q)));
+  expect(drawnFromEdge, 'the line drawn from the projected end shares its point').toHaveLength(1);
+  await clickAt(page, [17.5, 12]);
+  await clickAt(page, [far[0] + 3, far[1] + 9], true);
+  await expect.poll(() => kindsShown(frame)).toContain('perpendicular');
+  await relation(frame, 'perpendicular').click();
+  await sketchIdle(page);
+  expect(await note(page)).toBeNull();
+  d = await drawn(page);
+  proj!.p!.forEach((q, i) => expect(Math.hypot(d.points[q][0] - ends[i][0], d.points[q][1] - ends[i][1]), 'the projected line\'s ends').toBeLessThan(1e-6));
   expect(seen.errors).toEqual([]);
 });

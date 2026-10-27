@@ -4,7 +4,7 @@
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchEntity, SketchFeature, SketchRelationKind, Vec2 } from '../types/doc';
-import { centreOf, entityEnds, entityLabel, entityOf, entityPoints, isDimension, lineEnds as lineEndsOf, ORIGIN, pointAt, pointIdOf, radiusOf, refKindOf, type RefKind } from './model';
+import { arcGeom, centreOf, entityEnds, entityLabel, entityOf, entityPoints, isDimension, lineEnds as lineEndsOf, ORIGIN, pointAt, pointIdOf, radiusOf, refKindOf, type RefKind } from './model';
 // P4b (SKETCH): splines.
 import { splineOf } from './tools/spline-entity';
 
@@ -107,7 +107,14 @@ export function curvesMerged(before: F, after: F, ids: readonly string[]): strin
     const rb = radiusOf(f, y);
     if (ra == null || rb == null) return false;
     const [ca, cb] = [centreOf(f, x), centreOf(f, y)];
-    return !!ca && !!cb && near(pointAt(f, ca), pointAt(f, cb)) && Math.abs(ra - rb) <= tol;
+    if (!(!!ca && !!cb && near(pointAt(f, ca), pointAt(f, cb)) && Math.abs(ra - rb) <= tol)) return false;
+    // Integration review: an arc on a circle's path, or two arcs of one circle side by side, is
+    // coradial (an arc on a pitch circle), not one curve on another: only two full circles, or
+    // two arcs whose spans overlap, are.
+    if (a.kind === 'circle' && b.kind === 'circle') return true;
+    if (a.kind !== 'arc' || b.kind !== 'arc') return false;
+    const [ga, gb] = [arcGeom(f, a), arcGeom(f, b)];
+    return !!ga && !!gb && spansOverlap(ga.a0, ga.sweep, gb.a0, gb.sweep);
   };
   const curves = [...new Set(ids)].filter((id) => {
     const k = entityOf(after, id)?.kind;
@@ -118,6 +125,15 @@ export function curvesMerged(before: F, after: F, ids: readonly string[]): strin
       if (onTop(after, curves[i], curves[j]) && !onTop(before, curves[i], curves[j])) return `would put ${entityLabel(after, curves[i])} on ${entityLabel(after, curves[j])}`;
     }
   return null;
+}
+
+/** Whether two counter-clockwise spans (start, sweep) of one circle share more than an end. */
+function spansOverlap(a0: number, sa: number, b0: number, sb: number): boolean {
+  const TAU = 2 * Math.PI;
+  const eps = 1e-6;
+  const inside = (t: number, s0: number, sw: number) => ((((t - s0) % TAU) + TAU) % TAU) < sw - eps;
+  // Overlap with positive length: one span's start (or a point just after it) lies inside the other.
+  return inside(b0 + eps, a0, sa) || inside(a0 + eps, b0, sb);
 }
 
 /**
@@ -132,17 +148,36 @@ export const SUPERSEDES: Partial<Record<SketchRelationKind, SketchRelationKind[]
 
 /**
  * Where the solver starts for an angle relation of two lines (Parallel, Perpendicular, Collinear):
- * the line free to turn (no Horizontal, Vertical or Fix of its own; the second when both are)
- * turned about its middle to the wanted direction, its length kept. From far off the solver met
- * the relation by shrinking a line instead (Perpendicular on a horizontal line and one at 22
- * degrees left the horizontal one a few ten-thousandths long). Null: nothing to turn.
+ * the line free to turn, turned to the wanted direction, its length kept. From far off the solver
+ * met the relation by shrinking a line instead (Perpendicular on a horizontal line and one at 22
+ * degrees left the horizontal one a few ten-thousandths long).
+ * Integration review: the turn never moves what the sketch holds. A point is held when it is
+ * fully defined (`fully`, the sketch's analysis), Fixed (a point Fix, or a point of a Fixed curve,
+ * whose Fix holds it where it is loaded), a point of linked geometry (projected: fixed where its
+ * model puts it), or one place with any of those (Coincident, the origin). A line with a held end
+ * turns about that end; one with both ends held, or with its own Horizontal, Vertical or Fix,
+ * does not turn; when neither line can, the solver starts from where things are (null).
  */
-export function turnedForAngle(f: Pick<SketchFeature, 'points' | 'entities' | 'constraints'>, r: Pick<RelationPlan, 'kind' | 'refs'>): Record<string, Vec2> | null {
+export function turnedForAngle(
+  f: Pick<SketchFeature, 'points' | 'entities' | 'constraints'>,
+  r: Pick<RelationPlan, 'kind' | 'refs'>,
+  fully: (point: string) => boolean = () => false,
+): Record<string, Vec2> | null {
   if (r.kind !== 'parallel' && r.kind !== 'perpendicular' && r.kind !== 'collinear') return null;
   if (r.refs.length !== 2) return null;
   const held = (id: string) => f.constraints.some((c) => (c.kind === 'horizontal' || c.kind === 'vertical' || c.kind === 'fix') && c.refs.length === 1 && c.refs[0] === id);
+  const same = coincidentGroups(f);
+  const fixedPoints = new Set<string>([ORIGIN]);
+  const curveFixed = (id: string) => f.constraints.some((c) => c.kind === 'fix' && c.refs.length === 1 && c.refs[0] === id);
+  for (const e of f.entities) if (e.link || curveFixed(e.id)) for (const q of entityPoints(e)) fixedPoints.add(q);
+  for (const c of f.constraints) if (c.kind === 'fix' && c.refs.length === 1 && f.points[c.refs[0]]) fixedPoints.add(c.refs[0]);
+  const pinned = (q: string) => fully(q) || [...fixedPoints].some((x) => same(q, x));
+  const turnable = (id: string) => {
+    const e = entityOf(f, id);
+    return e?.kind === 'line' && !held(id) && !e.link && !(pinned(e.p[0]) && pinned(e.p[1]));
+  };
   const [a, b] = r.refs;
-  const turn = !held(b) ? b : !held(a) ? a : null;
+  const turn = turnable(b) ? b : turnable(a) ? a : null;
   if (!turn) return null;
   const keep = turn === a ? b : a;
   const [k, t] = [lineEndsOf(f, keep), lineEndsOf(f, turn)];
@@ -155,10 +190,14 @@ export function turnedForAngle(f: Pick<SketchFeature, 'points' | 'entities' | 'c
   if (kl < 1e-9 || tl < 1e-9) return null;
   let u: Vec2 = r.kind === 'perpendicular' ? [-kd[1] / kl, kd[0] / kl] : [kd[0] / kl, kd[1] / kl];
   if (u[0] * td[0] + u[1] * td[1] < 0) u = [-u[0], -u[1]];
+  const [p0, p1] = line.p;
+  // About its held end (the other end swings), else about its middle.
+  if (pinned(p0)) return { [p1]: [t[0][0] + u[0] * tl, t[0][1] + u[1] * tl] };
+  if (pinned(p1)) return { [p0]: [t[1][0] - u[0] * tl, t[1][1] - u[1] * tl] };
   const m: Vec2 = [(t[0][0] + t[1][0]) / 2, (t[0][1] + t[1][1]) / 2];
   return {
-    [line.p[0]]: [m[0] - (u[0] * tl) / 2, m[1] - (u[1] * tl) / 2],
-    [line.p[1]]: [m[0] + (u[0] * tl) / 2, m[1] + (u[1] * tl) / 2],
+    [p0]: [m[0] - (u[0] * tl) / 2, m[1] - (u[1] * tl) / 2],
+    [p1]: [m[0] + (u[0] * tl) / 2, m[1] + (u[1] * tl) / 2],
   };
 }
 

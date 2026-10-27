@@ -282,6 +282,30 @@ describe("a new sketch fillet's radius arrow", () => {
     expect(filletRadiusAt(fc2, m3, 0.01, filletLimit(f2.draft, arc2.id)!.max * 0.999)).toBeCloseTo(3, 3);
   });
 
+  // Integration review: a release while the solver is still busy with the drag's moves stored an
+  // older radius (the e2e under load: 5.5 for 7); the release keeps the pointer's last value.
+  it('a release that comes before the drag solves land stores the last value the pointer asked for', async () => {
+    h = await sketchHarness(plate());
+    h.tool('fillet');
+    h.click([40, 20]);
+    await h.idle();
+    const { at, dir } = h.mode.view.get().preview!.handles![0];
+    const along = (d: number): Vec2 => [at[0] + dir[0] * d * K, at[1] + dir[1] * d * K];
+    const t = h.mode.tool!;
+    t.pointer(ev('move', at));
+    t.pointer(ev('down', at, true));
+    // Four moves at once (no wait), then the release at once: the solves are all still to come.
+    for (let i = 1; i <= 4; i++) t.pointer(ev('move', along(i * 0.5), true));
+    t.pointer(ev('up', along(2)));
+    t.pointer(ev('click', along(2)));
+    await h.idle();
+    await h.idle();
+    const dim = h.sketch().constraints.find((c): c is SketchDimension => isDimension(c) && c.kind === 'radius')!;
+    expect(dim.expr).toBe('7 mm');
+    const arc = h.sketch().entities.find((e) => e.kind === 'arc') as Extract<SketchEntity, { kind: 'arc' }>;
+    expect(arcGeom(h.sketch(), arc)!.r).toBeCloseTo(7, 6);
+  });
+
   it('drag inward (away from the corner): bigger radius live and stored in one undo step (the dimension changes, nothing added); too far stops at 20 and says why; Undo gives 5 back', async () => {
     h = await sketchHarness(plate());
     h.tool('fillet');

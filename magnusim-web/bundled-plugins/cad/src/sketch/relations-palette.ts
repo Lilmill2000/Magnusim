@@ -24,7 +24,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchFeature, SketchRelationKind } from '../types/doc';
 import { uiFor } from '../ui/controller';
-import { applyRelation, IMPLIED, picks, relationEdit, relationIcon, relationRefusal } from './commands';
+import { applyRelation, fullyDefined, IMPLIED, picks, relationEdit, relationIcon, relationRefusal } from './commands';
 import { CONSTRAIN_COMMANDS, hasRelation, planConstraint, type RelationPlan } from './constraints';
 import { entityOf, entityPoints, RELATION_LABELS } from './model';
 import type { SketchMode } from './mode';
@@ -147,7 +147,9 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
 
   function candidates(): { sel: string[]; offers: RelationOffer[] } | null {
     const d = mode.draft();
-    if (!d || !mode.active || mode.byAssistant || mode.dragging) return null;
+    // Nothing while anything is dragged (a point, a curve, a fillet's radius arrow): its checks
+    // would queue whole-sketch solves ahead of the drag's own on the solver.
+    if (!d || !mode.active || mode.byAssistant || mode.dragging || mode.view.get().dragging) return null;
     if ((mode.tool?.id ?? 'select') !== 'select') return null;
     if (ui.editBlock()) return null;
     const hits = mode.selected();
@@ -156,15 +158,20 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
     return { sel, offers: relationOffers(d, sel) };
   }
 
-  /** Each offer as the command would add it, solved: addable, implied (pressed), or left out. */
-  async function check(sel: string[], offers: RelationOffer[]): Promise<RelationOffer[]> {
+  /**
+   * Each offer as the command would add it, solved: addable, implied (pressed), or left out. Null
+   * once another check took its place (integration review: a stale check went on queueing dry
+   * solves on the solver worker, ahead of the person's own solves and drag moves).
+   */
+  async function check(sel: string[], offers: RelationOffer[], my: number): Promise<RelationOffer[] | null> {
     const out: RelationOffer[] = [];
     for (const o of offers) {
+      if (my !== gen) return null;
       if (o.present) {
         out.push(o);
         continue;
       }
-      const r = await mode.tryApply(relationEdit(o.kind, sel), { refuse: relationRefusal(sel) });
+      const r = await mode.tryApply(relationEdit(o.kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel) });
       if (r.ok) out.push(o);
       else if (r.implied) out.push({ ...o, implied: true });
     }
@@ -256,14 +263,18 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
     // Another selection: nothing shown until its offers are checked. The same one after an edit:
     // the buttons stay (and keep the focus) until the new answer.
     if (!sameSel) el.hidden = true;
-    pending = check(c.sel, c.offers).then(
-      (offers) => {
-        if (my === gen) render(offers);
-      },
-      () => {
-        if (my === gen) render([]);
-      },
-    );
+    // One check per edit: an edit's draft comes first and its analysis right after (the status the
+    // check reads); while that analysis runs, the status it brings starts the check instead.
+    pending = Promise.resolve()
+      .then(() => (my !== gen || mode.state.get().analyzing ? null : check(c.sel, c.offers, my)))
+      .then(
+        (offers) => {
+          if (offers && my === gen) render(offers);
+        },
+        () => {
+          if (my === gen) render([]);
+        },
+      );
   }
 
   const offs = [mode.view.subscribe(sync), services.selection.subscribe(sync), mode.state.subscribe(sync)];

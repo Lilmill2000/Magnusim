@@ -106,7 +106,7 @@ export function relationIcon(kind: SketchRelationKind): string {
  * yet (a record already there is not added twice: it would only over-define it), replacing what the
  * new relation makes redundant on the same references (SUPERSEDES).
  */
-export function relationEdit(kind: SketchRelationKind, sel: readonly string[]): (d: SketchFeature) => EditOutcome {
+export function relationEdit(kind: SketchRelationKind, sel: readonly string[], fully?: (point: string) => boolean): (d: SketchFeature) => EditOutcome {
   return (d) => {
     const p = planConstraint(d, kind, sel);
     if (!p.ok) return { ok: false, reason: p.reason };
@@ -122,7 +122,7 @@ export function relationEdit(kind: SketchRelationKind, sel: readonly string[]): 
     }
     const draft = b.result();
     // Review (relations lane): an angle relation starts the solver from the free line turned to it.
-    const turned = add.length === 1 ? turnedForAngle(d, add[0]) : null;
+    const turned = add.length === 1 ? turnedForAngle(d, add[0], fully) : null;
     return { ok: true, draft: turned ? { ...draft, points: { ...draft.points, ...turned } } : draft, optional: [], removed: [] };
   };
 }
@@ -140,10 +140,15 @@ export function relationRefusal(sel: readonly string[]): (before: SketchFeature,
  * and the relations palette by the selection all add through here: the same records, refused with
  * the same reasons).
  */
-export function applyRelation(mode: Pick<SketchMode, 'apply'>, kind: SketchRelationKind, sel: readonly string[]): Promise<ApplyResult> {
+/** Whether the sketch's last analysis has this point fully defined (an angle relation never turns it). */
+export function fullyDefined(mode: Pick<SketchMode, 'view'>): (point: string) => boolean {
+  return (q) => mode.view.get().analysis?.perPoint[q] === 'fully';
+}
+
+export function applyRelation(mode: Pick<SketchMode, 'apply' | 'view'>, kind: SketchRelationKind, sel: readonly string[]): Promise<ApplyResult> {
   // Review (relations lane): the sketch's analysis is asked first, as it alone sees a relation the
   // others imply (Parallel of two horizontal lines): added, it only over-defined the sketch.
-  return mode.apply(RELATION_LABELS[kind], relationEdit(kind, sel), { refuse: relationRefusal(sel), analyzeFirst: true });
+  return mode.apply(RELATION_LABELS[kind], relationEdit(kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel), analyzeFirst: true });
 }
 
 export { IMPLIED };

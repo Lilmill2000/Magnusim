@@ -8,7 +8,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { CONSTRUCTION_BADGE_TEXT, createConstructionBadge, TURN_OFF_CONSTRUCTION } from '../../src/sketch/construction-badge';
-import { planConstraint } from '../../src/sketch/constraints';
+import { curvesMerged, planConstraint, turnedForAngle } from '../../src/sketch/constraints';
 import { createRelationsPalette, hasRelation, relationOffers, type RelationsPalette } from '../../src/sketch/relations-palette';
 import type { SketchConstraint, SketchEntity, SketchFeature, Vec2 } from '../../src/types/doc';
 import { rectangle, type Geo } from './fixtures';
@@ -341,6 +341,140 @@ describe('the palette in sketch mode (the real solver)', () => {
     expect(Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1])).toBeCloseTo(40, 3);
     expect(Math.hypot(p.d[0] - p.c[0], p.d[1] - p.c[1])).toBeCloseTo(Math.hypot(42, 17), 3);
     expect(p.c[0]).toBeCloseTo(p.d[0], 6);
+  });
+
+  // Integration review 7: the turned start never moves what the sketch holds.
+  it('Parallel, Perpendicular and Collinear next to a Fixed line: the fixed line stays where it is, the free one turns about the shared end', async () => {
+    for (const kind of ['parallel', 'perpendicular', 'collinear'] as const) {
+      h?.dispose();
+      palette?.dispose();
+      h = await sketchHarness({
+        points: { a: [0, 0], b: [30, 0], c: [36, 18] },
+        entities: [
+          { id: 'l1', kind: 'line', p: ['a', 'b'] },
+          { id: 'l2', kind: 'line', p: ['b', 'c'] },
+        ],
+        constraints: [{ id: 'fx', kind: 'fix', refs: ['l1'] }],
+      });
+      palette = createRelationsPalette(h.mode);
+      expect(await shows(['l1', 'l2'])).toContain(kind);
+      h.mode.select([{ what: 'entity', id: 'l1' }, { what: 'entity', id: 'l2' }], false);
+      expect(await h.services.commands.run(`sketch.${kind}`)).toBe(true);
+      await h.idle();
+      expect(h.mode.view.get().note, kind).toBeNull();
+      const p = h.sketch().points;
+      expect(p.a[0]).toBeCloseTo(0, 6);
+      expect(p.a[1]).toBeCloseTo(0, 6);
+      expect(p.b[0], `${kind}: the fixed line's end`).toBeCloseTo(30, 6);
+      expect(p.b[1], `${kind}: the fixed line's end`).toBeCloseTo(0, 6);
+      // The free line turned about (30, 0), its length kept.
+      expect(Math.hypot(p.c[0] - 30, p.c[1])).toBeCloseTo(Math.hypot(6, 18), 3);
+      if (kind === 'perpendicular') expect(p.c[0]).toBeCloseTo(30, 6);
+      else expect(p.c[1]).toBeCloseTo(0, 6);
+    }
+  });
+
+  it('Perpendicular with a line drawn from a projected line\'s end: the projected line stays on its model edge', async () => {
+    h = await sketchHarness({
+      points: { a: [0, 20], b: [40, 20], c: [46, 38], d: [-30, -10], e: [10, -10] },
+      entities: [
+        { id: 'lp', kind: 'line', p: ['a', 'b'], link: 'k1' } as unknown as SketchEntity,
+        { id: 'l2', kind: 'line', p: ['b', 'c'] },
+        { id: 'l3', kind: 'line', p: ['d', 'e'] },
+      ],
+      constraints: [{ id: 'h3', kind: 'horizontal', refs: ['l3'] }],
+    });
+    palette = createRelationsPalette(h.mode);
+    expect(await shows(['l3', 'l2'])).toContain('perpendicular');
+    h.mode.select([{ what: 'entity', id: 'l3' }, { what: 'entity', id: 'l2' }], false);
+    expect(await h.services.commands.run('sketch.perpendicular')).toBe(true);
+    await h.idle();
+    expect(h.mode.view.get().note).toBeNull();
+    const p = h.sketch().points;
+    expect(p.a).toEqual([0, 20]);
+    expect(p.b[0]).toBeCloseTo(40, 6);
+    expect(p.b[1]).toBeCloseTo(20, 6);
+    expect(p.c[0]).toBeCloseTo(40, 6);
+  });
+
+  it('the turned start: about a held end, never a held or linked line, nothing when neither line can turn', () => {
+    const g = {
+      points: { a: [0, 0] as Vec2, b: [30, 0] as Vec2, c: [36, 18] as Vec2 },
+      entities: [
+        { id: 'l1', kind: 'line', p: ['a', 'b'] } as SketchEntity,
+        { id: 'l2', kind: 'line', p: ['b', 'c'] } as SketchEntity,
+      ],
+      constraints: [{ id: 'fx', kind: 'fix', refs: ['l1'] }] as SketchConstraint[],
+    };
+    // l2 turns about b (l1's fixed end): only c moves.
+    const t = turnedForAngle(g, { kind: 'parallel', refs: ['l1', 'l2'] })!;
+    expect(Object.keys(t)).toEqual(['c']);
+    // A fully defined end is held too.
+    const t2 = turnedForAngle({ ...g, constraints: [] }, { kind: 'parallel', refs: ['l1', 'l2'] }, (q) => q === 'b')!;
+    expect(Object.keys(t2)).toEqual(['c']);
+    // Both ends of l2 held and l1 fixed: neither turns.
+    expect(turnedForAngle(g, { kind: 'parallel', refs: ['l1', 'l2'] }, (q) => q === 'c')).toBeNull();
+    // A linked line never turns: the other one does.
+    const linked = { ...g, constraints: [], entities: [{ ...g.entities[0] }, { ...g.entities[1], link: 'k1' } as unknown as SketchEntity] };
+    expect(Object.keys(turnedForAngle(linked, { kind: 'parallel', refs: ['l1', 'l2'] })!)).toEqual(['a']);
+  });
+
+  // Integration review 8: an arc on a circle's path is coradial, not one curve on another.
+  it('Equal of an arc and a circle with one centre applies (an arc on the circle), and the palette offers it', async () => {
+    h = await sketchHarness({
+      points: { k: [0, 0], s: [10, 0], t: [0, 10] },
+      entities: [
+        { id: 'c1', kind: 'circle', c: 'k', r: 12, construction: true } as SketchEntity,
+        { id: 'a1', kind: 'arc', c: 'k', a: 's', b: 't' },
+      ],
+    });
+    palette = createRelationsPalette(h.mode);
+    expect(await shows(['c1', 'a1'])).toContain('equal');
+    h.mode.select([{ what: 'entity', id: 'c1' }, { what: 'entity', id: 'a1' }], false);
+    expect(await h.services.commands.run('sketch.equal')).toBe(true);
+    await h.idle();
+    expect(h.mode.view.get().note).toBeNull();
+    expect(h.sketch().constraints.map((c) => c.kind)).toEqual(['equal']);
+    // Two arcs of one circle side by side: not on top of each other either; overlapping ones are.
+    const two = (b0: Vec2, b1: Vec2): Geo => ({
+      points: { k: [0, 0], s: [10, 0], t: [0, 10], u: b0, v: b1 },
+      entities: [
+        { id: 'a1', kind: 'arc', c: 'k', a: 's', b: 't' },
+        { id: 'a2', kind: 'arc', c: 'k', a: 'u', b: 'v' },
+      ],
+      constraints: [],
+    });
+    const before = two([-10, 0], [0, -10]);
+    expect(curvesMerged(before, before, ['a1', 'a2'])).toBeNull();
+    const over = two([7.0710678, 7.0710678], [-10, 0]);
+    expect(curvesMerged({ ...over, points: { ...over.points, u: [16, 12], v: [-20, 0] } }, over, ['a1', 'a2'])).toMatch(/^would put Arc/);
+  });
+
+  // Integration review 9: a superseded check stops; one check per edit.
+  it('a check another one took the place of stops asking the solver; an edit is checked once, after its analysis', async () => {
+    const geo = zoo();
+    h = await sketchHarness({ points: geo.points, entities: geo.entities });
+    palette = createRelationsPalette(h.mode);
+    let asked = 0;
+    const tryApply = h.mode.tryApply.bind(h.mode);
+    h.mode.tryApply = (...a: Parameters<typeof tryApply>) => {
+      asked++;
+      return tryApply(...a);
+    };
+    // Three quick selections: only the last one's offers are asked (and at most one stale ask).
+    h.mode.select([{ what: 'entity', id: 'l1' }, { what: 'entity', id: 'l2' }], false);
+    h.mode.select([{ what: 'entity', id: 'c1' }, { what: 'entity', id: 'a1' }], false);
+    h.mode.select([{ what: 'entity', id: 'l1' }], false);
+    await palette.settled();
+    expect(palette.offers().map((o) => o.kind)).toEqual(['horizontal', 'vertical', 'fix']);
+    expect(asked).toBeLessThanOrEqual(3 + 1);
+    // A click: the edit's draft, then its analysis, are checked once (3 offers or fewer).
+    asked = 0;
+    await palette.add('horizontal');
+    await h.idle();
+    await palette.settled();
+    expect(palette.offers().map((o) => `${o.kind}${o.present ? '*' : ''}`)).toEqual(['horizontal*']);
+    expect(asked).toBeLessThanOrEqual(3);
   });
 
   // Review 5: what the sketch already implies shows pressed, never as an addable button the solver refuses.

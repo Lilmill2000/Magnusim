@@ -1218,7 +1218,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       return;
     }
     el.style.display = '';
-    const key = [box.left, box.top, box.right, box.bottom].map(Math.round).join(',') + `,${el.childElementCount},${glyphEls.size},${dimEls.size},${boxEls.size},${handleEls.size},${badge.el.hidden},${d === sampled.d}`;
+    const key = [box.left, box.top, box.right, box.bottom].map(Math.round).join(',') + `,${el.childElementCount},${glyphEls.size},${dimEls.size},${boxEls.size},${handleEls.size},${badge.el.hidden},${badge.el.textContent},${d === sampled.d}`;
     if (key === paletteFor) return;
     paletteFor = key;
     const host = hostRect();
@@ -1660,7 +1660,12 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   // ux010 (DRAW): Show relations on or off: the glyphs again.
   const offRelations = relationsView(services).state.subscribe(() => render());
   // The Construction badge names Construction's key: the person's keybind, followed when it changes.
-  const offKeys = keybindsFor(services).subscribe(syncBadge);
+  // Integration review: a longer key widens the badge, so the palette is placed again (clear of its ×).
+  const offKeys = keybindsFor(services).subscribe(() => {
+    syncBadge();
+    placePalette();
+    ann.changed();
+  });
   // ux010 (DRAW): construction drawing on or off: the badge and the preview's dashes.
   let drawingConstruction = mode.drawConstruction;
   const offState = mode.state.subscribe((s) => {
