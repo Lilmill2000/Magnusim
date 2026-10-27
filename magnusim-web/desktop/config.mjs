@@ -1,0 +1,44 @@
+// Magnusim CAD's desktop settings: where its projects and prefs live, the server's
+// environment, and which addresses stay in the app's window. Plain functions (no Electron)
+// so desktop/test can check them.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { join } from 'node:path';
+
+export const APP_NAME = 'Magnusim CAD';
+
+/**
+ * The server's environment: the CAD edition; projects in Documents\Magnusim CAD (D5: the app's
+ * own folder; MAGNUSIM_PROJECTS_ROOT set by the person wins, e.g. Magnusim's folder to share it);
+ * prefs in the app's user data. The Assistant's home stays Magnusim's (%APPDATA%\Magnusim), so
+ * one sign-in covers both apps.
+ * @param {{ documents: string, userData: string, env?: NodeJS.ProcessEnv }} o
+ */
+export function serverEnv({ documents, userData, env = process.env }) {
+  const projects = String(env.MAGNUSIM_PROJECTS_ROOT || '').trim() || join(documents, APP_NAME);
+  return {
+    ...env,
+    MAGNUSIM_EDITION: 'cad',
+    MAGNUSIM_PROJECTS_ROOT: projects,
+    MAGNUSIM_LOCAL_JSON: String(env.MAGNUSIM_LOCAL_JSON || '').trim() || join(userData, 'local.json'),
+  };
+}
+
+/** The app's own pages: its server on this PC, at its port. Anything else opens in the browser. */
+export function isAppUrl(url, port) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost') && Number(u.port) === Number(port);
+  } catch {
+    return false;
+  }
+}
+
+/** A link the person may open in their browser (never a file, script or app address). */
+export function isExternalUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || u.protocol === 'http:' || u.protocol === 'mailto:';
+  } catch {
+    return false;
+  }
+}

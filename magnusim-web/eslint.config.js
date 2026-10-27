@@ -55,6 +55,8 @@ export default [
       'projects/**',
       '.cache/**',
       'e2e/**',
+      // Magnusim CAD's desktop shell: its own package (Electron), outside the app's lint.
+      'desktop/**',
       'scripts/diag-*.cjs',
       'scripts/prove-*.cjs',
       'src/app/shell.html',
