@@ -29,10 +29,14 @@ async function shot(page: Page, name: string, clip?: { x: number; y: number; wid
  * folds first. Commands not listed never fold.
  */
 const FOLD_ORDER = [
+  // The person's Picture and Find.
+  'file.picture',
+  'inspect.find',
   'modify.parameters',
   'inspect.check',
   'construct.point',
   'solid.loft',
+  'solid.hole',
   'inspect.mass',
   'modify.split',
   'modify.delete-faces',

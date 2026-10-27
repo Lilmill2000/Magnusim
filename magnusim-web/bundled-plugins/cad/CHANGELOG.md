@@ -4,6 +4,31 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**What the Assistant can do, you can do too.**
+- Hole (SOLID): click a flat face, click the centres on it (or type them), set
+  the diameter and Through or a blind depth, Done. It makes "Hole N sketch" and
+  the cut "Hole N" as one undo step, the same two features the Assistant's holes
+  are, edited later as a sketch and an extrude. Also in a face's right-click menu.
+- A body's colour: click its swatch in the tree, or "Colour…" in its menu.
+- The history's order: drag a feature onto another (it goes before or after
+  it), or Move up and Move down in its menu. A feature stays below what it uses
+  and above what uses it; a move that breaks that is refused and says why.
+- Delete with several features selected deletes them all as one undo step, or
+  none when a feature left still uses one of them.
+- The Back isometric view (key 8, and the views menu); Middle in the section
+  view cuts through the middle of the shown bodies.
+- Find (INSPECT): select faces, edges, bodies or sketch regions by a query in
+  the Assistant's own words ("Body 1 faces >Z", "largest", "hole", "edges of
+  Extrude 1.end"), then Select all or click a row.
+- Picture (FILE): a picture of the part from up to four set directions, with
+  body names or face labels, a section, bodies left out, saved as a PNG. Your
+  own view does not move.
+- Measure takes a body (its row in the tree: volume, solids, sealed voids,
+  whether it is valid; two bodies: their overlap and how many solids they make
+  joined), a body's cross-section at Top, Front, Right or a plane of yours, and
+  points typed as x, y, z.
+- Parameters have a comment, under each row.
+
 **The Assistant builds in the Part.** This needs Magnusim's Assistant, which is
 still in development for Magnusim 0.5.0 (Settings > Assistant: a cloud provider
 with your own key, or a local server on this PC). How to use it: "The Assistant

@@ -526,12 +526,12 @@ test('cad:p2p3-review1-toolbar-fit at 1280 x 800 and 1440 x 900 every command bu
     await finishSketch(frame);
   }
   // 1920 px: since P4b fix round 1 (Daniel: "I prefer 1280 px (model)") the model toolbar is the
-  // compact layout at every width: each group's main command labelled, the rest in its More (16),
+  // compact layout at every width: each group's main command labelled, the rest in its More (19),
   // nothing folded for the width, and VIEW and EDIT have room for their labels.
   await page.setViewportSize({ width: 1920, height: 1080 });
   const bar = frame.locator('[data-cad-toolbar="model"]');
   await expect(bar).toHaveAttribute('data-fit-folded', '0');
-  await expect(bar).toHaveAttribute('data-folded', '16');
+  await expect(bar).toHaveAttribute('data-folded', '19');
   await expect(bar).toHaveAttribute('data-fit', '0');
   for (const id of ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'])
     await expect(frame.locator(`[data-cad-toolbar] .tb-btn[data-command="${id}"] .tb-txt`)).toBeVisible();

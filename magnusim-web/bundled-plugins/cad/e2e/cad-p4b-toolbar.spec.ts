@@ -22,12 +22,12 @@ import { addSolid, baseUrl, groupCommandLabels, newPartFromTree, newProject, ope
 // ux010: SCALE MODELS' Banana for scale (after VIEW) is on the bar too.
 const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step', 'scale.banana'];
 const MODEL_MORE: Record<string, string> = {
-  solid: 'solid.revolve solid.sweep solid.loft',
+  solid: 'solid.revolve solid.sweep solid.loft solid.hole',
   pattern: 'pattern.circular pattern.mirror',
   modify: 'modify.parameters modify.shell modify.press-pull modify.delete-faces modify.split modify.combine',
   construct: 'construct.axis construct.point',
-  inspect: 'inspect.mass inspect.check',
-  file: 'file.export-step',
+  inspect: 'inspect.mass inspect.check inspect.find',
+  file: 'file.export-step file.picture',
 };
 
 const tb = (frame: FrameLocator) => frame.locator('[data-cad-toolbar]');
@@ -258,13 +258,13 @@ test("cad:p4b-toolbar-customize Show in toolbar, Move to More, a drag and Move l
   await expect.poll(() => shownIds(frame, 'solid')).toEqual(['solid.extrude', 'solid.revolve']);
   await onMoreItem(frame, 'solid', 'solid.sweep', 'tb-to-bar');
   await expect.poll(() => shownIds(frame, 'solid')).toEqual(['solid.extrude', 'solid.revolve', 'solid.sweep']);
-  expect(await moreIds(frame, 'solid')).toBe('solid.loft');
+  expect(await moreIds(frame, 'solid')).toBe('solid.loft solid.hole');
   await expect(bar).toHaveAttribute('data-layout', 'custom');
 
   // Move to More: Extrude goes into SOLID's More (still runs from there).
   await onButton(frame, 'solid.extrude', 'tb-to-more');
   await expect.poll(() => shownIds(frame, 'solid')).toEqual(['solid.revolve', 'solid.sweep']);
-  expect(await moreIds(frame, 'solid')).toBe('solid.extrude solid.loft');
+  expect(await moreIds(frame, 'solid')).toBe('solid.extrude solid.loft solid.hole');
   // Press-pull stays in MODIFY's More, and its shortcut Q opens it.
   expect(await moreIds(frame, 'modify')).toContain('modify.press-pull');
   await page.keyboard.press('q');
@@ -305,7 +305,7 @@ test("cad:p4b-toolbar-customize Show in toolbar, Move to More, a drag and Move l
   let again = await openPart(page, page.locator('#plugin-studies-section li[data-plugin="cad"]').first());
   await expect(tb(again)).toHaveAttribute('data-layout-ready', '1');
   await expect.poll(() => shownIds(again, 'solid')).toEqual(['solid.revolve', 'solid.sweep']);
-  expect(await moreIds(again, 'solid')).toBe('solid.extrude solid.loft');
+  expect(await moreIds(again, 'solid')).toBe('solid.extrude solid.loft solid.hole');
 
   // A new Part of the same project: the same layout.
   await page.locator('#workspace-overlay [data-ws-back]').click();
@@ -328,7 +328,7 @@ test("cad:p4b-toolbar-customize Show in toolbar, Move to More, a drag and Move l
   await onButton(again, 'solid.revolve', 'tb-reset');
   await expect(tb(again)).toHaveAttribute('data-layout', 'default');
   await expect.poll(() => shownIds(again, 'solid')).toEqual(['solid.extrude']);
-  expect(await moreIds(again, 'solid')).toBe('solid.revolve solid.sweep solid.loft');
+  expect(await moreIds(again, 'solid')).toBe('solid.revolve solid.sweep solid.loft solid.hole');
   // At the defaults Reset is greyed with the reason.
   await tb(again).locator('.tb-btn[data-command="solid.extrude"]').click({ button: 'right', force: true });
   await expect(menu(again).locator('[data-menu-item="tb-reset"]')).toHaveAttribute('data-disabled-reason', 'The toolbar is already as it was at first');
@@ -372,7 +372,7 @@ test('cad:p4b-toolbar-tabs a change in one tab reaches another open CAD tab at o
   await expect.poll(() => shownIds(a.frame, 'solid')).toEqual(['solid.revolve']);
   await expect.poll(() => shownIds(b.frame, 'solid')).toEqual(['solid.revolve']);
   await expect(tb(b.frame)).toHaveAttribute('data-layout', 'custom');
-  expect(await moreIds(b.frame, 'solid')).toBe('solid.extrude solid.sweep solid.loft');
+  expect(await moreIds(b.frame, 'solid')).toBe('solid.extrude solid.sweep solid.loft solid.hole');
   // Tab B: Reset toolbar. Tab A is back at the defaults too, and nothing is stored.
   await page2.bringToFront();
   await onButton(b.frame, 'solid.revolve', 'tb-reset');

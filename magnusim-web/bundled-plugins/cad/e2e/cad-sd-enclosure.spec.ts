@@ -121,7 +121,7 @@ test('cad:sd-no-one-click-solids the toolbar has no Box or Cylinder; CFD PREP (E
   const { seen, frame } = await freshPart(page, request);
   const labels = await tb(frame).locator('.tb-group-label').allTextContents();
   expect(labels).toEqual(['SKETCH', 'SOLID', 'PATTERN', 'MODIFY', 'CONSTRUCT', 'CFD PREP', 'INSPECT', 'FILE', 'VIEW', 'SCALE MODELS', 'EDIT']);
-  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
+  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft', 'Hole']);
   await expect(tb(frame).locator('[data-group="cfd"] .tb-txt')).toHaveText(['Enclosure']);
   await expect(tb(frame).locator('[data-command="solid.box"], [data-command="solid.cylinder"]')).toHaveCount(0);
   const enc = tb(frame).locator('[data-command="cfd.enclosure"]');

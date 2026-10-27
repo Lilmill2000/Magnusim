@@ -325,7 +325,8 @@ test('cad:p1-review2-planes rolled to the start the planes keep the part size; l
   // The canvas's corners are background, not plane.
   const px = await pixels(page, [
     [canvas.x + canvas.w - 30, canvas.y + 30],
-    [canvas.x + canvas.w - 30, canvas.y + canvas.h - 120],
+    // Above the app's Assistant corner button (bottom right, over the frame since the dock moved there).
+    [canvas.x + canvas.w - 30, canvas.y + canvas.h - 250],
     [canvas.x + 300, canvas.y + canvas.h - 30],
   ]);
   for (const p of px) expect(near(p, BG, 3), `background at a canvas corner: ${p}`).toBe(true);

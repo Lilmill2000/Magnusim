@@ -78,7 +78,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   const tip = frame.locator('[data-cad-tip]');
 
   // Only commands that work, in the core's toolbar groups. No one-click solids (decision 2026-10-01).
-  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft']);
+  expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft', 'Hole']);
   expect(await groupCommandLabels(frame, 'modify')).toEqual(['Parameters', 'Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
   await expect(tb.locator('[data-group="edit"] .tb-txt')).toHaveText(['Undo', 'Redo']);
   await expect(tb.locator('.tb-group-label').first()).toHaveText('SKETCH');
@@ -170,7 +170,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the modules'
   // actions for a face, then the body's and the feature's, the feature's Delete last of all (P4a
   // review: the actions first, Delete last; it sat between them).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Roll back to here', 'Delete Extrude 1']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 1']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
@@ -305,7 +305,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     folded.push(Number(await bar.getAttribute('data-folded')));
     await shot(page, `ui-parity-toolbar-${size.width}`);
   }
-  expect(folded).toEqual([16, 16]);
+  expect(folded).toEqual([19, 19]);
   await page.setViewportSize({ width: 1600, height: 1000 });
   // The core's .measure-chip (style.css:1093-1106): 600 12px/1.35 "Segoe UI", padding 8/10/8/12 (review round 1: CAD had 6/10).
   expect(await styleOf(frame.locator('[data-chip="volume"]'), ['font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color', 'border-top-color', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'])).toEqual({
@@ -402,7 +402,7 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
 
   // Suppress from the context menu: the row greys and strikes through; the cut is gone.
   await cut.locator('> .tree-row').click({ button: 'right' });
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Roll back to here', 'Delete Extrude 2']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 2']);
   await expect(menu.locator('[data-menu-item="rollback"]')).toHaveAttribute('aria-disabled', 'true');
   await menu.locator('[data-menu-item="suppress"]').click();
   await expect(menu).toHaveCount(0);

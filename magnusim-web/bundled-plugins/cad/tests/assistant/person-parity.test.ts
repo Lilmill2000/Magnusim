@@ -147,8 +147,11 @@ describe("the person's side of the Assistant's tools stores what the tools store
       await h.settle();
       expect(docNow(h)).toEqual(before);
       // Refused as a whole while a feature left uses one (Base uses Base sketch): nothing deleted.
+      const history = h.doc.state.get().history;
       ui.deleteFeatures([featureNamed<Feature>(h, 'Base sketch').id, featureNamed<Feature>(h, 'Plane 1').id]);
       expect(docNow(h)).toEqual(before);
+      // Refused before anything went: the undo and redo lists as they were (no Plane 1 deleted and taken back).
+      expect(h.doc.state.get().history).toEqual(history);
       await ok(h, 'delete', { features: ['Base sketch', 'Base'] });
       expect(docNow(h).features.map((f) => f.name)).toEqual(personAfter);
     },

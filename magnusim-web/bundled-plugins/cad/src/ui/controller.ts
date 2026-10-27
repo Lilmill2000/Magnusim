@@ -12,6 +12,7 @@
 // committed; doc.assistant.takeOver).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { dependencies } from '../doc/features/hooks';
 import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
 import { isPersonEditing, PersonEditing } from '../doc/person-editing';
 import { openModal } from '../lib/modal';
@@ -629,7 +630,17 @@ export function createUiController(services: AppServices): UiController {
       const block = editBlock();
       if (block) return fail(label, block);
       settleOtherPanel(null);
-      // Newest first: a listed feature's listed users go before it; a user outside the list refuses the whole delete.
+      // A feature left that uses one of them refuses the whole delete before anything goes (as the
+      // Assistant's delete): every such use named.
+      const doc0 = doc.state.get().doc;
+      const gone = new Set(list.map((f) => f.id));
+      const uses: string[] = [];
+      for (const g of doc0.features) {
+        if (gone.has(g.id)) continue;
+        for (const p of dependencies(doc.features, doc0, g)) if (gone.has(p)) uses.push(`${g.name} uses ${doc0.features.find((f) => f.id === p)?.name ?? 'one of them'}`);
+      }
+      if (uses.length) return fail(label, `nothing was deleted: ${uses.slice(0, 6).join('; ')}${uses.length > 6 ? `; and ${uses.length - 6} more` : ''}`);
+      // Newest first: a listed feature's listed users go before it.
       let removed = 0;
       for (const f of [...list].reverse()) {
         const why = doc.removeBlock(f.id);
@@ -643,7 +654,6 @@ export function createUiController(services: AppServices): UiController {
       }
       const joined = doc.joinSteps(removed, label);
       if (!joined.ok) console.warn('[cad] the deleted features stay separate undo steps:', joined.reason);
-      const gone = new Set(list.map((f) => f.id));
       services.selection.set((s) => ({ ...s, items: s.items.filter((it) => !('feature' in it && gone.has(it.feature))) }));
     },
     runFeatureAction(id, action) {

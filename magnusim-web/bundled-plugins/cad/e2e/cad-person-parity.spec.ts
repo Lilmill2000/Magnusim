@@ -1,15 +1,15 @@
 // Parity both ways (Daniel: "anything the AI has I should have"): what was the Assistant's alone,
 // used by a person with clicks and keys, and what they see:
-//   pp-hole     SOLID's Hole: a face clicked, two centres clicked on it, diameter and a blind
+//   cad:pp-hole     SOLID's Hole: a face clicked, two centres clicked on it, diameter and a blind
 //               depth typed, Done: "Hole 1 sketch" and "Hole 1" in the tree, the volume drops by
 //               the two holes, one Ctrl+Z takes both back and Ctrl+Y brings them;
-//   pp-tree     a body's colour from its swatch (and "Colour…" in its menu), a feature dragged to a
+//   cad:pp-tree     a body's colour from its swatch (and "Colour…" in its menu), a feature dragged to a
 //               new place in the history and moved with Move down, a drag the order rule refuses
 //               (said, nothing moved), and Delete of two selected features as one undo step;
-//   pp-view     the Back isometric view (its key 8 and the views menu), the section's Middle, Find
+//   cad:pp-view     the Back isometric view (its key 8 and the views menu), the section's Middle, Find
 //               with the selector language and Select all, Picture with body names from two
 //               directions;
-//   pp-measure  Measure of a body (solids, sealed voids) and its cross-section at Top offset 5,
+//   cad:pp-measure  Measure of a body (solids, sealed voids) and its cross-section at Top offset 5,
 //               two typed points, and a parameter's comment in the Parameters panel.
 // Setup (a block) goes in through the document as the other specs do; everything asserted is what
 // the person sees (the tree, the panels, the chips) or the record their click stored.
@@ -62,7 +62,7 @@ async function recordToasts(page: Page) {
 }
 const toasts = (page: Page) => workspaceFrame(page).evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
 
-test('pp-hole SOLID Hole: a face and two centres clicked, diameter and blind depth typed, Done makes the sketch and the cut as one step', async ({ page, request }) => {
+test('cad:pp-hole SOLID Hole: a face and two centres clicked, diameter and blind depth typed, Done makes the sketch and the cut as one step', async ({ page, request }) => {
   test.setTimeout(240_000);
   const frame = await freshPart(page, request);
   await addSolid(page, { size: [60, 40, 10] });
@@ -116,7 +116,7 @@ test('pp-hole SOLID Hole: a face and two centres clicked, diameter and blind dep
   await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(holes, 2);
 });
 
-test('pp-tree a body colour from its swatch, a drag and Move down in the history, a refused drag, and Delete of two features as one step', async ({ page, request }) => {
+test('cad:pp-tree a body colour from its swatch, a drag and Move down in the history, a refused drag, and Delete of two features as one step', async ({ page, request }) => {
   test.setTimeout(240_000);
   const frame = await freshPart(page, request);
   await addSolid(page, { size: [20, 20, 20] });
@@ -168,7 +168,7 @@ test('pp-tree a body colour from its swatch, a drag and Move down in the history
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Plane 1', 'Extrude 1']);
 });
 
-test('pp-view the Back isometric view by its key and menu, the section Middle, Find and Select all, and a Picture with body names', async ({ page, request }) => {
+test('cad:pp-view the Back isometric view by its key and menu, the section Middle, Find and Select all, and a Picture with body names', async ({ page, request }) => {
   test.setTimeout(240_000);
   const frame = await freshPart(page, request);
   await addSolid(page, { size: [40, 20, 10] });
@@ -228,7 +228,7 @@ test('pp-view the Back isometric view by its key and menu, the section Middle, F
   expect(await dir()).toEqual(before);
 });
 
-test("pp-measure Measure of a body (solids, voids) and its cross-section, two typed points, and a parameter's comment", async ({ page, request }) => {
+test("cad:pp-measure Measure of a body (solids, voids) and its cross-section, two typed points, and a parameter's comment", async ({ page, request }) => {
   test.setTimeout(240_000);
   const frame = await freshPart(page, request);
   await addSolid(page, { size: [60, 40, 10] });
