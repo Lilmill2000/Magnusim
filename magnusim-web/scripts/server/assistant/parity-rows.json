@@ -33,7 +33,7 @@
     { "row": "H9", "editions": ["magnusim", "cad"], "cad_control": { "reach": "card", "selector": "#home-delete-project" }, "paths": [{ "tool": "delete", "where": { "kind": "project" }, "routes": ["project.delete"] }] },
     { "row": "H10", "editions": ["magnusim", "cad"], "cad_control": { "reach": "folder_menu", "selector": "#home-ctx-delete" }, "paths": [{ "tool": "delete", "where": { "kind": "folder" }, "routes": ["folders.delete"] }] },
     { "row": "H11", "editions": ["magnusim"], "paths": [{ "tool": "project_edit", "where": { "action": "from_sample" }, "routes": ["project.sample"] }] },
-    { "row": "H12", "editions": ["magnusim", "cad"], "cad_control": { "reach": "new_project", "selector": "#np-start-list input[value=\"cad:part\"]" }, "paths": [{ "tool": "project_edit", "where": { "action": "start_action" }, "routes": ["project.create", "plugin_studies.create"] }, { "tool": "core__show", "where": { "target": "workspace" }, "page": true }] },
+    { "row": "H12", "editions": ["magnusim", "cad"], "cad_control": { "reach": "new_project", "selector": "#np-create" }, "paths": [{ "tool": "project_edit", "where": { "action": "start_action" }, "routes": ["project.create", "plugin_studies.create"] }, { "tool": "core__show", "where": { "target": "workspace" }, "page": true }] },
     { "row": "H13", "editions": ["magnusim"], "paths": [{ "tool": "project_summary", "where": { "with_thumbnail": true }, "routes": ["geometry.thumb"] }] },
     { "row": "H14", "editions": ["magnusim"], "paths": [{ "tool": "projects", "routes": ["projects.list"] }, { "tool": "project_summary", "routes": ["project.get"] }] },
 

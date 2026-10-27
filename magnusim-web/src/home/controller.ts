@@ -994,7 +994,10 @@ function paintProjectModalChrome() {
   const heading = $('np-heading');
   const btn = $('np-create');
   const start = $('np-start');
-  if (start) start.hidden = projectModal.mode === 'edit' || !projectModal.starts.length;
+  // One choice and no Import geometry beside it (Magnusim CAD): nothing to ask. It stays
+  // chosen (fillStartChoices checks it), so Create still starts from it.
+  const choices = projectModal.starts.length + (isCad() ? 0 : 1);
+  if (start) start.hidden = projectModal.mode === 'edit' || !projectModal.starts.length || choices === 1;
   if (projectModal.mode === 'edit') {
     if (heading) heading.textContent = 'Edit project';
     if (btn) btn.textContent = 'Save';

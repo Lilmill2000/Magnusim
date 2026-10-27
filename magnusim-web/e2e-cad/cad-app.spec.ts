@@ -36,9 +36,9 @@ test('New project makes a Part that opens in CAD, and the project page keeps its
   await page.locator('#home-new-project').click();
   const dialog = page.locator('#modal-new-project');
   await expect(dialog).toBeVisible();
-  // Start from: only CAD's, already chosen; no Import geometry, no Category.
+  // Start from is not asked: its one choice (a Part) is already made; no Import geometry, no Category.
+  await expect(dialog.locator('#np-start')).toBeHidden();
   await expect(dialog.locator('input[name="np-start-choice"]')).toHaveCount(1);
-  await expect(dialog.locator('#np-start-list')).toHaveText(/Design a part/);
   await expect(dialog.locator('input[name="np-start-choice"]')).toBeChecked();
   await expect(dialog.locator('#np-category')).toBeHidden();
   await dialog.locator('#np-title').fill('Bracket set');

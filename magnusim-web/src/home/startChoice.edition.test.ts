@@ -73,9 +73,10 @@ afterEach(() => {
 });
 
 describe('New Project in Magnusim CAD', () => {
-  it('starts from a Part (chosen), with no Import geometry', async () => {
+  it('starts from a Part (chosen), with no Import geometry; its only choice is not asked (Start from hidden)', async () => {
     await prepareCreateModal(null, { folder: 'My Projects' });
     expect(radios()).toEqual([['cad:part', 'Design a part', true]]);
+    expect((document.getElementById('np-start') as HTMLElement).hidden).toBe(true);
     (document.getElementById('np-title') as HTMLInputElement).value = 'Brackets';
     expect(await submitProjectModal()).toMatchObject({
       ok: true,
@@ -90,5 +91,32 @@ describe('New Project in Magnusim CAD', () => {
     expect(val('np-category')).toBe('Other');
     expect((document.getElementById('np-title') as HTMLInputElement).placeholder).toBe('Mounting bracket');
     expect((document.getElementById('np-description') as HTMLTextAreaElement).placeholder).toBe('What these parts are for');
+  });
+});
+
+describe('Start from with two of its own choices in Magnusim CAD', () => {
+  it('is asked (a second start action, still no Import geometry)', async () => {
+    resetStartActionsForTests();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url);
+        const second = { ...part, study_kind: 'sheet', kind_title: 'Sheet', label: 'Design a sheet part' };
+        if (u === '/api/plugins') return new Response(JSON.stringify({ ok: true, plugins: [{ ...PLUGINS[0], start_actions: [part, second] }] }), { status: 200 });
+        if (u === '/api/projects') return new Response(JSON.stringify({ projects: [], folders: ['My Projects'] }), { status: 200 });
+        return new Response('{}', { status: 200 });
+      }),
+    );
+    await loadStartActions();
+    await prepareCreateModal(null, { folder: 'My Projects' });
+    expect((document.getElementById('np-start') as HTMLElement).hidden).toBe(false);
+    expect(radios().map((r) => r[0])).toEqual(['cad:part', 'cad:sheet']);
+  });
+});
+
+describe('Edit project in Magnusim CAD', () => {
+  it('has no Start from', async () => {
+    await prepareCreateModal({ id: 'p1', title: 'Brackets', folder: 'My Projects', units: 'Metric', category: 'Other' }, {});
+    expect((document.getElementById('np-start') as HTMLElement).hidden).toBe(true);
   });
 });
