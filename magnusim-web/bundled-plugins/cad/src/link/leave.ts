@@ -212,7 +212,8 @@ export function createLeaveHandler(o: LeaveHookOptions): (leave: LeaveEvent) => 
       case 'nothing': {
         // Not a failure: the geometry keeps its last update (or none is made), and the leave goes
         // on once the user could read why. An empty Part never linked: nothing to say.
-        if (!(r.empty && !r.linked)) {
+        // A host with no project (noProject): the save landed and there is nothing to say either.
+        if (!(r.empty && !r.linked) && !r.noProject) {
           await showFor(r.message);
           if (signal.aborted) {
             report(r, null);

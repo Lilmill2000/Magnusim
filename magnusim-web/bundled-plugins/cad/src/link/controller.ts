@@ -108,7 +108,17 @@ export type LinkOutcome =
    * No body is included in the simulation. `empty`: the Part has no body at all; `linked`: a
    * geometry exists (it keeps its last update).
    */
-  | { outcome: 'nothing'; message: string; empty: boolean; linked: boolean }
+  | {
+      outcome: 'nothing';
+      message: string;
+      empty: boolean;
+      linked: boolean;
+      /**
+       * The host has no project to link into (it refuses link calls with not_allowed, as the
+       * CAD desktop edition does): the save has landed and there is nothing to say.
+       */
+      noProject?: boolean;
+    }
   /**
    * `brief`: the reason alone, without what became of the geometry, for the app's own
    * question after an exit ("Couldn't update the project"), which says that itself.
@@ -210,6 +220,11 @@ const STAGE_WORDS: Record<LinkStage, string> = {
   saving: 'The app is saving the update',
   finishing: 'Finishing',
 };
+
+/** A host with no project refuses the link calls with not_allowed: once saved, nothing to link. */
+function noProject(): LinkOutcome {
+  return { outcome: 'nothing', message: '', empty: false, linked: false, noProject: true };
+}
 
 function codeOf(e: unknown): string {
   const c = e && typeof e === 'object' ? (e as { code?: unknown }).code : undefined;
@@ -337,10 +352,16 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
     // Nothing would go to the project even if the save landed: never linked, and no body the
     // rebuild shows is included (a sketch-only Part, or every body left out).
     const nothingToLink = async (): Promise<boolean> => {
+      // A host with no project (it refuses with not_allowed) never links anything.
+      const now = await link.linkedGeometry().then(
+        (g) => g,
+        (e: unknown) => (codeOf(e) === 'not_allowed' ? ('no-project' as const) : undefined),
+      );
+      if (now === 'no-project') return true;
       const s = doc.state.get();
       if (s.status !== 'ready' || s.view.rollback != null || s.rebuild.status !== 'done') return false;
       if (s.rebuild.bodies.some((b) => isIncluded(s.doc, b.id) && b.solids !== 0)) return false;
-      return (await link.linkedGeometry().catch(() => undefined)) === null;
+      return now === null;
     };
     // Another tab's newer save is read in place at most once per sync.
     let reloaded = false;
@@ -413,7 +434,13 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
         const s = doc.state.get();
         return s.status === 'ready' && s.save.state === 'saved' && s.doc === at && s.sourceVersion === version && (keepTyped || !pendingEdits().pending);
       };
-      linked = await link.linkedGeometry();
+      try {
+        linked = await link.linkedGeometry();
+      } catch (e) {
+        // The save has landed and the host has no project to link into: nothing more to do.
+        if (codeOf(e) === 'not_allowed') return noProject();
+        throw e;
+      }
       if (!same()) continue;
       if (!linked && !removedRead) {
         const rec = (await (bridge.study?.get?.() ?? Promise.resolve(null)).catch(() => null)) as (StudyRecord & Record<string, unknown>) | null;
@@ -581,6 +608,7 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
         return { outcome: 'linked', sourceVersion, result, ...(notes.length ? { notes } : {}) };
       } catch (e) {
         const code = codeOf(e);
+        if (code === 'not_allowed') return noProject();
         if (code === 'cancelled') return { outcome: 'kept-editing', sourceVersion };
         if (code === 'not_now') {
           // Not now (the removed target's question): nothing linked; this design does not ask again.
@@ -631,7 +659,7 @@ export function createLinkController(o: LinkControllerOptions): LinkController {
 
   function tell(r: LinkOutcome) {
     if (r.outcome === 'linked' && r.notes?.length) bridge.toast(`${partTitle()} updated. ${r.notes.join(' ')}`, 'info');
-    if (r.outcome === 'nothing') bridge.toast(r.message, 'info');
+    if (r.outcome === 'nothing' && !r.noProject) bridge.toast(r.message, 'info');
     else if (r.outcome === 'failed' || r.outcome === 'unavailable') bridge.toast(r.message, 'error');
   }
 
