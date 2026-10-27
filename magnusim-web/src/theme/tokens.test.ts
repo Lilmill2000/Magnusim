@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import { lightTokens, plan, planFonts, textTokens } from '../../scripts/theme-codemod.mjs';
 import { seriesFor } from '../panels/run/ResidualPlot';
-import { readAppCss, ruleProps, tokenValues } from '../test/kitCss';
+import { darkTokenValues, readAppCss, readTokensCss, ruleProps, tokenValues, withTokens } from '../test/kitCss';
 
 const tokens = tokenValues();
+const dark = darkTokenValues();
 const appCss = readAppCss();
+
+const isColour = (v: string) => /^(#[0-9a-f]{3,8}|rgba?\([^)]*\))$/i.test(v);
+
+// WCAG 2 contrast of two #rrggbb colours.
+function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
 
 const colourIn = (value: string) => (value.match(/#[0-9a-f]{3,8}\b/i) || [value])[0];
 // transition: transform 0.15s → 150ms
@@ -51,12 +65,52 @@ const CORE_SOURCES: Array<[token: string, selector: string, prop: string, pick?:
 ];
 
 describe('tokens.css', () => {
-  it('each named core value equals the core rule it comes from (style.css)', () => {
+  it('each named core value equals the core rule it comes from (style.css, through its tokens)', () => {
     for (const [token, selector, prop, pick] of CORE_SOURCES) {
-      const core = ruleProps(appCss, selector)[prop];
-      expect(core, `${selector} { ${prop} }`).toBeDefined();
+      const raw = ruleProps(appCss, selector)[prop];
+      expect(raw, `${selector} { ${prop} }`).toBeDefined();
+      const core = withTokens({ [prop]: raw })[prop];
       expect(tokens[token], token).toBe(pick ? pick(core) : core);
     }
+  });
+
+  it('the dark set gives every light colour a dark value, and changes nothing but colours and shadows', () => {
+    const lightColours = Object.keys(tokens).filter((k) => isColour(tokens[k]));
+    expect(lightColours.length).toBeGreaterThan(60);
+    expect(lightColours.filter((k) => !(k in dark))).toEqual([]);
+    for (const [k, v] of Object.entries(dark)) {
+      expect(k in tokens, `${k} is a light token too`).toBe(true);
+      expect(isColour(v) || k.startsWith('--mg-shadow-'), `${k}: ${v}`).toBe(true);
+    }
+    expect(readTokensCss()).toMatch(/\[data-theme="dark"\]\s*\{\s*color-scheme: dark;/);
+  });
+
+  // Text on the surfaces it sits on: at least 4.5:1 in dark, or as readable as light where light is
+  // below that (the placeholder greys). The fills: their text on them, both themes.
+  it('dark text is readable on every surface, at least as readable as light', () => {
+    const texts = ['text', 'text-strong', 'text-body', 'text-secondary', 'text-muted', 'text-subtle', 'text-tertiary', 'text-dim', 'text-slate', 'text-faint', 'link', 'link-strong', 'primary-ink', 'danger', 'success', 'warning', 'info'];
+    const surfaces = ['bg', 'surface', 'surface-muted', 'surface-2', 'surface-3', 'surface-hover', 'app-bg', 'selected-bg'];
+    const fills = [['primary-text', 'primary'], ['primary-text', 'primary-hover'], ['primary-text', 'danger-solid'], ['tooltip-text', 'tooltip-bg'], ['danger', 'danger-bg'], ['success', 'success-bg'], ['warning', 'warning-bg'], ['text', 'btn-neutral-bg'], ['text', 'btn-neutral-hover']];
+    const pairs = [...texts.flatMap((t) => surfaces.map((s) => [t, s])), ...fills];
+    const value = (set: Record<string, string>, k: string) => set[`--mg-${k}`] ?? tokens[`--mg-${k}`];
+    const short = [];
+    for (const [t, s] of pairs) {
+      const light = contrast(value(tokens, t), value(tokens, s));
+      const darkRatio = contrast(value(dark, t), value(dark, s));
+      if (darkRatio < Math.min(4.5, light)) short.push(`${t} on ${s}: ${darkRatio.toFixed(2)} (light ${light.toFixed(2)})`);
+    }
+    expect(short).toEqual([]);
+    for (const [t, s] of fills.slice(0, 4)) expect(contrast(value(tokens, t), value(tokens, s)), `${t} on ${s}, light`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // The ratchet: style.css paints with tokens. A colour with a token's value must use the token, a
+  // new colour with no token is refused (the count only goes down), and every font size scales.
+  it('style.css uses a token for every colour that has one, adds no other colour literal, and has no px font size', () => {
+    const tokensCss = readTokensCss();
+    const { edits, skipped } = plan(appCss, lightTokens(tokensCss));
+    expect(edits.map((e: { line: number; literal: string; to: string }) => `${e.line}: ${e.literal} -> ${e.to}`)).toEqual([]);
+    expect(skipped.length).toBeLessThanOrEqual(415);
+    expect(planFonts(appCss, textTokens(tokensCss)).map((e: { line: number; literal: string }) => `${e.line}: ${e.literal}`)).toEqual([]);
   });
 
   it('the hover and solid danger values differ from their resting values', () => {

@@ -118,7 +118,7 @@ body.edition-cad #app[hidden] {
 }
 
 .cad-part-icon {
-  color: var(--mg-primary);
+  color: var(--mg-primary-ink);
 }
 
 .cad-part-title {

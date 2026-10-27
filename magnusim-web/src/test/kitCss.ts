@@ -32,10 +32,30 @@ export function readAppCss(): string {
   return readHere('../style.css');
 }
 
-/** Every --mg-* token src/theme/tokens.css declares, by name. */
-export function tokenValues(): Record<string, string> {
-  const css = readHere('../theme/tokens.css').replace(/\/\*[\s\S]*?\*\//g, '');
+/** src/theme/tokens.css without comments. */
+export function readTokensCss(): string {
+  return readHere('../theme/tokens.css').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+const DARK_BLOCK = /\[data-theme="dark"\]\s*\{([^}]*)\}/;
+
+function declared(css: string): Record<string, string> {
   return Object.fromEntries([...css.matchAll(/(--mg-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+}
+
+/**
+ * Every --mg-* token src/theme/tokens.css declares, by name, as Magnusim paints it by default:
+ * the light set (the dark block left out) at scale 1 (calc(12px * var(--mg-text-scale)) is 12px).
+ */
+export function tokenValues(): Record<string, string> {
+  const atScale1 = (v: string) => v.replace(/^calc\((\d+(?:\.\d+)?px) \* var\(--mg-(?:text|icon)-scale\)\)$/, '$1');
+  const light = declared(readTokensCss().replace(DARK_BLOCK, ''));
+  return Object.fromEntries(Object.entries(light).map(([k, v]) => [k, atScale1(v)]));
+}
+
+/** The tokens the dark block redefines, by name (html[data-theme="dark"]). */
+export function darkTokenValues(): Record<string, string> {
+  return declared(DARK_BLOCK.exec(readTokensCss())?.[1] ?? '');
 }
 
 /** `props` with each var(--mg-*) replaced by its tokens.css value, to compare with a core rule. */

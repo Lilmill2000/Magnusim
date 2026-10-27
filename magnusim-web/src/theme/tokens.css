@@ -5,8 +5,16 @@
  * selectors (no visual change), and plugin workspaces get it as
  * /plugin-sdk/theme.css with base styles. Primary #1570ef is the app's primary
  * blue (Daniel, 2026-10-02): the core panel buttons use it too.
+ *
+ * Appearance (Settings): html[data-theme="dark"] takes the dark set below; [data-theme="light"]
+ * keeps the light one inside a dark page (the parts not dark yet: the viewport and charts).
+ * --mg-text-scale and --mg-icon-scale size text and icons; the size tokens are declared again on
+ * [data-appearance-scope], so a preview with its own scales shows them (a var() in a custom
+ * property resolves where the property is declared).
  */
-:root {
+:root,
+[data-theme="light"] {
+  color-scheme: light;
   /* Colour roles */
   --mg-text: #101828;
   --mg-text-strong: #1a1d24;
@@ -21,6 +29,8 @@
   --mg-primary: #1570ef;
   --mg-primary-hover: #175cd3;
   --mg-primary-text: #ffffff;
+  /* The primary blue as text or an icon (in dark, lighter than the primary fill) */
+  --mg-primary-ink: #1570ef;
   --mg-selected-bg: #eff4ff;
   --mg-selected-border: #b2ccff;
   --mg-danger: #b42318;
@@ -35,12 +45,6 @@
   /* Type */
   --mg-font: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   --mg-font-mono: ui-monospace, Consolas, monospace;
-  --mg-text-xs: 11px;
-  --mg-text-sm: 12px;
-  --mg-text-md: 13px;
-  --mg-text-lg: 14px;
-  --mg-text-xl: 16px;
-  --mg-text-2xl: 18px;
   --mg-weight-regular: 400;
   --mg-weight-medium: 500;
   --mg-weight-semibold: 600;
@@ -108,8 +112,6 @@
   --mg-series-5: #0ba5ec;
   --mg-series-6: #dd2590;
   --mg-series-7: #667085;
-  --mg-text-3xs: 9px;
-  --mg-text-2xs: 10.5px;
   --mg-weight-bold: 700;
   --mg-line-tight: 1.35;
   --mg-radius-2xs: 2px;
@@ -124,4 +126,124 @@
   --mg-z-toast: 2000;
   /* The Assistant's dock: above toasts, under every dialog (modal 9999, Settings, confirm). */
   --mg-z-assistant: 2100;
+
+  /* Appearance: colours the core uses most that had no token (their light values) */
+  --mg-app-bg: #e8eaee;
+  --mg-surface-2: #eef0f4;
+  --mg-surface-3: #e4e7ec;
+  --mg-surface-hover: #eef1f5;
+  --mg-text-tertiary: #5b6575;
+  --mg-text-dim: #4a5160;
+  --mg-text-slate: #4b5563;
+  --mg-text-faint: #8a93a3;
+  --mg-primary-strong: #1a4fbf;
+  --mg-primary-deep: #1d4ed8;
+  --mg-shadow-color: rgba(20, 24, 40, 0.12);
+  --mg-viewport-bg: #f5f6f8;
+  --mg-axis-x: #d42828;
+  --mg-axis-y: #1f9a3a;
+  --mg-axis-z: #2a5bd7;
+}
+
+/* Text and icon sizes: scaled by Settings > Appearance (1 = as designed). */
+:root {
+  --mg-text-scale: 1;
+  --mg-icon-scale: 1;
+}
+
+:root,
+[data-appearance-scope] {
+  --mg-text-3xs: calc(9px * var(--mg-text-scale));
+  --mg-text-micro: calc(10px * var(--mg-text-scale));
+  --mg-text-2xs: calc(10.5px * var(--mg-text-scale));
+  --mg-text-xs: calc(11px * var(--mg-text-scale));
+  --mg-text-sm: calc(12px * var(--mg-text-scale));
+  --mg-text-md: calc(13px * var(--mg-text-scale));
+  --mg-text-lg: calc(14px * var(--mg-text-scale));
+  --mg-text-xl: calc(16px * var(--mg-text-scale));
+  --mg-text-2xl: calc(18px * var(--mg-text-scale));
+  --mg-icon-sm: calc(14px * var(--mg-icon-scale));
+  --mg-icon-md: calc(18px * var(--mg-icon-scale));
+  --mg-icon-lg: calc(20px * var(--mg-icon-scale));
+  --mg-icon-xl: calc(28px * var(--mg-icon-scale));
+}
+
+/*
+ * Dark: every colour token's dark value (the rest of the tokens are the same in both).
+ * Surfaces step up in lightness from the app background to raised cards; text on them is at
+ * least 4.5:1, or as readable as in light where light is below that (src/theme/tokens.test.ts).
+ * The primary fill stays dark enough for white text; blue text takes --mg-primary-ink.
+ */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --mg-text: #e6e9ef;
+  --mg-text-strong: #f2f4f7;
+  --mg-text-muted: #9aa4b2;
+  --mg-text-subtle: #7b8494;
+  --mg-bg: #1b1f27;
+  --mg-surface: #20252e;
+  --mg-surface-muted: #262c36;
+  --mg-border: #3a414e;
+  --mg-border-subtle: #2c323d;
+  --mg-header-border: #323946;
+  --mg-primary: #2f6fde;
+  --mg-primary-hover: #2563d0;
+  --mg-primary-text: #ffffff;
+  --mg-primary-ink: #7aa7ff;
+  --mg-selected-bg: #1f3355;
+  --mg-selected-border: #3f6db8;
+  --mg-danger: #f97066;
+  --mg-danger-bg: #3b1f1d;
+  --mg-danger-border: #8a3a33;
+  --mg-success: #47cd89;
+  --mg-success-bg: #133224;
+  --mg-warning: #fdb022;
+  --mg-warning-bg: #3a2b12;
+  --mg-focus: rgba(75, 141, 255, 0.45);
+  --mg-info: #6aa1ff;
+  --mg-text-body: #d0d5dd;
+  --mg-text-secondary: #b3bbc7;
+  --mg-divider: #2c323d;
+  --mg-card-border: #3a414e;
+  --mg-control-border: #444c5a;
+  --mg-btn-neutral-bg: #2a303b;
+  --mg-btn-neutral-hover: #333a46;
+  --mg-btn-neutral-border: #4f5866;
+  --mg-btn-disabled-bg: #3a414e;
+  --mg-link: #7aa7ff;
+  --mg-link-strong: #8fb5ff;
+  --mg-link-strong-hover: #b3cdff;
+  --mg-danger-solid: #d92d20;
+  --mg-danger-solid-hover: #f04438;
+  --mg-switch-off: #4a5262;
+  --mg-tooltip-bg: #0d1016;
+  --mg-tooltip-text: #f2f4f7;
+  --mg-plot-bg: #1b1f27;
+  --mg-plot-tip-bg: rgba(32, 37, 46, 0.96);
+  --mg-series-1: #4b8dff;
+  --mg-series-2: #9b7bf0;
+  --mg-series-3: #32d583;
+  --mg-series-4: #fdb022;
+  --mg-series-5: #36bffa;
+  --mg-series-6: #f670c7;
+  --mg-series-7: #9aa4b2;
+  --mg-app-bg: #12151b;
+  --mg-surface-2: #232934;
+  --mg-surface-3: #2b313c;
+  --mg-surface-hover: #283040;
+  --mg-text-tertiary: #a3acba;
+  --mg-text-dim: #b0b8c4;
+  --mg-text-slate: #aab2bf;
+  --mg-text-faint: #7f8898;
+  --mg-primary-strong: #8fb5ff;
+  --mg-primary-deep: #7aa7ff;
+  --mg-shadow-color: rgba(0, 0, 0, 0.45);
+  --mg-viewport-bg: #1b1f27;
+  --mg-axis-x: #ff6b6b;
+  --mg-axis-y: #4cd07d;
+  --mg-axis-z: #6f9bff;
+  --mg-shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --mg-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --mg-shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --mg-shadow-tooltip: 0 6px 18px rgba(0, 0, 0, 0.5);
 }

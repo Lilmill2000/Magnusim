@@ -32,7 +32,7 @@ describe('data.css', () => {
     for (const [kit, core] of copies) {
       const coreProps = ruleProps(appCss, core);
       expect(Object.keys(coreProps).length, core).toBeGreaterThan(0);
-      expect(withTokens(ruleProps(css, kit)), `${kit} = ${core}`).toEqual(coreProps);
+      expect(withTokens(ruleProps(css, kit)), `${kit} = ${core}`).toEqual(withTokens(coreProps));
     }
     expect(ruleProps(css, '.mgk-plot-cursor')['border-left']).toBe('1px dashed var(--mg-text-subtle)');
   });
@@ -52,7 +52,7 @@ describe('data.css', () => {
   // ColorLegend is a new look (no core pair): its rules are pinned here.
   it('the colour legend: a 12 px bar with the core legend bar corners, its title and ticks', () => {
     expect(ruleProps(css, '.mgk-legend-bar')).toEqual({ height: '12px', 'border-radius': 'var(--mg-radius-2xs)' });
-    const coreBar = ruleProps(appCss, '.legend-bar');
+    const coreBar = withTokens(ruleProps(appCss, '.legend-bar'));
     expect(withTokens(ruleProps(css, '.mgk-legend-bar'))).toEqual({ height: coreBar.height, 'border-radius': coreBar['border-radius'] });
     expect(ruleProps(css, '.mgk-legend-title')).toEqual({
       'font-size': 'var(--mg-text-xs)',

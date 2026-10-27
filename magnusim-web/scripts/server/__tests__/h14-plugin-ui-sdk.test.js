@@ -188,19 +188,26 @@ test('ui-kit-sheet.js runs the shipped kit: no kit source and no core module in 
   assert.doesNotMatch(text, /src\/dev\/ui-kit\/sections\/\w+\.core/);
 });
 
-test('tokens.css declares only --mg-* custom properties, inside :root', () => {
+// It styles no element: only tokens (and color-scheme, so scrollbars and inputs follow the theme),
+// on :root and the scopes Appearance stamps (a theme, the Settings preview).
+test('tokens.css declares only --mg-* custom properties and color-scheme, on :root and the appearance scopes', () => {
   const css = readFileSync(join(WEB, 'src', 'theme', 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   const blocks = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
-  assert.equal(blocks.length, 1);
-  assert.equal(blocks[0][1].trim(), ':root');
-  const props = blocks[0][2]
-    .split(';')
-    .map((d) => d.trim())
-    .filter(Boolean)
-    .map((d) => d.slice(0, d.indexOf(':')).trim());
-  assert.ok(props.length > 80);
-  assert.deepEqual(props.filter((p) => !p.startsWith('--mg-')), []);
-  assert.equal(css.replace(blocks[0][0], '').trim(), '');
+  const scopes = new Set([':root', '[data-theme="light"]', '[data-theme="dark"]', '[data-appearance-scope]']);
+  assert.equal(blocks[0][1].trim().split(/\s*,\s*/)[0], ':root');
+  let rest = css;
+  for (const [whole, selectors, body] of blocks) {
+    for (const s of selectors.trim().split(/\s*,\s*/)) assert.ok(scopes.has(s), s);
+    const props = body
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => d.slice(0, d.indexOf(':')).trim());
+    assert.deepEqual(props.filter((p) => !p.startsWith('--mg-') && p !== 'color-scheme'), [], selectors);
+    rest = rest.replace(whole, '');
+  }
+  assert.ok(blocks[0][2].split(';').length > 80);
+  assert.equal(rest.trim(), '');
 });
 
 test("prod react-all.js keeps React's licence notice", async () => {

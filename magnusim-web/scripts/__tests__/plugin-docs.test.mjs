@@ -253,7 +253,8 @@ describe('the handwritten guides', () => {
   });
 
   test("DESIGN.md's token values are tokens.css's", () => {
-    const css = readFileSync(join(WEB_ROOT, 'src', 'theme', 'tokens.css'), 'utf8');
+    // The light values: the dark block (html[data-theme="dark"]) left out.
+    const css = readFileSync(join(WEB_ROOT, 'src', 'theme', 'tokens.css'), 'utf8').replace(/\[data-theme="dark"\]\s*\{[^}]*\}/, '');
     const tokens = new Map([...css.matchAll(/^\s*(--mg-[\w-]+)\s*:\s*([^;]+);/gm)].map((m) => [m[1], m[2].trim()]));
     const design = read('DESIGN.md');
     let rows = 0;
