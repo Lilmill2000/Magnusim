@@ -35,8 +35,8 @@ let win = null;
 function startServer() {
   const env = serverEnv({ documents: app.getPath('documents'), userData: app.getPath('userData') });
   mkdirSync(env.MAGNUSIM_PROJECTS_ROOT, { recursive: true });
-  // From source until the packaged build has its page built (S7: --static).
-  const args = app.isPackaged ? ['--static', join(process.resourcesPath, 'page')] : ['--dev'];
+  // Installed: the page built with the app (build.mjs); from a checkout: the page from source.
+  const args = app.isPackaged ? ['--static', join(HERE, '..', 'page')] : ['--dev'];
   const child = utilityProcess.fork(join(HERE, 'server.mjs'), args, {
     env,
     serviceName: `${APP_NAME} server`,

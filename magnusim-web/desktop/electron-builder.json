@@ -1,0 +1,49 @@
+{
+  "appId": "org.magnusim.cad",
+  "productName": "Magnusim CAD",
+  "copyright": "Magnusim. Free software under GPL-3.0-or-later.",
+  "directories": {
+    "app": "build/app",
+    "output": "dist",
+    "buildResources": "resources"
+  },
+  "electronVersion": "44.9.3",
+  "asar": false,
+  "electronLanguages": [
+    "en-US"
+  ],
+  "npmRebuild": false,
+  "files": [
+    "**/*"
+  ],
+  "extraMetadata": {
+    "license": "GPL-3.0-or-later"
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "build/icon.png",
+    "artifactName": "Magnusim-CAD-Setup-${version}.${ext}",
+    "signAndEditExecutable": true
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Magnusim CAD",
+    "uninstallDisplayName": "Magnusim CAD",
+    "license": "build/app/LICENSE",
+    "include": "resources/uninstall.nsh"
+  },
+  "publish": null
+}

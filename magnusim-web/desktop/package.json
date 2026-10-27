@@ -10,9 +10,11 @@
   "main": "main.mjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "dist": "node scripts/build.mjs"
   },
   "devDependencies": {
-    "electron": "44.9.3"
+    "electron": "44.9.3",
+    "electron-builder": "26.18.0"
   }
 }

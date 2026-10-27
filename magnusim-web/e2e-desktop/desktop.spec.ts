@@ -28,7 +28,8 @@ test('the desktop app: a window on its own server, a Part with CAD running, and 
       .join(delimiter),
   } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({ executablePath: EXE, args: [DESKTOP], env });
+  // Its own user data (prefs, desktop.log, caches), never the person's Magnusim CAD folder in AppData.
+  const app = await electron.launch({ executablePath: EXE, args: [DESKTOP, `--user-data-dir=${join(root, 'user data')}`], env });
   try {
     const page = await app.firstWindow();
     await expect(page).toHaveTitle('Magnusim CAD - Projects', { timeout: 60_000 });
@@ -46,10 +47,18 @@ test('the desktop app: a window on its own server, a Part with CAD running, and 
     await page.locator('#workspace-overlay [data-ws-back]').click();
     await expect(page.locator('#cad-project .cad-part-title')).toHaveText(['Part 1']);
 
-    // A web link never opens a second app window.
+    // A web link goes to the person's browser, never a second app window. The browser is not
+    // really opened here: the app's call to it is caught and kept for the test.
+    await app.evaluate(({ shell }) => {
+      const opened: string[] = [];
+      (globalThis as unknown as { __opened: string[] }).__opened = opened;
+      shell.openExternal = async (url: string) => {
+        opened.push(url);
+      };
+    });
     const windows = app.windows().length;
     await page.evaluate(() => window.open('https://example.org/', '_blank'));
-    await page.waitForTimeout(500);
+    await expect.poll(() => app.evaluate(() => (globalThis as unknown as { __opened: string[] }).__opened)).toEqual(['https://example.org/']);
     expect(app.windows().length).toBe(windows);
 
     // Quit: the window goes and the server stops listening.
